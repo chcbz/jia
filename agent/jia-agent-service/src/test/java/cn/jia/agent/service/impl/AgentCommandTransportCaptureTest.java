@@ -63,6 +63,32 @@ class AgentCommandTransportCaptureTest {
     }
 
     @Test
+    void policy1RefusesOffAndShadowTransportBeforeCreatingRun() {
+        @SuppressWarnings("unchecked")
+        ObjectProvider<AgentCommandTransportWriter> writerProvider = mock(ObjectProvider.class);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<OutputRunAuthorizationService> outputProvider = mock(ObjectProvider.class);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<AgentTaskWorkItemDao> workItemProvider = mock(ObjectProvider.class);
+        when(writerProvider.getIfAvailable()).thenReturn(mock(AgentCommandTransportWriter.class));
+        when(outputProvider.getIfAvailable()).thenReturn(mock(OutputRunAuthorizationService.class));
+        when(workItemProvider.getIfAvailable()).thenReturn(mock(AgentTaskWorkItemDao.class));
+
+        for (AgentRabbitActivationState state : List.of(
+                AgentRabbitActivationState.OFF, AgentRabbitActivationState.DB_SHADOW,
+                AgentRabbitActivationState.MQ_SHADOW)) {
+            AgentCommandTransportCapture capture = new AgentCommandTransportCapture(
+                    gate(state), writerProvider, outputProvider);
+            capture.configureWorkItemDao(workItemProvider);
+            assertThrows(IllegalStateException.class,
+                    () -> capture.prepareTaskOutputDispatch(
+                            "tenant-a", "client-a", "task-1", List.of("agent-a"),
+                            1, "evt-policy1"));
+        }
+        verify(outputProvider, never()).getIfAvailable();
+    }
+
+    @Test
     void captureReportsDurableOwnershipOnlyForExactCanaryScope() {
         @SuppressWarnings("unchecked")
         ObjectProvider<AgentCommandTransportWriter> provider = mock(ObjectProvider.class);
@@ -100,7 +126,8 @@ class AgentCommandTransportCaptureTest {
         when(outputRunProvider.getIfAvailable()).thenReturn(outputRuns);
         when(workItemProvider.getIfAvailable()).thenReturn(workItems);
         AgentCommandTransportCapture capture = new AgentCommandTransportCapture(
-                gate(AgentRabbitActivationState.DB_SHADOW), writerProvider, outputRunProvider);
+                gate(AgentRabbitActivationState.DISPATCH_CANARY),
+                writerProvider, outputRunProvider);
         capture.configureWorkItemDao(workItemProvider);
 
         AgentTaskWorkItemEntity workItem = new AgentTaskWorkItemEntity()
@@ -125,13 +152,20 @@ class AgentCommandTransportCaptureTest {
 
         AgentCommandTransportCapture.PreparedTaskOutputContexts prepared =
                 capture.prepareTaskOutputDispatch("tenant-a", "client-a", "task-1",
-                        List.of("agent-a"), 1);
-        capture.captureTaskInvites(task(), List.of(agent("agent-a")),
+                        List.of("agent-a"), 1, "evt-assigned");
+        workItem.setDispatchedRunId(context.runId());
+        when(workItems.findByTaskAndWorkItemId(
+                "tenant-a", "client-a", "task-1", "work-1")).thenReturn(workItem);
+        AgentTaskDTO policyTask = task();
+        policyTask.setDeliveryPolicyVersion("1");
+        capture.captureTaskInvites(policyTask, List.of(agent("agent-a")),
                 "evt-assigned", 1_000L, prepared.contexts(), prepared.workItemIds());
 
         ArgumentCaptor<AgentCommandDraft> draft = ArgumentCaptor.forClass(AgentCommandDraft.class);
         verify(writer).write(draft.capture(), eq(context));
         assertEquals("work-1", draft.getValue().workItemId());
+        assertTrue(((cn.jia.agent.entity.AgentTaskInvitePayload) draft.getValue().payload())
+                .acceptance().contains("正式交付接口"));
         assertEquals(context, AgentCommandCanonicalCodec.outputContextFromWire(
                 AgentCommandCanonicalCodec.wireBytes(
                         draft.getValue(), "msg-policy1", 1, context)).orElseThrow());

@@ -15,11 +15,8 @@ final class AgentTaskMutationEventSupport {
             String eventType, String actorType, String actorId,
             String aggregateType, String aggregateId,
             TaskEventPayload.Builder payload, long occurredAt, long resultVersion) {
-        String seed = tenantId + '\u0000' + clientId + '\u0000' + taskId + '\u0000'
-                + eventType + '\u0000' + aggregateType + '\u0000' + aggregateId + '\u0000'
-                + resultVersion;
-        String eventId = EVENT_ID_PREFIX
-                + TaskEventPayload.ContentDigest.fromUtf8(seed).sha256();
+        String eventId = eventId(tenantId, clientId, taskId, eventType,
+                aggregateType, aggregateId, resultVersion);
         return new AgentTaskEventWriteCommand()
                 .setTenantId(tenantId)
                 .setClientId(clientId)
@@ -32,6 +29,15 @@ final class AgentTaskMutationEventSupport {
                 .setAggregateId(aggregateId)
                 .setEventJson(payload.toJson())
                 .setOccurredAt(occurredAt);
+    }
+
+    static String eventId(
+            String tenantId, String clientId, String taskId, String eventType,
+            String aggregateType, String aggregateId, long resultVersion) {
+        String seed = tenantId + '\u0000' + clientId + '\u0000' + taskId + '\u0000'
+                + eventType + '\u0000' + aggregateType + '\u0000' + aggregateId + '\u0000'
+                + resultVersion;
+        return EVENT_ID_PREFIX + TaskEventPayload.ContentDigest.fromUtf8(seed).sha256();
     }
 
     static String taskEvent(String status) {

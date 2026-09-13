@@ -41,6 +41,7 @@ class AgentWorkItemLeaseServiceImplTest extends BaseMockTest {
     private static final String WORK = "work-1";
     private static final String AGENT = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private static final String OTHER_AGENT = "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    private static final String RUN = "11111111111111111111111111111111";
     private static final String TOKEN = "lease_test_token";
     private static final long NOW = 1_000L;
     private static final long MAX_DURATION = 500L;
@@ -105,6 +106,46 @@ class AgentWorkItemLeaseServiceImplTest extends BaseMockTest {
         assertEquals("preserve-description", update.getValue().getDescription());
         assertEquals(AGENT, update.getValue().getAssigneeAgentId());
         assertEquals(1, update.getValue().getAttemptCount(), "claim does not consume an attempt");
+    }
+
+    @Test
+    void policy1ClaimAndHeartbeatRejectLeasePastRunDeadlineBeforeCas() {
+        usePolicy1Root();
+        AgentTaskWorkItemEntity ready = item("ready", 3L, AGENT, null, null, 0, 3);
+        ready.setDispatchedRunId(RUN);
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK)).thenReturn(ready);
+        when(memberDao.listByTask(TENANT, CLIENT, TASK)).thenReturn(List.of(member(AGENT, "accepted")));
+        when(workItemDao.listByTask(TENANT, CLIENT, TASK, null, 3))
+                .thenReturn(List.of(ready));
+        AgentWorkItemLeaseCommandDTO claim = claimCommand(AGENT, 3L, 51L);
+        claim.setRunId(RUN);
+        claim.setLeaseDeadlineAt(1_050L);
+
+        AgentTaskStateException claimFailure = assertThrows(AgentTaskStateException.class,
+                () -> service.claim(TENANT, CLIENT, TASK, WORK, claim));
+        assertEquals(Reason.INVALID_REQUEST, claimFailure.getReason());
+        verify(workItemDao, never()).claimReadyByVersion(
+                any(), any(), any(), any(), any(), anyLong(), any());
+
+        AgentTaskWorkItemEntity running = item(
+                "running", 4L, AGENT, TOKEN, 1_040L, 0, 3);
+        running.setExecutionRunId(RUN);
+        running.setDispatchedRunId(RUN);
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK)).thenReturn(running);
+        when(workItemDao.listByTask(TENANT, CLIENT, TASK, null, 3))
+                .thenReturn(List.of(running));
+        AgentWorkItemLeaseCommandDTO heartbeat = heartbeatCommand(
+                AGENT, TOKEN, 4L, 100L);
+        heartbeat.setRunId(RUN);
+        heartbeat.setLeaseDeadlineAt(1_050L);
+
+        AgentTaskStateException heartbeatFailure = assertThrows(
+                AgentTaskStateException.class,
+                () -> service.heartbeat(TENANT, CLIENT, TASK, WORK, heartbeat));
+        assertEquals(Reason.INVALID_REQUEST, heartbeatFailure.getReason());
+        verify(workItemDao, never()).updateActiveLeaseByVersion(
+                any(), any(), any(), any(), any(), any(), any(), anyLong(),
+                anyLong(), anyLong(), any());
     }
 
     @Test
@@ -583,6 +624,23 @@ class AgentWorkItemLeaseServiceImplTest extends BaseMockTest {
         member.setTenantId(TENANT);
         member.setClientId(CLIENT);
         return member;
+    }
+
+    private void usePolicy1Root() {
+        org.mockito.Mockito.doAnswer(invocation -> {
+                    AgentTaskMutationTransaction.LockedTaskMutation<?> mutation =
+                            invocation.getArgument(3);
+                    cn.jia.agent.entity.AgentTaskMetaEntity root =
+                            new cn.jia.agent.entity.AgentTaskMetaEntity()
+                                    .setTaskId(invocation.getArgument(2))
+                                    .setTaskVersion(0L)
+                                    .setCurrentEventVersion(0L)
+                                    .setDeliveryPolicyVersion(1);
+                    root.setTenantId(invocation.getArgument(0));
+                    root.setClientId(invocation.getArgument(1));
+                    return mutation.apply(root);
+                }).when(mutationTransaction)
+                .executeWithLockedTaskRoot(any(), any(), any(), any());
     }
 
     private AgentTaskWorkItemEntity item(

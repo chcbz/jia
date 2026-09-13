@@ -61,12 +61,22 @@ public final class AgentCommandCanonicalCodec {
 
     public static String taskInviteCommandId(
             String tenantId, String clientId, String taskId, String targetAgentId) {
+        return taskInviteCommandId(tenantId, clientId, taskId, targetAgentId, null);
+    }
+
+    public static String taskInviteCommandId(
+            String tenantId, String clientId, String taskId, String targetAgentId,
+            String dispatchIdentity) {
         requireExact(tenantId, "tenantId", 50);
         requireExact(clientId, "clientId", 50);
         requireExact(taskId, "taskId", 100);
         requireExact(targetAgentId, "targetAgentId", 100);
+        if (dispatchIdentity != null) {
+            requireExact(dispatchIdentity, "dispatchIdentity", 220);
+        }
         String seed = tenantId + '\0' + clientId + '\0' + taskId + '\0'
-                + targetAgentId + '\0' + AgentProtocolConstants.COMMAND_TASK_INVITE;
+                + targetAgentId + '\0' + AgentProtocolConstants.COMMAND_TASK_INVITE
+                + (dispatchIdentity == null ? "" : "\0" + dispatchIdentity);
         return TASK_INVITE_COMMAND_ID_PREFIX + hex(sha256(seed.getBytes(StandardCharsets.UTF_8)));
     }
 
@@ -345,14 +355,20 @@ public final class AgentCommandCanonicalCodec {
         }
         if (AgentProtocolConstants.COMMAND_TASK_INVITE.equals(draft.commandType())
                 && draft.intentId() == null) {
-            String expected = taskInviteCommandId(
-                    draft.tenantId(), draft.clientId(), draft.taskId(), draft.targetAgentId());
+            String expected = draft.workItemId() == null
+                    ? taskInviteCommandId(
+                            draft.tenantId(), draft.clientId(), draft.taskId(),
+                            draft.targetAgentId())
+                    : taskInviteCommandId(
+                            draft.tenantId(), draft.clientId(), draft.taskId(),
+                            draft.targetAgentId(), draft.workItemId().length() + ":"
+                                    + draft.workItemId() + ":" + draft.causationId());
             if (!expected.equals(draft.commandId())) throw invalid("commandId does not match frozen identity");
             requireFixedExpiry(draft, TASK_INVITE_TTL_MILLIS, "TASK_INVITE");
             if (!(draft.payload() instanceof AgentTaskInvitePayload invite)) {
                 throw invalid("TASK_INVITE payload type is invalid");
             }
-            validateTaskInvitePayload(invite, draft.targetAgentId());
+            validateTaskInvitePayload(invite, draft.targetAgentId(), draft.workItemId() != null);
             return;
         }
         if (!HALL_COMMAND_TYPES.contains(draft.commandType())) {
@@ -382,7 +398,7 @@ public final class AgentCommandCanonicalCodec {
     }
 
     private static void validateTaskInvitePayload(
-            AgentTaskInvitePayload payload, String targetAgentId) {
+            AgentTaskInvitePayload payload, String targetAgentId, boolean deliveryRun) {
         requireLiteral(payload.actionType(), "task_briefing", "actionType");
         requireLiteral(payload.reason(), "宋江首领已完成悬赏分派，请按职责协作推进。", "reason");
         requireLiteral(payload.instruction(),
@@ -399,8 +415,9 @@ public final class AgentCommandCanonicalCodec {
         }
         String expectedRole = targetAgentId.equals(payload.coordinatorAgentId()) ? "coordinator" : "worker";
         requireLiteral(payload.assignmentRole(), expectedRole, "assignmentRole");
-        requireLiteral(payload.acceptance(),
-                "回报执行计划、风险和协助诉求；Protocol v1 使用 work.progress，完成后使用 work.result，旧客户端由兼容层处理。",
+        requireLiteral(payload.acceptance(), deliveryRun
+                        ? "先领取并启动租约，执行期间续租；成果发布后使用正式交付接口提交，禁止使用旧 work.result 完成任务。"
+                        : "回报执行计划、风险和协助诉求；Protocol v1 使用 work.progress，完成后使用 work.result，旧客户端由兼容层处理。",
                 "acceptance");
         requireLiteral(payload.conversationType(), "juyiting", "conversationType");
     }

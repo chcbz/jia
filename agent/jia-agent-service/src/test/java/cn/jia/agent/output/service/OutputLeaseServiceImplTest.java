@@ -1,6 +1,7 @@
 package cn.jia.agent.output.service;
 
 import cn.jia.agent.entity.AgentTaskMetaEntity;
+import cn.jia.agent.entity.AgentWorkItemLeaseCommandDTO;
 import cn.jia.agent.entity.AgentWorkItemLeaseDTO;
 import cn.jia.agent.output.OutputAuthorizationException;
 import cn.jia.agent.output.OutputConstants;
@@ -69,6 +70,8 @@ class OutputLeaseServiceImplTest {
     @Test
     void successPersistsReceiptAfterAuthorizationAndLeaseMutation() {
         AgentWorkItemLeaseDTO lease = lease("claimed", "lease-secret", 1L);
+        ArgumentCaptor<AgentWorkItemLeaseCommandDTO> command =
+                ArgumentCaptor.forClass(AgentWorkItemLeaseCommandDTO.class);
         when(leases.mutateWithLockedTaskRoot(eq(root), eq("owner"), eq("client"),
                 eq("task-1"), eq("work-1"), eq("claim"), any())).thenReturn(lease);
         when(receipts.insertReceipt(anyString(), anyString(), anyString(), anyString(),
@@ -88,7 +91,8 @@ class OutputLeaseServiceImplTest {
         order.verify(receipts).lockReceipt("owner", "client", "RUN", RUN,
                 "lease.claim", "lease-example-claim-0001");
         order.verify(leases).mutateWithLockedTaskRoot(eq(root), eq("owner"), eq("client"),
-                eq("task-1"), eq("work-1"), eq("claim"), any());
+                eq("task-1"), eq("work-1"), eq("claim"), command.capture());
+        assertEquals(ticket.recoveryUntil(), command.getValue().getLeaseDeadlineAt());
         order.verify(receipts).insertReceipt(anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyString(), any(), eq(200), eq(result.responseJson()),
                 anyLong(), anyLong());

@@ -88,6 +88,7 @@ public class OutputLeaseServiceImpl implements OutputLeaseService {
                         AgentWorkItemLeaseCommandDTO command = new AgentWorkItemLeaseCommandDTO();
                         command.setAgentId(current.producerAgentId());
                         command.setRunId(current.runId());
+                        command.setLeaseDeadlineAt(current.recoveryUntil());
                         AgentWorkItemLeaseDTO result = leases.recoverWithLockedTaskRoot(
                                 root, current.tenantId(), current.clientId(), taskId, workItemId, command);
                         return success(result);
@@ -135,6 +136,7 @@ public class OutputLeaseServiceImpl implements OutputLeaseService {
             command.setExpectedVersion(required.expectedVersion());
             command.setLeaseToken(required.leaseToken());
             command.setLeaseDurationMillis(required.leaseDurationMillis());
+            command.setLeaseDeadlineAt(current.recoveryUntil());
             response = success(leases.mutateWithLockedTaskRoot(
                     root, current.tenantId(), current.clientId(), taskId, workItemId,
                     action, command));

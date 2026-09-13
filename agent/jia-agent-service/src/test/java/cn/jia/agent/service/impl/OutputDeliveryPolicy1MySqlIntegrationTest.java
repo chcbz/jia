@@ -1,6 +1,7 @@
 package cn.jia.agent.service.impl;
 
 import cn.jia.agent.config.AgentRabbitActivationState;
+import cn.jia.agent.config.AgentRabbitDispatchScopeProperties;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.config.AgentRabbitSafetyProperties;
 import cn.jia.agent.config.AgentSceneFeatureFlags;
@@ -15,6 +16,7 @@ import cn.jia.agent.dao.AgentTaskEventDao;
 import cn.jia.agent.dao.AgentTaskMemberDao;
 import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.dao.AgentTaskWorkItemDao;
+import cn.jia.agent.dao.impl.AgentCommandTransportDaoImpl;
 import cn.jia.agent.dao.impl.AgentIdentityAliasDaoImpl;
 import cn.jia.agent.dao.impl.AgentIdentityRegistryDaoImpl;
 import cn.jia.agent.dao.impl.AgentPersonaBindingDaoImpl;
@@ -32,6 +34,7 @@ import cn.jia.agent.entity.AgentTaskWorkItemEntity;
 import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.exception.AgentTaskStateException;
 import cn.jia.agent.mapper.AgentIdentityAliasMapper;
+import cn.jia.agent.mapper.AgentCommandTransportMapper;
 import cn.jia.agent.mapper.AgentIdentityRegistryMapper;
 import cn.jia.agent.mapper.AgentPersonaBindingMapper;
 import cn.jia.agent.mapper.AgentRuntimeMapper;
@@ -118,6 +121,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import tools.jackson.databind.JsonNode;
 
@@ -160,6 +164,7 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
     private OutputUploadDao receipts;
     private AgentServiceImpl agentService;
     private AgentCommandTransportWriter commandWriter;
+    private AgentCommandTransportCapture commandCapture;
     private AtomicInteger leaseTokens;
 
     @BeforeEach
@@ -211,6 +216,8 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
                 SELECT dispatched_run_id FROM agent_task_work_item
                 WHERE tenant_id=? AND client_id=? AND work_item_id=?
                 """, String.class, TENANT, CLIENT, assigned.workItemId()));
+        assertRunCommandIdentity(
+                assigned.runId(), assigned.taskId(), assigned.workItemId(), "TASK_ASSIGNED");
 
         Ticket ticket = ticket(assigned, AGENT_A, "runtime-a");
         OutputLeaseHttpResult recoveredReady = leaseService(receipts).recover(
@@ -270,6 +277,83 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
                 """, String.class, TENANT, CLIENT, assigned.workItemId()));
         assertEquals(4, jdbc.queryForObject("SELECT COUNT(*) FROM output_mutation_receipt",
                 Integer.class));
+
+        String secondRun = dispatchedRun(assigned.workItemId());
+        assertNotNull(secondRun);
+        assertTrue(!assigned.runId().equals(secondRun));
+        assertEquals(AGENT_A, jdbc.queryForObject("""
+                SELECT assignee_agent_id FROM agent_task_work_item
+                WHERE tenant_id=? AND client_id=? AND work_item_id=?
+                """, String.class, TENANT, CLIENT, assigned.workItemId()));
+        assertEquals(2, count("output_run_binding", assigned.taskId()));
+        assertRunCommandIdentity(
+                secondRun, assigned.taskId(), assigned.workItemId(),
+                "WORK_ITEM_LEASE_RELEASED");
+
+        OutputLeaseHttpResult replayedRelease = mutate(ticket, assigned, "release",
+                request(assigned.runId(), "3", leaseToken, null),
+                "idempotency-release-0001", "req-release-replay-after-redispatch");
+        assertEquals(json(released), json(replayedRelease));
+
+        OutputLeaseHttpResult staleReleasedRun = mutate(ticket, assigned, "claim",
+                request(assigned.runId(), "4", null, "120000"),
+                "idempotency-old-run-claim-1", "req-old-run-claim");
+        assertEquals(409, staleReleasedRun.status());
+        Ticket secondTicket = ticket(
+                new AssignedTask(assigned.taskId(), assigned.workItemId(), secondRun),
+                AGENT_A, "runtime-a");
+        OutputLeaseHttpResult secondClaim = leaseService(receipts).mutate(
+                secondTicket.projected(), secondTicket.bearer(),
+                "idempotency-second-run-claim", assigned.taskId(), assigned.workItemId(),
+                "claim", request(secondRun, "4", null, "120000"), "req-second-run-claim");
+        assertEquals(200, secondClaim.status());
+        assertEquals("5", field(secondClaim, "version"));
+
+        jdbc.update("""
+                UPDATE agent_task_work_item SET lease_until=?
+                WHERE tenant_id=? AND client_id=? AND work_item_id=? AND version=5
+                """, System.currentTimeMillis() - 1, TENANT, CLIENT, assigned.workItemId());
+        assertEquals(1, leaseCore().expireLeases(TENANT, CLIENT, 10).getRequeuedCount());
+        String thirdRun = dispatchedRun(assigned.workItemId());
+        assertNotNull(thirdRun);
+        assertTrue(!secondRun.equals(thirdRun));
+        assertEquals(3, count("output_run_binding", assigned.taskId()));
+        assertRunCommandIdentity(
+                thirdRun, assigned.taskId(), assigned.workItemId(), "WORK_ITEM_REQUEUED");
+
+        OutputLeaseHttpResult staleExpiredRun = leaseService(receipts).mutate(
+                secondTicket.projected(), secondTicket.bearer(),
+                "idempotency-expired-run-claim", assigned.taskId(), assigned.workItemId(),
+                "claim", request(secondRun, "6", null, "120000"), "req-expired-run-claim");
+        assertEquals(409, staleExpiredRun.status());
+        Ticket thirdTicket = ticket(
+                new AssignedTask(assigned.taskId(), assigned.workItemId(), thirdRun),
+                AGENT_A, "runtime-a");
+        OutputLeaseHttpResult thirdClaim = leaseService(receipts).mutate(
+                thirdTicket.projected(), thirdTicket.bearer(),
+                "idempotency-third-run-claim", assigned.taskId(), assigned.workItemId(),
+                "claim", request(thirdRun, "6", null, "120000"), "req-third-run-claim");
+        assertEquals(200, thirdClaim.status());
+        assertEquals("7", field(thirdClaim, "version"));
+
+        OutputLeaseHttpResult exhausted = leaseService(receipts).mutate(
+                thirdTicket.projected(), thirdTicket.bearer(),
+                "idempotency-third-run-release", assigned.taskId(), assigned.workItemId(),
+                "release", request(thirdRun, "7", field(thirdClaim, "leaseToken"), null),
+                "req-third-run-release");
+        assertEquals(200, exhausted.status());
+        assertEquals("failed", field(exhausted, "status"));
+        assertEquals("8", field(exhausted, "version"));
+        assertEquals(3, count("output_run_binding", assigned.taskId()));
+        Map<String, Object> exhaustedRow = jdbc.queryForMap("""
+                SELECT attempt_count,assignee_agent_id,execution_run_id,dispatched_run_id
+                FROM agent_task_work_item
+                WHERE tenant_id=? AND client_id=? AND work_item_id=?
+                """, TENANT, CLIENT, assigned.workItemId());
+        assertEquals(3, ((Number) exhaustedRow.get("attempt_count")).intValue());
+        assertNull(exhaustedRow.get("assignee_agent_id"));
+        assertNull(exhaustedRow.get("execution_run_id"));
+        assertNull(exhaustedRow.get("dispatched_run_id"));
     }
 
     @Test
@@ -460,6 +544,44 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
         assertEquals(baselineEvents, tableCount("agent_task_event"));
         assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM output_mutation_receipt",
                 Integer.class));
+
+        AssignedTask releaseRollbackTask = createAndAssignPolicy1(winnerAgent);
+        Ticket releaseRollbackTicket = ticket(releaseRollbackTask, winnerAgent, runtimeId);
+        OutputLeaseHttpResult rollbackClaim = leaseService(receipts).mutate(
+                releaseRollbackTicket.projected(), releaseRollbackTicket.bearer(),
+                "idempotency-release-rollback-claim", releaseRollbackTask.taskId(),
+                releaseRollbackTask.workItemId(), "claim",
+                request(releaseRollbackTask.runId(), "0", null, "120000"),
+                "req-release-rollback-claim");
+        String rollbackLeaseToken = field(rollbackClaim, "leaseToken");
+        long beforeReleaseVersion = workVersion(releaseRollbackTask.workItemId());
+        long beforeReleaseEvents = tableCount("agent_task_event");
+        int beforeReleaseRuns = count("output_run_binding", releaseRollbackTask.taskId());
+        int beforeReleaseDeliveries = scopedTransportCount(
+                "agent_command_delivery", releaseRollbackTask.taskId());
+        int beforeReleaseOutbox = scopedTransportCount(
+                "agent_outbox_event", releaseRollbackTask.taskId());
+        int beforeReleaseReceipts = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM output_mutation_receipt", Integer.class);
+        OutputUploadDao failingReleaseReceipt = delegatingProxy(
+                OutputUploadDao.class, receipts, "insertReceipt", true);
+        assertThrows(IllegalStateException.class, () -> leaseService(failingReleaseReceipt).mutate(
+                releaseRollbackTicket.projected(), releaseRollbackTicket.bearer(),
+                "idempotency-release-rollback", releaseRollbackTask.taskId(),
+                releaseRollbackTask.workItemId(), "release",
+                request(releaseRollbackTask.runId(), Long.toString(beforeReleaseVersion),
+                        rollbackLeaseToken, null),
+                "req-release-rollback"));
+        assertEquals(beforeReleaseVersion, workVersion(releaseRollbackTask.workItemId()));
+        assertEquals(beforeReleaseEvents, tableCount("agent_task_event"));
+        assertEquals(beforeReleaseRuns,
+                count("output_run_binding", releaseRollbackTask.taskId()));
+        assertEquals(beforeReleaseDeliveries, scopedTransportCount(
+                "agent_command_delivery", releaseRollbackTask.taskId()));
+        assertEquals(beforeReleaseOutbox, scopedTransportCount(
+                "agent_outbox_event", releaseRollbackTask.taskId()));
+        assertEquals(beforeReleaseReceipts, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM output_mutation_receipt", Integer.class));
     }
 
     private void wireServices() throws Exception {
@@ -509,7 +631,12 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
                 sourceDao, runDao, ticketDao, runtimeDao, identityService, true);
         receipts = new OutputUploadDaoImpl(jdbc);
 
-        commandWriter = mock(AgentCommandTransportWriter.class);
+        AtomicLong commandIds = new AtomicLong();
+        commandWriter = new AgentCommandTransportWriterImpl(
+                new AgentCommandTransportDaoImpl(
+                        template.getMapper(AgentCommandTransportMapper.class)),
+                dispatchGate(), transactionManager,
+                () -> new UUID(0L, commandIds.incrementAndGet()));
         @SuppressWarnings("unchecked")
         ObjectProvider<AgentCommandTransportWriter> writerProvider = mock(ObjectProvider.class);
         when(writerProvider.getIfAvailable()).thenReturn(commandWriter);
@@ -519,9 +646,9 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
         @SuppressWarnings("unchecked")
         ObjectProvider<AgentTaskWorkItemDao> workItemProvider = mock(ObjectProvider.class);
         when(workItemProvider.getIfAvailable()).thenReturn(workItemDao);
-        AgentCommandTransportCapture capture = new AgentCommandTransportCapture(
-                dbShadowGate(), writerProvider, outputProvider);
-        capture.configureWorkItemDao(workItemProvider);
+        commandCapture = new AgentCommandTransportCapture(
+                dispatchGate(), writerProvider, outputProvider);
+        commandCapture.configureWorkItemDao(workItemProvider);
 
         StaticListableBeanFactory empty = new StaticListableBeanFactory();
         AgentServiceImpl rawAgentService = new AgentServiceImpl(
@@ -535,7 +662,8 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
                 empty.getBeanProvider(ApiKeyService.class),
                 empty.getBeanProvider(cn.jia.agent.service.AgentSceneService.class),
                 new cn.jia.agent.service.AgentScopePublicationCoordinator(),
-                new AgentSceneFeatureFlags(false, false), taskTransactions, eventWriter, capture);
+                new AgentSceneFeatureFlags(false, false), taskTransactions, eventWriter,
+                commandCapture);
         ReflectionTestUtils.setField(rawAgentService, "outputDeliveryEnabled", true);
         ReflectionTestUtils.setField(rawAgentService, "deliveryPolicy1Enabled", true);
         ReflectionTestUtils.setField(rawAgentService, "deliveryPolicy1OwnerAllowlist", TENANT);
@@ -594,11 +722,17 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
     }
 
     private OutputLeaseServiceImpl leaseService(OutputUploadDao receiptDao) {
-        AgentWorkItemLeaseService core = new AgentWorkItemLeaseServiceImpl(
+        AgentWorkItemLeaseService core = leaseCore();
+        return new OutputLeaseServiceImpl(authorization, taskTransactions, core, receiptDao);
+    }
+
+    private AgentWorkItemLeaseServiceImpl leaseCore() {
+        AgentWorkItemLeaseServiceImpl core = new AgentWorkItemLeaseServiceImpl(
                 memberDao, workItemDao, taskTransactions, eventWriter,
                 System::currentTimeMillis,
                 () -> "lease-token-" + leaseTokens.incrementAndGet(), 900_000L);
-        return new OutputLeaseServiceImpl(authorization, taskTransactions, core, receiptDao);
+        core.setPolicy1Dispatcher(commandCapture);
+        return core;
     }
 
     private OutputLeaseRequestDTO request(
@@ -691,13 +825,67 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
         return jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Long.class);
     }
 
-    private AgentRabbitSafetyGate dbShadowGate() {
+    private AgentRabbitSafetyGate dispatchGate() {
         AgentRabbitSafetyGate gate = new AgentRabbitSafetyGate(
                 new AgentRabbitSafetyProperties(
                         new AgentRabbitSafetyProperties.CommandOutbox(true),
-                        null, null, null, null, null));
-        assertEquals(AgentRabbitActivationState.DB_SHADOW, gate.state());
+                        new AgentRabbitSafetyProperties.RabbitTopology(true),
+                        new AgentRabbitSafetyProperties.RabbitPublish(true),
+                        new AgentRabbitSafetyProperties.RabbitConsume(true),
+                        new AgentRabbitSafetyProperties.RabbitDispatch(true),
+                        new AgentRabbitSafetyProperties.RabbitBroker(
+                                "isolated.invalid", 5673, "user", "secret", "/isolated")),
+                new AgentRabbitDispatchScopeProperties(List.of(
+                        new AgentRabbitDispatchScopeProperties.AllowedScope(TENANT, CLIENT))));
+        assertEquals(AgentRabbitActivationState.DISPATCH_CANARY, gate.state());
         return gate;
+    }
+
+    private String dispatchedRun(String workItemId) {
+        return jdbc.queryForObject("""
+                SELECT dispatched_run_id FROM agent_task_work_item
+                WHERE tenant_id=? AND client_id=? AND work_item_id=?
+                """, String.class, TENANT, CLIENT, workItemId);
+    }
+
+    private void assertRunCommandIdentity(
+            String runId, String taskId, String workItemId, String expectedEventType) {
+        String originId = dbString(jdbc.queryForObject("""
+                SELECT origin_id FROM output_run_binding
+                WHERE tenant_id=? AND client_id=? AND run_id=?
+                """, Object.class, TENANT, CLIENT, runId));
+        Map<String, Object> delivery = jdbc.queryForMap("""
+                SELECT command_id,command_payload FROM agent_command_delivery
+                WHERE tenant_id=? AND client_id=? AND task_id=? AND work_item_id=?
+                  AND command_id=?
+                """, TENANT, CLIENT, taskId, workItemId, originId);
+        assertEquals(originId, delivery.get("command_id"));
+        var draft = AgentCommandCanonicalCodec.decodeBusinessBytes(
+                (byte[]) delivery.get("command_payload"));
+        assertEquals(originId, draft.commandId());
+        assertEquals(workItemId, draft.workItemId());
+        assertEquals(1, jdbc.queryForObject("""
+                SELECT COUNT(*) FROM agent_task_event
+                WHERE tenant_id=? AND client_id=? AND task_id=?
+                  AND event_id=? AND event_type=?
+                """, Integer.class, TENANT, CLIENT, taskId,
+                draft.causationId(), expectedEventType));
+    }
+
+    private int scopedTransportCount(String table, String taskId) {
+        if ("agent_command_delivery".equals(table)) {
+            return jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM agent_command_delivery
+                    WHERE tenant_id=? AND client_id=? AND task_id=?
+                    """, Integer.class, TENANT, CLIENT, taskId);
+        }
+        if ("agent_outbox_event".equals(table)) {
+            return jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM agent_outbox_event
+                    WHERE tenant_id=? AND client_id=? AND aggregate_id=?
+                    """, Integer.class, TENANT, CLIENT, taskId);
+        }
+        throw new IllegalArgumentException("unsupported transport table");
     }
 
     private SqlSessionFactory sqlSessionFactory(DataSource source) throws Exception {
@@ -707,6 +895,7 @@ class OutputDeliveryPolicy1MySqlIntegrationTest {
         configuration.addMapper(AgentTaskMemberMapper.class);
         configuration.addMapper(AgentTaskWorkItemMapper.class);
         configuration.addMapper(AgentTaskEventMapper.class);
+        configuration.addMapper(AgentCommandTransportMapper.class);
         configuration.addMapper(AgentRuntimeMapper.class);
         configuration.addMapper(AgentIdentityRegistryMapper.class);
         configuration.addMapper(AgentIdentityAliasMapper.class);

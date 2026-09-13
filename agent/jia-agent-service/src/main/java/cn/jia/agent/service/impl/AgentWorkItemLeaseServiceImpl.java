@@ -46,10 +46,17 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
     private final Supplier<String> tokenGenerator;
     private final long maxLeaseDurationMillis;
     private cn.jia.agent.service.AgentHostingWorkAdmission hostingWorkAdmission = (tenant, client, agent) -> { };
+    private AgentCommandTransportCapture policy1Dispatcher =
+            AgentCommandTransportCapture.disabledForLegacyConstruction();
 
     @org.springframework.beans.factory.annotation.Autowired
     public void setHostingWorkAdmission(cn.jia.agent.service.AgentHostingWorkAdmission admission) {
         this.hostingWorkAdmission = Objects.requireNonNull(admission);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setPolicy1Dispatcher(AgentCommandTransportCapture dispatcher) {
+        this.policy1Dispatcher = Objects.requireNonNull(dispatcher);
     }
 
     @Inject
@@ -197,6 +204,7 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
         boolean policy1 = requireRunPolicy(lockedTaskRoot, required.runId());
         long duration = requireDuration(required.leaseDurationMillis());
         long now = now();
+        requireWithinRunDeadline(required, now, duration, policy1);
         requireActiveMember(tenantId, clientId, taskId, required.agentId());
         AgentTaskWorkItemEntity current = requireWorkItem(tenantId, clientId, taskId, workItemId);
         requireCompleteSnapshot(current);
@@ -245,14 +253,25 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
             return result(copyWorkItem(context.current()), context.current().getVersion(),
                     context.now(), context.required().agentId(), context.required().runId());
         }
+        boolean redispatch = context.policy1()
+                && AgentTaskWorkItemStatus.READY.value().equals(requested.update().getStatus());
+        if (redispatch) {
+            policy1Dispatcher.requirePolicy1DispatchAvailable(tenantId, clientId);
+        }
         AgentWorkItemLeaseDTO result = updateActiveLease(context, requested.update());
-        appendLeaseEvent(tenantId, clientId, taskId, context.current(), result,
+        String eventId = appendLeaseEvent(tenantId, clientId, taskId, context.current(), result,
                 requested.eventType(), context.required().agentId(), requested.reasonCode());
+        if (redispatch) {
+            policy1Dispatcher.redispatchPolicy1WorkItem(
+                    lockedTaskRoot, workItemId, context.required().agentId(), eventId, context.now());
+        }
         return result;
     }
 
     private LeaseMutation heartbeatMutation(LeaseContext context) {
         long duration = requireDuration(context.required().leaseDurationMillis());
+        requireWithinRunDeadline(
+                context.required(), context.now(), duration, context.policy1());
         long maxUntil = addPositive(context.now(), maxLeaseDurationMillis,
                 "lease duration limit overflow");
         if (context.current().getLeaseUntil() > maxUntil) {
@@ -283,7 +302,8 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
                     ? AgentTaskWorkItemStatus.FAILED.value()
                     : AgentTaskWorkItemStatus.READY.value());
         }
-        clearLease(update);
+        clearLease(update, !cancelled && context.policy1()
+                && AgentTaskWorkItemStatus.READY.value().equals(update.getStatus()));
         return new LeaseMutation(update, eventType, null);
     }
 
@@ -319,19 +339,23 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
         requirePolicy1Topology(tenantId, clientId, taskId, workItemId,
                 required.agentId(), current);
         AgentTaskWorkItemStatus status = persistedStatus(current.getStatus());
+        long now = now();
+        long runDeadline = requireRunDeadline(required, now);
         String authorizedRun = status == AgentTaskWorkItemStatus.READY
                 ? current.getDispatchedRunId() : current.getExecutionRunId();
         if (!required.runId().equals(authorizedRun)) {
             throw leaseInvalid("Execution run does not authorize this work item state");
         }
         AgentTaskWorkItemDTO snapshot = copyWorkItem(current);
-        long now = now();
         if (status != AgentTaskWorkItemStatus.CLAIMED
                 && status != AgentTaskWorkItemStatus.RUNNING) {
             snapshot.setLeaseToken(null);
             snapshot.setLeaseUntil(null);
         } else {
             requireLeaseIdentity(current);
+            if (current.getLeaseUntil() > runDeadline) {
+                throw invalidPersisted("Persisted lease exceeds the execution run deadline");
+            }
             if (!required.agentId().equals(current.getAssigneeAgentId())
                     || current.getLeaseUntil() <= now) {
                 snapshot.setLeaseToken(null);
@@ -355,7 +379,7 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
         for (AgentTaskWorkItemEntity candidate : candidates) {
             ExpiryOutcome outcome = withLockedTaskRoot(
                     tenantId, clientId, candidate.getTaskId(), root ->
-                            expireCandidate(tenantId, clientId, candidate, now));
+                            expireCandidate(root, tenantId, clientId, candidate, now));
             if (outcome.conflict()) {
                 scan.setConflictCount(scan.getConflictCount() + 1);
                 continue;
@@ -368,8 +392,11 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
         return scan;
     }
 
-    private ExpiryOutcome expireCandidate(String tenantId, String clientId,
+    private ExpiryOutcome expireCandidate(AgentTaskMetaEntity lockedTaskRoot,
+            String tenantId, String clientId,
             AgentTaskWorkItemEntity candidate, long now) {
+        requireLockedTaskRoot(
+                lockedTaskRoot, tenantId, clientId, candidate.getTaskId());
         AgentTaskWorkItemEntity current = workItemDao.findByTaskAndWorkItemId(
                 tenantId, clientId, candidate.getTaskId(), candidate.getWorkItemId());
         if (current == null || !Objects.equals(current.getVersion(), candidate.getVersion())
@@ -389,9 +416,14 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
         AgentTaskWorkItemDTO update = copyWorkItem(current);
         update.setAttemptCount(nextAttempt);
         boolean failed = nextAttempt >= current.getMaxAttempts();
+        boolean policy1 = Integer.valueOf(1).equals(
+                lockedTaskRoot.getDeliveryPolicyVersion());
+        if (!failed && policy1) {
+            policy1Dispatcher.requirePolicy1DispatchAvailable(tenantId, clientId);
+        }
         update.setStatus(failed ? AgentTaskWorkItemStatus.FAILED.value()
                 : AgentTaskWorkItemStatus.READY.value());
-        clearLease(update);
+        clearLease(update, !failed && policy1);
         int updated = workItemDao.expireLeaseByVersion(
                 tenantId, clientId, current.getTaskId(), current.getWorkItemId(),
                 current.getAssigneeAgentId(), current.getLeaseToken(), current.getStatus(),
@@ -401,13 +433,19 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
         AgentWorkItemLeaseDTO result = result(
                 update, current.getVersion() + 1, now, current.getAssigneeAgentId(),
                 current.getExecutionRunId());
-        appendLeaseEvent(tenantId, clientId, current.getTaskId(), current, result,
+        String eventId = appendLeaseEvent(
+                tenantId, clientId, current.getTaskId(), current, result,
                 failed ? TaskEventType.WORK_ITEM_FAILED : TaskEventType.WORK_ITEM_REQUEUED,
                 null, "lease_expired");
+        if (!failed && policy1) {
+            policy1Dispatcher.redispatchPolicy1WorkItem(
+                    lockedTaskRoot, current.getWorkItemId(), current.getAssigneeAgentId(),
+                    eventId, now);
+        }
         return new ExpiryOutcome(false, failed, result);
     }
 
-    private void appendLeaseEvent(String tenantId, String clientId, String taskId,
+    private String appendLeaseEvent(String tenantId, String clientId, String taskId,
             AgentTaskWorkItemEntity current, AgentWorkItemLeaseDTO result,
             String eventType, String actorId, String reasonCode) {
         TaskEventPayload.Builder payload = TaskEventPayload.builder()
@@ -426,11 +464,13 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
             payload.put(TaskEventPayload.Key.LEASE_EXPIRES_AT, result.getLeaseUntil());
         }
         if (reasonCode != null) payload.put(TaskEventPayload.Key.REASON_CODE, reasonCode);
-        eventWriter.append(AgentTaskMutationEventSupport.command(
+        var command = AgentTaskMutationEventSupport.command(
                 tenantId, clientId, taskId, eventType,
                 actorId == null ? TaskEventType.ActorType.SYSTEM : TaskEventType.ActorType.AGENT,
                 actorId, TaskEventType.Aggregate.WORK_ITEM, current.getWorkItemId(),
-                payload, result.getChangedAt(), result.getVersion()));
+                payload, result.getChangedAt(), result.getVersion());
+        eventWriter.append(command);
+        return command.getEventId();
     }
 
     private AgentWorkItemLeaseDTO updateActiveLease(
@@ -476,6 +516,12 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
         if (policy1 && !required.runId().equals(current.getExecutionRunId())) {
             throw leaseInvalid("Lease belongs to another execution run");
         }
+        if (policy1) {
+            requireRunDeadline(required, now);
+            if (current.getLeaseUntil() > required.leaseDeadlineAt()) {
+                throw invalidPersisted("Persisted lease exceeds the execution run deadline");
+            }
+        }
         if (current.getLeaseUntil() <= now) {
             throw leaseInvalid("Lease is expired");
         }
@@ -485,7 +531,7 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
             throw invalidPersisted("Persisted lease exceeds the configured lease horizon");
         }
         return new LeaseContext(
-                tenantId, clientId, taskId, workItemId, required, current, now);
+                tenantId, clientId, taskId, workItemId, required, current, now, policy1);
     }
 
     private AgentTaskMemberEntity requireActiveMember(
@@ -689,7 +735,8 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
         }
         return new RequiredCommand(
                 command.getAgentId(), command.getRunId(), command.getLeaseToken(),
-                command.getExpectedVersion(), command.getLeaseDurationMillis());
+                command.getExpectedVersion(), command.getLeaseDurationMillis(),
+                command.getLeaseDeadlineAt());
     }
 
     private RequiredCommand requireRecoveryCommand(AgentWorkItemLeaseCommandDTO command) {
@@ -698,7 +745,7 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
             throw invalidRequest("agentId and runId are required");
         }
         return new RequiredCommand(command.getAgentId(), command.getRunId(),
-                null, 0L, null);
+                null, 0L, null, command.getLeaseDeadlineAt());
     }
 
     private long requireDuration(Long duration) {
@@ -774,8 +821,8 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
         return result;
     }
 
-    private void clearLease(AgentTaskWorkItemDTO update) {
-        update.setAssigneeAgentId(null);
+    private void clearLease(AgentTaskWorkItemDTO update, boolean preserveAssignee) {
+        if (!preserveAssignee) update.setAssigneeAgentId(null);
         update.setLeaseToken(null);
         update.setLeaseUntil(null);
         update.setExecutionRunId(null);
@@ -800,6 +847,24 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
         } catch (ArithmeticException e) {
             throw invalidRequest(message);
         }
+    }
+
+    private void requireWithinRunDeadline(
+            RequiredCommand command, long now, long duration, boolean policy1) {
+        if (!policy1) return;
+        long deadline = requireRunDeadline(command, now);
+        long requestedUntil = addPositive(now, duration, "lease duration overflow");
+        if (requestedUntil > deadline) {
+            throw invalidRequest("Lease duration exceeds the execution run deadline");
+        }
+    }
+
+    private long requireRunDeadline(RequiredCommand command, long now) {
+        Long deadline = command.leaseDeadlineAt();
+        if (deadline == null || deadline <= now) {
+            throw leaseInvalid("Execution run recovery deadline has expired");
+        }
+        return deadline;
     }
 
     private String generatedToken() {
@@ -871,7 +936,7 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
 
     private record RequiredCommand(
             String agentId, String runId, String leaseToken,
-            long expectedVersion, Long leaseDurationMillis) {
+            long expectedVersion, Long leaseDurationMillis, Long leaseDeadlineAt) {
     }
 
     private record LeaseMutation(AgentTaskWorkItemDTO update, String eventType, String reasonCode) {
@@ -883,7 +948,8 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
 
     private record LeaseContext(
             String tenantId, String clientId, String taskId, String workItemId,
-            RequiredCommand required, AgentTaskWorkItemEntity current, long now) {
+            RequiredCommand required, AgentTaskWorkItemEntity current, long now,
+            boolean policy1) {
     }
 
     private static final class SecureRandomHolder {

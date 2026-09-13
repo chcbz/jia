@@ -172,9 +172,16 @@ class AgentServiceImplTest extends BaseMockTest {
                 new AgentSceneFeatureFlags(true, true), mutationTransaction, taskEventWriter,
                 commandTransportCapture);
         org.mockito.Mockito.lenient().when(commandTransportCapture.prepareTaskOutputDispatch(
-                        any(), any(), any(), any(), anyInt()))
+                        any(), any(), any(), any(), anyInt(),
+                        org.mockito.ArgumentMatchers.nullable(String.class)))
                 .thenReturn(new AgentCommandTransportCapture.PreparedTaskOutputContexts(
                         Map.of(), Map.of()));
+        org.mockito.Mockito.lenient().when(commandTransportCapture.captureTaskInvites(
+                        any(), any(), any(), anyLong(), anyMap(), anyMap()))
+                .thenAnswer(invocation -> {
+                    AgentTaskDTO task = invocation.getArgument(0);
+                    return task != null && "1".equals(task.getDeliveryPolicyVersion());
+                });
         org.mockito.Mockito.lenient().when(legacyTaskCompatibilityService.resolveAgentIds(
                         any(), any(), any(), any()))
                 .thenAnswer(invocation -> List.copyOf(invocation.<List<String>>getArgument(3)));
@@ -847,7 +854,7 @@ class AgentServiceImplTest extends BaseMockTest {
                 multi.getMessage());
         verify(agentRuntimeDao, never()).findByAgentIdForUpdate(anyString());
         verify(commandTransportCapture, never()).prepareTaskOutputDispatch(
-                any(), any(), any(), any(), anyInt());
+                any(), any(), any(), any(), anyInt(), anyString());
     }
 
     @Test
@@ -883,7 +890,7 @@ class AgentServiceImplTest extends BaseMockTest {
                         () -> agentService.assignTask("task-001", request)).getMessage());
 
         verify(commandTransportCapture, never()).prepareTaskOutputDispatch(
-                any(), any(), any(), any(), anyInt());
+                any(), any(), any(), any(), anyInt(), anyString());
     }
 
     @Test
@@ -906,7 +913,8 @@ class AgentServiceImplTest extends BaseMockTest {
 
         assertEquals("1", assigned.getDeliveryPolicyVersion());
         verify(commandTransportCapture).prepareTaskOutputDispatch(
-                "juyiting", "jia_client", "task-001", List.of("agent-wuyong"), 1);
+                eq("juyiting"), eq("jia_client"), eq("task-001"),
+                eq(List.of("agent-wuyong")), eq(1), anyString());
     }
 
     private AgentTaskDeliveryRequirementsDTO deliveryRequirements(String mode, int minFiles) {

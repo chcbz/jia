@@ -1019,6 +1019,10 @@ public class AgentServiceImpl implements AgentService {
                                         lockedTask.getTaskId(), automatic, canonicalAgentIds.size());
                                 requireDeliveryAssignmentAllowedLocked(
                                         lockedTask, automatic, canonicalAgentIds.size());
+                                if (deliveryPolicyVersion(lockedTask) == 1) {
+                                    commandTransportCapture.requirePolicy1DispatchAvailable(
+                                            tenantId, clientId);
+                                }
                             }
 
                             @Override
@@ -1044,10 +1048,16 @@ public class AgentServiceImpl implements AgentService {
                             @Override
                             public void afterAssignmentRows(
                                     AgentTaskMetaEntity lockedTask, List<String> canonicalAgentIds) {
+                                String taskAssignedEventId = AgentTaskMutationEventSupport.eventId(
+                                        tenantId, clientId, taskId, TaskEventType.TASK_ASSIGNED,
+                                        TaskEventType.Aggregate.TASK, taskId,
+                                        lockedTask.getTaskVersion());
                                 assignmentOutputContexts.set(
                                         commandTransportCapture.prepareTaskOutputDispatch(
                                                 tenantId, clientId, taskId, canonicalAgentIds,
-                                                deliveryPolicyVersion(lockedTask)));
+                                                deliveryPolicyVersion(lockedTask),
+                                                deliveryPolicyVersion(lockedTask) == 1
+                                                        ? taskAssignedEventId : null));
                             }
                         });
         AgentTaskMetaEntity assignedMeta = Optional.ofNullable(
@@ -2270,6 +2280,10 @@ public class AgentServiceImpl implements AgentService {
     private void publishTaskAssignmentSideEffectsAfterCommit(
             AgentTaskDTO task, List<AgentRuntimeEntity> assignedAgents,
             boolean durableAssignmentDelivery) {
+        if ("1".equals(task.getDeliveryPolicyVersion()) && !durableAssignmentDelivery) {
+            throw new IllegalStateException(
+                    "Delivery policy 1 cannot fall back to legacy task dispatch");
+        }
         List<AgentRuntimeEntity> agents = List.copyOf(assignedAgents);
         publishOptionalAfterCommit("task-assignment", () -> {
             if (!durableAssignmentDelivery) {

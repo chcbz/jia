@@ -19,4 +19,6 @@ public class AgentWorkItemLeaseCommandDTO implements Serializable {
     private String leaseToken;
     private Long expectedVersion;
     private Long leaseDurationMillis;
+    /** Server-trusted hard deadline for policy-1 lease acquisition/renewal. */
+    private Long leaseDeadlineAt;
 }
