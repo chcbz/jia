@@ -46,6 +46,8 @@ import org.apache.ibatis.session.SqlSessionFactory;
 import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mybatis.spring.SqlSessionTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
@@ -75,6 +77,10 @@ class AgentCommandRecoveryRealTransactionTest {
     private static final String E2 = "33333333-3333-3333-3333-333333333333";
     private static final String M3 = "44444444-4444-4444-4444-444444444444";
     private static final String E3 = "55555555-5555-5555-5555-555555555555";
+    private static final String M4 = "66666666-6666-6666-6666-666666666666";
+    private static final String E4 = "77777777-7777-7777-7777-777777777777";
+    private static final String M5 = "88888888-8888-8888-8888-888888888888";
+    private static final String E5 = "99999999-9999-9999-9999-999999999999";
 
     private JdbcTemplate jdbc;
     private DataSourceTransactionManager manager;
@@ -394,6 +400,88 @@ class AgentCommandRecoveryRealTransactionTest {
         assertEquals(2, number("SELECT active_attempt FROM agent_command_delivery WHERE id=1"));
         assertEquals(2, number("SELECT COUNT(*) FROM agent_outbox_event"));
         assertEquals(M1, string("SELECT replay_parent_message_id FROM agent_outbox_event WHERE message_id='" + M2 + "'"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {4, 6, 9, Integer.MAX_VALUE})
+    void exhaustedAndHistoricalSentRetainsAllRowsThenDirectOrParentTerminalReconciles(int attempt) {
+        for (String correlation : List.of(M4, M3)) {
+            insertWaitingSourceAfterDelete();
+            assertEquals(1, reissueService(dao, M2, E2)
+                    .reissueForReconnect(scope(), 10, NOW).reissued());
+            publishAndComplete(M2, "bounded-attempt-2", NOW + 2L);
+            assertEquals(1, reissueService(dao, M3, E3)
+                    .reissueForReconnect(scope(), 10, NOW + 5_005L).reissued());
+            publishAndComplete(M3, "bounded-attempt-3", NOW + 5_007L);
+            assertEquals(1, reissueService(dao, M4, E4)
+                    .reissueForReconnect(scope(), 10, NOW + 35_010L).reissued());
+            publishAndComplete(M4, "bounded-attempt-4", NOW + 35_012L);
+            if (attempt > 4) seedHistoricalAttempt(attempt);
+
+            var before = recoveryRows();
+            long now = NOW + 65_016L; // Past SENT ACK timeout, before authoritative expiry.
+            for (var scan : List.of(
+                    reissueService(dao, M5, E5).reissueForReconnect(scope(), 10, now),
+                    reissueService(dao, M5, E5).reissueDue(10, 0, now))) {
+                assertEquals(0, scan.reissued());
+                var observation = scan.deferrals().getFirst();
+                assertEquals("MANUAL_TAKEOVER_REQUIRED", observation.reason());
+                assertEquals(attempt, observation.activeAttempt());
+                assertEquals(M4, observation.activeMessageId());
+                assertEquals("tenant-a", observation.tenantId());
+                assertEquals("client-a", observation.clientId());
+                assertEquals("task-1", observation.taskId());
+                assertEquals("agent-a", observation.targetAgentId());
+            }
+            assertEquals(before, recoveryRows());
+            assertEquals(4, number("SELECT COUNT(*) FROM agent_outbox_event"));
+
+            AgentCommandAckServiceImpl ack = new AgentCommandAckServiceImpl(dao, gate(), manager);
+            for (String nonterminal : List.of("RECEIVED", "STARTED")) {
+                assertThrows(AgentCommandAckRejectedException.class, () -> ack.acknowledge(
+                        ack("ambiguous-" + nonterminal, nonterminal, correlation), now + 1));
+                assertEquals(before, recoveryRows());
+            }
+            assertEquals(AgentCommandAckResult.Kind.ADVANCED, ack.acknowledge(
+                    ack("actual-terminal", "SUCCEEDED", correlation), now + 2).kind());
+            assertEquals("SUCCEEDED", string("SELECT status FROM agent_command_delivery WHERE id=1"));
+            assertEquals("PROCESSED", string(
+                    "SELECT status FROM agent_consumer_inbox WHERE message_id='" + M4 + "'"));
+            assertEquals(AgentCommandAckResult.Kind.PRIOR, ack.acknowledge(
+                    ack("actual-terminal-duplicate", "SUCCEEDED", correlation), now + 3).kind());
+            assertThrows(AgentCommandAckRejectedException.class, () -> ack.acknowledge(
+                    ack("conflicting-terminal", "FAILED", correlation), now + 3));
+            assertEquals(4, number("SELECT COUNT(*) FROM agent_outbox_event"));
+        }
+    }
+
+    /** Historical fixture only: old deployments could already have issued higher transport attempts. */
+    private void seedHistoricalAttempt(int attempt) {
+        AgentCommandDraft draft = AgentCommandCanonicalCodec.decodeBusinessBytes(
+                blob("SELECT command_payload FROM agent_command_delivery WHERE id=1"));
+        for (String message : List.of(M4, M3)) {
+            int transportAttempt = M4.equals(message) ? attempt : attempt - 1;
+            byte[] wire = AgentCommandCanonicalCodec.wireBytes(draft, message, transportAttempt);
+            byte[] hash = AgentCommandCanonicalCodec.sha256(wire);
+            jdbc.update("UPDATE agent_outbox_event SET active_attempt=?,wire_payload=?,wire_payload_hash=?"
+                    + " WHERE message_id=?", transportAttempt, wire, hash, message);
+            // Inbox attempts are independent claim counters, not delivery transport attempts.
+            jdbc.update("UPDATE agent_consumer_inbox SET wire_payload=?,wire_payload_hash=?"
+                    + " WHERE message_id=?", wire, hash, message);
+        }
+        jdbc.update("UPDATE agent_command_delivery SET active_attempt=?,attempt_count=? WHERE id=1",
+                attempt, attempt);
+    }
+
+    /** Compare every column (including payloads, processed_at, retry/error state and versions). */
+    private java.util.List<java.util.List<java.util.Map<String, Object>>> recoveryRows() {
+        return List.of("agent_command_delivery", "agent_outbox_event", "agent_consumer_inbox")
+                .stream().map(table -> jdbc.queryForList("SELECT * FROM " + table + " ORDER BY id")
+                        .stream().map(row -> {
+                            row.replaceAll((key, value) -> value instanceof byte[] bytes
+                                    ? java.util.HexFormat.of().formatHex(bytes) : value);
+                            return row;
+                        }).toList()).toList();
     }
 
     @Test

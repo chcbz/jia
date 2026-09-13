@@ -26,7 +26,8 @@ public final class AgentTaskWorkspaceEventValidator {
             TaskEventType.WORK_ITEM_REQUEUED, TaskEventType.WORK_ITEM_BLOCKED,
             TaskEventType.WORK_ITEM_FAILED, TaskEventType.WORK_ITEM_CANCELLED,
             TaskEventType.WORK_ITEM_LEASE_RENEWED,
-            TaskEventType.WORK_ITEM_LEASE_RELEASED);
+            TaskEventType.WORK_ITEM_LEASE_RELEASED,
+            TaskEventType.WORK_ITEM_REASSIGNED);
     private static final Set<String> REQUEST_EVENTS = Set.of(
             TaskEventType.HELP_REQUESTED, TaskEventType.REVIEW_REQUESTED,
             TaskEventType.REQUEST_CREATED, TaskEventType.REQUEST_ACKNOWLEDGED,
@@ -97,6 +98,50 @@ public final class AgentTaskWorkspaceEventValidator {
             requireLong(payload, TaskEventPayload.Key.RESULT_VERSION);
             return null;
         }
+        if (TaskEventType.WORK_ITEM_REASSIGNED.equals(eventType)) {
+            requireAggregateType(row, TaskEventType.Aggregate.WORK_ITEM);
+            requireAgentActor(row);
+            requireEqualId(payload, TaskEventPayload.Key.WORK_ITEM_ID, row.getAggregateId());
+            requireEqualId(payload, TaskEventPayload.Key.COORDINATOR_AGENT_ID, row.getActorId());
+            String previous = requireId(payload, TaskEventPayload.Key.PREVIOUS_AGENT_ID);
+            String target = requireId(payload, TaskEventPayload.Key.TARGET_AGENT_ID);
+            String from = requireString(payload, TaskEventPayload.Key.FROM_STATUS);
+            if (previous.equals(target)
+                    || !("claimed".equals(from) || "running".equals(from))
+                    || !"claimed".equals(requireString(payload, TaskEventPayload.Key.TO_STATUS))) {
+                throw invalid();
+            }
+            long expected = requireLong(payload, TaskEventPayload.Key.EXPECTED_VERSION);
+            long result = requirePositiveLong(payload, TaskEventPayload.Key.RESULT_VERSION);
+            long attempts = requirePositiveLong(payload, TaskEventPayload.Key.ATTEMPT_COUNT);
+            long maxAttempts = requirePositiveLong(payload, TaskEventPayload.Key.MAX_ATTEMPTS);
+            long previousExpiry = requirePositiveLong(
+                    payload, TaskEventPayload.Key.PREVIOUS_LEASE_EXPIRES_AT);
+            long leaseExpiry = requirePositiveLong(payload, TaskEventPayload.Key.LEASE_EXPIRES_AT);
+            requireId(payload, TaskEventPayload.Key.REASSIGNMENT_ID);
+            requireId(payload, TaskEventPayload.Key.SOURCE_COMMAND_ID);
+            requireId(payload, TaskEventPayload.Key.COMMAND_ID);
+            requireDigestValue(payload, TaskEventPayload.Key.REQUEST_DIGEST);
+            requireDigestValue(payload, TaskEventPayload.Key.LEASE_FENCE_SHA256);
+            if (result != expected + 1 || attempts >= maxAttempts
+                    || leaseExpiry <= previousExpiry || !payload.keySet().equals(Set.of(
+                    TaskEventPayload.Key.WORK_ITEM_ID,
+                    TaskEventPayload.Key.COORDINATOR_AGENT_ID,
+                    TaskEventPayload.Key.PREVIOUS_AGENT_ID,
+                    TaskEventPayload.Key.TARGET_AGENT_ID,
+                    TaskEventPayload.Key.FROM_STATUS, TaskEventPayload.Key.TO_STATUS,
+                    TaskEventPayload.Key.EXPECTED_VERSION, TaskEventPayload.Key.RESULT_VERSION,
+                    TaskEventPayload.Key.ATTEMPT_COUNT, TaskEventPayload.Key.MAX_ATTEMPTS,
+                    TaskEventPayload.Key.PREVIOUS_LEASE_EXPIRES_AT,
+                    TaskEventPayload.Key.LEASE_EXPIRES_AT,
+                    TaskEventPayload.Key.REASSIGNMENT_ID,
+                    TaskEventPayload.Key.SOURCE_COMMAND_ID, TaskEventPayload.Key.COMMAND_ID,
+                    TaskEventPayload.Key.REQUEST_DIGEST,
+                    TaskEventPayload.Key.LEASE_FENCE_SHA256))) {
+                throw invalid();
+            }
+            return null;
+        }
         if (WORK_ITEM_EVENTS.contains(eventType)) {
             requireAggregateType(row, TaskEventType.Aggregate.WORK_ITEM);
             requireEqualId(payload, TaskEventPayload.Key.WORK_ITEM_ID, row.getAggregateId());
@@ -154,6 +199,61 @@ public final class AgentTaskWorkspaceEventValidator {
             return new ArtifactClaim(artifactId, (int) artifactVersion, artifactType,
                     visibility, workItemId, row.getActorId());
         }
+        if (TaskEventType.ARTIFACT_ACCEPTED.equals(eventType)
+                || TaskEventType.ARTIFACT_SUPERSEDED.equals(eventType)) {
+            requireAggregateType(row, TaskEventType.Aggregate.ARTIFACT);
+            requireAgentActor(row);
+            String artifactId = requireId(payload, TaskEventPayload.Key.ARTIFACT_ID);
+            String producerAgentId = requireId(
+                    payload, TaskEventPayload.Key.PRODUCER_AGENT_ID);
+            String artifactType = requireString(payload, TaskEventPayload.Key.ARTIFACT_TYPE);
+            long artifactVersion = requirePositiveLong(
+                    payload, TaskEventPayload.Key.ARTIFACT_VERSION);
+            if (artifactVersion > Integer.MAX_VALUE) {
+                throw invalid();
+            }
+            requireAggregate(row, TaskEventType.Aggregate.ARTIFACT,
+                    artifactOutcomeAggregateId(taskId, artifactId, (int) artifactVersion));
+            String visibility = requireString(payload, TaskEventPayload.Key.VISIBILITY);
+            if (!Set.of("task_members", "reviewer", "private").contains(visibility)) {
+                throw invalid();
+            }
+            String workItemId = payload.containsKey(TaskEventPayload.Key.WORK_ITEM_ID)
+                    ? requireId(payload, TaskEventPayload.Key.WORK_ITEM_ID) : null;
+            requireId(payload, TaskEventPayload.Key.DECISION_ID);
+            String from = requireString(payload, TaskEventPayload.Key.FROM_STATUS);
+            String to = requireString(payload, TaskEventPayload.Key.TO_STATUS);
+            long expected = requireLong(payload, TaskEventPayload.Key.EXPECTED_VERSION);
+            long result = requirePositiveLong(payload, TaskEventPayload.Key.RESULT_VERSION);
+            if (result != expected + 1 || !("draft".equals(from) && expected == 0
+                    || "accepted".equals(from) && expected > 0)) {
+                throw invalid();
+            }
+            if (TaskEventType.ARTIFACT_ACCEPTED.equals(eventType)) {
+                if (!"draft".equals(from) || expected != 0 || result != 1
+                        || !"accepted".equals(to)
+                        || payload.containsKey(TaskEventPayload.Key.SUPERSEDED_BY_ARTIFACT_ID)
+                        || payload.containsKey(
+                        TaskEventPayload.Key.SUPERSEDED_BY_ARTIFACT_VERSION)) {
+                    throw invalid();
+                }
+            } else {
+                if (!"superseded".equals(to)) {
+                    throw invalid();
+                }
+                String replacementId = requireId(
+                        payload, TaskEventPayload.Key.SUPERSEDED_BY_ARTIFACT_ID);
+                long replacementVersion = requirePositiveLong(
+                        payload, TaskEventPayload.Key.SUPERSEDED_BY_ARTIFACT_VERSION);
+                if (replacementVersion > Integer.MAX_VALUE
+                        || artifactId.equals(replacementId)
+                        && artifactVersion == replacementVersion) {
+                    throw invalid();
+                }
+            }
+            return new ArtifactClaim(artifactId, (int) artifactVersion, artifactType,
+                    visibility, workItemId, producerAgentId);
+        }
         if (TaskEventType.THREAD_CREATED.equals(eventType)) {
             requireAggregateType(row, TaskEventType.Aggregate.THREAD);
             requireAgentActor(row);
@@ -203,6 +303,18 @@ public final class AgentTaskWorkspaceEventValidator {
         throw invalid();
     }
 
+    public static String artifactOutcomeAggregateId(
+            String taskId, String artifactId, int artifactVersion) {
+        requireIdValue(taskId);
+        requireIdValue(artifactId);
+        if (artifactVersion < 1) {
+            throw invalid();
+        }
+        String seed = "f06-artifact-version" + '\u0000' + taskId + '\u0000'
+                + artifactId + '\u0000' + artifactVersion;
+        return "av_" + TaskEventPayload.ContentDigest.fromUtf8(seed).sha256();
+    }
+
     private static void requireEventStatus(Map<String, Object> payload, String eventType) {
         String expected = switch (eventType) {
             case TaskEventType.TASK_ASSIGNED -> "assigned";
@@ -232,6 +344,7 @@ public final class AgentTaskWorkspaceEventValidator {
             case TaskEventType.WORK_ITEM_CANCELLED -> "cancelled";
             case TaskEventType.WORK_ITEM_LEASE_RENEWED -> null;
             case TaskEventType.WORK_ITEM_LEASE_RELEASED -> null;
+            case TaskEventType.WORK_ITEM_REASSIGNED -> "claimed";
             case TaskEventType.HELP_REQUESTED, TaskEventType.REVIEW_REQUESTED,
                     TaskEventType.REQUEST_CREATED -> "open";
             case TaskEventType.REQUEST_ACKNOWLEDGED -> "acknowledged";
@@ -379,6 +492,14 @@ public final class AgentTaskWorkspaceEventValidator {
     private static long requirePositiveLong(Map<String, Object> payload, String key) {
         long value = requireLong(payload, key);
         if (value <= 0) {
+            throw invalid();
+        }
+        return value;
+    }
+
+    private static String requireDigestValue(Map<String, Object> payload, String key) {
+        String value = requireString(payload, key);
+        if (!value.matches("[0-9a-f]{64}")) {
             throw invalid();
         }
         return value;

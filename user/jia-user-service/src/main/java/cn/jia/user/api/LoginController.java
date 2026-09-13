@@ -94,13 +94,18 @@ public class LoginController {
      */
     @GetMapping("/index.html")
     public ModelAndView login(HttpServletRequest request) {
+        // Failure must win over a saved loginType, otherwise WeChat immediately loops.
+        String failure = request.getParameter("thirdPartyLoginError");
+        if (failure != null) {
+            return thirdPartyLoginError(request, failure);
+        }
         ModelAndView view = new ModelAndView();
         String loginType = this.getRequestValue(request, "loginType").orElse("");
         switch (loginType) {
             case "wxmp" -> {
                 String state = createThirdPartyLoginState(request, "wxmp");
                 if (state == null) {
-                    return thirdPartyLoginError(request);
+                    return thirdPartyLoginError(request, "expired");
                 }
                 String baseUrl = "https://" + request.getServerName() +
                         (request.getServerPort() == 80 || request.getServerPort() == 443 ? "" : ":" + request.getServerPort());
@@ -115,7 +120,7 @@ public class LoginController {
             case "weixin" -> {
                 String state = createThirdPartyLoginState(request, "weixin");
                 if (state == null) {
-                    return thirdPartyLoginError(request);
+                    return thirdPartyLoginError(request, "expired");
                 }
                 String baseUrl = "https://" + request.getServerName() +
                         (request.getServerPort() == 80 || request.getServerPort() == 443 ? "" : ":" + request.getServerPort());
@@ -130,7 +135,7 @@ public class LoginController {
             case "weibo" -> {
                 String state = createThirdPartyLoginState(request, "weibo");
                 if (state == null) {
-                    return thirdPartyLoginError(request);
+                    return thirdPartyLoginError(request, "expired");
                 }
                 String baseUrl = "https://" + request.getServerName() +
                         (request.getServerPort() == 80 || request.getServerPort() == 443 ? "" : ":" + request.getServerPort());
@@ -143,7 +148,7 @@ public class LoginController {
             case "github" -> {
                 String state = createThirdPartyLoginState(request, "github");
                 if (state == null) {
-                    return thirdPartyLoginError(request);
+                    return thirdPartyLoginError(request, "expired");
                 }
                 String baseUrl = "https://" + request.getServerName() +
                         (request.getServerPort() == 80 || request.getServerPort() == 443 ? "" : ":" + request.getServerPort());
@@ -155,9 +160,6 @@ public class LoginController {
                 return view;
             }
             default -> {
-                if ("1".equals(request.getParameter("thirdPartyLoginError"))) {
-                    return thirdPartyLoginError(request);
-                }
                 view = this.initModelAndView(request);
                 view.setViewName("login/login");
                 return view;
@@ -289,11 +291,16 @@ public class LoginController {
         return thirdPartyLoginTransactionService.create(provider, requestToResume.getRedirectUrl());
     }
 
-    private ModelAndView thirdPartyLoginError(HttpServletRequest request) {
+    private ModelAndView thirdPartyLoginError(HttpServletRequest request, String reason) {
         ModelAndView view = this.initModelAndView(request);
         view.setViewName("login/login");
         view.addObject("thirdPartyLoginError", true);
-        view.addObject("error", "第三方登录请求已过期，请返回系统后重试。");
+        String message = switch (reason) {
+            case "expired" -> "第三方登录请求无效或已失效，请返回系统后重新发起登录。";
+            case "provider" -> "第三方登录服务暂时不可用，请返回系统后重新发起登录。";
+            default -> "第三方登录未完成，请返回系统后重试。";
+        };
+        view.addObject("error", message);
         return view;
     }
 

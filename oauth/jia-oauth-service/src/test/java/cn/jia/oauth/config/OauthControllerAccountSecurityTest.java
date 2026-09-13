@@ -64,21 +64,18 @@ class OauthControllerAccountSecurityTest extends BaseMockTest {
     }
 
     @Test
-    void providerFailureReturnsTheExistingExplicitFailureRedirectWithoutLocalWrites() {
+    void providerFailureIsNotReportedAsExpiredAndDoesNotWriteLocally() {
         ThirdPartyLoginTransactionService.Transaction transaction =
                 new ThirdPartyLoginTransactionService.Transaction("github",
                         "https://client.example/oauth2/authorize?client_id=web");
         when(transactions.consume("github", "state")).thenReturn(transaction);
-        OauthExternalHttpClient.CallbackBudget budget = new OauthExternalHttpClient.CallbackBudget(
-                new OauthExternalHttpTimeouts(), () -> 0L);
-        when(externalHttpClient.beginCallback()).thenReturn(budget);
-        when(externalHttpClient.postForEntity(eq(budget), anyString(), any(HttpEntity.class)))
+        when(externalHttpClient.postForEntity(anyString(), any(HttpEntity.class)))
                 .thenThrow(new OauthExternalHttpClient.OauthExternalCallRejectedException("safe"));
         OauthController controller = controller();
         ReflectionTestUtils.setField(controller, "githubAppId", "app");
         ReflectionTestUtils.setField(controller, "githubSecret", "secret");
 
-        assertEquals("redirect:/login/index.html?thirdPartyLoginError=1",
+        assertEquals("redirect:/login/index.html?thirdPartyLoginError=provider",
                 controller.thirdPartyGithub("code", "state", new MockHttpServletRequest(), new MockHttpServletResponse()));
 
         verifyNoInteractions(userService, accountSecurityService, permsService);
@@ -155,6 +152,15 @@ class OauthControllerAccountSecurityTest extends BaseMockTest {
         assertEquals("redirect:/login/index.html?thirdPartyLoginError=1", complete(callbackUser));
         assertNull(SecurityContextHolder.getContext().getAuthentication());
         verifyNoInteractions(permsService);
+    }
+
+    @Test
+    void invalidStateDoesNotCallProviderOrCreateAuthentication() {
+        assertEquals("redirect:/login/index.html?thirdPartyLoginError=expired",
+                controller().thirdPartyGithub("code", "invalid", new MockHttpServletRequest(),
+                        new MockHttpServletResponse()));
+        assertNull(SecurityContextHolder.getContext().getAuthentication());
+        verifyNoInteractions(externalHttpClient, userService, accountSecurityService, permsService);
     }
 
     private OauthController controller() {

@@ -1,6 +1,10 @@
 package cn.jia.starter;
 
 import cn.jia.base.filter.UriAccessLogFilter;
+import cn.jia.user.api.LoginController;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.security.web.savedrequest.DefaultSavedRequest;
+import java.util.List;
 import cn.jia.base.service.LogService;
 import cn.jia.base.service.impl.LogServiceImpl;
 import cn.jia.core.audit.AuditDispatcher;
@@ -134,6 +138,44 @@ class AuthFormTransportTest {
         } finally {
             server.stop();
             context.close();
+        }
+    }
+
+    @Test
+    void providerFailureMessageIsNotExpiryAndOverridesSavedAutomaticLogin() {
+        LoginController controller = new LoginController();
+        DefaultSavedRequest saved = mock(DefaultSavedRequest.class);
+        lenient().when(saved.getParameterValues("loginType")).thenReturn(new String[]{"wxmp"});
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/login/index.html");
+        request.getSession().setAttribute("SPRING_SECURITY_SAVED_REQUEST",
+                saved);
+        request.setParameter("thirdPartyLoginError", "provider");
+
+        var view = controller.login(request);
+
+        assertEquals("login/login", view.getViewName());
+        assertEquals(true, view.getModel().get("thirdPartyLoginError"));
+        assertEquals("第三方登录服务暂时不可用，请返回系统后重新发起登录。", view.getModel().get("error"));
+    }
+
+    @Test
+    void missingAuthorizationContextStillRejectsThirdPartyLogin() {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/login/index.html");
+        request.setQueryString("loginType=github");
+        var view = new LoginController().login(request);
+        assertEquals("login/login", view.getViewName());
+        assertEquals(true, view.getModel().get("thirdPartyLoginError"));
+        assertEquals("第三方登录请求无效或已失效，请返回系统后重新发起登录。", view.getModel().get("error"));
+    }
+
+    @Test
+    void legacyAndUntrustedErrorsUseGenericMessageWithoutEchoingInput() {
+        for (String reason : List.of("1", "<script>alert(1)</script>")) {
+            MockHttpServletRequest request = new MockHttpServletRequest("GET", "/login/index.html");
+            request.setParameter("thirdPartyLoginError", reason);
+            var view = new LoginController().login(request);
+            assertEquals("第三方登录未完成，请返回系统后重试。", view.getModel().get("error"));
+            assertEquals(true, view.getModel().get("thirdPartyLoginError"));
         }
     }
 
