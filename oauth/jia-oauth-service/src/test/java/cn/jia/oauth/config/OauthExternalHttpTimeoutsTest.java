@@ -56,7 +56,7 @@ class OauthExternalHttpTimeoutsTest {
             assertEquals(HttpStatus.OK, client.exchange("https://provider.example/user", HttpMethod.GET,
                     HttpEntity.EMPTY).getStatusCode());
         }
-        assertFalse(request.getHeaders().containsKey("X-Request-Deadline-Ms"));
+        assertNull(request.getHeaders().getFirst("X-Request-Deadline-Ms"));
     }
 
     @Test

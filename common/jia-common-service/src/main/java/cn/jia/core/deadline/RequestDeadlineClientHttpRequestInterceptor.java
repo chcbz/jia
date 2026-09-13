@@ -8,12 +8,9 @@ import org.springframework.http.client.ClientHttpResponse;
 import java.io.IOException;
 
 /**
- * Propagates only the common request deadline to the shared {@code RestTemplate}.
- *
- * <p>The reserved header is replaced rather than appended, so caller-supplied or stale values cannot extend the
- * current request budget. Exhaustion fails before {@link ClientHttpRequestExecution#execute(HttpRequest, byte[])};
- * failures after the network call starts are deliberately not reclassified because a write outcome may be unknown.
- * This interceptor never retries.</p>
+ * Removes the reserved performance-deadline header and executes once, even when
+ * the local observation budget has elapsed. Real network failures and caller
+ * cancellation are not reclassified or retried: write outcomes may be unknown.
  */
 public final class RequestDeadlineClientHttpRequestInterceptor implements ClientHttpRequestInterceptor {
     @Override

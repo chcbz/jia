@@ -9,7 +9,7 @@ import java.util.function.LongSupplier;
  *
  * <p>The value is deliberately independent from wall-clock time, so it is safe to carry across nested service
  * calls without exposing a timestamp or depending on clock synchronization. It does not interrupt work or end a
- * request; callers must use an explicit safe-before-work guard before adopting enforcement.</p>
+ * request; performance targets are observation-only, not permission to cancel business work.</p>
  */
 public final class RequestDeadline {
     static final long MAX_BUDGET_MILLIS = TimeUnit.HOURS.toMillis(24);
@@ -50,7 +50,7 @@ public final class RequestDeadline {
 
     /**
      * Returns a dependency timeout capped by both the requested timeout and the request's remaining budget after a
-     * safety margin. Zero means no safe time remains to start new work.
+     * safety margin. This is a measurement utility; zero must not be used to reject business work.
      */
     public long boundedBudgetMillis(long requestedMillis, long safetyMarginMillis) {
         if (requestedMillis <= 0 || requestedMillis > MAX_BUDGET_MILLIS) {

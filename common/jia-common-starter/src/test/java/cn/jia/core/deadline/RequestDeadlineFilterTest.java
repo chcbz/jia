@@ -44,6 +44,22 @@ class RequestDeadlineFilterTest {
     }
 
     @Test
+    void elapsedPerformanceTargetStillAllowsFollowingDependencyAndRecordsTheOverrun() throws Exception {
+        AtomicLong clock = new AtomicLong();
+        RequestDeadlineFilter filter = new RequestDeadlineFilter(3000, clock::get);
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/fixture/write");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        filter.doFilter(request, response, (ignoredRequest, ignoredResponse) -> {
+            clock.addAndGet(TimeUnit.MILLISECONDS.toNanos(5000));
+            assertEquals(60_000, RequestDeadlinePropagation.requireBudgetBeforeNewWork(
+                    60_000, 100, SafeRequestTimeoutException.Dependency.HTTP));
+            response.setStatus(201);
+        });
+        assertEquals(201, response.getStatus());
+        assertEquals(Boolean.TRUE, request.getAttribute(RequestDeadlineFilter.EXHAUSTED_ATTRIBUTE));
+    }
+
+    @Test
     void malformedOrOversizedHeadersFallBackAndLargeValidValueIsClamped() throws Exception {
         for (String invalid : new String[]{"", "-1", "+1", " 1", "1 ", "1.0", "abc", "99999999999"}) {
             AtomicLong clock = new AtomicLong();

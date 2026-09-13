@@ -35,44 +35,38 @@ class RequestDeadlinePropagationTest {
     }
 
     @Test
-    void propagatesOnlyTheRemainingBudgetAndCapsNewWork() {
+    void doesNotPropagateOrShortenTimeoutAsTheObservationBudgetShrinks() {
         AtomicLong clock = new AtomicLong();
         RequestDeadline deadline = RequestDeadline.start(700, clock::get);
         clock.addAndGet(TimeUnit.MILLISECONDS.toNanos(200));
         Map<String, String> headers = new LinkedHashMap<>();
 
         try (RequestDeadlineContext.Scope ignored = RequestDeadlineContext.open(deadline)) {
-            assertTrue(RequestDeadlinePropagation.writeCurrentHeader(headers::put));
-            assertEquals(400, RequestDeadlinePropagation.requireBudgetBeforeNewWork(
+            assertFalse(RequestDeadlinePropagation.writeCurrentHeader(headers::put));
+            assertEquals(60_000, RequestDeadlinePropagation.requireBudgetBeforeNewWork(
                     60_000, 100, SafeRequestTimeoutException.Dependency.HTTP));
         }
 
-        assertEquals(Map.of(RequestDeadlinePropagation.HEADER_NAME, "500"), headers);
+        assertTrue(headers.isEmpty());
     }
 
     @Test
-    void strictHeaderPropagationUsesOneRemainingValueAndFailsBeforeWritingWhenExhausted() {
+    void expiredObservationDoesNotWriteHeadersOrRejectFollowingWork() {
         AtomicLong clock = new AtomicLong();
         RequestDeadline deadline = RequestDeadline.start(700, clock::get);
-        Map<String, String> headers = new LinkedHashMap<>();
-
+        AtomicBoolean writerCalled = new AtomicBoolean();
         try (RequestDeadlineContext.Scope ignored = RequestDeadlineContext.open(deadline)) {
-            clock.addAndGet(TimeUnit.MILLISECONDS.toNanos(200));
-            assertTrue(RequestDeadlinePropagation.writeCurrentHeaderBeforeNewWork(
-                    headers::put, SafeRequestTimeoutException.Dependency.HTTP));
-            assertEquals(Map.of(RequestDeadlinePropagation.HEADER_NAME, "500"), headers);
-
-            clock.addAndGet(TimeUnit.MILLISECONDS.toNanos(500));
-            AtomicBoolean writerCalled = new AtomicBoolean();
-            SafeRequestTimeoutException exception = assertThrows(SafeRequestTimeoutException.class,
-                    () -> RequestDeadlinePropagation.writeCurrentHeaderBeforeNewWork(
-                            (name, value) -> writerCalled.set(true), SafeRequestTimeoutException.Dependency.HTTP));
-            assertFalse(writerCalled.get());
-            assertEquals(SafeRequestTimeoutException.Failure.REQUEST_DEADLINE_EXCEEDED, exception.failure());
-            assertEquals(SafeRequestTimeoutException.WorkState.NOT_STARTED, exception.workState());
-            assertEquals(SafeRequestTimeoutException.Dependency.HTTP, exception.dependency());
-            assertFalse(exception.retryable());
+            for (long elapsed : new long[]{200, 500, 5000}) {
+                clock.addAndGet(TimeUnit.MILLISECONDS.toNanos(elapsed));
+                assertFalse(RequestDeadlinePropagation.writeCurrentHeaderBeforeNewWork(
+                        (name, value) -> writerCalled.set(true), SafeRequestTimeoutException.Dependency.HTTP));
+                assertEquals(60_000, RequestDeadlinePropagation.requireBudgetBeforeNewWork(
+                        60_000, 100, SafeRequestTimeoutException.Dependency.HTTP));
+                assertTrue(RequestDeadlinePropagation.currentHeaderValue().isEmpty());
+            }
+            assertTrue(deadline.isExpired(), "overrun remains observable");
         }
+        assertFalse(writerCalled.get());
     }
 
     @Test
@@ -89,18 +83,13 @@ class RequestDeadlinePropagationTest {
     }
 
     @Test
-    void exhaustedGuardFailsOnlyWithSafeNotStartedContract() {
+    void exhaustedBudgetPreservesTransportPolicyForEveryDependency() {
         RequestDeadline expired = RequestDeadline.start(0);
         try (RequestDeadlineContext.Scope ignored = RequestDeadlineContext.open(expired)) {
-            SafeRequestTimeoutException exception = assertThrows(SafeRequestTimeoutException.class,
-                    () -> RequestDeadlinePropagation.requireBudgetBeforeNewWork(
-                            1000, 100, SafeRequestTimeoutException.Dependency.DATABASE));
-            assertEquals(SafeRequestTimeoutException.Failure.REQUEST_DEADLINE_EXCEEDED, exception.failure());
-            assertEquals(SafeRequestTimeoutException.WorkState.NOT_STARTED, exception.workState());
-            assertEquals(SafeRequestTimeoutException.Dependency.DATABASE, exception.dependency());
-            assertEquals("请求处理超时", exception.getMessage());
-            assertFalse(exception.retryable());
-            assertEquals(null, exception.getCause());
+            for (SafeRequestTimeoutException.Dependency dependency : SafeRequestTimeoutException.Dependency.values()) {
+                assertEquals(60_000, RequestDeadlinePropagation.requireBudgetBeforeNewWork(60_000, 100, dependency));
+                assertTrue(expired.isExpired());
+            }
         }
     }
 

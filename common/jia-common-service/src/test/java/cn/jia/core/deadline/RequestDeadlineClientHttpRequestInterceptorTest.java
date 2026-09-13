@@ -26,7 +26,7 @@ class RequestDeadlineClientHttpRequestInterceptorTest {
     }
 
     @Test
-    void replacesCallerValueWithRemainingBudgetAndExecutesExactlyOnce() throws Exception {
+    void removesDeadlineHeaderAndExecutesExactlyOnceWithoutShorteningWork() throws Exception {
         MockClientHttpRequest request = request();
         request.getHeaders().add("x-request-deadline-ms", "60000");
         AtomicInteger executions = new AtomicInteger();
@@ -37,14 +37,14 @@ class RequestDeadlineClientHttpRequestInterceptorTest {
         try (RequestDeadlineContext.Scope ignored = RequestDeadlineContext.open(deadline)) {
             interceptor.intercept(request, new byte[]{1, 2, 3}, (actualRequest, body) -> {
                 executions.incrementAndGet();
-                assertEquals("2100", actualRequest.getHeaders().getFirst(RequestDeadlinePropagation.HEADER_NAME));
+                assertNull(actualRequest.getHeaders().getFirst(RequestDeadlinePropagation.HEADER_NAME));
                 assertEquals(3, body.length);
                 return new MockClientHttpResponse(new byte[0], 200);
             });
         }
 
         assertEquals(1, executions.get());
-        assertEquals(1, request.getHeaders().get(RequestDeadlinePropagation.HEADER_NAME).size());
+        assertNull(request.getHeaders().get(RequestDeadlinePropagation.HEADER_NAME));
     }
 
     @Test
@@ -65,26 +65,21 @@ class RequestDeadlineClientHttpRequestInterceptorTest {
     }
 
     @Test
-    void exhaustedDeadlineFailsBeforeNetworkExecutionWithUnifiedSafeContract() {
+    void exhaustedObservationExecutesNetworkWriteOnceAndKeepsTheRealResponse() throws Exception {
         MockClientHttpRequest request = request();
-        request.getHeaders().add(RequestDeadlinePropagation.HEADER_NAME, "60000");
+        request.getHeaders().add(RequestDeadlinePropagation.HEADER_NAME, "0");
         AtomicInteger executions = new AtomicInteger();
-
-        try (RequestDeadlineContext.Scope ignored = RequestDeadlineContext.open(RequestDeadline.start(0))) {
-            SafeRequestTimeoutException failure = assertThrows(SafeRequestTimeoutException.class,
-                    () -> interceptor.intercept(request, new byte[0], (actualRequest, body) -> {
-                        executions.incrementAndGet();
-                        return new MockClientHttpResponse(new byte[0], 200);
-                    }));
-
-            assertEquals(SafeRequestTimeoutException.Failure.REQUEST_DEADLINE_EXCEEDED, failure.failure());
-            assertEquals(SafeRequestTimeoutException.Dependency.HTTP, failure.dependency());
-            assertEquals(SafeRequestTimeoutException.WorkState.NOT_STARTED, failure.workState());
-            assertFalse(failure.retryable());
+        RequestDeadline expired = RequestDeadline.start(0);
+        try (RequestDeadlineContext.Scope ignored = RequestDeadlineContext.open(expired)) {
+            var response = interceptor.intercept(request, new byte[0], (actualRequest, body) -> {
+                executions.incrementAndGet();
+                assertNull(actualRequest.getHeaders().getFirst(RequestDeadlinePropagation.HEADER_NAME));
+                return new MockClientHttpResponse(new byte[0], 201);
+            });
+            assertEquals(201, response.getStatusCode().value());
+            org.junit.jupiter.api.Assertions.assertTrue(expired.isExpired(), "overrun remains observable");
         }
-
-        assertEquals(0, executions.get());
-        assertNull(request.getHeaders().getFirst(RequestDeadlinePropagation.HEADER_NAME));
+        assertEquals(1, executions.get());
     }
 
     private static MockClientHttpRequest request() {
