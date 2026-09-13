@@ -146,11 +146,6 @@ class ChatControllerTest extends BaseMockTest {
         when(redisService.subscribeToChannel("1001")).thenReturn(Flux.never());
         when(chatConversationEventBroker.deletionSignal(eq("1001"), eq(1L), any()))
                 .thenReturn(Flux.never());
-        when(chatConversationEventBroker.runIfLive(eq("1001"), eq(1L), any(), any(Runnable.class)))
-                .thenAnswer(invocation -> {
-                    ((Runnable) invocation.getArgument(3)).run();
-                    return true;
-                });
         java.util.concurrent.CountDownLatch subscribed = new java.util.concurrent.CountDownLatch(1);
         java.util.concurrent.CountDownLatch cancelled = new java.util.concurrent.CountDownLatch(1);
         java.util.concurrent.atomic.AtomicReference<Throwable> failure = new java.util.concurrent.atomic.AtomicReference<>();
@@ -176,6 +171,9 @@ class ChatControllerTest extends BaseMockTest {
 
         assertTrue(cancelled.await(1, java.util.concurrent.TimeUnit.SECONDS));
         org.junit.jupiter.api.Assertions.assertNull(failure.get());
+        // No real or synthetic frame is emitted before caller cancellation.
+        verify(chatConversationEventBroker, never()).runIfLive(
+                eq("1001"), eq(1L), any(), any(Runnable.class));
     }
 
     @Test
