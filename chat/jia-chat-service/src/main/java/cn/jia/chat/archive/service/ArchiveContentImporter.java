@@ -1,5 +1,6 @@
 package cn.jia.chat.archive.service;
 
+import cn.jia.core.diagnostics.StartupTiming;
 import cn.jia.chat.archive.content.ArchiveEtags;
 import cn.jia.chat.archive.content.ArchiveManifest;
 import cn.jia.chat.archive.model.ArchiveBlockRecord;
@@ -42,7 +43,8 @@ public class ArchiveContentImporter {
         Objects.requireNonNull(manifest, "manifest");
         try {
             ArchiveEditionRecord expectedEdition = expectedEdition(manifest, manifestFileSha256);
-            if (activateExistingReady(manifest, expectedEdition)) {
+            if (StartupTiming.call("cyf.archive.ready-restart-transaction",
+                    () -> activateExistingReady(manifest, expectedEdition))) {
                 return;
             }
             transactions.required(() -> {
@@ -73,7 +75,8 @@ public class ArchiveContentImporter {
                 // The work row is intentionally not locked until the short activation transaction.
                 ArchiveEditionRecord current = store.lockEdition(manifest.editionId());
                 requireEditionMetadata(expectedEdition, current);
-                verifyPersistedContent(manifest);
+                StartupTiming.run("cyf.archive.persisted-content-verification",
+                    () -> verifyPersistedContent(manifest));
                 if ("STAGING".equals(current.importState())) {
                     if (store.markReady(manifest.editionId()) != 1) {
                         throw mismatch("edition READY transition");
@@ -112,7 +115,8 @@ public class ArchiveContentImporter {
             if (!"READY".equals(candidate.importState())) {
                 throw mismatch("ready restart candidate state");
             }
-            verifyPersistedContent(manifest);
+            StartupTiming.run("cyf.archive.persisted-content-verification",
+                    () -> verifyPersistedContent(manifest));
             activateLocked(manifest, work, candidate);
             return true;
         });

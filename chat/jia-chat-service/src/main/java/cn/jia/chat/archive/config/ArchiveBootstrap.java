@@ -1,5 +1,6 @@
 package cn.jia.chat.archive.config;
 
+import cn.jia.core.diagnostics.StartupTiming;
 import cn.jia.chat.archive.content.ArchiveManifestBundle;
 import cn.jia.chat.archive.content.ArchiveManifestLoader;
 import cn.jia.chat.archive.service.ArchiveContentImporter;
@@ -31,12 +32,17 @@ public class ArchiveBootstrap implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
+        StartupTiming.run("cyf.runner.archive", () -> runTimed(args));
+    }
+
+    private void runTimed(ApplicationArguments args) {
         if (!accessPolicy.enabled()) {
             return;
         }
-        schemaInitializer.initialize();
-        readerDataSchemaInitializer.initialize();
-        ArchiveManifestBundle bundle = manifestLoader.load();
-        importer.importAndActivate(bundle.manifest(), bundle.manifestFileSha256());
+        StartupTiming.run("cyf.archive.schema", schemaInitializer::initialize);
+        StartupTiming.run("cyf.archive.reader-schema", readerDataSchemaInitializer::initialize);
+        ArchiveManifestBundle bundle = StartupTiming.call("cyf.archive.manifest-load", manifestLoader::load);
+        StartupTiming.run("cyf.archive.import-activate",
+                () -> importer.importAndActivate(bundle.manifest(), bundle.manifestFileSha256()));
     }
 }

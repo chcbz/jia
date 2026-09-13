@@ -1,5 +1,6 @@
 package cn.jia.chat.config;
 
+import cn.jia.core.diagnostics.StartupTiming;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
@@ -25,6 +26,10 @@ public class ChatSchemaInitializer implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
+        StartupTiming.run("cyf.runner.chat-schema", () -> runTimed(args));
+    }
+
+    private void runTimed(ApplicationArguments args) {
         if (isH2Database() && !tableExists("chat_conversation")) {
             log.info("Skipping chat schema initialization because H2 does not provide the optional chat_conversation table");
             return;
