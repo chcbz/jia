@@ -17,8 +17,12 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
     private final AgentRuntimeAuthenticationService service;
     public AgentRuntimeAuthenticationFilter(AgentRuntimeAuthenticationService service) { this.service = service; }
 
-    public static boolean selects(HttpServletRequest request) {
-        return request.getHeader("X-Agent-Runtime-Id") != null || request.getHeader("X-Agent-Id") != null
+    public static boolean selectsRuntimeCredentialLane(HttpServletRequest request) {
+        // One X-Agent-Id is also the established API-key websocket identity header. It is not,
+        // by itself, proof that the caller is presenting an AgentRuntime credential. Ambiguous
+        // duplicates remain fail-closed instead of falling through to a first-value consumer.
+        return request.getHeader("X-Agent-Runtime-Id") != null
+                || Collections.list(request.getHeaders("X-Agent-Id")).size() > 1
                 || Collections.list(request.getHeaders("Authorization")).stream()
                 .anyMatch(value -> value.toLowerCase(Locale.ROOT).startsWith("agentruntime"));
     }

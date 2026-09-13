@@ -222,11 +222,43 @@ class AgentRuntimeSecurityIntegrationTest {
         } finally { cn.jia.core.context.EsContextHolder.clearContext(); }
     }
 
+    @Test void selectorClaimsRuntimeCredentialsButNotTheEstablishedApiKeyWebSocketAgentHeader() throws Exception {
+        var servletContext = new MockServletContext();
+        assertFalse(AgentRuntimeAuthenticationFilter.selectsRuntimeCredentialLane(
+                get("/ws/agent/channel").header("X-API-Key", "api-key")
+                        .header("X-Agent-Id", A).buildRequest(servletContext)));
+        assertFalse(AgentRuntimeAuthenticationFilter.selectsRuntimeCredentialLane(
+                get("/ws/agent/channel").queryParam("api_key", "api-key")
+                        .queryParam("agentId", A).buildRequest(servletContext)));
+        assertTrue(AgentRuntimeAuthenticationFilter.selectsRuntimeCredentialLane(
+                get("/ws/agent/channel").header("X-Agent-Id", A).header("X-Agent-Id", B)
+                        .buildRequest(servletContext)));
+        assertTrue(AgentRuntimeAuthenticationFilter.selectsRuntimeCredentialLane(
+                get("/ws/agent/channel").header("X-Agent-Runtime-Id", "runtime-a")
+                        .buildRequest(servletContext)));
+        assertTrue(AgentRuntimeAuthenticationFilter.selectsRuntimeCredentialLane(
+                get("/ws/agent/channel").header("Authorization", "AgentRuntime " + TOKEN_A)
+                        .buildRequest(servletContext)));
+        assertTrue(AgentRuntimeAuthenticationFilter.selectsRuntimeCredentialLane(
+                get("/ws/agent/channel").header("Authorization", "AgentRuntimeMalformed")
+                        .buildRequest(servletContext)));
+
+        mvc.perform(get("/agent/tasks/task-a/context-pack")
+                        .header("Authorization", "AgentRuntimeMalformed")
+                        .header("X-Agent-Id", A).header("X-Agent-Runtime-Id", "runtime-a"))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(requestA().header("X-Agent-Runtime-Id", "runtime-duplicate"))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(requestA().header("Authorization", "AgentRuntime " + TOKEN_B))
+                .andExpect(status().isUnauthorized());
+        verifyNoInteractions(packs, leases);
+    }
+
     @Test void noMintedJwtAndBearerStillRequiresOriginalOauthPrincipalPath() throws Exception {
         var principal = auth.authenticate(A,"runtime-a",TOKEN_A);
         assertNull(principal.getCredentials()); assertFalse(principal.toString().contains(TOKEN_A));
         assertThrows(IllegalArgumentException.class,()->principal.setAuthenticated(true));
-        assertFalse(AgentRuntimeAuthenticationFilter.selects(get("/agent/tasks/task-a/context-pack")
+        assertFalse(AgentRuntimeAuthenticationFilter.selectsRuntimeCredentialLane(get("/agent/tasks/task-a/context-pack")
                 .header("Authorization","Bearer original-jwt").buildRequest(new MockServletContext())));
         // Without the original OAuth chain a bearer string cannot acquire this principal.
         mvc.perform(get("/agent/tasks/task-a/context-pack").header("Authorization","Bearer "+TOKEN_A))

@@ -18,7 +18,7 @@ public class AgentRuntimeSecurityConfiguration {
     @Bean @Order(0)
     public SecurityFilterChain agentRuntimeSecurityFilterChain(HttpSecurity http,
             AgentRuntimeAuthenticationService service) throws Exception {
-        http.securityMatcher(AgentRuntimeAuthenticationFilter::selects)
+        http.securityMatcher(AgentRuntimeAuthenticationFilter::selectsRuntimeCredentialLane)
                 .addFilterBefore(new AgentRuntimeAuthenticationFilter(service), UsernamePasswordAuthenticationFilter.class)
                 .authorizeHttpRequests(a -> a.anyRequest().hasAuthority("AGENT_RUNTIME_NARROW"))
                 .csrf(AbstractHttpConfigurer::disable)
