@@ -826,6 +826,18 @@ class AgentWorkItemLeaseRealDatabaseTest {
         }
 
         @Override
+        public int reassignExpiredLeaseByVersion(
+                String tenantId, String clientId, String taskId, String workItemId,
+                String previousAgentId, String previousLeaseToken, String expectedStatus,
+                long expectedLeaseUntil, long expectedVersion, long expiredAtOrBefore,
+                AgentTaskWorkItemDTO item) {
+            beforeCompetingCas();
+            return delegate.reassignExpiredLeaseByVersion(
+                    tenantId, clientId, taskId, workItemId, previousAgentId, previousLeaseToken,
+                    expectedStatus, expectedLeaseUntil, expectedVersion, expiredAtOrBefore, item);
+        }
+
+        @Override
         public int expireLeaseByVersion(
                 String tenantId, String clientId, String taskId, String workItemId,
                 String assigneeAgentId, String leaseToken, String expectedStatus,
