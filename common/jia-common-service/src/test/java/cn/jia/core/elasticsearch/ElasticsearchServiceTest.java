@@ -18,23 +18,24 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class ElasticsearchServiceTest extends BaseMockTest {
     @Test
-    void doesNotStartSearchWhenRemainingDeadlineCannotFitTheElasticsearchRequestBudget() {
+    void expiredPerformanceDeadlineDoesNotRefuseElasticsearchSearch() throws Exception {
         ElasticsearchClient client = mock(ElasticsearchClient.class);
         ElasticsearchService service = service(client);
+        @SuppressWarnings("unchecked")
+        co.elastic.clients.elasticsearch.core.SearchResponse<String> response = mock(
+                co.elastic.clients.elasticsearch.core.SearchResponse.class);
+        when(client.search(any(Function.class), eq(String.class))).thenReturn(response);
 
-        try (RequestDeadlineContext.Scope ignored = RequestDeadlineContext.open(RequestDeadline.start(2500))) {
-            SafeRequestTimeoutException exception = assertThrows(SafeRequestTimeoutException.class,
-                    () -> service.searchMatch("phrase", "content", "water", String.class));
-            assertEquals(SafeRequestTimeoutException.Failure.REQUEST_DEADLINE_EXCEEDED, exception.failure());
-            assertEquals(SafeRequestTimeoutException.Dependency.ELASTICSEARCH, exception.dependency());
+        try (RequestDeadlineContext.Scope ignored = RequestDeadlineContext.open(RequestDeadline.start(0))) {
+            assertEquals(response, service.searchMatch("phrase", "content", "water", String.class));
         }
 
-        verifyNoInteractions(client);
+        verify(client).search(any(Function.class), eq(String.class));
     }
 
     @Test
@@ -83,9 +84,6 @@ class ElasticsearchServiceTest extends BaseMockTest {
     private ElasticsearchService service(ElasticsearchClient client) {
         ElasticsearchService service = new ElasticsearchService();
         ReflectionTestUtils.setField(service, "elasticsearchClient", client);
-        ReflectionTestUtils.setField(service, "elasticsearchTimeouts", new ElasticsearchTimeouts(
-                ElasticsearchTimeouts.DEFAULT_CONNECT_TIMEOUT, ElasticsearchTimeouts.DEFAULT_SOCKET_TIMEOUT,
-                ElasticsearchTimeouts.DEFAULT_REQUEST_TIMEOUT, ElasticsearchTimeouts.DEFAULT_SAFETY_MARGIN));
         return service;
     }
 }

@@ -8,6 +8,7 @@ import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -16,23 +17,22 @@ import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Set;
 
-/** Applies bounded RabbitMQ waits without changing routing, confirms, returns, transactions, ACKs or outbox state. */
+/** Applies explicitly enabled RabbitMQ transport waits without changing confirms, retries, recovery, ACKs or state. */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnClass(name = "org.springframework.amqp.rabbit.core.RabbitTemplate")
 public class RabbitMqBudgetConfiguration {
 
     @Bean
+    @ConditionalOnProperty(prefix = "jia.rabbitmq.budget", name = "enabled", havingValue = "true")
     static BeanPostProcessor rabbitMqBudgetBeanPostProcessor(
-            @Value("${jia.rabbitmq.budget.request-budget:2500ms}") Duration requestBudget,
-            @Value("${jia.rabbitmq.budget.safety-margin:100ms}") Duration safetyMargin,
-            @Value("${jia.rabbitmq.budget.connection-timeout:500ms}") Duration connectionTimeout,
-            @Value("${jia.rabbitmq.budget.handshake-timeout:750ms}") Duration handshakeTimeout,
-            @Value("${jia.rabbitmq.budget.channel-rpc-timeout:1000ms}") Duration channelRpcTimeout,
-            @Value("${jia.rabbitmq.budget.channel-checkout-timeout:500ms}") Duration channelCheckoutTimeout,
-            @Value("${jia.rabbitmq.budget.receive-timeout:0ms}") Duration receiveTimeout,
-            @Value("${jia.rabbitmq.budget.reply-timeout:2000ms}") Duration replyTimeout) {
-        RabbitMqWaitBudget budget = new RabbitMqWaitBudget(requestBudget, safetyMargin, connectionTimeout,
-                handshakeTimeout, channelRpcTimeout, channelCheckoutTimeout, receiveTimeout, replyTimeout);
+            @Value("${jia.rabbitmq.budget.connection-timeout}") Duration connectionTimeout,
+            @Value("${jia.rabbitmq.budget.handshake-timeout}") Duration handshakeTimeout,
+            @Value("${jia.rabbitmq.budget.channel-rpc-timeout}") Duration channelRpcTimeout,
+            @Value("${jia.rabbitmq.budget.channel-checkout-timeout}") Duration channelCheckoutTimeout,
+            @Value("${jia.rabbitmq.budget.receive-timeout}") Duration receiveTimeout,
+            @Value("${jia.rabbitmq.budget.reply-timeout}") Duration replyTimeout) {
+        RabbitMqWaitBudget budget = new RabbitMqWaitBudget(connectionTimeout, handshakeTimeout, channelRpcTimeout,
+                channelCheckoutTimeout, receiveTimeout, replyTimeout);
         return new RabbitMqBudgetBeanPostProcessor(budget);
     }
 
@@ -62,6 +62,7 @@ public class RabbitMqBudgetConfiguration {
             }
             configureNativeFactory(factory.getRabbitConnectionFactory());
             if (factory instanceof CachingConnectionFactory cachingFactory) {
+                // A checkout timeout is allowed to fail acquisition; it must never be converted into a successful send.
                 cachingFactory.setChannelCheckoutTimeout(budget.channelCheckoutTimeoutMillis());
             }
             if (factory.hasPublisherConnectionFactory()
@@ -74,16 +75,11 @@ public class RabbitMqBudgetConfiguration {
             factory.setConnectionTimeout(budget.connectionTimeoutMillis());
             factory.setHandshakeTimeout(budget.handshakeTimeoutMillis());
             factory.setChannelRpcTimeout(budget.channelRpcTimeoutMillis());
-            // Native recovery can replay topology or reconnect independently of the existing outbox/confirm owner.
-            factory.setAutomaticRecoveryEnabled(false);
-            factory.setTopologyRecoveryEnabled(false);
         }
 
         private void configureTemplate(RabbitTemplate template) {
             template.setReceiveTimeout(budget.receiveTimeoutMillis());
             template.setReplyTimeout(budget.replyTimeoutMillis());
-            // A timeout or publish exception can mean delivery is unknown; never infer that replay is safe here.
-            template.setRetryTemplate(null);
         }
     }
 }

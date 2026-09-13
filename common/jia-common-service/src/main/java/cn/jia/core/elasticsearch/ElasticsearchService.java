@@ -18,9 +18,6 @@ public class ElasticsearchService {
     @Autowired
     private ElasticsearchClient elasticsearchClient;
 
-    @Autowired
-    private ElasticsearchTimeouts elasticsearchTimeouts;
-
     /**
      * 查询最大匹配值（match 查询）
      *
@@ -31,7 +28,6 @@ public class ElasticsearchService {
      * @return 搜索结果列表（仅返回 source 转换后的对象）
      */
     public <T> SearchResponse<T> searchMatch(String index, String field, String value, Class<T> clazz) {
-        elasticsearchTimeouts.requireFullRequestBudgetBeforeNewOperation();
         try {
             return elasticsearchClient.search(s -> s
                             .index(index)
@@ -56,7 +52,6 @@ public class ElasticsearchService {
      * @return 被删除的文档ID（若成功）
      */
     public String delete(String id, String index) {
-        elasticsearchTimeouts.requireFullRequestBudgetBeforeNewOperation();
         try {
             DeleteResponse response = elasticsearchClient.delete(d -> d
                     .index(index)

@@ -7,6 +7,7 @@ import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.connection.AbstractConnectionFactory;
 import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.core.retry.RetryTemplate;
 
 import java.io.IOException;
@@ -18,6 +19,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -25,55 +27,56 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RabbitMqBudgetConfigurationTest {
 
-    @Test
-    void defaultsAreFiniteAndFitBothColdAndCachedPathsBeforeSafetyMargin() {
-        RabbitMqWaitBudget budget = RabbitMqWaitBudget.defaults();
+    private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
+            .withUserConfiguration(RabbitMqBudgetConfiguration.class);
 
-        assertEquals(2_500L, budget.requestBudgetMillis());
-        assertEquals(100L, budget.safetyMarginMillis());
-        assertEquals(500, budget.connectionTimeoutMillis());
-        assertEquals(750, budget.handshakeTimeoutMillis());
-        assertEquals(1_000, budget.channelRpcTimeoutMillis());
-        assertEquals(500L, budget.channelCheckoutTimeoutMillis());
-        assertEquals(0L, budget.receiveTimeoutMillis());
-        assertEquals(2_000L, budget.replyTimeoutMillis());
-        assertTrue(budget.coldConnectionPathMillis()
-                <= budget.requestBudgetMillis() - budget.safetyMarginMillis());
-        assertTrue(budget.cachedChannelPathMillis()
-                <= budget.requestBudgetMillis() - budget.safetyMarginMillis());
+    @Test
+    void performanceTransportOverridesAreDisabledByDefault() {
+        contextRunner.run(context -> assertFalse(context.containsBean("rabbitMqBudgetBeanPostProcessor")));
     }
 
     @Test
-    void invalidOrOverBudgetSettingsFailClosed() {
-        assertThrows(NullPointerException.class, () -> budget(null, ms(100), ms(500), ms(750),
-                ms(1_000), ms(500), Duration.ZERO, ms(2_000)));
-        assertThrows(IllegalArgumentException.class, () -> budget(Duration.ZERO, ms(100), ms(500), ms(750),
-                ms(1_000), ms(500), Duration.ZERO, ms(2_000)));
-        assertThrows(IllegalArgumentException.class, () -> budget(ms(3_001), ms(100), ms(500), ms(750),
-                ms(1_000), ms(500), Duration.ZERO, ms(2_000)));
-        assertThrows(IllegalArgumentException.class, () -> budget(ms(2_500), ms(2_500), ms(500), ms(750),
-                ms(1_000), ms(500), Duration.ZERO, ms(2_000)));
-        assertThrows(IllegalArgumentException.class, () -> budget(ms(2_500), ms(100), Duration.ZERO, ms(750),
-                ms(1_000), ms(500), Duration.ZERO, ms(2_000)));
-        assertThrows(IllegalArgumentException.class, () -> budget(ms(2_500), ms(100), Duration.ofNanos(1), ms(750),
-                ms(1_000), ms(500), Duration.ZERO, ms(2_000)));
-        assertThrows(IllegalArgumentException.class, () -> budget(ms(2_500), ms(100), ms(500), ms(750),
-                ms(1_151), ms(500), Duration.ZERO, ms(2_000)));
-        assertThrows(IllegalArgumentException.class, () -> budget(ms(2_500), ms(100), ms(500), ms(750),
-                ms(1_000), ms(1_401), Duration.ZERO, ms(2_000)));
-        assertThrows(IllegalArgumentException.class, () -> budget(ms(2_500), ms(100), ms(500), ms(750),
-                ms(1_000), ms(500), ms(-1), ms(2_000)));
-        assertThrows(IllegalArgumentException.class, () -> budget(ms(2_500), ms(100), ms(500), ms(750),
-                ms(1_000), ms(500), Duration.ZERO, ms(2_401)));
-        assertThrows(IllegalArgumentException.class, () -> budget(ms(2_500), ms(100),
-                ms((long) Integer.MAX_VALUE + 1), ms(1), ms(1), ms(1), Duration.ZERO, ms(1)));
+    void explicitFiniteTransportSettingsEnableTheAdapterWithoutAnApiSloCap() {
+        contextRunner.withPropertyValues(
+                        "jia.rabbitmq.budget.enabled=true",
+                        "jia.rabbitmq.budget.connection-timeout=30s",
+                        "jia.rabbitmq.budget.handshake-timeout=20s",
+                        "jia.rabbitmq.budget.channel-rpc-timeout=45s",
+                        "jia.rabbitmq.budget.channel-checkout-timeout=60s",
+                        "jia.rabbitmq.budget.receive-timeout=10s",
+                        "jia.rabbitmq.budget.reply-timeout=90s")
+                .run(context -> {
+                    assertTrue(context.containsBean("rabbitMqBudgetBeanPostProcessor"));
+                    assertNull(context.getStartupFailure());
+                });
     }
 
     @Test
-    void boundsDefaultAndDedicatedFactoriesWithoutConnectingOrChangingPublisherSemantics() {
+    void enabledAdapterRequiresCompleteFiniteTransportConfiguration() {
+        contextRunner.withPropertyValues("jia.rabbitmq.budget.enabled=true")
+                .run(context -> assertNotNull(context.getStartupFailure()));
+        assertThrows(NullPointerException.class, () -> waits(null, seconds(1), seconds(1),
+                seconds(1), Duration.ZERO, seconds(1)));
+        assertThrows(IllegalArgumentException.class, () -> waits(Duration.ZERO, seconds(1), seconds(1),
+                seconds(1), Duration.ZERO, seconds(1)));
+        assertThrows(IllegalArgumentException.class, () -> waits(Duration.ofNanos(1), seconds(1), seconds(1),
+                seconds(1), Duration.ZERO, seconds(1)));
+        assertThrows(IllegalArgumentException.class, () -> waits(seconds(1), seconds(1), seconds(1),
+                seconds(1), Duration.ofMillis(-1), seconds(1)));
+        assertThrows(IllegalArgumentException.class, () -> waits(
+                Duration.ofMillis((long) Integer.MAX_VALUE + 1), seconds(1), seconds(1), seconds(1),
+                Duration.ZERO, seconds(1)));
+    }
+
+    @Test
+    void configuresDefaultAndDedicatedFactoriesWithoutConnectingOrChangingRecovery() {
         RabbitMqBudgetConfiguration.RabbitMqBudgetBeanPostProcessor processor = processor();
         NoNetworkConnectionFactory defaultNative = new NoNetworkConnectionFactory();
         NoNetworkConnectionFactory dedicatedNative = new NoNetworkConnectionFactory();
+        defaultNative.setAutomaticRecoveryEnabled(true);
+        defaultNative.setTopologyRecoveryEnabled(true);
+        dedicatedNative.setAutomaticRecoveryEnabled(true);
+        dedicatedNative.setTopologyRecoveryEnabled(true);
         CachingConnectionFactory defaultFactory = new CachingConnectionFactory(defaultNative);
         CachingConnectionFactory dedicatedFactory = new CachingConnectionFactory(dedicatedNative);
         dedicatedFactory.setPublisherConfirmType(CachingConnectionFactory.ConfirmType.CORRELATED);
@@ -84,11 +87,11 @@ class RabbitMqBudgetConfigurationTest {
         assertSame(dedicatedFactory,
                 processor.postProcessBeforeInitialization(dedicatedFactory, "agentRabbitConnectionFactory"));
 
-        assertNativeBudget(defaultNative);
-        assertNativeBudget(dedicatedNative);
-        assertPublisherNativeBudget(dedicatedFactory);
-        assertEquals(500L, field(defaultFactory, "channelCheckoutTimeout"));
-        assertEquals(500L, field(dedicatedFactory, "channelCheckoutTimeout"));
+        assertNativeWaits(defaultNative);
+        assertNativeWaits(dedicatedNative);
+        assertPublisherNativeWaits(dedicatedFactory);
+        assertEquals(60_000L, field(defaultFactory, "channelCheckoutTimeout"));
+        assertEquals(60_000L, field(dedicatedFactory, "channelCheckoutTimeout"));
         assertEquals(7, dedicatedFactory.getChannelCacheSize());
         assertTrue(dedicatedFactory.isPublisherConfirms());
         assertFalse(dedicatedFactory.isSimplePublisherConfirms());
@@ -98,57 +101,57 @@ class RabbitMqBudgetConfigurationTest {
     }
 
     @Test
-    void boundsTemplateWaitsAndDisablesRetryWithoutChangingDeliveryOrTransactionSettings() {
+    void configuresTemplateWaitsWithoutChangingRetryDeliveryOrTransactionSettings() {
         RabbitMqBudgetConfiguration.RabbitMqBudgetBeanPostProcessor processor = processor();
         CachingConnectionFactory connectionFactory = new CachingConnectionFactory(new NoNetworkConnectionFactory());
         RabbitTemplate template = new RabbitTemplate(connectionFactory);
+        RetryTemplate retryTemplate = new RetryTemplate();
         template.setMandatory(true);
         template.setChannelTransacted(true);
         template.setReceiveTimeout(-1L);
-        template.setReplyTimeout(60_000L);
-        template.setRetryTemplate(new RetryTemplate());
+        template.setReplyTimeout(5_000L);
+        template.setRetryTemplate(retryTemplate);
 
         assertSame(template, processor.postProcessBeforeInitialization(template, "agentRabbitTemplate"));
 
         assertSame(connectionFactory, template.getConnectionFactory());
         assertTrue(template.isMandatoryFor(new Message(new byte[0])));
         assertTrue(template.isChannelTransacted());
-        assertEquals(0L, field(template, "receiveTimeout"));
-        assertEquals(2_000L, field(template, "replyTimeout"));
-        assertNull(field(template, "retryTemplate"));
+        assertEquals(10_000L, field(template, "receiveTimeout"));
+        assertEquals(90_000L, field(template, "replyTimeout"));
+        assertSame(retryTemplate, field(template, "retryTemplate"));
     }
 
     private static RabbitMqBudgetConfiguration.RabbitMqBudgetBeanPostProcessor processor() {
-        return new RabbitMqBudgetConfiguration.RabbitMqBudgetBeanPostProcessor(RabbitMqWaitBudget.defaults());
+        return new RabbitMqBudgetConfiguration.RabbitMqBudgetBeanPostProcessor(waits(
+                seconds(30), seconds(20), seconds(45), seconds(60), seconds(10), seconds(90)));
     }
 
-    private static RabbitMqWaitBudget budget(Duration requestBudget, Duration safetyMargin,
-            Duration connectionTimeout, Duration handshakeTimeout, Duration channelRpcTimeout,
-            Duration channelCheckoutTimeout, Duration receiveTimeout, Duration replyTimeout) {
-        return new RabbitMqWaitBudget(requestBudget, safetyMargin, connectionTimeout, handshakeTimeout,
-                channelRpcTimeout, channelCheckoutTimeout, receiveTimeout, replyTimeout);
+    private static RabbitMqWaitBudget waits(Duration connectionTimeout, Duration handshakeTimeout,
+            Duration channelRpcTimeout, Duration channelCheckoutTimeout, Duration receiveTimeout,
+            Duration replyTimeout) {
+        return new RabbitMqWaitBudget(connectionTimeout, handshakeTimeout, channelRpcTimeout,
+                channelCheckoutTimeout, receiveTimeout, replyTimeout);
     }
 
-    private static Duration ms(long millis) {
-        return Duration.ofMillis(millis);
+    private static Duration seconds(long seconds) {
+        return Duration.ofSeconds(seconds);
     }
 
-    private static void assertNativeBudget(NoNetworkConnectionFactory nativeFactory) {
-        assertEquals(500, nativeFactory.getConnectionTimeout());
-        assertEquals(750, nativeFactory.getHandshakeTimeout());
-        assertEquals(1_000, nativeFactory.getChannelRpcTimeout());
-        assertFalse(nativeFactory.isAutomaticRecoveryEnabled());
-        assertFalse(nativeFactory.isTopologyRecoveryEnabled());
+    private static void assertNativeWaits(NoNetworkConnectionFactory nativeFactory) {
+        assertEquals(30_000, nativeFactory.getConnectionTimeout());
+        assertEquals(20_000, nativeFactory.getHandshakeTimeout());
+        assertEquals(45_000, nativeFactory.getChannelRpcTimeout());
+        assertTrue(nativeFactory.isAutomaticRecoveryEnabled());
+        assertTrue(nativeFactory.isTopologyRecoveryEnabled());
     }
 
-    private static void assertPublisherNativeBudget(CachingConnectionFactory factory) {
+    private static void assertPublisherNativeWaits(CachingConnectionFactory factory) {
         AbstractConnectionFactory publisherFactory = (AbstractConnectionFactory) factory.getPublisherConnectionFactory();
         com.rabbitmq.client.ConnectionFactory nativeFactory = publisherFactory.getRabbitConnectionFactory();
-        assertEquals(500, nativeFactory.getConnectionTimeout());
-        assertEquals(750, nativeFactory.getHandshakeTimeout());
-        assertEquals(1_000, nativeFactory.getChannelRpcTimeout());
-        assertFalse(nativeFactory.isAutomaticRecoveryEnabled());
-        assertFalse(nativeFactory.isTopologyRecoveryEnabled());
+        assertEquals(30_000, nativeFactory.getConnectionTimeout());
+        assertEquals(20_000, nativeFactory.getHandshakeTimeout());
+        assertEquals(45_000, nativeFactory.getChannelRpcTimeout());
     }
 
     private static Object field(Object target, String name) {

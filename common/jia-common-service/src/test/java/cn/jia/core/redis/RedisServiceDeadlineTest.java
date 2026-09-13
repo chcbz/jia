@@ -2,17 +2,17 @@ package cn.jia.core.redis;
 
 import cn.jia.core.deadline.RequestDeadline;
 import cn.jia.core.deadline.RequestDeadlineContext;
-import cn.jia.core.deadline.SafeRequestTimeoutException;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 class RedisServiceDeadlineTest extends BaseMockTest {
 
@@ -22,18 +22,19 @@ class RedisServiceDeadlineTest extends BaseMockTest {
     }
 
     @Test
-    void doesNotStartSynchronousRedisCommandAfterDeadlineExpires() {
+    @SuppressWarnings("unchecked")
+    void expiredPerformanceDeadlineDoesNotRefuseRedisWork() {
         RedisTemplate<String, String> template = mock(RedisTemplate.class);
+        ValueOperations<String, String> values = mock(ValueOperations.class);
+        when(template.opsForValue()).thenReturn(values);
+        when(values.get("session:1")).thenReturn("available");
         RedisService service = new RedisService();
         ReflectionTestUtils.setField(service, "redisTemplate", template);
 
         try (RequestDeadlineContext.Scope ignored = RequestDeadlineContext.open(RequestDeadline.start(0))) {
-            SafeRequestTimeoutException exception = assertThrows(SafeRequestTimeoutException.class,
-                    () -> service.get("session:1"));
-            assertEquals(SafeRequestTimeoutException.Dependency.REDIS, exception.dependency());
-            assertEquals(SafeRequestTimeoutException.WorkState.NOT_STARTED, exception.workState());
+            assertEquals("available", service.get("session:1"));
         }
 
-        verifyNoInteractions(template);
+        verify(values).get("session:1");
     }
 }

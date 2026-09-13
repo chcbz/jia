@@ -37,7 +37,6 @@ public class RedisService {
      * @return 内容
      */
     public String get(String key) {
-        requireCommandBudget();
         return redisTemplate.opsForValue().get(key);
     }
 
@@ -48,7 +47,6 @@ public class RedisService {
      * @return 删除前的值；键不存在时返回null
      */
     public String getAndDelete(String key) {
-        requireCommandBudget();
         DefaultRedisScript<String> script = new DefaultRedisScript<>(
                 "local value = redis.call('GET', KEYS[1]); "
                         + "if value then redis.call('DEL', KEYS[1]); end; return value",
@@ -64,7 +62,6 @@ public class RedisService {
      * @return whether the matching key was deleted
      */
     public boolean deleteIfValueEquals(String key, String expectedValue) {
-        requireCommandBudget();
         DefaultRedisScript<Long> script = new DefaultRedisScript<>(
                 "if redis.call('GET', KEYS[1]) == ARGV[1] then "
                         + "return redis.call('DEL', KEYS[1]); end; return 0",
@@ -81,7 +78,6 @@ public class RedisService {
      * @return 内容
      */
     public <T> T get(String key, Class<T> clazz) {
-        requireCommandBudget();
         String value = redisTemplate.opsForValue().get(key);
         return JsonUtil.fromJson(value, clazz);
     }
@@ -93,7 +89,6 @@ public class RedisService {
      * @param value 值
      */
     public void set(String key, String value) {
-        requireCommandBudget();
         redisTemplate.opsForValue().set(key, value);
     }
 
@@ -105,7 +100,6 @@ public class RedisService {
      * @param duration 有效期
      */
     public void set(String key, String value, Duration duration) {
-        requireCommandBudget();
         redisTemplate.opsForValue().set(key, value, duration);
     }
 
@@ -118,7 +112,6 @@ public class RedisService {
      * @return 是否设置成功
      */
     public boolean setIfAbsent(String key, String value, Duration duration) {
-        requireCommandBudget();
         return Boolean.TRUE.equals(redisTemplate.opsForValue().setIfAbsent(key, value, duration));
     }
 
@@ -131,7 +124,6 @@ public class RedisService {
      * @param timeUnit 超时单位
      */
     public void set(String key, String value, Long timeout, TimeUnit timeUnit) {
-        requireCommandBudget();
         redisTemplate.opsForValue().set(key, value, timeout, timeUnit);
     }
 
@@ -142,7 +134,6 @@ public class RedisService {
      * @return 结果
      */
     public Boolean delete(String key) {
-        requireCommandBudget();
         return redisTemplate.delete(key);
     }
 
@@ -153,7 +144,6 @@ public class RedisService {
      * @return 结果
      */
     public Long delete(Collection<String> key) {
-        requireCommandBudget();
         return redisTemplate.delete(key);
     }
 
@@ -164,7 +154,6 @@ public class RedisService {
      * @return key列表
      */
     public Set<String> keys(String pattern) {
-        requireCommandBudget();
         return redisTemplate.keys(pattern);
     }
 
@@ -176,12 +165,7 @@ public class RedisService {
      * @param <T> 返回类型
      */
     public <T> T execute(RedisCallback<T> action) {
-        requireCommandBudget();
         return redisTemplate.execute(action);
-    }
-
-    private void requireCommandBudget() {
-        RedisRequestBudget.requireCommandBudget();
     }
 
     /**
@@ -192,10 +176,7 @@ public class RedisService {
      */
     public Flux<String> subscribeToChannel(String sessionId) {
         String channel = "channel:" + sessionId;
-        return Flux.defer(() -> {
-            requireCommandBudget();
-            return reactiveRedisTemplate.listenToChannel(channel);
-        })
+        return reactiveRedisTemplate.listenToChannel(channel)
                 .map(ReactiveSubscription.Message::getMessage)
                 .doOnSubscribe(sub ->
                         log.info("订阅频道: {}", channel))
@@ -211,10 +192,7 @@ public class RedisService {
      */
     public Mono<Long> publishSignal(String sessionId) {
         String channel = "channel:" + sessionId;
-        return Mono.defer(() -> {
-            requireCommandBudget();
-            return reactiveRedisTemplate.convertAndSend(channel, "SIGNAL");
-        })
+        return reactiveRedisTemplate.convertAndSend(channel, "SIGNAL")
                 .doOnSuccess(count ->
                         log.info("信号已发布到 {} 个订阅者", count));
     }
