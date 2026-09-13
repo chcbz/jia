@@ -3,6 +3,7 @@ package cn.jia.wx.service.impl;
 import cn.jia.test.BaseMockTest;
 import cn.jia.wx.dao.PayInfoDao;
 import cn.jia.wx.entity.PayInfoEntity;
+import com.github.binarywang.wxpay.config.WxPayConfig;
 import com.github.binarywang.wxpay.service.WxPayService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.BeforeEach;
@@ -40,8 +41,26 @@ class PayInfoServiceImplTest extends BaseMockTest {
         payInfoService.init();
         WxPayService wxPayService = payInfoService.findWxPayService("appid");
         assertNotNull(wxPayService);
-        assertEquals(250, wxPayService.getConfig().getHttpConnectionTimeout());
-        assertEquals(1750, wxPayService.getConfig().getHttpTimeout());
+        WxPayConfig sdkDefaults = new WxPayConfig();
+        assertEquals(sdkDefaults.getHttpConnectionTimeout(),
+                wxPayService.getConfig().getHttpConnectionTimeout());
+        assertEquals(sdkDefaults.getHttpTimeout(), wxPayService.getConfig().getHttpTimeout());
+    }
+
+    @Test
+    void appliesOnlyExplicitPositiveTimeoutOverrides() {
+        ReflectionTestUtils.setField(payInfoService, "connectTimeoutMillis", 7001);
+        ReflectionTestUtils.setField(payInfoService, "readTimeoutMillis", 12001);
+        PayInfoEntity payInfoEntity = new PayInfoEntity();
+        payInfoEntity.setAppId("explicit-appid");
+        payInfoEntity.setMchId("mchId");
+        when(payInfoDao.selectAll()).thenReturn(List.of(payInfoEntity));
+
+        payInfoService.init();
+
+        WxPayService wxPayService = payInfoService.findWxPayService("explicit-appid");
+        assertEquals(7001, wxPayService.getConfig().getHttpConnectionTimeout());
+        assertEquals(12001, wxPayService.getConfig().getHttpTimeout());
     }
 
     @Test

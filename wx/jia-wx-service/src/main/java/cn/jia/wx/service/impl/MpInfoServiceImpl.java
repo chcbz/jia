@@ -23,17 +23,15 @@ import java.util.Map;
 public class MpInfoServiceImpl extends BaseServiceImpl<MpInfoDao, MpInfoEntity> implements MpInfoService {
 	private final Map<String, WxMpService> wxMpServiceMap = new HashMap<>(16);
 
-	@Value("${wx.external-http.connection-request-timeout-ms:250}")
-	private int connectionRequestTimeoutMillis = 250;
+	@Value("${wx.external-http.connection-request-timeout-ms:0}")
+	private int connectionRequestTimeoutMillis;
 
-	@Value("${wx.external-http.connect-timeout-ms:500}")
-	private int connectTimeoutMillis = 500;
+	@Value("${wx.external-http.connect-timeout-ms:0}")
+	private int connectTimeoutMillis;
 
-	@Value("${wx.external-http.read-timeout-ms:1750}")
-	private int readTimeoutMillis = 1750;
+	@Value("${wx.external-http.read-timeout-ms:0}")
+	private int readTimeoutMillis;
 
-	@Value("${wx.external-http.total-timeout-ms:2500}")
-	private int totalTimeoutMillis = 2500;
 	
 //	@PostConstruct
 	public void init() {
@@ -81,8 +79,10 @@ public class MpInfoServiceImpl extends BaseServiceImpl<MpInfoDao, MpInfoEntity> 
 		config.setSecret(info.getSecret());
 		config.setToken(info.getToken());
 		config.setAesKey(info.getEncodingaeskey());
-		config.setApacheHttpClientBuilder(new WxExternalHttpClientBuilder(connectionRequestTimeoutMillis,
-				connectTimeoutMillis, readTimeoutMillis, totalTimeoutMillis));
+		if (connectionRequestTimeoutMillis > 0 || connectTimeoutMillis > 0 || readTimeoutMillis > 0) {
+			config.setApacheHttpClientBuilder(new WxExternalHttpClientBuilder(connectionRequestTimeoutMillis,
+					connectTimeoutMillis, readTimeoutMillis));
+		}
 		wxMpService.setWxMpConfigStorage(config);
 		return wxMpService;
 	}

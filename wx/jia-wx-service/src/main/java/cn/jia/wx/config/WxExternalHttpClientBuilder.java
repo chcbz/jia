@@ -12,7 +12,7 @@ import org.apache.http.impl.client.BasicCredentialsProvider;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 
-/** A per-service Wx MP client builder with bounded queue, connect, and read phases. */
+/** A per-service Wx MP client builder for explicitly configured transport overrides. */
 public final class WxExternalHttpClientBuilder implements ApacheHttpClientBuilder {
     private final int connectionRequestTimeoutMillis;
     private final int connectTimeoutMillis;
@@ -26,12 +26,7 @@ public final class WxExternalHttpClientBuilder implements ApacheHttpClientBuilde
     private SSLConnectionSocketFactory sslConnectionSocketFactory;
 
     public WxExternalHttpClientBuilder(int connectionRequestTimeoutMillis, int connectTimeoutMillis,
-            int readTimeoutMillis, int totalTimeoutMillis) {
-        if (connectionRequestTimeoutMillis <= 0 || connectTimeoutMillis <= 0 || readTimeoutMillis <= 0
-                || totalTimeoutMillis <= 0
-                || (long) connectionRequestTimeoutMillis + connectTimeoutMillis + readTimeoutMillis > totalTimeoutMillis) {
-            throw new IllegalArgumentException("Wx external HTTP phase timeouts must fit the total timeout budget");
-        }
+            int readTimeoutMillis) {
         this.connectionRequestTimeoutMillis = connectionRequestTimeoutMillis;
         this.connectTimeoutMillis = connectTimeoutMillis;
         this.readTimeoutMillis = readTimeoutMillis;
@@ -39,13 +34,18 @@ public final class WxExternalHttpClientBuilder implements ApacheHttpClientBuilde
 
     @Override
     public CloseableHttpClient build() {
-        RequestConfig requestConfig = RequestConfig.custom()
-                .setConnectionRequestTimeout(connectionRequestTimeoutMillis)
-                .setConnectTimeout(connectTimeoutMillis)
-                .setSocketTimeout(readTimeoutMillis)
-                .build();
+        RequestConfig.Builder requestConfig = RequestConfig.custom();
+        if (connectionRequestTimeoutMillis > 0) {
+            requestConfig.setConnectionRequestTimeout(connectionRequestTimeoutMillis);
+        }
+        if (connectTimeoutMillis > 0) {
+            requestConfig.setConnectTimeout(connectTimeoutMillis);
+        }
+        if (readTimeoutMillis > 0) {
+            requestConfig.setSocketTimeout(readTimeoutMillis);
+        }
         var builder = HttpClients.custom()
-                .setDefaultRequestConfig(requestConfig)
+                .setDefaultRequestConfig(requestConfig.build())
                 .disableAutomaticRetries();
         if (retryHandler != null) {
             builder.setRetryHandler(retryHandler);

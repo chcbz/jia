@@ -23,17 +23,15 @@ import java.util.Map;
 public class PayInfoServiceImpl extends BaseServiceImpl<PayInfoDao, PayInfoEntity> implements PayInfoService {
     private final Map<String, WxPayService> wxPayServiceMap = new HashMap<>(16);
 
-    @Value("${wx.external-http.connection-request-timeout-ms:250}")
-    private int connectionRequestTimeoutMillis = 250;
+    @Value("${wx.external-http.connection-request-timeout-ms:0}")
+    private int connectionRequestTimeoutMillis;
 
-    @Value("${wx.external-http.connect-timeout-ms:500}")
-    private int connectTimeoutMillis = 500;
+    @Value("${wx.external-http.connect-timeout-ms:0}")
+    private int connectTimeoutMillis;
 
-    @Value("${wx.external-http.read-timeout-ms:1750}")
-    private int readTimeoutMillis = 1750;
+    @Value("${wx.external-http.read-timeout-ms:0}")
+    private int readTimeoutMillis;
 
-    @Value("${wx.external-http.total-timeout-ms:2500}")
-    private int totalTimeoutMillis = 2500;
 
 //    @PostConstruct
     public void init() {
@@ -73,18 +71,25 @@ public class PayInfoServiceImpl extends BaseServiceImpl<PayInfoDao, PayInfoEntit
     }
 
     private WxPayService createWxPayService(PayInfoEntity info) {
-        if (connectionRequestTimeoutMillis <= 0 || connectTimeoutMillis <= 0 || readTimeoutMillis <= 0
-                || totalTimeoutMillis <= 0
-                || (long) connectionRequestTimeoutMillis + connectTimeoutMillis + readTimeoutMillis > totalTimeoutMillis) {
-            throw new IllegalStateException("Wx pay HTTP phase timeouts must fit the total timeout budget");
-        }
         WxPayService wxPayService = new WxPayServiceImpl();
         WxPayConfig config = new WxPayConfig();
         BeanUtil.copyPropertiesIgnoreNull(info, config);
-        config.setHttpConnectionTimeout(Math.min(connectionRequestTimeoutMillis, connectTimeoutMillis));
-        config.setHttpTimeout(readTimeoutMillis);
+        int configuredConnectionTimeout = configuredConnectionTimeout();
+        if (configuredConnectionTimeout > 0) {
+            config.setHttpConnectionTimeout(configuredConnectionTimeout);
+        }
+        if (readTimeoutMillis > 0) {
+            config.setHttpTimeout(readTimeoutMillis);
+        }
         wxPayService.setConfig(config);
         return wxPayService;
+    }
+
+    private int configuredConnectionTimeout() {
+        if (connectionRequestTimeoutMillis > 0 && connectTimeoutMillis > 0) {
+            return Math.min(connectionRequestTimeoutMillis, connectTimeoutMillis);
+        }
+        return Math.max(connectionRequestTimeoutMillis, connectTimeoutMillis);
     }
 
     @Override

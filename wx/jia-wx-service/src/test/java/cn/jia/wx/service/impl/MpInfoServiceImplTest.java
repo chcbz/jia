@@ -37,6 +37,19 @@ class MpInfoServiceImplTest extends BaseMockTest {
         mpInfoService.init();
         WxMpService wxMpService = mpInfoService.findWxMpService("appid");
         assertNotNull(wxMpService);
+        assertNull(wxMpService.getWxMpConfigStorage().getApacheHttpClientBuilder());
+    }
+
+    @Test
+    void installsCustomBuilderOnlyForExplicitPositiveTimeout() {
+        ReflectionTestUtils.setField(mpInfoService, "connectTimeoutMillis", 7001);
+        MpInfoEntity mpInfoEntity = new MpInfoEntity();
+        mpInfoEntity.setAppid("explicit-appid");
+        when(mpInfoDao.selectAll()).thenReturn(List.of(mpInfoEntity));
+
+        mpInfoService.init();
+
+        WxMpService wxMpService = mpInfoService.findWxMpService("explicit-appid");
         assertInstanceOf(WxExternalHttpClientBuilder.class,
                 wxMpService.getWxMpConfigStorage().getApacheHttpClientBuilder());
     }
