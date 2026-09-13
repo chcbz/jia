@@ -1,6 +1,7 @@
 package cn.jia.agent.api;
 
 import cn.jia.agent.config.AgentTaskEventsGate;
+import cn.jia.agent.security.AgentRuntimeAuthentication;
 import cn.jia.agent.entity.AgentTaskContextPackDTO;
 import cn.jia.agent.exception.AgentTaskContextPackException;
 import cn.jia.agent.service.AgentTaskContextPackService;
@@ -26,8 +27,8 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Authenticated F01 retrieval: exact JWT jiacn/client_id/sub and Authentication.name
- * bind tenant/client/actor. The closed query accepts only optional expectedVersion;
+ * Authenticated F01 retrieval: exact JWT jiacn/client_id/sub and Authentication.name,
+ * or the narrow server-bound native runtime principal, bind tenant/client/actor. The closed query accepts only optional expectedVersion;
  * even a same-subject actorAgentId query is rejected. No HTTP actor delegation exists.
  * Existing service ACL and read-only snapshot/lock contracts remain unchanged.
  */
@@ -122,6 +123,10 @@ public class AgentTaskContextPackController {
     }
 
     private static Scope requireJwtScope(Authentication authentication) {
+        if (authentication instanceof AgentRuntimeAuthentication runtime && runtime.isAuthenticated()) {
+            var scope = runtime.getPrincipal();
+            return new Scope(scope.tenantId(), scope.clientId(), scope.agentId());
+        }
         if (authentication == null || !authentication.isAuthenticated()
                 || !(authentication instanceof JwtAuthenticationToken jwt)) {
             throw new ContextPackAuthenticationException(false);

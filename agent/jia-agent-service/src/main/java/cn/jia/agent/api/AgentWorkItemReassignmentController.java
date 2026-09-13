@@ -1,6 +1,7 @@
 package cn.jia.agent.api;
 
 import cn.jia.agent.entity.AgentWorkItemReassignmentLeaseDTO;
+import cn.jia.agent.security.AgentRuntimeAuthentication;
 import cn.jia.agent.entity.AgentWorkItemReassignmentLeaseRequestDTO;
 import cn.jia.agent.entity.AgentWorkItemReassignmentRequestDTO;
 import cn.jia.agent.entity.AgentWorkItemReassignmentResultDTO;
@@ -164,6 +165,11 @@ public class AgentWorkItemReassignmentController {
     }
 
     private static Principal principal(Authentication authentication, boolean requireAuthority) {
+        if (authentication instanceof AgentRuntimeAuthentication runtime && runtime.isAuthenticated()) {
+            if (requireAuthority) throw new AuthenticationFailure(true);
+            var scope = runtime.getPrincipal();
+            return new Principal(scope.tenantId(), scope.clientId(), scope.agentId());
+        }
         if (authentication == null || !authentication.isAuthenticated()
                 || !(authentication instanceof JwtAuthenticationToken jwt)) {
             throw new AuthenticationFailure(false);

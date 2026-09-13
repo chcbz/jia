@@ -98,6 +98,12 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             AgentProtocolConstants.TYPE_ARTIFACT_PUBLISH,
             AgentProtocolConstants.TYPE_TASK_EVENT);
 
+    private cn.jia.agent.security.AgentRuntimeAuthenticationService runtimeAuthentication;
+    @Autowired
+    public void setRuntimeAuthentication(cn.jia.agent.security.AgentRuntimeAuthenticationService service) {
+        this.runtimeAuthentication = service;
+    }
+
     private cn.jia.agent.skill.SkillInstallResultService skillResults;
     @Autowired
     public void setSkillResults(cn.jia.agent.skill.SkillInstallResultService results) { this.skillResults=results; }
@@ -271,6 +277,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
+        if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
         sessions.remove(session.getId());
         sessionAgentIds.remove(session.getId());
         successfullyRegisteredAgentIds.remove(session.getId());
@@ -444,6 +451,10 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             if (agentId == null) {
                 return;
             }
+            if (session.getHandshakeHeaders() != null && session.getHandshakeHeaders().getOrigin() != null) {
+                throw new IllegalArgumentException("Native registration is unavailable to browsers");
+            }
+            if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
             AgentRegisterDTO request = new AgentRegisterDTO();
             request.setAgentId(agentId);
             request.setName(asString(payload.get("name")));
@@ -466,11 +477,24 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             putIfPresent(event, "runtimeInstanceId", sessionRuntimeInstanceId(session));
             event.put("status", result.getStatus());
             event.put("token", result.getToken());
-            sendEvent(session, "agent_registered", event);
+            // Scope comes only from the authenticated session and is rechecked against persisted
+            // identity/current registration token. This receipt is sent only on this native socket.
+            if (runtimeAuthentication != null && sessionRuntimeInstanceId(session) != null) {
+                event.put("runtimeAuth", runtimeAuthentication.bind(session.getId(), sessionJiacn(session),
+                        sessionClientId(session), result.getAgentId(), sessionRuntimeInstanceId(session),
+                        sessionAttribute(session, "managedApiKeyId"), result.getToken(), session::isOpen));
+            }
+            if (!sendEvent(session, "agent_registered", event)) {
+                if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
+                successfullyRegisteredAgentIds.remove(session.getId());
+                return;
+            }
             signalRegisteredReconnect(session, result.getAgentId());
             sendCapabilityIndex(session, payload);
         } catch (Exception e) {
-            sendError(session, payload, errorCode(e), e.getMessage());
+            if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
+            successfullyRegisteredAgentIds.remove(session.getId());
+            sendError(session, payload, "AGENT_REGISTRATION_UNAVAILABLE", "Agent registration is unavailable");
         }
     }
 
@@ -615,6 +639,11 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 request.setAbilities(asStringList(payload.get("abilities")));
             }
             AgentRuntimeDTO agent = withSessionContext(session, () -> agentService.updateStatus(agentId, request));
+            if (runtimeAuthentication != null && (AgentConstants.STATUS_OFFLINE.equals(agent.getStatus())
+                    || AgentConstants.STATUS_ERROR.equals(agent.getStatus()))) {
+                runtimeAuthentication.disconnect(session.getId());
+                successfullyRegisteredAgentIds.remove(session.getId());
+            }
             if (agent.getAgentId() != null) {
                 rememberSessionAgent(session.getId(), agent.getAgentId());
             }
@@ -1097,7 +1126,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             }
             return true;
         } catch (Exception e) {
-            log.error("Error sending OpenClaw channel event", e);
+            if ("agent_registered".equals(type)) log.error("AGENT_REGISTRATION_DELIVERY_UNAVAILABLE");
+            else log.error("Error sending OpenClaw channel event", e);
             return false;
         }
     }
@@ -1884,6 +1914,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
 
     private void sendSessionIdentityError(WebSocketSession session, Map<String, Object> payload,
             String code, String message) {
+        if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
         if (isProtocolV1(payload)) {
             sendProtocolError(session, payload, code, message);
         } else {

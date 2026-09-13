@@ -176,6 +176,12 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
                 .withPropertyValues("agent.rabbit-dispatch.enabled=true")
                 .withBean(ChatClient.class, () -> mock(ChatClient.class))
                 .withBean(AgentService.class, () -> mock(AgentService.class))
+                .withBean(cn.jia.agent.security.AgentRuntimeAuthenticationService.class,
+                        () -> mock(cn.jia.agent.security.AgentRuntimeAuthenticationService.class))
+                .withBean(cn.jia.agent.skill.SkillInstallResultService.class,
+                        () -> mock(cn.jia.agent.skill.SkillInstallResultService.class))
+                .withBean(cn.jia.chat.service.ChatConversationService.class,
+                        () -> mock(cn.jia.chat.service.ChatConversationService.class))
                 .withBean(ChatMessageDao.class, () -> mock(ChatMessageDao.class))
                 .withBean(ChatConversationEventBroker.class,
                         () -> mock(ChatConversationEventBroker.class))
