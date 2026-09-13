@@ -208,6 +208,32 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
     }
 
     @Override
+    public int reassignExpiredLeaseByVersion(
+            String tenantId, String clientId, String taskId, String workItemId,
+            String previousAgentId, String previousLeaseToken, String expectedStatus,
+            long expectedLeaseUntil, long expectedVersion, long expiredAtOrBefore,
+            AgentTaskWorkItemDTO item) {
+        requireLeaseCasCommon(tenantId, clientId, taskId, workItemId, expectedVersion, item);
+        requireLeaseIdentity(previousAgentId, previousLeaseToken, expectedStatus, expectedLeaseUntil);
+        requireNonnegativeTime(expiredAtOrBefore, "expiredAtOrBefore");
+        if (!LEASED_STATUSES.contains(expectedStatus)
+                || !"claimed".equals(item.getStatus())
+                || StringUtil.isBlank(item.getAssigneeAgentId())
+                || previousAgentId.equals(item.getAssigneeAgentId())
+                || StringUtil.isBlank(item.getLeaseToken()) || item.getLeaseUntil() == null
+                || item.getLeaseUntil() <= expiredAtOrBefore
+                || item.getAttemptCount() == null || item.getMaxAttempts() == null
+                || item.getAttemptCount() <= 0 || item.getAttemptCount() >= item.getMaxAttempts()) {
+            throw new IllegalArgumentException(
+                    "reassignment CAS requires a complete fresh claimed lease with remaining attempts");
+        }
+        return baseMapper.reassignExpiredLeaseByVersion(
+                tenantId, clientId, taskId, workItemId, previousAgentId, previousLeaseToken,
+                expectedStatus, expectedLeaseUntil, expectedVersion, expiredAtOrBefore,
+                item, DateUtil.nowTime());
+    }
+
+    @Override
     public int expireLeaseByVersion(
             String tenantId, String clientId, String taskId, String workItemId,
             String assigneeAgentId, String leaseToken, String expectedStatus,

@@ -51,6 +51,13 @@ public interface AgentTaskWorkItemDao {
             long expectedLeaseUntil, long expectedVersion, long operationTime,
             AgentTaskWorkItemDTO item);
 
+    /** Exact E05 CAS: expired claimed/running lease directly becomes a fresh target claimed lease. */
+    int reassignExpiredLeaseByVersion(
+            String tenantId, String clientId, String taskId, String workItemId,
+            String previousAgentId, String previousLeaseToken, String expectedStatus,
+            long expectedLeaseUntil, long expectedVersion, long expiredAtOrBefore,
+            AgentTaskWorkItemDTO item);
+
     int expireLeaseByVersion(
             String tenantId, String clientId, String taskId, String workItemId,
             String assigneeAgentId, String leaseToken, String expectedStatus,
