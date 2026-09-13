@@ -1,5 +1,6 @@
 package cn.jia.core.config;
 
+import cn.jia.core.deadline.RequestDeadlineClientHttpRequestInterceptor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -40,6 +41,7 @@ public class RestTemplateConfig {
                 ((AllEncompassingFormHttpMessageConverter) converter).setPartConverters(cos2);
             }
         }
+        template.getInterceptors().add(new RequestDeadlineClientHttpRequestInterceptor());
         //异常处理
         template.setErrorHandler(new RestErrorHandler());
         return template;

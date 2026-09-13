@@ -2,6 +2,7 @@ package cn.jia.agent.dao.impl;
 
 import cn.jia.agent.dao.AgentSceneStateDao;
 import cn.jia.agent.entity.AgentSceneStateEntity;
+import cn.jia.agent.mapper.AgentSceneSnapshotRow;
 import cn.jia.agent.mapper.AgentSceneStateMapper;
 import cn.jia.core.util.StringUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -40,6 +41,16 @@ public class AgentSceneStateDaoImpl implements AgentSceneStateDao {
                 .and(wrapper -> wrapper.isNull(AgentSceneStateEntity::getExpiresAt)
                         .or().gt(AgentSceneStateEntity::getExpiresAt, activeAt))
                 .orderByAsc(AgentSceneStateEntity::getAgentId));
+    }
+
+    @Override
+    public List<AgentSceneSnapshotRow> findSnapshotRows(
+            String tenantId, String clientId, String sceneId, long activeAt) {
+        requireScope(tenantId, clientId, sceneId);
+        if (activeAt < 0) {
+            throw new IllegalArgumentException("activeAt must be nonnegative");
+        }
+        return baseMapper.selectSnapshotRows(tenantId, clientId, sceneId, activeAt);
     }
 
     @Override

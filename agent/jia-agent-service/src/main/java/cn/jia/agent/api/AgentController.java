@@ -15,6 +15,8 @@ import cn.jia.agent.entity.AgentTaskCreateDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskNoteDTO;
 import cn.jia.agent.entity.AgentTaskRecommendationDTO;
+import cn.jia.agent.entity.AgentTaskTeamRecommendationDTO;
+import cn.jia.agent.entity.AgentTaskTeamRecommendationRequestDTO;
 import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.entity.AgentTaskSearchDTO;
 import cn.jia.agent.entity.DialogueRequestDTO;
@@ -163,8 +165,12 @@ public class AgentController {
     }
 
     @GetMapping("/personas/catalog")
-    public Object personaCatalog() {
-        return JsonResult.success(agentService.listPersonaCatalog());
+    public Object personaCatalog(Authentication authentication) {
+        AgentHostedBindingTransaction.Scope scope = requireJwtScope(authentication);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                .body(JsonResult.success(agentService.listPersonaCatalog(
+                        scope.tenantId(), scope.clientId(), scope.ownerJiacn())));
     }
 
     @PostMapping("/personas/{personaCode}/bind")
@@ -388,6 +394,19 @@ public class AgentController {
     public Object recommendTaskAssignees(@PathVariable String taskId) {
         List<AgentTaskRecommendationDTO> recommendations = agentService.recommendTaskAssignees(taskId);
         return JsonResult.success(recommendations);
+    }
+
+    @PostMapping("/tasks/{taskId}/team-recommendation")
+    public Object recommendTaskTeam(
+            @PathVariable String taskId,
+            @RequestBody AgentTaskTeamRecommendationRequestDTO request,
+            Authentication authentication) {
+        AgentHostedBindingTransaction.Scope scope = requireJwtScope(authentication);
+        AgentTaskTeamRecommendationDTO recommendation = agentService.recommendTaskTeam(
+                scope.tenantId(), scope.clientId(), taskId, request);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                .body(JsonResult.success(recommendation));
     }
 
     @PostMapping("/tasks/{taskId}/auto-assign")

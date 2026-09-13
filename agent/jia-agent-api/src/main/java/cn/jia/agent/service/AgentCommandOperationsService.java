@@ -4,6 +4,7 @@ import cn.jia.agent.entity.AgentCommandDlqPage;
 import cn.jia.agent.entity.AgentCommandOperationAuditPage;
 import cn.jia.agent.entity.AgentCommandOperationRequest;
 import cn.jia.agent.entity.AgentCommandOperationResult;
+import cn.jia.agent.entity.AgentCommandOperationV1View;
 import cn.jia.agent.entity.AgentCommandOpsMetrics;
 
 
@@ -22,6 +23,16 @@ public interface AgentCommandOperationsService {
 
     AgentCommandOperationAuditPage listAudit(
             String tenantId, String clientId, long afterId, int limit);
+
+    AgentCommandOperationV1View getOperationV1(
+            String tenantId, String clientId, String requesterId, String operationId, long now);
+
+    /**
+     * Versioned asynchronous acceptance only, independently default-off from synchronous
+     * redrive. The durable operation row is transactionally polled; no broker I/O occurs here.
+     */
+    AgentCommandOperationV1View acceptBrokerRedriveV1(
+            AgentCommandOperationRequest request, String idempotencyKey, long now);
 
     AgentCommandOperationResult brokerRedrive(AgentCommandOperationRequest request, long now);
 

@@ -4,6 +4,7 @@ import cn.jia.agent.entity.AgentCommandDeliveryEntity;
 import cn.jia.agent.entity.AgentCommandMetricCount;
 import cn.jia.agent.entity.AgentCommandOperationAuditEntity;
 import cn.jia.agent.entity.AgentCommandOperationAuditEntry;
+import cn.jia.agent.entity.AgentCommandOperationStatusRow;
 import cn.jia.agent.entity.AgentCommandRedriveOperationEntity;
 import cn.jia.agent.entity.AgentCommandRedriveOperationState;
 import cn.jia.agent.entity.AgentConsumerInboxEntity;
@@ -41,6 +42,8 @@ public interface AgentCommandOperationsDao {
             int sourceAttempt);
     List<AgentCommandOperationAuditEntry> listAudit(
             String tenantId, String clientId, long afterId, int limit);
+    List<AgentCommandOperationStatusRow> findOperationStatusRows(
+            String tenantId, String clientId, String requesterId, String operationId);
     AgentCommandDeliveryEntity lockDelivery(String tenantId, String clientId, long deliveryId);
     List<AgentOutboxEventEntity> lockActiveOutboxes(
             String tenantId, String clientId, long deliveryId, String messageId);

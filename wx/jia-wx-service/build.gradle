@@ -14,6 +14,7 @@ dependencies {
     implementation(libs.zxing.javase)
     implementation(libs.spring.redis)
     testImplementation project(':common:jia-common-test')
+    testRuntimeOnly libs.mysql
     testAnnotationProcessor libs.lombok
     testImplementation libs.lombok
 }

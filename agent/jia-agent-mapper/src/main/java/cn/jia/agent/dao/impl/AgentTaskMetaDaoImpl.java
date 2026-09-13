@@ -2,13 +2,21 @@ package cn.jia.agent.dao.impl;
 
 import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.entity.AgentTaskAggregationSnapshotRow;
+import cn.jia.agent.entity.AgentRuntimeEntity;
+import cn.jia.agent.entity.AgentTaskMemberEntity;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.mapper.AgentTaskMetaMapper;
+import cn.jia.agent.mapper.AgentTaskSearchRow;
+import cn.jia.agent.mapper.AgentTaskStatsRow;
+import cn.jia.agent.mapper.AgentTaskStatsScope;
+import cn.jia.agent.mapper.AgentTaskStatusCountRow;
 import cn.jia.common.dao.BaseDaoImpl;
 import cn.jia.core.util.DateUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import jakarta.inject.Named;
 
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 
 @Named
@@ -131,6 +139,21 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
                 tenantId, clientId, agentId, TaskCollaborationDaoSupport.boundedLimit(limit));
     }
 
+    @Override
+    public List<AgentTaskStatsRow> findStatsByAgents(List<AgentTaskStatsScope> scopes) {
+        if (scopes == null || scopes.isEmpty()) {
+            return List.of();
+        }
+        for (AgentTaskStatsScope scope : scopes) {
+            if (scope == null) {
+                throw new IllegalArgumentException("Agent task statistics scope is required");
+            }
+            TaskCollaborationDaoSupport.requireScope(scope.getTenantId(), scope.getClientId());
+            requireExactId(scope.getAgentId(), "agentId", 100);
+        }
+        return baseMapper.selectStatsByAgentScopes(scopes);
+    }
+
     private void requireExactId(String value, String name, int maxLength) {
         TaskCollaborationDaoSupport.requireId(value, name);
         if (value.length() > maxLength || !value.equals(value.strip())
@@ -141,13 +164,66 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
     }
 
     @Override
-    public List<AgentTaskMetaEntity> search(
-            String tenantId, String clientId, String status, String ability) {
+    public long countSearch(String tenantId, String clientId, String status,
+            String ability, String keyword) {
+        requireSearchScope(tenantId, clientId);
+        return baseMapper.countSearchExactInScope(
+                tenantId, clientId, status, ability, keyword);
+    }
+
+    @Override
+    public List<AgentTaskSearchRow> searchPage(String tenantId, String clientId, String status,
+            String ability, String keyword, long offset, int limit) {
+        requireSearchScope(tenantId, clientId);
+        if (offset < 0) {
+            throw new IllegalArgumentException("offset must not be negative");
+        }
+        return baseMapper.searchPageExactInScope(tenantId, clientId, status, ability,
+                keyword, offset, TaskCollaborationDaoSupport.boundedLimit(limit));
+    }
+
+    @Override
+    public List<AgentTaskMemberEntity> findSearchMembers(
+            String tenantId, String clientId, List<String> taskIds) {
+        requireSearchScope(tenantId, clientId);
+        List<String> exactTaskIds = exactIds(taskIds, "taskId", 100);
+        return exactTaskIds.isEmpty() ? List.of()
+                : baseMapper.selectSearchMembersExactInScope(
+                        tenantId, clientId, exactTaskIds);
+    }
+
+    @Override
+    public List<AgentRuntimeEntity> findSearchRuntimes(List<String> agentIds) {
+        List<String> exactAgentIds = exactIds(agentIds, "agentId", 100);
+        return exactAgentIds.isEmpty() ? List.of()
+                : baseMapper.selectSearchRuntimesExact(exactAgentIds);
+    }
+
+    @Override
+    public List<AgentTaskStatusCountRow> countSearchByStatus(
+            String tenantId, String clientId, String ability, String keyword) {
+        requireSearchScope(tenantId, clientId);
+        return baseMapper.countSearchByStatusExactInScope(
+                tenantId, clientId, ability, keyword);
+    }
+
+    private void requireSearchScope(String tenantId, String clientId) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
         if ("0".equals(tenantId) || "0".equals(clientId)) {
             throw new IllegalArgumentException(
                     "Legacy collaboration scope cannot be searched implicitly");
         }
-        return baseMapper.searchExactInScope(tenantId, clientId, status, ability);
+    }
+
+    private List<String> exactIds(List<String> values, String name, int maxLength) {
+        if (values == null || values.isEmpty()) {
+            return List.of();
+        }
+        LinkedHashSet<String> exact = new LinkedHashSet<>();
+        for (String value : values) {
+            requireExactId(value, name, maxLength);
+            exact.add(value);
+        }
+        return new ArrayList<>(exact);
     }
 }

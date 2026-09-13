@@ -8,7 +8,6 @@ import cn.jia.agent.mapper.AgentSceneEventMapper;
 import cn.jia.core.util.DateUtil;
 import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.StringUtil;
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 import org.springframework.transaction.annotation.Propagation;
@@ -56,14 +55,14 @@ public class AgentSceneEventDaoImpl implements AgentSceneEventDao {
 
     @Override
     public Long findLatestSceneVersion(String tenantId, String clientId, String sceneId) {
-        AgentSceneEventEntity event = findBoundary(tenantId, clientId, sceneId, false);
-        return event == null ? null : event.getSceneVersion();
+        requireScope(tenantId, clientId, sceneId);
+        return baseMapper.selectLatestVersion(tenantId, clientId, sceneId);
     }
 
     @Override
     public Long findEarliestSceneVersion(String tenantId, String clientId, String sceneId) {
-        AgentSceneEventEntity event = findBoundary(tenantId, clientId, sceneId, true);
-        return event == null ? null : event.getSceneVersion();
+        requireScope(tenantId, clientId, sceneId);
+        return baseMapper.selectEarliestVersion(tenantId, clientId, sceneId);
     }
 
     @Override
@@ -71,10 +70,8 @@ public class AgentSceneEventDaoImpl implements AgentSceneEventDao {
             String tenantId, String clientId, String sceneId, long sinceVersion, int limit) {
         requireScope(tenantId, clientId, sceneId);
         int boundedLimit = Math.max(1, Math.min(limit, 1000));
-        return baseMapper.selectList(scope(tenantId, clientId, sceneId)
-                .gt(AgentSceneEventEntity::getSceneVersion, sinceVersion)
-                .orderByAsc(AgentSceneEventEntity::getSceneVersion)
-                .last("limit " + boundedLimit));
+        return baseMapper.selectAfterVersion(
+                tenantId, clientId, sceneId, sinceVersion, boundedLimit);
     }
 
     @Override
@@ -112,26 +109,6 @@ public class AgentSceneEventDaoImpl implements AgentSceneEventDao {
             throw new IllegalArgumentException("Unable to serialize safe scene event");
         }
         return json;
-    }
-
-    private AgentSceneEventEntity findBoundary(
-            String tenantId, String clientId, String sceneId, boolean ascending) {
-        requireScope(tenantId, clientId, sceneId);
-        LambdaQueryWrapper<AgentSceneEventEntity> wrapper = scope(tenantId, clientId, sceneId);
-        if (ascending) {
-            wrapper.orderByAsc(AgentSceneEventEntity::getSceneVersion);
-        } else {
-            wrapper.orderByDesc(AgentSceneEventEntity::getSceneVersion);
-        }
-        return baseMapper.selectOne(wrapper.last("limit 1"));
-    }
-
-    private LambdaQueryWrapper<AgentSceneEventEntity> scope(
-            String tenantId, String clientId, String sceneId) {
-        return new LambdaQueryWrapper<AgentSceneEventEntity>()
-                .eq(AgentSceneEventEntity::getTenantId, tenantId)
-                .eq(AgentSceneEventEntity::getClientId, clientId)
-                .eq(AgentSceneEventEntity::getSceneId, sceneId);
     }
 
     private void requireScope(String tenantId, String clientId, String sceneId) {

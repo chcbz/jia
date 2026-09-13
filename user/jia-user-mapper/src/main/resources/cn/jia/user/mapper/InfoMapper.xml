@@ -88,6 +88,33 @@
             or update_time = #{updateTime,jdbcType=BIGINT}
         </if>
     </select>
+    <select id="selectRelationsByUserIds" resultType="cn.jia.user.dao.UserRelationRow">
+        SELECT relation_user_id AS userId, relation_type AS relationType, relation_id AS relationId
+        FROM (
+            SELECT user_id AS relation_user_id, 'ROLE' AS relation_type, role_id AS relation_id, id AS relation_row_id
+            FROM user_role_rel
+            WHERE user_id IN
+            <foreach collection="userIds" item="userId" open="(" separator="," close=")">
+                #{userId,jdbcType=BIGINT}
+            </foreach>
+            UNION ALL
+            SELECT user_id AS relation_user_id, 'ORG' AS relation_type, org_id AS relation_id, id AS relation_row_id
+            FROM user_org_rel
+            WHERE user_id IN
+            <foreach collection="userIds" item="userId" open="(" separator="," close=")">
+                #{userId,jdbcType=BIGINT}
+            </foreach>
+            UNION ALL
+            SELECT user_id AS relation_user_id, 'GROUP' AS relation_type, group_id AS relation_id, id AS relation_row_id
+            FROM user_group_rel
+            WHERE user_id IN
+            <foreach collection="userIds" item="userId" open="(" separator="," close=")">
+                #{userId,jdbcType=BIGINT}
+            </foreach>
+        ) relation_rows
+        ORDER BY relation_user_id, relation_type, relation_row_id
+    </select>
+
     <select id="selectSecurityById" resultType="cn.jia.user.entity.UserEntity">
         SELECT id, jiacn, account_state, auth_epoch
         FROM user_info
@@ -110,4 +137,24 @@
           AND account_state = _ascii'ACTIVE' COLLATE ascii_bin
           AND auth_epoch &lt; 9223372036854775807
     </update>
+
+    <update id="incrementPoint">
+        UPDATE user_info
+        SET point = COALESCE(point, 0) + #{add,jdbcType=INTEGER},
+            update_time = #{updateTime,jdbcType=BIGINT}
+        WHERE jiacn = #{jiacn,jdbcType=VARCHAR}
+          AND OCTET_LENGTH(jiacn) = OCTET_LENGTH(#{jiacn,jdbcType=VARCHAR})
+          AND CAST(jiacn AS BINARY) = CAST(#{jiacn,jdbcType=VARCHAR} AS BINARY)
+          AND COALESCE(point, 0) + #{add,jdbcType=INTEGER} &gt;= 0
+    </update>
+
+    <select id="selectPointByJiacn" resultType="java.lang.Integer">
+        SELECT point
+        FROM user_info
+        WHERE jiacn = #{jiacn,jdbcType=VARCHAR}
+          AND OCTET_LENGTH(jiacn) = OCTET_LENGTH(#{jiacn,jdbcType=VARCHAR})
+          AND CAST(jiacn AS BINARY) = CAST(#{jiacn,jdbcType=VARCHAR} AS BINARY)
+        ORDER BY id
+        LIMIT 2
+    </select>
 </mapper>

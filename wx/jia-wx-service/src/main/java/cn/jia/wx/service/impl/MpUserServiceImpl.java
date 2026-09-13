@@ -88,6 +88,18 @@ public class MpUserServiceImpl extends BaseServiceImpl<MpUserDao, MpUserEntity> 
 	}
 
 	@Override
+	public MpUserEntity findByAppIdAndOpenId(String appid, String openId) {
+		if (StringUtil.isEmpty(appid) || StringUtil.isEmpty(openId)) {
+			throw new IllegalArgumentException("appid and openId are required");
+		}
+		List<MpUserEntity> users = baseDao.selectByAppIdAndOpenIdExact(appid, openId);
+		if (users.size() > 1) {
+			throw new IllegalStateException("ambiguous WeChat user identity");
+		}
+		return users.stream().findFirst().orElse(null);
+	}
+
+	@Override
 	public MpUserEntity findByJiacn(String jiacn) {
 		MpUserEntity mpUserEntity = new MpUserEntity();
 		mpUserEntity.setJiacn(jiacn);

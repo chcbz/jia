@@ -11,6 +11,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.web.FilterChainProxy;
+import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -36,17 +37,31 @@ class OutputUploadSecurityConfigurationTest {
     @AfterEach void close(){context.close();}
     @Test void exactUploadRoutesRejectCookiesUserBearerAndMissingTicket()throws Exception{mvc.perform(post("/agent/output-uploads")).andExpect(status().isUnauthorized());mvc.perform(post("/agent/output-uploads").header("Authorization","Bearer user-jwt-token-value-that-is-not-run-ticket")).andExpect(status().isUnauthorized());mvc.perform(put("/agent/output-uploads/u/content").header("Authorization","Bearer terminal-ticket-value-that-is-long-enough-0000")).andExpect(status().isForbidden());}
     @Test void validTicketPassesExactMethodsAndOutputUserRouteIsNotCaptured()throws Exception{String active="Bearer active-ticket-value-that-is-long-enough-000000";mvc.perform(post("/agent/output-uploads").header("Authorization",active)).andExpect(status().isOk());mvc.perform(put("/agent/output-uploads/u/content").header("Authorization",active)).andExpect(status().isOk());mvc.perform(get("/agent/output-uploads/u").header("Authorization",active)).andExpect(status().isOk());mvc.perform(get("/agent/outputs")).andExpect(status().isOk());}
+    @Test void runTicketMatcherOwnsOnlyTheNewTaskPublicationPost(){
+        MockHttpServletRequest publication=new MockHttpServletRequest(
+                "POST","/agent/tasks/task-1/output-publications");
+        MockHttpServletRequest legacyArtifact=new MockHttpServletRequest(
+                "POST","/agent/tasks/task-1/artifacts");
+        MockHttpServletRequest nestedPublication=new MockHttpServletRequest(
+                "POST","/agent/tasks/task-1/output-publications/extra");
+        org.junit.jupiter.api.Assertions.assertTrue(
+                OutputUploadSecurityConfiguration.matches(publication));
+        org.junit.jupiter.api.Assertions.assertFalse(
+                OutputUploadSecurityConfiguration.matches(legacyArtifact));
+        org.junit.jupiter.api.Assertions.assertFalse(
+                OutputUploadSecurityConfiguration.matches(nestedPublication));
+    }
     @Test void terminalStatusTicketCanReachReceiptPostsButCannotWriteBytes()throws Exception{String terminal="Bearer terminal-ticket-value-that-is-long-enough-0000";mvc.perform(get("/agent/output-uploads/u").header("Authorization",terminal)).andExpect(status().isOk());mvc.perform(post("/agent/output-uploads/u/complete").header("Authorization",terminal)).andExpect(status().isOk());mvc.perform(put("/agent/output-uploads/u/content").header("Authorization",terminal)).andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("OUTPUT_AUTH_FORBIDDEN")).andExpect(jsonPath("$.retryable").value(false));}
     @Test void publicationPostsAdmitStatusTicketForServerSideReceiptRecovery()throws Exception{
         String active="Bearer active-ticket-value-that-is-long-enough-000000";
         String terminal="Bearer terminal-ticket-value-that-is-long-enough-0000";
-        mvc.perform(post("/agent/tasks/task-1/artifacts").header("Authorization",active)
+        mvc.perform(post("/agent/tasks/task-1/output-publications").header("Authorization",active)
                         .contentType("application/json"))
                 .andExpect(status().isOk());
         mvc.perform(post("/chat/conversations/101/outputs").header("Authorization",active)
                         .contentType("application/json"))
                 .andExpect(status().isOk());
-        mvc.perform(post("/agent/tasks/task-1/artifacts").header("Authorization",terminal)
+        mvc.perform(post("/agent/tasks/task-1/output-publications").header("Authorization",terminal)
                         .contentType("application/json"))
                 .andExpect(status().isOk());
         mvc.perform(post("/chat/conversations/101/outputs"))
@@ -54,7 +69,7 @@ class OutputUploadSecurityConfigurationTest {
                 .andExpect(jsonPath("$.code").value("OUTPUT_AUTH_UNAUTHORIZED"));
         mvc.perform(get("/agent/tasks/task-1/artifacts")).andExpect(status().isOk());
         mvc.perform(get("/chat/conversations/101/outputs")).andExpect(status().isOk());
-        mvc.perform(post("/agent/tasks/task-1/artifacts").header("Authorization",active)
+        mvc.perform(post("/agent/tasks/task-1/output-publications").header("Authorization",active)
                         .contentType("text/plain").header("X-Request-ID","mime-request-1"))
                 .andExpect(status().isUnsupportedMediaType())
                 .andExpect(header().string("Cache-Control","no-store"))
@@ -83,7 +98,7 @@ class OutputUploadSecurityConfigurationTest {
         @PostMapping("/agent/output-uploads/{id}/complete")String complete(){return "ok";}
         @GetMapping("/agent/output-uploads/{id}")String status(){return "ok";}
         @GetMapping("/agent/outputs")String user(){return "ok";}
-        @PostMapping("/agent/tasks/{taskId}/artifacts")String taskPublish(){return "ok";}
+        @PostMapping("/agent/tasks/{taskId}/output-publications")String taskPublish(){return "ok";}
         @GetMapping("/agent/tasks/{taskId}/artifacts")String taskList(){return "ok";}
         @PostMapping("/chat/conversations/{conversationId}/outputs")String chatPublish(){return "ok";}
         @GetMapping("/chat/conversations/{conversationId}/outputs")String chatList(){return "ok";}

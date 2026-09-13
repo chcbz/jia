@@ -30,4 +30,9 @@ public class MatVoteItemDaoImpl extends BaseDaoImpl<MatVoteItemMapper, MatVoteIt
     public void deleteByVoteId(Long voteId) {
         baseMapper.deleteByVoteId(voteId);
     }
+
+    @Override
+    public int incrementNum(long questionId, String opt) {
+        return baseMapper.incrementNum(questionId, opt);
+    }
 }

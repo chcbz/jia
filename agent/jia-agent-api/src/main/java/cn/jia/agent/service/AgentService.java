@@ -12,6 +12,8 @@ import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskNoteDTO;
 import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.entity.AgentTaskRecommendationDTO;
+import cn.jia.agent.entity.AgentTaskTeamRecommendationDTO;
+import cn.jia.agent.entity.AgentTaskTeamRecommendationRequestDTO;
 import cn.jia.agent.entity.AgentTaskSearchDTO;
 import cn.jia.agent.entity.DialogueRequestDTO;
 import com.github.pagehelper.PageInfo;
@@ -32,7 +34,7 @@ public interface AgentService {
 
     List<AgentCapabilityDTO> listCapabilities();
 
-    List<AgentRuntimeDTO> listPersonaCatalog();
+    List<AgentRuntimeDTO> listPersonaCatalog(String tenantId, String clientId, String ownerJiacn);
 
     AgentRuntimeDTO bindPersona(String tenantId, String clientId, String ownerJiacn, String personaCode);
 
@@ -70,6 +72,10 @@ public interface AgentService {
     AgentTaskDTO assignTask(String taskId, AgentTaskAssignDTO request);
 
     List<AgentTaskRecommendationDTO> recommendTaskAssignees(String taskId);
+
+    AgentTaskTeamRecommendationDTO recommendTaskTeam(
+            String tenantId, String clientId, String taskId,
+            AgentTaskTeamRecommendationRequestDTO request);
 
     AgentTaskDTO autoAssignTask(String taskId, AgentTaskAssignDTO request);
 

@@ -47,7 +47,7 @@ public class OutputUploadSecurityConfiguration {
     static boolean matches(HttpServletRequest r){String m=r.getMethod(),p=r.getRequestURI();
         if(("GET".equals(m)||"POST".equals(m))
                 &&p.matches("/agent/tasks/[^/]+/work-items/[^/]+/lease(?:/(?:claim|start|heartbeat|release))?"))return true;
-        if("POST".equals(m)&&(p.matches("/agent/tasks/[^/]+/artifacts")
+        if("POST".equals(m)&&(p.matches("/agent/tasks/[^/]+/output-publications")
                 ||p.matches("/chat/conversations/[^/]+/outputs")))return true;
         if("POST".equals(m)&&"/agent/output-uploads".equals(p))return true;
         if(!p.matches("/agent/output-uploads/[^/]+(?:/content|/complete)?"))return false;
@@ -63,7 +63,7 @@ public class OutputUploadSecurityConfiguration {
             try{
                 String h=r.getHeader(HttpHeaders.AUTHORIZATION);
                 if(h==null||!h.startsWith("Bearer ")){authorizationError(r,s,"OUTPUT_AUTH_UNAUTHORIZED",401,false);return;}
-                boolean publish="POST".equals(r.getMethod())&&(r.getRequestURI().matches("/agent/tasks/[^/]+/artifacts")
+                boolean publish="POST".equals(r.getMethod())&&(r.getRequestURI().matches("/agent/tasks/[^/]+/output-publications")
                         ||r.getRequestURI().matches("/chat/conversations/[^/]+/outputs"));
                 boolean lease="POST".equals(r.getMethod())&&r.getRequestURI()
                         .matches("/agent/tasks/[^/]+/work-items/[^/]+/lease/(?:claim|start|heartbeat|release)");

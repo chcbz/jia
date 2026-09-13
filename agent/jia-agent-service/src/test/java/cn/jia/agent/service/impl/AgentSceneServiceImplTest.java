@@ -14,6 +14,7 @@ import cn.jia.agent.entity.AgentScenePhaseResultDTO;
 import cn.jia.agent.entity.AgentSceneSnapshotDTO;
 import cn.jia.agent.entity.AgentSceneStateDTO;
 import cn.jia.agent.entity.AgentSceneStateEntity;
+import cn.jia.agent.mapper.AgentSceneSnapshotRow;
 import cn.jia.agent.service.AgentSceneEventBroker;
 import cn.jia.agent.service.AgentSceneService;
 import cn.jia.core.context.EsContext;
@@ -92,6 +93,8 @@ class AgentSceneServiceImplTest extends BaseMockTest {
                 .thenReturn(List.of(runtime("agent-songjiang", "songjiang", AgentConstants.STATUS_ONLINE)));
         lenient().when(stateDao.findActiveByScene(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), anyLong()))
                 .thenReturn(List.of());
+        lenient().when(stateDao.findSnapshotRows(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), anyLong()))
+                .thenReturn(List.of(snapshotFenceRow(0L)));
         lenient().when(eventDao.nextSceneVersion("tenant-a", "client-a", SCENE_ID)).thenReturn(1L);
         lenient().when(stateDao.upsert(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any())).thenReturn(1);
         lenient().when(eventDao.insert(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), any())).thenReturn(1);
@@ -600,10 +603,14 @@ class AgentSceneServiceImplTest extends BaseMockTest {
     }
 
     @Test
-    void rejectsBlankScopeWithoutDefaultingOrDaoAccess() {
+    void rejectsBlankOrPaddedScopeWithoutDefaultingOrDaoAccess() {
         setScope(" ", "client-a");
         assertThrows(IllegalArgumentException.class, () -> service.upsertState(SCENE_ID, request("a", "songjiang")));
         setScope("tenant-a", "");
+        assertThrows(IllegalArgumentException.class, () -> service.snapshot(SCENE_ID));
+        setScope("tenant-a ", "client-a");
+        assertThrows(IllegalArgumentException.class, () -> service.snapshot(SCENE_ID));
+        setScope("tenant-a", " client-a");
         assertThrows(IllegalArgumentException.class, () -> service.snapshot(SCENE_ID));
 
         verifyNoInteractions(stateDao, eventDao);
@@ -646,19 +653,14 @@ class AgentSceneServiceImplTest extends BaseMockTest {
     }
 
     @Test
-    void snapshotFiltersExpiryAndVisibilityOrdersByAgentIdAndDefensivelyCopies() {
+    void snapshotUsesOneScopedProjectionOrdersByAgentIdAndDefensivelyCopies() {
         long now = System.currentTimeMillis();
-        AgentRuntimeEntity zeta = runtime("agent-zeta", "wuyong", AgentConstants.STATUS_BUSY);
-        AgentRuntimeEntity alpha = runtime("agent-alpha", "songjiang", AgentConstants.STATUS_ONLINE);
-        AgentRuntimeEntity offline = runtime("agent-offline", "linchong", AgentConstants.STATUS_OFFLINE);
-        AgentSceneStateEntity activeZeta = stateEntity("agent-zeta", "wuyong", 2L, now + 60_000);
-        AgentSceneStateEntity activeAlpha = stateEntity("agent-alpha", "songjiang", 4L, null);
-        AgentSceneStateEntity expired = stateEntity("agent-offline", "linchong", 9L, now - 1);
-        when(runtimeDao.findRosterByOwner("client-a", "tenant-a", null, null))
-                .thenReturn(List.of(zeta, offline, alpha));
-        when(stateDao.findActiveByScene(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), anyLong()))
-                .thenReturn(List.of(activeZeta, expired, activeAlpha));
-        when(eventDao.findLatestSceneVersion("tenant-a", "client-a", SCENE_ID)).thenReturn(77L);
+        AgentSceneSnapshotRow zeta = snapshotRow(
+                77L, "agent-zeta", "wuyong", AgentConstants.STATUS_BUSY, 2L, now + 60_000);
+        AgentSceneSnapshotRow alpha = snapshotRow(
+                77L, "agent-alpha", "songjiang", AgentConstants.STATUS_ONLINE, 4L, null);
+        when(stateDao.findSnapshotRows(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), anyLong()))
+                .thenReturn(List.of(zeta, alpha));
 
         AgentSceneSnapshotDTO snapshot = service.snapshot(SCENE_ID);
 
@@ -667,13 +669,33 @@ class AgentSceneServiceImplTest extends BaseMockTest {
                 snapshot.getAgents().stream().map(agent -> agent.getAgentId()).toList());
         assertEquals(List.of("agent-alpha", "agent-zeta"),
                 snapshot.getStates().stream().map(AgentSceneStateDTO::getAgentId).toList());
+        verify(stateDao).findSnapshotRows(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), anyLong());
+        verify(runtimeDao, never()).findRosterByOwner(any(), any(), any(), any());
+        verify(eventDao, never()).findLatestSceneVersion(any(), any(), any());
+        verify(eventDao, never()).findCurrentSceneVersion(any(), any(), any());
 
         alpha.setPersonaCode("mutated-source");
-        activeAlpha.setPersonaCode("mutated-state");
+        alpha.setStatePersonaCode("mutated-state");
         snapshot.getAgents().get(0).setPersonaCode("mutated-publication");
         snapshot.getStates().get(0).setPersonaCode("mutated-publication");
         assertEquals("songjiang", snapshot.getAgents().get(0).getPersonaCode());
         assertEquals("songjiang", snapshot.getStates().get(0).getPersonaCode());
+    }
+
+    @Test
+    void snapshotRejectsMixedFenceVersionsAndOutOfScopeRows() {
+        AgentSceneSnapshotRow first = snapshotRow(
+                7L, "agent-a", "songjiang", AgentConstants.STATUS_ONLINE, 1L, null);
+        AgentSceneSnapshotRow second = snapshotRow(
+                8L, "agent-b", "wuyong", AgentConstants.STATUS_BUSY, 1L, null);
+        when(stateDao.findSnapshotRows(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), anyLong()))
+                .thenReturn(List.of(first, second));
+        assertThrows(IllegalStateException.class, () -> service.snapshot(SCENE_ID));
+
+        first.setScopeTenantId("Tenant-A");
+        when(stateDao.findSnapshotRows(eq("tenant-a"), eq("client-a"), eq(SCENE_ID), anyLong()))
+                .thenReturn(List.of(first));
+        assertThrows(IllegalStateException.class, () -> service.snapshot(SCENE_ID));
     }
 
     @Test
@@ -799,6 +821,37 @@ class AgentSceneServiceImplTest extends BaseMockTest {
         entity.setExpectedArrivalAt(2_000L);
         entity.setExpiresAt(expiresAt);
         return entity;
+    }
+
+    private AgentSceneSnapshotRow snapshotFenceRow(long sceneVersion) {
+        AgentSceneSnapshotRow row = new AgentSceneSnapshotRow();
+        row.setScopeTenantId("tenant-a");
+        row.setScopeClientId("client-a");
+        row.setScopeSceneId(SCENE_ID);
+        row.setSceneVersion(sceneVersion);
+        return row;
+    }
+
+    private AgentSceneSnapshotRow snapshotRow(
+            long sceneVersion, String agentId, String personaCode, String status,
+            long stateVersion, Long expiresAt) {
+        AgentSceneSnapshotRow row = snapshotFenceRow(sceneVersion);
+        row.setAgentId(agentId);
+        row.setPersonaCode(personaCode);
+        row.setStatus(status);
+        row.setStateAgentId(agentId);
+        row.setStatePersonaCode(personaCode);
+        row.setBehavior("moving_to_council");
+        row.setOriginRegionId("main-seat");
+        row.setTargetRegionId("council-table");
+        row.setRelatedType("task");
+        row.setRelatedId("task-1");
+        row.setPhase("moving");
+        row.setStateVersion(stateVersion);
+        row.setStartedAt(1_000L);
+        row.setExpectedArrivalAt(2_000L);
+        row.setExpiresAt(expiresAt);
+        return row;
     }
 
     private AgentSceneEventDTO sceneEvent(long version) {

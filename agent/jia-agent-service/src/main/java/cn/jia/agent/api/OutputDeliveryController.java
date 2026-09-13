@@ -46,7 +46,7 @@ public class OutputDeliveryController {
         return ok(service.capabilities());
     }
 
-    @PostMapping(value="/tasks/{taskId}/artifacts", consumes=MediaType.APPLICATION_JSON_VALUE,
+    @PostMapping(value="/tasks/{taskId}/output-publications", consumes=MediaType.APPLICATION_JSON_VALUE,
             produces=MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<OutputHttpEnvelope.Success<OutputSummaryDTO>> publish(
             @RequestHeader(HttpHeaders.AUTHORIZATION) String bearer,

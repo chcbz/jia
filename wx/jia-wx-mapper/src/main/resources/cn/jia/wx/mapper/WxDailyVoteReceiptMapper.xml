@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.jia.wx.mapper.WxDailyVoteReceiptMapper">
+
+    <sql id="Receipt_Columns">
+        id, appid, message_key, user_key, request_fingerprint, question_id,
+        processor_token, status, correct, point_awarded, reply_content,
+        create_time, update_time
+    </sql>
+
+    <insert id="claim" parameterType="cn.jia.wx.entity.WxDailyVoteReceiptEntity"
+            useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO wx_daily_vote_receipt
+            (appid, message_key, user_key, request_fingerprint, question_id,
+             processor_token, status, create_time, update_time)
+        VALUES
+            (#{appid,jdbcType=VARCHAR}, #{messageKey,jdbcType=VARCHAR},
+             #{userKey,jdbcType=VARCHAR}, #{requestFingerprint,jdbcType=VARCHAR},
+             #{questionId,jdbcType=BIGINT}, #{processorToken,jdbcType=VARCHAR},
+             'PROCESSING', #{createTime,jdbcType=BIGINT}, #{updateTime,jdbcType=BIGINT})
+        ON DUPLICATE KEY UPDATE id = id
+    </insert>
+
+    <select id="lockConflicts" resultType="cn.jia.wx.entity.WxDailyVoteReceiptEntity">
+        SELECT <include refid="Receipt_Columns" />
+        FROM wx_daily_vote_receipt
+        WHERE appid = #{appid,jdbcType=VARCHAR}
+          AND (message_key = #{messageKey,jdbcType=VARCHAR}
+               OR (user_key = #{userKey,jdbcType=VARCHAR}
+                   AND question_id = #{questionId,jdbcType=BIGINT}))
+        ORDER BY id
+        LIMIT 2
+        FOR UPDATE
+    </select>
+
+    <insert id="claimMessage" parameterType="cn.jia.wx.entity.WxDailyVoteMessageReceiptEntity"
+            useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO wx_daily_vote_message_receipt
+            (receipt_id, appid, message_key, user_key, request_fingerprint,
+             question_id, create_time, update_time)
+        VALUES
+            (#{receiptId,jdbcType=BIGINT}, #{appid,jdbcType=VARCHAR},
+             #{messageKey,jdbcType=VARCHAR}, #{userKey,jdbcType=VARCHAR},
+             #{requestFingerprint,jdbcType=VARCHAR}, #{questionId,jdbcType=BIGINT},
+             #{createTime,jdbcType=BIGINT}, #{updateTime,jdbcType=BIGINT})
+        ON DUPLICATE KEY UPDATE id = id
+    </insert>
+
+    <select id="selectMessage" resultType="cn.jia.wx.entity.WxDailyVoteMessageReceiptEntity">
+        SELECT id, receipt_id, appid, message_key, user_key, request_fingerprint,
+               question_id, create_time, update_time
+        FROM wx_daily_vote_message_receipt
+        WHERE appid = #{appid,jdbcType=VARCHAR}
+          AND message_key = #{messageKey,jdbcType=VARCHAR}
+        LIMIT 1
+    </select>
+
+    <select id="lockMessage" resultType="cn.jia.wx.entity.WxDailyVoteMessageReceiptEntity">
+        SELECT id, receipt_id, appid, message_key, user_key, request_fingerprint,
+               question_id, create_time, update_time
+        FROM wx_daily_vote_message_receipt
+        WHERE appid = #{appid,jdbcType=VARCHAR}
+          AND message_key = #{messageKey,jdbcType=VARCHAR}
+        LIMIT 1
+        FOR UPDATE
+    </select>
+
+    <select id="selectCompletedByMessage" resultType="cn.jia.wx.entity.WxDailyVoteReceiptEntity">
+        SELECT r.id, r.appid, m.message_key, m.user_key, m.request_fingerprint,
+               m.question_id, r.processor_token, r.status, r.correct,
+               r.point_awarded, r.reply_content, r.create_time, r.update_time
+        FROM wx_daily_vote_message_receipt m
+        INNER JOIN wx_daily_vote_receipt r ON r.id = m.receipt_id
+        WHERE m.appid = #{appid,jdbcType=VARCHAR}
+          AND m.message_key = #{messageKey,jdbcType=VARCHAR}
+          AND r.appid = m.appid
+          AND r.user_key = m.user_key
+          AND r.question_id = m.question_id
+          AND r.status = 'COMPLETED'
+        LIMIT 1
+    </select>
+
+    <select id="lockById" resultType="cn.jia.wx.entity.WxDailyVoteReceiptEntity">
+        SELECT <include refid="Receipt_Columns" />
+        FROM wx_daily_vote_receipt
+        WHERE id = #{id,jdbcType=BIGINT}
+        LIMIT 1
+        FOR UPDATE
+    </select>
+
+    <update id="complete">
+        UPDATE wx_daily_vote_receipt
+        SET status = 'COMPLETED',
+            request_fingerprint = #{requestFingerprint,jdbcType=VARCHAR},
+            correct = #{correct,jdbcType=INTEGER},
+            point_awarded = #{pointAwarded,jdbcType=INTEGER},
+            reply_content = #{replyContent,jdbcType=VARCHAR},
+            update_time = #{updateTime,jdbcType=BIGINT}
+        WHERE id = #{id,jdbcType=BIGINT}
+          AND processor_token = #{processorToken,jdbcType=VARCHAR}
+          AND status = 'PROCESSING'
+    </update>
+</mapper>

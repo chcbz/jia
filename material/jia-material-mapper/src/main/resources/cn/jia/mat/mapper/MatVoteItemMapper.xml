@@ -11,4 +11,11 @@
         delete from mat_vote_item
         where question_id in (select id from mat_vote_question where vote_id = #{voteId,jdbcType=BIGINT})
     </delete>
+
+    <update id="incrementNum">
+        UPDATE mat_vote_item
+        SET num = COALESCE(num, 0) + 1
+        WHERE question_id = #{questionId,jdbcType=BIGINT}
+          AND UPPER(opt) = UPPER(#{opt,jdbcType=VARCHAR})
+    </update>
 </mapper>

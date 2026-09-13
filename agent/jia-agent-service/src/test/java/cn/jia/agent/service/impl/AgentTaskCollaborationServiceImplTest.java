@@ -134,6 +134,21 @@ class AgentTaskCollaborationServiceImplTest {
     }
 
     @Test
+    void legacyPublishCannotCollideWithOdArtifactChainBeforeArtifactDaoAccess() {
+        AgentTaskMetaEntity root = task(null);
+        root.setDeliveryPolicyVersion(1);
+        when(taskDao.findByTaskId(TENANT, CLIENT, TASK)).thenReturn(root);
+
+        AgentTaskCollaborationException denied = assertThrows(
+                AgentTaskCollaborationException.class,
+                () -> service.publish(TENANT, CLIENT, TASK, ACTOR,
+                        artifactCommand(1, 0)));
+
+        assertEquals(Reason.RESERVED_FOR_LEASE_PROTOCOL, denied.getReason());
+        verifyNoInteractions(memberDao, workItemDao, requestDao, artifactDao, eventWriter);
+    }
+
+    @Test
     void unsupportedDeliveryPolicyBlocksLegacyCollaboration() {
         AgentTaskMetaEntity root = task(null);
         root.setDeliveryPolicyVersion(2);
@@ -505,6 +520,8 @@ class AgentTaskCollaborationServiceImplTest {
                 () -> service.publish(TENANT, CLIENT, TASK, ACTOR, command));
 
         assertEquals(Reason.INVALID_REQUEST, error.getReason());
+        verify(artifactDao, never()).findLatestVersionForUpdate(any(), any(), any(), any());
+        verify(artifactDao, never()).insert(any(), any(), any());
     }
 
     @Test

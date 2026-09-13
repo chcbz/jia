@@ -9,6 +9,8 @@ import cn.jia.core.service.BaseServiceImpl;
 import cn.jia.core.util.HttpUtil;
 import cn.jia.core.util.JsonUtil;
 import jakarta.inject.Named;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
@@ -51,7 +53,7 @@ public class LogServiceImpl extends BaseServiceImpl<LogDao, LogEntity> implement
     );
 
     @Override
-    public LogEntity addLog(EsRequestWrapper esRequestWrapper) {
+    public LogEntity captureLog(EsRequestWrapper esRequestWrapper) {
         LogEntity logEntity = new LogEntity();
         logEntity.setIp(sanitizePersistedText(HttpUtil.getIpAddr(esRequestWrapper)));
         logEntity.setUri(sanitizePersistedText(esRequestWrapper.getRequestURI()));
@@ -61,7 +63,19 @@ public class LogServiceImpl extends BaseServiceImpl<LogDao, LogEntity> implement
         logEntity.setParam(sanitizeParameters(esRequestWrapper));
         logEntity.setJiacn(sanitizePersistedText(EsContextHolder.getContext().getJiacn()));
         logEntity.setUsername(sanitizePersistedText(EsContextHolder.getContext().getUsername()));
+        return logEntity;
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public LogEntity persistLog(LogEntity logEntity) {
         return create(logEntity);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public LogEntity addLog(EsRequestWrapper esRequestWrapper) {
+        return persistLog(captureLog(esRequestWrapper));
     }
 
     private String sanitizeHeaders(EsRequestWrapper request) {

@@ -24,6 +24,8 @@ public class AgentTaskDTO implements Serializable {
     private Integer reward;
     private String assignedAgentId;
     private String assignedAgentName;
+    /** Optional exact-scoped coordinator projection; never inferred from assignees. */
+    private String coordinatorAgentId;
     private List<String> assignedAgentIds;
     private List<AgentTaskAssigneeDTO> assignees;
     private List<AgentActionDispatchResultDTO> actionDispatchResults;

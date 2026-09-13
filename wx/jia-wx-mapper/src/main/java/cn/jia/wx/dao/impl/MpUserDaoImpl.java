@@ -7,6 +7,8 @@ import cn.jia.wx.mapper.MpUserMapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import jakarta.inject.Named;
 
+import java.util.List;
+
 /**
  * <p>
  *  服务实现类
@@ -17,6 +19,11 @@ import jakarta.inject.Named;
  */
 @Named
 public class MpUserDaoImpl extends BaseDaoImpl<MpUserMapper, MpUserEntity> implements MpUserDao {
+    @Override
+    public List<MpUserEntity> selectByAppIdAndOpenIdExact(String appid, String openId) {
+        return baseMapper.selectByAppIdAndOpenIdExact(appid, openId);
+    }
+
     @Override
     public int unsubscribe(MpUserEntity example) {
         UpdateWrapper<MpUserEntity> updateWrapper = new UpdateWrapper<>();

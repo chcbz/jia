@@ -2,6 +2,12 @@ package cn.jia.agent.dao;
 
 import cn.jia.agent.entity.AgentTaskAggregationSnapshotRow;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
+import cn.jia.agent.mapper.AgentTaskSearchRow;
+import cn.jia.agent.mapper.AgentTaskStatsRow;
+import cn.jia.agent.mapper.AgentTaskStatusCountRow;
+import cn.jia.agent.entity.AgentRuntimeEntity;
+import cn.jia.agent.entity.AgentTaskMemberEntity;
+import cn.jia.agent.mapper.AgentTaskStatsScope;
 import cn.jia.core.dao.IBaseDao;
 
 import java.util.List;
@@ -43,6 +49,19 @@ public interface AgentTaskMetaDao extends IBaseDao<AgentTaskMetaEntity> {
     List<AgentTaskMetaEntity> findByAgentId(
             String tenantId, String clientId, String agentId, int limit);
 
-    List<AgentTaskMetaEntity> search(
-            String tenantId, String clientId, String status, String ability);
+    List<AgentTaskStatsRow> findStatsByAgents(List<AgentTaskStatsScope> scopes);
+
+    long countSearch(String tenantId, String clientId, String status,
+            String ability, String keyword);
+
+    List<AgentTaskSearchRow> searchPage(String tenantId, String clientId, String status,
+            String ability, String keyword, long offset, int limit);
+
+    List<AgentTaskMemberEntity> findSearchMembers(
+            String tenantId, String clientId, List<String> taskIds);
+
+    List<AgentRuntimeEntity> findSearchRuntimes(List<String> agentIds);
+
+    List<AgentTaskStatusCountRow> countSearchByStatus(
+            String tenantId, String clientId, String ability, String keyword);
 }

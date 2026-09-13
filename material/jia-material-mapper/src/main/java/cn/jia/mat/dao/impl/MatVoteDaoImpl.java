@@ -16,4 +16,9 @@ import jakarta.inject.Named;
  */
 @Named
 public class MatVoteDaoImpl extends BaseDaoImpl<MatVoteMapper, MatVoteEntity> implements MatVoteDao {
+
+    @Override
+    public int incrementNum(long voteId) {
+        return baseMapper.incrementNum(voteId);
+    }
 }

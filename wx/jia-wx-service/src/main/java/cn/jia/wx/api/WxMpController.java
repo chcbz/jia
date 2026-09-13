@@ -15,11 +15,8 @@ import cn.jia.kefu.entity.KefuMsgSubscribeEntity;
 import cn.jia.kefu.entity.KefuMsgTypeCode;
 import cn.jia.kefu.service.KefuMsgSubscribeService;
 import cn.jia.mat.entity.MatVoteItemEntity;
-import cn.jia.mat.entity.MatVoteQuestionEntity;
 import cn.jia.mat.entity.MatVoteQuestionVO;
-import cn.jia.mat.entity.MatVoteTickEntity;
 import cn.jia.mat.service.MatVoteService;
-import cn.jia.point.common.PointConstants;
 import cn.jia.point.entity.*;
 import cn.jia.point.service.GiftService;
 import cn.jia.point.service.PointService;
@@ -27,6 +24,11 @@ import cn.jia.user.common.UserConstants;
 import cn.jia.user.entity.UserEntity;
 import cn.jia.user.service.UserService;
 import cn.jia.wx.common.WxConstants;
+import cn.jia.wx.dailyvote.WxCallbackTiming;
+import cn.jia.wx.dailyvote.WxDailyVoteAnswerCommand;
+import cn.jia.wx.dailyvote.WxDailyVoteAnswerResult;
+import cn.jia.wx.dailyvote.WxDailyVoteKeys;
+import cn.jia.wx.dailyvote.WxDailyVoteReplayQuery;
 import cn.jia.wx.common.WxErrorConstants;
 import cn.jia.wx.entity.MpInfoEntity;
 import cn.jia.wx.entity.MpInfoVO;
@@ -34,6 +36,7 @@ import cn.jia.wx.entity.MpUserEntity;
 import cn.jia.wx.service.MpInfoService;
 import cn.jia.wx.service.MpUserService;
 import cn.jia.wx.service.PayInfoService;
+import cn.jia.wx.service.WxDailyVoteService;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonParser;
 import com.github.binarywang.wxpay.bean.request.WxPaySendRedpackRequest;
@@ -103,6 +106,8 @@ public class WxMpController {
     private RedisService redisService;
     @Autowired(required = false)
     private MatVoteService voteService;
+    @Autowired
+    private WxDailyVoteService dailyVoteService;
     @Autowired(required = false)
     private DwzService dwzService;
     @Autowired(required = false)
@@ -142,34 +147,78 @@ public class WxMpController {
      */
     @RequestMapping(value = "/checksignature", method = RequestMethod.POST)
     public Object receiveMsg(@RequestBody String msg, HttpServletRequest request) throws Exception {
-        log.debug("---------------------receiveMsg---------------------\n\r" + msg);
+        WxCallbackTiming timing = new WxCallbackTiming();
+        try {
+            long signatureStage = timing.startStage();
+            WxMpService wxMpService;
+            String appid;
+            boolean signatureValid;
+            try {
+                wxMpService = mpInfoService.findWxMpService(request);
+                appid = wxMpService.getWxMpConfigStorage().getAppId();
+                timing.appid(appid);
+                String signature = request.getParameter("signature");
+                String timestamp = request.getParameter("timestamp");
+                String nonce = request.getParameter("nonce");
+                signatureValid = StringUtil.isNotEmpty(signature)
+                        && StringUtil.isNotEmpty(timestamp)
+                        && StringUtil.isNotEmpty(nonce)
+                        && wxMpService.checkSignature(timestamp, nonce, signature);
+            } finally {
+                timing.signature(signatureStage);
+            }
+            if (!signatureValid) {
+                return "";
+            }
+
         WxMpXmlMessage message = WxMpXmlMessage.fromXml(msg);
-        //获取并设置oauth权限信息
-//		request.getSession().setAttribute("current_user", message.getFromUser());
-        String original = message.getToUser();
-        WxMpService wxMpService = mpInfoService.findWxMpService(original);
-        String appid = wxMpService.getWxMpConfigStorage().getAppId();
+        timing.messageType(message.getMsgType());
+        String messageKey = WxDailyVoteKeys.messageKey(appid, message);
+        timing.trace(WxDailyVoteKeys.trace(messageKey));
         MpInfoEntity mpInfo = mpInfoService.findByKey(appid);
+        if (mpInfo == null || !Objects.equals(mpInfo.getOriginal(), message.getToUser())) {
+            return "";
+        }
         String clientId = mpInfo.getClientId();
-        MpUserEntity mpUser = mpUserService.findByOpenId(message.getFromUser());
-        if (mpUser == null) {
-            //初始化用户信息
-            WxMpUser wxMpUser = wxMpService.getUserService().userInfoList(Collections.singletonList(message.getFromUser())).get(0);
-            MpUserEntity params = new MpUserEntity();
-            params.setAppid(appid);
-            params.setClientId(clientId);
-            params.setOpenId(wxMpUser.getOpenId());
+        long identityStage = timing.startStage();
+        MpUserEntity mpUser;
+        try {
+            mpUser = mpUserService.findByAppIdAndOpenId(appid, message.getFromUser());
+            if (mpUser == null) {
+                //初始化用户信息
+                WxMpUser wxMpUser = wxMpService.getUserService()
+                        .userInfoList(Collections.singletonList(message.getFromUser())).get(0);
+                MpUserEntity params = new MpUserEntity();
+                params.setAppid(appid);
+                params.setClientId(clientId);
+                params.setOpenId(wxMpUser.getOpenId());
 //			params.setCountry(wxMpUser.getCountry());
 //			params.setProvince(wxMpUser.getProvince());
 //			params.setCity(wxMpUser.getCity());
 //			params.setSex(wxMpUser.getSex());
-            params.setNickname(wxMpUser.getNickname());
-            params.setSubscribe(1);
-            params.setHeadImgUrl(wxMpUser.getHeadImgUrl());
-            mpUser = mpUserService.create(params);
+                params.setNickname(wxMpUser.getNickname());
+                params.setSubscribe(1);
+                params.setHeadImgUrl(wxMpUser.getHeadImgUrl());
+                mpUser = mpUserService.create(params);
+            }
+            if (mpUser.getJiacn() == null || mpUser.getJiacn().isBlank()) {
+                throw new IllegalStateException("WeChat user identity is incomplete");
+            }
+        } finally {
+            timing.identity(identityStage);
         }
-        // 将当前用户设置为活跃用户
-        redisService.set("active_mp_user_" + mpUser.getOpenId(), "Y", Duration.ofDays(2));
+        String userKey = WxDailyVoteKeys.userKey(appid, mpUser.getJiacn());
+        // 活跃标记是非关键缓存，故障不得阻断已验签消息。
+        long activeRedisStage = timing.startStage();
+        try {
+            redisService.set("active_mp_user_" + mpUser.getOpenId(), "Y", Duration.ofDays(2));
+        } catch (RuntimeException e) {
+            log.warn("Wx active marker update failed: appid={}, type={}, trace={}, error={}",
+                    appid, message.getMsgType(), WxDailyVoteKeys.trace(messageKey),
+                    e.getClass().getSimpleName());
+        } finally {
+            timing.redis(activeRedisStage);
+        }
         if (WxConsts.XmlMsgType.TEXT.equalsIgnoreCase(message.getMsgType())
                 && "TD".equalsIgnoreCase(message.getContent())) {
             WxMpXmlOutTextMessage outMessage = new WxMpXmlOutTextMessage();
@@ -179,7 +228,7 @@ public class WxMpController {
             unsubscribeVote(mpUser);
             redisService.delete("vote_" + mpUser.getJiacn());
             outMessage.setContent("退订成功咯！哼！！");
-            return outMessage.toXml();
+            return toXml(outMessage, timing);
         }
         //关注
         if (WxConsts.XmlMsgType.EVENT.equals(message.getMsgType()) && WxConsts.EventType.SUBSCRIBE.equals(message.getEvent())) {
@@ -216,7 +265,7 @@ public class WxMpController {
             } else {
                 outMessage.setContent(EsHandler.getMessage(request, "init.back"));
             }
-            return outMessage.toXml();
+            return toXml(outMessage, timing);
         }
         //退订
         if (WxConsts.XmlMsgType.EVENT.equals(message.getMsgType()) && WxConsts.EventType.UNSUBSCRIBE.equals(message.getEvent())) {
@@ -241,7 +290,7 @@ public class WxMpController {
             } catch (Exception ignored) {
                 outMessage.setContent("");
             }
-            return outMessage.toXml();
+            return toXml(outMessage, timing);
         }
         //点击菜单
         if (WxConsts.XmlMsgType.EVENT.equals(message.getMsgType()) && WxConsts.EventType.CLICK.equals(message.getEvent())) {
@@ -254,7 +303,7 @@ public class WxMpController {
                 UserEntity user = userService.findByJiacn(mpUser.getJiacn());
                 if (user == null) {
                     outMessage.setContent(WxErrorConstants.USER_NOT_EXIST.getCode());
-                    return outMessage.toXml();
+                    return toXml(outMessage, timing);
                 }
                 outMessage.setContent(EsHandler.getMessage(request, "point.mine", new String[]{String.valueOf(user.getPoint())}));
             }
@@ -303,7 +352,7 @@ public class WxMpController {
                 } else {
                     outMessage.setContent(EsHandler.getMessage(request, "luck.success", new String[]{String.valueOf(point)}));
                 }
-                return outMessage.toXml();
+                return toXml(outMessage, timing);
             }
             //礼品列表
             else if (WxConstants.EVENKEY_POINT_GIFT.equals(message.getEventKey())) {
@@ -323,7 +372,7 @@ public class WxMpController {
                     item.setUrl(pointWebUrl + "/pay?id=" + gift.getId());
                     newsMessage.addArticle(item);
                 }
-                return newsMessage.toXml();
+                return toXml(newsMessage, timing);
             }
             //获取分享二维码
             if (WxConstants.EVENKEY_POINT_QRCODE.equals(message.getEventKey())) {
@@ -347,62 +396,73 @@ public class WxMpController {
                 //上传临时素材并获取mediaId
                 WxMediaUploadResult imageResult = wxMpService.getMaterialService().mediaUpload(WxConsts.MaterialType.IMAGE, qrFile);
                 imageMessage.setMediaId(imageResult.getMediaId());
-                return imageMessage.toXml();
+                return toXml(imageMessage, timing);
             }
-            return outMessage.toXml();
+            return toXml(outMessage, timing);
         }
-        //回答问题
-        String obj = redisService.get("vote_" + mpUser.getJiacn());
-        if (obj != null && WxConsts.XmlMsgType.TEXT.equalsIgnoreCase(message.getMsgType())) {
-            WxMpXmlOutTextMessage outMessage = new WxMpXmlOutTextMessage();
-            outMessage.setCreateTime(message.getCreateTime());
-            outMessage.setFromUserName(message.getToUser());
-            outMessage.setToUserName(message.getFromUser());
+        //回答问题：receipt 先于 Redis 重放，保证提交后缓存故障仍可返回已持久结果。
+        if (WxConsts.XmlMsgType.TEXT.equalsIgnoreCase(message.getMsgType())) {
+            WxDailyVoteReplayQuery replayQuery = new WxDailyVoteReplayQuery(
+                    appid, messageKey, userKey, message.getContent());
+            Optional<WxDailyVoteAnswerResult> replay = findDailyVoteReplay(replayQuery, timing);
+            if (replay.isPresent()) {
+                WxDailyVoteAnswerResult result = replay.get();
+                clearVotePointer(mpUser.getJiacn(), result.questionId(), appid, messageKey, timing);
+                return toXml(dailyVoteReply(message, result.replyContent()), timing);
+            }
 
-            Long questionId = Long.parseLong(obj);
-            MatVoteQuestionEntity voteQuestion = voteService.findQuestion(questionId);
-            MatVoteTickEntity voteTick = new MatVoteTickEntity();
-            voteTick.setQuestionId(questionId);
-            voteTick.setOpt(message.getContent());
-            voteTick.setJiacn(mpUser.getJiacn());
-            boolean tick = voteService.tick(voteTick);
-            if (tick) {
-                outMessage.setContent("恭喜你，答案正确，增加" + voteQuestion.getPoint() + "积分！");
-                pointService.add(mpUser.getJiacn(), voteQuestion.getPoint(), PointConstants.POINT_TYPE_VOTE);
-                //随机发放红包
-                WxPaySendRedpackRequest sendRedpack = new WxPaySendRedpackRequest();
-                sendRedpack.setMchBillNo(String.valueOf(DateUtil.nowTime()));
-                sendRedpack.setClientIp(HttpUtil.getIpAddr(request));
-                sendRedpack.setActName("奖励红包");
-                sendRedpack.setReOpenid(message.getFromUser());
-                sendRedpack.setSceneId("PRODUCT_2");
-                sendRedpack.setWishing("幸运之神眷顾着你");
-                sendRedpack.setRemark("多多关注我们，每天都有不一样的收获!");
-                sendRedpack.setSendName(mpInfo.getName());
-                sendRedpack.setAmtType("ALL_RAND");
-                sendRedpack.setTotalAmount(200 + Integer.parseInt(DataUtil.getRandom(true, 3)));
-                sendRedpack.setTotalNum(10);
-                sendRedpack.setWxAppid(appid);
-                String redpackAppId = appid;
-                String voteJiacn = mpUser.getJiacn();
-                try {
-                    taskExecutor.execute(() -> {
-                        try {
-                            payInfoService.findWxPayService(redpackAppId).getRedpackService().sendRedpack(sendRedpack);
-                        } catch (Exception e) {
-                            log.error("Daily vote redpack failed: appid={}, questionId={}, jiacn={}",
-                                    redpackAppId, questionId, voteJiacn, e);
-                        }
-                    });
-                } catch (Exception e) {
-                    log.error("Daily vote redpack dispatch failed: appid={}, questionId={}, jiacn={}",
-                            redpackAppId, questionId, voteJiacn, e);
+            String voteKey = "vote_" + mpUser.getJiacn();
+            long voteRedisStage = timing.startStage();
+            String obj;
+            try {
+                obj = redisService.get(voteKey);
+            } finally {
+                timing.redis(voteRedisStage);
+            }
+            if (obj == null) {
+                // 覆盖 receipt 查询后、并发事务提交并清理 Redis 的窄竞态窗口。
+                replay = findDailyVoteReplay(replayQuery, timing);
+                if (replay.isPresent()) {
+                    WxDailyVoteAnswerResult result = replay.get();
+                    clearVotePointer(mpUser.getJiacn(), result.questionId(), appid, messageKey, timing);
+                    return toXml(dailyVoteReply(message, result.replyContent()), timing);
                 }
             } else {
-                outMessage.setContent("很遗憾，回答错误，正确答案是" + voteQuestion.getOpt() + ",下次继续努力！");
+                long questionId = Long.parseLong(obj);
+                long transactionStage = timing.startStage();
+                WxDailyVoteAnswerResult result = null;
+                RuntimeException answerFailure = null;
+                boolean replayAfterRollback = false;
+                try {
+                    result = dailyVoteService.answer(new WxDailyVoteAnswerCommand(
+                            appid, messageKey, userKey, mpUser.getJiacn(), questionId, message.getContent()));
+                } catch (RuntimeException failure) {
+                    answerFailure = failure;
+                } finally {
+                    timing.transaction(transactionStage);
+                }
+                if (answerFailure != null) {
+                    Optional<WxDailyVoteAnswerResult> committedReplay;
+                    try {
+                        committedReplay = findDailyVoteReplay(replayQuery, timing);
+                    } catch (RuntimeException replayFailure) {
+                        if (replayFailure != answerFailure) {
+                            answerFailure.addSuppressed(replayFailure);
+                        }
+                        throw answerFailure;
+                    }
+                    if (committedReplay.isEmpty()) {
+                        throw answerFailure;
+                    }
+                    result = committedReplay.get();
+                    replayAfterRollback = true;
+                }
+                clearVotePointer(mpUser.getJiacn(), result.questionId(), appid, messageKey, timing);
+                if (!replayAfterRollback && result.firstProcessing() && result.correct()) {
+                    dispatchDailyVoteRedpack(request, message, mpInfo, appid, messageKey, result);
+                }
+                return toXml(dailyVoteReply(message, result.replyContent()), timing);
             }
-            redisService.delete("vote_" + mpUser.getJiacn());
-            return outMessage.toXml();
         }
         //处理消息是否送达成功推送
         if (WxConsts.XmlMsgType.EVENT.equals(message.getMsgType())
@@ -413,7 +473,7 @@ public class WxMpController {
             outMessage.setFromUserName(message.getToUser());
             outMessage.setToUserName(message.getFromUser());
             outMessage.setContent("");
-            return outMessage.toXml();
+            return toXml(outMessage, timing);
         }
         //我要做题
         if ("我要做题".equals(message.getContent())) {
@@ -434,7 +494,7 @@ public class WxMpController {
                 outMessage.setContent(content.toString());
                 redisService.set("vote_" + mpUser.getJiacn(), String.valueOf(question.getId()), 2L, TimeUnit.HOURS);
             }
-            return outMessage.toXml();
+            return toXml(outMessage, timing);
         } else if ("我的积分".equals(message.getContent())) {
             WxMpXmlOutTextMessage outMessage = new WxMpXmlOutTextMessage();
             outMessage.setCreateTime(message.getCreateTime());
@@ -444,10 +504,10 @@ public class WxMpController {
             UserEntity user = userService.findByJiacn(mpUser.getJiacn());
             if (user == null) {
                 outMessage.setContent(WxErrorConstants.USER_NOT_EXIST.getCode());
-                return outMessage.toXml();
+                return toXml(outMessage, timing);
             }
             outMessage.setContent(EsHandler.getMessage(request, "point.mine", new String[]{String.valueOf(user.getPoint())}));
-            return outMessage.toXml();
+            return toXml(outMessage, timing);
         }
 
         //转客服
@@ -463,10 +523,88 @@ public class WxMpController {
         };
         WxMpMessageRouter router = new WxMpMessageRouter(wxMpService);
         router.rule().async(false).handler(handler).end();
-        WxMpXmlOutMessage outMessage = router.route(WxMpXmlMessage.fromXml(msg));
-        return outMessage.toXml();
+        WxMpXmlOutMessage outMessage = router.route(message);
+        return toXml(outMessage, timing);
+        } finally {
+            timing.log(log);
+        }
     }
-	
+
+
+    private Optional<WxDailyVoteAnswerResult> findDailyVoteReplay(
+            WxDailyVoteReplayQuery query, WxCallbackTiming timing) {
+        long replayStage = timing.startStage();
+        try {
+            return dailyVoteService.findReplay(query);
+        } finally {
+            timing.replay(replayStage);
+        }
+    }
+
+    private WxMpXmlOutTextMessage dailyVoteReply(WxMpXmlMessage message, String content) {
+        WxMpXmlOutTextMessage outMessage = new WxMpXmlOutTextMessage();
+        outMessage.setCreateTime(message.getCreateTime());
+        outMessage.setFromUserName(message.getToUser());
+        outMessage.setToUserName(message.getFromUser());
+        outMessage.setContent(content);
+        return outMessage;
+    }
+
+    private void clearVotePointer(String jiacn, long questionId, String appid, String messageKey,
+                                  WxCallbackTiming timing) {
+        long redisStage = timing.startStage();
+        try {
+            redisService.deleteIfValueEquals("vote_" + jiacn, String.valueOf(questionId));
+        } catch (RuntimeException e) {
+            log.warn("Daily vote cache cleanup failed: appid={}, questionId={}, trace={}, error={}",
+                    appid, questionId, WxDailyVoteKeys.trace(messageKey), e.getClass().getSimpleName());
+        } finally {
+            timing.redis(redisStage);
+        }
+    }
+
+    private void dispatchDailyVoteRedpack(HttpServletRequest request, WxMpXmlMessage message,
+                                          MpInfoEntity mpInfo, String appid, String messageKey,
+                                          WxDailyVoteAnswerResult result) {
+        WxPaySendRedpackRequest sendRedpack = new WxPaySendRedpackRequest();
+        sendRedpack.setMchBillNo(String.valueOf(DateUtil.nowTime()));
+        sendRedpack.setClientIp(HttpUtil.getIpAddr(request));
+        sendRedpack.setActName("奖励红包");
+        sendRedpack.setReOpenid(message.getFromUser());
+        sendRedpack.setSceneId("PRODUCT_2");
+        sendRedpack.setWishing("幸运之神眷顾着你");
+        sendRedpack.setRemark("多多关注我们，每天都有不一样的收获!");
+        sendRedpack.setSendName(mpInfo.getName());
+        sendRedpack.setAmtType("ALL_RAND");
+        sendRedpack.setTotalAmount(200 + Integer.parseInt(DataUtil.getRandom(true, 3)));
+        sendRedpack.setTotalNum(10);
+        sendRedpack.setWxAppid(appid);
+        try {
+            taskExecutor.execute(() -> {
+                try {
+                    payInfoService.findWxPayService(appid).getRedpackService().sendRedpack(sendRedpack);
+                } catch (Exception e) {
+                    log.error("Daily vote redpack failed: appid={}, questionId={}, receiptId={}, trace={}, error={}",
+                            appid, result.questionId(), result.receiptId(), WxDailyVoteKeys.trace(messageKey),
+                            e.getClass().getSimpleName());
+                }
+            });
+        } catch (RuntimeException e) {
+            log.error("Daily vote redpack dispatch failed: appid={}, questionId={}, receiptId={}, trace={}, error={}",
+                    appid, result.questionId(), result.receiptId(), WxDailyVoteKeys.trace(messageKey),
+                    e.getClass().getSimpleName());
+        }
+    }
+
+    private String toXml(WxMpXmlOutMessage outMessage, WxCallbackTiming timing) {
+        long replyStage = timing.startStage();
+        try {
+            return outMessage.toXml();
+        } finally {
+            timing.reply(replyStage);
+        }
+    }
+
 	/*public static void main(String[] args) throws IOException {
 		String shareUrl = "http://chcbz.net";
 		File qrFile = File.createTempFile("wx-qrcode", ".png");

@@ -123,6 +123,7 @@ public class JuyitingAgentRelayService {
                         }
                     }, emitter::error);
             subscriptionRef[0] = disposable;
+            emitter.onDispose(disposable);
 
             AtomicBoolean sent = new AtomicBoolean();
             boolean live = chatConversationEventBroker.runIfLive(
@@ -154,8 +155,8 @@ public class JuyitingAgentRelayService {
                 emitter.complete();
             }
 
-            emitter.onDispose(disposable);
-        }, FluxSink.OverflowStrategy.BUFFER)
+        }, FluxSink.OverflowStrategy.ERROR)
+                .transform(ChatStreamPolicy::bounded)
                 .takeUntilOther(chatConversationEventBroker.deletionSignal(
                         conversationId, generation,
                         () -> chatConversationService.isLiveGeneration(

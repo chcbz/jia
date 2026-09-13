@@ -12,6 +12,7 @@ import cn.jia.user.dao.UserGroupRelDao;
 import cn.jia.user.dao.UserInfoDao;
 import cn.jia.user.dao.UserOrgRelDao;
 import cn.jia.user.dao.UserRoleRelDao;
+import cn.jia.user.dao.UserRelationRow;
 import cn.jia.user.entity.*;
 import com.github.pagehelper.PageInfo;
 import org.junit.jupiter.api.Assertions;
@@ -24,6 +25,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.*;
@@ -76,6 +78,42 @@ class UserServiceImplTest extends BaseMockTest {
         EsRuntimeException exception = assertThrows(EsRuntimeException.class, () ->
                 userServiceImpl.changePoint("jiacn", -2));
         Assertions.assertEquals(UserErrorConstants.POINT_NO_ENOUGH.getMessage(), exception.getMessage());
+    }
+
+
+    @Test
+    void changePointAndGetUsesAtomicIncrementAndReturnsCommittedBalance() {
+        when(userInfoDao.incrementPoint(eq("jiacn"), eq(2), anyLong())).thenReturn(1);
+        when(userInfoDao.selectPointByJiacn("jiacn")).thenReturn(7);
+
+        int balance = userServiceImpl.changePointAndGet("jiacn", 2);
+
+        Assertions.assertEquals(7, balance);
+        verify(userInfoDao).incrementPoint(eq("jiacn"), eq(2), anyLong());
+        verify(userInfoDao).selectPointByJiacn("jiacn");
+        verify(userInfoDao, never()).selectByJiacn("jiacn");
+        verify(userInfoDao, never()).updateById(any());
+    }
+
+    @Test
+    void changePointAndGetFailsClosedForMissingInsufficientOrAmbiguousIdentity() {
+        when(userInfoDao.incrementPoint(eq("missing"), eq(1), anyLong())).thenReturn(0);
+        when(userInfoDao.selectPointByJiacn("missing")).thenReturn(null);
+        EsRuntimeException missing = assertThrows(EsRuntimeException.class,
+                () -> userServiceImpl.changePointAndGet("missing", 1));
+        Assertions.assertEquals(UserErrorConstants.USER_NOT_EXIST.getMessage(), missing.getMessage());
+
+        when(userInfoDao.incrementPoint(eq("poor"), eq(-2), anyLong())).thenReturn(0);
+        when(userInfoDao.selectPointByJiacn("poor")).thenReturn(1);
+        EsRuntimeException insufficient = assertThrows(EsRuntimeException.class,
+                () -> userServiceImpl.changePointAndGet("poor", -2));
+        Assertions.assertEquals(UserErrorConstants.POINT_NO_ENOUGH.getMessage(), insufficient.getMessage());
+
+        when(userInfoDao.incrementPoint(eq("duplicate"), eq(1), anyLong())).thenReturn(2);
+        assertThrows(IllegalStateException.class,
+                () -> userServiceImpl.changePointAndGet("duplicate", 1));
+        verify(userInfoDao, never()).selectPointByJiacn("duplicate");
+        verify(userInfoDao, never()).selectByJiacn(anyString());
     }
 
     @Test
@@ -330,4 +368,61 @@ class UserServiceImplTest extends BaseMockTest {
         Assertions.assertNull(updated.getValue().getAccountState());
         Assertions.assertNull(updated.getValue().getAuthEpoch());
     }
+    @Test
+    void userListRelationsUseOneBoundedBatchQueryAndPreserveDuplicates() {
+        when(userInfoDao.selectRelationsByUserIds(List.of(10L, 20L))).thenReturn(List.of(
+                new UserRelationRow(10L, "ROLE", 1L),
+                new UserRelationRow(10L, "ROLE", 1L),
+                new UserRelationRow(10L, "ORG", 2L),
+                new UserRelationRow(20L, "GROUP", 3L)));
+
+        Map<Long, UserRelationIds> result = userServiceImpl.findRelationIds(List.of(10L, 20L, 10L));
+
+        Assertions.assertEquals(List.of(1L, 1L), result.get(10L).roleIds());
+        Assertions.assertEquals(List.of(2L), result.get(10L).orgIds());
+        Assertions.assertEquals(List.of(), result.get(10L).groupIds());
+        Assertions.assertEquals(List.of(3L), result.get(20L).groupIds());
+        verify(userInfoDao, times(1)).selectRelationsByUserIds(List.of(10L, 20L));
+        verify(userRoleRelDao, never()).selectByUserId(anyLong());
+        verify(userOrgRelDao, never()).selectByUserId(anyLong());
+        verify(userGroupRelDao, never()).selectByUserId(anyLong());
+    }
+
+    @Test
+    void userListRelationsFailClosedForUnexpectedUserOrType() {
+        when(userInfoDao.selectRelationsByUserIds(List.of(10L)))
+                .thenReturn(List.of(new UserRelationRow(11L, "ROLE", 1L)));
+        assertThrows(IllegalStateException.class, () -> userServiceImpl.findRelationIds(List.of(10L)));
+
+        when(userInfoDao.selectRelationsByUserIds(List.of(20L)))
+                .thenReturn(List.of(new UserRelationRow(20L, "LEGACY", 1L)));
+        assertThrows(IllegalStateException.class, () -> userServiceImpl.findRelationIds(List.of(20L)));
+
+        when(userInfoDao.selectRelationsByUserIds(List.of(30L)))
+                .thenReturn(List.of(new UserRelationRow(30L, "ROLE", null)));
+        assertThrows(IllegalStateException.class, () -> userServiceImpl.findRelationIds(List.of(30L)));
+    }
+
+    @Test
+    void emptyUserListSkipsRelationQuery() {
+        Assertions.assertTrue(userServiceImpl.findRelationIds(List.of()).isEmpty());
+        Assertions.assertTrue(userServiceImpl.findRelationIds(java.util.Arrays.asList(null, null)).isEmpty());
+        verify(userInfoDao, never()).selectRelationsByUserIds(anyList());
+    }
+
+    @Test
+    void userListPageKeepsSearchAndOrderContract() {
+        UserVO search = new UserVO();
+        search.setTenantId("Tenant-A");
+        search.setClientId("Client-A");
+        when(userInfoDao.selectForList(search)).thenReturn(List.of(new UserEntity().setId(1L)));
+
+        PageInfo<UserEntity> page = userServiceImpl.findListPage(search, 2, 25, "create_time desc");
+
+        Assertions.assertEquals(1L, page.getList().getFirst().getId());
+        verify(userInfoDao).selectForList(same(search));
+        Assertions.assertEquals("Tenant-A", search.getTenantId());
+        Assertions.assertEquals("Client-A", search.getClientId());
+    }
+
 }

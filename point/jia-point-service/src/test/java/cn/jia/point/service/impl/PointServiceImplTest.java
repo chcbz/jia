@@ -79,13 +79,25 @@ class PointServiceImplTest extends BaseMockTest {
 
     @Test
     void testAdd() {
-        when(pointRecordDao.insert(any())).thenReturn(0);
-        UserEntity userEntity = new UserEntity();
-        userEntity.setPoint(1);
-        when(userService.findByJiacn(anyString())).thenReturn(userEntity);
+        when(pointRecordDao.insert(any())).thenReturn(1);
+        when(userService.changePointAndGet("jiacn", 1)).thenReturn(2);
 
         PointRecordEntity result = pointServiceImpl.add("jiacn", 1, 0);
+
         Assertions.assertEquals("jiacn", result.getJiacn());
+        Assertions.assertEquals(2, result.getRemain());
+        verify(userService).changePointAndGet("jiacn", 1);
+        verify(userService, never()).findByJiacn(anyString());
+    }
+
+
+    @Test
+    void addFailsWhenPointRecordCannotBePersistedSoTransactionCanRollBack() {
+        when(userService.changePointAndGet("jiacn", 1)).thenReturn(2);
+        when(pointRecordDao.insert(any())).thenReturn(0);
+
+        Assertions.assertThrows(IllegalStateException.class,
+                () -> pointServiceImpl.add("jiacn", 1, 0));
     }
 
     @Test

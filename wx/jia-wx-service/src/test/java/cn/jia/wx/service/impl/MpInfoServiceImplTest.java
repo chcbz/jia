@@ -1,6 +1,7 @@
 package cn.jia.wx.service.impl;
 
 import cn.jia.test.BaseMockTest;
+import cn.jia.wx.config.WxExternalHttpClientBuilder;
 import cn.jia.wx.dao.MpInfoDao;
 import cn.jia.wx.entity.MpInfoEntity;
 import jakarta.servlet.http.HttpServletRequest;
@@ -36,6 +37,8 @@ class MpInfoServiceImplTest extends BaseMockTest {
         mpInfoService.init();
         WxMpService wxMpService = mpInfoService.findWxMpService("appid");
         assertNotNull(wxMpService);
+        assertInstanceOf(WxExternalHttpClientBuilder.class,
+                wxMpService.getWxMpConfigStorage().getApacheHttpClientBuilder());
     }
 
     @Test

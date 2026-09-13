@@ -9,6 +9,11 @@ import cn.jia.agent.config.AgentRabbitTopologyManifest;
 import cn.jia.agent.dao.AgentCommandOperationsDao;
 import cn.jia.agent.dao.impl.AgentCommandOperationsDaoImpl;
 import cn.jia.agent.entity.AgentCommandDraft;
+import cn.jia.agent.entity.AgentCommandOperationAuditEntity;
+import cn.jia.agent.entity.AgentCommandOperationRequest;
+import cn.jia.agent.entity.AgentCommandOperationV1View;
+import cn.jia.agent.entity.AgentCommandOperationsException;
+import cn.jia.agent.entity.AgentCommandRedriveOperationEntity;
 import cn.jia.agent.entity.AgentHallCommandPayload;
 import cn.jia.agent.mapper.AgentCommandOperationsMapper;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
@@ -22,11 +27,18 @@ import org.junit.jupiter.api.Test;
 import org.mybatis.spring.SqlSessionTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
+import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Production mapper plus real read-only transaction evidence on H2 MySQL mode. */
@@ -78,11 +90,183 @@ class AgentCommandOperationsRealTransactionTest {
         assertFalse(second.hasMore());
     }
 
+    @Test
+    void redriveV1AcceptanceAndAuditCommitTogetherReplayWithoutDuplicateAndRollbackTogether() {
+        DaoDiagnostics diagnostics = new DaoDiagnostics();
+        AgentCommandOperationsServiceImpl service = service(true, diagnostics.observe(dao));
+
+        var accepted = diagnostics.requireAcceptance(() -> service.acceptBrokerRedriveV1(
+                request(1L, "11111111-1111-1111-1111-111111111111",
+                        "incident recovery"),
+                "redrive-key-0001", NOW));
+
+        assertEquals("ACCEPTED", accepted.status());
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM agent_command_redrive_operation", Integer.class));
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM agent_command_operation_audit", Integer.class));
+        assertEquals(accepted.operationId(), jdbc.queryForObject(
+                "SELECT operation_id FROM agent_command_redrive_operation", String.class));
+        var pending = new TransactionTemplate(manager).execute(status ->
+                dao.lockPendingRedriveOperations(
+                        "tenant-a", "client-a", NOW, 0, 10));
+        assertEquals(List.of(accepted.operationId()), pending.stream()
+                .map(row -> row.getOperationId()).toList());
+
+        var replay = service.acceptBrokerRedriveV1(
+                request(1L, "11111111-1111-1111-1111-111111111111",
+                        "incident recovery"),
+                "redrive-key-0001", NOW);
+        assertEquals(accepted.operationId(), replay.operationId());
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM agent_command_redrive_operation", Integer.class));
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM agent_command_operation_audit", Integer.class));
+
+        AgentCommandOperationsException conflict = assertThrows(
+                AgentCommandOperationsException.class,
+                () -> service.acceptBrokerRedriveV1(
+                        request(1L, "11111111-1111-1111-1111-111111111111",
+                                "different recovery"),
+                        "redrive-key-0001", NOW));
+        assertEquals(AgentCommandOperationsException.Reason.OPERATION_CONFLICT,
+                conflict.reason());
+
+        jdbc.execute("DROP TABLE agent_command_operation_audit");
+        AgentCommandOperationsException unavailable = assertThrows(
+                AgentCommandOperationsException.class,
+                () -> service.acceptBrokerRedriveV1(
+                        request(3L, "33333333-3333-3333-3333-333333333333",
+                                "second recovery"),
+                        "redrive-key-0002", NOW));
+        assertEquals(AgentCommandOperationsException.Reason.AUDIT_UNAVAILABLE,
+                unavailable.reason());
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM agent_command_redrive_operation", Integer.class));
+    }
+
+    @Test
+    void generatedGuardRetainsTerminalNullAndActiveUniquenessAcrossConnections() {
+        var accepted = service(true).acceptBrokerRedriveV1(
+                request(1L, "11111111-1111-1111-1111-111111111111", "guard regression"),
+                "guard-key-0001", NOW);
+        for (String state : List.of("PENDING", "SOURCE_REQUEUED", "NOT_ACQUIRED", "FAILED")) {
+            jdbc.update("UPDATE agent_command_redrive_operation SET settlement_state=? WHERE operation_id=?",
+                    state, accepted.operationId());
+            Integer expected = state.equals("SOURCE_REQUEUED") || state.equals("NOT_ACQUIRED") ? null : 1;
+            assertEquals(expected, jdbc.queryForObject(
+                    "SELECT redrive_guard FROM agent_command_redrive_operation WHERE operation_id=?",
+                    Integer.class, accepted.operationId()));
+        }
+        String duplicate = """
+                INSERT INTO agent_command_redrive_operation(
+                  operation_id,delivery_id,task_id,target_agent_id,command_id,source_event_id,source_message_id,
+                  source_attempt,wire_hash,requester_id,reason,ticket_reference,outcome_state,settlement_state,
+                  requested_at,version,tenant_id,client_id,create_time,update_time)
+                SELECT ?,delivery_id,task_id,target_agent_id,command_id,source_event_id,source_message_id,
+                  source_attempt,wire_hash,requester_id,reason,ticket_reference,outcome_state,settlement_state,
+                  requested_at,version,tenant_id,client_id,create_time,update_time
+                FROM agent_command_redrive_operation WHERE operation_id=?
+                """;
+        assertThrows(org.springframework.dao.DataIntegrityViolationException.class,
+                () -> jdbc.update(duplicate, "guard-duplicate", accepted.operationId()));
+        jdbc.update("UPDATE agent_command_redrive_operation SET settlement_state='SOURCE_REQUEUED'"
+                + " WHERE operation_id=?", accepted.operationId());
+        assertEquals(1, jdbc.update(duplicate, "guard-terminal-duplicate", accepted.operationId()));
+    }
+
     private AgentCommandOperationsServiceImpl service() {
+        return service(false);
+    }
+
+    private AgentCommandOperationsServiceImpl service(boolean asyncRedriveEnabled) {
+        return service(asyncRedriveEnabled, dao);
+    }
+
+    private AgentCommandOperationsServiceImpl service(
+            boolean asyncRedriveEnabled, AgentCommandOperationsDao operationsDao) {
         return new AgentCommandOperationsServiceImpl(
-                dao, gate(), AgentRabbitTopologyManifest.canonical(), null, null,
-                new AgentCommandOperationsProperties(true, false, false, 20, 20, null, null),
+                operationsDao, gate(), AgentRabbitTopologyManifest.canonical(), null, null,
+                new AgentCommandOperationsProperties(
+                        true, false, asyncRedriveEnabled, false, 20, 20, null, null),
                 manager, java.util.UUID::randomUUID, () -> NOW);
+    }
+
+    /** Observe the real DAO without replacing SQL, return values, exceptions or transactions. */
+    private static final class DaoDiagnostics {
+        private final List<String> stages = new ArrayList<>();
+        private Throwable firstDaoFailure;
+
+        private AgentCommandOperationsDao observe(AgentCommandOperationsDao realDao) {
+            return (AgentCommandOperationsDao) Proxy.newProxyInstance(
+                    AgentCommandOperationsDao.class.getClassLoader(),
+                    new Class<?>[]{AgentCommandOperationsDao.class}, (proxy, method, args) -> {
+                        try {
+                            Object result = method.invoke(realDao, args);
+                            String shape = result == null ? "null"
+                                    : result instanceof List<?> rows ? "rows=" + rows.size()
+                                    : result instanceof Number count ? "count=" + count
+                                    : "present";
+                            stages.add(method.getName() + ":" + shape + generatedKey(args));
+                            return result;
+                        } catch (InvocationTargetException invocation) {
+                            Throwable cause = invocation.getCause();
+                            if (firstDaoFailure == null) firstDaoFailure = cause;
+                            stages.add(method.getName() + ":" + exceptionCodes(cause)
+                                    + generatedKey(args));
+                            // Preserve the exact exception so production rollback/sanitization runs.
+                            throw cause;
+                        }
+                    });
+        }
+
+        private AgentCommandOperationV1View requireAcceptance(
+                Supplier<AgentCommandOperationV1View> acceptance) {
+            try {
+                return acceptance.get();
+            } catch (RuntimeException rejected) {
+                String reason = rejected instanceof AgentCommandOperationsException operation
+                        ? operation.reason().name() : rejected.getClass().getSimpleName();
+                AssertionError diagnostic = new AssertionError(
+                        "Initial async acceptance rejected: reason=" + reason + "; dao=" + stages);
+                // Only after the service/transaction boundary has failed: retain the fixture's
+                // original mapper cause in the test report, not in the production HTTP exception.
+                diagnostic.initCause(firstDaoFailure == null ? rejected : firstDaoFailure);
+                if (firstDaoFailure != null) diagnostic.addSuppressed(rejected);
+                throw diagnostic;
+            }
+        }
+
+        private static String generatedKey(Object[] args) {
+            if (args == null || args.length != 1) return "";
+            Long id;
+            if (args[0] instanceof AgentCommandRedriveOperationEntity operation) {
+                id = operation.getId();
+            } else if (args[0] instanceof AgentCommandOperationAuditEntity audit) {
+                id = audit.getId();
+            } else {
+                return "";
+            }
+            return ",generatedKey=" + (id == null ? "null" : id > 0 ? "positive" : "nonPositive");
+        }
+
+        private static String exceptionCodes(Throwable failure) {
+            List<String> codes = new ArrayList<>();
+            for (Throwable cause = failure; cause != null && codes.size() < 8;
+                    cause = cause.getCause()) {
+                codes.add(cause.getClass().getName() + (cause instanceof SQLException sql
+                        ? "[SQLState=" + sql.getSQLState() + ",errorCode=" + sql.getErrorCode() + "]"
+                        : ""));
+            }
+            return String.join(" -> ", codes);
+        }
+    }
+
+    private AgentCommandOperationRequest request(
+            long deliveryId, String messageId, String reason) {
+        return new AgentCommandOperationRequest(
+                "tenant-a", "client-a", deliveryId, "task-" + deliveryId,
+                "agent-a", messageId, "operator-a", null, reason, "INC-42");
     }
 
     private void insertSource(long id, String messageId, String eventId, boolean legalRoute) {
@@ -172,14 +356,43 @@ class AgentCommandOperationsRealTransactionTest {
                   client_id VARCHAR(50), create_time BIGINT, update_time BIGINT)
                 """);
         jdbc.execute("""
+                CREATE TABLE agent_command_operation_audit(
+                  id BIGINT AUTO_INCREMENT PRIMARY KEY, operation_id VARCHAR(100) NOT NULL,
+                  phase VARCHAR(20) NOT NULL, operation_type VARCHAR(40) NOT NULL,
+                  tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL,
+                  task_id VARCHAR(100) NOT NULL, target_agent_id VARCHAR(100) NOT NULL,
+                  command_id VARCHAR(100), source_message_id VARCHAR(100) NOT NULL,
+                  new_message_id VARCHAR(100), delivery_id BIGINT NOT NULL, source_attempt INT,
+                  new_attempt INT, wire_hash BINARY(32), requester_id VARCHAR(100) NOT NULL,
+                  approver_id VARCHAR(100), reason VARCHAR(1000) NOT NULL,
+                  ticket_reference VARCHAR(200) NOT NULL, requested_at BIGINT NOT NULL,
+                  completed_at BIGINT, outcome VARCHAR(32) NOT NULL, error_code VARCHAR(200),
+                  created_by VARCHAR(100) NOT NULL, created_at BIGINT NOT NULL,
+                  UNIQUE(operation_id, phase))
+                """);
+        // H2 2.4.240 retains the closed DDL session for an optimized generated IN expression.
+        // Simple CASE preserves the production guard semantics across independent JDBC connections.
+        jdbc.execute("""
                 CREATE TABLE agent_command_redrive_operation(
-                  id BIGINT PRIMARY KEY, operation_id VARCHAR(36), delivery_id BIGINT, task_id VARCHAR(100),
-                  target_agent_id VARCHAR(100), command_id VARCHAR(100), source_event_id VARCHAR(100),
-                  source_message_id VARCHAR(100), source_attempt INT, wire_hash BINARY(32), requester_id VARCHAR(100),
-                  reason VARCHAR(1000), ticket_reference VARCHAR(200), outcome_state VARCHAR(32),
-                  settlement_state VARCHAR(32), error_code VARCHAR(200), requested_at BIGINT, completed_at BIGINT,
-                  version BIGINT, disposition_guard INT, redrive_guard INT, tenant_id VARCHAR(50),
-                  client_id VARCHAR(50), create_time BIGINT, update_time BIGINT)
+                  id BIGINT AUTO_INCREMENT PRIMARY KEY, operation_id VARCHAR(100) NOT NULL,
+                  delivery_id BIGINT NOT NULL, task_id VARCHAR(100) NOT NULL,
+                  target_agent_id VARCHAR(100) NOT NULL, command_id VARCHAR(100) NOT NULL,
+                  source_event_id VARCHAR(100) NOT NULL, source_message_id VARCHAR(100) NOT NULL,
+                  source_attempt INT NOT NULL, wire_hash BINARY(32) NOT NULL,
+                  requester_id VARCHAR(100) NOT NULL, reason VARCHAR(1000) NOT NULL,
+                  ticket_reference VARCHAR(200) NOT NULL, outcome_state VARCHAR(32) NOT NULL,
+                  settlement_state VARCHAR(32) NOT NULL, error_code VARCHAR(200),
+                  requested_at BIGINT NOT NULL, completed_at BIGINT, version BIGINT NOT NULL,
+                  disposition_guard INT GENERATED ALWAYS AS
+                    (CASE WHEN outcome_state='PENDING' THEN 1 ELSE NULL END),
+                  redrive_guard INT GENERATED ALWAYS AS
+                    (CASE settlement_state WHEN 'SOURCE_REQUEUED' THEN NULL
+                          WHEN 'NOT_ACQUIRED' THEN NULL ELSE 1 END),
+                  tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL,
+                  create_time BIGINT NOT NULL, update_time BIGINT NOT NULL,
+                  UNIQUE(tenant_id, client_id, operation_id),
+                  UNIQUE(tenant_id, client_id, delivery_id, source_message_id,
+                         source_attempt, redrive_guard))
                 """);
     }
 

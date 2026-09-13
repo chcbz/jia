@@ -5,6 +5,7 @@ import cn.jia.agent.entity.AgentCommandDeliveryEntity;
 import cn.jia.agent.entity.AgentCommandMetricCount;
 import cn.jia.agent.entity.AgentCommandOperationAuditEntity;
 import cn.jia.agent.entity.AgentCommandOperationAuditEntry;
+import cn.jia.agent.entity.AgentCommandOperationStatusRow;
 import cn.jia.agent.entity.AgentCommandRedriveOperationEntity;
 import cn.jia.agent.entity.AgentCommandRedriveOperationState;
 import cn.jia.agent.entity.AgentConsumerInboxEntity;
@@ -42,6 +43,7 @@ public class AgentCommandOperationsDaoImpl implements AgentCommandOperationsDao 
     @Override public AgentConsumerInboxEntity selectInbox(String tenantId, String clientId, String consumerName, String messageId) { return mapper.selectInbox(tenantId, clientId, consumerName, messageId); }
     @Override public List<AgentCommandRedriveOperationEntity> selectActiveRedriveOperations(String tenantId, String clientId, long deliveryId, String sourceMessageId, int sourceAttempt) { return mapper.selectActiveRedriveOperations(tenantId, clientId, deliveryId, sourceMessageId, sourceAttempt); }
     @Override public List<AgentCommandOperationAuditEntry> listAudit(String tenantId, String clientId, long afterId, int limit) { return mapper.listAudit(tenantId, clientId, afterId, limit); }
+    @Override public List<AgentCommandOperationStatusRow> findOperationStatusRows(String tenantId, String clientId, String requesterId, String operationId) { return mapper.findOperationStatusRows(tenantId, clientId, requesterId, operationId); }
     @Override public AgentCommandDeliveryEntity lockDelivery(String tenantId, String clientId, long deliveryId) { return mapper.lockDelivery(tenantId, clientId, deliveryId); }
     @Override public List<AgentOutboxEventEntity> lockActiveOutboxes(String tenantId, String clientId, long deliveryId, String messageId) { return mapper.lockActiveOutboxes(tenantId, clientId, deliveryId, messageId); }
     @Override public List<AgentOutboxEventEntity> lockCurrentAttemptOutboxes(String tenantId, String clientId, long deliveryId, int activeAttempt) { return mapper.lockCurrentAttemptOutboxes(tenantId, clientId, deliveryId, activeAttempt); }

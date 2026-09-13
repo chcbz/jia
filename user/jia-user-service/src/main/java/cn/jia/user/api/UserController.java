@@ -38,6 +38,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
@@ -233,14 +234,18 @@ public class UserController {
     @PreAuthorize("hasAuthority('user-list')")
     @RequestMapping(value = "/list", method = RequestMethod.POST)
     public Object list(@RequestBody JsonRequestPage<UserVO> page) {
-        PageInfo<UserEntity> userList = userService.findPage(page.getSearch(), page.getPageNum(), page.getPageSize(), page.getOrderBy());
+        PageInfo<UserEntity> userList = userService.findListPage(page.getSearch(), page.getPageNum(),
+                page.getPageSize(), page.getOrderBy());
+        List<Long> userIds = userList.getList().stream().map(UserEntity::getId).toList();
+        Map<Long, UserRelationIds> relationsByUser = userService.findRelationIds(userIds);
         List<UserVO> userVOList = new ArrayList<>();
         //隐藏密码
         for (UserEntity u : userList.getList()) {
             UserVO userVO = UserVOMapper.INSTANCE.toVO(u);
-            userVO.setRoleIds(userService.findRoleIds(u.getId()));
-            userVO.setOrgIds(userService.findOrgIds(u.getId()));
-            userVO.setGroupIds(userService.findGroupIds(u.getId()));
+            UserRelationIds relations = relationsByUser.get(u.getId());
+            userVO.setRoleIds(relations == null ? List.of() : relations.roleIds());
+            userVO.setOrgIds(relations == null ? List.of() : relations.orgIds());
+            userVO.setGroupIds(relations == null ? List.of() : relations.groupIds());
             userVO.setPassword("******");
             userVOList.add(userVO);
         }

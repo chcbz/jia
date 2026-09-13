@@ -58,6 +58,13 @@ public class AgentRuntimeDaoImpl extends BaseDaoImpl<AgentRuntimeMapper, AgentRu
     }
 
     @Override
+    public List<AgentRuntimeEntity> findCandidateRosterByOwner(String clientId, String jiacn) {
+        requireExactId(clientId, "clientId");
+        requireExactId(jiacn, "jiacn");
+        return baseMapper.findCandidateRosterByOwner(clientId, jiacn);
+    }
+
+    @Override
     public int clearBindingAfterUnbind(long runtimeId, String agentId, long bindingId,
             String clientId, String ownerJiacn, long detachedAt) {
         if (runtimeId <= 0 || bindingId <= 0 || detachedAt <= 0) {
@@ -72,10 +79,8 @@ public class AgentRuntimeDaoImpl extends BaseDaoImpl<AgentRuntimeMapper, AgentRu
 
     @Override
     public List<AgentRuntimeEntity> findMapVisible(String clientId) {
-        return baseMapper.selectList(new LambdaQueryWrapper<AgentRuntimeEntity>()
-                .eq(AgentRuntimeEntity::getClientId, clientId)
-                .in(AgentRuntimeEntity::getStatus, AgentConstants.STATUS_ONLINE, AgentConstants.STATUS_BUSY)
-                .orderByDesc(AgentRuntimeEntity::getLastSeenAt));
+        requireExactId(clientId, "clientId");
+        return baseMapper.findMapVisibleByExactClient(clientId);
     }
 
     @Override

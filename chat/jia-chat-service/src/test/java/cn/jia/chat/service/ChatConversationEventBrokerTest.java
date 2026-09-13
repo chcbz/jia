@@ -1,19 +1,67 @@
 package cn.jia.chat.service;
 
 import org.junit.jupiter.api.Test;
+import org.reactivestreams.Subscription;
 import reactor.core.Disposable;
+import reactor.core.publisher.BaseSubscriber;
 
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ChatConversationEventBrokerTest {
+
+    @Test
+    void initialControlFrameIsEmittedAfterLiveRegistrationWithoutChangingEventPayloads() throws Exception {
+        ChatConversationEventBroker broker = new ChatConversationEventBroker();
+        List<String> events = new CopyOnWriteArrayList<>();
+        CountDownLatch received = new CountDownLatch(2);
+
+        Disposable subscription = broker.stream(
+                        "conv-ready", 1L, () -> true, "{\"type\":\"stream_ready\"}")
+                .subscribe(event -> {
+                    events.add(event);
+                    received.countDown();
+                });
+        assertEquals(1, broker.subscriberCount("conv-ready"));
+        assertTrue(broker.publishIfLive(
+                "conv-ready", 1L, () -> true,
+                Map.of("type", "agent_message", "content", "ready")));
+
+        assertTrue(received.await(2, TimeUnit.SECONDS));
+        assertEquals("{\"type\":\"stream_ready\"}", events.getFirst());
+        assertTrue(events.get(1).contains("\"type\":\"agent_message\""));
+        subscription.dispose();
+        assertEquals(0, broker.subscriberCount("conv-ready"));
+    }
+
+    @Test
+    void slowConversationSubscriberOverflowsAtFixedBoundAndReleasesBrokerState() throws Exception {
+        ChatConversationEventBroker broker = new ChatConversationEventBroker();
+        NoDemandSubscriber subscriber = new NoDemandSubscriber();
+        broker.stream("conv-slow", 1L, () -> true).subscribe(subscriber);
+        assertEquals(1, broker.subscriberCount("conv-slow"));
+
+        for (int index = 0; index <= ChatStreamPolicy.OUTBOUND_BUFFER_LIMIT; index++) {
+            broker.publishIfLive(
+                    "conv-slow", 1L, () -> true,
+                    Map.of("type", "agent_message_delta", "content", Integer.toString(index)));
+        }
+
+        assertEquals(0, broker.subscriberCount("conv-slow"),
+                "overflow cleanup must not wait for the consumer to drain buffered frames");
+        subscriber.drain();
+        assertTrue(subscriber.failed.await(2, TimeUnit.SECONDS));
+        assertTrue(subscriber.failure.get() instanceof IllegalStateException);
+    }
     @Test
     void publishSanitizesSensitiveFieldsBeforeStreaming() throws Exception {
         ChatConversationEventBroker broker = new ChatConversationEventBroker();
@@ -72,5 +120,25 @@ class ChatConversationEventBrokerTest {
                 .collectList().block().contains(Boolean.TRUE));
         assertEquals(0, broker.subscriberCount("77"));
         assertEquals(0, broker.watcherCount("77"));
+    }
+
+    private static final class NoDemandSubscriber extends BaseSubscriber<String> {
+        private final CountDownLatch failed = new CountDownLatch(1);
+        private final AtomicReference<Throwable> failure = new AtomicReference<>();
+
+        private void drain() {
+            requestUnbounded();
+        }
+
+        @Override
+        protected void hookOnSubscribe(Subscription subscription) {
+            // Do not request: the per-subscriber transport buffer must terminate at its bound.
+        }
+
+        @Override
+        protected void hookOnError(Throwable throwable) {
+            failure.set(throwable);
+            failed.countDown();
+        }
     }
 }

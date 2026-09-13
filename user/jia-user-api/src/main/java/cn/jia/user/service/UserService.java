@@ -2,10 +2,12 @@ package cn.jia.user.service;
 
 import cn.jia.common.service.IBaseService;
 import cn.jia.user.entity.UserEntity;
+import cn.jia.user.entity.UserRelationIds;
 import cn.jia.user.entity.UserVO;
 import com.github.pagehelper.PageInfo;
 
 import java.util.List;
+import java.util.Map;
 
 public interface UserService extends IBaseService<UserEntity> {
 
@@ -21,11 +23,17 @@ public interface UserService extends IBaseService<UserEntity> {
 	
 	PageInfo<UserEntity> search(UserEntity user, int pageNum, int pageSize, String orderBy);
 
+	PageInfo<UserEntity> findListPage(UserVO user, int pageNum, int pageSize, String orderBy);
+
+	Map<Long, UserRelationIds> findRelationIds(List<Long> userIds);
+
 	UserEntity update(UserEntity user);
 	
 	void sync(List<UserEntity> userList);
 
 	void changePoint(String jiacn, int add);
+
+	int changePointAndGet(String jiacn, int add);
 	
 	void changeRole(UserVO user);
 

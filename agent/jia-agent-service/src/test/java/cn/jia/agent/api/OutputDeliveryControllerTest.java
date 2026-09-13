@@ -90,14 +90,14 @@ class OutputDeliveryControllerTest {
         String common = "\"expectedPreviousVersion\":\"0\",\"title\":\"safe\","
                 + "\"artifactType\":\"document\",\"content\":\"body\","
                 + "\"artifactId\":\"artifact-1\",\"artifactVersion\":\"1\"";
-        mvc.perform(post("/agent/tasks/task-1/artifacts")
+        mvc.perform(post("/agent/tasks/task-1/output-publications")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + "a".repeat(43))
                         .header("Idempotency-Key", "publish-http-key-01")
                         .contentType("application/json")
                         .content("{\"runId\":\"run-1\",\"runId\":\"run-2\"," + common + "}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("OUTPUT_REQUEST_INVALID"));
-        mvc.perform(post("/agent/tasks/task-1/artifacts")
+        mvc.perform(post("/agent/tasks/task-1/output-publications")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + "a".repeat(43))
                         .header("Idempotency-Key", "publish-http-key-02")
                         .contentType("application/json")
@@ -123,7 +123,7 @@ class OutputDeliveryControllerTest {
                  "artifactVersion":"1","publishToOwner":true}
                 """;
 
-        mvc.perform(post("/agent/tasks/task-1/artifacts")
+        mvc.perform(post("/agent/tasks/task-1/output-publications")
                         .header(HttpHeaders.AUTHORIZATION,"Bearer "+"a".repeat(43))
                         .header("Idempotency-Key","publish-http-key-03")
                         .contentType("application/json").content(body))
@@ -135,12 +135,12 @@ class OutputDeliveryControllerTest {
                         .principal(jwt("owner","client")))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.data.content").value("body"));
 
-        mvc.perform(post("/agent/tasks/task-1/artifacts")
+        mvc.perform(post("/agent/tasks/task-1/output-publications")
                         .header(HttpHeaders.AUTHORIZATION,"Bearer "+"a".repeat(43))
                         .contentType("application/json").content(body))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("OUTPUT_REQUEST_INVALID"));
-        mvc.perform(post("/agent/tasks/task-1/artifacts")
+        mvc.perform(post("/agent/tasks/task-1/output-publications")
                         .header(HttpHeaders.AUTHORIZATION,"Bearer "+"a".repeat(43))
                         .header("Idempotency-Key","publish-http-key-04")
                         .contentType("text/plain").content(body))

@@ -27,6 +27,8 @@ public class AgentTaskArtifactViewDTO implements Serializable {
     private Long ownerSharedAt;
     private Long retainUntil;
     private String contentHash;
+    private String contentMimeType;
+    private Boolean managedStorage;
     private Integer artifactVersion;
     private String visibility;
     private Map<String, Object> metadata;

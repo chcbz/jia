@@ -95,6 +95,12 @@ class OutputUploadSecurityCoexistenceTest {
                 .andExpect(jsonPath("$.status").doesNotExist()).andExpect(jsonPath("$.msg").doesNotExist());
         mvc.perform(post("/agent/output-uploads/upload-1/complete").session(session).header("Authorization","Bearer user-jwt-token-value-that-is-not-run-ticket").header("Idempotency-Key","complete-http-key-01")).andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("OUTPUT_AUTH_UNAUTHORIZED")).andExpect(jsonPath("$.requestId").isString());
+        mvc.perform(post("/agent/tasks/task-1/output-publications").session(session)
+                        .header("Authorization","Bearer user-jwt-token-value-that-is-not-run-ticket")
+                        .header("Idempotency-Key","publish-http-key-01")
+                        .contentType("application/json").content("{}"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("OUTPUT_AUTH_UNAUTHORIZED"));
     }
 
     @Test void actualResourceAndFallbackChainsRemainOrderedAndIsolated()throws Exception{

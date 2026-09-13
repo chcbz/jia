@@ -2,7 +2,9 @@ package cn.jia.user.dao;
 
 import cn.jia.core.dao.IBaseDao;
 import cn.jia.user.entity.UserEntity;
+import cn.jia.user.entity.UserVO;
 
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -32,9 +34,17 @@ public interface UserInfoDao extends IBaseDao<UserEntity> {
 
     List<UserEntity> searchByExample(UserEntity user);
 
+    List<UserEntity> selectForList(UserVO user);
+
+    List<UserRelationRow> selectRelationsByUserIds(Collection<Long> userIds);
+
     UserEntity selectSecurityById(long userId);
 
     List<UserEntity> selectSecurityByExactJiacn(String jiacn);
 
     int incrementAuthEpoch(long userId, long expectedEpoch);
+
+    int incrementPoint(String jiacn, int add, long updateTime);
+
+    Integer selectPointByJiacn(String jiacn);
 }

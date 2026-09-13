@@ -33,6 +33,7 @@ dependencies {
     compileOnly(libs.spring.boot.starter.actuator)
 
     testImplementation project(':common:jia-common-test')
+    testImplementation libs.spring.rabbit
     testAnnotationProcessor libs.lombok
     testImplementation libs.lombok
 }

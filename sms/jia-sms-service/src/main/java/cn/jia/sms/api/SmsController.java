@@ -10,6 +10,7 @@ import cn.jia.sms.common.SmsErrorConstants;
 import cn.jia.sms.entity.*;
 import cn.jia.sms.service.SmsService;
 import cn.jia.sms.service.SmsServiceProvider;
+import cn.jia.sms.service.impl.SmsReplyCallbackService;
 import com.github.pagehelper.PageInfo;
 import jakarta.inject.Inject;
 import jakarta.servlet.http.HttpServletRequest;
@@ -35,6 +36,9 @@ public class SmsController {
 
     @Autowired(required = false)
     private SmsServiceProvider smsServiceProvider;
+
+    @Inject
+    private SmsReplyCallbackService smsReplyCallbackService;
 
     /**
      * 验证码校验接口
@@ -238,30 +242,13 @@ public class SmsController {
     @RequestMapping(value = "/receive", method = RequestMethod.GET)
     @ResponseBody
     public Object receive(@RequestParam String mobile, @RequestParam String content, @RequestParam String msgid, @RequestParam(required = false) String xh) {
-        SmsReplyEntity smsReply = new SmsReplyEntity();
-        smsReply.setContent(content);
-        smsReply.setMobile(mobile);
-        smsReply.setMsgid(msgid);
-        smsReply.setXh(xh);
-        smsService.reply(smsReply);
-
-        SmsSendEntity send = smsService.selectSend(msgid);
-        SmsConfigEntity config = smsService.selectConfig(send.getClientId());
-        if (config != null && StringUtil.isNotEmpty(config.getReplyUrl())) {
-            String replyUrl = config.getReplyUrl();
-            replyUrl = HttpUtil.addUrlValue(replyUrl, "mobile", mobile);
-            replyUrl = HttpUtil.addUrlValue(replyUrl, "content", content);
-            replyUrl = HttpUtil.addUrlValue(replyUrl, "msgid", msgid);
-            replyUrl = HttpUtil.addUrlValue(replyUrl, "xh", xh);
-
-            // 使用RestTemplate发送回复
-            String response = new org.springframework.web.client.RestTemplate().getForObject(replyUrl, String.class);
-            log.info("sms reply success: " + response);
-        } else {
-            log.warn("sms reply no replyUrl");
+        try {
+            smsReplyCallbackService.receive(mobile, content, msgid, xh);
+            return JsonResult.success();
+        } catch (RuntimeException exception) {
+            log.warn("短信回复回调明确失败，failure: {}", exception.getClass().getSimpleName());
+            return JsonResult.failure("E999", "短信回复处理失败");
         }
-
-        return JsonResult.success();
     }
 
     /**

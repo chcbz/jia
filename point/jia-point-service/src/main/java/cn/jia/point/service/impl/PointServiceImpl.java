@@ -173,22 +173,15 @@ public class PointServiceImpl implements PointService {
 	@Override
 	@Transactional(rollbackFor = Exception.class)
 	public PointRecordEntity add(String jiacn, int point, int type) {
-		// 检查用户是否存在
-		UserEntity userResult = userService.findByJiacn(jiacn);
-		if (userResult == null) {
-			throw new EsRuntimeException(UserErrorConstants.USER_NOT_EXIST);
-		}
-		int userPoint = userResult.getPoint(); //用户当前积分
-		// 增加用户积分
-		userService.changePoint(jiacn, point);
-		//记录积分情况
-		userPoint = userPoint + point;
+		int userPoint = userService.changePointAndGet(jiacn, point);
 		PointRecordEntity record = new PointRecordEntity();
 		record.setJiacn(jiacn);
 		record.setType(type);
 		record.setChg(point);
 		record.setRemain(userPoint);
-		pointRecordDao.insert(record);
+		if (pointRecordDao.insert(record) != 1) {
+			throw new IllegalStateException("point record insert failed");
+		}
 		return record;
 	}
 
