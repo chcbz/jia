@@ -10,18 +10,22 @@ import cn.jia.wx.dailyvote.WxDailyVoteAnswerCommand;
 import cn.jia.wx.dailyvote.WxDailyVoteAnswerResult;
 import cn.jia.wx.dailyvote.WxDailyVoteKeys;
 import cn.jia.wx.dailyvote.WxDailyVoteReplayQuery;
+import cn.jia.wx.dailyvote.WxDailyVoteSchemaSupport;
 import cn.jia.wx.entity.WxDailyVoteMessageReceiptEntity;
 import cn.jia.wx.entity.WxDailyVoteReceiptEntity;
 import cn.jia.wx.service.WxDailyVoteService;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
+@Slf4j
 @Service
 public class WxDailyVoteServiceImpl implements WxDailyVoteService {
 
@@ -29,6 +33,8 @@ public class WxDailyVoteServiceImpl implements WxDailyVoteService {
     private static final String COMPLETED = "COMPLETED";
     private static final Pattern HASH = Pattern.compile("[0-9a-f]{64}");
 
+    private final AtomicBoolean receiptSchemaUnavailable = new AtomicBoolean();
+    private final AtomicBoolean receiptSchemaFailureLogged = new AtomicBoolean();
     private final WxDailyVoteReceiptDao receiptDao;
     private final MatVoteService voteService;
     private final PointService pointService;
@@ -44,7 +50,22 @@ public class WxDailyVoteServiceImpl implements WxDailyVoteService {
     @Override
     public Optional<WxDailyVoteAnswerResult> findReplay(WxDailyVoteReplayQuery query) {
         validateIdentity(query.appid(), query.messageKey(), query.userKey());
-        WxDailyVoteReceiptEntity receipt = receiptDao.selectCompletedByMessage(query.appid(), query.messageKey());
+        if (receiptSchemaUnavailable.get()) {
+            return Optional.empty();
+        }
+        WxDailyVoteReceiptEntity receipt;
+        try {
+            receipt = receiptDao.selectCompletedByMessage(query.appid(), query.messageKey());
+        } catch (RuntimeException failure) {
+            if (WxDailyVoteSchemaSupport.isMissingReceiptSchema(failure)) {
+                receiptSchemaUnavailable.set(true);
+                if (receiptSchemaFailureLogged.compareAndSet(false, true)) {
+                    log.error("Daily-vote receipt schema is unavailable; replay is deferred until the scoped migration runs");
+                }
+                return Optional.empty();
+            }
+            throw failure;
+        }
         if (receipt == null) {
             return Optional.empty();
         }
@@ -61,6 +82,9 @@ public class WxDailyVoteServiceImpl implements WxDailyVoteService {
     @Transactional(rollbackFor = Exception.class)
     public WxDailyVoteAnswerResult answer(WxDailyVoteAnswerCommand command) {
         validateIdentity(command.appid(), command.messageKey(), command.userKey());
+        if (receiptSchemaUnavailable.get()) {
+            throw WxDailyVoteSchemaSupport.unavailable();
+        }
         if (command.jiacn() == null || command.jiacn().isBlank() || command.questionId() <= 0
                 || command.answer() == null) {
             throw new IllegalArgumentException("daily vote command is incomplete");

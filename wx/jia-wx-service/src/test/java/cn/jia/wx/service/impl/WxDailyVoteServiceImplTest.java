@@ -15,6 +15,9 @@ import cn.jia.wx.entity.WxDailyVoteMessageReceiptEntity;
 import cn.jia.wx.entity.WxDailyVoteReceiptEntity;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.jdbc.BadSqlGrammarException;
+
+import java.sql.SQLException;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 
@@ -54,6 +57,22 @@ class WxDailyVoteServiceImplTest extends BaseMockTest {
         });
         lenient().when(receiptDao.lockMessage(eq(APPID), anyString()))
                 .thenAnswer(invocation -> claimedMessage.get());
+    }
+
+
+    @Test
+    void missingReceiptSchemaDefersReplayInsteadOfBreakingOtherWechatCommands() {
+        when(receiptDao.selectCompletedByMessage(APPID, MESSAGE_KEY)).thenThrow(
+                new BadSqlGrammarException("select", "SELECT", new SQLException(
+                        "Table 'jia.wx_daily_vote_message_receipt' doesn't exist", "42S02", 1146)));
+
+        Optional<WxDailyVoteAnswerResult> replay = service.findReplay(
+                new WxDailyVoteReplayQuery(APPID, MESSAGE_KEY, USER_KEY, "A"));
+
+        assertTrue(replay.isEmpty());
+        assertTrue(service.findReplay(new WxDailyVoteReplayQuery(APPID, MESSAGE_KEY, USER_KEY, "A")).isEmpty());
+        verify(receiptDao, times(1)).selectCompletedByMessage(APPID, MESSAGE_KEY);
+        verifyNoInteractions(voteService, pointService);
     }
 
     @Test

@@ -29,6 +29,7 @@ import cn.jia.wx.dailyvote.WxDailyVoteAnswerCommand;
 import cn.jia.wx.dailyvote.WxDailyVoteAnswerResult;
 import cn.jia.wx.dailyvote.WxDailyVoteKeys;
 import cn.jia.wx.dailyvote.WxDailyVoteReplayQuery;
+import cn.jia.wx.dailyvote.WxDailyVoteSchemaSupport;
 import cn.jia.wx.common.WxErrorConstants;
 import cn.jia.wx.entity.MpInfoEntity;
 import cn.jia.wx.entity.MpInfoVO;
@@ -442,6 +443,12 @@ public class WxMpController {
                     timing.transaction(transactionStage);
                 }
                 if (answerFailure != null) {
+                    if (WxDailyVoteSchemaSupport.isMissingReceiptSchema(answerFailure)) {
+                        log.error("Daily-vote receipt schema unavailable: appid={}, trace={}",
+                                appid, WxDailyVoteKeys.trace(messageKey));
+                        return toXml(dailyVoteReply(message,
+                                "每日投票服务正在恢复，请稍后重试，当前题目已保留。"), timing);
+                    }
                     Optional<WxDailyVoteAnswerResult> committedReplay;
                     try {
                         committedReplay = findDailyVoteReplay(replayQuery, timing);

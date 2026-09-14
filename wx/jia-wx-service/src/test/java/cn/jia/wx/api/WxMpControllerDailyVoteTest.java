@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.sql.SQLException;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -184,6 +185,24 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
         assertSame(original, thrown);
         assertArrayEquals(new Throwable[]{replayFailure}, thrown.getSuppressed());
         verify(dailyVoteService, times(2)).findReplay(any());
+        verify(redisService, never()).deleteIfValueEquals(anyString(), anyString());
+        verify(taskExecutor, never()).execute(any(Runnable.class));
+    }
+
+
+    @Test
+    void missingReceiptSchemaKeepsTheCurrentQuestionAndReturnsRecoverableReply() throws Exception {
+        stubValidDailyVoteRequest();
+        when(dailyVoteService.findReplay(any())).thenReturn(Optional.empty());
+        when(redisService.get("vote_user-1")).thenReturn("337");
+        when(dailyVoteService.answer(any())).thenThrow(new RuntimeException("mapper failed",
+                new SQLException("Table 'jia.wx_daily_vote_message_receipt' doesn't exist", "42S02", 1146)));
+
+        String response = (String) controller.receiveMsg(XML, request);
+
+        assertTrue(response.contains("每日投票服务正在恢复，请稍后重试，当前题目已保留。"));
+        verify(dailyVoteService).answer(any());
+        verify(dailyVoteService, times(1)).findReplay(any());
         verify(redisService, never()).deleteIfValueEquals(anyString(), anyString());
         verify(taskExecutor, never()).execute(any(Runnable.class));
     }
