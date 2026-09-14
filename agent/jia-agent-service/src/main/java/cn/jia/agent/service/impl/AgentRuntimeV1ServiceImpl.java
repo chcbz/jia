@@ -57,10 +57,13 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
                 tenantId, clientId, ownerJiacn, request.canonicalAgentId());
         AgentRuntimeV1InstallationEntity installation = new AgentRuntimeV1InstallationEntity()
                 .setInstallationId("rti_" + UUID.randomUUID().toString().replace("-", ""))
-                .setTenantId(tenantId).setClientId(clientId).setCanonicalAgentId(canonicalAgentId)
-                .setManifestVersion(request.manifestVersion()).setManifestSha256(request.manifestSha256())
-                .setEnrollmentSecretHash(hexDigest(request.enrollmentSecretSha256()))
+                .setCanonicalAgentId(canonicalAgentId).setManifestVersion(request.manifestVersion())
+                .setManifestSha256(request.manifestSha256()).setEnrollmentSecretHash(hexDigest(request.enrollmentSecretSha256()))
                 .setEnrollmentExpiresAt(request.enrollmentExpiresAt()).setStatus("PENDING").setVersion(0L);
+        // BaseEntity setters return BaseEntity; assign scope separately so the
+        // Runtime-v1-specific fluent chain remains type-safe at compile time.
+        installation.setTenantId(tenantId);
+        installation.setClientId(clientId);
         if (installations.insert(installation) != 1) throw forbidden("Runtime v1 installation could not be created");
         return view(installation, null);
     }

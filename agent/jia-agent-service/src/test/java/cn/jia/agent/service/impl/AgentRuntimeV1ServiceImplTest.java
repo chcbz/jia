@@ -105,9 +105,12 @@ class AgentRuntimeV1ServiceImplTest {
     private static final String AGENT = "agt_0123456789abcdef0123456789abcdef";
     private static final String HASH = "b".repeat(64);
     private static AgentRuntimeV1InstallationEntity installation(String status) {
-        return new AgentRuntimeV1InstallationEntity().setId(1L).setVersion(0L).setInstallationId("rti-1")
-                .setTenantId("tenant-a").setClientId("client-a").setCanonicalAgentId(AGENT)
+        AgentRuntimeV1InstallationEntity installation = new AgentRuntimeV1InstallationEntity()
+                .setId(1L).setVersion(0L).setInstallationId("rti-1").setCanonicalAgentId(AGENT)
                 .setManifestVersion("1").setManifestSha256(HASH).setEnrollmentExpiresAt(10_000L).setStatus(status);
+        installation.setTenantId("tenant-a");
+        installation.setClientId("client-a");
+        return installation;
     }
     private static AgentRuntimeV1EnrollmentRequest enrollment(String secret) {
         return new AgentRuntimeV1EnrollmentRequest("rti-1", "tenant-a", "client-a", AGENT, "1", HASH, secret);
