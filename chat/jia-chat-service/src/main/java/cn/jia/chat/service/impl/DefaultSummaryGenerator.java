@@ -6,6 +6,7 @@ import cn.jia.core.util.JsonUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -13,6 +14,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 @Slf4j
+@Lazy
 @Service
 public class DefaultSummaryGenerator implements SummaryGenerator {
 

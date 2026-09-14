@@ -32,6 +32,7 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.context.annotation.Configuration;
 
 import lombok.extern.slf4j.Slf4j;
@@ -47,6 +48,7 @@ public class ChatClientConfig {
     private boolean mcpToolCallbacksEnabled;
 
     @Bean
+    @Lazy
     public ChatClient chatClient(ChatClient.Builder chatClientBuilder,
             ObjectProvider<McpSyncClient> mcpSyncClientsProvider, MemoryRepository memoryRepository,
             AgentTaskThreadMemoryGuard taskThreadMemoryGuard,

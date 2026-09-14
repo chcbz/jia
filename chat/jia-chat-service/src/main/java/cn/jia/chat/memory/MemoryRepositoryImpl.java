@@ -10,6 +10,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Repository;
 import org.springframework.util.StringUtils;
 
@@ -26,6 +27,7 @@ import java.util.stream.Collectors;
  * @since 2026-05-01
  */
 @Slf4j
+@Lazy
 @Repository
 public class MemoryRepositoryImpl implements MemoryRepository {
 
