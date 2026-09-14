@@ -28,6 +28,7 @@ import cn.jia.chat.service.impl.AgentTaskThreadMemoryGuard;
 import com.github.pagehelper.PageInfo;
 import io.micrometer.core.instrument.util.StringEscapeUtils;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.ai.chat.client.advisor.vectorstore.QuestionAnswerAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.UserMessage;
@@ -63,7 +64,6 @@ import java.util.Optional;
 @Slf4j
 @RestController
 @RequestMapping("/chat")
-@RequiredArgsConstructor
 public class ChatController {
     public static final String CONVERSATION_TYPE_NORMAL = "normal";
     public static final String CONVERSATION_TYPE_JUYITING = "juyiting";
@@ -78,6 +78,24 @@ public class ChatController {
     private final JuyitingAgentRelayService juyitingAgentRelayService;
     private final MemoryRepository memoryRepository;
     private final AgentTaskThreadMemoryGuard taskThreadMemoryGuard;
+    public ChatController(@Lazy ChatClient chatClient, ChatConversationService chatConversationService,
+            RedisService redisService, ChatClient.Builder chatClientBuilder,
+            ChatConversationEventBroker chatConversationEventBroker, BuiltinHallAgentSupport builtinHallAgentSupport,
+            JuyitingConversationScopeService juyitingConversationScopeService,
+            JuyitingAgentRelayService juyitingAgentRelayService, @Lazy MemoryRepository memoryRepository,
+            AgentTaskThreadMemoryGuard taskThreadMemoryGuard) {
+        this.chatClient = chatClient;
+        this.chatConversationService = chatConversationService;
+        this.redisService = redisService;
+        this.chatClientBuilder = chatClientBuilder;
+        this.chatConversationEventBroker = chatConversationEventBroker;
+        this.builtinHallAgentSupport = builtinHallAgentSupport;
+        this.juyitingConversationScopeService = juyitingConversationScopeService;
+        this.juyitingAgentRelayService = juyitingAgentRelayService;
+        this.memoryRepository = memoryRepository;
+        this.taskThreadMemoryGuard = taskThreadMemoryGuard;
+    }
+
     private static final PromptTemplate SUMMARY_PROMPT_TEMPLATE = new PromptTemplate("""
             帮我根据下面对话内容，输出15字以内的问题意图概述，需要名词开头。
             

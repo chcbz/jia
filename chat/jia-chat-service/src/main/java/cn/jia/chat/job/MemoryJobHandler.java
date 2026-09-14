@@ -5,6 +5,7 @@ import cn.jia.task.job.JobContext;
 import cn.jia.task.job.JobHandler;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -38,6 +39,7 @@ public class MemoryJobHandler implements JobHandler {
     private int monthlySummaryHour;
 
     @Autowired
+    @Lazy
     private LongTermMemoryService longTermMemoryService;
 
     @Override

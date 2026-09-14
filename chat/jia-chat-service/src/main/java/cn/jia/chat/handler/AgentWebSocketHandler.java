@@ -38,6 +38,7 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -151,7 +152,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     }
 
     @Autowired
-    public AgentWebSocketHandler(ChatClient chatClient, ObjectProvider<AgentService> agentServiceProvider,
+    public AgentWebSocketHandler(@Lazy ChatClient chatClient, ObjectProvider<AgentService> agentServiceProvider,
                                  ChatMessageDao chatMessageDao, ChatConversationEventBroker chatConversationEventBroker,
                                  HallAnnouncementService hallAnnouncementService,
                                  AgentProtocolMessageNormalizer protocolMessageNormalizer,
