@@ -26,7 +26,6 @@ import java.util.Locale;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class ChatMessageScopedQueryTest {
     private static final String TENANT = "Tenant-A";
@@ -169,7 +168,7 @@ class ChatMessageScopedQueryTest {
 
 
     @Test
-    void ownedReadJoinsLiveConversationAndFailsClosedOnCrossIdentityContamination() {
+    void ownedReadJoinsLiveConversationAndSkipsCrossIdentityContamination() {
         jdbc.update("""
                 INSERT INTO chat_conversation
                     (id, jiacn, tenant_id, client_id, conversation_type, deleted_at)
@@ -188,8 +187,8 @@ class ChatMessageScopedQueryTest {
         assertEquals(List.of(), dao.findOwnedByConversationId(TENANT, CLIENT, "3"));
 
         insertOwned(303, "1", "tenant-a", TENANT, CLIENT, 500, "case-owner-injection");
-        assertThrows(IllegalStateException.class,
-                () -> dao.findOwnedByConversationId(TENANT, CLIENT, "1"));
+        assertEquals(List.of(301L, 302L), dao.findOwnedByConversationId(
+                TENANT, CLIENT, "1").stream().map(ChatMessageEntity::getId).toList());
     }
 
     private void insert(

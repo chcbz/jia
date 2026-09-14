@@ -53,6 +53,13 @@ class AgentRuntimeBatchMapperContractTest {
         assertExactParameter(overlay, "a.owner_jiacn", "ownerjiacn");
         assertTrue(overlay.contains("cast(b.agent_id as binary) = cast(i.canonical_agent_id as binary)"));
         assertTrue(overlay.contains("cast(r.agent_id as binary) = cast(i.canonical_agent_id as binary)"));
+        assertTrue(overlay.contains("r.tenant_id = b.tenant_id"));
+        assertTrue(overlay.contains("cast(r.tenant_id as binary) = cast(b.tenant_id as binary)"));
+        assertTrue(overlay.contains("r.client_id = b.client_id"));
+        assertTrue(overlay.contains("cast(r.client_id as binary) = cast(b.client_id as binary)"));
+        assertTrue(overlay.contains("r.owner_jiacn = b.owner_jiacn"));
+        assertTrue(overlay.contains("cast(r.owner_jiacn as binary) = cast(b.owner_jiacn as binary)"));
+        assertTrue(overlay.contains("r.binding_id = b.id"));
         assertFalse(overlay.contains("select *"));
         assertFalse(overlay.contains("${"));
         assertFalse(overlay.contains("/agent/active"));

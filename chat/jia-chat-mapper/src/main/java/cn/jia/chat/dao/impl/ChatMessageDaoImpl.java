@@ -8,6 +8,7 @@ import cn.jia.core.mybatis.TenantScopeHelper;
 import cn.jia.core.util.StringUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import jakarta.inject.Named;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.Collections;
 import java.util.HashSet;
@@ -16,6 +17,7 @@ import java.util.Set;
 
 /** Chat message DAO implementation. */
 @Named
+@Slf4j
 public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessageEntity>
         implements ChatMessageDao {
 
@@ -61,7 +63,7 @@ public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessa
         requireScope(ownerJiacn, clientId);
         Long numericId = parseConversationId(conversationId);
         String canonicalId = Long.toString(numericId);
-        requireNoContamination(ownerJiacn, clientId, canonicalId, numericId);
+        observeContamination(ownerJiacn, clientId, canonicalId, numericId);
         return requireOwnedRows(baseMapper.findExactOwnedConversationMessages(
                         ownerJiacn, clientId, canonicalId, numericId),
                 ownerJiacn, clientId, canonicalId);
@@ -74,7 +76,7 @@ public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessa
         requireLimit(limit);
         Long numericId = parseConversationId(conversationId);
         String canonicalId = Long.toString(numericId);
-        requireNoContamination(ownerJiacn, clientId, canonicalId, numericId);
+        observeContamination(ownerJiacn, clientId, canonicalId, numericId);
         List<ChatMessageEntity> result = requireOwnedRows(
                 baseMapper.findExactOwnedConversationMessagesWithLimit(
                         ownerJiacn, clientId, canonicalId, numericId, limit),
@@ -153,12 +155,26 @@ public class ChatMessageDaoImpl extends BaseDaoImpl<ChatMessageMapper, ChatMessa
         return List.copyOf(jiacnSet);
     }
 
-    private void requireNoContamination(
+    /**
+     * A historical row outside this conversation owner's scope must never make the
+     * authenticated owner's exact-scoped history unreadable. The subsequent select is
+     * still byte-exact on owner, client, tenant, and conversation ID, so this observation
+     * does not relax isolation or expose the conflicting row.
+     */
+    private void observeContamination(
             String ownerJiacn, String clientId, String conversationId, Long numericId) {
-        if (baseMapper.countContaminatedOwnedConversationMessages(
-                ownerJiacn, clientId, conversationId, numericId) != 0) {
-            throw new IllegalStateException(
-                    "Conversation messages contain rows outside the authenticated owner scope");
+        try {
+            int contaminated = baseMapper.countContaminatedOwnedConversationMessages(
+                    ownerJiacn, clientId, conversationId, numericId);
+            if (contaminated > 0) {
+                log.warn("Ignoring out-of-scope historical message rows while returning exact-scoped conversation messages. conversationId={}, rows={}",
+                        conversationId, contaminated);
+            }
+        } catch (RuntimeException exception) {
+            // Diagnostics must not become a second availability gate. The actual message
+            // query below remains the authority and retains its exact owner scope.
+            log.warn("Unable to inspect historical message scope anomaly; continuing with exact-scoped message query. conversationId={}",
+                    conversationId, exception);
         }
     }
 
