@@ -28,6 +28,7 @@ import org.camunda.bpm.model.bpmn.instance.dc.Bounds;
 import org.camunda.bpm.model.bpmn.instance.di.Waypoint;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
+import org.springframework.context.annotation.Lazy;
 
 import java.io.File;
 import java.io.IOException;
@@ -41,14 +42,19 @@ import java.util.zip.ZipInputStream;
 @Named
 public class WorkflowServiceImpl implements WorkflowService {
 
+    @Lazy
     @Inject
     private RepositoryService repositoryService;
+    @Lazy
     @Inject
     private RuntimeService runtimeService;
+    @Lazy
     @Inject
     private TaskService taskService;
+    @Lazy
     @Inject
     private HistoryService historyService;
+    @Lazy
     @Inject
     private IdentityService identityService;
 

@@ -139,6 +139,7 @@ class ArchiveReaderServiceTest {
             return blocks;
         }
         @Override public List<ArchiveParagraphRecord> listParagraphs(String editionId, String blockId) { return paragraphs.getOrDefault(blockId, List.of()); }
+        @Override public List<ArchiveParagraphRecord> listAllParagraphs(String editionId) { return paragraphs.values().stream().flatMap(List::stream).toList(); }
         @Override public void insertWork(ArchiveWorkRecord value) { throw unsupported(); }
         @Override public void insertEdition(ArchiveEditionRecord value) { throw unsupported(); }
         @Override public void insertBlock(ArchiveBlockRecord value) { throw unsupported(); }

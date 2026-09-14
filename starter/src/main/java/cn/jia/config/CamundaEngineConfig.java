@@ -10,6 +10,7 @@ import org.camunda.bpm.engine.TaskService;
 import org.camunda.bpm.engine.impl.cfg.StandaloneProcessEngineConfiguration;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -17,6 +18,7 @@ import org.springframework.context.annotation.Configuration;
 public class CamundaEngineConfig {
 
     @Bean(destroyMethod = "close")
+    @Lazy
     @ConditionalOnMissingBean
     public ProcessEngine processEngine(@Value("${spring.datasource.driverClassName}") String driverClassName,
             @Value("${spring.datasource.url}") String jdbcUrl,
@@ -37,30 +39,35 @@ public class CamundaEngineConfig {
     }
 
     @Bean
+    @Lazy
     @ConditionalOnMissingBean
     public RepositoryService repositoryService(ProcessEngine processEngine) {
         return processEngine.getRepositoryService();
     }
 
     @Bean
+    @Lazy
     @ConditionalOnMissingBean
     public RuntimeService runtimeService(ProcessEngine processEngine) {
         return processEngine.getRuntimeService();
     }
 
     @Bean
+    @Lazy
     @ConditionalOnMissingBean
     public TaskService taskService(ProcessEngine processEngine) {
         return processEngine.getTaskService();
     }
 
     @Bean
+    @Lazy
     @ConditionalOnMissingBean
     public HistoryService historyService(ProcessEngine processEngine) {
         return processEngine.getHistoryService();
     }
 
     @Bean
+    @Lazy
     @ConditionalOnMissingBean
     public IdentityService identityService(ProcessEngine processEngine) {
         return processEngine.getIdentityService();

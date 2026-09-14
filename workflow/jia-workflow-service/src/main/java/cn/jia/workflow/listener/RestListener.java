@@ -6,6 +6,7 @@ import cn.jia.core.exception.EsErrorConstants;
 import cn.jia.core.util.*;
 import lombok.extern.slf4j.Slf4j;
 import org.camunda.bpm.engine.TaskService;
+import org.springframework.context.annotation.Lazy;
 import org.camunda.bpm.engine.delegate.*;
 import org.camunda.bpm.engine.impl.el.JuelExpression;
 import jakarta.inject.Inject;
@@ -34,6 +35,7 @@ public class RestListener implements ExecutionListener, TaskListener {
 	private JuelExpression params;
 	@Inject
 	private RestTemplate restTemplate;
+	@Lazy
 	@Inject
 	private TaskService taskService;
 

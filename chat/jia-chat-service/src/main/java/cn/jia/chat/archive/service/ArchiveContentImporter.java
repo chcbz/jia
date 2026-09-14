@@ -14,7 +14,9 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
 @Component
 public class ArchiveContentImporter {
@@ -202,18 +204,21 @@ public class ArchiveContentImporter {
     }
 
     private void verifyPersistedContent(ArchiveManifest manifest) {
-        List<ArchiveBlockRecord> expectedBlocks = manifest.blocksInReaderOrder().stream()
+        List<ArchiveManifest.Block> manifestBlocks = manifest.blocksInReaderOrder();
+        List<ArchiveBlockRecord> expectedBlocks = manifestBlocks.stream()
                 .map(block -> expectedBlock(manifest, block)).toList();
         List<ArchiveBlockRecord> actualBlocks = store.listBlocks(manifest.editionId());
         if (!expectedBlocks.equals(actualBlocks)) {
             throw mismatch("persisted block set/order");
         }
+        Map<String, List<ArchiveParagraphRecord>> actualParagraphsByBlock =
+                store.listAllParagraphs(manifest.editionId()).stream()
+                        .collect(Collectors.groupingBy(ArchiveParagraphRecord::blockId));
         int persistedParagraphs = 0;
-        for (int index = 0; index < expectedBlocks.size(); index++) {
-            ArchiveManifest.Block manifestBlock = manifest.blocksInReaderOrder().get(index);
+        for (ArchiveManifest.Block manifestBlock : manifestBlocks) {
             List<ArchiveParagraphRecord> expectedParagraphs = expectedParagraphs(manifest, manifestBlock);
-            List<ArchiveParagraphRecord> actualParagraphs = store.listParagraphs(
-                    manifest.editionId(), manifestBlock.blockId());
+            List<ArchiveParagraphRecord> actualParagraphs =
+                    actualParagraphsByBlock.getOrDefault(manifestBlock.blockId(), List.of());
             if (!expectedParagraphs.equals(actualParagraphs)) {
                 throw mismatch("persisted paragraph set/order for " + manifestBlock.blockId());
             }

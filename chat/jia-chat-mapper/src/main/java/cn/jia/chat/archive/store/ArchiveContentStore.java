@@ -19,6 +19,9 @@ public interface ArchiveContentStore {
     ArchiveParagraphRecord findParagraph(String editionId, String blockId, String paragraphId);
     List<ArchiveBlockRecord> listBlocks(String editionId);
     List<ArchiveParagraphRecord> listParagraphs(String editionId, String blockId);
+    default List<ArchiveParagraphRecord> listAllParagraphs(String editionId) {
+        throw new UnsupportedOperationException("listAllParagraphs is not supported by this store");
+    }
     int markReady(String editionId);
     ArchiveWorkRecord lockWork(String workId);
     ArchiveEditionRecord lockEdition(String editionId);

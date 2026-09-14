@@ -264,6 +264,11 @@ class ArchiveContentImporterTest {
         }
 
         @Override
+        public List<ArchiveParagraphRecord> listAllParagraphs(String editionId) {
+            return List.copyOf(paragraphs.values());
+        }
+
+        @Override
         public int markReady(String editionId) {
             if (edition == null || "READY".equals(edition.importState())) return 0;
             edition = edition.withImportState("READY");

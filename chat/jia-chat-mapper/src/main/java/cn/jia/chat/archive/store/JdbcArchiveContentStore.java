@@ -186,6 +186,17 @@ public class JdbcArchiveContentStore implements ArchiveContentStore {
     }
 
     @Override
+    public List<ArchiveParagraphRecord> listAllParagraphs(String editionId) {
+        return jdbc.query("""
+                SELECT edition_id, block_id, paragraph_id, ordinal, text, utf8_byte_length, sha256
+                FROM archive_paragraph
+                WHERE edition_id = ? AND CAST(edition_id AS BINARY) = CAST(? AS BINARY)
+                  AND OCTET_LENGTH(edition_id) = OCTET_LENGTH(?)
+                ORDER BY block_id, ordinal
+                """, PARAGRAPH_MAPPER, editionId, editionId, editionId);
+    }
+
+    @Override
     public int markReady(String editionId) {
         return jdbc.update("""
                 UPDATE archive_edition SET import_state = 'READY', ready_at = CURRENT_TIMESTAMP(6)
