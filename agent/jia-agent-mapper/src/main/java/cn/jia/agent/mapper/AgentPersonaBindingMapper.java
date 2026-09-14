@@ -116,7 +116,17 @@ public interface AgentPersonaBindingMapper extends BaseMapper<AgentPersonaBindin
                     AND CAST(p.client_id AS BINARY) = CAST(#{clientId} AS BINARY)
                     AND OCTET_LENGTH(p.client_id) = OCTET_LENGTH(#{clientId}))
                  )
-            LEFT JOIN agent_identity_registry i ON i.binding_id = b.id
+            LEFT JOIN agent_identity_registry i
+              ON i.binding_id = b.id
+             AND i.tenant_id = b.tenant_id
+             AND CAST(i.tenant_id AS BINARY) = CAST(b.tenant_id AS BINARY)
+             AND OCTET_LENGTH(i.tenant_id) = OCTET_LENGTH(b.tenant_id)
+             AND i.client_id = b.client_id
+             AND CAST(i.client_id AS BINARY) = CAST(b.client_id AS BINARY)
+             AND OCTET_LENGTH(i.client_id) = OCTET_LENGTH(b.client_id)
+             AND i.owner_jiacn = b.owner_jiacn
+             AND CAST(i.owner_jiacn AS BINARY) = CAST(b.owner_jiacn AS BINARY)
+             AND OCTET_LENGTH(i.owner_jiacn) = OCTET_LENGTH(b.owner_jiacn)
             LEFT JOIN agent_runtime r
               ON r.agent_id = i.canonical_agent_id
              AND CAST(r.agent_id AS BINARY) = CAST(i.canonical_agent_id AS BINARY)

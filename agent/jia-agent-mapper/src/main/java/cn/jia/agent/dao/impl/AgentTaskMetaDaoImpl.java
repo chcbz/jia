@@ -183,6 +183,17 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
     }
 
     @Override
+    public List<AgentTaskSearchRow> searchPageWithFunding(String tenantId, String clientId,
+            String status, String ability, String keyword, long offset, int limit) {
+        requireSearchScope(tenantId, clientId);
+        if (offset < 0) {
+            throw new IllegalArgumentException("offset must not be negative");
+        }
+        return baseMapper.searchPageWithFundingExactInScope(tenantId, clientId, status, ability,
+                keyword, offset, TaskCollaborationDaoSupport.boundedLimit(limit));
+    }
+
+    @Override
     public List<AgentTaskMemberEntity> findSearchMembers(
             String tenantId, String clientId, List<String> taskIds) {
         requireSearchScope(tenantId, clientId);

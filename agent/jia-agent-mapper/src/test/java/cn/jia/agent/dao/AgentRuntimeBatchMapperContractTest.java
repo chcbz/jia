@@ -43,6 +43,15 @@ class AgentRuntimeBatchMapperContractTest {
         assertExactParameter(overlay, "p.tenant_id", "tenantid");
         assertExactParameter(overlay, "p.client_id", "clientid");
         assertTrue(overlay.contains("left join agent_identity_registry i on i.binding_id = b.id"));
+        assertTrue(overlay.contains("i.tenant_id = b.tenant_id"));
+        assertTrue(overlay.contains("cast(i.tenant_id as binary) = cast(b.tenant_id as binary)"));
+        assertTrue(overlay.contains("octet_length(i.tenant_id) = octet_length(b.tenant_id)"));
+        assertTrue(overlay.contains("i.client_id = b.client_id"));
+        assertTrue(overlay.contains("cast(i.client_id as binary) = cast(b.client_id as binary)"));
+        assertTrue(overlay.contains("octet_length(i.client_id) = octet_length(b.client_id)"));
+        assertTrue(overlay.contains("i.owner_jiacn = b.owner_jiacn"));
+        assertTrue(overlay.contains("cast(i.owner_jiacn as binary) = cast(b.owner_jiacn as binary)"));
+        assertTrue(overlay.contains("octet_length(i.owner_jiacn) = octet_length(b.owner_jiacn)"));
         assertTrue(overlay.contains("left join agent_runtime r"));
         assertTrue(overlay.contains("exists ( select 1 from agent_identity_alias a"));
         assertExactParameter(overlay, "b.tenant_id", "tenantid");

@@ -181,12 +181,27 @@ class AgentTaskMetaScopedDaoTest {
         assertTrue(pageSql.contains("limit #{limit} offset #{offset}"), pageSql);
         assertTrue(pageSql.contains("plan.jiacn = #{tenantid}"), pageSql);
         assertTrue(pageSql.contains("plan.client_id = #{clientid}"), pageSql);
-        assertTrue(pageSql.contains("funding.tenant_id = #{tenantid}"), pageSql);
-        assertTrue(pageSql.contains("funding.client_id = #{clientid}"), pageSql);
+        // Standard Juyi Hall task search is independent of the unpublished funding schema.
+        assertTrue(pageSql.contains("0 as fundingpresent"), pageSql);
+        assertFalse(pageSql.contains("agent_task_funding"), pageSql);
         assertFalse(pageSql.contains("payer_principal"), pageSql);
         assertFalse(pageSql.contains("idempotency"), pageSql);
         assertFalse(pageSql.contains("request_hash"), pageSql);
         assertFalse(pageSql.contains("transaction_id"), pageSql);
+
+        Method fundedPage = AgentTaskMetaMapper.class.getDeclaredMethod(
+                "searchPageWithFundingExactInScope", String.class, String.class,
+                String.class, String.class, String.class, long.class, int.class);
+        String fundedSql = normalize(String.join(" ", fundedPage.getAnnotation(Select.class).value()));
+        assertTrue(fundedSql.contains("left join agent_task_funding funding"), fundedSql);
+        assertTrue(fundedSql.contains("funding.tenant_id = #{tenantid}"), fundedSql);
+        assertTrue(fundedSql.contains("funding.client_id = #{clientid}"), fundedSql);
+        assertTrue(fundedSql.contains("cast(funding.task_id as binary(400)) "
+                + "= cast(task.task_id as binary(400))"), fundedSql);
+        assertFalse(fundedSql.contains("payer_principal"), fundedSql);
+        assertFalse(fundedSql.contains("idempotency"), fundedSql);
+        assertFalse(fundedSql.contains("request_hash"), fundedSql);
+        assertFalse(fundedSql.contains("transaction_id"), fundedSql);
     }
 
     @Test
@@ -284,6 +299,14 @@ class AgentTaskMetaScopedDaoTest {
         assertEquals(List.of(), dao.searchPage(
                 "tenant-a", "client-a", "open", "planning", "reward", 500L, 9999));
         verify(mapper).searchPageExactInScope(
+                "tenant-a", "client-a", "open", "planning", "reward", 500L, 500);
+
+        when(mapper.searchPageWithFundingExactInScope(
+                "tenant-a", "client-a", "open", "planning", "reward", 500L, 500))
+                .thenReturn(List.of());
+        assertEquals(List.of(), dao.searchPageWithFunding(
+                "tenant-a", "client-a", "open", "planning", "reward", 500L, 9999));
+        verify(mapper).searchPageWithFundingExactInScope(
                 "tenant-a", "client-a", "open", "planning", "reward", 500L, 500);
 
         dao.findSearchMembers("tenant-a", "client-a", List.of("task-a", "task-a"));

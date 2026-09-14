@@ -2404,6 +2404,32 @@ class AgentServiceImplTest extends BaseMockTest {
     }
 
     @Test
+    void searchTasksUsesFundingProjectionOnlyWhenPreviewServiceExists() {
+        @SuppressWarnings("unchecked")
+        ObjectProvider<cn.jia.agent.service.funding.FundedBountyService> previewProvider =
+                org.mockito.Mockito.mock(ObjectProvider.class);
+        cn.jia.agent.service.funding.FundedBountyService previewService =
+                org.mockito.Mockito.mock(cn.jia.agent.service.funding.FundedBountyService.class);
+        when(previewProvider.getIfAvailable()).thenReturn(previewService);
+        agentService.configureFundedBountyService(previewProvider);
+
+        AgentTaskSearchRow task = searchRow(
+                "task-funded", "tenant-a", "client-a", AgentConstants.TASK_STATUS_OPEN);
+        when(agentTaskMetaDao.countSearch("tenant-a", "client-a", null, null, null))
+                .thenReturn(1L);
+        when(agentTaskMetaDao.searchPageWithFunding(
+                "tenant-a", "client-a", null, null, null, 0L, 20))
+                .thenReturn(List.of(task));
+        authenticateTaskScope("tenant-a", "client-a");
+
+        assertEquals(1, agentService.searchTasks(new AgentTaskSearchDTO()).getList().size());
+        verify(agentTaskMetaDao).searchPageWithFunding(
+                "tenant-a", "client-a", null, null, null, 0L, 20);
+        verify(agentTaskMetaDao, never()).searchPage(
+                "tenant-a", "client-a", null, null, null, 0L, 20);
+    }
+
+    @Test
     void searchTasksRejectsCorruptFundingProjectionWithoutSensitiveFallbackQueries() {
         AgentTaskSearchRow task = searchRow(
                 "task-funded", "tenant-a", "client-a", AgentConstants.TASK_STATUS_OPEN);

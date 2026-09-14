@@ -808,10 +808,18 @@ public class AgentServiceImpl implements AgentService {
         long total = agentTaskMetaDao.countSearch(scope.tenantId(), scope.clientId(),
                 filters.getStatus(), filters.getAbility(), keyword);
         require(total >= 0, "Persisted task search total is invalid");
+        // The normal bounty board must remain usable while the unpublished economy
+        // preview (and its additive tables) is disabled. Only an active preview service
+        // opts into the funding-table projection.
+        boolean fundingProjectionEnabled = fundedBountyService != null;
         List<AgentTaskSearchRow> rows = total == 0 ? List.of()
-                : Optional.ofNullable(agentTaskMetaDao.searchPage(
-                        scope.tenantId(), scope.clientId(), filters.getStatus(),
-                        filters.getAbility(), keyword, offset, pageSize))
+                : Optional.ofNullable(fundingProjectionEnabled
+                        ? agentTaskMetaDao.searchPageWithFunding(
+                                scope.tenantId(), scope.clientId(), filters.getStatus(),
+                                filters.getAbility(), keyword, offset, pageSize)
+                        : agentTaskMetaDao.searchPage(
+                                scope.tenantId(), scope.clientId(), filters.getStatus(),
+                                filters.getAbility(), keyword, offset, pageSize))
                         .orElseGet(Collections::emptyList);
         require(rows.size() <= pageSize,
                 "Persisted task search page exceeds the requested bound");
