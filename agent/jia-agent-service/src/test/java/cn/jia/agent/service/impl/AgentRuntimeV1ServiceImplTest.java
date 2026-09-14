@@ -86,12 +86,17 @@ class AgentRuntimeV1ServiceImplTest {
                 .thenReturn(new AgentCommandAckResult(AgentCommandAckResult.Kind.ADVANCED, "RECEIVED", 2));
         var result = service.acknowledge("auth", "msg-1", ack("tenant-a", AGENT), NOW);
         assertEquals(AgentCommandAckResult.Kind.ADVANCED, result.kind());
+        service.acknowledge("auth", "msg-1", ackWithCorrelation("tenant-a", AGENT, "corr-2"), NOW);
         var captor = org.mockito.ArgumentCaptor.forClass(AgentCommandAck.class);
-        verify(acks).acknowledge(captor.capture(), eq(NOW));
-        assertEquals("tenant-a", captor.getValue().tenantId());
-        assertEquals(AGENT, captor.getValue().registeredAgentId());
-        assertEquals("msg-1", captor.getValue().correlationId());
-        assertNotEquals("msg-1", captor.getValue().messageId());
+        verify(acks, times(2)).acknowledge(captor.capture(), eq(NOW));
+        AgentCommandAck first = captor.getAllValues().getFirst();
+        assertEquals("tenant-a", first.tenantId());
+        assertEquals(AGENT, first.registeredAgentId());
+        // Wire correlation is distinct from the active delivery message. The adapter
+        // preserves the former in its derived sender id and passes the latter to A06.
+        assertEquals("msg-1", first.correlationId());
+        assertNotEquals("msg-1", first.messageId());
+        assertNotEquals(first.messageId(), captor.getAllValues().get(1).messageId());
 
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> service.acknowledge("auth", "msg-1", ack("tenant-b", AGENT), NOW));
@@ -111,7 +116,10 @@ class AgentRuntimeV1ServiceImplTest {
         return new cn.jia.agent.entity.AgentRuntimeV1RuntimeRequest("rti-1", tenant, "client-a", agent, "1", HASH, "ok");
     }
     private static AgentRuntimeV1AckRequest ack(String tenant, String agent) {
-        return new AgentRuntimeV1AckRequest("msg-1", "corr-1", "cmd-1", "task-1", null,
+        return ackWithCorrelation(tenant, agent, "corr-1");
+    }
+    private static AgentRuntimeV1AckRequest ackWithCorrelation(String tenant, String agent, String correlationId) {
+        return new AgentRuntimeV1AckRequest("msg-1", correlationId, "cmd-1", "task-1", null,
                 tenant, "client-a", agent, "ref", "9999", "RECEIVED");
     }
     private static byte[] sha(String value) {
