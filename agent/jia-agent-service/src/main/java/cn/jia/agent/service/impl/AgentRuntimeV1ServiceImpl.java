@@ -33,7 +33,6 @@ import java.util.regex.Pattern;
 @Service
 @RequiredArgsConstructor
 public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
-    private static final Pattern OPAQUE_AGENT = Pattern.compile("agt_[0-9a-f]{32}");
     private static final Pattern SHA_256 = Pattern.compile("[0-9a-f]{64}");
     private static final Set<String> ACK_STATUSES = Set.of(
             "RECEIVED", "STARTED", "SUCCEEDED", "FAILED", "REJECTED");
@@ -48,7 +47,7 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
     public AgentRuntimeV1InstallationView create(String tenantId, String clientId, String ownerJiacn,
             AgentRuntimeV1InstallationRequest request, long now) {
         requireScope(tenantId, clientId);
-        if (request == null || !OPAQUE_AGENT.matcher(request.canonicalAgentId()).matches()
+        if (request == null || !exact(request.canonicalAgentId(), 100)
                 || !exact(request.manifestVersion(), 100) || !sha256Text(request.manifestSha256())
                 || !sha256Text(request.enrollmentSecretSha256()) || request.enrollmentExpiresAt() <= now) {
             throw forbidden("Runtime v1 installation request is invalid");
@@ -93,7 +92,7 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
     @Transactional(rollbackFor = Exception.class)
     public AgentRuntimeV1EnrollmentResult enroll(AgentRuntimeV1EnrollmentRequest request, long now) {
         if (request == null || !exact(request.installationId(), 100) || !exact(request.tenantId(), 50)
-                || !exact(request.clientId(), 50) || !OPAQUE_AGENT.matcher(request.canonicalAgentId()).matches()
+                || !exact(request.clientId(), 50) || !exact(request.canonicalAgentId(), 100)
                 || !exact(request.manifestVersion(), 100) || !sha256Text(request.manifestSha256())
                 || !exact(request.enrollmentSecret(), 4096)) throw forbidden("Runtime v1 enrollment rejected");
         AgentRuntimeV1InstallationEntity installation = installations.lock(request.installationId());

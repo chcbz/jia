@@ -53,6 +53,24 @@ class AgentRuntimeV1ServiceImplTest {
         assertNull(persisted.getRuntimeAuthorizationHash());
     }
 
+    @Test void existingDirectLegacyCanonicalIdentityCanUseOnlyTheV1Protocol() {
+        String legacyCanonical = "jyt-client-a-linchong";
+        when(identities.requireCanonicalAgentIdInScope("tenant-a", "client-a", "owner-a", legacyCanonical))
+                .thenReturn(legacyCanonical);
+        when(installations.insert(any())).thenAnswer(invocation -> {
+            ((AgentRuntimeV1InstallationEntity) invocation.getArgument(0)).setId(5L);
+            return 1;
+        });
+
+        var view = service.create("tenant-a", "client-a", "owner-a",
+                new AgentRuntimeV1InstallationRequest(legacyCanonical, "1", "a".repeat(64),
+                        "b".repeat(64), NOW + 1), NOW);
+
+        assertEquals(legacyCanonical, view.canonicalAgentId());
+        verify(identities).requireCanonicalAgentIdInScope(
+                "tenant-a", "client-a", "owner-a", legacyCanonical);
+    }
+
     @Test void enrollmentIsSingleUseAndNeverReturnsEnrollmentMaterial() {
         String enrollmentSecret = "runtime-v1-enrollment-secret-must-not-leak";
         AgentRuntimeV1InstallationEntity pending = installation("PENDING").setEnrollmentSecretHash(sha(enrollmentSecret));
