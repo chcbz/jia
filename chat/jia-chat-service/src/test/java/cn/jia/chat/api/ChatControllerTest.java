@@ -288,6 +288,7 @@ class ChatControllerTest extends BaseMockTest {
 
         ChatMessageDTO request = new ChatMessageDTO();
         request.setConversationType(ChatController.CONVERSATION_TYPE_JUYITING);
+        request.setContent("  请同步\n悬赏进度\u0007  ");
         setObjectField(request, "conversationScopeType", "bounty");
         setObjectField(request, "conversationScopeKey", "task:372");
         setObjectField(request, "taskId", "372");
@@ -304,6 +305,7 @@ class ChatControllerTest extends BaseMockTest {
         ChatConversationEntity captured = conversationCaptor.getValue();
 
         assertEquals(ChatController.CONVERSATION_TYPE_JUYITING, captured.getConversationType());
+        assertEquals("请同步 悬赏进度", captured.getTitle());
         assertEquals("bounty", getObjectField(captured, "conversationScopeType"));
         assertEquals("task:372", getObjectField(captured, "conversationScopeKey"));
         assertEquals("372", getObjectField(captured, "taskId"));

@@ -67,6 +67,9 @@ import java.util.Optional;
 public class ChatController {
     public static final String CONVERSATION_TYPE_NORMAL = "normal";
     public static final String CONVERSATION_TYPE_JUYITING = "juyiting";
+    private static final String JUYITING_DEFAULT_CONVERSATION_TITLE = "聚义厅议事";
+    // chat_conversation.title is VARCHAR(500); preserve a readable deterministic title within that schema limit.
+    private static final int JUYITING_CONVERSATION_TITLE_MAX_CODE_POINTS = 500;
 
     private final ChatClient chatClient;
     private final ChatConversationService chatConversationService;
@@ -218,6 +221,9 @@ public class ChatController {
                             : CONVERSATION_TYPE_NORMAL
             );
             if (CONVERSATION_TYPE_JUYITING.equals(message.getConversationType())) {
+                // Agent-delivered Hall replies may arrive asynchronously and never generate an AI summary.
+                // Title new Hall conversations from the first user message so history is always usable.
+                message.setTitle(initialJuyitingConversationTitle(chatMessage.getContent()));
                 if (requestsReservedTaskThreadScope(chatMessage)) {
                     throw reservedTaskThreadAccess();
                 }
@@ -252,6 +258,38 @@ public class ChatController {
             message = chatConversationService.get(chatMessage.getConversationId());
         }
         return message;
+    }
+
+    private String initialJuyitingConversationTitle(String content) {
+        if (content == null || content.isEmpty()) {
+            return JUYITING_DEFAULT_CONVERSATION_TITLE;
+        }
+        StringBuilder title = new StringBuilder();
+        boolean pendingSpace = false;
+        for (int offset = 0; offset < content.length();) {
+            int codePoint = content.codePointAt(offset);
+            offset += Character.charCount(codePoint);
+            if (Character.isISOControl(codePoint)
+                    || Character.getType(codePoint) == Character.FORMAT
+                    || Character.isWhitespace(codePoint)) {
+                pendingSpace = title.length() > 0;
+                continue;
+            }
+            if (pendingSpace) {
+                title.append(' ');
+                pendingSpace = false;
+            }
+            title.appendCodePoint(codePoint);
+        }
+        if (title.isEmpty()) {
+            return JUYITING_DEFAULT_CONVERSATION_TITLE;
+        }
+        int codePointCount = title.codePointCount(0, title.length());
+        if (codePointCount <= JUYITING_CONVERSATION_TITLE_MAX_CODE_POINTS) {
+            return title.toString();
+        }
+        int end = title.offsetByCodePoints(0, JUYITING_CONVERSATION_TITLE_MAX_CODE_POINTS - 1);
+        return title.substring(0, end) + "…";
     }
 
     private boolean requestsReservedTaskThreadScope(ChatMessageDTO chatMessage) {
