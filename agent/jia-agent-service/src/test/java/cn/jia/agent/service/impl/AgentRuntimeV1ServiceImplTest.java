@@ -54,17 +54,21 @@ class AgentRuntimeV1ServiceImplTest {
     }
 
     @Test void enrollmentIsSingleUseAndNeverReturnsEnrollmentMaterial() {
-        AgentRuntimeV1InstallationEntity pending = installation("PENDING").setEnrollmentSecretHash(sha("enroll"));
+        String enrollmentSecret = "runtime-v1-enrollment-secret-must-not-leak";
+        AgentRuntimeV1InstallationEntity pending = installation("PENDING").setEnrollmentSecretHash(sha(enrollmentSecret));
         when(installations.lock("rti-1")).thenReturn(pending);
         when(installations.activate(eq(pending), any(byte[].class), eq(NOW))).thenReturn(1);
-        var result = service.enroll(enrollment("enroll"), NOW);
+        var result = service.enroll(enrollment(enrollmentSecret), NOW);
         assertEquals("ACTIVE", result.installation().status());
         assertTrue(result.runtimeAuthorization().startsWith("rta1_"));
-        assertFalse(result.installation().toString().contains("enroll"));
+        assertFalse(result.installation().toString().contains(enrollmentSecret));
+        assertFalse(pending.toString().contains("enrollmentSecretHash"));
+        assertFalse(pending.toString().contains("runtimeAuthorizationHash"));
         verify(installations).activate(eq(pending), any(byte[].class), eq(NOW));
 
         pending.setEnrollmentConsumedAt(NOW);
-        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.enroll(enrollment("enroll"), NOW + 1));
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> service.enroll(enrollment(enrollmentSecret), NOW + 1));
     }
 
     @Test void revokedOrWrongScopeRuntimeAuthorizationCannotHeartbeatOrAck() {
