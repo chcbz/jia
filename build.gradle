@@ -14,6 +14,50 @@ ext.isForbiddenPublicArtifactJarMember = { String memberName ->
             rootProject.ext.forbiddenPublicArtifactJarExtensions.any { normalizedName.endsWith(it) }
 }
 
+/**
+ * Keeps a module's optional Spring Boot entry point outside its library runtime artifact.
+ * The launcher remains available through a dedicated source set, classified jar and JavaExec task.
+ */
+ext.configureStandaloneLauncher = { Project launcherProject, String applicationClass ->
+    def launcherSourceSet = launcherProject.sourceSets.create('launcher') {
+        java.srcDir 'src/launcher/java'
+        resources.srcDir 'src/launcher/resources'
+        compileClasspath += launcherProject.sourceSets.main.output
+        runtimeClasspath += output + compileClasspath
+    }
+
+    launcherProject.configurations.named(launcherSourceSet.implementationConfigurationName) {
+        extendsFrom launcherProject.configurations.implementation
+    }
+    launcherProject.configurations.named(launcherSourceSet.runtimeOnlyConfigurationName) {
+        extendsFrom launcherProject.configurations.runtimeOnly
+    }
+
+    def launcherJar = launcherProject.tasks.register('launcherJar', Jar) {
+        group = 'build'
+        description = "Assembles the standalone launcher artifact for ${launcherProject.path}."
+        archiveClassifier = 'launcher'
+        from launcherSourceSet.output
+    }
+
+    def launcherElements = launcherProject.configurations.create('standaloneLauncherElements') {
+        canBeConsumed = true
+        canBeResolved = false
+        description = "Standalone launcher artifact for ${launcherProject.path}."
+    }
+    launcherProject.artifacts.add(launcherElements.name, launcherJar)
+
+    launcherProject.tasks.register('runStandalone', JavaExec) {
+        group = 'application'
+        description = "Runs ${applicationClass} with ${launcherProject.path}'s library runtime."
+        dependsOn launcherProject.tasks.named(launcherSourceSet.classesTaskName)
+        classpath = launcherSourceSet.runtimeClasspath
+        mainClass = applicationClass
+    }
+
+    launcherProject.ext.standaloneLauncherClass = applicationClass
+}
+
 allprojects {
     group = 'cn.jia'
 
