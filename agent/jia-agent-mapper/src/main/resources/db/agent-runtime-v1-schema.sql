@@ -1,0 +1,26 @@
+-- Runtime v1 installation state. Enrollment and runtime authorizations are SHA-256 digests only.
+CREATE TABLE IF NOT EXISTS agent_runtime_v1_installation (
+  id BIGINT NOT NULL AUTO_INCREMENT,
+  installation_id VARCHAR(100) NOT NULL,
+  canonical_agent_id VARCHAR(100) NOT NULL,
+  manifest_version VARCHAR(100) NOT NULL,
+  manifest_sha256 VARCHAR(72) NOT NULL,
+  enrollment_secret_hash BINARY(32) NOT NULL,
+  enrollment_expires_at BIGINT NOT NULL,
+  enrollment_consumed_at BIGINT DEFAULT NULL,
+  runtime_authorization_hash BINARY(32) DEFAULT NULL,
+  runtime_authorization_issued_at BIGINT DEFAULT NULL,
+  status VARCHAR(32) NOT NULL,
+  last_heartbeat_at BIGINT DEFAULT NULL,
+  version BIGINT NOT NULL DEFAULT 0,
+  tenant_id VARCHAR(50) NOT NULL,
+  client_id VARCHAR(50) NOT NULL,
+  create_time BIGINT DEFAULT NULL,
+  update_time BIGINT DEFAULT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_runtime_v1_installation (installation_id),
+  UNIQUE KEY uk_runtime_v1_authorization (runtime_authorization_hash),
+  KEY idx_runtime_v1_scope (tenant_id, client_id, installation_id),
+  KEY idx_runtime_v1_identity (tenant_id, client_id, canonical_agent_id, status),
+  CONSTRAINT chk_runtime_v1_status CHECK (status IN ('PENDING','ACTIVE','REVOKED','REBINDS_REQUIRED'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
