@@ -77,16 +77,16 @@ CREATE TABLE IF NOT EXISTS agent_persona_binding (
                             ) STORED,
     create_time             BIGINT DEFAULT NULL COMMENT 'Create time',
     update_time             BIGINT DEFAULT NULL COMMENT 'Update time',
-    tenant_id               VARCHAR(50) DEFAULT '0' COMMENT 'Legacy tenant, when populated must equal owner_jiacn',
+    tenant_id               VARCHAR(50) NOT NULL DEFAULT '0' COMMENT 'Single tenant ID; always 0',
     client_id               VARCHAR(50) DEFAULT NULL COMMENT 'Owner-scope client ID',
     PRIMARY KEY (id),
-    UNIQUE KEY uk_agent_binding_active_persona (client_id, owner_jiacn, active_persona_code),
+    UNIQUE KEY uk_agent_binding_active_persona (tenant_id, client_id, active_persona_code),
     UNIQUE KEY uk_agent_binding_active_agent (active_agent_id),
     KEY idx_agent_binding_user (client_id, jiacn, status),
     KEY idx_agent_binding_agent (client_id, agent_id, status),
     KEY idx_agent_binding_persona (client_id, persona_code, status),
     CONSTRAINT chk_agent_binding_status CHECK (status IN (0, 1, 2, 3)),
-    CONSTRAINT chk_agent_binding_tenant_owner CHECK (tenant_id = '0' OR tenant_id = owner_jiacn)
+    CONSTRAINT chk_agent_binding_single_tenant CHECK (tenant_id = '0')
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Durable Agent persona binding history';
 
 CREATE TABLE IF NOT EXISTS agent_identity_registry (
@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS agent_identity_registry (
     lifecycle_status        VARCHAR(20) NOT NULL DEFAULT 'PROVISIONED' COMMENT 'PROVISIONED/ACTIVE/SUSPENDED/RETIRED | RETIRED is terminal and cannot be reverted',
     client_id               VARCHAR(50) DEFAULT NULL COMMENT 'Immutable owner-scope client after insert | NULL only for system identity',
     owner_jiacn             VARCHAR(50) DEFAULT NULL COMMENT 'Immutable owner-scope jiacn after insert | NULL only for system identity',
-    tenant_id               VARCHAR(50) DEFAULT '0' COMMENT 'Must equal TRIM(owner_jiacn) | NULL only for system | immutable after insert',
+    tenant_id               VARCHAR(50) DEFAULT '0' COMMENT 'Single tenant ID for non-system identities | NULL only for system',
     binding_id              BIGINT DEFAULT NULL COMMENT 'Audited source binding ID | immutable after insert | not an ownership substitute',
     provisioned_at          BIGINT DEFAULT NULL COMMENT 'Provisioned time',
     activated_at            BIGINT DEFAULT NULL COMMENT 'First activation time',
@@ -132,7 +132,7 @@ CREATE TABLE IF NOT EXISTS agent_identity_registry (
         OR (canonical_type <> 'SYSTEM'
             AND client_id IS NOT NULL AND TRIM(client_id) <> ''
             AND owner_jiacn IS NOT NULL AND TRIM(owner_jiacn) <> ''
-            AND tenant_id = TRIM(owner_jiacn))
+            AND tenant_id = '0')
     ),
     CONSTRAINT chk_identity_registry_retired CHECK (
         (lifecycle_status = 'RETIRED' AND retired_at IS NOT NULL)
@@ -157,7 +157,7 @@ CREATE TABLE IF NOT EXISTS agent_identity_alias (
                             ) STORED,
     client_id               VARCHAR(50) NOT NULL COMMENT 'Immutable owner-scope client after insert',
     owner_jiacn             VARCHAR(50) NOT NULL COMMENT 'Immutable owner-scope jiacn after insert',
-    tenant_id               VARCHAR(50) NOT NULL COMMENT 'Must equal TRIM(owner_jiacn) | immutable after insert',
+    tenant_id               VARCHAR(50) NOT NULL COMMENT 'Single tenant ID; always 0',
     audit_reason            VARCHAR(1000) NOT NULL COMMENT 'Auditable alias evidence/reason',
     create_time             BIGINT DEFAULT NULL COMMENT 'Create time',
     update_time             BIGINT DEFAULT NULL COMMENT 'Update time',
@@ -168,7 +168,7 @@ CREATE TABLE IF NOT EXISTS agent_identity_alias (
     KEY idx_identity_alias_canonical (canonical_agent_id, alias_status),
     CONSTRAINT chk_identity_alias_type CHECK (alias_type = 'LEGACY_AGENT_ID'),
     CONSTRAINT chk_identity_alias_status CHECK (alias_status IN ('ACTIVE', 'REVOKED')),
-    CONSTRAINT chk_identity_alias_scope CHECK (tenant_id = TRIM(owner_jiacn)),
+    CONSTRAINT chk_identity_alias_scope CHECK (tenant_id = '0'),
     CONSTRAINT chk_identity_alias_no_blank_scope CHECK (
         TRIM(client_id) <> '' AND TRIM(owner_jiacn) <> ''
     ),
@@ -208,6 +208,7 @@ CREATE TABLE IF NOT EXISTS dialogue_template (
 CREATE TABLE IF NOT EXISTS agent_task_meta (
     id                      BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
     task_id                 VARCHAR(100) NOT NULL COMMENT '关联Task ID',
+    owner_jiacn             VARCHAR(50) NOT NULL COMMENT 'Authenticated task owner',
     reward_status           VARCHAR(20) NOT NULL DEFAULT 'open' COMMENT 'open/assigned/running/completed/failed',
     assigned_agent_id       VARCHAR(100) DEFAULT NULL COMMENT '兼容期首要Agent ID；新多人关系以成员表为准',
     required_abilities      TEXT COMMENT '所需能力(JSON数组)',
@@ -228,16 +229,17 @@ CREATE TABLE IF NOT EXISTS agent_task_meta (
     tenant_id               VARCHAR(50) DEFAULT NULL COMMENT 'Owner jiacn scope；历史记录兼容可空',
     client_id               VARCHAR(50) DEFAULT NULL COMMENT 'OAuth/API client；历史记录兼容可空',
     PRIMARY KEY (id),
-    UNIQUE KEY uk_agent_task_meta_scope (tenant_id, client_id, task_id),
+    UNIQUE KEY uk_agent_task_meta_scope (tenant_id, client_id, owner_jiacn, task_id),
     KEY idx_agent_task_meta_status (reward_status),
     KEY idx_agent_task_meta_agent_id (assigned_agent_id),
-    KEY idx_agent_task_meta_scope_status (tenant_id, client_id, reward_status, update_time, id),
-    KEY idx_agent_task_meta_scope_coordinator (tenant_id, client_id, coordinator_agent_id, reward_status)
+    KEY idx_agent_task_meta_scope_status (tenant_id, client_id, owner_jiacn, reward_status, update_time, id),
+    KEY idx_agent_task_meta_scope_coordinator (tenant_id, client_id, owner_jiacn, coordinator_agent_id, reward_status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Agent任务扩展元数据表';
 
 CREATE TABLE IF NOT EXISTS agent_task_member (
     id                  BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
     task_id             VARCHAR(100) NOT NULL COMMENT 'Task ID',
+    owner_jiacn         VARCHAR(50) NOT NULL COMMENT 'Authenticated task owner',
     agent_id            VARCHAR(100) NOT NULL COMMENT 'ADR-001 canonical agentId',
     member_role         VARCHAR(20) NOT NULL COMMENT 'coordinator/worker/reviewer/observer',
     member_status       VARCHAR(20) NOT NULL DEFAULT 'invited' COMMENT 'invited/accepted/working/done/rejected/blocked/failed/left',
@@ -254,16 +256,17 @@ CREATE TABLE IF NOT EXISTS agent_task_member (
     create_time         BIGINT DEFAULT NULL COMMENT 'Create time',
     update_time         BIGINT DEFAULT NULL COMMENT 'Update time',
     PRIMARY KEY (id),
-    UNIQUE KEY uk_task_member_scope (tenant_id, client_id, task_id, agent_id),
-    KEY idx_task_member_agent_status (tenant_id, client_id, agent_id, member_status),
-    KEY idx_task_member_task_status (tenant_id, client_id, task_id, member_status),
-    KEY idx_task_member_task_role (tenant_id, client_id, task_id, member_role, member_status)
+    UNIQUE KEY uk_task_member_scope (tenant_id, client_id, owner_jiacn, task_id, agent_id),
+    KEY idx_task_member_agent_status (tenant_id, client_id, owner_jiacn, agent_id, member_status),
+    KEY idx_task_member_task_status (tenant_id, client_id, owner_jiacn, task_id, member_status),
+    KEY idx_task_member_task_role (tenant_id, client_id, owner_jiacn, task_id, member_role, member_status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped Agent task members';
 
 CREATE TABLE IF NOT EXISTS agent_task_work_item (
     id                  BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
     work_item_id        VARCHAR(100) NOT NULL COMMENT 'Stable work item ID',
     task_id             VARCHAR(100) NOT NULL COMMENT 'Task ID',
+    owner_jiacn         VARCHAR(50) NOT NULL COMMENT 'Authenticated task owner',
     title               VARCHAR(255) NOT NULL COMMENT 'Work item title',
     description         TEXT COMMENT 'Work item description',
     work_type           VARCHAR(30) NOT NULL COMMENT 'Work item type',
@@ -286,11 +289,11 @@ CREATE TABLE IF NOT EXISTS agent_task_work_item (
     create_time         BIGINT DEFAULT NULL COMMENT 'Create time',
     update_time         BIGINT DEFAULT NULL COMMENT 'Update time',
     PRIMARY KEY (id),
-    UNIQUE KEY uk_work_item_scope (tenant_id, client_id, work_item_id),
-    KEY idx_work_item_task_status (tenant_id, client_id, task_id, status, priority),
-    KEY idx_work_item_assignee_status (tenant_id, client_id, assignee_agent_id, status, lease_until),
+    UNIQUE KEY uk_work_item_scope (tenant_id, client_id, owner_jiacn, work_item_id),
+    KEY idx_work_item_task_status (tenant_id, client_id, owner_jiacn, task_id, status, priority),
+    KEY idx_work_item_assignee_status (tenant_id, client_id, owner_jiacn, assignee_agent_id, status, lease_until),
     KEY idx_work_item_lease (status, lease_until, id),
-    KEY idx_work_item_task_required (tenant_id, client_id, task_id, required_item, status)
+    KEY idx_work_item_task_required (tenant_id, client_id, owner_jiacn, task_id, required_item, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped Agent task work items';
 
 CREATE TABLE IF NOT EXISTS agent_task_backfill_issue (
@@ -463,6 +466,7 @@ CREATE TABLE IF NOT EXISTS agent_task_request (
     id                  BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
     request_id          VARCHAR(100) NOT NULL COMMENT 'Stable request ID',
     task_id             VARCHAR(100) NOT NULL COMMENT 'Task ID',
+    owner_jiacn         VARCHAR(50) NOT NULL COMMENT 'Authenticated task owner',
     work_item_id        VARCHAR(100) DEFAULT NULL COMMENT 'Related work item ID',
     requester_agent_id  VARCHAR(100) NOT NULL COMMENT 'ADR-001 canonical requester agentId',
     target_type         VARCHAR(20) NOT NULL COMMENT 'agent/role/user/system',
@@ -482,16 +486,17 @@ CREATE TABLE IF NOT EXISTS agent_task_request (
     create_time         BIGINT DEFAULT NULL COMMENT 'Create time',
     update_time         BIGINT DEFAULT NULL COMMENT 'Update time',
     PRIMARY KEY (id),
-    UNIQUE KEY uk_task_request_scope (tenant_id, client_id, request_id),
-    KEY idx_task_request_task_status (tenant_id, client_id, task_id, status, priority, create_time),
-    KEY idx_task_request_target_status (tenant_id, client_id, target_type, target_id, status, due_at),
-    KEY idx_task_request_work_item (tenant_id, client_id, work_item_id, status)
+    UNIQUE KEY uk_task_request_scope (tenant_id, client_id, owner_jiacn, request_id),
+    KEY idx_task_request_task_status (tenant_id, client_id, owner_jiacn, task_id, status, priority, create_time),
+    KEY idx_task_request_target_status (tenant_id, client_id, owner_jiacn, target_type, target_id, status, due_at),
+    KEY idx_task_request_work_item (tenant_id, client_id, owner_jiacn, work_item_id, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped Agent collaboration requests';
 
 CREATE TABLE IF NOT EXISTS agent_task_artifact (
     id                      BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
     artifact_id             VARCHAR(100) NOT NULL COMMENT 'Stable logical artifact ID',
     task_id                 VARCHAR(100) NOT NULL COMMENT 'Task ID',
+    owner_jiacn             VARCHAR(50) NOT NULL COMMENT 'Authenticated task owner',
     work_item_id            VARCHAR(100) DEFAULT NULL COMMENT 'Related work item ID',
     producer_agent_id       VARCHAR(100) NOT NULL COMMENT 'ADR-001 canonical producer agentId',
     artifact_type           VARCHAR(30) NOT NULL COMMENT 'summary/document/patch/commit/test_report/analysis/dataset/link',
@@ -508,16 +513,17 @@ CREATE TABLE IF NOT EXISTS agent_task_artifact (
     create_time             BIGINT DEFAULT NULL COMMENT 'Create time',
     update_time             BIGINT DEFAULT NULL COMMENT 'Update time',
     PRIMARY KEY (id),
-    UNIQUE KEY uk_artifact_version (tenant_id, client_id, artifact_id, artifact_version),
-    KEY idx_artifact_task_created (tenant_id, client_id, task_id, created_at),
-    KEY idx_artifact_work_item (tenant_id, client_id, work_item_id, artifact_type, created_at),
-    KEY idx_artifact_producer (tenant_id, client_id, producer_agent_id, created_at),
-    KEY idx_artifact_hash (tenant_id, client_id, content_hash)
+    UNIQUE KEY uk_artifact_version (tenant_id, client_id, owner_jiacn, artifact_id, artifact_version),
+    KEY idx_artifact_task_created (tenant_id, client_id, owner_jiacn, task_id, created_at),
+    KEY idx_artifact_work_item (tenant_id, client_id, owner_jiacn, work_item_id, artifact_type, created_at),
+    KEY idx_artifact_producer (tenant_id, client_id, owner_jiacn, producer_agent_id, created_at),
+    KEY idx_artifact_hash (tenant_id, client_id, owner_jiacn, content_hash)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped versioned Agent task artifacts';
 
 CREATE TABLE IF NOT EXISTS agent_task_note (
     id                  BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
     task_id             VARCHAR(100) NOT NULL COMMENT '关联悬赏任务ID',
+    owner_jiacn         VARCHAR(50) NOT NULL COMMENT 'Authenticated task owner',
     author_id           VARCHAR(100) DEFAULT NULL COMMENT '纪要作者ID',
     author_type         VARCHAR(20) NOT NULL DEFAULT 'user' COMMENT 'user/agent/system',
     note_type           VARCHAR(20) NOT NULL DEFAULT 'summary' COMMENT 'summary/report/meeting/system',
@@ -528,7 +534,7 @@ CREATE TABLE IF NOT EXISTS agent_task_note (
     tenant_id           VARCHAR(50) DEFAULT '0' COMMENT '租户ID',
     client_id           VARCHAR(50) DEFAULT NULL COMMENT '客户端ID',
     PRIMARY KEY (id),
-    KEY idx_agent_task_note_task_id (task_id),
+    KEY idx_agent_task_note_task_id (tenant_id, client_id, owner_jiacn, task_id),
     KEY idx_agent_task_note_created_at (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Agent任务纪要表';
 
@@ -606,6 +612,7 @@ CREATE TABLE IF NOT EXISTS agent_scene_phase_report (
 CREATE TABLE IF NOT EXISTS agent_task_event (
     id              BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
     task_id         VARCHAR(100) NOT NULL COMMENT 'Task ID',
+    owner_jiacn     VARCHAR(50) NOT NULL COMMENT 'Authenticated task owner',
     event_version   BIGINT NOT NULL COMMENT 'Monotonic event version scoped to (tenant,client,task)',
     event_id        VARCHAR(100) NOT NULL COMMENT 'Deterministic stable event identifier',
     event_type      VARCHAR(64) NOT NULL COMMENT 'Event type (SCREAMING_SNAKE_CASE)',
@@ -620,11 +627,11 @@ CREATE TABLE IF NOT EXISTS agent_task_event (
     create_time     BIGINT DEFAULT NULL COMMENT 'Create time',
     update_time     BIGINT DEFAULT NULL COMMENT 'Update time',
     PRIMARY KEY (id),
-    UNIQUE KEY uk_task_event_version (tenant_id, client_id, task_id, event_version),
-    UNIQUE KEY uk_task_event_id (tenant_id, client_id, event_id),
-    KEY idx_task_event_occurred (tenant_id, client_id, task_id, occurred_at),
-    KEY idx_event_actor_time (tenant_id, client_id, actor_type, actor_id, occurred_at),
-    KEY idx_event_type_time (tenant_id, client_id, event_type, occurred_at)
+    UNIQUE KEY uk_task_event_version (tenant_id, client_id, owner_jiacn, task_id, event_version),
+    UNIQUE KEY uk_task_event_id (tenant_id, client_id, owner_jiacn, event_id),
+    KEY idx_task_event_occurred (tenant_id, client_id, owner_jiacn, task_id, occurred_at),
+    KEY idx_event_actor_time (tenant_id, client_id, owner_jiacn, actor_type, actor_id, occurred_at),
+    KEY idx_event_type_time (tenant_id, client_id, owner_jiacn, event_type, occurred_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Scoped task event journal for M2 collaboration replay and SSE';
 
 -- D01 reliable Agent command transport tables. Keep byte-exact parity with
@@ -853,6 +860,7 @@ CREATE TABLE IF NOT EXISTS agent_hosted_profile (
     CONSTRAINT chk_hosted_state CHECK (lifecycle_state IN
       ('PREPARED','STAGED_DISABLED','FILE_ENABLED','ACTIVE','SUSPENDING','SUSPENDED','REPAIR_REQUIRED')),
     CONSTRAINT chk_hosted_generation CHECK (generation >= 0),
+    CONSTRAINT chk_hosted_single_tenant CHECK (tenant_id = '0'),
     CONSTRAINT chk_hosted_repair CHECK (
       (lifecycle_state = 'REPAIR_REQUIRED' AND resume_state IS NOT NULL)
       OR (lifecycle_state <> 'REPAIR_REQUIRED' AND resume_state IS NULL))

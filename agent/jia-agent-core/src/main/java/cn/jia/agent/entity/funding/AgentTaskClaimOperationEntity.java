@@ -23,6 +23,8 @@ public class AgentTaskClaimOperationEntity extends BaseEntity {
     private byte[] idempotencyKey;
     private byte[] requestHash;
     private String taskId;
+    /** Authenticated user that owns this task; separate from the executing Agent. */
+    private String ownerJiacn;
     private String agentId;
     private String quoteId;
     private String status;

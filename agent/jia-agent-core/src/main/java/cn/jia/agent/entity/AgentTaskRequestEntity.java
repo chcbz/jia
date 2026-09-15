@@ -22,6 +22,8 @@ public class AgentTaskRequestEntity extends BaseEntity {
     private Long id;
     private String requestId;
     private String taskId;
+    /** Authenticated user that owns this task; separate from the executing Agent. */
+    private String ownerJiacn;
     private String workItemId;
     private String requesterAgentId;
     private String targetType;

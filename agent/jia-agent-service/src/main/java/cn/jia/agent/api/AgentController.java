@@ -261,7 +261,7 @@ public class AgentController {
             throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
                     "Authenticated JWT scope is invalid");
         }
-        return new AgentHostedBindingTransaction.Scope(jiacn, clientId, jiacn);
+        return new AgentHostedBindingTransaction.Scope("0", clientId, jiacn);
     }
 
     private static boolean validExactScopeComponent(String value) {

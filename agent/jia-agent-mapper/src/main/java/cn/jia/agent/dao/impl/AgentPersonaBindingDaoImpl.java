@@ -36,6 +36,19 @@ public class AgentPersonaBindingDaoImpl extends BaseDaoImpl<AgentPersonaBindingM
     }
 
     @Override
+    public AgentPersonaBindingEntity findActiveByTenantClientAndPersonaForUpdate(
+            String tenantId, String clientId, String personaCode) {
+        requireExact(tenantId, "tenantId", 50);
+        requireExact(clientId, "clientId", 50);
+        requireExact(personaCode, "personaCode", 50);
+        if (!"0".equals(tenantId)) {
+            throw new IllegalArgumentException("persona tenant must be the single tenant");
+        }
+        return baseMapper.findActiveByTenantClientAndPersonaForUpdate(
+                tenantId, clientId, personaCode, AgentConstants.BINDING_STATUS_ACTIVE);
+    }
+
+    @Override
     public List<AgentPersonaCatalogBindingRow> findCatalogOverlay(
             String tenantId, String clientId, String ownerJiacn) {
         requirePersonaOwnerScope(tenantId, clientId, ownerJiacn);
@@ -113,7 +126,7 @@ public class AgentPersonaBindingDaoImpl extends BaseDaoImpl<AgentPersonaBindingM
         requireExact(tenantId, "tenantId", 50);
         requireExact(clientId, "clientId", 50);
         requireExact(ownerJiacn, "ownerJiacn", 50);
-        if ("0".equals(ownerJiacn) || !tenantId.equals(ownerJiacn)) {
+        if ("0".equals(ownerJiacn) || !"0".equals(tenantId)) {
             throw new IllegalArgumentException("persona owner scope is invalid");
         }
     }

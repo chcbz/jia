@@ -6,6 +6,8 @@ import lombok.Data;
 public class AgentTaskFundingEntity {
     private Long id;
     private String taskId;
+    /** Authenticated user that owns this task; separate from the executing Agent. */
+    private String ownerJiacn;
     private String fundingMode;
     private String fundingStatus;
     private String payerPrincipalType;

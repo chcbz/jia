@@ -14,6 +14,10 @@ public interface AgentPersonaBindingDao extends IBaseDao<AgentPersonaBindingEnti
     AgentPersonaBindingEntity findExactActiveByScopeAndPersona(
             String tenantId, String clientId, String ownerJiacn, String personaCode);
 
+    /** Locks the active globally unique role binding before a new bind is attempted. */
+    AgentPersonaBindingEntity findActiveByTenantClientAndPersonaForUpdate(
+            String tenantId, String clientId, String personaCode);
+
     List<AgentPersonaCatalogBindingRow> findCatalogOverlay(
             String tenantId, String clientId, String ownerJiacn);
 

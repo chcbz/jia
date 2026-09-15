@@ -12,6 +12,8 @@ public class AgentTaskSettlementEntity {
     private byte[] idempotencyKey;
     private byte[] requestHash;
     private String taskId;
+    /** Authenticated user that owns this task; separate from the executing Agent. */
+    private String ownerJiacn;
     private String quoteId;
     private String agentId;
     private String escrowId;

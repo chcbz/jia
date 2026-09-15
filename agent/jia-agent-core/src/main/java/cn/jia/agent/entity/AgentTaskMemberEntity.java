@@ -21,6 +21,8 @@ public class AgentTaskMemberEntity extends BaseEntity {
     @TableId(value = "id", type = IdType.AUTO)
     private Long id;
     private String taskId;
+    /** Authenticated user that owns this task; separate from the executing Agent. */
+    private String ownerJiacn;
     private String agentId;
     private String memberRole;
     private String memberStatus;
