@@ -52,9 +52,9 @@ public class AgentIdentityServiceImpl implements AgentIdentityService {
         }
 
         AgentIdentityRegistryEntity existing = registryDao.findExactByBindingInScope(
-                binding.getJiacn(), binding.getClientId(), binding.getJiacn(), binding.getId());
+                "0", binding.getClientId(), binding.getJiacn(), binding.getId());
         if (existing != null) {
-            validateRegistry(existing, binding.getJiacn(), binding.getClientId(), binding.getJiacn(),
+            validateRegistry(existing, "0", binding.getClientId(), binding.getJiacn(),
                     binding.getAgentId(), true);
             requireRegistrableLifecycle(existing);
             return existing;
@@ -67,7 +67,7 @@ public class AgentIdentityServiceImpl implements AgentIdentityService {
         identity.setLifecycleStatus(AgentConstants.IDENTITY_STATUS_PROVISIONED);
         identity.setClientId(binding.getClientId());
         identity.setOwnerJiacn(binding.getJiacn());
-        identity.setTenantId(binding.getJiacn());
+        identity.setTenantId("0");
         identity.setBindingId(binding.getId());
         identity.setProvisionedAt(now);
         identity.setAuditReason(auditReason);
@@ -524,10 +524,10 @@ public class AgentIdentityServiceImpl implements AgentIdentityService {
         if (binding == null) {
             throw forbidden("Agent binding is required");
         }
-        requireScope(binding.getJiacn(), binding.getClientId(), binding.getJiacn());
+        requireScope("0", binding.getClientId(), binding.getJiacn());
         requireAgentId(binding.getAgentId());
-        if (binding.getTenantId() != null && !Objects.equals(binding.getTenantId(), binding.getJiacn())) {
-            throw forbidden("Agent binding tenant does not match owner scope");
+        if (!"0".equals(binding.getTenantId())) {
+            throw forbidden("Agent binding tenant must be the single tenant");
         }
     }
 
@@ -535,8 +535,8 @@ public class AgentIdentityServiceImpl implements AgentIdentityService {
         requireExactText(tenantId, "tenantId", 50);
         requireExactText(clientId, "clientId", 50);
         requireExactText(ownerJiacn, "ownerJiacn", 50);
-        if (!tenantId.equals(ownerJiacn)) {
-            throw forbidden("Agent identity tenant must equal owner scope");
+        if (!"0".equals(tenantId) || "0".equals(ownerJiacn)) {
+            throw forbidden("Agent identity must use the single tenant and a real owner");
         }
     }
 

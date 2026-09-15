@@ -72,8 +72,11 @@ public class AgentHostedBindingTransaction {
     public Prepared prepareHosted(Scope scope, String personaCode) {
         AgentPersonaEntity persona = requirePersona(personaCode);
         if (Boolean.TRUE.equals(persona.getSystemAgent())) fail(AgentErrorConstants.PERSONA_NOT_BINDABLE, "System persona cannot be bound");
-        AgentPersonaBindingEntity binding = bindingDao.findExactActiveByScopeAndPersonaForUpdate(
-                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), persona.getPersonaCode());
+        AgentPersonaBindingEntity binding = bindingDao.findActiveByTenantClientAndPersonaForUpdate(
+                scope.tenantId(), scope.clientId(), persona.getPersonaCode());
+        if (binding != null && !Objects.equals(scope.ownerJiacn(), binding.getJiacn())) {
+            fail(AgentErrorConstants.PERSONA_BOUND, "Persona is already bound");
+        }
         boolean createdBinding = binding == null;
         AgentRuntimeDTO agent;
         AgentHostedProfileEntity hosted;
@@ -500,7 +503,7 @@ public class AgentHostedBindingTransaction {
     public record Scope(String tenantId, String clientId, String ownerJiacn) {
         public Scope {
             if (!validExact(tenantId) || !validExact(clientId) || !validExact(ownerJiacn)
-                    || "0".equals(ownerJiacn) || !Objects.equals(tenantId, ownerJiacn)) {
+                    || "0".equals(ownerJiacn) || !"0".equals(tenantId)) {
                 throw new IllegalArgumentException("exact hosted scope is required");
             }
         }

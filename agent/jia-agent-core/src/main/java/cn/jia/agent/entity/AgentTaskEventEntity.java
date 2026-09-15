@@ -26,6 +26,8 @@ public class AgentTaskEventEntity extends BaseEntity {
 
     @Schema(description = "任务ID")
     private String taskId;
+    /** Authenticated user that owns this task; separate from the executing Agent. */
+    private String ownerJiacn;
 
     @Schema(description = "任务范围单调事件版本号")
     private Long eventVersion;

@@ -10,6 +10,8 @@ public class AgentTaskFundingOperationEntity {
     private byte[] idempotencyKey;
     private byte[] requestHash;
     private String taskId;
+    /** Authenticated user that owns this task; separate from the executing Agent. */
+    private String ownerJiacn;
     private String status;
     private String reserveTransactionId;
     private Long receiptTaskVersion;

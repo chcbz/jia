@@ -22,6 +22,8 @@ public class AgentWorkItemReassignmentEntity extends BaseEntity {
     private String reassignmentId;
     private String requestSha256;
     private String taskId;
+    /** Authenticated user that owns this task; separate from the executing Agent. */
+    private String ownerJiacn;
     private String workItemId;
     private String operatorSubject;
     private String coordinatorAgentId;

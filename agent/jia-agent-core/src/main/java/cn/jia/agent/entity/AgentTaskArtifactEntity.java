@@ -22,6 +22,8 @@ public class AgentTaskArtifactEntity extends BaseEntity {
     private Long id;
     private String artifactId;
     private String taskId;
+    /** Authenticated user that owns this task; separate from the executing Agent. */
+    private String ownerJiacn;
     private String workItemId;
     private String producerAgentId;
     private String artifactType;

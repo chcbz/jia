@@ -108,6 +108,7 @@ import java.util.regex.Pattern;
 @Service
 @Slf4j
 public class AgentServiceImpl implements AgentService {
+    private static final String SINGLE_TENANT_ID = "0";
     private static final String REGION_BOUNTY_BOARD = "bounty-board";
     private static final String REGION_COUNCIL_TABLE = "council-table";
     private static final String REGION_MAIN_SEAT = "main-seat";
@@ -339,7 +340,7 @@ public class AgentServiceImpl implements AgentService {
         String clientId = resolveCurrentClientId();
         String jiacn = resolveCurrentJiacn();
         AgentIdentityRegistryEntity identity = agentIdentityService.requireRegistrationIdentityInScope(
-                jiacn, clientId, jiacn, request.getAgentId());
+                SINGLE_TENANT_ID, clientId, jiacn, request.getAgentId());
         AgentPersonaBindingEntity binding = agentIdentityService.requireActiveBinding(
                 identity, Objects.equals(request.getAgentId(), identity.getCanonicalAgentId())
                         ? null : request.getAgentId());
@@ -373,7 +374,7 @@ public class AgentServiceImpl implements AgentService {
             agentRuntimeDao.updateById(entity);
             observeSkillLifecycle(entity);
         }
-        publishAgentSnapshotAfterCommit("agent-register", jiacn, clientId, jiacn,
+        publishAgentSnapshotAfterCommit("agent-register", SINGLE_TENANT_ID, clientId, jiacn,
                 entity.getAgentId(), requireBindingId(entity));
         return new AgentRegisterResultDTO(entity.getAgentId(), token, entity.getStatus());
     }
@@ -480,16 +481,33 @@ public class AgentServiceImpl implements AgentService {
 
     private void requireCatalogOverlay(
             AgentHostedBindingTransaction.Scope scope, AgentPersonaCatalogBindingRow row) {
-        if (row == null || row.getBindingId() == null || row.getBindingId() <= 0
-                || row.getBindingStatus() == null
+        if (row == null || row.getBindingStatus() == null
                 || row.getBindingStatus() != AgentConstants.BINDING_STATUS_ACTIVE
                 || !Objects.equals(scope.tenantId(), row.getBindingTenantId())
                 || !Objects.equals(scope.clientId(), row.getBindingClientId())
-                || !Objects.equals(scope.ownerJiacn(), row.getBindingOwnerJiacn())
-                || !isExactPersonaCatalogText(row.getPersonaCode(), 50)
-                || !isExactPersonaCatalogText(row.getBindingAgentId(), 100)) {
+                || !isExactPersonaCatalogText(row.getBindingOwnerJiacn(), 50)
+                || !isExactPersonaCatalogText(row.getPersonaCode(), 50)) {
             throw personaCatalogForbidden(
                     "Persona catalog binding escaped the byte-exact requested scope");
+        }
+        if (!Objects.equals(scope.ownerJiacn(), row.getBindingOwnerJiacn())) {
+            if (row.getBindingId() != null || row.getBindingAgentId() != null
+                    || row.getIdentityId() != null || row.getIdentityBindingId() != null
+                    || row.getIdentityTenantId() != null || row.getIdentityClientId() != null
+                    || row.getIdentityOwnerJiacn() != null || row.getCanonicalAgentId() != null
+                    || row.getCanonicalType() != null || row.getLifecycleStatus() != null
+                    || row.getAgentReferenceValid() != null || row.getRuntimeId() != null
+                    || row.getRuntimeTenantId() != null || row.getRuntimeClientId() != null
+                    || row.getRuntimeOwnerJiacn() != null || row.getRuntimeBindingId() != null
+                    || row.getRuntimeAgentId() != null || row.getRuntimeAbilities() != null
+                    || row.getRuntimeStatus() != null) {
+                throw personaCatalogForbidden("Foreign persona binding disclosed durable details");
+            }
+            return;
+        }
+        if (row.getBindingId() == null || row.getBindingId() <= 0
+                || !isExactPersonaCatalogText(row.getBindingAgentId(), 100)) {
+            throw personaCatalogForbidden("Owned persona binding projection is incomplete");
         }
         if (row.getIdentityId() == null || row.getIdentityId() <= 0
                 || !Objects.equals(row.getBindingId(), row.getIdentityBindingId())
@@ -576,8 +594,11 @@ public class AgentServiceImpl implements AgentService {
         if (Boolean.TRUE.equals(persona.getSystemAgent())) {
             throw new AgentBizException(AgentErrorConstants.PERSONA_NOT_BINDABLE, "System persona cannot be bound");
         }
-        AgentPersonaBindingEntity bound = agentPersonaBindingDao.findExactActiveByScopeAndPersonaForUpdate(
-                exactScope.tenantId(), exactScope.clientId(), exactScope.ownerJiacn(), persona.getPersonaCode());
+        AgentPersonaBindingEntity bound = agentPersonaBindingDao.findActiveByTenantClientAndPersonaForUpdate(
+                exactScope.tenantId(), exactScope.clientId(), persona.getPersonaCode());
+        if (bound != null && !Objects.equals(exactScope.ownerJiacn(), bound.getJiacn())) {
+            throw new AgentBizException(AgentErrorConstants.PERSONA_BOUND, "Persona is already bound");
+        }
         if (bound != null) {
             AgentIdentityRegistryEntity identity = agentIdentityService.requireRegistrationIdentityInScope(
                     exactScope.tenantId(), exactScope.clientId(), exactScope.ownerJiacn(), bound.getAgentId());
@@ -629,7 +650,7 @@ public class AgentServiceImpl implements AgentService {
             return toRuntimeDTO(requireOwnedAgentForUpdate(clientId, jiacn, agentId));
         }
         agentIdentityService.requireCanonicalAgentIdInScope(
-                jiacn, clientId, jiacn, agentId);
+                SINGLE_TENANT_ID, clientId, jiacn, agentId);
 
         AgentRuntimeEntity agent = agentRuntimeDao.findByAgentId(agentId);
         if (agent == null) {
@@ -637,7 +658,7 @@ public class AgentServiceImpl implements AgentService {
                     "Agent runtime is missing or outside the authenticated scope");
         }
         AgentIdentityRegistryEntity identity = agentIdentityService.requireActiveIdentityForBinding(
-                jiacn, clientId, jiacn, requireBindingId(agent), agentId);
+                SINGLE_TENANT_ID, clientId, jiacn, requireBindingId(agent), agentId);
         requireExactRuntime(agent, agentId, clientId, jiacn, identity.getBindingId());
         return toRuntimeDTO(agent);
     }
@@ -652,7 +673,7 @@ public class AgentServiceImpl implements AgentService {
                     "System agent cannot be updated by external clients");
         }
         List<String> lockedAgentIds = agentIdentityService.lockActiveCanonicalAgentIdsInScope(
-                jiacn, clientId, jiacn, List.of(agentId));
+                SINGLE_TENANT_ID, clientId, jiacn, List.of(agentId));
         if (!List.of(agentId).equals(lockedAgentIds)) {
             throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
                     "Agent identity lock did not match the requested Agent");
@@ -663,7 +684,7 @@ public class AgentServiceImpl implements AgentService {
                     "Agent runtime is missing or outside the authenticated scope");
         }
         AgentIdentityRegistryEntity identity = agentIdentityService.requireActiveIdentityForBinding(
-                jiacn, clientId, jiacn, requireBindingId(agent), agentId);
+                SINGLE_TENANT_ID, clientId, jiacn, requireBindingId(agent), agentId);
         agentIdentityService.requireActiveBinding(identity, null);
         return requireExactRuntime(agent, agentId, clientId, jiacn, identity.getBindingId());
     }
@@ -705,7 +726,7 @@ public class AgentServiceImpl implements AgentService {
         require(agentRuntimeDao.updateById(entity) == 1, "Agent runtime update failed");
         observeSkillLifecycle(entity);
         AgentRuntimeDTO dto = toRuntimeDTO(entity);
-        publishAgentSnapshotAfterCommit("agent-presence", jiacn, clientId, jiacn,
+        publishAgentSnapshotAfterCommit("agent-presence", SINGLE_TENANT_ID, clientId, jiacn,
                 entity.getAgentId(), requireBindingId(entity));
         return dto;
     }
@@ -1908,9 +1929,9 @@ public class AgentServiceImpl implements AgentService {
         String clientId = resolveCurrentClientId();
         String jiacn = resolveCurrentJiacn();
         String canonicalAgentId = agentIdentityService.requireCanonicalAgentIdInScope(
-                jiacn, clientId, jiacn, agent.getAgentId());
+                SINGLE_TENANT_ID, clientId, jiacn, agent.getAgentId());
         AgentIdentityRegistryEntity identity = agentIdentityService.requireActiveIdentityForBinding(
-                jiacn, clientId, jiacn, requireBindingId(agent), canonicalAgentId);
+                SINGLE_TENANT_ID, clientId, jiacn, requireBindingId(agent), canonicalAgentId);
         agentIdentityService.requireActiveBinding(identity, null);
         requireExactRuntime(agent, canonicalAgentId, clientId, jiacn, identity.getBindingId());
     }
@@ -2051,7 +2072,9 @@ public class AgentServiceImpl implements AgentService {
         if (persona.systemAgent() && binding != null) {
             throw personaCatalogForbidden("System persona must not have a user binding");
         }
-        String catalogAgentId = binding == null ? null : binding.getCanonicalAgentId();
+        boolean boundToMe = binding != null
+                && Objects.equals(scope.ownerJiacn(), binding.getBindingOwnerJiacn());
+        String catalogAgentId = boundToMe ? binding.getCanonicalAgentId() : null;
         AgentRuntimeDTO dto = new AgentRuntimeDTO();
         dto.setAgentId(catalogAgentId);
         dto.setName(persona.name());
@@ -2063,16 +2086,16 @@ public class AgentServiceImpl implements AgentService {
         dto.setRankNo(persona.rankNo());
         dto.setVisualConfig(persona.visualConfig());
         dto.setSystemAgent(persona.systemAgent());
-        dto.setAbilities(parseList(binding != null && binding.getRuntimeId() != null
+        dto.setAbilities(parseList(boundToMe && binding.getRuntimeId() != null
                 && !StringUtil.isBlank(binding.getRuntimeAbilities())
                 ? binding.getRuntimeAbilities() : persona.abilities()));
-        dto.setStatus(binding == null || binding.getRuntimeId() == null
+        dto.setStatus(!boundToMe || binding.getRuntimeId() == null
                 ? AgentConstants.STATUS_OFFLINE : binding.getRuntimeStatus());
-        dto.setOwnerJiacn(binding == null ? null : scope.ownerJiacn());
+        dto.setOwnerJiacn(null);
         dto.setBound(binding != null || persona.systemAgent());
-        dto.setBoundToMe(binding != null);
+        dto.setBoundToMe(boundToMe);
         dto.setCanBind(!persona.systemAgent() && binding == null);
-        dto.setCanOperate(binding != null);
+        dto.setCanOperate(boundToMe);
         AgentStatsDTO stats = new AgentStatsDTO();
         stats.setPower(persona.power());
         stats.setIntelligence(persona.intelligence());

@@ -20,6 +20,8 @@ public class AgentTaskQuoteEntity extends BaseEntity {
     private Long id;
     private String quoteId;
     private String taskId;
+    /** Authenticated user that owns this task; separate from the executing Agent. */
+    private String ownerJiacn;
     private String agentId;
     private String principalType;
     private String principalId;

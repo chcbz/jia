@@ -37,12 +37,40 @@ public interface AgentPersonaBindingMapper extends BaseMapper<AgentPersonaBindin
             @Param("activeStatus") int activeStatus);
 
     @Select("""
-            SELECT b.id AS binding_id,
+            SELECT *
+            FROM agent_persona_binding
+            WHERE tenant_id = #{tenantId}
+              AND client_id = #{clientId}
+              AND persona_code = #{personaCode}
+              AND status = #{activeStatus}
+              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(persona_code AS BINARY) = CAST(#{personaCode} AS BINARY)
+              AND OCTET_LENGTH(persona_code) = OCTET_LENGTH(#{personaCode})
+            LIMIT 1
+            FOR UPDATE
+            """)
+    AgentPersonaBindingEntity findActiveByTenantClientAndPersonaForUpdate(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("personaCode") String personaCode,
+            @Param("activeStatus") int activeStatus);
+
+    @Select("""
+            SELECT CASE WHEN b.owner_jiacn = #{ownerJiacn}
+                              AND CAST(b.owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+                              AND OCTET_LENGTH(b.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
+                         THEN b.id ELSE NULL END AS binding_id,
                    b.tenant_id AS binding_tenant_id,
                    b.client_id AS binding_client_id,
                    b.owner_jiacn AS binding_owner_jiacn,
                    b.persona_code,
-                   b.agent_id AS binding_agent_id,
+                   CASE WHEN b.owner_jiacn = #{ownerJiacn}
+                              AND CAST(b.owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+                              AND OCTET_LENGTH(b.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
+                        THEN b.agent_id ELSE NULL END AS binding_agent_id,
                    b.status AS binding_status,
                    i.id AS identity_id,
                    i.binding_id AS identity_binding_id,
@@ -127,6 +155,9 @@ public interface AgentPersonaBindingMapper extends BaseMapper<AgentPersonaBindin
              AND i.owner_jiacn = b.owner_jiacn
              AND CAST(i.owner_jiacn AS BINARY) = CAST(b.owner_jiacn AS BINARY)
              AND OCTET_LENGTH(i.owner_jiacn) = OCTET_LENGTH(b.owner_jiacn)
+             AND b.owner_jiacn = #{ownerJiacn}
+             AND CAST(b.owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+             AND OCTET_LENGTH(b.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
             LEFT JOIN agent_runtime r
               ON r.agent_id = i.canonical_agent_id
              AND CAST(r.agent_id AS BINARY) = CAST(i.canonical_agent_id AS BINARY)
@@ -143,14 +174,11 @@ public interface AgentPersonaBindingMapper extends BaseMapper<AgentPersonaBindin
              AND r.binding_id = b.id
             WHERE b.tenant_id = #{tenantId}
               AND b.client_id = #{clientId}
-              AND b.owner_jiacn = #{ownerJiacn}
               AND b.status = #{activeStatus}
               AND CAST(b.tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(b.tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(b.client_id AS BINARY) = CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(b.client_id) = OCTET_LENGTH(#{clientId})
-              AND CAST(b.owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
-              AND OCTET_LENGTH(b.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
             ORDER BY b.persona_code ASC
             """)
     List<AgentPersonaCatalogBindingRow> findCatalogOverlay(
