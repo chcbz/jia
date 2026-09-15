@@ -563,7 +563,8 @@ public class WxMpController {
         return content.toString();
     }
 
-    private MpUserEntity resolveMpUser(WxMpService wxMpService, String appid, String clientId, String openId) {
+    private MpUserEntity resolveMpUser(WxMpService wxMpService, String appid, String clientId, String openId)
+            throws Exception {
         MpUserEntity mpUser = mpUserService.findByAppIdAndOpenId(appid, openId);
         if (mpUser == null) {
             WxMpUser wxMpUser = wxMpService.getUserService()
