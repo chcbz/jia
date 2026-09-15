@@ -121,14 +121,14 @@ public class ArchiveQuestionController {
 
     private Authorization authorize(Authentication authentication) {
         if (!(authentication instanceof JwtAuthenticationToken jwt)) return Authorization.failure(authIncomplete());
-        Object tenantClaim = jwt.getToken().getClaims().get("jiacn");
+        Object ownerClaim = jwt.getToken().getClaims().get("jiacn");
         Object clientClaim = jwt.getToken().getClaims().get("client_id");
-        if (!(tenantClaim instanceof String tenantId) || !(clientClaim instanceof String clientId)
-                || !ArchiveReaderAccessPolicy.validRequestClaim(tenantId)
+        if (!(ownerClaim instanceof String ownerJiacn) || !(clientClaim instanceof String clientId)
+                || !ArchiveReaderAccessPolicy.validRequestClaim(ownerJiacn)
                 || !ArchiveReaderAccessPolicy.validRequestClaim(clientId)) {
             return Authorization.failure(authIncomplete());
         }
-        return new Authorization(new ArchiveOwnerScope(tenantId, clientId, tenantId), null);
+        return new Authorization(new ArchiveOwnerScope(ArchiveOwnerScope.SINGLE_TENANT, clientId, ownerJiacn), null);
     }
 
     private ResponseEntity<JsonResult<?>> mutationSyntax(String questionId, String key, HttpServletRequest request) {

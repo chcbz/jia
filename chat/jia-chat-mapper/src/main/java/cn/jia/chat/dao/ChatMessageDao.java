@@ -21,7 +21,8 @@ public interface ChatMessageDao extends IBaseDao<ChatMessageEntity> {
             String ownerJiacn, String clientId, String conversationId, int limit);
 
     /** Deletes every byte-exact row for an already locked and authenticated conversation. */
-    int deleteExactConversationMessages(String conversationId);
+    int deleteExactOwnedConversationMessages(
+            String ownerJiacn, String clientId, String conversationId);
 
     /** Explicitly unscoped maintenance-only history query. Never expose through request paths. */
     List<ChatMessageEntity> findByConversationIdForMaintenance(String conversationId);

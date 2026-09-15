@@ -56,7 +56,7 @@ class ArchiveQuestionControllerTest {
         verify(service).create(owner.capture(), org.mockito.ArgumentMatchers.eq(ID),
                 org.mockito.ArgumentMatchers.eq("/archive/v1/me/questions/" + ID),
                 org.mockito.ArgumentMatchers.eq("key"), any());
-        assertEquals(new ArchiveOwnerScope("owner-a", "client-a", "owner-a"), owner.getValue());
+        assertEquals(new ArchiveOwnerScope("0", "client-a", "owner-a"), owner.getValue());
     }
 
     @Test

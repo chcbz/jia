@@ -197,7 +197,7 @@ public class ArchivePersonalDataController {
                 || !ArchiveReaderAccessPolicy.validRequestClaim(clientId)) {
             return Authorization.failure(authIncomplete());
         }
-        return new Authorization(new ArchiveOwnerScope(jiacn, clientId, jiacn), null);
+        return new Authorization(new ArchiveOwnerScope(ArchiveOwnerScope.SINGLE_TENANT, clientId, jiacn), null);
     }
 
     private ResponseEntity<JsonResult<?>> mutationSyntax(HttpServletRequest request, String key, boolean pathValid) {

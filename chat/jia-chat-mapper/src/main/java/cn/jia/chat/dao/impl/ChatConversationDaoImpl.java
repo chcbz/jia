@@ -5,6 +5,7 @@ import cn.jia.chat.entity.AgentTaskThreadConstants;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.mapper.ChatConversationMapper;
 import cn.jia.common.dao.BaseDaoImpl;
+import cn.jia.core.mybatis.TenantScopeHelper;
 import cn.jia.core.util.StringUtil;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import jakarta.inject.Named;
@@ -54,6 +55,18 @@ public class ChatConversationDaoImpl extends BaseDaoImpl<ChatConversationMapper,
     }
 
     @Override
+    public int updateScopedFields(
+            String ownerJiacn, String clientId, ChatConversationEntity entity) {
+        requireIdentity(ownerJiacn, "ownerJiacn");
+        requireIdentity(clientId, "clientId");
+        if (entity == null || entity.getId() == null) {
+            throw new IllegalArgumentException("conversation is required");
+        }
+        return baseMapper.updateExactOwnedFields(ownerJiacn, clientId, entity.getId(),
+                entity.getTitle(), entity.getStatus());
+    }
+
+    @Override
     public boolean isLiveGeneration(
             String ownerJiacn, String clientId, String conversationId, long expectedGeneration) {
         requireIdentity(ownerJiacn, "ownerJiacn");
@@ -72,9 +85,8 @@ public class ChatConversationDaoImpl extends BaseDaoImpl<ChatConversationMapper,
         }
         requireIdentity(example.getJiacn(), "jiacn");
         requireIdentity(example.getClientId(), "clientId");
-        requireIdentity(example.getTenantId(), "tenantId");
-        if (!example.getTenantId().equals(example.getJiacn())) {
-            throw new IllegalArgumentException("tenantId must be the authenticated owner scope");
+        if (!TenantScopeHelper.DEFAULT_TENANT.equals(example.getTenantId())) {
+            throw new IllegalArgumentException("tenantId must be the single tenant");
         }
 
         QueryWrapper<ChatConversationEntity> wrapper = new QueryWrapper<>();
@@ -84,11 +96,9 @@ public class ChatConversationDaoImpl extends BaseDaoImpl<ChatConversationMapper,
                 .eq("client_id", example.getClientId())
                 .apply("CAST(client_id AS BINARY) = CAST({0} AS BINARY)", example.getClientId())
                 .apply("OCTET_LENGTH(client_id) = OCTET_LENGTH({0})", example.getClientId())
-                .and(scope -> scope.eq("tenant_id", example.getTenantId()).or().eq("tenant_id", "0"))
-                .apply("(CAST(tenant_id AS BINARY) = CAST({0} AS BINARY) OR tenant_id = '0')",
-                        example.getTenantId())
-                .apply("(OCTET_LENGTH(tenant_id) = OCTET_LENGTH({0}) OR tenant_id = '0')",
-                        example.getTenantId())
+                .eq("tenant_id", TenantScopeHelper.DEFAULT_TENANT)
+                .apply("CAST(tenant_id AS BINARY) = CAST('0' AS BINARY)")
+                .apply("OCTET_LENGTH(tenant_id) = OCTET_LENGTH('0')")
                 .isNull("deleted_at");
         addAllowedFilters(example, wrapper);
         wrapper.and(nested -> nested.isNull("conversation_scope_type")

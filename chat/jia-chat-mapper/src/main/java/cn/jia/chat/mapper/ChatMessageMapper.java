@@ -12,15 +12,15 @@ import java.util.List;
 public interface ChatMessageMapper extends BaseMapper<ChatMessageEntity> {
     String LIVE_CONVERSATION_OWNER_SCOPE = """
               AND c.deleted_at IS NULL
+              AND c.tenant_id = '0'
               AND c.jiacn = #{ownerJiacn}
               AND c.client_id = #{clientId}
-              AND (c.tenant_id = #{ownerJiacn} OR c.tenant_id = '0')
+              AND CAST(c.tenant_id AS BINARY) = CAST('0' AS BINARY)
+              AND OCTET_LENGTH(c.tenant_id) = OCTET_LENGTH('0')
               AND CAST(c.jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
               AND OCTET_LENGTH(c.jiacn) = OCTET_LENGTH(#{ownerJiacn})
               AND CAST(c.client_id AS BINARY) = CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(c.client_id) = OCTET_LENGTH(#{clientId})
-              AND (CAST(c.tenant_id AS BINARY) = CAST(#{ownerJiacn} AS BINARY) OR c.tenant_id = '0')
-              AND (OCTET_LENGTH(c.tenant_id) = OCTET_LENGTH(#{ownerJiacn}) OR c.tenant_id = '0')
             """;
 
     String EXACT_MESSAGE_CONVERSATION_SCOPE = """
@@ -99,12 +99,17 @@ public interface ChatMessageMapper extends BaseMapper<ChatMessageEntity> {
             @Param("numericConversationId") Long numericConversationId);
 
     @Delete("""
-            DELETE FROM chat_message
-            WHERE conversation_id = #{conversationId}
-              AND CAST(conversation_id AS BINARY) = CAST(#{conversationId} AS BINARY)
-              AND OCTET_LENGTH(conversation_id) = OCTET_LENGTH(#{conversationId})
-            """)
-    int deleteExactConversationMessages(@Param("conversationId") String conversationId);
+            DELETE m FROM chat_message m
+            JOIN chat_conversation c ON c.id = #{numericConversationId}
+            WHERE 1 = 1
+            """ + EXACT_MESSAGE_CONVERSATION_SCOPE
+            + LIVE_CONVERSATION_OWNER_SCOPE
+            + EXACT_MESSAGE_OWNER_SCOPE)
+    int deleteExactOwnedConversationMessages(
+            @Param("ownerJiacn") String ownerJiacn,
+            @Param("clientId") String clientId,
+            @Param("conversationId") String conversationId,
+            @Param("numericConversationId") Long numericConversationId);
 
     @Select("""
             SELECT *

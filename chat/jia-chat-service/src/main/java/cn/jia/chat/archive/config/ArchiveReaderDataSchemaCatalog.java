@@ -40,6 +40,7 @@ public final class ArchiveReaderDataSchemaCatalog {
                         fk("fk_archive_progress_paragraph", List.of("edition_id", "block_id", "paragraph_id"),
                                 "archive_paragraph", List.of("edition_id", "block_id", "paragraph_id"))),
                 checks(
+                        "chk_archive_progress_single_tenant", "tenant_id = '0'",
                         "chk_archive_progress_state", "state in ('IN_PROGRESS','COMPLETED')",
                         "chk_archive_progress_values", "(byte_offset>=0) and (version>=1)",
                         "chk_archive_progress_completion", "((state='IN_PROGRESS') and (completed_at is null)) or ((state='COMPLETED') and (completed_at is not null))")));
@@ -71,6 +72,7 @@ public final class ArchiveReaderDataSchemaCatalog {
                         fk("fk_archive_bookmark_paragraph", List.of("edition_id", "block_id", "paragraph_id"),
                                 "archive_paragraph", List.of("edition_id", "block_id", "paragraph_id"))),
                 checks(
+                        "chk_archive_bookmark_single_tenant", "tenant_id = '0'",
                         "chk_archive_bookmark_id", "regexp_like(bookmark_id,'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')",
                         "chk_archive_bookmark_state", "state in ('ACTIVE','DELETED')",
                         "chk_archive_bookmark_version", "version>=1",
@@ -102,6 +104,7 @@ public final class ArchiveReaderDataSchemaCatalog {
                         fk("fk_archive_note_block", List.of("edition_id", "block_id"),
                                 "archive_chapter", List.of("edition_id", "block_id"))),
                 checks(
+                        "chk_archive_note_single_tenant", "tenant_id = '0'",
                         "chk_archive_note_id", "regexp_like(note_id,'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')",
                         "chk_archive_note_state", "state in ('ACTIVE','DELETED')",
                         "chk_archive_note_version", "version>=1",
@@ -126,6 +129,7 @@ public final class ArchiveReaderDataSchemaCatalog {
                         idx("idx_archive_idempotency_expiry", false, "expires_at", "row_id")),
                 foreignKeys(),
                 checks(
+                        "chk_archive_idempotency_single_tenant", "tenant_id = '0'",
                         "chk_archive_idempotency_method", "http_method in ('PUT','DELETE')",
                         "chk_archive_idempotency_state", "state in ('PENDING','COMPLETED')",
                         "chk_archive_idempotency_key", "regexp_like(idempotency_key,'^[!-~]{1,128}$')",

@@ -251,7 +251,10 @@ public class JdbcArchiveQuestionStore implements ArchiveQuestionStore {
                 SELECT tenant_id,client_id,owner_jiacn,question_id,row_id,
                        CASE WHEN state='READY' THEN available_at ELSE lease_until END AS candidate_at
                 FROM archive_outbox
-                WHERE attempt_count<3
+                WHERE tenant_id='0'
+                  AND CAST(tenant_id AS BINARY)=CAST('0' AS BINARY)
+                  AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH('0')
+                  AND attempt_count<3
                   AND ((state='READY' AND available_at<=?)
                        OR (state='LEASED' AND lease_until<=?))
                   AND (? IS NULL
@@ -272,7 +275,10 @@ public class JdbcArchiveQuestionStore implements ArchiveQuestionStore {
         return jdbc.query("""
                 SELECT tenant_id,client_id,owner_jiacn,question_id,row_id,lease_until AS candidate_at
                 FROM archive_outbox
-                WHERE state='LEASED' AND attempt_count>=3 AND lease_until<=?
+                WHERE tenant_id='0'
+                  AND CAST(tenant_id AS BINARY)=CAST('0' AS BINARY)
+                  AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH('0')
+                  AND state='LEASED' AND attempt_count>=3 AND lease_until<=?
                   AND (? IS NULL OR lease_until>? OR (lease_until=? AND row_id>?))
                 ORDER BY lease_until,row_id LIMIT ?
                 """, (rs, ignored) -> new ClaimCandidate(new ArchiveOwnerScope(
@@ -289,7 +295,13 @@ public class JdbcArchiveQuestionStore implements ArchiveQuestionStore {
                 FROM archive_outbox o JOIN archive_question q
                   ON q.tenant_id=o.tenant_id AND q.client_id=o.client_id
                  AND q.owner_jiacn=o.owner_jiacn AND q.question_id=o.question_id
-                WHERE o.published_sequence<q.current_sequence AND o.row_id>?
+                WHERE o.tenant_id='0'
+                  AND q.tenant_id='0'
+                  AND CAST(o.tenant_id AS BINARY)=CAST('0' AS BINARY)
+                  AND CAST(q.tenant_id AS BINARY)=CAST('0' AS BINARY)
+                  AND OCTET_LENGTH(o.tenant_id)=OCTET_LENGTH('0')
+                  AND OCTET_LENGTH(q.tenant_id)=OCTET_LENGTH('0')
+                  AND o.published_sequence<q.current_sequence AND o.row_id>?
                 ORDER BY o.row_id LIMIT ?
                 """, (rs, ignored) -> new PublishCandidate(new ArchiveOwnerScope(
                         rs.getString("tenant_id"), rs.getString("client_id"), rs.getString("owner_jiacn")),

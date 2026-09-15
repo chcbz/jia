@@ -51,6 +51,7 @@ public final class ArchiveQuestionSchemaCatalog {
                         fk("fk_archive_question_block", List.of("edition_id", "block_id"),
                                 "archive_chapter", List.of("edition_id", "block_id"))),
                 checks(
+                        "chk_archive_question_single_tenant", "tenant_id = '0'",
                         "chk_archive_question_id", "regexp_like(question_id,'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')",
                         "chk_archive_question_status", "status in ('QUEUED','RUNNING','SUCCEEDED','FAILED_RETRYABLE','FAILED_FINAL')",
                         "chk_archive_question_content", "regexp_like(edition_manifest_sha256,'^[0-9a-f]{64}$') and (block_type in ('PREFACE','CHAPTER')) and json_valid(anchor_json)",
@@ -85,6 +86,7 @@ public final class ArchiveQuestionSchemaCatalog {
                         List.of("question_row_id", "tenant_id", "client_id", "owner_jiacn", "question_id"),
                         "archive_question", List.of("row_id", "tenant_id", "client_id", "owner_jiacn", "question_id"))),
                 checks(
+                        "chk_archive_question_mutation_single_tenant", "tenant_id = '0'",
                         "chk_archive_question_mutation_id", "regexp_like(question_id,'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')",
                         "chk_archive_question_mutation_method", "http_method in ('PUT','POST')",
                         "chk_archive_question_mutation_path", "regexp_like(canonical_path,'^[!-~]{1,512}$') and (((http_method='PUT') and (canonical_path=concat('/archive/v1/me/questions/',question_id))) or ((http_method='POST') and (canonical_path=concat('/archive/v1/me/questions/',question_id,'/retry'))))",
@@ -111,6 +113,7 @@ public final class ArchiveQuestionSchemaCatalog {
                         List.of("tenant_id", "client_id", "owner_jiacn", "question_id"),
                         "archive_question", List.of("tenant_id", "client_id", "owner_jiacn", "question_id"))),
                 checks(
+                        "chk_archive_question_event_single_tenant", "tenant_id = '0'",
                         "chk_archive_question_event_id", "regexp_like(question_id,'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')",
                         "chk_archive_question_event_sequence", "sequence>=1",
                         "chk_archive_question_event_type", "event_type in ('QUESTION_QUEUED','QUESTION_RUNNING','ANSWER_DELTA','QUESTION_SUCCEEDED','QUESTION_FAILED_RETRYABLE','QUESTION_FAILED_FINAL','QUESTION_RETRY_QUEUED')",
@@ -137,6 +140,7 @@ public final class ArchiveQuestionSchemaCatalog {
                         List.of("tenant_id", "client_id", "owner_jiacn", "question_id"),
                         "archive_question", List.of("tenant_id", "client_id", "owner_jiacn", "question_id"))),
                 checks(
+                        "chk_archive_outbox_single_tenant", "tenant_id = '0'",
                         "chk_archive_outbox_id", "regexp_like(question_id,'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')",
                         "chk_archive_outbox_state", "state in ('READY','LEASED','WAITING_RETRY','DONE')",
                         "chk_archive_outbox_counters", "(attempt_count between 0 and 3) and (fencing_token>=0) and (published_sequence>=0)",

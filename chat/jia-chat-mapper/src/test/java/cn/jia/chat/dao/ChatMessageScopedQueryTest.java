@@ -2,12 +2,14 @@ package cn.jia.chat.dao;
 
 import cn.jia.chat.dao.impl.ChatMessageDaoImpl;
 import cn.jia.chat.entity.ChatMessageEntity;
+import cn.jia.chat.mapper.ChatConversationMapper;
 import cn.jia.chat.mapper.ChatMessageMapper;
 import cn.jia.common.dao.BaseDaoImpl;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.config.GlobalConfig;
 import com.baomidou.mybatisplus.core.incrementer.DefaultIdentifierGenerator;
 import com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.junit.jupiter.api.AfterEach;
@@ -28,7 +30,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ChatMessageScopedQueryTest {
-    private static final String TENANT = "Tenant-A";
+    private static final String OWNER = "Owner-A";
+    private static final String TENANT = "0";
     private static final String CLIENT = "Client-A";
     private static final String CONVERSATION = "Room-1";
 
@@ -136,13 +139,30 @@ class ChatMessageScopedQueryTest {
     }
 
     @Test
+    void genericConversationQueriesAndDeletesFixTenantZeroWhileKeepingOwnerAndClientExact() throws Exception {
+        String conversationScope = normalize(ChatConversationMapper.EXACT_OWNER_SCOPE);
+        assertTrue(conversationScope.contains("tenant_id = '0'"), conversationScope);
+        assertFalse(conversationScope.contains("or tenant_id"), conversationScope);
+        assertTrue(conversationScope.contains("jiacn = #{ownerjiacn}"), conversationScope);
+        assertTrue(conversationScope.contains("client_id = #{clientid}"), conversationScope);
+
+        Method delete = ChatMessageMapper.class.getDeclaredMethod("deleteExactOwnedConversationMessages",
+                String.class, String.class, String.class, Long.class);
+        String deleteSql = normalize(String.join(" ", delete.getAnnotation(Delete.class).value()));
+        assertTrue(deleteSql.contains("delete m from chat_message m join chat_conversation c"), deleteSql);
+        assertTrue(deleteSql.contains("c.tenant_id = '0'"), deleteSql);
+        assertTrue(deleteSql.contains("c.jiacn = #{ownerjiacn}"), deleteSql);
+        assertTrue(deleteSql.contains("c.client_id = #{clientid}"), deleteSql);
+    }
+
+    @Test
     void byteExactScopeRejectsCaseSpaceAndNulPaddingAndDaoPreservesLatestLimitOrder() {
         insert(101, TENANT, CLIENT, CONVERSATION, 100, "oldest");
         insert(102, TENANT, CLIENT, CONVERSATION, 200, "same-time-low-id");
         insert(103, TENANT, CLIENT, CONVERSATION, 200, "same-time-high-id");
         insert(104, TENANT, CLIENT, CONVERSATION, 300, "newest");
 
-        insert(201, "tenant-a", CLIENT, CONVERSATION, 1_000, "case-tenant-leak");
+        insert(201, OWNER, CLIENT, CONVERSATION, 1_000, "legacy-owner-tenant-leak");
         insert(202, TENANT, "client-a", CONVERSATION, 1_001, "case-client-leak");
         insert(203, TENANT, CLIENT, "room-1", 1_002, "case-conversation-leak");
         insert(204, TENANT + " ", CLIENT, CONVERSATION, 1_003, "space-tenant-leak");
@@ -151,7 +171,7 @@ class ChatMessageScopedQueryTest {
         insert(207, TENANT + (char) 0, CLIENT, CONVERSATION, 1_006, "nul-tenant-leak");
         insert(208, TENANT, CLIENT + (char) 0, CONVERSATION, 1_007, "nul-client-leak");
         insert(209, TENANT, CLIENT, CONVERSATION + (char) 0, 1_008, "nul-conversation-leak");
-        insert(210, "0", CLIENT, CONVERSATION, 1_009, "tenant-zero-public-leak");
+        insert(210, "00", CLIENT, CONVERSATION, 1_009, "tenant-lookalike-leak");
 
         List<ChatMessageEntity> mapperRows = mapper.findExactByConversationScope(
                 TENANT, CLIENT, CONVERSATION, 20);
@@ -175,20 +195,21 @@ class ChatMessageScopedQueryTest {
                 VALUES (1, ?, ?, ?, 'normal', NULL),
                        (2, 'Owner-B', 'Owner-B', ?, 'normal', NULL),
                        (3, ?, ?, ?, 'normal', 999)
-                """, TENANT, TENANT, CLIENT, CLIENT, TENANT, TENANT, CLIENT);
-        insertOwned(301, "1", TENANT, TENANT, CLIENT, 100, "owned-old");
-        insertOwned(302, "1", TENANT, TENANT, CLIENT, 200, "owned-new");
+                """, OWNER, TENANT, CLIENT, CLIENT, OWNER, TENANT, CLIENT);
+        insertOwned(301, "1", OWNER, TENANT, CLIENT, 100, "owned-old");
+        insertOwned(302, "1", OWNER, TENANT, CLIENT, 200, "owned-new");
         insertOwned(401, "2", "Owner-B", "Owner-B", CLIENT, 300, "foreign");
-        insertOwned(501, "3", TENANT, TENANT, CLIENT, 400, "deleted");
+        insertOwned(501, "3", OWNER, TENANT, CLIENT, 400, "deleted");
 
         assertEquals(List.of(301L, 302L), dao.findOwnedByConversationId(
-                TENANT, CLIENT, "1").stream().map(ChatMessageEntity::getId).toList());
-        assertEquals(List.of(), dao.findOwnedByConversationId(TENANT, CLIENT, "2"));
-        assertEquals(List.of(), dao.findOwnedByConversationId(TENANT, CLIENT, "3"));
+                OWNER, CLIENT, "1").stream().map(ChatMessageEntity::getId).toList());
+        assertEquals(List.of(), dao.findOwnedByConversationId(OWNER, CLIENT, "2"));
+        assertEquals(List.of(), dao.findOwnedByConversationId(OWNER, CLIENT, "3"));
 
-        insertOwned(303, "1", "tenant-a", TENANT, CLIENT, 500, "case-owner-injection");
+        insertOwned(303, "1", OWNER, "tenant-a", CLIENT, 500, "legacy-tenant-injection");
+        insertOwned(304, "1", OWNER, OWNER, CLIENT, 501, "legacy-owner-tenant");
         assertEquals(List.of(301L, 302L), dao.findOwnedByConversationId(
-                TENANT, CLIENT, "1").stream().map(ChatMessageEntity::getId).toList());
+                OWNER, CLIENT, "1").stream().map(ChatMessageEntity::getId).toList());
     }
 
     private void insert(
