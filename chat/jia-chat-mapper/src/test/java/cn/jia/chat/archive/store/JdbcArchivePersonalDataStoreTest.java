@@ -18,6 +18,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class JdbcArchivePersonalDataStoreTest {
     @Test
+    void ownerScopeCanonicalizesAnyLegacyTenantToZeroWithoutChangingClientOrOwner() {
+        ArchiveOwnerScope scope = new ArchiveOwnerScope("legacy-tenant", "client-a", "owner-a");
+        assertEquals("0", scope.tenantId());
+        assertEquals("client-a", scope.clientId());
+        assertEquals("owner-a", scope.ownerJiacn());
+    }
+
+    @Test
     void exactScopePredicatesFreezeAllThreeOwnerComponentsByValueBytesAndLength() throws Exception {
         Field field = JdbcArchivePersonalDataStore.class.getDeclaredField("EXACT_SCOPE");
         field.setAccessible(true);
@@ -34,7 +42,7 @@ class JdbcArchivePersonalDataStoreTest {
     void nullFirstPageCursorOmitsExclusivePredicateSoLongMaxRowIsEligible() {
         RecordingJdbcTemplate jdbc = new RecordingJdbcTemplate();
         JdbcArchivePersonalDataStore store = new JdbcArchivePersonalDataStore(jdbc);
-        ArchiveOwnerScope owner = new ArchiveOwnerScope("tenant", "client", "owner");
+        ArchiveOwnerScope owner = new ArchiveOwnerScope("0", "client", "owner");
 
         store.listBookmarks(owner, "edition", null, 101);
         assertFalse(jdbc.sql.contains("row_id<?"));
@@ -52,14 +60,14 @@ class JdbcArchivePersonalDataStoreTest {
     void multiArrayArgumentConcatenationFlattensOwnerScopeInsteadOfNestingIt() throws Exception {
         Method scopeArgs = JdbcArchivePersonalDataStore.class.getDeclaredMethod("scopeArgs", ArchiveOwnerScope.class);
         scopeArgs.setAccessible(true);
-        Object[] scope = (Object[]) scopeArgs.invoke(null, new ArchiveOwnerScope("tenant", "client", "owner"));
+        Object[] scope = (Object[]) scopeArgs.invoke(null, new ArchiveOwnerScope("0", "client", "owner"));
         Method concat = JdbcArchivePersonalDataStore.class.getDeclaredMethod(
                 "concat", Object[].class, Object[].class, Object[].class);
         concat.setAccessible(true);
         Object[] actual = (Object[]) concat.invoke(null, new Object[]{new Object[]{"state"}, scope,
                 new Object[]{"id", 7L}});
-        assertArrayEquals(new Object[]{"state", "tenant", "client", "owner", "tenant", "client", "owner",
-                "tenant", "client", "owner", "id", 7L}, actual);
+        assertArrayEquals(new Object[]{"state", "0", "client", "owner", "0", "client", "owner",
+                "0", "client", "owner", "id", 7L}, actual);
         assertTrue(Arrays.stream(actual).noneMatch(Object[].class::isInstance));
     }
 

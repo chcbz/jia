@@ -163,7 +163,7 @@ class AgentTaskThreadDaoTest {
         ChatConversationDaoImpl dao = new ChatConversationDaoImpl();
         setBaseMapper(dao, mapper);
         ChatConversationEntity example = new ChatConversationEntity().setJiacn("owner");
-        example.setTenantId("owner");
+        example.setTenantId("0");
         example.setClientId("client-a");
         dao.selectNonTaskThreadByEntity(example);
         ArgumentCaptor<Wrapper<ChatConversationEntity>> captor = ArgumentCaptor.forClass(Wrapper.class);

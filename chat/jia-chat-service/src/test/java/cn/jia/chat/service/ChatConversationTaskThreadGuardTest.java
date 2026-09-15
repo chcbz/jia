@@ -23,7 +23,6 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.inOrder;
@@ -72,7 +71,7 @@ class ChatConversationTaskThreadGuardTest extends BaseMockTest {
         verify(conversationDao).selectNonTaskThreadByEntity(captor.capture());
         ChatConversationEntity safe = captor.getValue();
         assertEquals(OWNER, safe.getJiacn());
-        assertEquals(OWNER, safe.getTenantId());
+        assertEquals("0", safe.getTenantId());
         assertEquals(CLIENT, safe.getClientId());
         assertEquals("juyiting", safe.getConversationType());
         assertNull(safe.getDeletedAt());
@@ -105,12 +104,12 @@ class ChatConversationTaskThreadGuardTest extends BaseMockTest {
 
     @Test
     void genericReadRejectsTaskThreadAndCrossUserWithoutMessageQuery() {
-        ChatConversationEntity taskThread = ownedConversation(77L, OWNER)
+        ChatConversationEntity taskThread = ownedConversation(77L, "0")
                 .setConversationScopeType(AgentTaskThreadConstants.CONVERSATION_SCOPE_TYPE);
         when(conversationDao.findScopedById(OWNER, CLIENT, "77")).thenReturn(taskThread);
         assertUnavailable(() -> service().findByConversationId("77"));
 
-        ChatConversationEntity bound = ownedConversation(78L, OWNER);
+        ChatConversationEntity bound = ownedConversation(78L, "0");
         when(conversationDao.findScopedById(OWNER, CLIENT, "78")).thenReturn(bound);
         when(taskThreadDao.findAnyByConversationId("78"))
                 .thenReturn(new AgentTaskThreadEntity().setConversationId("78"));
@@ -123,7 +122,7 @@ class ChatConversationTaskThreadGuardTest extends BaseMockTest {
 
     @Test
     void taskThreadEvidenceBlocksEveryGenericReadAndMutationPath() {
-        ChatConversationEntity protectedConversation = ownedConversation(80L, OWNER)
+        ChatConversationEntity protectedConversation = ownedConversation(80L, "0")
                 .setConversationScopeType(AgentTaskThreadConstants.CONVERSATION_SCOPE_TYPE);
         when(conversationDao.findScopedById(OWNER, CLIENT, "80"))
                 .thenReturn(protectedConversation);
@@ -139,9 +138,9 @@ class ChatConversationTaskThreadGuardTest extends BaseMockTest {
         service.deleteConversation("80");
 
         verify(messageDao, never()).findOwnedByConversationId(any(), any(), any());
-        verify(messageDao, never()).deleteExactConversationMessages(any());
+        verify(messageDao, never()).deleteExactOwnedConversationMessages(any(), any(), any());
         verify(conversationDao, never()).softDeleteScopedById(any(), any(), any(), org.mockito.ArgumentMatchers.anyLong());
-        verify(conversationDao, never()).updateById(any());
+        verify(conversationDao, never()).updateScopedFields(any(), any(), any());
     }
 
     @Test
@@ -160,9 +159,9 @@ class ChatConversationTaskThreadGuardTest extends BaseMockTest {
         service.deleteConversation("81");
 
         verify(messageDao, never()).findOwnedByConversationId(any(), any(), any());
-        verify(messageDao, never()).deleteExactConversationMessages(any());
+        verify(messageDao, never()).deleteExactOwnedConversationMessages(any(), any(), any());
         verify(conversationDao, never()).softDeleteScopedById(any(), any(), any(), org.mockito.ArgumentMatchers.anyLong());
-        verify(conversationDao, never()).updateById(any());
+        verify(conversationDao, never()).updateScopedFields(any(), any(), any());
     }
 
     @Test
@@ -181,8 +180,8 @@ class ChatConversationTaskThreadGuardTest extends BaseMockTest {
 
     @Test
     void repeatedDeleteConvergesAndDoesNotDiscloseMissingOrForeignRows() {
-        ChatConversationEntity live = ownedConversation(92L, OWNER);
-        ChatConversationEntity tombstoned = ownedConversation(92L, OWNER).setDeletedAt(999L);
+        ChatConversationEntity live = ownedConversation(92L, "0");
+        ChatConversationEntity tombstoned = ownedConversation(92L, "0").setDeletedAt(999L);
         when(conversationDao.lockScopedByIdIncludingDeleted(OWNER, CLIENT, "92"))
                 .thenReturn(live, tombstoned);
         when(conversationDao.softDeleteScopedById(
@@ -201,12 +200,12 @@ class ChatConversationTaskThreadGuardTest extends BaseMockTest {
                 org.mockito.ArgumentMatchers.eq(CLIENT),
                 org.mockito.ArgumentMatchers.eq("92"),
                 org.mockito.ArgumentMatchers.anyLong());
-        verify(messageDao, times(1)).deleteExactConversationMessages("92");
+        verify(messageDao, times(1)).deleteExactOwnedConversationMessages(OWNER, CLIENT, "92");
     }
 
     @Test
     void deleteAndLateCallbackUseConversationThenMessageLockOrder() {
-        ChatConversationEntity live = ownedConversation(93L, OWNER);
+        ChatConversationEntity live = ownedConversation(93L, "0");
         when(conversationDao.lockScopedByIdIncludingDeleted(OWNER, CLIENT, "93"))
                 .thenReturn(live);
         when(conversationDao.softDeleteScopedById(
@@ -224,7 +223,7 @@ class ChatConversationTaskThreadGuardTest extends BaseMockTest {
                 org.mockito.ArgumentMatchers.eq(CLIENT),
                 org.mockito.ArgumentMatchers.eq("93"),
                 org.mockito.ArgumentMatchers.anyLong());
-        order.verify(messageDao).deleteExactConversationMessages("93");
+        order.verify(messageDao).deleteExactOwnedConversationMessages(OWNER, CLIENT, "93");
 
         when(conversationDao.lockScopedById(OWNER, CLIENT, "93")).thenReturn(null);
         ChatMessageEntity late = new ChatMessageEntity().setConversationId("93")
@@ -272,10 +271,10 @@ class ChatConversationTaskThreadGuardTest extends BaseMockTest {
     }
 
     @Test
-    void currentTenantConversationRemainsAccessible() {
-        ChatConversationEntity owned = ownedConversation(95L, OWNER);
-        when(conversationDao.findScopedById(OWNER, CLIENT, "95")).thenReturn(owned);
-        assertSame(owned, service().get("95"));
+    void legacyOwnerTenantConversationIsDenied() {
+        ChatConversationEntity legacy = ownedConversation(95L, OWNER);
+        when(conversationDao.findScopedById(OWNER, CLIENT, "95")).thenReturn(legacy);
+        assertUnavailable(() -> service().get("95"));
     }
 
     private ChatConversationServiceImpl service() {

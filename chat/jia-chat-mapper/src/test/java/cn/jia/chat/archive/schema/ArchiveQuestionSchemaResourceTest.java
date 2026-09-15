@@ -18,6 +18,10 @@ class ArchiveQuestionSchemaResourceTest {
                 "archive_question_event", "archive_outbox"}) {
             assertTrue(sql.contains("create table " + table + " ("), table);
         }
+        for (String table : new String[]{"archive_question", "archive_question_mutation",
+                "archive_question_event", "archive_outbox"}) {
+            assertTrue(sql.contains("constraint chk_" + table + "_single_tenant check (tenant_id = '0')"), table);
+        }
         assertTrue(sql.contains("http_method in ('put', 'post')"));
         assertTrue(sql.contains("state in ('pending', 'completed')"));
         assertTrue(sql.contains("unique key uk_archive_question_event_sequence (tenant_id, client_id, owner_jiacn, question_id, sequence)"));

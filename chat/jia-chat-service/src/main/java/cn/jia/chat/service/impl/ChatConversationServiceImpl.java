@@ -51,7 +51,7 @@ public class ChatConversationServiceImpl implements ChatConversationService {
         EsContext context = requireIdentity();
         ChatConversationEntity safe = copyAllowedSearch(example);
         safe.setJiacn(context.getJiacn());
-        safe.setTenantId(context.getJiacn());
+        safe.setTenantId(TenantScopeHelper.DEFAULT_TENANT);
         safe.setClientId(context.getClientId());
         List<ChatConversationEntity> conversations;
         try {
@@ -111,7 +111,8 @@ public class ChatConversationServiceImpl implements ChatConversationService {
                 }
                 // The exact row remains locked until commit. Every ordinary writer takes this row
                 // lock first, so append-first/delete-first both converge without orphan messages.
-                chatMessageDao.deleteExactConversationMessages(canonicalId);
+                chatMessageDao.deleteExactOwnedConversationMessages(
+                        context.getJiacn(), context.getClientId(), canonicalId);
             }
             fenceHandedToTransaction = completeDeletionFenceAfterCommit(
                     deletionFence, liveGeneration);
@@ -284,7 +285,8 @@ public class ChatConversationServiceImpl implements ChatConversationService {
                 .setLifecycleGeneration(requireLifecycleGeneration(existing));
         allowedUpdate.setTenantId(existing.getTenantId());
         allowedUpdate.setClientId(existing.getClientId());
-        if (chatConversationDao.updateById(allowedUpdate) != 1) {
+        if (chatConversationDao.updateScopedFields(
+                existing.getJiacn(), existing.getClientId(), allowedUpdate) != 1) {
             throw unavailable();
         }
         return allowedUpdate;
@@ -433,9 +435,7 @@ public class ChatConversationServiceImpl implements ChatConversationService {
                 || !clientId.equals(conversation.getClientId())) {
             return false;
         }
-        String tenantId = conversation.getTenantId();
-        return ownerJiacn.equals(tenantId)
-                || TenantScopeHelper.DEFAULT_TENANT.equals(tenantId);
+        return TenantScopeHelper.DEFAULT_TENANT.equals(conversation.getTenantId());
     }
 
     private boolean isCanonicalIdentityPart(String value) {

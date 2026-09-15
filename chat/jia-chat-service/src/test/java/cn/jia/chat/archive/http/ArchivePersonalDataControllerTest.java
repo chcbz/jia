@@ -52,7 +52,7 @@ class ArchivePersonalDataControllerTest {
         controller.progress(EDITION, jwt(Map.of("jiacn", "owner-a", "client_id", "client-a")));
         ArgumentCaptor<ArchiveOwnerScope> owner = ArgumentCaptor.forClass(ArchiveOwnerScope.class);
         verify(service).progress(owner.capture(), org.mockito.ArgumentMatchers.eq(EDITION));
-        assertEquals(new ArchiveOwnerScope("owner-a", "client-a", "owner-a"), owner.getValue());
+        assertEquals(new ArchiveOwnerScope("0", "client-a", "owner-a"), owner.getValue());
     }
 
     @Test

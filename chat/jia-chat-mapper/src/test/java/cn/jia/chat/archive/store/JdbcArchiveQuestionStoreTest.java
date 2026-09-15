@@ -17,6 +17,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class JdbcArchiveQuestionStoreTest {
     @Test
+    void ownerScopeCanonicalizesAnyLegacyTenantToZeroWithoutChangingClientOrOwner() {
+        ArchiveOwnerScope scope = new ArchiveOwnerScope("legacy-tenant", "client-a", "owner-a");
+        assertEquals("0", scope.tenantId());
+        assertEquals("client-a", scope.clientId());
+        assertEquals("owner-a", scope.ownerJiacn());
+    }
+
+    @Test
     void everyQuestionLookupMutationAndCasUsesExactThreeComponentByteScope() throws Exception {
         Field field = JdbcArchiveQuestionStore.class.getDeclaredField("EXACT_SCOPE");
         field.setAccessible(true);
@@ -33,7 +41,7 @@ class JdbcArchiveQuestionStoreTest {
     void replayQueryFreezesExclusiveInclusiveBoundsExactQuestionAndAscendingSequence() {
         RecordingJdbcTemplate jdbc = new RecordingJdbcTemplate();
         JdbcArchiveQuestionStore store = new JdbcArchiveQuestionStore(jdbc);
-        ArchiveOwnerScope owner = new ArchiveOwnerScope("tenant", "client", "owner");
+        ArchiveOwnerScope owner = new ArchiveOwnerScope("0", "client", "owner");
         store.listEvents(owner, "123e4567-e89b-42d3-a456-426614174000", 7, 19, 100);
         assertTrue(jdbc.sql.contains("sequence>? AND sequence<=? ORDER BY sequence LIMIT ?"));
         assertEquals(15, jdbc.args.length);
@@ -47,14 +55,14 @@ class JdbcArchiveQuestionStoreTest {
     void ownerArraysAreFlattenedForMutationAndCasSqlArguments() throws Exception {
         Method scopeArgs = JdbcArchiveQuestionStore.class.getDeclaredMethod("scopeArgs", ArchiveOwnerScope.class);
         scopeArgs.setAccessible(true);
-        Object[] scope = (Object[]) scopeArgs.invoke(null, new ArchiveOwnerScope("tenant", "client", "owner"));
+        Object[] scope = (Object[]) scopeArgs.invoke(null, new ArchiveOwnerScope("0", "client", "owner"));
         Method concat = JdbcArchiveQuestionStore.class.getDeclaredMethod(
                 "concat", Object[].class, Object[].class, Object[].class);
         concat.setAccessible(true);
         Object[] actual = (Object[]) concat.invoke(null, new Object[]{new Object[]{"state", 3L}, scope,
                 new Object[]{"id", 7L, 9L}});
-        assertArrayEquals(new Object[]{"state", 3L, "tenant", "client", "owner", "tenant", "client", "owner",
-                "tenant", "client", "owner", "id", 7L, 9L}, actual);
+        assertArrayEquals(new Object[]{"state", 3L, "0", "client", "owner", "0", "client", "owner",
+                "0", "client", "owner", "id", 7L, 9L}, actual);
         assertTrue(Arrays.stream(actual).noneMatch(Object[].class::isInstance));
     }
 
@@ -62,7 +70,7 @@ class JdbcArchiveQuestionStoreTest {
     void leaseRenewalIsExactScopedCurrentFenceOnlyAndCandidateScansAreBounded() {
         RecordingJdbcTemplate jdbc = new RecordingJdbcTemplate();
         JdbcArchiveQuestionStore store = new JdbcArchiveQuestionStore(jdbc);
-        ArchiveOwnerScope owner = new ArchiveOwnerScope("tenant", "client", "tenant");
+        ArchiveOwnerScope owner = new ArchiveOwnerScope("0", "client", "tenant");
         Instant now = Instant.parse("2026-08-22T12:00:00Z");
 
         assertEquals(1, store.renewOutboxLease(owner,
@@ -92,6 +100,8 @@ class JdbcArchiveQuestionStoreTest {
     void claimAndRecoveryQueriesCarryDurableLeaseFencingAndPublicationWatermark() throws Exception {
         String source = java.nio.file.Files.readString(java.nio.file.Path.of(
                 "src/main/java/cn/jia/chat/archive/store/JdbcArchiveQuestionStore.java"));
+        assertTrue(source.contains("WHERE tenant_id='0'"));
+        assertTrue(source.contains("WHERE o.tenant_id='0'"));
         assertTrue(source.contains("attempt_count<3"));
         assertTrue(source.contains("state='LEASED' AND lease_until<=?"));
         assertTrue(source.contains("ORDER BY candidate_at,row_id LIMIT ?"));

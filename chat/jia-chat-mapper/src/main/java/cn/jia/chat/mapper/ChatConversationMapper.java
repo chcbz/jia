@@ -9,15 +9,15 @@ import org.apache.ibatis.annotations.Update;
 /** Chat conversation mapper. */
 public interface ChatConversationMapper extends BaseMapper<ChatConversationEntity> {
     String EXACT_OWNER_SCOPE = """
+              AND tenant_id = '0'
               AND jiacn = #{ownerJiacn}
               AND client_id = #{clientId}
-              AND (tenant_id = #{ownerJiacn} OR tenant_id = '0')
+              AND CAST(tenant_id AS BINARY) = CAST('0' AS BINARY)
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH('0')
               AND CAST(jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
               AND OCTET_LENGTH(jiacn) = OCTET_LENGTH(#{ownerJiacn})
               AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
-              AND (CAST(tenant_id AS BINARY) = CAST(#{ownerJiacn} AS BINARY) OR tenant_id = '0')
-              AND (OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{ownerJiacn}) OR tenant_id = '0')
             """;
 
     @Select("""
@@ -69,6 +69,21 @@ public interface ChatConversationMapper extends BaseMapper<ChatConversationEntit
             @Param("clientId") String clientId,
             @Param("id") Long id,
             @Param("deletedAt") long deletedAt);
+
+    @Update("""
+            UPDATE chat_conversation
+            SET title = #{title},
+                status = #{status}
+            WHERE id = #{id}
+            """ + EXACT_OWNER_SCOPE + """
+              AND deleted_at IS NULL
+            """)
+    int updateExactOwnedFields(
+            @Param("ownerJiacn") String ownerJiacn,
+            @Param("clientId") String clientId,
+            @Param("id") Long id,
+            @Param("title") String title,
+            @Param("status") Integer status);
 
     @Select("""
             SELECT COUNT(*) FROM chat_conversation

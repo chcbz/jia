@@ -22,5 +22,8 @@ public interface ChatConversationDao extends IBaseDao<ChatConversationEntity> {
     boolean isLiveGeneration(
             String ownerJiacn, String clientId, String conversationId, long expectedGeneration);
 
+    int updateScopedFields(
+            String ownerJiacn, String clientId, ChatConversationEntity entity);
+
     List<ChatConversationEntity> selectNonTaskThreadByEntity(ChatConversationEntity example);
 }
