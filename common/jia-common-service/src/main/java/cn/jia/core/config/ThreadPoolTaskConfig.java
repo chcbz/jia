@@ -37,6 +37,23 @@ public class ThreadPoolTaskConfig {
      *
      * @return 线程池
      */
+    /**
+     * Dedicated worker for acknowledged WeChat “daily vote” commands. It never falls back to the
+     * servlet thread: WeChat's callback transport window must remain free for the acknowledgement.
+     */
+    @Bean("wxDailyVoteQuestionExecutor")
+    public ThreadPoolTaskExecutor wxDailyVoteQuestionExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(2);
+        executor.setQueueCapacity(Integer.MAX_VALUE);
+        executor.setThreadNamePrefix("Wx-Daily-Vote-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.initialize();
+        return executor;
+    }
+
     @Bean("taskExecutor")
     public ThreadPoolTaskExecutor taskExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();

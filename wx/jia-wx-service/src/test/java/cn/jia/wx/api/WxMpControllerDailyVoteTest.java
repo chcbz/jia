@@ -13,6 +13,7 @@ import cn.jia.wx.service.MpUserService;
 import cn.jia.wx.service.WxDailyVoteService;
 import jakarta.servlet.http.HttpServletRequest;
 import me.chanjar.weixin.mp.api.WxMpService;
+import me.chanjar.weixin.mp.bean.kefu.WxMpKefuMessage;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
@@ -23,6 +24,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
+import org.mockito.ArgumentCaptor;
 import static org.mockito.Mockito.*;
 
 class WxMpControllerDailyVoteTest extends BaseMockTest {
@@ -46,6 +48,7 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
     private WxDailyVoteService dailyVoteService;
     private MatVoteService voteService;
     private ThreadPoolTaskExecutor taskExecutor;
+    private ThreadPoolTaskExecutor dailyVoteQuestionExecutor;
     private WxMpService wxMpService;
     private HttpServletRequest request;
 
@@ -58,6 +61,7 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
         dailyVoteService = mock(WxDailyVoteService.class);
         voteService = mock(MatVoteService.class);
         taskExecutor = mock(ThreadPoolTaskExecutor.class);
+        dailyVoteQuestionExecutor = mock(ThreadPoolTaskExecutor.class);
         wxMpService = mock(WxMpService.class, RETURNS_DEEP_STUBS);
         request = mock(HttpServletRequest.class);
 
@@ -67,6 +71,7 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
         ReflectionTestUtils.setField(controller, "dailyVoteService", dailyVoteService);
         ReflectionTestUtils.setField(controller, "voteService", voteService);
         ReflectionTestUtils.setField(controller, "taskExecutor", taskExecutor);
+        ReflectionTestUtils.setField(controller, "dailyVoteQuestionExecutor", dailyVoteQuestionExecutor);
 
         when(mpInfoService.findWxMpService(request)).thenReturn(wxMpService);
         when(wxMpService.getWxMpConfigStorage().getAppId()).thenReturn(APPID);
@@ -105,7 +110,7 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
     }
 
     @Test
-    void questionCommandBypassesAStaleAnswerPointerAndReturnsTheQuestion() throws Exception {
+    void questionCommandAcknowledgesImmediatelyThenDeliversTheQuestionThroughKefu() throws Exception {
         stubValidDailyVoteRequest();
         MatVoteQuestionVO question = new MatVoteQuestionVO();
         question.setId(337L);
@@ -115,16 +120,40 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
         item.setContent("及时雨宋江");
         question.setItems(java.util.List.of(item));
         when(voteService.findOneQuestion("user-1")).thenReturn(question);
-        when(redisService.get("vote_user-1")).thenReturn("336");
+        when(wxMpService.getKefuService().sendKefuMessage(any(WxMpKefuMessage.class))).thenReturn(true);
+
+        String questionXml = XML.replace("<![CDATA[A]]>", "<![CDATA[我要做题 ]]>");
+        String response = (String) controller.receiveMsg(questionXml, request);
+
+        assertTrue(response.contains("正在为你准备题目，将继续发送到本会话。"));
+        verify(dailyVoteQuestionExecutor).execute(any(Runnable.class));
+        verifyNoInteractions(dailyVoteService);
+        verify(voteService, never()).findOneQuestion(anyString());
+        verify(redisService, never()).get("vote_user-1");
+
+        ArgumentCaptor<Runnable> task = ArgumentCaptor.forClass(Runnable.class);
+        verify(dailyVoteQuestionExecutor).execute(task.capture());
+        task.getValue().run();
+
+        ArgumentCaptor<WxMpKefuMessage> delivery = ArgumentCaptor.forClass(WxMpKefuMessage.class);
+        verify(wxMpService.getKefuService()).sendKefuMessage(delivery.capture());
+        assertEquals(OPENID, delivery.getValue().getToUser());
+        assertEquals("水浒第一题\n\nA 及时雨宋江\n", delivery.getValue().getContent());
+        verify(voteService).findOneQuestion("user-1");
+        verify(redisService).set("vote_user-1", "337", 2L, java.util.concurrent.TimeUnit.HOURS);
+    }
+
+    @Test
+    void questionCommandNeverRunsQuestionLookupOnTheCallbackThreadWhenDispatchFails() throws Exception {
+        stubValidDailyVoteRequest();
+        doThrow(new IllegalStateException("executor unavailable"))
+                .when(dailyVoteQuestionExecutor).execute(any(Runnable.class));
 
         String questionXml = XML.replace("<![CDATA[A]]>", "<![CDATA[我要做题]]>");
         String response = (String) controller.receiveMsg(questionXml, request);
 
-        assertTrue(response.contains("水浒第一题"));
-        assertTrue(response.contains("A 及时雨宋江"));
-        verify(voteService).findOneQuestion("user-1");
-        verify(redisService).set("vote_user-1", "337", 2L, java.util.concurrent.TimeUnit.HOURS);
-        verify(redisService, never()).get("vote_user-1");
+        assertTrue(response.contains("正在为你准备题目，将继续发送到本会话。"));
+        verify(voteService, never()).findOneQuestion(anyString());
         verifyNoInteractions(dailyVoteService);
     }
 

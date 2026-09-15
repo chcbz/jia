@@ -8,18 +8,21 @@ import cn.jia.wx.config.WxExternalHttpClientBuilder;
 import cn.jia.wx.dao.MpInfoDao;
 import cn.jia.wx.entity.MpInfoEntity;
 import cn.jia.wx.service.MpInfoService;
+import jakarta.annotation.PostConstruct;
 import jakarta.servlet.http.HttpServletRequest;
 import me.chanjar.weixin.mp.api.WxMpService;
 import me.chanjar.weixin.mp.api.impl.WxMpServiceImpl;
 import me.chanjar.weixin.mp.config.impl.WxMpMapConfigImpl;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Service
+@Slf4j
 public class MpInfoServiceImpl extends BaseServiceImpl<MpInfoDao, MpInfoEntity> implements MpInfoService {
 	private final Map<String, WxMpService> wxMpServiceMap = new ConcurrentHashMap<>(16);
 	private final Map<String, MpInfoEntity> mpInfoMap = new ConcurrentHashMap<>(16);
@@ -33,12 +36,17 @@ public class MpInfoServiceImpl extends BaseServiceImpl<MpInfoDao, MpInfoEntity> 
 	@Value("${wx.external-http.read-timeout-ms:0}")
 	private int readTimeoutMillis;
 
-	
-//	@PostConstruct
+
+	@PostConstruct
 	public void init() {
-		List<MpInfoEntity> mpInfoList = baseDao.selectAll();
-		for(MpInfoEntity mp : mpInfoList) {
-			cache(mp);
+		try {
+			List<MpInfoEntity> mpInfoList = baseDao.selectAll();
+			for(MpInfoEntity mp : mpInfoList) {
+				cache(mp);
+			}
+		} catch (RuntimeException e) {
+			// A cache warm-up failure must not stop the service; the existing lazy lookup remains available.
+			log.warn("WeChat account cache warm-up failed: error={}", e.getClass().getSimpleName());
 		}
 	}
 	

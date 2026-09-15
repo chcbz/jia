@@ -24,6 +24,8 @@ class WxMpControllerSafetyContractTest {
         assertTrue(controller.contains("deleteIfValueEquals"));
         assertTrue(controller.contains("result.firstProcessing() && result.correct()"));
         assertTrue(controller.contains("new WxCallbackTiming()"));
+        assertTrue(controller.contains("dailyVoteQuestionExecutor.execute"));
+        assertTrue(controller.contains("正在为你准备题目，将继续发送到本会话。"));
         assertTrue(timing.contains("Wx callback timing"));
         assertFalse(timing.contains("openid"));
         assertFalse(timing.contains("content"));

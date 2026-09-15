@@ -63,6 +63,7 @@ import me.chanjar.weixin.mp.bean.result.WxMpUserList;
 import me.chanjar.weixin.mp.bean.template.WxMpTemplateMessage;
 import org.apache.commons.io.IOUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.multipart.MultipartFile;
@@ -115,6 +116,9 @@ public class WxMpController {
     private KefuMsgSubscribeService kefuMsgSubscribeService;
     @Autowired
     private ThreadPoolTaskExecutor taskExecutor;
+    @Autowired
+    @Qualifier("wxDailyVoteQuestionExecutor")
+    private ThreadPoolTaskExecutor dailyVoteQuestionExecutor;
 
     /**
      * 微信公众号接口认证
@@ -185,68 +189,22 @@ public class WxMpController {
         if (mpInfo == null || !Objects.equals(mpInfo.getOriginal(), message.getToUser())) {
             return "";
         }
-        String clientId = mpInfo.getClientId();
+        // “我要做题”必须在微信回调连接仍存活时完成确认；取题、用户初始化和客服投递
+        // 都由专用后台队列继续执行。这样外部回调的传输窗口不会丢掉已接收的用户指令。
+        if (isDailyVoteQuestionCommand(message)) {
+            dispatchDailyVoteQuestion(wxMpService, appid, mpInfo.getClientId(), message, messageKey);
+            return toXml(dailyVoteReply(message, "正在为你准备题目，将继续发送到本会话。"), timing);
+        }
+
         long identityStage = timing.startStage();
         MpUserEntity mpUser;
         try {
-            mpUser = mpUserService.findByAppIdAndOpenId(appid, message.getFromUser());
-            if (mpUser == null) {
-                //初始化用户信息
-                WxMpUser wxMpUser = wxMpService.getUserService()
-                        .userInfoList(Collections.singletonList(message.getFromUser())).get(0);
-                MpUserEntity params = new MpUserEntity();
-                params.setAppid(appid);
-                params.setClientId(clientId);
-                params.setOpenId(wxMpUser.getOpenId());
-//			params.setCountry(wxMpUser.getCountry());
-//			params.setProvince(wxMpUser.getProvince());
-//			params.setCity(wxMpUser.getCity());
-//			params.setSex(wxMpUser.getSex());
-                params.setNickname(wxMpUser.getNickname());
-                params.setSubscribe(1);
-                params.setHeadImgUrl(wxMpUser.getHeadImgUrl());
-                mpUser = mpUserService.create(params);
-            }
-            if (mpUser.getJiacn() == null || mpUser.getJiacn().isBlank()) {
-                throw new IllegalStateException("WeChat user identity is incomplete");
-            }
+            mpUser = resolveMpUser(wxMpService, appid, mpInfo.getClientId(), message.getFromUser());
         } finally {
             timing.identity(identityStage);
         }
         String userKey = WxDailyVoteKeys.userKey(appid, mpUser.getJiacn());
-        // 活跃标记是非关键缓存，故障不得阻断已验签消息。
-        long activeRedisStage = timing.startStage();
-        try {
-            redisService.set("active_mp_user_" + mpUser.getOpenId(), "Y", Duration.ofDays(2));
-        } catch (RuntimeException e) {
-            log.warn("Wx active marker update failed: appid={}, type={}, trace={}, error={}",
-                    appid, message.getMsgType(), WxDailyVoteKeys.trace(messageKey),
-                    e.getClass().getSimpleName());
-        } finally {
-            timing.redis(activeRedisStage);
-        }
-        // A request for a question is a command, never an answer to a stale cached question.
-        // It must run before the generic text-answer path below.
-        if ("我要做题".equals(message.getContent())) {
-            WxMpXmlOutTextMessage outMessage = new WxMpXmlOutTextMessage();
-            outMessage.setCreateTime(message.getCreateTime());
-            outMessage.setFromUserName(message.getToUser());
-            outMessage.setToUserName(message.getFromUser());
-
-            MatVoteQuestionVO question = voteService.findOneQuestion(mpUser.getJiacn());
-            if (question == null) {
-                outMessage.setContent("你超级厉害，所有题都被你做完了！");
-            } else {
-                StringBuilder content = new StringBuilder();
-                content.append(question.getTitle()).append("\n\n");
-                for (MatVoteItemEntity item : question.getItems()) {
-                    content.append(item.getOpt()).append(" ").append(item.getContent()).append("\n");
-                }
-                outMessage.setContent(content.toString());
-                redisService.set("vote_" + mpUser.getJiacn(), String.valueOf(question.getId()), 2L, TimeUnit.HOURS);
-            }
-            return toXml(outMessage, timing);
-        }
+        updateActiveMpUser(mpUser, appid, message.getMsgType(), messageKey);
         if (WxConsts.XmlMsgType.TEXT.equalsIgnoreCase(message.getMsgType())
                 && "TD".equalsIgnoreCase(message.getContent())) {
             WxMpXmlOutTextMessage outMessage = new WxMpXmlOutTextMessage();
@@ -544,6 +502,96 @@ public class WxMpController {
         }
     }
 
+
+    private boolean isDailyVoteQuestionCommand(WxMpXmlMessage message) {
+        return WxConsts.XmlMsgType.TEXT.equalsIgnoreCase(message.getMsgType())
+                && message.getContent() != null
+                && "我要做题".equals(message.getContent().trim());
+    }
+
+    private void dispatchDailyVoteQuestion(WxMpService wxMpService, String appid, String clientId,
+                                           WxMpXmlMessage message, String messageKey) {
+        try {
+            dailyVoteQuestionExecutor.execute(() -> deliverDailyVoteQuestion(
+                    wxMpService, appid, clientId, message, messageKey));
+        } catch (RuntimeException e) {
+            // The callback is already acknowledged so WeChat will not lose the command. A rejected
+            // executor is an operational fault, never a reason to run database/network work on this thread.
+            log.error("Daily-vote question delivery dispatch failed: appid={}, trace={}, error={}",
+                    appid, WxDailyVoteKeys.trace(messageKey), e.getClass().getSimpleName());
+        }
+    }
+
+    private void deliverDailyVoteQuestion(WxMpService wxMpService, String appid, String clientId,
+                                          WxMpXmlMessage message, String messageKey) {
+        try {
+            MpUserEntity mpUser = resolveMpUser(wxMpService, appid, clientId, message.getFromUser());
+            updateActiveMpUser(mpUser, appid, message.getMsgType(), messageKey);
+
+            MatVoteQuestionVO question = voteService.findOneQuestion(mpUser.getJiacn());
+            String content = question == null ? "你超级厉害，所有题都被你做完了！" : dailyVoteQuestionContent(question);
+
+            WxMpKefuMessage kefuMessage = new WxMpKefuMessage();
+            kefuMessage.setToUser(message.getFromUser());
+            kefuMessage.setMsgType(WxConsts.KefuMsgType.TEXT);
+            kefuMessage.setContent(content);
+            boolean sent = wxMpService.getKefuService().sendKefuMessage(kefuMessage);
+            if (!sent) {
+                log.warn("Daily-vote question delivery was not accepted: appid={}, trace={}",
+                        appid, WxDailyVoteKeys.trace(messageKey));
+                return;
+            }
+
+            // Only expose an answer pointer after WeChat accepted the question for delivery.
+            if (question != null) {
+                redisService.set("vote_" + mpUser.getJiacn(), String.valueOf(question.getId()),
+                        2L, TimeUnit.HOURS);
+            }
+            log.info("Daily-vote question delivered: appid={}, questionId={}, trace={}",
+                    appid, question == null ? "none" : question.getId(), WxDailyVoteKeys.trace(messageKey));
+        } catch (Exception e) {
+            log.error("Daily-vote question delivery failed: appid={}, trace={}, error={}",
+                    appid, WxDailyVoteKeys.trace(messageKey), e.getClass().getSimpleName());
+        }
+    }
+
+    private String dailyVoteQuestionContent(MatVoteQuestionVO question) {
+        StringBuilder content = new StringBuilder(question.getTitle()).append("\n\n");
+        for (MatVoteItemEntity item : question.getItems()) {
+            content.append(item.getOpt()).append(" ").append(item.getContent()).append("\n");
+        }
+        return content.toString();
+    }
+
+    private MpUserEntity resolveMpUser(WxMpService wxMpService, String appid, String clientId, String openId) {
+        MpUserEntity mpUser = mpUserService.findByAppIdAndOpenId(appid, openId);
+        if (mpUser == null) {
+            WxMpUser wxMpUser = wxMpService.getUserService()
+                    .userInfoList(Collections.singletonList(openId)).get(0);
+            MpUserEntity params = new MpUserEntity();
+            params.setAppid(appid);
+            params.setClientId(clientId);
+            params.setOpenId(wxMpUser.getOpenId());
+            params.setNickname(wxMpUser.getNickname());
+            params.setSubscribe(1);
+            params.setHeadImgUrl(wxMpUser.getHeadImgUrl());
+            mpUser = mpUserService.create(params);
+        }
+        if (mpUser == null || mpUser.getJiacn() == null || mpUser.getJiacn().isBlank()) {
+            throw new IllegalStateException("WeChat user identity is incomplete");
+        }
+        return mpUser;
+    }
+
+    private void updateActiveMpUser(MpUserEntity mpUser, String appid, String messageType, String messageKey) {
+        // 活跃标记是非关键缓存，故障不得阻断已验签消息或题目投递。
+        try {
+            redisService.set("active_mp_user_" + mpUser.getOpenId(), "Y", Duration.ofDays(2));
+        } catch (RuntimeException e) {
+            log.warn("Wx active marker update failed: appid={}, type={}, trace={}, error={}",
+                    appid, messageType, WxDailyVoteKeys.trace(messageKey), e.getClass().getSimpleName());
+        }
+    }
 
     private Optional<WxDailyVoteAnswerResult> findDailyVoteReplay(
             WxDailyVoteReplayQuery query, WxCallbackTiming timing) {
