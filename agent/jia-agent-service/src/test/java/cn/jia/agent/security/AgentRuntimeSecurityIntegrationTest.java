@@ -391,6 +391,22 @@ class AgentRuntimeSecurityIntegrationTest {
         } finally { cn.jia.core.context.EsContextHolder.clearContext(); }
     }
 
+    @Test void runtimeV1ClientLaneIsPostOnlyAndExcludesScopedInstallationAdministration() {
+        var servletContext = new MockServletContext();
+        for (String path : List.of("/agent/runtime/v1/enroll", "/agent/runtime/v1/session",
+                "/agent/runtime/v1/heartbeat", "/agent/runtime/v1/commands/message-1/acks")) {
+            assertTrue(AgentRuntimeSecurityConfiguration.selectsRuntimeV1ClientLane(
+                    post(path).buildRequest(servletContext)));
+            assertFalse(AgentRuntimeSecurityConfiguration.selectsRuntimeV1ClientLane(
+                    get(path).buildRequest(servletContext)));
+        }
+        for (String path : List.of("/agent/runtime/v1/installations", "/agent/runtime/v1/installations/id-1/revoke",
+                "/agent/runtime/v1/commands/message-1/acks/extra", "/agent/runtime/v1/commands//acks")) {
+            assertFalse(AgentRuntimeSecurityConfiguration.selectsRuntimeV1ClientLane(
+                    post(path).buildRequest(servletContext)));
+        }
+    }
+
     @Test void selectorClaimsRuntimeCredentialsButNotTheEstablishedApiKeyWebSocketAgentHeader() throws Exception {
         var servletContext = new MockServletContext();
         assertFalse(AgentRuntimeAuthenticationFilter.selectsRuntimeCredentialLane(
