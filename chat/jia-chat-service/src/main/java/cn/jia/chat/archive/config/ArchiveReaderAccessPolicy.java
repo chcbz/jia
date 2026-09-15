@@ -1,58 +1,44 @@
 package cn.jia.chat.archive.config;
 
 import java.nio.charset.StandardCharsets;
-import java.util.LinkedHashSet;
 import java.util.Objects;
-import java.util.Set;
 
+/**
+ * Archive reading is available to every authenticated caller while the feature is enabled.
+ *
+ * <p>Per-user data isolation is enforced by the server-derived owner scope used by the
+ * {@code /archive/v1/me/**} services. It must not be implemented as a reader-entry allowlist:
+ * doing so turns a rollout setting into an accidental per-user denial.</p>
+ */
 public final class ArchiveReaderAccessPolicy {
     public static final int MAX_SCOPE_UTF8_BYTES = 50;
 
     private final boolean enabled;
-    private final Set<Scope> allowedScopes;
 
-    private ArchiveReaderAccessPolicy(boolean enabled, Set<Scope> allowedScopes) {
+    private ArchiveReaderAccessPolicy(boolean enabled) {
         this.enabled = enabled;
-        this.allowedScopes = Set.copyOf(allowedScopes);
     }
 
     public static ArchiveReaderAccessPolicy from(ArchiveReaderProperties properties) {
         Objects.requireNonNull(properties, "properties");
-        Set<Scope> scopes = new LinkedHashSet<>();
-        for (ArchiveReaderProperties.AllowedScope configured : properties.getAllowedScopes()) {
-            if (configured == null) {
-                throw invalid("null scope");
-            }
-            String tenantId = requireScopeValue(configured.getTenantId(), "tenant-id");
-            String clientId = requireScopeValue(configured.getClientId(), "client-id");
-            if (!scopes.add(new Scope(tenantId, clientId))) {
-                throw invalid("duplicate scope");
-            }
-        }
-        if (properties.isEnabled() && scopes.isEmpty()) {
-            throw invalid("enabled configuration requires at least one allowed scope");
-        }
-        return new ArchiveReaderAccessPolicy(properties.isEnabled(), scopes);
+        return new ArchiveReaderAccessPolicy(properties.isEnabled());
     }
 
     public boolean enabled() {
         return enabled;
     }
 
+    /**
+     * Allows any valid JWT-derived owner/client pair when the archive feature is enabled.
+     * Legacy {@code archive.reader.allowed-scopes[*]} configuration is deliberately not an
+     * authorization condition; keeping it during rollout does not reintroduce per-user gating.
+     */
     public boolean allows(String tenantId, String clientId) {
-        return enabled && validRequestClaim(tenantId) && validRequestClaim(clientId)
-                && allowedScopes.contains(new Scope(tenantId, clientId));
+        return enabled && validRequestClaim(tenantId) && validRequestClaim(clientId);
     }
 
     public static boolean validRequestClaim(String value) {
         return validValue(value);
-    }
-
-    private static String requireScopeValue(String value, String name) {
-        if (!validValue(value)) {
-            throw invalid("invalid " + name);
-        }
-        return value;
     }
 
     private static boolean validValue(String value) {
@@ -60,12 +46,5 @@ public final class ArchiveReaderAccessPolicy {
                 && !value.contains("*")
                 && value.getBytes(StandardCharsets.UTF_8).length <= MAX_SCOPE_UTF8_BYTES
                 && value.chars().noneMatch(Character::isISOControl);
-    }
-
-    private static IllegalStateException invalid(String reason) {
-        return new IllegalStateException("Invalid archive.reader.allowed-scopes: " + reason);
-    }
-
-    private record Scope(String tenantId, String clientId) {
     }
 }

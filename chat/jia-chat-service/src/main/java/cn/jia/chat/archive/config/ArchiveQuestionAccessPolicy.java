@@ -2,7 +2,7 @@ package cn.jia.chat.archive.config;
 
 import java.util.Objects;
 
-/** Independent H05A feature gate layered over the frozen reader owner allowlist. */
+/** Independent H05A feature gate layered over the authenticated reader feature gate. */
 public final class ArchiveQuestionAccessPolicy {
     private final boolean questionEnabled;
     private final ArchiveReaderAccessPolicy readerAccessPolicy;

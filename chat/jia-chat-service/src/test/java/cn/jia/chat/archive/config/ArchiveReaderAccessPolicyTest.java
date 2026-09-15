@@ -5,41 +5,41 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ArchiveReaderAccessPolicyTest {
     @Test
-    void disabledAllowsNoScopesButNeverAuthorizes() {
-        ArchiveReaderProperties properties = new ArchiveReaderProperties();
-        ArchiveReaderAccessPolicy policy = ArchiveReaderAccessPolicy.from(properties);
+    void disabledNeverAuthorizes() {
+        ArchiveReaderAccessPolicy policy = ArchiveReaderAccessPolicy.from(new ArchiveReaderProperties());
         assertFalse(policy.enabled());
         assertFalse(policy.allows("tenant-a", "client-a"));
     }
 
     @Test
-    void enabledRequiresOneExactImmutableScope() {
+    void enabledAllowsEveryValidAuthenticatedOwnerAndClientPair() {
         ArchiveReaderProperties properties = properties(true,
-                scope("tenant-a", "client-a"), scope("tenant-b", "client-b"));
+                scope("tenant-a", "client-a"));
         ArchiveReaderAccessPolicy policy = ArchiveReaderAccessPolicy.from(properties);
+
         assertTrue(policy.allows("tenant-a", "client-a"));
-        assertFalse(policy.allows("tenant-a", "client-b"));
-        properties.getAllowedScopes().getFirst().setTenantId("mutated");
-        assertTrue(policy.allows("tenant-a", "client-a"));
-        assertFalse(policy.allows("mutated", "client-a"));
+        assertTrue(policy.allows("tenant-b", "client-a"));
+        assertTrue(policy.allows("tenant-a", "client-b"));
     }
 
     @Test
-    void startupRejectsEmptyDuplicateWildcardPaddedControlBlankAndOversizeScopes() {
-        assertThrows(IllegalStateException.class, () -> ArchiveReaderAccessPolicy.from(properties(true)));
-        assertThrows(IllegalStateException.class, () -> ArchiveReaderAccessPolicy.from(properties(true,
-                scope("tenant-a", "client-a"), scope("tenant-a", "client-a"))));
-        for (ArchiveReaderProperties.AllowedScope invalid : List.of(
-                scope("*", "client-a"), scope(" tenant-a", "client-a"),
-                scope("tenant-a", "client-a\n"), scope("", "client-a"),
-                scope("x".repeat(51), "client-a"))) {
-            assertThrows(IllegalStateException.class,
-                    () -> ArchiveReaderAccessPolicy.from(properties(true, invalid)));
+    void legacyAllowlistDoesNotBecomePerUserAuthorization() {
+        ArchiveReaderAccessPolicy policy = ArchiveReaderAccessPolicy.from(properties(true,
+                scope("tenant-a", "client-a")));
+
+        assertTrue(policy.allows("tenant-b", "client-b"));
+    }
+
+    @Test
+    void rejectsMalformedOrUnsafeJwtClaims() {
+        ArchiveReaderAccessPolicy policy = ArchiveReaderAccessPolicy.from(properties(true));
+        for (String invalid : List.of("*", " tenant-a", "tenant-a\n", "", "x".repeat(51))) {
+            assertFalse(policy.allows(invalid, "client-a"));
+            assertFalse(policy.allows("tenant-a", invalid));
         }
     }
 

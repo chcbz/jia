@@ -2,9 +2,6 @@ package cn.jia.chat.archive.config;
 
 import org.junit.jupiter.api.Test;
 
-import java.util.ArrayList;
-import java.util.List;
-
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -21,7 +18,7 @@ class ArchiveQuestionAccessPolicyTest {
     }
 
     @Test
-    void questionFlagCannotBypassReaderFeatureOrExactAllowlist() {
+    void questionFlagCannotBypassReaderFeatureAndRequiresValidAuthenticationClaims() {
         ArchiveQuestionProperties properties = new ArchiveQuestionProperties();
         properties.setEnabled(true);
 
@@ -34,19 +31,13 @@ class ArchiveQuestionAccessPolicyTest {
                 properties, readerPolicy(true));
         assertTrue(enabled.enabled());
         assertTrue(enabled.allows("owner-a", "client-a"));
-        assertFalse(enabled.allows("owner-a", "client-b"));
-        assertFalse(enabled.allows("OWNER-A", "client-a"));
+        assertTrue(enabled.allows("owner-a", "client-b"));
+        assertFalse(enabled.allows("owner-a", "client-a\n"));
     }
 
     private ArchiveReaderAccessPolicy readerPolicy(boolean enabled) {
         ArchiveReaderProperties properties = new ArchiveReaderProperties();
         properties.setEnabled(enabled);
-        if (enabled) {
-            ArchiveReaderProperties.AllowedScope scope = new ArchiveReaderProperties.AllowedScope();
-            scope.setTenantId("owner-a");
-            scope.setClientId("client-a");
-            properties.setAllowedScopes(new ArrayList<>(List.of(scope)));
-        }
         return ArchiveReaderAccessPolicy.from(properties);
     }
 }
