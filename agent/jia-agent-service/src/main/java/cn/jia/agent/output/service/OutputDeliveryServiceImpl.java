@@ -9,6 +9,7 @@ import cn.jia.agent.output.OutputRunAuthorizationService;
 import cn.jia.agent.output.OutputTicketAuthorization;
 import cn.jia.agent.output.OutputVersionProvider;
 import cn.jia.agent.output.dao.OutputUploadDao;
+import cn.jia.agent.output.dao.TaskDeliveryDao;
 import cn.jia.agent.output.dto.OutputCapabilitiesDTO;
 import cn.jia.agent.output.dto.OutputDetailDTO;
 import cn.jia.agent.output.dto.OutputDownloadDTO;
@@ -63,6 +64,7 @@ public final class OutputDeliveryServiceImpl implements OutputDeliveryService {
     private final OutputObjectStorage storage;
     private final TransactionTemplate tx;
     private final Map<String, OutputVersionProvider> providers;
+    private final TaskDeliveryDao deliveryDao;
     private final boolean writesPaused;
     private final byte[] cursorKey;
 
@@ -70,6 +72,13 @@ public final class OutputDeliveryServiceImpl implements OutputDeliveryService {
             OutputUploadDao dao, OutputObjectStorage storage,
             PlatformTransactionManager transactionManager, OutputDeliveryProperties properties,
             List<OutputVersionProvider> providers) {
+        this(authorization, dao, storage, transactionManager, properties, providers, null);
+    }
+
+    public OutputDeliveryServiceImpl(OutputRunAuthorizationService authorization,
+            OutputUploadDao dao, OutputObjectStorage storage,
+            PlatformTransactionManager transactionManager, OutputDeliveryProperties properties,
+            List<OutputVersionProvider> providers, TaskDeliveryDao deliveryDao) {
         this.authorization = Objects.requireNonNull(authorization);
         this.dao = Objects.requireNonNull(dao);
         this.storage = Objects.requireNonNull(storage);
@@ -81,6 +90,7 @@ public final class OutputDeliveryServiceImpl implements OutputDeliveryService {
                 throw new IllegalStateException("Duplicate output version provider " + provider.sourceType());
         }
         this.providers = Map.copyOf(mapped);
+        this.deliveryDao = deliveryDao;
         String configured = properties.cursorSigningKey();
         if (configured == null) configured = properties.storageSecretKey();
         if (configured == null) {
@@ -263,7 +273,8 @@ public final class OutputDeliveryServiceImpl implements OutputDeliveryService {
             OutputVersionProvider p = provider(sourceType);
             p.requireOwner(tenantId, clientId, jiacn, sourceId, false);
             OutputVersionProvider.PublishRow row = requireReadable(
-                    p.findVersion(tenantId, clientId, sourceId, outputId, numeric), sourceType);
+                    p.findVersion(tenantId, clientId, sourceId, outputId, numeric),
+                    sourceType, tenantId, clientId, sourceId, outputId, numeric);
             if (row.retainUntil() <= System.currentTimeMillis()) throw gone();
             if (row.objectId() == null) return new ReadPlan(row, null, null);
             OutputUploadDao.ObjectRow object = requireReadyObject(tenantId, clientId, row, true);
@@ -337,10 +348,25 @@ public final class OutputDeliveryServiceImpl implements OutputDeliveryService {
     }
 
     private OutputVersionProvider.PublishRow requireReadable(OutputVersionProvider.PublishRow row,
-            String sourceType) {
+            String sourceType, String tenantId, String clientId, String sourceId,
+            String outputId, long version) {
         if (row == null) throw hidden();
-        if (OutputConstants.SOURCE_TASK.equals(sourceType) && row.ownerSharedAt() == null) throw hidden();
+        if (OutputConstants.SOURCE_TASK.equals(sourceType) && row.ownerSharedAt() == null) {
+            if (deliveryDao == null || !deliveryDao.containsTaskItem(
+                    tenantId, clientId, sourceId, outputId, version)) throw hidden();
+            return deliveryRow(row);
+        }
         return row;
+    }
+
+    private static OutputVersionProvider.PublishRow deliveryRow(
+            OutputVersionProvider.PublishRow row) {
+        return new OutputVersionProvider.PublishRow(
+                row.tenantId(), row.clientId(), row.sourceId(), row.outputId(), row.version(),
+                row.runId(), row.producerAgentId(), row.title(), row.fileName(),
+                row.artifactType(), row.content(), row.objectId(), row.contentHash(),
+                row.contentByteLength(), row.mimeType(), "DELIVERY", row.visibility(),
+                row.workItemId(), row.ownerSharedAt(), row.retainUntil(), row.createdAt());
     }
 
     private Material material(OutputTicketAuthorization auth, OutputPublishDTO request) {

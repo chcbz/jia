@@ -103,6 +103,67 @@ public final class TaskDeliveryDaoImpl implements TaskDeliveryDao {
                 tenantId, clientId, deliveryId);
     }
 
+    @Override
+    public List<DeliveryRow> listTaskDeliveries(
+            String tenantId, String clientId, String taskId, long snapshotAt,
+            Long afterSubmittedAt, String afterDeliveryId, int limit) {
+        requireScope(tenantId, clientId);
+        requireId(taskId, "taskId", 400);
+        if (snapshotAt <= 0 || limit < 1 || limit > 101
+                || (afterSubmittedAt == null) != (afterDeliveryId == null)) {
+            throw new IllegalArgumentException("delivery page boundary is invalid");
+        }
+        if (afterSubmittedAt != null) {
+            if (afterSubmittedAt <= 0 || afterSubmittedAt > snapshotAt) {
+                throw new IllegalArgumentException("delivery page time is invalid");
+            }
+            requireId(afterDeliveryId, "afterDeliveryId", 100);
+        }
+        String boundary = afterSubmittedAt == null ? "" : """
+                  AND (submitted_at<? OR (submitted_at=?
+                       AND CAST(delivery_id AS BINARY)<CAST(? AS BINARY)))
+                """;
+        Object[] arguments = afterSubmittedAt == null
+                ? new Object[] { tenantId, clientId, taskId, snapshotAt, limit }
+                : new Object[] { tenantId, clientId, taskId, snapshotAt,
+                        afterSubmittedAt, afterSubmittedAt, afterDeliveryId, limit };
+        return jdbc.query("""
+                SELECT * FROM task_delivery
+                WHERE tenant_id=? AND client_id=? AND task_id=? AND submitted_at<=?
+                """ + boundary + """
+                ORDER BY submitted_at DESC,CAST(delivery_id AS BINARY) DESC LIMIT ?
+                """, DELIVERY, arguments);
+    }
+
+    @Override
+    public boolean containsTaskItem(
+            String tenantId, String clientId, String taskId,
+            String artifactId, long artifactVersion) {
+        requireScope(tenantId, clientId);
+        requireId(taskId, "taskId", 400);
+        requireId(artifactId, "artifactId", 400);
+        if (artifactVersion <= 0) {
+            throw new IllegalArgumentException("artifactVersion must be positive");
+        }
+        Integer count = jdbc.queryForObject("""
+                SELECT COUNT(*)
+                FROM task_delivery d
+                JOIN task_delivery_item i
+                  ON i.tenant_id=d.tenant_id AND i.client_id=d.client_id
+                 AND i.delivery_id=d.delivery_id
+                JOIN agent_task_artifact a
+                  ON a.tenant_id=d.tenant_id AND a.client_id=d.client_id
+                 AND a.task_id=d.task_id AND a.artifact_id=i.artifact_id
+                 AND a.artifact_version=i.artifact_version
+                WHERE d.tenant_id=? AND d.client_id=? AND d.task_id=?
+                  AND i.artifact_id=? AND i.artifact_version=?
+                  AND UPPER(a.content_hash)=HEX(i.content_hash)
+                  AND a.object_id <=> i.object_id
+                """, Integer.class, tenantId, clientId, taskId,
+                artifactId, artifactVersion);
+        return count != null && count > 0;
+    }
+
     private static void requireDelivery(DeliveryRow row, long now) {
         if (row == null) throw new IllegalArgumentException("delivery is required");
         requireScope(row.tenantId(), row.clientId());

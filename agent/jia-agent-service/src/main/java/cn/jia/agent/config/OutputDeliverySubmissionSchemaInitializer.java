@@ -110,6 +110,23 @@ public final class OutputDeliverySubmissionSchemaInitializer implements Initiali
         requireMetadata(table, "columns", expected.columns(), columns);
         requireMetadata(table, "indexes", expected.indexes(), indexes);
         requireMetadata(table, "checks", expected.checks(), checks);
+        List<String> foreignKeys = jdbc.queryForList("""
+                SELECT CONCAT(constraint_name,'|',ordinal_position,'|',column_name,'|',
+                  referenced_table_name,'|',referenced_column_name)
+                FROM information_schema.key_column_usage
+                WHERE table_schema=DATABASE() AND table_name=?
+                  AND referenced_table_name IS NOT NULL
+                ORDER BY constraint_name,ordinal_position
+                """, String.class, table);
+        requireMetadata(table, "foreign keys", List.of(), foreignKeys);
+        List<String> triggers = jdbc.queryForList("""
+                SELECT CONCAT(trigger_name,'|',action_timing,'|',event_manipulation,'|',
+                  action_orientation,'|',action_statement)
+                FROM information_schema.triggers
+                WHERE trigger_schema=DATABASE() AND event_object_table=?
+                ORDER BY trigger_name
+                """, String.class, table);
+        requireMetadata(table, "triggers", List.of(), triggers);
         String engine = jdbc.queryForObject("SELECT engine FROM information_schema.tables "
                 + "WHERE table_schema=DATABASE() AND table_name=?", String.class, table);
         String collation = jdbc.queryForObject("SELECT table_collation FROM information_schema.tables "

@@ -94,6 +94,32 @@ class OutputDeliverySubmissionSchemaInitializerMySqlTest {
                 String.class));
     }
 
+    @Test
+    void extraForeignKeysAndTriggersFailClosed() throws Exception {
+        JdbcTemplate jdbc = newDatabase("objects");
+        for (String ddl : OutputDeliverySubmissionSchemaInitializer.ddlStatements()) {
+            jdbc.execute(ddl);
+        }
+        jdbc.execute("""
+                ALTER TABLE task_delivery_review ADD CONSTRAINT fk_task_delivery_review_delivery
+                FOREIGN KEY (tenant_id,client_id,delivery_id)
+                REFERENCES task_delivery (tenant_id,client_id,delivery_id)
+                """);
+        IllegalStateException foreignKey = assertThrows(IllegalStateException.class,
+                () -> new OutputDeliverySubmissionSchemaInitializer(jdbc).afterPropertiesSet());
+        assertTrue(foreignKey.getMessage().contains("foreign keys"), foreignKey.getMessage());
+
+        jdbc.execute("ALTER TABLE task_delivery_review "
+                + "DROP FOREIGN KEY fk_task_delivery_review_delivery");
+        jdbc.execute("""
+                CREATE TRIGGER trg_task_delivery_touch BEFORE UPDATE ON task_delivery
+                FOR EACH ROW SET NEW.updated_at=OLD.updated_at
+                """);
+        IllegalStateException trigger = assertThrows(IllegalStateException.class,
+                () -> new OutputDeliverySubmissionSchemaInitializer(jdbc).afterPropertiesSet());
+        assertTrue(trigger.getMessage().contains("triggers"), trigger.getMessage());
+    }
+
     private JdbcTemplate newDatabase(String suffix) {
         String database = "cyf_m003b_" + suffix + "_"
                 + UUID.randomUUID().toString().replace("-", "").substring(0, 10);

@@ -7,6 +7,7 @@ import cn.jia.agent.output.OutputUploadService;
 import cn.jia.agent.output.OutputDeliveryService;
 import cn.jia.agent.output.OutputVersionProvider;
 import cn.jia.agent.output.dao.OutputUploadDao;
+import cn.jia.agent.output.dao.TaskDeliveryDao;
 import cn.jia.agent.output.dao.impl.OutputUploadDaoImpl;
 import cn.jia.agent.output.service.ClamAvOutputMalwareScanner;
 import cn.jia.agent.output.service.OutputUploadServiceImpl;
@@ -32,8 +33,9 @@ public class OutputUploadConfiguration {
     @Bean public OutputUploadService outputUploadService(OutputRunAuthorizationService auth,OutputUploadDao dao,OutputObjectStorage storage,OutputMalwareScanner scanner,PlatformTransactionManager tx,OutputDeliveryProperties p){return new OutputUploadServiceImpl(auth,dao,storage,scanner,tx,p);}
     @Bean public OutputDeliveryService outputDeliveryService(OutputRunAuthorizationService auth,
             OutputUploadDao dao, OutputObjectStorage storage, PlatformTransactionManager tx,
-            OutputDeliveryProperties p, List<OutputVersionProvider> providers){
-        return new OutputDeliveryServiceImpl(auth,dao,storage,tx,p,providers);
+            OutputDeliveryProperties p, List<OutputVersionProvider> providers,
+            TaskDeliveryDao deliveryDao){
+        return new OutputDeliveryServiceImpl(auth,dao,storage,tx,p,providers,deliveryDao);
     }
     @Bean public OutputUploadRecoveryScheduler outputUploadRecoveryScheduler(OutputUploadService service){return new OutputUploadRecoveryScheduler(service);}
 }

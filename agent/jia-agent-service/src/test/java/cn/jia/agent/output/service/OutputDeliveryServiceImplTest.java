@@ -9,6 +9,7 @@ import cn.jia.agent.output.OutputRunAuthorizationService;
 import cn.jia.agent.output.OutputTicketAuthorization;
 import cn.jia.agent.output.OutputVersionProvider;
 import cn.jia.agent.output.dao.OutputUploadDao;
+import cn.jia.agent.output.dao.TaskDeliveryDao;
 import cn.jia.agent.output.dao.impl.OutputUploadDaoImpl;
 import cn.jia.agent.output.dto.OutputPublishDTO;
 import org.junit.jupiter.api.BeforeEach;
@@ -129,6 +130,28 @@ class OutputDeliveryServiceImplTest {
                 "owner","client","owner","TASK","task-1","private-1","1")).status());
         assertEquals(404,assertThrows(OutputDeliveryException.class,()->service.list(
                 "other","client","other","TASK","task-1",null,20)).status());
+    }
+
+    @Test void exactFormalDeliveryItemGrantsOwnerReadWithoutOwnerShare() throws Exception {
+        service.publish(BEARER,"publish-key-delivery-1","TASK","task-1",
+                request("delivered-private","1",false,"Delivered title",null,"formal result"));
+        TaskDeliveryDao deliveries=mock(TaskDeliveryDao.class);
+        when(deliveries.containsTaskItem(
+                "owner","client","task-1","delivered-private",1L)).thenReturn(true);
+        OutputDeliveryServiceImpl formal=new OutputDeliveryServiceImpl(auth,dao,
+                new MemoryStorage(),new DataSourceTransactionManager(jdbc.getDataSource()),
+                properties(false),List.of(provider),deliveries);
+
+        var detail=formal.getVersion("owner","client","owner","TASK","task-1",
+                "delivered-private","1");
+        assertEquals("DELIVERY",detail.item().publicationKind());
+        assertEquals("formal result",detail.content());
+        try(InputStream input=formal.downloadVersion("owner","client","owner","TASK","task-1",
+                "delivered-private","1").stream()){
+            assertArrayEquals("formal result".getBytes(StandardCharsets.UTF_8),input.readAllBytes());
+        }
+        assertEquals(404,assertThrows(OutputDeliveryException.class,()->formal.getVersion(
+                "owner","client","owner","TASK","task-1","other-private","1")).status());
     }
 
     @Test void idempotencyConflictPredecessorConflictAndWritePauseFailClosed() {

@@ -47,6 +47,7 @@ public class OutputReadSecurityConfiguration {
         if (!"GET".equals(request.getMethod())) return false;
         String path = request.getRequestURI();
         return "/agent/output-capabilities".equals(path)
+                || path.matches("/agent/tasks/[^/]+/deliveries")
                 || path.matches("/agent/tasks/[^/]+/artifacts(?:/[^/]+/versions(?:/[^/]+(?:/download)?)?)?")
                 || path.matches("/chat/conversations/[^/]+/outputs(?:/[^/]+/versions(?:/[^/]+(?:/download)?)?)?");
     }

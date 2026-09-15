@@ -28,4 +28,12 @@ public interface TaskDeliveryDao {
 
     List<ItemRow> listItems(
             String tenantId, String clientId, String deliveryId, boolean forUpdate);
+
+    List<DeliveryRow> listTaskDeliveries(
+            String tenantId, String clientId, String taskId, long snapshotAt,
+            Long afterSubmittedAt, String afterDeliveryId, int limit);
+
+    boolean containsTaskItem(
+            String tenantId, String clientId, String taskId,
+            String artifactId, long artifactVersion);
 }
