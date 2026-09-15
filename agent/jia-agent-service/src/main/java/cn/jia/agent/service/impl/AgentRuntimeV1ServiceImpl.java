@@ -26,7 +26,6 @@ import java.security.SecureRandom;
 import java.util.HexFormat;
 import java.util.Objects;
 import java.util.Set;
-import java.util.UUID;
 import java.util.regex.Pattern;
 
 /** Runtime v1 boundary. It stores enrollment and runtime credentials as SHA-256 digests only. */
@@ -34,6 +33,9 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
     private static final Pattern SHA_256 = Pattern.compile("[0-9a-f]{64}");
+    // The controlled installer generates this opaque id before hashing its manifest.
+    // Server-side generation would make the installationId/manifestSha256 binding circular.
+    private static final Pattern INSTALLATION_ID = Pattern.compile("rti_[0-9a-f]{32}");
     private static final Set<String> ACK_STATUSES = Set.of(
             "RECEIVED", "STARTED", "SUCCEEDED", "FAILED", "REJECTED");
     private static final SecureRandom RANDOM = new SecureRandom();
@@ -47,7 +49,7 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
     public AgentRuntimeV1InstallationView create(String tenantId, String clientId, String ownerJiacn,
             AgentRuntimeV1InstallationRequest request, long now) {
         requireScope(tenantId, clientId);
-        if (request == null || !exact(request.canonicalAgentId(), 100)
+        if (request == null || !installationId(request.installationId()) || !exact(request.canonicalAgentId(), 100)
                 || !exact(request.manifestVersion(), 100) || !sha256Text(request.manifestSha256())
                 || !sha256Text(request.enrollmentSecretSha256()) || request.enrollmentExpiresAt() <= now) {
             throw forbidden("Runtime v1 installation request is invalid");
@@ -55,7 +57,7 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
         String canonicalAgentId = identityService.requireCanonicalAgentIdInScope(
                 tenantId, clientId, ownerJiacn, request.canonicalAgentId());
         AgentRuntimeV1InstallationEntity installation = new AgentRuntimeV1InstallationEntity()
-                .setInstallationId("rti_" + UUID.randomUUID().toString().replace("-", ""))
+                .setInstallationId(request.installationId())
                 .setCanonicalAgentId(canonicalAgentId).setManifestVersion(request.manifestVersion())
                 .setManifestSha256(request.manifestSha256()).setEnrollmentSecretHash(hexDigest(request.enrollmentSecretSha256()))
                 .setEnrollmentExpiresAt(request.enrollmentExpiresAt()).setStatus("PENDING").setVersion(0L);
@@ -194,6 +196,9 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
                 e.getCanonicalAgentId(), e.getManifestVersion(), e.getManifestSha256(),
                 e.getEnrollmentExpiresAt() == null ? 0 : e.getEnrollmentExpiresAt(),
                 status == null ? e.getStatus() : status, e.getLastHeartbeatAt());
+    }
+    private static boolean installationId(String input) {
+        return input != null && INSTALLATION_ID.matcher(input).matches();
     }
     private static boolean sha256Text(String input) { return input != null && SHA_256.matcher(input).matches(); }
     private static byte[] hexDigest(String input) { return HexFormat.of().parseHex(input); }

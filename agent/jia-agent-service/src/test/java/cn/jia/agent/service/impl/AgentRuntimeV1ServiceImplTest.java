@@ -43,14 +43,22 @@ class AgentRuntimeV1ServiceImplTest {
         });
         String digest = "a".repeat(64);
         var view = service.create("tenant-a", "client-a", "owner-a",
-                new AgentRuntimeV1InstallationRequest(AGENT, "1", digest, digest, NOW + 1), NOW);
+                new AgentRuntimeV1InstallationRequest("rti_0123456789abcdef0123456789abcdef", AGENT, "1", digest, digest, NOW + 1), NOW);
         assertEquals("PENDING", view.status());
+        assertEquals("rti_0123456789abcdef0123456789abcdef", view.installationId());
         assertNull(view.lastHeartbeatAt());
         var captor = org.mockito.ArgumentCaptor.forClass(AgentRuntimeV1InstallationEntity.class);
         verify(installations).insert(captor.capture());
         AgentRuntimeV1InstallationEntity persisted = captor.getValue();
         assertArrayEquals(java.util.HexFormat.of().parseHex(digest), persisted.getEnrollmentSecretHash());
         assertNull(persisted.getRuntimeAuthorizationHash());
+    }
+
+    @Test void rejectsInstallationIdThatCannotBeBoundIntoTheManifest() {
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.create("tenant-a", "client-a", "owner-a",
+                new AgentRuntimeV1InstallationRequest("rti-not-opaque", AGENT, "1", "a".repeat(64),
+                        "b".repeat(64), NOW + 1), NOW));
+        verifyNoInteractions(identities, installations);
     }
 
     @Test void existingDirectLegacyCanonicalIdentityCanUseOnlyTheV1Protocol() {
@@ -63,7 +71,7 @@ class AgentRuntimeV1ServiceImplTest {
         });
 
         var view = service.create("tenant-a", "client-a", "owner-a",
-                new AgentRuntimeV1InstallationRequest(legacyCanonical, "1", "a".repeat(64),
+                new AgentRuntimeV1InstallationRequest("rti_abcdefabcdefabcdefabcdefabcdefab", legacyCanonical, "1", "a".repeat(64),
                         "b".repeat(64), NOW + 1), NOW);
 
         assertEquals(legacyCanonical, view.canonicalAgentId());
