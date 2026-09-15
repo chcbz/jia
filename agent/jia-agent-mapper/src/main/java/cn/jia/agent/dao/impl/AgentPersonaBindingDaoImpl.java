@@ -44,6 +44,14 @@ public class AgentPersonaBindingDaoImpl extends BaseDaoImpl<AgentPersonaBindingM
     }
 
     @Override
+    public List<AgentPersonaBindingEntity> findExactActiveByScopeAndOwner(
+            String tenantId, String clientId, String ownerJiacn) {
+        requirePersonaOwnerScope(tenantId, clientId, ownerJiacn);
+        return baseMapper.findExactActiveByScopeAndOwner(
+                tenantId, clientId, ownerJiacn, AgentConstants.BINDING_STATUS_ACTIVE);
+    }
+
+    @Override
     public AgentPersonaBindingEntity findExactActiveByScopeAndPersonaForUpdate(
             String tenantId, String clientId, String ownerJiacn, String personaCode) {
         requirePersonaScope(tenantId, clientId, ownerJiacn, personaCode);

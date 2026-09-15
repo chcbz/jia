@@ -209,6 +209,30 @@ public interface AgentPersonaBindingMapper extends BaseMapper<AgentPersonaBindin
     @Select("""
             SELECT *
             FROM agent_persona_binding
+            WHERE tenant_id = #{tenantId}
+              AND client_id = #{clientId}
+              AND owner_jiacn = #{ownerJiacn}
+              AND jiacn = #{ownerJiacn}
+              AND status = #{activeStatus}
+              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+              AND OCTET_LENGTH(owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
+              AND CAST(jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+              AND OCTET_LENGTH(jiacn) = OCTET_LENGTH(#{ownerJiacn})
+            ORDER BY agent_id ASC
+            """)
+    List<AgentPersonaBindingEntity> findExactActiveByScopeAndOwner(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
+            @Param("activeStatus") int activeStatus);
+
+    @Select("""
+            SELECT *
+            FROM agent_persona_binding
             WHERE client_id = #{clientId}
               AND jiacn = #{jiacn}
               AND agent_id = #{agentId}

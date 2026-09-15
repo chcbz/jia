@@ -17,6 +17,10 @@ public interface AgentPersonaBindingDao extends IBaseDao<AgentPersonaBindingEnti
     List<AgentPersonaCatalogBindingRow> findCatalogOverlay(
             String tenantId, String clientId, String ownerJiacn);
 
+    /** Active bindings owned by an authenticated user in one exact tenant/client scope. */
+    List<AgentPersonaBindingEntity> findExactActiveByScopeAndOwner(
+            String tenantId, String clientId, String ownerJiacn);
+
     AgentPersonaBindingEntity findExactActiveByScopeAndPersonaForUpdate(
             String tenantId, String clientId, String ownerJiacn, String personaCode);
 
