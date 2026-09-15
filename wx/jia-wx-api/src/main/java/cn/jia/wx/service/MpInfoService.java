@@ -11,4 +11,10 @@ public interface MpInfoService extends IBaseService<MpInfoEntity> {
     WxMpService findWxMpService(String key);
 
     MpInfoEntity findByKey(String key);
+
+    /**
+     * Returns a public-account record already loaded while resolving its callback service.
+     * Callback callers use this to avoid a second database lookup in WeChat's synchronous reply path.
+     */
+    MpInfoEntity findCachedByKey(String key);
 }

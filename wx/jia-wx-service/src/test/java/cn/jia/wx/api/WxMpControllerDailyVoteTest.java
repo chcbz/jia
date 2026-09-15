@@ -1,6 +1,9 @@
 package cn.jia.wx.api;
 
 import cn.jia.core.redis.RedisService;
+import cn.jia.mat.entity.MatVoteItemEntity;
+import cn.jia.mat.entity.MatVoteQuestionVO;
+import cn.jia.mat.service.MatVoteService;
 import cn.jia.test.BaseMockTest;
 import cn.jia.wx.dailyvote.WxDailyVoteAnswerResult;
 import cn.jia.wx.entity.MpInfoEntity;
@@ -41,6 +44,7 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
     private MpUserService mpUserService;
     private RedisService redisService;
     private WxDailyVoteService dailyVoteService;
+    private MatVoteService voteService;
     private ThreadPoolTaskExecutor taskExecutor;
     private WxMpService wxMpService;
     private HttpServletRequest request;
@@ -52,6 +56,7 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
         mpUserService = mock(MpUserService.class);
         redisService = mock(RedisService.class);
         dailyVoteService = mock(WxDailyVoteService.class);
+        voteService = mock(MatVoteService.class);
         taskExecutor = mock(ThreadPoolTaskExecutor.class);
         wxMpService = mock(WxMpService.class, RETURNS_DEEP_STUBS);
         request = mock(HttpServletRequest.class);
@@ -60,6 +65,7 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
         ReflectionTestUtils.setField(controller, "mpUserService", mpUserService);
         ReflectionTestUtils.setField(controller, "redisService", redisService);
         ReflectionTestUtils.setField(controller, "dailyVoteService", dailyVoteService);
+        ReflectionTestUtils.setField(controller, "voteService", voteService);
         ReflectionTestUtils.setField(controller, "taskExecutor", taskExecutor);
 
         when(mpInfoService.findWxMpService(request)).thenReturn(wxMpService);
@@ -74,8 +80,10 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
     }
 
     private void stubAccountAndIdentity() {
-        when(mpInfoService.findByKey(APPID)).thenReturn(new MpInfoEntity()
-                .setAppid(APPID).setOriginal(ORIGINAL).setClientId("client-1").setName("公众号"));
+        MpInfoEntity account = new MpInfoEntity()
+                .setAppid(APPID).setOriginal(ORIGINAL).setClientId("client-1").setName("公众号");
+        when(mpInfoService.findCachedByKey(APPID)).thenReturn(account);
+        when(mpInfoService.findByKey(APPID)).thenReturn(account);
         when(mpUserService.findByAppIdAndOpenId(APPID, OPENID)).thenReturn(new MpUserEntity()
                 .setAppid(APPID).setOpenId(OPENID).setJiacn("user-1"));
     }
@@ -94,6 +102,30 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
         assertEquals("", response);
         verify(mpInfoService, never()).findByKey(anyString());
         verifyNoInteractions(mpUserService, dailyVoteService, redisService);
+    }
+
+    @Test
+    void questionCommandBypassesAStaleAnswerPointerAndReturnsTheQuestion() throws Exception {
+        stubValidDailyVoteRequest();
+        MatVoteQuestionVO question = new MatVoteQuestionVO();
+        question.setId(337L);
+        question.setTitle("水浒第一题");
+        MatVoteItemEntity item = new MatVoteItemEntity();
+        item.setOpt("A");
+        item.setContent("及时雨宋江");
+        question.setItems(java.util.List.of(item));
+        when(voteService.findOneQuestion("user-1")).thenReturn(question);
+        when(redisService.get("vote_user-1")).thenReturn("336");
+
+        String questionXml = XML.replace("<![CDATA[A]]>", "<![CDATA[我要做题]]>");
+        String response = (String) controller.receiveMsg(questionXml, request);
+
+        assertTrue(response.contains("水浒第一题"));
+        assertTrue(response.contains("A 及时雨宋江"));
+        verify(voteService).findOneQuestion("user-1");
+        verify(redisService).set("vote_user-1", "337", 2L, java.util.concurrent.TimeUnit.HOURS);
+        verify(redisService, never()).get("vote_user-1");
+        verifyNoInteractions(dailyVoteService);
     }
 
     @Test

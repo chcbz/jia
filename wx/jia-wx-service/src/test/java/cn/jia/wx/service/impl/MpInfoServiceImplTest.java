@@ -41,6 +41,19 @@ class MpInfoServiceImplTest extends BaseMockTest {
     }
 
     @Test
+    void initCachesThePublicAccountRecordForCallbackUse() {
+        MpInfoEntity mpInfoEntity = new MpInfoEntity();
+        mpInfoEntity.setAppid("appid");
+        mpInfoEntity.setOriginal("gh_appid");
+        when(mpInfoDao.selectAll()).thenReturn(List.of(mpInfoEntity));
+
+        mpInfoService.init();
+
+        assertSame(mpInfoEntity, mpInfoService.findCachedByKey("appid"));
+        assertSame(mpInfoEntity, mpInfoService.findCachedByKey("gh_appid"));
+    }
+
+    @Test
     void installsCustomBuilderOnlyForExplicitPositiveTimeout() {
         ReflectionTestUtils.setField(mpInfoService, "connectTimeoutMillis", 7001);
         MpInfoEntity mpInfoEntity = new MpInfoEntity();

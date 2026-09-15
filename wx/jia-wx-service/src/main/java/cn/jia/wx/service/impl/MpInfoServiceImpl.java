@@ -15,13 +15,14 @@ import me.chanjar.weixin.mp.config.impl.WxMpMapConfigImpl;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class MpInfoServiceImpl extends BaseServiceImpl<MpInfoDao, MpInfoEntity> implements MpInfoService {
-	private final Map<String, WxMpService> wxMpServiceMap = new HashMap<>(16);
+	private final Map<String, WxMpService> wxMpServiceMap = new ConcurrentHashMap<>(16);
+	private final Map<String, MpInfoEntity> mpInfoMap = new ConcurrentHashMap<>(16);
 
 	@Value("${wx.external-http.connection-request-timeout-ms:0}")
 	private int connectionRequestTimeoutMillis;
@@ -37,9 +38,7 @@ public class MpInfoServiceImpl extends BaseServiceImpl<MpInfoDao, MpInfoEntity> 
 	public void init() {
 		List<MpInfoEntity> mpInfoList = baseDao.selectAll();
 		for(MpInfoEntity mp : mpInfoList) {
-			WxMpService wxMpService = createWxMpService(mp);
-			wxMpServiceMap.put(mp.getAppid(), wxMpService);
-			wxMpServiceMap.put(mp.getOriginal(), wxMpService);
+			cache(mp);
 		}
 	}
 	
@@ -59,17 +58,35 @@ public class MpInfoServiceImpl extends BaseServiceImpl<MpInfoDao, MpInfoEntity> 
 		}
 		WxMpService wxMpService = wxMpServiceMap.get(key);
 		if(wxMpService == null) {
-			MpInfoEntity info = findByKey(key);
-			if(info != null) {
-				wxMpService = createWxMpService(info);
-				wxMpServiceMap.put(info.getAppid(), wxMpService);
-				wxMpServiceMap.put(info.getOriginal(), wxMpService);
-			}
+			loadAndCache(key);
+			wxMpService = wxMpServiceMap.get(key);
 		}
 		if(wxMpService == null) {
 			throw new EsRuntimeException(WxErrorConstants.WXMP_NOT_EXIST);
 		}
 		return wxMpService;
+	}
+
+	private synchronized void loadAndCache(String key) {
+		if (wxMpServiceMap.containsKey(key)) {
+			return;
+		}
+		MpInfoEntity info = findByKey(key);
+		if (info != null) {
+			cache(info);
+		}
+	}
+
+	private void cache(MpInfoEntity info) {
+		if (info == null || StringUtil.isEmpty(info.getAppid())) {
+			return;
+		}
+		WxMpService wxMpService = wxMpServiceMap.computeIfAbsent(info.getAppid(), ignored -> createWxMpService(info));
+		mpInfoMap.put(info.getAppid(), info);
+		if (!StringUtil.isEmpty(info.getOriginal())) {
+			wxMpServiceMap.put(info.getOriginal(), wxMpService);
+			mpInfoMap.put(info.getOriginal(), info);
+		}
 	}
 
 	private WxMpService createWxMpService(MpInfoEntity info) {
@@ -90,5 +107,10 @@ public class MpInfoServiceImpl extends BaseServiceImpl<MpInfoDao, MpInfoEntity> 
 	@Override
 	public MpInfoEntity findByKey(String key) {
 		return baseDao.findByKey(key);
+	}
+
+	@Override
+	public MpInfoEntity findCachedByKey(String key) {
+		return mpInfoMap.get(key);
 	}
 }

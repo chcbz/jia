@@ -176,7 +176,12 @@ public class WxMpController {
         timing.messageType(message.getMsgType());
         String messageKey = WxDailyVoteKeys.messageKey(appid, message);
         timing.trace(WxDailyVoteKeys.trace(messageKey));
-        MpInfoEntity mpInfo = mpInfoService.findByKey(appid);
+        MpInfoEntity mpInfo = mpInfoService.findCachedByKey(appid);
+        if (mpInfo == null) {
+            // The callback service normally loads this record into its local cache. Keep the
+            // fallback for a custom implementation that does not expose that cache.
+            mpInfo = mpInfoService.findByKey(appid);
+        }
         if (mpInfo == null || !Objects.equals(mpInfo.getOriginal(), message.getToUser())) {
             return "";
         }
@@ -219,6 +224,28 @@ public class WxMpController {
                     e.getClass().getSimpleName());
         } finally {
             timing.redis(activeRedisStage);
+        }
+        // A request for a question is a command, never an answer to a stale cached question.
+        // It must run before the generic text-answer path below.
+        if ("我要做题".equals(message.getContent())) {
+            WxMpXmlOutTextMessage outMessage = new WxMpXmlOutTextMessage();
+            outMessage.setCreateTime(message.getCreateTime());
+            outMessage.setFromUserName(message.getToUser());
+            outMessage.setToUserName(message.getFromUser());
+
+            MatVoteQuestionVO question = voteService.findOneQuestion(mpUser.getJiacn());
+            if (question == null) {
+                outMessage.setContent("你超级厉害，所有题都被你做完了！");
+            } else {
+                StringBuilder content = new StringBuilder();
+                content.append(question.getTitle()).append("\n\n");
+                for (MatVoteItemEntity item : question.getItems()) {
+                    content.append(item.getOpt()).append(" ").append(item.getContent()).append("\n");
+                }
+                outMessage.setContent(content.toString());
+                redisService.set("vote_" + mpUser.getJiacn(), String.valueOf(question.getId()), 2L, TimeUnit.HOURS);
+            }
+            return toXml(outMessage, timing);
         }
         if (WxConsts.XmlMsgType.TEXT.equalsIgnoreCase(message.getMsgType())
                 && "TD".equalsIgnoreCase(message.getContent())) {
@@ -482,27 +509,7 @@ public class WxMpController {
             outMessage.setContent("");
             return toXml(outMessage, timing);
         }
-        //我要做题
-        if ("我要做题".equals(message.getContent())) {
-            WxMpXmlOutTextMessage outMessage = new WxMpXmlOutTextMessage();
-            outMessage.setCreateTime(message.getCreateTime());
-            outMessage.setFromUserName(message.getToUser());
-            outMessage.setToUserName(message.getFromUser());
-
-            MatVoteQuestionVO question = voteService.findOneQuestion(mpUser.getJiacn());
-            if (question == null) {
-                outMessage.setContent("你超级厉害，所有题都被你做完了！");
-            } else {
-                StringBuilder content = new StringBuilder();
-                content.append(question.getTitle()).append("\n\n");
-                for (MatVoteItemEntity item : question.getItems()) {
-                    content.append(item.getOpt()).append(" ").append(item.getContent()).append("\n");
-                }
-                outMessage.setContent(content.toString());
-                redisService.set("vote_" + mpUser.getJiacn(), String.valueOf(question.getId()), 2L, TimeUnit.HOURS);
-            }
-            return toXml(outMessage, timing);
-        } else if ("我的积分".equals(message.getContent())) {
+        if ("我的积分".equals(message.getContent())) {
             WxMpXmlOutTextMessage outMessage = new WxMpXmlOutTextMessage();
             outMessage.setCreateTime(message.getCreateTime());
             outMessage.setFromUserName(message.getToUser());
