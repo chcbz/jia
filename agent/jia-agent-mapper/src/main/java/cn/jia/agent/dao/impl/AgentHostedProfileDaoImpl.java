@@ -62,7 +62,7 @@ public class AgentHostedProfileDaoImpl extends BaseDaoImpl<AgentHostedProfileMap
         requireExact(tenantId, "tenantId");
         requireExact(clientId, "clientId");
         requireExact(ownerJiacn, "ownerJiacn");
-        if ("0".equals(ownerJiacn) || !tenantId.equals(ownerJiacn)) {
+        if (!"0".equals(tenantId) || "0".equals(ownerJiacn)) {
             throw new IllegalArgumentException("hosted owner scope is invalid");
         }
     }
