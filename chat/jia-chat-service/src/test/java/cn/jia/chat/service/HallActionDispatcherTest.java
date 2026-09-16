@@ -164,7 +164,7 @@ class HallActionDispatcherTest extends BaseMockTest {
 
         HallActionDispatchResult result = dispatcher.dispatch(
                 legacyIntent("intent-outside", "agent-target", "task-1"),
-                new HallTrustedCaller("tenant-a", "client-a", null));
+                new HallTrustedCaller("0", "client-a", "tenant-a", null));
 
         assertEquals(HallActionDispatcher.STATUS_DISPATCHED, result.getStatus());
         verify(agentWebSocketHandler).isAgentConnected(
@@ -200,8 +200,7 @@ class HallActionDispatcherTest extends BaseMockTest {
             return new AgentCommandTransportWriteResult(
                     41L, draft.commandId(), "message-1", "event-1", false);
         });
-        HallTrustedCaller caller = new HallTrustedCaller(
-                "tenant-a", "client-a", "caller-agent");
+        HallTrustedCaller caller = new HallTrustedCaller("0", "client-a", "tenant-a", "caller-agent");
 
         HallActionDispatchResult online = dispatcher.dispatch(
                 durableIntent("intent-online", "agent-online", "task-1"), caller);
@@ -228,7 +227,7 @@ class HallActionDispatcherTest extends BaseMockTest {
         intent.setActionType("task_briefing");
         var durable = dispatcher(AgentRabbitActivationState.DISPATCH_CANARY, true);
         assertEquals(HallActionDispatcher.STATUS_FAILED, durable.dispatch(intent,
-                new HallTrustedCaller("tenant-a", "client-a", "caller-agent")).getStatus());
+                new HallTrustedCaller("0", "client-a", "tenant-a", "caller-agent")).getStatus());
         verify(writerProvider, never()).getIfAvailable();
         setScope("tenant-a", "client-a");
         var legacy = dispatcher(AgentRabbitActivationState.OFF, true);
@@ -253,7 +252,7 @@ class HallActionDispatcherTest extends BaseMockTest {
         intent.setInstruction("请阅读任务简报并确认职责");
 
         HallActionDispatchResult result = dispatcher.dispatch(
-                intent, new HallTrustedCaller("tenant-a", "client-a", "caller-agent"));
+                intent, new HallTrustedCaller("0", "client-a", "tenant-a", "caller-agent"));
 
         assertEquals(HallActionDispatcher.STATUS_ACCEPTED, result.getStatus());
         ArgumentCaptor<AgentCommandDraft> draft =
@@ -299,8 +298,7 @@ class HallActionDispatcherTest extends BaseMockTest {
     void transactionalWriterDenialProducesNoAcceptedClaimOrLegacyIo() {
         HallActionDispatcher dispatcher = dispatcher(
                 AgentRabbitActivationState.DISPATCH_CANARY, true);
-        HallTrustedCaller caller = new HallTrustedCaller(
-                "tenant-a", "client-a", "caller-agent");
+        HallTrustedCaller caller = new HallTrustedCaller("0", "client-a", "tenant-a", "caller-agent");
         when(writerProvider.getIfAvailable()).thenReturn(writer);
         when(writer.writeAuthorizedHall(any(), eq("caller-agent")))
                 .thenThrow(new IllegalArgumentException("authorization revoked"));
@@ -320,8 +318,7 @@ class HallActionDispatcherTest extends BaseMockTest {
     void untrustedIdentityListAndNestedContextAreRejectedBeforeAclAndWrite() {
         HallActionDispatcher dispatcher = dispatcher(
                 AgentRabbitActivationState.DISPATCH_CANARY, true);
-        HallTrustedCaller caller = new HallTrustedCaller(
-                "tenant-a", "client-a", "caller-agent");
+        HallTrustedCaller caller = new HallTrustedCaller("0", "client-a", "tenant-a", "caller-agent");
         HallActionIntent identities = durableIntent("intent-identities", "agent-target", "task-1");
         identities.setTargetAgentIds(List.of("agent-other"));
         HallActionIntent nested = durableIntent("intent-nested", "agent-target", "task-1");
@@ -351,7 +348,7 @@ class HallActionDispatcherTest extends BaseMockTest {
 
         HallActionDispatchResult result = dispatcher.dispatch(
                 durableIntent("intent-shadow", "agent-target", "task-1"),
-                new HallTrustedCaller("tenant-a", "client-a", "caller-agent"));
+                new HallTrustedCaller("0", "client-a", "tenant-a", "caller-agent"));
 
         assertEquals(HallActionDispatcher.STATUS_DISPATCHED, result.getStatus());
         assertEquals("dispatched", result.getMessage());
@@ -378,8 +375,7 @@ class HallActionDispatcherTest extends BaseMockTest {
                 "tenant-a", "client-a", "agent-target")).thenReturn(true);
         when(agentWebSocketHandler.sendDirectMessageToAgent(
                 eq("agent-target"), any(Map.class))).thenReturn(true);
-        HallTrustedCaller caller = new HallTrustedCaller(
-                "tenant-a", "client-a", "caller-agent");
+        HallTrustedCaller caller = new HallTrustedCaller("0", "client-a", "tenant-a", "caller-agent");
         HallActionIntent shadow = durableIntent("intent-shadow-cutover", "agent-target", "task-1");
 
         HallActionDispatchResult legacy = dispatcher(
@@ -408,13 +404,13 @@ class HallActionDispatcherTest extends BaseMockTest {
                 AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE,
                 "WAITING_AGENT", 9_999L, 900L, 950L);
         when(durableMailbox.query(
-                "tenant-a", "client-a", "caller-agent", "agent-target", "task-1",
+                "0", "client-a", "tenant-a", "caller-agent", "agent-target", "task-1",
                 null, null, 25, false))
                 .thenReturn(new AgentCommandMailboxPage(List.of(entry), 900L, 9L));
 
         Object raw = dispatcher.mailbox(
                 "agent-target", "task-1", null, 25, false,
-                new HallTrustedCaller("tenant-a", "client-a", "caller-agent"));
+                new HallTrustedCaller("0", "client-a", "tenant-a", "caller-agent"));
 
         HallDurableMailboxPage page = assertInstanceOf(HallDurableMailboxPage.class, raw);
         assertEquals(1, page.items().size());
@@ -423,7 +419,7 @@ class HallActionDispatcherTest extends BaseMockTest {
         assertNotNull(page.nextCursor());
         assertFalse(page.terminalIncluded());
         verify(durableMailbox).query(
-                "tenant-a", "client-a", "caller-agent", "agent-target", "task-1",
+                "0", "client-a", "tenant-a", "caller-agent", "agent-target", "task-1",
                 null, null, 25, false);
     }
 
@@ -436,7 +432,7 @@ class HallActionDispatcherTest extends BaseMockTest {
                 dispatcher.mailbox("agent-target", null, null, 50, false, null));
         HallDurableMailboxPage forged = assertInstanceOf(HallDurableMailboxPage.class,
                 dispatcher.mailbox("agent-target", "task-1", null, 50, false,
-                        new HallTrustedCaller("tenant-a", "client-a", null)));
+                        new HallTrustedCaller("0", "client-a", "tenant-a", null)));
 
         assertTrue(missing.items().isEmpty());
         assertTrue(forged.items().isEmpty());
@@ -449,17 +445,16 @@ class HallActionDispatcherTest extends BaseMockTest {
         HallActionDispatcher dispatcher = dispatcher(
                 AgentRabbitActivationState.DISPATCH_CANARY, true);
         when(mailboxProvider.getIfAvailable()).thenReturn(durableMailbox);
-        when(durableMailbox.query(any(), any(), any(), any(), any(),
+        when(durableMailbox.query(any(), any(), any(), any(), any(), any(),
                 any(), any(), eq(50), eq(false)))
                 .thenThrow(new AgentCommandMailboxAccessDeniedException());
 
         HallDurableMailboxPage page = assertInstanceOf(HallDurableMailboxPage.class,
                 dispatcher.mailbox("agent-target", "task-1", null, 50, false,
-                        new HallTrustedCaller(
-                                "tenant-a", "client-a", "caller-agent")));
+                        new HallTrustedCaller("0", "client-a", "tenant-a", "caller-agent")));
 
         assertTrue(page.items().isEmpty());
-        verify(durableMailbox).query(any(), any(), any(), any(), any(),
+        verify(durableMailbox).query(any(), any(), any(), any(), any(), any(),
                 any(), any(), eq(50), eq(false));
     }
 
@@ -468,7 +463,7 @@ class HallActionDispatcherTest extends BaseMockTest {
         HallActionDispatcher dispatcher = dispatcher(
                 AgentRabbitActivationState.DISPATCH_CANARY, true);
         when(mailboxProvider.getIfAvailable()).thenReturn(durableMailbox);
-        when(durableMailbox.query(any(), any(), any(), any(), any(),
+        when(durableMailbox.query(any(), any(), any(), any(), any(), any(),
                 any(), any(), eq(50), eq(false)))
                 .thenThrow(new DataAccessResourceFailureException(
                         "membership database unavailable"));
@@ -476,11 +471,10 @@ class HallActionDispatcherTest extends BaseMockTest {
         DataAccessResourceFailureException failure = assertThrows(
                 DataAccessResourceFailureException.class, () ->
                         dispatcher.mailbox("agent-target", "task-1", null, 50, false,
-                                new HallTrustedCaller(
-                                        "tenant-a", "client-a", "caller-agent")));
+                                new HallTrustedCaller("0", "client-a", "tenant-a", "caller-agent")));
 
         assertEquals("membership database unavailable", failure.getMessage());
-        verify(durableMailbox).query(any(), any(), any(), any(), any(),
+        verify(durableMailbox).query(any(), any(), any(), any(), any(), any(),
                 any(), any(), eq(50), eq(false));
     }
 
@@ -488,8 +482,7 @@ class HallActionDispatcherTest extends BaseMockTest {
     void malformedMailboxTargetTaskCursorAndLimitRemainExplicitErrors() {
         HallActionDispatcher dispatcher = dispatcher(
                 AgentRabbitActivationState.DISPATCH_CANARY, true);
-        HallTrustedCaller caller = new HallTrustedCaller(
-                "tenant-a", "client-a", "caller-agent");
+        HallTrustedCaller caller = new HallTrustedCaller("0", "client-a", "tenant-a", "caller-agent");
 
         assertThrows(IllegalArgumentException.class, () -> dispatcher.mailbox(
                 " agent-target", "task-1", null, 50, false, caller));
@@ -513,8 +506,7 @@ class HallActionDispatcherTest extends BaseMockTest {
 
         IllegalStateException failure = assertThrows(IllegalStateException.class, () ->
                 dispatcher.mailbox("agent-target", "task-1", null, 50, false,
-                        new HallTrustedCaller(
-                                "tenant-a", "client-a", "caller-agent")));
+                        new HallTrustedCaller("0", "client-a", "tenant-a", "caller-agent")));
 
         assertEquals("provider infrastructure unavailable", failure.getMessage());
     }
@@ -524,15 +516,14 @@ class HallActionDispatcherTest extends BaseMockTest {
         HallActionDispatcher dispatcher = dispatcher(
                 AgentRabbitActivationState.DISPATCH_CANARY, true);
         when(mailboxProvider.getIfAvailable()).thenReturn(durableMailbox);
-        when(durableMailbox.query(any(), any(), any(), any(), any(),
+        when(durableMailbox.query(any(), any(), any(), any(), any(), any(),
                 any(), any(), eq(50), eq(false)))
                 .thenThrow(new DataAccessResourceFailureException("mysql unavailable"));
 
         DataAccessResourceFailureException failure = assertThrows(
                 DataAccessResourceFailureException.class, () ->
                         dispatcher.mailbox("agent-target", "task-1", null, 50, false,
-                                new HallTrustedCaller(
-                                        "tenant-a", "client-a", "caller-agent")));
+                                new HallTrustedCaller("0", "client-a", "tenant-a", "caller-agent")));
 
         assertEquals("mysql unavailable", failure.getMessage());
     }
@@ -585,7 +576,7 @@ class HallActionDispatcherTest extends BaseMockTest {
         AgentRabbitDispatchScopeProperties scopes = dispatch
                 ? new AgentRabbitDispatchScopeProperties(List.of(
                         new AgentRabbitDispatchScopeProperties.AllowedScope(
-                                scopeAllowed ? "tenant-a" : "tenant-other", "client-a")))
+                                scopeAllowed ? "0" : "tenant-other", "client-a")))
                 : null;
         return new AgentRabbitSafetyGate(properties, scopes);
     }

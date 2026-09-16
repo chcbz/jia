@@ -7,6 +7,7 @@ public interface AgentCommandMailboxService {
     AgentCommandMailboxPage query(
             String tenantId,
             String clientId,
+            String ownerJiacn,
             String callerAgentId,
             String targetAgentId,
             String taskId,

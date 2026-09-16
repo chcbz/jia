@@ -39,8 +39,7 @@ class JuyitingActionControllerTest extends BaseMockTest {
     void dispatchesWithJwtScopeAndSeparatelyNominatedCaller() {
         HallActionIntent request = new HallActionIntent();
         request.setActorAgentId("agent-target");
-        HallTrustedCaller trusted = new HallTrustedCaller(
-                "tenant-a", "client-a", "agent-caller");
+        HallTrustedCaller trusted = new HallTrustedCaller("0", "client-a", "tenant-a", "agent-caller");
         when(dispatcher.dispatch(request, trusted)).thenReturn(
                 new HallActionDispatchResult(
                         "intent-1", "agent-target", "accepted", "accepted for durable delivery"));
@@ -61,7 +60,7 @@ class JuyitingActionControllerTest extends BaseMockTest {
         HallActionIntent request = new HallActionIntent();
         request.setActorAgentId("forged-body-actor");
         when(dispatcher.dispatch(request,
-                new HallTrustedCaller("tenant-a", "client-a", null)))
+                new HallTrustedCaller("0", "client-a", "tenant-a", null)))
                 .thenReturn(new HallActionDispatchResult(
                         "intent-2", "forged-body-actor", "failed",
                         "request is not authorized or valid"));
@@ -71,7 +70,7 @@ class JuyitingActionControllerTest extends BaseMockTest {
                 "intent-2", null, request, jwt("tenant-a", "client-a"));
 
         verify(dispatcher).dispatch(request,
-                new HallTrustedCaller("tenant-a", "client-a", null));
+                new HallTrustedCaller("0", "client-a", "tenant-a", null));
         assertEquals("failed", result.getData().getStatus());
     }
 
@@ -109,8 +108,7 @@ class JuyitingActionControllerTest extends BaseMockTest {
     @Test
     void listsDurableMailboxWithTrustedScopeAndBoundedQueryParameters() {
         HallDurableMailboxPage page = new HallDurableMailboxPage(List.of(), null, false);
-        HallTrustedCaller trusted = new HallTrustedCaller(
-                "tenant-a", "client-a", "agent-caller");
+        HallTrustedCaller trusted = new HallTrustedCaller("0", "client-a", "tenant-a", "agent-caller");
         when(dispatcher.mailbox(
                 "agent-target", "task-1", "cursor-1", 25, false, trusted))
                 .thenReturn(page);

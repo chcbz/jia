@@ -158,15 +158,18 @@ public interface AgentCommandTransportMapper {
                    d.update_time AS updateTime
             FROM agent_command_delivery d
             INNER JOIN agent_task_meta t
-              ON t.tenant_id=d.tenant_id AND t.client_id=d.client_id AND t.task_id=d.task_id
+              ON t.tenant_id=d.tenant_id AND t.client_id=d.client_id
+             AND t.owner_jiacn=d.owner_jiacn AND t.task_id=d.task_id
              AND CAST(t.tenant_id AS BINARY)=CAST(d.tenant_id AS BINARY)
              AND CAST(t.client_id AS BINARY)=CAST(d.client_id AS BINARY)
+             AND CAST(t.owner_jiacn AS BINARY)=CAST(d.owner_jiacn AS BINARY)
              AND CAST(t.task_id AS BINARY)=CAST(d.task_id AS BINARY)
             INNER JOIN agent_task_member caller
               ON caller.tenant_id=d.tenant_id AND caller.client_id=d.client_id
-             AND caller.task_id=d.task_id AND caller.agent_id=#{callerAgentId}
+             AND caller.owner_jiacn=d.owner_jiacn AND caller.task_id=d.task_id AND caller.agent_id=#{callerAgentId}
              AND CAST(caller.tenant_id AS BINARY)=CAST(d.tenant_id AS BINARY)
              AND CAST(caller.client_id AS BINARY)=CAST(d.client_id AS BINARY)
+             AND CAST(caller.owner_jiacn AS BINARY)=CAST(d.owner_jiacn AS BINARY)
              AND CAST(caller.task_id AS BINARY)=CAST(d.task_id AS BINARY)
              AND CAST(caller.agent_id AS BINARY)=CAST(#{callerAgentId} AS BINARY)
              AND ((CAST(caller.member_status AS BINARY)=CAST('accepted' AS BINARY)
@@ -193,9 +196,10 @@ public interface AgentCommandTransportMapper {
                    AND OCTET_LENGTH(caller.assignment_source)=OCTET_LENGTH('legacy')))
             INNER JOIN agent_task_member target
               ON target.tenant_id=d.tenant_id AND target.client_id=d.client_id
-             AND target.task_id=d.task_id AND target.agent_id=d.target_agent_id
+             AND target.owner_jiacn=d.owner_jiacn AND target.task_id=d.task_id AND target.agent_id=d.target_agent_id
              AND CAST(target.tenant_id AS BINARY)=CAST(d.tenant_id AS BINARY)
              AND CAST(target.client_id AS BINARY)=CAST(d.client_id AS BINARY)
+             AND CAST(target.owner_jiacn AS BINARY)=CAST(d.owner_jiacn AS BINARY)
              AND CAST(target.task_id AS BINARY)=CAST(d.task_id AS BINARY)
              AND CAST(target.agent_id AS BINARY)=CAST(d.target_agent_id AS BINARY)
              AND ((CAST(target.member_status AS BINARY)=CAST('accepted' AS BINARY)
@@ -220,12 +224,14 @@ public interface AgentCommandTransportMapper {
                    AND OCTET_LENGTH(target.assignment_source)=OCTET_LENGTH('migration'))
                OR (CAST(target.assignment_source AS BINARY)=CAST('legacy' AS BINARY)
                    AND OCTET_LENGTH(target.assignment_source)=OCTET_LENGTH('legacy')))
-            WHERE d.tenant_id=#{tenantId} AND d.client_id=#{clientId}
+            WHERE d.tenant_id='0' AND d.client_id=#{clientId} AND d.owner_jiacn=#{ownerJiacn}
               AND d.target_agent_id=#{targetAgentId}
               AND CAST(d.tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(d.tenant_id)=OCTET_LENGTH(#{tenantId})
               AND CAST(d.client_id AS BINARY)=CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(d.client_id)=OCTET_LENGTH(#{clientId})
+              AND CAST(d.owner_jiacn AS BINARY)=CAST(#{ownerJiacn} AS BINARY)
+              AND OCTET_LENGTH(d.owner_jiacn)=OCTET_LENGTH(#{ownerJiacn})
               AND CAST(d.target_agent_id AS BINARY)=CAST(#{targetAgentId} AS BINARY)
               AND OCTET_LENGTH(d.target_agent_id)=OCTET_LENGTH(#{targetAgentId})
               AND (#{taskId} IS NULL OR (
@@ -268,6 +274,7 @@ public interface AgentCommandTransportMapper {
     List<AgentCommandMailboxRow> selectMailboxPage(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("callerAgentId") String callerAgentId,
             @Param("targetAgentId") String targetAgentId,
             @Param("taskId") String taskId,

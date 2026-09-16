@@ -185,7 +185,7 @@ public class HallActionDispatcher {
         try {
             page = query.query(
                     trustedCaller.tenantId(), trustedCaller.clientId(),
-                    trustedCaller.callerAgentId(), agentId, taskId,
+                    trustedCaller.ownerJiacn(), trustedCaller.callerAgentId(), agentId, taskId,
                     request.cursor() == null ? null : request.cursor().createTime(),
                     request.cursor() == null ? null : request.cursor().id(),
                     limit, includeTerminal);
@@ -262,15 +262,15 @@ public class HallActionDispatcher {
         long expiresAt = Math.addExact(issuedAt,
                 AgentCommandCanonicalCodec.HALL_COMMAND_TTL_MILLIS);
         String commandId = AgentCommandCanonicalCodec.hallCommandId(
-                trustedCaller.tenantId(), trustedCaller.clientId(), intent.getTaskId(),
-                intent.getActorAgentId(), intent.getIntentId(), commandType);
+                trustedCaller.tenantId(), trustedCaller.clientId(), trustedCaller.ownerJiacn(),
+                intent.getTaskId(), intent.getActorAgentId(), intent.getIntentId(), commandType);
         AgentCommandDraft draft = new AgentCommandDraft(
                 AgentCommandCanonicalCodec.SCHEMA_VERSION,
                 commandId, intent.getTaskId(),
                 intent.getTriggerEventId() == null
                         ? intent.getIntentId() : intent.getTriggerEventId(),
-                trustedCaller.tenantId(), trustedCaller.clientId(), intent.getTaskId(),
-                intent.getWorkItemId(), intent.getActorAgentId(), commandType,
+                trustedCaller.tenantId(), trustedCaller.clientId(), trustedCaller.ownerJiacn(),
+                intent.getTaskId(), intent.getWorkItemId(), intent.getActorAgentId(), commandType,
                 issuedAt, expiresAt, intent.getIntentId(), payload);
         // Canonical validation, payload allowlist and identity checks all run before persistence.
         AgentCommandCanonicalCodec.businessBytes(draft);
@@ -287,8 +287,11 @@ public class HallActionDispatcher {
 
     private void requireTrustedScope(HallTrustedCaller caller) {
         if (caller == null) throw new IllegalArgumentException("authenticated scope is required");
-        requireExact(caller.tenantId(), "tenantId", 50);
+        if (!"0".equals(caller.tenantId())) {
+            throw new IllegalArgumentException("tenantId must be 0");
+        }
         requireExact(caller.clientId(), "clientId", 50);
+        requireExact(caller.ownerJiacn(), "ownerJiacn", 50);
     }
 
     private HallActionDispatchResult rejected(HallActionIntent intent) {

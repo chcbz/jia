@@ -70,7 +70,8 @@ import static org.mockito.Mockito.when;
 /** D08 durable Hall producer/query/restart/reissue evidence on an isolated MySQL 8.0.21 instance. */
 @EnabledIfEnvironmentVariable(named = "D08_MYSQL_URL", matches = ".+")
 class AgentHallMailboxMySqlRestartTest {
-    private static final String TENANT = "tenant-a";
+    private static final String TENANT = "0";
+    private static final String OWNER = "owner-a";
     private static final String CLIENT = "client-a";
     private static final String TASK = "task-1";
     private static final String CALLER = "agent-caller";
@@ -143,7 +144,7 @@ class AgentHallMailboxMySqlRestartTest {
         AgentCommandMailboxServiceImpl mailbox = mailbox(
                 restarted, ISSUED + 1_000L);
         AgentCommandMailboxPage page = mailbox.query(
-                TENANT, CLIENT, CALLER, TARGET, TASK, null, null, 10, false);
+                TENANT, CLIENT, OWNER, CALLER, TARGET, TASK, null, null, 10, false);
 
         assertEquals(1, page.entries().size());
         assertEquals(original.commandId(), page.entries().getFirst().commandId());
@@ -151,13 +152,13 @@ class AgentHallMailboxMySqlRestartTest {
                 page.entries().getFirst().commandType());
         assertEquals("PENDING", page.entries().getFirst().status());
         assertThrows(AgentCommandMailboxAccessDeniedException.class, () -> mailbox.query(
-                "tenant-other", CLIENT, CALLER, TARGET, TASK,
+                "tenant-other", CLIENT, OWNER, CALLER, TARGET, TASK,
                 null, null, 10, false));
         assertThrows(AgentCommandMailboxAccessDeniedException.class, () -> mailbox.query(
-                TENANT, CLIENT, "agent-other", TARGET, TASK,
+                TENANT, CLIENT, OWNER, "agent-other", TARGET, TASK,
                 null, null, 10, false));
         assertThrows(AgentCommandMailboxAccessDeniedException.class, () -> mailbox.query(
-                TENANT, CLIENT, CALLER, TARGET, "task-other",
+                TENANT, CLIENT, OWNER, CALLER, TARGET, "task-other",
                 null, null, 10, false));
 
         AgentCommandTransportWriteResult duplicate = writer(restarted, ids(M2, E2)).writeAuthorizedHall(
@@ -211,7 +212,7 @@ class AgentHallMailboxMySqlRestartTest {
 
         AgentCommandMailboxPage page = mailbox(
                 restarted, ISSUED + 10_000L).query(
-                TENANT, CLIENT, CALLER, TARGET, TASK, null, null, 10, false);
+                TENANT, CLIENT, OWNER, CALLER, TARGET, TASK, null, null, 10, false);
         assertEquals(1, page.entries().size());
         assertEquals("PENDING", page.entries().getFirst().status());
         assertEquals(draft.commandId(), page.entries().getFirst().commandId());
@@ -232,8 +233,8 @@ class AgentHallMailboxMySqlRestartTest {
                 transaction.executeWithoutResult(status -> {
                     assertEquals(1, revokeContext.jdbc().update("""
                             UPDATE agent_task_member SET member_status='left',update_time=?
-                            WHERE tenant_id=? AND client_id=? AND task_id=? AND agent_id=?
-                            """, ISSUED + 1, TENANT, CLIENT, TASK, TARGET));
+                            WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND task_id=? AND agent_id=?
+                            """, ISSUED + 1, TENANT, CLIENT, OWNER, TASK, TARGET));
                     revokedWhileLocked.countDown();
                     try {
                         if (!allowRevokeCommit.await(5, TimeUnit.SECONDS)) {
@@ -284,8 +285,8 @@ class AgentHallMailboxMySqlRestartTest {
                 transaction.executeWithoutResult(status -> {
                     assertEquals(1, revokeContext.jdbc().update("""
                             UPDATE d08_agent_identity SET identity_status='revoked'
-                            WHERE tenant_id=? AND client_id=? AND agent_id=?
-                            """, TENANT, CLIENT, TARGET));
+                            WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND agent_id=?
+                            """, TENANT, CLIENT, OWNER, TARGET));
                     revokedWhileLocked.countDown();
                     try {
                         if (!allowRevokeCommit.await(5, TimeUnit.SECONDS)) {
@@ -378,8 +379,8 @@ class AgentHallMailboxMySqlRestartTest {
                 transaction.executeWithoutResult(status -> {
                     assertEquals(1, revokeContext.jdbc().update("""
                             UPDATE agent_task_member SET member_status='left',update_time=?
-                            WHERE tenant_id=? AND client_id=? AND task_id=? AND agent_id=?
-                            """, ISSUED + 1, TENANT, CLIENT, TASK, TARGET));
+                            WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND task_id=? AND agent_id=?
+                            """, ISSUED + 1, TENANT, CLIENT, OWNER, TASK, TARGET));
                     revokedWhileLocked.countDown();
                     try {
                         if (!allowRevokeCommit.await(5, TimeUnit.SECONDS)) {
@@ -395,7 +396,7 @@ class AgentHallMailboxMySqlRestartTest {
 
             Future<AgentCommandMailboxPage> attempted = workers.submit(() -> mailbox(
                     queryContext, ISSUED + 1_000L).query(
-                    TENANT, CLIENT, CALLER, TARGET, TASK,
+                    TENANT, CLIENT, OWNER, CALLER, TARGET, TASK,
                     null, null, 10, false));
             Thread.sleep(250);
             assertFalse(attempted.isDone(),
@@ -432,8 +433,8 @@ class AgentHallMailboxMySqlRestartTest {
                 transaction.executeWithoutResult(status -> {
                     assertEquals(1, revokeContext.jdbc().update("""
                             UPDATE d08_agent_identity SET identity_status='revoked'
-                            WHERE tenant_id=? AND client_id=? AND agent_id=?
-                            """, TENANT, CLIENT, TARGET));
+                            WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND agent_id=?
+                            """, TENANT, CLIENT, OWNER, TARGET));
                     revokedWhileLocked.countDown();
                     try {
                         if (!allowRevokeCommit.await(5, TimeUnit.SECONDS)) {
@@ -449,7 +450,7 @@ class AgentHallMailboxMySqlRestartTest {
 
             Future<AgentCommandMailboxPage> attempted = workers.submit(() -> mailbox(
                     queryContext, ISSUED + 1_000L).query(
-                    TENANT, CLIENT, CALLER, TARGET, TASK,
+                    TENANT, CLIENT, OWNER, CALLER, TARGET, TASK,
                     null, null, 10, false));
             Thread.sleep(250);
             assertFalse(attempted.isDone(),
@@ -475,7 +476,7 @@ class AgentHallMailboxMySqlRestartTest {
                 hallDraft(ISSUED, "请回报当前进展、风险和下一步计划"), CALLER);
 
         AgentCommandMailboxPage page = mailbox(firstContext, EXPIRES).query(
-                TENANT, CLIENT, CALLER, TARGET, TASK,
+                TENANT, CLIENT, OWNER, CALLER, TARGET, TASK,
                 null, null, 10, false);
 
         assertTrue(page.entries().isEmpty());
@@ -505,7 +506,7 @@ class AgentHallMailboxMySqlRestartTest {
         RuntimeContext restarted = newContext();
         AgentCommandMailboxPage page = mailbox(
                 restarted, ISSUED + 1_000L).query(
-                TENANT, CLIENT, CALLER, TARGET, TASK, null, null, 10, false);
+                TENANT, CLIENT, OWNER, CALLER, TARGET, TASK, null, null, 10, false);
 
         assertEquals(1, page.entries().size());
         assertEquals(briefing.commandId(), page.entries().getFirst().commandId());
@@ -605,18 +606,19 @@ class AgentHallMailboxMySqlRestartTest {
                 anyString(), anyString(), anyString()))
                 .thenAnswer(invocation -> {
                     String clientId = invocation.getArgument(0);
-                    String tenantId = invocation.getArgument(1);
+                    String ownerJiacn = invocation.getArgument(1);
                     String agentId = invocation.getArgument(2);
                     List<String> identities = context.jdbc().query(
                             """
                             SELECT agent_id FROM d08_agent_identity
-                            WHERE tenant_id=? AND client_id=? AND agent_id=? AND identity_status='active'
-                              AND CAST(tenant_id AS BINARY)=CAST(? AS BINARY)
+                            WHERE tenant_id='0' AND client_id=? AND owner_jiacn=?
+                              AND agent_id=? AND identity_status='active'
                               AND CAST(client_id AS BINARY)=CAST(? AS BINARY)
+                              AND CAST(owner_jiacn AS BINARY)=CAST(? AS BINARY)
                               AND CAST(agent_id AS BINARY)=CAST(? AS BINARY)
                             LIMIT 2 FOR UPDATE
                             """, (row, index) -> row.getString(1),
-                            tenantId, clientId, agentId, tenantId, clientId, agentId);
+                            clientId, ownerJiacn, agentId, clientId, ownerJiacn, agentId);
                     if (!List.of(agentId).equals(identities)) {
                         throw new AgentBizException(
                                 AgentErrorConstants.AGENT_FORBIDDEN,
@@ -625,13 +627,13 @@ class AgentHallMailboxMySqlRestartTest {
                     List<String> statuses = context.jdbc().query(
                             """
                             SELECT runtime_status FROM d08_agent_runtime
-                            WHERE tenant_id=? AND client_id=? AND agent_id=?
-                              AND CAST(tenant_id AS BINARY)=CAST(? AS BINARY)
+                            WHERE tenant_id='0' AND client_id=? AND owner_jiacn=? AND agent_id=?
                               AND CAST(client_id AS BINARY)=CAST(? AS BINARY)
+                              AND CAST(owner_jiacn AS BINARY)=CAST(? AS BINARY)
                               AND CAST(agent_id AS BINARY)=CAST(? AS BINARY)
                             LIMIT 2 FOR UPDATE
                             """, (row, index) -> row.getString(1),
-                            tenantId, clientId, agentId, tenantId, clientId, agentId);
+                            clientId, ownerJiacn, agentId, clientId, ownerJiacn, agentId);
                     if (statuses.size() != 1) {
                         throw new AgentBizException(
                                 AgentErrorConstants.AGENT_NOT_FOUND,
@@ -674,9 +676,10 @@ class AgentHallMailboxMySqlRestartTest {
                   reward_status VARCHAR(20) NOT NULL,
                   tenant_id VARCHAR(50) NOT NULL,
                   client_id VARCHAR(50) NOT NULL,
+                  owner_jiacn VARCHAR(50) NOT NULL,
                   create_time BIGINT, update_time BIGINT,
                   PRIMARY KEY (id),
-                  UNIQUE KEY uk_agent_task_meta_scope (tenant_id,client_id,task_id)
+                  UNIQUE KEY uk_agent_task_meta_scope (tenant_id,client_id,owner_jiacn,task_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
                 """);
         jdbc.execute("""
@@ -689,9 +692,10 @@ class AgentHallMailboxMySqlRestartTest {
                   assignment_source VARCHAR(20) NOT NULL,
                   tenant_id VARCHAR(50) NOT NULL,
                   client_id VARCHAR(50) NOT NULL,
+                  owner_jiacn VARCHAR(50) NOT NULL,
                   create_time BIGINT, update_time BIGINT,
                   PRIMARY KEY (id),
-                  UNIQUE KEY uk_task_member_scope (tenant_id,client_id,task_id,agent_id)
+                  UNIQUE KEY uk_task_member_scope (tenant_id,client_id,owner_jiacn,task_id,agent_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
                 """);
         jdbc.execute("""
@@ -701,8 +705,9 @@ class AgentHallMailboxMySqlRestartTest {
                   identity_status VARCHAR(20) NOT NULL,
                   tenant_id VARCHAR(50) NOT NULL,
                   client_id VARCHAR(50) NOT NULL,
+                  owner_jiacn VARCHAR(50) NOT NULL,
                   PRIMARY KEY (id),
-                  UNIQUE KEY uk_d08_identity_scope (tenant_id,client_id,agent_id)
+                  UNIQUE KEY uk_d08_identity_scope (tenant_id,client_id,owner_jiacn,agent_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
                 """);
         jdbc.execute("""
@@ -712,8 +717,9 @@ class AgentHallMailboxMySqlRestartTest {
                   runtime_status VARCHAR(20) NOT NULL,
                   tenant_id VARCHAR(50) NOT NULL,
                   client_id VARCHAR(50) NOT NULL,
+                  owner_jiacn VARCHAR(50) NOT NULL,
                   PRIMARY KEY (id),
-                  UNIQUE KEY uk_d08_runtime_scope (tenant_id,client_id,agent_id)
+                  UNIQUE KEY uk_d08_runtime_scope (tenant_id,client_id,owner_jiacn,agent_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
                 """);
     }
@@ -721,33 +727,33 @@ class AgentHallMailboxMySqlRestartTest {
     private void insertTaskAcl(JdbcTemplate jdbc) {
         assertEquals(1, jdbc.update("""
                 INSERT INTO agent_task_meta(
-                    task_id,reward_status,tenant_id,client_id,create_time,update_time)
-                VALUES (?,'running',?,?,?,?)
-                """, TASK, TENANT, CLIENT, ISSUED - 1, ISSUED - 1));
+                    task_id,reward_status,tenant_id,client_id,owner_jiacn,create_time,update_time)
+                VALUES (?,'running',?,?,?,?,?)
+                """, TASK, TENANT, CLIENT, OWNER, ISSUED - 1, ISSUED - 1));
         assertEquals(1, jdbc.update("""
                 INSERT INTO agent_task_member(
                     task_id,agent_id,member_role,member_status,assignment_source,
-                    tenant_id,client_id,create_time,update_time)
-                VALUES (?,?,?,'working','manual',?,?,?,?)
-                """, TASK, CALLER, "coordinator", TENANT, CLIENT, ISSUED - 1, ISSUED - 1));
+                    tenant_id,client_id,owner_jiacn,create_time,update_time)
+                VALUES (?,?,?,'working','manual',?,?,?,?,?)
+                """, TASK, CALLER, "coordinator", TENANT, CLIENT, OWNER, ISSUED - 1, ISSUED - 1));
         assertEquals(1, jdbc.update("""
                 INSERT INTO agent_task_member(
                     task_id,agent_id,member_role,member_status,assignment_source,
-                    tenant_id,client_id,create_time,update_time)
-                VALUES (?,?,?,'accepted','auto',?,?,?,?)
-                """, TASK, TARGET, "worker", TENANT, CLIENT, ISSUED - 1, ISSUED - 1));
+                    tenant_id,client_id,owner_jiacn,create_time,update_time)
+                VALUES (?,?,?,'accepted','auto',?,?,?,?,?)
+                """, TASK, TARGET, "worker", TENANT, CLIENT, OWNER, ISSUED - 1, ISSUED - 1));
         for (String agentId : List.of(CALLER, TARGET)) {
             assertEquals(1, jdbc.update("""
                     INSERT INTO d08_agent_identity(
-                        agent_id,identity_status,tenant_id,client_id)
-                    VALUES (?,'active',?,?)
-                    """, agentId, TENANT, CLIENT));
+                        agent_id,identity_status,tenant_id,client_id,owner_jiacn)
+                    VALUES (?,'active',?,?,?)
+                    """, agentId, TENANT, CLIENT, OWNER));
             assertEquals(1, jdbc.update("""
                     INSERT INTO d08_agent_runtime(
-                        agent_id,runtime_status,tenant_id,client_id)
-                    VALUES (?,?,?,?)
+                        agent_id,runtime_status,tenant_id,client_id,owner_jiacn)
+                    VALUES (?,?,?,?,?)
                     """, agentId, TARGET.equals(agentId) ? "offline" : "online",
-                    TENANT, CLIENT));
+                    TENANT, CLIENT, OWNER));
         }
     }
 
@@ -799,10 +805,10 @@ class AgentHallMailboxMySqlRestartTest {
     private AgentCommandDraft hallTaskBriefingDraft(long issuedAt) {
         String commandType = AgentProtocolConstants.COMMAND_TASK_INVITE;
         String commandId = AgentCommandCanonicalCodec.hallCommandId(
-                TENANT, CLIENT, TASK, TARGET, INTENT, commandType);
+                TENANT, CLIENT, OWNER, TASK, TARGET, INTENT, commandType);
         return new AgentCommandDraft(
                 AgentCommandCanonicalCodec.SCHEMA_VERSION, commandId, TASK, INTENT,
-                TENANT, CLIENT, TASK, null, TARGET, commandType, issuedAt,
+                TENANT, CLIENT, OWNER, TASK, null, TARGET, commandType, issuedAt,
                 issuedAt + AgentCommandCanonicalCodec.HALL_COMMAND_TTL_MILLIS, INTENT,
                 new AgentHallCommandPayload(
                         "task_briefing", "请阅读任务简报并确认职责", "juyiting",
@@ -816,10 +822,10 @@ class AgentHallMailboxMySqlRestartTest {
     private AgentCommandDraft hallDraft(long issuedAt, String instruction) {
         String commandType = AgentProtocolConstants.COMMAND_CONTEXT_REFRESH;
         String commandId = AgentCommandCanonicalCodec.hallCommandId(
-                TENANT, CLIENT, TASK, TARGET, INTENT, commandType);
+                TENANT, CLIENT, OWNER, TASK, TARGET, INTENT, commandType);
         return new AgentCommandDraft(
                 AgentCommandCanonicalCodec.SCHEMA_VERSION, commandId, TASK, INTENT,
-                TENANT, CLIENT, TASK, null, TARGET, commandType, issuedAt,
+                TENANT, CLIENT, OWNER, TASK, null, TARGET, commandType, issuedAt,
                 issuedAt + AgentCommandCanonicalCodec.HALL_COMMAND_TTL_MILLIS, INTENT,
                 new AgentHallCommandPayload(
                         "request_report", instruction, "juyiting", "例行进展同步",
