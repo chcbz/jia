@@ -278,7 +278,8 @@ public class AgentTaskFormalDeliveryDecisionServiceImpl implements AgentTaskForm
         view.setProducerAgentId(delivery.getProducerAgentId()); view.setSummary(delivery.getSummary());
         view.setManifestArtifactId(delivery.getManifestArtifactId());
         view.setManifestArtifactVersion(delivery.getManifestArtifactVersion());
-        view.setSubmittedAt(delivery.getSubmittedAt()); view.setTaskVersion(taskVersion);
+        view.setSubmittedAt(delivery.getSubmittedAt()); view.setReviewedAt(delivery.getReviewedAt());
+        view.setReviewReason(delivery.getReviewReason()); view.setTaskVersion(taskVersion);
         view.setWorkItemVersion(workItemVersion); view.setReplayed(replayed); view.setItems(List.copyOf(items));
         return view;
     }

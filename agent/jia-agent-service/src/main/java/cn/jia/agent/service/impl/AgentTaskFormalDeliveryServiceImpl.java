@@ -458,6 +458,8 @@ public class AgentTaskFormalDeliveryServiceImpl implements AgentTaskFormalDelive
         view.setManifestArtifactId(delivery.getManifestArtifactId());
         view.setManifestArtifactVersion(delivery.getManifestArtifactVersion());
         view.setSubmittedAt(delivery.getSubmittedAt());
+        view.setReviewedAt(delivery.getReviewedAt());
+        view.setReviewReason(delivery.getReviewReason());
         view.setTaskVersion(taskVersion);
         view.setReplayed(replayed);
         view.setItems(List.copyOf(items));

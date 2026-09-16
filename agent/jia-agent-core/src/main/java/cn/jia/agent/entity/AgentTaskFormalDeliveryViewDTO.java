@@ -23,6 +23,9 @@ public class AgentTaskFormalDeliveryViewDTO implements Serializable {
     private String manifestArtifactId;
     private Integer manifestArtifactVersion;
     private Long submittedAt;
+    private Long reviewedAt;
+    /** Present only for a changes-requested result; never copied to task events. */
+    private String reviewReason;
     private Long workItemVersion;
     private Long taskVersion;
     private Boolean replayed;

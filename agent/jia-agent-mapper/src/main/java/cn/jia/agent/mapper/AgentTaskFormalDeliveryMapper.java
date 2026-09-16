@@ -85,6 +85,22 @@ public interface AgentTaskFormalDeliveryMapper extends BaseMapper<AgentTaskForma
     int insertDeliveryItem(AgentTaskFormalDeliveryItemEntity entity);
 
     @Select("""
+            SELECT d.* FROM agent_task_formal_delivery d
+             WHERE d.tenant_id=#{tenantId} AND d.client_id=#{clientId} AND d.task_id=#{taskId}
+               AND CAST(d.tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
+               AND OCTET_LENGTH(d.tenant_id)=OCTET_LENGTH(#{tenantId})
+               AND CAST(d.client_id AS BINARY)=CAST(#{clientId} AS BINARY)
+               AND OCTET_LENGTH(d.client_id)=OCTET_LENGTH(#{clientId})
+               AND CAST(d.task_id AS BINARY)=CAST(#{taskId} AS BINARY)
+               AND OCTET_LENGTH(d.task_id)=OCTET_LENGTH(#{taskId})
+             ORDER BY d.revision DESC, d.id DESC
+             LIMIT #{limit}
+            """)
+    List<AgentTaskFormalDeliveryEntity> selectTaskDeliveries(
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("taskId") String taskId, @Param("limit") int limit);
+
+    @Select("""
             SELECT i.* FROM agent_task_formal_delivery_item i
              WHERE i.tenant_id=#{tenantId} AND i.client_id=#{clientId} AND i.delivery_id=#{deliveryId}
                AND CAST(i.tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
