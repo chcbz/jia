@@ -8,6 +8,7 @@ public record AgentCommandDraft(
         String causationId,
         String tenantId,
         String clientId,
+        String ownerJiacn,
         String taskId,
         String workItemId,
         String targetAgentId,
@@ -17,7 +18,7 @@ public record AgentCommandDraft(
         String intentId,
         AgentCommandPayload payload) {
 
-    /** Preserves the frozen D02 constructor and byte encoding. */
+    /** Convenience constructor for commands without an intent identifier. */
     public AgentCommandDraft(
             int schemaVersion,
             String commandId,
@@ -25,6 +26,7 @@ public record AgentCommandDraft(
             String causationId,
             String tenantId,
             String clientId,
+            String ownerJiacn,
             String taskId,
             String workItemId,
             String targetAgentId,
@@ -33,7 +35,7 @@ public record AgentCommandDraft(
             long expiresAt,
             AgentCommandPayload payload) {
         this(schemaVersion, commandId, correlationId, causationId, tenantId, clientId,
-                taskId, workItemId, targetAgentId, commandType, issuedAt, expiresAt,
+                ownerJiacn, taskId, workItemId, targetAgentId, commandType, issuedAt, expiresAt,
                 null, payload);
     }
 }
