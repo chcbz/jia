@@ -280,7 +280,7 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
         }
 
         AgentCommandDraft draft = commandDraft(tenantId, clientId, taskId, workItemId,
-                required, current, reassignmentId, intentId, commandId, eventId, now);
+                required, root, current, reassignmentId, intentId, commandId, eventId, now);
         AgentCommandTransportWriteResult transport = commandWriter.writeAuthorizedHall(
                 draft, required.coordinatorAgentId());
         if (transport == null || transport.duplicate()
@@ -430,12 +430,14 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
 
     private AgentCommandDraft commandDraft(
             String tenantId, String clientId, String taskId, String workItemId,
-            RequiredRequest required, AgentTaskWorkItemEntity current,
+            RequiredRequest required, AgentTaskMetaEntity root, AgentTaskWorkItemEntity current,
             String reassignmentId, String intentId, String commandId, String eventId, long now) {
         String instruction = boundedInstruction(current.getTitle(), current.getDescription());
+        AgentTaskRiskAutonomyPolicy.Decision decision =
+                AgentTaskRiskAutonomyPolicy.expiredLeaseReassignment(root);
         AgentHallCommandPayload payload = new AgentHallCommandPayload(
                 "work_item_execute", instruction, "juyiting", "lease_expired_reassignment",
-                null, eventId, "autonomous", Boolean.FALSE,
+                null, eventId, decision.autonomyLevel(), decision.requiresApproval(),
                 new AgentHallCommandContext(null, current.getTitle(), null, null,
                         Long.toString(current.getVersion() + 1),
                         List.of(required.sourceCommandId()), List.of("lease-expired", "reassignment"),
@@ -456,6 +458,11 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
         }
         if (root.getTaskVersion() != request.expectedTaskVersion()) {
             throw failure(Reason.VERSION_CONFLICT, "Task version changed");
+        }
+        try {
+            AgentTaskRiskAutonomyPolicy.expiredLeaseReassignment(root);
+        } catch (IllegalArgumentException invalid) {
+            throw failure(Reason.INVALID_PERSISTED_STATE, invalid.getMessage(), invalid);
         }
         AgentTaskStatus status;
         try {

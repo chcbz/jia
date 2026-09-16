@@ -49,6 +49,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
@@ -423,6 +424,8 @@ class AgentWorkItemReassignmentServiceTest {
         assertFalse(commandBytes.contains(NEW_TOKEN));
         assertFalse(commandBytes.contains("authoritative_lease_expired"));
         AgentHallCommandPayload payload = (AgentHallCommandPayload) draft.getValue().payload();
+        assertEquals("supervised", payload.autonomyLevel());
+        assertTrue(payload.requiresApproval());
         assertEquals("evt_reassigned", payload.triggerEventId());
         assertEquals(Long.toString(VERSION + 1), payload.context().contextVersion());
         assertEquals(List.of(source.getCommandId()), payload.context().referenceIds());
@@ -441,6 +444,23 @@ class AgentWorkItemReassignmentServiceTest {
                 + inserted.get().getReassignmentId() + "\""));
         assertFalse(wireBytes.contains(NEW_TOKEN));
         assertFalse(wireBytes.contains("Authorization"));
+    }
+
+    @Test
+    void highRiskWithoutReviewBoundaryFailsBeforeAnyReassignmentWrite() {
+        root.setRiskLevel("high").setReviewRequired(false);
+
+        AgentWorkItemReassignmentException failure = assertThrows(
+                AgentWorkItemReassignmentException.class,
+                () -> service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+                        TASK, WORK, "reassign-key-0001", request(TARGET)));
+
+        assertEquals(AgentWorkItemReassignmentException.Reason.INVALID_PERSISTED_STATE,
+                failure.getReason());
+        verify(workItemDao, never()).reassignExpiredLeaseByVersion(
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyLong(), anyLong(), anyLong(), any());
+        verify(commandWriter, never()).writeAuthorizedHall(any(), anyString());
     }
 
     @Test
@@ -800,7 +820,7 @@ class AgentWorkItemReassignmentServiceTest {
 
     private AgentTaskMetaEntity root() {
         AgentTaskMetaEntity value = new AgentTaskMetaEntity()
-                .setTaskId(TASK).setRewardStatus("running")
+                .setTaskId(TASK).setRewardStatus("running").setRiskLevel("low")
                 .setCoordinatorAgentId(COORDINATOR).setTaskVersion(7L)
                 .setCurrentEventVersion(0L);
         value.setTenantId(TENANT);
