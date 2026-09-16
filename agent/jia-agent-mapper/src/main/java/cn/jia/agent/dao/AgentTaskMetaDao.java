@@ -17,8 +17,15 @@ public interface AgentTaskMetaDao extends IBaseDao<AgentTaskMetaEntity> {
 
     AgentTaskMetaEntity findByTaskId(String tenantId, String clientId, String taskId);
 
+    /** Strict task access: tenant is fixed to 0 and the authenticated owner is explicit. */
+    AgentTaskMetaEntity findByTaskIdInOwnerScope(
+            String tenantId, String clientId, String ownerJiacn, String taskId);
+
     int reserveOpenTaskRoot(
             String tenantId, String clientId, String taskId, long createTime);
+
+    int reserveOpenTaskRootInOwnerScope(
+            String tenantId, String clientId, String ownerJiacn, String taskId, long createTime);
 
     int rekeyReservedTaskRoot(
             String tenantId, String clientId, String reservedTaskId,
@@ -29,6 +36,10 @@ public interface AgentTaskMetaDao extends IBaseDao<AgentTaskMetaEntity> {
 
     AgentTaskMetaEntity findByTaskIdForUpdate(
             String tenantId, String clientId, String taskId);
+
+    /** Strict task mutation lock: owner is part of the SQL predicate, never a post-filter. */
+    AgentTaskMetaEntity findByTaskIdForUpdateInOwnerScope(
+            String tenantId, String clientId, String ownerJiacn, String taskId);
 
     AgentTaskMetaEntity findByWorkItemIdForUpdate(
             String tenantId, String clientId, String workItemId);

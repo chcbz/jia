@@ -31,6 +31,29 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
             @Param("clientId") String clientId,
             @Param("taskId") String taskId);
 
+    @Select("""
+            SELECT *
+            FROM agent_task_meta
+            WHERE tenant_id = #{tenantId}
+              AND client_id = #{clientId}
+              AND owner_jiacn = #{ownerJiacn}
+              AND task_id = #{taskId}
+              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+              AND OCTET_LENGTH(owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
+              AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
+              AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
+            LIMIT 1
+            """)
+    AgentTaskMetaEntity findExactByOwnerTaskScope(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
+            @Param("taskId") String taskId);
+
     @Insert("""
             INSERT IGNORE INTO agent_task_meta
                 (task_id, reward_status, collaboration_mode, risk_level, max_agents,
@@ -43,6 +66,22 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
     int reserveOpenTaskRoot(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("taskId") String taskId,
+            @Param("createTime") long createTime);
+
+    @Insert("""
+            INSERT IGNORE INTO agent_task_meta
+                (task_id, owner_jiacn, reward_status, collaboration_mode, risk_level, max_agents,
+                 review_required, task_version, current_event_version,
+                 tenant_id, client_id, create_time, update_time)
+            VALUES
+                (#{taskId}, #{ownerJiacn}, 'open', 'single', 'low', 1,
+                 0, 0, 0, #{tenantId}, #{clientId}, #{createTime}, #{createTime})
+            """)
+    int reserveOpenTaskRootInOwnerScope(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("taskId") String taskId,
             @Param("createTime") long createTime);
 
@@ -121,6 +160,30 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
     AgentTaskMetaEntity findExactByTaskScopeForUpdate(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("taskId") String taskId);
+
+    @Select("""
+            SELECT *
+            FROM agent_task_meta
+            WHERE tenant_id = #{tenantId}
+              AND client_id = #{clientId}
+              AND owner_jiacn = #{ownerJiacn}
+              AND task_id = #{taskId}
+              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+              AND OCTET_LENGTH(owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
+              AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
+              AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
+            LIMIT 1
+            FOR UPDATE
+            """)
+    AgentTaskMetaEntity findExactByOwnerTaskScopeForUpdate(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("taskId") String taskId);
 
     @Select("""

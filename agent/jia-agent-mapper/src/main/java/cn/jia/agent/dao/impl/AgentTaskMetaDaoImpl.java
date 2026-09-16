@@ -36,6 +36,14 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
     }
 
     @Override
+    public AgentTaskMetaEntity findByTaskIdInOwnerScope(
+            String tenantId, String clientId, String ownerJiacn, String taskId) {
+        requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
+        TaskCollaborationDaoSupport.requireId(taskId, "taskId");
+        return baseMapper.findExactByOwnerTaskScope(tenantId, clientId, ownerJiacn, taskId);
+    }
+
+    @Override
     public int reserveOpenTaskRoot(
             String tenantId, String clientId, String taskId, long createTime) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
@@ -44,6 +52,18 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
             throw new IllegalArgumentException("createTime must be positive");
         }
         return baseMapper.reserveOpenTaskRoot(tenantId, clientId, taskId, createTime);
+    }
+
+    @Override
+    public int reserveOpenTaskRootInOwnerScope(
+            String tenantId, String clientId, String ownerJiacn, String taskId, long createTime) {
+        requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
+        requireExactId(taskId, "taskId", 100);
+        if (createTime <= 0) {
+            throw new IllegalArgumentException("createTime must be positive");
+        }
+        return baseMapper.reserveOpenTaskRootInOwnerScope(
+                tenantId, clientId, ownerJiacn, taskId, createTime);
     }
 
     @Override
@@ -74,6 +94,15 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
         requireExactId(taskId, "taskId", 100);
         return baseMapper.findExactByTaskScopeForUpdate(tenantId, clientId, taskId);
+    }
+
+    @Override
+    public AgentTaskMetaEntity findByTaskIdForUpdateInOwnerScope(
+            String tenantId, String clientId, String ownerJiacn, String taskId) {
+        requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
+        requireExactId(taskId, "taskId", 100);
+        return baseMapper.findExactByOwnerTaskScopeForUpdate(
+                tenantId, clientId, ownerJiacn, taskId);
     }
 
     @Override
@@ -216,6 +245,15 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
         requireSearchScope(tenantId, clientId);
         return baseMapper.countSearchByStatusExactInScope(
                 tenantId, clientId, ability, keyword);
+    }
+
+    private void requireStrictOwnerScope(
+            String tenantId, String clientId, String ownerJiacn) {
+        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        requireExactId(ownerJiacn, "ownerJiacn", 50);
+        if (!"0".equals(tenantId) || "0".equals(ownerJiacn)) {
+            throw new IllegalArgumentException("strict task owner scope requires tenant 0 and a real owner");
+        }
     }
 
     private void requireSearchScope(String tenantId, String clientId) {
