@@ -441,6 +441,9 @@ public final class AgentCommandCanonicalCodec {
         if (!AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE.equals(draft.commandType())
                 || !"work_item_execute".equals(payload.actionType())
                 || !"lease_expired_reassignment".equals(payload.reason())
+                || !("supervised".equals(payload.autonomyLevel())
+                        || "manual".equals(payload.autonomyLevel()))
+                || !Boolean.TRUE.equals(payload.requiresApproval())
                 || !E05_REASSIGNMENT_BINDING_VERSION.equals(context.bindingVersion())
                 || context.reassignmentId() == null
                 || !E05_REASSIGNMENT_ID.matcher(context.reassignmentId()).matches()

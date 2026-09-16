@@ -276,7 +276,7 @@ class AgentCommandCanonicalCodecTest {
                 1000L, 1000L + AgentCommandCanonicalCodec.HALL_COMMAND_TTL_MILLIS,
                 intentId, new AgentHallCommandPayload(
                         "work_item_execute", "Execute reassigned work item", "juyiting",
-                        "lease_expired_reassignment", null, "evt-e05", "autonomous", false,
+                        "lease_expired_reassignment", null, "evt-e05", "supervised", true,
                         context));
     }
 
