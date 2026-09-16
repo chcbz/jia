@@ -10,14 +10,14 @@ import cn.jia.agent.entity.AgentTaskWorkspaceRows.WorkItemRow;
 import java.util.List;
 
 public interface AgentTaskWorkspaceDao {
-    TaskRow findTask(String tenantId, String clientId, String taskId);
-    MemberRow findActorMember(String tenantId, String clientId, String taskId, String actorAgentId);
-    List<MemberRow> findMembers(String tenantId, String clientId, String taskId);
-    List<WorkItemRow> findWorkItems(String tenantId, String clientId, String taskId);
-    List<RequestRow> findOpenRequests(String tenantId, String clientId, String taskId);
-    List<ArtifactRow> findVisibleArtifacts(String tenantId, String clientId, String taskId,
+    TaskRow findTask(String tenantId, String clientId, String ownerJiacn, String taskId);
+    MemberRow findActorMember(String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId);
+    List<MemberRow> findMembers(String tenantId, String clientId, String ownerJiacn, String taskId);
+    List<WorkItemRow> findWorkItems(String tenantId, String clientId, String ownerJiacn, String taskId);
+    List<RequestRow> findOpenRequests(String tenantId, String clientId, String ownerJiacn, String taskId);
+    List<ArtifactRow> findVisibleArtifacts(String tenantId, String clientId, String ownerJiacn, String taskId,
             String actorAgentId, boolean reviewerAccess, boolean coordinatorAccess);
-    ArtifactRow findArtifactVersion(String tenantId, String clientId, String taskId,
+    ArtifactRow findArtifactVersion(String tenantId, String clientId, String ownerJiacn, String taskId,
             String artifactId, int artifactVersion);
-    List<EventRow> findLatestEvents(String tenantId, String clientId, String taskId);
+    List<EventRow> findLatestEvents(String tenantId, String clientId, String ownerJiacn, String taskId);
 }

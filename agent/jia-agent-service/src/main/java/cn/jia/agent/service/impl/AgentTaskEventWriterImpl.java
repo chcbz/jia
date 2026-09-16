@@ -53,7 +53,7 @@ public class AgentTaskEventWriterImpl implements AgentTaskEventWriter {
         return transactionTemplate.execute(status -> {
             // 1. Lock and get current version
             Long currentVersion = eventDao.lockAndAllocateVersion(
-                    command.getTenantId(), command.getClientId(), command.getTaskId());
+                    command.getTenantId(), command.getClientId(), command.getOwnerJiacn(), command.getTaskId());
             if (currentVersion == null) {
                 throw new AgentTaskCollaborationException(Reason.NOT_FOUND,
                         "Task not found in scope: tenant=" + command.getTenantId()
@@ -95,7 +95,7 @@ public class AgentTaskEventWriterImpl implements AgentTaskEventWriter {
 
             // 4. CAS-update current_event_version
             int updated = eventDao.commitEventVersion(
-                    command.getTenantId(), command.getClientId(), command.getTaskId(),
+                    command.getTenantId(), command.getClientId(), command.getOwnerJiacn(), command.getTaskId(),
                     currentVersion, newVersion, now);
             if (updated != 1) {
                 throw new IllegalStateException(
@@ -105,7 +105,7 @@ public class AgentTaskEventWriterImpl implements AgentTaskEventWriter {
 
             // 5. Queue only the immutable scope/version wakeup in this transaction.
             afterCommitPublisher.enqueue(new TaskScope(
-                    command.getTenantId(), command.getClientId(), command.getTaskId()), newVersion);
+                    command.getTenantId(), command.getClientId(), command.getOwnerJiacn(), command.getTaskId()), newVersion);
 
             // 6. Build result
             return new AgentTaskEventWriteResult()
@@ -120,15 +120,13 @@ public class AgentTaskEventWriterImpl implements AgentTaskEventWriter {
         if (cmd == null) {
             throw new IllegalArgumentException("command must not be null");
         }
-        requireNonBlank(cmd.getTenantId(), "tenantId", 50);
+        if (!"0".equals(cmd.getTenantId())) {
+            throw new IllegalArgumentException("tenantId must be literal 0");
+        }
         requireNonBlank(cmd.getClientId(), "clientId", 50);
-        if ("0".equals(cmd.getTenantId())) {
-            requireNonBlank(cmd.getOwnerJiacn(), "ownerJiacn", 50);
-            if ("0".equals(cmd.getOwnerJiacn())) {
-                throw new IllegalArgumentException("ownerJiacn must be a real task owner");
-            }
-        } else if (cmd.getOwnerJiacn() != null) {
-            requireClean(cmd.getOwnerJiacn(), "ownerJiacn", 50);
+        requireNonBlank(cmd.getOwnerJiacn(), "ownerJiacn", 50);
+        if ("0".equals(cmd.getOwnerJiacn())) {
+            throw new IllegalArgumentException("ownerJiacn must be a real task owner");
         }
         requireNonBlank(cmd.getTaskId(), "taskId", 100);
         requireNonBlank(cmd.getEventId(), "eventId", 100);

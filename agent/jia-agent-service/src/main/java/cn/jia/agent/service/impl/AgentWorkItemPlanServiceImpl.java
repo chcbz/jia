@@ -251,7 +251,7 @@ public class AgentWorkItemPlanServiceImpl implements AgentWorkItemPlanService {
         List<AgentTaskEventEntity> existingEvents = new ArrayList<>(planned.size());
         for (PersistedPlanItem item : planned) {
             String eventId = createdEventId(tenantId, clientId, taskId, item.workItemId());
-            existingEvents.add(eventDao.findByEventId(tenantId, clientId, eventId));
+            existingEvents.add(eventDao.findByEventId(tenantId, clientId, task.getOwnerJiacn(), eventId));
         }
         if (existingCount == planned.size()) {
             for (int index = 0; index < planned.size(); index++) {

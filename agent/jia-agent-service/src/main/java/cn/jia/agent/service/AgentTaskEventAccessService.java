@@ -9,12 +9,13 @@ public interface AgentTaskEventAccessService {
      * Authorize one canonical task member and return only after the short read transaction ends.
      */
     AuthorizedSubject authorize(
-            String tenantId, String clientId, String taskId, String actorAgentId);
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId);
 
     /** Immutable browser authorization result safe to retain for one SSE connection. */
     record AuthorizedSubject(
             String tenantId,
             String clientId,
+            String ownerJiacn,
             String taskId,
             String actorAgentId,
             String actorRole,
@@ -22,6 +23,7 @@ public interface AgentTaskEventAccessService {
         public AuthorizedSubject {
             Objects.requireNonNull(tenantId, "tenantId");
             Objects.requireNonNull(clientId, "clientId");
+            Objects.requireNonNull(ownerJiacn, "ownerJiacn");
             Objects.requireNonNull(taskId, "taskId");
             Objects.requireNonNull(actorAgentId, "actorAgentId");
             Objects.requireNonNull(actorRole, "actorRole");

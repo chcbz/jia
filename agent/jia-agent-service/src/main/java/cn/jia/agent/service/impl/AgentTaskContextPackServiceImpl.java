@@ -82,20 +82,20 @@ public class AgentTaskContextPackServiceImpl implements AgentTaskContextPackServ
     @Transactional(propagation = Propagation.REQUIRED, isolation = Isolation.REPEATABLE_READ,
             readOnly = true, rollbackFor = Exception.class)
     public AgentTaskContextPackDTO generate(
-            String tenantId, String clientId, String taskId,
+            String tenantId, String clientId, String ownerJiacn, String taskId,
             String actorAgentId, String expectedVersion) {
         try {
             AgentTaskWorkspaceDTO workspace = workspaceService.snapshot(
-                    tenantId, clientId, taskId, actorAgentId);
+                    tenantId, clientId, ownerJiacn, taskId, actorAgentId);
             requireWorkspace(workspace, taskId);
             requireExpectedVersion(expectedVersion, workspace.getCurrentVersion());
 
             AgentTaskContextPackDTO pack = new AgentTaskContextPackDTO();
             pack.setSchemaVersion(SCHEMA_VERSION);
             pack.setProvenance(provenance(
-                    tenantId, clientId, taskId, actorAgentId, workspace));
+                    tenantId, clientId, ownerJiacn, taskId, actorAgentId, workspace));
             pack.setTaskDescription(taskDescription(
-                    tenantId, clientId, taskId));
+                    tenantId, clientId, ownerJiacn, taskId));
             pack.setMembers(members(workspace));
             pack.setWorkItems(workItems(workspace));
             AgentTaskContextPackDTO.ArtifactsSection authoritativeArtifacts = artifacts(
@@ -124,7 +124,7 @@ public class AgentTaskContextPackServiceImpl implements AgentTaskContextPackServ
     }
 
     private static AgentTaskContextPackDTO.Provenance provenance(
-            String tenantId, String clientId, String taskId, String actorAgentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId,
             AgentTaskWorkspaceDTO workspace) {
         AgentTaskContextPackDTO.Provenance value = new AgentTaskContextPackDTO.Provenance();
         value.setTenantId(tenantId);
@@ -137,11 +137,11 @@ public class AgentTaskContextPackServiceImpl implements AgentTaskContextPackServ
     }
 
     private AgentTaskContextPackDTO.TaskDescriptionSection taskDescription(
-            String tenantId, String clientId, String taskId) {
+            String tenantId, String clientId, String ownerJiacn, String taskId) {
         AgentTaskContextPackDTO.TaskDescriptionSection section =
                 new AgentTaskContextPackDTO.TaskDescriptionSection();
         AgentTaskContextPackTaskSourceRow row =
-                contextPackDao.findTaskDescription(tenantId, clientId, taskId);
+                contextPackDao.findTaskDescription(tenantId, clientId, ownerJiacn, taskId);
         if (row == null) {
             section.setStatus(UNAVAILABLE);
             section.setReason(taskId.matches("[0-9]+")
@@ -149,7 +149,7 @@ public class AgentTaskContextPackServiceImpl implements AgentTaskContextPackServ
             return section;
         }
         if (!tenantId.equals(row.getTenantId()) || !clientId.equals(row.getClientId())
-                || !taskId.equals(row.getTaskId()) || row.getPlanId() == null
+                || !ownerJiacn.equals(row.getOwnerJiacn()) || !taskId.equals(row.getTaskId()) || row.getPlanId() == null
                 || row.getPlanId() <= 0) {
             throw unavailable(null);
         }

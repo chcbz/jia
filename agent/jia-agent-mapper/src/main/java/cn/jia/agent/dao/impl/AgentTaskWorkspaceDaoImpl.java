@@ -24,67 +24,73 @@ public class AgentTaskWorkspaceDaoImpl implements AgentTaskWorkspaceDao {
     }
 
     @Override
-    public TaskRow findTask(String tenantId, String clientId, String taskId) {
-        requireScope(tenantId, clientId, taskId);
-        return mapper.findTask(tenantId, clientId, taskId);
+    public TaskRow findTask(String tenantId, String clientId, String ownerJiacn, String taskId) {
+        requireScope(tenantId, clientId, ownerJiacn, taskId);
+        return mapper.findTask(tenantId, clientId, ownerJiacn, taskId);
     }
 
     @Override
     public MemberRow findActorMember(
-            String tenantId, String clientId, String taskId, String actorAgentId) {
-        requireScope(tenantId, clientId, taskId);
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId) {
+        requireScope(tenantId, clientId, ownerJiacn, taskId);
         requireId(actorAgentId, "actorAgentId", 100);
-        return mapper.findActorMember(tenantId, clientId, taskId, actorAgentId);
+        return mapper.findActorMember(tenantId, clientId, ownerJiacn, taskId, actorAgentId);
     }
 
     @Override
-    public List<MemberRow> findMembers(String tenantId, String clientId, String taskId) {
-        requireScope(tenantId, clientId, taskId);
-        return mapper.findMembers(tenantId, clientId, taskId);
+    public List<MemberRow> findMembers(String tenantId, String clientId, String ownerJiacn, String taskId) {
+        requireScope(tenantId, clientId, ownerJiacn, taskId);
+        return mapper.findMembers(tenantId, clientId, ownerJiacn, taskId);
     }
 
     @Override
-    public List<WorkItemRow> findWorkItems(String tenantId, String clientId, String taskId) {
-        requireScope(tenantId, clientId, taskId);
-        return mapper.findWorkItems(tenantId, clientId, taskId);
+    public List<WorkItemRow> findWorkItems(String tenantId, String clientId, String ownerJiacn, String taskId) {
+        requireScope(tenantId, clientId, ownerJiacn, taskId);
+        return mapper.findWorkItems(tenantId, clientId, ownerJiacn, taskId);
     }
 
     @Override
-    public List<RequestRow> findOpenRequests(String tenantId, String clientId, String taskId) {
-        requireScope(tenantId, clientId, taskId);
-        return mapper.findOpenRequests(tenantId, clientId, taskId);
+    public List<RequestRow> findOpenRequests(String tenantId, String clientId, String ownerJiacn, String taskId) {
+        requireScope(tenantId, clientId, ownerJiacn, taskId);
+        return mapper.findOpenRequests(tenantId, clientId, ownerJiacn, taskId);
     }
 
     @Override
-    public List<ArtifactRow> findVisibleArtifacts(String tenantId, String clientId, String taskId,
+    public List<ArtifactRow> findVisibleArtifacts(String tenantId, String clientId, String ownerJiacn, String taskId,
             String actorAgentId, boolean reviewerAccess, boolean coordinatorAccess) {
-        requireScope(tenantId, clientId, taskId);
+        requireScope(tenantId, clientId, ownerJiacn, taskId);
         requireId(actorAgentId, "actorAgentId", 100);
-        return mapper.findVisibleArtifacts(tenantId, clientId, taskId, actorAgentId,
+        return mapper.findVisibleArtifacts(tenantId, clientId, ownerJiacn, taskId, actorAgentId,
                 reviewerAccess, coordinatorAccess);
     }
 
     @Override
-    public ArtifactRow findArtifactVersion(String tenantId, String clientId, String taskId,
+    public ArtifactRow findArtifactVersion(String tenantId, String clientId, String ownerJiacn, String taskId,
             String artifactId, int artifactVersion) {
-        requireScope(tenantId, clientId, taskId);
+        requireScope(tenantId, clientId, ownerJiacn, taskId);
         requireId(artifactId, "artifactId", 100);
         if (artifactVersion <= 0) {
             throw new IllegalArgumentException("artifactVersion must be positive");
         }
         return mapper.findArtifactVersion(
-                tenantId, clientId, taskId, artifactId, artifactVersion);
+                tenantId, clientId, ownerJiacn, taskId, artifactId, artifactVersion);
     }
 
     @Override
-    public List<EventRow> findLatestEvents(String tenantId, String clientId, String taskId) {
-        requireScope(tenantId, clientId, taskId);
-        return mapper.findLatestEvents(tenantId, clientId, taskId);
+    public List<EventRow> findLatestEvents(String tenantId, String clientId, String ownerJiacn, String taskId) {
+        requireScope(tenantId, clientId, ownerJiacn, taskId);
+        return mapper.findLatestEvents(tenantId, clientId, ownerJiacn, taskId);
     }
 
-    private static void requireScope(String tenantId, String clientId, String taskId) {
-        requireId(tenantId, "tenantId", 50);
+    private static void requireScope(String tenantId, String clientId, String ownerJiacn, String taskId) {
+        if (!"0".equals(tenantId)) {
+            throw new IllegalArgumentException("tenantId must be literal 0");
+        }
         requireId(clientId, "clientId", 50);
+        requireId(ownerJiacn, "ownerJiacn", 50);
+        if ("0".equals(ownerJiacn)) {
+            throw new IllegalArgumentException("ownerJiacn must be a real task owner");
+        }
         requireId(taskId, "taskId", 100);
     }
 

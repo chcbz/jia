@@ -44,12 +44,12 @@ public class AgentTaskWorkspaceController {
         requireRequestId(taskId, "taskId", 100);
         String actorAgentId = singleRequiredQuery(request, "actorAgentId");
         requireRequestId(actorAgentId, "actorAgentId", 100);
-        if (!taskEventsGate.allows(scope.jiacn(), scope.clientId())) {
+        if (!taskEventsGate.allows("0", scope.clientId())) {
             throw new AgentTaskWorkspaceException(
                     AgentTaskWorkspaceException.Reason.SNAPSHOT_UNAVAILABLE);
         }
         AgentTaskWorkspaceDTO snapshot = workspaceService.snapshot(
-                scope.jiacn(), scope.clientId(), taskId, actorAgentId);
+                "0", scope.clientId(), scope.jiacn(), taskId, actorAgentId);
         byte[] body;
         try {
             body = JsonUtil.getMapper().writeValueAsBytes(snapshot);

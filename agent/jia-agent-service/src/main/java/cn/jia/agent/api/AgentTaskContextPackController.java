@@ -56,12 +56,12 @@ public class AgentTaskContextPackController {
         if (expectedVersion != null && !canonicalDecimal(expectedVersion)) {
             throw new ContextPackRequestException("expectedVersion");
         }
-        if (!taskEventsGate.allows(scope.tenantId(), scope.clientId())) {
+        if (!taskEventsGate.allows("0", scope.clientId())) {
             throw new AgentTaskContextPackException(
                     AgentTaskContextPackException.Reason.CONTEXT_UNAVAILABLE);
         }
         AgentTaskContextPackDTO pack = contextPackService.generate(
-                scope.tenantId(), scope.clientId(), taskId, scope.actorAgentId(), expectedVersion);
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId, scope.actorAgentId(), expectedVersion);
         final byte[] body;
         try {
             body = JsonUtil.getMapper().writeValueAsBytes(pack);
@@ -123,23 +123,24 @@ public class AgentTaskContextPackController {
     }
 
     private static Scope requireJwtScope(Authentication authentication) {
-        if (authentication instanceof AgentRuntimeAuthentication runtime && runtime.isAuthenticated()) {
-            var scope = runtime.getPrincipal();
-            return new Scope(scope.tenantId(), scope.clientId(), scope.agentId());
+        if (authentication instanceof AgentRuntimeAuthentication) {
+            // The native runtime principal does not yet carry an authenticated user owner.
+            // Do not infer owner from tenant or agent ID.
+            throw new ContextPackAuthenticationException(true);
         }
         if (authentication == null || !authentication.isAuthenticated()
                 || !(authentication instanceof JwtAuthenticationToken jwt)) {
             throw new ContextPackAuthenticationException(false);
         }
         Map<String, Object> claims = jwt.getToken().getClaims();
-        String tenantId = requiredClaim(claims, "jiacn", 50);
+        String ownerJiacn = requiredClaim(claims, "jiacn", 50);
         String clientId = requiredClaim(claims, "client_id", 50);
         String actorAgentId = requiredClaim(claims, "sub", 100);
         String name = authentication.getName();
         if (!validExact(name, 100) || !actorAgentId.equals(name)) {
             throw new ContextPackAuthenticationException(true);
         }
-        return new Scope(tenantId, clientId, actorAgentId);
+        return new Scope("0", clientId, ownerJiacn, actorAgentId);
     }
 
     private static String requiredClaim(Map<String, Object> claims, String field, int maxLength) {
@@ -244,7 +245,7 @@ public class AgentTaskContextPackController {
                 .body(new ContextPackError(code, message));
     }
 
-    private record Scope(String tenantId, String clientId, String actorAgentId) {
+    private record Scope(String tenantId, String clientId, String ownerJiacn, String actorAgentId) {
     }
 
     public record ContextPackError(String code, String message) {

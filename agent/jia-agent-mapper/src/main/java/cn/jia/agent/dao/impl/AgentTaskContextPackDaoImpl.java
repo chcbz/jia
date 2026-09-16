@@ -19,11 +19,17 @@ public class AgentTaskContextPackDaoImpl implements AgentTaskContextPackDao {
 
     @Override
     public AgentTaskContextPackTaskSourceRow findTaskDescription(
-            String tenantId, String clientId, String taskId) {
-        requireId(tenantId, "tenantId", 50);
+            String tenantId, String clientId, String ownerJiacn, String taskId) {
+        if (!"0".equals(tenantId)) {
+            throw new IllegalArgumentException("tenantId must be literal 0");
+        }
         requireId(clientId, "clientId", 50);
+        requireId(ownerJiacn, "ownerJiacn", 50);
+        if ("0".equals(ownerJiacn)) {
+            throw new IllegalArgumentException("ownerJiacn must be a real task owner");
+        }
         requireId(taskId, "taskId", 100);
-        return mapper.findTaskDescription(tenantId, clientId, taskId);
+        return mapper.findTaskDescription(tenantId, clientId, ownerJiacn, taskId);
     }
 
     private static void requireId(String value, String field, int maxCodePoints) {

@@ -4,5 +4,5 @@ import cn.jia.agent.entity.AgentTaskWorkspaceDTO;
 
 public interface AgentTaskWorkspaceService {
     AgentTaskWorkspaceDTO snapshot(
-            String tenantId, String clientId, String taskId, String actorAgentId);
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId);
 }

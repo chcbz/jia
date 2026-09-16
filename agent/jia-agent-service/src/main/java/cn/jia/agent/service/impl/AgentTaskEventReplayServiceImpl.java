@@ -238,7 +238,7 @@ public class AgentTaskEventReplayServiceImpl
                 FluxSink<ReplaySignal> sink) {
             this.scope = scope;
             this.wakeupScope = new AgentTaskEventBroker.TaskScope(
-                    scope.tenantId(), scope.clientId(), scope.taskId());
+                    scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.taskId());
             this.sink = sink;
             this.catchUpVersion = new AtomicLong(initialCursor);
             this.deliveredVersion = new AtomicLong(initialCursor);
@@ -430,7 +430,7 @@ public class AgentTaskEventReplayServiceImpl
                 }
 
                 Long currentValue = eventDao.findCurrentVersion(
-                        scope.tenantId(), scope.clientId(), scope.taskId());
+                        scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.taskId());
                 highWaterReads++;
                 if (currentValue == null || currentValue < 0) {
                     throw terminal(ResyncReason.DURABLE_STATE_UNPROVABLE,
@@ -448,7 +448,7 @@ public class AgentTaskEventReplayServiceImpl
                 }
 
                 Long earliestValue = eventDao.findEarliestVersion(
-                        scope.tenantId(), scope.clientId(), scope.taskId());
+                        scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.taskId());
                 if (earliestValue == null) {
                     throw terminal(ResyncReason.HISTORY_GAP, currentVersion);
                 }
@@ -468,7 +468,7 @@ public class AgentTaskEventReplayServiceImpl
                                 currentVersion);
                     }
                     List<AgentTaskEventEntity> page = eventDao.findAfterVersion(
-                            scope.tenantId(), scope.clientId(), scope.taskId(),
+                            scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.taskId(),
                             cursor, policy.pageSize());
                     pagesRead++;
                     if (page == null) {
@@ -517,6 +517,7 @@ public class AgentTaskEventReplayServiceImpl
                     || entity.getEventVersion() != expectedVersion
                     || !scope.tenantId().equals(entity.getTenantId())
                     || !scope.clientId().equals(entity.getClientId())
+                    || !scope.ownerJiacn().equals(entity.getOwnerJiacn())
                     || !scope.taskId().equals(entity.getTaskId())
                     || entity.getEventId() == null
                     || entity.getEventType() == null

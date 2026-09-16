@@ -30,11 +30,14 @@ public interface AgentTaskEventMapper extends BaseMapper<AgentTaskEventEntity> {
             FROM agent_task_meta
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
+              AND owner_jiacn = #{ownerJiacn}
               AND task_id = #{taskId}
               AND CAST(tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
               AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
               AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(owner_jiacn AS BINARY(200)) = CAST(#{ownerJiacn} AS BINARY(200))
+              AND OCTET_LENGTH(owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
               AND CAST(SUBSTRING(task_id, 1, 50) AS BINARY(200))
                   = CAST(SUBSTRING(#{taskId}, 1, 50) AS BINARY(200))
               AND CAST(SUBSTRING(task_id, 51, 50) AS BINARY(200))
@@ -45,6 +48,7 @@ public interface AgentTaskEventMapper extends BaseMapper<AgentTaskEventEntity> {
     Long lockTaskMetaForEventVersion(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("taskId") String taskId);
 
     @Insert("""
@@ -78,11 +82,14 @@ public interface AgentTaskEventMapper extends BaseMapper<AgentTaskEventEntity> {
                 update_time = #{updateTime}
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
+              AND owner_jiacn = #{ownerJiacn}
               AND task_id = #{taskId}
               AND CAST(tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
               AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
               AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(owner_jiacn AS BINARY(200)) = CAST(#{ownerJiacn} AS BINARY(200))
+              AND OCTET_LENGTH(owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
               AND CAST(SUBSTRING(task_id, 1, 50) AS BINARY(200))
                   = CAST(SUBSTRING(#{taskId}, 1, 50) AS BINARY(200))
               AND CAST(SUBSTRING(task_id, 51, 50) AS BINARY(200))
@@ -93,6 +100,7 @@ public interface AgentTaskEventMapper extends BaseMapper<AgentTaskEventEntity> {
     int incrementCurrentEventVersion(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("taskId") String taskId,
             @Param("expectedCurrentVersion") long expectedCurrentVersion,
             @Param("newEventVersion") long newEventVersion,
@@ -102,16 +110,19 @@ public interface AgentTaskEventMapper extends BaseMapper<AgentTaskEventEntity> {
             SELECT id, task_id, event_version, event_id, event_type,
                    actor_type, actor_id, aggregate_type, aggregate_id,
                    event_json, occurred_at,
-                   tenant_id, client_id, create_time, update_time
+                   tenant_id, client_id, owner_jiacn, create_time, update_time
             FROM agent_task_event
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
+              AND owner_jiacn = #{ownerJiacn}
               AND task_id = #{taskId}
               AND event_version > #{afterVersion}
               AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+              AND OCTET_LENGTH(owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
               AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
               AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
             ORDER BY event_version ASC
@@ -120,6 +131,7 @@ public interface AgentTaskEventMapper extends BaseMapper<AgentTaskEventEntity> {
     List<AgentTaskEventEntity> findExactByTaskScopeAfterVersion(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("taskId") String taskId,
             @Param("afterVersion") long afterVersion,
             @Param("limit") int limit);
@@ -129,11 +141,14 @@ public interface AgentTaskEventMapper extends BaseMapper<AgentTaskEventEntity> {
             FROM agent_task_meta
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
+              AND owner_jiacn = #{ownerJiacn}
               AND task_id = #{taskId}
               AND CAST(tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
               AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
               AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(owner_jiacn AS BINARY(200)) = CAST(#{ownerJiacn} AS BINARY(200))
+              AND OCTET_LENGTH(owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
               AND CAST(SUBSTRING(task_id, 1, 50) AS BINARY(200))
                   = CAST(SUBSTRING(#{taskId}, 1, 50) AS BINARY(200))
               AND CAST(SUBSTRING(task_id, 51, 50) AS BINARY(200))
@@ -143,6 +158,7 @@ public interface AgentTaskEventMapper extends BaseMapper<AgentTaskEventEntity> {
     Long findExactCurrentEventVersion(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("taskId") String taskId);
 
     @Select("""
@@ -150,32 +166,39 @@ public interface AgentTaskEventMapper extends BaseMapper<AgentTaskEventEntity> {
             FROM agent_task_event
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
+              AND owner_jiacn = #{ownerJiacn}
               AND task_id = #{taskId}
               AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+              AND OCTET_LENGTH(owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
               AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
               AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
             """)
     Long findExactEarliestEventVersion(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("taskId") String taskId);
 
     @Select("""
             SELECT id, task_id, event_version, event_id, event_type,
                    actor_type, actor_id, aggregate_type, aggregate_id,
                    event_json, occurred_at,
-                   tenant_id, client_id, create_time, update_time
+                   tenant_id, client_id, owner_jiacn, create_time, update_time
             FROM agent_task_event
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
+              AND owner_jiacn = #{ownerJiacn}
               AND event_id = #{eventId}
               AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+              AND OCTET_LENGTH(owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
               AND CAST(event_id AS BINARY) = CAST(#{eventId} AS BINARY)
               AND OCTET_LENGTH(event_id) = OCTET_LENGTH(#{eventId})
             LIMIT 1
@@ -183,5 +206,6 @@ public interface AgentTaskEventMapper extends BaseMapper<AgentTaskEventEntity> {
     AgentTaskEventEntity findExactByEventId(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("eventId") String eventId);
 }
