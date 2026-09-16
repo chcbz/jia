@@ -37,6 +37,8 @@ public class AgentIdentityAliasDaoImpl
 
     private QueryWrapper<AgentIdentityAliasEntity> exactAliasQuery(
             String tenantId, String clientId, String ownerJiacn, String aliasValue) {
+        requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
+        requireExact(aliasValue, "aliasValue", 400);
         QueryWrapper<AgentIdentityAliasEntity> query = new QueryWrapper<>();
         IdentityExactQuerySupport.exact(query, "tenant_id", tenantId, 200);
         IdentityExactQuerySupport.exact(query, "client_id", clientId, 200);
@@ -45,6 +47,24 @@ public class AgentIdentityAliasDaoImpl
                 AgentConstants.IDENTITY_ALIAS_TYPE_LEGACY_AGENT_ID, 128);
         IdentityExactQuerySupport.exact(query, "alias_value", aliasValue, 400);
         return query;
+    }
+
+    private static void requireStrictOwnerScope(
+            String tenantId, String clientId, String ownerJiacn) {
+        requireExact(tenantId, "tenantId", 200);
+        requireExact(clientId, "clientId", 200);
+        requireExact(ownerJiacn, "ownerJiacn", 200);
+        if (!"0".equals(tenantId) || "0".equals(ownerJiacn)) {
+            throw new IllegalArgumentException("identity alias scope requires tenant 0 and a real owner");
+        }
+    }
+
+    private static void requireExact(String value, String field, int maxLength) {
+        if (value == null || value.isBlank() || value.length() > maxLength
+                || !value.equals(value.strip())
+                || value.chars().anyMatch(Character::isISOControl)) {
+            throw new IllegalArgumentException(field + " is invalid");
+        }
     }
 
 }
