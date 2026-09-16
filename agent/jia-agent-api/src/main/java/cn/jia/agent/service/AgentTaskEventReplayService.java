@@ -16,10 +16,14 @@ public interface AgentTaskEventReplayService {
     Flux<ReplaySignal> replay(TaskScope scope, long afterVersion);
 
     /** Exact task scope. Valid identities are preserved byte-for-byte. */
-    record TaskScope(String tenantId, String clientId, String taskId) {
+    record TaskScope(String tenantId, String clientId, String ownerJiacn, String taskId) {
         public TaskScope {
             tenantId = requireIdentity(tenantId, "tenantId", 50);
             clientId = requireIdentity(clientId, "clientId", 50);
+            ownerJiacn = requireIdentity(ownerJiacn, "ownerJiacn", 50);
+            if (!"0".equals(tenantId) || "0".equals(ownerJiacn)) {
+                throw new IllegalArgumentException("task scope must use tenant 0 and a real owner");
+            }
             taskId = requireIdentity(taskId, "taskId", 100);
         }
     }

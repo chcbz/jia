@@ -67,11 +67,11 @@ public class AgentTaskEventStreamController {
             Authentication authentication) {
         Scope jwt = requireJwtScope(authentication);
         RawRequest raw = requireRawRequest(taskId, request);
-        if (!taskEventsGate.allows(jwt.jiacn(), jwt.clientId())) {
+        if (!taskEventsGate.allows("0", jwt.clientId())) {
             throw unavailable();
         }
         AuthorizedSubject subject = accessService.authorize(
-                jwt.jiacn(), jwt.clientId(), taskId, raw.actorAgentId());
+                "0", jwt.clientId(), jwt.jiacn(), taskId, raw.actorAgentId());
         if (subject == null || TransactionSynchronizationManager.isActualTransactionActive()) {
             throw unavailable();
         }
@@ -79,7 +79,7 @@ public class AgentTaskEventStreamController {
         TaskScope scope;
         Flux<ReplaySignal> source;
         try {
-            scope = new TaskScope(subject.tenantId(), subject.clientId(), subject.taskId());
+            scope = new TaskScope(subject.tenantId(), subject.clientId(), subject.ownerJiacn(), subject.taskId());
             source = replayService.replay(scope, raw.cursor());
         } catch (RuntimeException exception) {
             throw unavailable();

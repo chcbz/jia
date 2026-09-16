@@ -7,6 +7,7 @@ import lombok.Data;
 public class AgentTaskContextPackTaskSourceRow {
     private String tenantId;
     private String clientId;
+    private String ownerJiacn;
     private String taskId;
     private Long planId;
     private String title;

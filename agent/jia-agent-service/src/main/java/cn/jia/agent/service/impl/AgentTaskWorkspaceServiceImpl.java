@@ -79,17 +79,17 @@ public class AgentTaskWorkspaceServiceImpl
     @Transactional(propagation = Propagation.REQUIRED, readOnly = true,
             rollbackFor = Exception.class)
     public AuthorizedSubject authorize(
-            String tenantId, String clientId, String taskId, String actorAgentId) {
-        return authorizeRows(tenantId, clientId, taskId, actorAgentId).subject();
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId) {
+        return authorizeRows(tenantId, clientId, ownerJiacn, taskId, actorAgentId).subject();
     }
 
     @Override
     @Transactional(propagation = Propagation.REQUIRED, isolation = Isolation.REPEATABLE_READ,
             readOnly = true, rollbackFor = Exception.class)
     public AgentTaskWorkspaceDTO snapshot(
-            String tenantId, String clientId, String taskId, String actorAgentId) {
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId) {
         Authorization authorization = authorizeRows(
-                tenantId, clientId, taskId, actorAgentId);
+                tenantId, clientId, ownerJiacn, taskId, actorAgentId);
         TaskRow task = authorization.task();
         MemberRow actor = authorization.actor();
         AuthorizedSubject subject = authorization.subject();
@@ -99,16 +99,16 @@ public class AgentTaskWorkspaceServiceImpl
         boolean coordinatorAccess = subject.coordinatorAccess();
 
         List<MemberRow> memberRows = complete(
-                workspaceDao.findMembers(tenantId, clientId, taskId));
+                workspaceDao.findMembers(tenantId, clientId, ownerJiacn, taskId));
         if (memberRows.stream().noneMatch(row -> sameActorMember(row, actor))) {
             throw unavailable();
         }
         List<WorkItemRow> workItemRows = complete(
-                workspaceDao.findWorkItems(tenantId, clientId, taskId));
+                workspaceDao.findWorkItems(tenantId, clientId, ownerJiacn, taskId));
         List<RequestRow> requestRows = complete(
-                workspaceDao.findOpenRequests(tenantId, clientId, taskId));
+                workspaceDao.findOpenRequests(tenantId, clientId, ownerJiacn, taskId));
         List<ArtifactRow> artifactRows = requiredList(workspaceDao.findVisibleArtifacts(
-                tenantId, clientId, taskId, actorAgentId,
+                tenantId, clientId, ownerJiacn, taskId, actorAgentId,
                 reviewerAccess, coordinatorAccess));
         if (artifactRows.size() > RECENT_ARTIFACT_LIMIT + 1) {
             throw unavailable();
@@ -118,17 +118,17 @@ public class AgentTaskWorkspaceServiceImpl
                 0, Math.min(RECENT_ARTIFACT_LIMIT, artifactRows.size()));
 
         List<EventRow> latestEvents = requiredList(
-                workspaceDao.findLatestEvents(tenantId, clientId, taskId));
-        Timeline timeline = timeline(tenantId, clientId, task, actor, latestEvents,
+                workspaceDao.findLatestEvents(tenantId, clientId, ownerJiacn, taskId));
+        Timeline timeline = timeline(tenantId, clientId, ownerJiacn, task, actor, latestEvents,
                 reviewerAccess, coordinatorAccess);
 
         AgentTaskWorkspaceDTO result = new AgentTaskWorkspaceDTO();
         result.setTask(taskDto(task));
-        result.setMembers(memberDtos(tenantId, clientId, taskId, memberRows));
-        result.setWorkItems(workItemDtos(tenantId, clientId, taskId, workItemRows));
-        result.setOpenRequests(requestDtos(tenantId, clientId, taskId, requestRows));
+        result.setMembers(memberDtos(tenantId, clientId, ownerJiacn, taskId, memberRows));
+        result.setWorkItems(workItemDtos(tenantId, clientId, ownerJiacn, taskId, workItemRows));
+        result.setOpenRequests(requestDtos(tenantId, clientId, ownerJiacn, taskId, requestRows));
         result.setRecentArtifacts(artifactDtos(
-                tenantId, clientId, taskId, returnedArtifacts));
+                tenantId, clientId, ownerJiacn, taskId, returnedArtifacts));
         result.setRecentArtifactsTruncated(artifactsTruncated);
         result.setConversationId(null);
         result.setRecentEvents(timeline.events());
@@ -138,15 +138,21 @@ public class AgentTaskWorkspaceServiceImpl
     }
 
     private Authorization authorizeRows(
-            String tenantId, String clientId, String taskId, String actorAgentId) {
-        requireId(tenantId, "tenantId", 50);
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId) {
+        if (!"0".equals(tenantId)) {
+            throw notFound();
+        }
         requireId(clientId, "clientId", 50);
+        requireId(ownerJiacn, "ownerJiacn", 50);
+        if ("0".equals(ownerJiacn)) {
+            throw notFound();
+        }
         requireId(taskId, "taskId", 100);
         requireId(actorAgentId, "actorAgentId", 100);
 
         try {
             String canonicalAgentId = agentIdentityService.requireCanonicalAgentIdInScope(
-                    tenantId, clientId, tenantId, actorAgentId);
+                    tenantId, clientId, ownerJiacn, actorAgentId);
             if (!actorAgentId.equals(canonicalAgentId)) {
                 throw notFound();
             }
@@ -154,22 +160,22 @@ public class AgentTaskWorkspaceServiceImpl
             throw notFound();
         }
 
-        TaskRow task = workspaceDao.findTask(tenantId, clientId, taskId);
-        if (!isExactTaskRow(task, tenantId, clientId, taskId)) {
+        TaskRow task = workspaceDao.findTask(tenantId, clientId, ownerJiacn, taskId);
+        if (!isExactTaskRow(task, tenantId, clientId, ownerJiacn, taskId)) {
             throw notFound();
         }
         MemberRow actor = workspaceDao.findActorMember(
-                tenantId, clientId, taskId, actorAgentId);
-        if (!validActorMember(actor, tenantId, clientId, taskId, actorAgentId)) {
+                tenantId, clientId, ownerJiacn, taskId, actorAgentId);
+        if (!validActorMember(actor, tenantId, clientId, ownerJiacn, taskId, actorAgentId)) {
             throw notFound();
         }
         AuthorizedSubject subject = new AuthorizedSubject(
-                tenantId, clientId, taskId, actorAgentId,
+                tenantId, clientId, ownerJiacn, taskId, actorAgentId,
                 actor.getMemberRole(), task.getCoordinatorAgentId());
         return new Authorization(task, actor, subject);
     }
 
-    private Timeline timeline(String tenantId, String clientId, TaskRow task,
+    private Timeline timeline(String tenantId, String clientId, String ownerJiacn, TaskRow task,
             MemberRow actor, List<EventRow> descending, boolean reviewerAccess,
             boolean coordinatorAccess) {
         long currentVersion = task.getCurrentEventVersion();
@@ -190,11 +196,11 @@ public class AgentTaskWorkspaceServiceImpl
         List<AgentTaskWorkspaceDTO.Event> projectedDescending =
                 new ArrayList<>(descending.size());
         for (EventRow row : descending) {
-            validateEventRow(tenantId, clientId, task.getTaskId(), row);
+            validateEventRow(tenantId, clientId, ownerJiacn, task.getTaskId(), row);
             if (row.getEventVersion() != expected) {
                 throw unavailable();
             }
-            projectedDescending.add(eventDto(tenantId, clientId, task, actor, row,
+            projectedDescending.add(eventDto(tenantId, clientId, ownerJiacn, task, actor, row,
                     reviewerAccess, coordinatorAccess));
             expected--;
         }
@@ -211,7 +217,7 @@ public class AgentTaskWorkspaceServiceImpl
         return new Timeline(List.copyOf(events), truncated);
     }
 
-    private AgentTaskWorkspaceDTO.Event eventDto(String tenantId, String clientId,
+    private AgentTaskWorkspaceDTO.Event eventDto(String tenantId, String clientId, String ownerJiacn,
             TaskRow task, MemberRow actor, EventRow row, boolean reviewerAccess,
             boolean coordinatorAccess) {
         Map<String, Object> payload = normalizedPayload(row.getEventJson());
@@ -226,9 +232,9 @@ public class AgentTaskWorkspaceServiceImpl
         }
         if (artifactClaim != null) {
             ArtifactRow artifact = workspaceDao.findArtifactVersion(
-                    tenantId, clientId, task.getTaskId(), artifactClaim.artifactId(),
+                    tenantId, clientId, ownerJiacn, task.getTaskId(), artifactClaim.artifactId(),
                     artifactClaim.artifactVersion());
-            if (!validArtifact(artifact, tenantId, clientId, task.getTaskId())
+            if (!validArtifact(artifact, tenantId, clientId, ownerJiacn, task.getTaskId())
                     || !artifactClaim.artifactId().equals(artifact.getArtifactId())
                     || artifactClaim.artifactVersion() != artifact.getArtifactVersion()
                     || !artifactClaim.producerAgentId().equals(artifact.getProducerAgentId())
@@ -259,9 +265,9 @@ public class AgentTaskWorkspaceServiceImpl
     }
 
     private void validateEventRow(
-            String tenantId, String clientId, String taskId, EventRow row) {
-        if (row == null || !scope(row.getTenantId(), row.getClientId(), row.getTaskId(),
-                tenantId, clientId, taskId)
+            String tenantId, String clientId, String ownerJiacn, String taskId, EventRow row) {
+        if (row == null || !scope(row.getTenantId(), row.getClientId(), row.getOwnerJiacn(), row.getTaskId(),
+                tenantId, clientId, ownerJiacn, taskId)
                 || row.getEventVersion() == null || row.getEventVersion() <= 0
                 || row.getOccurredAt() == null || row.getOccurredAt() <= 0) {
             throw unavailable();
@@ -337,11 +343,11 @@ public class AgentTaskWorkspaceServiceImpl
     }
 
     private static List<AgentTaskWorkspaceDTO.Member> memberDtos(String tenantId,
-            String clientId, String taskId, List<MemberRow> rows) {
+            String clientId, String ownerJiacn, String taskId, List<MemberRow> rows) {
         Set<String> ids = new HashSet<>();
         List<AgentTaskWorkspaceDTO.Member> result = new ArrayList<>(rows.size());
         for (MemberRow row : rows) {
-            if (!validMember(row, tenantId, clientId, taskId) || !ids.add(row.getAgentId())) {
+            if (!validMember(row, tenantId, clientId, ownerJiacn, taskId) || !ids.add(row.getAgentId())) {
                 throw unavailable();
             }
             AgentTaskWorkspaceDTO.Member dto = new AgentTaskWorkspaceDTO.Member();
@@ -361,11 +367,11 @@ public class AgentTaskWorkspaceServiceImpl
     }
 
     private static List<AgentTaskWorkspaceDTO.WorkItem> workItemDtos(String tenantId,
-            String clientId, String taskId, List<WorkItemRow> rows) {
+            String clientId, String ownerJiacn, String taskId, List<WorkItemRow> rows) {
         Set<String> ids = new HashSet<>();
         List<AgentTaskWorkspaceDTO.WorkItem> result = new ArrayList<>(rows.size());
         for (WorkItemRow row : rows) {
-            if (!validWorkItem(row, tenantId, clientId, taskId)
+            if (!validWorkItem(row, tenantId, clientId, ownerJiacn, taskId)
                     || !ids.add(row.getWorkItemId())) {
                 throw unavailable();
             }
@@ -393,11 +399,11 @@ public class AgentTaskWorkspaceServiceImpl
     }
 
     private static List<AgentTaskWorkspaceDTO.Request> requestDtos(String tenantId,
-            String clientId, String taskId, List<RequestRow> rows) {
+            String clientId, String ownerJiacn, String taskId, List<RequestRow> rows) {
         Set<String> ids = new HashSet<>();
         List<AgentTaskWorkspaceDTO.Request> result = new ArrayList<>(rows.size());
         for (RequestRow row : rows) {
-            if (!validRequest(row, tenantId, clientId, taskId)
+            if (!validRequest(row, tenantId, clientId, ownerJiacn, taskId)
                     || !ids.add(row.getRequestId())) {
                 throw unavailable();
             }
@@ -421,11 +427,11 @@ public class AgentTaskWorkspaceServiceImpl
     }
 
     private static List<AgentTaskWorkspaceDTO.Artifact> artifactDtos(String tenantId,
-            String clientId, String taskId, List<ArtifactRow> rows) {
+            String clientId, String ownerJiacn, String taskId, List<ArtifactRow> rows) {
         List<AgentTaskWorkspaceDTO.Artifact> result = new ArrayList<>(rows.size());
         Set<String> versions = new HashSet<>();
         for (ArtifactRow row : rows) {
-            if (!validArtifact(row, tenantId, clientId, taskId)
+            if (!validArtifact(row, tenantId, clientId, ownerJiacn, taskId)
                     || !versions.add(row.getArtifactId() + "\u0000" + row.getArtifactVersion())) {
                 throw unavailable();
             }
@@ -474,6 +480,7 @@ public class AgentTaskWorkspaceServiceImpl
         return candidate != null
                 && Objects.equals(candidate.getTenantId(), actor.getTenantId())
                 && Objects.equals(candidate.getClientId(), actor.getClientId())
+                && Objects.equals(candidate.getOwnerJiacn(), actor.getOwnerJiacn())
                 && Objects.equals(candidate.getTaskId(), actor.getTaskId())
                 && Objects.equals(candidate.getAgentId(), actor.getAgentId())
                 && Objects.equals(candidate.getMemberRole(), actor.getMemberRole())
@@ -483,23 +490,23 @@ public class AgentTaskWorkspaceServiceImpl
     }
 
     private static boolean isExactTaskRow(
-            TaskRow row, String tenantId, String clientId, String taskId) {
-        return row != null && scope(row.getTenantId(), row.getClientId(), row.getTaskId(),
-                tenantId, clientId, taskId);
+            TaskRow row, String tenantId, String clientId, String ownerJiacn, String taskId) {
+        return row != null && scope(row.getTenantId(), row.getClientId(), row.getOwnerJiacn(), row.getTaskId(),
+                tenantId, clientId, ownerJiacn, taskId);
     }
 
-    private static boolean validActorMember(MemberRow row, String tenantId, String clientId,
+    private static boolean validActorMember(MemberRow row, String tenantId, String clientId, String ownerJiacn,
             String taskId, String actorAgentId) {
-        return validMember(row, tenantId, clientId, taskId)
+        return validMember(row, tenantId, clientId, ownerJiacn, taskId)
                 && actorAgentId.equals(row.getAgentId())
                 && ACTOR_STATUSES.contains(
                         AgentTaskMemberStatus.fromPersistedValue(row.getMemberStatus()));
     }
 
     private static boolean validMember(
-            MemberRow row, String tenantId, String clientId, String taskId) {
-        if (row == null || !scope(row.getTenantId(), row.getClientId(), row.getTaskId(),
-                tenantId, clientId, taskId)
+            MemberRow row, String tenantId, String clientId, String ownerJiacn, String taskId) {
+        if (row == null || !scope(row.getTenantId(), row.getClientId(), row.getOwnerJiacn(), row.getTaskId(),
+                tenantId, clientId, ownerJiacn, taskId)
                 || !validId(row.getAgentId(), 100)
                 || !MEMBER_ROLES.contains(row.getMemberRole())
                 || !ASSIGNMENT_SOURCES.contains(row.getAssignmentSource())
@@ -515,9 +522,9 @@ public class AgentTaskWorkspaceServiceImpl
     }
 
     private static boolean validWorkItem(
-            WorkItemRow row, String tenantId, String clientId, String taskId) {
-        if (row == null || !scope(row.getTenantId(), row.getClientId(), row.getTaskId(),
-                tenantId, clientId, taskId)
+            WorkItemRow row, String tenantId, String clientId, String ownerJiacn, String taskId) {
+        if (row == null || !scope(row.getTenantId(), row.getClientId(), row.getOwnerJiacn(), row.getTaskId(),
+                tenantId, clientId, ownerJiacn, taskId)
                 || !validId(row.getWorkItemId(), 100)
                 || !validText(row.getTitle(), 255) || !validId(row.getWorkType(), 30)
                 || (row.getAssigneeAgentId() != null
@@ -539,9 +546,9 @@ public class AgentTaskWorkspaceServiceImpl
     }
 
     private static boolean validRequest(
-            RequestRow row, String tenantId, String clientId, String taskId) {
-        if (row == null || !scope(row.getTenantId(), row.getClientId(), row.getTaskId(),
-                tenantId, clientId, taskId)
+            RequestRow row, String tenantId, String clientId, String ownerJiacn, String taskId) {
+        if (row == null || !scope(row.getTenantId(), row.getClientId(), row.getOwnerJiacn(), row.getTaskId(),
+                tenantId, clientId, ownerJiacn, taskId)
                 || !validId(row.getRequestId(), 100)
                 || !validId(row.getRequesterAgentId(), 100)
                 || !TARGET_TYPES.contains(row.getTargetType())
@@ -564,10 +571,10 @@ public class AgentTaskWorkspaceServiceImpl
     }
 
     private static boolean validArtifact(
-            ArtifactRow row, String tenantId, String clientId, String taskId) {
+            ArtifactRow row, String tenantId, String clientId, String ownerJiacn, String taskId) {
         return row != null
-                && scope(row.getTenantId(), row.getClientId(), row.getTaskId(),
-                        tenantId, clientId, taskId)
+                && scope(row.getTenantId(), row.getClientId(), row.getOwnerJiacn(), row.getTaskId(),
+                        tenantId, clientId, ownerJiacn, taskId)
                 && validId(row.getArtifactId(), 100)
                 && (row.getWorkItemId() == null || validId(row.getWorkItemId(), 100))
                 && validId(row.getProducerAgentId(), 100)
@@ -578,9 +585,10 @@ public class AgentTaskWorkspaceServiceImpl
                 && row.getCreatedAt() != null && row.getCreatedAt() > 0;
     }
 
-    private static boolean scope(String rowTenant, String rowClient, String rowTask,
-            String tenantId, String clientId, String taskId) {
-        return tenantId.equals(rowTenant) && clientId.equals(rowClient) && taskId.equals(rowTask);
+    private static boolean scope(String rowTenant, String rowClient, String rowOwner, String rowTask,
+            String tenantId, String clientId, String ownerJiacn, String taskId) {
+        return tenantId.equals(rowTenant) && clientId.equals(rowClient)
+                && ownerJiacn.equals(rowOwner) && taskId.equals(rowTask);
     }
 
     private static <T> List<T> complete(List<T> rows) {

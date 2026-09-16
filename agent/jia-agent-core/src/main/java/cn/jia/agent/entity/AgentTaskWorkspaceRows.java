@@ -11,6 +11,7 @@ public final class AgentTaskWorkspaceRows {
     public static class TaskRow {
         private String tenantId;
         private String clientId;
+        private String ownerJiacn;
         private String taskId;
         private String rewardStatus;
         private String assignedAgentId;
@@ -32,6 +33,7 @@ public final class AgentTaskWorkspaceRows {
     public static class MemberRow {
         private String tenantId;
         private String clientId;
+        private String ownerJiacn;
         private String taskId;
         private String agentId;
         private String memberRole;
@@ -49,6 +51,7 @@ public final class AgentTaskWorkspaceRows {
     public static class WorkItemRow {
         private String tenantId;
         private String clientId;
+        private String ownerJiacn;
         private String taskId;
         private String workItemId;
         private String title;
@@ -73,6 +76,7 @@ public final class AgentTaskWorkspaceRows {
     public static class RequestRow {
         private String tenantId;
         private String clientId;
+        private String ownerJiacn;
         private String taskId;
         private String requestId;
         private String workItemId;
@@ -93,6 +97,7 @@ public final class AgentTaskWorkspaceRows {
     public static class ArtifactRow {
         private String tenantId;
         private String clientId;
+        private String ownerJiacn;
         private String taskId;
         private String artifactId;
         private String workItemId;
@@ -108,6 +113,7 @@ public final class AgentTaskWorkspaceRows {
     public static class EventRow {
         private String tenantId;
         private String clientId;
+        private String ownerJiacn;
         private String taskId;
         private Long eventVersion;
         private String eventType;

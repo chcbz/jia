@@ -23,7 +23,7 @@ public interface AgentTaskEventDao extends IBaseDao<AgentTaskEventEntity> {
      * @return current event version, or null if task not found in scope
      * @throws IllegalArgumentException if scope is invalid
      */
-    Long lockAndAllocateVersion(String tenantId, String clientId, String taskId);
+    Long lockAndAllocateVersion(String tenantId, String clientId, String ownerJiacn, String taskId);
 
     /**
      * Insert an event entity with its pre-allocated event version.
@@ -46,7 +46,7 @@ public interface AgentTaskEventDao extends IBaseDao<AgentTaskEventEntity> {
      * @return 1 on success, 0 if version/scope mismatch
      */
     int commitEventVersion(
-            String tenantId, String clientId, String taskId,
+            String tenantId, String clientId, String ownerJiacn, String taskId,
             long expectedCurrentVersion, long newEventVersion,
             long updateTime);
 
@@ -57,14 +57,14 @@ public interface AgentTaskEventDao extends IBaseDao<AgentTaskEventEntity> {
      * is returned, ordered by event version ascending and bounded by {@code limit}.
      */
     List<AgentTaskEventEntity> findAfterVersion(
-            String tenantId, String clientId, String taskId, long afterVersion, int limit);
+            String tenantId, String clientId, String ownerJiacn, String taskId, long afterVersion, int limit);
 
     /** Return the byte-exact task scope's durable high-water, or null when absent. */
-    Long findCurrentVersion(String tenantId, String clientId, String taskId);
+    Long findCurrentVersion(String tenantId, String clientId, String ownerJiacn, String taskId);
 
     /** Return the earliest retained byte-exact event version, or null when no event is retained. */
-    Long findEarliestVersion(String tenantId, String clientId, String taskId);
+    Long findEarliestVersion(String tenantId, String clientId, String ownerJiacn, String taskId);
 
     AgentTaskEventEntity findByEventId(
-            String tenantId, String clientId, String eventId);
+            String tenantId, String clientId, String ownerJiacn, String eventId);
 }

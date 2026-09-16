@@ -16,10 +16,10 @@ public class AgentTaskEventDaoImpl
         implements AgentTaskEventDao {
 
     @Override
-    public Long lockAndAllocateVersion(String tenantId, String clientId, String taskId) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+    public Long lockAndAllocateVersion(String tenantId, String clientId, String ownerJiacn, String taskId) {
+        requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         requireExactId(taskId, "taskId", 100);
-        return baseMapper.lockTaskMetaForEventVersion(tenantId, clientId, taskId);
+        return baseMapper.lockTaskMetaForEventVersion(tenantId, clientId, ownerJiacn, taskId);
     }
 
     @Override
@@ -31,10 +31,10 @@ public class AgentTaskEventDaoImpl
 
     @Override
     public int commitEventVersion(
-            String tenantId, String clientId, String taskId,
+            String tenantId, String clientId, String ownerJiacn, String taskId,
             long expectedCurrentVersion, long newEventVersion,
             long updateTime) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         requireExactId(taskId, "taskId", 100);
         if (expectedCurrentVersion < 0) {
             throw new IllegalArgumentException("expectedCurrentVersion must not be negative");
@@ -52,14 +52,14 @@ public class AgentTaskEventDaoImpl
             throw new IllegalArgumentException("updateTime must be positive");
         }
         return baseMapper.incrementCurrentEventVersion(
-                tenantId, clientId, taskId,
+                tenantId, clientId, ownerJiacn, taskId,
                 expectedCurrentVersion, newEventVersion, updateTime);
     }
 
     @Override
     public List<AgentTaskEventEntity> findAfterVersion(
-            String tenantId, String clientId, String taskId, long afterVersion, int limit) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+            String tenantId, String clientId, String ownerJiacn, String taskId, long afterVersion, int limit) {
+        requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         requireExactId(taskId, "taskId", 100);
         if (afterVersion < 0) {
             throw new IllegalArgumentException("afterVersion must not be negative");
@@ -69,29 +69,40 @@ public class AgentTaskEventDaoImpl
                     "limit must be between 1 and " + MAX_REPLAY_PAGE_SIZE);
         }
         return baseMapper.findExactByTaskScopeAfterVersion(
-                tenantId, clientId, taskId, afterVersion, limit);
+                tenantId, clientId, ownerJiacn, taskId, afterVersion, limit);
     }
 
     @Override
-    public Long findCurrentVersion(String tenantId, String clientId, String taskId) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+    public Long findCurrentVersion(String tenantId, String clientId, String ownerJiacn, String taskId) {
+        requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         requireExactId(taskId, "taskId", 100);
-        return baseMapper.findExactCurrentEventVersion(tenantId, clientId, taskId);
+        return baseMapper.findExactCurrentEventVersion(tenantId, clientId, ownerJiacn, taskId);
     }
 
     @Override
-    public Long findEarliestVersion(String tenantId, String clientId, String taskId) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+    public Long findEarliestVersion(String tenantId, String clientId, String ownerJiacn, String taskId) {
+        requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         requireExactId(taskId, "taskId", 100);
-        return baseMapper.findExactEarliestEventVersion(tenantId, clientId, taskId);
+        return baseMapper.findExactEarliestEventVersion(tenantId, clientId, ownerJiacn, taskId);
     }
 
     @Override
     public AgentTaskEventEntity findByEventId(
-            String tenantId, String clientId, String eventId) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+            String tenantId, String clientId, String ownerJiacn, String eventId) {
+        requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         requireExactId(eventId, "eventId", 100);
-        return baseMapper.findExactByEventId(tenantId, clientId, eventId);
+        return baseMapper.findExactByEventId(tenantId, clientId, ownerJiacn, eventId);
+    }
+
+    private void requireStrictOwnerScope(String tenantId, String clientId, String ownerJiacn) {
+        if (!"0".equals(tenantId)) {
+            throw new IllegalArgumentException("tenantId must be literal 0");
+        }
+        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        requireExactId(ownerJiacn, "ownerJiacn", 50);
+        if ("0".equals(ownerJiacn)) {
+            throw new IllegalArgumentException("ownerJiacn must be a real task owner");
+        }
     }
 
     private void requireExactId(String value, String name, int maxLength) {
@@ -108,16 +119,7 @@ public class AgentTaskEventDaoImpl
         if (event == null) {
             throw new IllegalArgumentException("event must not be null");
         }
-        requireExactId(event.getTenantId(), "tenantId", 50);
-        requireExactId(event.getClientId(), "clientId", 50);
-        if ("0".equals(event.getTenantId())) {
-            requireExactId(event.getOwnerJiacn(), "ownerJiacn", 50);
-            if ("0".equals(event.getOwnerJiacn())) {
-                throw new IllegalArgumentException("ownerJiacn must be a real task owner");
-            }
-        } else if (event.getOwnerJiacn() != null) {
-            requireExactId(event.getOwnerJiacn(), "ownerJiacn", 50);
-        }
+        requireStrictOwnerScope(event.getTenantId(), event.getClientId(), event.getOwnerJiacn());
         requireExactId(event.getTaskId(), "taskId", 100);
         requireExactId(event.getEventId(), "eventId", 100);
         if (event.getEventVersion() == null || event.getEventVersion() <= 0) {

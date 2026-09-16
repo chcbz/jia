@@ -9,6 +9,6 @@ public interface AgentTaskContextPackService {
      * Ownership/member/visibility ACL still applies inside the generator's collaborators.
      */
     AgentTaskContextPackDTO generate(
-            String tenantId, String clientId, String taskId,
+            String tenantId, String clientId, String ownerJiacn, String taskId,
             String actorAgentId, String expectedVersion);
 }
