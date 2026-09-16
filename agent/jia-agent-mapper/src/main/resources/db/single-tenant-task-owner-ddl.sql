@@ -180,11 +180,11 @@ DEALLOCATE PREPARE st_owner_taskbountyquote;
 SET @st_owner_ddl = (
     SELECT IF(
         EXISTS (SELECT 1 FROM information_schema.tables
-                WHERE table_schema = @st_owner_schema AND table_name = 'agent_task_claim_operation')
+                WHERE table_schema = @st_owner_schema AND table_name = 'agent_task_bounty_claim_operation')
         AND NOT EXISTS (SELECT 1 FROM information_schema.columns
-                        WHERE table_schema = @st_owner_schema AND table_name = 'agent_task_claim_operation'
+                        WHERE table_schema = @st_owner_schema AND table_name = 'agent_task_bounty_claim_operation'
                           AND column_name = 'owner_jiacn'),
-        'ALTER TABLE `agent_task_claim_operation` ADD COLUMN `owner_jiacn` VARCHAR(50) NULL COMMENT ''Authenticated task owner''',
+        'ALTER TABLE `agent_task_bounty_claim_operation` ADD COLUMN `owner_jiacn` VARCHAR(50) NULL COMMENT ''Authenticated task owner''',
         'SELECT 1')
 );
 PREPARE st_owner_taskclaimoperation FROM @st_owner_ddl;
@@ -194,11 +194,11 @@ DEALLOCATE PREPARE st_owner_taskclaimoperation;
 SET @st_owner_ddl = (
     SELECT IF(
         EXISTS (SELECT 1 FROM information_schema.tables
-                WHERE table_schema = @st_owner_schema AND table_name = 'agent_task_settlement')
+                WHERE table_schema = @st_owner_schema AND table_name = 'agent_task_bounty_settlement')
         AND NOT EXISTS (SELECT 1 FROM information_schema.columns
-                        WHERE table_schema = @st_owner_schema AND table_name = 'agent_task_settlement'
+                        WHERE table_schema = @st_owner_schema AND table_name = 'agent_task_bounty_settlement'
                           AND column_name = 'owner_jiacn'),
-        'ALTER TABLE `agent_task_settlement` ADD COLUMN `owner_jiacn` VARCHAR(50) NULL COMMENT ''Authenticated task owner''',
+        'ALTER TABLE `agent_task_bounty_settlement` ADD COLUMN `owner_jiacn` VARCHAR(50) NULL COMMENT ''Authenticated task owner''',
         'SELECT 1')
 );
 PREPARE st_owner_tasksettlement FROM @st_owner_ddl;
