@@ -83,6 +83,7 @@ public class AgentTaskEventWriterImpl implements AgentTaskEventWriter {
             event.setOccurredAt(command.getOccurredAt());
             event.setTenantId(command.getTenantId());
             event.setClientId(command.getClientId());
+            event.setOwnerJiacn(command.getOwnerJiacn());
             event.setCreateTime(now);
             event.setUpdateTime(now);
 
@@ -121,6 +122,14 @@ public class AgentTaskEventWriterImpl implements AgentTaskEventWriter {
         }
         requireNonBlank(cmd.getTenantId(), "tenantId", 50);
         requireNonBlank(cmd.getClientId(), "clientId", 50);
+        if ("0".equals(cmd.getTenantId())) {
+            requireNonBlank(cmd.getOwnerJiacn(), "ownerJiacn", 50);
+            if ("0".equals(cmd.getOwnerJiacn())) {
+                throw new IllegalArgumentException("ownerJiacn must be a real task owner");
+            }
+        } else if (cmd.getOwnerJiacn() != null) {
+            requireClean(cmd.getOwnerJiacn(), "ownerJiacn", 50);
+        }
         requireNonBlank(cmd.getTaskId(), "taskId", 100);
         requireNonBlank(cmd.getEventId(), "eventId", 100);
         requireNonBlank(cmd.getActorType(), "actorType", 20);

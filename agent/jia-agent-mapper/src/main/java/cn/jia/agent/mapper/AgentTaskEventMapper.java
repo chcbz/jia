@@ -52,12 +52,12 @@ public interface AgentTaskEventMapper extends BaseMapper<AgentTaskEventEntity> {
                 (task_id, event_version, event_id, event_type,
                  actor_type, actor_id, aggregate_type, aggregate_id,
                  event_json, occurred_at,
-                 tenant_id, client_id, create_time, update_time)
+                 tenant_id, client_id, owner_jiacn, create_time, update_time)
             VALUES
                 (#{taskId}, #{eventVersion}, #{eventId}, #{eventType},
                  #{actorType}, #{actorId}, #{aggregateType}, #{aggregateId},
                  #{eventJson}, #{occurredAt},
-                 #{tenantId}, #{clientId}, #{createTime}, #{updateTime})
+                 #{tenantId}, #{clientId}, #{ownerJiacn}, #{createTime}, #{updateTime})
             """)
     int insertEvent(AgentTaskEventEntity event);
 

@@ -15,14 +15,24 @@ final class AgentTaskMutationEventSupport {
             String eventType, String actorType, String actorId,
             String aggregateType, String aggregateId,
             TaskEventPayload.Builder payload, long occurredAt, long resultVersion) {
-        String seed = tenantId + '\u0000' + clientId + '\u0000' + taskId + '\u0000'
-                + eventType + '\u0000' + aggregateType + '\u0000' + aggregateId + '\u0000'
-                + resultVersion;
+        return command(tenantId, clientId, null, taskId, eventType, actorType, actorId,
+                aggregateType, aggregateId, payload, occurredAt, resultVersion);
+    }
+
+    static AgentTaskEventWriteCommand command(
+            String tenantId, String clientId, String ownerJiacn, String taskId,
+            String eventType, String actorType, String actorId,
+            String aggregateType, String aggregateId,
+            TaskEventPayload.Builder payload, long occurredAt, long resultVersion) {
+        String seed = tenantId + '\u0000' + clientId + '\u0000' + ownerJiacn + '\u0000'
+                + taskId + '\u0000' + eventType + '\u0000' + aggregateType + '\u0000'
+                + aggregateId + '\u0000' + resultVersion;
         String eventId = EVENT_ID_PREFIX
                 + TaskEventPayload.ContentDigest.fromUtf8(seed).sha256();
         return new AgentTaskEventWriteCommand()
                 .setTenantId(tenantId)
                 .setClientId(clientId)
+                .setOwnerJiacn(ownerJiacn)
                 .setTaskId(taskId)
                 .setEventId(eventId)
                 .setEventType(eventType)

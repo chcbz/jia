@@ -114,6 +114,34 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
             @Param("finalTaskId") String finalTaskId,
             @Param("updateTime") long updateTime);
 
+    @Update("""
+            UPDATE agent_task_meta
+            SET task_id = #{finalTaskId},
+                update_time = #{updateTime}
+            WHERE tenant_id = #{tenantId}
+              AND client_id = #{clientId}
+              AND owner_jiacn = #{ownerJiacn}
+              AND task_id = #{reservedTaskId}
+              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+              AND OCTET_LENGTH(owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
+              AND CAST(task_id AS BINARY) = CAST(#{reservedTaskId} AS BINARY)
+              AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{reservedTaskId})
+              AND reward_status = 'open'
+              AND task_version = 0
+              AND current_event_version = 0
+            """)
+    int rekeyReservedTaskRootInOwnerScope(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
+            @Param("reservedTaskId") String reservedTaskId,
+            @Param("finalTaskId") String finalTaskId,
+            @Param("updateTime") long updateTime);
+
     @Delete("""
             DELETE FROM agent_task_meta
             WHERE tenant_id = #{tenantId}

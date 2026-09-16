@@ -28,6 +28,10 @@ public class AgentTaskEventWriteCommand implements Serializable {
     @Schema(description = "客户端 scope (max 50 chars, byte-exact)", requiredMode = Schema.RequiredMode.REQUIRED)
     private String clientId;
 
+    /** Authenticated task owner; required by strict tenant-0 task writes. */
+    @Schema(description = "任务 owner scope (max 50 chars, byte-exact)")
+    private String ownerJiacn;
+
     @Schema(description = "任务ID (max 100 chars, byte-exact)", requiredMode = Schema.RequiredMode.REQUIRED)
     private String taskId;
 
