@@ -22,5 +22,6 @@ public final class AgentRuntimeAuthentication extends AbstractAuthenticationToke
         super.setAuthenticated(false);
     }
 
-    public record Scope(String tenantId, String clientId, String agentId, String runtimeInstanceId) { }
+    public record Scope(String tenantId, String clientId, String ownerJiacn,
+                        String agentId, String runtimeInstanceId) { }
 }
