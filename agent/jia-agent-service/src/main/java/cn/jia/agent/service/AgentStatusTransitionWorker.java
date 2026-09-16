@@ -119,7 +119,7 @@ public class AgentStatusTransitionWorker {
         }
 
         AgentIdentityRegistryEntity identity = identityRegistryDao.findExactByBindingInScopeForUpdate(
-                ownerJiacn, clientId, ownerJiacn, bindingId);
+                "0", clientId, ownerJiacn, bindingId);
         if (!isActiveIdentity(identity, ownerJiacn, clientId, bindingId, agentId)) {
             return null;
         }
@@ -155,33 +155,33 @@ public class AgentStatusTransitionWorker {
     }
 
     private boolean isActiveBinding(AgentPersonaBindingEntity binding,
-            String tenantId, String clientId, long bindingId) {
+            String ownerJiacn, String clientId, long bindingId) {
         return binding != null
                 && Objects.equals(binding.getId(), bindingId)
+                && "0".equals(binding.getTenantId())
                 && Objects.equals(binding.getClientId(), clientId)
-                && Objects.equals(binding.getJiacn(), tenantId)
-                && (binding.getTenantId() == null || Objects.equals(binding.getTenantId(), tenantId))
+                && Objects.equals(binding.getJiacn(), ownerJiacn)
                 && binding.getStatus() != null
                 && binding.getStatus() == AgentConstants.BINDING_STATUS_ACTIVE;
     }
 
     private boolean isActiveIdentity(AgentIdentityRegistryEntity identity,
-            String tenantId, String clientId, long bindingId, String agentId) {
+            String ownerJiacn, String clientId, long bindingId, String agentId) {
         return identity != null
-                && Objects.equals(identity.getTenantId(), tenantId)
+                && "0".equals(identity.getTenantId())
                 && Objects.equals(identity.getClientId(), clientId)
-                && Objects.equals(identity.getOwnerJiacn(), tenantId)
+                && Objects.equals(identity.getOwnerJiacn(), ownerJiacn)
                 && Objects.equals(identity.getBindingId(), bindingId)
                 && Objects.equals(identity.getCanonicalAgentId(), agentId)
                 && AgentConstants.IDENTITY_STATUS_ACTIVE.equals(identity.getLifecycleStatus());
     }
 
     private boolean isExactCurrentRuntime(AgentRuntimeEntity runtime,
-            String tenantId, String clientId, long bindingId, String agentId) {
+            String ownerJiacn, String clientId, long bindingId, String agentId) {
         return runtime != null
                 && Objects.equals(runtime.getAgentId(), agentId)
                 && Objects.equals(runtime.getClientId(), clientId)
-                && Objects.equals(runtime.getOwnerJiacn(), tenantId)
+                && Objects.equals(runtime.getOwnerJiacn(), ownerJiacn)
                 && Objects.equals(runtime.getBindingId(), bindingId);
     }
 

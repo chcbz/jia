@@ -100,12 +100,12 @@ public class AgentTaskContextPackServiceImpl implements AgentTaskContextPackServ
             pack.setWorkItems(workItems(workspace));
             AgentTaskContextPackDTO.ArtifactsSection authoritativeArtifacts = artifacts(
                     taskId, outcomeService.listAuthoritativeAccepted(
-                            tenantId, clientId, taskId, actorAgentId, null, MAX_ARTIFACTS + 1));
+                            tenantId, clientId, ownerJiacn, taskId, actorAgentId, null, MAX_ARTIFACTS + 1));
             pack.setAuthoritativeArtifacts(authoritativeArtifacts);
             pack.setOpenRequests(requests(workspace));
             pack.setRecentEvents(events(workspace, authoritativeArtifacts));
             pack.setConversation(conversation(
-                    tenantId, clientId, taskId, actorAgentId));
+                    tenantId, clientId, ownerJiacn, taskId, actorAgentId));
             pack.setDigestAlgorithm("SHA-256");
             pack.setDigest(digest(pack));
             return pack;
@@ -387,7 +387,8 @@ public class AgentTaskContextPackServiceImpl implements AgentTaskContextPackServ
     }
 
     private AgentTaskContextPackDTO.ConversationSection conversation(
-            String tenantId, String clientId, String taskId, String actorAgentId) {
+            String tenantId, String clientId, String ownerJiacn, String taskId,
+            String actorAgentId) {
         AgentTaskContextPackDTO.ConversationSection section =
                 new AgentTaskContextPackDTO.ConversationSection();
         section.setContentOmitted(true);
@@ -399,7 +400,7 @@ public class AgentTaskContextPackServiceImpl implements AgentTaskContextPackServ
         AgentTaskContextPackConversationSource.ConversationReference reference;
         try {
             reference = conversationSource.get().findReference(
-                    tenantId, clientId, taskId, actorAgentId);
+                    tenantId, clientId, ownerJiacn, taskId, actorAgentId);
         } catch (RuntimeException exception) {
             section.setStatus(UNAVAILABLE);
             section.setReason("CONVERSATION_SOURCE_UNAVAILABLE");

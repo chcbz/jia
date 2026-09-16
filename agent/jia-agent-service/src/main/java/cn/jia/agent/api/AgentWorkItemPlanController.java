@@ -66,7 +66,7 @@ public class AgentWorkItemPlanController {
         AgentWorkItemPlanSuggestRequestDTO command = parse(
                 body, AgentWorkItemPlanSuggestRequestDTO.class);
         return ok(planService.suggest(
-                scope.tenantId(), scope.clientId(), taskId, actorAgentId, command));
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId, actorAgentId, command));
     }
 
     @PostMapping(value = "/{taskId}/work-item-plans/confirm",
@@ -83,7 +83,7 @@ public class AgentWorkItemPlanController {
         requireIdempotencyKey(idempotencyKey);
         AgentWorkItemPlanConfirmRequestDTO command = parse(
                 body, AgentWorkItemPlanConfirmRequestDTO.class);
-        return ok(planService.confirm(scope.tenantId(), scope.clientId(), taskId,
+        return ok(planService.confirm(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId,
                 actorAgentId, idempotencyKey, command));
     }
 
@@ -128,13 +128,14 @@ public class AgentWorkItemPlanController {
             throw new AuthenticationFailure(false);
         }
         Map<String, Object> claims = jwt.getToken().getClaims();
-        Object tenant = claims.get("jiacn");
+        Object owner = claims.get("jiacn");
         Object client = claims.get("client_id");
-        if (!(tenant instanceof String tenantId) || !(client instanceof String clientId)
-                || !exact(tenantId, 50) || !exact(clientId, 50)) {
+        if (!(owner instanceof String ownerJiacn) || !(client instanceof String clientId)
+                || !exact(ownerJiacn, 50) || !exact(clientId, 50)
+                || "0".equals(ownerJiacn) || "0".equals(clientId)) {
             throw new AuthenticationFailure(true);
         }
-        return new Scope(tenantId, clientId);
+        return new Scope("0", clientId, ownerJiacn);
     }
 
     private static String actor(HttpServletRequest request) {
@@ -212,7 +213,7 @@ public class AgentWorkItemPlanController {
                 .body(new ErrorBody(code, message));
     }
 
-    private record Scope(String tenantId, String clientId) {
+    private record Scope(String tenantId, String clientId, String ownerJiacn) {
     }
 
     public record ErrorBody(String code, String message) {

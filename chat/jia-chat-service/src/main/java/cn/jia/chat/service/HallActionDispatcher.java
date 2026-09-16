@@ -1,5 +1,6 @@
 package cn.jia.chat.service;
 
+import cn.jia.agent.access.AgentTaskAccessLevel;
 import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.config.AgentRabbitActivationState;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
@@ -16,8 +17,6 @@ import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.AgentTaskCollaborationAccessService;
 import cn.jia.agent.service.impl.AgentCommandCanonicalCodec;
 import cn.jia.chat.handler.AgentWebSocketHandler;
-import cn.jia.core.context.EsContext;
-import cn.jia.core.context.EsContextHolder;
 import jakarta.inject.Inject;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
@@ -99,28 +98,30 @@ public class HallActionDispatcher {
         this.legacyConstruction = false;
     }
 
+    /** Owner-less dispatch is forbidden; HTTP callers must use the JWT-derived overload. */
     public HallActionDispatchResult dispatch(HallActionIntent intent) {
-        return dispatch(intent, null);
+        return rejected(intent);
     }
 
     public HallActionDispatchResult dispatch(HallActionIntent intent, HallTrustedCaller trustedCaller) {
-        if (legacyConstruction || gate.state() == AgentRabbitActivationState.OFF) {
-            return legacyDispatch(intent, null);
+        if (legacyConstruction || trustedCaller == null) {
+            return rejected(intent);
+        }
+        try {
+            requireTrustedCaller(trustedCaller);
+        } catch (RuntimeException invalidScope) {
+            return rejected(intent);
+        }
+        TaskCommandScope scope = new TaskCommandScope(
+                trustedCaller.tenantId(), trustedCaller.clientId(), trustedCaller.ownerJiacn(),
+                trustedCaller.callerAgentId());
+        if (gate.state() == AgentRabbitActivationState.OFF) {
+            return legacyDispatch(intent, scope);
         }
         boolean dispatchState = isDispatchState();
-        if (dispatchState) {
-            if (trustedCaller == null) {
-                return rejected(intent);
-            }
-            try {
-                requireTrustedScope(trustedCaller);
-            } catch (RuntimeException invalidScope) {
-                return rejected(intent);
-            }
-            if (!gate.allowsDispatch(trustedCaller.tenantId(), trustedCaller.clientId())) {
-                return legacyDispatch(intent, new TaskCommandScope(
-                        trustedCaller.tenantId(), trustedCaller.clientId()));
-            }
+        if (dispatchState && !gate.allowsDispatch(
+                trustedCaller.tenantId(), trustedCaller.clientId())) {
+            return legacyDispatch(intent, scope);
         }
 
         try {
@@ -144,7 +145,8 @@ public class HallActionDispatcher {
             }
             // Shadow mode never dispatches its capture directly; M1 remains the delivery path.
             return legacyDispatch(intent,
-                    new TaskCommandScope(request.tenantId(), request.clientId()));
+                    new TaskCommandScope(request.tenantId(), request.clientId(),
+                            request.ownerJiacn(), trustedCaller.callerAgentId()));
         } catch (AgentCommandShadowIntentException shadowIntent) {
             if (intent != null) intent.setStatus(STATUS_FAILED);
             return new HallActionDispatchResult(
@@ -157,9 +159,12 @@ public class HallActionDispatcher {
         }
     }
 
+    /**
+     * Legacy transport still derives the caller owner from the authenticated context; it never
+     * reads a mailbox only by agent id.
+     */
     public List<HallAgentMailboxItem> mailbox(String agentId) {
-        List<HallAgentMailboxItem> entries = mailbox.get(agentId);
-        return entries == null ? List.of() : List.copyOf(entries);
+        return List.of();
     }
 
     public Object mailbox(
@@ -167,7 +172,15 @@ public class HallActionDispatcher {
             boolean includeTerminal, HallTrustedCaller trustedCaller) {
         if (legacyConstruction || gate.state() == AgentRabbitActivationState.OFF
                 || !isDispatchState()) {
-            return mailbox(agentId);
+            if (trustedCaller == null) return List.of();
+            try {
+                requireTrustedScope(trustedCaller);
+            } catch (RuntimeException invalidScope) {
+                return List.of();
+            }
+            return mailbox(new TaskCommandScope(
+                    trustedCaller.tenantId(), trustedCaller.clientId(),
+                    trustedCaller.ownerJiacn(), trustedCaller.callerAgentId()), agentId);
         }
         if (trustedCaller == null || trustedCaller.callerAgentId() == null) {
             return emptyDurableMailbox(includeTerminal);
@@ -175,7 +188,9 @@ public class HallActionDispatcher {
         MailboxRequest request = validateMailboxRequest(
                 agentId, taskId, cursor, limit, trustedCaller);
         if (!request.durableScope()) {
-            return mailbox(agentId);
+            return mailbox(new TaskCommandScope(
+                    trustedCaller.tenantId(), trustedCaller.clientId(),
+                    trustedCaller.ownerJiacn(), trustedCaller.callerAgentId()), agentId);
         }
         AgentCommandMailboxService query = mailboxProvider.getIfAvailable();
         if (query == null) {
@@ -276,7 +291,7 @@ public class HallActionDispatcher {
         AgentCommandCanonicalCodec.businessBytes(draft);
         requireHostingAdmission(trustedCaller.tenantId(), trustedCaller.clientId(), intent.getActorAgentId(), commandType);
         return new DurableRequest(
-                trustedCaller.tenantId(), trustedCaller.clientId(),
+                trustedCaller.tenantId(), trustedCaller.clientId(), trustedCaller.ownerJiacn(),
                 intent.getActorAgentId(), draft);
     }
 
@@ -352,28 +367,38 @@ public class HallActionDispatcher {
                     intent == null ? null : intent.getActorAgentId(),
                     STATUS_FAILED, "actorAgentId and taskId are required");
         }
-        TaskCommandScope scope = trustedOverride == null
-                ? currentTaskCommandScope(intent) : trustedOverride;
+        TaskCommandScope scope = trustedOverride;
         if (scope == null) {
             return new HallActionDispatchResult(intent.getIntentId(), intent.getActorAgentId(), STATUS_FAILED,
                     "tenantId, clientId and taskId are required");
         }
         String agentId = intent.getActorAgentId();
         try {
+            requireExact(scope.callerAgentId(), "callerAgentId", 100);
+            for (String memberAgentId : List.of(scope.callerAgentId(), agentId)) {
+                AgentTaskAccessLevel access = accessService.resolveMemberAccess(
+                        scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
+                        intent.getTaskId(), memberAgentId);
+                if (access == null || !access.canWrite()) {
+                    return rejected(intent);
+                }
+                agentService.requireApiKeyOwnedAgent(
+                        scope.clientId(), scope.ownerJiacn(), memberAgentId);
+            }
             requireHostingAdmission(scope.tenantId(), scope.clientId(), agentId,
                     AgentProtocolConstants.commandTypeForLegacyAction(intent.getActionType()));
         } catch (RuntimeException expired) {
             return rejected(intent);
         }
         Map<String, Object> payload = buildLegacyPayload(intent, scope);
-        if (!agentWebSocketHandler.isAgentConnected(scope.tenantId(), scope.clientId(), agentId)) {
-            queue(agentId, intent, payload);
+        if (!agentWebSocketHandler.isAgentConnected(scope.ownerJiacn(), scope.clientId(), agentId)) {
+            queue(scope, agentId, intent, payload);
             intent.setStatus(STATUS_QUEUED);
             return new HallActionDispatchResult(intent.getIntentId(), agentId, STATUS_QUEUED, "agent is offline");
         }
         boolean delivered = agentWebSocketHandler.sendDirectMessageToAgent(agentId, payload);
         if (!delivered) {
-            queue(agentId, intent, payload);
+            queue(scope, agentId, intent, payload);
             intent.setStatus(STATUS_QUEUED);
             return new HallActionDispatchResult(intent.getIntentId(), agentId, STATUS_QUEUED, "agent delivery failed");
         }
@@ -404,6 +429,7 @@ public class HallActionDispatcher {
         putIfPresent(payload, "causationId", intent.getTriggerEventId());
         payload.put("tenantId", scope.tenantId());
         payload.put("clientId", scope.clientId());
+        payload.put("ownerJiacn", scope.ownerJiacn());
         payload.put("conversationId", intent.getConversationId());
         payload.put("conversationType", "juyiting");
         payload.put("taskId", intent.getTaskId());
@@ -427,7 +453,8 @@ public class HallActionDispatcher {
         return payload;
     }
 
-    private void queue(String agentId, HallActionIntent intent, Map<String, ?> payload) {
+    private void queue(
+            TaskCommandScope scope, String agentId, HallActionIntent intent, Map<String, ?> payload) {
         HallAgentMailboxItem item = new HallAgentMailboxItem();
         item.setIntentId(intent.getIntentId());
         item.setAgentId(agentId);
@@ -435,18 +462,18 @@ public class HallActionDispatcher {
         item.setStatus("pending");
         item.setCreateTime(System.currentTimeMillis());
         item.setUpdateTime(item.getCreateTime());
-        mailbox.computeIfAbsent(agentId, key -> new CopyOnWriteArrayList<>()).add(item);
+        mailbox.computeIfAbsent(mailboxKey(scope, agentId), key -> new CopyOnWriteArrayList<>()).add(item);
     }
 
-    private TaskCommandScope currentTaskCommandScope(HallActionIntent intent) {
-        EsContext context = EsContextHolder.getContext();
-        String tenantId = context == null ? null : context.getJiacn();
-        String clientId = context == null ? null : context.getClientId();
-        if (!StringUtils.hasText(tenantId) || !StringUtils.hasText(clientId)
-                || !StringUtils.hasText(intent.getTaskId())) {
-            return null;
-        }
-        return new TaskCommandScope(tenantId, clientId);
+    private List<HallAgentMailboxItem> mailbox(TaskCommandScope scope, String agentId) {
+        if (scope == null || !StringUtils.hasText(agentId)) return List.of();
+        List<HallAgentMailboxItem> entries = mailbox.get(mailboxKey(scope, agentId));
+        return entries == null ? List.of() : List.copyOf(entries);
+    }
+
+    private String mailboxKey(TaskCommandScope scope, String agentId) {
+        return scope.tenantId() + '\u0000' + scope.clientId() + '\u0000'
+                + scope.ownerJiacn() + '\u0000' + agentId;
     }
 
     private boolean isDispatchState() {
@@ -487,11 +514,13 @@ public class HallActionDispatcher {
         if (value != null) map.put(key, value);
     }
 
-    private record TaskCommandScope(String tenantId, String clientId) {
+    private record TaskCommandScope(
+            String tenantId, String clientId, String ownerJiacn, String callerAgentId) {
     }
 
     private record DurableRequest(
-            String tenantId, String clientId, String targetAgentId, AgentCommandDraft draft) {
+            String tenantId, String clientId, String ownerJiacn,
+            String targetAgentId, AgentCommandDraft draft) {
     }
 
     private record Cursor(long createTime, long id) {

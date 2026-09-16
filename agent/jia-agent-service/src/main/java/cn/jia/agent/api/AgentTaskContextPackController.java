@@ -123,10 +123,14 @@ public class AgentTaskContextPackController {
     }
 
     private static Scope requireJwtScope(Authentication authentication) {
-        if (authentication instanceof AgentRuntimeAuthentication) {
-            // The native runtime principal does not yet carry an authenticated user owner.
-            // Do not infer owner from tenant or agent ID.
-            throw new ContextPackAuthenticationException(true);
+        if (authentication instanceof AgentRuntimeAuthentication runtime && runtime.isAuthenticated()) {
+            var scope = runtime.getPrincipal();
+            if (!"0".equals(scope.tenantId()) || !validExact(scope.clientId(), 50)
+                    || !validExact(scope.ownerJiacn(), 50) || !validExact(scope.agentId(), 100)
+                    || !validExact(scope.runtimeInstanceId(), 100)) {
+                throw new ContextPackAuthenticationException(true);
+            }
+            return new Scope("0", scope.clientId(), scope.ownerJiacn(), scope.agentId());
         }
         if (authentication == null || !authentication.isAuthenticated()
                 || !(authentication instanceof JwtAuthenticationToken jwt)) {

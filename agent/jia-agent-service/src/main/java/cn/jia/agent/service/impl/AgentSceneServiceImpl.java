@@ -90,7 +90,7 @@ public class AgentSceneServiceImpl implements AgentSceneService {
         SceneScope scope = requireScope(sceneId);
         long now = System.currentTimeMillis();
         List<AgentSceneSnapshotRow> rows = safeList(stateDao.findSnapshotRows(
-                scope.tenantId(), scope.clientId(), scope.sceneId(), now));
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.sceneId(), now));
         if (rows.isEmpty()) {
             throw new IllegalStateException("Scoped scene snapshot query returned no fence row");
         }
@@ -164,10 +164,10 @@ public class AgentSceneServiceImpl implements AgentSceneService {
         AgentScenePhaseReportEntity reservation = toPhaseReportEntity(
                 report, PHASE_RESULT_PENDING_INTERNAL, processedAt);
         boolean reservationOwner = phaseReportDao.tryReserve(
-                scope.tenantId(), scope.clientId(), scope.sceneId(), reservation);
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.sceneId(), reservation);
         if (!reservationOwner) {
             AgentScenePhaseReportEntity original = phaseReportDao.findByReportIdForUpdate(
-                    scope.tenantId(), scope.clientId(), scope.sceneId(), report.getReportId());
+                    scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.sceneId(), report.getReportId());
             if (original == null) {
                 throw new IllegalStateException(
                         "Non-owner phase reservation has no scoped finalized row");
@@ -177,15 +177,15 @@ public class AgentSceneServiceImpl implements AgentSceneService {
                     AgentSceneConstants.RESULT_IGNORED_DUPLICATE);
         }
 
-        eventDao.lockSceneVersionScope(scope.tenantId(), scope.clientId(), scope.sceneId());
+        eventDao.lockSceneVersionScope(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.sceneId());
         AgentSceneStateEntity current = stateDao.findByAgent(
-                scope.tenantId(), scope.clientId(), scope.sceneId(), report.getAgentId());
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.sceneId(), report.getAgentId());
         boolean exactCurrent = phaseMatchesCurrent(report, current);
         String finalResult = exactCurrent
                 ? AgentSceneConstants.RESULT_ACCEPTED
                 : AgentSceneConstants.RESULT_IGNORED_STALE;
         if (phaseReportDao.finalizePendingResult(
-                scope.tenantId(), scope.clientId(), scope.sceneId(), report.getReportId(),
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.sceneId(), report.getReportId(),
                 PHASE_RESULT_PENDING_INTERNAL, finalResult, processedAt) != 1) {
             throw new IllegalStateException("Phase report reservation was not finalized exactly once");
         }
@@ -195,12 +195,12 @@ public class AgentSceneServiceImpl implements AgentSceneService {
         }
 
         long sceneVersion = eventDao.nextSceneVersion(
-                scope.tenantId(), scope.clientId(), scope.sceneId());
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.sceneId());
         if (sceneVersion <= 0) {
             throw new IllegalStateException("Allocated sceneVersion must be positive");
         }
         int updated = stateDao.updatePhase(
-                scope.tenantId(), scope.clientId(), scope.sceneId(), report.getAgentId(),
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.sceneId(), report.getAgentId(),
                 report.getStateVersion(), report.getPhase(), processedAt);
         if (updated <= 0) {
             throw new IllegalStateException("Scoped scene state changed while its version lock was held");
@@ -212,7 +212,7 @@ public class AgentSceneServiceImpl implements AgentSceneService {
         event.setEventType(EVENT_STATE_UPDATED);
         event.setState(publishedState);
         event.setOccurredAt(processedAt);
-        if (eventDao.insert(scope.tenantId(), scope.clientId(), scope.sceneId(), event) <= 0) {
+        if (eventDao.insert(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.sceneId(), event) <= 0) {
             throw new IllegalStateException("Unable to persist accepted phase event");
         }
         publishAfterCommit(scope, event);
@@ -233,7 +233,7 @@ public class AgentSceneServiceImpl implements AgentSceneService {
          * writers therefore serialize persona and stateVersion decisions until commit/rollback.
          */
         long sceneVersion = eventDao.nextSceneVersion(
-                scope.tenantId(), scope.clientId(), scope.sceneId());
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.sceneId());
         if (sceneVersion <= 0) {
             throw new IllegalStateException("Allocated sceneVersion must be positive");
         }
@@ -248,7 +248,7 @@ public class AgentSceneServiceImpl implements AgentSceneService {
             throw new IllegalArgumentException("personaCode does not match the scoped real agent");
         }
         AgentSceneStateEntity current = stateDao.findByAgent(
-                scope.tenantId(), scope.clientId(), scope.sceneId(), requested.getAgentId());
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.sceneId(), requested.getAgentId());
         rejectPersonaConflict(scope, requested, realAgents, now);
         long currentStateVersion = current == null || current.getStateVersion() == null
                 ? 0L : current.getStateVersion();
@@ -257,7 +257,7 @@ public class AgentSceneServiceImpl implements AgentSceneService {
         }
         long nextStateVersion = currentStateVersion + 1;
         AgentSceneStateEntity persisted = toStateEntity(requested, nextStateVersion);
-        if (stateDao.upsert(scope.tenantId(), scope.clientId(), scope.sceneId(), persisted) <= 0) {
+        if (stateDao.upsert(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.sceneId(), persisted) <= 0) {
             throw new IllegalStateException("Unable to persist monotonic scene state");
         }
 
@@ -267,7 +267,7 @@ public class AgentSceneServiceImpl implements AgentSceneService {
         event.setEventType(EVENT_STATE_UPDATED);
         event.setState(publishedState);
         event.setOccurredAt(now);
-        if (eventDao.insert(scope.tenantId(), scope.clientId(), scope.sceneId(), event) <= 0) {
+        if (eventDao.insert(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.sceneId(), event) <= 0) {
             throw new IllegalStateException("Unable to persist scene state event");
         }
         publishAfterCommit(scope, event);
@@ -293,7 +293,7 @@ public class AgentSceneServiceImpl implements AgentSceneService {
         long cursor = afterVersion;
         while (cursor < throughVersion) {
             List<AgentSceneEventEntity> page = safeList(eventDao.findAfterVersion(
-                    scope.tenantId(), scope.clientId(), scope.sceneId(), cursor, BACKLOG_PAGE_SIZE));
+                    scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.sceneId(), cursor, BACKLOG_PAGE_SIZE));
             if (page.isEmpty()) {
                 throw new ContinuityGapException();
             }
@@ -397,7 +397,7 @@ public class AgentSceneServiceImpl implements AgentSceneService {
                 return;
             }
             Long earliestVersion = eventDao.findEarliestSceneVersion(
-                    scope.tenantId(), scope.clientId(), scope.sceneId());
+                    scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.sceneId());
             boolean noRetainedBacklog = earliestVersion == null && currentVersion > sinceVersion;
             boolean retainedGap = earliestVersion != null
                     && earliestVersion > 0
@@ -448,7 +448,7 @@ public class AgentSceneServiceImpl implements AgentSceneService {
 
         private long currentVersion() {
             return versionOrZero(eventDao.findCurrentSceneVersion(
-                    scope.tenantId(), scope.clientId(), scope.sceneId()));
+                    scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.sceneId()));
         }
 
         private void scheduleCatchUp() {
@@ -567,7 +567,7 @@ public class AgentSceneServiceImpl implements AgentSceneService {
             Map<String, AgentRuntimeEntity> realAgents,
             long now) {
         for (AgentSceneStateEntity existing : safeList(stateDao.findActiveByScene(
-                scope.tenantId(), scope.clientId(), scope.sceneId(), now))) {
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.sceneId(), now))) {
             if (!isActive(existing, now)
                     || requested.getAgentId().equals(existing.getAgentId())
                     || !requested.getPersonaCode().equals(existing.getPersonaCode())) {
@@ -581,10 +581,10 @@ public class AgentSceneServiceImpl implements AgentSceneService {
     }
 
     private List<AgentRuntimeEntity> scopedRoster(SceneScope scope) {
-        return safeList(runtimeDao.findRosterByOwner(scope.clientId(), scope.tenantId(), null, null)).stream()
+        return safeList(runtimeDao.findRosterByOwner(scope.clientId(), scope.ownerJiacn(), null, null)).stream()
                 .filter(runtime -> runtime != null
                         && scope.clientId().equals(runtime.getClientId())
-                        && scope.tenantId().equals(runtime.getOwnerJiacn()))
+                        && scope.ownerJiacn().equals(runtime.getOwnerJiacn()))
                 .toList();
     }
 
@@ -708,13 +708,14 @@ public class AgentSceneServiceImpl implements AgentSceneService {
         if (context == null) {
             throw new IllegalArgumentException("tenant jiacn, clientId and sceneId are required");
         }
-        String tenantId = requireExactScopeId(context.getJiacn(), "tenant jiacn");
+        String tenantId = "0";
         String clientId = requireExactScopeId(context.getClientId(), "clientId");
+        String ownerJiacn = requireExactScopeId(context.getJiacn(), "owner jiacn");
         String normalizedSceneId = trim(sceneId);
         if (StringUtil.isBlank(normalizedSceneId)) {
             throw new IllegalArgumentException("tenant jiacn, clientId and sceneId are required");
         }
-        return new SceneScope(tenantId, clientId, normalizedSceneId);
+        return new SceneScope(tenantId, clientId, ownerJiacn, normalizedSceneId);
     }
 
     private static String requireExactScopeId(String value, String field) {

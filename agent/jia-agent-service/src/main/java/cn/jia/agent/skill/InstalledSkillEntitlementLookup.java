@@ -26,7 +26,7 @@ public class InstalledSkillEntitlementLookup implements FundedBountySkillEntitle
     @Override @Transactional(rollbackFor=Exception.class)
     public VerifiedSkillSnapshot lookup(FundedBountyActor actor,String agentId,List<AgentSkillRequirementDTO> requirements) {
         Objects.requireNonNull(requirements,"requirements");
-        var a=new HostingRentHttp.Actor(actor.userId(),actor.tenantId(),actor.clientId());
+        var a=new HostingRentHttp.Actor(actor.userId(),actor.tenantId(),actor.clientId(),actor.ownerJiacn());
         if(!skills.available(a)) return snapshot(requirements.isEmpty(),List.of());
         // The caller already holds task/binding/runtime roots; this joins the same REQUIRED transaction.
         versions.requireOwned(a,agentId,null,false);

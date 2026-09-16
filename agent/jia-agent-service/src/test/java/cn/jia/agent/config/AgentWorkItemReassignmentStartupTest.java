@@ -104,19 +104,19 @@ class AgentWorkItemReassignmentStartupTest {
                     context.getBean(AgentWorkItemReassignmentService.class);
             assertEquals(AgentWorkItemReassignmentException.Reason.TRANSPORT_DISABLED,
                     assertThrows(AgentWorkItemReassignmentException.class,
-                            () -> service.reassign("tenant-a", "client-a", ACTOR, ACTOR,
+                            () -> service.reassign("0", "client-a", "owner-a", ACTOR, ACTOR,
                                     "task-1", "work-1", "reassign-key-0001", null)).getReason());
             assertEquals(AgentWorkItemReassignmentException.Reason.TRANSPORT_DISABLED,
                     assertThrows(AgentWorkItemReassignmentException.class,
-                            () -> service.readLease("tenant-a", "client-a", ACTOR,
+                            () -> service.readLease("0", "client-a", "owner-a", ACTOR,
                                     "task-1", "work-1", "receipt-1", null)).getReason());
             assertEquals(AgentWorkItemReassignmentException.Reason.TRANSPORT_DISABLED,
                     assertThrows(AgentWorkItemReassignmentException.class,
-                            () -> service.startLease("tenant-a", "client-a", ACTOR,
+                            () -> service.startLease("0", "client-a", "owner-a", ACTOR,
                                     "task-1", "work-1", "receipt-1", null)).getReason());
             assertEquals(AgentWorkItemReassignmentException.Reason.TRANSPORT_DISABLED,
                     assertThrows(AgentWorkItemReassignmentException.class,
-                            () -> service.heartbeatLease("tenant-a", "client-a", ACTOR,
+                            () -> service.heartbeatLease("0", "client-a", "owner-a", ACTOR,
                                     "task-1", "work-1", "receipt-1", null)).getReason());
             MockMvc mvc = MockMvcBuilders.standaloneSetup(
                     context.getBean(AgentWorkItemReassignmentController.class)).build();

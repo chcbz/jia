@@ -434,3 +434,106 @@ SET @st_owner_ddl = (
 PREPARE st_owner_idxagentworkitemreassignmentownerscope FROM @st_owner_ddl;
 EXECUTE st_owner_idxagentworkitemreassignmentownerscope;
 DEALLOCATE PREPARE st_owner_idxagentworkitemreassignmentownerscope;
+
+-- Agent Scene Phase A. Scene history is user-owned even though the tenant is shared.
+-- No historic owner is inferred here; the controlled migration classifies each row
+-- from its authoritative binding/runtime evidence or deletes the exact orphan set.
+SET @st_owner_ddl = (
+    SELECT IF(
+        EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema = @st_owner_schema AND table_name = 'agent_scene_state')
+        AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = @st_owner_schema AND table_name = 'agent_scene_state'
+                          AND column_name = 'owner_jiacn'),
+        'ALTER TABLE `agent_scene_state` ADD COLUMN `owner_jiacn` VARCHAR(50) NULL COMMENT ''Authenticated scene owner''',
+        'SELECT 1')
+);
+PREPARE st_owner_scenestate FROM @st_owner_ddl;
+EXECUTE st_owner_scenestate;
+DEALLOCATE PREPARE st_owner_scenestate;
+
+SET @st_owner_ddl = (
+    SELECT IF(
+        EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema = @st_owner_schema AND table_name = 'agent_scene_event')
+        AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = @st_owner_schema AND table_name = 'agent_scene_event'
+                          AND column_name = 'owner_jiacn'),
+        'ALTER TABLE `agent_scene_event` ADD COLUMN `owner_jiacn` VARCHAR(50) NULL COMMENT ''Authenticated scene owner''',
+        'SELECT 1')
+);
+PREPARE st_owner_sceneevent FROM @st_owner_ddl;
+EXECUTE st_owner_sceneevent;
+DEALLOCATE PREPARE st_owner_sceneevent;
+
+SET @st_owner_ddl = (
+    SELECT IF(
+        EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema = @st_owner_schema AND table_name = 'agent_scene_version')
+        AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = @st_owner_schema AND table_name = 'agent_scene_version'
+                          AND column_name = 'owner_jiacn'),
+        'ALTER TABLE `agent_scene_version` ADD COLUMN `owner_jiacn` VARCHAR(50) NULL COMMENT ''Authenticated scene owner''',
+        'SELECT 1')
+);
+PREPARE st_owner_sceneversion FROM @st_owner_ddl;
+EXECUTE st_owner_sceneversion;
+DEALLOCATE PREPARE st_owner_sceneversion;
+
+SET @st_owner_ddl = (
+    SELECT IF(
+        EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema = @st_owner_schema AND table_name = 'agent_scene_phase_report')
+        AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = @st_owner_schema AND table_name = 'agent_scene_phase_report'
+                          AND column_name = 'owner_jiacn'),
+        'ALTER TABLE `agent_scene_phase_report` ADD COLUMN `owner_jiacn` VARCHAR(50) NULL COMMENT ''Authenticated scene owner''',
+        'SELECT 1')
+);
+PREPARE st_owner_scenephasereport FROM @st_owner_ddl;
+EXECUTE st_owner_scenephasereport;
+DEALLOCATE PREPARE st_owner_scenephasereport;
+
+SET @st_owner_ddl = (
+    SELECT IF(
+        EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = @st_owner_schema AND table_name = 'agent_scene_state')
+        AND NOT EXISTS (SELECT 1 FROM information_schema.statistics WHERE table_schema = @st_owner_schema AND table_name = 'agent_scene_state' AND index_name = 'idx_agent_scene_state_owner_scope'),
+        'CREATE INDEX `idx_agent_scene_state_owner_scope` ON `agent_scene_state` (tenant_id, client_id, owner_jiacn, scene_id, agent_id)',
+        'SELECT 1')
+);
+PREPARE st_owner_idxscenestate FROM @st_owner_ddl;
+EXECUTE st_owner_idxscenestate;
+DEALLOCATE PREPARE st_owner_idxscenestate;
+
+SET @st_owner_ddl = (
+    SELECT IF(
+        EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = @st_owner_schema AND table_name = 'agent_scene_event')
+        AND NOT EXISTS (SELECT 1 FROM information_schema.statistics WHERE table_schema = @st_owner_schema AND table_name = 'agent_scene_event' AND index_name = 'idx_agent_scene_event_owner_scope'),
+        'CREATE INDEX `idx_agent_scene_event_owner_scope` ON `agent_scene_event` (tenant_id, client_id, owner_jiacn, scene_id, scene_version)',
+        'SELECT 1')
+);
+PREPARE st_owner_idxsceneevent FROM @st_owner_ddl;
+EXECUTE st_owner_idxsceneevent;
+DEALLOCATE PREPARE st_owner_idxsceneevent;
+
+SET @st_owner_ddl = (
+    SELECT IF(
+        EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = @st_owner_schema AND table_name = 'agent_scene_version')
+        AND NOT EXISTS (SELECT 1 FROM information_schema.statistics WHERE table_schema = @st_owner_schema AND table_name = 'agent_scene_version' AND index_name = 'idx_agent_scene_version_owner_scope'),
+        'CREATE INDEX `idx_agent_scene_version_owner_scope` ON `agent_scene_version` (tenant_id, client_id, owner_jiacn, scene_id)',
+        'SELECT 1')
+);
+PREPARE st_owner_idxsceneversion FROM @st_owner_ddl;
+EXECUTE st_owner_idxsceneversion;
+DEALLOCATE PREPARE st_owner_idxsceneversion;
+
+SET @st_owner_ddl = (
+    SELECT IF(
+        EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = @st_owner_schema AND table_name = 'agent_scene_phase_report')
+        AND NOT EXISTS (SELECT 1 FROM information_schema.statistics WHERE table_schema = @st_owner_schema AND table_name = 'agent_scene_phase_report' AND index_name = 'idx_agent_scene_phase_report_owner_scope'),
+        'CREATE INDEX `idx_agent_scene_phase_report_owner_scope` ON `agent_scene_phase_report` (tenant_id, client_id, owner_jiacn, scene_id, report_id)',
+        'SELECT 1')
+);
+PREPARE st_owner_idxscenephasereport FROM @st_owner_ddl;
+EXECUTE st_owner_idxscenephasereport;
+DEALLOCATE PREPARE st_owner_idxscenephasereport;

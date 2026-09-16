@@ -103,10 +103,17 @@ public class AgentSceneEventBroker {
         return copy;
     }
 
-    public record SceneScope(String tenantId, String clientId, String sceneId) {
+    public record SceneScope(String tenantId, String clientId, String ownerJiacn, String sceneId) {
         public SceneScope {
             tenantId = requireText(tenantId, "tenantId");
+            if (!"0".equals(tenantId)) {
+                throw new IllegalArgumentException("tenantId must be 0");
+            }
             clientId = requireText(clientId, "clientId");
+            ownerJiacn = requireText(ownerJiacn, "ownerJiacn");
+            if ("0".equals(ownerJiacn)) {
+                throw new IllegalArgumentException("ownerJiacn must not be 0");
+            }
             sceneId = requireText(sceneId, "sceneId");
         }
 

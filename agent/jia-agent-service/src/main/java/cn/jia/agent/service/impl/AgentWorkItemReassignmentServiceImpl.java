@@ -152,62 +152,62 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AgentWorkItemReassignmentResultDTO reassign(
-            String tenantId, String clientId, String operatorSubject,
+            String tenantId, String clientId, String ownerJiacn, String operatorSubject,
             String coordinatorAgentId, String taskId, String workItemId,
             String idempotencyKey, AgentWorkItemReassignmentRequestDTO request) {
         requireTransportAvailable();
-        RequiredRequest required = requireRequest(tenantId, clientId, operatorSubject,
+        RequiredRequest required = requireRequest(tenantId, clientId, ownerJiacn, operatorSubject,
                 coordinatorAgentId, taskId, workItemId, idempotencyKey, request);
-        return withRoot(tenantId, clientId, taskId, root -> reassignLocked(
-                tenantId, clientId, taskId, workItemId, required, root));
+        return withRoot(tenantId, clientId, ownerJiacn, taskId, root -> reassignLocked(
+                tenantId, clientId, ownerJiacn, taskId, workItemId, required, root));
     }
 
     private AgentWorkItemReassignmentResultDTO reassignLocked(
-            String tenantId, String clientId, String taskId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             RequiredRequest required, AgentTaskMetaEntity root) {
         String reassignmentId = reassignmentId(
-                tenantId, clientId, taskId, workItemId, required.idempotencyKey());
+                tenantId, clientId, ownerJiacn, taskId, workItemId, required.idempotencyKey());
         String requestDigest = requestDigest(
-                tenantId, clientId, taskId, workItemId, required);
+                tenantId, clientId, ownerJiacn, taskId, workItemId, required);
         AgentWorkItemReassignmentEntity prior = reassignmentDao.findByReassignmentIdForUpdate(
-                tenantId, clientId, taskId, workItemId, reassignmentId);
+                tenantId, clientId, ownerJiacn, taskId, workItemId, reassignmentId);
         if (prior != null) {
-            requireReceipt(prior, tenantId, clientId, taskId, workItemId, reassignmentId);
+            requireReceipt(prior, tenantId, clientId, ownerJiacn, taskId, workItemId, reassignmentId);
             if (!requestDigest.equals(prior.getRequestSha256())) {
                 throw failure(Reason.IDEMPOTENCY_CONFLICT,
                         "Idempotency key is permanently bound to a different request");
             }
-            lockActiveCanonicalAgents(tenantId, clientId, receiptAgents(prior));
+            lockActiveCanonicalAgents(tenantId, clientId, ownerJiacn, receiptAgents(prior));
             return result(prior, true);
         }
-        requireTask(root, required);
+        requireTask(root, tenantId, clientId, ownerJiacn, required);
         AgentWorkItemReassignmentEntity latest = reassignmentDao.findLatestByWorkItemForUpdate(
-                tenantId, clientId, taskId, workItemId);
+                tenantId, clientId, ownerJiacn, taskId, workItemId);
         if (latest != null) {
-            requireReceipt(latest, tenantId, clientId, taskId, workItemId,
+            requireReceipt(latest, tenantId, clientId, ownerJiacn, taskId, workItemId,
                     latest.getReassignmentId());
         }
 
         List<String> agents = sortedDistinct(required.coordinatorAgentId(),
                 required.previousAgentId(), required.targetAgentId());
         for (String agentId : agents) {
-            requireActiveMemberLocked(tenantId, clientId, taskId, agentId,
+            requireActiveMemberLocked(tenantId, clientId, ownerJiacn, taskId, agentId,
                     agentId.equals(required.coordinatorAgentId()));
         }
         List<String> authorityAgents = latest == null ? agents : sortedDistinct(
                 required.coordinatorAgentId(), required.previousAgentId(), required.targetAgentId(),
                 latest.getCoordinatorAgentId(), latest.getPreviousAgentId(), latest.getTargetAgentId());
-        lockActiveCanonicalAgents(tenantId, clientId, authorityAgents);
-        requireRuntimes(tenantId, clientId, agents);
+        lockActiveCanonicalAgents(tenantId, clientId, ownerJiacn, authorityAgents);
+        requireRuntimes(tenantId, clientId, ownerJiacn, agents);
         try {
-            agentService.requireHostingNewWork(tenantId, clientId, required.targetAgentId());
+            agentService.requireHostingNewWork(ownerJiacn, clientId, required.targetAgentId());
         } catch (RuntimeException denied) {
             throw failure(Reason.NOT_FOUND_OR_FORBIDDEN,
                     "Target cannot accept new hosted work", denied);
         }
 
         AgentTaskWorkItemEntity current = requireCurrentWorkItem(
-                tenantId, clientId, taskId, workItemId, required.expectedWorkItemVersion());
+                tenantId, clientId, ownerJiacn, taskId, workItemId, required.expectedWorkItemVersion());
         long now = now();
         requireExpiredLease(current, required, now);
         String oldFence = sha256(current.getLeaseToken());
@@ -219,7 +219,7 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
                         "Source command is not bound to the current reassigned lease");
             }
         }
-        requireSourceCommand(tenantId, clientId, taskId, workItemId, required);
+        requireSourceCommand(tenantId, clientId, ownerJiacn, taskId, workItemId, required);
 
         if (current.getAttemptCount() >= current.getMaxAttempts() - 1) {
             throw failure(Reason.DOMAIN_ATTEMPTS_EXHAUSTED,
@@ -236,7 +236,7 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
         update.setLeaseUntil(leaseUntil);
         update.setAttemptCount(nextAttempt);
         int updated = workItemDao.reassignExpiredLeaseByVersion(
-                tenantId, clientId, taskId, workItemId,
+                tenantId, clientId, ownerJiacn, taskId, workItemId,
                 required.previousAgentId(), current.getLeaseToken(), current.getStatus(),
                 current.getLeaseUntil(), current.getVersion(), now, update);
         if (updated == 0) throw failure(Reason.VERSION_CONFLICT, "Expired lease CAS lost");
@@ -246,7 +246,7 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
         long resultVersion = current.getVersion() + 1;
         String intentId = "rsi_" + sha256("intent\0" + reassignmentId);
         String commandId = AgentCommandCanonicalCodec.hallCommandId(
-                tenantId, clientId, taskId, required.targetAgentId(), intentId,
+                tenantId, clientId, ownerJiacn, taskId, required.targetAgentId(), intentId,
                 AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE);
         TaskEventPayload.Builder payload = TaskEventPayload.builder()
                 .put(TaskEventPayload.Key.WORK_ITEM_ID, workItemId)
@@ -268,7 +268,7 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
                 .put(TaskEventPayload.Key.LEASE_FENCE_SHA256, leaseFence);
         AgentTaskEventWriteResult event = eventWriter.append(
                 AgentTaskMutationEventSupport.command(
-                        tenantId, clientId, taskId, TaskEventType.WORK_ITEM_REASSIGNED,
+                        tenantId, clientId, ownerJiacn, taskId, TaskEventType.WORK_ITEM_REASSIGNED,
                         TaskEventType.ActorType.AGENT, required.coordinatorAgentId(),
                         TaskEventType.Aggregate.WORK_ITEM, workItemId,
                         payload, now, resultVersion));
@@ -279,7 +279,7 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
                     "Reassignment event writer returned an invalid identity");
         }
 
-        AgentCommandDraft draft = commandDraft(tenantId, clientId, taskId, workItemId,
+        AgentCommandDraft draft = commandDraft(tenantId, clientId, ownerJiacn, taskId, workItemId,
                 required, current, reassignmentId, intentId, commandId, eventId, now);
         AgentCommandTransportWriteResult transport = commandWriter.writeAuthorizedHall(
                 draft, required.coordinatorAgentId());
@@ -295,6 +295,7 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
                 .setReassignmentId(reassignmentId)
                 .setRequestSha256(requestDigest)
                 .setTaskId(taskId)
+                .setOwnerJiacn(ownerJiacn)
                 .setWorkItemId(workItemId)
                 .setOperatorSubject(required.operatorSubject())
                 .setCoordinatorAgentId(required.coordinatorAgentId())
@@ -325,38 +326,38 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
 
     @Override
     public AgentWorkItemReassignmentLeaseDTO readLease(
-            String tenantId, String clientId, String targetAgentId,
+            String tenantId, String clientId, String ownerJiacn, String targetAgentId,
             String taskId, String workItemId, String reassignmentId,
             AgentWorkItemReassignmentLeaseRequestDTO request) {
-        return leaseAccess(tenantId, clientId, targetAgentId, taskId, workItemId,
+        return leaseAccess(tenantId, clientId, ownerJiacn, targetAgentId, taskId, workItemId,
                 reassignmentId, request, LeaseOperation.READ);
     }
 
     @Override
     public AgentWorkItemReassignmentLeaseDTO startLease(
-            String tenantId, String clientId, String targetAgentId,
+            String tenantId, String clientId, String ownerJiacn, String targetAgentId,
             String taskId, String workItemId, String reassignmentId,
             AgentWorkItemReassignmentLeaseRequestDTO request) {
-        return leaseAccess(tenantId, clientId, targetAgentId, taskId, workItemId,
+        return leaseAccess(tenantId, clientId, ownerJiacn, targetAgentId, taskId, workItemId,
                 reassignmentId, request, LeaseOperation.START);
     }
 
     @Override
     public AgentWorkItemReassignmentLeaseDTO heartbeatLease(
-            String tenantId, String clientId, String targetAgentId,
+            String tenantId, String clientId, String ownerJiacn, String targetAgentId,
             String taskId, String workItemId, String reassignmentId,
             AgentWorkItemReassignmentLeaseRequestDTO request) {
-        return leaseAccess(tenantId, clientId, targetAgentId, taskId, workItemId,
+        return leaseAccess(tenantId, clientId, ownerJiacn, targetAgentId, taskId, workItemId,
                 reassignmentId, request, LeaseOperation.HEARTBEAT);
     }
 
     @Transactional(rollbackFor = Exception.class)
     protected AgentWorkItemReassignmentLeaseDTO leaseAccess(
-            String tenantId, String clientId, String targetAgentId,
+            String tenantId, String clientId, String ownerJiacn, String targetAgentId,
             String taskId, String workItemId, String reassignmentId,
             AgentWorkItemReassignmentLeaseRequestDTO request, LeaseOperation operation) {
         requireTransportAvailable();
-        requireScope(tenantId, clientId, taskId, workItemId);
+        requireScope(tenantId, clientId, ownerJiacn, taskId, workItemId);
         requireAgent(targetAgentId, "targetAgentId");
         if (operation == null || !exact(reassignmentId, 100) || request == null
                 || !exact(request.getCommandId(), 100)
@@ -371,21 +372,21 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
                 && request.getLeaseDurationMillis() != null)) {
             throw failure(Reason.INVALID_REQUEST, "Invalid command-bound lease request");
         }
-        return withRoot(tenantId, clientId, taskId, root -> {
+        return withRoot(tenantId, clientId, ownerJiacn, taskId, root -> {
             AgentWorkItemReassignmentEntity receipt = reassignmentDao
                     .findByReassignmentIdForUpdate(
-                            tenantId, clientId, taskId, workItemId, reassignmentId);
+                            tenantId, clientId, ownerJiacn, taskId, workItemId, reassignmentId);
             if (receipt == null) throw unavailable();
-            requireReceipt(receipt, tenantId, clientId, taskId, workItemId, reassignmentId);
+            requireReceipt(receipt, tenantId, clientId, ownerJiacn, taskId, workItemId, reassignmentId);
             if (!targetAgentId.equals(receipt.getTargetAgentId())
                     || !request.getCommandId().equals(receipt.getCommandId())) {
                 throw unavailable();
             }
-            requireActiveMemberLocked(tenantId, clientId, taskId, targetAgentId, false);
-            lockActiveCanonicalAgents(tenantId, clientId, receiptAgents(receipt));
-            requireRuntimes(tenantId, clientId, List.of(targetAgentId));
+            requireActiveMemberLocked(tenantId, clientId, ownerJiacn, taskId, targetAgentId, false);
+            lockActiveCanonicalAgents(tenantId, clientId, ownerJiacn, receiptAgents(receipt));
+            requireRuntimes(tenantId, clientId, ownerJiacn, List.of(targetAgentId));
             AgentTaskWorkItemEntity current = requireCurrentWorkItem(
-                    tenantId, clientId, taskId, workItemId,
+                    tenantId, clientId, ownerJiacn, taskId, workItemId,
                     request.getExpectedWorkItemVersion());
             AgentTaskWorkItemStatus status = persistedStatus(current.getStatus());
             long accessTime = now();
@@ -410,8 +411,8 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
             command.setLeaseDurationMillis(request.getLeaseDurationMillis());
             try {
                 AgentWorkItemLeaseDTO changed = operation == LeaseOperation.START
-                        ? leaseService.start(tenantId, clientId, taskId, workItemId, command)
-                        : leaseService.heartbeat(tenantId, clientId, taskId, workItemId, command);
+                        ? leaseService.start(tenantId, clientId, ownerJiacn, taskId, workItemId, command)
+                        : leaseService.heartbeat(tenantId, clientId, ownerJiacn, taskId, workItemId, command);
                 requireLeaseMutationResult(receipt, current, changed, operation, targetAgentId);
                 return leaseResult(receipt, changed);
             } catch (AgentTaskStateException state) {
@@ -429,7 +430,7 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
     }
 
     private AgentCommandDraft commandDraft(
-            String tenantId, String clientId, String taskId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             RequiredRequest required, AgentTaskWorkItemEntity current,
             String reassignmentId, String intentId, String commandId, String eventId, long now) {
         String instruction = boundedInstruction(current.getTitle(), current.getDescription());
@@ -443,14 +444,16 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
                         reassignmentId));
         return new AgentCommandDraft(
                 AgentCommandCanonicalCodec.SCHEMA_VERSION, commandId, taskId, eventId,
-                tenantId, clientId, taskId, workItemId, required.targetAgentId(),
+                tenantId, clientId, ownerJiacn, taskId, workItemId, required.targetAgentId(),
                 AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE, now,
                 add(now, AgentCommandCanonicalCodec.HALL_COMMAND_TTL_MILLIS), intentId, payload);
     }
 
-    private void requireTask(AgentTaskMetaEntity root, RequiredRequest request) {
-        if (root == null || !request.taskId().equals(root.getTaskId())
-                || root.getTaskVersion() == null || root.getTaskVersion() < 0
+    private void requireTask(AgentTaskMetaEntity root, String tenantId, String clientId,
+            String ownerJiacn, RequiredRequest request) {
+        if (root == null || !tenantId.equals(root.getTenantId())
+                || !clientId.equals(root.getClientId()) || !ownerJiacn.equals(root.getOwnerJiacn())
+                || !request.taskId().equals(root.getTaskId()) || root.getTaskVersion() == null || root.getTaskVersion() < 0
                 || root.getTaskVersion() == Long.MAX_VALUE) {
             throw failure(Reason.INVALID_PERSISTED_STATE, "Task root is invalid");
         }
@@ -473,12 +476,12 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
     }
 
     private void requireActiveMemberLocked(
-            String tenantId, String clientId, String taskId, String agentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String agentId,
             boolean coordinator) {
         AgentTaskMemberEntity member = memberDao.findByTaskAndAgentForUpdate(
-                tenantId, clientId, taskId, agentId);
+                tenantId, clientId, ownerJiacn, taskId, agentId);
         if (member == null || !tenantId.equals(member.getTenantId())
-                || !clientId.equals(member.getClientId())
+                || !clientId.equals(member.getClientId()) || !ownerJiacn.equals(member.getOwnerJiacn())
                 || !taskId.equals(member.getTaskId()) || !agentId.equals(member.getAgentId())
                 || !MEMBER_ROLES.contains(member.getMemberRole())
                 || coordinator && !"coordinator".equals(member.getMemberRole())) {
@@ -495,11 +498,11 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
     }
 
     private void lockActiveCanonicalAgents(
-            String tenantId, String clientId, List<String> sortedAgents) {
+            String tenantId, String clientId, String ownerJiacn, List<String> sortedAgents) {
         List<String> locked;
         try {
             locked = identityService.lockActiveCanonicalAgentIdsInScope(
-                    tenantId, clientId, tenantId, sortedAgents);
+                    tenantId, clientId, ownerJiacn, sortedAgents);
         } catch (RuntimeException denied) {
             throw unavailable();
         }
@@ -507,11 +510,11 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
     }
 
     private void requireRuntimes(
-            String tenantId, String clientId, List<String> sortedAgents) {
+            String tenantId, String clientId, String ownerJiacn, List<String> sortedAgents) {
         for (String agentId : sortedAgents) {
             try {
                 AgentRuntimeDTO runtime = agentService.requireApiKeyOwnedAgentForUpdate(
-                        clientId, tenantId, agentId);
+                        clientId, ownerJiacn, agentId);
                 if (runtime == null || !agentId.equals(runtime.getAgentId())
                         || !RUNTIME_STATUSES.contains(runtime.getStatus())) {
                     throw unavailable();
@@ -525,12 +528,12 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
     }
 
     private AgentTaskWorkItemEntity requireCurrentWorkItem(
-            String tenantId, String clientId, String taskId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             long expectedVersion) {
         AgentTaskWorkItemEntity current = workItemDao.findByTaskAndWorkItemId(
-                tenantId, clientId, taskId, workItemId);
+                tenantId, clientId, ownerJiacn, taskId, workItemId);
         if (current == null) throw unavailable();
-        if (!tenantId.equals(current.getTenantId()) || !clientId.equals(current.getClientId())
+        if (!tenantId.equals(current.getTenantId()) || !clientId.equals(current.getClientId()) || !ownerJiacn.equals(current.getOwnerJiacn())
                 || !taskId.equals(current.getTaskId()) || !workItemId.equals(current.getWorkItemId())
                 || current.getVersion() == null || current.getVersion() < 0
                 || current.getVersion() == Long.MAX_VALUE
@@ -568,10 +571,10 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
     }
 
     private void requireSourceCommand(
-            String tenantId, String clientId, String taskId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             RequiredRequest required) {
         AgentCommandDeliveryEntity delivery = reassignmentDao.findSourceCommand(
-                tenantId, clientId, required.sourceCommandId());
+                tenantId, clientId, ownerJiacn, required.sourceCommandId());
         if (delivery == null) throw failure(Reason.INVALID_SOURCE_COMMAND,
                 "Source command is unavailable");
         try {
@@ -587,9 +590,11 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
                     delivery.getCommandType())
                     || !tenantId.equals(delivery.getTenantId())
                     || !clientId.equals(delivery.getClientId())
+                    || !ownerJiacn.equals(delivery.getOwnerJiacn())
                     || !required.sourceCommandId().equals(draft.commandId())
                     || !tenantId.equals(draft.tenantId())
                     || !clientId.equals(draft.clientId())
+                    || !ownerJiacn.equals(draft.ownerJiacn())
                     || !taskId.equals(draft.taskId())
                     || !workItemId.equals(draft.workItemId())
                     || !required.previousAgentId().equals(draft.targetAgentId())
@@ -608,10 +613,10 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
     }
 
     private RequiredRequest requireRequest(
-            String tenantId, String clientId, String operatorSubject,
+            String tenantId, String clientId, String ownerJiacn, String operatorSubject,
             String coordinatorAgentId, String taskId, String workItemId,
             String idempotencyKey, AgentWorkItemReassignmentRequestDTO request) {
-        requireScope(tenantId, clientId, taskId, workItemId);
+        requireScope(tenantId, clientId, ownerJiacn, taskId, workItemId);
         if (!exact(operatorSubject, 100) || !exact(coordinatorAgentId, 100)
                 || idempotencyKey == null || !idempotencyKey.matches("[A-Za-z0-9._~:/+\\-]{8,128}")
                 || request == null || request.getExpectedTaskVersion() == null
@@ -638,11 +643,12 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
     }
 
     private void requireReceipt(
-            AgentWorkItemReassignmentEntity value, String tenantId, String clientId,
+            AgentWorkItemReassignmentEntity value, String tenantId, String clientId, String ownerJiacn,
             String taskId, String workItemId, String reassignmentId) {
         if (value == null || value.getId() == null || value.getId() <= 0
                 || !tenantId.equals(value.getTenantId())
-                || !clientId.equals(value.getClientId()) || !taskId.equals(value.getTaskId())
+                || !clientId.equals(value.getClientId()) || !ownerJiacn.equals(value.getOwnerJiacn())
+                || !taskId.equals(value.getTaskId())
                 || !workItemId.equals(value.getWorkItemId())
                 || !reassignmentId.equals(value.getReassignmentId())
                 || !exact(value.getOperatorSubject(), 100)
@@ -799,11 +805,11 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
         return update;
     }
 
-    private <T> T withRoot(String tenantId, String clientId, String taskId,
+    private <T> T withRoot(String tenantId, String clientId, String ownerJiacn, String taskId,
             AgentTaskMutationTransaction.LockedTaskMutation<T> action) {
         try {
-            return mutationTransaction.executeWithLockedTaskRoot(
-                    tenantId, clientId, taskId, action);
+            return mutationTransaction.executeWithLockedTaskRootInOwnerScope(
+                    tenantId, clientId, ownerJiacn, taskId, action);
         } catch (AgentWorkItemReassignmentException known) {
             throw known;
         } catch (AgentTaskCollaborationException missing) {
@@ -819,9 +825,9 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
         }
     }
 
-    private String requestDigest(String tenantId, String clientId, String taskId,
+    private String requestDigest(String tenantId, String clientId, String ownerJiacn, String taskId,
             String workItemId, RequiredRequest request) {
-        return sha256(String.join("\0", tenantId, clientId, taskId, workItemId,
+        return sha256(String.join("\0", tenantId, clientId, ownerJiacn, taskId, workItemId,
                 request.operatorSubject(), request.coordinatorAgentId(),
                 Long.toString(request.expectedTaskVersion()),
                 Long.toString(request.expectedWorkItemVersion()),
@@ -829,10 +835,10 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
                 request.sourceCommandId(), request.reason()));
     }
 
-    private String reassignmentId(String tenantId, String clientId, String taskId,
+    private String reassignmentId(String tenantId, String clientId, String ownerJiacn, String taskId,
             String workItemId, String idempotencyKey) {
         return "rsn_" + sha256(String.join("\0", "e05-reassignment-v1",
-                tenantId, clientId, taskId, workItemId, idempotencyKey));
+                tenantId, clientId, ownerJiacn, taskId, workItemId, idempotencyKey));
     }
 
     private String boundedInstruction(String title, String description) {
@@ -864,8 +870,8 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
         return Integer.compare(left.length, right.length);
     }
 
-    private void requireScope(String tenantId, String clientId, String taskId, String workItemId) {
-        if (!exact(tenantId, 50) || !exact(clientId, 50)
+    private void requireScope(String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId) {
+        if (!"0".equals(tenantId) || !exact(clientId, 50) || !exact(ownerJiacn, 50)
                 || !exact(taskId, 100) || !exact(workItemId, 100)) {
             throw failure(Reason.INVALID_REQUEST, "Scope or path identity is invalid");
         }

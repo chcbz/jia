@@ -2226,11 +2226,12 @@ BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'C01H successful run cannot be 
                     expires_at BIGINT DEFAULT NULL,
                     tenant_id VARCHAR(50) NOT NULL,
                     client_id VARCHAR(50) NOT NULL,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     create_time BIGINT DEFAULT NULL,
                     update_time BIGINT DEFAULT NULL,
                     PRIMARY KEY (id),
-                    UNIQUE KEY uk_agent_scene_state_scope_agent (tenant_id, client_id, scene_id, agent_id),
-                    KEY idx_agent_scene_state_scope_version (tenant_id, client_id, scene_id, state_version)
+                    UNIQUE KEY uk_agent_scene_state_scope_agent (tenant_id, client_id, owner_jiacn, scene_id, agent_id),
+                    KEY idx_agent_scene_state_scope_version (tenant_id, client_id, owner_jiacn, scene_id, state_version)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """);
         jdbcTemplate.execute("""
@@ -2243,22 +2244,24 @@ BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'C01H successful run cannot be 
                     occurred_at BIGINT NOT NULL,
                     tenant_id VARCHAR(50) NOT NULL,
                     client_id VARCHAR(50) NOT NULL,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     create_time BIGINT DEFAULT NULL,
                     update_time BIGINT DEFAULT NULL,
                     PRIMARY KEY (id),
-                    UNIQUE KEY uk_agent_scene_event_scope_version (tenant_id, client_id, scene_id, scene_version),
-                    KEY idx_agent_scene_event_scope_occurred (tenant_id, client_id, scene_id, occurred_at)
+                    UNIQUE KEY uk_agent_scene_event_scope_version (tenant_id, client_id, owner_jiacn, scene_id, scene_version),
+                    KEY idx_agent_scene_event_scope_occurred (tenant_id, client_id, owner_jiacn, scene_id, occurred_at)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """);
         jdbcTemplate.execute("""
                 CREATE TABLE IF NOT EXISTS agent_scene_version (
                     tenant_id VARCHAR(50) NOT NULL,
                     client_id VARCHAR(50) NOT NULL,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     scene_id VARCHAR(100) NOT NULL,
                     current_version BIGINT NOT NULL,
                     create_time BIGINT DEFAULT NULL,
                     update_time BIGINT DEFAULT NULL,
-                    PRIMARY KEY (tenant_id, client_id, scene_id)
+                    PRIMARY KEY (tenant_id, client_id, owner_jiacn, scene_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """);
         jdbcTemplate.execute("""
@@ -2275,43 +2278,44 @@ BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'C01H successful run cannot be 
                     processed_at BIGINT NOT NULL,
                     tenant_id VARCHAR(50) NOT NULL,
                     client_id VARCHAR(50) NOT NULL,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     create_time BIGINT DEFAULT NULL,
                     update_time BIGINT DEFAULT NULL,
                     PRIMARY KEY (id),
                     UNIQUE KEY uk_agent_scene_phase_report_scope_report
-                        (tenant_id, client_id, scene_id, report_id),
+                        (tenant_id, client_id, owner_jiacn, scene_id, report_id),
                     KEY idx_agent_scene_phase_report_scope_agent_version
-                        (tenant_id, client_id, scene_id, agent_id, state_version)
+                        (tenant_id, client_id, owner_jiacn, scene_id, agent_id, state_version)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """);
 
         ensureRequiredIndex("agent_scene_state", "uk_agent_scene_state_scope_agent", true,
-                List.of("tenant_id", "client_id", "scene_id", "agent_id"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "scene_id", "agent_id"),
                 "CREATE UNIQUE INDEX uk_agent_scene_state_scope_agent "
-                        + "ON agent_scene_state (tenant_id, client_id, scene_id, agent_id)");
+                        + "ON agent_scene_state (tenant_id, client_id, owner_jiacn, scene_id, agent_id)");
         ensureRequiredIndex("agent_scene_state", "idx_agent_scene_state_scope_version", false,
-                List.of("tenant_id", "client_id", "scene_id", "state_version"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "scene_id", "state_version"),
                 "CREATE INDEX idx_agent_scene_state_scope_version "
-                        + "ON agent_scene_state (tenant_id, client_id, scene_id, state_version)");
+                        + "ON agent_scene_state (tenant_id, client_id, owner_jiacn, scene_id, state_version)");
         ensureRequiredIndex("agent_scene_event", "uk_agent_scene_event_scope_version", true,
-                List.of("tenant_id", "client_id", "scene_id", "scene_version"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "scene_id", "scene_version"),
                 "CREATE UNIQUE INDEX uk_agent_scene_event_scope_version "
-                        + "ON agent_scene_event (tenant_id, client_id, scene_id, scene_version)");
+                        + "ON agent_scene_event (tenant_id, client_id, owner_jiacn, scene_id, scene_version)");
         ensureRequiredIndex("agent_scene_event", "idx_agent_scene_event_scope_occurred", false,
-                List.of("tenant_id", "client_id", "scene_id", "occurred_at"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "scene_id", "occurred_at"),
                 "CREATE INDEX idx_agent_scene_event_scope_occurred "
-                        + "ON agent_scene_event (tenant_id, client_id, scene_id, occurred_at)");
+                        + "ON agent_scene_event (tenant_id, client_id, owner_jiacn, scene_id, occurred_at)");
         ensureRequiredIndex("agent_scene_phase_report", "uk_agent_scene_phase_report_scope_report", true,
-                List.of("tenant_id", "client_id", "scene_id", "report_id"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "scene_id", "report_id"),
                 "CREATE UNIQUE INDEX uk_agent_scene_phase_report_scope_report "
-                        + "ON agent_scene_phase_report (tenant_id, client_id, scene_id, report_id)");
+                        + "ON agent_scene_phase_report (tenant_id, client_id, owner_jiacn, scene_id, report_id)");
         ensureRequiredIndex("agent_scene_phase_report", "idx_agent_scene_phase_report_scope_agent_version", false,
-                List.of("tenant_id", "client_id", "scene_id", "agent_id", "state_version"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "scene_id", "agent_id", "state_version"),
                 "CREATE INDEX idx_agent_scene_phase_report_scope_agent_version "
-                        + "ON agent_scene_phase_report (tenant_id, client_id, scene_id, agent_id, state_version)");
+                        + "ON agent_scene_phase_report (tenant_id, client_id, owner_jiacn, scene_id, agent_id, state_version)");
         ensureRequiredIndex("agent_scene_version", "PRIMARY", true,
-                List.of("tenant_id", "client_id", "scene_id"),
-                "ALTER TABLE agent_scene_version ADD PRIMARY KEY (tenant_id, client_id, scene_id)");
+                List.of("tenant_id", "client_id", "owner_jiacn", "scene_id"),
+                "ALTER TABLE agent_scene_version ADD PRIMARY KEY (tenant_id, client_id, owner_jiacn, scene_id)");
     }
 
     void ensureTaskEventSchema() {

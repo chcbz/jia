@@ -21,6 +21,7 @@ public class AgentSceneStateEntity extends BaseEntity {
     @TableId(value = "id", type = IdType.AUTO)
     private Long id;
     private String sceneId;
+    private String ownerJiacn;
     private String agentId;
     private String personaCode;
     private String behavior;

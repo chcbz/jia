@@ -12,7 +12,7 @@ import static org.mockito.Mockito.*;
 class SkillPackageSecurityConfigurationTest {
     @AfterEach void cleanup() { SecurityContextHolder.clearContext(); }
     @Test void exactCurrentKeyAuthenticatesWithoutExposingSecretInPrincipal() throws Exception {
-        var key=new OauthApiKeyEntity();key.setId("key");key.setTenantId("Tenant");key.setJiacn("Tenant");key.setClientId("Client");key.setApiKey("secret-fixture");key.setStatus(1);
+        var key=new OauthApiKeyEntity();key.setId("key");key.setTenantId("0");key.setJiacn("Tenant");key.setClientId("Client");key.setApiKey("secret-fixture");key.setStatus(1);
         var keys=mock(ApiKeyService.class);when(keys.findByApiKey("secret-fixture")).thenReturn(key);when(keys.get("key")).thenReturn(key);
         var accounts=mock(AccountSecurityService.class);when(accounts.findUniqueByExactJiacn("Tenant")).thenReturn(Optional.of(new AccountSecuritySnapshot(1,"Tenant",AccountState.ACTIVE,1)));
         var filter=new SkillPackageSecurityConfiguration.PackageKeyFilter(provider(keys),provider(accounts));

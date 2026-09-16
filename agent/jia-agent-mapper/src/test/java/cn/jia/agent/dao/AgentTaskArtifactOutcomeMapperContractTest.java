@@ -20,7 +20,7 @@ class AgentTaskArtifactOutcomeMapperContractTest {
     void authoritativeQueryFiltersAcceptedAndAclBeforeOrderAndLimit() throws Exception {
         Method method = AgentTaskArtifactOutcomeMapper.class.getDeclaredMethod(
                 "selectAuthoritativeAccepted", String.class, String.class, String.class,
-                String.class, String.class, boolean.class, boolean.class, int.class);
+                String.class, String.class, String.class, boolean.class, boolean.class, int.class);
         String sql = String.join("\n", method.getAnnotation(Select.class).value());
 
         int accepted = sql.indexOf("o.outcome_state = 'accepted'");
@@ -30,6 +30,7 @@ class AgentTaskArtifactOutcomeMapperContractTest {
         assertTrue(accepted >= 0 && accepted < visibility && visibility < order && order < limit);
         assertTrue(sql.contains("CAST(o.tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)"));
         assertTrue(sql.contains("CAST(o.client_id AS BINARY) = CAST(#{clientId} AS BINARY)"));
+        assertTrue(sql.contains("CAST(o.owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)"));
         assertTrue(sql.contains("CAST(o.task_id AS BINARY) = CAST(#{taskId} AS BINARY)"));
         assertTrue(sql.contains("CAST(a.artifact_id AS BINARY) = CAST(o.artifact_id AS BINARY)"));
         assertTrue(sql.contains("a.producer_agent_id = #{actorAgentId}"));
@@ -44,20 +45,22 @@ class AgentTaskArtifactOutcomeMapperContractTest {
     void lockingAndCasQueriesUseExactScopeAndExactArtifactIdentity() throws Exception {
         Method lock = AgentTaskArtifactOutcomeMapper.class.getDeclaredMethod(
                 "selectExactForUpdate", String.class, String.class, String.class,
-                String.class, int.class);
+                String.class, String.class, int.class);
         String lockSql = String.join("\n", lock.getAnnotation(Select.class).value());
         assertTrue(lockSql.contains("FOR UPDATE"));
+        assertTrue(lockSql.contains("CAST(o.owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)"));
         assertTrue(lockSql.contains(
                 "CAST(o.artifact_id AS BINARY) = CAST(#{artifactId} AS BINARY)"));
         assertTrue(lockSql.contains(
                 "OCTET_LENGTH(o.artifact_id) = OCTET_LENGTH(#{artifactId})"));
 
         Method decision = AgentTaskArtifactOutcomeMapper.class.getDeclaredMethod(
-                "selectDecisionForUpdate", String.class, String.class,
+                "selectDecisionForUpdate", String.class, String.class, String.class,
                 String.class, String.class);
         String decisionSql = String.join("\n", decision.getAnnotation(Select.class).value());
         assertTrue(decisionSql.contains("FROM agent_task_artifact_outcome_decision d"));
         assertTrue(decisionSql.contains("FOR UPDATE"));
+        assertTrue(decisionSql.contains("CAST(d.owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)"));
         assertTrue(decisionSql.contains(
                 "CAST(d.decision_id AS BINARY) = CAST(#{decisionId} AS BINARY)"));
 
@@ -69,6 +72,7 @@ class AgentTaskArtifactOutcomeMapperContractTest {
         assertTrue(insertDecisionSql.contains(
                 "INSERT INTO agent_task_artifact_outcome_decision"));
         assertTrue(insertDecisionSql.contains("#{acceptedOutcomeVersion}"));
+        assertTrue(insertDecisionSql.contains("owner_jiacn"));
 
         Method update = java.util.Arrays.stream(
                         AgentTaskArtifactOutcomeMapper.class.getDeclaredMethods())
@@ -77,6 +81,7 @@ class AgentTaskArtifactOutcomeMapperContractTest {
         String updateSql = String.join("\n", update.getAnnotation(Update.class).value());
         assertTrue(updateSql.contains("AND outcome_state = #{expectedState}"));
         assertTrue(updateSql.contains("AND version = #{expectedVersion}"));
+        assertTrue(updateSql.contains("AND owner_jiacn = #{ownerJiacn}"));
         assertTrue(updateSql.contains(
                 "CAST(outcome_state AS BINARY) = CAST(#{expectedState} AS BINARY)"));
         assertTrue(updateSql.contains("version = #{resultVersion}"));
@@ -93,6 +98,7 @@ class AgentTaskArtifactOutcomeMapperContractTest {
         assertTrue(lower.contains("create table if not exists agent_task_artifact_outcome"));
         assertTrue(lower.contains("outcome_state in ('accepted', 'superseded')"));
         assertTrue(lower.contains("unique key uk_artifact_outcome_version"));
+        assertTrue(lower.contains("owner_jiacn varchar(50) not null"));
         assertTrue(lower.contains(
                 "create table if not exists agent_task_artifact_outcome_decision"));
         assertTrue(lower.contains("unique key uk_artifact_outcome_decision"));

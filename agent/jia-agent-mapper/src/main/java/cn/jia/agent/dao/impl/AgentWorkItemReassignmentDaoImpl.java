@@ -18,37 +18,37 @@ public class AgentWorkItemReassignmentDaoImpl implements AgentWorkItemReassignme
 
     @Override
     public AgentWorkItemReassignmentEntity findByReassignmentIdForUpdate(
-            String tenantId, String clientId, String taskId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             String reassignmentId) {
-        require(tenantId, clientId, taskId, workItemId, reassignmentId);
+        require(tenantId, clientId, ownerJiacn, taskId, workItemId, reassignmentId);
         return mapper.selectReceiptForUpdate(
-                tenantId, clientId, taskId, workItemId, reassignmentId);
+                tenantId, clientId, ownerJiacn, taskId, workItemId, reassignmentId);
     }
 
     @Override
     public AgentWorkItemReassignmentEntity findLatestByWorkItemForUpdate(
-            String tenantId, String clientId, String taskId, String workItemId) {
-        require(tenantId, clientId, taskId, workItemId, "latest");
-        return mapper.selectLatestReceiptForUpdate(tenantId, clientId, taskId, workItemId);
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId) {
+        require(tenantId, clientId, ownerJiacn, taskId, workItemId, "latest");
+        return mapper.selectLatestReceiptForUpdate(tenantId, clientId, ownerJiacn, taskId, workItemId);
     }
 
     @Override
     public AgentCommandDeliveryEntity findSourceCommand(
-            String tenantId, String clientId, String commandId) {
-        require(tenantId, clientId, commandId, "source", "source");
-        return mapper.selectSourceCommand(tenantId, clientId, commandId);
+            String tenantId, String clientId, String ownerJiacn, String commandId) {
+        require(tenantId, clientId, ownerJiacn, commandId, "source", "source");
+        return mapper.selectSourceCommand(tenantId, clientId, ownerJiacn, commandId);
     }
 
     @Override
     public int insert(AgentWorkItemReassignmentEntity receipt) {
         if (receipt == null) throw new IllegalArgumentException("receipt is required");
-        require(receipt.getTenantId(), receipt.getClientId(), receipt.getTaskId(),
-                receipt.getWorkItemId(), receipt.getReassignmentId());
+        require(receipt.getTenantId(), receipt.getClientId(), receipt.getOwnerJiacn(),
+                receipt.getTaskId(), receipt.getWorkItemId(), receipt.getReassignmentId());
         return mapper.insertReceipt(receipt);
     }
 
-    private void require(String tenantId, String clientId, String first, String second, String third) {
-        if (!exact(tenantId, 50) || !exact(clientId, 50)
+    private void require(String tenantId, String clientId, String ownerJiacn, String first, String second, String third) {
+        if (!"0".equals(tenantId) || !exact(clientId, 50) || !exact(ownerJiacn, 50)
                 || !exact(first, 100) || !exact(second, 100) || !exact(third, 100)) {
             throw new IllegalArgumentException("reassignment DAO scope or identity is invalid");
         }

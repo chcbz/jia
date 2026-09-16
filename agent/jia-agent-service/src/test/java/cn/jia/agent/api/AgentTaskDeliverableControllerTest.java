@@ -65,7 +65,7 @@ class AgentTaskDeliverableControllerTest {
 
     @Test
     void listBindsTenantClientAndActorOnlyFromValidatedJwtAndFiltersResponse() throws Exception {
-        when(artifactService.list(anyString(), anyString(), anyString(), anyString(), any()))
+        when(artifactService.list(anyString(), anyString(), anyString(), anyString(), anyString(), any()))
                 .thenReturn(List.of(view()));
 
         mvc.perform(get("/agent/tasks/{taskId}/deliverables", TASK)
@@ -86,7 +86,7 @@ class AgentTaskDeliverableControllerTest {
 
         ArgumentCaptor<AgentTaskArtifactQueryDTO> query =
                 ArgumentCaptor.forClass(AgentTaskArtifactQueryDTO.class);
-        verify(artifactService).list(eq(TENANT), eq(CLIENT), eq(TASK), eq(ACTOR), query.capture());
+        verify(artifactService).list(eq("0"), eq(CLIENT), eq(TENANT), eq(TASK), eq(ACTOR), query.capture());
         assertEquals("work-1", query.getValue().getWorkItemId());
         assertEquals(25, query.getValue().getLimit());
     }
@@ -130,11 +130,11 @@ class AgentTaskDeliverableControllerTest {
 
     @Test
     void foreignScopesAndForbiddenMemberCollapseToSameNotFoundShape() throws Exception {
-        when(artifactService.list(eq("tenant-b"), eq(CLIENT), eq(TASK), eq(ACTOR), any()))
+        when(artifactService.list(eq("0"), eq(CLIENT), eq("tenant-b"), eq(TASK), eq(ACTOR), any()))
                 .thenThrow(new AgentTaskCollaborationException(Reason.NOT_FOUND, "tenant secret"));
-        when(artifactService.list(eq(TENANT), eq("client-b"), eq(TASK), eq(ACTOR), any()))
+        when(artifactService.list(eq("0"), eq("client-b"), eq(TENANT), eq(TASK), eq(ACTOR), any()))
                 .thenThrow(new AgentTaskCollaborationException(Reason.NOT_FOUND, "client secret"));
-        when(artifactService.list(eq(TENANT), eq(CLIENT), eq(TASK), eq(OTHER), any()))
+        when(artifactService.list(eq("0"), eq(CLIENT), eq(TENANT), eq(TASK), eq(OTHER), any()))
                 .thenThrow(new AgentTaskCollaborationException(Reason.FORBIDDEN, "member secret"));
 
         MvcResult tenant = list(jwt("tenant-b", CLIENT, ACTOR));
@@ -149,7 +149,7 @@ class AgentTaskDeliverableControllerTest {
 
     @Test
     void contentDownloadUsesJwtActorOnlyAndReturnsExactSafeBytes() throws Exception {
-        when(contentService.readContent(TENANT, CLIENT, TASK, ACTOR, ARTIFACT, 3))
+        when(contentService.readContent("0", CLIENT, TENANT, TASK, ACTOR, ARTIFACT, 3))
                 .thenReturn(new AgentTaskArtifactContentDTO(ARTIFACT, 3, sha256(BYTES),
                         (long) BYTES.length, "application/octet-stream", BYTES));
 
@@ -166,7 +166,7 @@ class AgentTaskDeliverableControllerTest {
                 .andReturn();
 
         assertArrayEquals(BYTES, result.getResponse().getContentAsByteArray());
-        verify(contentService).readContent(TENANT, CLIENT, TASK, ACTOR, ARTIFACT, 3);
+        verify(contentService).readContent("0", CLIENT, TENANT, TASK, ACTOR, ARTIFACT, 3);
     }
 
     @Test
@@ -180,14 +180,14 @@ class AgentTaskDeliverableControllerTest {
             mvc.perform(get(uri).principal(auth)).andExpect(status().isBadRequest());
         }
         verify(contentService, never()).readContent(anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyInt());
+                anyString(), anyString(), anyString(), anyInt());
     }
 
     @Test
     void corruptArtifactMetadataAndBytesFailClosedWithoutLeakingFields() throws Exception {
         AgentTaskArtifactViewDTO corrupt = view();
         corrupt.setContentMimeType("text/plain\r\nX-Secret: yes");
-        when(artifactService.list(anyString(), anyString(), anyString(), anyString(), any()))
+        when(artifactService.list(anyString(), anyString(), anyString(), anyString(), anyString(), any()))
                 .thenReturn(List.of(corrupt));
         mvc.perform(get("/agent/tasks/{taskId}/deliverables", TASK)
                         .principal(jwt(TENANT, CLIENT, ACTOR)))
@@ -195,7 +195,7 @@ class AgentTaskDeliverableControllerTest {
                 .andExpect(content().string(org.hamcrest.Matchers.not(
                         org.hamcrest.Matchers.containsString("X-Secret"))));
 
-        when(contentService.readContent(anyString(), anyString(), anyString(), anyString(),
+        when(contentService.readContent(anyString(), anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyInt()))
                 .thenReturn(new AgentTaskArtifactContentDTO(ARTIFACT, 1, "0".repeat(64),
                         (long) BYTES.length, "text/plain", BYTES));

@@ -105,8 +105,8 @@ public final class FundedBountyQuoteClaimServiceImpl implements FundedBountyQuot
         validateId(taskId, "taskId", 100);
         QuoteRequest parsed = validateQuoteRequest(request);
         try {
-            AgentTaskQuoteDTO result = transactions.execute(status -> mutationTransaction.executeWithLockedTaskRoot(
-                    actor.tenantId(), actor.clientId(), taskId,
+            AgentTaskQuoteDTO result = transactions.execute(status -> mutationTransaction.executeWithLockedTaskRootInOwnerScope(
+                    actor.tenantId(), actor.clientId(), actor.ownerJiacn(), taskId,
                     root -> quoteLocked(actor, key, requestHash, parsed, root)));
             if (result == null) throw unavailable("Quote transaction returned no result");
             return result;
@@ -131,7 +131,7 @@ public final class FundedBountyQuoteClaimServiceImpl implements FundedBountyQuot
             throw conflict("Funded task is not open for quotation");
         }
         List<String> canonical = identityService.lockActiveCanonicalAgentIdsInScope(
-                actor.tenantId(), actor.clientId(), actor.tenantId(), List.of(request.agentId()));
+                actor.tenantId(), actor.clientId(), actor.ownerJiacn(), List.of(request.agentId()));
         if (!canonical.equals(List.of(request.agentId()))) throw notFound("Agent not found");
         AgentRuntimeEntity runtime = requireScopedRuntime(actor,
                 runtimeDao.findByAgentIdForUpdate(request.agentId()), request.agentId());
@@ -217,7 +217,7 @@ public final class FundedBountyQuoteClaimServiceImpl implements FundedBountyQuot
         ClaimRequest parsed = validateClaimRequest(request);
         try {
             AgentTaskClaimReceiptDTO result = transactions.execute(status ->
-                    mutationTransaction.executeWithLockedTaskRoot(actor.tenantId(), actor.clientId(), taskId,
+                    mutationTransaction.executeWithLockedTaskRootInOwnerScope(actor.tenantId(), actor.clientId(), actor.ownerJiacn(), taskId,
                             root -> claimLocked(actor, key, requestHash, parsed, root)));
             if (result == null) throw unavailable("Claim transaction returned no result");
             return result;
@@ -254,7 +254,7 @@ public final class FundedBountyQuoteClaimServiceImpl implements FundedBountyQuot
 
         AtomicReference<AgentRuntimeEntity> assignedRuntime = new AtomicReference<>();
         AgentLegacyTaskCompatibilityService.AssignOutcome outcome = assignmentService.assignResolvedVersioned(
-                actor.tenantId(), actor.clientId(), root.getTaskId(), List.of(request.agentId()), false,
+                actor.tenantId(), actor.clientId(), actor.ownerJiacn(), root.getTaskId(), List.of(request.agentId()), false,
                 request.taskVersion(),
                 (lockedTask, agentIds) -> {
                     AgentRuntimeEntity runtime = requireScopedRuntime(actor,
@@ -452,7 +452,7 @@ public final class FundedBountyQuoteClaimServiceImpl implements FundedBountyQuot
         if (runtime == null) throw notFound("Agent not found");
         if (!exact(expectedAgentId, runtime.getAgentId())
                 || !exact(actor.clientId(), runtime.getClientId())
-                || !exact(actor.tenantId(), runtime.getOwnerJiacn())
+                || !exact(actor.ownerJiacn(), runtime.getOwnerJiacn())
                 || !exact(actor.tenantId(), runtime.getTenantId())
                 || runtime.getBindingId() == null || runtime.getBindingId() <= 0) {
             throw notFound("Agent not found");
@@ -461,11 +461,11 @@ public final class FundedBountyQuoteClaimServiceImpl implements FundedBountyQuot
         // assignment's claim callback. Verify the runtime references THAT active scoped binding.
         try {
             cn.jia.agent.entity.AgentIdentityRegistryEntity identity = identityService.requireActiveIdentityForBinding(
-                    actor.tenantId(), actor.clientId(), actor.tenantId(), runtime.getBindingId(), expectedAgentId);
+                    actor.tenantId(), actor.clientId(), actor.ownerJiacn(), runtime.getBindingId(), expectedAgentId);
             if (identity == null || !runtime.getBindingId().equals(identity.getBindingId())
                     || !exact(expectedAgentId, identity.getCanonicalAgentId())
                     || !exact(actor.tenantId(), identity.getTenantId())
-                    || !exact(actor.tenantId(), identity.getOwnerJiacn())
+                    || !exact(actor.ownerJiacn(), identity.getOwnerJiacn())
                     || !exact(actor.clientId(), identity.getClientId())) throw notFound("Agent not found");
         } catch (cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException incompatible) {
             throw notFound("Agent not found");
@@ -600,8 +600,10 @@ public final class FundedBountyQuoteClaimServiceImpl implements FundedBountyQuot
     private static void validateActor(FundedBountyActor actor) {
         if (actor == null) throw new FundedBountyException(HttpStatus.UNAUTHORIZED,
                 "ECONOMY_UNAUTHENTICATED", "Authentication is required");
-        validateId(actor.tenantId(), "jiacn", 50);
+        if (!"0".equals(actor.tenantId())) throw badRequest("tenantId must be 0");
         validateId(actor.clientId(), "client_id", 50);
+        validateId(actor.ownerJiacn(), "jiacn", 50);
+        if ("0".equals(actor.ownerJiacn())) throw badRequest("jiacn is invalid");
         validateId(actor.userId(), "sub", 100);
     }
 

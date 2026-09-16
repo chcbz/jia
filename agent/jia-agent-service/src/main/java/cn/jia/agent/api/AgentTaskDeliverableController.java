@@ -74,7 +74,7 @@ public class AgentTaskDeliverableController {
         serviceQuery.setWorkItemId(query.workItemId());
         serviceQuery.setLimit(query.limit());
         List<AgentTaskArtifactViewDTO> result = artifactService.list(
-                scope.tenantId(), scope.clientId(), taskId, scope.actorAgentId(), serviceQuery);
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId, scope.actorAgentId(), serviceQuery);
         if (result == null || result.size() > effectiveLimit(query.limit())) {
             throw new IllegalStateException("Deliverable result is inconsistent");
         }
@@ -103,7 +103,7 @@ public class AgentTaskDeliverableController {
         requireNoQuery(request);
         int exactVersion = positiveVersion(artifactVersion);
         AgentTaskArtifactContentDTO result = contentService.readContent(
-                scope.tenantId(), scope.clientId(), taskId, scope.actorAgentId(),
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId, scope.actorAgentId(),
                 artifactId, exactVersion);
         Download download = requireDownload(result, artifactId, exactVersion);
         return ResponseEntity.ok()
@@ -151,13 +151,14 @@ public class AgentTaskDeliverableController {
             throw new AuthenticationFailure(false);
         }
         Map<String, Object> claims = jwt.getToken().getClaims();
-        String tenantId = requiredClaim(claims, "jiacn", 50);
+        String ownerJiacn = requiredClaim(claims, "jiacn", 50);
         String clientId = requiredClaim(claims, "client_id", 50);
         String actorAgentId = requiredClaim(claims, "sub", 100);
-        if (!byteExact(authentication.getName(), actorAgentId)) {
+        if ("0".equals(ownerJiacn) || "0".equals(clientId)
+                || !byteExact(authentication.getName(), actorAgentId)) {
             throw new AuthenticationFailure(true);
         }
-        return new Scope(tenantId, clientId, actorAgentId);
+        return new Scope("0", clientId, ownerJiacn, actorAgentId);
     }
 
     private static String requiredClaim(Map<String, Object> claims, String name, int maxLength) {
@@ -350,7 +351,7 @@ public class AgentTaskDeliverableController {
                 .body(new ErrorBody(code, message));
     }
 
-    private record Scope(String tenantId, String clientId, String actorAgentId) {
+    private record Scope(String tenantId, String clientId, String ownerJiacn, String actorAgentId) {
     }
 
     private record ListQuery(String workItemId, Integer limit) {

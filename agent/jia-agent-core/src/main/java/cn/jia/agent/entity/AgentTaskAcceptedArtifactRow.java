@@ -8,6 +8,7 @@ public class AgentTaskAcceptedArtifactRow {
     private String tenantId;
     private String clientId;
     private String taskId;
+    private String ownerJiacn;
     private String artifactId;
     private String workItemId;
     private String producerAgentId;

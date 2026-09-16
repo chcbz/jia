@@ -890,6 +890,56 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
             @Param("workItemId") String workItemId);
 
     @Select("""
+            SELECT parent.*
+            FROM agent_task_meta parent
+            WHERE parent.tenant_id = #{tenantId}
+              AND parent.client_id = #{clientId}
+              AND parent.owner_jiacn = #{ownerJiacn}
+              AND CAST(parent.tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(parent.tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(parent.client_id AS BINARY) = CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(parent.client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(parent.owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+              AND OCTET_LENGTH(parent.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
+              AND EXISTS (
+                  SELECT 1
+                  FROM agent_task_work_item child
+                  WHERE child.tenant_id = #{tenantId}
+                    AND child.client_id = #{clientId}
+                    AND child.owner_jiacn = #{ownerJiacn}
+                    AND child.work_item_id = #{workItemId}
+                    AND CAST(child.tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+                    AND OCTET_LENGTH(child.tenant_id) = OCTET_LENGTH(#{tenantId})
+                    AND CAST(child.client_id AS BINARY) = CAST(#{clientId} AS BINARY)
+                    AND OCTET_LENGTH(child.client_id) = OCTET_LENGTH(#{clientId})
+                    AND CAST(child.owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+                    AND OCTET_LENGTH(child.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
+                    AND child.tenant_id = parent.tenant_id
+                    AND CAST(child.tenant_id AS BINARY) = CAST(parent.tenant_id AS BINARY)
+                    AND OCTET_LENGTH(child.tenant_id) = OCTET_LENGTH(parent.tenant_id)
+                    AND child.client_id = parent.client_id
+                    AND CAST(child.client_id AS BINARY) = CAST(parent.client_id AS BINARY)
+                    AND OCTET_LENGTH(child.client_id) = OCTET_LENGTH(parent.client_id)
+                    AND child.owner_jiacn = parent.owner_jiacn
+                    AND CAST(child.owner_jiacn AS BINARY) = CAST(parent.owner_jiacn AS BINARY)
+                    AND OCTET_LENGTH(child.owner_jiacn) = OCTET_LENGTH(parent.owner_jiacn)
+                    AND CAST(child.work_item_id AS BINARY) = CAST(#{workItemId} AS BINARY)
+                    AND OCTET_LENGTH(child.work_item_id) = OCTET_LENGTH(#{workItemId})
+                    AND child.task_id = parent.task_id
+                    AND CAST(child.task_id AS BINARY) = CAST(parent.task_id AS BINARY)
+                    AND OCTET_LENGTH(child.task_id) = OCTET_LENGTH(parent.task_id)
+              )
+            ORDER BY parent.task_id ASC, parent.id ASC
+            LIMIT 1
+            FOR UPDATE
+            """)
+    AgentTaskMetaEntity findTaskRootByWorkItemForUpdateInOwnerScope(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
+            @Param("workItemId") String workItemId);
+
+    @Select("""
             SELECT 'member' AS row_type, tenant_id, client_id, task_id,
                    agent_id AS entity_id, member_role AS role, member_status AS status,
                    NULL AS required_item, NULL AS attempt_count, NULL AS max_attempts,
@@ -899,11 +949,14 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
             FROM agent_task_member
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
+              AND owner_jiacn = #{ownerJiacn}
               AND task_id = #{taskId}
               AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+              AND OCTET_LENGTH(owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
               AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
               AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
             UNION ALL
@@ -914,11 +967,14 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
             FROM agent_task_work_item
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
+              AND owner_jiacn = #{ownerJiacn}
               AND task_id = #{taskId}
               AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+              AND OCTET_LENGTH(owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
               AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
               AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
             ORDER BY row_type, entity_id
@@ -926,6 +982,7 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
     List<AgentTaskAggregationSnapshotRow> selectAggregationSnapshot(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("taskId") String taskId);
 
     @Update("""

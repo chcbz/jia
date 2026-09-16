@@ -63,7 +63,8 @@ public class AgentBountySettlementController {
         }
         String subject = claim(jwt, "sub", 100);
         if (!subject.equals(auth.getName())) throw forbidden();
-        return new FundedBountyActor(claim(jwt, "jiacn", 50), claim(jwt, "client_id", 50), subject);
+        return new FundedBountyActor("0", claim(jwt, "client_id", 50),
+                claim(jwt, "jiacn", 50), subject);
     }
 
     private static String claim(JwtAuthenticationToken jwt, String name, int limit) {

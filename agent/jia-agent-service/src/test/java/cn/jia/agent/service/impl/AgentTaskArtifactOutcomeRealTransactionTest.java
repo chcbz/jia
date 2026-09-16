@@ -55,7 +55,8 @@ class AgentTaskArtifactOutcomeRealTransactionTest {
     private static final String JDBC_URL =
             "jdbc:h2:mem:cyf_f06_outcome;MODE=MYSQL;DB_CLOSE_DELAY=-1;"
                     + "CASE_INSENSITIVE_IDENTIFIERS=TRUE;LOCK_TIMEOUT=10000";
-    private static final String TENANT = "tenant-a";
+    private static final String TENANT = "0";
+    private static final String OWNER = "owner-a";
     private static final String CLIENT = "client-a";
     private static final String TASK = "task-1";
     private static final String ACTOR = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -112,14 +113,14 @@ class AgentTaskArtifactOutcomeRealTransactionTest {
     void acceptedReplacementIsPersistedAndAuthoritativeReadExcludesSuperseded() {
         insertArtifact("artifact-old", 1, "work-1");
         insertArtifact("artifact-new", 1, "work-1");
-        service.accept(TENANT, CLIENT, TASK, ACTOR,
+        service.accept(TENANT, CLIENT, OWNER, TASK, ACTOR,
                 command("decision-old", ref("artifact-old", 1, 0)));
 
-        var accepted = service.accept(TENANT, CLIENT, TASK, ACTOR,
+        var accepted = service.accept(TENANT, CLIENT, OWNER, TASK, ACTOR,
                 command("decision-new", ref("artifact-new", 1, 0),
                         ref("artifact-old", 1, 1)));
         var authoritative = service.listAuthoritativeAccepted(
-                TENANT, CLIENT, TASK, ACTOR, "work-1", 100);
+                TENANT, CLIENT, OWNER, TASK, ACTOR, "work-1", 100);
 
         assertEquals("artifact-new", accepted.getArtifactId());
         assertEquals(List.of("artifact-new"),
@@ -136,10 +137,10 @@ class AgentTaskArtifactOutcomeRealTransactionTest {
         long events = count("SELECT COUNT(*) FROM agent_task_event");
         long outcomes = count("SELECT COUNT(*) FROM agent_task_artifact_outcome");
         long decisions = count("SELECT COUNT(*) FROM agent_task_artifact_outcome_decision");
-        var replay = service.accept(TENANT, CLIENT, TASK, ACTOR,
+        var replay = service.accept(TENANT, CLIENT, OWNER, TASK, ACTOR,
                 command("decision-new", ref("artifact-new", 1, 0),
                         ref("artifact-old", 1, 1)));
-        var supersededDecisionReplay = service.accept(TENANT, CLIENT, TASK, ACTOR,
+        var supersededDecisionReplay = service.accept(TENANT, CLIENT, OWNER, TASK, ACTOR,
                 command("decision-old", ref("artifact-old", 1, 0)));
         assertEquals(accepted.getDecisionId(), replay.getDecisionId());
         assertEquals("artifact-old", supersededDecisionReplay.getArtifactId());
@@ -157,10 +158,10 @@ class AgentTaskArtifactOutcomeRealTransactionTest {
                 INSERT INTO agent_task_artifact_outcome
                 (task_id, artifact_id, artifact_version, outcome_state,
                  decision_id, decision_digest, decided_by_agent_id, decided_at, version,
-                 tenant_id, client_id, create_time, update_time)
+                 tenant_id, client_id, owner_jiacn, create_time, update_time)
                 VALUES (?, 'artifact-authoritative', 1, 'accepted',
-                        'decision-authoritative', ?, ?, 1, 1, ?, ?, 1, 1)
-                """, TASK, "a".repeat(64), ACTOR, TENANT, CLIENT);
+                        'decision-authoritative', ?, ?, 1, 1, ?, ?, ?, 1, 1)
+                """, TASK, "a".repeat(64), ACTOR, TENANT, CLIENT, OWNER);
         for (int index = 0; index < 101; index++) {
             String artifactId = "artifact-superseded-" + String.format("%03d", index);
             insertArtifact(artifactId, 1, "work-1");
@@ -169,15 +170,15 @@ class AgentTaskArtifactOutcomeRealTransactionTest {
                     (task_id, artifact_id, artifact_version, outcome_state,
                      superseded_by_artifact_id, superseded_by_artifact_version,
                      decision_id, decision_digest, decided_by_agent_id, decided_at, version,
-                     tenant_id, client_id, create_time, update_time)
+                     tenant_id, client_id, owner_jiacn, create_time, update_time)
                     VALUES (?, ?, 1, 'superseded', 'artifact-authoritative', 1,
-                            ?, ?, ?, ?, 1, ?, ?, 1, 1)
+                            ?, ?, ?, ?, 1, ?, ?, ?, 1, 1)
                     """, TASK, artifactId, "decision-superseded-" + index,
-                    "b".repeat(64), ACTOR, 100L + index, TENANT, CLIENT);
+                    "b".repeat(64), ACTOR, 100L + index, TENANT, CLIENT, OWNER);
         }
 
         var rows = service.listAuthoritativeAccepted(
-                TENANT, CLIENT, TASK, ACTOR, "work-1", 1);
+                TENANT, CLIENT, OWNER, TASK, ACTOR, "work-1", 1);
 
         assertEquals(List.of("artifact-authoritative"),
                 rows.stream().map(value -> value.getArtifactId()).toList());
@@ -187,7 +188,7 @@ class AgentTaskArtifactOutcomeRealTransactionTest {
     void eventFailureRollsBackAcceptedInsertSupersessionUpdateAndEventVersion() {
         insertArtifact("artifact-old", 1, "work-1");
         insertArtifact("artifact-new", 1, "work-1");
-        service.accept(TENANT, CLIENT, TASK, ACTOR,
+        service.accept(TENANT, CLIENT, OWNER, TASK, ACTOR,
                 command("decision-old", ref("artifact-old", 1, 0)));
         long initialEventVersion = jdbc.queryForObject(
                 "SELECT current_event_version FROM agent_task_meta WHERE task_id=?",
@@ -205,7 +206,7 @@ class AgentTaskArtifactOutcomeRealTransactionTest {
                 mutationTransaction, failOnSecondEvent, clock::incrementAndGet);
 
         assertThrows(IllegalStateException.class, () -> failing.accept(
-                TENANT, CLIENT, TASK, ACTOR,
+                TENANT, CLIENT, OWNER, TASK, ACTOR,
                 command("decision-rollback", ref("artifact-new", 1, 0),
                         ref("artifact-old", 1, 1))));
 
@@ -230,7 +231,7 @@ class AgentTaskArtifactOutcomeRealTransactionTest {
         insertArtifact("artifact-old", 1, "work-1");
         insertArtifact("artifact-a", 1, "work-1");
         insertArtifact("artifact-b", 1, "work-1");
-        service.accept(TENANT, CLIENT, TASK, ACTOR,
+        service.accept(TENANT, CLIENT, OWNER, TASK, ACTOR,
                 command("decision-old", ref("artifact-old", 1, 0)));
 
         CountDownLatch ready = new CountDownLatch(2);
@@ -270,7 +271,7 @@ class AgentTaskArtifactOutcomeRealTransactionTest {
                 throw new IllegalStateException("race start timeout");
             }
             try {
-                service.accept(TENANT, CLIENT, TASK, ACTOR,
+                service.accept(TENANT, CLIENT, OWNER, TASK, ACTOR,
                         command(decisionId, ref(artifactId, 1, 0),
                                 ref("artifact-old", 1, 1)));
                 return new Outcome(true, null);
@@ -305,8 +306,9 @@ class AgentTaskArtifactOutcomeRealTransactionTest {
                     coordinator_agent_id VARCHAR(100), task_version BIGINT NOT NULL DEFAULT 0,
                     current_event_version BIGINT NOT NULL DEFAULT 0,
                     tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     create_time BIGINT, update_time BIGINT,
-                    UNIQUE (tenant_id, client_id, task_id)
+                    UNIQUE (tenant_id, client_id, owner_jiacn, task_id)
                 )""");
         jdbc.execute("""
                 CREATE TABLE agent_task_member (
@@ -315,6 +317,7 @@ class AgentTaskArtifactOutcomeRealTransactionTest {
                     member_status VARCHAR(20) NOT NULL, assignment_source VARCHAR(20),
                     version BIGINT NOT NULL DEFAULT 0,
                     tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     create_time BIGINT, update_time BIGINT
                 )""");
         jdbc.execute("""
@@ -326,8 +329,9 @@ class AgentTaskArtifactOutcomeRealTransactionTest {
                     content_hash VARCHAR(128), artifact_version INT NOT NULL,
                     visibility VARCHAR(20) NOT NULL, metadata_json CLOB, created_at BIGINT NOT NULL,
                     tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     create_time BIGINT, update_time BIGINT,
-                    UNIQUE (tenant_id, client_id, artifact_id, artifact_version)
+                    UNIQUE (tenant_id, client_id, owner_jiacn, artifact_id, artifact_version)
                 )""");
         jdbc.execute("""
                 CREATE TABLE agent_task_artifact_outcome (
@@ -339,8 +343,9 @@ class AgentTaskArtifactOutcomeRealTransactionTest {
                     decision_digest CHAR(64) NOT NULL, decided_by_agent_id VARCHAR(100) NOT NULL,
                     decided_at BIGINT NOT NULL, version BIGINT NOT NULL,
                     tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     create_time BIGINT, update_time BIGINT,
-                    UNIQUE (tenant_id, client_id, artifact_id, artifact_version)
+                    UNIQUE (tenant_id, client_id, owner_jiacn, artifact_id, artifact_version)
                 )""");
         jdbc.execute("""
                 CREATE TABLE agent_task_artifact_outcome_decision (
@@ -351,8 +356,9 @@ class AgentTaskArtifactOutcomeRealTransactionTest {
                     accepted_outcome_version BIGINT NOT NULL,
                     decided_by_agent_id VARCHAR(100) NOT NULL, decided_at BIGINT NOT NULL,
                     tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     create_time BIGINT, update_time BIGINT,
-                    UNIQUE (tenant_id, client_id, task_id, decision_id)
+                    UNIQUE (tenant_id, client_id, owner_jiacn, task_id, decision_id)
                 )""");
         jdbc.execute("""
                 CREATE TABLE agent_task_event (
@@ -362,18 +368,19 @@ class AgentTaskArtifactOutcomeRealTransactionTest {
                     actor_id VARCHAR(100), aggregate_type VARCHAR(30) NOT NULL,
                     aggregate_id VARCHAR(100) NOT NULL, event_json CLOB NOT NULL,
                     occurred_at BIGINT NOT NULL, tenant_id VARCHAR(50) NOT NULL,
-                    client_id VARCHAR(50) NOT NULL, create_time BIGINT, update_time BIGINT,
-                    UNIQUE (tenant_id, client_id, task_id, event_version),
-                    UNIQUE (tenant_id, client_id, event_id)
+                    client_id VARCHAR(50) NOT NULL, owner_jiacn VARCHAR(50) NOT NULL,
+                    create_time BIGINT, update_time BIGINT,
+                    UNIQUE (tenant_id, client_id, owner_jiacn, task_id, event_version),
+                    UNIQUE (tenant_id, client_id, owner_jiacn, event_id)
                 )""");
     }
 
     private void insertTask() {
         jdbc.update("INSERT INTO agent_task_meta "
                         + "(task_id, coordinator_agent_id, task_version, current_event_version, "
-                        + "tenant_id, client_id, create_time, update_time) "
-                        + "VALUES (?, ?, 0, 0, ?, ?, 1, 1)",
-                TASK, ACTOR, TENANT, CLIENT);
+                        + "tenant_id, client_id, owner_jiacn, create_time, update_time) "
+                        + "VALUES (?, ?, 0, 0, ?, ?, ?, 1, 1)",
+                TASK, ACTOR, TENANT, CLIENT, OWNER);
     }
 
     private void insertArtifact(String artifactId, int version, String workItemId) {
@@ -381,10 +388,10 @@ class AgentTaskArtifactOutcomeRealTransactionTest {
                 INSERT INTO agent_task_artifact
                 (artifact_id, task_id, work_item_id, producer_agent_id, artifact_type, title,
                  content_hash, artifact_version, visibility, created_at,
-                 tenant_id, client_id, create_time, update_time)
-                VALUES (?, ?, ?, ?, 'analysis', ?, ?, ?, 'task_members', ?, ?, ?, 1, 1)
+                 tenant_id, client_id, owner_jiacn, create_time, update_time)
+                VALUES (?, ?, ?, ?, 'analysis', ?, ?, ?, 'task_members', ?, ?, ?, ?, 1, 1)
                 """, artifactId, TASK, workItemId, ACTOR, artifactId,
-                "a".repeat(64), version, NOW - 100, TENANT, CLIENT);
+                "a".repeat(64), version, NOW - 100, TENANT, CLIENT, OWNER);
     }
 
     private AgentTaskArtifactAcceptDTO command(

@@ -35,16 +35,21 @@ public final class SkillInstallResultService {
         this.runtimes=runtimes;this.packages=packages;this.tx=new TransactionTemplate(manager);
     }
     public Map<String,Object> accept(String tenant,String client,String registeredAgent,String authenticatedKeyId,Map<String,Object> body) {
+        require("0".equals(tenant),403,"SKILL_RESULT_REJECTED");
         require(authenticatedKeyId!=null && !authenticatedKeyId.isBlank(),403,"SKILL_RESULT_REJECTED");
         String installId=text(body,"installationId"),messageId=text(body,"messageId");
         var hint=app.installation(tenant,client,installId);
         require(hint!=null && registeredAgent.equals(hint.getTargetAgentId()),403,"SKILL_RESULT_REJECTED");
         var visible=app.order(tenant,client,hint.getOrderId());
         require(visible!=null,403,"SKILL_RESULT_REJECTED");
-        var actor=new HostingRentHttp.Actor(visible.getBuyerId(),tenant,client);
-        require(skills.available(actor),503,"SKILL_MARKETPLACE_DISABLED");
         byte[] hash=resultHash(body);
         return tx.execute(s->{
+            var runtime=runtimes.findByAgentIdForUpdate(registeredAgent);
+            require(runtime!=null && "0".equals(runtime.getTenantId()) && client.equals(runtime.getClientId())
+                    && runtime.getOwnerJiacn()!=null && !runtime.getOwnerJiacn().isBlank(),403,"SKILL_RESULT_REJECTED");
+            String ownerJiacn=runtime.getOwnerJiacn();
+            var actor=new HostingRentHttp.Actor(visible.getBuyerId(),tenant,client,ownerJiacn);
+            require(skills.available(actor),503,"SKILL_MARKETPLACE_DISABLED");
             skills.actorLock(actor);
             var authenticatedBinding=app.deliveryBinding(tenant,client,installId);
             require(authenticatedBinding!=null && authenticatedKeyId.equals(authenticatedBinding.getApiKeyId()),403,"SKILL_RESULT_REJECTED");
@@ -62,8 +67,8 @@ public final class SkillInstallResultService {
             var binding=app.deliveryBinding(tenant,client,installId);
             require(binding!=null,409,"SKILL_REGISTRATION_CHANGED");
             require(binding.getApiKeyId().equals(skills.requireManagedKey(actor,registeredAgent)),403,"SKILL_AGENT_CREDENTIAL_UNPROVEN");
-            var delivery=commands.lockDelivery(tenant,client,i.getCommandId());
-            requireCurrentDelivery(i,delivery,false);
+            var delivery=commands.lockDelivery(tenant,client,ownerJiacn,i.getCommandId());
+            requireCurrentDelivery(i,delivery,ownerJiacn,false);
             boolean success="SUCCEEDED".equals(body.get("status"));
             String failure=body.get("failureCode")==null?null:text(body,"failureCode");
             boolean refund=!success && failure!=null && SAFE_FAILURES.contains(failure);
@@ -98,15 +103,16 @@ public final class SkillInstallResultService {
         });
     }
     public byte[] packageBytes(OauthApiKeyEntity key,String installationId) {
-        require(key!=null && key.getId()!=null && key.getJiacn()!=null && key.getJiacn().equals(key.getTenantId())
+        require(key!=null && key.getId()!=null && key.getJiacn()!=null && "0".equals(key.getTenantId())
                 && Integer.valueOf(1).equals(key.getStatus()) && (key.getExpireTime()==null || key.getExpireTime()>System.currentTimeMillis()),403,"SKILL_DOWNLOAD_FORBIDDEN");
-        String t=key.getJiacn(),c=key.getClientId();
+        String t="0",c=key.getClientId(),ownerJiacn=key.getJiacn();
+        require(ownerJiacn!=null && !ownerJiacn.isBlank() && !"0".equals(ownerJiacn),403,"SKILL_DOWNLOAD_FORBIDDEN");
         var hint=app.installation(t,c,installationId);
         require(hint!=null,403,"SKILL_DOWNLOAD_FORBIDDEN");
         return tx.execute(s->{
             var visible=app.order(t,c,hint.getOrderId());
             require(visible!=null,403,"SKILL_DOWNLOAD_FORBIDDEN");
-            var actor=new HostingRentHttp.Actor(visible.getBuyerId(),t,c);
+            var actor=new HostingRentHttp.Actor(visible.getBuyerId(),t,c,ownerJiacn);
             require(skills.available(actor),503,"SKILL_MARKETPLACE_DISABLED");
             skills.actorLock(actor); versions.requireOwned(actor,hint.getTargetAgentId(),null,false);
             var o=market.selectOrderForUpdate(t,c,hint.getOrderId());
@@ -114,14 +120,16 @@ public final class SkillInstallResultService {
             require(o!=null && "INSTALLING".equals(o.getStatus()) && i!=null && "INSTALLING".equals(i.getStatus()),403,"SKILL_DOWNLOAD_FORBIDDEN");
             var binding=app.deliveryBinding(t,c,installationId);
             require(binding!=null && key.getId().equals(binding.getApiKeyId()) && key.getId().equals(skills.requireManagedKey(actor,i.getTargetAgentId())),403,"SKILL_DOWNLOAD_FORBIDDEN");
-            requireCurrentDelivery(i,commands.lockDelivery(t,c,i.getCommandId()),true);
+            requireCurrentDelivery(i,commands.lockDelivery(t,c,ownerJiacn,i.getCommandId()),ownerJiacn,true);
             var pkg=packages.getObject().get(i.getProductVersionId());
             require(pkg.product().packageSize()==i.getPackageSize() && Arrays.equals(pkg.product().packageSha256(),i.getPackageSha256()),503,"SKILL_PACKAGE_UNAVAILABLE");
             return pkg.bytes(); // already cached at startup; no filesystem/network I/O under transaction
         });
     }
-    static void requireCurrentDelivery(SkillInstallationEntity i,AgentCommandDeliveryEntity d,boolean download) {
-        require(d!=null && i.getTenantId().equals(d.getTenantId()) && i.getClientId().equals(d.getClientId())
+    static void requireCurrentDelivery(SkillInstallationEntity i,AgentCommandDeliveryEntity d,String ownerJiacn,boolean download) {
+        require(d!=null && "0".equals(i.getTenantId()) && "0".equals(d.getTenantId())
+                && ownerJiacn!=null && ownerJiacn.equals(d.getOwnerJiacn())
+                && i.getTenantId().equals(d.getTenantId()) && i.getClientId().equals(d.getClientId())
                 && i.getCommandId().equals(d.getCommandId()) && "SKILL_INSTALL".equals(d.getCommandType())
                 && i.getOrderId().equals(d.getTaskId()) && i.getTargetAgentId().equals(d.getTargetAgentId())
                 && i.getMessageId().equals(d.getActiveMessageId()) && i.getAttempt().equals(d.getActiveAttempt())

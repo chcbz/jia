@@ -11,12 +11,15 @@ public interface AgentTaskArtifactMapper extends BaseMapper<AgentTaskArtifactEnt
             FROM agent_task_artifact
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
+              AND owner_jiacn = #{ownerJiacn}
               AND task_id = #{taskId}
               AND artifact_id = #{artifactId}
               AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+              AND OCTET_LENGTH(owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
               AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
               AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
               AND CAST(artifact_id AS BINARY) = CAST(#{artifactId} AS BINARY)
@@ -28,6 +31,7 @@ public interface AgentTaskArtifactMapper extends BaseMapper<AgentTaskArtifactEnt
     AgentTaskArtifactEntity selectLatestVersionForUpdate(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("taskId") String taskId,
             @Param("artifactId") String artifactId);
 }

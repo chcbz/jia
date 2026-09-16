@@ -10,6 +10,6 @@ import cn.jia.agent.entity.AgentTaskAggregationDTO;
  */
 public interface AgentTaskAggregationService {
     AgentTaskAggregationDTO aggregate(
-            String tenantId, String clientId, String taskId,
+            String tenantId, String clientId, String ownerJiacn, String taskId,
             AgentTaskAggregationCommandDTO command);
 }

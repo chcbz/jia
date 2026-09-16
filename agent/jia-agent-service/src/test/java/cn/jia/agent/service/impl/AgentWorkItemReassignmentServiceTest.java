@@ -60,8 +60,9 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class AgentWorkItemReassignmentServiceTest {
-    private static final String TENANT = "tenant-a";
+    private static final String TENANT = "0";
     private static final String CLIENT = "client-a";
+    private static final String OWNER = "owner-a";
     private static final String TASK = "task-1";
     private static final String WORK = "work-1";
     private static final String PREVIOUS = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -106,21 +107,21 @@ class AgentWorkItemReassignmentServiceTest {
 
         AgentTaskMutationTransaction transaction = new InlineTransaction(root);
         for (String agent : List.of(PREVIOUS, TARGET, COORDINATOR)) {
-            when(memberDao.findByTaskAndAgentForUpdate(TENANT, CLIENT, TASK, agent))
+            when(memberDao.findByTaskAndAgentForUpdate(TENANT, CLIENT, OWNER, TASK, agent))
                     .thenReturn(member(agent));
-            when(agentService.requireApiKeyOwnedAgentForUpdate(CLIENT, TENANT, agent))
+            when(agentService.requireApiKeyOwnedAgentForUpdate(CLIENT, OWNER, agent))
                     .thenReturn(runtime(agent));
         }
         when(identityService.lockActiveCanonicalAgentIdsInScope(
-                eq(TENANT), eq(CLIENT), eq(TENANT), any()))
+                eq(TENANT), eq(CLIENT), eq(OWNER), any()))
                 .thenAnswer(invocation -> invocation.getArgument(3));
-        doNothing().when(agentService).requireHostingNewWork(TENANT, CLIENT, TARGET);
-        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, WORK))
+        doNothing().when(agentService).requireHostingNewWork(OWNER, CLIENT, TARGET);
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, OWNER, TASK, WORK))
                 .thenReturn(workItem);
-        when(reassignmentDao.findSourceCommand(TENANT, CLIENT, source.getCommandId()))
+        when(reassignmentDao.findSourceCommand(TENANT, CLIENT, OWNER, source.getCommandId()))
                 .thenReturn(source);
         when(workItemDao.reassignExpiredLeaseByVersion(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
                 anyString(), org.mockito.ArgumentMatchers.anyLong(),
                 org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyLong(), any()))
                 .thenReturn(1);
@@ -149,14 +150,14 @@ class AgentWorkItemReassignmentServiceTest {
         root.setCoordinatorAgentId(LEGACY_COORDINATOR);
         workItem.setAssigneeAgentId(LEGACY_PREVIOUS);
         source = sourceFor(LEGACY_PREVIOUS, "legacy-source-intent");
-        when(reassignmentDao.findSourceCommand(TENANT, CLIENT, source.getCommandId())).thenReturn(source);
+        when(reassignmentDao.findSourceCommand(TENANT, CLIENT, OWNER, source.getCommandId())).thenReturn(source);
         for (String agent : List.of(LEGACY_PREVIOUS, LEGACY_TARGET, LEGACY_COORDINATOR)) {
-            when(memberDao.findByTaskAndAgentForUpdate(TENANT, CLIENT, TASK, agent))
+            when(memberDao.findByTaskAndAgentForUpdate(TENANT, CLIENT, OWNER, TASK, agent))
                     .thenReturn(member(agent, LEGACY_COORDINATOR));
-            when(agentService.requireApiKeyOwnedAgentForUpdate(CLIENT, TENANT, agent))
+            when(agentService.requireApiKeyOwnedAgentForUpdate(CLIENT, OWNER, agent))
                     .thenReturn(runtime(agent));
         }
-        doNothing().when(agentService).requireHostingNewWork(TENANT, CLIENT, LEGACY_TARGET);
+        doNothing().when(agentService).requireHostingNewWork(OWNER, CLIENT, LEGACY_TARGET);
         when(commandWriter.writeAuthorizedHall(any(), eq(LEGACY_COORDINATOR)))
                 .thenAnswer(invocation -> {
                     AgentCommandDraft draft = invocation.getArgument(0);
@@ -165,17 +166,17 @@ class AgentWorkItemReassignmentServiceTest {
                 });
         PersistedIdentityAuthority authority = new PersistedIdentityAuthority();
         authority.addDirect(LEGACY_PREVIOUS, AgentConstants.IDENTITY_TYPE_LEGACY_CANONICAL,
-                AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, TENANT, CLIENT);
+                AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, OWNER, CLIENT);
         authority.addDirect(LEGACY_TARGET, AgentConstants.IDENTITY_TYPE_LEGACY_CANONICAL,
-                AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, TENANT, CLIENT);
+                AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, OWNER, CLIENT);
         authority.addDirect(LEGACY_COORDINATOR, AgentConstants.IDENTITY_TYPE_LEGACY_CANONICAL,
-                AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, TENANT, CLIENT);
+                AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, OWNER, CLIENT);
         AgentWorkItemLeaseServiceImpl actualLease = actualLease(authority.service());
         leaseService = actualLease; // Real delegate, never mock away the active lease compatibility boundary.
-        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK, LEGACY_TARGET))
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK, LEGACY_TARGET))
                 .thenReturn(member(LEGACY_TARGET, LEGACY_COORDINATOR));
-        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK)).thenAnswer(inv -> workItem);
-        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, WORK))
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, OWNER, WORK)).thenAnswer(inv -> workItem);
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, OWNER, TASK, WORK))
                 .thenAnswer(inv -> workItem);
         when(workItemDao.updateActiveLeaseByVersion(
                 anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
@@ -212,7 +213,7 @@ class AgentWorkItemReassignmentServiceTest {
 
         AgentWorkItemReassignmentRequestDTO legacyRequest = request(
                 LEGACY_PREVIOUS, LEGACY_TARGET, source.getCommandId());
-        var created = service.reassign(TENANT, CLIENT, "operator-legacy", LEGACY_COORDINATOR,
+        var created = service.reassign(TENANT, CLIENT, OWNER, "operator-legacy", LEGACY_COORDINATOR,
                 TASK, WORK, "reassign-key-legacy", legacyRequest);
         assertEquals(LEGACY_TARGET, created.getTargetAgentId());
         AgentWorkItemReassignmentEntity receipt = inserted.get();
@@ -222,13 +223,13 @@ class AgentWorkItemReassignmentServiceTest {
         workItem.setAssigneeAgentId(LEGACY_TARGET).setLeaseToken(NEW_TOKEN)
                 .setLeaseUntil(NOW + 300_000).setAttemptCount(1).setVersion(VERSION + 1);
         when(reassignmentDao.findByReassignmentIdForUpdate(
-                TENANT, CLIENT, TASK, WORK, receipt.getReassignmentId())).thenReturn(receipt);
-        var lease = service.readLease(TENANT, CLIENT, LEGACY_TARGET, TASK, WORK,
+                TENANT, CLIENT, OWNER, TASK, WORK, receipt.getReassignmentId())).thenReturn(receipt);
+        var lease = service.readLease(TENANT, CLIENT, OWNER, LEGACY_TARGET, TASK, WORK,
                 receipt.getReassignmentId(), leaseRequest(receipt.getCommandId(), VERSION + 1));
         assertEquals(LEGACY_TARGET, lease.getAgentId());
         assertEquals(NEW_TOKEN, lease.getLeaseToken());
 
-        var startedLease = service.startLease(TENANT, CLIENT, LEGACY_TARGET, TASK, WORK,
+        var startedLease = service.startLease(TENANT, CLIENT, OWNER, LEGACY_TARGET, TASK, WORK,
                 receipt.getReassignmentId(), leaseRequest(receipt.getCommandId(), VERSION + 1));
         assertEquals("running", startedLease.getStatus());
         assertEquals("running", workItem.getStatus());
@@ -237,7 +238,7 @@ class AgentWorkItemReassignmentServiceTest {
         AgentWorkItemReassignmentLeaseRequestDTO heartbeat =
                 leaseRequest(receipt.getCommandId(), VERSION + 2);
         heartbeat.setLeaseDurationMillis(400_000L);
-        var renewedLease = service.heartbeatLease(TENANT, CLIENT, LEGACY_TARGET, TASK, WORK,
+        var renewedLease = service.heartbeatLease(TENANT, CLIENT, OWNER, LEGACY_TARGET, TASK, WORK,
                 receipt.getReassignmentId(), heartbeat);
         assertEquals(NOW + 400_000, renewedLease.getLeaseUntil());
         assertEquals(NOW + 400_000, workItem.getLeaseUntil());
@@ -245,18 +246,18 @@ class AgentWorkItemReassignmentServiceTest {
         assertEquals(NEW_TOKEN, workItem.getLeaseToken());
         assertEquals(LEGACY_TARGET, workItem.getAssigneeAgentId());
         verify(workItemDao, org.mockito.Mockito.times(2)).updateActiveLeaseByVersion(
-                eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), eq(LEGACY_TARGET), eq(NEW_TOKEN),
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK), eq(LEGACY_TARGET), eq(NEW_TOKEN),
                 anyString(), org.mockito.ArgumentMatchers.anyLong(),
                 org.mockito.ArgumentMatchers.anyLong(), eq(NOW), any());
 
         authority.suspend(LEGACY_TARGET);
         assertEquals(AgentWorkItemReassignmentException.Reason.NOT_FOUND_OR_FORBIDDEN,
                 assertThrows(AgentWorkItemReassignmentException.class,
-                        () -> service.reassign(TENANT, CLIENT, "operator-legacy", LEGACY_COORDINATOR,
+                        () -> service.reassign(TENANT, CLIENT, OWNER, "operator-legacy", LEGACY_COORDINATOR,
                                 TASK, WORK, "reassign-key-legacy", legacyRequest)).getReason());
         assertEquals(AgentWorkItemReassignmentException.Reason.NOT_FOUND_OR_FORBIDDEN,
                 assertThrows(AgentWorkItemReassignmentException.class,
-                        () -> service.readLease(TENANT, CLIENT, LEGACY_TARGET, TASK, WORK,
+                        () -> service.readLease(TENANT, CLIENT, OWNER, LEGACY_TARGET, TASK, WORK,
                                 receipt.getReassignmentId(),
                                 leaseRequest(receipt.getCommandId(), VERSION + 1))).getReason());
         // Revocation is also enforced by the real delegate, even without its E05 wrapper.
@@ -265,19 +266,19 @@ class AgentWorkItemReassignmentServiceTest {
         revokedCommand.setExpectedVersion(VERSION + 3); revokedCommand.setLeaseDurationMillis(500_000L);
         assertEquals(cn.jia.agent.exception.AgentTaskStateException.Reason.NOT_FOUND,
                 assertThrows(cn.jia.agent.exception.AgentTaskStateException.class,
-                        () -> actualLease.heartbeat(TENANT, CLIENT, TASK, WORK, revokedCommand)).getReason());
+                        () -> actualLease.heartbeat(TENANT, CLIENT, OWNER, TASK, WORK, revokedCommand)).getReason());
 
         // ACTIVE is required for execution, not system cleanup: revoked direct-canonical
         // references still pass historical validation and can have their expired lease reclaimed.
         workItem.setLeaseUntil(NOW - 1);
         when(workItemDao.listExpiredLeases(TENANT, CLIENT, NOW, 1)).thenReturn(List.of(workItem));
-        when(workItemDao.expireLeaseByVersion(eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK),
+        when(workItemDao.expireLeaseByVersion(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK),
                 eq(LEGACY_TARGET), eq(NEW_TOKEN), eq("running"), eq(NOW - 1), eq(VERSION + 3), eq(NOW), any()))
                 .thenReturn(1);
         var expired = actualLease.expireLeases(TENANT, CLIENT, 1);
         assertEquals(1, expired.getExpiredCount());
         assertEquals(1, expired.getRequeuedCount());
-        verify(workItemDao).expireLeaseByVersion(eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK),
+        verify(workItemDao).expireLeaseByVersion(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK),
                 eq(LEGACY_TARGET), eq(NEW_TOKEN), eq("running"), eq(NOW - 1), eq(VERSION + 3), eq(NOW), any());
     }
 
@@ -289,22 +290,22 @@ class AgentWorkItemReassignmentServiceTest {
             switch (kind) {
                 case "alias" -> authority.addAlias(agent, TARGET);
                 case "system" -> authority.addDirect(agent, AgentConstants.IDENTITY_TYPE_SYSTEM,
-                        AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, TENANT, CLIENT);
+                        AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, OWNER, CLIENT);
                 case "classification" -> authority.addDirect(agent, "ALIAS",
-                        AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, TENANT, CLIENT);
+                        AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, OWNER, CLIENT);
                 case "inactive" -> authority.addDirect(agent, AgentConstants.IDENTITY_TYPE_LEGACY_CANONICAL,
                         AgentConstants.IDENTITY_STATUS_SUSPENDED, AgentConstants.BINDING_STATUS_SUSPENDED, TENANT, CLIENT);
                 case "crossScope" -> authority.addDirect(agent, AgentConstants.IDENTITY_TYPE_LEGACY_CANONICAL,
                         AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, TENANT, "client-other");
                 default -> { } // Unknown ID deliberately has no persisted identity.
             }
-            when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK, agent)).thenReturn(member(agent));
+            when(memberDao.findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK, agent)).thenReturn(member(agent));
             var command = new cn.jia.agent.entity.AgentWorkItemLeaseCommandDTO();
             command.setAgentId(agent); command.setLeaseToken(NEW_TOKEN); command.setExpectedVersion(VERSION + 1);
             var actual = actualLease(authority.service());
             assertEquals(cn.jia.agent.exception.AgentTaskStateException.Reason.NOT_FOUND,
                     assertThrows(cn.jia.agent.exception.AgentTaskStateException.class,
-                            () -> actual.start(TENANT, CLIENT, TASK, WORK, command)).getReason(), kind);
+                            () -> actual.start(TENANT, CLIENT, OWNER, TASK, WORK, command)).getReason(), kind);
         }
         verify(workItemDao, never()).updateActiveLeaseByVersion(
                 any(), any(), any(), any(), any(), any(), any(),
@@ -321,7 +322,7 @@ class AgentWorkItemReassignmentServiceTest {
                     AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, TENANT, scope);
             workItem.setAssigneeAgentId(unknown);
             when(workItemDao.listExpiredLeases(TENANT, CLIENT, NOW, 1)).thenReturn(List.of(workItem));
-            when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, WORK)).thenReturn(workItem);
+            when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, OWNER, TASK, WORK)).thenReturn(workItem);
             assertEquals(cn.jia.agent.exception.AgentTaskStateException.Reason.INVALID_PERSISTED_STATE,
                     assertThrows(cn.jia.agent.exception.AgentTaskStateException.class,
                             () -> actualLease(authority.service()).expireLeases(TENANT, CLIENT, 1)).getReason());
@@ -348,7 +349,7 @@ class AgentWorkItemReassignmentServiceTest {
         }
         useIdentityAuthority(authority.service());
 
-        var result = service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+        var result = service.reassign(TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                 TASK, WORK, "reassign-key-opaque", request(TARGET));
         assertEquals(TARGET, result.getTargetAgentId());
         assertFalse(result.isIdempotentReplay());
@@ -363,7 +364,7 @@ class AgentWorkItemReassignmentServiceTest {
 
         PersistedIdentityAuthority system = baselineOpaqueAuthority();
         system.addDirect(AgentConstants.BUILTIN_SONGJIANG_AGENT_ID, AgentConstants.IDENTITY_TYPE_SYSTEM,
-                AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, TENANT, CLIENT);
+                AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, OWNER, CLIENT);
         assertTargetAuthorityRejected(AgentConstants.BUILTIN_SONGJIANG_AGENT_ID, system,
                 "reassign-key-system");
 
@@ -392,13 +393,13 @@ class AgentWorkItemReassignmentServiceTest {
         AgentWorkItemReassignmentRequestDTO invalid = request("invalid agent id");
         assertEquals(AgentWorkItemReassignmentException.Reason.INVALID_REQUEST,
                 assertThrows(AgentWorkItemReassignmentException.class,
-                        () -> service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+                        () -> service.reassign(TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                                 TASK, WORK, "reassign-key-invalid", invalid)).getReason());
     }
 
     @Test
     void expiredLeaseReassignsExplicitTargetAndIgnoresTransportExhaustion() {
-        var result = service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+        var result = service.reassign(TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                 TASK, WORK, "reassign-key-0001", request(TARGET));
 
         assertEquals(TARGET, result.getTargetAgentId());
@@ -449,7 +450,7 @@ class AgentWorkItemReassignmentServiceTest {
         workItem.setLeaseUntil(NOW + 1);
         AgentWorkItemReassignmentException failure = assertThrows(
                 AgentWorkItemReassignmentException.class,
-                () -> service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+                () -> service.reassign(TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                         TASK, WORK, "reassign-key-0001", request(TARGET)));
         assertEquals(AgentWorkItemReassignmentException.Reason.LEASE_NOT_EXPIRED,
                 failure.getReason());
@@ -465,7 +466,7 @@ class AgentWorkItemReassignmentServiceTest {
         workItem.setAttemptCount(1).setMaxAttempts(2);
         AgentWorkItemReassignmentException failure = assertThrows(
                 AgentWorkItemReassignmentException.class,
-                () -> service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+                () -> service.reassign(TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                         TASK, WORK, "reassign-key-0001", request(TARGET)));
         assertEquals(AgentWorkItemReassignmentException.Reason.DOMAIN_ATTEMPTS_EXHAUSTED,
                 failure.getReason());
@@ -478,16 +479,16 @@ class AgentWorkItemReassignmentServiceTest {
 
     @Test
     void permanentReceiptReplaysBeforeLeaseOrTransportMutation() {
-        service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+        service.reassign(TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                 TASK, WORK, "reassign-key-0001", request(TARGET));
         AgentWorkItemReassignmentEntity receipt = inserted.get();
         when(reassignmentDao.findByReassignmentIdForUpdate(
-                eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), anyString()))
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK), anyString()))
                 .thenReturn(receipt);
         root.setTaskVersion(99L).setRewardStatus("completed");
         workItem.setVersion(88L).setStatus("completed").setLeaseToken(null).setLeaseUntil(null);
 
-        var replay = service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+        var replay = service.reassign(TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                 TASK, WORK, "reassign-key-0001", request(TARGET));
 
         assertTrue(replay.isIdempotentReplay());
@@ -499,11 +500,11 @@ class AgentWorkItemReassignmentServiceTest {
 
     @Test
     void sameKeyChangedTargetConflictsWithoutLookingAtCurrentLease() {
-        service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+        service.reassign(TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                 TASK, WORK, "reassign-key-0001", request(TARGET));
         AgentWorkItemReassignmentEntity receipt = inserted.get();
         when(reassignmentDao.findByReassignmentIdForUpdate(
-                eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), anyString()))
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK), anyString()))
                 .thenReturn(receipt);
         AgentWorkItemReassignmentRequestDTO changed = request(PREVIOUS);
         changed.setExpectedPreviousAgentId(TARGET);
@@ -511,7 +512,7 @@ class AgentWorkItemReassignmentServiceTest {
 
         AgentWorkItemReassignmentException failure = assertThrows(
                 AgentWorkItemReassignmentException.class,
-                () -> service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+                () -> service.reassign(TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                         TASK, WORK, "reassign-key-0001", changed));
         assertEquals(AgentWorkItemReassignmentException.Reason.IDEMPOTENCY_CONFLICT,
                 failure.getReason());
@@ -523,13 +524,13 @@ class AgentWorkItemReassignmentServiceTest {
         staleTask.setExpectedTaskVersion(6L);
         assertEquals(AgentWorkItemReassignmentException.Reason.VERSION_CONFLICT,
                 assertThrows(AgentWorkItemReassignmentException.class,
-                        () -> service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+                        () -> service.reassign(TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                                 TASK, WORK, "reassign-key-0001", staleTask)).getReason());
         AgentWorkItemReassignmentRequestDTO staleWork = request(TARGET);
         staleWork.setExpectedWorkItemVersion(VERSION - 1);
         assertEquals(AgentWorkItemReassignmentException.Reason.VERSION_CONFLICT,
                 assertThrows(AgentWorkItemReassignmentException.class,
-                        () -> service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+                        () -> service.reassign(TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                                 TASK, WORK, "reassign-key-0002", staleWork)).getReason());
     }
 
@@ -538,13 +539,13 @@ class AgentWorkItemReassignmentServiceTest {
         root.setCoordinatorAgentId(TARGET);
         assertEquals(AgentWorkItemReassignmentException.Reason.NOT_FOUND_OR_FORBIDDEN,
                 assertThrows(AgentWorkItemReassignmentException.class,
-                        () -> service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+                        () -> service.reassign(TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                                 TASK, WORK, "reassign-key-0001", request(TARGET))).getReason());
         root.setCoordinatorAgentId(COORDINATOR);
         source.setTargetAgentId(TARGET);
         assertEquals(AgentWorkItemReassignmentException.Reason.INVALID_SOURCE_COMMAND,
                 assertThrows(AgentWorkItemReassignmentException.class,
-                        () -> service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+                        () -> service.reassign(TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                                 TASK, WORK, "reassign-key-0002", request(TARGET))).getReason());
         verify(workItemDao, never()).reassignExpiredLeaseByVersion(
                 any(), any(), any(), any(), any(), any(), any(),
@@ -554,29 +555,29 @@ class AgentWorkItemReassignmentServiceTest {
 
     @Test
     void targetMembershipRuntimeAndHostingAdmissionEachFailClosedBeforeCas() {
-        when(memberDao.findByTaskAndAgentForUpdate(TENANT, CLIENT, TASK, TARGET))
+        when(memberDao.findByTaskAndAgentForUpdate(TENANT, CLIENT, OWNER, TASK, TARGET))
                 .thenReturn(null);
         assertEquals(AgentWorkItemReassignmentException.Reason.NOT_FOUND_OR_FORBIDDEN,
                 assertThrows(AgentWorkItemReassignmentException.class,
-                        () -> service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+                        () -> service.reassign(TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                                 TASK, WORK, "reassign-key-member", request(TARGET))).getReason());
 
-        when(memberDao.findByTaskAndAgentForUpdate(TENANT, CLIENT, TASK, TARGET))
+        when(memberDao.findByTaskAndAgentForUpdate(TENANT, CLIENT, OWNER, TASK, TARGET))
                 .thenReturn(member(TARGET));
-        when(agentService.requireApiKeyOwnedAgentForUpdate(CLIENT, TENANT, TARGET))
+        when(agentService.requireApiKeyOwnedAgentForUpdate(CLIENT, OWNER, TARGET))
                 .thenThrow(new IllegalStateException("cross-scope runtime"));
         assertEquals(AgentWorkItemReassignmentException.Reason.NOT_FOUND_OR_FORBIDDEN,
                 assertThrows(AgentWorkItemReassignmentException.class,
-                        () -> service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+                        () -> service.reassign(TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                                 TASK, WORK, "reassign-key-runtime", request(TARGET))).getReason());
 
         org.mockito.Mockito.doReturn(runtime(TARGET)).when(agentService)
-                .requireApiKeyOwnedAgentForUpdate(CLIENT, TENANT, TARGET);
+                .requireApiKeyOwnedAgentForUpdate(CLIENT, OWNER, TARGET);
         org.mockito.Mockito.doThrow(new IllegalStateException("hosting denied"))
-                .when(agentService).requireHostingNewWork(TENANT, CLIENT, TARGET);
+                .when(agentService).requireHostingNewWork(OWNER, CLIENT, TARGET);
         assertEquals(AgentWorkItemReassignmentException.Reason.NOT_FOUND_OR_FORBIDDEN,
                 assertThrows(AgentWorkItemReassignmentException.class,
-                        () -> service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+                        () -> service.reassign(TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                                 TASK, WORK, "reassign-key-hosting", request(TARGET))).getReason());
 
         verify(workItemDao, never()).reassignExpiredLeaseByVersion(
@@ -590,30 +591,30 @@ class AgentWorkItemReassignmentServiceTest {
         AgentWorkItemReassignmentEntity receipt = receipt("rsn-old", "cmd-new",
                 TARGET, "0".repeat(64));
         when(reassignmentDao.findByReassignmentIdForUpdate(
-                TENANT, CLIENT, TASK, WORK, "rsn-old")).thenReturn(receipt);
+                TENANT, CLIENT, OWNER, TASK, WORK, "rsn-old")).thenReturn(receipt);
         AgentWorkItemReassignmentLeaseRequestDTO request = leaseRequest("cmd-old", VERSION);
         assertEquals(AgentWorkItemReassignmentException.Reason.NOT_FOUND_OR_FORBIDDEN,
                 assertThrows(AgentWorkItemReassignmentException.class,
-                        () -> service.readLease(TENANT, CLIENT, TARGET, TASK, WORK,
+                        () -> service.readLease(TENANT, CLIENT, OWNER, TARGET, TASK, WORK,
                                 "rsn-old", request)).getReason());
 
         request.setCommandId("cmd-new");
         assertEquals(AgentWorkItemReassignmentException.Reason.NOT_FOUND_OR_FORBIDDEN,
                 assertThrows(AgentWorkItemReassignmentException.class,
-                        () -> service.readLease(TENANT, CLIENT, TARGET, TASK, WORK,
+                        () -> service.readLease(TENANT, CLIENT, OWNER, TARGET, TASK, WORK,
                                 "rsn-old", request)).getReason());
         verifyNoInteractions(leaseService);
     }
 
     @Test
     void exactTargetCommandAndFenceCanStartWithoutCallerSupplyingToken() {
-        service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+        service.reassign(TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                 TASK, WORK, "reassign-key-0001", request(TARGET));
         AgentWorkItemReassignmentEntity receipt = inserted.get();
         workItem.setAssigneeAgentId(TARGET).setLeaseToken(NEW_TOKEN)
                 .setLeaseUntil(NOW + 300_000).setAttemptCount(1).setVersion(VERSION + 1);
         when(reassignmentDao.findByReassignmentIdForUpdate(
-                TENANT, CLIENT, TASK, WORK, receipt.getReassignmentId())).thenReturn(receipt);
+                TENANT, CLIENT, OWNER, TASK, WORK, receipt.getReassignmentId())).thenReturn(receipt);
         AgentWorkItemLeaseDTO started = new AgentWorkItemLeaseDTO();
         started.setTaskId(TASK);
         started.setWorkItemId(WORK);
@@ -625,30 +626,30 @@ class AgentWorkItemReassignmentServiceTest {
         started.setAttemptCount(1);
         started.setMaxAttempts(3);
         started.setChangedAt(NOW);
-        when(leaseService.start(eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), any()))
+        when(leaseService.start(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK), any()))
                 .thenReturn(started);
 
-        var result = service.startLease(TENANT, CLIENT, TARGET, TASK, WORK,
+        var result = service.startLease(TENANT, CLIENT, OWNER, TARGET, TASK, WORK,
                 receipt.getReassignmentId(), leaseRequest(receipt.getCommandId(), VERSION + 1));
         assertEquals(NEW_TOKEN, result.getLeaseToken());
         assertEquals("running", result.getStatus());
         var command = ArgumentCaptor.forClass(cn.jia.agent.entity.AgentWorkItemLeaseCommandDTO.class);
-        verify(leaseService).start(eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), command.capture());
+        verify(leaseService).start(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK), command.capture());
         assertEquals(NEW_TOKEN, command.getValue().getLeaseToken());
     }
 
 
     @Test
     void exactTargetCommandAndFenceCanReadAndHeartbeatWithoutCallerToken() {
-        service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+        service.reassign(TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                 TASK, WORK, "reassign-key-0001", request(TARGET));
         AgentWorkItemReassignmentEntity receipt = inserted.get();
         workItem.setAssigneeAgentId(TARGET).setLeaseToken(NEW_TOKEN)
                 .setLeaseUntil(NOW + 300_000).setAttemptCount(1).setVersion(VERSION + 1);
         when(reassignmentDao.findByReassignmentIdForUpdate(
-                TENANT, CLIENT, TASK, WORK, receipt.getReassignmentId())).thenReturn(receipt);
+                TENANT, CLIENT, OWNER, TASK, WORK, receipt.getReassignmentId())).thenReturn(receipt);
 
-        var read = service.readLease(TENANT, CLIENT, TARGET, TASK, WORK,
+        var read = service.readLease(TENANT, CLIENT, OWNER, TARGET, TASK, WORK,
                 receipt.getReassignmentId(), leaseRequest(receipt.getCommandId(), VERSION + 1));
         assertEquals(NEW_TOKEN, read.getLeaseToken());
         assertEquals(VERSION + 1, read.getWorkItemVersion());
@@ -664,31 +665,31 @@ class AgentWorkItemReassignmentServiceTest {
         renewed.setAttemptCount(1);
         renewed.setMaxAttempts(3);
         renewed.setChangedAt(NOW);
-        when(leaseService.heartbeat(eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), any()))
+        when(leaseService.heartbeat(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK), any()))
                 .thenReturn(renewed);
         AgentWorkItemReassignmentLeaseRequestDTO heartbeat =
                 leaseRequest(receipt.getCommandId(), VERSION + 1);
         heartbeat.setLeaseDurationMillis(400_000L);
 
-        var result = service.heartbeatLease(TENANT, CLIENT, TARGET, TASK, WORK,
+        var result = service.heartbeatLease(TENANT, CLIENT, OWNER, TARGET, TASK, WORK,
                 receipt.getReassignmentId(), heartbeat);
         assertEquals(NOW + 400_000, result.getLeaseUntil());
         var command = ArgumentCaptor.forClass(cn.jia.agent.entity.AgentWorkItemLeaseCommandDTO.class);
         verify(leaseService).heartbeat(
-                eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), command.capture());
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK), command.capture());
         assertEquals(NEW_TOKEN, command.getValue().getLeaseToken());
         assertEquals(400_000L, command.getValue().getLeaseDurationMillis());
     }
 
     @Test
     void inconsistentHeartbeatVersionAndExpiryShapeFailsClosed() {
-        service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+        service.reassign(TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                 TASK, WORK, "reassign-key-0001", request(TARGET));
         AgentWorkItemReassignmentEntity receipt = inserted.get();
         workItem.setAssigneeAgentId(TARGET).setLeaseToken(NEW_TOKEN)
                 .setLeaseUntil(NOW + 300_000).setAttemptCount(1).setVersion(VERSION + 1);
         when(reassignmentDao.findByReassignmentIdForUpdate(
-                TENANT, CLIENT, TASK, WORK, receipt.getReassignmentId())).thenReturn(receipt);
+                TENANT, CLIENT, OWNER, TASK, WORK, receipt.getReassignmentId())).thenReturn(receipt);
         AgentWorkItemLeaseDTO poisoned = new AgentWorkItemLeaseDTO();
         poisoned.setTaskId(TASK);
         poisoned.setWorkItemId(WORK);
@@ -700,7 +701,7 @@ class AgentWorkItemReassignmentServiceTest {
         poisoned.setAttemptCount(1);
         poisoned.setMaxAttempts(3);
         poisoned.setChangedAt(NOW);
-        when(leaseService.heartbeat(eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), any()))
+        when(leaseService.heartbeat(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK), any()))
                 .thenReturn(poisoned);
         AgentWorkItemReassignmentLeaseRequestDTO heartbeat =
                 leaseRequest(receipt.getCommandId(), VERSION + 1);
@@ -708,7 +709,7 @@ class AgentWorkItemReassignmentServiceTest {
 
         AgentWorkItemReassignmentException failure = assertThrows(
                 AgentWorkItemReassignmentException.class,
-                () -> service.heartbeatLease(TENANT, CLIENT, TARGET, TASK, WORK,
+                () -> service.heartbeatLease(TENANT, CLIENT, OWNER, TARGET, TASK, WORK,
                         receipt.getReassignmentId(), heartbeat));
         assertEquals(AgentWorkItemReassignmentException.Reason.INVALID_PERSISTED_STATE,
                 failure.getReason());
@@ -716,13 +717,13 @@ class AgentWorkItemReassignmentServiceTest {
 
     @Test
     void inconsistentLeaseDelegateCannotLeakOrReplaceTheReceiptBoundCredential() {
-        service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+        service.reassign(TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                 TASK, WORK, "reassign-key-0001", request(TARGET));
         AgentWorkItemReassignmentEntity receipt = inserted.get();
         workItem.setAssigneeAgentId(TARGET).setLeaseToken(NEW_TOKEN)
                 .setLeaseUntil(NOW + 300_000).setAttemptCount(1).setVersion(VERSION + 1);
         when(reassignmentDao.findByReassignmentIdForUpdate(
-                TENANT, CLIENT, TASK, WORK, receipt.getReassignmentId())).thenReturn(receipt);
+                TENANT, CLIENT, OWNER, TASK, WORK, receipt.getReassignmentId())).thenReturn(receipt);
         AgentWorkItemLeaseDTO poisoned = new AgentWorkItemLeaseDTO();
         poisoned.setTaskId(TASK);
         poisoned.setWorkItemId(WORK);
@@ -734,12 +735,12 @@ class AgentWorkItemReassignmentServiceTest {
         poisoned.setAttemptCount(1);
         poisoned.setMaxAttempts(3);
         poisoned.setChangedAt(NOW);
-        when(leaseService.start(eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), any()))
+        when(leaseService.start(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK), any()))
                 .thenReturn(poisoned);
 
         AgentWorkItemReassignmentException failure = assertThrows(
                 AgentWorkItemReassignmentException.class,
-                () -> service.startLease(TENANT, CLIENT, TARGET, TASK, WORK,
+                () -> service.startLease(TENANT, CLIENT, OWNER, TARGET, TASK, WORK,
                         receipt.getReassignmentId(),
                         leaseRequest(receipt.getCommandId(), VERSION + 1)));
         assertEquals(AgentWorkItemReassignmentException.Reason.INVALID_PERSISTED_STATE,
@@ -752,7 +753,7 @@ class AgentWorkItemReassignmentServiceTest {
         request.setReason("Authorization: Bearer secret");
         assertEquals(AgentWorkItemReassignmentException.Reason.INVALID_REQUEST,
                 assertThrows(AgentWorkItemReassignmentException.class,
-                        () -> service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+                        () -> service.reassign(TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                                 TASK, WORK, "reassign-key-secret", request)).getReason());
         verifyNoInteractions(eventWriter, commandWriter);
     }
@@ -778,22 +779,22 @@ class AgentWorkItemReassignmentServiceTest {
 
     private void assertTargetAuthorityRejected(
             String target, PersistedIdentityAuthority authority, String idempotencyKey) {
-        when(memberDao.findByTaskAndAgentForUpdate(TENANT, CLIENT, TASK, target))
+        when(memberDao.findByTaskAndAgentForUpdate(TENANT, CLIENT, OWNER, TASK, target))
                 .thenReturn(member(target));
-        when(agentService.requireApiKeyOwnedAgentForUpdate(CLIENT, TENANT, target))
+        when(agentService.requireApiKeyOwnedAgentForUpdate(CLIENT, OWNER, target))
                 .thenReturn(runtime(target));
-        doNothing().when(agentService).requireHostingNewWork(TENANT, CLIENT, target);
+        doNothing().when(agentService).requireHostingNewWork(OWNER, CLIENT, target);
         useIdentityAuthority(authority.service());
         assertEquals(AgentWorkItemReassignmentException.Reason.NOT_FOUND_OR_FORBIDDEN,
                 assertThrows(AgentWorkItemReassignmentException.class,
-                        () -> service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+                        () -> service.reassign(TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                                 TASK, WORK, idempotencyKey, request(target))).getReason());
     }
 
     private AgentTaskWorkItemDTO captureUpdate() {
         ArgumentCaptor<AgentTaskWorkItemDTO> update = ArgumentCaptor.forClass(AgentTaskWorkItemDTO.class);
         verify(workItemDao).reassignExpiredLeaseByVersion(
-                eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), eq(PREVIOUS), eq(TOKEN),
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK), eq(PREVIOUS), eq(TOKEN),
                 eq("claimed"), eq(NOW - 1), eq(VERSION), eq(NOW), update.capture());
         return update.getValue();
     }
@@ -805,6 +806,7 @@ class AgentWorkItemReassignmentServiceTest {
                 .setCurrentEventVersion(0L);
         value.setTenantId(TENANT);
         value.setClientId(CLIENT);
+        value.setOwnerJiacn(OWNER);
         return value;
     }
 
@@ -819,6 +821,7 @@ class AgentWorkItemReassignmentServiceTest {
                 .setMemberStatus("working").setAssignmentSource("manual").setVersion(0L);
         value.setTenantId(TENANT);
         value.setClientId(CLIENT);
+        value.setOwnerJiacn(OWNER);
         return value;
     }
 
@@ -855,6 +858,7 @@ class AgentWorkItemReassignmentServiceTest {
                 .setVersion(VERSION);
         value.setTenantId(TENANT);
         value.setClientId(CLIENT);
+        value.setOwnerJiacn(OWNER);
         return value;
     }
 
@@ -868,7 +872,7 @@ class AgentWorkItemReassignmentServiceTest {
                 TENANT, CLIENT, TASK, targetAgentId, intent,
                 AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE);
         AgentCommandDraft draft = new AgentCommandDraft(
-                1, commandId, TASK, intent, TENANT, CLIENT, TASK, WORK, targetAgentId,
+                1, commandId, TASK, intent, TENANT, CLIENT, OWNER, TASK, WORK, targetAgentId,
                 AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE, issued,
                 issued + AgentCommandCanonicalCodec.HALL_COMMAND_TTL_MILLIS, intent,
                 new AgentHallCommandPayload("work_item_execute", "Execute original work item",
@@ -883,6 +887,7 @@ class AgentWorkItemReassignmentServiceTest {
                 .setStatus("DEAD").setAttemptCount(Integer.MAX_VALUE).setVersion(0L);
         value.setTenantId(TENANT);
         value.setClientId(CLIENT);
+        value.setOwnerJiacn(OWNER);
         return value;
     }
 
@@ -1022,13 +1027,31 @@ class AgentWorkItemReassignmentServiceTest {
             return mutation.apply(root);
         }
         @Override
+        public <T> T executeWithLockedTaskRootInOwnerScope(
+                String tenantId, String clientId, String ownerJiacn, String taskId,
+                LockedTaskMutation<T> mutation) {
+            return mutation.apply(root);
+        }
+        @Override
         public <T> T executeWithLockedTaskRootForWorkItem(String tenantId, String clientId,
                 String workItemId, LockedTaskMutation<T> mutation) {
             return mutation.apply(root);
         }
         @Override
+        public <T> T executeWithLockedTaskRootForWorkItemInOwnerScope(
+                String tenantId, String clientId, String ownerJiacn, String workItemId,
+                LockedTaskMutation<T> mutation) {
+            return mutation.apply(root);
+        }
+        @Override
         public <T> T executeAfterTaskRootReservation(String tenantId, String clientId,
                 String taskId, TaskRootReservation reservation, ReservedTaskMutation<T> mutation) {
+            return mutation.apply(root, reservation.reserve() == 1);
+        }
+        @Override
+        public <T> T executeAfterTaskRootReservationInOwnerScope(
+                String tenantId, String clientId, String ownerJiacn, String taskId,
+                TaskRootReservation reservation, ReservedTaskMutation<T> mutation) {
             return mutation.apply(root, reservation.reserve() == 1);
         }
     }

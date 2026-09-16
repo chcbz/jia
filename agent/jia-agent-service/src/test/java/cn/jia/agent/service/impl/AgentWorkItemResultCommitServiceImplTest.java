@@ -33,7 +33,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class AgentWorkItemResultCommitServiceImplTest {
-    private static final String TENANT = "tenant-a";
+    private static final String TENANT = "0";
+    private static final String OWNER = "owner-a";
     private static final String CLIENT = "client-a";
     private static final String TASK = "task-1";
     private static final String WORK = "work-1";
@@ -57,13 +58,14 @@ class AgentWorkItemResultCommitServiceImplTest {
         workItemDao = mock(AgentTaskWorkItemDao.class);
         mutationTransaction = mock(AgentTaskMutationTransaction.class);
         eventWriter = mock(AgentTaskEventWriter.class);
-        when(mutationTransaction.executeWithLockedTaskRoot(
-                eq(TENANT), eq(CLIENT), eq(TASK), any())).thenAnswer(invocation -> {
-            AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(3);
+        when(mutationTransaction.executeWithLockedTaskRootInOwnerScope(
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), any())).thenAnswer(invocation -> {
+            AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(4);
             AgentTaskMetaEntity root = new AgentTaskMetaEntity()
                     .setTaskId(TASK).setTaskVersion(0L).setCurrentEventVersion(0L);
             root.setTenantId(TENANT);
             root.setClientId(CLIENT);
+            root.setOwnerJiacn(OWNER);
             return mutation.apply(root);
         });
         service = new AgentWorkItemResultCommitServiceImpl(
@@ -74,25 +76,25 @@ class AgentWorkItemResultCommitServiceImplTest {
     @Test
     void reusesB04ValidationThenAppliesExactLeaseCas() {
         AgentWorkItemResultCommitDTO command = command();
-        when(leaseService.validateLeaseForResult(eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), any()))
+        when(leaseService.validateLeaseForResult(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK), any()))
                 .thenReturn(lease());
         AgentTaskArtifactViewDTO artifact = new AgentTaskArtifactViewDTO();
         artifact.setArtifactId("artifact-1");
-        when(artifactService.publish(TENANT, CLIENT, TASK, AGENT, command.getArtifact()))
+        when(artifactService.publish(TENANT, CLIENT, OWNER, TASK, AGENT, command.getArtifact()))
                 .thenReturn(artifact);
-        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, WORK))
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, OWNER, TASK, WORK))
                 .thenReturn(workItem());
         when(workItemDao.updateActiveLeaseByVersion(
-                eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), eq(AGENT), eq(TOKEN),
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK), eq(AGENT), eq(TOKEN),
                 eq("running"), eq(LEASE_UNTIL), eq(VERSION), eq(NOW), any())).thenReturn(1);
 
-        var result = service.commitResult(TENANT, CLIENT, TASK, AGENT, command);
+        var result = service.commitResult(TENANT, CLIENT, OWNER, TASK, AGENT, command);
 
         assertEquals("submitted", result.getStatus());
         assertEquals(VERSION + 1, result.getWorkItemVersion());
         ArgumentCaptor<AgentTaskWorkItemDTO> update = ArgumentCaptor.forClass(AgentTaskWorkItemDTO.class);
         verify(workItemDao).updateActiveLeaseByVersion(
-                eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), eq(AGENT), eq(TOKEN),
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK), eq(AGENT), eq(TOKEN),
                 eq("running"), eq(LEASE_UNTIL), eq(VERSION), eq(NOW), update.capture());
         assertEquals("submitted", update.getValue().getStatus());
         assertEquals("artifact-1", update.getValue().getResultArtifactId());
@@ -103,20 +105,20 @@ class AgentWorkItemResultCommitServiceImplTest {
     @Test
     void casLossAfterArtifactPublishRaisesConflictForTransactionRollback() {
         AgentWorkItemResultCommitDTO command = command();
-        when(leaseService.validateLeaseForResult(eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), any()))
+        when(leaseService.validateLeaseForResult(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK), any()))
                 .thenReturn(lease());
         AgentTaskArtifactViewDTO artifact = new AgentTaskArtifactViewDTO();
         artifact.setArtifactId("artifact-1");
-        when(artifactService.publish(TENANT, CLIENT, TASK, AGENT, command.getArtifact()))
+        when(artifactService.publish(TENANT, CLIENT, OWNER, TASK, AGENT, command.getArtifact()))
                 .thenReturn(artifact);
-        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, WORK))
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, OWNER, TASK, WORK))
                 .thenReturn(workItem());
         when(workItemDao.updateActiveLeaseByVersion(
-                eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), eq(AGENT), eq(TOKEN),
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK), eq(AGENT), eq(TOKEN),
                 eq("running"), eq(LEASE_UNTIL), eq(VERSION), eq(NOW), any())).thenReturn(0);
 
         AgentTaskCollaborationException error = assertThrows(AgentTaskCollaborationException.class,
-                () -> service.commitResult(TENANT, CLIENT, TASK, AGENT, command));
+                () -> service.commitResult(TENANT, CLIENT, OWNER, TASK, AGENT, command));
 
         assertEquals(Reason.VERSION_CONFLICT, error.getReason());
     }
@@ -125,14 +127,14 @@ class AgentWorkItemResultCommitServiceImplTest {
     void mismatchedB04SnapshotFailsClosedBeforeArtifactWrite() {
         AgentWorkItemLeaseDTO mismatched = lease();
         mismatched.setLeaseToken("lease_other");
-        when(leaseService.validateLeaseForResult(eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), any()))
+        when(leaseService.validateLeaseForResult(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK), any()))
                 .thenReturn(mismatched);
 
         AgentTaskCollaborationException error = assertThrows(AgentTaskCollaborationException.class,
-                () -> service.commitResult(TENANT, CLIENT, TASK, AGENT, command()));
+                () -> service.commitResult(TENANT, CLIENT, OWNER, TASK, AGENT, command()));
 
         assertEquals(Reason.INVALID_PERSISTED_STATE, error.getReason());
-        verify(artifactService, never()).publish(any(), any(), any(), any(), any());
+        verify(artifactService, never()).publish(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -140,35 +142,35 @@ class AgentWorkItemResultCommitServiceImplTest {
         AgentWorkItemResultCommitDTO command = command();
         command.getArtifact().setWorkItemId("work-other");
         assertEquals(Reason.INVALID_REQUEST, assertThrows(AgentTaskCollaborationException.class,
-                () -> service.commitResult(TENANT, CLIENT, TASK, AGENT, command)).getReason());
-        verify(leaseService, never()).validateLeaseForResult(any(), any(), any(), any(), any());
+                () -> service.commitResult(TENANT, CLIENT, OWNER, TASK, AGENT, command)).getReason());
+        verify(leaseService, never()).validateLeaseForResult(any(), any(), any(), any(), any(), any());
     }
 
 
     @Test
     void locksRootThenPublishesArtifactBeforeSubmittedEvent() {
         AgentWorkItemResultCommitDTO command = command();
-        when(leaseService.validateLeaseForResult(eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), any()))
+        when(leaseService.validateLeaseForResult(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK), any()))
                 .thenReturn(lease());
         AgentTaskArtifactViewDTO artifact = new AgentTaskArtifactViewDTO();
         artifact.setArtifactId("artifact-1");
-        when(artifactService.publish(TENANT, CLIENT, TASK, AGENT, command.getArtifact()))
+        when(artifactService.publish(TENANT, CLIENT, OWNER, TASK, AGENT, command.getArtifact()))
                 .thenReturn(artifact);
-        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, WORK))
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, OWNER, TASK, WORK))
                 .thenReturn(workItem());
         when(workItemDao.updateActiveLeaseByVersion(
-                eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), eq(AGENT), eq(TOKEN),
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK), eq(AGENT), eq(TOKEN),
                 eq("running"), eq(LEASE_UNTIL), eq(VERSION), eq(NOW), any())).thenReturn(1);
 
-        service.commitResult(TENANT, CLIENT, TASK, AGENT, command);
+        service.commitResult(TENANT, CLIENT, OWNER, TASK, AGENT, command);
 
         var order = inOrder(mutationTransaction, leaseService, artifactService, workItemDao, eventWriter);
-        order.verify(mutationTransaction).executeWithLockedTaskRoot(
-                eq(TENANT), eq(CLIENT), eq(TASK), any());
-        order.verify(leaseService).validateLeaseForResult(eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), any());
-        order.verify(artifactService).publish(TENANT, CLIENT, TASK, AGENT, command.getArtifact());
+        order.verify(mutationTransaction).executeWithLockedTaskRootInOwnerScope(
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), any());
+        order.verify(leaseService).validateLeaseForResult(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK), any());
+        order.verify(artifactService).publish(TENANT, CLIENT, OWNER, TASK, AGENT, command.getArtifact());
         order.verify(workItemDao).updateActiveLeaseByVersion(
-                eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), eq(AGENT), eq(TOKEN),
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK), eq(AGENT), eq(TOKEN),
                 eq("running"), eq(LEASE_UNTIL), eq(VERSION), eq(NOW), any());
         ArgumentCaptor<AgentTaskEventWriteCommand> event =
                 ArgumentCaptor.forClass(AgentTaskEventWriteCommand.class);
@@ -181,20 +183,20 @@ class AgentWorkItemResultCommitServiceImplTest {
     @Test
     void resultCasLossDoesNotAppendSubmittedEvent() {
         AgentWorkItemResultCommitDTO command = command();
-        when(leaseService.validateLeaseForResult(eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), any()))
+        when(leaseService.validateLeaseForResult(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK), any()))
                 .thenReturn(lease());
         AgentTaskArtifactViewDTO artifact = new AgentTaskArtifactViewDTO();
         artifact.setArtifactId("artifact-1");
-        when(artifactService.publish(TENANT, CLIENT, TASK, AGENT, command.getArtifact()))
+        when(artifactService.publish(TENANT, CLIENT, OWNER, TASK, AGENT, command.getArtifact()))
                 .thenReturn(artifact);
-        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, TASK, WORK))
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, OWNER, TASK, WORK))
                 .thenReturn(workItem());
         when(workItemDao.updateActiveLeaseByVersion(
-                eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), eq(AGENT), eq(TOKEN),
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK), eq(AGENT), eq(TOKEN),
                 eq("running"), eq(LEASE_UNTIL), eq(VERSION), eq(NOW), any())).thenReturn(0);
 
         assertThrows(AgentTaskCollaborationException.class,
-                () -> service.commitResult(TENANT, CLIENT, TASK, AGENT, command));
+                () -> service.commitResult(TENANT, CLIENT, OWNER, TASK, AGENT, command));
 
         verify(eventWriter, never()).append(any());
     }
@@ -227,6 +229,9 @@ class AgentWorkItemResultCommitServiceImplTest {
 
     private AgentTaskWorkItemEntity workItem() {
         AgentTaskWorkItemEntity item = new AgentTaskWorkItemEntity();
+        item.setTenantId(TENANT);
+        item.setClientId(CLIENT);
+        item.setOwnerJiacn(OWNER);
         item.setTaskId(TASK);
         item.setWorkItemId(WORK);
         item.setTitle("work");

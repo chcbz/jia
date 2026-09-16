@@ -184,7 +184,7 @@ public final class AgentCommandRabbitConsumer {
         if ("SKILL_INSTALL".equals(message.commandType())) {
             if (skillDispatch==null) return completeDead(message,token,WS_DISPATCH_REJECTED);
             AgentRawCommandDispatchResult sent;
-            try { sent=skillDispatch.dispatch(message.tenantId(),message.clientId(),message.taskId(),message.targetAgentId(),message.commandId(),message.rawWireBytes()); }
+            try { sent=skillDispatch.dispatch(message.tenantId(),message.clientId(),message.ownerJiacn(),message.taskId(),message.targetAgentId(),message.commandId(),message.rawWireBytes()); }
             catch(RuntimeException unavailable) { return parkClaimedTransient(message,token,WS_SEND_FAILED,WS_RETRY_EXHAUSTED); }
             return switch(sent.status()) {
                 case SENT -> completeSent(message,token);
@@ -196,7 +196,7 @@ public final class AgentCommandRabbitConsumer {
         AgentTaskAccessLevel access;
         try {
             access = accessService.resolveMemberAccess(
-                    message.tenantId(), message.clientId(), message.taskId(),
+                    message.tenantId(), message.clientId(), message.ownerJiacn(), message.taskId(),
                     message.targetAgentId());
         } catch (RuntimeException unavailable) {
             return parkClaimedTransient(

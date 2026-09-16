@@ -6,23 +6,23 @@ import cn.jia.agent.entity.AgentWorkItemLeaseScanDTO;
 
 public interface AgentWorkItemLeaseService {
     AgentWorkItemLeaseDTO claim(
-            String tenantId, String clientId, String taskId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             AgentWorkItemLeaseCommandDTO command);
 
     AgentWorkItemLeaseDTO start(
-            String tenantId, String clientId, String taskId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             AgentWorkItemLeaseCommandDTO command);
 
     AgentWorkItemLeaseDTO heartbeat(
-            String tenantId, String clientId, String taskId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             AgentWorkItemLeaseCommandDTO command);
 
     AgentWorkItemLeaseDTO release(
-            String tenantId, String clientId, String taskId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             AgentWorkItemLeaseCommandDTO command);
 
     AgentWorkItemLeaseDTO cancel(
-            String tenantId, String clientId, String taskId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             AgentWorkItemLeaseCommandDTO command);
 
     /**
@@ -31,8 +31,8 @@ public interface AgentWorkItemLeaseService {
      * artifacts or task aggregate state.
      */
     AgentWorkItemLeaseDTO validateLeaseForResult(
-            String tenantId, String clientId, String taskId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             AgentWorkItemLeaseCommandDTO command);
 
-    AgentWorkItemLeaseScanDTO expireLeases(String tenantId, String clientId, int limit);
+    AgentWorkItemLeaseScanDTO expireLeases(String tenantId, String clientId, String ownerJiacn, int limit);
 }

@@ -129,6 +129,15 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
     }
 
     @Override
+    public AgentTaskMetaEntity findByWorkItemIdForUpdateInOwnerScope(
+            String tenantId, String clientId, String ownerJiacn, String workItemId) {
+        requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
+        requireExactId(workItemId, "workItemId", 100);
+        return baseMapper.findTaskRootByWorkItemForUpdateInOwnerScope(
+                tenantId, clientId, ownerJiacn, workItemId);
+    }
+
+    @Override
     public AgentTaskMetaEntity findDurableActiveAssignmentByAgentForUpdate(
             String tenantId, String clientId, String agentId) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
@@ -139,10 +148,10 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
 
     @Override
     public List<AgentTaskAggregationSnapshotRow> findAggregationSnapshot(
-            String tenantId, String clientId, String taskId) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+            String tenantId, String clientId, String ownerJiacn, String taskId) {
+        requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
-        return baseMapper.selectAggregationSnapshot(tenantId, clientId, taskId);
+        return baseMapper.selectAggregationSnapshot(tenantId, clientId, ownerJiacn, taskId);
     }
 
     @Override

@@ -131,6 +131,8 @@ final class AgentCommandRabbitMessageDecoder {
                 || !commandId.equals(text(root, "commandId"))
                 || !tenantId.equals(text(root, "tenantId"))
                 || !clientId.equals(text(root, "clientId"))
+                || !"0".equals(tenantId)
+                || !validOwner(text(root, "ownerJiacn"))
                 || !taskId.equals(text(root, "taskId"))
                 || !targetAgentId.equals(text(root, "targetAgentId"))
                 || !integralEquals(root, "attempt", activeAttempt)
@@ -143,8 +145,10 @@ final class AgentCommandRabbitMessageDecoder {
         String commandType = requireExact(text(root, "commandType"), 64, "COMMAND_TYPE_INVALID");
         if (!COMMAND_TYPES.contains(commandType)) throw invalid("COMMAND_TYPE_NOT_ALLOWED");
         validateTaskInviteCompatibility(root, commandType, taskId, targetAgentId);
+        String ownerJiacn = text(root, "ownerJiacn");
         rejectNestedConflict(root.get("payload"), "tenantId", tenantId);
         rejectNestedConflict(root.get("payload"), "clientId", clientId);
+        rejectNestedConflict(root.get("payload"), "ownerJiacn", ownerJiacn);
         rejectNestedConflict(root.get("payload"), "taskId", taskId);
         rejectNestedConflict(root.get("payload"), "targetAgentId", targetAgentId);
         rejectNestedConflict(root.get("payload"), "agentId", targetAgentId);
@@ -152,7 +156,7 @@ final class AgentCommandRabbitMessageDecoder {
         rejectNestedConflict(root.get("payload"), "commandId", commandId);
 
         return new DecodedAgentCommandMessage(
-                messageId, eventId, deliveryId, commandId, tenantId, clientId,
+                messageId, eventId, deliveryId, commandId, tenantId, clientId, ownerJiacn,
                 taskId, targetAgentId, commandType, activeAttempt, expiresAt,
                 topologyHash, sourceRetry, raw, actualHash);
     }
@@ -236,6 +240,11 @@ final class AgentCommandRabbitMessageDecoder {
         Object value = headers.get(name);
         if (!(value instanceof Long number)) throw invalid("HEADER_TYPE_INVALID");
         return number;
+    }
+
+    private static boolean validOwner(String value) {
+        return value != null && !"0".equals(value)
+                && value.equals(requireExact(value, 50, "OWNER_INVALID"));
     }
 
     private static String requireExact(String value, int maxLength, String reason) {

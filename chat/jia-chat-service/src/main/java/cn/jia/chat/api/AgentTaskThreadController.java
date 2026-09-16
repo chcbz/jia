@@ -32,7 +32,7 @@ public class AgentTaskThreadController {
         AgentTaskThreadCreateDTO safe = request == null ? new AgentTaskThreadCreateDTO() : request;
         Scope scope = currentScope();
         return JsonResult.success(taskThreadService.getOrCreateTeamThread(
-                scope.tenantId(), scope.clientId(), taskId,
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId,
                 safe.getActorAgentId(), safe.getTitle()));
     }
 
@@ -42,7 +42,7 @@ public class AgentTaskThreadController {
             @RequestParam String actorAgentId) {
         Scope scope = currentScope();
         return JsonResult.success(taskThreadService.getTeamThread(
-                scope.tenantId(), scope.clientId(), taskId, actorAgentId));
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId, actorAgentId));
     }
 
     @PostMapping("/{taskId}/team/messages")
@@ -51,7 +51,7 @@ public class AgentTaskThreadController {
             @RequestBody(required = false) AgentTaskThreadMessageCreateDTO request) {
         Scope scope = currentScope();
         return JsonResult.success(taskThreadService.appendTeamMessage(
-                scope.tenantId(), scope.clientId(), taskId, request));
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId, request));
     }
 
     @GetMapping("/{taskId}/team/messages")
@@ -61,7 +61,7 @@ public class AgentTaskThreadController {
             @RequestParam(defaultValue = "100") int limit) {
         Scope scope = currentScope();
         return JsonResult.success(taskThreadService.listTeamMessages(
-                scope.tenantId(), scope.clientId(), taskId, actorAgentId, limit));
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId, actorAgentId, limit));
     }
 
     @ExceptionHandler(AgentTaskThreadException.class)
@@ -89,7 +89,7 @@ public class AgentTaskThreadController {
 
     private Scope currentScope() {
         EsContext context = EsContextHolder.getContext();
-        return new Scope(context.getJiacn(), context.getClientId());
+        return new Scope("0", context.getClientId(), context.getJiacn());
     }
 
     private ResponseEntity<JsonResult<Void>> error(
@@ -99,6 +99,6 @@ public class AgentTaskThreadController {
         return ResponseEntity.status(status).body(result);
     }
 
-    private record Scope(String tenantId, String clientId) {
+    private record Scope(String tenantId, String clientId, String ownerJiacn) {
     }
 }

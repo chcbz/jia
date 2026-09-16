@@ -135,21 +135,22 @@ public final class FundedBountyServiceImpl implements FundedBountyService {
         reserved.setCurrentEventVersion(0L);
         reserved.setTenantId(actor.tenantId());
         reserved.setClientId(actor.clientId());
+        reserved.setOwnerJiacn(actor.ownerJiacn());
         reserved.setCreateTime(now);
         reserved.setUpdateTime(now);
 
-        return mutationTransaction.executeAfterTaskRootReservation(
-                actor.tenantId(), actor.clientId(), reservedTaskId,
+        return mutationTransaction.executeAfterTaskRootReservationInOwnerScope(
+                actor.tenantId(), actor.clientId(), actor.ownerJiacn(), reservedTaskId,
                 () -> taskMetaDao.insert(reserved),
                 (root, created) -> {
                     if (!created) throw conflict("Funded task root identifier collision");
-                    String finalTaskId = createTaskPlan(request, reservedTaskId, actor.tenantId());
+                    String finalTaskId = createTaskPlan(request, reservedTaskId, actor.ownerJiacn());
                     if (!reservedTaskId.equals(finalTaskId)) {
-                        if (taskMetaDao.findByTaskIdForUpdate(actor.tenantId(), actor.clientId(), finalTaskId) != null) {
+                        if (taskMetaDao.findByTaskIdForUpdateInOwnerScope(actor.tenantId(), actor.clientId(), actor.ownerJiacn(), finalTaskId) != null) {
                             throw conflict("Task plan ID collides with an existing task root");
                         }
                         long rekeyedAt = positiveNow();
-                        requireOne(taskMetaDao.rekeyReservedTaskRoot(actor.tenantId(), actor.clientId(),
+                        requireOne(taskMetaDao.rekeyReservedTaskRootInOwnerScope(actor.tenantId(), actor.clientId(), actor.ownerJiacn(),
                                 reservedTaskId, finalTaskId, rekeyedAt), "funded task root plan ID backfill");
                         requireOne(fundingMapper.rekeyOperation(actor.tenantId(), actor.clientId(),
                                 reservedTaskId, finalTaskId, rekeyedAt), "funded create receipt rekey");
@@ -195,7 +196,7 @@ public final class FundedBountyServiceImpl implements FundedBountyService {
         AgentTaskFundingCancelReceiptDTO result;
         try {
             result = transactions.execute(status ->
-                    mutationTransaction.executeWithLockedTaskRoot(actor.tenantId(), actor.clientId(), taskId,
+                    mutationTransaction.executeWithLockedTaskRootInOwnerScope(actor.tenantId(), actor.clientId(), actor.ownerJiacn(), taskId,
                             root -> cancelLocked(actor, idempotencyKey, requestHash, expectedTaskVersion, root)));
         } catch (AgentTaskCollaborationException exception) {
             if (exception.getReason() == AgentTaskCollaborationException.Reason.NOT_FOUND
@@ -245,7 +246,7 @@ public final class FundedBountyServiceImpl implements FundedBountyService {
         } catch (EconomyPostingException exception) {
             throw mapEconomy(exception);
         }
-        requireOne(taskMetaDao.updateStatusByVersion(actor.tenantId(), actor.clientId(), root.getTaskId(),
+        requireOne(taskMetaDao.updateStatusByVersionInOwnerScope(actor.tenantId(), actor.clientId(), actor.ownerJiacn(), root.getTaskId(),
                 expectedTaskVersion, AgentConstants.TASK_STATUS_CANCELLED, null, null, null),
                 "funded task cancellation version CAS");
         requireOne(fundingMapper.markRefunded(actor.tenantId(), actor.clientId(), root.getTaskId(),
@@ -292,7 +293,7 @@ public final class FundedBountyServiceImpl implements FundedBountyService {
 
     private AgentTaskDTO replayCreate(FundedBountyActor actor, AgentTaskCreateDTO request,
             AgentTaskFundingOperationEntity operation) {
-        AgentTaskMetaEntity root = taskMetaDao.findByTaskId(actor.tenantId(), actor.clientId(), operation.getTaskId());
+        AgentTaskMetaEntity root = taskMetaDao.findByTaskIdInOwnerScope(actor.tenantId(), actor.clientId(), actor.ownerJiacn(), operation.getTaskId());
         AgentTaskFundingEntity funding = fundingMapper.selectFunding(
                 actor.tenantId(), actor.clientId(), operation.getTaskId());
         if (root == null || funding == null || operation.getReceiptTaskVersion() == null
@@ -300,6 +301,7 @@ public final class FundedBountyServiceImpl implements FundedBountyService {
                 || !Objects.equals(operation.getReserveTransactionId(), funding.getReserveTransactionId())) {
             throw unavailable("Funded create receipt is incomplete");
         }
+        requireOwnedTask(actor, root);
         requireOwnedFunding(actor, funding);
         return taskReceipt(root, request, funding, operation.getReceiptTaskVersion(),
                 AgentConstants.TASK_STATUS_OPEN, operation.getReceiptCreatedAt(), operation.getReceiptUpdatedAt());
@@ -401,6 +403,14 @@ public final class FundedBountyServiceImpl implements FundedBountyService {
                 || funding.getEscrowId() == null || funding.getEscrowVersion() == null
                 || funding.getReserveTransactionId() == null || funding.getVersion() == null) {
             throw unavailable("Funded task projection is corrupt");
+        }
+    }
+
+    private void requireOwnedTask(FundedBountyActor actor, AgentTaskMetaEntity root) {
+        if (root == null || !actor.tenantId().equals(root.getTenantId())
+                || !actor.clientId().equals(root.getClientId())
+                || !actor.ownerJiacn().equals(root.getOwnerJiacn())) {
+            throw new FundedBountyException(HttpStatus.NOT_FOUND, "TASK_NOT_FOUND", "Task not found");
         }
     }
 
@@ -512,8 +522,10 @@ public final class FundedBountyServiceImpl implements FundedBountyService {
     private static void validateActor(FundedBountyActor actor) {
         if (actor == null) throw new FundedBountyException(HttpStatus.UNAUTHORIZED,
                 "ECONOMY_UNAUTHENTICATED", "Authentication is required");
-        validateId(actor.tenantId(), "jiacn", 50);
+        if (!"0".equals(actor.tenantId())) throw badRequest("tenantId must be 0");
         validateId(actor.clientId(), "client_id", 50);
+        validateId(actor.ownerJiacn(), "jiacn", 50);
+        if ("0".equals(actor.ownerJiacn())) throw badRequest("jiacn is invalid");
         validateId(actor.userId(), "sub", 100);
     }
 

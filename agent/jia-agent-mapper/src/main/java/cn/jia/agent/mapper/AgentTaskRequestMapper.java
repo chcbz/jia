@@ -26,12 +26,15 @@ public interface AgentTaskRequestMapper extends BaseMapper<AgentTaskRequestEntit
                 version = version + 1
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
+              AND owner_jiacn = #{ownerJiacn}
               AND task_id = #{taskId}
               AND request_id = #{requestId}
               AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+              AND OCTET_LENGTH(owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
               AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
               AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
               AND CAST(request_id AS BINARY) = CAST(#{requestId} AS BINARY)
@@ -41,6 +44,7 @@ public interface AgentTaskRequestMapper extends BaseMapper<AgentTaskRequestEntit
     int updateByVersion(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("taskId") String taskId,
             @Param("requestId") String requestId,
             @Param("expectedVersion") long expectedVersion,

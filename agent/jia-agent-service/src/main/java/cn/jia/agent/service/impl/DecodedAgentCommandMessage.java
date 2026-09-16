@@ -10,6 +10,7 @@ record DecodedAgentCommandMessage(
         String commandId,
         String tenantId,
         String clientId,
+        String ownerJiacn,
         String taskId,
         String targetAgentId,
         String commandType,

@@ -142,15 +142,18 @@ public final class HostingRentReconciler {
         if (initial == null || !"INITIAL".equals(initial.getQuotePurpose()) || !"ACTIVE".equals(initial.getStatus())
                 || !"USER".equals(initial.getPrincipalType()) || !row.getPrincipalId().equals(initial.getPrincipalId())
                 || !row.getLeaseId().equals(initial.getLeaseId()) || !row.getAgentId().equals(initial.getAgentId())) return null;
-        var actor = new HostingRentHttp.Actor(initial.getPrincipalId(), row.getTenantId(), row.getClientId());
-        String owner = owners.requireOwner(actor);
-        var lease = mapper.selectLeaseForUpdate(actor.tenantId(), actor.clientId(), row.getLeaseId());
+        var lease = mapper.selectLeaseForUpdate(row.getTenantId(), row.getClientId(), row.getLeaseId());
         if (lease == null || !"ACTIVE".equals(lease.getStatus()) || !"USER".equals(lease.getPrincipalType())
-                || !actor.actorId().equals(lease.getPrincipalId()) || !row.getAgentId().equals(lease.getAgentId())
+                || !initial.getPrincipalId().equals(lease.getPrincipalId()) || !row.getAgentId().equals(lease.getAgentId())
                 || lease.getBindingId() == null || !row.getPersonaCode().equals(lease.getPersonaCode())) return null;
         var binding = bindings.findByIdForUpdate(Long.parseLong(lease.getBindingId()));
-        if (binding == null || !Integer.valueOf(1).equals(binding.getStatus()) || !owner.equals(binding.getJiacn())
-                || !actor.clientId().equals(binding.getClientId()) || !row.getAgentId().equals(binding.getAgentId())) return null;
+        if (binding == null || !Integer.valueOf(1).equals(binding.getStatus())
+                || !row.getClientId().equals(binding.getClientId()) || !row.getAgentId().equals(binding.getAgentId())) return null;
+        String owner = binding.getJiacn();
+        if (owner == null || owner.isBlank()) return null;
+        var actor = new HostingRentHttp.Actor(
+                initial.getPrincipalId(), row.getTenantId(), row.getClientId(), owner);
+        if (!owner.equals(owners.requireOwner(actor))) return null;
         var identity = identities.requireRegistrationIdentityInScope(actor.tenantId(), actor.clientId(), owner, row.getAgentId());
         var canonicalBinding = identities.requireActiveBinding(identity, null);
         if (!row.getAgentId().equals(identity.getCanonicalAgentId()) || !lease.getBindingId().equals(canonicalBinding.getId().toString())) return null;
@@ -175,17 +178,20 @@ public final class HostingRentReconciler {
         var intent = mapper.selectIntentForUpdate(row.getTenantId(), row.getClientId(), row.getIntentId());
         if (intent == null || !"USER".equals(intent.getPrincipalType()) || !"INITIAL".equals(intent.getQuotePurpose())
                 || "ACTIVE".equals(intent.getStatus()) || "REFUNDED".equals(intent.getStatus())) return null;
-        var actor = new HostingRentHttp.Actor(intent.getPrincipalId(), intent.getTenantId(), intent.getClientId());
-        String owner = owners.requireOwner(actor);
-        var lease = mapper.selectLeaseForUpdate(actor.tenantId(), actor.clientId(), intent.getLeaseId());
+        var lease = mapper.selectLeaseForUpdate(intent.getTenantId(), intent.getClientId(), intent.getLeaseId());
         if (lease == null || !intent.getIntentId().equals(lease.getLatestIntentId())
-                || !intent.getAgentId().equals(lease.getAgentId()) || !actor.actorId().equals(lease.getPrincipalId())
+                || !intent.getAgentId().equals(lease.getAgentId()) || !intent.getPrincipalId().equals(lease.getPrincipalId())
                 || !"USER".equals(lease.getPrincipalType())
                 || !"PROVISIONING".equals(lease.getStatus()) || lease.getBindingId() == null) return null;
         var lockedBinding = bindings.findByIdForUpdate(Long.parseLong(lease.getBindingId()));
         if (lockedBinding == null || !Integer.valueOf(1).equals(lockedBinding.getStatus())
                 || !intent.getAgentId().equals(lockedBinding.getAgentId())
-                || !owner.equals(lockedBinding.getJiacn()) || !actor.clientId().equals(lockedBinding.getClientId())) return null;
+                || !intent.getClientId().equals(lockedBinding.getClientId())) return null;
+        String owner = lockedBinding.getJiacn();
+        if (owner == null || owner.isBlank()) return null;
+        var actor = new HostingRentHttp.Actor(
+                intent.getPrincipalId(), intent.getTenantId(), intent.getClientId(), owner);
+        if (!owner.equals(owners.requireOwner(actor))) return null;
         var identity = identities.requireRegistrationIdentityInScope(actor.tenantId(), actor.clientId(), owner, intent.getAgentId());
         var binding = identities.requireActiveBinding(identity, null);
         if (!intent.getAgentId().equals(identity.getCanonicalAgentId())

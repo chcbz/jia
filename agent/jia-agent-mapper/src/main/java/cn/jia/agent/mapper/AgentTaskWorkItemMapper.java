@@ -15,22 +15,25 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
                  assignee_agent_id, status, priority, required_item, dependency_json,
                  lease_token, lease_until, attempt_count, max_attempts,
                  result_artifact_id, submitted_at, completed_at, version,
-                 tenant_id, client_id, create_time, update_time)
+                 tenant_id, client_id, owner_jiacn, create_time, update_time)
             SELECT #{item.workItemId}, #{item.taskId}, #{item.title}, #{item.description},
                    #{item.workType}, #{item.requiredAbilities}, #{item.assigneeAgentId},
                    #{item.status}, #{item.priority}, #{item.requiredItem},
                    #{item.dependencyJson}, #{item.leaseToken}, #{item.leaseUntil},
                    #{item.attemptCount}, #{item.maxAttempts}, #{item.resultArtifactId},
                    #{item.submittedAt}, #{item.completedAt}, #{item.version},
-                   #{tenantId}, #{clientId}, #{item.createTime}, #{item.updateTime}
+                   #{tenantId}, #{clientId}, #{ownerJiacn}, #{item.createTime}, #{item.updateTime}
             FROM agent_task_meta parent
             WHERE parent.tenant_id = #{tenantId}
               AND parent.client_id = #{clientId}
+              AND parent.owner_jiacn = #{ownerJiacn}
               AND parent.task_id = #{item.taskId}
               AND CAST(parent.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
               AND OCTET_LENGTH(parent.tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(parent.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
               AND OCTET_LENGTH(parent.client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(parent.owner_jiacn AS BINARY(200)) = CAST(#{ownerJiacn} AS BINARY(200))
+              AND OCTET_LENGTH(parent.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
               AND CAST(SUBSTRING(parent.task_id, 1, 50) AS BINARY(200))
                   = CAST(SUBSTRING(#{item.taskId}, 1, 50) AS BINARY(200))
               AND CAST(SUBSTRING(parent.task_id, 51, 50) AS BINARY(200))
@@ -55,6 +58,7 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
     int insertIfParentNonTerminal(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("item") AgentTaskWorkItemEntity item);
 
     @Update("""
@@ -79,11 +83,14 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
                 version = version + 1
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
+              AND owner_jiacn = #{ownerJiacn}
               AND work_item_id = #{workItemId}
               AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+              AND OCTET_LENGTH(owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
               AND CAST(work_item_id AS BINARY) = CAST(#{workItemId} AS BINARY)
               AND OCTET_LENGTH(work_item_id) = OCTET_LENGTH(#{workItemId})
               AND version = #{expectedVersion}
@@ -91,6 +98,7 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
     int updateByVersion(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("workItemId") String workItemId,
             @Param("expectedVersion") long expectedVersion,
             @Param("item") AgentTaskWorkItemDTO item,
@@ -101,11 +109,14 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
             FROM agent_task_work_item
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
+              AND owner_jiacn = #{ownerJiacn}
               AND task_id = #{taskId}
               AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+              AND OCTET_LENGTH(owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
               AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
               AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
             ORDER BY CAST(work_item_id AS BINARY), id
@@ -115,6 +126,7 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
     java.util.List<AgentTaskWorkItemEntity> selectTaskGraphForUpdate(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("taskId") String taskId,
             @Param("limit") int limit);
 
@@ -131,12 +143,15 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
                 update_time = #{changedAt}, version = version + 1
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
+              AND owner_jiacn = #{ownerJiacn}
               AND task_id = #{taskId}
               AND work_item_id = #{workItemId}
               AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+              AND OCTET_LENGTH(owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
               AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
               AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
               AND CAST(work_item_id AS BINARY) = CAST(#{workItemId} AS BINARY)
@@ -151,6 +166,7 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
     int readyPendingByVersion(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("taskId") String taskId,
             @Param("workItemId") String workItemId,
             @Param("expectedVersion") long expectedVersion,
@@ -170,12 +186,15 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
                 update_time = #{updateTime}, version = version + 1
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
+              AND owner_jiacn = #{ownerJiacn}
               AND task_id = #{taskId}
               AND work_item_id = #{workItemId}
               AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+              AND OCTET_LENGTH(owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
               AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
               AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
               AND CAST(work_item_id AS BINARY) = CAST(#{workItemId} AS BINARY)
@@ -191,6 +210,7 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
     int claimReadyUnassignedByVersion(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("taskId") String taskId,
             @Param("workItemId") String workItemId,
             @Param("expectedVersion") long expectedVersion,
@@ -210,12 +230,15 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
                 update_time = #{updateTime}, version = version + 1
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
+              AND owner_jiacn = #{ownerJiacn}
               AND task_id = #{taskId}
               AND work_item_id = #{workItemId}
               AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+              AND OCTET_LENGTH(owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
               AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
               AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
               AND CAST(work_item_id AS BINARY) = CAST(#{workItemId} AS BINARY)
@@ -233,6 +256,7 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
     int claimReadyAssignedByVersion(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("taskId") String taskId,
             @Param("workItemId") String workItemId,
             @Param("expectedAssigneeAgentId") String expectedAssigneeAgentId,
@@ -251,12 +275,14 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
                 max_attempts=#{item.maxAttempts}, result_artifact_id=#{item.resultArtifactId},
                 submitted_at=#{item.submittedAt}, completed_at=#{item.completedAt},
                 update_time=#{updateTime}, version=version+1
-            WHERE tenant_id=#{tenantId} AND client_id=#{clientId}
+            WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
               AND task_id=#{taskId} AND work_item_id=#{workItemId}
               AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
               AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
+              AND CAST(owner_jiacn AS BINARY)=CAST(#{ownerJiacn} AS BINARY)
+              AND OCTET_LENGTH(owner_jiacn)=OCTET_LENGTH(#{ownerJiacn})
               AND CAST(task_id AS BINARY)=CAST(#{taskId} AS BINARY)
               AND OCTET_LENGTH(task_id)=OCTET_LENGTH(#{taskId})
               AND CAST(work_item_id AS BINARY)=CAST(#{workItemId} AS BINARY)
@@ -279,6 +305,7 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
             """)
     int reassignExpiredLeaseByVersion(
             @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("taskId") String taskId, @Param("workItemId") String workItemId,
             @Param("previousAgentId") String previousAgentId,
             @Param("previousLeaseToken") String previousLeaseToken,
@@ -301,12 +328,15 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
                 update_time = #{updateTime}, version = version + 1
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
+              AND owner_jiacn = #{ownerJiacn}
               AND task_id = #{taskId}
               AND work_item_id = #{workItemId}
               AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+              AND OCTET_LENGTH(owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
               AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
               AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
               AND CAST(work_item_id AS BINARY) = CAST(#{workItemId} AS BINARY)
@@ -327,6 +357,7 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
     int updateActiveLeaseByVersion(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("taskId") String taskId,
             @Param("workItemId") String workItemId,
             @Param("assigneeAgentId") String assigneeAgentId,
@@ -351,12 +382,15 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
                 update_time = #{updateTime}, version = version + 1
             WHERE tenant_id = #{tenantId}
               AND client_id = #{clientId}
+              AND owner_jiacn = #{ownerJiacn}
               AND task_id = #{taskId}
               AND work_item_id = #{workItemId}
               AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+              AND OCTET_LENGTH(owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
               AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
               AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
               AND CAST(work_item_id AS BINARY) = CAST(#{workItemId} AS BINARY)
@@ -377,6 +411,7 @@ public interface AgentTaskWorkItemMapper extends BaseMapper<AgentTaskWorkItemEnt
     int expireLeaseByVersion(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("taskId") String taskId,
             @Param("workItemId") String workItemId,
             @Param("assigneeAgentId") String assigneeAgentId,

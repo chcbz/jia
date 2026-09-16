@@ -23,37 +23,39 @@ public class AgentTaskArtifactOutcomeDaoImpl implements AgentTaskArtifactOutcome
 
     @Override
     public AgentTaskArtifactOutcomeEntity findForUpdate(
-            String tenantId, String clientId, String taskId,
+            String tenantId, String clientId, String ownerJiacn, String taskId,
             String artifactId, int artifactVersion) {
-        requireScopeAndArtifact(tenantId, clientId, taskId, artifactId, artifactVersion);
+        requireScopeAndArtifact(tenantId, clientId, ownerJiacn, taskId, artifactId, artifactVersion);
         return mapper.selectExactForUpdate(
-                tenantId, clientId, taskId, artifactId, artifactVersion);
+                tenantId, clientId, ownerJiacn, taskId, artifactId, artifactVersion);
     }
 
     @Override
     public AgentTaskArtifactOutcomeDecisionEntity findDecisionForUpdate(
-            String tenantId, String clientId, String taskId, String decisionId) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+            String tenantId, String clientId, String ownerJiacn, String taskId, String decisionId) {
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(decisionId, "decisionId");
-        return mapper.selectDecisionForUpdate(tenantId, clientId, taskId, decisionId);
+        return mapper.selectDecisionForUpdate(tenantId, clientId, ownerJiacn, taskId, decisionId);
     }
 
     @Override
-    public int insertDecision(String tenantId, String clientId,
+    public int insertDecision(String tenantId, String clientId, String ownerJiacn,
             AgentTaskArtifactOutcomeDecisionEntity decision) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         requireDecision(decision);
         TaskCollaborationDaoSupport.applyScope(decision, tenantId, clientId);
+        decision.setOwnerJiacn(ownerJiacn);
         decision.init4Creation();
         return mapper.insertDecision(decision);
     }
 
     @Override
-    public int insert(String tenantId, String clientId, AgentTaskArtifactOutcomeEntity outcome) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+    public int insert(String tenantId, String clientId, String ownerJiacn, AgentTaskArtifactOutcomeEntity outcome) {
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         requireOutcome(outcome);
         TaskCollaborationDaoSupport.applyScope(outcome, tenantId, clientId);
+        outcome.setOwnerJiacn(ownerJiacn);
         if (outcome.getVersion() != 1L) {
             throw new IllegalArgumentException("inserted outcome version must be one");
         }
@@ -62,21 +64,22 @@ public class AgentTaskArtifactOutcomeDaoImpl implements AgentTaskArtifactOutcome
     }
 
     @Override
-    public int updateByVersion(String tenantId, String clientId, String taskId,
+    public int updateByVersion(String tenantId, String clientId, String ownerJiacn, String taskId,
             String artifactId, int artifactVersion, String expectedState,
             long expectedVersion, AgentTaskArtifactOutcomeEntity outcome) {
-        requireScopeAndArtifact(tenantId, clientId, taskId, artifactId, artifactVersion);
+        requireScopeAndArtifact(tenantId, clientId, ownerJiacn, taskId, artifactId, artifactVersion);
         TaskCollaborationDaoSupport.requireId(expectedState, "expectedState");
         TaskCollaborationDaoSupport.requireExpectedVersion(expectedVersion);
         requireOutcome(outcome);
-        if (!taskId.equals(outcome.getTaskId()) || !artifactId.equals(outcome.getArtifactId())
+        if (!ownerJiacn.equals(outcome.getOwnerJiacn())
+                || !taskId.equals(outcome.getTaskId()) || !artifactId.equals(outcome.getArtifactId())
                 || artifactVersion != outcome.getArtifactVersion()) {
             throw new IllegalArgumentException("outcome does not match update key");
         }
         if (outcome.getVersion() == null || outcome.getVersion() != expectedVersion + 1) {
             throw new IllegalArgumentException("outcome result version is invalid");
         }
-        return mapper.updateByVersion(tenantId, clientId, taskId, artifactId, artifactVersion,
+        return mapper.updateByVersion(tenantId, clientId, ownerJiacn, taskId, artifactId, artifactVersion,
                 expectedState, expectedVersion, outcome.getOutcomeState(),
                 outcome.getSupersededByArtifactId(), outcome.getSupersededByArtifactVersion(),
                 outcome.getDecisionId(), outcome.getDecisionDigest(),
@@ -85,15 +88,15 @@ public class AgentTaskArtifactOutcomeDaoImpl implements AgentTaskArtifactOutcome
 
     @Override
     public List<AgentTaskAcceptedArtifactRow> listAuthoritativeAccepted(
-            String tenantId, String clientId, String taskId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             String actorAgentId, boolean reviewerAccess, boolean coordinatorAccess, int limit) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(actorAgentId, "actorAgentId");
         if (!StringUtil.isBlank(workItemId)) {
             TaskCollaborationDaoSupport.requireId(workItemId, "workItemId");
         }
-        return mapper.selectAuthoritativeAccepted(tenantId, clientId, taskId,
+        return mapper.selectAuthoritativeAccepted(tenantId, clientId, ownerJiacn, taskId,
                 StringUtil.isBlank(workItemId) ? null : workItemId,
                 actorAgentId, reviewerAccess, coordinatorAccess,
                 TaskCollaborationDaoSupport.boundedLimit(limit));
@@ -124,9 +127,9 @@ public class AgentTaskArtifactOutcomeDaoImpl implements AgentTaskArtifactOutcome
         }
     }
 
-    private void requireScopeAndArtifact(String tenantId, String clientId, String taskId,
+    private void requireScopeAndArtifact(String tenantId, String clientId, String ownerJiacn, String taskId,
             String artifactId, int artifactVersion) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(artifactId, "artifactId");
         if (artifactVersion < 1) {

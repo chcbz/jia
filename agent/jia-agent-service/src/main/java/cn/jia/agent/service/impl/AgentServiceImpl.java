@@ -1215,7 +1215,7 @@ public class AgentServiceImpl implements AgentService {
                 new AtomicReference<>(List.of());
         AgentLegacyTaskCompatibilityService.AssignOutcome outcome =
                 legacyTaskCompatibilityService.assignResolved(
-                        tenantId, clientId, taskId, agentIds, automatic,
+                        tenantId, clientId, ownerJiacn, taskId, agentIds, automatic,
                         new AgentLegacyTaskCompatibilityService.AssignmentPrecommitValidator() {
                             @Override
                             public void beforeIdentityLock(
@@ -1231,7 +1231,7 @@ public class AgentServiceImpl implements AgentService {
                             public void validate(
                                     AgentTaskMetaEntity lockedTask, List<String> canonicalAgentIds) {
                                 List<AgentRuntimeEntity> runtimes = canonicalAgentIds.stream()
-                                        .map(agentId -> lockAssignedRuntime(agentId, tenantId, clientId))
+                                        .map(agentId -> lockAssignedRuntime(agentId, tenantId, clientId, ownerJiacn))
                                         .toList();
                                 for (AgentRuntimeEntity agent : runtimes) {
                                     requireHostingNewWork(tenantId, clientId, agent.getAgentId());
@@ -1562,7 +1562,7 @@ public class AgentServiceImpl implements AgentService {
 
         AgentLegacyTaskCompatibilityService.ReportOutcome outcome =
                 legacyTaskCompatibilityService.reportResolved(
-                        tenantId, clientId, taskId, reportingAgentId,
+                        tenantId, clientId, ownerJiacn, taskId, reportingAgentId,
                         request.getStatus(), request.getFailureReason());
         AgentTaskMetaEntity meta = Optional.ofNullable(
                 agentTaskMetaDao.findByTaskIdInOwnerScope(
@@ -1910,15 +1910,15 @@ public class AgentServiceImpl implements AgentService {
     }
 
     private AgentRuntimeEntity lockAssignedRuntime(
-            String agentId, String tenantId, String clientId) {
+            String agentId, String tenantId, String clientId, String ownerJiacn) {
         AgentRuntimeEntity agent = agentRuntimeDao.findByAgentIdForUpdate(agentId);
         if (agent == null) {
             throw new AgentBizException(AgentErrorConstants.AGENT_NOT_FOUND, "Agent not found");
         }
         AgentIdentityRegistryEntity identity = agentIdentityService.requireActiveIdentityForBinding(
-                tenantId, clientId, tenantId, requireBindingId(agent), agentId);
+                tenantId, clientId, ownerJiacn, requireBindingId(agent), agentId);
         agentIdentityService.requireActiveBinding(identity, null);
-        return requireExactRuntime(agent, agentId, clientId, tenantId, identity.getBindingId());
+        return requireExactRuntime(agent, agentId, clientId, ownerJiacn, identity.getBindingId());
     }
 
     private void validateAssignableAgent(AgentRuntimeEntity agent, boolean allowQueue) {

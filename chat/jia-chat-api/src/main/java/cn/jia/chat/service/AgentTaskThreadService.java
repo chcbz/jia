@@ -8,15 +8,18 @@ import java.util.List;
 
 public interface AgentTaskThreadService {
     AgentTaskThreadDTO getOrCreateTeamThread(
-            String tenantId, String clientId, String taskId, String actorAgentId, String title);
+            String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, String title);
 
     AgentTaskThreadDTO getTeamThread(
-            String tenantId, String clientId, String taskId, String actorAgentId);
+            String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId);
 
     AgentTaskThreadMessageDTO appendTeamMessage(
-            String tenantId, String clientId, String taskId,
+            String tenantId, String clientId, String ownerJiacn, String taskId,
             AgentTaskThreadMessageCreateDTO request);
 
     List<AgentTaskThreadMessageDTO> listTeamMessages(
-            String tenantId, String clientId, String taskId, String actorAgentId, int limit);
+            String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, int limit);
 }

@@ -26,12 +26,13 @@ public class AgentTaskContextPackConversationSourceImpl
 
     @Override
     public ConversationReference findReference(
-            String tenantId, String clientId, String taskId, String actorAgentId) {
+            String tenantId, String clientId, String ownerJiacn, String taskId,
+            String actorAgentId) {
         try {
             AgentTaskThreadDTO thread = threadService.getTeamThread(
-                    tenantId, clientId, taskId, actorAgentId);
+                    tenantId, clientId, ownerJiacn, taskId, actorAgentId);
             List<AgentTaskThreadMessageDTO> rows = threadService.listTeamMessages(
-                    tenantId, clientId, taskId, actorAgentId, RECENT_MESSAGE_LIMIT + 1);
+                    tenantId, clientId, ownerJiacn, taskId, actorAgentId, RECENT_MESSAGE_LIMIT + 1);
             if (thread == null || thread.getConversationId() == null || rows == null) {
                 return ConversationReference.unavailable("CONVERSATION_REFERENCE_INVALID");
             }

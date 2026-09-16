@@ -30,7 +30,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class AgentTaskContextPackServiceImplTest {
-    private static final String TENANT = "tenant-a";
+    private static final String TENANT = "0";
+    private static final String OWNER = "owner-a";
     private static final String CLIENT = "client-a";
     private static final String TASK = "17";
     private static final String ACTOR = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -49,13 +50,13 @@ class AgentTaskContextPackServiceImplTest {
         conversationSource = mock(AgentTaskContextPackConversationSource.class);
         service = new AgentTaskContextPackServiceImpl(workspaceService, outcomeService,
                 contextPackDao, Optional.of(conversationSource));
-        when(workspaceService.snapshot(TENANT, CLIENT, TASK, ACTOR))
+        when(workspaceService.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR))
                 .thenReturn(workspace("7"));
-        when(contextPackDao.findTaskDescription(TENANT, CLIENT, TASK))
+        when(contextPackDao.findTaskDescription(TENANT, CLIENT, OWNER, TASK))
                 .thenReturn(taskSource("Task title", "Task description"));
         when(outcomeService.listAuthoritativeAccepted(
-                TENANT, CLIENT, TASK, ACTOR, null, 51)).thenReturn(List.of(artifact()));
-        when(conversationSource.findReference(TENANT, CLIENT, TASK, ACTOR))
+                TENANT, CLIENT, OWNER, TASK, ACTOR, null, 51)).thenReturn(List.of(artifact()));
+        when(conversationSource.findReference(TENANT, CLIENT, OWNER, TASK, ACTOR))
                 .thenReturn(AgentTaskContextPackConversationSource.ConversationReference
                         .available("31", 2, 1234L, false));
     }
@@ -63,7 +64,7 @@ class AgentTaskContextPackServiceImplTest {
     @Test
     void generatorOwnsOneRepeatableReadReadOnlyTransactionBoundary() throws Exception {
         Method method = AgentTaskContextPackServiceImpl.class.getMethod("generate",
-                String.class, String.class, String.class, String.class, String.class);
+                String.class, String.class, String.class, String.class, String.class, String.class);
         Transactional transactional = method.getAnnotation(Transactional.class);
         assertEquals(Propagation.REQUIRED, transactional.propagation());
         assertEquals(Isolation.REPEATABLE_READ, transactional.isolation());
@@ -76,10 +77,10 @@ class AgentTaskContextPackServiceImplTest {
         AgentTaskWorkspaceDTO.Member z = member("z", "worker");
         AgentTaskWorkspaceDTO.Member a = member("a", "worker");
         workspace.setMembers(List.of(z, a));
-        when(workspaceService.snapshot(TENANT, CLIENT, TASK, ACTOR)).thenReturn(workspace);
+        when(workspaceService.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR)).thenReturn(workspace);
 
-        var first = service.generate(TENANT, CLIENT, TASK, ACTOR, "7");
-        var second = service.generate(TENANT, CLIENT, TASK, ACTOR, "7");
+        var first = service.generate(TENANT, CLIENT, OWNER, TASK, ACTOR, "7");
+        var second = service.generate(TENANT, CLIENT, OWNER, TASK, ACTOR, "7");
 
         assertEquals(first.getDigest(), second.getDigest());
         assertEquals(List.of("a", "z"), first.getMembers().getItems().stream()
@@ -93,14 +94,14 @@ class AgentTaskContextPackServiceImplTest {
     void expectedStaleVersionStopsBeforeTaskArtifactsAndConversationReads() {
         AgentTaskContextPackException failure = assertThrows(
                 AgentTaskContextPackException.class,
-                () -> service.generate(TENANT, CLIENT, TASK, ACTOR, "6"));
+                () -> service.generate(TENANT, CLIENT, OWNER, TASK, ACTOR, "6"));
 
         assertEquals(AgentTaskContextPackException.Reason.STALE_VERSION,
                 failure.getReason());
-        verify(contextPackDao, never()).findTaskDescription(TENANT, CLIENT, TASK);
+        verify(contextPackDao, never()).findTaskDescription(TENANT, CLIENT, OWNER, TASK);
         verify(outcomeService, never()).listAuthoritativeAccepted(
-                TENANT, CLIENT, TASK, ACTOR, null, 51);
-        verify(conversationSource, never()).findReference(TENANT, CLIENT, TASK, ACTOR);
+                TENANT, CLIENT, OWNER, TASK, ACTOR, null, 51);
+        verify(conversationSource, never()).findReference(TENANT, CLIENT, OWNER, TASK, ACTOR);
     }
 
     @Test
@@ -112,11 +113,11 @@ class AgentTaskContextPackServiceImplTest {
         workspace.setWorkItems(List.of(item));
         AgentTaskWorkspaceDTO.Request request = request("request-1", "password=hunter2");
         workspace.setOpenRequests(List.of(request));
-        when(workspaceService.snapshot(TENANT, CLIENT, TASK, ACTOR)).thenReturn(workspace);
-        when(contextPackDao.findTaskDescription(TENANT, CLIENT, TASK))
+        when(workspaceService.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR)).thenReturn(workspace);
+        when(contextPackDao.findTaskDescription(TENANT, CLIENT, OWNER, TASK))
                 .thenReturn(taskSource("api_key=top-secret", "normal"));
 
-        var result = service.generate(TENANT, CLIENT, TASK, ACTOR, null);
+        var result = service.generate(TENANT, CLIENT, OWNER, TASK, ACTOR, null);
         String json = JsonUtil.getMapper().writeValueAsString(result);
 
         assertEquals("[REDACTED_SENSITIVE_TEXT]",
@@ -138,9 +139,9 @@ class AgentTaskContextPackServiceImplTest {
         AgentTaskWorkspaceDTO workspace = workspace("7");
         workspace.setWorkItems(List.of(workItem("work-1", "normal")));
         workspace.getWorkItems().get(0).setDependencyJson("{\"secret\":true}");
-        when(workspaceService.snapshot(TENANT, CLIENT, TASK, ACTOR)).thenReturn(workspace);
+        when(workspaceService.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR)).thenReturn(workspace);
 
-        var result = service.generate(TENANT, CLIENT, TASK, ACTOR, null);
+        var result = service.generate(TENANT, CLIENT, OWNER, TASK, ACTOR, null);
 
         assertEquals("UNAVAILABLE", result.getWorkItems().getStatus());
         assertEquals("DEPENDENCY_DATA_INVALID", result.getWorkItems().getReason());
@@ -152,11 +153,11 @@ class AgentTaskContextPackServiceImplTest {
         AgentTaskArtifactOutcomeViewDTO superseded = artifact();
         superseded.setOutcomeState("superseded");
         when(outcomeService.listAuthoritativeAccepted(
-                TENANT, CLIENT, TASK, ACTOR, null, 51)).thenReturn(List.of(superseded));
+                TENANT, CLIENT, OWNER, TASK, ACTOR, null, 51)).thenReturn(List.of(superseded));
 
         AgentTaskContextPackException failure = assertThrows(
                 AgentTaskContextPackException.class,
-                () -> service.generate(TENANT, CLIENT, TASK, ACTOR, null));
+                () -> service.generate(TENANT, CLIENT, OWNER, TASK, ACTOR, null));
 
         assertEquals(AgentTaskContextPackException.Reason.CONTEXT_UNAVAILABLE,
                 failure.getReason());
@@ -167,9 +168,9 @@ class AgentTaskContextPackServiceImplTest {
     void absentTaskPlanAndConversationSourceAreExplicitlyUnavailable() {
         service = new AgentTaskContextPackServiceImpl(workspaceService, outcomeService,
                 contextPackDao, Optional.empty());
-        when(contextPackDao.findTaskDescription(TENANT, CLIENT, TASK)).thenReturn(null);
+        when(contextPackDao.findTaskDescription(TENANT, CLIENT, OWNER, TASK)).thenReturn(null);
 
-        var result = service.generate(TENANT, CLIENT, TASK, ACTOR, null);
+        var result = service.generate(TENANT, CLIENT, OWNER, TASK, ACTOR, null);
 
         assertEquals("UNAVAILABLE", result.getTaskDescription().getStatus());
         assertEquals("TASK_PLAN_SOURCE_NOT_FOUND", result.getTaskDescription().getReason());
@@ -194,9 +195,9 @@ class AgentTaskContextPackServiceImplTest {
             workItems.add(item);
         }
         workspace.setWorkItems(workItems);
-        when(workspaceService.snapshot(TENANT, CLIENT, TASK, ACTOR)).thenReturn(workspace);
+        when(workspaceService.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR)).thenReturn(workspace);
 
-        var result = service.generate(TENANT, CLIENT, TASK, ACTOR, null);
+        var result = service.generate(TENANT, CLIENT, OWNER, TASK, ACTOR, null);
 
         assertEquals(25, result.getWorkItems().getItems().size());
         assertEquals("TRUNCATED", result.getWorkItems().getStatus());
@@ -213,18 +214,18 @@ class AgentTaskContextPackServiceImplTest {
         AgentTaskWorkspaceDTO.Event draft = event("1", "ARTIFACT_PUBLISHED", "artifact-draft");
         AgentTaskWorkspaceDTO.Event accepted = event("2", "ARTIFACT_ACCEPTED", "artifact-a");
         workspace.setRecentEvents(List.of(draft, accepted));
-        when(workspaceService.snapshot(TENANT, CLIENT, legacyTask, ACTOR)).thenReturn(workspace);
-        when(contextPackDao.findTaskDescription(TENANT, CLIENT, legacyTask)).thenReturn(null);
+        when(workspaceService.snapshot(TENANT, CLIENT, OWNER, legacyTask, ACTOR)).thenReturn(workspace);
+        when(contextPackDao.findTaskDescription(TENANT, CLIENT, OWNER, legacyTask)).thenReturn(null);
         AgentTaskArtifactOutcomeViewDTO acceptedArtifact = artifact();
         acceptedArtifact.setTaskId(legacyTask);
         when(outcomeService.listAuthoritativeAccepted(
-                TENANT, CLIENT, legacyTask, ACTOR, null, 51))
+                TENANT, CLIENT, OWNER, legacyTask, ACTOR, null, 51))
                 .thenReturn(List.of(acceptedArtifact));
-        when(conversationSource.findReference(TENANT, CLIENT, legacyTask, ACTOR))
+        when(conversationSource.findReference(TENANT, CLIENT, OWNER, legacyTask, ACTOR))
                 .thenReturn(AgentTaskContextPackConversationSource.ConversationReference
                         .unavailable("CONVERSATION_REFERENCE_UNAVAILABLE"));
 
-        var result = service.generate(TENANT, CLIENT, legacyTask, ACTOR, null);
+        var result = service.generate(TENANT, CLIENT, OWNER, legacyTask, ACTOR, null);
 
         assertEquals("TASK_PLAN_SOURCE_NON_NUMERIC", result.getTaskDescription().getReason());
         assertEquals(List.of("ARTIFACT_ACCEPTED"), result.getRecentEvents().getItems().stream()
@@ -234,37 +235,37 @@ class AgentTaskContextPackServiceImplTest {
 
     @Test
     void workspaceAclDenialDoesNotProbeDescriptionArtifactsOrConversation() {
-        when(workspaceService.snapshot(TENANT, CLIENT, TASK, ACTOR)).thenThrow(
+        when(workspaceService.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR)).thenThrow(
                 new cn.jia.agent.exception.AgentTaskWorkspaceException(
                         cn.jia.agent.exception.AgentTaskWorkspaceException.Reason
                                 .NOT_FOUND_OR_FORBIDDEN));
 
         AgentTaskContextPackException failure = assertThrows(
                 AgentTaskContextPackException.class,
-                () -> service.generate(TENANT, CLIENT, TASK, ACTOR, null));
+                () -> service.generate(TENANT, CLIENT, OWNER, TASK, ACTOR, null));
 
         assertEquals(AgentTaskContextPackException.Reason.NOT_FOUND_OR_FORBIDDEN,
                 failure.getReason());
-        verify(contextPackDao, never()).findTaskDescription(TENANT, CLIENT, TASK);
+        verify(contextPackDao, never()).findTaskDescription(TENANT, CLIENT, OWNER, TASK);
         verify(outcomeService, never()).listAuthoritativeAccepted(
-                TENANT, CLIENT, TASK, ACTOR, null, 51);
-        verify(conversationSource, never()).findReference(TENANT, CLIENT, TASK, ACTOR);
+                TENANT, CLIENT, OWNER, TASK, ACTOR, null, 51);
+        verify(conversationSource, never()).findReference(TENANT, CLIENT, OWNER, TASK, ACTOR);
     }
 
     @Test
     void actorAndScopeAreDigestBound() {
-        var first = service.generate(TENANT, CLIENT, TASK, ACTOR, null);
-        when(workspaceService.snapshot(TENANT, CLIENT, TASK, "agt_other"))
+        var first = service.generate(TENANT, CLIENT, OWNER, TASK, ACTOR, null);
+        when(workspaceService.snapshot(TENANT, CLIENT, OWNER, TASK, "agt_other"))
                 .thenReturn(workspace("7"));
-        when(contextPackDao.findTaskDescription(TENANT, CLIENT, TASK))
+        when(contextPackDao.findTaskDescription(TENANT, CLIENT, OWNER, TASK))
                 .thenReturn(taskSource("Task title", "Task description"));
         when(outcomeService.listAuthoritativeAccepted(
-                TENANT, CLIENT, TASK, "agt_other", null, 51)).thenReturn(List.of(artifact()));
-        when(conversationSource.findReference(TENANT, CLIENT, TASK, "agt_other"))
+                TENANT, CLIENT, OWNER, TASK, "agt_other", null, 51)).thenReturn(List.of(artifact()));
+        when(conversationSource.findReference(TENANT, CLIENT, OWNER, TASK, "agt_other"))
                 .thenReturn(AgentTaskContextPackConversationSource.ConversationReference
                         .available("31", 2, 1234L, false));
 
-        var second = service.generate(TENANT, CLIENT, TASK, "agt_other", null);
+        var second = service.generate(TENANT, CLIENT, OWNER, TASK, "agt_other", null);
 
         assertNotEquals(first.getDigest(), second.getDigest());
     }

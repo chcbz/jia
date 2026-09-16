@@ -146,7 +146,7 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
                 .toList();
         for (String agentId : lockedAgents) {
             AgentTaskAccessLevel access = accessService.resolveMemberAccessForUpdate(
-                    draft.tenantId(), draft.clientId(), draft.taskId(), agentId);
+                    draft.tenantId(), draft.clientId(), draft.ownerJiacn(), draft.taskId(), agentId);
             if (access == null || !access.canWrite()) {
                 throw new IllegalArgumentException(
                         "Caller or target is not a writable task member");

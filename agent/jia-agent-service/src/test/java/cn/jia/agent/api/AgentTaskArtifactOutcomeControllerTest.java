@@ -42,7 +42,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 class AgentTaskArtifactOutcomeControllerTest {
-    private static final String TENANT = "tenant-a";
+    private static final String TENANT = "0";
+    private static final String OWNER = "owner-a";
     private static final String CLIENT = "client-a";
     private static final String TASK = "task-1";
     private static final String ACTOR = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -64,14 +65,14 @@ class AgentTaskArtifactOutcomeControllerTest {
 
     @Test
     void acceptBindsTenantClientAndActorOnlyFromValidatedJwtContext() throws Exception {
-        when(service.accept(anyString(), anyString(), anyString(), anyString(), any()))
+        when(service.accept(anyString(), anyString(), anyString(), anyString(), anyString(), any()))
                 .thenReturn(accepted("artifact-new", "work-1", ACTOR, DECISION));
 
         mvc.perform(post("/agent/tasks/{taskId}/artifact-outcomes/accept", TASK)
                         .header("Idempotency-Key", DECISION)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(acceptBody())
-                        .principal(jwt(TENANT, CLIENT, ACTOR)))
+                        .principal(jwt(OWNER, CLIENT, ACTOR)))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
                 .andExpect(jsonPath("$.artifactId").value("artifact-new"))
@@ -86,7 +87,7 @@ class AgentTaskArtifactOutcomeControllerTest {
 
         ArgumentCaptor<AgentTaskArtifactAcceptDTO> command =
                 ArgumentCaptor.forClass(AgentTaskArtifactAcceptDTO.class);
-        verify(service).accept(eq(TENANT), eq(CLIENT), eq(TASK), eq(ACTOR), command.capture());
+        verify(service).accept(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(ACTOR), command.capture());
         assertEquals(DECISION, command.getValue().getDecisionId());
         assertEquals("artifact-new", command.getValue().getAcceptedArtifact().getArtifactId());
         assertEquals(2, command.getValue().getAcceptedArtifact()
@@ -101,13 +102,13 @@ class AgentTaskArtifactOutcomeControllerTest {
     @Test
     void acceptedListForwardsOnlyAuthenticatedScopeAndExactOptionalQuery() throws Exception {
         when(service.listAuthoritativeAccepted(
-                TENANT, CLIENT, TASK, ACTOR, "work-1", 25))
+                TENANT, CLIENT, OWNER, TASK, ACTOR, "work-1", 25))
                 .thenReturn(List.of(accepted("artifact-a", "work-1", OTHER, "decision-list")));
 
         mvc.perform(get("/agent/tasks/{taskId}/artifact-outcomes/accepted", TASK)
                         .queryParam("workItemId", "work-1")
                         .queryParam("limit", "25")
-                        .principal(jwt(TENANT, CLIENT, ACTOR)))
+                        .principal(jwt(OWNER, CLIENT, ACTOR)))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
                 .andExpect(jsonPath("$[0].artifactId").value("artifact-a"))
@@ -117,7 +118,7 @@ class AgentTaskArtifactOutcomeControllerTest {
                 .andExpect(jsonPath("$[0].metadata").doesNotExist());
 
         verify(service).listAuthoritativeAccepted(
-                TENANT, CLIENT, TASK, ACTOR, "work-1", 25);
+                TENANT, CLIENT, OWNER, TASK, ACTOR, "work-1", 25);
     }
 
     @Test
@@ -136,17 +137,17 @@ class AgentTaskArtifactOutcomeControllerTest {
 
         mvc.perform(post("/agent/tasks/%20bad%20/artifact-outcomes/accept")
                         .contentType(MediaType.APPLICATION_JSON).content("{")
-                        .principal(jwtClaims(TENANT, 7, ACTOR, ACTOR)))
+                        .principal(jwtClaims(OWNER, 7, ACTOR, ACTOR)))
                 .andExpect(status().isForbidden());
 
         mvc.perform(post("/agent/tasks/%20bad%20/artifact-outcomes/accept")
                         .contentType(MediaType.APPLICATION_JSON).content("{")
-                        .principal(jwtClaims(TENANT, CLIENT, " " + ACTOR, " " + ACTOR)))
+                        .principal(jwtClaims(OWNER, CLIENT, " " + ACTOR, " " + ACTOR)))
                 .andExpect(status().isForbidden());
 
         mvc.perform(post("/agent/tasks/%20bad%20/artifact-outcomes/accept")
                         .contentType(MediaType.APPLICATION_JSON).content("{")
-                        .principal(jwtClaims(TENANT, CLIENT, ACTOR, OTHER)))
+                        .principal(jwtClaims(OWNER, CLIENT, ACTOR, OTHER)))
                 .andExpect(status().isForbidden());
 
         verifyNoInteractions(gate, service);
@@ -154,7 +155,7 @@ class AgentTaskArtifactOutcomeControllerTest {
 
     @Test
     void requestCannotInjectTenantClientActorOrDecisionIdentity() throws Exception {
-        JwtAuthenticationToken auth = jwt(TENANT, CLIENT, ACTOR);
+        JwtAuthenticationToken auth = jwt(OWNER, CLIENT, ACTOR);
         mvc.perform(post("/agent/tasks/{taskId}/artifact-outcomes/accept", TASK)
                         .header("Idempotency-Key", DECISION)
                         .queryParam("actorAgentId", OTHER)
@@ -184,7 +185,7 @@ class AgentTaskArtifactOutcomeControllerTest {
     @Test
     void strictClosedBodyRejectsDuplicateUnknownTrailingAndNonIntegralReferences()
             throws Exception {
-        JwtAuthenticationToken auth = jwt(TENANT, CLIENT, ACTOR);
+        JwtAuthenticationToken auth = jwt(OWNER, CLIENT, ACTOR);
         String duplicateRoot = acceptBody().replace(
                 "\"acceptedArtifact\":",
                 "\"acceptedArtifact\":{"
@@ -219,7 +220,7 @@ class AgentTaskArtifactOutcomeControllerTest {
 
     @Test
     void idempotencyKeyIsRequiredBoundedAndStableAcrossExactReplay() throws Exception {
-        JwtAuthenticationToken auth = jwt(TENANT, CLIENT, ACTOR);
+        JwtAuthenticationToken auth = jwt(OWNER, CLIENT, ACTOR);
         for (String key : new String[]{null, "short", "bad key", "x".repeat(101)}) {
             var request = post("/agent/tasks/{taskId}/artifact-outcomes/accept", TASK)
                     .contentType(MediaType.APPLICATION_JSON).content(acceptBody())
@@ -231,7 +232,7 @@ class AgentTaskArtifactOutcomeControllerTest {
         }
         verifyNoInteractions(gate, service);
 
-        when(service.accept(anyString(), anyString(), anyString(), anyString(), any()))
+        when(service.accept(anyString(), anyString(), anyString(), anyString(), anyString(), any()))
                 .thenReturn(accepted("artifact-new", "work-1", ACTOR, DECISION));
         for (int attempt = 0; attempt < 2; attempt++) {
             mvc.perform(post("/agent/tasks/{taskId}/artifact-outcomes/accept", TASK)
@@ -244,7 +245,7 @@ class AgentTaskArtifactOutcomeControllerTest {
         ArgumentCaptor<AgentTaskArtifactAcceptDTO> commands =
                 ArgumentCaptor.forClass(AgentTaskArtifactAcceptDTO.class);
         verify(service, times(2)).accept(
-                eq(TENANT), eq(CLIENT), eq(TASK), eq(ACTOR), commands.capture());
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(ACTOR), commands.capture());
         assertEquals(List.of(DECISION, DECISION), commands.getAllValues().stream()
                 .map(AgentTaskArtifactAcceptDTO::getDecisionId).toList());
     }
@@ -253,26 +254,26 @@ class AgentTaskArtifactOutcomeControllerTest {
     void foreignAuthenticatedIdentitiesCollapseToOneNonEnumeratingNotFoundShape()
             throws Exception {
         when(service.listAuthoritativeAccepted(
-                "tenant-b", CLIENT, TASK, ACTOR, null, null))
+                TENANT, CLIENT, "owner-b", TASK, ACTOR, null, null))
                 .thenThrow(new AgentTaskCollaborationException(Reason.NOT_FOUND, "tenant secret"));
         when(service.listAuthoritativeAccepted(
-                TENANT, "client-b", TASK, ACTOR, null, null))
+                TENANT, "client-b", OWNER, TASK, ACTOR, null, null))
                 .thenThrow(new AgentTaskCollaborationException(Reason.NOT_FOUND, "client secret"));
         when(service.listAuthoritativeAccepted(
-                TENANT, CLIENT, TASK, OTHER, null, null))
+                TENANT, CLIENT, OWNER, TASK, OTHER, null, null))
                 .thenThrow(new AgentTaskCollaborationException(Reason.FORBIDDEN, "actor secret"));
 
         MvcResult foreignTenant = mvc.perform(
                         get("/agent/tasks/{taskId}/artifact-outcomes/accepted", TASK)
-                                .principal(jwt("tenant-b", CLIENT, ACTOR)))
+                                .principal(jwt("owner-b", CLIENT, ACTOR)))
                 .andExpect(status().isNotFound()).andReturn();
         MvcResult foreignClient = mvc.perform(
                         get("/agent/tasks/{taskId}/artifact-outcomes/accepted", TASK)
-                                .principal(jwt(TENANT, "client-b", ACTOR)))
+                                .principal(jwt(OWNER, "client-b", ACTOR)))
                 .andExpect(status().isNotFound()).andReturn();
         MvcResult foreignActor = mvc.perform(
                         get("/agent/tasks/{taskId}/artifact-outcomes/accepted", TASK)
-                                .principal(jwt(TENANT, CLIENT, OTHER)))
+                                .principal(jwt(OWNER, CLIENT, OTHER)))
                 .andExpect(status().isNotFound()).andReturn();
 
         String notFoundBody = foreignTenant.getResponse().getContentAsString();
@@ -282,11 +283,11 @@ class AgentTaskArtifactOutcomeControllerTest {
         assertFalse(notFoundBody.contains("client secret"));
         assertFalse(notFoundBody.contains("actor secret"));
         verify(service).listAuthoritativeAccepted(
-                "tenant-b", CLIENT, TASK, ACTOR, null, null);
+                TENANT, CLIENT, "owner-b", TASK, ACTOR, null, null);
         verify(service).listAuthoritativeAccepted(
-                TENANT, "client-b", TASK, ACTOR, null, null);
+                TENANT, "client-b", OWNER, TASK, ACTOR, null, null);
         verify(service).listAuthoritativeAccepted(
-                TENANT, CLIENT, TASK, OTHER, null, null);
+                TENANT, CLIENT, OWNER, TASK, OTHER, null, null);
     }
 
     @Test
@@ -296,7 +297,7 @@ class AgentTaskArtifactOutcomeControllerTest {
         mvc.perform(post("/agent/tasks/{taskId}/artifact-outcomes/accept", TASK)
                         .header("Idempotency-Key", DECISION)
                         .contentType(MediaType.APPLICATION_JSON).content(acceptBody())
-                        .principal(jwt(TENANT, CLIENT, ACTOR)))
+                        .principal(jwt(OWNER, CLIENT, ACTOR)))
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
                 .andExpect(jsonPath("$.code").value("ARTIFACT_OUTCOME_UNAVAILABLE"));
@@ -307,7 +308,7 @@ class AgentTaskArtifactOutcomeControllerTest {
 
     @Test
     void listQueryIsClosedCanonicalAndBoundedBeforeGateOrService() throws Exception {
-        JwtAuthenticationToken auth = jwt(TENANT, CLIENT, ACTOR);
+        JwtAuthenticationToken auth = jwt(OWNER, CLIENT, ACTOR);
         for (String uri : List.of(
                 "/agent/tasks/task-1/artifact-outcomes/accepted?tenantId=tenant-b",
                 "/agent/tasks/task-1/artifact-outcomes/accepted?workItemId=",
@@ -325,10 +326,10 @@ class AgentTaskArtifactOutcomeControllerTest {
     @Test
     void collaborationConflictsAndSchemaFailureRetainDistinctNonLeakingStatuses()
             throws Exception {
-        JwtAuthenticationToken auth = jwt(TENANT, CLIENT, ACTOR);
+        JwtAuthenticationToken auth = jwt(OWNER, CLIENT, ACTOR);
         doThrow(new AgentTaskCollaborationException(
                 Reason.VERSION_CONFLICT, "current outcome version=secret"))
-                .when(service).accept(any(), any(), any(), any(), any());
+                .when(service).accept(any(), any(), any(), any(), any(), any());
         mvc.perform(post("/agent/tasks/{taskId}/artifact-outcomes/accept", TASK)
                         .header("Idempotency-Key", DECISION)
                         .contentType(MediaType.APPLICATION_JSON).content(acceptBody())
@@ -340,7 +341,7 @@ class AgentTaskArtifactOutcomeControllerTest {
 
         doThrow(new AgentTaskCollaborationException(
                 Reason.INVALID_TRANSITION, "superseded row detail"))
-                .when(service).accept(any(), any(), any(), any(), any());
+                .when(service).accept(any(), any(), any(), any(), any(), any());
         mvc.perform(post("/agent/tasks/{taskId}/artifact-outcomes/accept", TASK)
                         .header("Idempotency-Key", DECISION)
                         .contentType(MediaType.APPLICATION_JSON).content(acceptBody())
@@ -350,7 +351,7 @@ class AgentTaskArtifactOutcomeControllerTest {
 
         doThrow(new AgentTaskCollaborationException(
                 Reason.INVALID_PERSISTED_STATE, "jdbc://secret/schema"))
-                .when(service).accept(any(), any(), any(), any(), any());
+                .when(service).accept(any(), any(), any(), any(), any(), any());
         mvc.perform(post("/agent/tasks/{taskId}/artifact-outcomes/accept", TASK)
                         .header("Idempotency-Key", DECISION)
                         .contentType(MediaType.APPLICATION_JSON).content(acceptBody())
@@ -364,10 +365,10 @@ class AgentTaskArtifactOutcomeControllerTest {
     @Test
     void acceptRejectsMismatchedArtifactVersionOutcomeAndDecisionAuthority()
             throws Exception {
-        JwtAuthenticationToken auth = jwt(TENANT, CLIENT, ACTOR);
+        JwtAuthenticationToken auth = jwt(OWNER, CLIENT, ACTOR);
         AgentTaskArtifactOutcomeViewDTO mismatch =
                 accepted("artifact-other", "work-1", OTHER, DECISION);
-        when(service.accept(anyString(), anyString(), anyString(), anyString(), any()))
+        when(service.accept(anyString(), anyString(), anyString(), anyString(), anyString(), any()))
                 .thenReturn(mismatch);
         mvc.perform(post("/agent/tasks/{taskId}/artifact-outcomes/accept", TASK)
                         .header("Idempotency-Key", DECISION)
@@ -378,7 +379,7 @@ class AgentTaskArtifactOutcomeControllerTest {
 
         mismatch = accepted("artifact-new", "work-1", OTHER, DECISION);
         mismatch.setArtifactVersion(3);
-        when(service.accept(anyString(), anyString(), anyString(), anyString(), any()))
+        when(service.accept(anyString(), anyString(), anyString(), anyString(), anyString(), any()))
                 .thenReturn(mismatch);
         mvc.perform(post("/agent/tasks/{taskId}/artifact-outcomes/accept", TASK)
                         .header("Idempotency-Key", DECISION)
@@ -388,7 +389,7 @@ class AgentTaskArtifactOutcomeControllerTest {
 
         mismatch = accepted("artifact-new", "work-1", OTHER, DECISION);
         mismatch.setOutcomeVersion(2L);
-        when(service.accept(anyString(), anyString(), anyString(), anyString(), any()))
+        when(service.accept(anyString(), anyString(), anyString(), anyString(), anyString(), any()))
                 .thenReturn(mismatch);
         mvc.perform(post("/agent/tasks/{taskId}/artifact-outcomes/accept", TASK)
                         .header("Idempotency-Key", DECISION)
@@ -397,7 +398,7 @@ class AgentTaskArtifactOutcomeControllerTest {
                 .andExpect(status().isServiceUnavailable());
 
         mismatch = accepted("artifact-new", "work-1", OTHER, "decision-other");
-        when(service.accept(anyString(), anyString(), anyString(), anyString(), any()))
+        when(service.accept(anyString(), anyString(), anyString(), anyString(), anyString(), any()))
                 .thenReturn(mismatch);
         mvc.perform(post("/agent/tasks/{taskId}/artifact-outcomes/accept", TASK)
                         .header("Idempotency-Key", DECISION)
@@ -413,9 +414,9 @@ class AgentTaskArtifactOutcomeControllerTest {
                 accepted("artifact-a", "work-1", OTHER, "decision-a");
         superseded.setOutcomeState("superseded");
         when(service.listAuthoritativeAccepted(
-                TENANT, CLIENT, TASK, ACTOR, null, null)).thenReturn(List.of(superseded));
+                TENANT, CLIENT, OWNER, TASK, ACTOR, null, null)).thenReturn(List.of(superseded));
         mvc.perform(get("/agent/tasks/{taskId}/artifact-outcomes/accepted", TASK)
-                        .principal(jwt(TENANT, CLIENT, ACTOR)))
+                        .principal(jwt(OWNER, CLIENT, ACTOR)))
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(content().string(org.hamcrest.Matchers.not(
                         org.hamcrest.Matchers.containsString("superseded"))));
@@ -424,28 +425,28 @@ class AgentTaskArtifactOutcomeControllerTest {
                 accepted("artifact-a", "work-1", OTHER, "decision-a");
         crossTask.setTaskId("task-b");
         when(service.listAuthoritativeAccepted(
-                TENANT, CLIENT, TASK, ACTOR, null, 2)).thenReturn(List.of(crossTask));
+                TENANT, CLIENT, OWNER, TASK, ACTOR, null, 2)).thenReturn(List.of(crossTask));
         mvc.perform(get("/agent/tasks/{taskId}/artifact-outcomes/accepted", TASK)
                         .queryParam("limit", "2")
-                        .principal(jwt(TENANT, CLIENT, ACTOR)))
+                        .principal(jwt(OWNER, CLIENT, ACTOR)))
                 .andExpect(status().isServiceUnavailable());
 
         AgentTaskArtifactOutcomeViewDTO duplicate =
                 accepted("artifact-a", "work-1", OTHER, "decision-a");
         when(service.listAuthoritativeAccepted(
-                TENANT, CLIENT, TASK, ACTOR, null, 2))
+                TENANT, CLIENT, OWNER, TASK, ACTOR, null, 2))
                 .thenReturn(List.of(duplicate, duplicate));
         mvc.perform(get("/agent/tasks/{taskId}/artifact-outcomes/accepted", TASK)
                         .queryParam("limit", "2")
-                        .principal(jwt(TENANT, CLIENT, ACTOR)))
+                        .principal(jwt(OWNER, CLIENT, ACTOR)))
                 .andExpect(status().isServiceUnavailable());
 
         when(service.listAuthoritativeAccepted(
-                TENANT, CLIENT, TASK, ACTOR, null, 1))
+                TENANT, CLIENT, OWNER, TASK, ACTOR, null, 1))
                 .thenReturn(List.of(duplicate, duplicate));
         mvc.perform(get("/agent/tasks/{taskId}/artifact-outcomes/accepted", TASK)
                         .queryParam("limit", "1")
-                        .principal(jwt(TENANT, CLIENT, ACTOR)))
+                        .principal(jwt(OWNER, CLIENT, ACTOR)))
                 .andExpect(status().isServiceUnavailable());
     }
 
@@ -455,7 +456,7 @@ class AgentTaskArtifactOutcomeControllerTest {
                         .header("Idempotency-Key", DECISION)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("")
-                        .principal(jwt(TENANT, CLIENT, ACTOR)))
+                        .principal(jwt(OWNER, CLIENT, ACTOR)))
                 .andExpect(status().isBadRequest())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
 
@@ -463,7 +464,7 @@ class AgentTaskArtifactOutcomeControllerTest {
                         .header("Idempotency-Key", DECISION)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("x".repeat(AgentTaskArtifactOutcomeController.MAX_BODY_BYTES + 1))
-                        .principal(jwt(TENANT, CLIENT, ACTOR)))
+                        .principal(jwt(OWNER, CLIENT, ACTOR)))
                 .andExpect(status().isBadRequest())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
         verifyNoInteractions(gate, service);

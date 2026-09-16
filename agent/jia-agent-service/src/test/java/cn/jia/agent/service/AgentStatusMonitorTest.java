@@ -111,7 +111,7 @@ class AgentStatusMonitorTest extends BaseMockTest {
         InOrder lockOrder = inOrder(bindingDao, identityRegistryDao, agentRuntimeDao);
         lockOrder.verify(bindingDao).findByIdForUpdate(7L);
         lockOrder.verify(identityRegistryDao).findExactByBindingInScopeForUpdate(
-                "juyiting", "jia_client", "juyiting", 7L);
+                "0", "jia_client", "juyiting", 7L);
         lockOrder.verify(agentRuntimeDao).findByAgentIdForUpdate("agent-wuyong");
         lockOrder.verify(agentRuntimeDao).updateById(current);
     }
@@ -128,10 +128,10 @@ class AgentStatusMonitorTest extends BaseMockTest {
         when(bindingDao.findByIdForUpdate(11L)).thenReturn(binding(provisioned));
         when(bindingDao.findByIdForUpdate(12L)).thenReturn(binding(suspended));
         when(identityRegistryDao.findExactByBindingInScopeForUpdate(
-                "juyiting", "jia_client", "juyiting", 11L))
+                "0", "jia_client", "juyiting", 11L))
                 .thenReturn(identity(provisioned, AgentConstants.IDENTITY_STATUS_PROVISIONED));
         when(identityRegistryDao.findExactByBindingInScopeForUpdate(
-                "juyiting", "jia_client", "juyiting", 12L))
+                "0", "jia_client", "juyiting", 12L))
                 .thenReturn(identity(suspended, AgentConstants.IDENTITY_STATUS_SUSPENDED));
         when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
         when(eventPublisher.connectedAgentIds()).thenReturn(Set.of());
@@ -204,7 +204,7 @@ class AgentStatusMonitorTest extends BaseMockTest {
                 transitioned, AgentConstants.IDENTITY_STATUS_SUSPENDED);
         when(bindingDao.findByIdForUpdate(14L)).thenReturn(activeBinding, activeBinding);
         when(identityRegistryDao.findExactByBindingInScopeForUpdate(
-                "juyiting", "jia_client", "juyiting", 14L))
+                "0", "jia_client", "juyiting", 14L))
                 .thenReturn(activeIdentity, suspendedIdentity);
         when(agentRuntimeDao.findByAgentIdForUpdate("agent-raced-unbind"))
                 .thenReturn(transitioned);
@@ -237,7 +237,7 @@ class AgentStatusMonitorTest extends BaseMockTest {
                 transitioned, AgentConstants.IDENTITY_STATUS_ACTIVE);
         when(bindingDao.findByIdForUpdate(15L)).thenReturn(activeBinding);
         when(identityRegistryDao.findExactByBindingInScopeForUpdate(
-                "juyiting", "jia_client", "juyiting", 15L)).thenReturn(activeIdentity);
+                "0", "jia_client", "juyiting", 15L)).thenReturn(activeIdentity);
         when(agentRuntimeDao.findByAgentIdForUpdate("agent-raced-presence"))
                 .thenReturn(transitioned, changed);
         when(eventPublisherProvider.getIfAvailable()).thenReturn(eventPublisher);
@@ -317,7 +317,7 @@ class AgentStatusMonitorTest extends BaseMockTest {
     private AgentPersonaBindingEntity binding(AgentRuntimeEntity runtime) {
         AgentPersonaBindingEntity binding = new AgentPersonaBindingEntity();
         binding.setId(runtime.getBindingId());
-        binding.setTenantId(runtime.getOwnerJiacn());
+        binding.setTenantId("0");
         binding.setClientId(runtime.getClientId());
         binding.setJiacn(runtime.getOwnerJiacn());
         binding.setAgentId(runtime.getAgentId());
@@ -328,7 +328,7 @@ class AgentStatusMonitorTest extends BaseMockTest {
     private AgentIdentityRegistryEntity identity(AgentRuntimeEntity runtime, String lifecycle) {
         AgentIdentityRegistryEntity identity = new AgentIdentityRegistryEntity();
         identity.setId(runtime.getBindingId() + 200L);
-        identity.setTenantId(runtime.getOwnerJiacn());
+        identity.setTenantId("0");
         identity.setClientId(runtime.getClientId());
         identity.setOwnerJiacn(runtime.getOwnerJiacn());
         identity.setBindingId(runtime.getBindingId());

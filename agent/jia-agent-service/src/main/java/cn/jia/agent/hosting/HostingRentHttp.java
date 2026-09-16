@@ -28,9 +28,16 @@ public final class HostingRentHttp {
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
     private HostingRentHttp() { }
 
-    public record Actor(String actorId, String tenantId, String clientId) {
+    /**
+     * Economy payer and authenticated personal owner are distinct. Tenant is the fixed shared
+     * deployment tenant, never a substitute for the owner's jiacn.
+     */
+    public record Actor(String actorId, String tenantId, String clientId, String ownerJiacn) {
         public Actor {
-            exact(actorId, 100); exact(tenantId, 50); exact(clientId, 50);
+            exact(actorId, 100);
+            if (!"0".equals(tenantId)) throw new IllegalArgumentException("tenantId must be 0");
+            exact(clientId, 50); exact(ownerJiacn, 50);
+            if ("0".equals(ownerJiacn)) throw new IllegalArgumentException("ownerJiacn must not be 0");
         }
         public EconomyScope scope() { return new EconomyScope(tenantId, clientId); }
         public EconomyPrincipal principal() { return new EconomyPrincipal(EconomyPrincipalType.USER, actorId); }
@@ -42,7 +49,8 @@ public final class HostingRentHttp {
         }
         try {
             Map<String, Object> claims = jwt.getToken().getClaims();
-            return new Actor(claim(claims, "sub"), claim(claims, "jiacn"), claim(claims, "client_id"));
+            return new Actor(claim(claims, "sub"), "0", claim(claims, "client_id"),
+                    claim(claims, "jiacn"));
         } catch (IllegalArgumentException exception) {
             throw new HostingRentApplicationException(403, "HOSTING_RENT_FORBIDDEN");
         }

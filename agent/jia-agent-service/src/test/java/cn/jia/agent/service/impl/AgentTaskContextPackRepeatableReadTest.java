@@ -43,7 +43,7 @@ class AgentTaskContextPackRepeatableReadTest {
             jdbc.update("INSERT INTO f01_snapshot(id, snapshot_value) VALUES (1, 'old')");
 
             var pack = context.getBean(AgentTaskContextPackService.class)
-                    .generate("tenant", "client", "1", "actor", "1");
+                    .generate("0", "client", "owner", "1", "actor", "1");
 
             assertEquals("old", pack.getTaskDescription().getTitle().getValue());
             assertEquals("old", pack.getAuthoritativeArtifacts()
@@ -81,7 +81,7 @@ class AgentTaskContextPackRepeatableReadTest {
 
         @Bean
         AgentTaskWorkspaceService workspaceService(JdbcTemplate jdbc) {
-            return (tenantId, clientId, taskId, actorAgentId) -> {
+            return (tenantId, clientId, ownerJiacn, taskId, actorAgentId) -> {
                 jdbc.queryForObject("SELECT snapshot_value FROM f01_snapshot WHERE id=1", String.class);
                 AgentTaskWorkspaceDTO result = new AgentTaskWorkspaceDTO();
                 AgentTaskWorkspaceDTO.Task task = new AgentTaskWorkspaceDTO.Task();
@@ -100,7 +100,7 @@ class AgentTaskContextPackRepeatableReadTest {
         @Bean
         AgentTaskContextPackDao contextPackDao(
                 JdbcTemplate jdbc, DataSource dataSource) {
-            return (tenantId, clientId, taskId) -> {
+            return (tenantId, clientId, ownerJiacn, taskId) -> {
                 String value = jdbc.queryForObject(
                         "SELECT snapshot_value FROM f01_snapshot WHERE id=1", String.class);
                 if (updated.compareAndSet(false, true)) {
@@ -110,6 +110,7 @@ class AgentTaskContextPackRepeatableReadTest {
                         new AgentTaskContextPackTaskSourceRow();
                 row.setTenantId(tenantId);
                 row.setClientId(clientId);
+                row.setOwnerJiacn(ownerJiacn);
                 row.setTaskId(taskId);
                 row.setPlanId(1L);
                 row.setTitle(value);
@@ -123,14 +124,14 @@ class AgentTaskContextPackRepeatableReadTest {
             return new AgentTaskArtifactOutcomeService() {
                 @Override
                 public AgentTaskArtifactOutcomeViewDTO accept(
-                        String tenantId, String clientId, String taskId,
+                        String tenantId, String clientId, String ownerJiacn, String taskId,
                         String actorAgentId, AgentTaskArtifactAcceptDTO command) {
                     throw new UnsupportedOperationException();
                 }
 
                 @Override
                 public List<AgentTaskArtifactOutcomeViewDTO> listAuthoritativeAccepted(
-                        String tenantId, String clientId, String taskId,
+                        String tenantId, String clientId, String ownerJiacn, String taskId,
                         String actorAgentId, String workItemId, Integer limit) {
                     String value = jdbc.queryForObject(
                             "SELECT snapshot_value FROM f01_snapshot WHERE id=1", String.class);

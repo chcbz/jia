@@ -88,14 +88,12 @@ public class AgentWorkItemDependencyServiceImpl implements AgentWorkItemDependen
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AgentWorkItemDependencyResolutionDTO resolveReady(
-            String tenantId, String clientId, String taskId) {
-        requireScopeId(tenantId, "tenantId", 50);
-        requireScopeId(clientId, "clientId", 50);
-        requireScopeId(taskId, "taskId", 100);
+            String tenantId, String clientId, String ownerJiacn, String taskId) {
+        requireStrictScope(tenantId, clientId, ownerJiacn, taskId);
         try {
-            return mutationTransaction.executeWithLockedTaskRoot(
-                    tenantId, clientId, taskId,
-                    root -> resolveLocked(tenantId, clientId, taskId, root));
+            return mutationTransaction.executeWithLockedTaskRootInOwnerScope(
+                    tenantId, clientId, ownerJiacn, taskId,
+                    root -> resolveLocked(tenantId, clientId, ownerJiacn, taskId, root));
         } catch (AgentTaskCollaborationException failure) {
             if (failure.getReason() == AgentTaskCollaborationException.Reason.NOT_FOUND) {
                 throw new AgentWorkItemDependencyException(
@@ -106,10 +104,10 @@ public class AgentWorkItemDependencyServiceImpl implements AgentWorkItemDependen
     }
 
     private AgentWorkItemDependencyResolutionDTO resolveLocked(
-            String tenantId, String clientId, String taskId, AgentTaskMetaEntity root) {
-        AgentTaskStatus taskStatus = validateRoot(root, tenantId, clientId, taskId);
+            String tenantId, String clientId, String ownerJiacn, String taskId, AgentTaskMetaEntity root) {
+        AgentTaskStatus taskStatus = validateRoot(root, tenantId, clientId, ownerJiacn, taskId);
         List<AgentTaskWorkItemEntity> fetched = workItemDao.listByTaskForUpdate(
-                tenantId, clientId, taskId, FETCH_LIMIT);
+                tenantId, clientId, ownerJiacn, taskId, FETCH_LIMIT);
         if (fetched == null) {
             throw invalidPersisted("Work-item graph query returned null");
         }
@@ -124,7 +122,7 @@ public class AgentWorkItemDependencyServiceImpl implements AgentWorkItemDependen
         int pendingCount = 0;
         for (AgentTaskWorkItemEntity row : rows) {
             AgentTaskWorkItemStatus status = validateRow(
-                    row, tenantId, clientId, taskId);
+                    row, tenantId, clientId, ownerJiacn, taskId);
             if (byId.put(row.getWorkItemId(), row) != null) {
                 throw invalidPersisted("Work-item graph contains duplicate exact IDs");
             }
@@ -154,7 +152,7 @@ public class AgentWorkItemDependencyServiceImpl implements AgentWorkItemDependen
                 AgentTaskWorkItemDTO update = copy(row);
                 update.setStatus(AgentTaskWorkItemStatus.READY.value());
                 int updated = workItemDao.readyPendingByVersion(
-                        tenantId, clientId, taskId, row.getWorkItemId(),
+                        tenantId, clientId, ownerJiacn, taskId, row.getWorkItemId(),
                         row.getVersion(), changedAt, update);
                 if (updated == 0) {
                     throw new AgentWorkItemDependencyException(
@@ -164,7 +162,7 @@ public class AgentWorkItemDependencyServiceImpl implements AgentWorkItemDependen
                 if (updated != 1) {
                     throw invalidPersisted("Pending-to-ready CAS affected an unexpected row count");
                 }
-                appendReadyEvent(tenantId, clientId, taskId, row, changedAt);
+                appendReadyEvent(tenantId, clientId, ownerJiacn, taskId, row, changedAt);
                 readyIds.add(row.getWorkItemId());
             }
         }
@@ -179,9 +177,10 @@ public class AgentWorkItemDependencyServiceImpl implements AgentWorkItemDependen
     }
 
     private AgentTaskStatus validateRoot(
-            AgentTaskMetaEntity root, String tenantId, String clientId, String taskId) {
+            AgentTaskMetaEntity root, String tenantId, String clientId, String ownerJiacn, String taskId) {
         if (root == null || !tenantId.equals(root.getTenantId())
-                || !clientId.equals(root.getClientId()) || !taskId.equals(root.getTaskId())
+                || !clientId.equals(root.getClientId()) || !ownerJiacn.equals(root.getOwnerJiacn())
+                || !taskId.equals(root.getTaskId())
                 || root.getTaskVersion() == null || root.getTaskVersion() < 0
                 || root.getCurrentEventVersion() == null || root.getCurrentEventVersion() < 0) {
             throw invalidPersisted("Locked task root is incomplete or out of scope");
@@ -194,9 +193,10 @@ public class AgentWorkItemDependencyServiceImpl implements AgentWorkItemDependen
     }
 
     private AgentTaskWorkItemStatus validateRow(
-            AgentTaskWorkItemEntity row, String tenantId, String clientId, String taskId) {
+            AgentTaskWorkItemEntity row, String tenantId, String clientId, String ownerJiacn, String taskId) {
         if (row == null || !tenantId.equals(row.getTenantId())
-                || !clientId.equals(row.getClientId()) || !taskId.equals(row.getTaskId())) {
+                || !clientId.equals(row.getClientId()) || !ownerJiacn.equals(row.getOwnerJiacn())
+                || !taskId.equals(row.getTaskId())) {
             throw invalidPersisted("Work-item graph contains an out-of-scope row");
         }
         requirePersistedId(row.getWorkItemId(), "workItemId");
@@ -350,7 +350,7 @@ public class AgentWorkItemDependencyServiceImpl implements AgentWorkItemDependen
         return true;
     }
 
-    private void appendReadyEvent(String tenantId, String clientId, String taskId,
+    private void appendReadyEvent(String tenantId, String clientId, String ownerJiacn, String taskId,
             AgentTaskWorkItemEntity row, long changedAt) {
         long resultVersion = row.getVersion() + 1;
         TaskEventPayload.Builder payload = TaskEventPayload.builder()
@@ -362,7 +362,7 @@ public class AgentWorkItemDependencyServiceImpl implements AgentWorkItemDependen
                 .put(TaskEventPayload.Key.SOURCE, "dependency_completion")
                 .put(TaskEventPayload.Key.UPDATED_AT, changedAt);
         eventWriter.append(AgentTaskMutationEventSupport.command(
-                tenantId, clientId, taskId, TaskEventType.WORK_ITEM_READY,
+                tenantId, clientId, ownerJiacn, taskId, TaskEventType.WORK_ITEM_READY,
                 TaskEventType.ActorType.SYSTEM, null, TaskEventType.Aggregate.WORK_ITEM,
                 row.getWorkItemId(), payload, changedAt, resultVersion));
     }
@@ -397,6 +397,21 @@ public class AgentWorkItemDependencyServiceImpl implements AgentWorkItemDependen
             throw invalidPersisted("Dependency scheduler clock returned a non-positive timestamp");
         }
         return value;
+    }
+
+    private void requireStrictScope(
+            String tenantId, String clientId, String ownerJiacn, String taskId) {
+        if (!"0".equals(tenantId)) {
+            throw new AgentWorkItemDependencyException(Reason.INVALID_REQUEST,
+                    "tenantId must be the strict single-tenant value");
+        }
+        requireScopeId(clientId, "clientId", 50);
+        requireScopeId(ownerJiacn, "ownerJiacn", 50);
+        if ("0".equals(ownerJiacn)) {
+            throw new AgentWorkItemDependencyException(Reason.INVALID_REQUEST,
+                    "ownerJiacn must not be the tenant sentinel");
+        }
+        requireScopeId(taskId, "taskId", 100);
     }
 
     private void requireScopeId(String value, String name, int maxLength) {

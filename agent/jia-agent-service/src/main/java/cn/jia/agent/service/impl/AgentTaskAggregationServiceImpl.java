@@ -70,14 +70,14 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
     @Override
     @Transactional(isolation = Isolation.REPEATABLE_READ, rollbackFor = Exception.class)
     public AgentTaskAggregationDTO aggregate(
-            String tenantId, String clientId, String taskId,
+            String tenantId, String clientId, String ownerJiacn, String taskId,
             AgentTaskAggregationCommandDTO command) {
-        requireScopeAndTask(tenantId, clientId, taskId);
+        requireScopeAndTask(tenantId, clientId, ownerJiacn, taskId);
         long expectedVersion = requireCommand(command);
         try {
-            return mutationTransaction.executeWithLockedTaskRoot(
-                    tenantId, clientId, taskId, task -> aggregateLocked(
-                            tenantId, clientId, taskId, expectedVersion, task));
+            return mutationTransaction.executeWithLockedTaskRootInOwnerScope(
+                    tenantId, clientId, ownerJiacn, taskId, task -> aggregateLocked(
+                            tenantId, clientId, ownerJiacn, taskId, expectedVersion, task));
         } catch (cn.jia.agent.exception.AgentTaskCollaborationException e) {
             throw switch (e.getReason()) {
                 case NOT_FOUND -> notFound();
@@ -88,21 +88,21 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
     }
 
     private AgentTaskAggregationDTO aggregateLocked(
-            String tenantId, String clientId, String taskId, long expectedVersion,
+            String tenantId, String clientId, String ownerJiacn, String taskId, long expectedVersion,
             AgentTaskMetaEntity task) {
         long calculatedAt = now();
-        validateTask(task, tenantId, clientId, taskId);
+        validateTask(task, tenantId, clientId, ownerJiacn, taskId);
         if (task.getTaskVersion() != expectedVersion) throw conflict();
 
         List<AgentTaskAggregationSnapshotRow> snapshot = taskMetaDao.findAggregationSnapshot(
-                tenantId, clientId, taskId);
+                tenantId, clientId, ownerJiacn, taskId);
         if (snapshot == null) throw invalidPersisted("Aggregate snapshot is incomplete");
         List<AgentTaskMemberEntity> members = snapshot.stream()
                 .filter(row -> "member".equals(row.getRowType()))
-                .map(row -> memberFromSnapshot(row, tenantId, clientId, taskId)).toList();
+                .map(row -> memberFromSnapshot(row, tenantId, clientId, ownerJiacn, taskId)).toList();
         List<AgentTaskWorkItemEntity> workItems = snapshot.stream()
                 .filter(row -> "work_item".equals(row.getRowType()))
-                .map(row -> workItemFromSnapshot(row, tenantId, clientId, taskId)).toList();
+                .map(row -> workItemFromSnapshot(row, tenantId, clientId, ownerJiacn, taskId)).toList();
         if (members.size() + workItems.size() != snapshot.size()) {
             throw invalidPersisted("Aggregate snapshot contains an unknown row type");
         }
@@ -117,7 +117,7 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
             if (startedAt == null && startsTaskClock(decision.status())) startedAt = calculatedAt;
             Long completedAt = decision.status() == AgentTaskStatus.COMPLETED
                     ? firstNonNull(task.getCompletedAt(), calculatedAt) : null;
-            int updated = taskMetaDao.updateStatusByVersion(tenantId, clientId, taskId,
+            int updated = taskMetaDao.updateStatusByVersionInOwnerScope(tenantId, clientId, ownerJiacn, taskId,
                     expectedVersion, decision.status().value(), startedAt, completedAt,
                     aggregateFailureReason(decision));
             if (updated == 0) throw conflict();
@@ -161,9 +161,9 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
     }
 
     private void validateTask(
-            AgentTaskMetaEntity task, String tenantId, String clientId, String taskId) {
+            AgentTaskMetaEntity task, String tenantId, String clientId, String ownerJiacn, String taskId) {
         if (!tenantId.equals(task.getTenantId()) || !clientId.equals(task.getClientId())
-                || !taskId.equals(task.getTaskId())) {
+                || !ownerJiacn.equals(task.getOwnerJiacn()) || !taskId.equals(task.getTaskId())) {
             throw invalidPersisted("Persisted task identity does not match its scoped lookup");
         }
         persistedTaskStatus(task.getRewardStatus());
@@ -179,7 +179,7 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
 
     private AgentTaskMemberEntity memberFromSnapshot(
             AgentTaskAggregationSnapshotRow row,
-            String tenantId, String clientId, String taskId) {
+            String tenantId, String clientId, String ownerJiacn, String taskId) {
         AgentTaskMemberEntity member = new AgentTaskMemberEntity()
                 .setTaskId(row.getTaskId())
                 .setAgentId(row.getEntityId())
@@ -189,13 +189,13 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
                 .setVersion(row.getVersion());
         member.setTenantId(row.getTenantId());
         member.setClientId(row.getClientId());
-        validateMember(member, tenantId, clientId, taskId);
+        validateMember(member, tenantId, clientId, ownerJiacn, taskId);
         return member;
     }
 
     private AgentTaskWorkItemEntity workItemFromSnapshot(
             AgentTaskAggregationSnapshotRow row,
-            String tenantId, String clientId, String taskId) {
+            String tenantId, String clientId, String ownerJiacn, String taskId) {
         AgentTaskWorkItemEntity item = new AgentTaskWorkItemEntity()
                 .setWorkItemId(row.getEntityId())
                 .setTaskId(row.getTaskId())
@@ -213,16 +213,16 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
                 .setVersion(row.getVersion());
         item.setTenantId(row.getTenantId());
         item.setClientId(row.getClientId());
-        validateWorkItem(item, tenantId, clientId, taskId);
+        validateWorkItem(item, tenantId, clientId, ownerJiacn, taskId);
         return item;
     }
 
     private void validateMember(
-            AgentTaskMemberEntity member, String tenantId, String clientId, String taskId) {
+            AgentTaskMemberEntity member, String tenantId, String clientId, String ownerJiacn, String taskId) {
         if (member == null || !tenantId.equals(member.getTenantId())
                 || !clientId.equals(member.getClientId())
                 || !taskId.equals(member.getTaskId())
-                || !isCanonicalStoredAgentId(tenantId, clientId, member.getAgentId())) {
+                || !isCanonicalStoredAgentId(tenantId, clientId, ownerJiacn, member.getAgentId())) {
             throw invalidPersisted("Persisted member identity does not match the aggregate scope");
         }
         try {
@@ -237,7 +237,7 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
     }
 
     private void validateWorkItem(
-            AgentTaskWorkItemEntity item, String tenantId, String clientId, String taskId) {
+            AgentTaskWorkItemEntity item, String tenantId, String clientId, String ownerJiacn, String taskId) {
         if (item == null || !tenantId.equals(item.getTenantId())
                 || !clientId.equals(item.getClientId())
                 || !taskId.equals(item.getTaskId())
@@ -268,7 +268,7 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
                 || status == AgentTaskWorkItemStatus.RUNNING;
         boolean hasAssignee = item.getAssigneeAgentId() != null;
         boolean canonicalAssignee = !hasAssignee || isCanonicalStoredAgentId(
-                tenantId, clientId, item.getAssigneeAgentId());
+                tenantId, clientId, ownerJiacn, item.getAssigneeAgentId());
         if (activeLeaseStatus) {
             if (!hasAssignee || !canonicalAssignee
                     || !isExactStoredText(item.getLeaseToken(), MAX_LEASE_TOKEN_LENGTH)
@@ -294,7 +294,7 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
     }
 
     private boolean isCanonicalStoredAgentId(
-            String tenantId, String clientId, String agentId) {
+            String tenantId, String clientId, String ownerJiacn, String agentId) {
         if (agentId == null || agentId.isEmpty() || agentId.length() > 100
                 || !agentId.equals(agentId.strip())
                 || agentId.chars().anyMatch(Character::isISOControl)) {
@@ -302,7 +302,7 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
         }
         try {
             return agentId.equals(identityService.requirePersistedCanonicalAgentIdInScope(
-                    tenantId, clientId, tenantId, agentId));
+                    tenantId, clientId, ownerJiacn, agentId));
         } catch (RuntimeException ignored) {
             return false;
         }
@@ -374,10 +374,10 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
     }
 
     private void requireScopeAndTask(
-            String tenantId, String clientId, String taskId) {
-        if (StringUtil.isBlank(tenantId) || StringUtil.isBlank(clientId)
-                || StringUtil.isBlank(taskId)) {
-            throw invalidRequest("tenantId, clientId and taskId are required");
+            String tenantId, String clientId, String ownerJiacn, String taskId) {
+        if (!"0".equals(tenantId) || StringUtil.isBlank(clientId)
+                || StringUtil.isBlank(ownerJiacn) || "0".equals(ownerJiacn) || StringUtil.isBlank(taskId)) {
+            throw invalidRequest("tenantId, clientId, ownerJiacn and taskId are required");
         }
     }
 
@@ -396,10 +396,38 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
                 return mutation.apply(root);
             }
             @Override
+            public <T> T executeWithLockedTaskRootInOwnerScope(
+                    String tenantId, String clientId, String ownerJiacn, String taskId,
+                    LockedTaskMutation<T> mutation) {
+                return mutation.apply(taskMetaDao.findByTaskIdForUpdateInOwnerScope(
+                        tenantId, clientId, ownerJiacn, taskId));
+            }
+
+            @Override
+            public <T> T executeWithLockedTaskRootForWorkItemInOwnerScope(
+                    String tenantId, String clientId, String ownerJiacn, String workItemId,
+                    LockedTaskMutation<T> mutation) {
+                return mutation.apply(taskMetaDao.findByWorkItemIdForUpdateInOwnerScope(
+                        tenantId, clientId, ownerJiacn, workItemId));
+            }
+
+            @Override
             public <T> T executeWithLockedTaskRootForWorkItem(String tenantId, String clientId,
                     String workItemId, LockedTaskMutation<T> mutation) {
                 throw new UnsupportedOperationException();
             }
+            @Override
+            public <T> T executeAfterTaskRootReservationInOwnerScope(
+                    String tenantId, String clientId, String ownerJiacn, String taskId,
+                    TaskRootReservation reservation, ReservedTaskMutation<T> mutation) {
+                int reserved = reservation.reserve();
+                if (reserved != 0 && reserved != 1) {
+                    throw new IllegalStateException("Task root reservation returned an unexpected row count");
+                }
+                return mutation.apply(taskMetaDao.findByTaskIdForUpdateInOwnerScope(
+                        tenantId, clientId, ownerJiacn, taskId), reserved == 1);
+            }
+
             @Override
             public <T> T executeAfterTaskRootReservation(String tenantId, String clientId,
                     String taskId, TaskRootReservation reservation, ReservedTaskMutation<T> mutation) {
