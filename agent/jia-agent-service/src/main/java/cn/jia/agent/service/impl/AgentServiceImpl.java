@@ -1262,7 +1262,7 @@ public class AgentServiceImpl implements AgentService {
         }
         task.setActionDispatchResults(List.of());
         boolean durableAssignmentDelivery = commandTransportCapture.captureTaskInvites(
-                task, assignedAgents, outcome.taskAssignedEventId(), outcome.occurredAt());
+                ownerJiacn, task, assignedAgents, outcome.taskAssignedEventId(), outcome.occurredAt());
         publishTaskAssignmentSideEffectsAfterCommit(
                 task, assignedAgents, durableAssignmentDelivery);
         publishTaskAssignmentSceneStates(taskId, assignedAgents);
