@@ -57,7 +57,7 @@ class AgentCommandMailboxServiceImplTest {
     @Test
     void locksMembershipAndOwnershipInsideRequiredBoundaryBeforeProjection() {
         when(mapper.selectMailboxPage(
-                "tenant-a", "client-a", "caller-a", "target-a", "task-1",
+                "0", "client-a", "owner-a", "caller-a", "target-a", "task-1",
                 null, null, 3, false, NOW))
                 .thenReturn(List.of(
                         row(30L, "cmd-30", "WAITING_AGENT", 300L, 10_000L),
@@ -65,7 +65,7 @@ class AgentCommandMailboxServiceImplTest {
                         row(28L, "cmd-28", "RECEIVED", 299L, 10_000L)));
 
         AgentCommandMailboxPage page = service.query(
-                "tenant-a", "client-a", "caller-a", "target-a", "task-1",
+                "0", "client-a", "owner-a", "caller-a", "target-a", "task-1",
                 null, null, 2, false);
 
         assertEquals(List.of("cmd-30", "cmd-29"),
@@ -75,15 +75,15 @@ class AgentCommandMailboxServiceImplTest {
         InOrder order = inOrder(transactions, accessService, agentService, mapper);
         order.verify(transactions).getTransaction(any());
         order.verify(accessService).resolveMemberAccessForUpdate(
-                "tenant-a", "client-a", "task-1", "caller-a");
+                "0", "client-a", "task-1", "caller-a");
         order.verify(accessService).resolveMemberAccessForUpdate(
-                "tenant-a", "client-a", "task-1", "target-a");
+                "0", "client-a", "task-1", "target-a");
         order.verify(agentService).requireApiKeyOwnedAgentForUpdate(
-                "client-a", "tenant-a", "caller-a");
+                "client-a", "owner-a", "caller-a");
         order.verify(agentService).requireApiKeyOwnedAgentForUpdate(
-                "client-a", "tenant-a", "target-a");
+                "client-a", "owner-a", "target-a");
         order.verify(mapper).selectMailboxPage(
-                "tenant-a", "client-a", "caller-a", "target-a", "task-1",
+                "0", "client-a", "owner-a", "caller-a", "target-a", "task-1",
                 null, null, 3, false, NOW);
         order.verify(transactions).commit(any(TransactionStatus.class));
     }
@@ -91,15 +91,15 @@ class AgentCommandMailboxServiceImplTest {
     @Test
     void revokeObservedByLockedAccessReturnsNoProjectionAndRollsBack() {
         when(accessService.resolveMemberAccessForUpdate(
-                "tenant-a", "client-a", "task-1", "target-a"))
+                "0", "client-a", "task-1", "target-a"))
                 .thenReturn(AgentTaskAccessLevel.NONE);
 
         assertThrows(AgentCommandMailboxAccessDeniedException.class, () -> service.query(
-                "tenant-a", "client-a", "caller-a", "target-a", "task-1",
+                "0", "client-a", "owner-a", "caller-a", "target-a", "task-1",
                 null, null, 10, false));
 
         verify(mapper, never()).selectMailboxPage(
-                any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(), any(), any(),
                 org.mockito.ArgumentMatchers.anyInt(),
                 org.mockito.ArgumentMatchers.anyBoolean(),
                 org.mockito.ArgumentMatchers.anyLong());
@@ -109,12 +109,12 @@ class AgentCommandMailboxServiceImplTest {
     @Test
     void finalShortPageHasNoNextCursor() {
         when(mapper.selectMailboxPage(
-                "tenant-a", "client-a", "caller-a", "target-a", null,
+                "0", "client-a", "owner-a", "caller-a", "target-a", null,
                 300L, 29L, 51, true, NOW))
                 .thenReturn(List.of(row(28L, "cmd-28", "SUCCEEDED", 299L, 900L)));
 
         AgentCommandMailboxPage page = service.query(
-                "tenant-a", "client-a", "caller-a", "target-a", null,
+                "0", "client-a", "owner-a", "caller-a", "target-a", null,
                 300L, 29L, 50, true);
 
         assertEquals(1, page.entries().size());
@@ -125,56 +125,56 @@ class AgentCommandMailboxServiceImplTest {
     @Test
     void defaultProjectionRejectsTerminalAndExpiredNonTerminalRowsIfMapperDrifts() {
         when(mapper.selectMailboxPage(
-                "tenant-a", "client-a", "caller-a", "target-a", null,
+                "0", "client-a", "owner-a", "caller-a", "target-a", null,
                 null, null, 11, false, NOW))
                 .thenReturn(List.of(row(1L, "cmd-terminal", "DEAD", 100L, 10_000L)));
         assertThrows(IllegalStateException.class, () -> service.query(
-                "tenant-a", "client-a", "caller-a", "target-a", null,
+                "0", "client-a", "owner-a", "caller-a", "target-a", null,
                 null, null, 10, false));
 
         when(mapper.selectMailboxPage(
-                "tenant-a", "client-a", "caller-a", "target-a", "task-1",
+                "0", "client-a", "owner-a", "caller-a", "target-a", "task-1",
                 null, null, 11, false, NOW))
                 .thenReturn(List.of(row(1L, "cmd-expired-pending", "PENDING", 100L, NOW)));
         assertThrows(IllegalStateException.class, () -> service.query(
-                "tenant-a", "client-a", "caller-a", "target-a", "task-1",
+                "0", "client-a", "owner-a", "caller-a", "target-a", "task-1",
                 null, null, 10, false));
     }
 
     @Test
     void crossTargetOrUnstableOrderingFailsClosed() {
         when(mapper.selectMailboxPage(
-                "tenant-a", "client-a", "caller-a", "target-a", null,
+                "0", "client-a", "owner-a", "caller-a", "target-a", null,
                 null, null, 11, true, NOW))
                 .thenReturn(List.of(new AgentCommandMailboxRow(
                         1L, "cmd-cross", "task-1", null, "target-other",
                         AgentProtocolConstants.COMMAND_CONTEXT_REFRESH,
                         "PENDING", 10_000L, 100L, 100L)));
         assertThrows(IllegalStateException.class, () -> service.query(
-                "tenant-a", "client-a", "caller-a", "target-a", null,
+                "0", "client-a", "owner-a", "caller-a", "target-a", null,
                 null, null, 10, true));
 
         when(mapper.selectMailboxPage(
-                "tenant-a", "client-a", "caller-a", "target-a", "task-1",
+                "0", "client-a", "owner-a", "caller-a", "target-a", "task-1",
                 null, null, 11, true, NOW))
                 .thenReturn(List.of(
                         row(2L, "cmd-2", "PENDING", 100L, 10_000L),
                         row(3L, "cmd-3", "PENDING", 100L, 10_000L)));
         assertThrows(IllegalStateException.class, () -> service.query(
-                "tenant-a", "client-a", "caller-a", "target-a", "task-1",
+                "0", "client-a", "owner-a", "caller-a", "target-a", "task-1",
                 null, null, 10, true));
     }
 
     @Test
     void malformedScopeCursorAndBoundsNeverStartTransaction() {
         assertThrows(IllegalArgumentException.class, () -> service.query(
-                "tenant-a", "client-a", "caller-a", "target-a", null,
+                "0", "client-a", "owner-a", "caller-a", "target-a", null,
                 100L, null, 50, false));
         assertThrows(IllegalArgumentException.class, () -> service.query(
-                "tenant-a", "client-a", "caller-a", "target-a", null,
+                "0", "client-a", "owner-a", "caller-a", "target-a", null,
                 null, null, 0, false));
         assertThrows(IllegalArgumentException.class, () -> service.query(
-                "tenant-a", "client-a", "caller-a", "target-a ", null,
+                "0", "client-a", "owner-a", "caller-a", "target-a ", null,
                 null, null, 50, false));
         verify(transactions, never()).getTransaction(any());
     }
@@ -182,13 +182,13 @@ class AgentCommandMailboxServiceImplTest {
     @Test
     void mapperInfrastructureFailureIsObservableAndRollsBack() {
         when(mapper.selectMailboxPage(
-                "tenant-a", "client-a", "caller-a", "target-a", "task-1",
+                "0", "client-a", "owner-a", "caller-a", "target-a", "task-1",
                 null, null, 11, false, NOW))
                 .thenThrow(new DataAccessResourceFailureException("mysql unavailable"));
 
         DataAccessResourceFailureException failure = assertThrows(
                 DataAccessResourceFailureException.class, () -> service.query(
-                        "tenant-a", "client-a", "caller-a", "target-a", "task-1",
+                        "0", "client-a", "owner-a", "caller-a", "target-a", "task-1",
                         null, null, 10, false));
 
         assertEquals("mysql unavailable", failure.getMessage());

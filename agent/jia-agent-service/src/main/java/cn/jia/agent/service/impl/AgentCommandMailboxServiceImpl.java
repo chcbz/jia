@@ -68,11 +68,12 @@ public final class AgentCommandMailboxServiceImpl implements AgentCommandMailbox
 
     @Override
     public AgentCommandMailboxPage query(
-            String tenantId, String clientId, String callerAgentId, String targetAgentId,
-            String taskId, Long beforeCreateTime, Long beforeId, int limit,
+            String tenantId, String clientId, String ownerJiacn, String callerAgentId,
+            String targetAgentId, String taskId, Long beforeCreateTime, Long beforeId, int limit,
             boolean includeTerminal) {
-        requireExact(tenantId, "tenantId", 50);
+        if (!"0".equals(tenantId)) throw new IllegalArgumentException("tenantId must be 0");
         requireExact(clientId, "clientId", 50);
+        requireExact(ownerJiacn, "ownerJiacn", 50);
         requireExact(callerAgentId, "callerAgentId", 100);
         requireExact(targetAgentId, "targetAgentId", 100);
         if (taskId != null) requireExact(taskId, "taskId", 100);
@@ -84,15 +85,15 @@ public final class AgentCommandMailboxServiceImpl implements AgentCommandMailbox
             throw new IllegalArgumentException("mailbox limit must be in 1..100");
         }
         AgentCommandMailboxPage page = transaction.execute(status -> queryAuthorized(
-                tenantId, clientId, callerAgentId, targetAgentId, taskId,
+                tenantId, clientId, ownerJiacn, callerAgentId, targetAgentId, taskId,
                 beforeCreateTime, beforeId, limit, includeTerminal));
         if (page == null) throw new IllegalStateException("mailbox transaction returned no projection");
         return page;
     }
 
     private AgentCommandMailboxPage queryAuthorized(
-            String tenantId, String clientId, String callerAgentId, String targetAgentId,
-            String taskId, Long beforeCreateTime, Long beforeId, int limit,
+            String tenantId, String clientId, String ownerJiacn, String callerAgentId,
+            String targetAgentId, String taskId, Long beforeCreateTime, Long beforeId, int limit,
             boolean includeTerminal) {
         List<String> agents = Stream.of(callerAgentId, targetAgentId)
                 .distinct().sorted(AgentCommandMailboxServiceImpl::compareUtf8Unsigned)
@@ -107,13 +108,13 @@ public final class AgentCommandMailboxServiceImpl implements AgentCommandMailbox
             }
         }
         for (String agentId : agents) {
-            requireOwnedRuntime(clientId, tenantId, agentId);
+            requireOwnedRuntime(clientId, ownerJiacn, agentId);
         }
         long now = clock.getAsLong();
         if (now <= 0) throw new IllegalStateException("mailbox clock returned an invalid time");
 
         List<AgentCommandMailboxRow> rows = mapper.selectMailboxPage(
-                tenantId, clientId, callerAgentId, targetAgentId, taskId,
+                tenantId, clientId, ownerJiacn, callerAgentId, targetAgentId, taskId,
                 beforeCreateTime, beforeId, limit + 1, includeTerminal, now);
         if (rows == null || rows.size() > limit + 1) {
             throw new IllegalStateException("mailbox query returned an invalid row count");
@@ -137,11 +138,11 @@ public final class AgentCommandMailboxServiceImpl implements AgentCommandMailbox
                 last == null ? null : last.createTime(), last == null ? null : last.id());
     }
 
-    private void requireOwnedRuntime(String clientId, String tenantId, String agentId) {
+    private void requireOwnedRuntime(String clientId, String ownerJiacn, String agentId) {
         AgentRuntimeDTO runtime;
         try {
             runtime = agentService.requireApiKeyOwnedAgentForUpdate(
-                    clientId, tenantId, agentId);
+                    clientId, ownerJiacn, agentId);
         } catch (AgentBizException denied) {
             if (AgentErrorConstants.AGENT_FORBIDDEN.equals(denied.getCode())
                     || AgentErrorConstants.AGENT_NOT_FOUND.equals(denied.getCode())) {

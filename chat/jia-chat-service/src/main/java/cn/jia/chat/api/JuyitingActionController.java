@@ -63,14 +63,15 @@ public class JuyitingActionController {
             return null;
         }
         Map<String, Object> claims = jwt.getToken().getClaims();
-        Object tenant = claims.get("jiacn");
+        Object owner = claims.get("jiacn");
         Object client = claims.get("client_id");
-        if (!(tenant instanceof String tenantId) || !(client instanceof String clientId)
-                || !validExact(tenantId, 50) || !validExact(clientId, 50)) {
+        if (!(owner instanceof String ownerJiacn) || !(client instanceof String clientId)
+                || !validExact(ownerJiacn, 50) || !validExact(clientId, 50)) {
             return null;
         }
         return new HallTrustedCaller(
-                tenantId, clientId, validExact(callerAgentId, 100) ? callerAgentId : null);
+                "0", clientId, ownerJiacn,
+                validExact(callerAgentId, 100) ? callerAgentId : null);
     }
 
     private boolean validExact(String value, int maxLength) {
