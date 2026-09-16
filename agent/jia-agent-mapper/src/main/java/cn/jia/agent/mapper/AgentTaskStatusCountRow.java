@@ -7,6 +7,7 @@ import lombok.Data;
 public class AgentTaskStatusCountRow {
     private String tenantId;
     private String clientId;
+    private String ownerJiacn;
     private String status;
     private Long taskCount;
 }

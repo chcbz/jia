@@ -221,58 +221,64 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
     }
 
     @Override
-    public long countSearch(String tenantId, String clientId, String status,
+    public long countSearch(String tenantId, String clientId, String ownerJiacn, String status,
             String ability, String keyword) {
-        requireSearchScope(tenantId, clientId);
+        requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         return baseMapper.countSearchExactInScope(
-                tenantId, clientId, status, ability, keyword);
+                tenantId, clientId, ownerJiacn, status, ability, keyword);
     }
 
     @Override
-    public List<AgentTaskSearchRow> searchPage(String tenantId, String clientId, String status,
+    public List<AgentTaskSearchRow> searchPage(
+            String tenantId, String clientId, String ownerJiacn, String status,
             String ability, String keyword, long offset, int limit) {
-        requireSearchScope(tenantId, clientId);
+        requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         if (offset < 0) {
             throw new IllegalArgumentException("offset must not be negative");
         }
-        return baseMapper.searchPageExactInScope(tenantId, clientId, status, ability,
+        return baseMapper.searchPageExactInScope(tenantId, clientId, ownerJiacn, status, ability,
                 keyword, offset, TaskCollaborationDaoSupport.boundedLimit(limit));
     }
 
     @Override
-    public List<AgentTaskSearchRow> searchPageWithFunding(String tenantId, String clientId,
-            String status, String ability, String keyword, long offset, int limit) {
-        requireSearchScope(tenantId, clientId);
+    public List<AgentTaskSearchRow> searchPageWithFunding(
+            String tenantId, String clientId, String ownerJiacn, String status,
+            String ability, String keyword, long offset, int limit) {
+        requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         if (offset < 0) {
             throw new IllegalArgumentException("offset must not be negative");
         }
-        return baseMapper.searchPageWithFundingExactInScope(tenantId, clientId, status, ability,
-                keyword, offset, TaskCollaborationDaoSupport.boundedLimit(limit));
+        return baseMapper.searchPageWithFundingExactInScope(
+                tenantId, clientId, ownerJiacn, status, ability, keyword, offset,
+                TaskCollaborationDaoSupport.boundedLimit(limit));
     }
 
     @Override
     public List<AgentTaskMemberEntity> findSearchMembers(
-            String tenantId, String clientId, List<String> taskIds) {
-        requireSearchScope(tenantId, clientId);
+            String tenantId, String clientId, String ownerJiacn, List<String> taskIds) {
+        requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         List<String> exactTaskIds = exactIds(taskIds, "taskId", 100);
         return exactTaskIds.isEmpty() ? List.of()
                 : baseMapper.selectSearchMembersExactInScope(
-                        tenantId, clientId, exactTaskIds);
+                        tenantId, clientId, ownerJiacn, exactTaskIds);
     }
 
     @Override
-    public List<AgentRuntimeEntity> findSearchRuntimes(List<String> agentIds) {
+    public List<AgentRuntimeEntity> findSearchRuntimes(
+            String tenantId, String clientId, String ownerJiacn, List<String> agentIds) {
+        requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         List<String> exactAgentIds = exactIds(agentIds, "agentId", 100);
         return exactAgentIds.isEmpty() ? List.of()
-                : baseMapper.selectSearchRuntimesExact(exactAgentIds);
+                : baseMapper.selectSearchRuntimesExactInOwnerScope(
+                        tenantId, clientId, ownerJiacn, exactAgentIds);
     }
 
     @Override
     public List<AgentTaskStatusCountRow> countSearchByStatus(
-            String tenantId, String clientId, String ability, String keyword) {
-        requireSearchScope(tenantId, clientId);
+            String tenantId, String clientId, String ownerJiacn, String ability, String keyword) {
+        requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         return baseMapper.countSearchByStatusExactInScope(
-                tenantId, clientId, ability, keyword);
+                tenantId, clientId, ownerJiacn, ability, keyword);
     }
 
     private void requireStrictOwnerScope(
@@ -281,14 +287,6 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
         requireExactId(ownerJiacn, "ownerJiacn", 50);
         if (!"0".equals(tenantId) || "0".equals(ownerJiacn)) {
             throw new IllegalArgumentException("strict task owner scope requires tenant 0 and a real owner");
-        }
-    }
-
-    private void requireSearchScope(String tenantId, String clientId) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
-        if ("0".equals(tenantId) || "0".equals(clientId)) {
-            throw new IllegalArgumentException(
-                    "Legacy collaboration scope cannot be searched implicitly");
         }
     }
 

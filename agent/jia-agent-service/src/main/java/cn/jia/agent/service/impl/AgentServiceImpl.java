@@ -831,7 +831,8 @@ public class AgentServiceImpl implements AgentService {
         String keyword = StringUtil.isBlank(filters.getKeyword())
                 ? null : filters.getKeyword().trim();
 
-        long total = agentTaskMetaDao.countSearch(scope.tenantId(), scope.clientId(),
+        long total = agentTaskMetaDao.countSearch(
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
                 filters.getStatus(), filters.getAbility(), keyword);
         require(total >= 0, "Persisted task search total is invalid");
         // The normal bounty board must remain usable while the unpublished economy
@@ -841,17 +842,17 @@ public class AgentServiceImpl implements AgentService {
         List<AgentTaskSearchRow> rows = total == 0 ? List.of()
                 : Optional.ofNullable(fundingProjectionEnabled
                         ? agentTaskMetaDao.searchPageWithFunding(
-                                scope.tenantId(), scope.clientId(), filters.getStatus(),
-                                filters.getAbility(), keyword, offset, pageSize)
+                                scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
+                                filters.getStatus(), filters.getAbility(), keyword, offset, pageSize)
                         : agentTaskMetaDao.searchPage(
-                                scope.tenantId(), scope.clientId(), filters.getStatus(),
-                                filters.getAbility(), keyword, offset, pageSize))
+                                scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
+                                filters.getStatus(), filters.getAbility(), keyword, offset, pageSize))
                         .orElseGet(Collections::emptyList);
         require(rows.size() <= pageSize,
                 "Persisted task search page exceeds the requested bound");
         LinkedHashSet<String> exactTaskIds = new LinkedHashSet<>();
         for (AgentTaskSearchRow row : rows) {
-            requireScopedTaskProjection(row, scope.tenantId(), scope.clientId(),
+            requireScopedTaskProjection(row, scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
                     row == null ? null : row.getTaskId());
             require(isExactStoredText(row.getTaskId(), 100)
                             && exactTaskIds.add(row.getTaskId()),
@@ -865,7 +866,7 @@ public class AgentServiceImpl implements AgentService {
         for (AgentTaskSearchRow row : rows) {
             agentIds.addAll(searchAssigneeIds(row, membersByTask.get(row.getTaskId())));
         }
-        Map<String, AgentRuntimeEntity> runtimesById = searchRuntimesById(agentIds);
+        Map<String, AgentRuntimeEntity> runtimesById = searchRuntimesById(scope, agentIds);
         List<AgentTaskDTO> tasks = rows.stream()
                 .map(row -> toSearchTaskDTO(row,
                         searchAssigneeIds(row, membersByTask.get(row.getTaskId())),
@@ -891,7 +892,8 @@ public class AgentServiceImpl implements AgentService {
                 .forEach(status -> counts.put(status, 0L));
 
         List<AgentTaskStatusCountRow> rows = Optional.ofNullable(
-                agentTaskMetaDao.countSearchByStatus(scope.tenantId(), scope.clientId(),
+                agentTaskMetaDao.countSearchByStatus(
+                        scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
                         filters.getAbility(), filters.getKeyword()))
                 .orElseGet(Collections::emptyList);
         long total = 0L;
@@ -899,6 +901,7 @@ public class AgentServiceImpl implements AgentService {
             require(row != null
                             && Objects.equals(scope.tenantId(), row.getTenantId())
                             && Objects.equals(scope.clientId(), row.getClientId())
+                            && Objects.equals(scope.ownerJiacn(), row.getOwnerJiacn())
                             && isExactStoredText(row.getStatus(), 20)
                             && row.getTaskCount() != null && row.getTaskCount() >= 0,
                     "Persisted task status count is outside the authenticated scope");
@@ -917,17 +920,17 @@ public class AgentServiceImpl implements AgentService {
             throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
                     "Authenticated task " + operation + " scope is required");
         }
-        Object tenantClaim = jwtAuthentication.getToken().getClaims().get("jiacn");
+        Object ownerClaim = jwtAuthentication.getToken().getClaims().get("jiacn");
         Object clientClaim = jwtAuthentication.getToken().getClaims().get("client_id");
-        if (!(tenantClaim instanceof String tenantId)
+        if (!(ownerClaim instanceof String ownerJiacn)
                 || !(clientClaim instanceof String clientId)
-                || !isExactAuthenticatedScopeId(tenantId)
+                || !isExactAuthenticatedScopeId(ownerJiacn)
                 || !isExactAuthenticatedScopeId(clientId)
-                || "0".equals(tenantId) || "0".equals(clientId)) {
+                || "0".equals(ownerJiacn) || "0".equals(clientId)) {
             throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
                     "Authenticated task " + operation + " scope is invalid");
         }
-        return new TaskSearchScope(tenantId, clientId);
+        return new TaskSearchScope(SINGLE_TENANT_ID, clientId, ownerJiacn);
     }
 
     private boolean isExactAuthenticatedScopeId(String value) {
@@ -949,12 +952,13 @@ public class AgentServiceImpl implements AgentService {
         Set<String> requestedTaskIds = new LinkedHashSet<>(taskIds);
         List<AgentTaskMemberEntity> members = Optional.ofNullable(
                 agentTaskMetaDao.findSearchMembers(
-                        scope.tenantId(), scope.clientId(), taskIds))
+                        scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskIds))
                 .orElseGet(Collections::emptyList);
         for (AgentTaskMemberEntity member : members) {
             require(member != null
                             && Objects.equals(scope.tenantId(), member.getTenantId())
                             && Objects.equals(scope.clientId(), member.getClientId())
+                            && Objects.equals(scope.ownerJiacn(), member.getOwnerJiacn())
                             && requestedTaskIds.contains(member.getTaskId())
                             && isExactStoredText(member.getTaskId(), 100)
                             && isExactStoredText(member.getAgentId(), 100),
@@ -983,16 +987,22 @@ public class AgentServiceImpl implements AgentService {
         return List.copyOf(agentIds);
     }
 
-    private Map<String, AgentRuntimeEntity> searchRuntimesById(Set<String> agentIds) {
+    private Map<String, AgentRuntimeEntity> searchRuntimesById(
+            TaskSearchScope scope, Set<String> agentIds) {
         if (agentIds.isEmpty()) {
             return Map.of();
         }
         Map<String, AgentRuntimeEntity> byId = new LinkedHashMap<>();
         List<AgentRuntimeEntity> runtimes = Optional.ofNullable(
-                agentTaskMetaDao.findSearchRuntimes(new ArrayList<>(agentIds)))
+                agentTaskMetaDao.findSearchRuntimes(
+                        scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
+                        new ArrayList<>(agentIds)))
                 .orElseGet(Collections::emptyList);
         for (AgentRuntimeEntity runtime : runtimes) {
             require(runtime != null && agentIds.contains(runtime.getAgentId())
+                            && Objects.equals(scope.tenantId(), runtime.getTenantId())
+                            && Objects.equals(scope.clientId(), runtime.getClientId())
+                            && Objects.equals(scope.ownerJiacn(), runtime.getOwnerJiacn())
                             && isExactStoredText(runtime.getAgentId(), 100)
                             && !byId.containsKey(runtime.getAgentId()),
                     "Persisted Agent runtime is outside the task search projection");
@@ -1001,7 +1011,7 @@ public class AgentServiceImpl implements AgentService {
         return byId;
     }
 
-    private record TaskSearchScope(String tenantId, String clientId) {
+    private record TaskSearchScope(String tenantId, String clientId, String ownerJiacn) {
     }
 
     @Override
@@ -1823,12 +1833,14 @@ public class AgentServiceImpl implements AgentService {
     }
 
     private void requireScopedTaskProjection(
-            AgentTaskMetaEntity task, String tenantId, String clientId, String taskId) {
+            AgentTaskMetaEntity task, String tenantId, String clientId,
+            String ownerJiacn, String taskId) {
         require(task != null
                         && Objects.equals(tenantId, task.getTenantId())
                         && Objects.equals(clientId, task.getClientId())
+                        && Objects.equals(ownerJiacn, task.getOwnerJiacn())
                         && Objects.equals(taskId, task.getTaskId()),
-                "Persisted task does not match the byte-exact current scope");
+                "Persisted task does not match the authenticated owner scope");
     }
 
     private List<String> normalizeAssignAgentIds(AgentTaskAssignDTO request) {
