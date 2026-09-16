@@ -166,7 +166,7 @@ class FundedBountyQuoteClaimServiceTest {
         TrackingTransactionManager manager = new TrackingTransactionManager();
         Fixture fixture = fixture(manager);
         stubSuccessfulAssignment(fixture);
-        when(fixture.transport.captureTaskInvites(any(), anyList(), anyString(), anyLong()))
+        when(fixture.transport.captureTaskInvites(anyString(), any(), anyList(), anyString(), anyLong()))
                 .thenThrow(new IllegalStateException("outbox unavailable"));
 
         assertThrows(IllegalStateException.class, () ->
@@ -184,7 +184,7 @@ class FundedBountyQuoteClaimServiceTest {
         TrackingTransactionManager manager = new TrackingTransactionManager();
         Fixture fixture = fixture(manager);
         stubSuccessfulAssignment(fixture);
-        when(fixture.transport.captureTaskInvites(any(), anyList(), anyString(), anyLong()))
+        when(fixture.transport.captureTaskInvites(anyString(), any(), anyList(), anyString(), anyLong()))
                 .thenAnswer(invocation -> {
                     assertFalse(manager.committed.get());
                     assertFalse(manager.rolledBack.get());
@@ -216,7 +216,7 @@ class FundedBountyQuoteClaimServiceTest {
                     fixture.claimQuote.setStatus("CLAIMED");
                     return 1;
                 });
-        when(fixture.transport.captureTaskInvites(any(), anyList(), anyString(), anyLong())).thenReturn(true);
+        when(fixture.transport.captureTaskInvites(anyString(), any(), anyList(), anyString(), anyLong())).thenReturn(true);
 
         CountDownLatch start = new CountDownLatch(1);
         ExecutorService pool = Executors.newFixedThreadPool(2);

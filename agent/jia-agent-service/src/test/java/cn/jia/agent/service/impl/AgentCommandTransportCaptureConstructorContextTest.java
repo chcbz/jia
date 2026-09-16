@@ -28,7 +28,7 @@ class AgentCommandTransportCaptureConstructorContextTest {
             context.refresh();
 
             assertFalse(context.getBean(AgentCommandTransportCapture.class)
-                    .captureTaskInvites(null, null, null, 0));
+                    .captureTaskInvites(null, null, null, null, 0));
             verify(gate).commandOutboxEnabled();
             verifyNoInteractions(writer);
         }
@@ -45,7 +45,7 @@ class AgentCommandTransportCaptureConstructorContextTest {
 
             IllegalStateException failure = assertThrows(IllegalStateException.class,
                     () -> context.getBean(AgentCommandTransportCapture.class)
-                            .captureTaskInvites(null, null, null, 0));
+                            .captureTaskInvites(null, null, null, null, 0));
             assertEquals("agent.command-outbox.enabled=true but AgentCommandTransportWriter is missing",
                     failure.getMessage());
             verify(gate).commandOutboxEnabled();

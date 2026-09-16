@@ -49,7 +49,13 @@ public class AgentCommandTransportCapture {
         return new AgentCommandTransportCapture();
     }
 
+    /**
+     * Captures assignment commands only in the authenticated task-owner scope.
+     * The owner is supplied by the already-authenticated caller; it is never
+     * recovered from task or Agent identifiers.
+     */
     public boolean captureTaskInvites(
+            String ownerJiacn,
             AgentTaskDTO task,
             List<AgentRuntimeEntity> assignedAgents,
             String taskAssignedEventId,
@@ -60,10 +66,13 @@ public class AgentCommandTransportCapture {
             throw new IllegalStateException(
                     "agent.command-outbox.enabled=true but AgentCommandTransportWriter is missing");
         }
-        if (task == null || assignedAgents == null || assignedAgents.isEmpty()
+        if (ownerJiacn == null || ownerJiacn.isBlank()
+                || task == null || !"0".equals(task.getTenantId())
+                || task.getClientId() == null || task.getClientId().isBlank()
+                || assignedAgents == null || assignedAgents.isEmpty()
                 || taskAssignedEventId == null || taskAssignedEventId.isBlank()
                 || occurredAt <= 0) {
-            throw new IllegalStateException("Changed assignment lacks durable TASK_ASSIGNED command facts");
+            throw new IllegalStateException("Changed assignment lacks strict owner-scoped TASK_ASSIGNED command facts");
         }
         List<String> collaboratorIds = AgentCommandCanonicalCodec.canonicalCollaborators(
                 assignedAgents.stream().map(AgentRuntimeEntity::getAgentId).toList());
@@ -87,13 +96,13 @@ public class AgentCommandTransportCapture {
             writer.write(new AgentCommandDraft(
                     AgentCommandCanonicalCodec.SCHEMA_VERSION,
                     AgentCommandCanonicalCodec.taskInviteCommandId(
-                            task.getTenantId(), task.getClientId(), task.getId(), targetAgentId),
+                            "0", task.getClientId(), ownerJiacn, task.getId(), targetAgentId),
                     task.getId(), taskAssignedEventId,
-                    task.getTenantId(), task.getClientId(), task.getId(), null,
+                    "0", task.getClientId(), ownerJiacn, task.getId(), null,
                     targetAgentId, AgentProtocolConstants.COMMAND_TASK_INVITE,
                     occurredAt, expiresAt, payload));
         }
-        return gate.allowsDispatch(task.getTenantId(), task.getClientId());
+        return gate.allowsDispatch("0", task.getClientId());
     }
 
     private static int compareUtf8Unsigned(String left, String right) {

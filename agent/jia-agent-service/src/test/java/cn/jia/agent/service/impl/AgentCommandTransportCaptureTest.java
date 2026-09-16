@@ -30,7 +30,7 @@ class AgentCommandTransportCaptureTest {
         AgentCommandTransportCapture capture = new AgentCommandTransportCapture(
                 gate(AgentRabbitActivationState.OFF), provider);
 
-        assertFalse(capture.captureTaskInvites(null, null, null, 0));
+        assertFalse(capture.captureTaskInvites(null, null, null, null, 0));
 
         verify(provider, never()).getIfAvailable();
     }
@@ -44,7 +44,7 @@ class AgentCommandTransportCaptureTest {
                 gate(AgentRabbitActivationState.DB_SHADOW), provider);
 
         assertThrows(IllegalStateException.class,
-                () -> capture.captureTaskInvites(null, null, null, 0));
+                () -> capture.captureTaskInvites(null, null, null, null, 0));
     }
 
     @Test
@@ -58,11 +58,11 @@ class AgentCommandTransportCaptureTest {
 
         AgentCommandTransportCapture shadow = new AgentCommandTransportCapture(
                 gate(AgentRabbitActivationState.DB_SHADOW), provider);
-        assertFalse(shadow.captureTaskInvites(task, agents, "evt-assigned", 1_000L));
+        assertFalse(shadow.captureTaskInvites("owner-a", task, agents, "evt-assigned", 1_000L));
 
         AgentCommandTransportCapture canary = new AgentCommandTransportCapture(
                 gate(AgentRabbitActivationState.DISPATCH_CANARY), provider);
-        assertTrue(canary.captureTaskInvites(task, agents, "evt-assigned", 1_000L));
+        assertTrue(canary.captureTaskInvites("owner-a", task, agents, "evt-assigned", 1_000L));
 
         ArgumentCaptor<AgentCommandDraft> drafts = ArgumentCaptor.forClass(AgentCommandDraft.class);
         verify(writer, org.mockito.Mockito.times(4)).write(drafts.capture());
@@ -73,7 +73,7 @@ class AgentCommandTransportCaptureTest {
     private AgentTaskDTO task() {
         AgentTaskDTO task = new AgentTaskDTO();
         task.setId("task-1");
-        task.setTenantId("tenant-a");
+        task.setTenantId("0");
         task.setClientId("client-a");
         task.setTitle("Task One");
         task.setRequiredAbilities(List.of("analysis"));
@@ -104,7 +104,7 @@ class AgentCommandTransportCaptureTest {
         AgentRabbitDispatchScopeProperties scopes = dispatch
                 ? new AgentRabbitDispatchScopeProperties(List.of(
                         new AgentRabbitDispatchScopeProperties.AllowedScope(
-                                "tenant-a", "client-a")))
+                                "0", "client-a")))
                 : null;
         return new AgentRabbitSafetyGate(properties, scopes);
     }
