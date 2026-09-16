@@ -124,6 +124,57 @@ class AgentTaskFormalDeliveryServiceImplTest {
     }
 
     @Test
+    void changesRequestedDeliveryCreatesTheNextImmutableRevision() {
+        AgentTaskFormalDeliveryEntity previous = delivery();
+        previous.setState("changes_requested");
+        previous.setVersion(1L);
+        previous.setReviewedByJiacn(TENANT);
+        previous.setReviewReason("needs revision");
+        previous.setReviewedAt(900L);
+        AgentTaskFormalDeliverySubmitDTO rework = command();
+        rework.setDeliveryId("delivery-b");
+        rework.setRunId("run-b");
+        rework.setExpectedTaskVersion(5L);
+        rework.setExpectedWorkItemVersion(9L);
+        when(transaction.executeWithLockedTaskRoot(eq(TENANT), eq(CLIENT), eq(TASK), any()))
+                .thenAnswer(invocation -> {
+                    AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(3);
+                    AgentTaskMetaEntity root = root();
+                    root.setTaskVersion(5L);
+                    return mutation.apply(root);
+                });
+        AgentTaskWorkItemEntity reworkItem = workItem();
+        reworkItem.setVersion(9L);
+        when(deliveryDao.findForUpdate(TENANT, CLIENT, "delivery-b")).thenReturn(null);
+        when(deliveryDao.findLatestTaskForUpdate(TENANT, CLIENT, TASK)).thenReturn(previous);
+        when(workItemDao.listByTaskForUpdate(TENANT, CLIENT, TASK, 2)).thenReturn(List.of(reworkItem));
+        AgentWorkItemLeaseDTO reworkLease = lease();
+        reworkLease.setVersion(9L);
+        when(leaseService.validateLeaseForResult(eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), any()))
+                .thenReturn(reworkLease);
+        when(artifactDao.findVersion(TENANT, CLIENT, TASK, ARTIFACT, 1)).thenReturn(artifact());
+        when(deliveryDao.insert(eq(TENANT), eq(CLIENT), any())).thenReturn(1);
+        when(deliveryDao.insertItem(eq(TENANT), eq(CLIENT), any())).thenReturn(1);
+        when(workItemDao.updateActiveLeaseByVersion(eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK),
+                eq(AGENT), eq(TOKEN), eq("running"), eq(2_000L), eq(9L), anyLong(), any()))
+                .thenReturn(1);
+        when(taskMetaDao.updateStatusByVersion(TENANT, CLIENT, TASK, 5L, "reviewing",
+                100L, null, null)).thenReturn(1);
+        AgentTaskFormalDeliveryItemEntity item = persistedItem();
+        item.setDeliveryId("delivery-b");
+        when(deliveryDao.listItems(TENANT, CLIENT, "delivery-b")).thenReturn(List.of(item));
+
+        var result = service.submit(TENANT, CLIENT, TASK, AGENT, rework);
+
+        assertEquals(2L, result.getRevision());
+        ArgumentCaptor<AgentTaskFormalDeliveryEntity> inserted =
+                ArgumentCaptor.forClass(AgentTaskFormalDeliveryEntity.class);
+        verify(deliveryDao).insert(eq(TENANT), eq(CLIENT), inserted.capture());
+        assertEquals(2L, inserted.getValue().getRevision());
+        assertEquals(DELIVERY, inserted.getValue().getSupersedesDeliveryId());
+    }
+
+    @Test
     void successfulReplayIsReturnedBeforeLeaseValidation() {
         AgentTaskFormalDeliveryEntity existing = delivery();
         when(deliveryDao.findForUpdate(TENANT, CLIENT, DELIVERY)).thenReturn(existing);

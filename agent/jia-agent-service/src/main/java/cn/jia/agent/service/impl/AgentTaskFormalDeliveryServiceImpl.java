@@ -129,16 +129,15 @@ public class AgentTaskFormalDeliveryServiceImpl implements AgentTaskFormalDelive
                 tenantId, clientId, taskId, actorAgentId, command);
         AgentTaskFormalDeliveryEntity latest = deliveryDao.findLatestTaskForUpdate(
                 tenantId, clientId, taskId);
-        if (latest != null) {
-            throw transition("A formal delivery revision already exists for this task");
-        }
+        Revision revision = nextRevision(latest, tenantId, clientId, taskId);
 
         long submittedAt = now();
         AgentTaskFormalDeliveryEntity delivery = new AgentTaskFormalDeliveryEntity()
                 .setTaskId(taskId)
                 .setWorkItemId(command.workItemId())
                 .setDeliveryId(command.deliveryId())
-                .setRevision(1L)
+                .setRevision(revision.number())
+                .setSupersedesDeliveryId(revision.supersedesDeliveryId())
                 .setProducerAgentId(actorAgentId)
                 .setRunId(command.runId())
                 .setSummary(command.summary())
@@ -329,6 +328,27 @@ public class AgentTaskFormalDeliveryServiceImpl implements AgentTaskFormalDelive
             throw invalid("Formal delivery manifest must be a pinned summary artifact");
         }
         return List.copyOf(pins);
+    }
+
+    private Revision nextRevision(AgentTaskFormalDeliveryEntity latest, String tenantId,
+            String clientId, String taskId) {
+        if (latest == null) return new Revision(1L, null);
+        if (!tenantId.equals(latest.getTenantId()) || !clientId.equals(latest.getClientId())
+                || !taskId.equals(latest.getTaskId()) || latest.getRevision() == null
+                || latest.getRevision() < 1 || latest.getRevision() == Long.MAX_VALUE
+                || latest.getDeliveryId() == null || latest.getDeliveryId().isBlank()) {
+            throw invalidPersisted("Latest formal delivery revision is invalid");
+        }
+        AgentTaskFormalDeliveryState state;
+        try {
+            state = AgentTaskFormalDeliveryState.fromPersistedValue(latest.getState());
+        } catch (IllegalArgumentException invalid) {
+            throw invalidPersisted("Latest formal delivery state is invalid");
+        }
+        if (state != AgentTaskFormalDeliveryState.CHANGES_REQUESTED) {
+            throw transition("A formal delivery revision already exists for this task");
+        }
+        return new Revision(latest.getRevision() + 1, latest.getDeliveryId());
     }
 
     private void requireNewDeliveryRoot(
@@ -568,6 +588,7 @@ public class AgentTaskFormalDeliveryServiceImpl implements AgentTaskFormalDelive
     private record ArtifactKey(String artifactId, int artifactVersion) { }
     private record RequiredItem(String artifactId, int artifactVersion, String contentHash, String purpose) { }
     private record PinnedArtifact(String artifactId, int artifactVersion, String contentHash, String purpose) { }
+    private record Revision(long number, String supersedesDeliveryId) { }
     private record RequiredCommand(String deliveryId, String runId, String workItemId, String leaseToken,
             long expectedTaskVersion, long expectedWorkItemVersion, String summary,
             String manifestArtifactId, int manifestArtifactVersion, List<RequiredItem> items,
