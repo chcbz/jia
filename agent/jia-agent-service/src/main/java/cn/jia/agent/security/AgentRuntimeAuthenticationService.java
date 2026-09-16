@@ -23,6 +23,7 @@ import java.util.function.BooleanSupplier;
  */
 @Service
 public final class AgentRuntimeAuthenticationService {
+    private static final String SINGLE_TENANT_ID = "0";
     // Wire syntax is bounded only; persisted direct-canonical authority is mandatory below.
     private static final Pattern AGENT_REFERENCE =
             Pattern.compile("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}");
@@ -40,22 +41,24 @@ public final class AgentRuntimeAuthenticationService {
     }
 
     /** Called ONLY after authenticated WebSocket registration with server session attributes. */
-    public Receipt bind(String sessionId, String tenant, String client, String agent, String runtime,
+    public Receipt bind(String sessionId, String client, String ownerJiacn, String agent, String runtime,
             String apiKeyId, String token, BooleanSupplier connected) {
-        if (!exact(sessionId, 128) || !exact(tenant, 50) || !exact(client, 50)
+        if (!exact(sessionId, 128) || !exact(client, 50) || "0".equals(client)
+                || !exact(ownerJiacn, 50) || "0".equals(ownerJiacn)
                 || !validAgentReference(agent)
                 || !exact(runtime, 100) || runtime.equals(agent) || !exact(apiKeyId, 128)
                 || connected == null || !validToken(token)) throw denied();
-        var scope = new AgentRuntimeAuthentication.Scope(tenant, client, agent, runtime);
-        var account = account(tenant);
+        var scope = new AgentRuntimeAuthentication.Scope(
+                SINGLE_TENANT_ID, client, ownerJiacn, agent, runtime);
+        var account = account(ownerJiacn);
         var key = keys.get(apiKeyId);
         if (key == null || key.getApiKey() == null || key.getApiKey().isBlank()) throw denied();
         Binding binding = new Binding(sessionId, scope, apiKeyId, digest(key.getApiKey()),
                 digest(token), account.userId(), account.authEpoch(), connected);
         validate(binding, token);
         bindings.put(agent, binding); // exact canonical identity: newer registration supersedes older
-        return new Receipt("native-runtime-v1", tenant, client, agent, runtime,
-                gate.allows(tenant, client));
+        return new Receipt("native-runtime-v1", SINGLE_TENANT_ID, client, ownerJiacn, agent, runtime,
+                gate.allows(SINGLE_TENANT_ID, client));
     }
 
     public void disconnect(String sessionId) {
@@ -74,30 +77,35 @@ public final class AgentRuntimeAuthenticationService {
     private void validate(Binding binding, String token) {
         var scope = binding.scope;
         if (!binding.connected.getAsBoolean()
-                || !account(scope.tenantId()).matches(binding.userId, scope.tenantId(), binding.authEpoch)
+                || !SINGLE_TENANT_ID.equals(scope.tenantId())
+                || !account(scope.ownerJiacn()).matches(
+                        binding.userId, scope.ownerJiacn(), binding.authEpoch)
                 || !MessageDigest.isEqual(binding.tokenDigest, digest(token))) throw denied();
         var key = keys.get(binding.apiKeyId);
         if (key == null || !binding.apiKeyId.equals(key.getId()) || !Integer.valueOf(1).equals(key.getStatus())
-                || !scope.tenantId().equals(key.getJiacn())
+                || !scope.tenantId().equals(key.getTenantId())
+                || !scope.ownerJiacn().equals(key.getJiacn())
                 || !scope.clientId().equals(key.getClientId()) || key.getApiKey() == null
                 || !MessageDigest.isEqual(binding.keyDigest, digest(key.getApiKey()))
                 || key.getExpireTime() != null && key.getExpireTime() <= System.currentTimeMillis()) throw denied();
         var row = runtimes.findByAgentId(scope.agentId());
         if (row == null || !scope.agentId().equals(row.getAgentId())
-                || !scope.tenantId().equals(row.getTenantId()) || !scope.tenantId().equals(row.getOwnerJiacn())
+                || !scope.tenantId().equals(row.getTenantId())
+                || !scope.ownerJiacn().equals(row.getOwnerJiacn())
                 || !scope.clientId().equals(row.getClientId()) || row.getBindingId() == null
                 || !Set.of("online", "busy").contains(row.getStatus()) || !validToken(row.getTokenHash())
                 || !MessageDigest.isEqual(row.getTokenHash().getBytes(StandardCharsets.UTF_8),
                         token.getBytes(StandardCharsets.UTF_8))) throw denied();
         var identity = identities.requireActiveIdentityForBinding(scope.tenantId(), scope.clientId(),
-                scope.tenantId(), row.getBindingId(), scope.agentId());
+                scope.ownerJiacn(), row.getBindingId(), scope.agentId());
         if (identity == null || !scope.agentId().equals(identity.getCanonicalAgentId())) throw denied();
         if (identities.requireActiveBinding(identity, null) == null) throw denied();
     }
 
-    private AccountSecuritySnapshot account(String tenant) {
-        var account = accounts.findUniqueByExactJiacn(tenant).orElseThrow(AgentRuntimeAuthenticationService::denied);
-        if (!tenant.equals(account.jiacn()) || !account.isAuthenticatable()) throw denied();
+    private AccountSecuritySnapshot account(String ownerJiacn) {
+        var account = accounts.findUniqueByExactJiacn(ownerJiacn)
+                .orElseThrow(AgentRuntimeAuthenticationService::denied);
+        if (!ownerJiacn.equals(account.jiacn()) || !account.isAuthenticatable()) throw denied();
         return account;
     }
     private static byte[] digest(String value) {
@@ -115,6 +123,6 @@ public final class AgentRuntimeAuthenticationService {
     static IllegalArgumentException denied() { return new IllegalArgumentException("AGENT_RUNTIME_UNAUTHENTICATED"); }
     private record Binding(String sessionId, AgentRuntimeAuthentication.Scope scope, String apiKeyId,
                            byte[] keyDigest, byte[] tokenDigest, long userId, long authEpoch, BooleanSupplier connected) { }
-    public record Receipt(String scheme, String tenantId, String clientId, String agentId,
+    public record Receipt(String scheme, String tenantId, String clientId, String ownerJiacn, String agentId,
                           String runtimeInstanceId, boolean contextPackEnabled) { }
 }

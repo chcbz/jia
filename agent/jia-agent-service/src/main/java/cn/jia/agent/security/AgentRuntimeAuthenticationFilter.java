@@ -55,7 +55,7 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
         SecurityContextHolder.setContext(context);
         var previousScope = EsContextHolder.getContext();
         var trustedScope = new EsContext();
-        trustedScope.setJiacn(authentication.getPrincipal().tenantId());
+        trustedScope.setJiacn(authentication.getPrincipal().ownerJiacn());
         trustedScope.setClientId(authentication.getPrincipal().clientId());
         EsContextHolder.setContext(trustedScope); // never inherit client cookies as domain scope
         try { chain.doFilter(request, response); } finally {

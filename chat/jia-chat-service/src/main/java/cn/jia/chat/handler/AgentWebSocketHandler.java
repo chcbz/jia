@@ -482,8 +482,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             // Scope comes only from the authenticated session and is rechecked against persisted
             // identity/current registration token. This receipt is sent only on this native socket.
             if (runtimeAuthentication != null && sessionRuntimeInstanceId(session) != null) {
-                event.put("runtimeAuth", runtimeAuthentication.bind(session.getId(), sessionJiacn(session),
-                        sessionClientId(session), result.getAgentId(), sessionRuntimeInstanceId(session),
+                event.put("runtimeAuth", runtimeAuthentication.bind(session.getId(), sessionClientId(session),
+                        sessionJiacn(session), result.getAgentId(), sessionRuntimeInstanceId(session),
                         sessionAttribute(session, "managedApiKeyId"), result.getToken(), session::isOpen));
             }
             if (!sendEvent(session, "agent_registered", event)) {

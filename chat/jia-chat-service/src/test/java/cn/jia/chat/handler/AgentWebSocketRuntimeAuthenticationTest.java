@@ -19,24 +19,26 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class AgentWebSocketRuntimeAuthenticationTest {
+    static final String TENANT = "0", CLIENT = "client-a", OWNER = "owner-a";
     static final String AGENT = "agt_" + "a".repeat(32), TOKEN = "1".repeat(32);
 
     @Test void realRegistrationWireCarriesOnlyServerBoundScopeAndCloseRevokes() throws Exception {
         Fixture f = new Fixture(false);
-        when(f.auth.bind(eq("socket-a"), eq("tenant-a"), eq("client-a"), eq(AGENT), eq("runtime-a"),
+        when(f.auth.bind(eq("socket-a"), eq(CLIENT), eq(OWNER), eq(AGENT), eq("runtime-a"),
                 eq("key-a"), eq(TOKEN), any())).thenReturn(new AgentRuntimeAuthenticationService.Receipt(
-                "native-runtime-v1", "tenant-a", "client-a", AGENT, "runtime-a", true));
+                "native-runtime-v1", TENANT, CLIENT, OWNER, AGENT, "runtime-a", true));
         f.register();
         var receipt = f.frames.stream().map(text -> JsonUtil.getMapper().readTree(text))
                 .filter(node -> "agent_registered".equals(node.path("type").textValue())).findFirst().orElseThrow();
         assertEquals(TOKEN, receipt.path("token").textValue());
         assertEquals("reg-a", receipt.path("messageId").textValue());
         assertEquals("runtime-a", receipt.path("runtimeInstanceId").textValue());
-        assertEquals("tenant-a", receipt.path("runtimeAuth").path("tenantId").textValue());
-        assertEquals("client-a", receipt.path("runtimeAuth").path("clientId").textValue());
+        assertEquals(TENANT, receipt.path("runtimeAuth").path("tenantId").textValue());
+        assertEquals(CLIENT, receipt.path("runtimeAuth").path("clientId").textValue());
+        assertEquals(OWNER, receipt.path("runtimeAuth").path("ownerJiacn").textValue());
         assertEquals(AGENT, receipt.path("runtimeAuth").path("agentId").textValue());
         assertFalse(receipt.toString().contains("key-a"));
-        verify(f.auth).bind(eq("socket-a"), eq("tenant-a"), eq("client-a"), eq(AGENT), eq("runtime-a"),
+        verify(f.auth).bind(eq("socket-a"), eq(CLIENT), eq(OWNER), eq(AGENT), eq("runtime-a"),
                 eq("key-a"), eq(TOKEN), any());
         f.handler.afterConnectionClosed(f.session, CloseStatus.NORMAL);
         verify(f.auth, atLeastOnce()).disconnect("socket-a");
@@ -58,7 +60,7 @@ class AgentWebSocketRuntimeAuthenticationTest {
         Fixture f = new Fixture(false);
         when(f.auth.bind(anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),any()))
                 .thenReturn(new AgentRuntimeAuthenticationService.Receipt(
-                        "native-runtime-v1", "tenant-a", "client-a", AGENT, "runtime-a", true));
+                        "native-runtime-v1", TENANT, CLIENT, OWNER, AGENT, "runtime-a", true));
         doThrow(new java.io.IOException("untrusted transport detail")).when(f.session).sendMessage(any());
         f.register();
         verify(f.auth, times(2)).disconnect("socket-a"); // prior-generation invalidation and failed delivery
@@ -103,7 +105,7 @@ class AgentWebSocketRuntimeAuthenticationTest {
             when(provider.getIfAvailable()).thenReturn(service);
             when(service.register(any(AgentRegisterDTO.class))).thenReturn(new AgentRegisterResultDTO(AGENT,TOKEN,AgentConstants.STATUS_ONLINE));
             var attributes = new HashMap<String,Object>(); attributes.put("agentId",AGENT);
-            attributes.put("jiacn","tenant-a"); attributes.put("clientId","client-a");
+            attributes.put("jiacn",OWNER); attributes.put("clientId",CLIENT);
             attributes.put("runtimeInstanceId","runtime-a"); attributes.put("managedApiKeyId","key-a");
             when(session.getAttributes()).thenReturn(attributes); when(session.getId()).thenReturn("socket-a");
             when(session.isOpen()).thenReturn(true);
