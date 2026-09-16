@@ -274,11 +274,16 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
               ON task.task_id REGEXP '^[0-9]+$'
              AND plan.id = CAST(task.task_id AS UNSIGNED)
              AND plan.jiacn = #{tenantId}
-             AND plan.client_id = #{clientId}
              AND CAST(plan.jiacn AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
              AND OCTET_LENGTH(plan.jiacn) = OCTET_LENGTH(#{tenantId})
-             AND CAST(plan.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
-             AND OCTET_LENGTH(plan.client_id) = OCTET_LENGTH(#{clientId})
+             AND (
+                   plan.client_id IS NULL
+                OR (
+                       plan.client_id = #{clientId}
+                   AND CAST(plan.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+                   AND OCTET_LENGTH(plan.client_id) = OCTET_LENGTH(#{clientId})
+                )
+             )
             WHERE task.tenant_id = #{tenantId}
               AND task.client_id = #{clientId}
               AND CAST(task.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
@@ -368,11 +373,16 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
               ON task.task_id REGEXP '^[0-9]+$'
              AND plan.id = CAST(task.task_id AS UNSIGNED)
              AND plan.jiacn = #{tenantId}
-             AND plan.client_id = #{clientId}
              AND CAST(plan.jiacn AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
              AND OCTET_LENGTH(plan.jiacn) = OCTET_LENGTH(#{tenantId})
-             AND CAST(plan.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
-             AND OCTET_LENGTH(plan.client_id) = OCTET_LENGTH(#{clientId})
+             AND (
+                   plan.client_id IS NULL
+                OR (
+                       plan.client_id = #{clientId}
+                   AND CAST(plan.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+                   AND OCTET_LENGTH(plan.client_id) = OCTET_LENGTH(#{clientId})
+                )
+             )
             WHERE task.tenant_id = #{tenantId}
               AND task.client_id = #{clientId}
               AND CAST(task.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
@@ -478,11 +488,16 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
               ON task.task_id REGEXP '^[0-9]+$'
              AND plan.id = CAST(task.task_id AS UNSIGNED)
              AND plan.jiacn = #{tenantId}
-             AND plan.client_id = #{clientId}
              AND CAST(plan.jiacn AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
              AND OCTET_LENGTH(plan.jiacn) = OCTET_LENGTH(#{tenantId})
-             AND CAST(plan.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
-             AND OCTET_LENGTH(plan.client_id) = OCTET_LENGTH(#{clientId})
+             AND (
+                   plan.client_id IS NULL
+                OR (
+                       plan.client_id = #{clientId}
+                   AND CAST(plan.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+                   AND OCTET_LENGTH(plan.client_id) = OCTET_LENGTH(#{clientId})
+                )
+             )
             LEFT JOIN agent_task_funding funding
               ON funding.tenant_id = #{tenantId}
              AND funding.client_id = #{clientId}

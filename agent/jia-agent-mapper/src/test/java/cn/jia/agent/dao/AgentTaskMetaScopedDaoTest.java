@@ -172,6 +172,12 @@ class AgentTaskMetaScopedDaoTest {
             assertTrue(sql.contains("lower(task.task_id) like"), sql);
             assertTrue(sql.contains("lower(coalesce(plan.name, '')) like"), sql);
             assertTrue(sql.contains("lower(coalesce(plan.description, '')) like"), sql);
+            assertTrue(sql.contains("plan.client_id is null"), sql);
+            assertTrue(sql.contains("plan.client_id = #{clientid}"), sql);
+            assertTrue(sql.contains("cast(plan.client_id as binary(200)) "
+                    + "= cast(#{clientid} as binary(200))"), sql);
+            assertTrue(sql.contains("octet_length(plan.client_id) "
+                    + "= octet_length(#{clientid})"), sql);
             assertTrue(sql.contains("from agent_runtime runtime"), sql);
             assertFalse(sql.contains("tenant_id = '0'"), sql);
             assertFalse(sql.contains("tenant_id is null"), sql);
@@ -180,7 +186,14 @@ class AgentTaskMetaScopedDaoTest {
                 "order by task.update_time desc, task.task_id asc, task.id asc"), pageSql);
         assertTrue(pageSql.contains("limit #{limit} offset #{offset}"), pageSql);
         assertTrue(pageSql.contains("plan.jiacn = #{tenantid}"), pageSql);
+        assertTrue(pageSql.contains("plan.client_id is null"), pageSql);
         assertTrue(pageSql.contains("plan.client_id = #{clientid}"), pageSql);
+        assertTrue(pageSql.contains("cast(plan.client_id as binary(200)) "
+                + "= cast(#{clientid} as binary(200))"), pageSql);
+        assertTrue(pageSql.contains("octet_length(plan.client_id) "
+                + "= octet_length(#{clientid})"), pageSql);
+        // Historical plans without client scope can recover their title only through the
+        // already exact-scoped task root; non-null mismatched client ids remain excluded.
         // Standard Juyi Hall task search is independent of the unpublished funding schema.
         assertTrue(pageSql.contains("0 as fundingpresent"), pageSql);
         assertFalse(pageSql.contains("agent_task_funding"), pageSql);
@@ -194,6 +207,12 @@ class AgentTaskMetaScopedDaoTest {
                 String.class, String.class, String.class, long.class, int.class);
         String fundedSql = normalize(String.join(" ", fundedPage.getAnnotation(Select.class).value()));
         assertTrue(fundedSql.contains("left join agent_task_funding funding"), fundedSql);
+        assertTrue(fundedSql.contains("plan.client_id is null"), fundedSql);
+        assertTrue(fundedSql.contains("plan.client_id = #{clientid}"), fundedSql);
+        assertTrue(fundedSql.contains("cast(plan.client_id as binary(200)) "
+                + "= cast(#{clientid} as binary(200))"), fundedSql);
+        assertTrue(fundedSql.contains("octet_length(plan.client_id) "
+                + "= octet_length(#{clientid})"), fundedSql);
         assertTrue(fundedSql.contains("funding.tenant_id = #{tenantid}"), fundedSql);
         assertTrue(fundedSql.contains("funding.client_id = #{clientid}"), fundedSql);
         assertTrue(fundedSql.contains("cast(funding.task_id as binary(400)) "
