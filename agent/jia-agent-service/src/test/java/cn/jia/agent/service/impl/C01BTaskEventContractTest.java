@@ -36,6 +36,7 @@ class C01BTaskEventContractTest {
             "REQUEST_RESOLVED", "REQUEST_REJECTED", "REQUEST_CANCELLED",
             "THREAD_CREATED", "MESSAGE_POSTED", "ARTIFACT_PUBLISHED",
             "ARTIFACT_ACCEPTED", "ARTIFACT_SUPERSEDED", "FORMAL_DELIVERY_SUBMITTED",
+            "FORMAL_DELIVERY_ACCEPTED", "FORMAL_DELIVERY_CHANGES_REQUESTED",
             "COMMAND_DELIVERY_FAILED", "HISTORICAL_BASELINE_IMPORTED");
 
     private static final Set<String> AGGREGATES = Set.of(
@@ -65,6 +66,7 @@ class C01BTaskEventContractTest {
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskArtifactOutcomeServiceImpl.java", 1,
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentWorkItemResultCommitServiceImpl.java", 1,
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskFormalDeliveryServiceImpl.java", 3,
+            "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskFormalDeliveryDecisionServiceImpl.java", 3,
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentLegacyTaskCompatibilityService.java", 5,
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentServiceImpl.java", 3,
             "chat/jia-chat-service/src/main/java/cn/jia/chat/service/impl/AgentTaskThreadCreationTransaction.java", 2);
@@ -77,6 +79,7 @@ class C01BTaskEventContractTest {
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskArtifactOutcomeServiceImpl.java",
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentWorkItemResultCommitServiceImpl.java",
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskFormalDeliveryServiceImpl.java",
+            "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskFormalDeliveryDecisionServiceImpl.java",
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentLegacyTaskCompatibilityService.java",
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentServiceImpl.java",
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskEventWriterImpl.java",

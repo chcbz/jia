@@ -18,7 +18,8 @@ class TaskEventCatalogTest {
                 "WORK_ITEM_LEASE_RENEWED", "WORK_ITEM_LEASE_RELEASED",
                 "REQUEST_CREATED", "REQUEST_ACKNOWLEDGED", "REQUEST_RESOLVED",
                 "REQUEST_REJECTED", "REQUEST_CANCELLED",
-                "THREAD_CREATED", "MESSAGE_POSTED", "FORMAL_DELIVERY_SUBMITTED"
+                "THREAD_CREATED", "MESSAGE_POSTED", "FORMAL_DELIVERY_SUBMITTED",
+                "FORMAL_DELIVERY_ACCEPTED", "FORMAL_DELIVERY_CHANGES_REQUESTED"
         ).forEach(type -> assertEquals(type, TaskEventType.requireKnown(type)));
     }
 
