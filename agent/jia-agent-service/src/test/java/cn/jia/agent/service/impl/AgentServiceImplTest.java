@@ -728,6 +728,7 @@ class AgentServiceImplTest extends BaseMockTest {
         assertEquals("Inspect archive search with a ", planCaptor.getValue().getName());
         assertEquals("Verify library retrieval", planCaptor.getValue().getDescription());
         assertEquals("juyiting", planCaptor.getValue().getJiacn());
+        assertEquals("jia_client", planCaptor.getValue().getClientId());
 
         ArgumentCaptor<AgentTaskMetaEntity> metaCaptor = ArgumentCaptor.forClass(AgentTaskMetaEntity.class);
         verify(agentTaskMetaDao).insert(metaCaptor.capture());

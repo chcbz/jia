@@ -1057,6 +1057,7 @@ public class AgentServiceImpl implements AgentService {
         taskPlan.setName(limitLength(request.getTitle(), 30));
         taskPlan.setDescription(limitLength(request.getDescription(), 200));
         taskPlan.setJiacn(resolveCurrentJiacn());
+        taskPlan.setClientId(resolveCurrentClientId());
         taskPlan.setPeriod(TaskConstants.TASK_PERIOD_ALLTIME);
         taskPlan.setType(TaskConstants.TASK_TYPE_NOTIFY);
         taskPlan.setStatus(TaskConstants.TASK_STATUS_ENABLE);
