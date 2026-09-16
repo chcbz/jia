@@ -156,7 +156,7 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
             AgentRuntimeDTO runtime;
             try {
                 runtime = agentService.requireApiKeyOwnedAgentForUpdate(
-                        draft.clientId(), draft.tenantId(), agentId);
+                        draft.clientId(), draft.ownerJiacn(), agentId);
             } catch (AgentServiceImpl.AgentBizException denied) {
                 throw new IllegalArgumentException(
                         "Caller or target is not active in the trusted owner scope", denied);
@@ -173,7 +173,7 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
             AgentCommandDraft draft, byte[] commandBytes, byte[] commandHash) {
         Admission admission = admission(draft.tenantId(), draft.clientId());
         AgentCommandDeliveryEntity existing = dao.lockDelivery(
-                draft.tenantId(), draft.clientId(), draft.commandId());
+                draft.tenantId(), draft.clientId(), draft.ownerJiacn(), draft.commandId());
         if (existing != null) {
             return duplicateOrConflict(existing, draft, commandBytes, commandHash, admission);
         }
@@ -189,6 +189,7 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
 
         AgentCommandDeliveryEntity delivery = new AgentCommandDeliveryEntity()
                 .setCommandId(draft.commandId())
+                .setOwnerJiacn(draft.ownerJiacn())
                 .setTaskId(draft.taskId())
                 .setWorkItemId(draft.workItemId())
                 .setTargetAgentId(draft.targetAgentId())
@@ -210,7 +211,7 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
             requireOne(dao.insertDelivery(delivery), "delivery insert");
         } catch (DuplicateKeyException concurrent) {
             AgentCommandDeliveryEntity winner = dao.lockDelivery(
-                    draft.tenantId(), draft.clientId(), draft.commandId());
+                    draft.tenantId(), draft.clientId(), draft.ownerJiacn(), draft.commandId());
             if (winner == null) {
                 throw new IllegalStateException(
                         "Concurrent command identity conflict did not expose the winning row",
@@ -285,6 +286,7 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
                 existing, draft, commandBytes, commandHash);
         boolean identityMatches = Objects.equals(existing.getTenantId(), draft.tenantId())
                 && Objects.equals(existing.getClientId(), draft.clientId())
+                && Objects.equals(existing.getOwnerJiacn(), draft.ownerJiacn())
                 && Objects.equals(existing.getCommandId(), draft.commandId())
                 && Objects.equals(existing.getTaskId(), draft.taskId())
                 && Objects.equals(existing.getWorkItemId(), draft.workItemId())
@@ -336,7 +338,8 @@ public final class AgentCommandTransportWriterImpl implements AgentCommandTransp
         }
         AgentCommandDraft stableRetry = new AgentCommandDraft(
                 draft.schemaVersion(), draft.commandId(), draft.correlationId(), draft.causationId(),
-                draft.tenantId(), draft.clientId(), draft.taskId(), draft.workItemId(),
+                draft.tenantId(), draft.clientId(), draft.ownerJiacn(), draft.taskId(),
+                draft.workItemId(),
                 draft.targetAgentId(), draft.commandType(), stored.issuedAt(), stored.expiresAt(),
                 draft.intentId(), draft.payload());
         byte[] comparableBytes = AgentCommandCanonicalCodec.businessBytes(stableRetry);

@@ -63,30 +63,46 @@ public final class AgentCommandCanonicalCodec {
     }
 
     public static String taskInviteCommandId(
-            String tenantId, String clientId, String taskId, String targetAgentId) {
-        requireExact(tenantId, "tenantId", 50);
+            String tenantId, String clientId, String ownerJiacn, String taskId,
+            String targetAgentId) {
+        requireSingleTenant(tenantId);
         requireExact(clientId, "clientId", 50);
+        requireExact(ownerJiacn, "ownerJiacn", 50);
         requireExact(taskId, "taskId", 100);
         requireExact(targetAgentId, "targetAgentId", 100);
-        String seed = tenantId + '\0' + clientId + '\0' + taskId + '\0'
-                + targetAgentId + '\0' + AgentProtocolConstants.COMMAND_TASK_INVITE;
-        return TASK_INVITE_COMMAND_ID_PREFIX + hex(sha256(seed.getBytes(StandardCharsets.UTF_8)));
+        String seed = tenantId + '\0' + clientId + '\0' + ownerJiacn + '\0'
+                + taskId + '\0' + targetAgentId + '\0'
+                + AgentProtocolConstants.COMMAND_TASK_INVITE;
+        return TASK_INVITE_COMMAND_ID_PREFIX
+                + hex(sha256(seed.getBytes(StandardCharsets.UTF_8)));
     }
 
     public static String hallCommandId(
-            String tenantId, String clientId, String taskId, String targetAgentId,
-            String intentId, String commandType) {
-        requireExact(tenantId, "tenantId", 50);
+            String tenantId, String clientId, String ownerJiacn, String taskId,
+            String targetAgentId, String intentId, String commandType) {
+        requireSingleTenant(tenantId);
         requireExact(clientId, "clientId", 50);
+        requireExact(ownerJiacn, "ownerJiacn", 50);
         requireExact(taskId, "taskId", 100);
         requireExact(targetAgentId, "targetAgentId", 100);
         requireExact(intentId, "intentId", 100);
         if (!HALL_COMMAND_TYPES.contains(commandType)) {
             throw invalid("commandType is outside the Hall allowlist");
         }
-        String seed = tenantId + '\0' + clientId + '\0' + taskId + '\0'
-                + targetAgentId + '\0' + intentId + '\0' + commandType;
+        String seed = tenantId + '\0' + clientId + '\0' + ownerJiacn + '\0'
+                + taskId + '\0' + targetAgentId + '\0' + intentId + '\0' + commandType;
         return HALL_COMMAND_ID_PREFIX + hex(sha256(seed.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    public static String skillInstallCommandId(
+            String tenantId, String clientId, String ownerJiacn, String installationId) {
+        requireSingleTenant(tenantId);
+        requireExact(clientId, "clientId", 50);
+        requireExact(ownerJiacn, "ownerJiacn", 50);
+        requireExact(installationId, "installationId", 100);
+        String seed = tenantId + '\0' + clientId + '\0' + ownerJiacn + '\0'
+                + installationId + '\0' + "SKILL_INSTALL";
+        return "cmd_skill_" + hex(sha256(seed.getBytes(StandardCharsets.UTF_8)));
     }
 
     public static String hallCommandTypeForAction(String actionType) {
@@ -138,6 +154,7 @@ public final class AgentCommandCanonicalCodec {
         string(json, "causationId", draft.causationId());
         string(json, "tenantId", draft.tenantId());
         string(json, "clientId", draft.clientId());
+        string(json, "ownerJiacn", draft.ownerJiacn());
         string(json, "taskId", draft.taskId());
         nullableString(json, "workItemId", draft.workItemId());
         string(json, "targetAgentId", draft.targetAgentId());
@@ -168,6 +185,7 @@ public final class AgentCommandCanonicalCodec {
         string(json, "causationId", draft.causationId());
         string(json, "tenantId", draft.tenantId());
         string(json, "clientId", draft.clientId());
+        string(json, "ownerJiacn", draft.ownerJiacn());
         string(json, "taskId", draft.taskId());
         nullableString(json, "workItemId", draft.workItemId());
         string(json, "targetAgentId", draft.targetAgentId());
@@ -196,7 +214,9 @@ public final class AgentCommandCanonicalCodec {
             if (root == null || !root.isObject()) throw invalid("business JSON must be an object");
             String commandType = text(root, "commandType");
             boolean hall = root.has("intentId");
-            if (root.size() != (hall ? 14 : 13)) throw invalid("business envelope contains unknown fields");
+            if (root.size() != (hall ? 15 : 14)) {
+                throw invalid("business envelope contains unknown fields");
+            }
             AgentCommandPayload decodedPayload = "SKILL_INSTALL".equals(commandType) ? decodeSkill(root.get("payload")) : hall
                     ? decodeHallPayload(root.get("payload"))
                     : decodeTaskInvitePayload(root.get("payload"));
@@ -207,6 +227,7 @@ public final class AgentCommandCanonicalCodec {
                     text(root, "causationId"),
                     text(root, "tenantId"),
                     text(root, "clientId"),
+                    text(root, "ownerJiacn"),
                     text(root, "taskId"),
                     nullableText(root, "workItemId"),
                     text(root, "targetAgentId"),
@@ -270,8 +291,9 @@ public final class AgentCommandCanonicalCodec {
         requireExact(draft.commandId(), "commandId", 100);
         requireExact(draft.correlationId(), "correlationId", 100);
         requireExact(draft.causationId(), "causationId", 100);
-        requireExact(draft.tenantId(), "tenantId", 50);
+        requireSingleTenant(draft.tenantId());
         requireExact(draft.clientId(), "clientId", 50);
+        requireExact(draft.ownerJiacn(), "ownerJiacn", 50);
         requireExact(draft.taskId(), "taskId", 100);
         if (draft.workItemId() != null) requireExact(draft.workItemId(), "workItemId", 100);
         requireExact(draft.targetAgentId(), "targetAgentId", 100);
@@ -282,7 +304,9 @@ public final class AgentCommandCanonicalCodec {
         if ("SKILL_INSTALL".equals(draft.commandType())) {
             if (!(draft.payload() instanceof AgentSkillInstallPayload p) || draft.intentId()!=null
                     || !draft.taskId().equals(p.orderId()) || !draft.causationId().equals(p.installationId())
-                    || !draft.commandId().equals("cmd_skill_" + p.installationId()) || draft.workItemId()!=null)
+                    || !draft.commandId().equals(skillInstallCommandId(
+                            draft.tenantId(), draft.clientId(), draft.ownerJiacn(), p.installationId()))
+                    || draft.workItemId()!=null)
                 throw invalid("SKILL_INSTALL identity mismatch");
             requireExact(p.orderId(),"orderId",100); requireExact(p.installationId(),"installationId",100);
             requireExact(p.productVersionId(),"productVersionId",100);
@@ -299,7 +323,8 @@ public final class AgentCommandCanonicalCodec {
         if (AgentProtocolConstants.COMMAND_TASK_INVITE.equals(draft.commandType())
                 && draft.intentId() == null) {
             String expected = taskInviteCommandId(
-                    draft.tenantId(), draft.clientId(), draft.taskId(), draft.targetAgentId());
+                    draft.tenantId(), draft.clientId(), draft.ownerJiacn(),
+                    draft.taskId(), draft.targetAgentId());
             if (!expected.equals(draft.commandId())) throw invalid("commandId does not match frozen identity");
             requireFixedExpiry(draft, TASK_INVITE_TTL_MILLIS, "TASK_INVITE");
             if (!(draft.payload() instanceof AgentTaskInvitePayload invite)) {
@@ -312,7 +337,8 @@ public final class AgentCommandCanonicalCodec {
             throw invalid("commandType is outside the frozen allowlist");
         }
         requireExact(draft.intentId(), "intentId", 100);
-        String expected = hallCommandId(draft.tenantId(), draft.clientId(), draft.taskId(),
+        String expected = hallCommandId(
+                draft.tenantId(), draft.clientId(), draft.ownerJiacn(), draft.taskId(),
                 draft.targetAgentId(), draft.intentId(), draft.commandType());
         if (!expected.equals(draft.commandId())) throw invalid("Hall commandId does not match frozen identity");
         requireFixedExpiry(draft, HALL_COMMAND_TTL_MILLIS, "Hall command");
@@ -663,6 +689,13 @@ public final class AgentCommandCanonicalCodec {
                 || lower.contains("-----begin private key")
                 || lower.contains("-----begin rsa private key")) {
             throw invalid(field + " contains forbidden credential-like content");
+        }
+    }
+
+    private static void requireSingleTenant(String tenantId) {
+        requireExact(tenantId, "tenantId", 1);
+        if (!"0".equals(tenantId)) {
+            throw invalid("tenantId must equal 0");
         }
     }
 

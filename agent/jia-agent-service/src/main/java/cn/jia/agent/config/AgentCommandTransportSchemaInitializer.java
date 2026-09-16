@@ -596,6 +596,7 @@ public final class AgentCommandTransportSchemaInitializer implements Initializin
                 "agent_command_delivery",
                 List.of(
                         id(), varchar("command_id", 100, false, null),
+                        varchar("owner_jiacn", 50, false, null),
                         varchar("task_id", 100, false, null),
                         varchar("work_item_id", 100, true, null),
                         varchar("target_agent_id", 100, false, null),
@@ -614,13 +615,14 @@ public final class AgentCommandTransportSchemaInitializer implements Initializin
                         bigint("create_time", true, null), bigint("update_time", true, null)),
                 indexes(
                         index("PRIMARY", true, "id"),
-                        index("uk_delivery_command", true, "tenant_id", "client_id", "command_id"),
+                        index("uk_delivery_command", true, "tenant_id", "client_id",
+                                "owner_jiacn", "command_id"),
                         index("idx_delivery_retry", false, "status", "next_retry_at", "expires_at", "id"),
                         index("idx_delivery_lease", false, "status", "lease_until", "id"),
-                        index("idx_delivery_agent", false, "tenant_id", "client_id", "target_agent_id",
-                                "status", "next_retry_at", "id"),
+                        index("idx_delivery_agent", false, "tenant_id", "client_id", "owner_jiacn",
+                                "target_agent_id", "status", "next_retry_at", "id"),
                         index("idx_delivery_active_message", false, "tenant_id", "client_id",
-                                "active_message_id", "active_attempt"))));
+                                "owner_jiacn", "active_message_id", "active_attempt"))));
         tables.put("agent_outbox_event", new TableExpectation(
                 "agent_outbox_event",
                 List.of(

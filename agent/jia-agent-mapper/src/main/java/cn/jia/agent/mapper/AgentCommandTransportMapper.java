@@ -12,18 +12,21 @@ import java.util.List;
 
 public interface AgentCommandTransportMapper {
     @Select("""
-            SELECT id, command_id, task_id, work_item_id, target_agent_id, command_type,
+            SELECT id, command_id, owner_jiacn, task_id, work_item_id, target_agent_id, command_type,
                    command_payload, command_payload_hash, status, attempt_count,
                    next_retry_at, lease_owner, lease_until, active_message_id, active_attempt,
                    expires_at, last_error, version, replay_parent_message_id,
                    replay_requester_id, replay_approver_id, replay_reason,
                    tenant_id, client_id, create_time, update_time
             FROM agent_command_delivery
-            WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND command_id=#{commandId}
+            WHERE tenant_id='0' AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
+              AND command_id=#{commandId}
               AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
               AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
+              AND CAST(owner_jiacn AS BINARY)=CAST(#{ownerJiacn} AS BINARY)
+              AND OCTET_LENGTH(owner_jiacn)=OCTET_LENGTH(#{ownerJiacn})
               AND CAST(command_id AS BINARY)=CAST(#{commandId} AS BINARY)
               AND OCTET_LENGTH(command_id)=OCTET_LENGTH(#{commandId})
             LIMIT 1 FOR UPDATE
@@ -31,6 +34,7 @@ public interface AgentCommandTransportMapper {
     AgentCommandDeliveryEntity selectDeliveryForUpdate(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("commandId") String commandId);
 
     @Select("""
@@ -62,8 +66,9 @@ public interface AgentCommandTransportMapper {
     @Update("""
             UPDATE agent_command_delivery
             SET status='PENDING', last_error=#{marker}, version=version+1, update_time=#{now}
-            WHERE id=#{delivery.id} AND tenant_id=#{delivery.tenantId}
-              AND client_id=#{delivery.clientId} AND command_id=#{delivery.commandId}
+            WHERE id=#{delivery.id} AND tenant_id='0'
+              AND client_id=#{delivery.clientId} AND owner_jiacn=#{delivery.ownerJiacn}
+              AND command_id=#{delivery.commandId}
               AND active_message_id=#{delivery.activeMessageId}
               AND status='DEAD' AND last_error=#{delivery.lastError}
               AND active_attempt=#{delivery.activeAttempt} AND attempt_count=#{delivery.attemptCount}
@@ -72,6 +77,8 @@ public interface AgentCommandTransportMapper {
               AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{delivery.tenantId})
               AND CAST(client_id AS BINARY)=CAST(#{delivery.clientId} AS BINARY)
               AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{delivery.clientId})
+              AND CAST(owner_jiacn AS BINARY)=CAST(#{delivery.ownerJiacn} AS BINARY)
+              AND OCTET_LENGTH(owner_jiacn)=OCTET_LENGTH(#{delivery.ownerJiacn})
               AND CAST(command_id AS BINARY)=CAST(#{delivery.commandId} AS BINARY)
               AND OCTET_LENGTH(command_id)=OCTET_LENGTH(#{delivery.commandId})
               AND CAST(active_message_id AS BINARY)=CAST(#{delivery.activeMessageId} AS BINARY)
@@ -114,12 +121,12 @@ public interface AgentCommandTransportMapper {
 
     @Insert("""
             INSERT INTO agent_command_delivery
-              (command_id,task_id,work_item_id,target_agent_id,command_type,
+              (command_id,owner_jiacn,task_id,work_item_id,target_agent_id,command_type,
                command_payload,command_payload_hash,status,attempt_count,next_retry_at,
                lease_owner,lease_until,active_message_id,active_attempt,expires_at,last_error,
                version,tenant_id,client_id,create_time,update_time)
             VALUES
-              (#{commandId},#{taskId},#{workItemId},#{targetAgentId},#{commandType},
+              (#{commandId},#{ownerJiacn},#{taskId},#{workItemId},#{targetAgentId},#{commandType},
                #{commandPayload},#{commandPayloadHash},#{status},#{attemptCount},#{nextRetryAt},
                #{leaseOwner},#{leaseUntil},#{activeMessageId},#{activeAttempt},#{expiresAt},#{lastError},
                #{version},#{tenantId},#{clientId},#{createTime},#{updateTime})

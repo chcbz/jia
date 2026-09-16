@@ -16,8 +16,8 @@ public class AgentCommandTransportDaoImpl implements AgentHallCommandTransportDa
 
     @Override
     public AgentCommandDeliveryEntity lockDelivery(
-            String tenantId, String clientId, String commandId) {
-        return mapper.selectDeliveryForUpdate(tenantId, clientId, commandId);
+            String tenantId, String clientId, String ownerJiacn, String commandId) {
+        return mapper.selectDeliveryForUpdate(tenantId, clientId, ownerJiacn, commandId);
     }
 
     @Override

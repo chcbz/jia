@@ -19,6 +19,7 @@ public class AgentCommandDeliveryEntity extends BaseEntity {
     @TableId(value = "id", type = IdType.AUTO)
     private Long id;
     private String commandId;
+    private String ownerJiacn;
     private String taskId;
     private String workItemId;
     private String targetAgentId;

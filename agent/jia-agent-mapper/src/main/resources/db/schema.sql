@@ -639,6 +639,7 @@ CREATE TABLE IF NOT EXISTS agent_task_event (
 CREATE TABLE IF NOT EXISTS agent_command_delivery (
     id                          BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
     command_id                  VARCHAR(100) NOT NULL COMMENT 'Stable business intent idempotency key',
+    owner_jiacn                 VARCHAR(50) NOT NULL COMMENT 'Authenticated command owner; never inferred from task or Agent identity',
     task_id                     VARCHAR(100) NOT NULL COMMENT 'Scoped task ID',
     work_item_id                VARCHAR(100) DEFAULT NULL COMMENT 'Optional scoped work item ID',
     target_agent_id             VARCHAR(100) NOT NULL COMMENT 'Exact canonical target Agent ID',
@@ -659,16 +660,18 @@ CREATE TABLE IF NOT EXISTS agent_command_delivery (
     replay_requester_id         VARCHAR(100) DEFAULT NULL COMMENT 'Replay requester identity',
     replay_approver_id          VARCHAR(100) DEFAULT NULL COMMENT 'Replay approver identity',
     replay_reason               VARCHAR(1000) DEFAULT NULL COMMENT 'Audited replay reason',
-    tenant_id                   VARCHAR(50) NOT NULL COMMENT 'Owner jiacn scope',
+    tenant_id                   VARCHAR(50) NOT NULL COMMENT 'Single tenant literal 0',
     client_id                   VARCHAR(50) NOT NULL COMMENT 'OAuth/API client scope',
     create_time                 BIGINT DEFAULT NULL COMMENT 'Create time',
     update_time                 BIGINT DEFAULT NULL COMMENT 'Update time',
     PRIMARY KEY (id),
-    UNIQUE KEY uk_delivery_command (tenant_id, client_id, command_id),
+    UNIQUE KEY uk_delivery_command (tenant_id, client_id, owner_jiacn, command_id),
     KEY idx_delivery_retry (status, next_retry_at, expires_at, id),
     KEY idx_delivery_lease (status, lease_until, id),
-    KEY idx_delivery_agent (tenant_id, client_id, target_agent_id, status, next_retry_at, id),
-    KEY idx_delivery_active_message (tenant_id, client_id, active_message_id, active_attempt)
+    KEY idx_delivery_agent (tenant_id, client_id, owner_jiacn, target_agent_id, status, next_retry_at, id),
+    KEY idx_delivery_active_message (tenant_id, client_id, owner_jiacn, active_message_id, active_attempt),
+    CONSTRAINT chk_delivery_single_tenant CHECK (tenant_id = '0'),
+    CONSTRAINT chk_delivery_owner_nonempty CHECK (OCTET_LENGTH(owner_jiacn) BETWEEN 1 AND 50)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Durable Agent command mailbox and business intent state';
 
 CREATE TABLE IF NOT EXISTS agent_outbox_event (
