@@ -101,7 +101,7 @@ public final class AgentCommandMailboxServiceImpl implements AgentCommandMailbox
         if (taskId != null) {
             for (String agentId : agents) {
                 AgentTaskAccessLevel access = accessService.resolveMemberAccessForUpdate(
-                        tenantId, clientId, taskId, agentId);
+                        tenantId, clientId, ownerJiacn, taskId, agentId);
                 if (access == null || !access.canWrite()) {
                     throw new AgentCommandMailboxAccessDeniedException();
                 }

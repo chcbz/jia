@@ -43,7 +43,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class AgentTaskArtifactOutcomeServiceImplTest {
-    private static final String TENANT = "tenant-a";
+    private static final String TENANT = "0";
+    private static final String OWNER = "owner-a";
     private static final String CLIENT = "client-a";
     private static final String TASK = "task-1";
     private static final String ACTOR = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -68,12 +69,12 @@ class AgentTaskArtifactOutcomeServiceImplTest {
         transaction = mock(AgentTaskMutationTransaction.class);
         eventWriter = mock(AgentTaskEventWriter.class);
         root = task(ACTOR);
-        when(transaction.executeWithLockedTaskRoot(
-                eq(TENANT), eq(CLIENT), eq(TASK), any())).thenAnswer(invocation -> {
-            AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(3);
+        when(transaction.executeWithLockedTaskRootInOwnerScope(
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), any())).thenAnswer(invocation -> {
+            AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(4);
             return mutation.apply(root);
         });
-        when(outcomeDao.insertDecision(eq(TENANT), eq(CLIENT), any())).thenReturn(1);
+        when(outcomeDao.insertDecision(eq(TENANT), eq(CLIENT), eq(OWNER), any())).thenReturn(1);
         service = new AgentTaskArtifactOutcomeServiceImpl(
                 artifactDao, outcomeDao, memberDao, taskDao, transaction, eventWriter, () -> NOW);
     }
@@ -86,17 +87,17 @@ class AgentTaskArtifactOutcomeServiceImplTest {
         stubArtifacts(accepted, oldB, oldA);
         AgentTaskArtifactOutcomeEntity priorAccepted = outcome(
                 oldA, "accepted", 1, "prior-decision", null, null);
-        when(outcomeDao.findForUpdate(TENANT, CLIENT, TASK, "artifact-a", 1))
+        when(outcomeDao.findForUpdate(TENANT, CLIENT, OWNER, TASK, "artifact-a", 1))
                 .thenReturn(priorAccepted);
-        when(outcomeDao.findForUpdate(TENANT, CLIENT, TASK, "artifact-b", 1))
+        when(outcomeDao.findForUpdate(TENANT, CLIENT, OWNER, TASK, "artifact-b", 1))
                 .thenReturn(null);
-        when(outcomeDao.findForUpdate(TENANT, CLIENT, TASK, "artifact-z", 1))
+        when(outcomeDao.findForUpdate(TENANT, CLIENT, OWNER, TASK, "artifact-z", 1))
                 .thenReturn(null);
-        when(outcomeDao.insert(eq(TENANT), eq(CLIENT), any())).thenReturn(1);
-        when(outcomeDao.updateByVersion(eq(TENANT), eq(CLIENT), eq(TASK),
+        when(outcomeDao.insert(eq(TENANT), eq(CLIENT), eq(OWNER), any())).thenReturn(1);
+        when(outcomeDao.updateByVersion(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK),
                 eq("artifact-a"), eq(1), eq("accepted"), eq(1L), any())).thenReturn(1);
 
-        var result = service.accept(TENANT, CLIENT, TASK, ACTOR,
+        var result = service.accept(TENANT, CLIENT, OWNER, TASK, ACTOR,
                 command("decision-1", ref("artifact-z", 1, 0),
                         ref("artifact-b", 1, 0), ref("artifact-a", 1, 1)));
 
@@ -104,9 +105,9 @@ class AgentTaskArtifactOutcomeServiceImplTest {
         assertEquals("accepted", result.getOutcomeState());
         assertEquals(1L, result.getOutcomeVersion());
         InOrder locks = inOrder(artifactDao);
-        locks.verify(artifactDao).findLatestVersionForUpdate(TENANT, CLIENT, TASK, "artifact-a");
-        locks.verify(artifactDao).findLatestVersionForUpdate(TENANT, CLIENT, TASK, "artifact-b");
-        locks.verify(artifactDao).findLatestVersionForUpdate(TENANT, CLIENT, TASK, "artifact-z");
+        locks.verify(artifactDao).findLatestVersionForUpdate(TENANT, CLIENT, OWNER, TASK, "artifact-a");
+        locks.verify(artifactDao).findLatestVersionForUpdate(TENANT, CLIENT, OWNER, TASK, "artifact-b");
+        locks.verify(artifactDao).findLatestVersionForUpdate(TENANT, CLIENT, OWNER, TASK, "artifact-z");
 
         ArgumentCaptor<AgentTaskEventWriteCommand> events =
                 ArgumentCaptor.forClass(AgentTaskEventWriteCommand.class);
@@ -132,18 +133,18 @@ class AgentTaskArtifactOutcomeServiceImplTest {
                 "artifact-replay", 1, "work-1", "analysis", OTHER);
         AgentTaskArtifactEntity version2 = artifact(
                 "artifact-replay", 2, "work-1", "analysis", OTHER);
-        when(artifactDao.findLatestVersionForUpdate(TENANT, CLIENT, TASK, "artifact-replay"))
+        when(artifactDao.findLatestVersionForUpdate(TENANT, CLIENT, OWNER, TASK, "artifact-replay"))
                 .thenReturn(version1, version2);
-        when(artifactDao.findVersion(TENANT, CLIENT, TASK, "artifact-replay", 1))
+        when(artifactDao.findVersion(TENANT, CLIENT, OWNER, TASK, "artifact-replay", 1))
                 .thenReturn(version1);
         List<AgentTaskArtifactOutcomeDecisionEntity> persisted = new ArrayList<>();
-        when(outcomeDao.findDecisionForUpdate(TENANT, CLIENT, TASK, "decision-replay"))
+        when(outcomeDao.findDecisionForUpdate(TENANT, CLIENT, OWNER, TASK, "decision-replay"))
                 .thenAnswer(invocation -> persisted.isEmpty() ? null : persisted.get(0));
-        when(outcomeDao.findForUpdate(TENANT, CLIENT, TASK, "artifact-replay", 1))
+        when(outcomeDao.findForUpdate(TENANT, CLIENT, OWNER, TASK, "artifact-replay", 1))
                 .thenReturn(null);
-        when(outcomeDao.insert(eq(TENANT), eq(CLIENT), any())).thenReturn(1);
-        when(outcomeDao.insertDecision(eq(TENANT), eq(CLIENT), any())).thenAnswer(invocation -> {
-            AgentTaskArtifactOutcomeDecisionEntity row = invocation.getArgument(2);
+        when(outcomeDao.insert(eq(TENANT), eq(CLIENT), eq(OWNER), any())).thenReturn(1);
+        when(outcomeDao.insertDecision(eq(TENANT), eq(CLIENT), eq(OWNER), any())).thenAnswer(invocation -> {
+            AgentTaskArtifactOutcomeDecisionEntity row = invocation.getArgument(3);
             row.setTenantId(TENANT);
             row.setClientId(CLIENT);
             persisted.add(row);
@@ -152,8 +153,8 @@ class AgentTaskArtifactOutcomeServiceImplTest {
         AgentTaskArtifactAcceptDTO command = command(
                 "decision-replay", ref("artifact-replay", 1, 0));
 
-        var first = service.accept(TENANT, CLIENT, TASK, ACTOR, command);
-        var replay = service.accept(TENANT, CLIENT, TASK, ACTOR, command);
+        var first = service.accept(TENANT, CLIENT, OWNER, TASK, ACTOR, command);
+        var replay = service.accept(TENANT, CLIENT, OWNER, TASK, ACTOR, command);
 
         assertEquals(first.getDecisionId(), replay.getDecisionId());
         assertEquals(first.getOutcomeVersion(), replay.getOutcomeVersion());
@@ -169,12 +170,12 @@ class AgentTaskArtifactOutcomeServiceImplTest {
         stubArtifacts(artifact);
         AgentTaskArtifactOutcomeDecisionEntity stored = decision(
                 artifact, 1, "decision-replay", "b".repeat(64));
-        when(outcomeDao.findDecisionForUpdate(TENANT, CLIENT, TASK, "decision-replay"))
+        when(outcomeDao.findDecisionForUpdate(TENANT, CLIENT, OWNER, TASK, "decision-replay"))
                 .thenReturn(stored);
 
         AgentTaskCollaborationException failure = assertThrows(
                 AgentTaskCollaborationException.class,
-                () -> service.accept(TENANT, CLIENT, TASK, ACTOR,
+                () -> service.accept(TENANT, CLIENT, OWNER, TASK, ACTOR,
                         command("decision-replay", ref("artifact-replay", 1, 1))));
 
         assertEquals(Reason.VERSION_CONFLICT, failure.getReason());
@@ -188,14 +189,14 @@ class AgentTaskArtifactOutcomeServiceImplTest {
                 "artifact-versioned", 1, "work-1", "analysis", OTHER);
         AgentTaskArtifactEntity latest = artifact(
                 "artifact-versioned", 2, "work-1", "analysis", OTHER);
-        when(artifactDao.findLatestVersionForUpdate(TENANT, CLIENT, TASK, "artifact-versioned"))
+        when(artifactDao.findLatestVersionForUpdate(TENANT, CLIENT, OWNER, TASK, "artifact-versioned"))
                 .thenReturn(latest);
-        when(artifactDao.findVersion(TENANT, CLIENT, TASK, "artifact-versioned", 1))
+        when(artifactDao.findVersion(TENANT, CLIENT, OWNER, TASK, "artifact-versioned", 1))
                 .thenReturn(requested);
 
         AgentTaskCollaborationException failure = assertThrows(
                 AgentTaskCollaborationException.class,
-                () -> service.accept(TENANT, CLIENT, TASK, ACTOR,
+                () -> service.accept(TENANT, CLIENT, OWNER, TASK, ACTOR,
                         command("decision-latest", ref("artifact-versioned", 1, 0))));
 
         assertEquals(Reason.VERSION_CONFLICT, failure.getReason());
@@ -205,20 +206,20 @@ class AgentTaskArtifactOutcomeServiceImplTest {
     @Test
     void workerCannotDecideAndContaminatedReviewerIdentityFailsClosed() {
         root = task(OTHER);
-        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK, ACTOR))
-                .thenReturn(member(ACTOR, "worker", "working", TENANT));
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK, ACTOR))
+                .thenReturn(member(ACTOR, "worker", "working", OWNER));
         AgentTaskCollaborationException worker = assertThrows(
                 AgentTaskCollaborationException.class,
-                () -> service.accept(TENANT, CLIENT, TASK, ACTOR,
+                () -> service.accept(TENANT, CLIENT, OWNER, TASK, ACTOR,
                         command("decision-acl", ref("artifact-a", 1, 0))));
         assertEquals(Reason.FORBIDDEN, worker.getReason());
-        verify(artifactDao, never()).findLatestVersionForUpdate(any(), any(), any(), any());
+        verify(artifactDao, never()).findLatestVersionForUpdate(any(), any(), any(), any(), any());
 
-        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK, ACTOR))
-                .thenReturn(member(ACTOR, "reviewer", "working", "tenant-b"));
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK, ACTOR))
+                .thenReturn(member(ACTOR, "reviewer", "working", "owner-b"));
         AgentTaskCollaborationException contaminated = assertThrows(
                 AgentTaskCollaborationException.class,
-                () -> service.accept(TENANT, CLIENT, TASK, ACTOR,
+                () -> service.accept(TENANT, CLIENT, OWNER, TASK, ACTOR,
                         command("decision-acl-2", ref("artifact-a", 1, 0))));
         assertEquals(Reason.INVALID_PERSISTED_STATE, contaminated.getReason());
     }
@@ -232,7 +233,7 @@ class AgentTaskArtifactOutcomeServiceImplTest {
         stubArtifacts(accepted, different);
         AgentTaskCollaborationException scope = assertThrows(
                 AgentTaskCollaborationException.class,
-                () -> service.accept(TENANT, CLIENT, TASK, ACTOR,
+                () -> service.accept(TENANT, CLIENT, OWNER, TASK, ACTOR,
                         command("decision-scope", ref("artifact-new", 1, 0),
                                 ref("artifact-old", 1, 0))));
         assertEquals(Reason.INVALID_REQUEST, scope.getReason());
@@ -240,12 +241,12 @@ class AgentTaskArtifactOutcomeServiceImplTest {
         AgentTaskArtifactEntity lone = artifact(
                 "artifact-cas", 1, "work-1", "analysis", OTHER);
         stubArtifacts(lone);
-        when(outcomeDao.findForUpdate(TENANT, CLIENT, TASK, "artifact-cas", 1))
+        when(outcomeDao.findForUpdate(TENANT, CLIENT, OWNER, TASK, "artifact-cas", 1))
                 .thenReturn(null);
-        when(outcomeDao.insert(eq(TENANT), eq(CLIENT), any())).thenReturn(0);
+        when(outcomeDao.insert(eq(TENANT), eq(CLIENT), eq(OWNER), any())).thenReturn(0);
         AgentTaskCollaborationException cas = assertThrows(
                 AgentTaskCollaborationException.class,
-                () -> service.accept(TENANT, CLIENT, TASK, ACTOR,
+                () -> service.accept(TENANT, CLIENT, OWNER, TASK, ACTOR,
                         command("decision-cas", ref("artifact-cas", 1, 0))));
         assertEquals(Reason.VERSION_CONFLICT, cas.getReason());
         verify(eventWriter, never()).append(any());
@@ -254,16 +255,16 @@ class AgentTaskArtifactOutcomeServiceImplTest {
     @Test
     void authoritativeSurfacePassesAclFlagsAndRejectsSupersededOrContaminatedRows() {
         root = task(OTHER);
-        when(taskDao.findByTaskId(TENANT, CLIENT, TASK)).thenReturn(root);
-        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK, ACTOR))
+        when(taskDao.findByTaskIdInOwnerScope(TENANT, CLIENT, OWNER, TASK)).thenReturn(root);
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK, ACTOR))
                 .thenReturn(member(ACTOR, "reviewer", "working", TENANT));
         AgentTaskAcceptedArtifactRow accepted = acceptedRow("artifact-a", "accepted");
         when(outcomeDao.listAuthoritativeAccepted(
-                TENANT, CLIENT, TASK, "work-1", ACTOR, true, false, 25))
+                TENANT, CLIENT, OWNER, TASK, "work-1", ACTOR, true, false, 25))
                 .thenReturn(List.of(accepted));
 
         var rows = service.listAuthoritativeAccepted(
-                TENANT, CLIENT, TASK, ACTOR, "work-1", 25);
+                TENANT, CLIENT, OWNER, TASK, ACTOR, "work-1", 25);
 
         assertEquals(List.of("artifact-a"),
                 rows.stream().map(value -> value.getArtifactId()).toList());
@@ -273,7 +274,7 @@ class AgentTaskArtifactOutcomeServiceImplTest {
         AgentTaskCollaborationException invalid = assertThrows(
                 AgentTaskCollaborationException.class,
                 () -> service.listAuthoritativeAccepted(
-                        TENANT, CLIENT, TASK, ACTOR, "work-1", 25));
+                        TENANT, CLIENT, OWNER, TASK, ACTOR, "work-1", 25));
         assertEquals(Reason.INVALID_PERSISTED_STATE, invalid.getReason());
     }
 
@@ -283,12 +284,12 @@ class AgentTaskArtifactOutcomeServiceImplTest {
                 "artifact-schema", 1, "work-1", "analysis", OTHER);
         stubArtifacts(artifact);
         when(outcomeDao.findDecisionForUpdate(
-                TENANT, CLIENT, TASK, "decision-schema"))
+                TENANT, CLIENT, OWNER, TASK, "decision-schema"))
                 .thenThrow(new DataAccessResourceFailureException("missing outcome table"));
 
         AgentTaskCollaborationException failure = assertThrows(
                 AgentTaskCollaborationException.class,
-                () -> service.accept(TENANT, CLIENT, TASK, ACTOR,
+                () -> service.accept(TENANT, CLIENT, OWNER, TASK, ACTOR,
                         command("decision-schema", ref("artifact-schema", 1, 0))));
 
         assertEquals(Reason.INVALID_PERSISTED_STATE, failure.getReason());
@@ -302,12 +303,12 @@ class AgentTaskArtifactOutcomeServiceImplTest {
     void storageFailureIsMappedToNonLeakingPersistedStateFailure() {
         AgentTaskArtifactEntity artifact = artifact(
                 "artifact-a", 1, "work-1", "analysis", OTHER);
-        when(artifactDao.findLatestVersionForUpdate(TENANT, CLIENT, TASK, "artifact-a"))
+        when(artifactDao.findLatestVersionForUpdate(TENANT, CLIENT, OWNER, TASK, "artifact-a"))
                 .thenThrow(new DataAccessResourceFailureException("jdbc secret details"));
 
         AgentTaskCollaborationException failure = assertThrows(
                 AgentTaskCollaborationException.class,
-                () -> service.accept(TENANT, CLIENT, TASK, ACTOR,
+                () -> service.accept(TENANT, CLIENT, OWNER, TASK, ACTOR,
                         command("decision-storage", ref("artifact-a", 1, 0))));
 
         assertEquals(Reason.INVALID_PERSISTED_STATE, failure.getReason());
@@ -318,8 +319,8 @@ class AgentTaskArtifactOutcomeServiceImplTest {
     private void stubArtifacts(AgentTaskArtifactEntity... artifacts) {
         for (AgentTaskArtifactEntity artifact : artifacts) {
             when(artifactDao.findLatestVersionForUpdate(
-                    TENANT, CLIENT, TASK, artifact.getArtifactId())).thenReturn(artifact);
-            when(artifactDao.findVersion(TENANT, CLIENT, TASK,
+                    TENANT, CLIENT, OWNER, TASK, artifact.getArtifactId())).thenReturn(artifact);
+            when(artifactDao.findVersion(TENANT, CLIENT, OWNER, TASK,
                     artifact.getArtifactId(), artifact.getArtifactVersion())).thenReturn(artifact);
         }
     }
@@ -351,6 +352,7 @@ class AgentTaskArtifactOutcomeServiceImplTest {
                 .setVisibility("task_members").setCreatedAt(NOW - 100);
         artifact.setTenantId(TENANT);
         artifact.setClientId(CLIENT);
+        artifact.setOwnerJiacn(OWNER);
         return artifact;
     }
 
@@ -366,6 +368,7 @@ class AgentTaskArtifactOutcomeServiceImplTest {
                 .setDecidedByAgentId(ACTOR).setDecidedAt(NOW - 50).setVersion(version);
         outcome.setTenantId(TENANT);
         outcome.setClientId(CLIENT);
+        outcome.setOwnerJiacn(OWNER);
         return outcome;
     }
 
@@ -385,6 +388,7 @@ class AgentTaskArtifactOutcomeServiceImplTest {
                         .setDecidedAt(NOW - 50);
         decision.setTenantId(TENANT);
         decision.setClientId(CLIENT);
+        decision.setOwnerJiacn(OWNER);
         return decision;
     }
 
@@ -392,6 +396,7 @@ class AgentTaskArtifactOutcomeServiceImplTest {
         AgentTaskAcceptedArtifactRow row = new AgentTaskAcceptedArtifactRow();
         row.setTenantId(TENANT);
         row.setClientId(CLIENT);
+        row.setOwnerJiacn(OWNER);
         row.setTaskId(TASK);
         row.setArtifactId(artifactId);
         row.setWorkItemId("work-1");
@@ -416,15 +421,17 @@ class AgentTaskArtifactOutcomeServiceImplTest {
                 .setCurrentEventVersion(0L);
         task.setTenantId(TENANT);
         task.setClientId(CLIENT);
+        task.setOwnerJiacn(OWNER);
         return task;
     }
 
     private AgentTaskMemberEntity member(
-            String agentId, String role, String status, String tenant) {
+            String agentId, String role, String status, String ownerJiacn) {
         AgentTaskMemberEntity member = new AgentTaskMemberEntity().setTaskId(TASK)
                 .setAgentId(agentId).setMemberRole(role).setMemberStatus(status).setVersion(1L);
-        member.setTenantId(tenant);
+        member.setTenantId(TENANT);
         member.setClientId(CLIENT);
+        member.setOwnerJiacn(ownerJiacn);
         return member;
     }
 }

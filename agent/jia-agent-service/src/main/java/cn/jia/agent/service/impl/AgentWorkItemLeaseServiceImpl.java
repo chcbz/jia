@@ -92,11 +92,11 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
         this.maxLeaseDurationMillis = maxLeaseDurationMillis;
     }
 
-    private <T> T withLockedTaskRoot(String tenantId, String clientId, String taskId,
-            AgentTaskMutationTransaction.LockedTaskMutation<T> mutation) {
+    private <T> T withLockedTaskRoot(String tenantId, String clientId, String ownerJiacn,
+            String taskId, AgentTaskMutationTransaction.LockedTaskMutation<T> mutation) {
         try {
-            return mutationTransaction.executeWithLockedTaskRoot(
-                    tenantId, clientId, taskId, mutation);
+            return mutationTransaction.executeWithLockedTaskRootInOwnerScope(
+                    tenantId, clientId, ownerJiacn, taskId, mutation);
         } catch (AgentTaskCollaborationException e) {
             if (e.getReason() == AgentTaskCollaborationException.Reason.NOT_FOUND) {
                 throw notFound();
@@ -108,18 +108,18 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AgentWorkItemLeaseDTO claim(
-            String tenantId, String clientId, String taskId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             AgentWorkItemLeaseCommandDTO command) {
-        requireScopeAndIds(tenantId, clientId, taskId, workItemId);
+        requireScopeAndIds(tenantId, clientId, ownerJiacn, taskId, workItemId);
         RequiredCommand required = requireCommand(command, true, false);
         requireAgentReference(required.agentId());
         long duration = requireDuration(required.leaseDurationMillis());
-        return withLockedTaskRoot(tenantId, clientId, taskId, root -> {
+        return withLockedTaskRoot(tenantId, clientId, ownerJiacn, taskId, root -> {
             long now = now();
-            requireActiveMember(tenantId, clientId, taskId, required.agentId());
-            requireActiveCanonicalAgent(tenantId, clientId, required.agentId());
-            AgentTaskWorkItemEntity current = requireWorkItem(tenantId, clientId, taskId, workItemId);
-            requireCompleteSnapshot(tenantId, clientId, current);
+            requireActiveMember(tenantId, clientId, ownerJiacn, taskId, required.agentId());
+            requireActiveCanonicalAgent(tenantId, clientId, ownerJiacn, required.agentId());
+            AgentTaskWorkItemEntity current = requireWorkItem(tenantId, clientId, ownerJiacn, taskId, workItemId);
+            requireCompleteSnapshot(tenantId, clientId, ownerJiacn, current);
             requireVersion(current.getVersion(), required.expectedVersion());
             requireStatus(current, AgentTaskWorkItemStatus.READY);
             requireReadyLeaseState(current);
@@ -134,11 +134,11 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
             update.setLeaseToken(leaseToken);
             update.setLeaseUntil(leaseUntil);
             requireSingleCasUpdate(workItemDao.claimReadyByVersion(
-                    tenantId, clientId, taskId, workItemId,
+                    tenantId, clientId, ownerJiacn, taskId, workItemId,
                     nullIfBlank(current.getAssigneeAgentId()), required.expectedVersion(), update));
             AgentWorkItemLeaseDTO result = result(
                     update, required.expectedVersion() + 1, now, required.agentId());
-            appendLeaseEvent(tenantId, clientId, taskId, current, result,
+            appendLeaseEvent(tenantId, clientId, ownerJiacn, taskId, current, result,
                     TaskEventType.WORK_ITEM_CLAIMED, required.agentId(), null);
             return result;
         });
@@ -147,9 +147,9 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AgentWorkItemLeaseDTO start(
-            String tenantId, String clientId, String taskId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             AgentWorkItemLeaseCommandDTO command) {
-        return mutateActiveLease(tenantId, clientId, taskId, workItemId, command,
+        return mutateActiveLease(tenantId, clientId, ownerJiacn, taskId, workItemId, command,
                 List.of(AgentTaskWorkItemStatus.CLAIMED), false,
                 context -> {
                     AgentTaskWorkItemDTO update = copyWorkItem(context.current());
@@ -161,9 +161,9 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AgentWorkItemLeaseDTO heartbeat(
-            String tenantId, String clientId, String taskId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             AgentWorkItemLeaseCommandDTO command) {
-        return mutateActiveLease(tenantId, clientId, taskId, workItemId, command,
+        return mutateActiveLease(tenantId, clientId, ownerJiacn, taskId, workItemId, command,
                 List.of(AgentTaskWorkItemStatus.CLAIMED, AgentTaskWorkItemStatus.RUNNING), true,
                 context -> {
                     long duration = requireDuration(context.required().leaseDurationMillis());
@@ -189,9 +189,9 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AgentWorkItemLeaseDTO release(
-            String tenantId, String clientId, String taskId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             AgentWorkItemLeaseCommandDTO command) {
-        return mutateActiveLease(tenantId, clientId, taskId, workItemId, command,
+        return mutateActiveLease(tenantId, clientId, ownerJiacn, taskId, workItemId, command,
                 List.of(AgentTaskWorkItemStatus.CLAIMED, AgentTaskWorkItemStatus.RUNNING), false,
                 context -> {
                     int nextAttempt = incrementAttempt(context.current());
@@ -208,9 +208,9 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AgentWorkItemLeaseDTO cancel(
-            String tenantId, String clientId, String taskId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             AgentWorkItemLeaseCommandDTO command) {
-        return mutateActiveLease(tenantId, clientId, taskId, workItemId, command,
+        return mutateActiveLease(tenantId, clientId, ownerJiacn, taskId, workItemId, command,
                 List.of(AgentTaskWorkItemStatus.CLAIMED, AgentTaskWorkItemStatus.RUNNING), false,
                 context -> {
                     AgentTaskWorkItemDTO update = copyWorkItem(context.current());
@@ -221,20 +221,20 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
     }
 
     private AgentWorkItemLeaseDTO mutateActiveLease(
-            String tenantId, String clientId, String taskId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             AgentWorkItemLeaseCommandDTO command, List<AgentTaskWorkItemStatus> statuses,
             boolean requireDuration, java.util.function.Function<LeaseContext, LeaseMutation> mutation) {
-        requireScopeAndIds(tenantId, clientId, taskId, workItemId);
-        return withLockedTaskRoot(tenantId, clientId, taskId, root -> {
+        requireScopeAndIds(tenantId, clientId, ownerJiacn, taskId, workItemId);
+        return withLockedTaskRoot(tenantId, clientId, ownerJiacn, taskId, root -> {
             LeaseContext context = requireActiveLease(
-                    tenantId, clientId, taskId, workItemId, command, statuses, requireDuration);
+                    tenantId, clientId, ownerJiacn, taskId, workItemId, command, statuses, requireDuration);
             LeaseMutation requested = mutation.apply(context);
             if (requested.update() == null) {
                 return result(copyWorkItem(context.current()), context.current().getVersion(),
                         context.now(), context.required().agentId());
             }
             AgentWorkItemLeaseDTO result = updateActiveLease(context, requested.update());
-            appendLeaseEvent(tenantId, clientId, taskId, context.current(), result,
+            appendLeaseEvent(tenantId, clientId, ownerJiacn, taskId, context.current(), result,
                     requested.eventType(), context.required().agentId(), requested.reasonCode());
             return result;
         });
@@ -243,10 +243,10 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
     @Override
     @Transactional(readOnly = true)
     public AgentWorkItemLeaseDTO validateLeaseForResult(
-            String tenantId, String clientId, String taskId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             AgentWorkItemLeaseCommandDTO command) {
         LeaseContext context = requireActiveLease(
-                tenantId, clientId, taskId, workItemId, command,
+                tenantId, clientId, ownerJiacn, taskId, workItemId, command,
                 List.of(AgentTaskWorkItemStatus.RUNNING), false);
         return result(copyWorkItem(context.current()), context.current().getVersion(),
                 context.now(), context.required().agentId());
@@ -254,18 +254,19 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public AgentWorkItemLeaseScanDTO expireLeases(String tenantId, String clientId, int limit) {
-        requireScope(tenantId, clientId);
+    public AgentWorkItemLeaseScanDTO expireLeases(
+            String tenantId, String clientId, String ownerJiacn, int limit) {
+        requireScope(tenantId, clientId, ownerJiacn);
         if (limit <= 0) throw invalidRequest("limit must be positive");
         long now = now();
         List<AgentTaskWorkItemEntity> candidates = workItemDao.listExpiredLeases(
-                tenantId, clientId, now, limit);
+                tenantId, clientId, ownerJiacn, now, limit);
         AgentWorkItemLeaseScanDTO scan = new AgentWorkItemLeaseScanDTO();
         scan.setScannedCount(candidates.size());
         for (AgentTaskWorkItemEntity candidate : candidates) {
             ExpiryOutcome outcome = withLockedTaskRoot(
-                    tenantId, clientId, candidate.getTaskId(), root ->
-                            expireCandidate(tenantId, clientId, candidate, now));
+                    tenantId, clientId, ownerJiacn, candidate.getTaskId(), root ->
+                            expireCandidate(tenantId, clientId, ownerJiacn, candidate, now));
             if (outcome.conflict()) {
                 scan.setConflictCount(scan.getConflictCount() + 1);
                 continue;
@@ -278,17 +279,17 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
         return scan;
     }
 
-    private ExpiryOutcome expireCandidate(String tenantId, String clientId,
+    private ExpiryOutcome expireCandidate(String tenantId, String clientId, String ownerJiacn,
             AgentTaskWorkItemEntity candidate, long now) {
         AgentTaskWorkItemEntity current = workItemDao.findByTaskAndWorkItemId(
-                tenantId, clientId, candidate.getTaskId(), candidate.getWorkItemId());
+                tenantId, clientId, ownerJiacn, candidate.getTaskId(), candidate.getWorkItemId());
         if (current == null || !Objects.equals(current.getVersion(), candidate.getVersion())
                 || !Objects.equals(current.getLeaseToken(), candidate.getLeaseToken())
                 || !Objects.equals(current.getLeaseUntil(), candidate.getLeaseUntil())
                 || !Objects.equals(current.getStatus(), candidate.getStatus())) {
             return ExpiryOutcome.casConflict();
         }
-        requireCompleteSnapshot(tenantId, clientId, current);
+        requireCompleteSnapshot(tenantId, clientId, ownerJiacn, current);
         AgentTaskWorkItemStatus status = persistedStatus(current.getStatus());
         if (status != AgentTaskWorkItemStatus.CLAIMED && status != AgentTaskWorkItemStatus.RUNNING) {
             throw invalidPersisted("Expiry scan returned a non-leased status");
@@ -303,20 +304,20 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
                 : AgentTaskWorkItemStatus.READY.value());
         clearLease(update);
         int updated = workItemDao.expireLeaseByVersion(
-                tenantId, clientId, current.getTaskId(), current.getWorkItemId(),
+                tenantId, clientId, ownerJiacn, current.getTaskId(), current.getWorkItemId(),
                 current.getAssigneeAgentId(), current.getLeaseToken(), current.getStatus(),
                 current.getLeaseUntil(), current.getVersion(), now, update);
         if (updated == 0) return ExpiryOutcome.casConflict();
         if (updated != 1) throw invalidPersisted("Scoped expiry CAS updated an unexpected row count");
         AgentWorkItemLeaseDTO result = result(
                 update, current.getVersion() + 1, now, current.getAssigneeAgentId());
-        appendLeaseEvent(tenantId, clientId, current.getTaskId(), current, result,
+        appendLeaseEvent(tenantId, clientId, ownerJiacn, current.getTaskId(), current, result,
                 failed ? TaskEventType.WORK_ITEM_FAILED : TaskEventType.WORK_ITEM_REQUEUED,
                 null, "lease_expired");
         return new ExpiryOutcome(false, failed, result);
     }
 
-    private void appendLeaseEvent(String tenantId, String clientId, String taskId,
+    private void appendLeaseEvent(String tenantId, String clientId, String ownerJiacn, String taskId,
             AgentTaskWorkItemEntity current, AgentWorkItemLeaseDTO result,
             String eventType, String actorId, String reasonCode) {
         TaskEventPayload.Builder payload = TaskEventPayload.builder()
@@ -336,7 +337,7 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
         }
         if (reasonCode != null) payload.put(TaskEventPayload.Key.REASON_CODE, reasonCode);
         eventWriter.append(AgentTaskMutationEventSupport.command(
-                tenantId, clientId, taskId, eventType,
+                tenantId, clientId, ownerJiacn, taskId, eventType,
                 actorId == null ? TaskEventType.ActorType.SYSTEM : TaskEventType.ActorType.AGENT,
                 actorId, TaskEventType.Aggregate.WORK_ITEM, current.getWorkItemId(),
                 payload, result.getChangedAt(), result.getVersion()));
@@ -346,7 +347,7 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
             LeaseContext context, AgentTaskWorkItemDTO update) {
         AgentTaskWorkItemEntity current = context.current();
         int updated = workItemDao.updateActiveLeaseByVersion(
-                context.tenantId(), context.clientId(), context.taskId(), context.workItemId(),
+                context.tenantId(), context.clientId(), context.ownerJiacn(), context.taskId(), context.workItemId(),
                 context.required().agentId(), context.required().leaseToken(), current.getStatus(),
                 current.getLeaseUntil(), context.required().expectedVersion(), context.now(), update);
         requireSingleCasUpdate(updated);
@@ -355,19 +356,19 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
     }
 
     private LeaseContext requireActiveLease(
-            String tenantId, String clientId, String taskId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             AgentWorkItemLeaseCommandDTO command,
             List<AgentTaskWorkItemStatus> allowedStatuses,
             boolean requireDuration) {
-        requireScopeAndIds(tenantId, clientId, taskId, workItemId);
+        requireScopeAndIds(tenantId, clientId, ownerJiacn, taskId, workItemId);
         RequiredCommand required = requireCommand(command, requireDuration, true);
         requireAgentReference(required.agentId());
         long now = now();
-        requireActiveMember(tenantId, clientId, taskId, required.agentId());
-        requireActiveCanonicalAgent(tenantId, clientId, required.agentId());
+        requireActiveMember(tenantId, clientId, ownerJiacn, taskId, required.agentId());
+        requireActiveCanonicalAgent(tenantId, clientId, ownerJiacn, required.agentId());
         AgentTaskWorkItemEntity current = requireWorkItem(
-                tenantId, clientId, taskId, workItemId);
-        requireCompleteSnapshot(tenantId, clientId, current);
+                tenantId, clientId, ownerJiacn, taskId, workItemId);
+        requireCompleteSnapshot(tenantId, clientId, ownerJiacn, current);
         requireVersion(current.getVersion(), required.expectedVersion());
         AgentTaskWorkItemStatus status = persistedStatus(current.getStatus());
         if (!allowedStatuses.contains(status)) {
@@ -387,18 +388,18 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
             throw invalidPersisted("Persisted lease exceeds the configured lease horizon");
         }
         return new LeaseContext(
-                tenantId, clientId, taskId, workItemId, required, current, now);
+                tenantId, clientId, ownerJiacn, taskId, workItemId, required, current, now);
     }
 
     private AgentTaskMemberEntity requireActiveMember(
-            String tenantId, String clientId, String taskId, String agentId) {
+            String tenantId, String clientId, String ownerJiacn, String taskId, String agentId) {
         AgentTaskMemberEntity member = memberDao.findByTaskAndAgent(
-                tenantId, clientId, taskId, agentId);
+                tenantId, clientId, ownerJiacn, taskId, agentId);
         if (member == null) {
             throw notFound();
         }
         if (!tenantId.equals(member.getTenantId()) || !clientId.equals(member.getClientId())
-                || !taskId.equals(member.getTaskId()) || !agentId.equals(member.getAgentId())) {
+                || !ownerJiacn.equals(member.getOwnerJiacn()) || !taskId.equals(member.getTaskId()) || !agentId.equals(member.getAgentId())) {
             throw invalidPersisted("Persisted member identity does not match its scoped lookup");
         }
         AgentTaskMemberStatus status;
@@ -418,13 +419,14 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
     }
 
     private AgentTaskWorkItemEntity requireWorkItem(
-            String tenantId, String clientId, String taskId, String workItemId) {
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId) {
         AgentTaskWorkItemEntity current = workItemDao.findByWorkItemId(
-                tenantId, clientId, workItemId);
+                tenantId, clientId, ownerJiacn, workItemId);
         if (current == null) {
             throw notFound();
         }
-        if (!tenantId.equals(current.getTenantId()) || !clientId.equals(current.getClientId())) {
+        if (!tenantId.equals(current.getTenantId()) || !clientId.equals(current.getClientId())
+                || !ownerJiacn.equals(current.getOwnerJiacn())) {
             throw invalidPersisted("Persisted work item scope does not match its scoped lookup");
         }
         if (!taskId.equals(current.getTaskId()) || !workItemId.equals(current.getWorkItemId())) {
@@ -433,8 +435,10 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
         return current;
     }
 
-    private void requireCompleteSnapshot(String tenantId, String clientId, AgentTaskWorkItemEntity current) {
+    private void requireCompleteSnapshot(
+            String tenantId, String clientId, String ownerJiacn, AgentTaskWorkItemEntity current) {
         if (current == null || !tenantId.equals(current.getTenantId()) || !clientId.equals(current.getClientId())
+                || !ownerJiacn.equals(current.getOwnerJiacn())
                 || StringUtil.isBlank(current.getWorkItemId())
                 || StringUtil.isBlank(current.getTaskId())
                 || StringUtil.isBlank(current.getTitle())
@@ -451,7 +455,7 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
             throw invalidPersisted("Persisted assignee is blank");
         }
         if (current.getAssigneeAgentId() != null) {
-            requirePersistedAgentReference(tenantId, clientId, current.getAssigneeAgentId());
+            requirePersistedAgentReference(tenantId, clientId, ownerJiacn, current.getAssigneeAgentId());
         }
     }
 
@@ -648,16 +652,17 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
     }
 
     private void requireScopeAndIds(
-            String tenantId, String clientId, String taskId, String workItemId) {
-        requireScope(tenantId, clientId);
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId) {
+        requireScope(tenantId, clientId, ownerJiacn);
         if (StringUtil.isBlank(taskId) || StringUtil.isBlank(workItemId)) {
             throw invalidRequest("taskId and workItemId are required");
         }
     }
 
-    private void requireScope(String tenantId, String clientId) {
-        if (StringUtil.isBlank(tenantId) || StringUtil.isBlank(clientId)) {
-            throw invalidRequest("tenantId and clientId are required");
+    private void requireScope(String tenantId, String clientId, String ownerJiacn) {
+        if (!"0".equals(tenantId) || StringUtil.isBlank(clientId)
+                || StringUtil.isBlank(ownerJiacn) || "0".equals(ownerJiacn)) {
+            throw invalidRequest("strict tenant-zero client and owner scope is required");
         }
     }
 
@@ -667,7 +672,8 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
         }
     }
 
-    private void requireActiveCanonicalAgent(String tenantId, String clientId, String agentId) {
+    private void requireActiveCanonicalAgent(
+            String tenantId, String clientId, String ownerJiacn, String agentId) {
         if (identityService == null) {
             throw invalidPersisted("Canonical identity authority is unavailable");
         }
@@ -676,14 +682,15 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
             // Direct ACTIVE registry + binding, never alias resolution. E05 already holds the
             // receipt-wide identity locks; this read check also works for read-only result validation.
             canonical = identityService.requireCanonicalAgentIdInScope(
-                    tenantId, clientId, tenantId, agentId);
+                    tenantId, clientId, ownerJiacn, agentId);
         } catch (RuntimeException denied) {
             throw notFound();
         }
         if (!agentId.equals(canonical)) throw notFound();
     }
 
-    private void requirePersistedAgentReference(String tenantId, String clientId, String agentId) {
+    private void requirePersistedAgentReference(
+            String tenantId, String clientId, String ownerJiacn, String agentId) {
         // History must be genuinely canonical, but system expiry must also reclaim revoked
         // Agents' leases. Live operations separately require ACTIVE identity and binding.
         if (identityService == null || agentId == null || !AGENT_REFERENCE.matcher(agentId).matches()) {
@@ -692,7 +699,7 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
         final String canonical;
         try {
             canonical = identityService.requirePersistedCanonicalAgentIdInScope(
-                    tenantId, clientId, tenantId, agentId);
+                    tenantId, clientId, ownerJiacn, agentId);
         } catch (RuntimeException denied) {
             throw invalidPersisted("Persisted assignee is not a canonical identity in this scope");
         }
@@ -738,7 +745,7 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
     }
 
     private record LeaseContext(
-            String tenantId, String clientId, String taskId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             RequiredCommand required, AgentTaskWorkItemEntity current, long now) {
     }
 

@@ -3,7 +3,8 @@ package cn.jia.agent.service;
 /** Optional metadata-only conversation source. Implementations must not generate paid summaries. */
 public interface AgentTaskContextPackConversationSource {
     ConversationReference findReference(
-            String tenantId, String clientId, String taskId, String actorAgentId);
+            String tenantId, String clientId, String ownerJiacn, String taskId,
+            String actorAgentId);
 
     record ConversationReference(
             boolean available, String reason, String conversationId,

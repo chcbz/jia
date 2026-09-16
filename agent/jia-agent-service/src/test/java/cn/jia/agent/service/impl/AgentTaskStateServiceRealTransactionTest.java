@@ -68,8 +68,9 @@ class AgentTaskStateServiceRealTransactionTest {
     private static final String JDBC_URL =
             "jdbc:h2:mem:cyf_b03_real_tx;MODE=MYSQL;DB_CLOSE_DELAY=-1;"
             + "CASE_INSENSITIVE_IDENTIFIERS=TRUE;LOCK_TIMEOUT=10000";
-    private static final String TENANT = "tenant-a";
+    private static final String TENANT = "0";
     private static final String CLIENT = "client-a";
+    private static final String OWNER = "owner-a";
     private static final String TASK_ID = "task-1";
     private static final String AGENT_ID = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private static final String WORK_ITEM_ID = "workitem-1";
@@ -186,7 +187,7 @@ class AgentTaskStateServiceRealTransactionTest {
 
         AgentTaskStateException exception = assertThrows(AgentTaskStateException.class,
                 () -> transactionalService.transitionMemberAndWorkItem(
-                        TENANT, CLIENT, TASK_ID, AGENT_ID, WORK_ITEM_ID,
+                        TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID, WORK_ITEM_ID,
                         memberTx, wiTx));
 
         assertEquals(Reason.VERSION_CONFLICT, exception.getReason());
@@ -216,7 +217,7 @@ class AgentTaskStateServiceRealTransactionTest {
         AgentTaskStateTransitionDTO wiTx = transition("submitted", 6L, null);
 
         AgentTaskMemberWorkItemStateDTO result = transactionalService.transitionMemberAndWorkItem(
-                TENANT, CLIENT, TASK_ID, AGENT_ID, WORK_ITEM_ID, memberTx, wiTx);
+                TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID, WORK_ITEM_ID, memberTx, wiTx);
 
         assertNotNull(result);
         assertEquals("done", result.getMember().getStatus());
@@ -237,7 +238,7 @@ class AgentTaskStateServiceRealTransactionTest {
         insertWorkItem("running", 6L, AGENT_ID);
 
         transactionalService.transitionWorkItem(
-                TENANT, CLIENT, WORK_ITEM_ID, transition("submitted", 6L, null));
+                TENANT, CLIENT, OWNER, WORK_ITEM_ID, transition("submitted", 6L, null));
 
         AgentTaskWorkItemEntity after = readWorkItem();
         assertEquals("submitted", after.getStatus());
@@ -250,7 +251,7 @@ class AgentTaskStateServiceRealTransactionTest {
         insertPendingWorkItem(DEPENDENT, "[\"work-prerequisite-a\"]", 0L);
 
         transactionalService.transitionWorkItem(
-                TENANT, CLIENT, PREREQUISITE_A, transition("completed", 4L, null));
+                TENANT, CLIENT, OWNER, PREREQUISITE_A, transition("completed", 4L, null));
 
         Map<String, Object> prerequisite = readWorkItem(PREREQUISITE_A);
         assertEquals("completed", prerequisite.get("STATUS"));
@@ -270,7 +271,7 @@ class AgentTaskStateServiceRealTransactionTest {
 
         AgentTaskStateException replay = assertThrows(AgentTaskStateException.class,
                 () -> transactionalService.transitionWorkItem(
-                        TENANT, CLIENT, PREREQUISITE_A,
+                        TENANT, CLIENT, OWNER, PREREQUISITE_A,
                         transition("completed", 5L, null)));
         assertEquals(Reason.INVALID_TRANSITION, replay.getReason());
         assertEquals(2, countEvents());
@@ -291,13 +292,13 @@ class AgentTaskStateServiceRealTransactionTest {
             Future<?> direct = executor.submit(() -> {
                 await(start);
                 transactionalService.transitionWorkItem(
-                        TENANT, CLIENT, PREREQUISITE_A,
+                        TENANT, CLIENT, OWNER, PREREQUISITE_A,
                         transition("completed", 4L, null));
             });
             Future<?> combined = executor.submit(() -> {
                 await(start);
                 transactionalService.transitionMemberAndWorkItem(
-                        TENANT, CLIENT, TASK_ID, AGENT_ID, PREREQUISITE_B,
+                        TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID, PREREQUISITE_B,
                         transition("done", 3L, null),
                         transition("completed", 6L, null));
             });
@@ -344,7 +345,7 @@ class AgentTaskStateServiceRealTransactionTest {
                 transactionManager);
 
         assertThrows(IllegalStateException.class, () -> failing.transitionWorkItem(
-                TENANT, CLIENT, PREREQUISITE_A, transition("completed", 4L, null)));
+                TENANT, CLIENT, OWNER, PREREQUISITE_A, transition("completed", 4L, null)));
 
         Map<String, Object> prerequisite = readWorkItem(PREREQUISITE_A);
         assertEquals("submitted", prerequisite.get("STATUS"));
@@ -355,8 +356,8 @@ class AgentTaskStateServiceRealTransactionTest {
         assertEquals(0L, ((Number) dependent.get("VERSION")).longValue());
         assertEquals(0, countEvents());
         assertEquals(0L, jdbc.queryForObject(
-                "SELECT current_event_version FROM agent_task_meta WHERE task_id = ?",
-                Long.class, TASK_ID));
+                "SELECT current_event_version FROM agent_task_meta WHERE owner_jiacn = ? AND task_id = ?",
+                Long.class, OWNER, TASK_ID));
     }
 
     @Test
@@ -375,7 +376,7 @@ class AgentTaskStateServiceRealTransactionTest {
         AgentTaskStateService service = (AgentTaskStateService) factory.getProxy();
 
         assertThrows(IllegalStateException.class, () -> service.transitionMember(
-                TENANT, CLIENT, TASK_ID, AGENT_ID, transition("done", 3L, null)));
+                TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID, transition("done", 3L, null)));
 
         AgentTaskMemberEntity memberAfter = readMember();
         assertEquals("working", memberAfter.getMemberStatus());
@@ -402,10 +403,11 @@ class AgentTaskStateServiceRealTransactionTest {
                     version BIGINT NOT NULL DEFAULT 0,
                     tenant_id VARCHAR(50) NOT NULL,
                     client_id VARCHAR(50) NOT NULL,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     create_time BIGINT DEFAULT NULL,
                     update_time BIGINT DEFAULT NULL,
                     PRIMARY KEY (id),
-                    UNIQUE (tenant_id, client_id, task_id, agent_id)
+                    UNIQUE (tenant_id, client_id, owner_jiacn, task_id, agent_id)
                 )""");
         jdbc.execute("""
                 CREATE TABLE agent_task_work_item (
@@ -431,10 +433,11 @@ class AgentTaskStateServiceRealTransactionTest {
                     version BIGINT NOT NULL DEFAULT 0,
                     tenant_id VARCHAR(50) NOT NULL,
                     client_id VARCHAR(50) NOT NULL,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     create_time BIGINT DEFAULT NULL,
                     update_time BIGINT DEFAULT NULL,
                     PRIMARY KEY (id),
-                    UNIQUE (tenant_id, client_id, work_item_id)
+                    UNIQUE (tenant_id, client_id, owner_jiacn, work_item_id)
                 )""");
         jdbc.execute("""
                 CREATE TABLE agent_task_event (
@@ -451,10 +454,11 @@ class AgentTaskStateServiceRealTransactionTest {
                     occurred_at BIGINT NOT NULL,
                     tenant_id VARCHAR(50) NOT NULL,
                     client_id VARCHAR(50) NOT NULL,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     create_time BIGINT,
                     update_time BIGINT,
-                    UNIQUE (tenant_id, client_id, task_id, event_version),
-                    UNIQUE (tenant_id, client_id, event_id)
+                    UNIQUE (tenant_id, client_id, owner_jiacn, task_id, event_version),
+                    UNIQUE (tenant_id, client_id, owner_jiacn, event_id)
                 )""");
         // Task meta table (not written by B03 but needed for completeness)
         jdbc.execute("""
@@ -478,10 +482,11 @@ class AgentTaskStateServiceRealTransactionTest {
                     current_event_version BIGINT NOT NULL DEFAULT 0,
                     create_time BIGINT DEFAULT NULL,
                     update_time BIGINT DEFAULT NULL,
-                    tenant_id VARCHAR(50) DEFAULT NULL,
-                    client_id VARCHAR(50) DEFAULT NULL,
+                    tenant_id VARCHAR(50) NOT NULL,
+                    client_id VARCHAR(50) NOT NULL,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     PRIMARY KEY (id),
-                    UNIQUE (task_id)
+                    UNIQUE (tenant_id, client_id, owner_jiacn, task_id)
                 )""");
     }
 
@@ -508,9 +513,9 @@ class AgentTaskStateServiceRealTransactionTest {
                 INSERT INTO agent_task_meta
                 (task_id, reward_status, collaboration_mode, risk_level, max_agents,
                  review_required, task_version, current_event_version,
-                 tenant_id, client_id, create_time, update_time)
-                VALUES (?, 'running', 'single', 'low', 1, 0, 0, 0, ?, ?, 1, 1)
-                """, TASK_ID, TENANT, CLIENT);
+                 tenant_id, client_id, owner_jiacn, create_time, update_time)
+                VALUES (?, 'running', 'single', 'low', 1, 0, 0, 0, ?, ?, ?, 1, 1)
+                """, TASK_ID, TENANT, CLIENT, OWNER);
     }
 
     private void insertMember(String status, long version) {
@@ -518,9 +523,9 @@ class AgentTaskStateServiceRealTransactionTest {
         jdbc.update("""
                 INSERT INTO agent_task_member
                 (task_id, agent_id, member_role, member_status, assignment_source,
-                 version, tenant_id, client_id, create_time, update_time)
+                 version, tenant_id, client_id, owner_jiacn, create_time, update_time)
                 VALUES (?, ?, 'worker', ?, 'manual', ?, ?, ?, ?, ?)
-                """, TASK_ID, AGENT_ID, status, version, TENANT, CLIENT, now, now);
+                """, TASK_ID, AGENT_ID, status, version, TENANT, CLIENT, OWNER, now, now);
     }
 
     private void insertWorkItem(String status, long version, String assignee) {
@@ -529,11 +534,11 @@ class AgentTaskStateServiceRealTransactionTest {
                 INSERT INTO agent_task_work_item
                 (work_item_id, task_id, title, work_type, assignee_agent_id, status,
                  priority, required_item, attempt_count, max_attempts,
-                 version, tenant_id, client_id, create_time, update_time)
+                 version, tenant_id, client_id, owner_jiacn, create_time, update_time)
                 VALUES (?, ?, 'Test WI', 'implementation', ?, ?,
-                        10, 1, 1, 3, ?, ?, ?, ?, ?)
+                        10, 1, 1, 3, ?, ?, ?, ?, ?, ?)
                 """, WORK_ITEM_ID, TASK_ID, assignee, status,
-                version, TENANT, CLIENT, now, now);
+                version, TENANT, CLIENT, OWNER, now, now);
     }
 
     private void insertSubmittedWorkItem(
@@ -544,12 +549,12 @@ class AgentTaskStateServiceRealTransactionTest {
                 INSERT INTO agent_task_work_item
                 (work_item_id, task_id, title, work_type, assignee_agent_id, status,
                  priority, required_item, dependency_json, attempt_count, max_attempts,
-                 result_artifact_id, submitted_at, version, tenant_id, client_id,
+                 result_artifact_id, submitted_at, version, tenant_id, client_id, owner_jiacn,
                  create_time, update_time)
                 VALUES (?, ?, 'Submitted WI', 'implementation', ?, 'submitted',
-                        10, 1, '[]', 1, 3, ?, ?, ?, ?, ?, ?, ?)
+                        10, 1, '[]', 1, 3, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, workItemId, TASK_ID, assignee, artifactId, submittedAt, version,
-                TENANT, CLIENT, now, now);
+                TENANT, CLIENT, OWNER, now, now);
     }
 
     private void insertPendingWorkItem(String workItemId, String dependencies, long version) {
@@ -557,19 +562,19 @@ class AgentTaskStateServiceRealTransactionTest {
         jdbc.update("""
                 INSERT INTO agent_task_work_item
                 (work_item_id, task_id, title, work_type, status, priority, required_item,
-                 dependency_json, attempt_count, max_attempts, version, tenant_id, client_id,
+                 dependency_json, attempt_count, max_attempts, version, tenant_id, client_id, owner_jiacn,
                  create_time, update_time)
                 VALUES (?, ?, 'Pending WI', 'implementation', 'pending', 10, 1,
-                        ?, 0, 3, ?, ?, ?, ?, ?)
-                """, workItemId, TASK_ID, dependencies, version, TENANT, CLIENT, now, now);
+                        ?, 0, 3, ?, ?, ?, ?, ?, ?)
+                """, workItemId, TASK_ID, dependencies, version, TENANT, CLIENT, OWNER, now, now);
     }
 
     private Map<String, Object> readWorkItem(String workItemId) {
         return jdbc.queryForMap(
                 "SELECT status, version, result_artifact_id, submitted_at, completed_at"
                         + " FROM agent_task_work_item"
-                        + " WHERE tenant_id = ? AND client_id = ? AND work_item_id = ?",
-                TENANT, CLIENT, workItemId);
+                        + " WHERE tenant_id = ? AND client_id = ? AND owner_jiacn = ? AND work_item_id = ?",
+                TENANT, CLIENT, OWNER, workItemId);
     }
 
     private AgentTaskStateService transactionalProxy(
@@ -601,27 +606,27 @@ class AgentTaskStateServiceRealTransactionTest {
     private AgentTaskMemberEntity readMember() {
         return jdbc.queryForObject(
                 "SELECT member_status, version FROM agent_task_member"
-                + " WHERE tenant_id = ? AND client_id = ? AND task_id = ? AND agent_id = ?",
+                + " WHERE tenant_id = ? AND client_id = ? AND owner_jiacn = ? AND task_id = ? AND agent_id = ?",
                 (rs, rowNum) -> {
                     AgentTaskMemberEntity e = new AgentTaskMemberEntity();
                     e.setMemberStatus(rs.getString("member_status"));
                     e.setVersion(rs.getLong("version"));
                     return e;
                 },
-                TENANT, CLIENT, TASK_ID, AGENT_ID);
+                TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID);
     }
 
     private AgentTaskWorkItemEntity readWorkItem() {
         return jdbc.queryForObject(
                 "SELECT status, version FROM agent_task_work_item"
-                + " WHERE tenant_id = ? AND client_id = ? AND work_item_id = ?",
+                + " WHERE tenant_id = ? AND client_id = ? AND owner_jiacn = ? AND work_item_id = ?",
                 (rs, rowNum) -> {
                     AgentTaskWorkItemEntity e = new AgentTaskWorkItemEntity();
                     e.setStatus(rs.getString("status"));
                     e.setVersion(rs.getLong("version"));
                     return e;
                 },
-                TENANT, CLIENT, WORK_ITEM_ID);
+                TENANT, CLIENT, OWNER, WORK_ITEM_ID);
     }
 
     private AgentTaskStateTransitionDTO transition(String status, long version, String failureReason) {

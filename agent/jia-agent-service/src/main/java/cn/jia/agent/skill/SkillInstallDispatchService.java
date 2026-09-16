@@ -30,11 +30,12 @@ public final class SkillInstallDispatchService {
         this.app=app;this.market=market;this.skills=skills;this.versions=versions;this.runtimes=runtimes;
         this.commands=commands;this.sessions=sessions;tx=new TransactionTemplate(manager);
     }
-    public AgentRawCommandDispatchResult dispatch(String tenant,String client,String order,String agent,String commandId,byte[] wire) {
+    public AgentRawCommandDispatchResult dispatch(String tenant,String client,String ownerJiacn,String order,String agent,String commandId,byte[] wire) {
+        require("0".equals(tenant) && ownerJiacn!=null && !ownerJiacn.isBlank() && !"0".equals(ownerJiacn),403,"SKILL_DELIVERY_FENCED");
         require(!TransactionSynchronizationManager.isActualTransactionActive(),503,"SKILL_DISPATCH_TRANSACTION_OPEN");
         var proof=tx.execute(s->{
             var hint=app.order(tenant,client,order); require(hint!=null,403,"SKILL_DELIVERY_FENCED");
-            var actor=new HostingRentHttp.Actor(hint.getBuyerId(),tenant,client);
+            var actor=new HostingRentHttp.Actor(hint.getBuyerId(),tenant,client,ownerJiacn);
             require(skills.available(actor),503,"SKILL_MARKETPLACE_DISABLED");
             skills.actorLock(actor); versions.requireOwned(actor,agent,null,true);
             var o=market.selectOrderForUpdate(tenant,client,order);
@@ -44,10 +45,13 @@ public final class SkillInstallDispatchService {
             var binding=app.deliveryBinding(tenant,client,i.getInstallationId());
             String key=skills.requireManagedKey(actor,agent);
             require(binding!=null && key.equals(binding.getApiKeyId()),403,"SKILL_DELIVERY_FENCED");
-            var d=commands.lockDelivery(tenant,client,commandId);
-            SkillInstallResultService.requireCurrentDelivery(i,d,true);
+            var d=commands.lockDelivery(tenant,client,ownerJiacn,commandId);
+            SkillInstallResultService.requireCurrentDelivery(i,d,ownerJiacn,true);
             var draft=AgentCommandCanonicalCodec.decodeBusinessBytes(d.getCommandPayload());
-            require(Arrays.equals(AgentCommandCanonicalCodec.sha256(d.getCommandPayload()),d.getCommandPayloadHash())
+            require("0".equals(draft.tenantId()) && client.equals(draft.clientId())
+                    && ownerJiacn.equals(draft.ownerJiacn()) && commandId.equals(draft.commandId())
+                    && order.equals(draft.taskId()) && agent.equals(draft.targetAgentId())
+                    && Arrays.equals(AgentCommandCanonicalCodec.sha256(d.getCommandPayload()),d.getCommandPayloadHash())
                     && Arrays.equals(wire,AgentCommandCanonicalCodec.wireBytes(draft,d.getActiveMessageId(),d.getActiveAttempt())),403,"SKILL_DELIVERY_FENCED");
             return new Proof(key,registrationHash(runtimes.findByAgentIdForUpdate(agent)));
         });

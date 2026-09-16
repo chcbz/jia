@@ -15,6 +15,21 @@ final class TaskCollaborationDaoSupport {
         requireId(clientId, "clientId");
     }
 
+    /**
+     * Task facts are single-tenant records: tenant is always literal 0 while the
+     * authenticated Jia account remains the explicit, non-system owner key.
+     */
+    static void requireStrictOwnerScope(String tenantId, String clientId, String ownerJiacn) {
+        requireScope(tenantId, clientId);
+        requireId(ownerJiacn, "ownerJiacn");
+        if (!"0".equals(tenantId)) {
+            throw new IllegalArgumentException("tenantId must be literal 0");
+        }
+        if ("0".equals(ownerJiacn)) {
+            throw new IllegalArgumentException("ownerJiacn must be a real task owner");
+        }
+    }
+
     static void requireId(String value, String name) {
         if (StringUtil.isBlank(value) || !value.equals(value.strip())
                 || value.chars().anyMatch(Character::isISOControl)) {

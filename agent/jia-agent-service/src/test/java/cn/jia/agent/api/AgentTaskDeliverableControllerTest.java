@@ -3,6 +3,8 @@ package cn.jia.agent.api;
 import cn.jia.agent.entity.AgentTaskArtifactContentDTO;
 import cn.jia.agent.entity.AgentTaskArtifactQueryDTO;
 import cn.jia.agent.entity.AgentTaskArtifactViewDTO;
+import cn.jia.agent.exception.AgentTaskCollaborationException;
+import cn.jia.agent.exception.AgentTaskCollaborationException.Reason;
 import cn.jia.agent.service.AgentTaskArtifactContentService;
 import cn.jia.agent.service.AgentTaskArtifactService;
 import org.junit.jupiter.api.BeforeEach;
@@ -30,6 +32,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -62,13 +65,13 @@ class AgentTaskDeliverableControllerTest {
 
     @Test
     void listBindsTenantClientAndActorOnlyFromValidatedJwtAndFiltersResponse() throws Exception {
-        when(artifactService.listForTaskOwner(anyString(), anyString(), anyString(), any()))
+        when(artifactService.listForTaskOwner(anyString(), anyString(), anyString(), anyString(), any()))
                 .thenReturn(List.of(view()));
 
         mvc.perform(get("/agent/tasks/{taskId}/deliverables", TASK)
                         .queryParam("workItemId", "work-1")
                         .queryParam("limit", "25")
-                        .principal(jwt(TENANT, CLIENT, OTHER)))
+                        .principal(jwt(TENANT, CLIENT, ACTOR)))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
                 .andExpect(jsonPath("$.items[0].artifactId").value(ARTIFACT))
@@ -83,7 +86,7 @@ class AgentTaskDeliverableControllerTest {
 
         ArgumentCaptor<AgentTaskArtifactQueryDTO> query =
                 ArgumentCaptor.forClass(AgentTaskArtifactQueryDTO.class);
-        verify(artifactService).listForTaskOwner(eq(TENANT), eq(CLIENT), eq(TASK), query.capture());
+        verify(artifactService).listForTaskOwner(eq("0"), eq(CLIENT), eq(TENANT), eq(TASK), query.capture());
         assertEquals("work-1", query.getValue().getWorkItemId());
         assertEquals(25, query.getValue().getLimit());
     }
@@ -127,17 +130,15 @@ class AgentTaskDeliverableControllerTest {
 
     @Test
     void ownerScopeDoesNotNeedPersonaBindingAndTaskNotFoundRemainsOpaque() throws Exception {
-        when(artifactService.listForTaskOwner(eq(TENANT), eq(CLIENT), eq(TASK), any()))
+        when(artifactService.listForTaskOwner(eq("0"), eq(CLIENT), eq(TENANT), eq(TASK), any()))
                 .thenReturn(List.of(view()));
         mvc.perform(get("/agent/tasks/{taskId}/deliverables", TASK)
                         .principal(jwt(TENANT, CLIENT, OTHER)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.items[0].artifactId").value(ARTIFACT));
 
-        when(artifactService.listForTaskOwner(eq("tenant-b"), eq(CLIENT), eq(TASK), any()))
-                .thenThrow(new cn.jia.agent.exception.AgentTaskCollaborationException(
-                        cn.jia.agent.exception.AgentTaskCollaborationException.Reason.NOT_FOUND,
-                        "outside scope"));
+        when(artifactService.listForTaskOwner(eq("0"), eq(CLIENT), eq("tenant-b"), eq(TASK), any()))
+                .thenThrow(new AgentTaskCollaborationException(Reason.NOT_FOUND, "outside scope"));
         MvcResult foreign = list(jwt("tenant-b", CLIENT, OTHER));
         assertEquals(404, foreign.getResponse().getStatus());
         assertFalse(foreign.getResponse().getContentAsString().contains("outside scope"));
@@ -145,14 +146,14 @@ class AgentTaskDeliverableControllerTest {
 
     @Test
     void contentDownloadUsesTaskOwnerScopeAndReturnsExactSafeBytes() throws Exception {
-        when(contentService.readContentForTaskOwner(TENANT, CLIENT, TASK, ARTIFACT, 3))
+        when(contentService.readContentForTaskOwner("0", CLIENT, TENANT, TASK, ARTIFACT, 3))
                 .thenReturn(new AgentTaskArtifactContentDTO(ARTIFACT, 3, sha256(BYTES),
                         (long) BYTES.length, "application/octet-stream", BYTES));
 
         MvcResult result = mvc.perform(get(
                         "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}/content",
                         TASK, ARTIFACT, 3)
-                        .principal(jwt(TENANT, CLIENT, OTHER)))
+                        .principal(jwt(TENANT, CLIENT, ACTOR)))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
                 .andExpect(header().string("X-Content-Type-Options", "nosniff"))
@@ -162,7 +163,7 @@ class AgentTaskDeliverableControllerTest {
                 .andReturn();
 
         assertArrayEquals(BYTES, result.getResponse().getContentAsByteArray());
-        verify(contentService).readContentForTaskOwner(TENANT, CLIENT, TASK, ARTIFACT, 3);
+        verify(contentService).readContentForTaskOwner("0", CLIENT, TENANT, TASK, ARTIFACT, 3);
     }
 
     @Test
@@ -182,7 +183,7 @@ class AgentTaskDeliverableControllerTest {
     void corruptArtifactMetadataAndBytesFailClosedWithoutLeakingFields() throws Exception {
         AgentTaskArtifactViewDTO corrupt = view();
         corrupt.setContentMimeType("text/plain\r\nX-Secret: yes");
-        when(artifactService.listForTaskOwner(anyString(), anyString(), anyString(), any()))
+        when(artifactService.listForTaskOwner(anyString(), anyString(), anyString(), anyString(), any()))
                 .thenReturn(List.of(corrupt));
         mvc.perform(get("/agent/tasks/{taskId}/deliverables", TASK)
                         .principal(jwt(TENANT, CLIENT, ACTOR)))
@@ -190,7 +191,7 @@ class AgentTaskDeliverableControllerTest {
                 .andExpect(content().string(org.hamcrest.Matchers.not(
                         org.hamcrest.Matchers.containsString("X-Secret"))));
 
-        when(contentService.readContentForTaskOwner(anyString(), anyString(), anyString(),
+        when(contentService.readContentForTaskOwner(anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyInt()))
                 .thenReturn(new AgentTaskArtifactContentDTO(ARTIFACT, 1, "0".repeat(64),
                         (long) BYTES.length, "text/plain", BYTES));

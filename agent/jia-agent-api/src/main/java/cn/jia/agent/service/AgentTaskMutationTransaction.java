@@ -33,6 +33,14 @@ public interface AgentTaskMutationTransaction {
             String workItemId,
             LockedTaskMutation<T> mutation);
 
+    /** Strict single-tenant work-item-to-root lock; owner is an SQL predicate. */
+    <T> T executeWithLockedTaskRootForWorkItemInOwnerScope(
+            String tenantId,
+            String clientId,
+            String ownerJiacn,
+            String workItemId,
+            LockedTaskMutation<T> mutation);
+
     <T> T executeAfterTaskRootReservation(
             String tenantId,
             String clientId,

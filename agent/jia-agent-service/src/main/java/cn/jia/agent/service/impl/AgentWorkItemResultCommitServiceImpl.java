@@ -70,8 +70,9 @@ public class AgentWorkItemResultCommitServiceImpl implements AgentWorkItemResult
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AgentWorkItemResultCommitViewDTO commitResult(
-            String tenantId, String clientId, String taskId, String actorAgentId,
-            AgentWorkItemResultCommitDTO command) {
+            String tenantId, String clientId, String ownerJiacn, String taskId,
+            String actorAgentId, AgentWorkItemResultCommitDTO command) {
+        requireScope(tenantId, clientId, ownerJiacn, taskId);
         requireCommand(actorAgentId, command);
         AgentTaskArtifactPublishDTO artifact = command.getArtifact();
         if (!actorAgentId.equals(command.getProducerAgentId())
@@ -82,26 +83,29 @@ public class AgentWorkItemResultCommitServiceImpl implements AgentWorkItemResult
             throw invalid("Result artifact must reference the committed work item");
         }
 
-        return mutationTransaction.executeWithLockedTaskRoot(tenantId, clientId, taskId,
-                taskRoot -> commitResultLocked(tenantId, clientId, taskId, actorAgentId, command));
+        return mutationTransaction.executeWithLockedTaskRootInOwnerScope(
+                tenantId, clientId, ownerJiacn, taskId,
+                taskRoot -> commitResultLocked(
+                        tenantId, clientId, ownerJiacn, taskId, actorAgentId, command));
     }
 
     private AgentWorkItemResultCommitViewDTO commitResultLocked(
-            String tenantId, String clientId, String taskId, String actorAgentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId,
             AgentWorkItemResultCommitDTO command) {
         AgentWorkItemLeaseCommandDTO leaseCommand = new AgentWorkItemLeaseCommandDTO();
         leaseCommand.setAgentId(actorAgentId);
         leaseCommand.setLeaseToken(command.getLeaseToken());
         leaseCommand.setExpectedVersion(command.getExpectedWorkItemVersion());
         AgentWorkItemLeaseDTO lease = leaseService.validateLeaseForResult(
-                tenantId, clientId, taskId, command.getWorkItemId(), leaseCommand);
+                tenantId, clientId, ownerJiacn, taskId, command.getWorkItemId(), leaseCommand);
         requireExactLeaseSnapshot(taskId, actorAgentId, command, lease);
 
         AgentTaskArtifactViewDTO published = artifactService.publish(
-                tenantId, clientId, taskId, actorAgentId, command.getArtifact());
+                tenantId, clientId, ownerJiacn, taskId, actorAgentId, command.getArtifact());
 
         AgentTaskWorkItemEntity current = workItemDao.findByTaskAndWorkItemId(
-                tenantId, clientId, taskId, command.getWorkItemId());
+                tenantId, clientId, ownerJiacn, taskId, command.getWorkItemId());
+        requireCurrentScope(tenantId, clientId, ownerJiacn, current);
         requireCurrentMatchesValidatedLease(current, lease);
         long submittedAt = now();
         AgentTaskWorkItemDTO update = copyWorkItem(current);
@@ -113,7 +117,7 @@ public class AgentWorkItemResultCommitServiceImpl implements AgentWorkItemResult
         update.setLeaseUntil(null);
 
         int updated = workItemDao.updateActiveLeaseByVersion(
-                tenantId, clientId, taskId, command.getWorkItemId(),
+                tenantId, clientId, ownerJiacn, taskId, command.getWorkItemId(),
                 lease.getAgentId(), lease.getLeaseToken(), lease.getStatus(),
                 lease.getLeaseUntil(), lease.getVersion(), submittedAt, update);
         if (updated == 0) {
@@ -124,7 +128,7 @@ public class AgentWorkItemResultCommitServiceImpl implements AgentWorkItemResult
             throw invalidPersisted("Result CAS affected an unexpected row count");
         }
 
-        appendSubmittedEvent(tenantId, clientId, taskId, actorAgentId, current,
+        appendSubmittedEvent(tenantId, clientId, ownerJiacn, taskId, actorAgentId, current,
                 lease.getVersion(), lease.getVersion() + 1, submittedAt, published.getArtifactId());
 
         AgentWorkItemResultCommitViewDTO result = new AgentWorkItemResultCommitViewDTO();
@@ -137,8 +141,8 @@ public class AgentWorkItemResultCommitServiceImpl implements AgentWorkItemResult
         return result;
     }
 
-    private void appendSubmittedEvent(String tenantId, String clientId, String taskId,
-            String actorAgentId, AgentTaskWorkItemEntity current, long expectedVersion,
+    private void appendSubmittedEvent(
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId, AgentTaskWorkItemEntity current, long expectedVersion,
             long resultVersion, long occurredAt, String artifactId) {
         TaskEventPayload.Builder payload = TaskEventPayload.builder()
                 .put(TaskEventPayload.Key.WORK_ITEM_ID, current.getWorkItemId())
@@ -147,10 +151,19 @@ public class AgentWorkItemResultCommitServiceImpl implements AgentWorkItemResult
                 .put(TaskEventPayload.Key.TO_STATUS, "submitted")
                 .put(TaskEventPayload.Key.EXPECTED_VERSION, expectedVersion)
                 .put(TaskEventPayload.Key.RESULT_VERSION, resultVersion);
-        eventWriter.append(AgentTaskMutationEventSupport.command(tenantId, clientId, taskId,
-                TaskEventType.WORK_ITEM_SUBMITTED, TaskEventType.ActorType.AGENT, actorAgentId,
+        eventWriter.append(AgentTaskMutationEventSupport.command(
+                tenantId, clientId, ownerJiacn, taskId, TaskEventType.WORK_ITEM_SUBMITTED, TaskEventType.ActorType.AGENT, actorAgentId,
                 TaskEventType.Aggregate.WORK_ITEM, current.getWorkItemId(), payload, occurredAt,
                 resultVersion));
+    }
+
+    private void requireScope(
+            String tenantId, String clientId, String ownerJiacn, String taskId) {
+        if (!"0".equals(tenantId) || StringUtil.isBlank(clientId)
+                || StringUtil.isBlank(ownerJiacn) || "0".equals(ownerJiacn)
+                || StringUtil.isBlank(taskId)) {
+            throw invalid("strict tenant-zero client, owner and task scope is required");
+        }
     }
 
     private void requireCommand(String actorAgentId, AgentWorkItemResultCommitDTO command) {
@@ -177,6 +190,15 @@ public class AgentWorkItemResultCommitServiceImpl implements AgentWorkItemResult
                 || !command.getExpectedWorkItemVersion().equals(lease.getVersion())
                 || lease.getLeaseUntil() == null || lease.getLeaseUntil() <= 0) {
             throw invalidPersisted("B04 returned an incomplete or mismatched lease snapshot");
+        }
+    }
+
+    private void requireCurrentScope(
+            String tenantId, String clientId, String ownerJiacn, AgentTaskWorkItemEntity current) {
+        if (current == null || !tenantId.equals(current.getTenantId())
+                || !clientId.equals(current.getClientId())
+                || !ownerJiacn.equals(current.getOwnerJiacn())) {
+            throw invalidPersisted("Persisted work item is outside the locked owner scope");
         }
     }
 
@@ -235,13 +257,31 @@ public class AgentWorkItemResultCommitServiceImpl implements AgentWorkItemResult
                 return mutation.apply(null);
             }
             @Override
+            public <T> T executeWithLockedTaskRootInOwnerScope(
+                    String tenantId, String clientId, String ownerJiacn, String taskId,
+                    LockedTaskMutation<T> mutation) {
+                return mutation.apply(null);
+            }
+            @Override
             public <T> T executeWithLockedTaskRootForWorkItem(String tenantId, String clientId,
                     String workItemId, LockedTaskMutation<T> mutation) {
                 return mutation.apply(null);
             }
             @Override
+            public <T> T executeWithLockedTaskRootForWorkItemInOwnerScope(
+                    String tenantId, String clientId, String ownerJiacn, String workItemId,
+                    LockedTaskMutation<T> mutation) {
+                return mutation.apply(null);
+            }
+            @Override
             public <T> T executeAfterTaskRootReservation(String tenantId, String clientId,
                     String taskId, TaskRootReservation reservation, ReservedTaskMutation<T> mutation) {
+                throw new UnsupportedOperationException();
+            }
+            @Override
+            public <T> T executeAfterTaskRootReservationInOwnerScope(
+                    String tenantId, String clientId, String ownerJiacn, String taskId,
+                    TaskRootReservation reservation, ReservedTaskMutation<T> mutation) {
                 throw new UnsupportedOperationException();
             }
         };

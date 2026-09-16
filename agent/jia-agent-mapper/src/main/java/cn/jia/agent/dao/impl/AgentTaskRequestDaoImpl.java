@@ -22,11 +22,12 @@ public class AgentTaskRequestDaoImpl implements AgentTaskRequestDao {
     }
 
     @Override
-    public int insert(String tenantId, String clientId, AgentTaskRequestDTO request) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+    public int insert(String tenantId, String clientId, String ownerJiacn, AgentTaskRequestDTO request) {
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         requireRequest(request, true);
         AgentTaskRequestEntity entity = toEntity(request);
         TaskCollaborationDaoSupport.applyScope(entity, tenantId, clientId);
+        entity.setOwnerJiacn(ownerJiacn);
         entity.setPriority(request.getPriority() == null ? 0 : request.getPriority());
         entity.setVersion(0L);
         entity.init4Creation();
@@ -35,11 +36,11 @@ public class AgentTaskRequestDaoImpl implements AgentTaskRequestDao {
 
     @Override
     public AgentTaskRequestEntity findByRequestId(
-            String tenantId, String clientId, String taskId, String requestId) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+            String tenantId, String clientId, String ownerJiacn, String taskId, String requestId) {
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(requestId, "requestId");
-        LambdaQueryWrapper<AgentTaskRequestEntity> wrapper = scope(tenantId, clientId)
+        LambdaQueryWrapper<AgentTaskRequestEntity> wrapper = scope(tenantId, clientId, ownerJiacn)
                 .eq(AgentTaskRequestEntity::getTaskId, taskId)
                 .eq(AgentTaskRequestEntity::getRequestId, requestId);
         TaskCollaborationDaoSupport.exact(wrapper, "task_id", taskId);
@@ -49,11 +50,11 @@ public class AgentTaskRequestDaoImpl implements AgentTaskRequestDao {
 
     @Override
     public List<AgentTaskRequestEntity> listByTask(
-            String tenantId, String clientId, String taskId, String status,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String status,
             String workItemId, int limit) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
-        LambdaQueryWrapper<AgentTaskRequestEntity> wrapper = scope(tenantId, clientId)
+        LambdaQueryWrapper<AgentTaskRequestEntity> wrapper = scope(tenantId, clientId, ownerJiacn)
                 .eq(AgentTaskRequestEntity::getTaskId, taskId);
         TaskCollaborationDaoSupport.exact(wrapper, "task_id", taskId);
         appendStatus(wrapper, status);
@@ -66,13 +67,13 @@ public class AgentTaskRequestDaoImpl implements AgentTaskRequestDao {
     }
 
     @Override
-    public List<AgentTaskRequestEntity> listByTarget(String tenantId, String clientId, String taskId,
+    public List<AgentTaskRequestEntity> listByTarget(String tenantId, String clientId, String ownerJiacn, String taskId,
             String targetType, String targetId, String status, int limit) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(targetType, "targetType");
         TaskCollaborationDaoSupport.requireId(targetId, "targetId");
-        LambdaQueryWrapper<AgentTaskRequestEntity> wrapper = scope(tenantId, clientId)
+        LambdaQueryWrapper<AgentTaskRequestEntity> wrapper = scope(tenantId, clientId, ownerJiacn)
                 .eq(AgentTaskRequestEntity::getTaskId, taskId)
                 .eq(AgentTaskRequestEntity::getTargetType, targetType)
                 .eq(AgentTaskRequestEntity::getTargetId, targetId);
@@ -90,15 +91,15 @@ public class AgentTaskRequestDaoImpl implements AgentTaskRequestDao {
     }
 
     @Override
-    public int updateByVersion(String tenantId, String clientId, String taskId, String requestId,
+    public int updateByVersion(String tenantId, String clientId, String ownerJiacn, String taskId, String requestId,
             long expectedVersion, AgentTaskRequestDTO request) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(requestId, "requestId");
         requireRequest(request, false);
         TaskCollaborationDaoSupport.requireExpectedVersion(expectedVersion);
         return baseMapper.updateByVersion(
-                tenantId, clientId, taskId, requestId, expectedVersion, request, DateUtil.nowTime());
+                tenantId, clientId, ownerJiacn, taskId, requestId, expectedVersion, request, DateUtil.nowTime());
     }
 
     private LambdaQueryWrapper<AgentTaskRequestEntity> orderByTask(
@@ -118,13 +119,15 @@ public class AgentTaskRequestDaoImpl implements AgentTaskRequestDao {
         }
     }
 
-    private LambdaQueryWrapper<AgentTaskRequestEntity> scope(String tenantId, String clientId) {
+    private LambdaQueryWrapper<AgentTaskRequestEntity> scope(String tenantId, String clientId, String ownerJiacn) {
         LambdaQueryWrapper<AgentTaskRequestEntity> wrapper =
                 new LambdaQueryWrapper<AgentTaskRequestEntity>()
                         .eq(AgentTaskRequestEntity::getTenantId, tenantId)
-                        .eq(AgentTaskRequestEntity::getClientId, clientId);
+                        .eq(AgentTaskRequestEntity::getClientId, clientId)
+                        .eq(AgentTaskRequestEntity::getOwnerJiacn, ownerJiacn);
         TaskCollaborationDaoSupport.exact(wrapper, "tenant_id", tenantId);
-        return TaskCollaborationDaoSupport.exact(wrapper, "client_id", clientId);
+        TaskCollaborationDaoSupport.exact(wrapper, "client_id", clientId);
+        return TaskCollaborationDaoSupport.exact(wrapper, "owner_jiacn", ownerJiacn);
     }
 
     private void requireRequest(AgentTaskRequestDTO request, boolean requireIdentity) {

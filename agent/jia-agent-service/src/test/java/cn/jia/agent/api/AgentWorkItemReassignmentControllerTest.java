@@ -123,7 +123,7 @@ class AgentWorkItemReassignmentControllerTest {
         result.setTargetAgentId("agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
         result.setIdempotentReplay(true);
         when(service.reassign(anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), any())).thenReturn(result);
+                anyString(), anyString(), anyString(), anyString(), any())).thenReturn(result);
 
         mvc.perform(post("/agent/tasks/task-1/work-items/work-1/reassignments")
                         .header("Idempotency-Key", "reassign-key-0001")
@@ -134,7 +134,7 @@ class AgentWorkItemReassignmentControllerTest {
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
                 .andExpect(jsonPath("$.idempotentReplay").value(true));
 
-        verify(service).reassign(eq("Tenant-A"), eq("Client-A"), eq("operator-123"),
+        verify(service).reassign(eq("0"), eq("Client-A"), eq("Tenant-A"), eq("operator-123"),
                 eq(ACTOR), eq("task-1"), eq("work-1"), eq("reassign-key-0001"),
                 any(AgentWorkItemReassignmentRequestDTO.class));
     }
@@ -144,7 +144,7 @@ class AgentWorkItemReassignmentControllerTest {
         AgentWorkItemReassignmentLeaseDTO lease = new AgentWorkItemReassignmentLeaseDTO();
         lease.setLeaseToken("secret-target-token");
         when(service.readLease(anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), any())).thenReturn(lease);
+                anyString(), anyString(), anyString(), any())).thenReturn(lease);
 
         mvc.perform(post("/agent/tasks/task-1/work-items/work-1/reassignments/rsn-1/lease")
                         .queryParam("actorAgentId", "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
@@ -155,7 +155,7 @@ class AgentWorkItemReassignmentControllerTest {
                 .andExpect(jsonPath("$.leaseToken").value("secret-target-token"))
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
 
-        verify(service).readLease(eq("tenant-a"), eq("client-a"),
+        verify(service).readLease(eq("0"), eq("client-a"), eq("tenant-a"),
                 eq("agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"), eq("task-1"), eq("work-1"),
                 eq("rsn-1"), any());
     }
@@ -214,7 +214,7 @@ class AgentWorkItemReassignmentControllerTest {
                 AgentWorkItemReassignmentException.Reason.LEASE_NOT_EXPIRED,
                 "secret lease token and database detail"))
                 .when(service).reassign(anyString(), anyString(), anyString(), anyString(),
-                        anyString(), anyString(), anyString(), any());
+                        anyString(), anyString(), anyString(), anyString(), any());
         mvc.perform(post("/agent/tasks/task-1/work-items/work-1/reassignments")
                         .header("Idempotency-Key", "reassign-key-0001")
                         .queryParam("actorAgentId", ACTOR)
@@ -261,9 +261,9 @@ class AgentWorkItemReassignmentControllerTest {
                         .content("{\"commandId\":\"cmd-new\",\"expectedWorkItemVersion\":6,\"leaseDurationMillis\":1000}")
                         .principal(targetJwt(target)))
                 .andExpect(status().isOk());
-        verify(service).startLease(eq("tenant-a"), eq("client-a"), eq(target),
+        verify(service).startLease(eq("0"), eq("client-a"), eq("tenant-a"), eq(target),
                 eq("task-1"), eq("work-1"), eq("rsn-1"), any());
-        verify(service).heartbeatLease(eq("tenant-a"), eq("client-a"), eq(target),
+        verify(service).heartbeatLease(eq("0"), eq("client-a"), eq("tenant-a"), eq(target),
                 eq("task-1"), eq("work-1"), eq("rsn-1"), any());
     }
 

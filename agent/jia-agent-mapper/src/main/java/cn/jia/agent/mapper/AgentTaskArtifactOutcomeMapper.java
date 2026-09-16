@@ -17,6 +17,8 @@ public interface AgentTaskArtifactOutcomeMapper extends BaseMapper<AgentTaskArti
               AND OCTET_LENGTH(o.tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(o.client_id AS BINARY) = CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(o.client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(o.owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+              AND OCTET_LENGTH(o.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
               AND CAST(o.task_id AS BINARY) = CAST(#{taskId} AS BINARY)
               AND OCTET_LENGTH(o.task_id) = OCTET_LENGTH(#{taskId})
             """;
@@ -26,6 +28,7 @@ public interface AgentTaskArtifactOutcomeMapper extends BaseMapper<AgentTaskArti
             FROM agent_task_artifact_outcome o
             WHERE o.tenant_id = #{tenantId}
               AND o.client_id = #{clientId}
+              AND o.owner_jiacn = #{ownerJiacn}
               AND o.task_id = #{taskId}
               AND o.artifact_id = #{artifactId}
               AND o.artifact_version = #{artifactVersion}
@@ -38,6 +41,7 @@ public interface AgentTaskArtifactOutcomeMapper extends BaseMapper<AgentTaskArti
     AgentTaskArtifactOutcomeEntity selectExactForUpdate(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("taskId") String taskId,
             @Param("artifactId") String artifactId,
             @Param("artifactVersion") int artifactVersion);
@@ -47,12 +51,15 @@ public interface AgentTaskArtifactOutcomeMapper extends BaseMapper<AgentTaskArti
             FROM agent_task_artifact_outcome_decision d
             WHERE d.tenant_id = #{tenantId}
               AND d.client_id = #{clientId}
+              AND d.owner_jiacn = #{ownerJiacn}
               AND d.task_id = #{taskId}
               AND d.decision_id = #{decisionId}
               AND CAST(d.tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
               AND OCTET_LENGTH(d.tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(d.client_id AS BINARY) = CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(d.client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(d.owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+              AND OCTET_LENGTH(d.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
               AND CAST(d.task_id AS BINARY) = CAST(#{taskId} AS BINARY)
               AND OCTET_LENGTH(d.task_id) = OCTET_LENGTH(#{taskId})
               AND CAST(d.decision_id AS BINARY) = CAST(#{decisionId} AS BINARY)
@@ -63,6 +70,7 @@ public interface AgentTaskArtifactOutcomeMapper extends BaseMapper<AgentTaskArti
     AgentTaskArtifactOutcomeDecisionEntity selectDecisionForUpdate(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("taskId") String taskId,
             @Param("decisionId") String decisionId);
 
@@ -71,12 +79,12 @@ public interface AgentTaskArtifactOutcomeMapper extends BaseMapper<AgentTaskArti
                 (task_id, decision_id, decision_digest,
                  accepted_artifact_id, accepted_artifact_version,
                  accepted_outcome_version, decided_by_agent_id, decided_at,
-                 tenant_id, client_id, create_time, update_time)
+                 tenant_id, client_id, owner_jiacn, create_time, update_time)
             VALUES
                 (#{taskId}, #{decisionId}, #{decisionDigest},
                  #{acceptedArtifactId}, #{acceptedArtifactVersion},
                  #{acceptedOutcomeVersion}, #{decidedByAgentId}, #{decidedAt},
-                 #{tenantId}, #{clientId}, #{createTime}, #{updateTime})
+                 #{tenantId}, #{clientId}, #{ownerJiacn}, #{createTime}, #{updateTime})
             """)
     int insertDecision(AgentTaskArtifactOutcomeDecisionEntity decision);
 
@@ -93,6 +101,7 @@ public interface AgentTaskArtifactOutcomeMapper extends BaseMapper<AgentTaskArti
                    update_time = #{decidedAt}
              WHERE tenant_id = #{tenantId}
                AND client_id = #{clientId}
+               AND owner_jiacn = #{ownerJiacn}
                AND task_id = #{taskId}
                AND artifact_id = #{artifactId}
                AND artifact_version = #{artifactVersion}
@@ -102,6 +111,8 @@ public interface AgentTaskArtifactOutcomeMapper extends BaseMapper<AgentTaskArti
                AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
                AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
                AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+               AND CAST(owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+               AND OCTET_LENGTH(owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
                AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
                AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
                AND CAST(artifact_id AS BINARY) = CAST(#{artifactId} AS BINARY)
@@ -112,6 +123,7 @@ public interface AgentTaskArtifactOutcomeMapper extends BaseMapper<AgentTaskArti
     int updateByVersion(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("taskId") String taskId,
             @Param("artifactId") String artifactId,
             @Param("artifactVersion") int artifactVersion,
@@ -128,7 +140,7 @@ public interface AgentTaskArtifactOutcomeMapper extends BaseMapper<AgentTaskArti
 
     @Select("""
             <script>
-            SELECT a.tenant_id, a.client_id, a.task_id, a.artifact_id, a.work_item_id,
+            SELECT a.tenant_id, a.client_id, a.owner_jiacn, a.task_id, a.artifact_id, a.work_item_id,
                    a.producer_agent_id, a.artifact_type, a.title, a.content_hash,
                    a.artifact_version, a.visibility, a.created_at,
                    o.outcome_state, o.version AS outcome_version,
@@ -137,11 +149,13 @@ public interface AgentTaskArtifactOutcomeMapper extends BaseMapper<AgentTaskArti
               JOIN agent_task_artifact a
                 ON a.tenant_id = o.tenant_id
                AND a.client_id = o.client_id
+               AND a.owner_jiacn = o.owner_jiacn
                AND a.task_id = o.task_id
                AND a.artifact_id = o.artifact_id
                AND a.artifact_version = o.artifact_version
              WHERE o.tenant_id = #{tenantId}
                AND o.client_id = #{clientId}
+               AND o.owner_jiacn = #{ownerJiacn}
                AND o.task_id = #{taskId}
                AND o.outcome_state = 'accepted'
             """ + EXACT_SCOPE + """
@@ -151,6 +165,9 @@ public interface AgentTaskArtifactOutcomeMapper extends BaseMapper<AgentTaskArti
                AND OCTET_LENGTH(a.tenant_id) = OCTET_LENGTH(#{tenantId})
                AND CAST(a.client_id AS BINARY) = CAST(#{clientId} AS BINARY)
                AND OCTET_LENGTH(a.client_id) = OCTET_LENGTH(#{clientId})
+               AND a.owner_jiacn = #{ownerJiacn}
+               AND CAST(a.owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+               AND OCTET_LENGTH(a.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
                AND CAST(a.task_id AS BINARY) = CAST(#{taskId} AS BINARY)
                AND OCTET_LENGTH(a.task_id) = OCTET_LENGTH(#{taskId})
                AND CAST(a.artifact_id AS BINARY) = CAST(o.artifact_id AS BINARY)
@@ -187,6 +204,7 @@ public interface AgentTaskArtifactOutcomeMapper extends BaseMapper<AgentTaskArti
     List<AgentTaskAcceptedArtifactRow> selectAuthoritativeAccepted(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("taskId") String taskId,
             @Param("workItemId") String workItemId,
             @Param("actorAgentId") String actorAgentId,

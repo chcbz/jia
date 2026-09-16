@@ -12,122 +12,13 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Named
 public class AgentScenePhaseReportDaoImpl implements AgentScenePhaseReportDao {
-    private final AgentScenePhaseReportMapper baseMapper;
-
-    @Inject
-    public AgentScenePhaseReportDaoImpl(AgentScenePhaseReportMapper baseMapper) {
-        this.baseMapper = baseMapper;
-    }
-
-    @Override
-    public AgentScenePhaseReportEntity findByReportId(
-            String tenantId, String clientId, String sceneId, String reportId) {
-        requireScope(tenantId, clientId, sceneId);
-        if (StringUtil.isBlank(reportId)) {
-            throw new IllegalArgumentException("reportId is required");
-        }
-        return baseMapper.selectOne(scope(tenantId, clientId, sceneId)
-                .eq(AgentScenePhaseReportEntity::getReportId, reportId)
-                .last("limit 1"));
-    }
-
-    @Override
-    @Transactional(propagation = Propagation.MANDATORY)
-    public AgentScenePhaseReportEntity findByReportIdForUpdate(
-            String tenantId, String clientId, String sceneId, String reportId) {
-        requireScope(tenantId, clientId, sceneId);
-        if (StringUtil.isBlank(reportId)) {
-            throw new IllegalArgumentException("reportId is required");
-        }
-        return baseMapper.selectScopedForUpdate(tenantId, clientId, sceneId, reportId);
-    }
-
-    @Override
-    @Transactional(propagation = Propagation.MANDATORY)
-    public boolean tryReserve(String tenantId, String clientId, String sceneId,
-            AgentScenePhaseReportEntity entity) {
-        requireScope(tenantId, clientId, sceneId);
-        requireReservation(entity);
-        entity.setTenantId(tenantId);
-        entity.setClientId(clientId);
-        entity.setSceneId(sceneId);
-        requireMaxLength("tenantId", tenantId, 50);
-        requireMaxLength("clientId", clientId, 50);
-        requireMaxLength("sceneId", sceneId, 100);
-        entity.init4Creation();
-        int inserted = baseMapper.reserveIgnore(entity);
-        if (inserted == 1) {
-            return true;
-        }
-        if (inserted == 0) {
-            return false;
-        }
-        throw new IllegalStateException("Phase report reservation affected an unexpected row count: " + inserted);
-    }
-
-    @Override
-    @Transactional(propagation = Propagation.MANDATORY)
-    public int finalizePendingResult(String tenantId, String clientId, String sceneId,
-            String reportId, String pendingResult, String finalResult, long processedAt) {
-        requireScope(tenantId, clientId, sceneId);
-        if (StringUtil.isBlank(reportId) || StringUtil.isBlank(pendingResult)
-                || StringUtil.isBlank(finalResult) || processedAt < 0) {
-            throw new IllegalArgumentException(
-                    "reportId, pendingResult, finalResult and nonnegative processedAt are required");
-        }
-        AgentScenePhaseReportEntity update = new AgentScenePhaseReportEntity();
-        update.setResult(finalResult);
-        update.setProcessedAt(processedAt);
-        update.setUpdateTime(processedAt);
-        return baseMapper.update(update, scope(tenantId, clientId, sceneId)
-                .eq(AgentScenePhaseReportEntity::getReportId, reportId)
-                .eq(AgentScenePhaseReportEntity::getResult, pendingResult));
-    }
-
-    private LambdaQueryWrapper<AgentScenePhaseReportEntity> scope(
-            String tenantId, String clientId, String sceneId) {
-        return new LambdaQueryWrapper<AgentScenePhaseReportEntity>()
-                .eq(AgentScenePhaseReportEntity::getTenantId, tenantId)
-                .eq(AgentScenePhaseReportEntity::getClientId, clientId)
-                .eq(AgentScenePhaseReportEntity::getSceneId, sceneId);
-    }
-
-    private void requireScope(String tenantId, String clientId, String sceneId) {
-        if (StringUtil.isBlank(tenantId) || StringUtil.isBlank(clientId) || StringUtil.isBlank(sceneId)) {
-            throw new IllegalArgumentException("tenantId, clientId and sceneId are required");
-        }
-    }
-
-    private void requireReservation(AgentScenePhaseReportEntity entity) {
-        if (entity == null) {
-            throw new IllegalArgumentException("phase report is required");
-        }
-        requireText("reportId", entity.getReportId(), 100);
-        requireText("agentId", entity.getAgentId(), 100);
-        requireText("phase", entity.getPhase(), 20);
-        requireText("regionId", entity.getRegionId(), 100);
-        requireText("result", entity.getResult(), 30);
-        if (entity.getStateVersion() == null || entity.getStateVersion() <= 0) {
-            throw new IllegalArgumentException("stateVersion must be positive");
-        }
-        if (entity.getOccurredAt() == null || entity.getOccurredAt() < 0) {
-            throw new IllegalArgumentException("occurredAt must be nonnegative");
-        }
-        if (entity.getProcessedAt() == null || entity.getProcessedAt() < 0) {
-            throw new IllegalArgumentException("processedAt must be nonnegative");
-        }
-    }
-
-    private void requireText(String name, String value, int maxLength) {
-        if (StringUtil.isBlank(value)) {
-            throw new IllegalArgumentException(name + " is required");
-        }
-        requireMaxLength(name, value, maxLength);
-    }
-
-    private void requireMaxLength(String name, String value, int maxLength) {
-        if (value.length() > maxLength) {
-            throw new IllegalArgumentException(name + " exceeds maximum length " + maxLength);
-        }
-    }
+ private final AgentScenePhaseReportMapper baseMapper;
+ @Inject public AgentScenePhaseReportDaoImpl(AgentScenePhaseReportMapper baseMapper){this.baseMapper=baseMapper;}
+ @Override public AgentScenePhaseReportEntity findByReportId(String t,String c,String o,String s,String r){requireScope(t,c,o,s);if(StringUtil.isBlank(r))throw new IllegalArgumentException("reportId is required");return baseMapper.selectOne(scope(t,c,o,s).eq(AgentScenePhaseReportEntity::getReportId,r).last("limit 1"));}
+ @Override @Transactional(propagation=Propagation.MANDATORY) public AgentScenePhaseReportEntity findByReportIdForUpdate(String t,String c,String o,String s,String r){requireScope(t,c,o,s);if(StringUtil.isBlank(r))throw new IllegalArgumentException("reportId is required");return baseMapper.selectScopedForUpdate(t,c,o,s,r);}
+ @Override @Transactional(propagation=Propagation.MANDATORY) public boolean tryReserve(String t,String c,String o,String s,AgentScenePhaseReportEntity e){requireScope(t,c,o,s);requireReservation(e);e.setTenantId(t);e.setClientId(c);e.setOwnerJiacn(o);e.setSceneId(s);e.init4Creation();int n=baseMapper.reserveIgnore(e);if(n==1)return true;if(n==0)return false;throw new IllegalStateException("Phase report reservation affected an unexpected row count: "+n);}
+ @Override @Transactional(propagation=Propagation.MANDATORY) public int finalizePendingResult(String t,String c,String o,String s,String r,String p,String f,long at){requireScope(t,c,o,s);if(StringUtil.isBlank(r)||StringUtil.isBlank(p)||StringUtil.isBlank(f)||at<0)throw new IllegalArgumentException("reportId, pendingResult, finalResult and nonnegative processedAt are required");AgentScenePhaseReportEntity u=new AgentScenePhaseReportEntity();u.setResult(f);u.setProcessedAt(at);u.setUpdateTime(at);return baseMapper.update(u,scope(t,c,o,s).eq(AgentScenePhaseReportEntity::getReportId,r).eq(AgentScenePhaseReportEntity::getResult,p));}
+ private LambdaQueryWrapper<AgentScenePhaseReportEntity> scope(String t,String c,String o,String s){return new LambdaQueryWrapper<AgentScenePhaseReportEntity>().eq(AgentScenePhaseReportEntity::getTenantId,t).eq(AgentScenePhaseReportEntity::getClientId,c).eq(AgentScenePhaseReportEntity::getOwnerJiacn,o).eq(AgentScenePhaseReportEntity::getSceneId,s);}
+ private void requireScope(String t,String c,String o,String s){if(!"0".equals(t)||StringUtil.isBlank(c)||StringUtil.isBlank(o)||"0".equals(o)||StringUtil.isBlank(s))throw new IllegalArgumentException("strict scene owner scope is required");}
+ private void requireReservation(AgentScenePhaseReportEntity e){if(e==null)throw new IllegalArgumentException("phase report is required");for(String[] v:new String[][]{{"reportId",e.getReportId()},{"agentId",e.getAgentId()},{"phase",e.getPhase()},{"regionId",e.getRegionId()},{"result",e.getResult()}})if(StringUtil.isBlank(v[1]))throw new IllegalArgumentException(v[0]+" is required");if(e.getStateVersion()==null||e.getStateVersion()<=0)throw new IllegalArgumentException("stateVersion must be positive");if(e.getOccurredAt()==null||e.getOccurredAt()<0||e.getProcessedAt()==null||e.getProcessedAt()<0)throw new IllegalArgumentException("timestamps must be nonnegative");}
 }

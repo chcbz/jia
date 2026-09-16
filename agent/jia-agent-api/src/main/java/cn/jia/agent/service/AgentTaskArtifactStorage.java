@@ -15,7 +15,7 @@ public interface AgentTaskArtifactStorage {
 
     boolean matches(Scope scope, String storageUri, String expectedSha256);
 
-    record Scope(String tenantId, String clientId, String taskId) {
+    record Scope(String tenantId, String clientId, String ownerJiacn, String taskId) {
     }
 
     record StoredObject(String storageUri, String sha256, long byteLength,

@@ -7,25 +7,51 @@ import cn.jia.agent.entity.AgentTaskRequestViewDTO;
 
 import java.util.List;
 
+/** Request APIs require the exact authenticated owner of the task. */
 public interface AgentTaskRequestService {
-    AgentTaskRequestViewDTO create(String tenantId, String clientId, String taskId,
-            String actorAgentId, AgentTaskRequestCreateDTO command);
+    @Deprecated(forRemoval = true)
+    default AgentTaskRequestViewDTO create(String tenantId, String clientId, String taskId,
+            String actorAgentId, AgentTaskRequestCreateDTO command) { throw ownerRequired(); }
+    @Deprecated(forRemoval = true)
+    default AgentTaskRequestViewDTO get(String tenantId, String clientId, String taskId,
+            String actorAgentId, String requestId) { throw ownerRequired(); }
+    @Deprecated(forRemoval = true)
+    default List<AgentTaskRequestViewDTO> list(String tenantId, String clientId, String taskId,
+            String actorAgentId, AgentTaskRequestQueryDTO query) { throw ownerRequired(); }
+    @Deprecated(forRemoval = true)
+    default AgentTaskRequestViewDTO acknowledge(String tenantId, String clientId, String taskId,
+            String actorAgentId, String requestId, AgentTaskRequestTransitionDTO command) { throw ownerRequired(); }
+    @Deprecated(forRemoval = true)
+    default AgentTaskRequestViewDTO resolve(String tenantId, String clientId, String taskId,
+            String actorAgentId, String requestId, AgentTaskRequestTransitionDTO command) { throw ownerRequired(); }
+    @Deprecated(forRemoval = true)
+    default AgentTaskRequestViewDTO reject(String tenantId, String clientId, String taskId,
+            String actorAgentId, String requestId, AgentTaskRequestTransitionDTO command) { throw ownerRequired(); }
+    @Deprecated(forRemoval = true)
+    default AgentTaskRequestViewDTO cancel(String tenantId, String clientId, String taskId,
+            String actorAgentId, String requestId, AgentTaskRequestTransitionDTO command) { throw ownerRequired(); }
 
-    AgentTaskRequestViewDTO get(String tenantId, String clientId, String taskId,
-            String actorAgentId, String requestId);
+    AgentTaskRequestViewDTO create(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, AgentTaskRequestCreateDTO command);
 
-    List<AgentTaskRequestViewDTO> list(String tenantId, String clientId, String taskId,
-            String actorAgentId, AgentTaskRequestQueryDTO query);
+    AgentTaskRequestViewDTO get(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, String requestId);
 
-    AgentTaskRequestViewDTO acknowledge(String tenantId, String clientId, String taskId,
-            String actorAgentId, String requestId, AgentTaskRequestTransitionDTO command);
+    List<AgentTaskRequestViewDTO> list(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, AgentTaskRequestQueryDTO query);
 
-    AgentTaskRequestViewDTO resolve(String tenantId, String clientId, String taskId,
-            String actorAgentId, String requestId, AgentTaskRequestTransitionDTO command);
+    AgentTaskRequestViewDTO acknowledge(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, String requestId, AgentTaskRequestTransitionDTO command);
 
-    AgentTaskRequestViewDTO reject(String tenantId, String clientId, String taskId,
-            String actorAgentId, String requestId, AgentTaskRequestTransitionDTO command);
+    AgentTaskRequestViewDTO resolve(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, String requestId, AgentTaskRequestTransitionDTO command);
 
-    AgentTaskRequestViewDTO cancel(String tenantId, String clientId, String taskId,
-            String actorAgentId, String requestId, AgentTaskRequestTransitionDTO command);
+    AgentTaskRequestViewDTO reject(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, String requestId, AgentTaskRequestTransitionDTO command);
+
+    AgentTaskRequestViewDTO cancel(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, String requestId, AgentTaskRequestTransitionDTO command);
+    private static UnsupportedOperationException ownerRequired() {
+        return new UnsupportedOperationException("strict task owner scope is required");
+    }
 }

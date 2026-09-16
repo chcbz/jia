@@ -48,11 +48,15 @@ public interface AgentTaskMetaDao extends IBaseDao<AgentTaskMetaEntity> {
     AgentTaskMetaEntity findByWorkItemIdForUpdate(
             String tenantId, String clientId, String workItemId);
 
+    /** Strict work-item-to-root lock: owner is part of both parent and child predicates. */
+    AgentTaskMetaEntity findByWorkItemIdForUpdateInOwnerScope(
+            String tenantId, String clientId, String ownerJiacn, String workItemId);
+
     AgentTaskMetaEntity findDurableActiveAssignmentByAgentForUpdate(
             String tenantId, String clientId, String agentId);
 
     List<AgentTaskAggregationSnapshotRow> findAggregationSnapshot(
-            String tenantId, String clientId, String taskId);
+            String tenantId, String clientId, String ownerJiacn, String taskId);
 
     int updateAssignmentByVersion(AgentTaskMetaEntity task, long expectedVersion,
             long resultVersion, long updateTime);

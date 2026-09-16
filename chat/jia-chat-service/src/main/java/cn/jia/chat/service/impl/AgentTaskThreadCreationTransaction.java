@@ -57,19 +57,19 @@ public class AgentTaskThreadCreationTransaction {
 
     @Transactional(rollbackFor = Exception.class)
     public AgentTaskThreadEntity createTeamThread(
-            String tenantId, String clientId, String taskId,
+            String tenantId, String clientId, String ownerJiacn, String taskId,
             String actorAgentId, String title, String conversationScopeKey) {
-        return mutationTransaction.executeWithLockedTaskRoot(
-                tenantId, clientId, taskId, taskRoot -> createTeamThreadLocked(
-                        tenantId, clientId, taskId, actorAgentId, title,
+        return mutationTransaction.executeWithLockedTaskRootInOwnerScope(
+                tenantId, clientId, ownerJiacn, taskId, taskRoot -> createTeamThreadLocked(
+                        tenantId, clientId, ownerJiacn, taskId, actorAgentId, title,
                         conversationScopeKey, taskRoot));
     }
 
     private AgentTaskThreadEntity createTeamThreadLocked(
-            String tenantId, String clientId, String taskId,
+            String tenantId, String clientId, String ownerJiacn, String taskId,
             String actorAgentId, String title, String conversationScopeKey,
             AgentTaskMetaEntity taskRoot) {
-        requireLockedWriter(tenantId, clientId, taskId, actorAgentId);
+        requireLockedWriter(tenantId, clientId, ownerJiacn, taskId, actorAgentId);
         AgentTaskThreadEntity existing = taskThreadDao.findByTaskThreadForUpdate(
                 tenantId, clientId, taskId,
                 AgentTaskThreadConstants.THREAD_TYPE_TEAM,
@@ -78,41 +78,41 @@ public class AgentTaskThreadCreationTransaction {
             return requireCanonicalThread(tenantId, clientId, taskId, existing);
         }
         AgentTaskThreadEntity created = createBinding(
-                tenantId, clientId, taskId, actorAgentId, title, conversationScopeKey);
-        appendThreadCreated(tenantId, clientId, taskId, actorAgentId, taskRoot, created);
+                tenantId, clientId, ownerJiacn, taskId, actorAgentId, title, conversationScopeKey);
+        appendThreadCreated(tenantId, clientId, ownerJiacn, taskId, actorAgentId, taskRoot, created);
         return created;
     }
 
     @Transactional(rollbackFor = Exception.class)
     public ChatMessageEntity appendTeamMessage(
-            String tenantId, String clientId, String taskId, String actorAgentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId,
             String requestedSenderName, ChatMessageEntity message) {
-        return mutationTransaction.executeWithLockedTaskRoot(
-                tenantId, clientId, taskId, taskRoot -> appendTeamMessageLocked(
-                        tenantId, clientId, taskId, actorAgentId,
+        return mutationTransaction.executeWithLockedTaskRootInOwnerScope(
+                tenantId, clientId, ownerJiacn, taskId, taskRoot -> appendTeamMessageLocked(
+                        tenantId, clientId, ownerJiacn, taskId, actorAgentId,
                         requestedSenderName, message, taskRoot));
     }
 
     private ChatMessageEntity appendTeamMessageLocked(
-            String tenantId, String clientId, String taskId, String actorAgentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId,
             String requestedSenderName, ChatMessageEntity message,
             AgentTaskMetaEntity taskRoot) {
-        AgentRuntimeDTO runtime = requireLockedWriter(tenantId, clientId, taskId, actorAgentId);
+        AgentRuntimeDTO runtime = requireLockedWriter(tenantId, clientId, ownerJiacn, taskId, actorAgentId);
         AgentTaskThreadEntity thread = taskThreadDao.findByTaskThreadForUpdate(
                 tenantId, clientId, taskId,
                 AgentTaskThreadConstants.THREAD_TYPE_TEAM,
                 AgentTaskThreadConstants.THREAD_KEY_TEAM);
         if (thread == null) {
             thread = createBinding(
-                    tenantId, clientId, taskId, actorAgentId,
+                    tenantId, clientId, ownerJiacn, taskId, actorAgentId,
                     "Task " + taskId + " team thread", "task-thread:" + taskId);
-            appendThreadCreated(tenantId, clientId, taskId, actorAgentId, taskRoot, thread);
+            appendThreadCreated(tenantId, clientId, ownerJiacn, taskId, actorAgentId, taskRoot, thread);
         } else {
             thread = requireCanonicalThread(tenantId, clientId, taskId, thread);
         }
         ChatConversationEntity conversation = conversationDao.findScopedById(
                 tenantId, clientId, thread.getConversationId());
-        requireCanonicalConversation(tenantId, clientId, taskId, thread, conversation);
+        requireCanonicalConversation(tenantId, clientId, ownerJiacn, taskId, thread, conversation);
 
         String senderName = trustedSenderName(runtime, actorAgentId);
         if (requestedSenderName != null && !requestedSenderName.equals(senderName)) {
@@ -126,16 +126,16 @@ public class AgentTaskThreadCreationTransaction {
         if (inserted != 1 || message.getId() == null) {
             throw new IllegalStateException("Task thread message insert did not affect one row");
         }
-        appendMessagePosted(tenantId, clientId, taskId, actorAgentId, taskRoot, message);
+        appendMessagePosted(tenantId, clientId, ownerJiacn, taskId, actorAgentId, taskRoot, message);
         return message;
     }
 
     private AgentTaskThreadEntity createBinding(
-            String tenantId, String clientId, String taskId,
+            String tenantId, String clientId, String ownerJiacn, String taskId,
             String actorAgentId, String title, String conversationScopeKey) {
         ChatConversationEntity conversation = new ChatConversationEntity();
         conversation.setTitle(title);
-        conversation.setJiacn(tenantId);
+        conversation.setJiacn(ownerJiacn);
         conversation.setTenantId(tenantId);
         conversation.setClientId(clientId);
         conversation.setConversationType(AgentTaskThreadConstants.CONVERSATION_TYPE);
@@ -161,7 +161,7 @@ public class AgentTaskThreadCreationTransaction {
     }
 
     private void appendThreadCreated(
-            String tenantId, String clientId, String taskId, String actorAgentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId,
             AgentTaskMetaEntity taskRoot, AgentTaskThreadEntity thread) {
         long occurredAt = positiveTime(thread.getCreateTime());
         TaskEventPayload.Builder payload = TaskEventPayload.builder()
@@ -169,14 +169,14 @@ public class AgentTaskThreadCreationTransaction {
                 .put(TaskEventPayload.Key.THREAD_TYPE, thread.getThreadType())
                 .put(TaskEventPayload.Key.CONVERSATION_ID, thread.getConversationId())
                 .put(TaskEventPayload.Key.CREATED_AT, occurredAt);
-        eventWriter.append(command(tenantId, clientId, taskId,
+        eventWriter.append(command(tenantId, clientId, ownerJiacn, taskId,
                 TaskEventType.THREAD_CREATED, TaskEventType.ActorType.AGENT, actorAgentId,
                 TaskEventType.Aggregate.THREAD, String.valueOf(thread.getId()), payload,
                 occurredAt, taskRoot.getTaskVersion()));
     }
 
     private void appendMessagePosted(
-            String tenantId, String clientId, String taskId, String actorAgentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId,
             AgentTaskMetaEntity taskRoot, ChatMessageEntity message) {
         long occurredAt = positiveTime(message.getCreateTime());
         TaskEventPayload.Builder payload = TaskEventPayload.builder()
@@ -186,23 +186,24 @@ public class AgentTaskThreadCreationTransaction {
                 .put(TaskEventPayload.Key.SENDER_AGENT_ID, actorAgentId)
                 .putContentDigest(TaskEventPayload.ContentDigest.fromUtf8(message.getContent()))
                 .put(TaskEventPayload.Key.CREATED_AT, occurredAt);
-        eventWriter.append(command(tenantId, clientId, taskId,
+        eventWriter.append(command(tenantId, clientId, ownerJiacn, taskId,
                 TaskEventType.MESSAGE_POSTED, TaskEventType.ActorType.AGENT, actorAgentId,
                 TaskEventType.Aggregate.MESSAGE, String.valueOf(message.getId()), payload,
                 occurredAt, taskRoot.getTaskVersion()));
     }
 
     private AgentTaskEventWriteCommand command(
-            String tenantId, String clientId, String taskId,
+            String tenantId, String clientId, String ownerJiacn, String taskId,
             String eventType, String actorType, String actorId,
             String aggregateType, String aggregateId,
             TaskEventPayload.Builder payload, long occurredAt, long resultVersion) {
-        String seed = tenantId + '\u0000' + clientId + '\u0000' + taskId + '\u0000'
+        String seed = tenantId + '\u0000' + clientId + '\u0000' + ownerJiacn + '\u0000' + taskId + '\u0000'
                 + eventType + '\u0000' + aggregateType + '\u0000' + aggregateId + '\u0000'
                 + resultVersion;
         return new AgentTaskEventWriteCommand()
                 .setTenantId(tenantId)
                 .setClientId(clientId)
+                .setOwnerJiacn(ownerJiacn)
                 .setTaskId(taskId)
                 .setEventId(EVENT_ID_PREFIX
                         + TaskEventPayload.ContentDigest.fromUtf8(seed).sha256())
@@ -231,14 +232,14 @@ public class AgentTaskThreadCreationTransaction {
     }
 
     private AgentRuntimeDTO requireLockedWriter(
-            String tenantId, String clientId, String taskId, String actorAgentId) {
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId) {
         try {
             // Root lock is acquired by AgentTaskMutationTransaction before this member lock.
             // Preserve B07's remaining order: member -> identity/runtime -> thread/message.
             AgentTaskAccessLevel access = accessService.resolveMemberAccessForUpdate(
-                    tenantId, clientId, taskId, actorAgentId);
+                    tenantId, clientId, ownerJiacn, taskId, actorAgentId);
             AgentRuntimeDTO runtime = access.canWrite()
-                    ? agentService.requireApiKeyOwnedAgentForUpdate(clientId, tenantId, actorAgentId)
+                    ? agentService.requireApiKeyOwnedAgentForUpdate(clientId, ownerJiacn, actorAgentId)
                     : null;
             if (runtime == null || !actorAgentId.equals(runtime.getAgentId()) || !access.canWrite()) {
                 throw unavailable();
@@ -268,14 +269,14 @@ public class AgentTaskThreadCreationTransaction {
     }
 
     private void requireCanonicalConversation(
-            String tenantId, String clientId, String taskId,
+            String tenantId, String clientId, String ownerJiacn, String taskId,
             AgentTaskThreadEntity thread, ChatConversationEntity conversation) {
         if (conversation == null
                 || conversation.getId() == null
                 || !thread.getConversationId().equals(String.valueOf(conversation.getId()))
                 || !tenantId.equals(conversation.getTenantId())
                 || !clientId.equals(conversation.getClientId())
-                || !tenantId.equals(conversation.getJiacn())
+                || !ownerJiacn.equals(conversation.getJiacn())
                 || !AgentTaskThreadConstants.CONVERSATION_TYPE.equals(conversation.getConversationType())
                 || !AgentTaskThreadConstants.CONVERSATION_SCOPE_TYPE.equals(conversation.getConversationScopeType())
                 || !("task-thread:" + taskId).equals(conversation.getConversationScopeKey())

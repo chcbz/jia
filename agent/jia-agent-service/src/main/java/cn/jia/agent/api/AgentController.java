@@ -548,8 +548,8 @@ public class AgentController {
             throw new FundedBountyException(HttpStatus.FORBIDDEN,
                     "ECONOMY_FORBIDDEN", "Authenticated money scope is incomplete");
         }
-        return new FundedBountyActor(requiredMoneyClaim(claims, "jiacn", 50),
-                requiredMoneyClaim(claims, "client_id", 50), subject);
+        return new FundedBountyActor("0", requiredMoneyClaim(claims, "client_id", 50),
+                requiredMoneyClaim(claims, "jiacn", 50), subject);
     }
 
     private static String requiredMoneyClaim(Map<String, Object> claims, String name, int maxBytes) {

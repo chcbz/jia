@@ -95,11 +95,11 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
         this.clock = Objects.requireNonNull(clock, "clock");
     }
 
-    private <T> T withLockedTaskRoot(String tenantId, String clientId, String taskId,
+    private <T> T withLockedTaskRoot(String tenantId, String clientId, String ownerJiacn, String taskId,
             AgentTaskMutationTransaction.LockedTaskMutation<T> mutation) {
         try {
-            return mutationTransaction.executeWithLockedTaskRoot(
-                    tenantId, clientId, taskId, mutation);
+            return mutationTransaction.executeWithLockedTaskRootInOwnerScope(
+                    tenantId, clientId, ownerJiacn, taskId, mutation);
         } catch (AgentTaskCollaborationException e) {
             if (e.getReason() == AgentTaskCollaborationException.Reason.NOT_FOUND) {
                 throw notFound("Task state was not found in the requested scope");
@@ -110,11 +110,11 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
     }
 
     private <T> T withLockedTaskRootForWorkItem(
-            String tenantId, String clientId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String workItemId,
             AgentTaskMutationTransaction.LockedTaskMutation<T> mutation) {
         try {
-            return mutationTransaction.executeWithLockedTaskRootForWorkItem(
-                    tenantId, clientId, workItemId, mutation);
+            return mutationTransaction.executeWithLockedTaskRootForWorkItemInOwnerScope(
+                    tenantId, clientId, ownerJiacn, workItemId, mutation);
         } catch (AgentTaskCollaborationException e) {
             if (e.getReason() == AgentTaskCollaborationException.Reason.NOT_FOUND) {
                 throw notFound("Task work item was not found in the requested scope");
@@ -126,13 +126,13 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public AgentTaskStateDTO transitionTask(String tenantId, String clientId, String taskId,
+    public AgentTaskStateDTO transitionTask(String tenantId, String clientId, String ownerJiacn, String taskId,
             AgentTaskStateTransitionDTO transition) {
-        requireScopeAndId(tenantId, clientId, taskId, "taskId");
+        requireStrictScopeAndId(tenantId, clientId, ownerJiacn, taskId, "taskId");
         RequiredTransition required = requireTransition(transition);
         return withLockedTaskRoot(
-                tenantId, clientId, taskId, root -> {
-                    AgentTaskMetaEntity current = taskMetaDao.findByTaskId(tenantId, clientId, taskId);
+                tenantId, clientId, ownerJiacn, taskId, root -> {
+                    AgentTaskMetaEntity current = taskMetaDao.findByTaskIdInOwnerScope(tenantId, clientId, ownerJiacn, taskId);
                     if (current == null) {
                         throw notFound("Task state was not found in the requested scope");
                     }
@@ -148,12 +148,12 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
                     Long completedAt = current.getCompletedAt();
                     if (targetStatus == AgentTaskStatus.COMPLETED && completedAt == null) completedAt = changedAt;
                     String failureReason = taskFailureReason(current, targetStatus, required.failureReason());
-                    requireSingleCasUpdate(taskMetaDao.updateStatusByVersion(
-                            tenantId, clientId, taskId, required.expectedVersion(), targetStatus.value(),
+                    requireSingleCasUpdate(taskMetaDao.updateStatusByVersionInOwnerScope(
+                            tenantId, clientId, ownerJiacn, taskId, required.expectedVersion(), targetStatus.value(),
                             startedAt, completedAt, failureReason));
                     AgentTaskStateDTO result = state(AGGREGATE_TASK, taskId, null, null,
                             targetStatus.value(), required.expectedVersion() + 1, changedAt);
-                    appendStateEvent(tenantId, clientId, taskId,
+                    appendStateEvent(tenantId, clientId, ownerJiacn, taskId,
                             AgentTaskMutationEventSupport.taskEvent(targetStatus.value()),
                             TaskEventType.Aggregate.TASK, taskId, null,
                             currentStatus.value(), targetStatus.value(), required.expectedVersion(),
@@ -165,33 +165,33 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public AgentTaskStateDTO transitionMember(String tenantId, String clientId, String taskId, String agentId,
+    public AgentTaskStateDTO transitionMember(String tenantId, String clientId, String ownerJiacn, String taskId, String agentId,
             AgentTaskStateTransitionDTO transition) {
-        requireScopeAndId(tenantId, clientId, taskId, "taskId");
+        requireStrictScopeAndId(tenantId, clientId, ownerJiacn, taskId, "taskId");
         requireId(agentId, "agentId");
-        return withLockedTaskRoot(tenantId, clientId, taskId, root -> {
-            MemberChange change = prepareMember(tenantId, clientId, taskId, agentId, transition, now());
+        return withLockedTaskRoot(tenantId, clientId, ownerJiacn, taskId, root -> {
+            MemberChange change = prepareMember(tenantId, clientId, ownerJiacn, taskId, agentId, transition, now());
             requireSingleCasUpdate(memberDao.updateByVersion(
-                    tenantId, clientId, taskId, agentId, change.expectedVersion(), change.update()));
-            appendMemberEvent(tenantId, clientId, taskId, agentId, change);
+                    tenantId, clientId, ownerJiacn, taskId, agentId, change.expectedVersion(), change.update()));
+            appendMemberEvent(tenantId, clientId, ownerJiacn, taskId, agentId, change);
             return change.result();
         });
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public AgentTaskStateDTO transitionWorkItem(String tenantId, String clientId, String workItemId,
+    public AgentTaskStateDTO transitionWorkItem(String tenantId, String clientId, String ownerJiacn, String workItemId,
             AgentTaskStateTransitionDTO transition) {
-        requireScopeAndId(tenantId, clientId, workItemId, "workItemId");
-        return withLockedTaskRootForWorkItem(tenantId, clientId, workItemId, root -> {
+        requireStrictScopeAndId(tenantId, clientId, ownerJiacn, workItemId, "workItemId");
+        return withLockedTaskRootForWorkItem(tenantId, clientId, ownerJiacn, workItemId, root -> {
             String taskId = root.getTaskId();
             WorkItemChange change = prepareWorkItem(
-                    tenantId, clientId, taskId, workItemId, transition, now());
+                    tenantId, clientId, ownerJiacn, taskId, workItemId, transition, now());
             requireSingleCasUpdate(workItemDao.updateByVersion(
-                    tenantId, clientId, workItemId, change.expectedVersion(), change.update()));
-            appendWorkItemEvent(tenantId, clientId, taskId, change,
+                    tenantId, clientId, ownerJiacn, workItemId, change.expectedVersion(), change.update()));
+            appendWorkItemEvent(tenantId, clientId, ownerJiacn, taskId, change,
                     AgentTaskMutationEventSupport.workItemEvent(change.result().getStatus()), null);
-            resolveDependenciesAfterCompletion(tenantId, clientId, taskId, change);
+            resolveDependenciesAfterCompletion(tenantId, clientId, ownerJiacn, taskId, change);
             return change.result();
         });
     }
@@ -199,18 +199,18 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AgentTaskMemberWorkItemStateDTO transitionMemberAndWorkItem(
-            String tenantId, String clientId, String taskId, String agentId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String agentId, String workItemId,
             AgentTaskStateTransitionDTO memberTransition,
             AgentTaskStateTransitionDTO workItemTransition) {
-        requireScopeAndId(tenantId, clientId, taskId, "taskId");
+        requireStrictScopeAndId(tenantId, clientId, ownerJiacn, taskId, "taskId");
         requireId(agentId, "agentId");
         requireId(workItemId, "workItemId");
-        return withLockedTaskRoot(tenantId, clientId, taskId, root -> {
+        return withLockedTaskRoot(tenantId, clientId, ownerJiacn, taskId, root -> {
             long changedAt = now();
             MemberChange memberChange = prepareMember(
-                    tenantId, clientId, taskId, agentId, memberTransition, changedAt);
+                    tenantId, clientId, ownerJiacn, taskId, agentId, memberTransition, changedAt);
             WorkItemChange workItemChange = prepareWorkItem(
-                    tenantId, clientId, taskId, workItemId, workItemTransition, changedAt);
+                    tenantId, clientId, ownerJiacn, taskId, workItemId, workItemTransition, changedAt);
             String assigneeAgentId = workItemChange.current().getAssigneeAgentId();
             if (StringUtil.isBlank(assigneeAgentId)) {
                 throw invalidRequest("Work item must have a non-blank assignee for combined transition");
@@ -219,15 +219,15 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
                 throw invalidRequest("Work item assignee does not match the transitioning member");
             }
             requireSingleCasUpdate(memberDao.updateByVersion(
-                    tenantId, clientId, taskId, agentId,
+                    tenantId, clientId, ownerJiacn, taskId, agentId,
                     memberChange.expectedVersion(), memberChange.update()));
             requireSingleCasUpdate(workItemDao.updateByVersion(
-                    tenantId, clientId, workItemId,
+                    tenantId, clientId, ownerJiacn, workItemId,
                     workItemChange.expectedVersion(), workItemChange.update()));
-            appendMemberEvent(tenantId, clientId, taskId, agentId, memberChange);
-            appendWorkItemEvent(tenantId, clientId, taskId, workItemChange,
+            appendMemberEvent(tenantId, clientId, ownerJiacn, taskId, agentId, memberChange);
+            appendWorkItemEvent(tenantId, clientId, ownerJiacn, taskId, workItemChange,
                     AgentTaskMutationEventSupport.workItemEvent(workItemChange.result().getStatus()), null);
-            resolveDependenciesAfterCompletion(tenantId, clientId, taskId, workItemChange);
+            resolveDependenciesAfterCompletion(tenantId, clientId, ownerJiacn, taskId, workItemChange);
             AgentTaskMemberWorkItemStateDTO result = new AgentTaskMemberWorkItemStateDTO();
             result.setMember(memberChange.result());
             result.setWorkItem(workItemChange.result());
@@ -236,15 +236,15 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
     }
 
     private void resolveDependenciesAfterCompletion(
-            String tenantId, String clientId, String taskId, WorkItemChange change) {
+            String tenantId, String clientId, String ownerJiacn, String taskId, WorkItemChange change) {
         if (AgentTaskWorkItemStatus.COMPLETED.value().equals(change.result().getStatus())) {
-            dependencyService.resolveReady(tenantId, clientId, taskId);
+            dependencyService.resolveReady(tenantId, clientId, ownerJiacn, taskId);
         }
     }
 
-    private void appendMemberEvent(String tenantId, String clientId, String taskId,
+    private void appendMemberEvent(String tenantId, String clientId, String ownerJiacn, String taskId,
             String agentId, MemberChange change) {
-        appendStateEvent(tenantId, clientId, taskId,
+        appendStateEvent(tenantId, clientId, ownerJiacn, taskId,
                 AgentTaskMutationEventSupport.memberEvent(change.result().getStatus()),
                 TaskEventType.Aggregate.MEMBER, agentId, null,
                 change.currentStatus(), change.result().getStatus(), change.expectedVersion(),
@@ -252,16 +252,16 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
                 agentId, change.update().getMemberRole(), null);
     }
 
-    private void appendWorkItemEvent(String tenantId, String clientId, String taskId,
+    private void appendWorkItemEvent(String tenantId, String clientId, String ownerJiacn, String taskId,
             WorkItemChange change, String eventType, String actorId) {
-        appendStateEvent(tenantId, clientId, taskId, eventType,
+        appendStateEvent(tenantId, clientId, ownerJiacn, taskId, eventType,
                 TaskEventType.Aggregate.WORK_ITEM, change.current().getWorkItemId(), actorId,
                 change.currentStatus(), change.result().getStatus(), change.expectedVersion(),
                 change.result().getVersion(), change.result().getChangedAt(), null,
                 null, null, change.update().getAttemptCount());
     }
 
-    private void appendStateEvent(String tenantId, String clientId, String taskId,
+    private void appendStateEvent(String tenantId, String clientId, String ownerJiacn, String taskId,
             String eventType, String aggregateType, String aggregateId, String actorId,
             String fromStatus, String toStatus, long expectedVersion, long resultVersion,
             long occurredAt, String reasonCode, String agentId, String role,
@@ -281,7 +281,7 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
         // B03 mutation APIs carry no authenticated actor argument. Keep the actor SYSTEM
         // rather than fabricating an Agent identity from the member/work-item aggregate.
         eventWriter.append(AgentTaskMutationEventSupport.command(
-                tenantId, clientId, taskId, eventType,
+                tenantId, clientId, ownerJiacn, taskId, eventType,
                 actorId == null ? TaskEventType.ActorType.SYSTEM : TaskEventType.ActorType.AGENT,
                 actorId, aggregateType, aggregateId, payload, occurredAt, resultVersion));
     }
@@ -296,11 +296,11 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
     }
 
     private MemberChange prepareMember(
-            String tenantId, String clientId, String taskId, String agentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String agentId,
             AgentTaskStateTransitionDTO transition, long changedAt) {
         RequiredTransition required = requireTransition(transition);
         AgentTaskMemberEntity current = memberDao.findByTaskAndAgent(
-                tenantId, clientId, taskId, agentId);
+                tenantId, clientId, ownerJiacn, taskId, agentId);
         if (current == null) {
             throw notFound("Task member was not found in the requested scope");
         }
@@ -327,11 +327,11 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
     }
 
     private WorkItemChange prepareWorkItem(
-            String tenantId, String clientId, String expectedTaskId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String expectedTaskId, String workItemId,
             AgentTaskStateTransitionDTO transition, long changedAt) {
         RequiredTransition required = requireTransition(transition);
         AgentTaskWorkItemEntity current = workItemDao.findByWorkItemId(
-                tenantId, clientId, workItemId);
+                tenantId, clientId, ownerJiacn, workItemId);
         if (current == null) {
             throw notFound("Task work item was not found in the requested scope");
         }
@@ -543,9 +543,11 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
         return result;
     }
 
-    private void requireScopeAndId(String tenantId, String clientId, String id, String idName) {
-        if (StringUtil.isBlank(tenantId) || StringUtil.isBlank(clientId)) {
-            throw invalidRequest("tenantId and clientId are required");
+    private void requireStrictScopeAndId(
+            String tenantId, String clientId, String ownerJiacn, String id, String idName) {
+        if (!"0".equals(tenantId) || StringUtil.isBlank(clientId)
+                || StringUtil.isBlank(ownerJiacn) || "0".equals(ownerJiacn)) {
+            throw invalidRequest("strict task owner scope is required");
         }
         requireId(id, idName);
     }
@@ -577,7 +579,7 @@ public class AgentTaskStateServiceImpl implements AgentTaskStateService {
     }
 
     private static AgentWorkItemDependencyService noDependencyResolution() {
-        return (tenantId, clientId, taskId) -> null;
+        return (tenantId, clientId, ownerJiacn, taskId) -> null;
     }
 
     private AgentTaskStateException invalidRequest(String message) {

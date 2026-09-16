@@ -15,19 +15,20 @@ CREATE TABLE IF NOT EXISTS agent_task_artifact_outcome (
     decided_by_agent_id             VARCHAR(100) NOT NULL COMMENT 'Authorized coordinator/reviewer agent ID',
     decided_at                      BIGINT NOT NULL COMMENT 'Decision time',
     version                         BIGINT NOT NULL COMMENT 'Outcome optimistic lock version; implicit draft is zero',
-    tenant_id                       VARCHAR(50) NOT NULL COMMENT 'Owner jiacn scope',
+    tenant_id                       VARCHAR(50) NOT NULL COMMENT 'Single tenant scope; always 0',
     client_id                       VARCHAR(50) NOT NULL COMMENT 'OAuth/API client scope',
+    owner_jiacn                     VARCHAR(50) NOT NULL COMMENT 'Authenticated user owner scope',
     create_time                     BIGINT DEFAULT NULL COMMENT 'Create time',
     update_time                     BIGINT DEFAULT NULL COMMENT 'Last modified time',
     PRIMARY KEY (id),
     UNIQUE KEY uk_artifact_outcome_version
-        (tenant_id, client_id, artifact_id, artifact_version),
+        (tenant_id, client_id, owner_jiacn, artifact_id, artifact_version),
     KEY idx_artifact_outcome_task_state
-        (tenant_id, client_id, task_id, outcome_state, decided_at, id),
+        (tenant_id, client_id, owner_jiacn, task_id, outcome_state, decided_at, id),
     KEY idx_artifact_outcome_decision
-        (tenant_id, client_id, task_id, decision_id, id),
+        (tenant_id, client_id, owner_jiacn, task_id, decision_id, id),
     KEY idx_artifact_outcome_superseded_by
-        (tenant_id, client_id, task_id,
+        (tenant_id, client_id, owner_jiacn, task_id,
          superseded_by_artifact_id, superseded_by_artifact_version),
     CONSTRAINT chk_artifact_outcome_state
         CHECK (outcome_state IN ('accepted', 'superseded')),
@@ -60,15 +61,16 @@ CREATE TABLE IF NOT EXISTS agent_task_artifact_outcome_decision (
     accepted_outcome_version    BIGINT NOT NULL COMMENT 'Accepted outcome version returned on replay',
     decided_by_agent_id         VARCHAR(100) NOT NULL COMMENT 'Authorized coordinator/reviewer agent ID',
     decided_at                  BIGINT NOT NULL COMMENT 'Original committed decision time',
-    tenant_id                   VARCHAR(50) NOT NULL COMMENT 'Owner jiacn scope',
+    tenant_id                   VARCHAR(50) NOT NULL COMMENT 'Single tenant scope; always 0',
     client_id                   VARCHAR(50) NOT NULL COMMENT 'OAuth/API client scope',
+    owner_jiacn                 VARCHAR(50) NOT NULL COMMENT 'Authenticated user owner scope',
     create_time                 BIGINT DEFAULT NULL COMMENT 'Create time',
     update_time                 BIGINT DEFAULT NULL COMMENT 'Last modified time',
     PRIMARY KEY (id),
     UNIQUE KEY uk_artifact_outcome_decision
-        (tenant_id, client_id, task_id, decision_id),
+        (tenant_id, client_id, owner_jiacn, task_id, decision_id),
     KEY idx_artifact_outcome_decision_accepted
-        (tenant_id, client_id, task_id,
+        (tenant_id, client_id, owner_jiacn, task_id,
          accepted_artifact_id, accepted_artifact_version),
     CONSTRAINT chk_artifact_outcome_decision_versions
         CHECK (accepted_artifact_version >= 1

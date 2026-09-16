@@ -24,26 +24,27 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
     }
 
     @Override
-    public int insert(String tenantId, String clientId, AgentTaskWorkItemDTO item) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+    public int insert(String tenantId, String clientId, String ownerJiacn, AgentTaskWorkItemDTO item) {
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         requireItem(item, true);
         AgentTaskWorkItemEntity entity = toEntity(item);
         TaskCollaborationDaoSupport.applyScope(entity, tenantId, clientId);
+        entity.setOwnerJiacn(ownerJiacn);
         entity.setPriority(item.getPriority() == null ? 0 : item.getPriority());
         entity.setRequiredItem(item.getRequiredItem() == null || item.getRequiredItem());
         entity.setAttemptCount(item.getAttemptCount() == null ? 0 : item.getAttemptCount());
         entity.setMaxAttempts(item.getMaxAttempts() == null ? 3 : item.getMaxAttempts());
         entity.setVersion(0L);
         entity.init4Creation();
-        return baseMapper.insertIfParentNonTerminal(tenantId, clientId, entity);
+        return baseMapper.insertIfParentNonTerminal(tenantId, clientId, ownerJiacn, entity);
     }
 
     @Override
     public AgentTaskWorkItemEntity findByWorkItemId(
-            String tenantId, String clientId, String workItemId) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+            String tenantId, String clientId, String ownerJiacn, String workItemId) {
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         TaskCollaborationDaoSupport.requireId(workItemId, "workItemId");
-        LambdaQueryWrapper<AgentTaskWorkItemEntity> wrapper = scope(tenantId, clientId)
+        LambdaQueryWrapper<AgentTaskWorkItemEntity> wrapper = scope(tenantId, clientId, ownerJiacn)
                 .eq(AgentTaskWorkItemEntity::getWorkItemId, workItemId);
         TaskCollaborationDaoSupport.exact(wrapper, "work_item_id", workItemId);
         return baseMapper.selectOne(wrapper.last("limit 1"));
@@ -51,11 +52,11 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
 
     @Override
     public AgentTaskWorkItemEntity findByTaskAndWorkItemId(
-            String tenantId, String clientId, String taskId, String workItemId) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId) {
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(workItemId, "workItemId");
-        LambdaQueryWrapper<AgentTaskWorkItemEntity> wrapper = scope(tenantId, clientId)
+        LambdaQueryWrapper<AgentTaskWorkItemEntity> wrapper = scope(tenantId, clientId, ownerJiacn)
                 .eq(AgentTaskWorkItemEntity::getTaskId, taskId)
                 .eq(AgentTaskWorkItemEntity::getWorkItemId, workItemId);
         TaskCollaborationDaoSupport.exact(wrapper, "task_id", taskId);
@@ -65,10 +66,10 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
 
     @Override
     public List<AgentTaskWorkItemEntity> listByTask(
-            String tenantId, String clientId, String taskId, String status, int limit) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+            String tenantId, String clientId, String ownerJiacn, String taskId, String status, int limit) {
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
-        LambdaQueryWrapper<AgentTaskWorkItemEntity> wrapper = scope(tenantId, clientId)
+        LambdaQueryWrapper<AgentTaskWorkItemEntity> wrapper = scope(tenantId, clientId, ownerJiacn)
                 .eq(AgentTaskWorkItemEntity::getTaskId, taskId);
         TaskCollaborationDaoSupport.exact(wrapper, "task_id", taskId);
         appendStatus(wrapper, status);
@@ -77,19 +78,19 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
 
     @Override
     public List<AgentTaskWorkItemEntity> listByTaskForUpdate(
-            String tenantId, String clientId, String taskId, int limit) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+            String tenantId, String clientId, String ownerJiacn, String taskId, int limit) {
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         return baseMapper.selectTaskGraphForUpdate(
-                tenantId, clientId, taskId, boundedDependencyGraphLimit(limit));
+                tenantId, clientId, ownerJiacn, taskId, boundedDependencyGraphLimit(limit));
     }
 
     @Override
     public List<AgentTaskWorkItemEntity> listByAssignee(
-            String tenantId, String clientId, String assigneeAgentId, String status, int limit) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+            String tenantId, String clientId, String ownerJiacn, String assigneeAgentId, String status, int limit) {
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         TaskCollaborationDaoSupport.requireId(assigneeAgentId, "assigneeAgentId");
-        LambdaQueryWrapper<AgentTaskWorkItemEntity> wrapper = scope(tenantId, clientId)
+        LambdaQueryWrapper<AgentTaskWorkItemEntity> wrapper = scope(tenantId, clientId, ownerJiacn)
                 .eq(AgentTaskWorkItemEntity::getAssigneeAgentId, assigneeAgentId);
         TaskCollaborationDaoSupport.exact(wrapper, "assignee_agent_id", assigneeAgentId);
         appendStatus(wrapper, status);
@@ -98,11 +99,11 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
 
     @Override
     public List<AgentTaskWorkItemEntity> listByTaskAndAssignee(
-            String tenantId, String clientId, String taskId, String assigneeAgentId, int limit) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+            String tenantId, String clientId, String ownerJiacn, String taskId, String assigneeAgentId, int limit) {
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(assigneeAgentId, "assigneeAgentId");
-        LambdaQueryWrapper<AgentTaskWorkItemEntity> wrapper = scope(tenantId, clientId)
+        LambdaQueryWrapper<AgentTaskWorkItemEntity> wrapper = scope(tenantId, clientId, ownerJiacn)
                 .eq(AgentTaskWorkItemEntity::getTaskId, taskId)
                 .eq(AgentTaskWorkItemEntity::getAssigneeAgentId, assigneeAgentId);
         TaskCollaborationDaoSupport.exact(wrapper, "task_id", taskId);
@@ -112,13 +113,13 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
 
     @Override
     public List<AgentTaskWorkItemEntity> listByTaskAssigneeAndType(
-            String tenantId, String clientId, String taskId, String assigneeAgentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String assigneeAgentId,
             String workType, int limit) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(assigneeAgentId, "assigneeAgentId");
         TaskCollaborationDaoSupport.requireId(workType, "workType");
-        LambdaQueryWrapper<AgentTaskWorkItemEntity> wrapper = scope(tenantId, clientId)
+        LambdaQueryWrapper<AgentTaskWorkItemEntity> wrapper = scope(tenantId, clientId, ownerJiacn)
                 .eq(AgentTaskWorkItemEntity::getTaskId, taskId)
                 .eq(AgentTaskWorkItemEntity::getAssigneeAgentId, assigneeAgentId)
                 .eq(AgentTaskWorkItemEntity::getWorkType, workType);
@@ -130,10 +131,10 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
 
     @Override
     public List<AgentTaskWorkItemEntity> listExpiredLeases(
-            String tenantId, String clientId, long expiredAtOrBefore, int limit) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+            String tenantId, String clientId, String ownerJiacn, long expiredAtOrBefore, int limit) {
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         requireNonnegativeTime(expiredAtOrBefore, "expiredAtOrBefore");
-        LambdaQueryWrapper<AgentTaskWorkItemEntity> wrapper = scope(tenantId, clientId)
+        LambdaQueryWrapper<AgentTaskWorkItemEntity> wrapper = scope(tenantId, clientId, ownerJiacn)
                 .in(AgentTaskWorkItemEntity::getStatus, LEASED_STATUSES);
         TaskCollaborationDaoSupport.exactAny(wrapper, "status", LEASED_STATUSES);
         return baseMapper.selectList(wrapper
@@ -146,36 +147,36 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
     }
 
     @Override
-    public int updateByVersion(String tenantId, String clientId, String workItemId,
+    public int updateByVersion(String tenantId, String clientId, String ownerJiacn, String workItemId,
             long expectedVersion, AgentTaskWorkItemDTO item) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         TaskCollaborationDaoSupport.requireId(workItemId, "workItemId");
         requireItem(item, false);
         TaskCollaborationDaoSupport.requireExpectedVersion(expectedVersion);
         return baseMapper.updateByVersion(
-                tenantId, clientId, workItemId, expectedVersion, item, DateUtil.nowTime());
+                tenantId, clientId, ownerJiacn, workItemId, expectedVersion, item, DateUtil.nowTime());
     }
 
     @Override
     public int claimReadyByVersion(
-            String tenantId, String clientId, String taskId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             String expectedAssigneeAgentId, long expectedVersion, AgentTaskWorkItemDTO item) {
-        requireLeaseCasCommon(tenantId, clientId, taskId, workItemId, expectedVersion, item);
+        requireLeaseCasCommon(tenantId, clientId, ownerJiacn, taskId, workItemId, expectedVersion, item);
         long updateTime = DateUtil.nowTime();
         if (StringUtil.isBlank(expectedAssigneeAgentId)) {
             return baseMapper.claimReadyUnassignedByVersion(
-                    tenantId, clientId, taskId, workItemId, expectedVersion, item, updateTime);
+                    tenantId, clientId, ownerJiacn, taskId, workItemId, expectedVersion, item, updateTime);
         }
         return baseMapper.claimReadyAssignedByVersion(
-                tenantId, clientId, taskId, workItemId, expectedAssigneeAgentId,
+                tenantId, clientId, ownerJiacn, taskId, workItemId, expectedAssigneeAgentId,
                 expectedVersion, item, updateTime);
     }
 
     @Override
     public int readyPendingByVersion(
-            String tenantId, String clientId, String taskId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             long expectedVersion, long changedAt, AgentTaskWorkItemDTO item) {
-        requireLeaseCasCommon(tenantId, clientId, taskId, workItemId, expectedVersion, item);
+        requireLeaseCasCommon(tenantId, clientId, ownerJiacn, taskId, workItemId, expectedVersion, item);
         if (!"ready".equals(item.getStatus())
                 || !taskId.equals(item.getTaskId())
                 || !workItemId.equals(item.getWorkItemId())
@@ -189,31 +190,32 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
                     "dependency ready CAS requires an exact ready snapshot and positive changedAt");
         }
         return baseMapper.readyPendingByVersion(
-                tenantId, clientId, taskId, workItemId, expectedVersion, item, changedAt);
+                tenantId, clientId, ownerJiacn, taskId, workItemId,
+                expectedVersion, item, changedAt);
     }
 
     @Override
     public int updateActiveLeaseByVersion(
-            String tenantId, String clientId, String taskId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             String assigneeAgentId, String leaseToken, String expectedStatus,
             long expectedLeaseUntil, long expectedVersion, long operationTime,
             AgentTaskWorkItemDTO item) {
-        requireLeaseCasCommon(tenantId, clientId, taskId, workItemId, expectedVersion, item);
+        requireLeaseCasCommon(tenantId, clientId, ownerJiacn, taskId, workItemId, expectedVersion, item);
         requireLeaseIdentity(assigneeAgentId, leaseToken, expectedStatus, expectedLeaseUntil);
         requireNonnegativeTime(operationTime, "operationTime");
         return baseMapper.updateActiveLeaseByVersion(
-                tenantId, clientId, taskId, workItemId, assigneeAgentId, leaseToken,
+                tenantId, clientId, ownerJiacn, taskId, workItemId, assigneeAgentId, leaseToken,
                 expectedStatus, expectedLeaseUntil, expectedVersion, operationTime,
                 item, DateUtil.nowTime());
     }
 
     @Override
     public int reassignExpiredLeaseByVersion(
-            String tenantId, String clientId, String taskId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             String previousAgentId, String previousLeaseToken, String expectedStatus,
             long expectedLeaseUntil, long expectedVersion, long expiredAtOrBefore,
             AgentTaskWorkItemDTO item) {
-        requireLeaseCasCommon(tenantId, clientId, taskId, workItemId, expectedVersion, item);
+        requireLeaseCasCommon(tenantId, clientId, ownerJiacn, taskId, workItemId, expectedVersion, item);
         requireLeaseIdentity(previousAgentId, previousLeaseToken, expectedStatus, expectedLeaseUntil);
         requireNonnegativeTime(expiredAtOrBefore, "expiredAtOrBefore");
         if (!LEASED_STATUSES.contains(expectedStatus)
@@ -228,30 +230,30 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
                     "reassignment CAS requires a complete fresh claimed lease with remaining attempts");
         }
         return baseMapper.reassignExpiredLeaseByVersion(
-                tenantId, clientId, taskId, workItemId, previousAgentId, previousLeaseToken,
+                tenantId, clientId, ownerJiacn, taskId, workItemId, previousAgentId, previousLeaseToken,
                 expectedStatus, expectedLeaseUntil, expectedVersion, expiredAtOrBefore,
                 item, DateUtil.nowTime());
     }
 
     @Override
     public int expireLeaseByVersion(
-            String tenantId, String clientId, String taskId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             String assigneeAgentId, String leaseToken, String expectedStatus,
             long expectedLeaseUntil, long expectedVersion, long expiredAtOrBefore,
             AgentTaskWorkItemDTO item) {
-        requireLeaseCasCommon(tenantId, clientId, taskId, workItemId, expectedVersion, item);
+        requireLeaseCasCommon(tenantId, clientId, ownerJiacn, taskId, workItemId, expectedVersion, item);
         requireLeaseIdentity(assigneeAgentId, leaseToken, expectedStatus, expectedLeaseUntil);
         requireNonnegativeTime(expiredAtOrBefore, "expiredAtOrBefore");
         return baseMapper.expireLeaseByVersion(
-                tenantId, clientId, taskId, workItemId, assigneeAgentId, leaseToken,
+                tenantId, clientId, ownerJiacn, taskId, workItemId, assigneeAgentId, leaseToken,
                 expectedStatus, expectedLeaseUntil, expectedVersion, expiredAtOrBefore,
                 item, DateUtil.nowTime());
     }
 
     private void requireLeaseCasCommon(
-            String tenantId, String clientId, String taskId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             long expectedVersion, AgentTaskWorkItemDTO item) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(workItemId, "workItemId");
         TaskCollaborationDaoSupport.requireExpectedVersion(expectedVersion);
@@ -300,13 +302,16 @@ public class AgentTaskWorkItemDaoImpl implements AgentTaskWorkItemDao {
         }
     }
 
-    private LambdaQueryWrapper<AgentTaskWorkItemEntity> scope(String tenantId, String clientId) {
+    private LambdaQueryWrapper<AgentTaskWorkItemEntity> scope(
+            String tenantId, String clientId, String ownerJiacn) {
         LambdaQueryWrapper<AgentTaskWorkItemEntity> wrapper =
                 new LambdaQueryWrapper<AgentTaskWorkItemEntity>()
                         .eq(AgentTaskWorkItemEntity::getTenantId, tenantId)
-                        .eq(AgentTaskWorkItemEntity::getClientId, clientId);
+                        .eq(AgentTaskWorkItemEntity::getClientId, clientId)
+                        .eq(AgentTaskWorkItemEntity::getOwnerJiacn, ownerJiacn);
         TaskCollaborationDaoSupport.exact(wrapper, "tenant_id", tenantId);
-        return TaskCollaborationDaoSupport.exact(wrapper, "client_id", clientId);
+        TaskCollaborationDaoSupport.exact(wrapper, "client_id", clientId);
+        return TaskCollaborationDaoSupport.exact(wrapper, "owner_jiacn", ownerJiacn);
     }
 
     private void requireItem(AgentTaskWorkItemDTO item, boolean requireIdentity) {

@@ -72,7 +72,7 @@ public class AgentTaskDeliverableController {
         AgentTaskArtifactQueryDTO serviceQuery = new AgentTaskArtifactQueryDTO();
         serviceQuery.setWorkItemId(query.workItemId());
         serviceQuery.setLimit(query.limit());
-        return ok(new DeliverableListResponse(
+return ok(new DeliverableListResponse(
                 listOwnerDeliverables(scope, taskId, query, serviceQuery), null));
     }
 
@@ -88,8 +88,8 @@ public class AgentTaskDeliverableController {
         requireExact(artifactId, 100);
         requireNoQuery(request);
         int exactVersion = positiveVersion(artifactVersion);
-        AgentTaskArtifactContentDTO result = contentService.readContentForTaskOwner(
-                scope.tenantId(), scope.clientId(), taskId, artifactId, exactVersion);
+AgentTaskArtifactContentDTO result = contentService.readContentForTaskOwner(
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId, artifactId, exactVersion);
         Download download = requireDownload(result, artifactId, exactVersion);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
@@ -136,13 +136,14 @@ public class AgentTaskDeliverableController {
             throw new AuthenticationFailure(false);
         }
         Map<String, Object> claims = jwt.getToken().getClaims();
-        String tenantId = requiredClaim(claims, "jiacn", 50);
+        String ownerJiacn = requiredClaim(claims, "jiacn", 50);
         String clientId = requiredClaim(claims, "client_id", 50);
-        String subject = requiredClaim(claims, "sub", 100);
-        if ("0".equals(tenantId) || !byteExact(authentication.getName(), subject)) {
+String subject = requiredClaim(claims, "sub", 100);
+        if ("0".equals(ownerJiacn) || "0".equals(clientId)
+                || !byteExact(authentication.getName(), subject)) {
             throw new AuthenticationFailure(true);
         }
-        return new Scope(tenantId, clientId);
+        return new Scope("0", clientId, ownerJiacn);
     }
 
     private static String requiredClaim(Map<String, Object> claims, String name, int maxLength) {
@@ -157,7 +158,7 @@ public class AgentTaskDeliverableController {
             Scope scope, String taskId, ListQuery query, AgentTaskArtifactQueryDTO serviceQuery) {
         int limit = effectiveLimit(query.limit());
         List<AgentTaskArtifactViewDTO> result = artifactService.listForTaskOwner(
-                scope.tenantId(), scope.clientId(), taskId, serviceQuery);
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId, serviceQuery);
         if (result == null || result.size() > limit) {
             throw new IllegalStateException("Deliverable result is inconsistent");
         }
@@ -348,7 +349,7 @@ public class AgentTaskDeliverableController {
                 .body(new ErrorBody(code, message));
     }
 
-    private record Scope(String tenantId, String clientId) {
+private record Scope(String tenantId, String clientId, String ownerJiacn) {
     }
 
     private record ListQuery(String workItemId, Integer limit) {

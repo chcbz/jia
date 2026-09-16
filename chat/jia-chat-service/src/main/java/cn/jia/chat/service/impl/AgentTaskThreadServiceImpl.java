@@ -64,8 +64,9 @@ public class AgentTaskThreadServiceImpl implements AgentTaskThreadService {
 
     @Override
     public AgentTaskThreadDTO getOrCreateTeamThread(
-            String tenantId, String clientId, String taskId, String actorAgentId, String title) {
-        Scope scope = requireScope(tenantId, clientId, taskId, actorAgentId);
+            String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, String title) {
+        Scope scope = requireScope(tenantId, clientId, ownerJiacn, taskId, actorAgentId);
         requireWriteAccess(scope);
         return getOrCreateTeamThread(scope, title);
     }
@@ -83,8 +84,8 @@ public class AgentTaskThreadServiceImpl implements AgentTaskThreadService {
         String scopeKey = "task-thread:" + scope.taskId();
         try {
             AgentTaskThreadEntity created = creationTransaction.createTeamThread(
-                    scope.tenantId(), scope.clientId(), scope.taskId(), scope.actorAgentId(),
-                    safeTitle, scopeKey);
+                    scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
+                    scope.taskId(), scope.actorAgentId(), safeTitle, scopeKey);
             return toThreadDto(requireUsableThread(scope, created));
         } catch (RuntimeException exception) {
             if (!isDuplicateBinding(exception)) {
@@ -101,8 +102,9 @@ public class AgentTaskThreadServiceImpl implements AgentTaskThreadService {
 
     @Override
     public AgentTaskThreadDTO getTeamThread(
-            String tenantId, String clientId, String taskId, String actorAgentId) {
-        Scope scope = requireScope(tenantId, clientId, taskId, actorAgentId);
+            String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId) {
+        Scope scope = requireScope(tenantId, clientId, ownerJiacn, taskId, actorAgentId);
         requireReadAccess(scope);
         AgentTaskThreadEntity thread = findTeam(scope);
         if (thread == null) {
@@ -113,12 +115,12 @@ public class AgentTaskThreadServiceImpl implements AgentTaskThreadService {
 
     @Override
     public AgentTaskThreadMessageDTO appendTeamMessage(
-            String tenantId, String clientId, String taskId,
+            String tenantId, String clientId, String ownerJiacn, String taskId,
             AgentTaskThreadMessageCreateDTO request) {
         if (request == null) {
             throw invalid("message request is required");
         }
-        Scope scope = requireScope(tenantId, clientId, taskId, request.getActorAgentId());
+        Scope scope = requireScope(tenantId, clientId, ownerJiacn, taskId, request.getActorAgentId());
         String content = requiredTextUtf8(request.getContent(), "content", MAX_TEXT_UTF8_BYTES);
         String senderName = optionalExactText(
                 request.getSenderName(), "senderName", MAX_SENDER_NAME_LENGTH);
@@ -142,14 +144,14 @@ public class AgentTaskThreadServiceImpl implements AgentTaskThreadService {
         message.setMessageType("ASSISTANT");
         message.setContent(content);
         message.setMetadata(metadataJson);
-        message.setJiacn(scope.tenantId());
+        message.setJiacn(scope.ownerJiacn());
         message.setSyncStatus(AgentTaskThreadConstants.MEMORY_SYNC_EXCLUDED);
         message.setConversationType(AgentTaskThreadConstants.CONVERSATION_TYPE);
         message.setSenderType("agent");
         try {
             return toMessageDto(creationTransaction.appendTeamMessage(
-                    scope.tenantId(), scope.clientId(), scope.taskId(), scope.actorAgentId(),
-                    senderName, message));
+                    scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
+                    scope.taskId(), scope.actorAgentId(), senderName, message));
         } catch (RuntimeException exception) {
             throw persistenceFailure(exception);
         }
@@ -157,8 +159,9 @@ public class AgentTaskThreadServiceImpl implements AgentTaskThreadService {
 
     @Override
     public List<AgentTaskThreadMessageDTO> listTeamMessages(
-            String tenantId, String clientId, String taskId, String actorAgentId, int limit) {
-        Scope scope = requireScope(tenantId, clientId, taskId, actorAgentId);
+            String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, int limit) {
+        Scope scope = requireScope(tenantId, clientId, ownerJiacn, taskId, actorAgentId);
         if (limit < 1 || limit > MAX_MESSAGES) {
             throw invalid("limit must be between 1 and " + MAX_MESSAGES);
         }
@@ -220,7 +223,7 @@ public class AgentTaskThreadServiceImpl implements AgentTaskThreadService {
                 || !thread.getConversationId().equals(String.valueOf(conversation.getId()))
                 || !scope.tenantId().equals(conversation.getTenantId())
                 || !scope.clientId().equals(conversation.getClientId())
-                || !scope.tenantId().equals(conversation.getJiacn())
+                || !scope.ownerJiacn().equals(conversation.getJiacn())
                 || !AgentTaskThreadConstants.CONVERSATION_TYPE.equals(conversation.getConversationType())
                 || !AgentTaskThreadConstants.CONVERSATION_SCOPE_TYPE.equals(conversation.getConversationScopeType())
                 || !("task-thread:" + scope.taskId()).equals(conversation.getConversationScopeKey())
@@ -234,7 +237,8 @@ public class AgentTaskThreadServiceImpl implements AgentTaskThreadService {
     private void requireReadAccess(Scope scope) {
         requireOwnedActor(scope);
         AgentTaskAccessLevel access = accessService.resolveMemberAccess(
-                scope.tenantId(), scope.clientId(), scope.taskId(), scope.actorAgentId());
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
+                scope.taskId(), scope.actorAgentId());
         if (!access.canRead()) {
             throw unavailable();
         }
@@ -243,7 +247,8 @@ public class AgentTaskThreadServiceImpl implements AgentTaskThreadService {
     private void requireWriteAccess(Scope scope) {
         requireOwnedActor(scope);
         AgentTaskAccessLevel access = accessService.resolveMemberAccess(
-                scope.tenantId(), scope.clientId(), scope.taskId(), scope.actorAgentId());
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
+                scope.taskId(), scope.actorAgentId());
         if (!access.canWrite()) {
             throw unavailable();
         }
@@ -254,17 +259,25 @@ public class AgentTaskThreadServiceImpl implements AgentTaskThreadService {
             // HTTP callers nominate an actor, but authenticated tenant/client scope is authoritative.
             // Reuse the same active persona-binding ownership check as the API-key WebSocket handshake.
             agentService.requireApiKeyOwnedAgent(
-                    scope.clientId(), scope.tenantId(), scope.actorAgentId());
+                    scope.clientId(), scope.ownerJiacn(), scope.actorAgentId());
         } catch (RuntimeException exception) {
             throw unavailable();
         }
     }
 
     private Scope requireScope(
-            String tenantId, String clientId, String taskId, String actorAgentId) {
+            String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId) {
+        if (!"0".equals(tenantId)) {
+            throw invalid("tenantId must be 0");
+        }
+        if ("0".equals(ownerJiacn)) {
+            throw invalid("ownerJiacn must not be 0");
+        }
         return new Scope(
-                requiredId(tenantId, "tenantId", MAX_SCOPE_LENGTH),
+                tenantId,
                 requiredId(clientId, "clientId", MAX_SCOPE_LENGTH),
+                requiredId(ownerJiacn, "ownerJiacn", MAX_SCOPE_LENGTH),
                 requiredId(taskId, "taskId", MAX_TASK_ID_LENGTH),
                 requiredId(actorAgentId, "actorAgentId", MAX_AGENT_ID_LENGTH));
     }
@@ -380,6 +393,8 @@ public class AgentTaskThreadServiceImpl implements AgentTaskThreadService {
                 .setCreatedAt(entity.getCreateTime());
     }
 
-    private record Scope(String tenantId, String clientId, String taskId, String actorAgentId) {
+    private record Scope(
+            String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId) {
     }
 }

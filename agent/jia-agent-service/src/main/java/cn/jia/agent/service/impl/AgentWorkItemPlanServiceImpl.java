@@ -135,9 +135,9 @@ public class AgentWorkItemPlanServiceImpl implements AgentWorkItemPlanService {
     @Override
     @Transactional(propagation = Propagation.REQUIRED, readOnly = true, rollbackFor = Exception.class)
     public AgentWorkItemPlanViewDTO suggest(
-            String tenantId, String clientId, String taskId, String actorAgentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId,
             AgentWorkItemPlanSuggestRequestDTO request) {
-        requireScope(tenantId, clientId, taskId, actorAgentId);
+        requireScope(tenantId, clientId, ownerJiacn, taskId, actorAgentId);
         if (request == null) {
             throw invalid("Suggestion request is required");
         }
@@ -153,7 +153,7 @@ public class AgentWorkItemPlanServiceImpl implements AgentWorkItemPlanService {
         }
 
         AgentTaskMetaEntity task = requireReadableTask(
-                tenantId, clientId, taskId, actorAgentId);
+                tenantId, clientId, ownerJiacn, taskId, actorAgentId);
         List<String> taskAbilities = parseAbilities(task.getRequiredAbilities(), "task abilities");
         List<AgentWorkItemPlanItemDTO> suggested = decompose(
                 request.getObjective(), maxItems, dependencyMode,
@@ -165,7 +165,7 @@ public class AgentWorkItemPlanServiceImpl implements AgentWorkItemPlanService {
         AgentWorkItemPlanViewDTO result = baseView(taskId, normalized);
         result.setSourcePlanDigest(digest);
         result.setSourcePlanId(sourcePlanId(
-                tenantId, clientId, taskId, actorAgentId, taskVersion, digest));
+                tenantId, clientId, ownerJiacn, taskId, actorAgentId, taskVersion, digest));
         result.setExpectedTaskVersion(Long.toString(taskVersion));
         result.setConfirmationRequired(true);
         result.setConfirmed(false);
@@ -176,16 +176,16 @@ public class AgentWorkItemPlanServiceImpl implements AgentWorkItemPlanService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AgentWorkItemPlanViewDTO confirm(
-            String tenantId, String clientId, String taskId, String actorAgentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId,
             String idempotencyKey, AgentWorkItemPlanConfirmRequestDTO request) {
-        requireScope(tenantId, clientId, taskId, actorAgentId);
+        requireScope(tenantId, clientId, ownerJiacn, taskId, actorAgentId);
         if (!validIdempotencyKey(idempotencyKey) || request == null
                 || !Boolean.TRUE.equals(request.getConfirmed())) {
             throw invalid("Explicit confirmation and a valid idempotency key are required");
         }
         long expectedTaskVersion = parseVersion(request.getExpectedTaskVersion());
         requireDigest(request.getSourcePlanDigest(), "sourcePlanDigest");
-        String expectedSourcePlanId = sourcePlanId(tenantId, clientId, taskId, actorAgentId,
+        String expectedSourcePlanId = sourcePlanId(tenantId, clientId, ownerJiacn, taskId, actorAgentId,
                 expectedTaskVersion, request.getSourcePlanDigest());
         if (!expectedSourcePlanId.equals(request.getSourcePlanId())) {
             throw notFound();
@@ -194,18 +194,18 @@ public class AgentWorkItemPlanServiceImpl implements AgentWorkItemPlanService {
         String confirmedDigest = planDigest(normalized);
         String requestDigest = confirmationRequestDigest(request, confirmedDigest);
 
-        return withLockedTaskRoot(tenantId, clientId, taskId,
-                taskRoot -> confirmLocked(tenantId, clientId, taskId, actorAgentId,
+        return withLockedTaskRoot(tenantId, clientId, ownerJiacn, taskId,
+                taskRoot -> confirmLocked(tenantId, clientId, ownerJiacn, taskId, actorAgentId,
                         idempotencyKey, request, expectedTaskVersion,
                         confirmedDigest, requestDigest, normalized, taskRoot));
     }
 
     private <T> T withLockedTaskRoot(
-            String tenantId, String clientId, String taskId,
+            String tenantId, String clientId, String ownerJiacn, String taskId,
             AgentTaskMutationTransaction.LockedTaskMutation<T> mutation) {
         try {
-            return mutationTransaction.executeWithLockedTaskRoot(
-                    tenantId, clientId, taskId, mutation);
+            return mutationTransaction.executeWithLockedTaskRootInOwnerScope(
+                    tenantId, clientId, ownerJiacn, taskId, mutation);
         } catch (AgentTaskCollaborationException failure) {
             if (failure.getReason() == AgentTaskCollaborationException.Reason.NOT_FOUND) {
                 throw notFound();
@@ -215,16 +215,16 @@ public class AgentWorkItemPlanServiceImpl implements AgentWorkItemPlanService {
     }
 
     private AgentWorkItemPlanViewDTO confirmLocked(
-            String tenantId, String clientId, String taskId, String actorAgentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId,
             String idempotencyKey, AgentWorkItemPlanConfirmRequestDTO request,
             long expectedTaskVersion, String confirmedDigest, String requestDigest,
             List<NormalizedItem> items, AgentTaskMetaEntity task) {
-        requireCoordinator(tenantId, clientId, taskId, actorAgentId, task, true);
+        requireCoordinator(tenantId, clientId, ownerJiacn, taskId, actorAgentId, task, true);
         Map<String, String> workItemIds = new LinkedHashMap<>();
         for (int index = 0; index < items.size(); index++) {
             NormalizedItem item = items.get(index);
             workItemIds.put(item.itemKey(), workItemId(
-                    tenantId, clientId, taskId, idempotencyKey, item.itemKey(), index == 0));
+                    tenantId, clientId, ownerJiacn, taskId, idempotencyKey, item.itemKey(), index == 0));
         }
         List<PersistedPlanItem> planned = items.stream()
                 .map(item -> persisted(item, taskId, workItemIds))
@@ -234,11 +234,11 @@ public class AgentWorkItemPlanServiceImpl implements AgentWorkItemPlanService {
         List<AgentTaskWorkItemEntity> existingRows = new ArrayList<>(planned.size());
         for (PersistedPlanItem item : planned) {
             AgentTaskWorkItemEntity existing = workItemDao.findByTaskAndWorkItemId(
-                    tenantId, clientId, taskId, item.workItemId());
+                    tenantId, clientId, ownerJiacn, taskId, item.workItemId());
             existingRows.add(existing);
             if (existing != null) {
                 existingCount++;
-                requireExactPersistedScope(existing, tenantId, clientId, taskId, item.workItemId());
+                requireExactPersistedScope(existing, tenantId, clientId, ownerJiacn, taskId, item.workItemId());
                 if (!sameImmutablePlan(existing, item)) {
                     throw idempotencyConflict();
                 }
@@ -250,14 +250,14 @@ public class AgentWorkItemPlanServiceImpl implements AgentWorkItemPlanService {
         }
         List<AgentTaskEventEntity> existingEvents = new ArrayList<>(planned.size());
         for (PersistedPlanItem item : planned) {
-            String eventId = createdEventId(tenantId, clientId, taskId, item.workItemId());
-            existingEvents.add(eventDao.findByEventId(tenantId, clientId, task.getOwnerJiacn(), eventId));
+            String eventId = createdEventId(tenantId, clientId, ownerJiacn, taskId, item.workItemId());
+            existingEvents.add(eventDao.findByEventId(tenantId, clientId, ownerJiacn, eventId));
         }
         if (existingCount == planned.size()) {
             for (int index = 0; index < planned.size(); index++) {
                 PersistedPlanItem item = planned.get(index);
-                String eventId = createdEventId(tenantId, clientId, taskId, item.workItemId());
-                requireConfirmationEvent(existingEvents.get(index), tenantId, clientId, taskId,
+                String eventId = createdEventId(tenantId, clientId, ownerJiacn, taskId, item.workItemId());
+                requireConfirmationEvent(existingEvents.get(index), tenantId, clientId, ownerJiacn, taskId,
                         eventId, item, requestDigest);
             }
             return confirmedView(taskId, request, confirmedDigest, items,
@@ -277,7 +277,7 @@ public class AgentWorkItemPlanServiceImpl implements AgentWorkItemPlanService {
         for (PersistedPlanItem item : writeOrder) {
             try {
                 int inserted = workItemDao.insert(
-                        tenantId, clientId, insertDto(taskId, item));
+                        tenantId, clientId, ownerJiacn, insertDto(taskId, item));
                 if (inserted != 1) {
                     throw invalidPersisted("Work item insert did not affect exactly one row");
                 }
@@ -290,11 +290,11 @@ public class AgentWorkItemPlanServiceImpl implements AgentWorkItemPlanService {
             }
         }
         for (PersistedPlanItem item : writeOrder) {
-            appendCreatedEvent(tenantId, clientId, taskId, item, requestDigest, occurredAt);
+            appendCreatedEvent(tenantId, clientId, ownerJiacn, taskId, item, requestDigest, occurredAt);
         }
-        int taskUpdated = taskMetaDao.updateStatusByVersion(tenantId, clientId, taskId,
-                expectedTaskVersion, task.getRewardStatus(), task.getStartedAt(),
-                task.getCompletedAt(), task.getFailureReason());
+        int taskUpdated = taskMetaDao.updateStatusByVersionInOwnerScope(
+                tenantId, clientId, ownerJiacn, taskId, expectedTaskVersion,
+                task.getRewardStatus(), task.getStartedAt(), task.getCompletedAt(), task.getFailureReason());
         if (taskUpdated != 1) {
             throw conflict();
         }
@@ -302,8 +302,8 @@ public class AgentWorkItemPlanServiceImpl implements AgentWorkItemPlanService {
         List<AgentTaskWorkItemEntity> insertedRows = new ArrayList<>(planned.size());
         for (PersistedPlanItem item : planned) {
             AgentTaskWorkItemEntity stored = workItemDao.findByTaskAndWorkItemId(
-                    tenantId, clientId, taskId, item.workItemId());
-            requireExactPersistedScope(stored, tenantId, clientId, taskId, item.workItemId());
+                    tenantId, clientId, ownerJiacn, taskId, item.workItemId());
+            requireExactPersistedScope(stored, tenantId, clientId, ownerJiacn, taskId, item.workItemId());
             if (!sameImmutablePlan(stored, item) || stored.getVersion() == null
                     || stored.getVersion() != 0L) {
                 throw invalidPersisted("Inserted work item does not match the confirmed plan");
@@ -315,20 +315,21 @@ public class AgentWorkItemPlanServiceImpl implements AgentWorkItemPlanService {
     }
 
     private AgentTaskMetaEntity requireReadableTask(
-            String tenantId, String clientId, String taskId, String actorAgentId) {
-        AgentTaskMetaEntity task = taskMetaDao.findByTaskId(tenantId, clientId, taskId);
-        requireCoordinator(tenantId, clientId, taskId, actorAgentId, task, false);
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId) {
+        AgentTaskMetaEntity task = taskMetaDao.findByTaskIdInOwnerScope(
+                tenantId, clientId, ownerJiacn, taskId);
+        requireCoordinator(tenantId, clientId, ownerJiacn, taskId, actorAgentId, task, false);
         return task;
     }
 
     private void requireCoordinator(
-            String tenantId, String clientId, String taskId, String actorAgentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId,
             AgentTaskMetaEntity task, boolean lockIdentity) {
         if (task == null) {
             throw notFound();
         }
         if (!tenantId.equals(task.getTenantId()) || !clientId.equals(task.getClientId())
-                || !taskId.equals(task.getTaskId())) {
+                || !ownerJiacn.equals(task.getOwnerJiacn()) || !taskId.equals(task.getTaskId())) {
             throw invalidPersisted("Task lookup returned a mismatched scope");
         }
         AgentTaskStatus status;
@@ -346,13 +347,13 @@ public class AgentWorkItemPlanServiceImpl implements AgentWorkItemPlanService {
         try {
             if (lockIdentity) {
                 List<String> locked = identityService.lockActiveCanonicalAgentIdsInScope(
-                        tenantId, clientId, tenantId, List.of(actorAgentId));
+                        tenantId, clientId, ownerJiacn, List.of(actorAgentId));
                 if (!List.of(actorAgentId).equals(locked)) {
                     throw notFound();
                 }
             } else {
                 String canonical = identityService.requireCanonicalAgentIdInScope(
-                        tenantId, clientId, tenantId, actorAgentId);
+                        tenantId, clientId, ownerJiacn, actorAgentId);
                 if (!actorAgentId.equals(canonical)) {
                     throw notFound();
                 }
@@ -361,9 +362,10 @@ public class AgentWorkItemPlanServiceImpl implements AgentWorkItemPlanService {
             throw notFound();
         }
         AgentTaskMemberEntity member = memberDao.findByTaskAndAgent(
-                tenantId, clientId, taskId, actorAgentId);
+                tenantId, clientId, ownerJiacn, taskId, actorAgentId);
         if (member == null || !tenantId.equals(member.getTenantId())
                 || !clientId.equals(member.getClientId())
+                || !ownerJiacn.equals(member.getOwnerJiacn())
                 || !taskId.equals(member.getTaskId())
                 || !actorAgentId.equals(member.getAgentId())) {
             throw notFound();
@@ -664,15 +666,16 @@ public class AgentWorkItemPlanServiceImpl implements AgentWorkItemPlanService {
     }
 
     private void requireExactPersistedScope(AgentTaskWorkItemEntity row,
-            String tenantId, String clientId, String taskId, String workItemId) {
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId) {
         if (row == null || !tenantId.equals(row.getTenantId())
-                || !clientId.equals(row.getClientId()) || !taskId.equals(row.getTaskId())
+                || !clientId.equals(row.getClientId()) || !ownerJiacn.equals(row.getOwnerJiacn())
+                || !taskId.equals(row.getTaskId())
                 || !workItemId.equals(row.getWorkItemId())) {
             throw invalidPersisted("Work item lookup returned an incomplete or mismatched row");
         }
     }
 
-    private void appendCreatedEvent(String tenantId, String clientId, String taskId,
+    private void appendCreatedEvent(String tenantId, String clientId, String ownerJiacn, String taskId,
             PersistedPlanItem item, String requestDigest, long occurredAt) {
         TaskEventPayload.Builder payload = TaskEventPayload.builder()
                 .put(TaskEventPayload.Key.WORK_ITEM_ID, item.workItemId())
@@ -684,7 +687,7 @@ public class AgentWorkItemPlanServiceImpl implements AgentWorkItemPlanService {
                 .put(TaskEventPayload.Key.RESULT_VERSION, 0L)
                 .put(TaskEventPayload.Key.CREATED_AT, occurredAt);
         eventWriter.append(AgentTaskMutationEventSupport.command(
-                tenantId, clientId, taskId, TaskEventType.WORK_ITEM_CREATED,
+                tenantId, clientId, ownerJiacn, taskId, TaskEventType.WORK_ITEM_CREATED,
                 TaskEventType.ActorType.SYSTEM, null, TaskEventType.Aggregate.WORK_ITEM,
                 item.workItemId(), payload, occurredAt, 0L));
     }
@@ -696,18 +699,19 @@ public class AgentWorkItemPlanServiceImpl implements AgentWorkItemPlanService {
     }
 
     private String createdEventId(
-            String tenantId, String clientId, String taskId, String workItemId) {
-        String seed = tenantId + '\0' + clientId + '\0' + taskId + '\0'
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId) {
+        String seed = tenantId + '\0' + clientId + '\0' + ownerJiacn + '\0' + taskId + '\0'
                 + TaskEventType.WORK_ITEM_CREATED + '\0' + TaskEventType.Aggregate.WORK_ITEM
                 + '\0' + workItemId + '\0' + 0L;
         return "evt_" + sha256(seed);
     }
 
     private void requireConfirmationEvent(
-            AgentTaskEventEntity event, String tenantId, String clientId, String taskId,
+            AgentTaskEventEntity event, String tenantId, String clientId, String ownerJiacn, String taskId,
             String eventId, PersistedPlanItem item, String requestDigest) {
         if (event == null || !tenantId.equals(event.getTenantId())
-                || !clientId.equals(event.getClientId()) || !taskId.equals(event.getTaskId())
+                || !clientId.equals(event.getClientId()) || !ownerJiacn.equals(event.getOwnerJiacn())
+                || !taskId.equals(event.getTaskId())
                 || !eventId.equals(event.getEventId())
                 || !TaskEventType.WORK_ITEM_CREATED.equals(event.getEventType())
                 || !TaskEventType.ActorType.SYSTEM.equals(event.getActorType())
@@ -809,16 +813,16 @@ public class AgentWorkItemPlanServiceImpl implements AgentWorkItemPlanService {
         return view;
     }
 
-    private String sourcePlanId(String tenantId, String clientId, String taskId,
+    private String sourcePlanId(String tenantId, String clientId, String ownerJiacn, String taskId,
             String actorAgentId, long taskVersion, String digest) {
-        return "wpp1." + shortHash(tenantId + '\0' + clientId) + "."
+        return "wpp1." + shortHash(tenantId + '\0' + clientId + '\0' + ownerJiacn) + "."
                 + shortHash(taskId) + "." + shortHash(actorAgentId) + "."
                 + taskVersion + "." + digest.substring(0, 24);
     }
 
-    private String workItemId(String tenantId, String clientId, String taskId,
+    private String workItemId(String tenantId, String clientId, String ownerJiacn, String taskId,
             String idempotencyKey, String itemKey, boolean confirmationAnchor) {
-        String seed = tenantId + '\0' + clientId + '\0' + taskId + '\0' + idempotencyKey;
+        String seed = tenantId + '\0' + clientId + '\0' + ownerJiacn + '\0' + taskId + '\0' + idempotencyKey;
         if (!confirmationAnchor) {
             seed += '\0' + itemKey;
         }
@@ -909,12 +913,16 @@ public class AgentWorkItemPlanServiceImpl implements AgentWorkItemPlanService {
         }
     }
 
-    private void requireScope(String tenantId, String clientId,
+    private void requireScope(String tenantId, String clientId, String ownerJiacn,
             String taskId, String actorAgentId) {
         requireExact(tenantId, "tenantId", 50);
         requireExact(clientId, "clientId", 50);
+        requireExact(ownerJiacn, "ownerJiacn", 50);
         requireExact(taskId, "taskId", 100);
         requireExact(actorAgentId, "actorAgentId", 100);
+        if (!"0".equals(tenantId) || "0".equals(ownerJiacn)) {
+            throw invalid("strict task owner scope is invalid");
+        }
     }
 
     private void requireText(String value, String field, int maxCodePoints) {

@@ -104,7 +104,7 @@ public class AgentTaskArtifactController {
         command.setMetadata(publicRequest.getMetadata());
 
         AgentTaskArtifactViewDTO published = artifactService.publish(
-                scope.tenantId(), scope.clientId(), taskId, actorAgentId, command);
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId, actorAgentId, command);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(MediaType.APPLICATION_JSON)
@@ -125,7 +125,7 @@ public class AgentTaskArtifactController {
         int exactVersion = positiveVersion(artifactVersion);
         String actorAgentId = actor(request);
         AgentTaskArtifactContentDTO result = contentService.readContent(
-                scope.tenantId(), scope.clientId(), taskId, actorAgentId,
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId, actorAgentId,
                 artifactId, exactVersion);
         Download download = requireDownload(result, artifactId, exactVersion);
         return ResponseEntity.ok()
@@ -181,13 +181,14 @@ public class AgentTaskArtifactController {
             throw new AuthenticationFailure(false);
         }
         Map<String, Object> claims = jwt.getToken().getClaims();
-        Object tenant = claims.get("jiacn");
+        Object owner = claims.get("jiacn");
         Object client = claims.get("client_id");
-        if (!(tenant instanceof String tenantId) || !(client instanceof String clientId)
-                || !exact(tenantId, 50) || !exact(clientId, 50)) {
+        if (!(owner instanceof String ownerJiacn) || !(client instanceof String clientId)
+                || !exact(ownerJiacn, 50) || !exact(clientId, 50)
+                || "0".equals(ownerJiacn) || "0".equals(clientId)) {
             throw new AuthenticationFailure(true);
         }
-        return new Scope(tenantId, clientId);
+        return new Scope("0", clientId, ownerJiacn);
     }
 
     private static String actor(HttpServletRequest request) {
@@ -371,7 +372,7 @@ public class AgentTaskArtifactController {
                 .body(new ErrorBody(code, message));
     }
 
-    private record Scope(String tenantId, String clientId) {
+    private record Scope(String tenantId, String clientId, String ownerJiacn) {
     }
 
     private record Download(byte[] content, MediaType mediaType) {

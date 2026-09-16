@@ -21,6 +21,7 @@ public class AgentSceneEventEntity extends BaseEntity {
     @TableId(value = "id", type = IdType.AUTO)
     private Long id;
     private String sceneId;
+    private String ownerJiacn;
     private Long sceneVersion;
     private String eventType;
     private String eventJson;

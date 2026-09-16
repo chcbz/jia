@@ -47,7 +47,7 @@ class AgentWorkItemPlanControllerTest {
 
     @Test
     void jwtClaimsAreSoleScopeAuthorityAndSuggestionIsNoStore() throws Exception {
-        when(service.suggest(anyString(), anyString(), anyString(), anyString(), any()))
+        when(service.suggest(anyString(), anyString(), anyString(), anyString(), anyString(), any()))
                 .thenReturn(view(false));
 
         mvc.perform(post("/agent/tasks/task-1/work-item-plans/suggest")
@@ -62,7 +62,7 @@ class AgentWorkItemPlanControllerTest {
 
         var request = org.mockito.ArgumentCaptor.forClass(
                 AgentWorkItemPlanSuggestRequestDTO.class);
-        verify(service).suggest(eq("Tenant-A"), eq("Client-A"), eq("task-1"), eq(ACTOR), request.capture());
+        verify(service).suggest(eq("0"), eq("Client-A"), eq("Tenant-A"), eq("task-1"), eq(ACTOR), request.capture());
         assertEquals("Implement endpoint", request.getValue().getObjective());
     }
 
@@ -158,7 +158,7 @@ class AgentWorkItemPlanControllerTest {
 
     @Test
     void confirmForwardsOnlyAuthenticatedScopeAndReturnsReplayFlag() throws Exception {
-        when(service.confirm(anyString(), anyString(), anyString(), anyString(), anyString(), any()))
+        when(service.confirm(anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), any()))
                 .thenReturn(view(true));
 
         mvc.perform(post("/agent/tasks/task-1/work-item-plans/confirm")
@@ -171,8 +171,9 @@ class AgentWorkItemPlanControllerTest {
                 .andExpect(jsonPath("$.confirmed").value(true))
                 .andExpect(jsonPath("$.idempotentReplay").value(true));
 
-        verify(service).confirm(org.mockito.ArgumentMatchers.eq("tenant-a"),
+        verify(service).confirm(org.mockito.ArgumentMatchers.eq("0"),
                 org.mockito.ArgumentMatchers.eq("client-a"),
+                org.mockito.ArgumentMatchers.eq("tenant-a"),
                 org.mockito.ArgumentMatchers.eq("task-1"),
                 org.mockito.ArgumentMatchers.eq(ACTOR),
                 org.mockito.ArgumentMatchers.eq("confirm-key-0001"),
@@ -183,7 +184,7 @@ class AgentWorkItemPlanControllerTest {
     void serviceFailuresMapToNonLeakingFrozenStatuses() throws Exception {
         doThrow(new AgentWorkItemPlanException(
                 AgentWorkItemPlanException.Reason.NOT_FOUND_OR_FORBIDDEN, "secret scope"))
-                .when(service).suggest(anyString(), anyString(), anyString(), anyString(), any());
+                .when(service).suggest(anyString(), anyString(), anyString(), anyString(), anyString(), any());
         var missing = mvc.perform(post("/agent/tasks/task-1/work-item-plans/suggest")
                         .queryParam("actorAgentId", ACTOR)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -199,7 +200,7 @@ class AgentWorkItemPlanControllerTest {
 
         doThrow(new AgentWorkItemPlanException(
                 AgentWorkItemPlanException.Reason.INVALID_PERSISTED_STATE, "database detail"))
-                .when(service).suggest(anyString(), anyString(), anyString(), anyString(), any());
+                .when(service).suggest(anyString(), anyString(), anyString(), anyString(), anyString(), any());
         mvc.perform(post("/agent/tasks/task-1/work-item-plans/suggest")
                         .queryParam("actorAgentId", ACTOR)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -219,7 +220,7 @@ class AgentWorkItemPlanControllerTest {
                         .content("x".repeat(AgentWorkItemPlanController.MAX_BODY_BYTES + 1))
                         .principal(jwt("tenant-a", "client-a")))
                 .andExpect(status().isBadRequest());
-        verify(service, never()).suggest(any(), any(), any(), any(), any());
+        verify(service, never()).suggest(any(), any(), any(), any(), any(), any());
     }
 
     private JwtAuthenticationToken jwt(String tenant, String client) {

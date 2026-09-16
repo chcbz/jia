@@ -43,33 +43,32 @@ public class AgentTaskCollaborationAccessServiceImpl
 
     @Override
     public AgentTaskAccessLevel resolveMemberAccess(
-            String tenantId, String clientId, String taskId, String agentId) {
-        return resolveMemberAccess(tenantId, clientId, taskId, agentId, false);
+            String tenantId, String clientId, String ownerJiacn, String taskId, String agentId) {
+        return resolveMemberAccess(tenantId, clientId, ownerJiacn, taskId, agentId, false);
     }
 
     @Override
     public AgentTaskAccessLevel resolveMemberAccessForUpdate(
-            String tenantId, String clientId, String taskId, String agentId) {
-        return resolveMemberAccess(tenantId, clientId, taskId, agentId, true);
+            String tenantId, String clientId, String ownerJiacn, String taskId, String agentId) {
+        return resolveMemberAccess(tenantId, clientId, ownerJiacn, taskId, agentId, true);
     }
 
     private AgentTaskAccessLevel resolveMemberAccess(
-            String tenantId, String clientId, String taskId, String agentId, boolean forUpdate) {
-        requireScopeId(tenantId, "tenantId");
-        requireScopeId(clientId, "clientId");
+            String tenantId, String clientId, String ownerJiacn, String taskId, String agentId, boolean forUpdate) {
+        requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         requireScopeId(taskId, "taskId");
         requireScopeId(agentId, "agentId");
 
         AgentTaskMetaEntity task = forUpdate
-                ? taskMetaDao.findByTaskIdForUpdate(tenantId, clientId, taskId)
-                : taskMetaDao.findByTaskId(tenantId, clientId, taskId);
-        if (!isCanonicalTask(task, tenantId, clientId, taskId)) {
+                ? taskMetaDao.findByTaskIdForUpdateInOwnerScope(tenantId, clientId, ownerJiacn, taskId)
+                : taskMetaDao.findByTaskIdInOwnerScope(tenantId, clientId, ownerJiacn, taskId);
+        if (!isCanonicalTask(task, tenantId, clientId, ownerJiacn, taskId)) {
             return AgentTaskAccessLevel.NONE;
         }
         AgentTaskMemberEntity member = forUpdate
-                ? memberDao.findByTaskAndAgentForUpdate(tenantId, clientId, taskId, agentId)
-                : memberDao.findByTaskAndAgent(tenantId, clientId, taskId, agentId);
-        if (!isCanonicalMember(member, tenantId, clientId, taskId, agentId)) {
+                ? memberDao.findByTaskAndAgentForUpdate(tenantId, clientId, ownerJiacn, taskId, agentId)
+                : memberDao.findByTaskAndAgent(tenantId, clientId, ownerJiacn, taskId, agentId);
+        if (!isCanonicalMember(member, tenantId, clientId, ownerJiacn, taskId, agentId)) {
             return AgentTaskAccessLevel.NONE;
         }
 
@@ -87,20 +86,22 @@ public class AgentTaskCollaborationAccessServiceImpl
     }
 
     private boolean isCanonicalTask(
-            AgentTaskMetaEntity task, String tenantId, String clientId, String taskId) {
+            AgentTaskMetaEntity task, String tenantId, String clientId, String ownerJiacn, String taskId) {
         return task != null
                 && tenantId.equals(task.getTenantId())
                 && clientId.equals(task.getClientId())
+                && ownerJiacn.equals(task.getOwnerJiacn())
                 && taskId.equals(task.getTaskId())
                 && isCanonicalTaskStatus(task.getRewardStatus());
     }
 
     private boolean isCanonicalMember(
             AgentTaskMemberEntity member, String tenantId, String clientId,
-            String taskId, String agentId) {
+            String ownerJiacn, String taskId, String agentId) {
         return member != null
                 && tenantId.equals(member.getTenantId())
                 && clientId.equals(member.getClientId())
+                && ownerJiacn.equals(member.getOwnerJiacn())
                 && taskId.equals(member.getTaskId())
                 && agentId.equals(member.getAgentId())
                 && MEMBER_ROLES.contains(member.getMemberRole())
@@ -113,6 +114,18 @@ public class AgentTaskCollaborationAccessServiceImpl
             return true;
         } catch (IllegalArgumentException exception) {
             return false;
+        }
+    }
+
+    private void requireStrictOwnerScope(
+            String tenantId, String clientId, String ownerJiacn) {
+        if (!"0".equals(tenantId)) {
+            throw new IllegalArgumentException("tenantId must be 0");
+        }
+        requireScopeId(clientId, "clientId");
+        requireScopeId(ownerJiacn, "ownerJiacn");
+        if ("0".equals(ownerJiacn)) {
+            throw new IllegalArgumentException("ownerJiacn must not be 0");
         }
     }
 

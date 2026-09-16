@@ -170,16 +170,16 @@ public class AgentTaskCollaborationServiceImpl
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public AgentTaskRequestViewDTO create(String tenantId, String clientId, String taskId,
-            String actorAgentId, AgentTaskRequestCreateDTO command) {
-        requireScope(tenantId, clientId, taskId, actorAgentId);
-        return mutationTransaction.executeWithLockedTaskRoot(tenantId, clientId, taskId,
-                taskRoot -> createLocked(tenantId, clientId, taskId, actorAgentId, command, taskRoot));
+    public AgentTaskRequestViewDTO create(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, AgentTaskRequestCreateDTO command) {
+        requireScope(tenantId, clientId, ownerJiacn, taskId, actorAgentId);
+        return mutationTransaction.executeWithLockedTaskRootInOwnerScope(tenantId, clientId, ownerJiacn, taskId,
+                taskRoot -> createLocked(tenantId, clientId, ownerJiacn, taskId, actorAgentId, command, taskRoot));
     }
 
-    private AgentTaskRequestViewDTO createLocked(String tenantId, String clientId, String taskId,
-            String actorAgentId, AgentTaskRequestCreateDTO command, AgentTaskMetaEntity taskRoot) {
-        Access access = requireAccess(tenantId, clientId, taskId, actorAgentId, true, taskRoot);
+    private AgentTaskRequestViewDTO createLocked(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, AgentTaskRequestCreateDTO command, AgentTaskMetaEntity taskRoot) {
+        Access access = requireAccess(tenantId, clientId, ownerJiacn, taskId, actorAgentId, true, taskRoot);
         if (command == null) {
             throw invalid("request command is required");
         }
@@ -194,7 +194,7 @@ public class AgentTaskCollaborationServiceImpl
         }
         requireId(command.getTargetId(), "targetId", 100);
         String targetId = command.getTargetId();
-        validateTarget(tenantId, clientId, taskId, targetType, targetId, taskRoot);
+        validateTarget(tenantId, clientId, ownerJiacn, taskId, targetType, targetId, taskRoot);
         String requestType = canonical(command.getRequestType(), "requestType");
         if (!REQUEST_TYPES.contains(requestType)) {
             throw invalid("requestType is not supported");
@@ -205,7 +205,7 @@ public class AgentTaskCollaborationServiceImpl
             throw invalid("dueAt must not be negative");
         }
         String workItemId = requireWorkItem(
-                tenantId, clientId, taskId, command.getWorkItemId());
+                tenantId, clientId, ownerJiacn, taskId, command.getWorkItemId());
 
         AgentTaskRequestDTO insert = new AgentTaskRequestDTO();
         insert.setRequestId(command.getRequestId());
@@ -221,7 +221,7 @@ public class AgentTaskCollaborationServiceImpl
         insert.setDescription(command.getDescription());
         insert.setDueAt(command.getDueAt());
         try {
-            requireSingleInsert(requestDao.insert(tenantId, clientId, insert));
+            requireSingleInsert(requestDao.insert(tenantId, clientId, ownerJiacn, insert));
         } catch (RuntimeException e) {
             if (isDuplicateConflict(e)) {
                 throw conflict("Request changed or already exists", null);
@@ -232,30 +232,30 @@ public class AgentTaskCollaborationServiceImpl
             throw e;
         }
         AgentTaskRequestEntity stored = requestDao.findByRequestId(
-                tenantId, clientId, taskId, insert.getRequestId());
-        if (stored == null) {
-            throw invalidPersisted("Inserted request could not be read in its scope");
+                tenantId, clientId, ownerJiacn, taskId, insert.getRequestId());
+        if (stored == null || !ownerJiacn.equals(stored.getOwnerJiacn())) {
+            throw invalidPersisted("Inserted request could not be read in its owner scope");
         }
         if (stored.getVersion() == null || stored.getVersion() != 0L) {
             throw invalidPersisted("Inserted request has an unexpected initial version");
         }
-        appendRequestEvent(tenantId, clientId, taskId, actorAgentId, stored,
+        appendRequestEvent(tenantId, clientId, ownerJiacn, taskId, actorAgentId, stored,
                 requestCreateEvent(requestType), null, AgentTaskRequestStatus.OPEN.value(),
                 0L, 0L, now());
         return requestView(stored);
     }
 
     @Override
-    public AgentTaskRequestViewDTO get(String tenantId, String clientId, String taskId,
-            String actorAgentId, String requestId) {
-        requireAccess(tenantId, clientId, taskId, actorAgentId, false);
-        return requestView(requireRequest(tenantId, clientId, taskId, requestId));
+    public AgentTaskRequestViewDTO get(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, String requestId) {
+        requireAccess(tenantId, clientId, ownerJiacn, taskId, actorAgentId, false);
+        return requestView(requireRequest(tenantId, clientId, ownerJiacn, taskId, requestId));
     }
 
     @Override
-    public List<AgentTaskRequestViewDTO> list(String tenantId, String clientId, String taskId,
-            String actorAgentId, AgentTaskRequestQueryDTO query) {
-        requireAccess(tenantId, clientId, taskId, actorAgentId, false);
+    public List<AgentTaskRequestViewDTO> list(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, AgentTaskRequestQueryDTO query) {
+        requireAccess(tenantId, clientId, ownerJiacn, taskId, actorAgentId, false);
         String status = query == null ? null : trimToNull(query.getStatus());
         if (status != null) {
             try {
@@ -264,57 +264,57 @@ public class AgentTaskCollaborationServiceImpl
                 throw invalid("status is not supported");
             }
         }
-        String workItemId = requireWorkItem(tenantId, clientId, taskId,
+        String workItemId = requireWorkItem(tenantId, clientId, ownerJiacn, taskId,
                 query == null ? null : query.getWorkItemId());
         int limit = boundedLimit(query == null ? null : query.getLimit());
         return requestDao.listByTask(
-                        tenantId, clientId, taskId, status, workItemId, limit).stream()
+                        tenantId, clientId, ownerJiacn, taskId, status, workItemId, limit).stream()
                 .map(this::requestView)
                 .toList();
     }
 
     @Override
-    public AgentTaskRequestViewDTO acknowledge(String tenantId, String clientId, String taskId,
-            String actorAgentId, String requestId, AgentTaskRequestTransitionDTO command) {
-        return transitionRequest(tenantId, clientId, taskId, actorAgentId, requestId,
+    public AgentTaskRequestViewDTO acknowledge(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, String requestId, AgentTaskRequestTransitionDTO command) {
+        return transitionRequest(tenantId, clientId, ownerJiacn, taskId, actorAgentId, requestId,
                 AgentTaskRequestStatus.ACKNOWLEDGED, command);
     }
 
     @Override
-    public AgentTaskRequestViewDTO resolve(String tenantId, String clientId, String taskId,
-            String actorAgentId, String requestId, AgentTaskRequestTransitionDTO command) {
-        return transitionRequest(tenantId, clientId, taskId, actorAgentId, requestId,
+    public AgentTaskRequestViewDTO resolve(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, String requestId, AgentTaskRequestTransitionDTO command) {
+        return transitionRequest(tenantId, clientId, ownerJiacn, taskId, actorAgentId, requestId,
                 AgentTaskRequestStatus.RESOLVED, command);
     }
 
     @Override
-    public AgentTaskRequestViewDTO reject(String tenantId, String clientId, String taskId,
-            String actorAgentId, String requestId, AgentTaskRequestTransitionDTO command) {
-        return transitionRequest(tenantId, clientId, taskId, actorAgentId, requestId,
+    public AgentTaskRequestViewDTO reject(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, String requestId, AgentTaskRequestTransitionDTO command) {
+        return transitionRequest(tenantId, clientId, ownerJiacn, taskId, actorAgentId, requestId,
                 AgentTaskRequestStatus.REJECTED, command);
     }
 
     @Override
-    public AgentTaskRequestViewDTO cancel(String tenantId, String clientId, String taskId,
-            String actorAgentId, String requestId, AgentTaskRequestTransitionDTO command) {
-        return transitionRequest(tenantId, clientId, taskId, actorAgentId, requestId,
+    public AgentTaskRequestViewDTO cancel(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, String requestId, AgentTaskRequestTransitionDTO command) {
+        return transitionRequest(tenantId, clientId, ownerJiacn, taskId, actorAgentId, requestId,
                 AgentTaskRequestStatus.CANCELLED, command);
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public AgentTaskArtifactViewDTO publish(String tenantId, String clientId, String taskId,
-            String actorAgentId, AgentTaskArtifactPublishDTO command) {
-        requireScope(tenantId, clientId, taskId, actorAgentId);
-        return mutationTransaction.executeWithLockedTaskRoot(tenantId, clientId, taskId,
-                taskRoot -> publishLocked(tenantId, clientId, taskId, actorAgentId, command, taskRoot));
+    public AgentTaskArtifactViewDTO publish(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, AgentTaskArtifactPublishDTO command) {
+        requireScope(tenantId, clientId, ownerJiacn, taskId, actorAgentId);
+        return mutationTransaction.executeWithLockedTaskRootInOwnerScope(tenantId, clientId, ownerJiacn, taskId,
+                taskRoot -> publishLocked(tenantId, clientId, ownerJiacn, taskId, actorAgentId, command, taskRoot));
     }
 
-    private AgentTaskArtifactViewDTO publishLocked(String tenantId, String clientId, String taskId,
-            String actorAgentId, AgentTaskArtifactPublishDTO command, AgentTaskMetaEntity taskRoot) {
+    private AgentTaskArtifactViewDTO publishLocked(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, AgentTaskArtifactPublishDTO command, AgentTaskMetaEntity taskRoot) {
         // Frozen order: task-root lock -> ACL/work-item validation -> artifact-version lock ->
         // bounded filesystem write -> artifact row -> ARTIFACT_PUBLISHED event.
-        requireAccess(tenantId, clientId, taskId, actorAgentId, true, taskRoot);
+        requireAccess(tenantId, clientId, ownerJiacn, taskId, actorAgentId, true, taskRoot);
         if (command == null) {
             throw invalid("artifact command is required");
         }
@@ -324,7 +324,7 @@ public class AgentTaskCollaborationServiceImpl
             throw forbidden();
         }
         String workItemId = requireWorkItem(
-                tenantId, clientId, taskId, command.getWorkItemId());
+                tenantId, clientId, ownerJiacn, taskId, command.getWorkItemId());
         String artifactType = canonical(command.getArtifactType(), "artifactType");
         if (!ARTIFACT_TYPES.contains(artifactType)) {
             throw invalid("artifactType is not supported");
@@ -338,7 +338,7 @@ public class AgentTaskCollaborationServiceImpl
         int expectedPrevious = requireArtifactVersions(command);
 
         AgentTaskArtifactEntity latest = artifactDao.findLatestVersionForUpdate(
-                tenantId, clientId, taskId, command.getArtifactId());
+                tenantId, clientId, ownerJiacn, taskId, command.getArtifactId());
         int persistedLatest = latest == null ? 0 : requirePersistedArtifactVersion(latest);
         if (persistedLatest != expectedPrevious) {
             throw conflict("Artifact version changed concurrently", null);
@@ -348,7 +348,7 @@ public class AgentTaskCollaborationServiceImpl
         }
 
         ArtifactPayload payload = materializeArtifactPayload(
-                tenantId, clientId, taskId, command, payloadMode);
+                tenantId, clientId, ownerJiacn, taskId, command, payloadMode);
         AgentTaskArtifactDTO insert = new AgentTaskArtifactDTO();
         insert.setArtifactId(command.getArtifactId());
         insert.setTaskId(taskId);
@@ -364,7 +364,7 @@ public class AgentTaskCollaborationServiceImpl
         insert.setMetadataJson(payload.metadataJson());
         insert.setCreatedAt(now());
         try {
-            requireSingleInsert(artifactDao.insert(tenantId, clientId, insert));
+            requireSingleInsert(artifactDao.insert(tenantId, clientId, ownerJiacn, insert));
         } catch (RuntimeException e) {
             // Managed bytes are already an immutable scoped digest at this point. If the database
             // transaction fails, retaining that digest is safer than deleting content another
@@ -378,11 +378,11 @@ public class AgentTaskCollaborationServiceImpl
             throw e;
         }
         AgentTaskArtifactEntity stored = artifactDao.findVersion(
-                tenantId, clientId, taskId, insert.getArtifactId(), insert.getArtifactVersion());
+                tenantId, clientId, ownerJiacn, taskId, insert.getArtifactId(), insert.getArtifactVersion());
         if (stored == null) {
             throw invalidPersisted("Inserted artifact could not be read in its scope");
         }
-        if (!taskId.equals(stored.getTaskId())
+        if (!ownerJiacn.equals(stored.getOwnerJiacn()) || !taskId.equals(stored.getTaskId())
                 || !insert.getArtifactId().equals(stored.getArtifactId())
                 || !artifactType.equals(stored.getArtifactType())
                 || !command.getArtifactVersion().equals(stored.getArtifactVersion())
@@ -398,18 +398,18 @@ public class AgentTaskCollaborationServiceImpl
                 || !Objects.equals(persistedMaterial.mimeType(), payload.mimeType())) {
             throw invalidPersisted("Inserted artifact storage metadata does not match its content");
         }
-        appendArtifactEvent(tenantId, clientId, taskId, actorAgentId, stored,
+        appendArtifactEvent(tenantId, clientId, ownerJiacn, taskId, actorAgentId, stored,
                 new ArtifactEventDigest(payload.sha256(), payload.byteLength()), now());
         return artifactView(stored);
     }
 
     @Override
-    public AgentTaskArtifactViewDTO getLatest(String tenantId, String clientId, String taskId,
-            String actorAgentId, String artifactId) {
-        Access access = requireAccess(tenantId, clientId, taskId, actorAgentId, false);
+    public AgentTaskArtifactViewDTO getLatest(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, String artifactId) {
+        Access access = requireAccess(tenantId, clientId, ownerJiacn, taskId, actorAgentId, false);
         requireId(artifactId, "artifactId", 100);
         AgentTaskArtifactEntity entity = artifactDao.findLatestVersion(
-                tenantId, clientId, taskId, artifactId);
+                tenantId, clientId, ownerJiacn, taskId, artifactId);
         if (entity == null || !canReadArtifact(access, entity)) {
             throw notFound();
         }
@@ -417,15 +417,15 @@ public class AgentTaskCollaborationServiceImpl
     }
 
     @Override
-    public AgentTaskArtifactViewDTO getVersion(String tenantId, String clientId, String taskId,
-            String actorAgentId, String artifactId, int artifactVersion) {
-        Access access = requireAccess(tenantId, clientId, taskId, actorAgentId, false);
+    public AgentTaskArtifactViewDTO getVersion(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, String artifactId, int artifactVersion) {
+        Access access = requireAccess(tenantId, clientId, ownerJiacn, taskId, actorAgentId, false);
         requireId(artifactId, "artifactId", 100);
         if (artifactVersion < 1) {
             throw invalid("artifactVersion must be positive");
         }
         AgentTaskArtifactEntity entity = artifactDao.findVersion(
-                tenantId, clientId, taskId, artifactId, artifactVersion);
+                tenantId, clientId, ownerJiacn, taskId, artifactId, artifactVersion);
         if (entity == null || !canReadArtifact(access, entity)) {
             throw notFound();
         }
@@ -433,30 +433,59 @@ public class AgentTaskCollaborationServiceImpl
     }
 
     @Override
-    public AgentTaskArtifactContentDTO readContent(String tenantId, String clientId, String taskId,
-            String actorAgentId, String artifactId, int artifactVersion) {
-        Access access = requireAccess(tenantId, clientId, taskId, actorAgentId, false);
+    public AgentTaskArtifactContentDTO readContent(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, String artifactId, int artifactVersion) {
+        Access access = requireAccess(tenantId, clientId, ownerJiacn, taskId, actorAgentId, false);
         requireId(artifactId, "artifactId", 100);
         if (artifactVersion < 1) {
             throw invalid("artifactVersion must be positive");
         }
         AgentTaskArtifactEntity entity = artifactDao.findVersion(
-                tenantId, clientId, taskId, artifactId, artifactVersion);
+                tenantId, clientId, ownerJiacn, taskId, artifactId, artifactVersion);
         if (entity == null || !canReadArtifact(access, entity)) {
             throw notFound();
         }
-        return readArtifactContent(tenantId, clientId, taskId, entity);
+        ArtifactMaterial material = artifactMaterial(entity);
+        byte[] content;
+        if (material.inlineContent() != null) {
+            content = material.inlineContent();
+        } else if (material.managedStorage()) {
+            try {
+                AgentTaskArtifactStorage.StoredContent stored = artifactStorage.read(
+                        new AgentTaskArtifactStorage.Scope(tenantId, clientId, ownerJiacn, taskId),
+                        entity.getStorageUri(), entity.getContentHash(), material.byteLength(),
+                        material.mimeType());
+                content = stored == null ? null : stored.content();
+                if (content == null || !entity.getContentHash().equals(stored.sha256())
+                        || material.byteLength() != stored.byteLength()
+                        || !material.mimeType().equals(stored.mimeType())
+                        || content.length != stored.byteLength()
+                        || !stored.sha256().equals(sha256(content))) {
+                    throw invalidPersisted(
+                            "Managed artifact storage returned inconsistent content");
+                }
+            } catch (AgentTaskArtifactStorageException failure) {
+                throw invalidPersisted(
+                        "Managed artifact storage is unavailable or corrupt");
+            }
+        } else {
+            // Legacy external URIs are metadata-only. This service intentionally performs no
+            // outbound fetch, so they cannot become an SSRF or arbitrary local-file read surface.
+            throw invalid("Artifact content is not managed by this service");
+        }
+        return new AgentTaskArtifactContentDTO(entity.getArtifactId(), entity.getArtifactVersion(),
+                entity.getContentHash(), material.byteLength(), material.mimeType(), content);
     }
 
     @Override
-    public List<AgentTaskArtifactViewDTO> list(String tenantId, String clientId, String taskId,
-            String actorAgentId, AgentTaskArtifactQueryDTO query) {
-        Access access = requireAccess(tenantId, clientId, taskId, actorAgentId, false);
-        String workItemId = requireWorkItem(tenantId, clientId, taskId,
+    public List<AgentTaskArtifactViewDTO> list(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, AgentTaskArtifactQueryDTO query) {
+        Access access = requireAccess(tenantId, clientId, ownerJiacn, taskId, actorAgentId, false);
+        String workItemId = requireWorkItem(tenantId, clientId, ownerJiacn, taskId,
                 query == null ? null : query.getWorkItemId());
         int limit = boundedLimit(query == null ? null : query.getLimit());
         List<AgentTaskArtifactEntity> entities = artifactDao.listVisibleByTask(
-                tenantId, clientId, taskId, workItemId, actorAgentId,
+                tenantId, clientId, ownerJiacn, taskId, workItemId, actorAgentId,
                 "reviewer".equals(access.role()), access.coordinator(), limit);
         return entities.stream()
                 .filter(entity -> canReadArtifact(access, entity))
@@ -467,60 +496,86 @@ public class AgentTaskCollaborationServiceImpl
 
     @Override
     public List<AgentTaskArtifactViewDTO> listForTaskOwner(
-            String tenantId, String clientId, String taskId, AgentTaskArtifactQueryDTO query) {
-        requireOwnerTaskScope(tenantId, clientId, taskId);
-        String workItemId = requireWorkItem(tenantId, clientId, taskId,
+            String tenantId, String clientId, String ownerJiacn, String taskId,
+            AgentTaskArtifactQueryDTO query) {
+        requireOwnerTaskScope(tenantId, clientId, ownerJiacn, taskId);
+        String workItemId = requireWorkItem(tenantId, clientId, ownerJiacn, taskId,
                 query == null ? null : query.getWorkItemId());
         int limit = boundedLimit(query == null ? null : query.getLimit());
         List<AgentTaskArtifactEntity> entities = workItemId == null
-                ? artifactDao.listByTask(tenantId, clientId, taskId, limit)
-                : artifactDao.listByWorkItem(tenantId, clientId, taskId, workItemId, limit);
+                ? artifactDao.listByTask(tenantId, clientId, ownerJiacn, taskId, limit)
+                : artifactDao.listByWorkItem(tenantId, clientId, ownerJiacn, taskId, workItemId, limit);
         return entities.stream().limit(limit).map(this::artifactView).toList();
     }
 
     @Override
     public AgentTaskArtifactContentDTO readContentForTaskOwner(String tenantId, String clientId,
-            String taskId, String artifactId, int artifactVersion) {
-        requireOwnerTaskScope(tenantId, clientId, taskId);
+            String ownerJiacn, String taskId, String artifactId, int artifactVersion) {
+        requireOwnerTaskScope(tenantId, clientId, ownerJiacn, taskId);
         requireId(artifactId, "artifactId", 100);
         if (artifactVersion < 1) {
             throw invalid("artifactVersion must be positive");
         }
         AgentTaskArtifactEntity entity = artifactDao.findVersion(
-                tenantId, clientId, taskId, artifactId, artifactVersion);
+                tenantId, clientId, ownerJiacn, taskId, artifactId, artifactVersion);
         if (entity == null) {
             throw notFound();
         }
-        return readArtifactContent(tenantId, clientId, taskId, entity);
+        ArtifactMaterial material = artifactMaterial(entity);
+        byte[] content;
+        if (material.inlineContent() != null) {
+            content = material.inlineContent();
+        } else if (material.managedStorage()) {
+            try {
+                AgentTaskArtifactStorage.StoredContent stored = artifactStorage.read(
+                        new AgentTaskArtifactStorage.Scope(tenantId, clientId, ownerJiacn, taskId),
+                        entity.getStorageUri(), entity.getContentHash(), material.byteLength(),
+                        material.mimeType());
+                content = stored == null ? null : stored.content();
+                if (content == null || !entity.getContentHash().equals(stored.sha256())
+                        || material.byteLength() != stored.byteLength()
+                        || !material.mimeType().equals(stored.mimeType())
+                        || content.length != stored.byteLength()
+                        || !stored.sha256().equals(sha256(content))) {
+                    throw invalidPersisted("Managed artifact storage returned inconsistent content");
+                }
+            } catch (AgentTaskArtifactStorageException failure) {
+                throw invalidPersisted("Managed artifact storage is unavailable or corrupt");
+            }
+        } else {
+            throw invalid("Artifact content is not managed by this service");
+        }
+        return new AgentTaskArtifactContentDTO(entity.getArtifactId(), entity.getArtifactVersion(),
+                entity.getContentHash(), material.byteLength(), material.mimeType(), content);
     }
 
     @Override
-    public List<AgentTaskArtifactViewDTO> listVersions(String tenantId, String clientId, String taskId,
-            String actorAgentId, String artifactId) {
-        Access access = requireAccess(tenantId, clientId, taskId, actorAgentId, false);
+    public List<AgentTaskArtifactViewDTO> listVersions(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, String artifactId) {
+        Access access = requireAccess(tenantId, clientId, ownerJiacn, taskId, actorAgentId, false);
         requireId(artifactId, "artifactId", 100);
-        return artifactDao.listVersions(tenantId, clientId, taskId, artifactId).stream()
+        return artifactDao.listVersions(tenantId, clientId, ownerJiacn, taskId, artifactId).stream()
                 .filter(entity -> canReadArtifact(access, entity))
                 .map(this::artifactView)
                 .toList();
     }
 
     @Transactional(rollbackFor = Exception.class)
-    AgentTaskRequestViewDTO transitionRequest(String tenantId, String clientId, String taskId,
-            String actorAgentId, String requestId, AgentTaskRequestStatus target,
+    AgentTaskRequestViewDTO transitionRequest(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, String requestId, AgentTaskRequestStatus target,
             AgentTaskRequestTransitionDTO command) {
-        requireScope(tenantId, clientId, taskId, actorAgentId);
-        return mutationTransaction.executeWithLockedTaskRoot(tenantId, clientId, taskId,
-                taskRoot -> transitionRequestLocked(tenantId, clientId, taskId, actorAgentId,
+        requireScope(tenantId, clientId, ownerJiacn, taskId, actorAgentId);
+        return mutationTransaction.executeWithLockedTaskRootInOwnerScope(tenantId, clientId, ownerJiacn, taskId,
+                taskRoot -> transitionRequestLocked(tenantId, clientId, ownerJiacn, taskId, actorAgentId,
                         requestId, target, command, taskRoot));
     }
 
     private AgentTaskRequestViewDTO transitionRequestLocked(
-            String tenantId, String clientId, String taskId, String actorAgentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId,
             String requestId, AgentTaskRequestStatus target, AgentTaskRequestTransitionDTO command,
             AgentTaskMetaEntity taskRoot) {
-        Access access = requireAccess(tenantId, clientId, taskId, actorAgentId, true, taskRoot);
-        AgentTaskRequestEntity current = requireRequest(tenantId, clientId, taskId, requestId);
+        Access access = requireAccess(tenantId, clientId, ownerJiacn, taskId, actorAgentId, true, taskRoot);
+        AgentTaskRequestEntity current = requireRequest(tenantId, clientId, ownerJiacn, taskId, requestId);
         long expectedVersion = requireExpectedVersion(command);
         if (current.getVersion() == null || current.getVersion() < 0) {
             throw invalidPersisted("Persisted request version is invalid");
@@ -562,7 +617,7 @@ public class AgentTaskCollaborationServiceImpl
         int updated;
         try {
             updated = requestDao.updateByVersion(
-                    tenantId, clientId, taskId, requestId, expectedVersion, update);
+                    tenantId, clientId, ownerJiacn, taskId, requestId, expectedVersion, update);
         } catch (RuntimeException e) {
             if (isDuplicateConflict(e)) {
                 throw conflict("Request changed concurrently", null);
@@ -579,7 +634,7 @@ public class AgentTaskCollaborationServiceImpl
         current.setResolvedAt(update.getResolvedAt());
         current.setVersion(expectedVersion + 1);
         current.setUpdateTime(changedAt);
-        appendRequestEvent(tenantId, clientId, taskId, actorAgentId, current,
+        appendRequestEvent(tenantId, clientId, ownerJiacn, taskId, actorAgentId, current,
                 requestTransitionEvent(target), currentStatus.value(), target.value(),
                 expectedVersion, expectedVersion + 1, changedAt);
         return requestView(current);
@@ -603,7 +658,7 @@ public class AgentTaskCollaborationServiceImpl
         };
     }
 
-    private void appendRequestEvent(String tenantId, String clientId, String taskId,
+    private void appendRequestEvent(String tenantId, String clientId, String ownerJiacn, String taskId,
             String actorAgentId, AgentTaskRequestEntity request, String eventType,
             String fromStatus, String toStatus, long expectedVersion, long resultVersion,
             long occurredAt) {
@@ -619,12 +674,12 @@ public class AgentTaskCollaborationServiceImpl
         if (request.getWorkItemId() != null) {
             payload.put(TaskEventPayload.Key.WORK_ITEM_ID, request.getWorkItemId());
         }
-        eventWriter.append(AgentTaskMutationEventSupport.command(tenantId, clientId, taskId,
+        eventWriter.append(AgentTaskMutationEventSupport.command(tenantId, clientId, ownerJiacn, taskId,
                 eventType, TaskEventType.ActorType.AGENT, actorAgentId,
                 TaskEventType.Aggregate.REQUEST, request.getRequestId(), payload, occurredAt, resultVersion));
     }
 
-    private void appendArtifactEvent(String tenantId, String clientId, String taskId,
+    private void appendArtifactEvent(String tenantId, String clientId, String ownerJiacn, String taskId,
             String actorAgentId, AgentTaskArtifactEntity artifact,
             ArtifactEventDigest digest, long occurredAt) {
         TaskEventPayload.Builder payload = TaskEventPayload.builder()
@@ -639,75 +694,41 @@ public class AgentTaskCollaborationServiceImpl
         if (artifact.getWorkItemId() != null) {
             payload.put(TaskEventPayload.Key.WORK_ITEM_ID, artifact.getWorkItemId());
         }
-        eventWriter.append(AgentTaskMutationEventSupport.command(tenantId, clientId, taskId,
+        eventWriter.append(AgentTaskMutationEventSupport.command(tenantId, clientId, ownerJiacn, taskId,
                 TaskEventType.ARTIFACT_PUBLISHED, TaskEventType.ActorType.AGENT, actorAgentId,
                 TaskEventType.Aggregate.ARTIFACT, artifact.getArtifactId(), payload, occurredAt,
                 artifact.getArtifactVersion().longValue()));
     }
 
-    private AgentTaskArtifactContentDTO readArtifactContent(
-            String tenantId, String clientId, String taskId, AgentTaskArtifactEntity entity) {
-        ArtifactMaterial material = artifactMaterial(entity);
-        byte[] content;
-        if (material.inlineContent() != null) {
-            content = material.inlineContent();
-        } else if (material.managedStorage()) {
-            try {
-                AgentTaskArtifactStorage.StoredContent stored = artifactStorage.read(
-                        new AgentTaskArtifactStorage.Scope(tenantId, clientId, taskId),
-                        entity.getStorageUri(), entity.getContentHash(), material.byteLength(),
-                        material.mimeType());
-                content = stored == null ? null : stored.content();
-                if (content == null || !entity.getContentHash().equals(stored.sha256())
-                        || material.byteLength() != stored.byteLength()
-                        || !material.mimeType().equals(stored.mimeType())
-                        || content.length != stored.byteLength()
-                        || !stored.sha256().equals(sha256(content))) {
-                    throw invalidPersisted(
-                            "Managed artifact storage returned inconsistent content");
-                }
-            } catch (AgentTaskArtifactStorageException failure) {
-                throw invalidPersisted(
-                        "Managed artifact storage is unavailable or corrupt");
-            }
-        } else {
-            // Legacy external URIs are metadata-only. This service intentionally performs no
-            // outbound fetch, so they cannot become an SSRF or arbitrary local-file read surface.
-            throw invalid("Artifact content is not managed by this service");
-        }
-        return new AgentTaskArtifactContentDTO(entity.getArtifactId(), entity.getArtifactVersion(),
-                entity.getContentHash(), material.byteLength(), material.mimeType(), content);
-    }
-
-    /**
-     * Task-owner reads are an HTTP adapter capability: the caller has already authenticated the
-     * owner and can only provide its exact tenant/client claims. Agent-member ACL remains the
-     * boundary for agent-client APIs.
-     */
-    private void requireOwnerTaskScope(String tenantId, String clientId, String taskId) {
-        requireScope(tenantId, clientId, taskId, tenantId);
-        AgentTaskMetaEntity task = taskMetaDao.findByTaskId(tenantId, clientId, taskId);
+    private void requireOwnerTaskScope(
+            String tenantId, String clientId, String ownerJiacn, String taskId) {
+        requireScope(tenantId, clientId, ownerJiacn, taskId, ownerJiacn);
+        AgentTaskMetaEntity task = taskMetaDao.findByTaskIdInOwnerScope(
+                tenantId, clientId, ownerJiacn, taskId);
         if (task == null || !tenantId.equals(task.getTenantId())
-                || !clientId.equals(task.getClientId()) || !taskId.equals(task.getTaskId())) {
+                || !clientId.equals(task.getClientId()) || !ownerJiacn.equals(task.getOwnerJiacn())
+                || !taskId.equals(task.getTaskId())) {
             throw notFound();
         }
     }
 
-    private Access requireAccess(String tenantId, String clientId, String taskId,
+    private Access requireAccess(String tenantId, String clientId, String ownerJiacn, String taskId,
             String actorAgentId, boolean write) {
-        requireScope(tenantId, clientId, taskId, actorAgentId);
-        return requireAccess(tenantId, clientId, taskId, actorAgentId, write,
-                taskMetaDao.findByTaskId(tenantId, clientId, taskId));
+        requireScope(tenantId, clientId, ownerJiacn, taskId, actorAgentId);
+        return requireAccess(tenantId, clientId, ownerJiacn, taskId, actorAgentId, write,
+                taskMetaDao.findByTaskIdInOwnerScope(tenantId, clientId, ownerJiacn, taskId));
     }
 
-    private Access requireAccess(String tenantId, String clientId, String taskId,
+    private Access requireAccess(String tenantId, String clientId, String ownerJiacn, String taskId,
             String actorAgentId, boolean write, AgentTaskMetaEntity task) {
-        if (task == null) {
+        if (task == null || !tenantId.equals(task.getTenantId())
+                || !clientId.equals(task.getClientId()) || !ownerJiacn.equals(task.getOwnerJiacn())
+                || !taskId.equals(task.getTaskId())) {
             throw notFound();
         }
         boolean coordinator = actorAgentId.equals(task.getCoordinatorAgentId());
         AgentTaskMemberEntity member = memberDao.findByTaskAndAgent(
-                tenantId, clientId, taskId, actorAgentId);
+                tenantId, clientId, ownerJiacn, taskId, actorAgentId);
         if (coordinator) {
             return new Access(actorAgentId, "coordinator", true);
         }
@@ -731,11 +752,11 @@ public class AgentTaskCollaborationServiceImpl
         return new Access(actorAgentId, role, coordinator || "coordinator".equals(role));
     }
 
-    private void validateTarget(String tenantId, String clientId, String taskId,
+    private void validateTarget(String tenantId, String clientId, String ownerJiacn, String taskId,
             String targetType, String targetId, AgentTaskMetaEntity taskRoot) {
         if ("agent".equals(targetType)) {
             AgentTaskMemberEntity target = memberDao.findByTaskAndAgent(
-                    tenantId, clientId, taskId, targetId);
+                    tenantId, clientId, ownerJiacn, taskId, targetId);
             if (target == null) {
                 if (taskRoot == null || !targetId.equals(taskRoot.getCoordinatorAgentId())) {
                     throw notFound();
@@ -748,7 +769,7 @@ public class AgentTaskCollaborationServiceImpl
         if (!MEMBER_ROLES.contains(targetId)) {
             throw invalid("target role is not supported");
         }
-        boolean present = memberDao.listByTask(tenantId, clientId, taskId).stream()
+        boolean present = memberDao.listByTask(tenantId, clientId, ownerJiacn, taskId).stream()
                 .anyMatch(member -> targetId.equals(member.getMemberRole()) && eligibleTargetMember(member));
         if (!present && "coordinator".equals(targetId)) {
             present = taskRoot != null && !StringUtil.isBlank(taskRoot.getCoordinatorAgentId());
@@ -788,28 +809,29 @@ public class AgentTaskCollaborationServiceImpl
     }
 
     private AgentTaskRequestEntity requireRequest(
-            String tenantId, String clientId, String taskId, String requestId) {
+            String tenantId, String clientId, String ownerJiacn, String taskId, String requestId) {
         requireId(requestId, "requestId", 100);
         AgentTaskRequestEntity request = requestDao.findByRequestId(
-                tenantId, clientId, taskId, requestId);
+                tenantId, clientId, ownerJiacn, taskId, requestId);
         if (request == null) {
             throw notFound();
         }
-        if (!taskId.equals(request.getTaskId())) {
+        if (!ownerJiacn.equals(request.getOwnerJiacn()) || !taskId.equals(request.getTaskId())) {
             throw notFound();
         }
         return request;
     }
 
     private String requireWorkItem(
-            String tenantId, String clientId, String taskId, String workItemId) {
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId) {
         if (workItemId == null || workItemId.isEmpty()) {
             return null;
         }
         requireId(workItemId, "workItemId", 100);
         AgentTaskWorkItemEntity item = workItemDao.findByTaskAndWorkItemId(
-                tenantId, clientId, taskId, workItemId);
-        if (item == null || !taskId.equals(item.getTaskId())) {
+                tenantId, clientId, ownerJiacn, taskId, workItemId);
+        if (item == null || !ownerJiacn.equals(item.getOwnerJiacn())
+                || !taskId.equals(item.getTaskId())) {
             throw notFound();
         }
         return workItemId;
@@ -853,12 +875,12 @@ public class AgentTaskCollaborationServiceImpl
         return ArtifactPayloadMode.LEGACY_EXTERNAL;
     }
 
-    private ArtifactPayload materializeArtifactPayload(String tenantId, String clientId,
+    private ArtifactPayload materializeArtifactPayload(String tenantId, String clientId, String ownerJiacn,
             String taskId, AgentTaskArtifactPublishDTO command, ArtifactPayloadMode mode) {
         return switch (mode) {
             case INLINE -> inlinePayload(command);
             case LEGACY_EXTERNAL -> legacyExternalPayload(command);
-            case MANAGED -> managedPayload(tenantId, clientId, taskId, command);
+            case MANAGED -> managedPayload(tenantId, clientId, ownerJiacn, taskId, command);
         };
     }
 
@@ -885,7 +907,7 @@ public class AgentTaskCollaborationServiceImpl
                 serializeObject(command.getMetadata(), "metadata", MAX_TEXT_BYTES));
     }
 
-    private ArtifactPayload managedPayload(String tenantId, String clientId, String taskId,
+    private ArtifactPayload managedPayload(String tenantId, String clientId, String ownerJiacn, String taskId,
             AgentTaskArtifactPublishDTO command) {
         byte[] content = command.getContentBytes();
         String actualHash = sha256(content);
@@ -897,7 +919,7 @@ public class AgentTaskCollaborationServiceImpl
         String metadataJson = serializeManagedMetadata(
                 command.getMetadata(), actualHash, actualLength, command.getContentMimeType());
         AgentTaskArtifactStorage.Scope scope =
-                new AgentTaskArtifactStorage.Scope(tenantId, clientId, taskId);
+                new AgentTaskArtifactStorage.Scope(tenantId, clientId, ownerJiacn, taskId);
         AgentTaskArtifactStorage.StoredObject stored;
         try {
             stored = artifactStorage.store(scope, content, command.getContentMimeType());
@@ -1130,7 +1152,7 @@ public class AgentTaskCollaborationServiceImpl
                     ? null : new LinkedHashMap<>(persistedMetadata);
             ManagedStorageMetadata managed = managedStorageMetadata(internalStorage, entity);
             AgentTaskArtifactStorage.Scope scope = new AgentTaskArtifactStorage.Scope(
-                    entity.getTenantId(), entity.getClientId(), entity.getTaskId());
+                    entity.getTenantId(), entity.getClientId(), entity.getOwnerJiacn(), entity.getTaskId());
             if (!artifactStorage.matches(scope, storageUri, entity.getContentHash())) {
                 throw invalidPersisted("Persisted managed artifact URI escaped its exact scope");
             }
@@ -1287,9 +1309,15 @@ public class AgentTaskCollaborationServiceImpl
         return Math.max(1, Math.min(requested == null ? 100 : requested, MAX_LIST_LIMIT));
     }
 
-    private void requireScope(String tenantId, String clientId, String taskId, String actorAgentId) {
-        requireId(tenantId, "tenantId", 50);
+    private void requireScope(String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId) {
+        if (!"0".equals(tenantId)) {
+            throw invalid("tenantId must be literal 0");
+        }
         requireId(clientId, "clientId", 50);
+        requireId(ownerJiacn, "ownerJiacn", 50);
+        if ("0".equals(ownerJiacn)) {
+            throw invalid("ownerJiacn must be a real user");
+        }
         requireId(taskId, "taskId", 100);
         requireId(actorAgentId, "actorAgentId", 100);
     }
@@ -1406,17 +1434,36 @@ public class AgentTaskCollaborationServiceImpl
             @Override
             public <T> T executeWithLockedTaskRoot(String tenantId, String clientId, String taskId,
                     LockedTaskMutation<T> mutation) {
-                return mutation.apply(taskMetaDao.findByTaskIdForUpdate(tenantId, clientId, taskId));
+                throw new UnsupportedOperationException("strict task owner scope is required");
+            }
+            @Override
+            public <T> T executeWithLockedTaskRootInOwnerScope(String tenantId, String clientId,
+                    String ownerJiacn, String taskId, LockedTaskMutation<T> mutation) {
+                return mutation.apply(taskMetaDao.findByTaskIdForUpdateInOwnerScope(
+                        tenantId, clientId, ownerJiacn, taskId));
             }
             @Override
             public <T> T executeWithLockedTaskRootForWorkItem(String tenantId, String clientId,
                     String workItemId, LockedTaskMutation<T> mutation) {
-                throw new UnsupportedOperationException();
+                throw new UnsupportedOperationException("strict task owner scope is required");
+            }
+            @Override
+            public <T> T executeWithLockedTaskRootForWorkItemInOwnerScope(String tenantId,
+                    String clientId, String ownerJiacn, String workItemId,
+                    LockedTaskMutation<T> mutation) {
+                return mutation.apply(taskMetaDao.findByWorkItemIdForUpdateInOwnerScope(
+                        tenantId, clientId, ownerJiacn, workItemId));
             }
             @Override
             public <T> T executeAfterTaskRootReservation(String tenantId, String clientId,
                     String taskId, TaskRootReservation reservation, ReservedTaskMutation<T> mutation) {
-                throw new UnsupportedOperationException();
+                throw new UnsupportedOperationException("strict task owner scope is required");
+            }
+            @Override
+            public <T> T executeAfterTaskRootReservationInOwnerScope(String tenantId, String clientId,
+                    String ownerJiacn, String taskId, TaskRootReservation reservation,
+                    ReservedTaskMutation<T> mutation) {
+                throw new UnsupportedOperationException("reservation is unavailable in direct transaction");
             }
         };
     }

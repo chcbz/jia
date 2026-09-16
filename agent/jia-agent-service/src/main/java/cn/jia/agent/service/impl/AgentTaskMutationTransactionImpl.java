@@ -75,6 +75,20 @@ public class AgentTaskMutationTransactionImpl implements AgentTaskMutationTransa
     }
 
     @Override
+    public <T> T executeWithLockedTaskRootForWorkItemInOwnerScope(
+            String tenantId, String clientId, String ownerJiacn, String workItemId,
+            LockedTaskMutation<T> mutation) {
+        requireOwnerScope(tenantId, clientId, ownerJiacn, workItemId);
+        if (mutation == null) {
+            throw new IllegalArgumentException("mutation must not be null");
+        }
+        return requiredTransaction.execute(status -> mutation.apply(validateRoot(
+                taskMetaDao.findByWorkItemIdForUpdateInOwnerScope(
+                        tenantId, clientId, ownerJiacn, workItemId),
+                tenantId, clientId, ownerJiacn, null)));
+    }
+
+    @Override
     public <T> T executeAfterTaskRootReservation(
             String tenantId,
             String clientId,

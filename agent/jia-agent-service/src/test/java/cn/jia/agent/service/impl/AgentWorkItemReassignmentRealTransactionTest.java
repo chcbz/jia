@@ -66,8 +66,9 @@ class AgentWorkItemReassignmentRealTransactionTest {
     private static final String JDBC_URL =
             "jdbc:h2:mem:cyf_e05_reassignment;MODE=MYSQL;DB_CLOSE_DELAY=-1;"
                     + "CASE_INSENSITIVE_IDENTIFIERS=TRUE;LOCK_TIMEOUT=10000";
-    private static final String TENANT = "tenant-a";
+    private static final String TENANT = "0";
     private static final String CLIENT = "client-a";
+    private static final String OWNER = "owner-a";
     private static final String TASK = "task-1";
     private static final String WORK = "work-1";
     private static final String PREVIOUS = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -123,7 +124,7 @@ class AgentWorkItemReassignmentRealTransactionTest {
             runtime.setStatus("offline");
             return runtime;
         });
-        doNothing().when(agentService).requireHostingNewWork(TENANT, CLIENT, TARGET);
+        doNothing().when(agentService).requireHostingNewWork(OWNER, CLIENT, TARGET);
         insertFixture();
     }
 
@@ -135,7 +136,7 @@ class AgentWorkItemReassignmentRealTransactionTest {
     @Test
     void workItemEventNewCommandOutboxAndReceiptCommitAtomically() {
         AgentWorkItemReassignmentServiceImpl service = service(new JdbcCommandWriter(false));
-        var result = service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+        var result = service.reassign(TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                 TASK, WORK, "reassign-key-0001", request());
 
         assertEquals(TARGET, jdbc.queryForObject(
@@ -156,7 +157,7 @@ class AgentWorkItemReassignmentRealTransactionTest {
                 "SELECT lease_fence_sha256 FROM agent_work_item_reassignment", String.class)
                 .contains("new-secret-token"));
 
-        var replay = service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+        var replay = service.reassign(TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                 TASK, WORK, "reassign-key-0001", request());
         assertEquals(result.getCommandId(), replay.getCommandId());
         assertEquals(1, count("agent_task_event"));
@@ -176,7 +177,7 @@ class AgentWorkItemReassignmentRealTransactionTest {
                 ready.countDown();
                 start.await();
                 try {
-                    service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+                    service.reassign(TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                             TASK, WORK, "reassign-key-race", request());
                     return true;
                 } catch (RuntimeException lost) {
@@ -211,7 +212,7 @@ class AgentWorkItemReassignmentRealTransactionTest {
     void outboxFailureRollsBackLeaseEventDeliveryAndReceipt() {
         AgentWorkItemReassignmentServiceImpl service = service(new JdbcCommandWriter(true));
         assertThrows(IllegalStateException.class, () -> service.reassign(
-                TENANT, CLIENT, "operator-1", COORDINATOR,
+                TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                 TASK, WORK, "reassign-key-0001", request()));
 
         assertRollbackBaseline();
@@ -225,7 +226,7 @@ class AgentWorkItemReassignmentRealTransactionTest {
         AgentWorkItemReassignmentServiceImpl service = service(
                 new JdbcCommandWriter(false), failingEvent, reassignmentDao);
         assertThrows(IllegalStateException.class, () -> service.reassign(
-                TENANT, CLIENT, "operator-1", COORDINATOR,
+                TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                 TASK, WORK, "reassign-key-0001", request()));
         assertRollbackBaseline();
     }
@@ -235,22 +236,22 @@ class AgentWorkItemReassignmentRealTransactionTest {
         AgentWorkItemReassignmentDao failingReceipt = new AgentWorkItemReassignmentDao() {
             @Override
             public cn.jia.agent.entity.AgentWorkItemReassignmentEntity
-                    findByReassignmentIdForUpdate(String tenantId, String clientId,
+                    findByReassignmentIdForUpdate(String tenantId, String clientId, String ownerJiacn,
                     String taskId, String workItemId, String reassignmentId) {
                 return reassignmentDao.findByReassignmentIdForUpdate(
-                        tenantId, clientId, taskId, workItemId, reassignmentId);
+                        tenantId, clientId, ownerJiacn, taskId, workItemId, reassignmentId);
             }
             @Override
             public cn.jia.agent.entity.AgentWorkItemReassignmentEntity
-                    findLatestByWorkItemForUpdate(String tenantId, String clientId,
+                    findLatestByWorkItemForUpdate(String tenantId, String clientId, String ownerJiacn,
                     String taskId, String workItemId) {
                 return reassignmentDao.findLatestByWorkItemForUpdate(
-                        tenantId, clientId, taskId, workItemId);
+                        tenantId, clientId, ownerJiacn, taskId, workItemId);
             }
             @Override
             public cn.jia.agent.entity.AgentCommandDeliveryEntity findSourceCommand(
-                    String tenantId, String clientId, String commandId) {
-                return reassignmentDao.findSourceCommand(tenantId, clientId, commandId);
+                    String tenantId, String clientId, String ownerJiacn, String commandId) {
+                return reassignmentDao.findSourceCommand(tenantId, clientId, ownerJiacn, commandId);
             }
             @Override
             public int insert(cn.jia.agent.entity.AgentWorkItemReassignmentEntity receipt) {
@@ -260,7 +261,7 @@ class AgentWorkItemReassignmentRealTransactionTest {
         AgentWorkItemReassignmentServiceImpl service = service(
                 new JdbcCommandWriter(false), eventWriter, failingReceipt);
         assertThrows(IllegalStateException.class, () -> service.reassign(
-                TENANT, CLIENT, "operator-1", COORDINATOR,
+                TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                 TASK, WORK, "reassign-key-0001", request()));
         assertRollbackBaseline();
     }

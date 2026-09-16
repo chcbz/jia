@@ -44,7 +44,7 @@ import static org.mockito.Mockito.when;
 class AgentSceneEventBrokerTest {
     private final AgentSceneEventBroker broker = new AgentSceneEventBroker();
     private final AgentSceneEventBroker.SceneScope scope =
-            new AgentSceneEventBroker.SceneScope("tenant-a", "client-a", "juyiting-main");
+            new AgentSceneEventBroker.SceneScope("0", "client-a", "owner-a", "juyiting-main");
 
     @Test
     void streamsOnlyNewerEventsAndDefensivelyCopies() {
@@ -69,17 +69,17 @@ class AgentSceneEventBrokerTest {
     }
 
     @Test
-    void isolatesTenantClientAndSceneScopes() {
-        AgentSceneEventBroker.SceneScope anotherTenant =
-                new AgentSceneEventBroker.SceneScope("tenant-b", "client-a", "juyiting-main");
+    void isolatesOwnerClientAndSceneScopes() {
+        AgentSceneEventBroker.SceneScope anotherOwner =
+                new AgentSceneEventBroker.SceneScope("0", "client-a", "owner-b", "juyiting-main");
         AgentSceneEventBroker.SceneScope anotherClient =
-                new AgentSceneEventBroker.SceneScope("tenant-a", "client-b", "juyiting-main");
+                new AgentSceneEventBroker.SceneScope("0", "client-b", "owner-a", "juyiting-main");
         AgentSceneEventBroker.SceneScope anotherScene =
-                new AgentSceneEventBroker.SceneScope("tenant-a", "client-a", "another-scene");
+                new AgentSceneEventBroker.SceneScope("0", "client-a", "owner-a", "another-scene");
 
         StepVerifier.create(broker.stream(scope, 0L).take(1))
                 .then(() -> {
-                    broker.publish(anotherTenant, event(1L, "wrong-tenant"));
+                    broker.publish(anotherOwner, event(1L, "wrong-owner"));
                     broker.publish(anotherClient, event(2L, "wrong-client"));
                     broker.publish(anotherScene, event(3L, "wrong-scene"));
                     broker.publish(scope, event(4L, "agent-songjiang"));
@@ -129,11 +129,11 @@ class AgentSceneEventBrokerTest {
     @Test
     void rejectsBlankScopeAndNegativeVersion() {
         assertThrows(IllegalArgumentException.class,
-                () -> new AgentSceneEventBroker.SceneScope(" ", "client", "scene"));
+                () -> new AgentSceneEventBroker.SceneScope(" ", "client", "owner", "scene"));
         assertThrows(IllegalArgumentException.class,
-                () -> new AgentSceneEventBroker.SceneScope("tenant", "", "scene"));
+                () -> new AgentSceneEventBroker.SceneScope("0", "", "owner", "scene"));
         assertThrows(IllegalArgumentException.class,
-                () -> new AgentSceneEventBroker.SceneScope("tenant", "client", "\t"));
+                () -> new AgentSceneEventBroker.SceneScope("0", "client", "owner", "\t"));
         StepVerifier.create(broker.stream(scope, -1L))
                 .expectError(IllegalArgumentException.class)
                 .verify(Duration.ofSeconds(2));
@@ -142,21 +142,21 @@ class AgentSceneEventBrokerTest {
 
     @Test
     void serviceBridgesBacklogAndLiveWithoutDuplicateOrGapDuringConcurrentHandoff() {
-        setScope("tenant-a", "client-a");
+        setScope("owner-a", "client-a");
         AgentSceneEventDao eventDao = mock(AgentSceneEventDao.class);
         CountDownLatch backlogEntered = new CountDownLatch(1);
         CountDownLatch releaseBacklog = new CountDownLatch(1);
-        when(eventDao.findCurrentSceneVersion("tenant-a", "client-a", "juyiting-main"))
+        when(eventDao.findCurrentSceneVersion("0", "client-a", "owner-a", "juyiting-main"))
                 .thenReturn(2L, 3L);
-        when(eventDao.findEarliestSceneVersion("tenant-a", "client-a", "juyiting-main"))
+        when(eventDao.findEarliestSceneVersion("0", "client-a", "owner-a", "juyiting-main"))
                 .thenReturn(1L);
-        when(eventDao.findAfterVersion("tenant-a", "client-a", "juyiting-main", 0L, 1000))
+        when(eventDao.findAfterVersion("0", "client-a", "owner-a", "juyiting-main", 0L, 1000))
                 .thenAnswer(invocation -> {
                     backlogEntered.countDown();
                     assertTrue(releaseBacklog.await(5, TimeUnit.SECONDS));
                     return List.of(entity(event(1L, "one")), entity(event(2L, "two")));
                 });
-        when(eventDao.findAfterVersion("tenant-a", "client-a", "juyiting-main", 2L, 1000))
+        when(eventDao.findAfterVersion("0", "client-a", "owner-a", "juyiting-main", 2L, 1000))
                 .thenReturn(List.of(entity(event(3L, "three"))));
         AgentSceneServiceImpl service = service(eventDao);
         List<Long> received = new CopyOnWriteArrayList<>();
@@ -180,17 +180,17 @@ class AgentSceneEventBrokerTest {
 
     @Test
     void serviceCatchesUpPersistedEventsWhenLiveCallbacksArriveOutOfVersionOrder() {
-        setScope("tenant-a", "client-a");
+        setScope("owner-a", "client-a");
         AgentSceneEventDao eventDao = mock(AgentSceneEventDao.class);
         CountDownLatch streamReady = new CountDownLatch(1);
-        when(eventDao.findCurrentSceneVersion("tenant-a", "client-a", "juyiting-main"))
+        when(eventDao.findCurrentSceneVersion("0", "client-a", "owner-a", "juyiting-main"))
                 .thenReturn(1L, 3L);
-        when(eventDao.findEarliestSceneVersion("tenant-a", "client-a", "juyiting-main"))
+        when(eventDao.findEarliestSceneVersion("0", "client-a", "owner-a", "juyiting-main"))
                 .thenAnswer(invocation -> {
                     streamReady.countDown();
                     return 1L;
                 });
-        when(eventDao.findAfterVersion("tenant-a", "client-a", "juyiting-main", 1L, 1000))
+        when(eventDao.findAfterVersion("0", "client-a", "owner-a", "juyiting-main", 1L, 1000))
                 .thenAnswer(invocation -> {
                     assertTrue(Thread.currentThread().getName().startsWith("boundedElastic-"));
                     return List.of(entity(event(2L, "two")), entity(event(3L, "three")));
@@ -209,18 +209,18 @@ class AgentSceneEventBrokerTest {
                 .verify(Duration.ofSeconds(5));
 
         verify(eventDao).findAfterVersion(
-                "tenant-a", "client-a", "juyiting-main", 1L, 1000);
+                "0", "client-a", "owner-a", "juyiting-main", 1L, 1000);
     }
 
     @Test
     void persistedBacklogGapRequiresOneSafeResyncWithoutPartialReplay() {
-        setScope("tenant-a", "client-a");
+        setScope("owner-a", "client-a");
         AgentSceneEventDao eventDao = mock(AgentSceneEventDao.class);
-        when(eventDao.findCurrentSceneVersion("tenant-a", "client-a", "juyiting-main"))
+        when(eventDao.findCurrentSceneVersion("0", "client-a", "owner-a", "juyiting-main"))
                 .thenReturn(3L);
-        when(eventDao.findEarliestSceneVersion("tenant-a", "client-a", "juyiting-main"))
+        when(eventDao.findEarliestSceneVersion("0", "client-a", "owner-a", "juyiting-main"))
                 .thenReturn(1L);
-        when(eventDao.findAfterVersion("tenant-a", "client-a", "juyiting-main", 0L, 1000))
+        when(eventDao.findAfterVersion("0", "client-a", "owner-a", "juyiting-main", 0L, 1000))
                 .thenReturn(List.of(entity(event(1L, "one")), entity(event(3L, "three"))));
 
         assertSingleSafeResync(service(eventDao).events("juyiting-main", 0L), 3L);
@@ -228,17 +228,17 @@ class AgentSceneEventBrokerTest {
 
     @Test
     void liveJumpWithMissingPersistedIntermediateRequiresResync() {
-        setScope("tenant-a", "client-a");
+        setScope("owner-a", "client-a");
         AgentSceneEventDao eventDao = mock(AgentSceneEventDao.class);
         CountDownLatch streamReady = new CountDownLatch(1);
-        when(eventDao.findCurrentSceneVersion("tenant-a", "client-a", "juyiting-main"))
+        when(eventDao.findCurrentSceneVersion("0", "client-a", "owner-a", "juyiting-main"))
                 .thenReturn(1L, 3L, 3L);
-        when(eventDao.findEarliestSceneVersion("tenant-a", "client-a", "juyiting-main"))
+        when(eventDao.findEarliestSceneVersion("0", "client-a", "owner-a", "juyiting-main"))
                 .thenAnswer(invocation -> {
                     streamReady.countDown();
                     return 1L;
                 });
-        when(eventDao.findAfterVersion("tenant-a", "client-a", "juyiting-main", 1L, 1000))
+        when(eventDao.findAfterVersion("0", "client-a", "owner-a", "juyiting-main", 1L, 1000))
                 .thenReturn(List.of(entity(event(3L, "three"))));
 
         StepVerifier.create(service(eventDao).events("juyiting-main", 1L))
@@ -253,13 +253,13 @@ class AgentSceneEventBrokerTest {
 
     @Test
     void retentionChangeDuringBacklogHandoffRequiresResync() {
-        setScope("tenant-a", "client-a");
+        setScope("owner-a", "client-a");
         AgentSceneEventDao eventDao = mock(AgentSceneEventDao.class);
-        when(eventDao.findCurrentSceneVersion("tenant-a", "client-a", "juyiting-main"))
+        when(eventDao.findCurrentSceneVersion("0", "client-a", "owner-a", "juyiting-main"))
                 .thenReturn(3L);
-        when(eventDao.findEarliestSceneVersion("tenant-a", "client-a", "juyiting-main"))
+        when(eventDao.findEarliestSceneVersion("0", "client-a", "owner-a", "juyiting-main"))
                 .thenReturn(1L);
-        when(eventDao.findAfterVersion("tenant-a", "client-a", "juyiting-main", 0L, 1000))
+        when(eventDao.findAfterVersion("0", "client-a", "owner-a", "juyiting-main", 0L, 1000))
                 .thenReturn(List.of(entity(event(2L, "two")), entity(event(3L, "three"))));
 
         assertSingleSafeResync(service(eventDao).events("juyiting-main", 0L), 3L);
@@ -267,22 +267,22 @@ class AgentSceneEventBrokerTest {
 
     @Test
     void cursorAheadOfDurableVersionRequiresResync() {
-        setScope("tenant-a", "client-a");
+        setScope("owner-a", "client-a");
         AgentSceneEventDao eventDao = mock(AgentSceneEventDao.class);
-        when(eventDao.findCurrentSceneVersion("tenant-a", "client-a", "juyiting-main"))
+        when(eventDao.findCurrentSceneVersion("0", "client-a", "owner-a", "juyiting-main"))
                 .thenReturn(3L);
 
         assertSingleSafeResync(service(eventDao).events("juyiting-main", 5L), 3L);
-        verify(eventDao, never()).findEarliestSceneVersion(any(), any(), any());
+        verify(eventDao, never()).findEarliestSceneVersion(any(), any(), any(), any());
     }
 
     @Test
     void serviceEmitsExactlyOneSafeResyncWhenRetentionHasARealGap() {
-        setScope("tenant-a", "client-a");
+        setScope("owner-a", "client-a");
         AgentSceneEventDao eventDao = mock(AgentSceneEventDao.class);
-        when(eventDao.findCurrentSceneVersion("tenant-a", "client-a", "juyiting-main"))
+        when(eventDao.findCurrentSceneVersion("0", "client-a", "owner-a", "juyiting-main"))
                 .thenReturn(50L);
-        when(eventDao.findEarliestSceneVersion("tenant-a", "client-a", "juyiting-main"))
+        when(eventDao.findEarliestSceneVersion("0", "client-a", "owner-a", "juyiting-main"))
                 .thenReturn(40L);
 
         StepVerifier.create(service(eventDao).events("juyiting-main", 10L))
@@ -295,18 +295,18 @@ class AgentSceneEventBrokerTest {
                 .expectComplete()
                 .verify(Duration.ofSeconds(5));
         assertEquals(0, broker.activeScopeCount());
-        verify(eventDao, never()).findAfterVersion(any(), any(), any(), anyLong(), anyInt());
+        verify(eventDao, never()).findAfterVersion(any(), any(), any(), any(), anyLong(), anyInt());
     }
 
     @Test
     void retentionBoundaryReplaysEarliestWhenClientHasImmediatelyPrecedingVersion() {
-        setScope("tenant-a", "client-a");
+        setScope("owner-a", "client-a");
         AgentSceneEventDao eventDao = mock(AgentSceneEventDao.class);
-        when(eventDao.findCurrentSceneVersion("tenant-a", "client-a", "juyiting-main"))
+        when(eventDao.findCurrentSceneVersion("0", "client-a", "owner-a", "juyiting-main"))
                 .thenReturn(40L);
-        when(eventDao.findEarliestSceneVersion("tenant-a", "client-a", "juyiting-main"))
+        when(eventDao.findEarliestSceneVersion("0", "client-a", "owner-a", "juyiting-main"))
                 .thenReturn(40L);
-        when(eventDao.findAfterVersion("tenant-a", "client-a", "juyiting-main", 39L, 1000))
+        when(eventDao.findAfterVersion("0", "client-a", "owner-a", "juyiting-main", 39L, 1000))
                 .thenReturn(List.of(entity(event(40L, "boundary"))));
 
         StepVerifier.create(service(eventDao).events("juyiting-main", 39L).take(1))
@@ -317,11 +317,11 @@ class AgentSceneEventBrokerTest {
 
     @Test
     void noRetainedRowsWithNewerCurrentVersionRequiresResync() {
-        setScope("tenant-a", "client-a");
+        setScope("owner-a", "client-a");
         AgentSceneEventDao eventDao = mock(AgentSceneEventDao.class);
-        when(eventDao.findCurrentSceneVersion("tenant-a", "client-a", "juyiting-main"))
+        when(eventDao.findCurrentSceneVersion("0", "client-a", "owner-a", "juyiting-main"))
                 .thenReturn(8L);
-        when(eventDao.findEarliestSceneVersion("tenant-a", "client-a", "juyiting-main"))
+        when(eventDao.findEarliestSceneVersion("0", "client-a", "owner-a", "juyiting-main"))
                 .thenReturn(null);
 
         StepVerifier.create(service(eventDao).events("juyiting-main", 7L))
@@ -335,39 +335,39 @@ class AgentSceneEventBrokerTest {
 
     @Test
     void serviceEventReadsUseCurrentTenantClientAndRequestedSceneOnly() {
-        setScope("tenant-b", "client-b");
+        setScope("owner-b", "client-b");
         AgentSceneEventDao eventDao = mock(AgentSceneEventDao.class);
-        when(eventDao.findCurrentSceneVersion("tenant-b", "client-b", "scene-b")).thenReturn(0L);
-        when(eventDao.findEarliestSceneVersion("tenant-b", "client-b", "scene-b")).thenReturn(null);
+        when(eventDao.findCurrentSceneVersion("0", "client-b", "owner-b", "scene-b")).thenReturn(0L);
+        when(eventDao.findEarliestSceneVersion("0", "client-b", "owner-b", "scene-b")).thenReturn(null);
 
         StepVerifier.create(service(eventDao).events("scene-b", 0L))
                 .then(() -> {
                     verify(eventDao, timeout(2_000))
-                            .findCurrentSceneVersion("tenant-b", "client-b", "scene-b");
+                            .findCurrentSceneVersion("0", "client-b", "owner-b", "scene-b");
                     verify(eventDao, timeout(2_000))
-                            .findEarliestSceneVersion("tenant-b", "client-b", "scene-b");
+                            .findEarliestSceneVersion("0", "client-b", "owner-b", "scene-b");
                 })
                 .thenCancel()
                 .verify(Duration.ofSeconds(5));
 
         assertEquals(0, broker.activeScopeCount());
-        verify(eventDao).findCurrentSceneVersion("tenant-b", "client-b", "scene-b");
-        verify(eventDao).findEarliestSceneVersion("tenant-b", "client-b", "scene-b");
-        verify(eventDao, never()).findCurrentSceneVersion(eq("tenant-a"), any(), any());
+        verify(eventDao).findCurrentSceneVersion("0", "client-b", "owner-b", "scene-b");
+        verify(eventDao).findEarliestSceneVersion("0", "client-b", "owner-b", "scene-b");
+        verify(eventDao, never()).findCurrentSceneVersion(eq("0"), eq("client-a"), eq("owner-a"), any());
     }
 
     @Test
     void upsertPublishesOnlyAfterCommitAndNeverAfterRollback() {
-        setScope("tenant-a", "client-a");
+        setScope("owner-a", "client-a");
         AgentSceneEventDao eventDao = mock(AgentSceneEventDao.class);
         AgentSceneStateDao stateDao = mock(AgentSceneStateDao.class);
         AgentRuntimeDao runtimeDao = mock(AgentRuntimeDao.class);
-        when(eventDao.nextSceneVersion("tenant-a", "client-a", "juyiting-main")).thenReturn(9L, 10L);
-        when(eventDao.insert(eq("tenant-a"), eq("client-a"), eq("juyiting-main"), any())).thenReturn(1);
-        when(stateDao.upsert(eq("tenant-a"), eq("client-a"), eq("juyiting-main"), any())).thenReturn(1);
-        when(stateDao.findActiveByScene(eq("tenant-a"), eq("client-a"), eq("juyiting-main"), anyLong()))
+        when(eventDao.nextSceneVersion("0", "client-a", "owner-a", "juyiting-main")).thenReturn(9L, 10L);
+        when(eventDao.insert(eq("0"), eq("client-a"), eq("owner-a"), eq("juyiting-main"), any())).thenReturn(1);
+        when(stateDao.upsert(eq("0"), eq("client-a"), eq("owner-a"), eq("juyiting-main"), any())).thenReturn(1);
+        when(stateDao.findActiveByScene(eq("0"), eq("client-a"), eq("owner-a"), eq("juyiting-main"), anyLong()))
                 .thenReturn(List.of());
-        when(runtimeDao.findRosterByOwner("client-a", "tenant-a", null, null))
+        when(runtimeDao.findRosterByOwner("client-a", "owner-a", null, null))
                 .thenReturn(List.of(runtime("agent-songjiang", "songjiang")));
         AgentSceneServiceImpl service = new AgentSceneServiceImpl(stateDao, eventDao, runtimeDao, broker);
         List<Long> liveVersions = new CopyOnWriteArrayList<>();
@@ -444,9 +444,10 @@ class AgentSceneEventBrokerTest {
                 mock(AgentSceneStateDao.class), eventDao, mock(AgentRuntimeDao.class), broker);
     }
 
-    private void setScope(String tenantId, String clientId) {
+    private void setScope(String ownerJiacn, String clientId) {
         EsContext context = new EsContext();
-        context.setJiacn(tenantId);
+        context.setTenantId("0");
+        context.setJiacn(ownerJiacn);
         context.setClientId(clientId);
         EsContextHolder.setContext(context);
     }
@@ -456,7 +457,7 @@ class AgentSceneEventBrokerTest {
         runtime.setAgentId(agentId);
         runtime.setPersonaCode(personaCode);
         runtime.setStatus(AgentConstants.STATUS_ONLINE);
-        runtime.setOwnerJiacn("tenant-a");
+        runtime.setOwnerJiacn("owner-a");
         runtime.setClientId("client-a");
         return runtime;
     }

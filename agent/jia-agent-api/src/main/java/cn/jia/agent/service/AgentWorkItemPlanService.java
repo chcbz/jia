@@ -6,10 +6,10 @@ import cn.jia.agent.entity.AgentWorkItemPlanViewDTO;
 
 public interface AgentWorkItemPlanService {
     AgentWorkItemPlanViewDTO suggest(
-            String tenantId, String clientId, String taskId, String actorAgentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId,
             AgentWorkItemPlanSuggestRequestDTO request);
 
     AgentWorkItemPlanViewDTO confirm(
-            String tenantId, String clientId, String taskId, String actorAgentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId,
             String idempotencyKey, AgentWorkItemPlanConfirmRequestDTO request);
 }

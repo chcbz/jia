@@ -153,62 +153,62 @@ public class AgentLegacyTaskCompatibilityService {
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public AssignOutcome assign(String tenantId, String clientId, String taskId,
+    public AssignOutcome assign(String tenantId, String clientId, String ownerJiacn, String taskId,
             List<String> requestedAgentIds, boolean automatic) {
-        return assignResolved(tenantId, clientId, taskId,
-                resolveAgentIds(tenantId, clientId, tenantId, requestedAgentIds), automatic);
+        return assignResolved(tenantId, clientId, ownerJiacn, taskId,
+                resolveAgentIds(tenantId, clientId, ownerJiacn, requestedAgentIds), automatic);
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public AssignOutcome assignResolved(String tenantId, String clientId, String taskId,
+    public AssignOutcome assignResolved(String tenantId, String clientId, String ownerJiacn, String taskId,
             List<String> canonicalAgentIds, boolean automatic) {
-        return assignResolvedInternal(tenantId, clientId, taskId, canonicalAgentIds, automatic,
+        return assignResolvedInternal(tenantId, clientId, ownerJiacn, taskId, canonicalAgentIds, automatic,
                 null, (task, agentIds) -> { });
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public AssignOutcome assignResolved(String tenantId, String clientId, String taskId,
+    public AssignOutcome assignResolved(String tenantId, String clientId, String ownerJiacn, String taskId,
             List<String> canonicalAgentIds, boolean automatic,
             AssignmentPrecommitValidator precommitValidator) {
-        return assignResolvedInternal(tenantId, clientId, taskId, canonicalAgentIds,
+        return assignResolvedInternal(tenantId, clientId, ownerJiacn, taskId, canonicalAgentIds,
                 automatic, null, precommitValidator);
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public AssignOutcome assignResolvedVersioned(String tenantId, String clientId, String taskId,
+    public AssignOutcome assignResolvedVersioned(String tenantId, String clientId, String ownerJiacn, String taskId,
             List<String> canonicalAgentIds, boolean automatic, long expectedTaskVersion,
             AssignmentPrecommitValidator precommitValidator) {
         if (expectedTaskVersion < 0 || expectedTaskVersion == Long.MAX_VALUE) {
             throw invalid("Expected task version is invalid");
         }
-        return assignResolvedInternal(tenantId, clientId, taskId, canonicalAgentIds,
+        return assignResolvedInternal(tenantId, clientId, ownerJiacn, taskId, canonicalAgentIds,
                 automatic, expectedTaskVersion, precommitValidator);
     }
 
-    private AssignOutcome assignResolvedInternal(String tenantId, String clientId, String taskId,
+    private AssignOutcome assignResolvedInternal(String tenantId, String clientId, String ownerJiacn, String taskId,
             List<String> canonicalAgentIds, boolean automatic, Long expectedTaskVersion,
             AssignmentPrecommitValidator precommitValidator) {
-        requireScope(tenantId, clientId, tenantId);
+        requireScope(tenantId, clientId, ownerJiacn);
         requireExactText(taskId, "taskId", 100);
         List<String> agentIds = requireResolvedAgentIds(canonicalAgentIds);
         Objects.requireNonNull(precommitValidator, "precommitValidator");
         long reservedAt = now();
-        return mutationTransaction.executeAfterTaskRootReservation(
-                tenantId, clientId, taskId,
-                () -> taskMetaDao.reserveOpenTaskRoot(tenantId, clientId, taskId, reservedAt),
+        return mutationTransaction.executeAfterTaskRootReservationInOwnerScope(
+                tenantId, clientId, ownerJiacn, taskId,
+                () -> taskMetaDao.reserveOpenTaskRootInOwnerScope(tenantId, clientId, ownerJiacn, taskId, reservedAt),
                 (task, rootCreated) -> assignResolvedLocked(
-                        tenantId, clientId, taskId, agentIds, automatic, reservedAt, task,
+                        tenantId, clientId, ownerJiacn, taskId, agentIds, automatic, reservedAt, task,
                         expectedTaskVersion, precommitValidator));
     }
 
     private AssignOutcome assignResolvedLocked(
-            String tenantId, String clientId, String taskId, List<String> agentIds,
+            String tenantId, String clientId, String ownerJiacn, String taskId, List<String> agentIds,
             boolean automatic, long changedAt, AgentTaskMetaEntity task,
             Long expectedTaskVersion, AssignmentPrecommitValidator precommitValidator) {
         validateLockedTask(task, tenantId, clientId, taskId);
         precommitValidator.beforeIdentityLock(task, agentIds);
         List<String> lockedAgentIds = identityService.lockActiveCanonicalAgentIdsInScope(
-                tenantId, clientId, tenantId, agentIds);
+                tenantId, clientId, ownerJiacn, agentIds);
         if (!agentIds.equals(lockedAgentIds)) {
             throw forbidden();
         }
@@ -219,10 +219,10 @@ public class AgentLegacyTaskCompatibilityService {
         }
 
         List<AgentTaskMemberEntity> members = requireSnapshot(
-                memberDao.listByTask(tenantId, clientId, taskId), "task member");
+                memberDao.listByTask(tenantId, clientId, ownerJiacn, taskId), "task member");
         List<AgentTaskWorkItemEntity> defaultItems = requireSnapshot(
                 workItemDao.listByTask(
-                        tenantId, clientId, taskId, null, MAX_COLLABORATION_ROWS),
+                        tenantId, clientId, ownerJiacn, taskId, null, MAX_COLLABORATION_ROWS),
                 "task work item");
         rejectTruncatedSnapshot(members, "task member");
         rejectTruncatedSnapshot(defaultItems, "legacy default work item");
@@ -253,9 +253,9 @@ public class AgentLegacyTaskCompatibilityService {
         String source = automatic ? ASSIGNMENT_AUTO : ASSIGNMENT_MANUAL;
         for (int index = 0; index < agentIds.size(); index++) {
             String agentId = agentIds.get(index);
-            insertMember(tenantId, clientId, taskId, agentId, source, changedAt,
+            insertMember(tenantId, clientId, ownerJiacn, taskId, agentId, source, changedAt,
                     index == 0 ? MEMBER_ROLE_COORDINATOR : MEMBER_ROLE_WORKER);
-            insertDefaultWorkItem(tenantId, clientId, taskId, agentId);
+            insertDefaultWorkItem(tenantId, clientId, ownerJiacn, taskId, agentId);
         }
         String taskAssignedEventId = appendAssignmentEvents(
                 tenantId, clientId, taskId, task, agentIds, source, fromStatus, changedAt);
@@ -263,34 +263,34 @@ public class AgentLegacyTaskCompatibilityService {
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public ReportOutcome report(String tenantId, String clientId, String taskId,
+    public ReportOutcome report(String tenantId, String clientId, String ownerJiacn, String taskId,
             String requestedAgentId, String requestedStatus, String failureReason) {
         String canonicalAgentId = resolveAgentId(
-                tenantId, clientId, tenantId, requestedAgentId);
-        return reportResolved(tenantId, clientId, taskId,
+                tenantId, clientId, ownerJiacn, requestedAgentId);
+        return reportResolved(tenantId, clientId, ownerJiacn, taskId,
                 canonicalAgentId, requestedStatus, failureReason);
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public ReportOutcome reportResolved(String tenantId, String clientId, String taskId,
+    public ReportOutcome reportResolved(String tenantId, String clientId, String ownerJiacn, String taskId,
             String agentId, String requestedStatus, String failureReason) {
-        requireScope(tenantId, clientId, tenantId);
+        requireScope(tenantId, clientId, ownerJiacn);
         requireExactText(taskId, "taskId", 100);
         requireExactText(agentId, "agentId", 100);
         AgentTaskStatus reportStatus = requireReportStatus(requestedStatus);
-        return mutationTransaction.executeWithLockedTaskRoot(
-                tenantId, clientId, taskId, task -> reportResolvedLocked(
-                        tenantId, clientId, taskId, agentId, reportStatus,
+        return mutationTransaction.executeWithLockedTaskRootInOwnerScope(
+                tenantId, clientId, ownerJiacn, taskId, task -> reportResolvedLocked(
+                        tenantId, clientId, ownerJiacn, taskId, agentId, reportStatus,
                         failureReason, task));
     }
 
     private ReportOutcome reportResolvedLocked(
-            String tenantId, String clientId, String taskId, String agentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String agentId,
             AgentTaskStatus reportStatus, String failureReason, AgentTaskMetaEntity task) {
         validateLockedTask(task, tenantId, clientId, taskId);
         fundedBountyLegacyGuard.requireLifecycleAllowed(tenantId, clientId, taskId, true);
         List<String> lockedAgentIds = identityService.lockActiveCanonicalAgentIdsInScope(
-                tenantId, clientId, tenantId, List.of(agentId));
+                tenantId, clientId, ownerJiacn, List.of(agentId));
         if (!List.of(agentId).equals(lockedAgentIds)) {
             throw forbidden();
         }
@@ -298,13 +298,13 @@ public class AgentLegacyTaskCompatibilityService {
         requireTaskVersion(task.getTaskVersion());
 
         AgentTaskMemberEntity member = memberDao.findByTaskAndAgent(
-                tenantId, clientId, taskId, agentId);
+                tenantId, clientId, ownerJiacn, taskId, agentId);
         if (member == null) {
             throw forbidden();
         }
         validateMember(member, tenantId, clientId, taskId, agentId);
         AgentTaskWorkItemEntity item = requireUniqueDefaultWorkItem(
-                tenantId, clientId, taskId, agentId);
+                tenantId, clientId, ownerJiacn, taskId, agentId);
         rejectB04B06OwnedState(item, taskId, agentId);
         LegacyReportState currentState = validateLegacyReportState(
                 member, item, taskId, agentId);
@@ -314,14 +314,14 @@ public class AgentLegacyTaskCompatibilityService {
 
         long changedAt = now();
         boolean memberChanged = updateMemberForReport(
-                tenantId, clientId, taskId, agentId,
+                tenantId, clientId, ownerJiacn, taskId, agentId,
                 member, reportStatus, failureReason, changedAt);
         if (memberChanged) {
             appendMemberReportEvent(tenantId, clientId, taskId, agentId,
                     member, reportStatus, changedAt);
         }
         boolean itemChanged = updateWorkItemForReport(
-                tenantId, clientId, taskId, agentId,
+                tenantId, clientId, ownerJiacn, taskId, agentId,
                 item, reportStatus, changedAt);
         if (itemChanged) {
             appendWorkItemReportEvent(tenantId, clientId, taskId, agentId,
@@ -331,7 +331,7 @@ public class AgentLegacyTaskCompatibilityService {
         AgentTaskAggregationCommandDTO command = new AgentTaskAggregationCommandDTO();
         command.setExpectedVersion(task.getTaskVersion());
         AgentTaskAggregationDTO aggregate = aggregationService.aggregate(
-                tenantId, clientId, taskId, command);
+                tenantId, clientId, ownerJiacn, taskId, command);
         boolean aggregateChanged = Boolean.TRUE.equals(aggregate.getChanged());
         if (exactDuplicate && aggregateChanged) {
             throw invalidPersisted("Duplicate legacy report exposed aggregate state drift");
@@ -342,7 +342,7 @@ public class AgentLegacyTaskCompatibilityService {
                 && !previousTaskStatus.isOperationalTerminal()
                 && persistedTaskStatus(aggregate.getStatus()).isOperationalTerminal();
         List<String> memberAgentIds = currentMemberAgentIds(
-                tenantId, clientId, taskId);
+                tenantId, clientId, ownerJiacn, taskId);
         return new ReportOutcome(aggregate.getStatus(), aggregate.getTaskVersion(), changed,
                 terminalTransition, agentId, memberAgentIds);
     }
@@ -571,7 +571,7 @@ public class AgentLegacyTaskCompatibilityService {
                 payload, occurredAt, resultVersion));
     }
 
-    private void insertMember(String tenantId, String clientId, String taskId,
+    private void insertMember(String tenantId, String clientId, String ownerJiacn, String taskId,
             String agentId, String source, long changedAt, String role) {
         AgentTaskMemberDTO member = new AgentTaskMemberDTO();
         member.setTaskId(taskId);
@@ -581,11 +581,11 @@ public class AgentLegacyTaskCompatibilityService {
         member.setAssignmentSource(source);
         member.setJoinedAt(changedAt);
         member.setAcceptedAt(changedAt);
-        requireSingleMutation(memberDao.insert(tenantId, clientId, member), "task member");
+        requireSingleMutation(memberDao.insert(tenantId, clientId, ownerJiacn, member), "task member");
     }
 
     private void insertDefaultWorkItem(
-            String tenantId, String clientId, String taskId, String agentId) {
+            String tenantId, String clientId, String ownerJiacn, String taskId, String agentId) {
         AgentTaskWorkItemDTO item = new AgentTaskWorkItemDTO();
         item.setWorkItemId(defaultWorkItemId(taskId, agentId));
         item.setTaskId(taskId);
@@ -599,14 +599,14 @@ public class AgentLegacyTaskCompatibilityService {
         item.setDependencyJson("[]");
         item.setAttemptCount(0);
         item.setMaxAttempts(3);
-        requireSingleMutation(workItemDao.insert(tenantId, clientId, item), "default work item");
+        requireSingleMutation(workItemDao.insert(tenantId, clientId, ownerJiacn, item), "default work item");
     }
 
     private AgentTaskWorkItemEntity requireUniqueDefaultWorkItem(
-            String tenantId, String clientId, String taskId, String agentId) {
+            String tenantId, String clientId, String ownerJiacn, String taskId, String agentId) {
         List<AgentTaskWorkItemEntity> items = requireSnapshot(
                 workItemDao.listByTaskAndAssignee(
-                        tenantId, clientId, taskId, agentId, MAX_COLLABORATION_ROWS),
+                        tenantId, clientId, ownerJiacn, taskId, agentId, MAX_COLLABORATION_ROWS),
                 "member work item");
         rejectTruncatedSnapshot(items, "member work item");
         List<AgentTaskWorkItemEntity> legacyItems = items.stream()
@@ -725,7 +725,7 @@ public class AgentLegacyTaskCompatibilityService {
     }
 
     private boolean updateMemberForReport(
-            String tenantId, String clientId, String taskId, String agentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String agentId,
             AgentTaskMemberEntity current, AgentTaskStatus reportStatus,
             String failureReason, long changedAt) {
         AgentTaskMemberStatus currentStatus = persistedMemberStatus(current.getMemberStatus());
@@ -765,12 +765,12 @@ public class AgentLegacyTaskCompatibilityService {
         update.setFailureReason(target == AgentTaskMemberStatus.FAILED
                 ? requiredFailureReason(failureReason) : null);
         requireSingleCas(memberDao.updateByVersion(
-                tenantId, clientId, taskId, agentId, current.getVersion(), update), "task member");
+                tenantId, clientId, ownerJiacn, taskId, agentId, current.getVersion(), update), "task member");
         return true;
     }
 
     private boolean updateWorkItemForReport(
-            String tenantId, String clientId, String taskId, String agentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String agentId,
             AgentTaskWorkItemEntity current, AgentTaskStatus reportStatus, long changedAt) {
         AgentTaskWorkItemStatus currentStatus = persistedWorkItemStatus(current.getStatus());
         AgentTaskWorkItemStatus target = switch (reportStatus) {
@@ -832,7 +832,7 @@ public class AgentLegacyTaskCompatibilityService {
             update.setCompletedAt(firstNonNull(update.getCompletedAt(), changedAt));
         }
         requireSingleCas(workItemDao.updateByVersion(
-                tenantId, clientId, current.getWorkItemId(), current.getVersion(), update),
+                tenantId, clientId, ownerJiacn, current.getWorkItemId(), current.getVersion(), update),
                 "default work item");
         return true;
     }
@@ -901,9 +901,9 @@ public class AgentLegacyTaskCompatibilityService {
     }
 
     private List<String> currentMemberAgentIds(
-            String tenantId, String clientId, String taskId) {
+            String tenantId, String clientId, String ownerJiacn, String taskId) {
         List<AgentTaskMemberEntity> members = requireSnapshot(
-                memberDao.listByTask(tenantId, clientId, taskId), "task member");
+                memberDao.listByTask(tenantId, clientId, ownerJiacn, taskId), "task member");
         rejectTruncatedSnapshot(members, "task member");
         LinkedHashSet<String> agentIds = new LinkedHashSet<>();
         for (AgentTaskMemberEntity member : members) {
@@ -1155,11 +1155,39 @@ public class AgentLegacyTaskCompatibilityService {
             }
 
             @Override
+            public <T> T executeWithLockedTaskRootInOwnerScope(
+                    String tenantId, String clientId, String ownerJiacn, String taskId,
+                    LockedTaskMutation<T> mutation) {
+                return mutation.apply(taskMetaDao.findByTaskIdForUpdateInOwnerScope(
+                        tenantId, clientId, ownerJiacn, taskId));
+            }
+
+            @Override
+            public <T> T executeWithLockedTaskRootForWorkItemInOwnerScope(
+                    String tenantId, String clientId, String ownerJiacn, String workItemId,
+                    LockedTaskMutation<T> mutation) {
+                return mutation.apply(taskMetaDao.findByWorkItemIdForUpdateInOwnerScope(
+                        tenantId, clientId, ownerJiacn, workItemId));
+            }
+
+            @Override
             public <T> T executeWithLockedTaskRootForWorkItem(
                     String tenantId, String clientId, String workItemId,
                     LockedTaskMutation<T> mutation) {
                 return mutation.apply(taskMetaDao.findByWorkItemIdForUpdate(
                         tenantId, clientId, workItemId));
+            }
+
+            @Override
+            public <T> T executeAfterTaskRootReservationInOwnerScope(
+                    String tenantId, String clientId, String ownerJiacn, String taskId,
+                    TaskRootReservation reservation, ReservedTaskMutation<T> mutation) {
+                int reserved = reservation.reserve();
+                if (reserved != 0 && reserved != 1) {
+                    throw new IllegalStateException("Task root reservation returned an unexpected row count");
+                }
+                return mutation.apply(taskMetaDao.findByTaskIdForUpdateInOwnerScope(
+                        tenantId, clientId, ownerJiacn, taskId), reserved == 1);
             }
 
             @Override

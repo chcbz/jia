@@ -101,15 +101,15 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AgentTaskArtifactOutcomeViewDTO accept(
-            String tenantId, String clientId, String taskId,
+            String tenantId, String clientId, String ownerJiacn, String taskId,
             String actorAgentId, AgentTaskArtifactAcceptDTO command) {
-        requireScope(tenantId, clientId, taskId, actorAgentId);
+        requireScope(tenantId, clientId, ownerJiacn, taskId, actorAgentId);
         Decision decision = normalizeDecision(
-                tenantId, clientId, taskId, actorAgentId, command);
+                tenantId, clientId, ownerJiacn, taskId, actorAgentId, command);
         try {
-            return mutationTransaction.executeWithLockedTaskRoot(tenantId, clientId, taskId,
-                    root -> acceptLocked(tenantId, clientId, taskId, actorAgentId,
-                            decision, requireExactRoot(root, tenantId, clientId, taskId)));
+            return mutationTransaction.executeWithLockedTaskRootInOwnerScope(tenantId, clientId, ownerJiacn, taskId,
+                    root -> acceptLocked(tenantId, clientId, ownerJiacn, taskId, actorAgentId,
+                            decision, requireExactRoot(root, tenantId, clientId, ownerJiacn, taskId)));
         } catch (AgentTaskCollaborationException exception) {
             throw exception;
         } catch (DataAccessException exception) {
@@ -118,20 +118,20 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
     }
 
     private AgentTaskArtifactOutcomeViewDTO acceptLocked(
-            String tenantId, String clientId, String taskId, String actorAgentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId,
             Decision decision, AgentTaskMetaEntity root) {
         Access access = requireAccess(
-                tenantId, clientId, taskId, actorAgentId, root, true);
+                tenantId, clientId, ownerJiacn, taskId, actorAgentId, root, true);
 
         // Frozen lock order: task root -> artifact logical chains (UTF-8 byte order)
         // -> outcome decision/exact rows -> writes -> events.
         LockedArtifacts locked = lockAndLoadArtifacts(
-                tenantId, clientId, taskId, access, decision);
+                tenantId, clientId, ownerJiacn, taskId, access, decision);
         Map<ArtifactRef, AgentTaskArtifactEntity> artifacts = locked.byRef();
         AgentTaskArtifactOutcomeDecisionEntity replay = outcomeDao.findDecisionForUpdate(
-                tenantId, clientId, taskId, decision.decisionId());
+                tenantId, clientId, ownerJiacn, taskId, decision.decisionId());
         if (replay != null) {
-            requireExactReplay(tenantId, clientId, taskId, actorAgentId, decision, replay);
+            requireExactReplay(tenantId, clientId, ownerJiacn, taskId, actorAgentId, decision, replay);
             return view(artifacts.get(decision.accepted()), replay);
         }
         requireAcceptedArtifactIsLatest(decision, locked);
@@ -140,27 +140,27 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
         Map<ArtifactRef, AgentTaskArtifactOutcomeEntity> current = new LinkedHashMap<>();
         for (ArtifactRef ref : orderedRefs) {
             current.put(ref, outcomeDao.findForUpdate(
-                    tenantId, clientId, taskId, ref.artifactId(), ref.artifactVersion()));
+                    tenantId, clientId, ownerJiacn, taskId, ref.artifactId(), ref.artifactVersion()));
         }
-        validateTransitions(tenantId, clientId, taskId, decision, current);
+        validateTransitions(tenantId, clientId, ownerJiacn, taskId, decision, current);
 
         long decidedAt = now();
         AgentTaskArtifactOutcomeEntity accepted = persist(
-                tenantId, clientId, taskId, actorAgentId, decision,
+                tenantId, clientId, ownerJiacn, taskId, actorAgentId, decision,
                 decision.accepted(), current.get(decision.accepted()),
                 AgentTaskArtifactOutcomeState.ACCEPTED, decidedAt);
         List<AgentTaskArtifactOutcomeEntity> superseded = new ArrayList<>();
         for (ArtifactRef ref : decision.superseded()) {
-            superseded.add(persist(tenantId, clientId, taskId, actorAgentId, decision,
+            superseded.add(persist(tenantId, clientId, ownerJiacn, taskId, actorAgentId, decision,
                     ref, current.get(ref), AgentTaskArtifactOutcomeState.SUPERSEDED, decidedAt));
         }
-        persistDecision(tenantId, clientId, taskId, actorAgentId,
+        persistDecision(tenantId, clientId, ownerJiacn, taskId, actorAgentId,
                 decision, accepted, decidedAt);
 
-        appendOutcomeEvent(tenantId, clientId, taskId, actorAgentId,
+        appendOutcomeEvent(tenantId, clientId, ownerJiacn, taskId, actorAgentId,
                 artifacts.get(decision.accepted()), accepted, null, decidedAt);
         for (int index = 0; index < decision.superseded().size(); index++) {
-            appendOutcomeEvent(tenantId, clientId, taskId, actorAgentId,
+            appendOutcomeEvent(tenantId, clientId, ownerJiacn, taskId, actorAgentId,
                     artifacts.get(decision.superseded().get(index)), superseded.get(index),
                     decision.accepted(), decidedAt);
         }
@@ -170,15 +170,15 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
     @Override
     @Transactional(readOnly = true, rollbackFor = Exception.class)
     public List<AgentTaskArtifactOutcomeViewDTO> listAuthoritativeAccepted(
-            String tenantId, String clientId, String taskId,
+            String tenantId, String clientId, String ownerJiacn, String taskId,
             String actorAgentId, String workItemId, Integer limit) {
-        requireScope(tenantId, clientId, taskId, actorAgentId);
+        requireScope(tenantId, clientId, ownerJiacn, taskId, actorAgentId);
         if (workItemId != null) {
             requireId(workItemId, "workItemId", 100);
         }
         final Access access;
         try {
-            access = requireReadAccess(tenantId, clientId, taskId, actorAgentId);
+            access = requireReadAccess(tenantId, clientId, ownerJiacn, taskId, actorAgentId);
         } catch (AgentTaskCollaborationException exception) {
             throw exception;
         } catch (DataAccessException exception) {
@@ -191,7 +191,7 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
         final List<AgentTaskAcceptedArtifactRow> rows;
         try {
             rows = requiredList(outcomeDao.listAuthoritativeAccepted(
-                    tenantId, clientId, taskId, workItemId, actorAgentId,
+                    tenantId, clientId, ownerJiacn, taskId, workItemId, actorAgentId,
                     access.reviewer(), access.coordinator(), bounded));
         } catch (DataAccessException exception) {
             throw unavailable("Artifact outcome storage is unavailable", exception);
@@ -199,7 +199,7 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
         List<AgentTaskArtifactOutcomeViewDTO> result = new ArrayList<>(rows.size());
         Set<ArtifactKey> unique = new HashSet<>();
         for (AgentTaskAcceptedArtifactRow row : rows) {
-            if (!validAcceptedRow(row, tenantId, clientId, taskId, workItemId, access)
+            if (!validAcceptedRow(row, tenantId, clientId, ownerJiacn, taskId, workItemId, access)
                     || !unique.add(new ArtifactKey(
                     row.getArtifactId(), row.getArtifactVersion()))) {
                 throw unavailable("Authoritative artifact outcome data is invalid", null);
@@ -210,7 +210,7 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
     }
 
     private LockedArtifacts lockAndLoadArtifacts(
-            String tenantId, String clientId, String taskId,
+            String tenantId, String clientId, String ownerJiacn, String taskId,
             Access access, Decision decision) {
         List<String> artifactIds = decision.orderedRefs().stream()
                 .map(ArtifactRef::artifactId).distinct()
@@ -218,8 +218,8 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
         Map<String, AgentTaskArtifactEntity> latestById = new HashMap<>();
         for (String artifactId : artifactIds) {
             AgentTaskArtifactEntity latest = artifactDao.findLatestVersionForUpdate(
-                    tenantId, clientId, taskId, artifactId);
-            if (!validArtifact(latest, tenantId, clientId, taskId)
+                    tenantId, clientId, ownerJiacn, taskId, artifactId);
+            if (!validArtifact(latest, tenantId, clientId, ownerJiacn, taskId)
                     || !artifactId.equals(latest.getArtifactId())) {
                 throw notFound();
             }
@@ -229,8 +229,8 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
         Map<ArtifactRef, AgentTaskArtifactEntity> artifacts = new LinkedHashMap<>();
         for (ArtifactRef ref : decision.orderedRefs()) {
             AgentTaskArtifactEntity artifact = artifactDao.findVersion(
-                    tenantId, clientId, taskId, ref.artifactId(), ref.artifactVersion());
-            if (!validArtifact(artifact, tenantId, clientId, taskId, ref)
+                    tenantId, clientId, ownerJiacn, taskId, ref.artifactId(), ref.artifactVersion());
+            if (!validArtifact(artifact, tenantId, clientId, ownerJiacn, taskId, ref)
                     || !canReadArtifact(access, artifact)) {
                 throw notFound();
             }
@@ -256,7 +256,7 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
         AgentTaskArtifactEntity latest = locked.latestById().get(
                 decision.accepted().artifactId());
         if (!validArtifact(latest, accepted.getTenantId(), accepted.getClientId(),
-                accepted.getTaskId())
+                accepted.getOwnerJiacn(), accepted.getTaskId())
                 || !accepted.getArtifactId().equals(latest.getArtifactId())
                 || !Objects.equals(latest.getArtifactVersion(), accepted.getArtifactVersion())) {
             throw conflict("Only the latest artifact version can be accepted");
@@ -264,12 +264,13 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
     }
 
     private void validateTransitions(
-            String tenantId, String clientId, String taskId, Decision decision,
+            String tenantId, String clientId, String ownerJiacn, String taskId, Decision decision,
             Map<ArtifactRef, AgentTaskArtifactOutcomeEntity> current) {
         for (ArtifactRef ref : decision.orderedRefs()) {
             AgentTaskArtifactOutcomeEntity row = current.get(ref);
             if (row != null && (!tenantId.equals(row.getTenantId())
-                    || !clientId.equals(row.getClientId()) || !taskId.equals(row.getTaskId())
+                    || !clientId.equals(row.getClientId()) || !ownerJiacn.equals(row.getOwnerJiacn())
+                || !taskId.equals(row.getTaskId())
                     || !ref.artifactId().equals(row.getArtifactId())
                     || row.getArtifactVersion() == null
                     || ref.artifactVersion() != row.getArtifactVersion())) {
@@ -293,12 +294,13 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
     }
 
     private AgentTaskArtifactOutcomeEntity persist(
-            String tenantId, String clientId, String taskId, String actorAgentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId,
             Decision decision, ArtifactRef ref, AgentTaskArtifactOutcomeEntity current,
             AgentTaskArtifactOutcomeState state, long decidedAt) {
         long resultVersion = ref.expectedOutcomeVersion() + 1;
         AgentTaskArtifactOutcomeEntity next = new AgentTaskArtifactOutcomeEntity()
                 .setTaskId(taskId)
+                .setOwnerJiacn(ownerJiacn)
                 .setArtifactId(ref.artifactId())
                 .setArtifactVersion(ref.artifactVersion())
                 .setOutcomeState(state.value())
@@ -313,8 +315,8 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
                 .setVersion(resultVersion);
         try {
             int affected = current == null
-                    ? outcomeDao.insert(tenantId, clientId, next)
-                    : outcomeDao.updateByVersion(tenantId, clientId, taskId,
+                    ? outcomeDao.insert(tenantId, clientId, ownerJiacn, next)
+                    : outcomeDao.updateByVersion(tenantId, clientId, ownerJiacn, taskId,
                     ref.artifactId(), ref.artifactVersion(), current.getOutcomeState(),
                     ref.expectedOutcomeVersion(), next);
             if (affected != 1) {
@@ -329,11 +331,12 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
     }
 
     private void persistDecision(
-            String tenantId, String clientId, String taskId, String actorAgentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId,
             Decision decision, AgentTaskArtifactOutcomeEntity accepted, long decidedAt) {
         AgentTaskArtifactOutcomeDecisionEntity record =
                 new AgentTaskArtifactOutcomeDecisionEntity()
                         .setTaskId(taskId)
+                        .setOwnerJiacn(ownerJiacn)
                         .setDecisionId(decision.decisionId())
                         .setDecisionDigest(decision.digest())
                         .setAcceptedArtifactId(decision.accepted().artifactId())
@@ -342,7 +345,7 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
                         .setDecidedByAgentId(actorAgentId)
                         .setDecidedAt(decidedAt);
         try {
-            if (outcomeDao.insertDecision(tenantId, clientId, record) != 1) {
+            if (outcomeDao.insertDecision(tenantId, clientId, ownerJiacn, record) != 1) {
                 throw conflict("Artifact decision changed concurrently");
             }
         } catch (DuplicateKeyException exception) {
@@ -353,12 +356,12 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
     }
 
     private void requireExactReplay(
-            String tenantId, String clientId, String taskId, String actorAgentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId,
             Decision decision, AgentTaskArtifactOutcomeDecisionEntity record) {
         long expectedAcceptedOutcomeVersion = decision.accepted().expectedOutcomeVersion() + 1;
         if (!tenantId.equals(record.getTenantId())
                 || !clientId.equals(record.getClientId())
-                || !taskId.equals(record.getTaskId())
+                || !ownerJiacn.equals(record.getOwnerJiacn()) || !taskId.equals(record.getTaskId())
                 || !decision.decisionId().equals(record.getDecisionId())
                 || !decision.digest().equals(record.getDecisionDigest())
                 || !decision.accepted().artifactId().equals(record.getAcceptedArtifactId())
@@ -373,7 +376,7 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
     }
 
     private void appendOutcomeEvent(
-            String tenantId, String clientId, String taskId, String actorAgentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId,
             AgentTaskArtifactEntity artifact, AgentTaskArtifactOutcomeEntity outcome,
             ArtifactRef replacement, long occurredAt) {
         AgentTaskArtifactOutcomeState state = requireOutcomeState(outcome);
@@ -402,7 +405,7 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
         String eventType = state == AgentTaskArtifactOutcomeState.ACCEPTED
                 ? TaskEventType.ARTIFACT_ACCEPTED : TaskEventType.ARTIFACT_SUPERSEDED;
         eventWriter.append(AgentTaskMutationEventSupport.command(
-                tenantId, clientId, taskId, eventType, TaskEventType.ActorType.AGENT,
+                tenantId, clientId, ownerJiacn, taskId, eventType, TaskEventType.ActorType.AGENT,
                 actorAgentId, TaskEventType.Aggregate.ARTIFACT,
                 AgentTaskWorkspaceEventValidator.artifactOutcomeAggregateId(
                         taskId, artifact.getArtifactId(), artifact.getArtifactVersion()),
@@ -410,25 +413,25 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
     }
 
     private Access requireReadAccess(
-            String tenantId, String clientId, String taskId, String actorAgentId) {
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId) {
         AgentTaskMetaEntity root;
         try {
-            root = taskMetaDao.findByTaskId(tenantId, clientId, taskId);
+            root = taskMetaDao.findByTaskIdInOwnerScope(tenantId, clientId, ownerJiacn, taskId);
         } catch (DataAccessException exception) {
             throw unavailable("Task access state is unavailable", exception);
         }
-        return requireAccess(tenantId, clientId, taskId, actorAgentId,
-                requireExactRoot(root, tenantId, clientId, taskId), false);
+        return requireAccess(tenantId, clientId, ownerJiacn, taskId, actorAgentId,
+                requireExactRoot(root, tenantId, clientId, ownerJiacn, taskId), false);
     }
 
     private Access requireAccess(
-            String tenantId, String clientId, String taskId, String actorAgentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId,
             AgentTaskMetaEntity root, boolean decide) {
         boolean coordinator = actorAgentId.equals(root.getCoordinatorAgentId());
         final AgentTaskMemberEntity member;
         try {
             member = memberDao.findByTaskAndAgent(
-                    tenantId, clientId, taskId, actorAgentId);
+                    tenantId, clientId, ownerJiacn, taskId, actorAgentId);
         } catch (DataAccessException exception) {
             throw unavailable("Task member access state is unavailable", exception);
         }
@@ -439,7 +442,7 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
             throw forbidden();
         }
         if (!tenantId.equals(member.getTenantId()) || !clientId.equals(member.getClientId())
-                || !taskId.equals(member.getTaskId())
+                || !ownerJiacn.equals(member.getOwnerJiacn()) || !taskId.equals(member.getTaskId())
                 || !actorAgentId.equals(member.getAgentId())) {
             throw unavailable("Persisted task member scope is invalid", null);
         }
@@ -465,7 +468,7 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
     }
 
     private Decision normalizeDecision(
-            String tenantId, String clientId, String taskId, String actorAgentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId,
             AgentTaskArtifactAcceptDTO command) {
         if (command == null) {
             throw invalid("artifact outcome command is required");
@@ -492,7 +495,7 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
         ordered.add(accepted);
         ordered.addAll(superseded);
         ordered.sort(REF_ORDER);
-        String digest = decisionDigest(tenantId, clientId, taskId, actorAgentId,
+        String digest = decisionDigest(tenantId, clientId, ownerJiacn, taskId, actorAgentId,
                 command.getDecisionId(), accepted, superseded);
         return new Decision(command.getDecisionId(), accepted,
                 List.copyOf(superseded), List.copyOf(ordered), digest);
@@ -516,11 +519,11 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
     }
 
     private boolean validArtifact(AgentTaskArtifactEntity artifact,
-            String tenantId, String clientId, String taskId) {
+            String tenantId, String clientId, String ownerJiacn, String taskId) {
         return artifact != null
                 && tenantId.equals(artifact.getTenantId())
                 && clientId.equals(artifact.getClientId())
-                && taskId.equals(artifact.getTaskId())
+                && ownerJiacn.equals(artifact.getOwnerJiacn()) && taskId.equals(artifact.getTaskId())
                 && artifact.getArtifactVersion() != null
                 && artifact.getArtifactVersion() > 0
                 && validPersistedId(artifact.getArtifactId(), 100)
@@ -534,8 +537,8 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
     }
 
     private boolean validArtifact(AgentTaskArtifactEntity artifact,
-            String tenantId, String clientId, String taskId, ArtifactRef ref) {
-        return validArtifact(artifact, tenantId, clientId, taskId)
+            String tenantId, String clientId, String ownerJiacn, String taskId, ArtifactRef ref) {
+        return validArtifact(artifact, tenantId, clientId, ownerJiacn, taskId)
                 && ref.artifactId().equals(artifact.getArtifactId())
                 && ref.artifactVersion() == artifact.getArtifactVersion();
     }
@@ -554,10 +557,11 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
     }
 
     private boolean validAcceptedRow(AgentTaskAcceptedArtifactRow row,
-            String tenantId, String clientId, String taskId,
+            String tenantId, String clientId, String ownerJiacn, String taskId,
             String requestedWorkItemId, Access access) {
         if (row == null || !tenantId.equals(row.getTenantId())
-                || !clientId.equals(row.getClientId()) || !taskId.equals(row.getTaskId())
+                || !clientId.equals(row.getClientId()) || !ownerJiacn.equals(row.getOwnerJiacn())
+                || !taskId.equals(row.getTaskId())
                 || row.getArtifactVersion() == null || row.getArtifactVersion() < 1
                 || row.getOutcomeVersion() == null || row.getOutcomeVersion() < 1
                 || !AgentTaskArtifactOutcomeState.ACCEPTED.value().equals(row.getOutcomeState())
@@ -655,9 +659,10 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
     }
 
     private AgentTaskMetaEntity requireExactRoot(AgentTaskMetaEntity root,
-            String tenantId, String clientId, String taskId) {
+            String tenantId, String clientId, String ownerJiacn, String taskId) {
         if (root == null || !tenantId.equals(root.getTenantId())
-                || !clientId.equals(root.getClientId()) || !taskId.equals(root.getTaskId())) {
+                || !clientId.equals(root.getClientId()) || !ownerJiacn.equals(root.getOwnerJiacn())
+                || !taskId.equals(root.getTaskId())) {
             throw notFound();
         }
         return root;
@@ -712,11 +717,11 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
         return value;
     }
 
-    private static String decisionDigest(String tenantId, String clientId, String taskId,
+    private static String decisionDigest(String tenantId, String clientId, String ownerJiacn, String taskId,
             String actorAgentId, String decisionId, ArtifactRef accepted,
             List<ArtifactRef> superseded) {
         StringBuilder canonical = new StringBuilder("f06-v1");
-        for (String value : List.of(tenantId, clientId, taskId, actorAgentId, decisionId)) {
+        for (String value : List.of(tenantId, clientId, ownerJiacn, taskId, actorAgentId, decisionId)) {
             appendField(canonical, value);
         }
         appendRef(canonical, accepted);
@@ -767,9 +772,15 @@ public class AgentTaskArtifactOutcomeServiceImpl implements AgentTaskArtifactOut
     }
 
     private static void requireScope(
-            String tenantId, String clientId, String taskId, String actorAgentId) {
-        requireId(tenantId, "tenantId", 50);
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId) {
+        if (!"0".equals(tenantId)) {
+            throw invalid("tenantId must be the single-tenant scope");
+        }
         requireId(clientId, "clientId", 50);
+        requireId(ownerJiacn, "ownerJiacn", 50);
+        if ("0".equals(ownerJiacn)) {
+            throw invalid("ownerJiacn is invalid");
+        }
         requireId(taskId, "taskId", 100);
         requireId(actorAgentId, "actorAgentId", 100);
     }

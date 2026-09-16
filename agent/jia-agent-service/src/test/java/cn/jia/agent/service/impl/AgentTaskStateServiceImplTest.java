@@ -52,8 +52,9 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class AgentTaskStateServiceImplTest extends BaseMockTest {
-    private static final String TENANT = "tenant-a";
+    private static final String TENANT = "0";
     private static final String CLIENT = "client-a";
+    private static final String OWNER = "owner-a";
     private static final String TASK_ID = "task-1";
     private static final String AGENT_ID = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private static final String WORK_ITEM_ID = "work-1";
@@ -77,17 +78,17 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
 
     @BeforeEach
     void setUp() {
-        org.mockito.Mockito.lenient().when(mutationTransaction.executeWithLockedTaskRoot(any(), any(), any(), any()))
+        org.mockito.Mockito.lenient().when(mutationTransaction.executeWithLockedTaskRootInOwnerScope(any(), any(), any(), any(), any()))
                 .thenAnswer(invocation -> {
-                    AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(3);
+                    AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(4);
                     AgentTaskMetaEntity root = task("assigned", 0L);
                     root.setCurrentEventVersion(0L);
                     return mutation.apply(root);
                 });
         org.mockito.Mockito.lenient().when(
-                mutationTransaction.executeWithLockedTaskRootForWorkItem(any(), any(), any(), any()))
+                mutationTransaction.executeWithLockedTaskRootForWorkItemInOwnerScope(any(), any(), any(), any(), any()))
                 .thenAnswer(invocation -> {
-                    AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(3);
+                    AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(4);
                     AgentTaskMetaEntity root = task("assigned", 0L);
                     root.setCurrentEventVersion(0L);
                     return mutation.apply(root);
@@ -131,34 +132,34 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
     @Test
     void legalTaskTransitionUsesScopedTaskVersionCas() {
         AgentTaskMetaEntity current = task("assigned", 4L);
-        when(taskMetaDao.findByTaskId(TENANT, CLIENT, TASK_ID)).thenReturn(current);
-        when(taskMetaDao.updateStatusByVersion(
-                TENANT, CLIENT, TASK_ID, 4L, "running", NOW, null, null)).thenReturn(1);
+        when(taskMetaDao.findByTaskIdInOwnerScope(TENANT, CLIENT, OWNER, TASK_ID)).thenReturn(current);
+        when(taskMetaDao.updateStatusByVersionInOwnerScope(
+                TENANT, CLIENT, OWNER, TASK_ID, 4L, "running", NOW, null, null)).thenReturn(1);
 
         AgentTaskStateDTO result = service.transitionTask(
-                TENANT, CLIENT, TASK_ID, transition("running", 4L, null));
+                TENANT, CLIENT, OWNER, TASK_ID, transition("running", 4L, null));
 
         assertEquals("task", result.getAggregateType());
         assertEquals("running", result.getStatus());
         assertEquals(5L, result.getVersion());
         assertEquals(NOW, result.getChangedAt());
-        verify(taskMetaDao).findByTaskId(TENANT, CLIENT, TASK_ID);
-        verify(taskMetaDao).updateStatusByVersion(
-                TENANT, CLIENT, TASK_ID, 4L, "running", NOW, null, null);
+        verify(taskMetaDao).findByTaskIdInOwnerScope(TENANT, CLIENT, OWNER, TASK_ID);
+        verify(taskMetaDao).updateStatusByVersionInOwnerScope(
+                TENANT, CLIENT, OWNER, TASK_ID, 4L, "running", NOW, null, null);
     }
 
     @Test
     void illegalAndTerminalTaskTransitionsFailClosedWithoutCasWrite() {
         AgentTaskMetaEntity completed = task("completed", 8L);
-        when(taskMetaDao.findByTaskId(TENANT, CLIENT, TASK_ID)).thenReturn(completed);
+        when(taskMetaDao.findByTaskIdInOwnerScope(TENANT, CLIENT, OWNER, TASK_ID)).thenReturn(completed);
 
         AgentTaskStateException exception = assertThrows(AgentTaskStateException.class,
                 () -> service.transitionTask(
-                        TENANT, CLIENT, TASK_ID, transition("running", 8L, null)));
+                        TENANT, CLIENT, OWNER, TASK_ID, transition("running", 8L, null)));
 
         assertEquals(Reason.INVALID_TRANSITION, exception.getReason());
-        verify(taskMetaDao, never()).updateStatusByVersion(
-                any(), any(), any(), anyLong(), any(), any(), any(), any());
+        verify(taskMetaDao, never()).updateStatusByVersionInOwnerScope(
+                any(), any(), any(), any(), anyLong(), any(), any(), any(), any());
         assertFalse(AgentTaskStatus.ARCHIVED.canTransitionTo(AgentTaskStatus.RUNNING));
         assertFalse(AgentTaskMemberStatus.DONE.canTransitionTo(AgentTaskMemberStatus.WORKING));
         assertFalse(AgentTaskWorkItemStatus.COMPLETED.canTransitionTo(AgentTaskWorkItemStatus.READY));
@@ -167,18 +168,18 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
     @Test
     void memberDoneUsesScopedCasAndNeverCompletesTask() {
         AgentTaskMemberEntity current = member("working", 3L);
-        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK_ID, AGENT_ID)).thenReturn(current);
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID)).thenReturn(current);
         when(memberDao.updateByVersion(
-                eq(TENANT), eq(CLIENT), eq(TASK_ID), eq(AGENT_ID), eq(3L), any())).thenReturn(1);
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK_ID), eq(AGENT_ID), eq(3L), any())).thenReturn(1);
 
         AgentTaskStateDTO result = service.transitionMember(
-                TENANT, CLIENT, TASK_ID, AGENT_ID, transition("done", 3L, null));
+                TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID, transition("done", 3L, null));
 
         assertEquals("done", result.getStatus());
         assertEquals(4L, result.getVersion());
         ArgumentCaptor<AgentTaskMemberDTO> update = ArgumentCaptor.forClass(AgentTaskMemberDTO.class);
         verify(memberDao).updateByVersion(
-                eq(TENANT), eq(CLIENT), eq(TASK_ID), eq(AGENT_ID), eq(3L), update.capture());
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK_ID), eq(AGENT_ID), eq(3L), update.capture());
         assertEquals("done", update.getValue().getMemberStatus());
         assertEquals(NOW, update.getValue().getCompletedAt());
         verifyNoInteractions(taskMetaDao);
@@ -187,55 +188,55 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
     @Test
     void blockedAndFailedStatesRequireAReasonBeforeAnyWrite() {
         AgentTaskMemberEntity member = member("working", 3L);
-        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK_ID, AGENT_ID)).thenReturn(member);
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID)).thenReturn(member);
 
         AgentTaskStateException memberFailure = assertThrows(AgentTaskStateException.class,
                 () -> service.transitionMember(
-                        TENANT, CLIENT, TASK_ID, AGENT_ID, transition("blocked", 3L, " ")));
+                        TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID, transition("blocked", 3L, " ")));
         assertEquals(Reason.INVALID_REQUEST, memberFailure.getReason());
-        verify(memberDao, never()).updateByVersion(any(), any(), any(), any(), anyLong(), any());
+        verify(memberDao, never()).updateByVersion(any(), any(), any(), any(), any(), anyLong(), any());
 
         AgentTaskMetaEntity task = task("running", 5L);
-        when(taskMetaDao.findByTaskId(TENANT, CLIENT, TASK_ID)).thenReturn(task);
+        when(taskMetaDao.findByTaskIdInOwnerScope(TENANT, CLIENT, OWNER, TASK_ID)).thenReturn(task);
         AgentTaskStateException taskFailure = assertThrows(AgentTaskStateException.class,
                 () -> service.transitionTask(
-                        TENANT, CLIENT, TASK_ID, transition("failed", 5L, null)));
+                        TENANT, CLIENT, OWNER, TASK_ID, transition("failed", 5L, null)));
         assertEquals(Reason.INVALID_REQUEST, taskFailure.getReason());
-        verify(taskMetaDao, never()).updateStatusByVersion(
-                any(), any(), any(), anyLong(), any(), any(), any(), any());
+        verify(taskMetaDao, never()).updateStatusByVersionInOwnerScope(
+                any(), any(), any(), any(), anyLong(), any(), any(), any(), any());
     }
 
     @Test
     void legalWorkItemTransitionsPreserveSnapshotAndSetSubmissionTime() {
         AgentTaskWorkItemEntity current = workItem("running", 6L);
         current.setDescription("preserve me");
-        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID)).thenReturn(current);
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, OWNER, WORK_ITEM_ID)).thenReturn(current);
         when(workItemDao.updateByVersion(
-                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), eq(6L), any())).thenReturn(1);
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(WORK_ITEM_ID), eq(6L), any())).thenReturn(1);
 
         AgentTaskStateDTO result = service.transitionWorkItem(
-                TENANT, CLIENT, WORK_ITEM_ID, transition("submitted", 6L, null));
+                TENANT, CLIENT, OWNER, WORK_ITEM_ID, transition("submitted", 6L, null));
 
         assertEquals("submitted", result.getStatus());
         assertEquals(7L, result.getVersion());
         ArgumentCaptor<AgentTaskWorkItemDTO> update = ArgumentCaptor.forClass(AgentTaskWorkItemDTO.class);
         verify(workItemDao).updateByVersion(
-                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), eq(6L), update.capture());
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(WORK_ITEM_ID), eq(6L), update.capture());
         assertEquals("submitted", update.getValue().getStatus());
         assertEquals("preserve me", update.getValue().getDescription());
         assertEquals(NOW, update.getValue().getSubmittedAt());
-        verify(dependencyService, never()).resolveReady(any(), any(), any());
+        verify(dependencyService, never()).resolveReady(any(), any(), any(), any());
     }
 
     @Test
     void authoritativeCompletionPreservesProofAndResolvesAfterCompletedEvent() {
         AgentTaskWorkItemEntity current = submittedWorkItem(7L);
-        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID)).thenReturn(current);
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, OWNER, WORK_ITEM_ID)).thenReturn(current);
         when(workItemDao.updateByVersion(
-                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), eq(7L), any())).thenReturn(1);
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(WORK_ITEM_ID), eq(7L), any())).thenReturn(1);
 
         AgentTaskStateDTO result = service.transitionWorkItem(
-                TENANT, CLIENT, WORK_ITEM_ID, transition("completed", 7L, null));
+                TENANT, CLIENT, OWNER, WORK_ITEM_ID, transition("completed", 7L, null));
 
         assertEquals("completed", result.getStatus());
         assertEquals(8L, result.getVersion());
@@ -244,13 +245,13 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
         ArgumentCaptor<cn.jia.agent.entity.AgentTaskEventWriteCommand> event =
                 ArgumentCaptor.forClass(cn.jia.agent.entity.AgentTaskEventWriteCommand.class);
         InOrder order = inOrder(mutationTransaction, workItemDao, eventWriter, dependencyService);
-        order.verify(mutationTransaction).executeWithLockedTaskRootForWorkItem(
-                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), any());
-        order.verify(workItemDao).findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID);
+        order.verify(mutationTransaction).executeWithLockedTaskRootForWorkItemInOwnerScope(
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(WORK_ITEM_ID), any());
+        order.verify(workItemDao).findByWorkItemId(TENANT, CLIENT, OWNER, WORK_ITEM_ID);
         order.verify(workItemDao).updateByVersion(
-                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), eq(7L), update.capture());
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(WORK_ITEM_ID), eq(7L), update.capture());
         order.verify(eventWriter).append(event.capture());
-        order.verify(dependencyService).resolveReady(TENANT, CLIENT, TASK_ID);
+        order.verify(dependencyService).resolveReady(TENANT, CLIENT, OWNER, TASK_ID);
         assertEquals("artifact-accepted", update.getValue().getResultArtifactId());
         assertEquals(9_000L, update.getValue().getSubmittedAt());
         assertEquals(NOW, update.getValue().getCompletedAt());
@@ -259,28 +260,28 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
 
     @Test
     void combinedAuthoritativeCompletionUsesTheSameResolverBoundary() {
-        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK_ID, AGENT_ID))
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID))
                 .thenReturn(member("working", 3L));
-        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID))
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, OWNER, WORK_ITEM_ID))
                 .thenReturn(submittedWorkItem(7L));
         when(memberDao.updateByVersion(
-                eq(TENANT), eq(CLIENT), eq(TASK_ID), eq(AGENT_ID), eq(3L), any())).thenReturn(1);
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK_ID), eq(AGENT_ID), eq(3L), any())).thenReturn(1);
         when(workItemDao.updateByVersion(
-                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), eq(7L), any())).thenReturn(1);
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(WORK_ITEM_ID), eq(7L), any())).thenReturn(1);
 
         service.transitionMemberAndWorkItem(
-                TENANT, CLIENT, TASK_ID, AGENT_ID, WORK_ITEM_ID,
+                TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID, WORK_ITEM_ID,
                 transition("done", 3L, null), transition("completed", 7L, null));
 
         ArgumentCaptor<cn.jia.agent.entity.AgentTaskEventWriteCommand> events =
                 ArgumentCaptor.forClass(cn.jia.agent.entity.AgentTaskEventWriteCommand.class);
         InOrder order = inOrder(memberDao, workItemDao, eventWriter, dependencyService);
         order.verify(memberDao).updateByVersion(
-                eq(TENANT), eq(CLIENT), eq(TASK_ID), eq(AGENT_ID), eq(3L), any());
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK_ID), eq(AGENT_ID), eq(3L), any());
         order.verify(workItemDao).updateByVersion(
-                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), eq(7L), any());
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(WORK_ITEM_ID), eq(7L), any());
         order.verify(eventWriter, org.mockito.Mockito.times(2)).append(events.capture());
-        order.verify(dependencyService).resolveReady(TENANT, CLIENT, TASK_ID);
+        order.verify(dependencyService).resolveReady(TENANT, CLIENT, OWNER, TASK_ID);
         assertEquals(TaskEventType.MEMBER_DONE, events.getAllValues().get(0).getEventType());
         assertEquals(TaskEventType.Aggregate.MEMBER,
                 events.getAllValues().get(0).getAggregateType());
@@ -300,17 +301,17 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
         missingSubmission.setSubmittedAt(null);
         AgentTaskWorkItemEntity staleCompletion = submittedWorkItem(7L);
         staleCompletion.setCompletedAt(9_500L);
-        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID))
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, OWNER, WORK_ITEM_ID))
                 .thenReturn(missingArtifact, missingSubmission, staleCompletion);
 
         for (int attempt = 0; attempt < 3; attempt++) {
             AgentTaskStateException failure = assertThrows(AgentTaskStateException.class,
                     () -> service.transitionWorkItem(
-                            TENANT, CLIENT, WORK_ITEM_ID, transition("completed", 7L, null)));
+                            TENANT, CLIENT, OWNER, WORK_ITEM_ID, transition("completed", 7L, null)));
             assertEquals(Reason.INVALID_PERSISTED_STATE, failure.getReason());
         }
 
-        verify(workItemDao, never()).updateByVersion(any(), any(), any(), anyLong(), any());
+        verify(workItemDao, never()).updateByVersion(any(), any(), any(), any(), any(), anyLong(), any());
         verifyNoInteractions(eventWriter, dependencyService);
     }
 
@@ -318,47 +319,47 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
     void failedAndCancelledTransitionsNeverResolveDependencies() {
         AgentTaskWorkItemEntity running = workItem("running", 6L);
         AgentTaskWorkItemEntity ready = workItem("ready", 2L);
-        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID))
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, OWNER, WORK_ITEM_ID))
                 .thenReturn(running, ready);
         when(workItemDao.updateByVersion(
-                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), eq(6L), any())).thenReturn(1);
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(WORK_ITEM_ID), eq(6L), any())).thenReturn(1);
         when(workItemDao.updateByVersion(
-                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), eq(2L), any())).thenReturn(1);
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(WORK_ITEM_ID), eq(2L), any())).thenReturn(1);
 
         service.transitionWorkItem(
-                TENANT, CLIENT, WORK_ITEM_ID, transition("failed", 6L, null));
+                TENANT, CLIENT, OWNER, WORK_ITEM_ID, transition("failed", 6L, null));
         service.transitionWorkItem(
-                TENANT, CLIENT, WORK_ITEM_ID, transition("cancelled", 2L, null));
+                TENANT, CLIENT, OWNER, WORK_ITEM_ID, transition("cancelled", 2L, null));
 
-        verify(dependencyService, never()).resolveReady(any(), any(), any());
+        verify(dependencyService, never()).resolveReady(any(), any(), any(), any());
     }
 
     @Test
     void completionEventFailurePreventsDependencyResolution() {
-        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID))
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, OWNER, WORK_ITEM_ID))
                 .thenReturn(submittedWorkItem(7L));
         when(workItemDao.updateByVersion(
-                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), eq(7L), any())).thenReturn(1);
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(WORK_ITEM_ID), eq(7L), any())).thenReturn(1);
         when(eventWriter.append(any())).thenThrow(new IllegalStateException("completed event failed"));
 
         assertThrows(IllegalStateException.class, () -> service.transitionWorkItem(
-                TENANT, CLIENT, WORK_ITEM_ID, transition("completed", 7L, null)));
+                TENANT, CLIENT, OWNER, WORK_ITEM_ID, transition("completed", 7L, null)));
 
-        verify(dependencyService, never()).resolveReady(any(), any(), any());
+        verify(dependencyService, never()).resolveReady(any(), any(), any(), any());
     }
 
     @Test
     void dependencyFailurePropagatesAfterAuthoritativeCompletionEvent() {
-        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID))
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, OWNER, WORK_ITEM_ID))
                 .thenReturn(submittedWorkItem(7L));
         when(workItemDao.updateByVersion(
-                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), eq(7L), any())).thenReturn(1);
-        when(dependencyService.resolveReady(TENANT, CLIENT, TASK_ID))
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(WORK_ITEM_ID), eq(7L), any())).thenReturn(1);
+        when(dependencyService.resolveReady(TENANT, CLIENT, OWNER, TASK_ID))
                 .thenThrow(new IllegalStateException("ready event failed"));
 
         IllegalStateException failure = assertThrows(IllegalStateException.class,
                 () -> service.transitionWorkItem(
-                        TENANT, CLIENT, WORK_ITEM_ID, transition("completed", 7L, null)));
+                        TENANT, CLIENT, OWNER, WORK_ITEM_ID, transition("completed", 7L, null)));
 
         assertEquals("ready event failed", failure.getMessage());
         verify(eventWriter).append(any());
@@ -367,80 +368,76 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
     @Test
     void claimSensitiveWorkItemTransitionsAreDefinedButReservedForB04() {
         AgentTaskWorkItemEntity current = workItem("ready", 2L);
-        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID)).thenReturn(current);
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, OWNER, WORK_ITEM_ID)).thenReturn(current);
 
         AgentTaskStateException exception = assertThrows(AgentTaskStateException.class,
                 () -> service.transitionWorkItem(
-                        TENANT, CLIENT, WORK_ITEM_ID, transition("claimed", 2L, null)));
+                        TENANT, CLIENT, OWNER, WORK_ITEM_ID, transition("claimed", 2L, null)));
 
         assertEquals(Reason.RESERVED_FOR_CLAIM_PROTOCOL, exception.getReason());
-        verify(workItemDao, never()).updateByVersion(any(), any(), any(), anyLong(), any());
+        verify(workItemDao, never()).updateByVersion(any(), any(), any(), any(), any(), anyLong(), any());
         assertTrue(AgentTaskWorkItemStatus.READY.requiresClaimProtocol(AgentTaskWorkItemStatus.CLAIMED));
     }
 
     @Test
-    void scopeMissIsNotFoundWithoutLeakingOrWritingAcrossScope() {
-        when(memberDao.findByTaskAndAgent(
-                "tenant-wrong", CLIENT, TASK_ID, AGENT_ID)).thenReturn(null);
-
+    void nonTenantZeroScopeIsRejectedBeforeAnyTaskLookup() {
         AgentTaskStateException exception = assertThrows(AgentTaskStateException.class,
                 () -> service.transitionMember(
-                        "tenant-wrong", CLIENT, TASK_ID, AGENT_ID, transition("accepted", 0L, null)));
+                        "tenant-wrong", CLIENT, OWNER, TASK_ID, AGENT_ID,
+                        transition("accepted", 0L, null)));
 
-        assertEquals(Reason.NOT_FOUND, exception.getReason());
-        verify(memberDao).findByTaskAndAgent("tenant-wrong", CLIENT, TASK_ID, AGENT_ID);
-        verify(memberDao, never()).updateByVersion(any(), any(), any(), any(), anyLong(), any());
-        verifyNoInteractions(taskMetaDao, workItemDao);
+        assertEquals(Reason.INVALID_REQUEST, exception.getReason());
+        verifyNoInteractions(taskMetaDao, memberDao, workItemDao, eventWriter, dependencyService);
     }
 
     @Test
     void staleVersionAndRacingCasReturnExplicitConflict() {
         AgentTaskMemberEntity current = member("accepted", 5L);
-        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK_ID, AGENT_ID)).thenReturn(current);
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID)).thenReturn(current);
 
         AgentTaskStateException stale = assertThrows(AgentTaskStateException.class,
                 () -> service.transitionMember(
-                        TENANT, CLIENT, TASK_ID, AGENT_ID, transition("working", 4L, null)));
+                        TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID, transition("working", 4L, null)));
         assertEquals(Reason.VERSION_CONFLICT, stale.getReason());
-        verify(memberDao, never()).updateByVersion(any(), any(), any(), any(), anyLong(), any());
+        verify(memberDao, never()).updateByVersion(any(), any(), any(), any(), any(), anyLong(), any());
 
         when(memberDao.updateByVersion(
-                eq(TENANT), eq(CLIENT), eq(TASK_ID), eq(AGENT_ID), eq(5L), any())).thenReturn(0);
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK_ID), eq(AGENT_ID), eq(5L), any())).thenReturn(0);
         AgentTaskStateException race = assertThrows(AgentTaskStateException.class,
                 () -> service.transitionMember(
-                        TENANT, CLIENT, TASK_ID, AGENT_ID, transition("working", 5L, null)));
+                        TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID, transition("working", 5L, null)));
         assertEquals(Reason.VERSION_CONFLICT, race.getReason());
         verifyNoInteractions(eventWriter);
     }
 
     @Test
     void combinedTransitionValidatesBothStatesBeforeTheFirstWrite() {
-        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK_ID, AGENT_ID))
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID))
                 .thenReturn(member("working", 3L));
-        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID))
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, OWNER, WORK_ITEM_ID))
                 .thenReturn(workItem("completed", 6L));
 
         AgentTaskStateException exception = assertThrows(AgentTaskStateException.class,
                 () -> service.transitionMemberAndWorkItem(
-                        TENANT, CLIENT, TASK_ID, AGENT_ID, WORK_ITEM_ID,
+                        TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID, WORK_ITEM_ID,
                         transition("done", 3L, null), transition("running", 6L, null)));
 
         assertEquals(Reason.INVALID_TRANSITION, exception.getReason());
-        verify(memberDao, never()).updateByVersion(any(), any(), any(), any(), anyLong(), any());
-        verify(workItemDao, never()).updateByVersion(any(), any(), any(), anyLong(), any());
+        verify(memberDao, never()).updateByVersion(any(), any(), any(), any(), any(), anyLong(), any());
+        verify(workItemDao, never()).updateByVersion(any(), any(), any(), any(), any(), anyLong(), any());
         verifyNoInteractions(taskMetaDao);
     }
 
     @Test
     void secondCasConflictRollsBackTheCombinedMemberAndWorkItemTransaction() throws Exception {
-        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK_ID, AGENT_ID))
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID))
                 .thenReturn(member("working", 3L));
-        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID))
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, OWNER, WORK_ITEM_ID))
                 .thenReturn(workItem("running", 6L));
         when(memberDao.updateByVersion(
-                eq(TENANT), eq(CLIENT), eq(TASK_ID), eq(AGENT_ID), eq(3L), any())).thenReturn(1);
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK_ID), eq(AGENT_ID), eq(3L), any())).thenReturn(1);
         when(workItemDao.updateByVersion(
-                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), eq(6L), any())).thenReturn(0);
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(WORK_ITEM_ID), eq(6L), any())).thenReturn(0);
 
         PlatformTransactionManager transactionManager = org.mockito.Mockito.mock(PlatformTransactionManager.class);
         TransactionStatus transactionStatus = new SimpleTransactionStatus();
@@ -454,22 +451,22 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
 
         AgentTaskStateException exception = assertThrows(AgentTaskStateException.class,
                 () -> transactionalService.transitionMemberAndWorkItem(
-                        TENANT, CLIENT, TASK_ID, AGENT_ID, WORK_ITEM_ID,
+                        TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID, WORK_ITEM_ID,
                         transition("done", 3L, null), transition("submitted", 6L, null)));
 
         assertEquals(Reason.VERSION_CONFLICT, exception.getReason());
         InOrder order = inOrder(memberDao, workItemDao);
         order.verify(memberDao).updateByVersion(
-                eq(TENANT), eq(CLIENT), eq(TASK_ID), eq(AGENT_ID), eq(3L), any());
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK_ID), eq(AGENT_ID), eq(3L), any());
         order.verify(workItemDao).updateByVersion(
-                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), eq(6L), any());
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(WORK_ITEM_ID), eq(6L), any());
         verify(transactionManager).rollback(transactionStatus);
         verify(transactionManager, never()).commit(any());
         verifyNoInteractions(taskMetaDao);
 
         Transactional annotation = AgentTaskStateServiceImpl.class.getMethod(
                 "transitionMemberAndWorkItem",
-                String.class, String.class, String.class, String.class, String.class,
+                String.class, String.class, String.class, String.class, String.class, String.class,
                 AgentTaskStateTransitionDTO.class, AgentTaskStateTransitionDTO.class)
                 .getAnnotation(Transactional.class);
         assertTrue(Arrays.asList(annotation.rollbackFor()).contains(Exception.class));
@@ -482,59 +479,59 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
     void combinedTransitionRejectsBlankAssigneeBeforeAnyWrite() {
         AgentTaskWorkItemEntity wi = workItem("running", 6L);
         wi.setAssigneeAgentId(null);
-        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK_ID, AGENT_ID))
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID))
                 .thenReturn(member("working", 3L));
-        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID))
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, OWNER, WORK_ITEM_ID))
                 .thenReturn(wi);
 
         AgentTaskStateException exception = assertThrows(AgentTaskStateException.class,
                 () -> service.transitionMemberAndWorkItem(
-                        TENANT, CLIENT, TASK_ID, AGENT_ID, WORK_ITEM_ID,
+                        TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID, WORK_ITEM_ID,
                         transition("done", 3L, null), transition("submitted", 6L, null)));
 
         assertEquals(Reason.INVALID_REQUEST, exception.getReason());
         assertTrue(exception.getMessage().contains("non-blank assignee"));
-        verify(memberDao, never()).updateByVersion(any(), any(), any(), any(), anyLong(), any());
-        verify(workItemDao, never()).updateByVersion(any(), any(), any(), anyLong(), any());
+        verify(memberDao, never()).updateByVersion(any(), any(), any(), any(), any(), anyLong(), any());
+        verify(workItemDao, never()).updateByVersion(any(), any(), any(), any(), any(), anyLong(), any());
     }
 
     @Test
     void combinedTransitionRejectsEmptyStringAssigneeBeforeAnyWrite() {
         AgentTaskWorkItemEntity wi = workItem("running", 6L);
         wi.setAssigneeAgentId("   ");
-        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK_ID, AGENT_ID))
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID))
                 .thenReturn(member("working", 3L));
-        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID))
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, OWNER, WORK_ITEM_ID))
                 .thenReturn(wi);
 
         AgentTaskStateException exception = assertThrows(AgentTaskStateException.class,
                 () -> service.transitionMemberAndWorkItem(
-                        TENANT, CLIENT, TASK_ID, AGENT_ID, WORK_ITEM_ID,
+                        TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID, WORK_ITEM_ID,
                         transition("done", 3L, null), transition("submitted", 6L, null)));
 
         assertEquals(Reason.INVALID_REQUEST, exception.getReason());
-        verify(memberDao, never()).updateByVersion(any(), any(), any(), any(), anyLong(), any());
-        verify(workItemDao, never()).updateByVersion(any(), any(), any(), anyLong(), any());
+        verify(memberDao, never()).updateByVersion(any(), any(), any(), any(), any(), anyLong(), any());
+        verify(workItemDao, never()).updateByVersion(any(), any(), any(), any(), any(), anyLong(), any());
     }
 
     @Test
     void combinedTransitionRejectsMismatchedAssigneeBeforeAnyWrite() {
         AgentTaskWorkItemEntity wi = workItem("running", 6L);
         wi.setAssigneeAgentId("agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
-        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK_ID, AGENT_ID))
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID))
                 .thenReturn(member("working", 3L));
-        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID))
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, OWNER, WORK_ITEM_ID))
                 .thenReturn(wi);
 
         AgentTaskStateException exception = assertThrows(AgentTaskStateException.class,
                 () -> service.transitionMemberAndWorkItem(
-                        TENANT, CLIENT, TASK_ID, AGENT_ID, WORK_ITEM_ID,
+                        TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID, WORK_ITEM_ID,
                         transition("done", 3L, null), transition("submitted", 6L, null)));
 
         assertEquals(Reason.INVALID_REQUEST, exception.getReason());
         assertTrue(exception.getMessage().contains("assignee does not match"));
-        verify(memberDao, never()).updateByVersion(any(), any(), any(), any(), anyLong(), any());
-        verify(workItemDao, never()).updateByVersion(any(), any(), any(), anyLong(), any());
+        verify(memberDao, never()).updateByVersion(any(), any(), any(), any(), any(), anyLong(), any());
+        verify(workItemDao, never()).updateByVersion(any(), any(), any(), any(), any(), anyLong(), any());
     }
 
     // ── P2-3: Persisted noncanonical status values are rejected ──
@@ -542,25 +539,25 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
     @Test
     void persistedNoncanonicalTaskStatusIsRejectedWithoutNormalization() {
         AgentTaskMetaEntity current = task("RUNNING", 5L); // uppercase, not canonical "running"
-        when(taskMetaDao.findByTaskId(TENANT, CLIENT, TASK_ID)).thenReturn(current);
+        when(taskMetaDao.findByTaskIdInOwnerScope(TENANT, CLIENT, OWNER, TASK_ID)).thenReturn(current);
 
         AgentTaskStateException exception = assertThrows(AgentTaskStateException.class,
                 () -> service.transitionTask(
-                        TENANT, CLIENT, TASK_ID, transition("completed", 5L, null)));
+                        TENANT, CLIENT, OWNER, TASK_ID, transition("completed", 5L, null)));
 
         assertEquals(Reason.INVALID_PERSISTED_STATE, exception.getReason());
-        verify(taskMetaDao, never()).updateStatusByVersion(
-                any(), any(), any(), anyLong(), any(), any(), any(), any());
+        verify(taskMetaDao, never()).updateStatusByVersionInOwnerScope(
+                any(), any(), any(), any(), anyLong(), any(), any(), any(), any());
     }
 
     @Test
     void persistedNoncanonicalTaskStatusWhitespaceIsRejected() {
         AgentTaskMetaEntity current = task(" running ", 5L); // whitespace not canonical
-        when(taskMetaDao.findByTaskId(TENANT, CLIENT, TASK_ID)).thenReturn(current);
+        when(taskMetaDao.findByTaskIdInOwnerScope(TENANT, CLIENT, OWNER, TASK_ID)).thenReturn(current);
 
         AgentTaskStateException exception = assertThrows(AgentTaskStateException.class,
                 () -> service.transitionTask(
-                        TENANT, CLIENT, TASK_ID, transition("completed", 5L, null)));
+                        TENANT, CLIENT, OWNER, TASK_ID, transition("completed", 5L, null)));
 
         assertEquals(Reason.INVALID_PERSISTED_STATE, exception.getReason());
     }
@@ -568,11 +565,11 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
     @Test
     void persistedNoncanonicalTaskStatusEmptyIsRejected() {
         AgentTaskMetaEntity current = task("", 5L);
-        when(taskMetaDao.findByTaskId(TENANT, CLIENT, TASK_ID)).thenReturn(current);
+        when(taskMetaDao.findByTaskIdInOwnerScope(TENANT, CLIENT, OWNER, TASK_ID)).thenReturn(current);
 
         AgentTaskStateException exception = assertThrows(AgentTaskStateException.class,
                 () -> service.transitionTask(
-                        TENANT, CLIENT, TASK_ID, transition("completed", 5L, null)));
+                        TENANT, CLIENT, OWNER, TASK_ID, transition("completed", 5L, null)));
 
         assertEquals(Reason.INVALID_PERSISTED_STATE, exception.getReason());
     }
@@ -580,37 +577,37 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
     @Test
     void persistedNoncanonicalMemberStatusIsRejected() {
         AgentTaskMemberEntity current = member("WORKING", 3L);
-        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK_ID, AGENT_ID)).thenReturn(current);
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID)).thenReturn(current);
 
         AgentTaskStateException exception = assertThrows(AgentTaskStateException.class,
                 () -> service.transitionMember(
-                        TENANT, CLIENT, TASK_ID, AGENT_ID, transition("done", 3L, null)));
+                        TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID, transition("done", 3L, null)));
 
         assertEquals(Reason.INVALID_PERSISTED_STATE, exception.getReason());
-        verify(memberDao, never()).updateByVersion(any(), any(), any(), any(), anyLong(), any());
+        verify(memberDao, never()).updateByVersion(any(), any(), any(), any(), any(), anyLong(), any());
     }
 
     @Test
     void persistedNoncanonicalWorkItemStatusIsRejected() {
         AgentTaskWorkItemEntity current = workItem("RUNNING", 6L);
-        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID)).thenReturn(current);
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, OWNER, WORK_ITEM_ID)).thenReturn(current);
 
         AgentTaskStateException exception = assertThrows(AgentTaskStateException.class,
                 () -> service.transitionWorkItem(
-                        TENANT, CLIENT, WORK_ITEM_ID, transition("submitted", 6L, null)));
+                        TENANT, CLIENT, OWNER, WORK_ITEM_ID, transition("submitted", 6L, null)));
 
         assertEquals(Reason.INVALID_PERSISTED_STATE, exception.getReason());
-        verify(workItemDao, never()).updateByVersion(any(), any(), any(), anyLong(), any());
+        verify(workItemDao, never()).updateByVersion(any(), any(), any(), any(), any(), anyLong(), any());
     }
 
     @Test
     void persistedNoncanonicalWorkerItemStatusWhitespaceIsRejected() {
         AgentTaskWorkItemEntity current = workItem(" running ", 6L);
-        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID)).thenReturn(current);
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, OWNER, WORK_ITEM_ID)).thenReturn(current);
 
         AgentTaskStateException exception = assertThrows(AgentTaskStateException.class,
                 () -> service.transitionWorkItem(
-                        TENANT, CLIENT, WORK_ITEM_ID, transition("submitted", 6L, null)));
+                        TENANT, CLIENT, OWNER, WORK_ITEM_ID, transition("submitted", 6L, null)));
 
         assertEquals(Reason.INVALID_PERSISTED_STATE, exception.getReason());
     }
@@ -621,13 +618,13 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
         // This test confirms that the target " DONE " (with whitespace) is normalized
         // while persisted non-canonical values are rejected.
         AgentTaskMemberEntity current = member("working", 3L);
-        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK_ID, AGENT_ID)).thenReturn(current);
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID)).thenReturn(current);
         when(memberDao.updateByVersion(
-                eq(TENANT), eq(CLIENT), eq(TASK_ID), eq(AGENT_ID), eq(3L), any())).thenReturn(1);
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK_ID), eq(AGENT_ID), eq(3L), any())).thenReturn(1);
 
         // Target " DONE " is normalized to "done" by requestedMemberStatus
         AgentTaskStateDTO result = service.transitionMember(
-                TENANT, CLIENT, TASK_ID, AGENT_ID, transition(" DONE ", 3L, null));
+                TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID, transition(" DONE ", 3L, null));
 
         assertEquals("done", result.getStatus());
     }
@@ -635,17 +632,17 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
 
     @Test
     void taskTransitionAppendsCanonicalBoundedEventAfterCas() {
-        when(taskMetaDao.findByTaskId(TENANT, CLIENT, TASK_ID)).thenReturn(task("assigned", 4L));
-        when(taskMetaDao.updateStatusByVersion(
-                TENANT, CLIENT, TASK_ID, 4L, "running", NOW, null, null)).thenReturn(1);
+        when(taskMetaDao.findByTaskIdInOwnerScope(TENANT, CLIENT, OWNER, TASK_ID)).thenReturn(task("assigned", 4L));
+        when(taskMetaDao.updateStatusByVersionInOwnerScope(
+                TENANT, CLIENT, OWNER, TASK_ID, 4L, "running", NOW, null, null)).thenReturn(1);
 
-        service.transitionTask(TENANT, CLIENT, TASK_ID, transition("running", 4L, null));
+        service.transitionTask(TENANT, CLIENT, OWNER, TASK_ID, transition("running", 4L, null));
 
         ArgumentCaptor<cn.jia.agent.entity.AgentTaskEventWriteCommand> event =
                 ArgumentCaptor.forClass(cn.jia.agent.entity.AgentTaskEventWriteCommand.class);
         InOrder order = inOrder(taskMetaDao, eventWriter);
-        order.verify(taskMetaDao).updateStatusByVersion(
-                TENANT, CLIENT, TASK_ID, 4L, "running", NOW, null, null);
+        order.verify(taskMetaDao).updateStatusByVersionInOwnerScope(
+                TENANT, CLIENT, OWNER, TASK_ID, 4L, "running", NOW, null, null);
         order.verify(eventWriter).append(event.capture());
         assertEquals("TASK_STARTED", event.getValue().getEventType());
         assertEquals("system", event.getValue().getActorType());
@@ -659,12 +656,12 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
     @Test
     void taskTransitionEventUsesDeterministicBoundedReasonCodeWithoutRawFailureReason() {
         String rawReason = "database password leaked in raw failure text";
-        when(taskMetaDao.findByTaskId(TENANT, CLIENT, TASK_ID))
+        when(taskMetaDao.findByTaskIdInOwnerScope(TENANT, CLIENT, OWNER, TASK_ID))
                 .thenReturn(task("running", 7L));
-        when(taskMetaDao.updateStatusByVersion(
-                TENANT, CLIENT, TASK_ID, 7L, "failed", null, null, rawReason)).thenReturn(1);
+        when(taskMetaDao.updateStatusByVersionInOwnerScope(
+                TENANT, CLIENT, OWNER, TASK_ID, 7L, "failed", null, null, rawReason)).thenReturn(1);
 
-        service.transitionTask(TENANT, CLIENT, TASK_ID,
+        service.transitionTask(TENANT, CLIENT, OWNER, TASK_ID,
                 transition("failed", 7L, rawReason));
 
         ArgumentCaptor<cn.jia.agent.entity.AgentTaskEventWriteCommand> event =
@@ -678,13 +675,13 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
 
     @Test
     void stateMutationWithoutActorParameterUsesSystemWithoutFabricatingMemberAsActor() {
-        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK_ID, AGENT_ID))
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID))
                 .thenReturn(member("working", 3L));
         when(memberDao.updateByVersion(
-                eq(TENANT), eq(CLIENT), eq(TASK_ID), eq(AGENT_ID), eq(3L), any())).thenReturn(1);
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK_ID), eq(AGENT_ID), eq(3L), any())).thenReturn(1);
 
         service.transitionMember(
-                TENANT, CLIENT, TASK_ID, AGENT_ID, transition("done", 3L, null));
+                TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID, transition("done", 3L, null));
 
         ArgumentCaptor<cn.jia.agent.entity.AgentTaskEventWriteCommand> event =
                 ArgumentCaptor.forClass(cn.jia.agent.entity.AgentTaskEventWriteCommand.class);
@@ -697,17 +694,17 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
 
     @Test
     void combinedTransitionAppendsMemberThenWorkItemAndConflictAppendsNothing() {
-        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK_ID, AGENT_ID))
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID))
                 .thenReturn(member("working", 3L));
-        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID))
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, OWNER, WORK_ITEM_ID))
                 .thenReturn(workItem("running", 6L));
         when(memberDao.updateByVersion(
-                eq(TENANT), eq(CLIENT), eq(TASK_ID), eq(AGENT_ID), eq(3L), any())).thenReturn(1);
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK_ID), eq(AGENT_ID), eq(3L), any())).thenReturn(1);
         when(workItemDao.updateByVersion(
-                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), eq(6L), any())).thenReturn(1);
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(WORK_ITEM_ID), eq(6L), any())).thenReturn(1);
 
         service.transitionMemberAndWorkItem(
-                TENANT, CLIENT, TASK_ID, AGENT_ID, WORK_ITEM_ID,
+                TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID, WORK_ITEM_ID,
                 transition("done", 3L, null), transition("submitted", 6L, null));
 
         ArgumentCaptor<cn.jia.agent.entity.AgentTaskEventWriteCommand> events =
@@ -719,39 +716,39 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
 
     @Test
     void memberMutationEntersTaskRootBoundaryBeforeChildReadAndWrite() {
-        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK_ID, AGENT_ID))
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID))
                 .thenReturn(member("working", 3L));
         when(memberDao.updateByVersion(
-                eq(TENANT), eq(CLIENT), eq(TASK_ID), eq(AGENT_ID), eq(3L), any())).thenReturn(1);
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK_ID), eq(AGENT_ID), eq(3L), any())).thenReturn(1);
 
         service.transitionMember(
-                TENANT, CLIENT, TASK_ID, AGENT_ID, transition("done", 3L, null));
+                TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID, transition("done", 3L, null));
 
         InOrder order = inOrder(mutationTransaction, memberDao, eventWriter);
-        order.verify(mutationTransaction).executeWithLockedTaskRoot(
-                eq(TENANT), eq(CLIENT), eq(TASK_ID), any());
-        order.verify(memberDao).findByTaskAndAgent(TENANT, CLIENT, TASK_ID, AGENT_ID);
+        order.verify(mutationTransaction).executeWithLockedTaskRootInOwnerScope(
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK_ID), any());
+        order.verify(memberDao).findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK_ID, AGENT_ID);
         order.verify(memberDao).updateByVersion(
-                eq(TENANT), eq(CLIENT), eq(TASK_ID), eq(AGENT_ID), eq(3L), any());
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK_ID), eq(AGENT_ID), eq(3L), any());
         order.verify(eventWriter).append(any());
     }
 
     @Test
     void workItemMutationResolvesAndLocksTaskRootBeforeChildRead() {
-        when(workItemDao.findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID))
+        when(workItemDao.findByWorkItemId(TENANT, CLIENT, OWNER, WORK_ITEM_ID))
                 .thenReturn(workItem("running", 6L));
         when(workItemDao.updateByVersion(
-                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), eq(6L), any())).thenReturn(1);
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(WORK_ITEM_ID), eq(6L), any())).thenReturn(1);
 
         service.transitionWorkItem(
-                TENANT, CLIENT, WORK_ITEM_ID, transition("submitted", 6L, null));
+                TENANT, CLIENT, OWNER, WORK_ITEM_ID, transition("submitted", 6L, null));
 
         InOrder order = inOrder(mutationTransaction, workItemDao, eventWriter);
-        order.verify(mutationTransaction).executeWithLockedTaskRootForWorkItem(
-                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), any());
-        order.verify(workItemDao).findByWorkItemId(TENANT, CLIENT, WORK_ITEM_ID);
+        order.verify(mutationTransaction).executeWithLockedTaskRootForWorkItemInOwnerScope(
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(WORK_ITEM_ID), any());
+        order.verify(workItemDao).findByWorkItemId(TENANT, CLIENT, OWNER, WORK_ITEM_ID);
         order.verify(workItemDao).updateByVersion(
-                eq(TENANT), eq(CLIENT), eq(WORK_ITEM_ID), eq(6L), any());
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(WORK_ITEM_ID), eq(6L), any());
         order.verify(eventWriter).append(any());
     }
 
@@ -762,6 +759,7 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
         entity.setTaskVersion(version);
         entity.setTenantId(TENANT);
         entity.setClientId(CLIENT);
+        entity.setOwnerJiacn(OWNER);
         return entity;
     }
 
@@ -775,6 +773,7 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
         entity.setVersion(version);
         entity.setTenantId(TENANT);
         entity.setClientId(CLIENT);
+        entity.setOwnerJiacn(OWNER);
         return entity;
     }
 
@@ -793,6 +792,7 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
         entity.setVersion(version);
         entity.setTenantId(TENANT);
         entity.setClientId(CLIENT);
+        entity.setOwnerJiacn(OWNER);
         return entity;
     }
 

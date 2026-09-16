@@ -37,7 +37,7 @@ public final class ManagedHostingCredentials {
                     || !p.agentId().equals(intent.getAgentId()) || !p.leaseId().equals(intent.getLeaseId())
                     || !Objects.equals(p.reservedAt(), intent.getReservedAt())
                     || !("PROVISIONING_UNKNOWN".equals(intent.getStatus()) || "ACTIVE".equals(intent.getStatus()))) throw unavailable();
-            var actor = new HostingRentHttp.Actor(intent.getPrincipalId(), p.tenantId(), p.clientId());
+            var actor = new HostingRentHttp.Actor(intent.getPrincipalId(), p.tenantId(), p.clientId(), p.ownerJiacn());
             if (!p.ownerJiacn().equals(owners.requireOwner(actor))) throw unavailable();
             var lease = rent.selectLeaseForUpdate(p.tenantId(), p.clientId(), p.leaseId());
             if (lease == null || !p.agentId().equals(lease.getAgentId()) || !p.bindingId().equals(lease.getBindingId())

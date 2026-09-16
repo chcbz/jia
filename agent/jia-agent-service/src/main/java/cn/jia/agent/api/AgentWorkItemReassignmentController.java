@@ -68,7 +68,7 @@ public class AgentWorkItemReassignmentController {
         requireIdempotencyKey(idempotencyKey);
         AgentWorkItemReassignmentRequestDTO command = parse(
                 request, AgentWorkItemReassignmentRequestDTO.class);
-        return ok(service.reassign(principal.tenantId(), principal.clientId(),
+        return ok(service.reassign(principal.tenantId(), principal.clientId(), principal.ownerJiacn(),
                 principal.subject(), actorAgentId, taskId, workItemId,
                 idempotencyKey, command));
     }
@@ -83,7 +83,7 @@ public class AgentWorkItemReassignmentController {
         Principal principal = principal(authentication, false);
         String actorAgentId = targetActor(request, principal);
         requirePath(taskId, workItemId, reassignmentId);
-        return ok(service.readLease(principal.tenantId(), principal.clientId(), actorAgentId,
+        return ok(service.readLease(principal.tenantId(), principal.clientId(), principal.ownerJiacn(), actorAgentId,
                 taskId, workItemId, reassignmentId,
                 parse(request, AgentWorkItemReassignmentLeaseRequestDTO.class)));
     }
@@ -98,7 +98,7 @@ public class AgentWorkItemReassignmentController {
         Principal principal = principal(authentication, false);
         String actorAgentId = targetActor(request, principal);
         requirePath(taskId, workItemId, reassignmentId);
-        return ok(service.startLease(principal.tenantId(), principal.clientId(), actorAgentId,
+        return ok(service.startLease(principal.tenantId(), principal.clientId(), principal.ownerJiacn(), actorAgentId,
                 taskId, workItemId, reassignmentId,
                 parse(request, AgentWorkItemReassignmentLeaseRequestDTO.class)));
     }
@@ -113,7 +113,7 @@ public class AgentWorkItemReassignmentController {
         Principal principal = principal(authentication, false);
         String actorAgentId = targetActor(request, principal);
         requirePath(taskId, workItemId, reassignmentId);
-        return ok(service.heartbeatLease(principal.tenantId(), principal.clientId(), actorAgentId,
+        return ok(service.heartbeatLease(principal.tenantId(), principal.clientId(), principal.ownerJiacn(), actorAgentId,
                 taskId, workItemId, reassignmentId,
                 parse(request, AgentWorkItemReassignmentLeaseRequestDTO.class)));
     }
@@ -168,19 +168,19 @@ public class AgentWorkItemReassignmentController {
         if (authentication instanceof AgentRuntimeAuthentication runtime && runtime.isAuthenticated()) {
             if (requireAuthority) throw new AuthenticationFailure(true);
             var scope = runtime.getPrincipal();
-            return new Principal(scope.tenantId(), scope.clientId(), scope.agentId());
+            return new Principal("0", scope.clientId(), scope.ownerJiacn(), scope.agentId());
         }
         if (authentication == null || !authentication.isAuthenticated()
                 || !(authentication instanceof JwtAuthenticationToken jwt)) {
             throw new AuthenticationFailure(false);
         }
         Map<String, Object> claims = jwt.getToken().getClaims();
-        Object tenant = claims.get("jiacn");
+        Object owner = claims.get("jiacn");
         Object client = claims.get("client_id");
         Object subject = claims.get("sub");
-        if (!(tenant instanceof String tenantId) || !(client instanceof String clientId)
+        if (!(owner instanceof String ownerJiacn) || !(client instanceof String clientId)
                 || !(subject instanceof String operatorSubject)
-                || !exact(tenantId, 50) || !exact(clientId, 50)
+                || !exact(ownerJiacn, 50) || !exact(clientId, 50)
                 || !exact(operatorSubject, 100)
                 || !byteExact(authentication.getName(), operatorSubject)
                 || requireAuthority && jwt.getAuthorities().stream()
@@ -188,7 +188,7 @@ public class AgentWorkItemReassignmentController {
                 .noneMatch(REASSIGN_AUTHORITY::equals)) {
             throw new AuthenticationFailure(true);
         }
-        return new Principal(tenantId, clientId, operatorSubject);
+        return new Principal("0", clientId, ownerJiacn, operatorSubject);
     }
 
     /** A query parameter can confirm, never select, the authenticated target. */
@@ -296,7 +296,7 @@ public class AgentWorkItemReassignmentController {
                 .body(new ErrorBody(code, message));
     }
 
-    private record Principal(String tenantId, String clientId, String subject) { }
+    private record Principal(String tenantId, String clientId, String ownerJiacn, String subject) { }
     public record ErrorBody(String code, String message) { }
     private static final class RequestFailure extends RuntimeException { }
     private static final class AuthenticationFailure extends RuntimeException {

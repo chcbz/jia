@@ -112,7 +112,7 @@ public final class FundedBountySettlementServiceImpl implements FundedBountySett
                 key, hash, root.getTaskId(), claim.getAgentId(), gross, actual, fee, payout,
                 held.getEscrowVersion(), held.getReserveTransactionId()));
         long now = captured.postedAt();
-        one(tasks.updateStatusByVersion(actor.tenantId(), actor.clientId(), root.getTaskId(), expected,
+        one(tasks.updateStatusByVersionInOwnerScope(actor.tenantId(), actor.clientId(), actor.ownerJiacn(), root.getTaskId(), expected,
                 AgentConstants.TASK_STATUS_COMPLETED, root.getStartedAt(), now, null, now));
         one(settlements.markSettled(actor.tenantId(), actor.clientId(), root.getTaskId(), held.getVersion(),
                 captured.escrowVersion(), now));
@@ -220,8 +220,8 @@ public final class FundedBountySettlementServiceImpl implements FundedBountySett
     private <T> T locked(FundedBountyActor actor, String taskId, Function<AgentTaskMetaEntity, T> action) {
         try {
             capture.requirePreviewScope(new EconomyScope(actor.tenantId(), actor.clientId()));
-            return Objects.requireNonNull(transactions.execute(status -> roots.executeWithLockedTaskRoot(
-                    actor.tenantId(), actor.clientId(), taskId, action::apply)));
+            return Objects.requireNonNull(transactions.execute(status -> roots.executeWithLockedTaskRootInOwnerScope(
+                    actor.tenantId(), actor.clientId(), actor.ownerJiacn(), taskId, action::apply)));
         } catch (AgentTaskCollaborationException scope) {
             if (scope.getReason() == AgentTaskCollaborationException.Reason.NOT_FOUND
                     || scope.getReason() == AgentTaskCollaborationException.Reason.FORBIDDEN) {
@@ -253,7 +253,9 @@ public final class FundedBountySettlementServiceImpl implements FundedBountySett
 
     static void validateActor(FundedBountyActor actor) {
         if (actor == null) throw error(HttpStatus.UNAUTHORIZED, "ECONOMY_UNAUTHENTICATED", "Authentication required");
-        validateId(actor.tenantId(), 50); validateId(actor.clientId(), 50); validateId(actor.userId(), 100);
+        if (!"0".equals(actor.tenantId())) throw bad("tenantId must be 0");
+        validateId(actor.clientId(), 50); validateId(actor.ownerJiacn(), 50); validateId(actor.userId(), 100);
+        if ("0".equals(actor.ownerJiacn())) throw bad("ownerJiacn must not be 0");
     }
     private static void validateId(String id, int limit) {
         if (id == null || id.isEmpty() || !id.equals(id.strip()) || id.getBytes(StandardCharsets.UTF_8).length > limit

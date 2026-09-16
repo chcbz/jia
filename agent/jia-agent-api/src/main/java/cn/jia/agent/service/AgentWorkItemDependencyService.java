@@ -12,5 +12,5 @@ import cn.jia.agent.entity.AgentWorkItemDependencyResolutionDTO;
  */
 public interface AgentWorkItemDependencyService {
     AgentWorkItemDependencyResolutionDTO resolveReady(
-            String tenantId, String clientId, String taskId);
+            String tenantId, String clientId, String ownerJiacn, String taskId);
 }

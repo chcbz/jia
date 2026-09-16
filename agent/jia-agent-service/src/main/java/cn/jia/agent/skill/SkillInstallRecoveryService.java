@@ -47,7 +47,12 @@ public final class SkillInstallRecoveryService {
     void recover(AgentCommandDeliveryEntity hint,long now) {
         AgentInboxMessage message=tx.execute(s->{
             var d=dao.lockDelivery(hint.getTenantId(),hint.getClientId(),hint.getId());
-            require(d!=null && "SKILL_INSTALL".equals(d.getCommandType()) && d.getExpiresAt()>now+1,409,"SKILL_DELIVERY_FENCED");
+            require(d!=null && "0".equals(d.getTenantId()) && "0".equals(hint.getTenantId())
+                    && hint.getClientId().equals(d.getClientId()) && hint.getOwnerJiacn()!=null
+                    && hint.getOwnerJiacn().equals(d.getOwnerJiacn())
+                    && hint.getCommandId().equals(d.getCommandId()) && hint.getTargetAgentId().equals(d.getTargetAgentId())
+                    && hint.getTaskId().equals(d.getTaskId()) && "SKILL_INSTALL".equals(d.getCommandType())
+                    && d.getExpiresAt()>now+1,409,"SKILL_DELIVERY_FENCED");
             var rows=dao.lockActiveOutboxes(d.getTenantId(),d.getClientId(),d.getId(),d.getActiveMessageId());
             require(rows!=null && rows.size()==1,409,"SKILL_DELIVERY_FENCED");var o=rows.getFirst();
             var i=dao.lockInbox(d.getTenantId(),d.getClientId(),AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,d.getActiveMessageId());
@@ -62,7 +67,10 @@ public final class SkillInstallRecoveryService {
                     && Arrays.equals(AgentCommandCanonicalCodec.sha256(o.getWirePayload()),o.getWirePayloadHash())
                     && Arrays.equals(o.getWirePayloadHash(),i.getWirePayloadHash()),409,"SKILL_DELIVERY_FENCED");
             var draft=AgentCommandCanonicalCodec.decodeBusinessBytes(d.getCommandPayload());
-            require(Arrays.equals(AgentCommandCanonicalCodec.sha256(d.getCommandPayload()),d.getCommandPayloadHash())
+            require("0".equals(draft.tenantId()) && d.getClientId().equals(draft.clientId())
+                    && d.getOwnerJiacn().equals(draft.ownerJiacn()) && d.getCommandId().equals(draft.commandId())
+                    && d.getTaskId().equals(draft.taskId()) && d.getTargetAgentId().equals(draft.targetAgentId())
+                    && Arrays.equals(AgentCommandCanonicalCodec.sha256(d.getCommandPayload()),d.getCommandPayloadHash())
                     && Arrays.equals(o.getWirePayload(),AgentCommandCanonicalCodec.wireBytes(draft,d.getActiveMessageId(),d.getActiveAttempt())),409,"SKILL_DELIVERY_FENCED");
             if("WAITING_AGENT".equals(d.getStatus()) || "SENT".equals(d.getStatus())) {
                 require(d.getUpdateTime()<=now-60000 && ("WAITING_AGENT".equals(d.getStatus())?
@@ -76,7 +84,7 @@ public final class SkillInstallRecoveryService {
         var claim=inbox.getObject().claim(message,owner,System.currentTimeMillis(),60000);
         if(claim.kind()!=AgentInboxClaim.Kind.ACQUIRED) return;
         AgentRawCommandDispatchResult result;
-        try { result=dispatch.dispatch(hint.getTenantId(),hint.getClientId(),hint.getTaskId(),hint.getTargetAgentId(),hint.getCommandId(),message.rawWireBytes()); }
+        try { result=dispatch.dispatch(hint.getTenantId(),hint.getClientId(),hint.getOwnerJiacn(),hint.getTaskId(),hint.getTargetAgentId(),hint.getCommandId(),message.rawWireBytes()); }
         catch(RuntimeException unknown) { result=AgentRawCommandDispatchResult.sendFailed(1); }
         long finish=System.currentTimeMillis();
         AgentInboxDisposition disposition;

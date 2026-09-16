@@ -63,9 +63,9 @@ public final class SkillAgentVersions {
         return state.getVersion();
     }
     public void consume(HostingRentHttp.Actor actor,String agentId,long expected) {
-        var state=mapper.lockVersion(actor.tenantId(),actor.clientId(),agentId);
+        var state=mapper.lockVersion(actor.ownerJiacn(),actor.clientId(),agentId);
         require(state!=null && state.getVersion()==expected,409,"AGENT_VERSION_CONFLICT");
-        require(mapper.advanceVersion(actor.tenantId(),actor.clientId(),agentId,state.getSourceHash(),expected)==1,409,"AGENT_VERSION_CONFLICT");
+        require(mapper.advanceVersion(actor.ownerJiacn(),actor.clientId(),agentId,state.getSourceHash(),expected)==1,409,"AGENT_VERSION_CONFLICT");
     }
     static byte[] sourceHash(AgentRuntimeEntity r) {
         Map<String,String> fields=new TreeMap<>();

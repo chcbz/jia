@@ -73,7 +73,7 @@ class AgentTaskArtifactControllerTest {
     @Test
     void publishDerivesScopeAndProducerComputesDigestAndReturnsOnlyAllowlistedMetadata()
             throws Exception {
-        when(artifactService.publish(anyString(), anyString(), anyString(), anyString(), any()))
+        when(artifactService.publish(anyString(), anyString(), anyString(), anyString(), anyString(), any()))
                 .thenReturn(publishedView());
 
         mvc.perform(post("/agent/tasks/{taskId}/artifacts", TASK)
@@ -94,7 +94,7 @@ class AgentTaskArtifactControllerTest {
 
         ArgumentCaptor<AgentTaskArtifactPublishDTO> command =
                 ArgumentCaptor.forClass(AgentTaskArtifactPublishDTO.class);
-        verify(artifactService).publish(eq("tenant-a"), eq("client-a"), eq(TASK), eq(ACTOR),
+        verify(artifactService).publish(eq("0"), eq("client-a"), eq("tenant-a"), eq(TASK), eq(ACTOR),
                 command.capture());
         assertEquals(ACTOR, command.getValue().getProducerAgentId());
         assertEquals(null, command.getValue().getStorageUri());
@@ -209,7 +209,7 @@ class AgentTaskArtifactControllerTest {
     void versionConflictIs409AndNeverInventsIdempotentReplay() throws Exception {
         doThrow(new AgentTaskCollaborationException(
                 Reason.VERSION_CONFLICT, "internal latest version detail"))
-                .when(artifactService).publish(any(), any(), any(), any(), any());
+                .when(artifactService).publish(any(), any(), any(), any(), any(), any());
 
         mvc.perform(post("/agent/tasks/{taskId}/artifacts", TASK)
                         .queryParam("actorAgentId", ACTOR)
@@ -219,14 +219,14 @@ class AgentTaskArtifactControllerTest {
                 .andExpect(jsonPath("$.code").value("ARTIFACT_VERSION_CONFLICT"))
                 .andExpect(content().string(org.hamcrest.Matchers.not(
                         org.hamcrest.Matchers.containsString("internal latest version detail"))));
-        verify(artifactService).publish(any(), any(), any(), any(), any());
+        verify(artifactService).publish(any(), any(), any(), any(), any(), any());
     }
 
     @Test
     void disabledOrCorruptBackingServiceIsSafelyUnavailable() throws Exception {
         doThrow(new AgentTaskCollaborationException(
                 Reason.INVALID_PERSISTED_STATE, "root=/private/storage"))
-                .when(artifactService).publish(any(), any(), any(), any(), any());
+                .when(artifactService).publish(any(), any(), any(), any(), any(), any());
 
         mvc.perform(post("/agent/tasks/{taskId}/artifacts", TASK)
                         .queryParam("actorAgentId", ACTOR)
@@ -242,7 +242,7 @@ class AgentTaskArtifactControllerTest {
     void exactVersionDownloadReturnsExactBytesAndSafePrivateAttachmentHeaders()
             throws Exception {
         when(contentService.readContent(
-                "tenant-a", "client-a", TASK, ACTOR, ARTIFACT, 3))
+                "0", "client-a", "tenant-a", TASK, ACTOR, ARTIFACT, 3))
                 .thenReturn(new AgentTaskArtifactContentDTO(
                         ARTIFACT, 3, sha256(BYTES), (long) BYTES.length,
                         "application/octet-stream", BYTES));
@@ -263,16 +263,16 @@ class AgentTaskArtifactControllerTest {
 
         assertArrayEquals(BYTES, result.getResponse().getContentAsByteArray());
         verify(contentService).readContent(
-                "tenant-a", "client-a", TASK, ACTOR, ARTIFACT, 3);
+                "0", "client-a", "tenant-a", TASK, ACTOR, ARTIFACT, 3);
     }
 
     @Test
     void tenantAndClientMismatchDownloadsAreBothScopedAndNonomerating() throws Exception {
         when(contentService.readContent(
-                "tenant-b", "client-a", TASK, ACTOR, ARTIFACT, 1))
+                "0", "client-a", "tenant-b", TASK, ACTOR, ARTIFACT, 1))
                 .thenThrow(new AgentTaskCollaborationException(Reason.NOT_FOUND, "tenant secret"));
         when(contentService.readContent(
-                "tenant-a", "client-b", TASK, ACTOR, ARTIFACT, 1))
+                "0", "client-b", "tenant-a", TASK, ACTOR, ARTIFACT, 1))
                 .thenThrow(new AgentTaskCollaborationException(Reason.FORBIDDEN, "client secret"));
 
         MvcResult tenantMismatch = download(jwt("tenant-b", "client-a"));
@@ -285,14 +285,14 @@ class AgentTaskArtifactControllerTest {
         assertEquals("private, no-store",
                 tenantMismatch.getResponse().getHeader(HttpHeaders.CACHE_CONTROL));
         verify(contentService).readContent(
-                "tenant-b", "client-a", TASK, ACTOR, ARTIFACT, 1);
+                "0", "client-a", "tenant-b", TASK, ACTOR, ARTIFACT, 1);
         verify(contentService).readContent(
-                "tenant-a", "client-b", TASK, ACTOR, ARTIFACT, 1);
+                "0", "client-b", "tenant-a", TASK, ACTOR, ARTIFACT, 1);
     }
 
     @Test
     void contentReadAclMissingAndForbiddenHaveOnePublicNotFoundShape() throws Exception {
-        when(contentService.readContent(any(), any(), any(), any(), any(), anyInt()))
+        when(contentService.readContent(any(), any(), any(), any(), any(), any(), anyInt()))
                 .thenThrow(new AgentTaskCollaborationException(Reason.NOT_FOUND, "row absent"))
                 .thenThrow(new AgentTaskCollaborationException(Reason.FORBIDDEN, "private owner"));
 
@@ -311,7 +311,7 @@ class AgentTaskArtifactControllerTest {
 
     @Test
     void inconsistentDownloadMetadataOrBytesFails503WithoutPartialContent() throws Exception {
-        when(contentService.readContent(any(), any(), any(), any(), any(), anyInt()))
+        when(contentService.readContent(any(), any(), any(), any(), any(), any(), anyInt()))
                 .thenReturn(new AgentTaskArtifactContentDTO(
                         ARTIFACT, 1, "0".repeat(64), (long) BYTES.length,
                         "text/plain\r\nX-Secret: yes", BYTES));
@@ -355,7 +355,7 @@ class AgentTaskArtifactControllerTest {
                         .queryParam("clientId", "client-b")
                         .principal(jwt("tenant-a", "client-a")))
                 .andExpect(status().isBadRequest());
-        verify(contentService, never()).readContent(any(), any(), any(), any(), any(), anyInt());
+        verify(contentService, never()).readContent(any(), any(), any(), any(), any(), any(), anyInt());
     }
 
     private MvcResult download(JwtAuthenticationToken authentication) throws Exception {

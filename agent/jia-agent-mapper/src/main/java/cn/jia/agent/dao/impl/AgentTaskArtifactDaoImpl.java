@@ -22,11 +22,12 @@ public class AgentTaskArtifactDaoImpl implements AgentTaskArtifactDao {
     }
 
     @Override
-    public int insert(String tenantId, String clientId, AgentTaskArtifactDTO artifact) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+    public int insert(String tenantId, String clientId, String ownerJiacn, AgentTaskArtifactDTO artifact) {
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         requireArtifact(artifact);
         AgentTaskArtifactEntity entity = toEntity(artifact);
         TaskCollaborationDaoSupport.applyScope(entity, tenantId, clientId);
+        entity.setOwnerJiacn(ownerJiacn);
         entity.setVisibility(StringUtil.isBlank(artifact.getVisibility())
                 ? "task_members" : artifact.getVisibility());
         entity.setCreatedAt(artifact.getCreatedAt() == null ? DateUtil.nowTime() : artifact.getCreatedAt());
@@ -36,12 +37,12 @@ public class AgentTaskArtifactDaoImpl implements AgentTaskArtifactDao {
 
     @Override
     public AgentTaskArtifactEntity findVersion(
-            String tenantId, String clientId, String taskId, String artifactId, int artifactVersion) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+            String tenantId, String clientId, String ownerJiacn, String taskId, String artifactId, int artifactVersion) {
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(artifactId, "artifactId");
         requireVersion(artifactVersion);
-        LambdaQueryWrapper<AgentTaskArtifactEntity> wrapper = scope(tenantId, clientId)
+        LambdaQueryWrapper<AgentTaskArtifactEntity> wrapper = scope(tenantId, clientId, ownerJiacn)
                 .eq(AgentTaskArtifactEntity::getTaskId, taskId)
                 .eq(AgentTaskArtifactEntity::getArtifactId, artifactId)
                 .eq(AgentTaskArtifactEntity::getArtifactVersion, artifactVersion);
@@ -51,11 +52,11 @@ public class AgentTaskArtifactDaoImpl implements AgentTaskArtifactDao {
 
     @Override
     public AgentTaskArtifactEntity findLatestVersion(
-            String tenantId, String clientId, String taskId, String artifactId) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+            String tenantId, String clientId, String ownerJiacn, String taskId, String artifactId) {
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(artifactId, "artifactId");
-        LambdaQueryWrapper<AgentTaskArtifactEntity> wrapper = scope(tenantId, clientId)
+        LambdaQueryWrapper<AgentTaskArtifactEntity> wrapper = scope(tenantId, clientId, ownerJiacn)
                 .eq(AgentTaskArtifactEntity::getTaskId, taskId)
                 .eq(AgentTaskArtifactEntity::getArtifactId, artifactId);
         exactArtifact(wrapper, taskId, artifactId);
@@ -67,20 +68,20 @@ public class AgentTaskArtifactDaoImpl implements AgentTaskArtifactDao {
 
     @Override
     public AgentTaskArtifactEntity findLatestVersionForUpdate(
-            String tenantId, String clientId, String taskId, String artifactId) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+            String tenantId, String clientId, String ownerJiacn, String taskId, String artifactId) {
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(artifactId, "artifactId");
-        return baseMapper.selectLatestVersionForUpdate(tenantId, clientId, taskId, artifactId);
+        return baseMapper.selectLatestVersionForUpdate(tenantId, clientId, ownerJiacn, taskId, artifactId);
     }
 
     @Override
     public List<AgentTaskArtifactEntity> listVersions(
-            String tenantId, String clientId, String taskId, String artifactId) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+            String tenantId, String clientId, String ownerJiacn, String taskId, String artifactId) {
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(artifactId, "artifactId");
-        LambdaQueryWrapper<AgentTaskArtifactEntity> wrapper = scope(tenantId, clientId)
+        LambdaQueryWrapper<AgentTaskArtifactEntity> wrapper = scope(tenantId, clientId, ownerJiacn)
                 .eq(AgentTaskArtifactEntity::getTaskId, taskId)
                 .eq(AgentTaskArtifactEntity::getArtifactId, artifactId);
         exactArtifact(wrapper, taskId, artifactId);
@@ -91,10 +92,10 @@ public class AgentTaskArtifactDaoImpl implements AgentTaskArtifactDao {
 
     @Override
     public List<AgentTaskArtifactEntity> listByTask(
-            String tenantId, String clientId, String taskId, int limit) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+            String tenantId, String clientId, String ownerJiacn, String taskId, int limit) {
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
-        LambdaQueryWrapper<AgentTaskArtifactEntity> wrapper = scope(tenantId, clientId)
+        LambdaQueryWrapper<AgentTaskArtifactEntity> wrapper = scope(tenantId, clientId, ownerJiacn)
                 .eq(AgentTaskArtifactEntity::getTaskId, taskId);
         TaskCollaborationDaoSupport.exact(wrapper, "task_id", taskId);
         return ordered(wrapper, limit);
@@ -102,12 +103,12 @@ public class AgentTaskArtifactDaoImpl implements AgentTaskArtifactDao {
 
     @Override
     public List<AgentTaskArtifactEntity> listVisibleByTask(
-            String tenantId, String clientId, String taskId, String workItemId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             String actorAgentId, boolean reviewerAccess, boolean coordinatorAccess, int limit) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(actorAgentId, "actorAgentId");
-        LambdaQueryWrapper<AgentTaskArtifactEntity> wrapper = scope(tenantId, clientId)
+        LambdaQueryWrapper<AgentTaskArtifactEntity> wrapper = scope(tenantId, clientId, ownerJiacn)
                 .eq(AgentTaskArtifactEntity::getTaskId, taskId)
                 .in(AgentTaskArtifactEntity::getVisibility,
                         "task_members", "reviewer", "private");
@@ -137,11 +138,11 @@ public class AgentTaskArtifactDaoImpl implements AgentTaskArtifactDao {
 
     @Override
     public List<AgentTaskArtifactEntity> listByWorkItem(
-            String tenantId, String clientId, String taskId, String workItemId, int limit) {
-        TaskCollaborationDaoSupport.requireScope(tenantId, clientId);
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId, int limit) {
+        TaskCollaborationDaoSupport.requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
         TaskCollaborationDaoSupport.requireId(taskId, "taskId");
         TaskCollaborationDaoSupport.requireId(workItemId, "workItemId");
-        LambdaQueryWrapper<AgentTaskArtifactEntity> wrapper = scope(tenantId, clientId)
+        LambdaQueryWrapper<AgentTaskArtifactEntity> wrapper = scope(tenantId, clientId, ownerJiacn)
                 .eq(AgentTaskArtifactEntity::getTaskId, taskId)
                 .eq(AgentTaskArtifactEntity::getWorkItemId, workItemId);
         TaskCollaborationDaoSupport.exact(wrapper, "task_id", taskId);
@@ -159,13 +160,15 @@ public class AgentTaskArtifactDaoImpl implements AgentTaskArtifactDao {
                 .last("limit " + TaskCollaborationDaoSupport.boundedLimit(limit)));
     }
 
-    private LambdaQueryWrapper<AgentTaskArtifactEntity> scope(String tenantId, String clientId) {
+    private LambdaQueryWrapper<AgentTaskArtifactEntity> scope(String tenantId, String clientId, String ownerJiacn) {
         LambdaQueryWrapper<AgentTaskArtifactEntity> wrapper =
                 new LambdaQueryWrapper<AgentTaskArtifactEntity>()
                         .eq(AgentTaskArtifactEntity::getTenantId, tenantId)
-                        .eq(AgentTaskArtifactEntity::getClientId, clientId);
+                        .eq(AgentTaskArtifactEntity::getClientId, clientId)
+                        .eq(AgentTaskArtifactEntity::getOwnerJiacn, ownerJiacn);
         TaskCollaborationDaoSupport.exact(wrapper, "tenant_id", tenantId);
-        return TaskCollaborationDaoSupport.exact(wrapper, "client_id", clientId);
+        TaskCollaborationDaoSupport.exact(wrapper, "client_id", clientId);
+        return TaskCollaborationDaoSupport.exact(wrapper, "owner_jiacn", ownerJiacn);
     }
 
     private void exactArtifact(

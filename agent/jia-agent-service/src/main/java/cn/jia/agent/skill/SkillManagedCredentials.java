@@ -54,19 +54,19 @@ public final class SkillManagedCredentials {
             if(old!=null) {
                 var prior=keys.getObject().get(old.getApiKeyId());
                 require(prior!=null && old.getApiKeyId().equals(prior.getId()) && actor.tenantId().equals(prior.getTenantId())
-                        && actor.tenantId().equals(prior.getJiacn()) && actor.clientId().equals(prior.getClientId()),403,"SKILL_AGENT_CREDENTIAL_UNPROVEN");
+                        && actor.ownerJiacn().equals(prior.getJiacn()) && actor.clientId().equals(prior.getClientId()),403,"SKILL_AGENT_CREDENTIAL_UNPROVEN");
                 require((prior.getKeyName()==null || !prior.getKeyName().startsWith("hosting:")),409,"SKILL_HOSTING_CREDENTIAL_ROTATION_UNSUPPORTED");
                 prior.setStatus(0); require(keys.getObject().update(prior)!=null,503,"SKILL_STATE_UNAVAILABLE");
                 one(mapper.retire(actor.tenantId(),actor.clientId(),old.getCredentialId(),old.getVersion(),System.currentTimeMillis()));
             }
             String credentialId=id("sc_"); var key=new OauthApiKeyEntity();
-            key.setTenantId(actor.tenantId());key.setClientId(actor.clientId());key.setJiacn(actor.tenantId());key.setStatus(1);
+            key.setTenantId(actor.tenantId());key.setClientId(actor.clientId());key.setJiacn(actor.ownerJiacn());key.setStatus(1);
             key.setKeyName("skill-agent:"+credentialId);key.setDescription("Canonical managed Agent "+agent);
             key.setApiKey("cdx_"+UUID.randomUUID().toString().replace("-","")+UUID.randomUUID().toString().replace("-",""));
             var created=keys.getObject().create(key);
             require(created!=null && created.getId()!=null && key.getApiKey().equals(created.getApiKey())
                     && key.getKeyName().equals(created.getKeyName()) && actor.tenantId().equals(created.getTenantId())
-                    && actor.tenantId().equals(created.getJiacn()) && actor.clientId().equals(created.getClientId()),503,"SKILL_STATE_UNAVAILABLE");
+                    && actor.ownerJiacn().equals(created.getJiacn()) && actor.clientId().equals(created.getClientId()),503,"SKILL_STATE_UNAVAILABLE");
             one(mapper.insert(credentialId,created.getId(),agent,runtime.getBindingId(),actor.tenantId(),actor.clientId(),System.currentTimeMillis()));
             versions.consume(actor,agent,expected);
             one(mapper.operationInsert(actor.tenantId(),actor.clientId(),actor.actorId(),bytes(idem),hash,credentialId,System.currentTimeMillis()));
@@ -100,7 +100,7 @@ public final class SkillManagedCredentials {
         return mapper.active(actor.tenantId(),actor.clientId(),agent);
     }
     private static boolean validKey(HostingRentHttp.Actor a,OauthApiKeyEntity k,String id) {
-        return k!=null && id.equals(k.getId()) && a.tenantId().equals(k.getTenantId()) && a.tenantId().equals(k.getJiacn())
+        return k!=null && id.equals(k.getId()) && a.tenantId().equals(k.getTenantId()) && a.ownerJiacn().equals(k.getJiacn())
                 && a.clientId().equals(k.getClientId()) && Integer.valueOf(1).equals(k.getStatus())
                 && (k.getExpireTime()==null || k.getExpireTime()>System.currentTimeMillis());
     }

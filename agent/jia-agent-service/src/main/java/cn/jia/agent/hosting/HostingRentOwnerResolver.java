@@ -22,11 +22,11 @@ public final class HostingRentOwnerResolver {
         AccountSecurityService accounts = accountProvider.getIfAvailable();
         UserService users = userProvider.getIfAvailable();
         if (accounts == null || users == null) throw forbidden();
-        AccountSecuritySnapshot account = accounts.findUniqueByExactJiacn(actor.tenantId())
+        AccountSecuritySnapshot account = accounts.findUniqueByExactJiacn(actor.ownerJiacn())
                 .filter(AccountSecuritySnapshot::isAuthenticatable).orElseThrow(HostingRentOwnerResolver::forbidden);
         UserEntity row = users.get(account.userId());
         if (row == null || !Objects.equals(row.getId(), account.userId())
-                || !actor.tenantId().equals(row.getJiacn()) || !matchesLoginSubject(actor.actorId(), row)
+                || !actor.ownerJiacn().equals(row.getJiacn()) || !matchesLoginSubject(actor.actorId(), row)
                 || accounts.findByUserId(account.userId()).filter(current -> current.equals(account)).isEmpty()) {
             throw forbidden();
         }

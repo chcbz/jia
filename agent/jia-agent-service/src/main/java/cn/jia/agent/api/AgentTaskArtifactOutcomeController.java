@@ -100,7 +100,7 @@ public class AgentTaskArtifactOutcomeController {
         requireEnabled(scope);
 
         AgentTaskArtifactOutcomeViewDTO accepted = outcomeService.accept(
-                scope.tenantId(), scope.clientId(), taskId, scope.actorAgentId(), command);
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId, scope.actorAgentId(), command);
         AgentTaskArtifactRefDTO expected = command.getAcceptedArtifact();
         return ok(requireAcceptedResponse(accepted, taskId, null,
                 new ExpectedArtifact(expected.getArtifactId(), expected.getArtifactVersion(),
@@ -120,7 +120,7 @@ public class AgentTaskArtifactOutcomeController {
         requireEnabled(scope);
 
         List<AgentTaskArtifactOutcomeViewDTO> rows = outcomeService.listAuthoritativeAccepted(
-                scope.tenantId(), scope.clientId(), taskId, scope.actorAgentId(),
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId, scope.actorAgentId(),
                 query.workItemId(), query.limit());
         if (rows == null || rows.size() > (query.limit() == null ? MAX_LIST_LIMIT : query.limit())) {
             throw new IllegalStateException("Accepted outcome result is inconsistent");
@@ -186,13 +186,16 @@ public class AgentTaskArtifactOutcomeController {
             throw new AuthenticationFailure(false);
         }
         Map<String, Object> claims = jwt.getToken().getClaims();
-        String tenantId = requiredClaim(claims, "jiacn", 50);
+        String ownerJiacn = requiredClaim(claims, "jiacn", 50);
+        if ("0".equals(ownerJiacn)) {
+            throw new AuthenticationFailure(true);
+        }
         String clientId = requiredClaim(claims, "client_id", 50);
         String actorAgentId = requiredClaim(claims, "sub", 100);
         if (!byteExact(authentication.getName(), actorAgentId)) {
             throw new AuthenticationFailure(true);
         }
-        return new Scope(tenantId, clientId, actorAgentId);
+        return new Scope("0", clientId, ownerJiacn, actorAgentId);
     }
 
     private static String requiredClaim(
@@ -475,7 +478,7 @@ public class AgentTaskArtifactOutcomeController {
                 .body(new ErrorBody(code, message));
     }
 
-    private record Scope(String tenantId, String clientId, String actorAgentId) {
+    private record Scope(String tenantId, String clientId, String ownerJiacn, String actorAgentId) {
     }
 
     private record ListQuery(String workItemId, Integer limit) {

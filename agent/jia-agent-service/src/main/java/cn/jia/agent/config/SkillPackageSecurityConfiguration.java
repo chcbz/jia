@@ -49,7 +49,8 @@ public class SkillPackageSecurityConfiguration {
                 var current=keys.getObject().get(resolved.getId());
                 if(current==null || current.getApiKey()==null || !MessageDigest.isEqual(current.getApiKey().getBytes(StandardCharsets.UTF_8),headers.getFirst().getBytes(StandardCharsets.UTF_8))
                         || !Integer.valueOf(1).equals(current.getStatus()) || current.getExpireTime()!=null && current.getExpireTime()<=System.currentTimeMillis()
-                        || current.getJiacn()==null || !current.getJiacn().equals(current.getTenantId()) || current.getClientId()==null) throw denied();
+                        || current.getJiacn()==null || current.getJiacn().isBlank() || "0".equals(current.getJiacn())
+                        || !"0".equals(current.getTenantId()) || current.getClientId()==null || current.getClientId().isBlank()) throw denied();
                 var account=accounts.getObject().findUniqueByExactJiacn(current.getJiacn()).filter(a->a.isAuthenticatable()).orElseThrow(PackageKeyFilter::denied);
                 if(!current.getJiacn().equals(account.jiacn())) throw denied();
                 // Never put a secret-bearing entity into the security context or logging surface.

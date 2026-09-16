@@ -4,11 +4,11 @@ import cn.jia.agent.entity.AgentWorkItemResultCommitDTO;
 import cn.jia.agent.entity.AgentWorkItemResultCommitViewDTO;
 
 /**
- * Atomic B04+B06 result boundary. Implementations must call B04 lease validation and then use the
- * returned exact agent/token/status/leaseUntil/version snapshot in the same transaction's work-item
- * result CAS. An ordinary artifact publish is not an authoritative result commit.
+ * Atomic B04+B06 result boundary. The caller must carry the authenticated task-owner scope
+ * through lease validation, artifact publication, work-item CAS and event append.
  */
 public interface AgentWorkItemResultCommitService {
-    AgentWorkItemResultCommitViewDTO commitResult(String tenantId, String clientId, String taskId,
+    AgentWorkItemResultCommitViewDTO commitResult(
+            String tenantId, String clientId, String ownerJiacn, String taskId,
             String actorAgentId, AgentWorkItemResultCommitDTO command);
 }

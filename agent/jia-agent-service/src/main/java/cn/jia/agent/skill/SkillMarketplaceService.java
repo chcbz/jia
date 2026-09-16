@@ -140,8 +140,12 @@ public final class SkillMarketplaceService {
                     v.getPackageSize().toString(),digest(v.getPackageSha256()),"/internal/agent/skill-installations/"+installId+"/package");
             // Existing outbox is the after-commit dispatcher. The order root fills its legacy aggregate slot;
             // no task is fabricated, admitted, or completed by this command.
-            var draft=new AgentCommandDraft(1,"cmd_skill_"+installId,orderId,installId,a.tenantId(),a.clientId(),orderId,null,
-                    q.getTargetAgentId(),"SKILL_INSTALL",now,Math.addExact(now,3600000L),payload);
+            String commandId=AgentCommandCanonicalCodec.skillInstallCommandId(
+                    a.tenantId(),a.clientId(),a.ownerJiacn(),installId);
+            var draft=new AgentCommandDraft(1,commandId,orderId,installId,
+                    a.tenantId(),a.clientId(),a.ownerJiacn(),orderId,null,
+                    q.getTargetAgentId(),"SKILL_INSTALL",now,
+                    Math.addExact(now,AgentCommandCanonicalCodec.TASK_INVITE_TTL_MILLIS),payload);
             var command=writer.getObject().write(draft);
             var install=new SkillInstallationEntity().setInstallationId(installId).setOrderId(orderId).setProductVersionId(v.getProductVersionId())
                     .setTargetAgentId(q.getTargetAgentId()).setSchemaVersion(1).setMessageType("command.dispatch").setMessageId(command.messageId())

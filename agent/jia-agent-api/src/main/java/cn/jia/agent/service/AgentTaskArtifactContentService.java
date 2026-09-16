@@ -2,14 +2,12 @@ package cn.jia.agent.service;
 
 import cn.jia.agent.entity.AgentTaskArtifactContentDTO;
 
-/** ACL-protected internal content read boundary; no public download route is implied. */
+/** ACL-protected content boundary scoped by the exact task owner. */
 public interface AgentTaskArtifactContentService {
-    AgentTaskArtifactContentDTO readContent(String tenantId, String clientId, String taskId,
-            String actorAgentId, String artifactId, int artifactVersion);
+    AgentTaskArtifactContentDTO readContent(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, String artifactId, int artifactVersion);
 
-    /**
-     * Browser task-owner content read, bound to the authenticated tenant/client by its caller.
-     */
+    /** Browser task-owner read after JWT ownership has been authenticated by the adapter. */
     AgentTaskArtifactContentDTO readContentForTaskOwner(String tenantId, String clientId,
-            String taskId, String artifactId, int artifactVersion);
+            String ownerJiacn, String taskId, String artifactId, int artifactVersion);
 }
