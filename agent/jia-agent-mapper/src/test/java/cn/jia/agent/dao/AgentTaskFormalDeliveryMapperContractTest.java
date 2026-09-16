@@ -33,6 +33,13 @@ class AgentTaskFormalDeliveryMapperContractTest {
         assertTrue(lockSql.contains("OCTET_LENGTH(d.client_id)=OCTET_LENGTH(#{clientId})"));
         assertTrue(lockSql.contains("CAST(d.delivery_id AS BINARY)=CAST(#{deliveryId} AS BINARY)"));
 
+        Method latest = AgentTaskFormalDeliveryMapper.class.getDeclaredMethod(
+                "selectLatestTaskForUpdate", String.class, String.class, String.class);
+        String latestSql = String.join("\n", latest.getAnnotation(Select.class).value());
+        assertTrue(latestSql.contains("ORDER BY d.revision DESC, d.id DESC"));
+        assertTrue(latestSql.contains("LIMIT 1 FOR UPDATE"));
+        assertTrue(latestSql.contains("CAST(d.task_id AS BINARY)=CAST(#{taskId} AS BINARY)"));
+
         Method update = AgentTaskFormalDeliveryMapper.class.getDeclaredMethod("reviewByVersion",
                 String.class, String.class, String.class, String.class, long.class, String.class,
                 String.class, String.class, long.class, long.class);
@@ -57,7 +64,7 @@ class AgentTaskFormalDeliveryMapperContractTest {
                 .setTaskId("task-1").setWorkItemId("work-1").setDeliveryId("delivery-1")
                 .setRevision(1L).setProducerAgentId("agent-1").setRunId("run-1")
                 .setSummary("x".repeat(101)).setState("submitted")
-                .setManifestArtifactId("manifest-1").setManifestArtifactVersion(1)
+                .setSubmissionDigest("a".repeat(64)).setManifestArtifactId("manifest-1").setManifestArtifactVersion(1)
                 .setSubmittedAt(1L).setVersion(0L);
 
         assertDoesNotThrow(() -> dao.insert("tenant-1", "client-1", delivery));
@@ -73,6 +80,8 @@ class AgentTaskFormalDeliveryMapperContractTest {
         assertTrue(ddl.contains("create table if not exists agent_task_formal_delivery_item"));
         assertTrue(ddl.contains("state in ('submitted', 'accepted', 'changes_requested')"));
         assertTrue(ddl.contains("unique key uk_formal_delivery_revision"));
+        assertTrue(ddl.contains("submission_digest"));
+        assertTrue(ddl.contains("chk_formal_delivery_submission_digest"));
         assertTrue(ddl.contains("unique key uk_formal_delivery_item_exact"));
         assertFalse(ddl.matches("(?s).*\\b(insert|update|delete|replace|truncate|alter|drop)\\b.*"));
 

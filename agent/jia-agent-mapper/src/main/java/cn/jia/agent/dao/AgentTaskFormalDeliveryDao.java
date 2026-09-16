@@ -10,6 +10,8 @@ public interface AgentTaskFormalDeliveryDao {
     AgentTaskFormalDeliveryEntity findForUpdate(String tenantId, String clientId, String deliveryId);
     AgentTaskFormalDeliveryEntity findTaskRevisionForUpdate(
             String tenantId, String clientId, String taskId, long revision);
+    AgentTaskFormalDeliveryEntity findLatestTaskForUpdate(
+            String tenantId, String clientId, String taskId);
     int insert(String tenantId, String clientId, AgentTaskFormalDeliveryEntity delivery);
     int insertItem(String tenantId, String clientId, AgentTaskFormalDeliveryItemEntity item);
     List<AgentTaskFormalDeliveryItemEntity> listItems(String tenantId, String clientId, String deliveryId);

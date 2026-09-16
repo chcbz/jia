@@ -44,15 +44,31 @@ public interface AgentTaskFormalDeliveryMapper extends BaseMapper<AgentTaskForma
             @Param("tenantId") String tenantId, @Param("clientId") String clientId,
             @Param("taskId") String taskId, @Param("revision") long revision);
 
+    @Select("""
+            SELECT d.* FROM agent_task_formal_delivery d
+             WHERE d.tenant_id=#{tenantId} AND d.client_id=#{clientId} AND d.task_id=#{taskId}
+               AND CAST(d.tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
+               AND OCTET_LENGTH(d.tenant_id)=OCTET_LENGTH(#{tenantId})
+               AND CAST(d.client_id AS BINARY)=CAST(#{clientId} AS BINARY)
+               AND OCTET_LENGTH(d.client_id)=OCTET_LENGTH(#{clientId})
+               AND CAST(d.task_id AS BINARY)=CAST(#{taskId} AS BINARY)
+               AND OCTET_LENGTH(d.task_id)=OCTET_LENGTH(#{taskId})
+             ORDER BY d.revision DESC, d.id DESC
+             LIMIT 1 FOR UPDATE
+            """)
+    AgentTaskFormalDeliveryEntity selectLatestTaskForUpdate(
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("taskId") String taskId);
+
     @Insert("""
             INSERT INTO agent_task_formal_delivery
               (task_id,work_item_id,delivery_id,revision,supersedes_delivery_id,
-               producer_agent_id,run_id,summary,state,manifest_artifact_id,manifest_artifact_version,
+               producer_agent_id,run_id,summary,state,submission_digest,manifest_artifact_id,manifest_artifact_version,
                submitted_at,reviewed_by_jiacn,review_reason,reviewed_at,version,
                tenant_id,client_id,create_time,update_time)
             VALUES
               (#{taskId},#{workItemId},#{deliveryId},#{revision},#{supersedesDeliveryId},
-               #{producerAgentId},#{runId},#{summary},#{state},#{manifestArtifactId},#{manifestArtifactVersion},
+               #{producerAgentId},#{runId},#{summary},#{state},#{submissionDigest},#{manifestArtifactId},#{manifestArtifactVersion},
                #{submittedAt},#{reviewedByJiacn},#{reviewReason},#{reviewedAt},#{version},
                #{tenantId},#{clientId},#{createTime},#{updateTime})
             """)

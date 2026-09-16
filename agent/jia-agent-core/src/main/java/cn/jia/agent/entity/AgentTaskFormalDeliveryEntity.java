@@ -30,6 +30,7 @@ public class AgentTaskFormalDeliveryEntity extends BaseEntity {
     private String runId;
     private String summary;
     private String state;
+    private String submissionDigest;
     private String manifestArtifactId;
     private Integer manifestArtifactVersion;
     private Long submittedAt;

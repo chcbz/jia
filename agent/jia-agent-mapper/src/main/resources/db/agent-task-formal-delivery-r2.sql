@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS agent_task_formal_delivery (
     run_id                    VARCHAR(100) NOT NULL,
     summary                   TEXT NOT NULL,
     state                     VARCHAR(24) NOT NULL,
+    submission_digest         CHAR(64) NOT NULL,
     manifest_artifact_id      VARCHAR(100) NOT NULL,
     manifest_artifact_version INT NOT NULL,
     submitted_at              BIGINT NOT NULL,
@@ -31,6 +32,7 @@ CREATE TABLE IF NOT EXISTS agent_task_formal_delivery (
     KEY idx_formal_delivery_work_item (tenant_id, client_id, task_id, work_item_id, revision),
     CONSTRAINT chk_formal_delivery_revision CHECK (revision >= 1 AND version >= 0),
     CONSTRAINT chk_formal_delivery_manifest CHECK (manifest_artifact_version >= 1),
+    CONSTRAINT chk_formal_delivery_submission_digest CHECK (CHAR_LENGTH(submission_digest) = 64),
     CONSTRAINT chk_formal_delivery_state CHECK (state IN ('submitted', 'accepted', 'changes_requested')),
     CONSTRAINT chk_formal_delivery_review CHECK (
         (state = 'submitted' AND reviewed_by_jiacn IS NULL AND review_reason IS NULL AND reviewed_at IS NULL)

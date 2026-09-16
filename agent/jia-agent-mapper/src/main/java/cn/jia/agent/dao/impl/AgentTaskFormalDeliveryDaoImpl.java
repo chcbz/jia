@@ -35,6 +35,13 @@ public class AgentTaskFormalDeliveryDaoImpl implements AgentTaskFormalDeliveryDa
     }
 
     @Override
+    public AgentTaskFormalDeliveryEntity findLatestTaskForUpdate(
+            String tenantId, String clientId, String taskId) {
+        scope(tenantId, clientId); id(taskId, "taskId");
+        return mapper.selectLatestTaskForUpdate(tenantId, clientId, taskId);
+    }
+
+    @Override
     public int insert(String tenantId, String clientId, AgentTaskFormalDeliveryEntity delivery) {
         scope(tenantId, clientId); requireDelivery(delivery);
         delivery.setTenantId(tenantId).setClientId(clientId);
@@ -85,6 +92,7 @@ public class AgentTaskFormalDeliveryDaoImpl implements AgentTaskFormalDeliveryDa
         id(value.getTaskId(), "taskId"); id(value.getWorkItemId(), "workItemId");
         id(value.getDeliveryId(), "deliveryId"); id(value.getProducerAgentId(), "producerAgentId");
         id(value.getRunId(), "runId"); requiredText(value.getSummary(), "summary");
+        sha256(value.getSubmissionDigest(), "submissionDigest");
         id(value.getManifestArtifactId(), "manifestArtifactId"); positive(value.getRevision(), "revision");
         if (value.getManifestArtifactVersion() == null || value.getManifestArtifactVersion() < 1
                 || value.getSubmittedAt() == null || value.getSubmittedAt() <= 0
@@ -120,6 +128,11 @@ public class AgentTaskFormalDeliveryDaoImpl implements AgentTaskFormalDeliveryDa
     private static void id(String value, String name) {
         if (value == null || value.isBlank() || value.length() > 100 || !value.equals(value.strip())
                 || value.codePoints().anyMatch(Character::isISOControl)) {
+            throw new IllegalArgumentException(name + " is invalid");
+        }
+    }
+    private static void sha256(String value, String name) {
+        if (value == null || !value.matches("[0-9a-f]{64}")) {
             throw new IllegalArgumentException(name + " is invalid");
         }
     }
