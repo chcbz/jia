@@ -174,6 +174,20 @@ public class AgentTaskMetaDaoImpl extends BaseDaoImpl<AgentTaskMetaMapper, Agent
     }
 
     @Override
+    public int updateStatusByVersionInOwnerScope(
+            String tenantId, String clientId, String ownerJiacn, String taskId,
+            long expectedVersion, String rewardStatus, Long startedAt, Long completedAt,
+            String failureReason) {
+        requireStrictOwnerScope(tenantId, clientId, ownerJiacn);
+        TaskCollaborationDaoSupport.requireId(taskId, "taskId");
+        TaskCollaborationDaoSupport.requireId(rewardStatus, "rewardStatus");
+        TaskCollaborationDaoSupport.requireExpectedVersion(expectedVersion);
+        return baseMapper.updateStatusByVersionInOwnerScope(
+                tenantId, clientId, ownerJiacn, taskId, expectedVersion, rewardStatus,
+                startedAt, completedAt, failureReason, DateUtil.nowTime());
+    }
+
+    @Override
     public List<AgentTaskMetaEntity> findByAgentId(
             String tenantId, String clientId, String agentId, int limit) {
         TaskCollaborationDaoSupport.requireScope(tenantId, clientId);

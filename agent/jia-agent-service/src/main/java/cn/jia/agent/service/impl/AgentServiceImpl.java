@@ -733,10 +733,11 @@ public class AgentServiceImpl implements AgentService {
 
     @Override
     public List<AgentTaskDTO> getAgentTasks(String requestedAgentId) {
-        String tenantId = resolveCurrentJiacn();
+        String tenantId = SINGLE_TENANT_ID;
         String clientId = resolveCurrentClientId();
+        String ownerJiacn = resolveCurrentJiacn();
         String agentId = legacyTaskCompatibilityService.resolveAgentId(
-                tenantId, clientId, tenantId, requestedAgentId);
+                tenantId, clientId, ownerJiacn, requestedAgentId);
         requireOwnedAgent(requireAgent(agentId));
         List<AgentTaskMemberEntity> memberships = Optional.ofNullable(
                 agentTaskMemberDao.listByAgent(tenantId, clientId, agentId, null,
@@ -749,6 +750,7 @@ public class AgentServiceImpl implements AgentService {
             for (AgentTaskMemberEntity member : memberships) {
                 require(Objects.equals(tenantId, member.getTenantId())
                                 && Objects.equals(clientId, member.getClientId())
+                                && Objects.equals(ownerJiacn, member.getOwnerJiacn())
                                 && Objects.equals(agentId, member.getAgentId())
                                 && isExactStoredText(member.getTaskId(), 100),
                         "Persisted Agent task membership is outside the requested scope");
@@ -761,11 +763,11 @@ public class AgentServiceImpl implements AgentService {
             }
             return taskIds.stream()
                     .map(taskId -> {
-                        AgentTaskMetaEntity task = agentTaskMetaDao.findByTaskId(
-                                tenantId, clientId, taskId);
+                        AgentTaskMetaEntity task = agentTaskMetaDao.findByTaskIdInOwnerScope(
+                                tenantId, clientId, ownerJiacn, taskId);
                         require(task != null,
-                                "Persisted Agent task membership has no scoped task");
-                        requireScopedTaskProjection(task, tenantId, clientId, taskId);
+                                "Persisted Agent task membership has no owned task");
+                        requireOwnedTaskProjection(task, tenantId, clientId, ownerJiacn, taskId);
                         return toTaskDTO(task);
                     })
                     .toList();
@@ -777,8 +779,11 @@ public class AgentServiceImpl implements AgentService {
         require(legacyTasks.size() < TASK_MEMBERSHIP_SNAPSHOT_LIMIT,
                 "Legacy Agent task snapshot exceeds the safe limit");
         return legacyTasks.stream()
-                .peek(meta -> requireScopedLegacyAgentTaskProjection(
-                        meta, tenantId, clientId, agentId))
+                .peek(meta -> {
+                    requireScopedLegacyAgentTaskProjection(meta, tenantId, clientId, agentId);
+                    requireOwnedTaskProjection(
+                            meta, tenantId, clientId, ownerJiacn, meta.getTaskId());
+                })
                 .map(this::toTaskDTO)
                 .toList();
     }
@@ -1185,22 +1190,16 @@ public class AgentServiceImpl implements AgentService {
             String taskId, AgentTaskAssignDTO request, boolean automatic) {
         List<String> requestedAgentIds = normalizeAssignAgentIds(request);
         require(!requestedAgentIds.isEmpty(), "agentId is required");
-        String tenantId = resolveCurrentJiacn();
+        String tenantId = SINGLE_TENANT_ID;
         String clientId = resolveCurrentClientId();
+        String ownerJiacn = resolveCurrentJiacn();
+        AgentTaskMetaEntity meta = requireTask(taskId);
+        requireOwnedTaskProjection(meta, tenantId, clientId, ownerJiacn, taskId);
         requireLegacyAssignmentAllowed(tenantId, clientId, taskId, automatic, requestedAgentIds.size());
         List<String> agentIds = legacyTaskCompatibilityService.resolveAgentIds(
-                tenantId, clientId, tenantId, requestedAgentIds);
+                tenantId, clientId, ownerJiacn, requestedAgentIds);
         boolean allowQueue = Boolean.TRUE.equals(request.getAllowQueue());
 
-        AgentTaskMetaEntity meta = agentTaskMetaDao.findByTaskId(tenantId, clientId, taskId);
-        if (meta == null) {
-            meta = new AgentTaskMetaEntity();
-            meta.setTaskId(taskId);
-            meta.setRewardStatus(AgentConstants.TASK_STATUS_OPEN);
-            meta.setTaskVersion(0L);
-            meta.setCurrentEventVersion(0L);
-        }
-        require(taskId.equals(meta.getTaskId()), "taskId does not match current scope");
         validateLegacyAssignableTask(meta);
         AtomicReference<List<AgentRuntimeEntity>> lockedAssignedAgents =
                 new AtomicReference<>(List.of());
@@ -1211,6 +1210,9 @@ public class AgentServiceImpl implements AgentService {
                             @Override
                             public void beforeIdentityLock(
                                     AgentTaskMetaEntity lockedTask, List<String> canonicalAgentIds) {
+                                requireOwnedTaskProjection(
+                                        lockedTask, tenantId, clientId, ownerJiacn,
+                                        lockedTask.getTaskId());
                                 requireLegacyAssignmentAllowedLocked(tenantId, clientId,
                                         lockedTask.getTaskId(), automatic, canonicalAgentIds.size());
                             }
@@ -1233,9 +1235,10 @@ public class AgentServiceImpl implements AgentService {
                             }
                         });
         AgentTaskMetaEntity assignedMeta = Optional.ofNullable(
-                agentTaskMetaDao.findByTaskId(tenantId, clientId, taskId)).orElseThrow(() ->
+                agentTaskMetaDao.findByTaskIdInOwnerScope(
+                        tenantId, clientId, ownerJiacn, taskId)).orElseThrow(() ->
                 new AgentBizException(AgentErrorConstants.TASK_NOT_FOUND, "Task not found"));
-        requireScopedTaskProjection(assignedMeta, tenantId, clientId, taskId);
+        requireOwnedTaskProjection(assignedMeta, tenantId, clientId, ownerJiacn, taskId);
         List<AgentRuntimeEntity> assignedAgents = lockedAssignedAgents.get();
         if (outcome.changed() && assignedAgents.size() != outcome.agentIds().size()) {
             throw new IllegalStateException("Changed assignment did not validate every target runtime");
@@ -1260,9 +1263,9 @@ public class AgentServiceImpl implements AgentService {
     public List<AgentTaskRecommendationDTO> recommendTaskAssignees(String taskId) {
         AgentTaskDTO task = getTask(taskId);
         String clientId = resolveCurrentClientId();
-        String tenantId = resolveCurrentJiacn();
+        String ownerJiacn = resolveCurrentJiacn();
         List<AgentRuntimeEntity> candidates = Optional.ofNullable(agentRuntimeDao
-                .findCandidateRosterByOwner(clientId, tenantId))
+                .findCandidateRosterByOwner(clientId, ownerJiacn))
                 .orElseGet(Collections::emptyList);
         return candidates.stream()
                 .map(agent -> evaluateTaskCandidate(task, agent))
@@ -1283,6 +1286,7 @@ public class AgentServiceImpl implements AgentService {
     public AgentTaskTeamRecommendationDTO recommendTaskTeam(
             String tenantId, String clientId, String taskId,
             AgentTaskTeamRecommendationRequestDTO request) {
+        String ownerJiacn = resolveCurrentJiacn();
         requireExactTeamScope(tenantId, clientId);
         require(isExactStoredText(taskId, 100), "taskId is invalid");
         require(request != null, "team recommendation request is required");
@@ -1297,9 +1301,10 @@ public class AgentServiceImpl implements AgentService {
         require(request.getHighRisk() != null, "highRisk must be explicitly provided");
 
         AgentTaskMetaEntity meta = Optional.ofNullable(
-                agentTaskMetaDao.findByTaskId(tenantId, clientId, taskId)).orElseThrow(() ->
+                agentTaskMetaDao.findByTaskIdInOwnerScope(
+                        tenantId, clientId, ownerJiacn, taskId)).orElseThrow(() ->
                 new AgentBizException(AgentErrorConstants.TASK_NOT_FOUND, "Task not found"));
-        requireScopedTaskProjection(meta, tenantId, clientId, taskId);
+        requireOwnedTaskProjection(meta, tenantId, clientId, ownerJiacn, taskId);
         require(meta.getRiskLevel() != null && TEAM_RISK_LEVELS.contains(meta.getRiskLevel()),
                 "Persisted task riskLevel is invalid");
         require(meta.getReviewRequired() != null,
@@ -1313,7 +1318,7 @@ public class AgentServiceImpl implements AgentService {
                 request.getMaxTeamSize(), meta.getMaxAgents());
         AgentTaskDTO task = toTeamRecommendationTask(meta);
         TaskRecommendationCandidates candidates = loadTaskRecommendationCandidates(
-                task, tenantId, clientId);
+                task, clientId, ownerJiacn);
 
         boolean reviewerRequired = authoritativeHighRisk
                 || Boolean.TRUE.equals(meta.getReviewRequired())
@@ -1386,12 +1391,12 @@ public class AgentServiceImpl implements AgentService {
     }
 
     private TaskRecommendationCandidates loadTaskRecommendationCandidates(
-            AgentTaskDTO task, String tenantId, String clientId) {
+            AgentTaskDTO task, String clientId, String ownerJiacn) {
         List<AgentRuntimeEntity> rows;
         PageHelper.startPage(1, MAX_TEAM_RECOMMENDATION_CANDIDATES + 1);
         try {
             rows = Optional.ofNullable(
-                    agentRuntimeDao.findCandidateRosterByOwner(clientId, tenantId))
+                    agentRuntimeDao.findCandidateRosterByOwner(clientId, ownerJiacn))
                     .orElseGet(Collections::emptyList);
         } finally {
             PageHelper.clearPage();
@@ -1403,7 +1408,7 @@ public class AgentServiceImpl implements AgentService {
         for (AgentRuntimeEntity row : rows) {
             require(row != null
                             && Objects.equals(clientId, row.getClientId())
-                            && Objects.equals(tenantId, row.getOwnerJiacn())
+                            && Objects.equals(ownerJiacn, row.getOwnerJiacn())
                             && isExactStoredText(row.getAgentId(), 100),
                     "Persisted recommendation candidate is outside the byte-exact scope");
             if (uniqueRows.putIfAbsent(row.getAgentId(), row) != null) {
@@ -1411,7 +1416,7 @@ public class AgentServiceImpl implements AgentService {
             }
         }
         List<AgentTaskRecommendationDTO> recommendations = uniqueRows.values().stream()
-                .map(agent -> evaluateTaskCandidate(task, agent, clientId, tenantId))
+                .map(agent -> evaluateTaskCandidate(task, agent, clientId, ownerJiacn))
                 .sorted((left, right) -> {
                     int eligibility = Boolean.compare(Boolean.TRUE.equals(right.getEligible()),
                             Boolean.TRUE.equals(left.getEligible()));
@@ -1498,9 +1503,9 @@ public class AgentServiceImpl implements AgentService {
     }
 
     private void requireExactTeamScope(String tenantId, String clientId) {
-        if (!isExactAuthenticatedScopeId(tenantId)
+        if (!SINGLE_TENANT_ID.equals(tenantId)
                 || !isExactAuthenticatedScopeId(clientId)
-                || "0".equals(tenantId) || "0".equals(clientId)) {
+                || !Objects.equals(clientId, resolveCurrentClientId())) {
             throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
                     "Authenticated team recommendation scope is invalid");
         }
@@ -1518,7 +1523,8 @@ public class AgentServiceImpl implements AgentService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AgentTaskDTO autoAssignTask(String taskId, AgentTaskAssignDTO request) {
-        requireLegacyAssignmentAllowed(resolveCurrentJiacn(), resolveCurrentClientId(), taskId, true, 1);
+        requireTask(taskId);
+        requireLegacyAssignmentAllowed(SINGLE_TENANT_ID, resolveCurrentClientId(), taskId, true, 1);
         AgentTaskDTO task = getTask(taskId);
         List<AgentTaskRecommendationDTO> recommendations = recommendTaskAssignees(taskId);
         List<String> selectedAgentIds = selectAutoAssignAgentIds(task, recommendations);
@@ -1535,11 +1541,13 @@ public class AgentServiceImpl implements AgentService {
     public AgentTaskDTO reportTask(String taskId, AgentTaskReportDTO request) {
         require(request != null, "report request is required");
         require(!StringUtil.isBlank(request.getAgentId()), "agentId is required");
-        String tenantId = resolveCurrentJiacn();
+        String tenantId = SINGLE_TENANT_ID;
         String clientId = resolveCurrentClientId();
+        String ownerJiacn = resolveCurrentJiacn();
+        requireTask(taskId);
         requireLegacyLifecycleAllowed(tenantId, clientId, taskId);
         String reportingAgentId = legacyTaskCompatibilityService.resolveAgentId(
-                tenantId, clientId, tenantId, request.getAgentId());
+                tenantId, clientId, ownerJiacn, request.getAgentId());
         requireOwnedAgent(requireAgent(reportingAgentId));
 
         AgentLegacyTaskCompatibilityService.ReportOutcome outcome =
@@ -1547,9 +1555,10 @@ public class AgentServiceImpl implements AgentService {
                         tenantId, clientId, taskId, reportingAgentId,
                         request.getStatus(), request.getFailureReason());
         AgentTaskMetaEntity meta = Optional.ofNullable(
-                agentTaskMetaDao.findByTaskId(tenantId, clientId, taskId)).orElseThrow(() ->
+                agentTaskMetaDao.findByTaskIdInOwnerScope(
+                        tenantId, clientId, ownerJiacn, taskId)).orElseThrow(() ->
                 new AgentBizException(AgentErrorConstants.TASK_NOT_FOUND, "Task not found"));
-        requireScopedTaskProjection(meta, tenantId, clientId, taskId);
+        requireOwnedTaskProjection(meta, tenantId, clientId, ownerJiacn, taskId);
         require(outcome.taskStatus().equals(meta.getRewardStatus())
                         && Objects.equals(outcome.taskVersion(), meta.getTaskVersion()),
                 "task aggregate does not match the compatibility report outcome");
@@ -1595,15 +1604,17 @@ public class AgentServiceImpl implements AgentService {
                 TaskEventPayload.ContentDigest.fromUtf8(request.getContent());
         // Validate the bounded code before any business row is written.
         TaskEventPayload.builder().put(TaskEventPayload.Key.NOTE_TYPE, noteType);
-        String tenantId = resolveCurrentJiacn();
+        String tenantId = SINGLE_TENANT_ID;
         String clientId = resolveCurrentClientId();
-        return mutationTransaction.executeWithLockedTaskRoot(
-                tenantId, clientId, taskId, taskRoot -> {
-                    requireScopedTaskProjection(taskRoot, tenantId, clientId, taskId);
+        String ownerJiacn = resolveCurrentJiacn();
+        return mutationTransaction.executeWithLockedTaskRootInOwnerScope(
+                tenantId, clientId, ownerJiacn, taskId, taskRoot -> {
+                    requireOwnedTaskProjection(taskRoot, tenantId, clientId, ownerJiacn, taskId);
                     AgentTaskNoteEntity note = new AgentTaskNoteEntity();
                     note.setTaskId(taskId);
                     note.setTenantId(tenantId);
                     note.setClientId(clientId);
+                    note.setOwnerJiacn(ownerJiacn);
                     note.setAuthorId(request.getAuthorId());
                     note.setAuthorType(StringUtil.isBlank(request.getAuthorType())
                             ? "user" : request.getAuthorType());
@@ -1620,7 +1631,8 @@ public class AgentServiceImpl implements AgentService {
     @Override
     public List<AgentTaskNoteDTO> listTaskNotes(String taskId) {
         requireTask(taskId);
-        return agentTaskNoteDao.findByTaskId(taskId).stream()
+        return agentTaskNoteDao.findByTaskIdInOwnerScope(
+                        SINGLE_TENANT_ID, resolveCurrentClientId(), resolveCurrentJiacn(), taskId).stream()
                 .map(this::toTaskNoteDTO)
                 .toList();
     }
@@ -1628,11 +1640,12 @@ public class AgentServiceImpl implements AgentService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AgentTaskDTO archiveTask(String taskId) {
-        String tenantId = resolveCurrentJiacn();
+        String tenantId = SINGLE_TENANT_ID;
         String clientId = resolveCurrentClientId();
-        return mutationTransaction.executeWithLockedTaskRoot(
-                tenantId, clientId, taskId, taskRoot -> {
-                    requireScopedTaskProjection(taskRoot, tenantId, clientId, taskId);
+        String ownerJiacn = resolveCurrentJiacn();
+        return mutationTransaction.executeWithLockedTaskRootInOwnerScope(
+                tenantId, clientId, ownerJiacn, taskId, taskRoot -> {
+                    requireOwnedTaskProjection(taskRoot, tenantId, clientId, ownerJiacn, taskId);
                     requireLegacyLifecycleAllowedLocked(tenantId, clientId, taskId);
                     AgentTaskStatus currentStatus;
                     try {
@@ -1658,8 +1671,8 @@ public class AgentServiceImpl implements AgentService {
                                 "Persisted taskVersion cannot be incremented");
                     }
                     long expectedVersion = persistedVersion;
-                    if (agentTaskMetaDao.updateStatusByVersion(
-                                    tenantId, clientId, taskId, expectedVersion,
+                    if (agentTaskMetaDao.updateStatusByVersionInOwnerScope(
+                                    tenantId, clientId, ownerJiacn, taskId, expectedVersion,
                                     AgentConstants.TASK_STATUS_ARCHIVED,
                                     taskRoot.getStartedAt(), taskRoot.getCompletedAt(),
                                     taskRoot.getFailureReason()) != 1) {

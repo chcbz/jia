@@ -61,6 +61,12 @@ public interface AgentTaskMetaDao extends IBaseDao<AgentTaskMetaEntity> {
             long expectedVersion, String rewardStatus, Long startedAt, Long completedAt,
             String failureReason);
 
+    /** Strict task status update: owner is part of the optimistic-lock predicate. */
+    int updateStatusByVersionInOwnerScope(
+            String tenantId, String clientId, String ownerJiacn, String taskId,
+            long expectedVersion, String rewardStatus, Long startedAt, Long completedAt,
+            String failureReason);
+
     List<AgentTaskMetaEntity> findByAgentId(
             String tenantId, String clientId, String agentId, int limit);
 
