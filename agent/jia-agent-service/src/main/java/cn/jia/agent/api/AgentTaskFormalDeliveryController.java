@@ -88,7 +88,7 @@ public class AgentTaskFormalDeliveryController {
         requireExact(taskId, 100);
         requireNoQuery(request);
         List<AgentTaskFormalDeliveryViewDTO> rows = readService.listForTaskOwner(
-                scope.tenantId(), scope.clientId(), taskId);
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId);
         if (rows == null || rows.size() > MAX_ITEMS) {
             throw new IllegalStateException("Formal delivery result is inconsistent");
         }
@@ -114,7 +114,7 @@ public class AgentTaskFormalDeliveryController {
         String deliveryId = deliveryId(scope, taskId, key);
         AgentTaskFormalDeliverySubmitDTO command = parseSubmit(readBounded(request), deliveryId);
         AgentTaskFormalDeliveryViewDTO view = submissionService.submit(scope.tenantId(),
-                scope.clientId(), taskId, scope.actorId(), command);
+                scope.clientId(), scope.ownerJiacn(), taskId, scope.actorId(), command);
         return ok(response(view, taskId, Long.MAX_VALUE));
     }
 
@@ -131,7 +131,7 @@ public class AgentTaskFormalDeliveryController {
         requireIdempotencyKey(idempotencyKey);
         AgentTaskFormalDeliveryDecisionDTO command = parseDecision(readBounded(request), deliveryId);
         AgentTaskFormalDeliveryViewDTO view = decisionService.decide(scope.tenantId(),
-                scope.clientId(), taskId, scope.tenantId(), command);
+                scope.clientId(), taskId, scope.ownerJiacn(), command);
         return ok(response(view, taskId, Long.MAX_VALUE));
     }
 
@@ -172,13 +172,14 @@ public class AgentTaskFormalDeliveryController {
             throw new AuthenticationFailure(false);
         }
         Map<String, Object> claims = jwt.getToken().getClaims();
-        String tenantId = requiredClaim(claims, "jiacn", 50);
+        String ownerJiacn = requiredClaim(claims, "jiacn", 50);
         String clientId = requiredClaim(claims, "client_id", 50);
         String actorId = requiredClaim(claims, "sub", 100);
-        if ("0".equals(tenantId) || !byteExact(authentication.getName(), actorId)) {
+        if ("0".equals(ownerJiacn) || "0".equals(clientId)
+                || !byteExact(authentication.getName(), actorId)) {
             throw new AuthenticationFailure(true);
         }
-        return new Scope(tenantId, clientId, actorId);
+        return new Scope("0", clientId, ownerJiacn, actorId);
     }
 
     private static String requiredClaim(Map<String, Object> claims, String field, int maxLength) {
@@ -265,9 +266,8 @@ public class AgentTaskFormalDeliveryController {
                     || root.size() > DECISION_FIELDS.size()) {
                 throw new RequestFailure();
             }
-            java.util.Iterator<String> fields = root.propertyNames();
-            while (fields.hasNext()) {
-                if (!DECISION_FIELDS.contains(fields.next())) throw new RequestFailure();
+            for (String field : root.propertyNames()) {
+                if (!DECISION_FIELDS.contains(field)) throw new RequestFailure();
             }
             for (String field : required) {
                 if (!root.has(field)) throw new RequestFailure();
@@ -474,7 +474,7 @@ public class AgentTaskFormalDeliveryController {
                 .body(new ErrorBody(code, message));
     }
 
-    private record Scope(String tenantId, String clientId, String actorId) { }
+    private record Scope(String tenantId, String clientId, String ownerJiacn, String actorId) { }
     private record ArtifactKey(String artifactId, int artifactVersion) { }
     public record FormalDeliveryListResponse(List<FormalDeliveryResponse> items) { }
     public record FormalDeliveryResponse(String taskId, String workItemId, String deliveryId,

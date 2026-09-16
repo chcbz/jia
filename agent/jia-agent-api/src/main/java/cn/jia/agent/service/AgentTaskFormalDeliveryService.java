@@ -9,6 +9,6 @@ import cn.jia.agent.entity.AgentTaskFormalDeliveryViewDTO;
  */
 public interface AgentTaskFormalDeliveryService {
     AgentTaskFormalDeliveryViewDTO submit(
-            String tenantId, String clientId, String taskId, String actorAgentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId,
             AgentTaskFormalDeliverySubmitDTO command);
 }

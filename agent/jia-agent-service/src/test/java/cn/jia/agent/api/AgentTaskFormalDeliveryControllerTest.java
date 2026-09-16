@@ -52,7 +52,7 @@ class AgentTaskFormalDeliveryControllerTest {
 
     @Test
     void submitDerivesOpaqueStableDeliveryIdentityAndNeverReturnsLease() throws Exception {
-        when(submission.submit(eq(TENANT), eq(CLIENT), eq(TASK), eq(ACTOR), any()))
+        when(submission.submit(eq("0"), eq(CLIENT), eq(TENANT), eq(TASK), eq(ACTOR), any()))
                 .thenReturn(view("submitted", null, null));
         String body = """
                 {"runId":"run-a","workItemId":"work-a","leaseToken":"lease-secret-a",
@@ -74,7 +74,7 @@ class AgentTaskFormalDeliveryControllerTest {
 
         ArgumentCaptor<cn.jia.agent.entity.AgentTaskFormalDeliverySubmitDTO> command =
                 ArgumentCaptor.forClass(cn.jia.agent.entity.AgentTaskFormalDeliverySubmitDTO.class);
-        verify(submission).submit(eq(TENANT), eq(CLIENT), eq(TASK), eq(ACTOR), command.capture());
+        verify(submission).submit(eq("0"), eq(CLIENT), eq(TENANT), eq(TASK), eq(ACTOR), command.capture());
         assertEquals("fd_de3a458cf563ceb3f0d65b59b4fdad01913a98b3efc690265730518a31209a3c",
                 command.getValue().getDeliveryId());
         assertEquals("lease-secret-a", command.getValue().getLeaseToken());
@@ -82,7 +82,7 @@ class AgentTaskFormalDeliveryControllerTest {
 
     @Test
     void ownerDecisionUsesTenantNotBrowserSuppliedIdentity() throws Exception {
-        when(decision.decide(eq(TENANT), eq(CLIENT), eq(TASK), eq(TENANT), any()))
+        when(decision.decide(eq("0"), eq(CLIENT), eq(TASK), eq(TENANT), any()))
                 .thenReturn(view("changes_requested", 2_000L, "add tests"));
         String body = """
                 {"expectedTaskVersion":4,"expectedDeliveryVersion":0,
@@ -94,7 +94,7 @@ class AgentTaskFormalDeliveryControllerTest {
                         .contentType("application/json").content(body).principal(jwt()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.state").value("changes_requested"));
-        verify(decision).decide(eq(TENANT), eq(CLIENT), eq(TASK), eq(TENANT), any());
+        verify(decision).decide(eq("0"), eq(CLIENT), eq(TASK), eq(TENANT), any());
     }
 
     @Test
@@ -105,7 +105,7 @@ class AgentTaskFormalDeliveryControllerTest {
         mvc.perform(get("/agent/tasks/" + TASK + "/formal-deliveries")
                         .principal(jwtClaims(TENANT, CLIENT, "different-name")))
                 .andExpect(status().isForbidden());
-        verify(read, never()).listForTaskOwner(any(), any(), any());
+        verify(read, never()).listForTaskOwner(any(), any(), any(), any());
     }
 
     private static AgentTaskFormalDeliveryViewDTO view(

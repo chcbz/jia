@@ -48,10 +48,11 @@ public class AgentTaskFormalDeliveryReadServiceImpl implements AgentTaskFormalDe
     @Override
     @Transactional(readOnly = true, rollbackFor = Exception.class)
     public List<AgentTaskFormalDeliveryViewDTO> listForTaskOwner(
-            String tenantId, String clientId, String taskId) {
-        requireScope(tenantId, clientId, taskId);
-        AgentTaskMetaEntity task = taskMetaDao.findByTaskId(tenantId, clientId, taskId);
-        requireTask(task, tenantId, clientId, taskId);
+            String tenantId, String clientId, String ownerJiacn, String taskId) {
+        requireScope(tenantId, clientId, ownerJiacn, taskId);
+        AgentTaskMetaEntity task = taskMetaDao.findByTaskIdInOwnerScope(
+                tenantId, clientId, ownerJiacn, taskId);
+        requireTask(task, tenantId, clientId, ownerJiacn, taskId);
         List<AgentTaskFormalDeliveryEntity> deliveries = deliveryDao.listTaskDeliveries(
                 tenantId, clientId, taskId, MAX_DELIVERIES);
         if (deliveries == null || deliveries.size() > MAX_DELIVERIES) {
@@ -63,8 +64,8 @@ public class AgentTaskFormalDeliveryReadServiceImpl implements AgentTaskFormalDe
             requireDelivery(delivery, tenantId, clientId, taskId, previousRevision);
             previousRevision = delivery.getRevision();
             AgentTaskWorkItemEntity workItem = workItemDao.findByTaskAndWorkItemId(
-                    tenantId, clientId, taskId, delivery.getWorkItemId());
-            requireWorkItem(workItem, tenantId, clientId, taskId, delivery);
+                    tenantId, clientId, ownerJiacn, taskId, delivery.getWorkItemId());
+            requireWorkItem(workItem, tenantId, clientId, ownerJiacn, taskId, delivery);
             List<AgentTaskFormalDeliveryItemEntity> rows = deliveryDao.listItems(
                     tenantId, clientId, delivery.getDeliveryId());
             result.add(view(delivery, rows, task.getTaskVersion(), workItem.getVersion()));
@@ -109,9 +110,9 @@ public class AgentTaskFormalDeliveryReadServiceImpl implements AgentTaskFormalDe
     }
 
     private static void requireTask(AgentTaskMetaEntity task, String tenantId, String clientId,
-            String taskId) {
+            String ownerJiacn, String taskId) {
         if (task == null || !tenantId.equals(task.getTenantId()) || !clientId.equals(task.getClientId())
-                || !taskId.equals(task.getTaskId()) || task.getTaskVersion() == null
+                || !ownerJiacn.equals(task.getOwnerJiacn()) || !taskId.equals(task.getTaskId()) || task.getTaskVersion() == null
                 || task.getTaskVersion() < 0 || task.getTaskVersion() == Long.MAX_VALUE) {
             throw notFound();
         }
@@ -155,18 +156,18 @@ public class AgentTaskFormalDeliveryReadServiceImpl implements AgentTaskFormalDe
     }
 
     private static void requireWorkItem(AgentTaskWorkItemEntity item, String tenantId,
-            String clientId, String taskId, AgentTaskFormalDeliveryEntity delivery) {
+            String clientId, String ownerJiacn, String taskId, AgentTaskFormalDeliveryEntity delivery) {
         if (item == null || !tenantId.equals(item.getTenantId()) || !clientId.equals(item.getClientId())
-                || !taskId.equals(item.getTaskId()) || !delivery.getWorkItemId().equals(item.getWorkItemId())
+                || !ownerJiacn.equals(item.getOwnerJiacn()) || !taskId.equals(item.getTaskId()) || !delivery.getWorkItemId().equals(item.getWorkItemId())
                 || item.getVersion() == null || item.getVersion() < 0
                 || item.getVersion() == Long.MAX_VALUE) {
             throw unavailable("Formal delivery work item is unavailable");
         }
     }
 
-    private static void requireScope(String tenantId, String clientId, String taskId) {
-        if (!exact(tenantId, 50) || "0".equals(tenantId) || !exact(clientId, 50)
-                || !exact(taskId, 100)) {
+    private static void requireScope(String tenantId, String clientId, String ownerJiacn, String taskId) {
+        if (!"0".equals(tenantId) || !exact(clientId, 50) || "0".equals(clientId)
+                || !exact(ownerJiacn, 50) || "0".equals(ownerJiacn) || !exact(taskId, 100)) {
             throw notFound();
         }
     }

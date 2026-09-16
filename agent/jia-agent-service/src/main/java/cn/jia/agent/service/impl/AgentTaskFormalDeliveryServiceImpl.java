@@ -95,18 +95,19 @@ public class AgentTaskFormalDeliveryServiceImpl implements AgentTaskFormalDelive
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AgentTaskFormalDeliveryViewDTO submit(
-            String tenantId, String clientId, String taskId, String actorAgentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId,
             AgentTaskFormalDeliverySubmitDTO command) {
-        requireScope(tenantId, clientId, taskId, actorAgentId);
+        requireScope(tenantId, clientId, ownerJiacn, taskId, actorAgentId);
         RequiredCommand required = requireCommand(command);
-        return mutationTransaction.executeWithLockedTaskRoot(tenantId, clientId, taskId,
-                root -> submitLocked(tenantId, clientId, taskId, actorAgentId, root, required));
+        return mutationTransaction.executeWithLockedTaskRootInOwnerScope(
+                tenantId, clientId, ownerJiacn, taskId,
+                root -> submitLocked(tenantId, clientId, ownerJiacn, taskId, actorAgentId, root, required));
     }
 
     private AgentTaskFormalDeliveryViewDTO submitLocked(
-            String tenantId, String clientId, String taskId, String actorAgentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId,
             AgentTaskMetaEntity root, RequiredCommand command) {
-        requireRootScope(root, tenantId, clientId, taskId);
+        requireRootScope(root, tenantId, clientId, ownerJiacn, taskId);
 
         // Replay comes first: a successful response lost after commit must not be rejected merely
         // because its lease was cleared and the task has already moved to reviewing/completed.
@@ -120,13 +121,13 @@ public class AgentTaskFormalDeliveryServiceImpl implements AgentTaskFormalDelive
 
         requireNewDeliveryRoot(root, actorAgentId, command);
         AgentTaskWorkItemEntity workItem = requireSingleRequiredWorkItem(
-                tenantId, clientId, taskId, command.workItemId());
+                tenantId, clientId, ownerJiacn, taskId, command.workItemId());
         AgentWorkItemLeaseDTO lease = validateLease(
-                tenantId, clientId, taskId, actorAgentId, command);
-        requireCurrentLease(workItem, tenantId, clientId, taskId, actorAgentId, command, lease);
+                tenantId, clientId, ownerJiacn, taskId, actorAgentId, command);
+        requireCurrentLease(workItem, tenantId, clientId, ownerJiacn, taskId, actorAgentId, command, lease);
 
         List<PinnedArtifact> pins = validateExactArtifacts(
-                tenantId, clientId, taskId, actorAgentId, command);
+                tenantId, clientId, ownerJiacn, taskId, actorAgentId, command);
         AgentTaskFormalDeliveryEntity latest = deliveryDao.findLatestTaskForUpdate(
                 tenantId, clientId, taskId);
         Revision revision = nextRevision(latest, tenantId, clientId, taskId);
@@ -169,7 +170,7 @@ public class AgentTaskFormalDeliveryServiceImpl implements AgentTaskFormalDelive
         workUpdate.setLeaseToken(null);
         workUpdate.setLeaseUntil(null);
         int workUpdated = workItemDao.updateActiveLeaseByVersion(
-                tenantId, clientId, taskId, command.workItemId(), actorAgentId,
+                tenantId, clientId, ownerJiacn, taskId, command.workItemId(), actorAgentId,
                 command.leaseToken(), RUNNING, lease.getLeaseUntil(), lease.getVersion(), submittedAt,
                 workUpdate);
         if (workUpdated == 0) {
@@ -177,15 +178,15 @@ public class AgentTaskFormalDeliveryServiceImpl implements AgentTaskFormalDelive
         }
         requireOne(workUpdated, "Formal delivery work-item CAS affected an unexpected row count");
 
-        int taskUpdated = taskMetaDao.updateStatusByVersion(
-                tenantId, clientId, taskId, command.expectedTaskVersion(), REVIEWING,
+        int taskUpdated = taskMetaDao.updateStatusByVersionInOwnerScope(
+                tenantId, clientId, ownerJiacn, taskId, command.expectedTaskVersion(), REVIEWING,
                 root.getStartedAt(), root.getCompletedAt(), root.getFailureReason());
         if (taskUpdated == 0) {
             throw conflict("Task state changed during formal delivery submission");
         }
         requireOne(taskUpdated, "Formal delivery task CAS affected an unexpected row count");
 
-        appendEvents(tenantId, clientId, taskId, actorAgentId, command, workItem, submittedAt);
+        appendEvents(tenantId, clientId, ownerJiacn, taskId, actorAgentId, command, workItem, submittedAt);
         List<AgentTaskFormalDeliveryItemEntity> persisted = deliveryDao.listItems(
                 tenantId, clientId, command.deliveryId());
         if (persisted == null || persisted.size() != pins.size()) {
@@ -248,9 +249,9 @@ public class AgentTaskFormalDeliveryServiceImpl implements AgentTaskFormalDelive
     }
 
     private AgentTaskWorkItemEntity requireSingleRequiredWorkItem(
-            String tenantId, String clientId, String taskId, String requestedWorkItemId) {
+            String tenantId, String clientId, String ownerJiacn, String taskId, String requestedWorkItemId) {
         List<AgentTaskWorkItemEntity> workItems = workItemDao.listByTaskForUpdate(
-                tenantId, clientId, taskId, 2);
+                tenantId, clientId, ownerJiacn, taskId, 2);
         if (workItems == null || workItems.size() != 1) {
             throw transition("Formal delivery currently supports exactly one required work item");
         }
@@ -262,14 +263,14 @@ public class AgentTaskFormalDeliveryServiceImpl implements AgentTaskFormalDelive
     }
 
     private AgentWorkItemLeaseDTO validateLease(
-            String tenantId, String clientId, String taskId, String actorAgentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId,
             RequiredCommand command) {
         AgentWorkItemLeaseCommandDTO leaseCommand = new AgentWorkItemLeaseCommandDTO();
         leaseCommand.setAgentId(actorAgentId);
         leaseCommand.setLeaseToken(command.leaseToken());
         leaseCommand.setExpectedVersion(command.expectedWorkItemVersion());
         AgentWorkItemLeaseDTO lease = leaseService.validateLeaseForResult(
-                tenantId, clientId, taskId, command.workItemId(), leaseCommand);
+                tenantId, clientId, ownerJiacn, taskId, command.workItemId(), leaseCommand);
         if (lease == null || !taskId.equals(lease.getTaskId())
                 || !command.workItemId().equals(lease.getWorkItemId())
                 || !actorAgentId.equals(lease.getAgentId())
@@ -283,10 +284,11 @@ public class AgentTaskFormalDeliveryServiceImpl implements AgentTaskFormalDelive
     }
 
     private void requireCurrentLease(AgentTaskWorkItemEntity workItem,
-            String tenantId, String clientId, String taskId, String actorAgentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId,
             RequiredCommand command, AgentWorkItemLeaseDTO lease) {
         if (workItem == null || !tenantId.equals(workItem.getTenantId())
-                || !clientId.equals(workItem.getClientId()) || !taskId.equals(workItem.getTaskId())
+                || !clientId.equals(workItem.getClientId()) || !ownerJiacn.equals(workItem.getOwnerJiacn())
+                || !taskId.equals(workItem.getTaskId())
                 || !command.workItemId().equals(workItem.getWorkItemId())
                 || !actorAgentId.equals(workItem.getAssigneeAgentId())
                 || !RUNNING.equals(workItem.getStatus())
@@ -300,16 +302,16 @@ public class AgentTaskFormalDeliveryServiceImpl implements AgentTaskFormalDelive
     }
 
     private List<PinnedArtifact> validateExactArtifacts(
-            String tenantId, String clientId, String taskId, String actorAgentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId,
             RequiredCommand command) {
         List<PinnedArtifact> pins = new ArrayList<>(command.items().size());
         boolean manifestIsSummary = false;
         for (RequiredItem requested : command.items()) {
-            AgentTaskArtifactEntity artifact = artifactDao.findVersion(tenantId, clientId, taskId,
+            AgentTaskArtifactEntity artifact = artifactDao.findVersion(tenantId, clientId, ownerJiacn, taskId,
                     requested.artifactId(), requested.artifactVersion());
             if (artifact == null) throw notFound("Formal delivery artifact is unavailable");
             if (!tenantId.equals(artifact.getTenantId()) || !clientId.equals(artifact.getClientId())
-                    || !taskId.equals(artifact.getTaskId())
+                    || !ownerJiacn.equals(artifact.getOwnerJiacn()) || !taskId.equals(artifact.getTaskId())
                     || !requested.artifactId().equals(artifact.getArtifactId())
                     || !Objects.equals(requested.artifactVersion(), artifact.getArtifactVersion())
                     || !actorAgentId.equals(artifact.getProducerAgentId())
@@ -380,9 +382,9 @@ public class AgentTaskFormalDeliveryServiceImpl implements AgentTaskFormalDelive
         }
     }
 
-    private void appendEvents(String tenantId, String clientId, String taskId, String actorAgentId,
+    private void appendEvents(String tenantId, String clientId, String ownerJiacn, String taskId, String actorAgentId,
             RequiredCommand command, AgentTaskWorkItemEntity workItem, long occurredAt) {
-        eventWriter.append(AgentTaskMutationEventSupport.command(tenantId, clientId, taskId,
+        eventWriter.append(AgentTaskMutationEventSupport.command(tenantId, clientId, ownerJiacn, taskId,
                 TaskEventType.FORMAL_DELIVERY_SUBMITTED, TaskEventType.ActorType.AGENT, actorAgentId,
                 TaskEventType.Aggregate.FORMAL_DELIVERY, command.deliveryId(),
                 TaskEventPayload.builder()
@@ -399,7 +401,7 @@ public class AgentTaskFormalDeliveryServiceImpl implements AgentTaskFormalDelive
                 occurredAt, 1L));
 
         long workResultVersion = command.expectedWorkItemVersion() + 1;
-        eventWriter.append(AgentTaskMutationEventSupport.command(tenantId, clientId, taskId,
+        eventWriter.append(AgentTaskMutationEventSupport.command(tenantId, clientId, ownerJiacn, taskId,
                 TaskEventType.WORK_ITEM_SUBMITTED, TaskEventType.ActorType.AGENT, actorAgentId,
                 TaskEventType.Aggregate.WORK_ITEM, command.workItemId(),
                 TaskEventPayload.builder()
@@ -412,7 +414,7 @@ public class AgentTaskFormalDeliveryServiceImpl implements AgentTaskFormalDelive
                 occurredAt, workResultVersion));
 
         long taskResultVersion = command.expectedTaskVersion() + 1;
-        eventWriter.append(AgentTaskMutationEventSupport.command(tenantId, clientId, taskId,
+        eventWriter.append(AgentTaskMutationEventSupport.command(tenantId, clientId, ownerJiacn, taskId,
                 TaskEventType.TASK_REVIEWING, TaskEventType.ActorType.AGENT, actorAgentId,
                 TaskEventType.Aggregate.TASK, taskId,
                 TaskEventPayload.builder()
@@ -467,32 +469,33 @@ public class AgentTaskFormalDeliveryServiceImpl implements AgentTaskFormalDelive
     }
 
     private AgentTaskWorkItemDTO copyWorkItem(AgentTaskWorkItemEntity current) {
-        return new AgentTaskWorkItemDTO()
-                .setWorkItemId(current.getWorkItemId())
-                .setTaskId(current.getTaskId())
-                .setTitle(current.getTitle())
-                .setDescription(current.getDescription())
-                .setWorkType(current.getWorkType())
-                .setRequiredAbilities(current.getRequiredAbilities())
-                .setAssigneeAgentId(current.getAssigneeAgentId())
-                .setStatus(current.getStatus())
-                .setPriority(current.getPriority())
-                .setRequiredItem(current.getRequiredItem())
-                .setDependencyJson(current.getDependencyJson())
-                .setLeaseToken(current.getLeaseToken())
-                .setLeaseUntil(current.getLeaseUntil())
-                .setAttemptCount(current.getAttemptCount())
-                .setMaxAttempts(current.getMaxAttempts())
-                .setResultArtifactId(current.getResultArtifactId())
-                .setSubmittedAt(current.getSubmittedAt())
-                .setCompletedAt(current.getCompletedAt())
-                .setVersion(current.getVersion());
+        AgentTaskWorkItemDTO copy = new AgentTaskWorkItemDTO();
+        copy.setWorkItemId(current.getWorkItemId());
+        copy.setTaskId(current.getTaskId());
+        copy.setTitle(current.getTitle());
+        copy.setDescription(current.getDescription());
+        copy.setWorkType(current.getWorkType());
+        copy.setRequiredAbilities(current.getRequiredAbilities());
+        copy.setAssigneeAgentId(current.getAssigneeAgentId());
+        copy.setStatus(current.getStatus());
+        copy.setPriority(current.getPriority());
+        copy.setRequiredItem(current.getRequiredItem());
+        copy.setDependencyJson(current.getDependencyJson());
+        copy.setLeaseToken(current.getLeaseToken());
+        copy.setLeaseUntil(current.getLeaseUntil());
+        copy.setAttemptCount(current.getAttemptCount());
+        copy.setMaxAttempts(current.getMaxAttempts());
+        copy.setResultArtifactId(current.getResultArtifactId());
+        copy.setSubmittedAt(current.getSubmittedAt());
+        copy.setCompletedAt(current.getCompletedAt());
+        copy.setVersion(current.getVersion());
+        return copy;
     }
 
     private void requireRootScope(AgentTaskMetaEntity root,
-            String tenantId, String clientId, String taskId) {
+            String tenantId, String clientId, String ownerJiacn, String taskId) {
         if (root == null || !tenantId.equals(root.getTenantId()) || !clientId.equals(root.getClientId())
-                || !taskId.equals(root.getTaskId()) || root.getTaskVersion() == null
+                || !ownerJiacn.equals(root.getOwnerJiacn()) || !taskId.equals(root.getTaskId()) || root.getTaskVersion() == null
                 || root.getTaskVersion() < 0 || root.getTaskVersion() == Long.MAX_VALUE) {
             throw invalidPersisted("Formal delivery task root is invalid");
         }
@@ -527,12 +530,17 @@ public class AgentTaskFormalDeliveryServiceImpl implements AgentTaskFormalDelive
         return value;
     }
 
-    private static void requireScope(String tenantId, String clientId, String taskId, String actorAgentId) {
+    private static void requireScope(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId) {
         requireId(tenantId, "tenantId");
         requireId(clientId, "clientId");
+        requireId(ownerJiacn, "ownerJiacn");
         requireId(taskId, "taskId");
         requireId(actorAgentId, "actorAgentId");
-        if (tenantId.length() > 50 || clientId.length() > 50) throw invalidStatic("scope is invalid");
+        if (!"0".equals(tenantId) || "0".equals(clientId) || "0".equals(ownerJiacn)
+                || tenantId.length() > 50 || clientId.length() > 50 || ownerJiacn.length() > 50) {
+            throw invalidStatic("strict tenant-zero client, owner and task scope is required");
+        }
     }
 
     private static void requireId(String value, String name) {

@@ -78,13 +78,13 @@ public class AgentTaskFormalDeliveryDecisionServiceImpl implements AgentTaskForm
             String ownerJiacn, AgentTaskFormalDeliveryDecisionDTO command) {
         requireScope(tenantId, clientId, taskId, ownerJiacn);
         Decision decision = normalize(command);
-        return mutationTransaction.executeWithLockedTaskRoot(tenantId, clientId, taskId,
+        return mutationTransaction.executeWithLockedTaskRootInOwnerScope(tenantId, clientId, ownerJiacn, taskId,
                 root -> decideLocked(tenantId, clientId, taskId, ownerJiacn, root, decision));
     }
 
     private AgentTaskFormalDeliveryViewDTO decideLocked(String tenantId, String clientId, String taskId,
             String ownerJiacn, AgentTaskMetaEntity root, Decision decision) {
-        requireRootScope(root, tenantId, clientId, taskId);
+        requireRootScope(root, tenantId, clientId, ownerJiacn, taskId);
         AgentTaskFormalDeliveryEntity delivery = deliveryDao.findForUpdate(
                 tenantId, clientId, decision.deliveryId());
         if (delivery == null) throw notFound("Formal delivery is unavailable");
@@ -96,8 +96,8 @@ public class AgentTaskFormalDeliveryDecisionServiceImpl implements AgentTaskForm
         }
         requirePendingRootAndDelivery(root, delivery, decision);
         AgentTaskWorkItemEntity workItem = workItemDao.findByTaskAndWorkItemId(
-                tenantId, clientId, taskId, delivery.getWorkItemId());
-        requireSubmittedWorkItem(workItem, tenantId, clientId, taskId, delivery);
+                tenantId, clientId, ownerJiacn, taskId, delivery.getWorkItemId());
+        requireSubmittedWorkItem(workItem, tenantId, clientId, ownerJiacn, taskId, delivery);
 
         long decidedAt = now();
         int reviewed = deliveryDao.reviewByVersion(tenantId, clientId, delivery.getDeliveryId(),
@@ -110,7 +110,7 @@ public class AgentTaskFormalDeliveryDecisionServiceImpl implements AgentTaskForm
         if (decision.state() == AgentTaskFormalDeliveryState.ACCEPTED) {
             workUpdate.setStatus(COMPLETED);
             workUpdate.setCompletedAt(decidedAt);
-            updateTask(tenantId, clientId, taskId, root, COMPLETED, root.getStartedAt(), decidedAt);
+            updateTask(tenantId, clientId, ownerJiacn, taskId, root, COMPLETED, root.getStartedAt(), decidedAt);
         } else {
             workUpdate.setStatus(READY);
             workUpdate.setResultArtifactId(null);
@@ -118,28 +118,28 @@ public class AgentTaskFormalDeliveryDecisionServiceImpl implements AgentTaskForm
             workUpdate.setCompletedAt(null);
             workUpdate.setLeaseToken(null);
             workUpdate.setLeaseUntil(null);
-            updateTask(tenantId, clientId, taskId, root, RUNNING, root.getStartedAt(), null);
+            updateTask(tenantId, clientId, ownerJiacn, taskId, root, RUNNING, root.getStartedAt(), null);
         }
         int workUpdated = workItemDao.updateByVersion(
-                tenantId, clientId, workItem.getWorkItemId(), workItem.getVersion(), workUpdate);
+                tenantId, clientId, ownerJiacn, workItem.getWorkItemId(), workItem.getVersion(), workUpdate);
         if (workUpdated == 0) throw conflict("Work item changed during formal delivery decision");
         requireOne(workUpdated, "Formal delivery work-item CAS affected an unexpected row count");
 
         AgentTaskFormalDeliveryEntity result = copyDecision(delivery, decision, ownerJiacn, decidedAt);
-        appendEvents(tenantId, clientId, taskId, decision, workItem, root, decidedAt);
+        appendEvents(tenantId, clientId, ownerJiacn, taskId, decision, workItem, root, decidedAt);
         return view(result, deliveryDao.listItems(tenantId, clientId, delivery.getDeliveryId()),
                 root.getTaskVersion() + 1, workItem.getVersion() + 1, false);
     }
 
-    private void updateTask(String tenantId, String clientId, String taskId, AgentTaskMetaEntity root,
+    private void updateTask(String tenantId, String clientId, String ownerJiacn, String taskId, AgentTaskMetaEntity root,
             String target, Long startedAt, Long completedAt) {
-        int updated = taskMetaDao.updateStatusByVersion(tenantId, clientId, taskId,
+        int updated = taskMetaDao.updateStatusByVersionInOwnerScope(tenantId, clientId, ownerJiacn, taskId,
                 root.getTaskVersion(), target, startedAt, completedAt, null);
         if (updated == 0) throw conflict("Task changed during formal delivery decision");
         requireOne(updated, "Formal delivery task CAS affected an unexpected row count");
     }
 
-    private void appendEvents(String tenantId, String clientId, String taskId, Decision decision,
+    private void appendEvents(String tenantId, String clientId, String ownerJiacn, String taskId, Decision decision,
             AgentTaskWorkItemEntity workItem, AgentTaskMetaEntity root, long occurredAt) {
         String formalEvent = decision.state() == AgentTaskFormalDeliveryState.ACCEPTED
                 ? TaskEventType.FORMAL_DELIVERY_ACCEPTED
@@ -154,7 +154,7 @@ public class AgentTaskFormalDeliveryDecisionServiceImpl implements AgentTaskForm
         if (decision.state() == AgentTaskFormalDeliveryState.CHANGES_REQUESTED) {
             formal.put(TaskEventPayload.Key.REASON_CODE, "owner_changes_requested");
         }
-        eventWriter.append(AgentTaskMutationEventSupport.command(tenantId, clientId, taskId,
+        eventWriter.append(AgentTaskMutationEventSupport.command(tenantId, clientId, ownerJiacn, taskId,
                 formalEvent, TaskEventType.ActorType.ROLE, OWNER_ROLE,
                 TaskEventType.Aggregate.FORMAL_DELIVERY, decision.deliveryId(), formal, occurredAt,
                 decision.expectedDeliveryVersion() + 1));
@@ -162,7 +162,7 @@ public class AgentTaskFormalDeliveryDecisionServiceImpl implements AgentTaskForm
         long workResult = workItem.getVersion() + 1;
         String workTarget = decision.state() == AgentTaskFormalDeliveryState.ACCEPTED
                 ? COMPLETED : READY;
-        eventWriter.append(AgentTaskMutationEventSupport.command(tenantId, clientId, taskId,
+        eventWriter.append(AgentTaskMutationEventSupport.command(tenantId, clientId, ownerJiacn, taskId,
                 decision.state() == AgentTaskFormalDeliveryState.ACCEPTED
                         ? TaskEventType.WORK_ITEM_COMPLETED : TaskEventType.WORK_ITEM_READY,
                 TaskEventType.ActorType.SYSTEM, null, TaskEventType.Aggregate.WORK_ITEM,
@@ -176,7 +176,7 @@ public class AgentTaskFormalDeliveryDecisionServiceImpl implements AgentTaskForm
         long taskResult = root.getTaskVersion() + 1;
         String taskTarget = decision.state() == AgentTaskFormalDeliveryState.ACCEPTED
                 ? COMPLETED : RUNNING;
-        eventWriter.append(AgentTaskMutationEventSupport.command(tenantId, clientId, taskId,
+        eventWriter.append(AgentTaskMutationEventSupport.command(tenantId, clientId, ownerJiacn, taskId,
                 decision.state() == AgentTaskFormalDeliveryState.ACCEPTED
                         ? TaskEventType.TASK_COMPLETED : TaskEventType.TASK_STARTED,
                 TaskEventType.ActorType.SYSTEM, null, TaskEventType.Aggregate.TASK, taskId,
@@ -207,9 +207,9 @@ public class AgentTaskFormalDeliveryDecisionServiceImpl implements AgentTaskForm
     }
 
     private void requireSubmittedWorkItem(AgentTaskWorkItemEntity item, String tenantId,
-            String clientId, String taskId, AgentTaskFormalDeliveryEntity delivery) {
+            String clientId, String ownerJiacn, String taskId, AgentTaskFormalDeliveryEntity delivery) {
         if (item == null || !tenantId.equals(item.getTenantId()) || !clientId.equals(item.getClientId())
-                || !taskId.equals(item.getTaskId()) || !delivery.getWorkItemId().equals(item.getWorkItemId())
+                || !ownerJiacn.equals(item.getOwnerJiacn()) || !taskId.equals(item.getTaskId()) || !delivery.getWorkItemId().equals(item.getWorkItemId())
                 || !SUBMITTED.equals(item.getStatus()) || item.getVersion() == null
                 || item.getVersion() < 0 || item.getResultArtifactId() == null
                 || !delivery.getManifestArtifactId().equals(item.getResultArtifactId())
@@ -308,9 +308,10 @@ public class AgentTaskFormalDeliveryDecisionServiceImpl implements AgentTaskForm
         return result;
     }
 
-    private void requireRootScope(AgentTaskMetaEntity root, String tenantId, String clientId, String taskId) {
+    private void requireRootScope(AgentTaskMetaEntity root, String tenantId, String clientId,
+            String ownerJiacn, String taskId) {
         if (root == null || !tenantId.equals(root.getTenantId()) || !clientId.equals(root.getClientId())
-                || !taskId.equals(root.getTaskId()) || root.getTaskVersion() == null
+                || !ownerJiacn.equals(root.getOwnerJiacn()) || !taskId.equals(root.getTaskId()) || root.getTaskVersion() == null
                 || root.getTaskVersion() < 0 || root.getTaskVersion() == Long.MAX_VALUE) {
             throw invalidPersisted("Formal delivery task root is invalid");
         }
@@ -329,7 +330,9 @@ public class AgentTaskFormalDeliveryDecisionServiceImpl implements AgentTaskForm
     private static void requireScope(String tenant, String client, String task, String owner) {
         requireId(tenant, "tenantId", 50); requireId(client, "clientId", 50); requireId(task, "taskId", 100);
         requireId(owner, "ownerJiacn", 50);
-        if (!tenant.equals(owner)) throw forbidden("Task owner is outside the requested tenant scope");
+        if (!"0".equals(tenant) || "0".equals(client) || "0".equals(owner)) {
+            throw forbidden("Strict tenant-zero client and owner scope is required");
+        }
     }
     private static void requireId(String value, String name, int max) { if (value == null || value.isBlank() || value.length() > max || !value.equals(value.strip()) || value.codePoints().anyMatch(Character::isISOControl)) throw invalid(name + " is invalid"); }
     private static void requireText(String value, String name, int max) { if (value == null || value.isBlank() || value.length() > max || !value.equals(value.strip()) || value.codePoints().anyMatch(Character::isISOControl)) throw invalid(name + " is invalid"); }

@@ -5,6 +5,7 @@ import cn.jia.agent.dao.AgentRuntimeDao;
 import cn.jia.agent.entity.*;
 import cn.jia.agent.hosting.HostingRentHttp;
 import cn.jia.agent.service.AgentCommandTransportWriter;
+import cn.jia.agent.service.impl.AgentCommandCanonicalCodec;
 import cn.jia.agent.service.AgentManagedSessionLookup;
 import cn.jia.economy.common.*;
 import cn.jia.economy.config.EconomyPreviewGate;
