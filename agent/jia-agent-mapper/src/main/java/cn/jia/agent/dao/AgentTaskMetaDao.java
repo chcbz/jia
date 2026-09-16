@@ -31,6 +31,10 @@ public interface AgentTaskMetaDao extends IBaseDao<AgentTaskMetaEntity> {
             String tenantId, String clientId, String reservedTaskId,
             String finalTaskId, long updateTime);
 
+    int rekeyReservedTaskRootInOwnerScope(
+            String tenantId, String clientId, String ownerJiacn, String reservedTaskId,
+            String finalTaskId, long updateTime);
+
     int deleteReservedTaskRoot(
             String tenantId, String clientId, String reservedTaskId);
 

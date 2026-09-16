@@ -110,6 +110,14 @@ public class AgentTaskEventDaoImpl
         }
         requireExactId(event.getTenantId(), "tenantId", 50);
         requireExactId(event.getClientId(), "clientId", 50);
+        if ("0".equals(event.getTenantId())) {
+            requireExactId(event.getOwnerJiacn(), "ownerJiacn", 50);
+            if ("0".equals(event.getOwnerJiacn())) {
+                throw new IllegalArgumentException("ownerJiacn must be a real task owner");
+            }
+        } else if (event.getOwnerJiacn() != null) {
+            requireExactId(event.getOwnerJiacn(), "ownerJiacn", 50);
+        }
         requireExactId(event.getTaskId(), "taskId", 100);
         requireExactId(event.getEventId(), "eventId", 100);
         if (event.getEventVersion() == null || event.getEventVersion() <= 0) {

@@ -1007,8 +1007,9 @@ public class AgentServiceImpl implements AgentService {
                         && request.getRequiredSkillRequirements() == null,
                 "funded task fields require the funded bounty endpoint");
 
-        String tenantId = resolveCurrentJiacn();
+        String tenantId = SINGLE_TENANT_ID;
         String clientId = resolveCurrentClientId();
+        String ownerJiacn = resolveCurrentJiacn();
         String reservedTaskId = UUID.randomUUID().toString();
         AgentTaskMetaEntity reservedMeta = new AgentTaskMetaEntity();
         reservedMeta.setTaskId(reservedTaskId);
@@ -1024,12 +1025,12 @@ public class AgentServiceImpl implements AgentService {
         reservedMeta.setCurrentEventVersion(0L);
         applyCurrentTaskScope(reservedMeta);
 
-        return mutationTransaction.executeAfterTaskRootReservation(
-                tenantId, clientId, reservedTaskId,
+        return mutationTransaction.executeAfterTaskRootReservationInOwnerScope(
+                tenantId, clientId, ownerJiacn, reservedTaskId,
                 () -> agentTaskMetaDao.insert(reservedMeta),
                 (reservedRoot, rootCreated) -> {
-                    requireScopedTaskProjection(
-                            reservedRoot, tenantId, clientId, reservedTaskId);
+                    requireOwnedTaskProjection(
+                            reservedRoot, tenantId, clientId, ownerJiacn, reservedTaskId);
                     if (!rootCreated) {
                         return taskCreateResult(reservedRoot, request);
                     }
@@ -1049,16 +1050,16 @@ public class AgentServiceImpl implements AgentService {
 
                     AgentTaskMetaEntity taskRoot = reservedRoot;
                     if (!reservedTaskId.equals(finalTaskId)) {
-                        AgentTaskMetaEntity existing = agentTaskMetaDao.findByTaskIdForUpdate(
-                                tenantId, clientId, finalTaskId);
+                        AgentTaskMetaEntity existing = agentTaskMetaDao.findByTaskIdForUpdateInOwnerScope(
+                                tenantId, clientId, ownerJiacn, finalTaskId);
                         if (existing != null) {
-                            requireScopedTaskProjection(existing, tenantId, clientId, finalTaskId);
+                            requireOwnedTaskProjection(existing, tenantId, clientId, ownerJiacn, finalTaskId);
                             throw new IllegalStateException(
                                     "Task plan ID collides with an existing scoped task root");
                         }
                         long rekeyedAt = System.currentTimeMillis();
-                        require(agentTaskMetaDao.rekeyReservedTaskRoot(
-                                        tenantId, clientId, reservedTaskId,
+                        require(agentTaskMetaDao.rekeyReservedTaskRootInOwnerScope(
+                                        tenantId, clientId, ownerJiacn, reservedTaskId,
                                         finalTaskId, rekeyedAt) == 1,
                                 "Reserved task root planId backfill failed");
                         reservedRoot.setTaskId(finalTaskId);
@@ -1695,7 +1696,7 @@ public class AgentServiceImpl implements AgentService {
                 .put(TaskEventPayload.Key.RESULT_VERSION, taskVersion)
                 .put(TaskEventPayload.Key.CREATED_AT, occurredAt);
         taskEventWriter.append(AgentTaskMutationEventSupport.command(
-                tenantId, clientId, task.getTaskId(), TaskEventType.TASK_CREATED,
+                tenantId, clientId, task.getOwnerJiacn(), task.getTaskId(), TaskEventType.TASK_CREATED,
                 TaskEventType.ActorType.SYSTEM, null, TaskEventType.Aggregate.TASK,
                 task.getTaskId(), payload, occurredAt, taskVersion));
     }
@@ -1712,7 +1713,7 @@ public class AgentServiceImpl implements AgentService {
                 .put(TaskEventPayload.Key.RESULT_VERSION, taskVersion)
                 .put(TaskEventPayload.Key.UPDATED_AT, occurredAt);
         taskEventWriter.append(AgentTaskMutationEventSupport.command(
-                tenantId, clientId, task.getTaskId(), TaskEventType.TASK_ARCHIVED,
+                tenantId, clientId, task.getOwnerJiacn(), task.getTaskId(), TaskEventType.TASK_ARCHIVED,
                 TaskEventType.ActorType.SYSTEM, null, TaskEventType.Aggregate.TASK,
                 task.getTaskId(), payload, occurredAt, taskVersion));
     }
@@ -1728,7 +1729,7 @@ public class AgentServiceImpl implements AgentService {
                 .put(TaskEventPayload.Key.NOTE_TYPE, note.getNoteType())
                 .putContentDigest(digest);
         var command = AgentTaskMutationEventSupport.command(
-                tenantId, clientId, task.getTaskId(), TaskEventType.PROGRESS_REPORTED,
+                tenantId, clientId, task.getOwnerJiacn(), task.getTaskId(), TaskEventType.PROGRESS_REPORTED,
                 TaskEventType.ActorType.SYSTEM, null, TaskEventType.Aggregate.TASK,
                 task.getTaskId(), payload, occurredAt, taskVersion);
         String noteSeed = tenantId + '\u0000' + clientId + '\u0000' + task.getTaskId()
@@ -1754,28 +1755,47 @@ public class AgentServiceImpl implements AgentService {
     }
 
     private void applyCurrentTaskScope(AgentTaskMetaEntity meta) {
-        String tenantId = resolveCurrentJiacn();
         String clientId = resolveCurrentClientId();
+        String ownerJiacn = resolveCurrentJiacn();
         if (StringUtil.isBlank(meta.getTenantId())) {
-            meta.setTenantId(tenantId);
+            meta.setTenantId(SINGLE_TENANT_ID);
         } else {
-            require(tenantId.equals(meta.getTenantId()), "task tenantId does not match current scope");
+            require(SINGLE_TENANT_ID.equals(meta.getTenantId()),
+                    "task tenantId must be the single-tenant key");
         }
         if (StringUtil.isBlank(meta.getClientId())) {
             meta.setClientId(clientId);
         } else {
             require(clientId.equals(meta.getClientId()), "task clientId does not match current scope");
         }
+        if (StringUtil.isBlank(meta.getOwnerJiacn())) {
+            meta.setOwnerJiacn(ownerJiacn);
+        } else {
+            require(ownerJiacn.equals(meta.getOwnerJiacn()),
+                    "task owner does not match authenticated scope");
+        }
     }
 
     private AgentTaskMetaEntity requireTask(String taskId) {
-        String tenantId = resolveCurrentJiacn();
         String clientId = resolveCurrentClientId();
+        String ownerJiacn = resolveCurrentJiacn();
         AgentTaskMetaEntity task = Optional.ofNullable(
-                agentTaskMetaDao.findByTaskId(tenantId, clientId, taskId)).orElseThrow(() ->
+                agentTaskMetaDao.findByTaskIdInOwnerScope(
+                        SINGLE_TENANT_ID, clientId, ownerJiacn, taskId)).orElseThrow(() ->
                 new AgentBizException(AgentErrorConstants.TASK_NOT_FOUND, "Task not found"));
-        requireScopedTaskProjection(task, tenantId, clientId, taskId);
+        requireOwnedTaskProjection(task, SINGLE_TENANT_ID, clientId, ownerJiacn, taskId);
         return task;
+    }
+
+    private void requireOwnedTaskProjection(
+            AgentTaskMetaEntity task, String tenantId, String clientId,
+            String ownerJiacn, String taskId) {
+        require(task != null
+                        && Objects.equals(tenantId, task.getTenantId())
+                        && Objects.equals(clientId, task.getClientId())
+                        && Objects.equals(ownerJiacn, task.getOwnerJiacn())
+                        && Objects.equals(taskId, task.getTaskId()),
+                "Persisted task does not match the authenticated owner scope");
     }
 
     private void requireScopedLegacyAgentTaskProjection(
