@@ -92,16 +92,16 @@ public class AgentSchemaInitializer implements InitializingBean {
                     %s,
                     create_time         BIGINT DEFAULT NULL COMMENT 'Create time',
                     update_time         BIGINT DEFAULT NULL COMMENT 'Update time',
-                    tenant_id           VARCHAR(50) DEFAULT '0' COMMENT 'Legacy tenant, when populated must equal owner_jiacn',
+                    tenant_id           VARCHAR(50) NOT NULL DEFAULT '0' COMMENT 'Single tenant scope; always 0',
                     client_id           VARCHAR(50) DEFAULT NULL COMMENT 'Owner-scope client ID',
                     PRIMARY KEY (id),
-                    UNIQUE KEY uk_agent_binding_active_persona (client_id, owner_jiacn, active_persona_code),
+                    UNIQUE KEY uk_agent_binding_active_persona (tenant_id, client_id, active_persona_code),
                     UNIQUE KEY uk_agent_binding_active_agent (active_agent_id),
                     KEY idx_agent_binding_user (client_id, jiacn, status),
                     KEY idx_agent_binding_agent (client_id, agent_id, status),
                     KEY idx_agent_binding_persona (client_id, persona_code, status),
                     CONSTRAINT chk_agent_binding_status CHECK (status IN (0, 1, 2, 3)),
-                    CONSTRAINT chk_agent_binding_tenant_owner CHECK (tenant_id = '0' OR tenant_id = owner_jiacn)
+                    CONSTRAINT chk_agent_binding_tenant_owner CHECK (tenant_id = '0')
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Durable Agent persona binding history'
                 """.formatted(ownerJiacnColumn, lifecycleColumn, activePersonaColumn, activeAgentColumn));
         addRequiredColumnIfMissing("agent_persona_binding", "owner_jiacn", ownerJiacnColumn);
@@ -109,16 +109,16 @@ public class AgentSchemaInitializer implements InitializingBean {
         addRequiredColumnIfMissing("agent_persona_binding", "active_persona_code", activePersonaColumn);
         addRequiredColumnIfMissing("agent_persona_binding", "active_agent_id", activeAgentColumn);
         ensureRequiredIndex("agent_persona_binding", "uk_agent_binding_active_persona", true,
-                List.of("client_id", "owner_jiacn", "active_persona_code"),
+                List.of("tenant_id", "client_id", "active_persona_code"),
                 "CREATE UNIQUE INDEX uk_agent_binding_active_persona "
-                        + "ON agent_persona_binding (client_id, owner_jiacn, active_persona_code)");
+                        + "ON agent_persona_binding (tenant_id, client_id, active_persona_code)");
         ensureRequiredIndex("agent_persona_binding", "uk_agent_binding_active_agent", true,
                 List.of("active_agent_id"),
                 "CREATE UNIQUE INDEX uk_agent_binding_active_agent ON agent_persona_binding (active_agent_id)");
         ensureRequiredCheckConstraint("agent_persona_binding", "chk_agent_binding_status",
                 "status IN (0, 1, 2, 3)");
         ensureRequiredCheckConstraint("agent_persona_binding", "chk_agent_binding_tenant_owner",
-                "tenant_id = '0' OR tenant_id = owner_jiacn");
+                "tenant_id = '0'");
     }
 
     private void ensureHostedProfileTable() {
@@ -443,11 +443,11 @@ public class AgentSchemaInitializer implements InitializingBean {
                         """),
                 java.util.Map.entry("agent_identity_registry.chk_identity_registry_scope", """
                         (canonical_type = 'SYSTEM'
-                            AND client_id IS NULL AND owner_jiacn IS NULL AND tenant_id IS NULL)
+                            AND client_id IS NULL AND owner_jiacn IS NULL AND tenant_id = '0')
                         OR (canonical_type <> 'SYSTEM'
                             AND client_id IS NOT NULL AND TRIM(client_id) <> ''
                             AND owner_jiacn IS NOT NULL AND TRIM(owner_jiacn) <> ''
-                            AND tenant_id = TRIM(owner_jiacn))
+                            AND tenant_id = '0')
                         """),
                 java.util.Map.entry("agent_identity_registry.chk_identity_registry_retired", """
                         (lifecycle_status = 'RETIRED' AND retired_at IS NOT NULL)
@@ -458,7 +458,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                 java.util.Map.entry("agent_identity_alias.chk_identity_alias_status",
                         "alias_status IN ('ACTIVE', 'REVOKED')"),
                 java.util.Map.entry("agent_identity_alias.chk_identity_alias_scope",
-                        "tenant_id = TRIM(owner_jiacn)"),
+                        "tenant_id = '0'"),
                 java.util.Map.entry("agent_identity_alias.chk_identity_alias_no_blank_scope",
                         "TRIM(client_id) <> '' AND TRIM(owner_jiacn) <> ''"),
                 java.util.Map.entry("agent_identity_alias.chk_identity_alias_window", """
@@ -720,7 +720,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                     lifecycle_status        VARCHAR(20) NOT NULL DEFAULT 'PROVISIONED' COMMENT 'PROVISIONED/ACTIVE/SUSPENDED/RETIRED | RETIRED is terminal and cannot be reverted',
                     client_id               VARCHAR(50) DEFAULT NULL COMMENT 'Immutable owner-scope client after insert | NULL only for system identity',
                     owner_jiacn             VARCHAR(50) DEFAULT NULL COMMENT 'Immutable owner-scope jiacn after insert | NULL only for system identity',
-                    tenant_id               VARCHAR(50) DEFAULT '0' COMMENT 'Must equal TRIM(owner_jiacn) | NULL only for system | immutable after insert',
+                    tenant_id               VARCHAR(50) DEFAULT '0' COMMENT 'Single tenant scope; 0 for every identity including system rows',
                     binding_id              BIGINT DEFAULT NULL COMMENT 'Audited source binding ID | immutable after insert | not an ownership substitute',
                     provisioned_at          BIGINT DEFAULT NULL COMMENT 'Provisioned time',
                     activated_at            BIGINT DEFAULT NULL COMMENT 'First activation time',
@@ -752,11 +752,11 @@ public class AgentSchemaInitializer implements InitializingBean {
                     ),
                     CONSTRAINT chk_identity_registry_scope CHECK (
                         (canonical_type = 'SYSTEM'
-                            AND client_id IS NULL AND owner_jiacn IS NULL AND tenant_id IS NULL)
+                            AND client_id IS NULL AND owner_jiacn IS NULL AND tenant_id = '0')
                         OR (canonical_type <> 'SYSTEM'
                             AND client_id IS NOT NULL AND TRIM(client_id) <> ''
                             AND owner_jiacn IS NOT NULL AND TRIM(owner_jiacn) <> ''
-                            AND tenant_id = TRIM(owner_jiacn))
+                            AND tenant_id = '0')
                     ),
                     CONSTRAINT chk_identity_registry_retired CHECK (
                         (lifecycle_status = 'RETIRED' AND retired_at IS NOT NULL)
@@ -777,7 +777,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                     %s,
                     client_id               VARCHAR(50) NOT NULL COMMENT 'Immutable owner-scope client after insert',
                     owner_jiacn             VARCHAR(50) NOT NULL COMMENT 'Immutable owner-scope jiacn after insert',
-                    tenant_id               VARCHAR(50) NOT NULL COMMENT 'Must equal TRIM(owner_jiacn) | immutable after insert',
+                    tenant_id               VARCHAR(50) NOT NULL COMMENT 'Single tenant scope; always 0 | immutable after insert',
                     audit_reason            VARCHAR(1000) NOT NULL COMMENT 'Auditable alias evidence/reason',
                     create_time             BIGINT DEFAULT NULL COMMENT 'Create time',
                     update_time             BIGINT DEFAULT NULL COMMENT 'Update time',
@@ -788,7 +788,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                     KEY idx_identity_alias_canonical (canonical_agent_id, alias_status),
                     CONSTRAINT chk_identity_alias_type CHECK (alias_type = 'LEGACY_AGENT_ID'),
                     CONSTRAINT chk_identity_alias_status CHECK (alias_status IN ('ACTIVE', 'REVOKED')),
-                    CONSTRAINT chk_identity_alias_scope CHECK (tenant_id = TRIM(owner_jiacn)),
+                    CONSTRAINT chk_identity_alias_scope CHECK (tenant_id = '0'),
                     CONSTRAINT chk_identity_alias_no_blank_scope CHECK (
                         TRIM(client_id) <> '' AND TRIM(owner_jiacn) <> ''
                     ),
