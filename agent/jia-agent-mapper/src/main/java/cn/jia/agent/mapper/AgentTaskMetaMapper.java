@@ -364,18 +364,21 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
             LEFT JOIN task_plan plan
               ON task.task_id REGEXP '^[0-9]+$'
              AND plan.id = CAST(task.task_id AS UNSIGNED)
-             AND plan.jiacn = #{tenantId}
+             AND plan.jiacn = #{ownerJiacn}
              AND plan.client_id = #{clientId}
-             AND CAST(plan.jiacn AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
-             AND OCTET_LENGTH(plan.jiacn) = OCTET_LENGTH(#{tenantId})
+             AND CAST(plan.jiacn AS BINARY(200)) = CAST(#{ownerJiacn} AS BINARY(200))
+             AND OCTET_LENGTH(plan.jiacn) = OCTET_LENGTH(#{ownerJiacn})
              AND CAST(plan.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
              AND OCTET_LENGTH(plan.client_id) = OCTET_LENGTH(#{clientId})
             WHERE task.tenant_id = #{tenantId}
               AND task.client_id = #{clientId}
+              AND task.owner_jiacn = #{ownerJiacn}
               AND CAST(task.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
               AND OCTET_LENGTH(task.tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(task.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+              AND CAST(task.owner_jiacn AS BINARY(200)) = CAST(#{ownerJiacn} AS BINARY(200))
               AND OCTET_LENGTH(task.client_id) = OCTET_LENGTH(#{clientId})
+              AND OCTET_LENGTH(task.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
             <if test="status != null and status.trim() != ''">
               AND task.reward_status = #{status}
             </if>
@@ -394,15 +397,27 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
                           FROM agent_task_member member
                           LEFT JOIN agent_runtime runtime
                             ON runtime.agent_id = member.agent_id
+                           AND runtime.tenant_id = #{tenantId}
+                           AND runtime.client_id = #{clientId}
+                           AND runtime.owner_jiacn = #{ownerJiacn}
+                           AND CAST(runtime.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+                           AND OCTET_LENGTH(runtime.tenant_id) = OCTET_LENGTH(#{tenantId})
+                           AND CAST(runtime.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+                           AND OCTET_LENGTH(runtime.client_id) = OCTET_LENGTH(#{clientId})
+                           AND CAST(runtime.owner_jiacn AS BINARY(200)) = CAST(#{ownerJiacn} AS BINARY(200))
+                           AND OCTET_LENGTH(runtime.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
                            AND CAST(runtime.agent_id AS BINARY(400)) = CAST(member.agent_id AS BINARY(400))
                            AND OCTET_LENGTH(runtime.agent_id) = OCTET_LENGTH(member.agent_id)
                           WHERE member.tenant_id = #{tenantId}
                             AND member.client_id = #{clientId}
+                            AND member.owner_jiacn = #{ownerJiacn}
                             AND member.task_id = task.task_id
                             AND CAST(member.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
                             AND OCTET_LENGTH(member.tenant_id) = OCTET_LENGTH(#{tenantId})
                             AND CAST(member.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+                            AND CAST(member.owner_jiacn AS BINARY(200)) = CAST(#{ownerJiacn} AS BINARY(200))
                             AND OCTET_LENGTH(member.client_id) = OCTET_LENGTH(#{clientId})
+                            AND OCTET_LENGTH(member.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
                             AND CAST(member.task_id AS BINARY(400)) = CAST(task.task_id AS BINARY(400))
                             AND OCTET_LENGTH(member.task_id) = OCTET_LENGTH(task.task_id)
                             AND member.member_status NOT IN ('rejected', 'left')
@@ -414,17 +429,29 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
                           FROM agent_task_member any_member
                           WHERE any_member.tenant_id = #{tenantId}
                             AND any_member.client_id = #{clientId}
+                            AND any_member.owner_jiacn = #{ownerJiacn}
                             AND any_member.task_id = task.task_id
                             AND CAST(any_member.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
                             AND OCTET_LENGTH(any_member.tenant_id) = OCTET_LENGTH(#{tenantId})
                             AND CAST(any_member.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+                            AND CAST(any_member.owner_jiacn AS BINARY(200)) = CAST(#{ownerJiacn} AS BINARY(200))
                             AND OCTET_LENGTH(any_member.client_id) = OCTET_LENGTH(#{clientId})
+                            AND OCTET_LENGTH(any_member.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
                             AND CAST(any_member.task_id AS BINARY(400)) = CAST(task.task_id AS BINARY(400))
                             AND OCTET_LENGTH(any_member.task_id) = OCTET_LENGTH(task.task_id)
                       ) THEN (
                           SELECT runtime.name
                           FROM agent_runtime runtime
                           WHERE runtime.agent_id = task.assigned_agent_id
+                            AND runtime.tenant_id = #{tenantId}
+                            AND runtime.client_id = #{clientId}
+                            AND runtime.owner_jiacn = #{ownerJiacn}
+                            AND CAST(runtime.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+                            AND OCTET_LENGTH(runtime.tenant_id) = OCTET_LENGTH(#{tenantId})
+                            AND CAST(runtime.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+                            AND OCTET_LENGTH(runtime.client_id) = OCTET_LENGTH(#{clientId})
+                            AND CAST(runtime.owner_jiacn AS BINARY(200)) = CAST(#{ownerJiacn} AS BINARY(200))
+                            AND OCTET_LENGTH(runtime.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
                             AND CAST(runtime.agent_id AS BINARY(400)) = CAST(task.assigned_agent_id AS BINARY(400))
                             AND OCTET_LENGTH(runtime.agent_id) = OCTET_LENGTH(task.assigned_agent_id)
                           LIMIT 1
@@ -437,6 +464,7 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
     long countSearchExactInScope(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("status") String status,
             @Param("ability") String ability,
             @Param("keyword") String keyword);
@@ -446,7 +474,7 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
             SELECT task.task_id, task.reward_status, task.assigned_agent_id,
                    task.required_abilities, task.reward, task.assigned_at, task.started_at,
                    task.completed_at, task.failure_reason, task.task_version,
-                   task.create_time, task.update_time, task.tenant_id, task.client_id,
+                   task.create_time, task.update_time, task.tenant_id, task.client_id, task.owner_jiacn,
                    plan.name AS planTitle, plan.description AS planDescription,
                    CAST(plan.amount AS SIGNED) AS planReward,
                    plan.create_time AS planCreateTime, plan.update_time AS planUpdateTime,
@@ -458,18 +486,21 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
             LEFT JOIN task_plan plan
               ON task.task_id REGEXP '^[0-9]+$'
              AND plan.id = CAST(task.task_id AS UNSIGNED)
-             AND plan.jiacn = #{tenantId}
+             AND plan.jiacn = #{ownerJiacn}
              AND plan.client_id = #{clientId}
-             AND CAST(plan.jiacn AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
-             AND OCTET_LENGTH(plan.jiacn) = OCTET_LENGTH(#{tenantId})
+             AND CAST(plan.jiacn AS BINARY(200)) = CAST(#{ownerJiacn} AS BINARY(200))
+             AND OCTET_LENGTH(plan.jiacn) = OCTET_LENGTH(#{ownerJiacn})
              AND CAST(plan.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
              AND OCTET_LENGTH(plan.client_id) = OCTET_LENGTH(#{clientId})
             WHERE task.tenant_id = #{tenantId}
               AND task.client_id = #{clientId}
+              AND task.owner_jiacn = #{ownerJiacn}
               AND CAST(task.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
               AND OCTET_LENGTH(task.tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(task.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+              AND CAST(task.owner_jiacn AS BINARY(200)) = CAST(#{ownerJiacn} AS BINARY(200))
               AND OCTET_LENGTH(task.client_id) = OCTET_LENGTH(#{clientId})
+              AND OCTET_LENGTH(task.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
             <if test="status != null and status.trim() != ''">
               AND task.reward_status = #{status}
             </if>
@@ -488,15 +519,27 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
                           FROM agent_task_member member
                           LEFT JOIN agent_runtime runtime
                             ON runtime.agent_id = member.agent_id
+                           AND runtime.tenant_id = #{tenantId}
+                           AND runtime.client_id = #{clientId}
+                           AND runtime.owner_jiacn = #{ownerJiacn}
+                           AND CAST(runtime.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+                           AND OCTET_LENGTH(runtime.tenant_id) = OCTET_LENGTH(#{tenantId})
+                           AND CAST(runtime.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+                           AND OCTET_LENGTH(runtime.client_id) = OCTET_LENGTH(#{clientId})
+                           AND CAST(runtime.owner_jiacn AS BINARY(200)) = CAST(#{ownerJiacn} AS BINARY(200))
+                           AND OCTET_LENGTH(runtime.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
                            AND CAST(runtime.agent_id AS BINARY(400)) = CAST(member.agent_id AS BINARY(400))
                            AND OCTET_LENGTH(runtime.agent_id) = OCTET_LENGTH(member.agent_id)
                           WHERE member.tenant_id = #{tenantId}
                             AND member.client_id = #{clientId}
+                            AND member.owner_jiacn = #{ownerJiacn}
                             AND member.task_id = task.task_id
                             AND CAST(member.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
                             AND OCTET_LENGTH(member.tenant_id) = OCTET_LENGTH(#{tenantId})
                             AND CAST(member.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+                            AND CAST(member.owner_jiacn AS BINARY(200)) = CAST(#{ownerJiacn} AS BINARY(200))
                             AND OCTET_LENGTH(member.client_id) = OCTET_LENGTH(#{clientId})
+                            AND OCTET_LENGTH(member.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
                             AND CAST(member.task_id AS BINARY(400)) = CAST(task.task_id AS BINARY(400))
                             AND OCTET_LENGTH(member.task_id) = OCTET_LENGTH(task.task_id)
                             AND member.member_status NOT IN ('rejected', 'left')
@@ -508,17 +551,29 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
                           FROM agent_task_member any_member
                           WHERE any_member.tenant_id = #{tenantId}
                             AND any_member.client_id = #{clientId}
+                            AND any_member.owner_jiacn = #{ownerJiacn}
                             AND any_member.task_id = task.task_id
                             AND CAST(any_member.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
                             AND OCTET_LENGTH(any_member.tenant_id) = OCTET_LENGTH(#{tenantId})
                             AND CAST(any_member.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+                            AND CAST(any_member.owner_jiacn AS BINARY(200)) = CAST(#{ownerJiacn} AS BINARY(200))
                             AND OCTET_LENGTH(any_member.client_id) = OCTET_LENGTH(#{clientId})
+                            AND OCTET_LENGTH(any_member.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
                             AND CAST(any_member.task_id AS BINARY(400)) = CAST(task.task_id AS BINARY(400))
                             AND OCTET_LENGTH(any_member.task_id) = OCTET_LENGTH(task.task_id)
                       ) THEN (
                           SELECT runtime.name
                           FROM agent_runtime runtime
                           WHERE runtime.agent_id = task.assigned_agent_id
+                            AND runtime.tenant_id = #{tenantId}
+                            AND runtime.client_id = #{clientId}
+                            AND runtime.owner_jiacn = #{ownerJiacn}
+                            AND CAST(runtime.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+                            AND OCTET_LENGTH(runtime.tenant_id) = OCTET_LENGTH(#{tenantId})
+                            AND CAST(runtime.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+                            AND OCTET_LENGTH(runtime.client_id) = OCTET_LENGTH(#{clientId})
+                            AND CAST(runtime.owner_jiacn AS BINARY(200)) = CAST(#{ownerJiacn} AS BINARY(200))
+                            AND OCTET_LENGTH(runtime.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
                             AND CAST(runtime.agent_id AS BINARY(400)) = CAST(task.assigned_agent_id AS BINARY(400))
                             AND OCTET_LENGTH(runtime.agent_id) = OCTET_LENGTH(task.assigned_agent_id)
                           LIMIT 1
@@ -533,6 +588,7 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
     List<AgentTaskSearchRow> searchPageExactInScope(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("status") String status,
             @Param("ability") String ability,
             @Param("keyword") String keyword,
@@ -545,7 +601,7 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
             SELECT task.task_id, task.reward_status, task.assigned_agent_id,
                    task.required_abilities, task.reward, task.assigned_at, task.started_at,
                    task.completed_at, task.failure_reason, task.task_version,
-                   task.create_time, task.update_time, task.tenant_id, task.client_id,
+                   task.create_time, task.update_time, task.tenant_id, task.client_id, task.owner_jiacn,
                    plan.name AS planTitle, plan.description AS planDescription,
                    CAST(plan.amount AS SIGNED) AS planReward,
                    plan.create_time AS planCreateTime, plan.update_time AS planUpdateTime,
@@ -568,28 +624,34 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
             LEFT JOIN task_plan plan
               ON task.task_id REGEXP '^[0-9]+$'
              AND plan.id = CAST(task.task_id AS UNSIGNED)
-             AND plan.jiacn = #{tenantId}
+             AND plan.jiacn = #{ownerJiacn}
              AND plan.client_id = #{clientId}
-             AND CAST(plan.jiacn AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
-             AND OCTET_LENGTH(plan.jiacn) = OCTET_LENGTH(#{tenantId})
+             AND CAST(plan.jiacn AS BINARY(200)) = CAST(#{ownerJiacn} AS BINARY(200))
+             AND OCTET_LENGTH(plan.jiacn) = OCTET_LENGTH(#{ownerJiacn})
              AND CAST(plan.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
              AND OCTET_LENGTH(plan.client_id) = OCTET_LENGTH(#{clientId})
             LEFT JOIN agent_task_funding funding
               ON funding.tenant_id = #{tenantId}
              AND funding.client_id = #{clientId}
+              AND funding.owner_jiacn = #{ownerJiacn}
              AND funding.task_id = task.task_id
              AND CAST(funding.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
              AND OCTET_LENGTH(funding.tenant_id) = OCTET_LENGTH(#{tenantId})
              AND CAST(funding.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+              AND CAST(funding.owner_jiacn AS BINARY(200)) = CAST(#{ownerJiacn} AS BINARY(200))
              AND OCTET_LENGTH(funding.client_id) = OCTET_LENGTH(#{clientId})
+              AND OCTET_LENGTH(funding.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
              AND CAST(funding.task_id AS BINARY(400)) = CAST(task.task_id AS BINARY(400))
              AND OCTET_LENGTH(funding.task_id) = OCTET_LENGTH(task.task_id)
             WHERE task.tenant_id = #{tenantId}
               AND task.client_id = #{clientId}
+              AND task.owner_jiacn = #{ownerJiacn}
               AND CAST(task.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
               AND OCTET_LENGTH(task.tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(task.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+              AND CAST(task.owner_jiacn AS BINARY(200)) = CAST(#{ownerJiacn} AS BINARY(200))
               AND OCTET_LENGTH(task.client_id) = OCTET_LENGTH(#{clientId})
+              AND OCTET_LENGTH(task.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
             <if test="status != null and status.trim() != ''">
               AND task.reward_status = #{status}
             </if>
@@ -608,15 +670,27 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
                           FROM agent_task_member member
                           LEFT JOIN agent_runtime runtime
                             ON runtime.agent_id = member.agent_id
+                           AND runtime.tenant_id = #{tenantId}
+                           AND runtime.client_id = #{clientId}
+                           AND runtime.owner_jiacn = #{ownerJiacn}
+                           AND CAST(runtime.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+                           AND OCTET_LENGTH(runtime.tenant_id) = OCTET_LENGTH(#{tenantId})
+                           AND CAST(runtime.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+                           AND OCTET_LENGTH(runtime.client_id) = OCTET_LENGTH(#{clientId})
+                           AND CAST(runtime.owner_jiacn AS BINARY(200)) = CAST(#{ownerJiacn} AS BINARY(200))
+                           AND OCTET_LENGTH(runtime.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
                            AND CAST(runtime.agent_id AS BINARY(400)) = CAST(member.agent_id AS BINARY(400))
                            AND OCTET_LENGTH(runtime.agent_id) = OCTET_LENGTH(member.agent_id)
                           WHERE member.tenant_id = #{tenantId}
                             AND member.client_id = #{clientId}
+                            AND member.owner_jiacn = #{ownerJiacn}
                             AND member.task_id = task.task_id
                             AND CAST(member.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
                             AND OCTET_LENGTH(member.tenant_id) = OCTET_LENGTH(#{tenantId})
                             AND CAST(member.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+                            AND CAST(member.owner_jiacn AS BINARY(200)) = CAST(#{ownerJiacn} AS BINARY(200))
                             AND OCTET_LENGTH(member.client_id) = OCTET_LENGTH(#{clientId})
+                            AND OCTET_LENGTH(member.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
                             AND CAST(member.task_id AS BINARY(400)) = CAST(task.task_id AS BINARY(400))
                             AND OCTET_LENGTH(member.task_id) = OCTET_LENGTH(task.task_id)
                             AND member.member_status NOT IN ('rejected', 'left')
@@ -628,17 +702,29 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
                           FROM agent_task_member any_member
                           WHERE any_member.tenant_id = #{tenantId}
                             AND any_member.client_id = #{clientId}
+                            AND any_member.owner_jiacn = #{ownerJiacn}
                             AND any_member.task_id = task.task_id
                             AND CAST(any_member.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
                             AND OCTET_LENGTH(any_member.tenant_id) = OCTET_LENGTH(#{tenantId})
                             AND CAST(any_member.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+                            AND CAST(any_member.owner_jiacn AS BINARY(200)) = CAST(#{ownerJiacn} AS BINARY(200))
                             AND OCTET_LENGTH(any_member.client_id) = OCTET_LENGTH(#{clientId})
+                            AND OCTET_LENGTH(any_member.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
                             AND CAST(any_member.task_id AS BINARY(400)) = CAST(task.task_id AS BINARY(400))
                             AND OCTET_LENGTH(any_member.task_id) = OCTET_LENGTH(task.task_id)
                       ) THEN (
                           SELECT runtime.name
                           FROM agent_runtime runtime
                           WHERE runtime.agent_id = task.assigned_agent_id
+                            AND runtime.tenant_id = #{tenantId}
+                            AND runtime.client_id = #{clientId}
+                            AND runtime.owner_jiacn = #{ownerJiacn}
+                            AND CAST(runtime.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+                            AND OCTET_LENGTH(runtime.tenant_id) = OCTET_LENGTH(#{tenantId})
+                            AND CAST(runtime.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+                            AND OCTET_LENGTH(runtime.client_id) = OCTET_LENGTH(#{clientId})
+                            AND CAST(runtime.owner_jiacn AS BINARY(200)) = CAST(#{ownerJiacn} AS BINARY(200))
+                            AND OCTET_LENGTH(runtime.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
                             AND CAST(runtime.agent_id AS BINARY(400)) = CAST(task.assigned_agent_id AS BINARY(400))
                             AND OCTET_LENGTH(runtime.agent_id) = OCTET_LENGTH(task.assigned_agent_id)
                           LIMIT 1
@@ -653,6 +739,7 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
     List<AgentTaskSearchRow> searchPageWithFundingExactInScope(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("status") String status,
             @Param("ability") String ability,
             @Param("keyword") String keyword,
@@ -661,15 +748,18 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
 
     @Select("""
             <script>
-            SELECT member.tenant_id, member.client_id, member.task_id,
+            SELECT member.tenant_id, member.client_id, member.owner_jiacn, member.task_id,
                    member.agent_id, member.member_status
             FROM agent_task_member member
             WHERE member.tenant_id = #{tenantId}
               AND member.client_id = #{clientId}
+                            AND member.owner_jiacn = #{ownerJiacn}
               AND CAST(member.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
               AND OCTET_LENGTH(member.tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(member.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+                            AND CAST(member.owner_jiacn AS BINARY(200)) = CAST(#{ownerJiacn} AS BINARY(200))
               AND OCTET_LENGTH(member.client_id) = OCTET_LENGTH(#{clientId})
+                            AND OCTET_LENGTH(member.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
               AND (
               <foreach collection="taskIds" item="taskId" separator=" OR ">
                 (member.task_id = #{taskId}
@@ -683,35 +773,54 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
     List<cn.jia.agent.entity.AgentTaskMemberEntity> selectSearchMembersExactInScope(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("taskIds") List<String> taskIds);
 
     @Select("""
             <script>
-            SELECT runtime.agent_id, runtime.name, runtime.status
+            SELECT runtime.agent_id, runtime.name, runtime.status, runtime.tenant_id, runtime.client_id,
+                   runtime.owner_jiacn
             FROM agent_runtime runtime
-            WHERE
-            <foreach collection="agentIds" item="agentId" open="(" separator=" OR " close=")">
-              (runtime.agent_id = #{agentId}
-               AND CAST(runtime.agent_id AS BINARY(400)) = CAST(#{agentId} AS BINARY(400))
-               AND OCTET_LENGTH(runtime.agent_id) = OCTET_LENGTH(#{agentId}))
-            </foreach>
+            WHERE runtime.tenant_id = #{tenantId}
+              AND runtime.client_id = #{clientId}
+              AND runtime.owner_jiacn = #{ownerJiacn}
+              AND CAST(runtime.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
+              AND OCTET_LENGTH(runtime.tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(runtime.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+              AND OCTET_LENGTH(runtime.client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(runtime.owner_jiacn AS BINARY(200)) = CAST(#{ownerJiacn} AS BINARY(200))
+              AND OCTET_LENGTH(runtime.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
+              AND (
+              <foreach collection="agentIds" item="agentId" separator=" OR ">
+                (runtime.agent_id = #{agentId}
+                 AND CAST(runtime.agent_id AS BINARY(400)) = CAST(#{agentId} AS BINARY(400))
+                 AND OCTET_LENGTH(runtime.agent_id) = OCTET_LENGTH(#{agentId}))
+              </foreach>
+              )
             ORDER BY runtime.agent_id ASC
             </script>
             """)
-    List<cn.jia.agent.entity.AgentRuntimeEntity> selectSearchRuntimesExact(
+    List<cn.jia.agent.entity.AgentRuntimeEntity> selectSearchRuntimesExactInOwnerScope(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("agentIds") List<String> agentIds);
 
     @Select("""
             <script>
             SELECT task.tenant_id AS tenantId, task.client_id AS clientId,
+                   task.owner_jiacn AS ownerJiacn,
                    COALESCE(task.reward_status, 'open') AS status, COUNT(*) AS taskCount
             FROM agent_task_meta task
             WHERE task.tenant_id = #{tenantId}
               AND task.client_id = #{clientId}
+              AND task.owner_jiacn = #{ownerJiacn}
               AND CAST(task.tenant_id AS BINARY(200)) = CAST(#{tenantId} AS BINARY(200))
               AND OCTET_LENGTH(task.tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(task.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
+              AND CAST(task.owner_jiacn AS BINARY(200)) = CAST(#{ownerJiacn} AS BINARY(200))
               AND OCTET_LENGTH(task.client_id) = OCTET_LENGTH(#{clientId})
+              AND OCTET_LENGTH(task.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
             <if test="ability != null and ability.trim() != ''">
               AND task.required_abilities LIKE CONCAT('%', '"', #{ability}, '"', '%')
             </if>
@@ -720,6 +829,7 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
             </if>
             GROUP BY task.tenant_id, CAST(task.tenant_id AS BINARY), OCTET_LENGTH(task.tenant_id),
                      task.client_id, CAST(task.client_id AS BINARY), OCTET_LENGTH(task.client_id),
+                     task.owner_jiacn, CAST(task.owner_jiacn AS BINARY), OCTET_LENGTH(task.owner_jiacn),
                      COALESCE(task.reward_status, 'open')
             ORDER BY status ASC
             </script>
@@ -727,6 +837,7 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
     List<AgentTaskStatusCountRow> countSearchByStatusExactInScope(
             @Param("tenantId") String tenantId,
             @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
             @Param("ability") String ability,
             @Param("keyword") String keyword);
 
