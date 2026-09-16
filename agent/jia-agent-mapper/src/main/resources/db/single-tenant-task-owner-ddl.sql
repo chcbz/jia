@@ -277,3 +277,160 @@ SET @st_owner_ddl = (
 PREPARE st_owner_idxagenttaskeventownerscope FROM @st_owner_ddl;
 EXECUTE st_owner_idxagenttaskeventownerscope;
 DEALLOCATE PREPARE st_owner_idxagenttaskeventownerscope;
+
+-- Owner-scope indexes for every persisted task child. The maintenance runner
+-- first validates the actual table shape; a missing table is an intentional no-op.
+
+SET @st_owner_ddl = (
+    SELECT IF(
+        EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema = @st_owner_schema AND table_name = 'agent_task_request')
+        AND NOT EXISTS (SELECT 1 FROM information_schema.statistics
+                        WHERE table_schema = @st_owner_schema AND table_name = 'agent_task_request'
+                          AND index_name = 'idx_agent_task_request_owner_scope'),
+        'CREATE INDEX `idx_agent_task_request_owner_scope` ON `agent_task_request` (tenant_id, client_id, owner_jiacn, task_id, request_id)',
+        'SELECT 1')
+);
+PREPARE st_owner_idxagenttaskrequestownerscope FROM @st_owner_ddl;
+EXECUTE st_owner_idxagenttaskrequestownerscope;
+DEALLOCATE PREPARE st_owner_idxagenttaskrequestownerscope;
+
+SET @st_owner_ddl = (
+    SELECT IF(
+        EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema = @st_owner_schema AND table_name = 'agent_task_artifact')
+        AND NOT EXISTS (SELECT 1 FROM information_schema.statistics
+                        WHERE table_schema = @st_owner_schema AND table_name = 'agent_task_artifact'
+                          AND index_name = 'idx_agent_task_artifact_owner_scope'),
+        'CREATE INDEX `idx_agent_task_artifact_owner_scope` ON `agent_task_artifact` (tenant_id, client_id, owner_jiacn, task_id, artifact_id)',
+        'SELECT 1')
+);
+PREPARE st_owner_idxagenttaskartifactownerscope FROM @st_owner_ddl;
+EXECUTE st_owner_idxagenttaskartifactownerscope;
+DEALLOCATE PREPARE st_owner_idxagenttaskartifactownerscope;
+
+SET @st_owner_ddl = (
+    SELECT IF(
+        EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema = @st_owner_schema AND table_name = 'agent_task_note')
+        AND NOT EXISTS (SELECT 1 FROM information_schema.statistics
+                        WHERE table_schema = @st_owner_schema AND table_name = 'agent_task_note'
+                          AND index_name = 'idx_agent_task_note_owner_scope'),
+        'CREATE INDEX `idx_agent_task_note_owner_scope` ON `agent_task_note` (tenant_id, client_id, owner_jiacn, task_id, id)',
+        'SELECT 1')
+);
+PREPARE st_owner_idxagenttasknoteownerscope FROM @st_owner_ddl;
+EXECUTE st_owner_idxagenttasknoteownerscope;
+DEALLOCATE PREPARE st_owner_idxagenttasknoteownerscope;
+
+SET @st_owner_ddl = (
+    SELECT IF(
+        EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema = @st_owner_schema AND table_name = 'agent_task_artifact_outcome')
+        AND NOT EXISTS (SELECT 1 FROM information_schema.statistics
+                        WHERE table_schema = @st_owner_schema AND table_name = 'agent_task_artifact_outcome'
+                          AND index_name = 'idx_agent_task_artifact_outcome_owner_scope'),
+        'CREATE INDEX `idx_agent_task_artifact_outcome_owner_scope` ON `agent_task_artifact_outcome` (tenant_id, client_id, owner_jiacn, task_id, id)',
+        'SELECT 1')
+);
+PREPARE st_owner_idxagenttaskartifactoutcomeownerscope FROM @st_owner_ddl;
+EXECUTE st_owner_idxagenttaskartifactoutcomeownerscope;
+DEALLOCATE PREPARE st_owner_idxagenttaskartifactoutcomeownerscope;
+
+SET @st_owner_ddl = (
+    SELECT IF(
+        EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema = @st_owner_schema AND table_name = 'agent_task_artifact_outcome_decision')
+        AND NOT EXISTS (SELECT 1 FROM information_schema.statistics
+                        WHERE table_schema = @st_owner_schema AND table_name = 'agent_task_artifact_outcome_decision'
+                          AND index_name = 'idx_agent_task_artifact_outcome_decision_owner_scope'),
+        'CREATE INDEX `idx_agent_task_artifact_outcome_decision_owner_scope` ON `agent_task_artifact_outcome_decision` (tenant_id, client_id, owner_jiacn, task_id, id)',
+        'SELECT 1')
+);
+PREPARE st_owner_idxagenttaskartifactoutcomedecisionownerscope FROM @st_owner_ddl;
+EXECUTE st_owner_idxagenttaskartifactoutcomedecisionownerscope;
+DEALLOCATE PREPARE st_owner_idxagenttaskartifactoutcomedecisionownerscope;
+
+SET @st_owner_ddl = (
+    SELECT IF(
+        EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema = @st_owner_schema AND table_name = 'agent_task_funding')
+        AND NOT EXISTS (SELECT 1 FROM information_schema.statistics
+                        WHERE table_schema = @st_owner_schema AND table_name = 'agent_task_funding'
+                          AND index_name = 'idx_agent_task_funding_owner_scope'),
+        'CREATE INDEX `idx_agent_task_funding_owner_scope` ON `agent_task_funding` (tenant_id, client_id, owner_jiacn, task_id)',
+        'SELECT 1')
+);
+PREPARE st_owner_idxagenttaskfundingownerscope FROM @st_owner_ddl;
+EXECUTE st_owner_idxagenttaskfundingownerscope;
+DEALLOCATE PREPARE st_owner_idxagenttaskfundingownerscope;
+
+SET @st_owner_ddl = (
+    SELECT IF(
+        EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema = @st_owner_schema AND table_name = 'agent_task_funding_operation')
+        AND NOT EXISTS (SELECT 1 FROM information_schema.statistics
+                        WHERE table_schema = @st_owner_schema AND table_name = 'agent_task_funding_operation'
+                          AND index_name = 'idx_agent_task_funding_operation_owner_scope'),
+        'CREATE INDEX `idx_agent_task_funding_operation_owner_scope` ON `agent_task_funding_operation` (tenant_id, client_id, owner_jiacn, task_id, id)',
+        'SELECT 1')
+);
+PREPARE st_owner_idxagenttaskfundingoperationownerscope FROM @st_owner_ddl;
+EXECUTE st_owner_idxagenttaskfundingoperationownerscope;
+DEALLOCATE PREPARE st_owner_idxagenttaskfundingoperationownerscope;
+
+SET @st_owner_ddl = (
+    SELECT IF(
+        EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema = @st_owner_schema AND table_name = 'agent_task_bounty_quote')
+        AND NOT EXISTS (SELECT 1 FROM information_schema.statistics
+                        WHERE table_schema = @st_owner_schema AND table_name = 'agent_task_bounty_quote'
+                          AND index_name = 'idx_agent_task_bounty_quote_owner_scope'),
+        'CREATE INDEX `idx_agent_task_bounty_quote_owner_scope` ON `agent_task_bounty_quote` (tenant_id, client_id, owner_jiacn, task_id, id)',
+        'SELECT 1')
+);
+PREPARE st_owner_idxagenttaskbountyquoteownerscope FROM @st_owner_ddl;
+EXECUTE st_owner_idxagenttaskbountyquoteownerscope;
+DEALLOCATE PREPARE st_owner_idxagenttaskbountyquoteownerscope;
+
+SET @st_owner_ddl = (
+    SELECT IF(
+        EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema = @st_owner_schema AND table_name = 'agent_task_bounty_claim_operation')
+        AND NOT EXISTS (SELECT 1 FROM information_schema.statistics
+                        WHERE table_schema = @st_owner_schema AND table_name = 'agent_task_bounty_claim_operation'
+                          AND index_name = 'idx_agent_task_bounty_claim_owner_scope'),
+        'CREATE INDEX `idx_agent_task_bounty_claim_owner_scope` ON `agent_task_bounty_claim_operation` (tenant_id, client_id, owner_jiacn, task_id, id)',
+        'SELECT 1')
+);
+PREPARE st_owner_idxagenttaskbountyclaimownerscope FROM @st_owner_ddl;
+EXECUTE st_owner_idxagenttaskbountyclaimownerscope;
+DEALLOCATE PREPARE st_owner_idxagenttaskbountyclaimownerscope;
+
+SET @st_owner_ddl = (
+    SELECT IF(
+        EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema = @st_owner_schema AND table_name = 'agent_task_bounty_settlement')
+        AND NOT EXISTS (SELECT 1 FROM information_schema.statistics
+                        WHERE table_schema = @st_owner_schema AND table_name = 'agent_task_bounty_settlement'
+                          AND index_name = 'idx_agent_task_bounty_settlement_owner_scope'),
+        'CREATE INDEX `idx_agent_task_bounty_settlement_owner_scope` ON `agent_task_bounty_settlement` (tenant_id, client_id, owner_jiacn, task_id, id)',
+        'SELECT 1')
+);
+PREPARE st_owner_idxagenttaskbountysettlementownerscope FROM @st_owner_ddl;
+EXECUTE st_owner_idxagenttaskbountysettlementownerscope;
+DEALLOCATE PREPARE st_owner_idxagenttaskbountysettlementownerscope;
+
+SET @st_owner_ddl = (
+    SELECT IF(
+        EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema = @st_owner_schema AND table_name = 'agent_work_item_reassignment')
+        AND NOT EXISTS (SELECT 1 FROM information_schema.statistics
+                        WHERE table_schema = @st_owner_schema AND table_name = 'agent_work_item_reassignment'
+                          AND index_name = 'idx_agent_work_item_reassignment_owner_scope'),
+        'CREATE INDEX `idx_agent_work_item_reassignment_owner_scope` ON `agent_work_item_reassignment` (tenant_id, client_id, owner_jiacn, task_id, work_item_id)',
+        'SELECT 1')
+);
+PREPARE st_owner_idxagentworkitemreassignmentownerscope FROM @st_owner_ddl;
+EXECUTE st_owner_idxagentworkitemreassignmentownerscope;
+DEALLOCATE PREPARE st_owner_idxagentworkitemreassignmentownerscope;
