@@ -1,12 +1,8 @@
 package cn.jia.agent.api;
 
-import cn.jia.agent.dao.AgentPersonaBindingDao;
-import cn.jia.agent.entity.AgentPersonaBindingEntity;
 import cn.jia.agent.entity.AgentTaskArtifactContentDTO;
 import cn.jia.agent.entity.AgentTaskArtifactQueryDTO;
 import cn.jia.agent.entity.AgentTaskArtifactViewDTO;
-import cn.jia.agent.exception.AgentTaskCollaborationException;
-import cn.jia.agent.exception.AgentTaskCollaborationException.Reason;
 import cn.jia.agent.service.AgentTaskArtifactContentService;
 import cn.jia.agent.service.AgentTaskArtifactService;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,7 +30,6 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -55,25 +50,19 @@ class AgentTaskDeliverableControllerTest {
 
     private AgentTaskArtifactService artifactService;
     private AgentTaskArtifactContentService contentService;
-    private AgentPersonaBindingDao personaBindingDao;
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
         artifactService = mock(AgentTaskArtifactService.class);
         contentService = mock(AgentTaskArtifactContentService.class);
-        personaBindingDao = mock(AgentPersonaBindingDao.class);
-        when(personaBindingDao.findExactActiveByScopeAndOwner(
-                anyString(), anyString(), anyString())).thenAnswer(invocation ->
-                List.of(binding(invocation.getArgument(2), ACTOR)));
         mvc = MockMvcBuilders.standaloneSetup(
-                new AgentTaskDeliverableController(
-                        artifactService, contentService, personaBindingDao)).build();
+                new AgentTaskDeliverableController(artifactService, contentService)).build();
     }
 
     @Test
     void listBindsTenantClientAndActorOnlyFromValidatedJwtAndFiltersResponse() throws Exception {
-        when(artifactService.list(anyString(), anyString(), anyString(), anyString(), any()))
+        when(artifactService.listForTaskOwner(anyString(), anyString(), anyString(), any()))
                 .thenReturn(List.of(view()));
 
         mvc.perform(get("/agent/tasks/{taskId}/deliverables", TASK)
@@ -94,7 +83,7 @@ class AgentTaskDeliverableControllerTest {
 
         ArgumentCaptor<AgentTaskArtifactQueryDTO> query =
                 ArgumentCaptor.forClass(AgentTaskArtifactQueryDTO.class);
-        verify(artifactService).list(eq(TENANT), eq(CLIENT), eq(TASK), eq(ACTOR), query.capture());
+        verify(artifactService).listForTaskOwner(eq(TENANT), eq(CLIENT), eq(TASK), query.capture());
         assertEquals("work-1", query.getValue().getWorkItemId());
         assertEquals(25, query.getValue().getLimit());
     }
@@ -137,46 +126,26 @@ class AgentTaskDeliverableControllerTest {
     }
 
     @Test
-    void foreignScopesForbiddenOwnerAndDisabledBindingCollapseToSameNotFoundShape() throws Exception {
-        when(artifactService.list(eq("tenant-b"), eq(CLIENT), eq(TASK), eq(ACTOR), any()))
-                .thenThrow(new AgentTaskCollaborationException(Reason.NOT_FOUND, "tenant secret"));
-        when(artifactService.list(eq(TENANT), eq("client-b"), eq(TASK), eq(ACTOR), any()))
-                .thenThrow(new AgentTaskCollaborationException(Reason.NOT_FOUND, "client secret"));
-        when(artifactService.list(eq(TENANT), eq(CLIENT), eq(TASK), eq(ACTOR), any()))
-                .thenThrow(new AgentTaskCollaborationException(Reason.FORBIDDEN, "member secret"));
-
-        MvcResult tenant = list(jwt("tenant-b", CLIENT, ACTOR));
-        MvcResult client = list(jwt(TENANT, "client-b", ACTOR));
-        MvcResult owner = list(jwt(TENANT, CLIENT, OTHER));
-        when(personaBindingDao.findExactActiveByScopeAndOwner(TENANT, CLIENT, TENANT))
-                .thenReturn(List.of());
-        MvcResult disabled = list(jwt(TENANT, CLIENT, ACTOR));
-
-        assertEquals(404, tenant.getResponse().getStatus());
-        assertEquals(tenant.getResponse().getContentAsString(), client.getResponse().getContentAsString());
-        assertEquals(tenant.getResponse().getContentAsString(), owner.getResponse().getContentAsString());
-        assertEquals(tenant.getResponse().getContentAsString(), disabled.getResponse().getContentAsString());
-        assertFalse(tenant.getResponse().getContentAsString().contains("secret"));
-    }
-
-    @Test
-    void listResolvesTheOwnersActiveAgentInsteadOfTreatingJwtSubjectAsAnAgentId() throws Exception {
-        when(artifactService.list(eq(TENANT), eq(CLIENT), eq(TASK), eq(ACTOR), any()))
+    void ownerScopeDoesNotNeedPersonaBindingAndTaskNotFoundRemainsOpaque() throws Exception {
+        when(artifactService.listForTaskOwner(eq(TENANT), eq(CLIENT), eq(TASK), any()))
                 .thenReturn(List.of(view()));
-
         mvc.perform(get("/agent/tasks/{taskId}/deliverables", TASK)
                         .principal(jwt(TENANT, CLIENT, OTHER)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.items[0].artifactId").value(ARTIFACT));
 
-        verify(personaBindingDao).findExactActiveByScopeAndOwner(TENANT, CLIENT, TENANT);
-        verify(artifactService).list(eq(TENANT), eq(CLIENT), eq(TASK), eq(ACTOR), any());
-        verify(artifactService, never()).list(eq(TENANT), eq(CLIENT), eq(TASK), eq(OTHER), any());
+        when(artifactService.listForTaskOwner(eq("tenant-b"), eq(CLIENT), eq(TASK), any()))
+                .thenThrow(new cn.jia.agent.exception.AgentTaskCollaborationException(
+                        cn.jia.agent.exception.AgentTaskCollaborationException.Reason.NOT_FOUND,
+                        "outside scope"));
+        MvcResult foreign = list(jwt("tenant-b", CLIENT, OTHER));
+        assertEquals(404, foreign.getResponse().getStatus());
+        assertFalse(foreign.getResponse().getContentAsString().contains("outside scope"));
     }
 
     @Test
-    void contentDownloadUsesResolvedOwnedAgentAndReturnsExactSafeBytes() throws Exception {
-        when(contentService.readContent(TENANT, CLIENT, TASK, ACTOR, ARTIFACT, 3))
+    void contentDownloadUsesTaskOwnerScopeAndReturnsExactSafeBytes() throws Exception {
+        when(contentService.readContentForTaskOwner(TENANT, CLIENT, TASK, ARTIFACT, 3))
                 .thenReturn(new AgentTaskArtifactContentDTO(ARTIFACT, 3, sha256(BYTES),
                         (long) BYTES.length, "application/octet-stream", BYTES));
 
@@ -193,26 +162,7 @@ class AgentTaskDeliverableControllerTest {
                 .andReturn();
 
         assertArrayEquals(BYTES, result.getResponse().getContentAsByteArray());
-        verify(contentService).readContent(TENANT, CLIENT, TASK, ACTOR, ARTIFACT, 3);
-        verify(contentService, never()).readContent(TENANT, CLIENT, TASK, OTHER, ARTIFACT, 3);
-    }
-
-    @Test
-    void multipleOwnedAgentsAreUnionedWithoutLettingTheBrowserChooseOne() throws Exception {
-        when(personaBindingDao.findExactActiveByScopeAndOwner(TENANT, CLIENT, TENANT))
-                .thenReturn(List.of(binding(TENANT, ACTOR), binding(TENANT, OTHER)));
-        when(artifactService.list(eq(TENANT), eq(CLIENT), eq(TASK), eq(ACTOR), any()))
-                .thenThrow(new AgentTaskCollaborationException(Reason.FORBIDDEN, "not a task member"));
-        when(artifactService.list(eq(TENANT), eq(CLIENT), eq(TASK), eq(OTHER), any()))
-                .thenReturn(List.of(view()));
-
-        mvc.perform(get("/agent/tasks/{taskId}/deliverables", TASK)
-                        .principal(jwt(TENANT, CLIENT, "browser-subject")))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.items[0].artifactId").value(ARTIFACT));
-
-        verify(artifactService).list(eq(TENANT), eq(CLIENT), eq(TASK), eq(ACTOR), any());
-        verify(artifactService).list(eq(TENANT), eq(CLIENT), eq(TASK), eq(OTHER), any());
+        verify(contentService).readContentForTaskOwner(TENANT, CLIENT, TASK, ARTIFACT, 3);
     }
 
     @Test
@@ -225,15 +175,14 @@ class AgentTaskDeliverableControllerTest {
                 "/agent/tasks/task-1/deliverables/artifact-1/versions/1/content?workItemId=work-1")) {
             mvc.perform(get(uri).principal(auth)).andExpect(status().isBadRequest());
         }
-        verify(contentService, never()).readContent(anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyInt());
+        verifyNoInteractions(contentService);
     }
 
     @Test
     void corruptArtifactMetadataAndBytesFailClosedWithoutLeakingFields() throws Exception {
         AgentTaskArtifactViewDTO corrupt = view();
         corrupt.setContentMimeType("text/plain\r\nX-Secret: yes");
-        when(artifactService.list(anyString(), anyString(), anyString(), anyString(), any()))
+        when(artifactService.listForTaskOwner(anyString(), anyString(), anyString(), any()))
                 .thenReturn(List.of(corrupt));
         mvc.perform(get("/agent/tasks/{taskId}/deliverables", TASK)
                         .principal(jwt(TENANT, CLIENT, ACTOR)))
@@ -241,7 +190,7 @@ class AgentTaskDeliverableControllerTest {
                 .andExpect(content().string(org.hamcrest.Matchers.not(
                         org.hamcrest.Matchers.containsString("X-Secret"))));
 
-        when(contentService.readContent(anyString(), anyString(), anyString(), anyString(),
+        when(contentService.readContentForTaskOwner(anyString(), anyString(), anyString(),
                 anyString(), anyInt()))
                 .thenReturn(new AgentTaskArtifactContentDTO(ARTIFACT, 1, "0".repeat(64),
                         (long) BYTES.length, "text/plain", BYTES));
@@ -254,10 +203,6 @@ class AgentTaskDeliverableControllerTest {
     private MvcResult list(JwtAuthenticationToken authentication) throws Exception {
         return mvc.perform(get("/agent/tasks/{taskId}/deliverables", TASK)
                 .principal(authentication)).andReturn();
-    }
-
-    private static AgentPersonaBindingEntity binding(String ownerJiacn, String agentId) {
-        return new AgentPersonaBindingEntity().setJiacn(ownerJiacn).setAgentId(agentId);
     }
 
     private static AgentTaskArtifactViewDTO view() {

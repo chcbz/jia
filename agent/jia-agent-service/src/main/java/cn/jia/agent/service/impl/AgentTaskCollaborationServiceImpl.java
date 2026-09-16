@@ -445,36 +445,7 @@ public class AgentTaskCollaborationServiceImpl
         if (entity == null || !canReadArtifact(access, entity)) {
             throw notFound();
         }
-        ArtifactMaterial material = artifactMaterial(entity);
-        byte[] content;
-        if (material.inlineContent() != null) {
-            content = material.inlineContent();
-        } else if (material.managedStorage()) {
-            try {
-                AgentTaskArtifactStorage.StoredContent stored = artifactStorage.read(
-                        new AgentTaskArtifactStorage.Scope(tenantId, clientId, taskId),
-                        entity.getStorageUri(), entity.getContentHash(), material.byteLength(),
-                        material.mimeType());
-                content = stored == null ? null : stored.content();
-                if (content == null || !entity.getContentHash().equals(stored.sha256())
-                        || material.byteLength() != stored.byteLength()
-                        || !material.mimeType().equals(stored.mimeType())
-                        || content.length != stored.byteLength()
-                        || !stored.sha256().equals(sha256(content))) {
-                    throw invalidPersisted(
-                            "Managed artifact storage returned inconsistent content");
-                }
-            } catch (AgentTaskArtifactStorageException failure) {
-                throw invalidPersisted(
-                        "Managed artifact storage is unavailable or corrupt");
-            }
-        } else {
-            // Legacy external URIs are metadata-only. This service intentionally performs no
-            // outbound fetch, so they cannot become an SSRF or arbitrary local-file read surface.
-            throw invalid("Artifact content is not managed by this service");
-        }
-        return new AgentTaskArtifactContentDTO(entity.getArtifactId(), entity.getArtifactVersion(),
-                entity.getContentHash(), material.byteLength(), material.mimeType(), content);
+        return readArtifactContent(tenantId, clientId, taskId, entity);
     }
 
     @Override
@@ -492,6 +463,35 @@ public class AgentTaskCollaborationServiceImpl
                 .limit(limit)
                 .map(this::artifactView)
                 .toList();
+    }
+
+    @Override
+    public List<AgentTaskArtifactViewDTO> listForTaskOwner(
+            String tenantId, String clientId, String taskId, AgentTaskArtifactQueryDTO query) {
+        requireOwnerTaskScope(tenantId, clientId, taskId);
+        String workItemId = requireWorkItem(tenantId, clientId, taskId,
+                query == null ? null : query.getWorkItemId());
+        int limit = boundedLimit(query == null ? null : query.getLimit());
+        List<AgentTaskArtifactEntity> entities = workItemId == null
+                ? artifactDao.listByTask(tenantId, clientId, taskId, limit)
+                : artifactDao.listByWorkItem(tenantId, clientId, taskId, workItemId, limit);
+        return entities.stream().limit(limit).map(this::artifactView).toList();
+    }
+
+    @Override
+    public AgentTaskArtifactContentDTO readContentForTaskOwner(String tenantId, String clientId,
+            String taskId, String artifactId, int artifactVersion) {
+        requireOwnerTaskScope(tenantId, clientId, taskId);
+        requireId(artifactId, "artifactId", 100);
+        if (artifactVersion < 1) {
+            throw invalid("artifactVersion must be positive");
+        }
+        AgentTaskArtifactEntity entity = artifactDao.findVersion(
+                tenantId, clientId, taskId, artifactId, artifactVersion);
+        if (entity == null) {
+            throw notFound();
+        }
+        return readArtifactContent(tenantId, clientId, taskId, entity);
     }
 
     @Override
@@ -643,6 +643,54 @@ public class AgentTaskCollaborationServiceImpl
                 TaskEventType.ARTIFACT_PUBLISHED, TaskEventType.ActorType.AGENT, actorAgentId,
                 TaskEventType.Aggregate.ARTIFACT, artifact.getArtifactId(), payload, occurredAt,
                 artifact.getArtifactVersion().longValue()));
+    }
+
+    private AgentTaskArtifactContentDTO readArtifactContent(
+            String tenantId, String clientId, String taskId, AgentTaskArtifactEntity entity) {
+        ArtifactMaterial material = artifactMaterial(entity);
+        byte[] content;
+        if (material.inlineContent() != null) {
+            content = material.inlineContent();
+        } else if (material.managedStorage()) {
+            try {
+                AgentTaskArtifactStorage.StoredContent stored = artifactStorage.read(
+                        new AgentTaskArtifactStorage.Scope(tenantId, clientId, taskId),
+                        entity.getStorageUri(), entity.getContentHash(), material.byteLength(),
+                        material.mimeType());
+                content = stored == null ? null : stored.content();
+                if (content == null || !entity.getContentHash().equals(stored.sha256())
+                        || material.byteLength() != stored.byteLength()
+                        || !material.mimeType().equals(stored.mimeType())
+                        || content.length != stored.byteLength()
+                        || !stored.sha256().equals(sha256(content))) {
+                    throw invalidPersisted(
+                            "Managed artifact storage returned inconsistent content");
+                }
+            } catch (AgentTaskArtifactStorageException failure) {
+                throw invalidPersisted(
+                        "Managed artifact storage is unavailable or corrupt");
+            }
+        } else {
+            // Legacy external URIs are metadata-only. This service intentionally performs no
+            // outbound fetch, so they cannot become an SSRF or arbitrary local-file read surface.
+            throw invalid("Artifact content is not managed by this service");
+        }
+        return new AgentTaskArtifactContentDTO(entity.getArtifactId(), entity.getArtifactVersion(),
+                entity.getContentHash(), material.byteLength(), material.mimeType(), content);
+    }
+
+    /**
+     * Task-owner reads are an HTTP adapter capability: the caller has already authenticated the
+     * owner and can only provide its exact tenant/client claims. Agent-member ACL remains the
+     * boundary for agent-client APIs.
+     */
+    private void requireOwnerTaskScope(String tenantId, String clientId, String taskId) {
+        requireScope(tenantId, clientId, taskId, tenantId);
+        AgentTaskMetaEntity task = taskMetaDao.findByTaskId(tenantId, clientId, taskId);
+        if (task == null || !tenantId.equals(task.getTenantId())
+                || !clientId.equals(task.getClientId()) || !taskId.equals(task.getTaskId())) {
+            throw notFound();
+        }
     }
 
     private Access requireAccess(String tenantId, String clientId, String taskId,

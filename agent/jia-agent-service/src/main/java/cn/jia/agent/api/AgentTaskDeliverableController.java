@@ -1,7 +1,5 @@
 package cn.jia.agent.api;
 
-import cn.jia.agent.dao.AgentPersonaBindingDao;
-import cn.jia.agent.entity.AgentPersonaBindingEntity;
 import cn.jia.agent.entity.AgentTaskArtifactContentDTO;
 import cn.jia.agent.entity.AgentTaskArtifactQueryDTO;
 import cn.jia.agent.entity.AgentTaskArtifactViewDTO;
@@ -26,8 +24,6 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -37,10 +33,10 @@ import java.util.regex.Pattern;
 /**
  * Read-only browser adapter for existing task artifacts.
  *
- * <p>The existing collaboration services remain the only ACL, version, and content-storage
- * boundary. This adapter derives the browser owner from JWT scope and resolves only active
- * Agent bindings in that exact tenant/client scope. It never accepts a browser-supplied
- * {@code actorAgentId}, storage URI, or artifact metadata.</p>
+ * <p>The existing collaboration services remain the version and content-storage boundary. This
+ * adapter binds a browser task-owner read to the exact JWT tenant/client scope, so the task owner
+ * can inspect a bounty's deliverables even when no browser persona is a task member. It never
+ * accepts a browser-supplied {@code actorAgentId}, storage URI, or artifact metadata.</p>
  */
 @Slf4j
 @RestController
@@ -57,14 +53,11 @@ public class AgentTaskDeliverableController {
 
     private final AgentTaskArtifactService artifactService;
     private final AgentTaskArtifactContentService contentService;
-    private final AgentPersonaBindingDao personaBindingDao;
 
     public AgentTaskDeliverableController(AgentTaskArtifactService artifactService,
-            AgentTaskArtifactContentService contentService,
-            AgentPersonaBindingDao personaBindingDao) {
+            AgentTaskArtifactContentService contentService) {
         this.artifactService = Objects.requireNonNull(artifactService, "artifactService");
         this.contentService = Objects.requireNonNull(contentService, "contentService");
-        this.personaBindingDao = Objects.requireNonNull(personaBindingDao, "personaBindingDao");
     }
 
     @GetMapping(value = "/{taskId}/deliverables", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -80,7 +73,7 @@ public class AgentTaskDeliverableController {
         serviceQuery.setWorkItemId(query.workItemId());
         serviceQuery.setLimit(query.limit());
         return ok(new DeliverableListResponse(
-                listOwnedDeliverables(scope, taskId, query, serviceQuery), null));
+                listOwnerDeliverables(scope, taskId, query, serviceQuery), null));
     }
 
     @GetMapping(value = "/{taskId}/deliverables/{artifactId}/versions/{artifactVersion}/content")
@@ -95,8 +88,8 @@ public class AgentTaskDeliverableController {
         requireExact(artifactId, 100);
         requireNoQuery(request);
         int exactVersion = positiveVersion(artifactVersion);
-        AgentTaskArtifactContentDTO result = readOwnedContent(
-                scope, taskId, artifactId, exactVersion);
+        AgentTaskArtifactContentDTO result = contentService.readContentForTaskOwner(
+                scope.tenantId(), scope.clientId(), taskId, artifactId, exactVersion);
         Download download = requireDownload(result, artifactId, exactVersion);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
@@ -143,13 +136,13 @@ public class AgentTaskDeliverableController {
             throw new AuthenticationFailure(false);
         }
         Map<String, Object> claims = jwt.getToken().getClaims();
-        String ownerJiacn = requiredClaim(claims, "jiacn", 50);
+        String tenantId = requiredClaim(claims, "jiacn", 50);
         String clientId = requiredClaim(claims, "client_id", 50);
         String subject = requiredClaim(claims, "sub", 100);
-        if ("0".equals(ownerJiacn) || !byteExact(authentication.getName(), subject)) {
+        if ("0".equals(tenantId) || !byteExact(authentication.getName(), subject)) {
             throw new AuthenticationFailure(true);
         }
-        return new Scope(ownerJiacn, clientId, ownerJiacn);
+        return new Scope(tenantId, clientId);
     }
 
     private static String requiredClaim(Map<String, Object> claims, String name, int maxLength) {
@@ -160,85 +153,17 @@ public class AgentTaskDeliverableController {
         return text;
     }
 
-    private List<DeliverableResponse> listOwnedDeliverables(
+    private List<DeliverableResponse> listOwnerDeliverables(
             Scope scope, String taskId, ListQuery query, AgentTaskArtifactQueryDTO serviceQuery) {
         int limit = effectiveLimit(query.limit());
-        Map<DeliverableKey, DeliverableResponse> merged = new LinkedHashMap<>();
-        boolean readable = false;
-        for (String actorAgentId : ownedAgentIds(scope)) {
-            final List<AgentTaskArtifactViewDTO> result;
-            try {
-                result = artifactService.list(scope.tenantId(), scope.clientId(), taskId,
-                        actorAgentId, serviceQuery);
-            } catch (AgentTaskCollaborationException failure) {
-                if (notFoundOrForbidden(failure)) {
-                    continue;
-                }
-                throw failure;
-            }
-            if (result == null || result.size() > limit) {
-                throw new IllegalStateException("Deliverable result is inconsistent");
-            }
-            readable = true;
-            for (AgentTaskArtifactViewDTO artifact : result) {
-                DeliverableResponse item = requireDeliverable(artifact, taskId, query.workItemId());
-                DeliverableResponse previous = merged.putIfAbsent(
-                        new DeliverableKey(item.artifactId(), item.artifactVersion()), item);
-                if (previous != null && !previous.equals(item)) {
-                    throw new IllegalStateException("Deliverable result is inconsistent");
-                }
-            }
+        List<AgentTaskArtifactViewDTO> result = artifactService.listForTaskOwner(
+                scope.tenantId(), scope.clientId(), taskId, serviceQuery);
+        if (result == null || result.size() > limit) {
+            throw new IllegalStateException("Deliverable result is inconsistent");
         }
-        if (!readable) {
-            throw notFound();
-        }
-        return merged.values().stream().limit(limit).toList();
-    }
-
-    private AgentTaskArtifactContentDTO readOwnedContent(
-            Scope scope, String taskId, String artifactId, int artifactVersion) {
-        for (String actorAgentId : ownedAgentIds(scope)) {
-            try {
-                return contentService.readContent(scope.tenantId(), scope.clientId(), taskId,
-                        actorAgentId, artifactId, artifactVersion);
-            } catch (AgentTaskCollaborationException failure) {
-                if (notFoundOrForbidden(failure)) {
-                    continue;
-                }
-                throw failure;
-            }
-        }
-        throw notFound();
-    }
-
-    private List<String> ownedAgentIds(Scope scope) {
-        List<AgentPersonaBindingEntity> bindings = personaBindingDao.findExactActiveByScopeAndOwner(
-                scope.tenantId(), scope.clientId(), scope.ownerJiacn());
-        if (bindings == null || bindings.isEmpty()) {
-            throw notFound();
-        }
-        Set<String> agentIds = new LinkedHashSet<>();
-        for (AgentPersonaBindingEntity binding : bindings) {
-            if (binding == null || !scope.ownerJiacn().equals(binding.getJiacn())
-                    || !exact(binding.getAgentId(), 100)) {
-                throw new IllegalStateException("Deliverable owner binding is inconsistent");
-            }
-            agentIds.add(binding.getAgentId());
-        }
-        if (agentIds.isEmpty()) {
-            throw notFound();
-        }
-        return List.copyOf(agentIds);
-    }
-
-    private static boolean notFoundOrForbidden(AgentTaskCollaborationException failure) {
-        return failure.getReason() == AgentTaskCollaborationException.Reason.NOT_FOUND
-                || failure.getReason() == AgentTaskCollaborationException.Reason.FORBIDDEN;
-    }
-
-    private static AgentTaskCollaborationException notFound() {
-        return new AgentTaskCollaborationException(
-                AgentTaskCollaborationException.Reason.NOT_FOUND, "Deliverable is unavailable");
+        return result.stream()
+                .map(artifact -> requireDeliverable(artifact, taskId, query.workItemId()))
+                .toList();
     }
 
     private static ListQuery requireListQuery(HttpServletRequest request) {
@@ -423,13 +348,10 @@ public class AgentTaskDeliverableController {
                 .body(new ErrorBody(code, message));
     }
 
-    private record Scope(String tenantId, String clientId, String ownerJiacn) {
+    private record Scope(String tenantId, String clientId) {
     }
 
     private record ListQuery(String workItemId, Integer limit) {
-    }
-
-    private record DeliverableKey(String artifactId, Integer artifactVersion) {
     }
 
     private record Download(byte[] content, MediaType mediaType) {

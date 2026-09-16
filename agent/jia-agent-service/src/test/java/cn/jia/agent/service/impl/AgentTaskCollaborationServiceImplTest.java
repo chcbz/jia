@@ -698,6 +698,34 @@ class AgentTaskCollaborationServiceImplTest {
     }
 
     @Test
+    void taskOwnerCatalogReadsAllTaskArtifactsWithoutInventingAnAgentMembership() {
+        when(taskDao.findByTaskId(TENANT, CLIENT, TASK)).thenReturn(task(null));
+        AgentTaskArtifactEntity privateArtifact = artifact("artifact-private", 1, TARGET, "private");
+        AgentTaskArtifactEntity reviewerArtifact = artifact("artifact-review", 1, TARGET, "reviewer");
+        when(artifactDao.listByTask(TENANT, CLIENT, TASK, 100))
+                .thenReturn(List.of(privateArtifact, reviewerArtifact));
+
+        var result = service.listForTaskOwner(
+                TENANT, CLIENT, TASK, new AgentTaskArtifactQueryDTO());
+
+        assertEquals(List.of("artifact-private", "artifact-review"),
+                result.stream().map(item -> item.getArtifactId()).toList());
+        verify(memberDao, never()).findByTaskAndAgent(any(), any(), any(), any());
+    }
+
+    @Test
+    void taskOwnerCatalogRejectsMissingExactTaskScopeBeforeArtifactLookup() {
+        when(taskDao.findByTaskId("tenant-b", CLIENT, TASK)).thenReturn(null);
+
+        AgentTaskCollaborationException error = assertThrows(AgentTaskCollaborationException.class,
+                () -> service.listForTaskOwner(
+                        "tenant-b", CLIENT, TASK, new AgentTaskArtifactQueryDTO()));
+
+        assertEquals(Reason.NOT_FOUND, error.getReason());
+        verify(artifactDao, never()).listByTask(any(), any(), any(), anyInt());
+    }
+
+    @Test
     void malformedPersistedVisibilityFailsClosed() {
         allow(ACTOR, "worker");
         when(artifactDao.findLatestVersion(TENANT, CLIENT, TASK, "artifact-1"))

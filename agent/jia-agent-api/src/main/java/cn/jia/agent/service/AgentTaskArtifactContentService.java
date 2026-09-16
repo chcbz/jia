@@ -6,4 +6,10 @@ import cn.jia.agent.entity.AgentTaskArtifactContentDTO;
 public interface AgentTaskArtifactContentService {
     AgentTaskArtifactContentDTO readContent(String tenantId, String clientId, String taskId,
             String actorAgentId, String artifactId, int artifactVersion);
+
+    /**
+     * Browser task-owner content read, bound to the authenticated tenant/client by its caller.
+     */
+    AgentTaskArtifactContentDTO readContentForTaskOwner(String tenantId, String clientId,
+            String taskId, String artifactId, int artifactVersion);
 }

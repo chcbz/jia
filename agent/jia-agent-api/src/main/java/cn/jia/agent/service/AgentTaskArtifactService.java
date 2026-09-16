@@ -19,6 +19,13 @@ public interface AgentTaskArtifactService {
     List<AgentTaskArtifactViewDTO> list(String tenantId, String clientId, String taskId,
             String actorAgentId, AgentTaskArtifactQueryDTO query);
 
+    /**
+     * Browser task-owner catalog. The caller must have already bound the authenticated owner to
+     * this exact tenant/client scope; no browser-supplied agent identity is accepted here.
+     */
+    List<AgentTaskArtifactViewDTO> listForTaskOwner(String tenantId, String clientId, String taskId,
+            AgentTaskArtifactQueryDTO query);
+
     List<AgentTaskArtifactViewDTO> listVersions(String tenantId, String clientId, String taskId,
             String actorAgentId, String artifactId);
 }
