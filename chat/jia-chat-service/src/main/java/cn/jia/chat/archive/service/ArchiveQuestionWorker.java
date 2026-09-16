@@ -1,6 +1,7 @@
 package cn.jia.chat.archive.service;
 
 import cn.jia.chat.archive.config.ArchiveQuestionAccessPolicy;
+import cn.jia.chat.archive.config.ArchiveReaderAccessPolicy;
 import cn.jia.chat.archive.model.ArchiveOwnerScope;
 import cn.jia.chat.archive.store.ArchiveQuestionStore;
 import cn.jia.chat.archive.store.ArchiveQuestionStore.ClaimCandidate;
@@ -556,7 +557,10 @@ public class ArchiveQuestionWorker {
     }
 
     private boolean allowed(ArchiveOwnerScope owner) {
-        return owner != null && owner.ownerJiacn().equals(owner.tenantId())
+        return owner != null
+                && ArchiveOwnerScope.SINGLE_TENANT.equals(owner.tenantId())
+                && !ArchiveOwnerScope.SINGLE_TENANT.equals(owner.ownerJiacn())
+                && ArchiveReaderAccessPolicy.validRequestClaim(owner.ownerJiacn())
                 && accessPolicy.allows(owner.tenantId(), owner.clientId());
     }
 
