@@ -45,6 +45,23 @@ public class AgentTaskMutationTransactionImpl implements AgentTaskMutationTransa
     }
 
     @Override
+    public <T> T executeWithLockedTaskRootInOwnerScope(
+            String tenantId,
+            String clientId,
+            String ownerJiacn,
+            String taskId,
+            LockedTaskMutation<T> mutation) {
+        requireOwnerScope(tenantId, clientId, ownerJiacn, taskId);
+        if (mutation == null) {
+            throw new IllegalArgumentException("mutation must not be null");
+        }
+        return requiredTransaction.execute(status -> mutation.apply(validateRoot(
+                taskMetaDao.findByTaskIdForUpdateInOwnerScope(
+                        tenantId, clientId, ownerJiacn, taskId),
+                tenantId, clientId, ownerJiacn, taskId)));
+    }
+
+    @Override
     public <T> T executeWithLockedTaskRootForWorkItem(
             String tenantId, String clientId, String workItemId,
             LockedTaskMutation<T> mutation) {
@@ -54,7 +71,7 @@ public class AgentTaskMutationTransactionImpl implements AgentTaskMutationTransa
         }
         return requiredTransaction.execute(status -> mutation.apply(validateRoot(
                 taskMetaDao.findByWorkItemIdForUpdate(tenantId, clientId, workItemId),
-                tenantId, clientId, null)));
+                tenantId, clientId, null, null)));
     }
 
     @Override
@@ -82,21 +99,51 @@ public class AgentTaskMutationTransactionImpl implements AgentTaskMutationTransa
         });
     }
 
+    @Override
+    public <T> T executeAfterTaskRootReservationInOwnerScope(
+            String tenantId,
+            String clientId,
+            String ownerJiacn,
+            String taskId,
+            TaskRootReservation reservation,
+            ReservedTaskMutation<T> mutation) {
+        requireOwnerScope(tenantId, clientId, ownerJiacn, taskId);
+        if (reservation == null) {
+            throw new IllegalArgumentException("reservation must not be null");
+        }
+        if (mutation == null) {
+            throw new IllegalArgumentException("mutation must not be null");
+        }
+        return requiredTransaction.execute(status -> {
+            int reserved = reservation.reserve();
+            if (reserved != 0 && reserved != 1) {
+                throw new IllegalStateException(
+                        "Task root reservation returned " + reserved + " rows; expected 0 or 1");
+            }
+            AgentTaskMetaEntity root = validateRoot(
+                    taskMetaDao.findByTaskIdForUpdateInOwnerScope(
+                            tenantId, clientId, ownerJiacn, taskId),
+                    tenantId, clientId, ownerJiacn, taskId);
+            return mutation.apply(root, reserved == 1);
+        });
+    }
+
     private AgentTaskMetaEntity lockAndValidateRoot(
             String tenantId, String clientId, String taskId) {
         AgentTaskMetaEntity root = taskMetaDao.findByTaskIdForUpdate(
                 tenantId, clientId, taskId);
-        return validateRoot(root, tenantId, clientId, taskId);
+        return validateRoot(root, tenantId, clientId, null, taskId);
     }
 
     private AgentTaskMetaEntity validateRoot(AgentTaskMetaEntity root,
-            String tenantId, String clientId, String expectedTaskId) {
+            String tenantId, String clientId, String expectedOwnerJiacn, String expectedTaskId) {
         if (root == null) {
             throw new AgentTaskCollaborationException(
                     Reason.NOT_FOUND, "Task not found in requested scope");
         }
         if (!tenantId.equals(root.getTenantId())
                 || !clientId.equals(root.getClientId())
+                || (expectedOwnerJiacn != null && !expectedOwnerJiacn.equals(root.getOwnerJiacn()))
                 || (expectedTaskId != null && !expectedTaskId.equals(root.getTaskId()))
                 || root.getTaskId() == null || root.getTaskId().isBlank()
                 || root.getTaskVersion() == null
@@ -114,6 +161,14 @@ public class AgentTaskMutationTransactionImpl implements AgentTaskMutationTransa
         if (!isValidScopeId(tenantId, 50)) throw new IllegalArgumentException("tenantId is invalid");
         if (!isValidScopeId(clientId, 50)) throw new IllegalArgumentException("clientId is invalid");
         if (!isValidScopeId(id, 100)) throw new IllegalArgumentException(name + " is invalid");
+    }
+
+    private void requireOwnerScope(
+            String tenantId, String clientId, String ownerJiacn, String taskId) {
+        requireScope(tenantId, clientId, taskId);
+        if (!"0".equals(tenantId) || !isValidScopeId(ownerJiacn, 50) || "0".equals(ownerJiacn)) {
+            throw new IllegalArgumentException("strict task owner scope is invalid");
+        }
     }
 
     private void requireScope(String tenantId, String clientId, String taskId) {
