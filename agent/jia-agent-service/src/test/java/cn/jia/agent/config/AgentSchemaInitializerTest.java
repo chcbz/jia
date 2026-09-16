@@ -1308,13 +1308,13 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                         """),
                 new AgentSchemaInitializer.CheckDefinition("agent_identity_registry",
                         "chk_identity_registry_scope", weakenedScope
-                        ? "canonical_type = 'SYSTEM' OR tenant_id = TRIM(owner_jiacn)"
+                        ? "canonical_type = 'SYSTEM' OR tenant_id = '0'"
                         : """
                           (canonical_type = 'SYSTEM' AND client_id IS NULL
-                              AND owner_jiacn IS NULL AND tenant_id IS NULL)
+                              AND owner_jiacn IS NULL AND tenant_id = '0')
                           OR (canonical_type <> 'SYSTEM' AND client_id IS NOT NULL
                               AND TRIM(client_id) <> '' AND owner_jiacn IS NOT NULL
-                              AND TRIM(owner_jiacn) <> '' AND tenant_id = TRIM(owner_jiacn))
+                              AND TRIM(owner_jiacn) <> '' AND tenant_id = '0')
                           """),
                 new AgentSchemaInitializer.CheckDefinition("agent_identity_registry",
                         "chk_identity_registry_retired", """
@@ -1326,7 +1326,7 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                 new AgentSchemaInitializer.CheckDefinition("agent_identity_alias",
                         "chk_identity_alias_status", "alias_status IN ('ACTIVE','REVOKED')"),
                 new AgentSchemaInitializer.CheckDefinition("agent_identity_alias",
-                        "chk_identity_alias_scope", "tenant_id = TRIM(owner_jiacn)"),
+                        "chk_identity_alias_scope", "tenant_id = '0'"),
                 new AgentSchemaInitializer.CheckDefinition("agent_identity_alias",
                         "chk_identity_alias_no_blank_scope",
                         "TRIM(client_id) <> '' AND TRIM(owner_jiacn) <> ''"),
