@@ -35,20 +35,22 @@ class C01BTaskEventContractTest {
             "REVIEW_REQUESTED", "REQUEST_CREATED", "REQUEST_ACKNOWLEDGED",
             "REQUEST_RESOLVED", "REQUEST_REJECTED", "REQUEST_CANCELLED",
             "THREAD_CREATED", "MESSAGE_POSTED", "ARTIFACT_PUBLISHED",
-            "ARTIFACT_ACCEPTED", "ARTIFACT_SUPERSEDED",
+            "ARTIFACT_ACCEPTED", "ARTIFACT_SUPERSEDED", "FORMAL_DELIVERY_SUBMITTED",
+            "FORMAL_DELIVERY_ACCEPTED", "FORMAL_DELIVERY_CHANGES_REQUESTED",
             "COMMAND_DELIVERY_FAILED", "HISTORICAL_BASELINE_IMPORTED");
 
     private static final Set<String> AGGREGATES = Set.of(
-            "task", "member", "work_item", "request", "artifact", "thread", "message");
+            "task", "member", "work_item", "request", "artifact", "thread", "message",
+            "formal_delivery");
 
     private static final Set<String> PAYLOAD_KEYS = Set.of(
             "fromStatus", "toStatus", "status", "reasonCode", "expectedVersion",
             "resultVersion", "taskId", "taskType", "agentId", "memberId",
             "workItemId", "assigneeAgentId", "role", "attemptCount", "maxAttempts",
             "requestId", "requestType", "targetType", "targetId", "artifactId",
-            "artifactType", "artifactVersion", "producerAgentId",
-            "supersededByArtifactId", "supersededByArtifactVersion", "decisionId",
-            "visibility", "threadId", "threadType",
+            "artifactType", "artifactVersion", "producerAgentId", "deliveryId", "runId",
+            "deliveryRevision", "submissionDigest", "supersededByArtifactId",
+            "supersededByArtifactVersion", "decisionId", "visibility", "threadId", "threadType",
             "conversationId", "messageId", "messageType", "senderAgentId", "noteId",
             "noteType", "contentByteLength", "contentSha256", "source", "decisionCode",
             "memberCount", "workItemCount", "completedWorkItemCount",
@@ -63,6 +65,8 @@ class C01BTaskEventContractTest {
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskCollaborationServiceImpl.java", 2,
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskArtifactOutcomeServiceImpl.java", 1,
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentWorkItemResultCommitServiceImpl.java", 1,
+            "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskFormalDeliveryServiceImpl.java", 3,
+            "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskFormalDeliveryDecisionServiceImpl.java", 3,
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentLegacyTaskCompatibilityService.java", 5,
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentServiceImpl.java", 3,
             "chat/jia-chat-service/src/main/java/cn/jia/chat/service/impl/AgentTaskThreadCreationTransaction.java", 2);
@@ -74,6 +78,8 @@ class C01BTaskEventContractTest {
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskCollaborationServiceImpl.java",
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskArtifactOutcomeServiceImpl.java",
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentWorkItemResultCommitServiceImpl.java",
+            "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskFormalDeliveryServiceImpl.java",
+            "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskFormalDeliveryDecisionServiceImpl.java",
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentLegacyTaskCompatibilityService.java",
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentServiceImpl.java",
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskEventWriterImpl.java",
@@ -95,7 +101,7 @@ class C01BTaskEventContractTest {
                 "agent/jia-agent-mapper/src/main/resources/db/task-event-schema.sql")) {
             String schema = Files.readString(root.resolve(schemaPath), StandardCharsets.UTF_8);
             assertTrue(schema.contains(
-                    "Aggregate type: task/member/work_item/request/artifact/thread/message"));
+                    "Aggregate type: task/member/work_item/request/artifact/thread/message/formal_delivery"));
             assertTrue(schema.contains(
                     "UNIQUE KEY uk_task_event_version (tenant_id, client_id, task_id, event_version)"));
             assertTrue(schema.contains(

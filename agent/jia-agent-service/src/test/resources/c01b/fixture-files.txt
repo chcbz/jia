@@ -1,9 +1,15 @@
 agent/jia-agent-api/src/main/java/cn/jia/agent/service/AgentTaskEventWriter.java
+agent/jia-agent-api/src/main/java/cn/jia/agent/service/AgentTaskFormalDeliveryDecisionService.java
+agent/jia-agent-api/src/main/java/cn/jia/agent/service/AgentTaskFormalDeliveryService.java
 agent/jia-agent-api/src/main/java/cn/jia/agent/service/AgentTaskMutationTransaction.java
 agent/jia-agent-core/src/main/java/cn/jia/agent/common/TaskEventPayload.java
 agent/jia-agent-core/src/main/java/cn/jia/agent/common/TaskEventType.java
 agent/jia-agent-core/src/main/java/cn/jia/agent/entity/AgentTaskArtifactPublishDTO.java
 agent/jia-agent-core/src/main/java/cn/jia/agent/entity/AgentTaskEventWriteCommand.java
+agent/jia-agent-core/src/main/java/cn/jia/agent/entity/AgentTaskFormalDeliveryDecisionDTO.java
+agent/jia-agent-core/src/main/java/cn/jia/agent/entity/AgentTaskFormalDeliveryItemDTO.java
+agent/jia-agent-core/src/main/java/cn/jia/agent/entity/AgentTaskFormalDeliverySubmitDTO.java
+agent/jia-agent-core/src/main/java/cn/jia/agent/entity/AgentTaskFormalDeliveryViewDTO.java
 agent/jia-agent-mapper/src/main/java/cn/jia/agent/dao/AgentTaskEventDao.java
 agent/jia-agent-mapper/src/main/java/cn/jia/agent/dao/AgentTaskMetaDao.java
 agent/jia-agent-mapper/src/main/java/cn/jia/agent/dao/impl/AgentTaskEventDaoImpl.java
@@ -22,6 +28,8 @@ agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentServiceImpl
 agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskAggregationServiceImpl.java
 agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskCollaborationServiceImpl.java
 agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskEventWriterImpl.java
+agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskFormalDeliveryDecisionServiceImpl.java
+agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskFormalDeliveryServiceImpl.java
 agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskMutationEventSupport.java
 agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskMutationTransactionImpl.java
 agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskStateServiceImpl.java

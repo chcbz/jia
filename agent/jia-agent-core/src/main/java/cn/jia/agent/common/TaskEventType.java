@@ -68,6 +68,9 @@ public final class TaskEventType {
     public static final String ARTIFACT_PUBLISHED = "ARTIFACT_PUBLISHED";
     public static final String ARTIFACT_ACCEPTED = "ARTIFACT_ACCEPTED";
     public static final String ARTIFACT_SUPERSEDED = "ARTIFACT_SUPERSEDED";
+    public static final String FORMAL_DELIVERY_SUBMITTED = "FORMAL_DELIVERY_SUBMITTED";
+    public static final String FORMAL_DELIVERY_ACCEPTED = "FORMAL_DELIVERY_ACCEPTED";
+    public static final String FORMAL_DELIVERY_CHANGES_REQUESTED = "FORMAL_DELIVERY_CHANGES_REQUESTED";
 
     // ── Infrastructure ──
     public static final String COMMAND_DELIVERY_FAILED = "COMMAND_DELIVERY_FAILED";
@@ -88,6 +91,8 @@ public final class TaskEventType {
             REQUEST_CREATED, REQUEST_ACKNOWLEDGED, REQUEST_RESOLVED,
             REQUEST_REJECTED, REQUEST_CANCELLED, THREAD_CREATED, MESSAGE_POSTED,
             ARTIFACT_PUBLISHED, ARTIFACT_ACCEPTED, ARTIFACT_SUPERSEDED,
+            FORMAL_DELIVERY_SUBMITTED, FORMAL_DELIVERY_ACCEPTED,
+            FORMAL_DELIVERY_CHANGES_REQUESTED,
             COMMAND_DELIVERY_FAILED,
             HISTORICAL_BASELINE_IMPORTED
     );
@@ -106,9 +111,10 @@ public final class TaskEventType {
         public static final String ARTIFACT = "artifact";
         public static final String THREAD = "thread";
         public static final String MESSAGE = "message";
+        public static final String FORMAL_DELIVERY = "formal_delivery";
 
         private static final Set<String> KNOWN = Set.of(
-                TASK, MEMBER, WORK_ITEM, REQUEST, ARTIFACT, THREAD, MESSAGE);
+                TASK, MEMBER, WORK_ITEM, REQUEST, ARTIFACT, THREAD, MESSAGE, FORMAL_DELIVERY);
 
         public static String requireKnown(String aggregateType) {
             if (aggregateType == null || !KNOWN.contains(aggregateType)) {

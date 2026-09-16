@@ -34,7 +34,7 @@ public final class TaskEventPayload {
     private static final Set<String> ID_KEYS = Set.of(
             Key.TASK_ID, Key.AGENT_ID, Key.MEMBER_ID, Key.WORK_ITEM_ID,
             Key.ASSIGNEE_AGENT_ID, Key.REQUEST_ID, Key.TARGET_ID,
-            Key.ARTIFACT_ID, Key.PRODUCER_AGENT_ID,
+            Key.ARTIFACT_ID, Key.PRODUCER_AGENT_ID, Key.DELIVERY_ID, Key.RUN_ID,
             Key.SUPERSEDED_BY_ARTIFACT_ID, Key.DECISION_ID,
             Key.THREAD_ID, Key.CONVERSATION_ID,
             Key.MESSAGE_ID, Key.SENDER_AGENT_ID, Key.NOTE_ID,
@@ -50,7 +50,8 @@ public final class TaskEventPayload {
             Key.MESSAGE_TYPE, Key.NOTE_TYPE);
 
     private static final Set<String> DIGEST_KEYS = Set.of(
-            Key.CONTENT_SHA256, Key.REQUEST_DIGEST, Key.LEASE_FENCE_SHA256);
+            Key.CONTENT_SHA256, Key.REQUEST_DIGEST, Key.LEASE_FENCE_SHA256,
+            Key.SUBMISSION_DIGEST);
 
     private static final Set<String> LONG_KEYS = Set.of(
             Key.EXPECTED_VERSION, Key.RESULT_VERSION, Key.ARTIFACT_VERSION,
@@ -62,7 +63,7 @@ public final class TaskEventPayload {
             Key.CREATED_AT, Key.UPDATED_AT, Key.ASSIGNED_AT, Key.STARTED_AT,
             Key.COMPLETED_AT, Key.ACKNOWLEDGED_AT, Key.RESOLVED_AT,
             Key.CANCELLED_AT, Key.PUBLISHED_AT,
-            Key.PREVIOUS_LEASE_EXPIRES_AT, Key.LEASE_EXPIRES_AT);
+            Key.PREVIOUS_LEASE_EXPIRES_AT, Key.LEASE_EXPIRES_AT, Key.DELIVERY_REVISION);
 
     private static final Set<String> ALLOWED_KEYS;
 
@@ -337,6 +338,10 @@ public final class TaskEventPayload {
         public static final String SUPERSEDED_BY_ARTIFACT_ID = "supersededByArtifactId";
         public static final String SUPERSEDED_BY_ARTIFACT_VERSION = "supersededByArtifactVersion";
         public static final String DECISION_ID = "decisionId";
+        public static final String DELIVERY_ID = "deliveryId";
+        public static final String RUN_ID = "runId";
+        public static final String DELIVERY_REVISION = "deliveryRevision";
+        public static final String SUBMISSION_DIGEST = "submissionDigest";
         public static final String VISIBILITY = "visibility";
 
         public static final String THREAD_ID = "threadId";
