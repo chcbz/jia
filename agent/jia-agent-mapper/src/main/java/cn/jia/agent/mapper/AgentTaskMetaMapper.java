@@ -890,4 +890,38 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
             @Param("completedAt") Long completedAt,
             @Param("failureReason") String failureReason,
             @Param("updateTime") long updateTime);
+
+    @Update("""
+            UPDATE agent_task_meta
+            SET reward_status = #{rewardStatus},
+                started_at = #{startedAt},
+                completed_at = #{completedAt},
+                failure_reason = #{failureReason},
+                update_time = #{updateTime},
+                task_version = task_version + 1
+            WHERE tenant_id = #{tenantId}
+              AND client_id = #{clientId}
+              AND owner_jiacn = #{ownerJiacn}
+              AND task_id = #{taskId}
+              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
+              AND OCTET_LENGTH(owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
+              AND CAST(task_id AS BINARY) = CAST(#{taskId} AS BINARY)
+              AND OCTET_LENGTH(task_id) = OCTET_LENGTH(#{taskId})
+              AND task_version = #{expectedVersion}
+            """)
+    int updateStatusByVersionInOwnerScope(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,
+            @Param("taskId") String taskId,
+            @Param("expectedVersion") long expectedVersion,
+            @Param("rewardStatus") String rewardStatus,
+            @Param("startedAt") Long startedAt,
+            @Param("completedAt") Long completedAt,
+            @Param("failureReason") String failureReason,
+            @Param("updateTime") long updateTime);
 }
