@@ -18,7 +18,7 @@ class TaskEventCatalogTest {
                 "WORK_ITEM_LEASE_RENEWED", "WORK_ITEM_LEASE_RELEASED",
                 "REQUEST_CREATED", "REQUEST_ACKNOWLEDGED", "REQUEST_RESOLVED",
                 "REQUEST_REJECTED", "REQUEST_CANCELLED",
-                "THREAD_CREATED", "MESSAGE_POSTED"
+                "THREAD_CREATED", "MESSAGE_POSTED", "FORMAL_DELIVERY_SUBMITTED"
         ).forEach(type -> assertEquals(type, TaskEventType.requireKnown(type)));
     }
 
@@ -26,6 +26,7 @@ class TaskEventCatalogTest {
     void threadAndMessageAggregatesAreKnownAndCatalogRemainsFailClosed() {
         assertEquals("thread", TaskEventType.Aggregate.requireKnown("thread"));
         assertEquals("message", TaskEventType.Aggregate.requireKnown("message"));
+        assertEquals("formal_delivery", TaskEventType.Aggregate.requireKnown("formal_delivery"));
         assertThrows(IllegalArgumentException.class,
                 () -> TaskEventType.requireKnown("LEASE_TOKEN_RECORDED"));
         assertThrows(IllegalArgumentException.class,

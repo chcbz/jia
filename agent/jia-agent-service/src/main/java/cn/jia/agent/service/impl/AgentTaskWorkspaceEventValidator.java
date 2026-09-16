@@ -178,6 +178,38 @@ public final class AgentTaskWorkspaceEventValidator {
             }
             return null;
         }
+        if (TaskEventType.FORMAL_DELIVERY_SUBMITTED.equals(eventType)) {
+            requireAggregateType(row, TaskEventType.Aggregate.FORMAL_DELIVERY);
+            requireAgentActor(row);
+            requireEqualId(payload, TaskEventPayload.Key.DELIVERY_ID, row.getAggregateId());
+            requireId(payload, TaskEventPayload.Key.WORK_ITEM_ID);
+            requireEqualId(payload, TaskEventPayload.Key.PRODUCER_AGENT_ID, row.getActorId());
+            requireId(payload, TaskEventPayload.Key.RUN_ID);
+            requireId(payload, TaskEventPayload.Key.ARTIFACT_ID);
+            long artifactVersion = requirePositiveLong(
+                    payload, TaskEventPayload.Key.ARTIFACT_VERSION);
+            long deliveryRevision = requirePositiveLong(
+                    payload, TaskEventPayload.Key.DELIVERY_REVISION);
+            requireDigestValue(payload, TaskEventPayload.Key.SUBMISSION_DIGEST);
+            if (artifactVersion > Integer.MAX_VALUE
+                    || deliveryRevision == Long.MAX_VALUE
+                    || !"running".equals(requireString(payload, TaskEventPayload.Key.FROM_STATUS))
+                    || !"submitted".equals(requireString(payload, TaskEventPayload.Key.TO_STATUS))
+                    || !payload.keySet().equals(Set.of(
+                    TaskEventPayload.Key.DELIVERY_ID,
+                    TaskEventPayload.Key.WORK_ITEM_ID,
+                    TaskEventPayload.Key.PRODUCER_AGENT_ID,
+                    TaskEventPayload.Key.RUN_ID,
+                    TaskEventPayload.Key.ARTIFACT_ID,
+                    TaskEventPayload.Key.ARTIFACT_VERSION,
+                    TaskEventPayload.Key.DELIVERY_REVISION,
+                    TaskEventPayload.Key.SUBMISSION_DIGEST,
+                    TaskEventPayload.Key.FROM_STATUS,
+                    TaskEventPayload.Key.TO_STATUS))) {
+                throw invalid();
+            }
+            return null;
+        }
         if (TaskEventType.ARTIFACT_PUBLISHED.equals(eventType)) {
             requireAggregateType(row, TaskEventType.Aggregate.ARTIFACT);
             requireAgentActor(row);
