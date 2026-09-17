@@ -432,7 +432,7 @@ class VoiceHttpContractIntegrationTest {
     private record Part(String name, String filename, String contentType, byte[] body) {
     }
 
-    private record HttpResult(int status, HttpHeaders headers, byte[] body) {
+    private record HttpResult(int status, java.net.http.HttpHeaders headers, byte[] body) {
         private String bodyText() {
             return new String(body, StandardCharsets.UTF_8);
         }
