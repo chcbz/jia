@@ -89,7 +89,7 @@ public class OAuthResourceIdentityController {
     }
 
     private static boolean containsWhitespace(String value) {
-        return value.codePoints().anyMatch(AuthenticationController::isUnicodeWhiteSpace);
+        return value.codePoints().anyMatch(OAuthResourceIdentityController::isUnicodeWhiteSpace);
     }
 
     private static boolean isUnicodeWhiteSpace(int codePoint) {
