@@ -99,7 +99,7 @@ DEALLOCATE PREPARE b01_stmt;
 SET @b01_ddl = (
     SELECT IF(COUNT(*) > 0,
               'SELECT 1',
-              'CREATE INDEX idx_agent_task_meta_scope_status ON agent_task_meta (tenant_id, client_id, reward_status, update_time, id)')
+              'CREATE INDEX idx_agent_task_meta_scope_status ON agent_task_meta (tenant_id, client_id, owner_jiacn, reward_status, update_time, id)')
     FROM information_schema.statistics
     WHERE table_schema = @b01_schema
       AND table_name = 'agent_task_meta'
@@ -112,7 +112,7 @@ DEALLOCATE PREPARE b01_stmt;
 SET @b01_ddl = (
     SELECT IF(COUNT(*) > 0,
               'SELECT 1',
-              'CREATE INDEX idx_agent_task_meta_scope_coordinator ON agent_task_meta (tenant_id, client_id, coordinator_agent_id, reward_status)')
+              'CREATE INDEX idx_agent_task_meta_scope_coordinator ON agent_task_meta (tenant_id, client_id, owner_jiacn, coordinator_agent_id, reward_status)')
     FROM information_schema.statistics
     WHERE table_schema = @b01_schema
       AND table_name = 'agent_task_meta'
@@ -126,13 +126,13 @@ DEALLOCATE PREPARE b01_stmt;
 -- legacy global UNIQUE(task_id). A crash between the two steps remains fail-closed
 -- (temporarily over-restrictive) and a repeated run completes the migration.
 SET @b01_ddl = (
-    SELECT IF(COUNT(*) = 3
-                  AND SUM(non_unique = 0) = 3
-                  AND SUM(sub_part IS NULL) = 3
+    SELECT IF(COUNT(*) = 4
+                  AND SUM(non_unique = 0) = 4
+                  AND SUM(sub_part IS NULL) = 4
                   AND GROUP_CONCAT(LOWER(column_name) ORDER BY seq_in_index SEPARATOR ',')
-                      = 'tenant_id,client_id,task_id',
+                      = 'tenant_id,client_id,owner_jiacn,task_id',
               'SELECT 1',
-              'CREATE UNIQUE INDEX uk_agent_task_meta_scope ON agent_task_meta (tenant_id, client_id, task_id)')
+              'CREATE UNIQUE INDEX uk_agent_task_meta_scope ON agent_task_meta (tenant_id, client_id, owner_jiacn, task_id)')
     FROM information_schema.statistics
     WHERE table_schema = @b01_schema
       AND table_name = 'agent_task_meta'
@@ -180,6 +180,7 @@ DEALLOCATE PREPARE b01_stmt;
 CREATE TABLE IF NOT EXISTS agent_task_member (
     id                  BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
     task_id             VARCHAR(100) NOT NULL COMMENT 'Task ID',
+    owner_jiacn         VARCHAR(50) NOT NULL COMMENT 'Authenticated task owner',
     agent_id            VARCHAR(100) NOT NULL COMMENT 'ADR-001 canonical agentId',
     member_role         VARCHAR(20) NOT NULL COMMENT 'coordinator/worker/reviewer/observer',
     member_status       VARCHAR(20) NOT NULL DEFAULT 'invited' COMMENT 'invited/accepted/working/done/rejected/blocked/failed/left',
@@ -196,16 +197,17 @@ CREATE TABLE IF NOT EXISTS agent_task_member (
     create_time         BIGINT DEFAULT NULL COMMENT 'Create time',
     update_time         BIGINT DEFAULT NULL COMMENT 'Update time',
     PRIMARY KEY (id),
-    UNIQUE KEY uk_task_member_scope (tenant_id, client_id, task_id, agent_id),
-    KEY idx_task_member_agent_status (tenant_id, client_id, agent_id, member_status),
-    KEY idx_task_member_task_status (tenant_id, client_id, task_id, member_status),
-    KEY idx_task_member_task_role (tenant_id, client_id, task_id, member_role, member_status)
+    UNIQUE KEY uk_task_member_scope (tenant_id, client_id, owner_jiacn, task_id, agent_id),
+    KEY idx_task_member_agent_status (tenant_id, client_id, owner_jiacn, agent_id, member_status),
+    KEY idx_task_member_task_status (tenant_id, client_id, owner_jiacn, task_id, member_status),
+    KEY idx_task_member_task_role (tenant_id, client_id, owner_jiacn, task_id, member_role, member_status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped Agent task members';
 
 CREATE TABLE IF NOT EXISTS agent_task_work_item (
     id                  BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
     work_item_id        VARCHAR(100) NOT NULL COMMENT 'Stable work item ID',
     task_id             VARCHAR(100) NOT NULL COMMENT 'Task ID',
+    owner_jiacn         VARCHAR(50) NOT NULL COMMENT 'Authenticated task owner',
     title               VARCHAR(255) NOT NULL COMMENT 'Work item title',
     description         TEXT COMMENT 'Work item description',
     work_type           VARCHAR(30) NOT NULL COMMENT 'Work item type',
@@ -228,17 +230,18 @@ CREATE TABLE IF NOT EXISTS agent_task_work_item (
     create_time         BIGINT DEFAULT NULL COMMENT 'Create time',
     update_time         BIGINT DEFAULT NULL COMMENT 'Update time',
     PRIMARY KEY (id),
-    UNIQUE KEY uk_work_item_scope (tenant_id, client_id, work_item_id),
-    KEY idx_work_item_task_status (tenant_id, client_id, task_id, status, priority),
-    KEY idx_work_item_assignee_status (tenant_id, client_id, assignee_agent_id, status, lease_until),
+    UNIQUE KEY uk_work_item_scope (tenant_id, client_id, owner_jiacn, work_item_id),
+    KEY idx_work_item_task_status (tenant_id, client_id, owner_jiacn, task_id, status, priority),
+    KEY idx_work_item_assignee_status (tenant_id, client_id, owner_jiacn, assignee_agent_id, status, lease_until),
     KEY idx_work_item_lease (status, lease_until, id),
-    KEY idx_work_item_task_required (tenant_id, client_id, task_id, required_item, status)
+    KEY idx_work_item_task_required (tenant_id, client_id, owner_jiacn, task_id, required_item, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped Agent task work items';
 
 CREATE TABLE IF NOT EXISTS agent_task_request (
     id                  BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
     request_id          VARCHAR(100) NOT NULL COMMENT 'Stable request ID',
     task_id             VARCHAR(100) NOT NULL COMMENT 'Task ID',
+    owner_jiacn         VARCHAR(50) NOT NULL COMMENT 'Authenticated task owner',
     work_item_id        VARCHAR(100) DEFAULT NULL COMMENT 'Related work item ID',
     requester_agent_id  VARCHAR(100) NOT NULL COMMENT 'ADR-001 canonical requester agentId',
     target_type         VARCHAR(20) NOT NULL COMMENT 'agent/role/user/system',
@@ -258,16 +261,17 @@ CREATE TABLE IF NOT EXISTS agent_task_request (
     create_time         BIGINT DEFAULT NULL COMMENT 'Create time',
     update_time         BIGINT DEFAULT NULL COMMENT 'Update time',
     PRIMARY KEY (id),
-    UNIQUE KEY uk_task_request_scope (tenant_id, client_id, request_id),
-    KEY idx_task_request_task_status (tenant_id, client_id, task_id, status, priority, create_time),
-    KEY idx_task_request_target_status (tenant_id, client_id, target_type, target_id, status, due_at),
-    KEY idx_task_request_work_item (tenant_id, client_id, work_item_id, status)
+    UNIQUE KEY uk_task_request_scope (tenant_id, client_id, owner_jiacn, request_id),
+    KEY idx_task_request_task_status (tenant_id, client_id, owner_jiacn, task_id, status, priority, create_time),
+    KEY idx_task_request_target_status (tenant_id, client_id, owner_jiacn, target_type, target_id, status, due_at),
+    KEY idx_task_request_work_item (tenant_id, client_id, owner_jiacn, work_item_id, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped Agent collaboration requests';
 
 CREATE TABLE IF NOT EXISTS agent_task_artifact (
     id                      BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
     artifact_id             VARCHAR(100) NOT NULL COMMENT 'Stable logical artifact ID',
     task_id                 VARCHAR(100) NOT NULL COMMENT 'Task ID',
+    owner_jiacn             VARCHAR(50) NOT NULL COMMENT 'Authenticated task owner',
     work_item_id            VARCHAR(100) DEFAULT NULL COMMENT 'Related work item ID',
     producer_agent_id       VARCHAR(100) NOT NULL COMMENT 'ADR-001 canonical producer agentId',
     artifact_type           VARCHAR(30) NOT NULL COMMENT 'summary/document/patch/commit/test_report/analysis/dataset/link',
@@ -284,9 +288,9 @@ CREATE TABLE IF NOT EXISTS agent_task_artifact (
     create_time             BIGINT DEFAULT NULL COMMENT 'Create time',
     update_time             BIGINT DEFAULT NULL COMMENT 'Update time',
     PRIMARY KEY (id),
-    UNIQUE KEY uk_artifact_version (tenant_id, client_id, artifact_id, artifact_version),
-    KEY idx_artifact_task_created (tenant_id, client_id, task_id, created_at),
-    KEY idx_artifact_work_item (tenant_id, client_id, work_item_id, artifact_type, created_at),
-    KEY idx_artifact_producer (tenant_id, client_id, producer_agent_id, created_at),
-    KEY idx_artifact_hash (tenant_id, client_id, content_hash)
+    UNIQUE KEY uk_artifact_version (tenant_id, client_id, owner_jiacn, artifact_id, artifact_version),
+    KEY idx_artifact_task_created (tenant_id, client_id, owner_jiacn, task_id, created_at),
+    KEY idx_artifact_work_item (tenant_id, client_id, owner_jiacn, work_item_id, artifact_type, created_at),
+    KEY idx_artifact_producer (tenant_id, client_id, owner_jiacn, producer_agent_id, created_at),
+    KEY idx_artifact_hash (tenant_id, client_id, owner_jiacn, content_hash)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped versioned Agent task artifacts';
