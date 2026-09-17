@@ -115,6 +115,10 @@ class VoiceHttpContractIntegrationTest {
     private SpeechSynthesisService synthesisService;
     @Autowired
     private ControllerInvocationProbe controllerInvocationProbe;
+    @Autowired
+    private CorsConfig corsConfig;
+    @Autowired
+    private org.springframework.core.env.Environment environment;
 
     @Test
     void realSecurityChainAndVoiceAdviceReturnFrozenErrorsWithoutSensitiveLogs(
@@ -210,6 +214,9 @@ class VoiceHttpContractIntegrationTest {
             throws Exception {
         clearInvocations(synthesisService);
         String origin = "https://kit.chaoyoufan.cn";
+        assertEquals(origin, environment.getProperty("cors.allowed.origin.patterns"));
+        assertArrayEquals(new String[]{origin}, (String[]) org.springframework.test.util.ReflectionTestUtils
+                .getField(corsConfig, "allowedOriginPatterns"));
         HttpRequest preflightRequest = HttpRequest.newBuilder(
                         URI.create("http://127.0.0.1:" + port + "/chat/speech/synthesis"))
                 .timeout(Duration.ofSeconds(10))
