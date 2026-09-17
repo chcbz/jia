@@ -157,7 +157,7 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
     void persistedReferencesRejectUnknownCrossScopeAliasPaddedSystemAndProvisioned() {
         insertIdentity(TENANT, CLIENT, AGENT_A, AgentConstants.IDENTITY_STATUS_ACTIVE,
                 AgentConstants.BINDING_STATUS_ACTIVE);
-        compatibilityService.assign(TENANT, CLIENT, TASK, List.of(AGENT_A), false);
+        compatibilityService.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false);
 
         assertTamperedReferenceRejected("agt_dddddddddddddddddddddddddddddddd");
 
@@ -190,7 +190,7 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
             Future<AgentLegacyTaskCompatibilityService.AssignOutcome> assign = executor.submit(() ->
-                    compatibilityService.assign(TENANT, CLIENT, TASK, List.of(AGENT_A), false));
+                    compatibilityService.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false));
             assertTrue(identityLocked.await(10, TimeUnit.SECONDS));
             Future<Void> suspend = executor.submit(() -> {
                 suspendBinding(bindingId, null, null);
@@ -228,7 +228,7 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
             });
             assertTrue(suspended.await(10, TimeUnit.SECONDS));
             Future<Object> assign = executor.submit(() -> capture(() ->
-                    compatibilityService.assign(TENANT, CLIENT, TASK, List.of(AGENT_A), false)));
+                    compatibilityService.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false)));
             Thread.sleep(150L);
             assertFalse(assign.isDone(), "assign must wait for the binding/registry suspension locks");
             allowSuspendCommit.countDown();
@@ -250,13 +250,12 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
     void reportLocksIdentityUntilMutationCommitThenSuspendMayProceed() throws Exception {
         long bindingId = insertIdentity(TENANT, CLIENT, AGENT_A,
                 AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE);
-        compatibilityService.assign(TENANT, CLIENT, TASK, List.of(AGENT_A), false);
+        compatibilityService.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false);
         pauseNextIdentityLock();
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
             Future<AgentLegacyTaskCompatibilityService.ReportOutcome> report = executor.submit(() ->
-                    compatibilityService.report(
-                            TENANT, CLIENT, TASK, AGENT_A, "running", null));
+                    compatibilityService.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "running", null));
             assertTrue(identityLocked.await(10, TimeUnit.SECONDS));
             Future<Void> suspend = executor.submit(() -> {
                 suspendBinding(bindingId, null, null);
@@ -285,7 +284,7 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
     void suspendCommitBeforeReportRejectsMutationWithoutDeadlock() throws Exception {
         long bindingId = insertIdentity(TENANT, CLIENT, AGENT_A,
                 AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE);
-        compatibilityService.assign(TENANT, CLIENT, TASK, List.of(AGENT_A), false);
+        compatibilityService.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false);
         CountDownLatch suspended = new CountDownLatch(1);
         CountDownLatch allowSuspendCommit = new CountDownLatch(1);
         ExecutorService executor = Executors.newFixedThreadPool(2);
@@ -296,8 +295,7 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
             });
             assertTrue(suspended.await(10, TimeUnit.SECONDS));
             Future<Object> report = executor.submit(() -> capture(() ->
-                    compatibilityService.report(
-                            TENANT, CLIENT, TASK, AGENT_A, "running", null)));
+                    compatibilityService.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "running", null)));
             Thread.sleep(150L);
             assertFalse(report.isDone(), "report must wait for the suspension locks");
             allowSuspendCommit.countDown();
@@ -322,8 +320,8 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
                 AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE);
         insertIdentity(TENANT, CLIENT, AGENT_B,
                 AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE);
-        compatibilityService.assign(TENANT, CLIENT, TASK, List.of(AGENT_A, AGENT_B), false);
-        compatibilityService.report(TENANT, CLIENT, TASK, AGENT_A, "completed", null);
+        compatibilityService.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A, AGENT_B), false);
+        compatibilityService.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "completed", null);
 
         if (AgentConstants.IDENTITY_STATUS_SUSPENDED.equals(lifecycle)) {
             suspendBinding(bindingA, null, null);
@@ -341,22 +339,19 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
                 () -> identityService.requireCanonicalAgentIdInScope(
                         TENANT, CLIENT, TENANT, AGENT_A));
 
-        AgentLegacyTaskCompatibilityService.ReportOutcome completed = compatibilityService.report(
-                TENANT, CLIENT, TASK, AGENT_B, "completed", null);
+        AgentLegacyTaskCompatibilityService.ReportOutcome completed = compatibilityService.report(TENANT, CLIENT, TENANT, TASK, AGENT_B, "completed", null);
         assertEquals("completed", completed.taskStatus());
         assertEquals(2, count("agent_task_member"));
         assertEquals(2, count("agent_task_work_item"));
 
         AgentServiceImpl.AgentBizException reportError = assertThrows(
                 AgentServiceImpl.AgentBizException.class,
-                () -> compatibilityService.report(
-                        TENANT, CLIENT, TASK, AGENT_A, "completed", null));
+                () -> compatibilityService.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "completed", null));
         assertEquals(cn.jia.agent.common.AgentErrorConstants.AGENT_FORBIDDEN,
                 reportError.getCode());
         AgentServiceImpl.AgentBizException assignError = assertThrows(
                 AgentServiceImpl.AgentBizException.class,
-                () -> compatibilityService.assign(
-                        TENANT, CLIENT, TASK + "-new", List.of(AGENT_A), false));
+                () -> compatibilityService.assign(TENANT, CLIENT, TENANT, TASK + "-new", List.of(AGENT_A), false));
         assertEquals(cn.jia.agent.common.AgentErrorConstants.AGENT_FORBIDDEN,
                 assignError.getCode());
         assertEquals(0, jdbc.queryForObject(
