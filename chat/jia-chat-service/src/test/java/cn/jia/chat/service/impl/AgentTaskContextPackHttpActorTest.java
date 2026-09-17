@@ -85,7 +85,7 @@ class AgentTaskContextPackHttpActorTest {
         // The other coordinator created this very same task's thread. That is NOT HTTP authority.
         when(threads.findByTaskThread(TENANT, CLIENT, TASK, "team", "team"))
                 .thenReturn(thread());
-        when(conversations.findScopedById(TENANT, CLIENT, CONVERSATION))
+        when(conversations.findScopedById(OWNER, CLIENT, CONVERSATION))
                 .thenReturn(conversation());
         ChatMessageEntity message = new ChatMessageEntity().setId(201L)
                 .setConversationId(CONVERSATION)
@@ -136,7 +136,7 @@ class AgentTaskContextPackHttpActorTest {
         verify(agents, times(2)).requireApiKeyOwnedAgent(CLIENT, OWNER, REQUESTER);
         verify(access, times(2)).resolveMemberAccess(TENANT, CLIENT, OWNER, TASK, REQUESTER);
         verify(threads, times(2)).findByTaskThread(TENANT, CLIENT, TASK, "team", "team");
-        verify(conversations, times(2)).findScopedById(TENANT, CLIENT, CONVERSATION);
+        verify(conversations, times(2)).findScopedById(OWNER, CLIENT, CONVERSATION);
         verify(messages).findByConversationIdScoped(TENANT, CLIENT, CONVERSATION, 101);
         verifyNoMoreInteractions(generator, workspace, outcomes, source, adapter, threadService,
                 agents, access, threads, conversations, messages);

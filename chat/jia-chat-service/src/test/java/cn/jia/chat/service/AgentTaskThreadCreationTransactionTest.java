@@ -114,7 +114,7 @@ class AgentTaskThreadCreationTransactionTest extends BaseMockTest {
                     thread.setCreateTime(101L);
                     return 1;
                 });
-        when(conversationDao.findScopedById(TENANT, CLIENT, "77")).thenReturn(conversation());
+        when(conversationDao.findScopedById(OWNER, CLIENT, "77")).thenReturn(conversation());
         when(messageDao.insertScoped(eq(TENANT), eq(CLIENT), any(ChatMessageEntity.class)))
                 .thenAnswer(invocation -> {
                     ChatMessageEntity message = invocation.getArgument(2);
@@ -148,7 +148,7 @@ class AgentTaskThreadCreationTransactionTest extends BaseMockTest {
         stubWriter(AgentTaskAccessLevel.READ_WRITE);
         when(taskThreadDao.findByTaskThreadForUpdate(TENANT, CLIENT, TASK, "team", "team"))
                 .thenReturn(thread());
-        when(conversationDao.findScopedById(TENANT, CLIENT, "77"))
+        when(conversationDao.findScopedById(OWNER, CLIENT, "77"))
                 .thenReturn(conversation());
         when(messageDao.insertScoped(eq(TENANT), eq(CLIENT), any(ChatMessageEntity.class)))
                 .thenAnswer(invocation -> {
@@ -164,6 +164,8 @@ class AgentTaskThreadCreationTransactionTest extends BaseMockTest {
 
         assertEquals("Agent A", saved.getSenderName());
         assertEquals("77", saved.getConversationId());
+        verify(conversationDao).findScopedById(OWNER, CLIENT, "77");
+        verify(conversationDao, never()).findScopedById(eq(TENANT), any(), any());
         verify(agentService).requireApiKeyOwnedAgentForUpdate(CLIENT, OWNER, AGENT);
         verify(accessService).resolveMemberAccessForUpdate(TENANT, CLIENT, OWNER, TASK, AGENT);
     }
@@ -174,7 +176,7 @@ class AgentTaskThreadCreationTransactionTest extends BaseMockTest {
         stubWriter(AgentTaskAccessLevel.READ_WRITE);
         when(taskThreadDao.findByTaskThreadForUpdate(TENANT, CLIENT, TASK, "team", "team"))
                 .thenReturn(thread());
-        when(conversationDao.findScopedById(TENANT, CLIENT, "77"))
+        when(conversationDao.findScopedById(OWNER, CLIENT, "77"))
                 .thenReturn(conversation());
         assertThrows(AgentTaskThreadException.class, () -> transaction().appendTeamMessage(
                 TENANT, CLIENT, OWNER, TASK, AGENT, "Other Agent",

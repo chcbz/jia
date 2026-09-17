@@ -111,7 +111,7 @@ public class AgentTaskThreadCreationTransaction {
             thread = requireCanonicalThread(tenantId, clientId, taskId, thread);
         }
         ChatConversationEntity conversation = conversationDao.findScopedById(
-                tenantId, clientId, thread.getConversationId());
+                ownerJiacn, clientId, thread.getConversationId());
         requireCanonicalConversation(tenantId, clientId, ownerJiacn, taskId, thread, conversation);
 
         String senderName = trustedSenderName(runtime, actorAgentId);

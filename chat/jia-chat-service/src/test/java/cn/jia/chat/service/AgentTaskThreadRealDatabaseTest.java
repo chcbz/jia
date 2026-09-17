@@ -231,6 +231,63 @@ class AgentTaskThreadRealDatabaseTest {
     }
 
     @Test
+    void distinctOwnerRoundTripsAndRejectsCrossScopeRequestsAndConversationRows() {
+        assertTrue(!OWNER.equals(TENANT), "owner identity must not be the tenant sentinel");
+        AgentTaskThreadDTO thread = service.getOrCreateTeamThread(
+                TENANT, CLIENT, OWNER, TASK, AGENT_A, null);
+        var conversation = conversationDao.findScopedById(
+                OWNER, CLIENT, thread.getConversationId());
+        assertNotNull(conversation);
+        assertEquals(OWNER, conversation.getJiacn());
+        assertEquals(TENANT, conversation.getTenantId());
+        assertEquals(CLIENT, conversation.getClientId());
+        assertNull(conversationDao.findScopedById(TENANT, CLIENT, thread.getConversationId()));
+        assertNull(conversationDao.findScopedById("owner-b", CLIENT, thread.getConversationId()));
+        assertNull(conversationDao.findScopedById(OWNER, "client-b", thread.getConversationId()));
+
+        AgentTaskThreadMessageCreateDTO message = new AgentTaskThreadMessageCreateDTO();
+        message.setActorAgentId(AGENT_A);
+        message.setContent("owner-scoped message");
+        service.appendTeamMessage(TENANT, CLIENT, OWNER, TASK, message);
+        assertEquals(OWNER, jdbc.queryForObject("SELECT jiacn FROM chat_message", String.class));
+        assertEquals(thread.getConversationId(), service.getTeamThread(
+                TENANT, CLIENT, OWNER, TASK, AGENT_B).getConversationId());
+        assertEquals(1, service.listTeamMessages(TENANT, CLIENT, OWNER, TASK, AGENT_B, 20).size());
+
+        assertUnavailable(() -> service.getTeamThread(TENANT, CLIENT, "owner-b", TASK, AGENT_A));
+        assertUnavailable(() -> service.appendTeamMessage(TENANT, CLIENT, "owner-b", TASK, message));
+        assertUnavailable(() -> service.getTeamThread(TENANT, "client-b", OWNER, TASK, AGENT_A));
+        assertUnavailable(() -> service.appendTeamMessage(TENANT, "client-b", OWNER, TASK, message));
+        assertInvalid(() -> service.getTeamThread("tenant-b", CLIENT, OWNER, TASK, AGENT_A));
+        assertInvalid(() -> service.appendTeamMessage("tenant-b", CLIENT, OWNER, TASK, message));
+
+        // Keep task/member ACL valid: each malformed persisted conversation must be rejected
+        // by the real DAO on reads and by the root-locked transaction on appends.
+        for (String[] scope : List.of(
+                new String[]{TENANT, CLIENT, "owner-b"},
+                new String[]{"tenant-b", CLIENT, OWNER},
+                new String[]{TENANT, "client-b", OWNER})) {
+            assertEquals(1, jdbc.update("""
+                    UPDATE chat_conversation SET tenant_id = ?, client_id = ?, jiacn = ?
+                    WHERE id = ?
+                    """, scope[0], scope[1], scope[2], conversation.getId()));
+            assertNull(conversationDao.findScopedById(OWNER, CLIENT, thread.getConversationId()));
+            assertUnavailable(() -> service.getTeamThread(TENANT, CLIENT, OWNER, TASK, AGENT_A));
+            assertUnavailable(() -> service.appendTeamMessage(TENANT, CLIENT, OWNER, TASK, message));
+            assertEquals(1, count("chat_message"));
+            assertEquals(1, jdbc.update("""
+                    UPDATE chat_conversation SET tenant_id = ?, client_id = ?, jiacn = ?
+                    WHERE id = ?
+                    """, TENANT, CLIENT, OWNER, conversation.getId()));
+            assertEquals(thread.getConversationId(), service.getTeamThread(
+                    TENANT, CLIENT, OWNER, TASK, AGENT_A).getConversationId());
+        }
+        assertEquals(List.of("owner-scoped message"), service.listTeamMessages(
+                TENANT, CLIENT, OWNER, TASK, AGENT_B, 20)
+                .stream().map(item -> item.getContent()).toList());
+    }
+
+    @Test
     void nonZeroScopeCannotReadOrLockTenantZeroTaskThread() {
         jdbc.update("""
                 INSERT INTO agent_task_thread

@@ -64,7 +64,7 @@ class AgentTaskThreadServiceImplTest extends BaseMockTest {
         when(creationTransaction.createTeamThread(
                 eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(AGENT), any(), eq("task-thread:" + TASK)))
                 .thenReturn(thread);
-        when(conversationDao.findScopedById(TENANT, CLIENT, "101"))
+        when(conversationDao.findScopedById(OWNER, CLIENT, "101"))
                 .thenReturn(conversation(101L));
 
         AgentTaskThreadServiceImpl service = service();
@@ -74,6 +74,8 @@ class AgentTaskThreadServiceImplTest extends BaseMockTest {
                 TENANT, CLIENT, OWNER, TASK, AGENT, "ignored on repeat").getConversationId());
 
         verify(agentService, times(2)).requireApiKeyOwnedAgent(CLIENT, OWNER, AGENT);
+        verify(conversationDao, times(2)).findScopedById(OWNER, CLIENT, "101");
+        verify(conversationDao, never()).findScopedById(eq(TENANT), any(), any());
         verify(creationTransaction, times(1)).createTeamThread(
                 eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(AGENT), any(), any());
     }
@@ -156,7 +158,7 @@ class AgentTaskThreadServiceImplTest extends BaseMockTest {
                 .thenReturn(AgentTaskAccessLevel.READ_ONLY);
         when(taskThreadDao.findByTaskThread(TENANT, CLIENT, TASK, "team", "team"))
                 .thenReturn(thread);
-        when(conversationDao.findScopedById(TENANT, CLIENT, "202"))
+        when(conversationDao.findScopedById(OWNER, CLIENT, "202"))
                 .thenReturn(conversation(202L));
         when(messageDao.findByConversationIdScoped(TENANT, CLIENT, "202", 10))
                 .thenReturn(List.of(message(1L, "202", "history")));

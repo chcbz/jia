@@ -217,7 +217,7 @@ public class AgentTaskThreadServiceImpl implements AgentTaskThreadService {
             throw unavailable();
         }
         ChatConversationEntity conversation = conversationDao.findScopedById(
-                scope.tenantId(), scope.clientId(), thread.getConversationId());
+                scope.ownerJiacn(), scope.clientId(), thread.getConversationId());
         if (conversation == null
                 || conversation.getId() == null
                 || !thread.getConversationId().equals(String.valueOf(conversation.getId()))
