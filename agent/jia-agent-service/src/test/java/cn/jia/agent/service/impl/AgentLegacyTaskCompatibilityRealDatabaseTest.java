@@ -211,10 +211,10 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
     @Test
     void reportEventsAreMemberThenWorkItemThenChangedAggregateAndDuplicateIsZeroEvent() {
         insertTask(TASK, TENANT, "assigned", 0L);
-        service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false);
+        service.assign(TENANT, CLIENT, TASK, List.of(AGENT_A), false);
         reset(eventWriter);
 
-        service.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "running", null);
+        service.report(TENANT, CLIENT, TASK, AGENT_A, "running", null);
 
         org.mockito.ArgumentCaptor<AgentTaskEventWriteCommand> events =
                 org.mockito.ArgumentCaptor.forClass(AgentTaskEventWriteCommand.class);
@@ -228,7 +228,7 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
 
         reset(eventWriter);
         AgentLegacyTaskCompatibilityService.ReportOutcome duplicate =
-                service.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "running", null);
+                service.report(TENANT, CLIENT, TASK, AGENT_A, "running", null);
         assertFalse(duplicate.changed());
         verify(eventWriter, org.mockito.Mockito.never()).append(any());
     }
@@ -244,7 +244,7 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
         }).when(eventWriter).append(any());
 
         assertThrows(IllegalStateException.class, () ->
-                service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false));
+                service.assign(TENANT, CLIENT, TASK, List.of(AGENT_A), false));
         assertEquals(0, count("agent_task_meta"));
         assertEquals(0, count("agent_task_member"));
         assertEquals(0, count("agent_task_work_item"));
@@ -253,7 +253,7 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
     @Test
     void reportEventFailureRollsBackMemberAndWorkItemMutations() {
         insertTask(TASK, TENANT, "assigned", 0L);
-        service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false);
+        service.assign(TENANT, CLIENT, TASK, List.of(AGENT_A), false);
         reset(eventWriter);
         doAnswer(invocation -> {
             AgentTaskEventWriteCommand command = invocation.getArgument(0);
@@ -264,7 +264,7 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
         }).when(eventWriter).append(any());
 
         assertThrows(IllegalStateException.class, () ->
-                service.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "running", null));
+                service.report(TENANT, CLIENT, TASK, AGENT_A, "running", null));
         assertEquals("assigned", value("SELECT reward_status FROM agent_task_meta"));
         assertEquals("accepted", value("SELECT member_status FROM agent_task_member"));
         assertEquals("ready", value("SELECT status FROM agent_task_work_item"));
@@ -276,7 +276,7 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
     void outerRollbackRemovesAssignmentRootMembersAndWorkItems() {
         TransactionTemplate outer = new TransactionTemplate(transactionManager);
         outer.executeWithoutResult(status -> {
-            service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false);
+            service.assign(TENANT, CLIENT, TASK, List.of(AGENT_A), false);
             status.setRollbackOnly();
         });
         assertEquals(0, count("agent_task_meta"));
@@ -287,12 +287,12 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
     @Test
     void outerRollbackRemovesReportMemberWorkItemAndAggregateMutations() {
         insertTask(TASK, TENANT, "assigned", 0L);
-        service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false);
+        service.assign(TENANT, CLIENT, TASK, List.of(AGENT_A), false);
         reset(eventWriter);
 
         TransactionTemplate outer = new TransactionTemplate(transactionManager);
         outer.executeWithoutResult(status -> {
-            service.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "running", null);
+            service.report(TENANT, CLIENT, TASK, AGENT_A, "running", null);
             status.setRollbackOnly();
         });
 
@@ -309,9 +309,9 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
         insertTask(TASK, TENANT, "assigned", 0L);
 
         AgentLegacyTaskCompatibilityService.AssignOutcome firstAssign =
-                service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false);
+                service.assign(TENANT, CLIENT, TASK, List.of(AGENT_A), false);
         AgentLegacyTaskCompatibilityService.AssignOutcome duplicateAssign =
-                service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false);
+                service.assign(TENANT, CLIENT, TASK, List.of(AGENT_A), false);
         assertTrue(firstAssign.changed());
         assertFalse(duplicateAssign.changed());
         assertEquals(1, count("agent_task_member"));
@@ -323,7 +323,8 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
         assertEquals(1L, number("SELECT max_agents FROM agent_task_meta"));
         assertEquals(AGENT_A, value("SELECT coordinator_agent_id FROM agent_task_meta"));
 
-        AgentLegacyTaskCompatibilityService.ReportOutcome running = service.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "running", null);
+        AgentLegacyTaskCompatibilityService.ReportOutcome running = service.report(
+                TENANT, CLIENT, TASK, AGENT_A, "running", null);
         assertEquals("running", running.taskStatus());
         assertEquals(1L, running.taskVersion());
         assertTrue(running.changed());
@@ -333,7 +334,8 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
         assertTrue(((String) value("SELECT lease_token FROM agent_task_work_item"))
                 .startsWith("legacy_"));
 
-        AgentLegacyTaskCompatibilityService.ReportOutcome completed = service.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "completed", null);
+        AgentLegacyTaskCompatibilityService.ReportOutcome completed = service.report(
+                TENANT, CLIENT, TASK, AGENT_A, "completed", null);
         assertEquals("completed", completed.taskStatus());
         assertEquals(2L, completed.taskVersion());
         assertTrue(completed.changed());
@@ -343,7 +345,8 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
         assertTrue(((String) value("SELECT result_artifact_id FROM agent_task_work_item"))
                 .startsWith("legacy_result_"));
 
-        AgentLegacyTaskCompatibilityService.ReportOutcome duplicate = service.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "completed", null);
+        AgentLegacyTaskCompatibilityService.ReportOutcome duplicate = service.report(
+                TENANT, CLIENT, TASK, AGENT_A, "completed", null);
         assertEquals("completed", duplicate.taskStatus());
         assertEquals(2L, duplicate.taskVersion());
         assertFalse(duplicate.changed());
@@ -355,18 +358,20 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
     @Test
     void multiAgentSingleReportCannotCompleteWholeTask() {
         insertTask(TASK, TENANT, "assigned", 0L);
-        service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A, AGENT_B), true);
+        service.assign(TENANT, CLIENT, TASK, List.of(AGENT_A, AGENT_B), true);
         assertEquals(2, count("agent_task_member"));
         assertEquals(2, count("agent_task_work_item"));
         assertEquals(2, jdbc.queryForObject(
                 "SELECT COUNT(*) FROM agent_task_member WHERE assignment_source='auto'", Integer.class));
 
-        AgentLegacyTaskCompatibilityService.ReportOutcome first = service.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "completed", null);
+        AgentLegacyTaskCompatibilityService.ReportOutcome first = service.report(
+                TENANT, CLIENT, TASK, AGENT_A, "completed", null);
         assertEquals("running", first.taskStatus());
         assertEquals("accepted", value("SELECT member_status FROM agent_task_member WHERE agent_id='" + AGENT_B + "'"));
         assertEquals("ready", value("SELECT status FROM agent_task_work_item WHERE assignee_agent_id='" + AGENT_B + "'"));
 
-        AgentLegacyTaskCompatibilityService.ReportOutcome second = service.report(TENANT, CLIENT, TENANT, TASK, AGENT_B, "completed", null);
+        AgentLegacyTaskCompatibilityService.ReportOutcome second = service.report(
+                TENANT, CLIENT, TASK, AGENT_B, "completed", null);
         assertEquals("completed", second.taskStatus());
         assertEquals(2L, second.taskVersion());
     }
@@ -374,14 +379,20 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
     @Test
     void missingWrongNonMemberPaddedStatusAndCrossTenantFailClosed() {
         insertTask(TASK, TENANT, "assigned", 0L);
-        service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false);
+        service.assign(TENANT, CLIENT, TASK, List.of(AGENT_A), false);
 
-        assertReason(Reason.INVALID_REQUEST, () -> service.report(TENANT, CLIENT, TENANT, TASK, null, "running", null));
-        assertReason(Reason.FORBIDDEN, () -> service.report(TENANT, CLIENT, TENANT, TASK, "agent-a", "running", null));
-        assertReason(Reason.FORBIDDEN, () -> service.report(TENANT, CLIENT, TENANT, TASK, AGENT_C, "running", null));
-        assertReason(Reason.INVALID_REQUEST, () -> service.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "running ", null));
-        assertReason(Reason.FORBIDDEN, () -> service.report(OTHER_TENANT, CLIENT, OTHER_TENANT, TASK, AGENT_A, "running", null));
-        assertReason(Reason.FORBIDDEN, () -> service.report(TENANT, OTHER_CLIENT, TENANT, TASK, AGENT_A, "running", null));
+        assertReason(Reason.INVALID_REQUEST, () -> service.report(
+                TENANT, CLIENT, TASK, null, "running", null));
+        assertReason(Reason.FORBIDDEN, () -> service.report(
+                TENANT, CLIENT, TASK, "agent-a", "running", null));
+        assertReason(Reason.FORBIDDEN, () -> service.report(
+                TENANT, CLIENT, TASK, AGENT_C, "running", null));
+        assertReason(Reason.INVALID_REQUEST, () -> service.report(
+                TENANT, CLIENT, TASK, AGENT_A, "running ", null));
+        assertReason(Reason.FORBIDDEN, () -> service.report(
+                OTHER_TENANT, CLIENT, TASK, AGENT_A, "running", null));
+        assertReason(Reason.FORBIDDEN, () -> service.report(
+                TENANT, OTHER_CLIENT, TASK, AGENT_A, "running", null));
 
         assertEquals("assigned", value("SELECT reward_status FROM agent_task_meta"));
         assertEquals("accepted", value("SELECT member_status FROM agent_task_member"));
@@ -391,13 +402,16 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
     @Test
     void sameMemberSetIsIdempotentButDifferentReassignmentFailsClosed() {
         insertTask(TASK, TENANT, "assigned", 0L);
-        AgentLegacyTaskCompatibilityService.AssignOutcome first = service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A, AGENT_B), false);
-        AgentLegacyTaskCompatibilityService.AssignOutcome sameSet = service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_B, AGENT_A), true);
+        AgentLegacyTaskCompatibilityService.AssignOutcome first = service.assign(
+                TENANT, CLIENT, TASK, List.of(AGENT_A, AGENT_B), false);
+        AgentLegacyTaskCompatibilityService.AssignOutcome sameSet = service.assign(
+                TENANT, CLIENT, TASK, List.of(AGENT_B, AGENT_A), true);
 
         assertTrue(first.changed());
         assertFalse(sameSet.changed());
         assertEquals(List.of(AGENT_A, AGENT_B), sameSet.agentIds());
-        assertReason(Reason.INVALID_REQUEST, () -> service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A, AGENT_C), false));
+        assertReason(Reason.INVALID_REQUEST, () -> service.assign(
+                TENANT, CLIENT, TASK, List.of(AGENT_A, AGENT_C), false));
         assertEquals(2, count("agent_task_member"));
         assertEquals(2, count("agent_task_work_item"));
         assertEquals(AGENT_A, value("SELECT assigned_agent_id FROM agent_task_meta"));
@@ -417,7 +431,8 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
                         + "0,1,0,3,0,?,?,1,1)",
                 TASK, AGENT_A, TENANT, CLIENT);
 
-        assertReason(Reason.INVALID_PERSISTED_STATE, () -> service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false));
+        assertReason(Reason.INVALID_PERSISTED_STATE, () -> service.assign(
+                TENANT, CLIENT, TASK, List.of(AGENT_A), false));
         assertEquals(0, count("agent_task_member"));
         assertEquals(1, count("agent_task_work_item"));
         assertNull(value("SELECT assigned_agent_id FROM agent_task_meta"));
@@ -426,38 +441,43 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
     @Test
     void idempotentAssignmentRejectsHiddenDependencyOrCoordinatorDrift() {
         insertTask(TASK, TENANT, "assigned", 0L);
-        service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A, AGENT_B), false);
+        service.assign(TENANT, CLIENT, TASK, List.of(AGENT_A, AGENT_B), false);
 
         jdbc.update("UPDATE agent_task_work_item SET dependency_json='[\"missing\"]' "
                 + "WHERE assignee_agent_id=?", AGENT_B);
-        assertReason(Reason.INVALID_PERSISTED_STATE, () -> service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A, AGENT_B), false));
+        assertReason(Reason.INVALID_PERSISTED_STATE, () -> service.assign(
+                TENANT, CLIENT, TASK, List.of(AGENT_A, AGENT_B), false));
 
         jdbc.update("UPDATE agent_task_work_item SET dependency_json='[]' "
                 + "WHERE assignee_agent_id=?", AGENT_B);
         jdbc.update("UPDATE agent_task_member SET member_role='worker' "
                 + "WHERE agent_id=?", AGENT_A);
-        assertReason(Reason.INVALID_PERSISTED_STATE, () -> service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A, AGENT_B), false));
+        assertReason(Reason.INVALID_PERSISTED_STATE, () -> service.assign(
+                TENANT, CLIENT, TASK, List.of(AGENT_A, AGENT_B), false));
     }
 
     @Test
     void idempotentAssignmentRejectsProgressedOrIncompleteAdapterState() {
         insertTask(TASK, TENANT, "assigned", 0L);
-        service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false);
+        service.assign(TENANT, CLIENT, TASK, List.of(AGENT_A), false);
 
         jdbc.update("UPDATE agent_task_member SET member_status='working', started_at=900, "
                 + "version=version+1 WHERE agent_id=?", AGENT_A);
-        assertReason(Reason.INVALID_PERSISTED_STATE, () -> service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false));
+        assertReason(Reason.INVALID_PERSISTED_STATE, () -> service.assign(
+                TENANT, CLIENT, TASK, List.of(AGENT_A), false));
 
         jdbc.update("UPDATE agent_task_member SET member_status='accepted', started_at=NULL, "
                 + "version=version+1 WHERE agent_id=?", AGENT_A);
         jdbc.update("UPDATE agent_task_work_item SET attempt_count=1, version=version+1 "
                 + "WHERE assignee_agent_id=?", AGENT_A);
-        assertReason(Reason.INVALID_PERSISTED_STATE, () -> service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false));
+        assertReason(Reason.INVALID_PERSISTED_STATE, () -> service.assign(
+                TENANT, CLIENT, TASK, List.of(AGENT_A), false));
 
         jdbc.update("UPDATE agent_task_work_item SET attempt_count=0, version=version+1 "
                 + "WHERE assignee_agent_id=?", AGENT_A);
         jdbc.update("UPDATE agent_task_meta SET assigned_at=NULL WHERE task_id=?", TASK);
-        assertReason(Reason.INVALID_PERSISTED_STATE, () -> service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false));
+        assertReason(Reason.INVALID_PERSISTED_STATE, () -> service.assign(
+                TENANT, CLIENT, TASK, List.of(AGENT_A), false));
         assertEquals(1, count("agent_task_member"));
         assertEquals(1, count("agent_task_work_item"));
     }
@@ -466,7 +486,8 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
     void threeAgentAssignmentStoresOnlyPrimaryInCompatibilityColumn() {
         insertTask(TASK, TENANT, "assigned", 0L);
 
-        AgentLegacyTaskCompatibilityService.AssignOutcome outcome = service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A, AGENT_B, AGENT_C), true);
+        AgentLegacyTaskCompatibilityService.AssignOutcome outcome = service.assign(
+                TENANT, CLIENT, TASK, List.of(AGENT_A, AGENT_B, AGENT_C), true);
 
         assertTrue(outcome.changed());
         assertEquals(List.of(AGENT_A, AGENT_B, AGENT_C), outcome.agentIds());
@@ -480,17 +501,20 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
     @Test
     void explicitLegacyCanonicalAndApprovedAliasResolveWithoutFormatGuessing() {
         insertTask(TASK, TENANT, "assigned", 0L);
-        service.assign(TENANT, CLIENT, TENANT, TASK, List.of(LEGACY_AGENT), false);
+        service.assign(TENANT, CLIENT, TASK, List.of(LEGACY_AGENT), false);
 
-        AgentLegacyTaskCompatibilityService.ReportOutcome running = service.report(TENANT, CLIENT, TENANT, TASK, LEGACY_AGENT, "running", null);
-        AgentLegacyTaskCompatibilityService.ReportOutcome completed = service.report(TENANT, CLIENT, TENANT, TASK, LEGACY_AGENT, "completed", null);
+        AgentLegacyTaskCompatibilityService.ReportOutcome running = service.report(
+                TENANT, CLIENT, TASK, LEGACY_AGENT, "running", null);
+        AgentLegacyTaskCompatibilityService.ReportOutcome completed = service.report(
+                TENANT, CLIENT, TASK, LEGACY_AGENT, "completed", null);
 
         assertEquals("running", running.taskStatus());
         assertEquals("completed", completed.taskStatus());
         assertEquals(LEGACY_AGENT, value("SELECT agent_id FROM agent_task_member"));
 
         insertTask("task-alias", TENANT, "assigned", 0L);
-        AgentLegacyTaskCompatibilityService.AssignOutcome alias = service.assign(TENANT, CLIENT, TENANT, "task-alias", List.of(LEGACY_ALIAS), false);
+        AgentLegacyTaskCompatibilityService.AssignOutcome alias = service.assign(
+                TENANT, CLIENT, "task-alias", List.of(LEGACY_ALIAS), false);
         assertEquals(List.of(AGENT_A), alias.agentIds());
         assertEquals(AGENT_A, value("SELECT agent_id FROM agent_task_member WHERE task_id='task-alias'"));
     }
@@ -498,39 +522,44 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
     @Test
     void submittedOrRealArtifactStateIsNeverTakenOverByLegacyReport() {
         insertTask(TASK, TENANT, "assigned", 0L);
-        service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false);
+        service.assign(TENANT, CLIENT, TASK, List.of(AGENT_A), false);
         jdbc.update("UPDATE agent_task_work_item SET status='submitted', "
                 + "result_artifact_id='artifact-real', submitted_at=900, version=version+1");
 
-        assertReason(Reason.RESERVED_FOR_LEASE_PROTOCOL, () -> service.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "completed", null));
+        assertReason(Reason.RESERVED_FOR_LEASE_PROTOCOL, () -> service.report(
+                TENANT, CLIENT, TASK, AGENT_A, "completed", null));
         assertEquals("accepted", value("SELECT member_status FROM agent_task_member"));
         assertEquals("submitted", value("SELECT status FROM agent_task_work_item"));
         assertEquals("artifact-real", value("SELECT result_artifact_id FROM agent_task_work_item"));
 
         jdbc.update("UPDATE agent_task_work_item SET status='ready', lease_token=NULL, "
                 + "lease_until=NULL, version=version+1");
-        assertReason(Reason.RESERVED_FOR_LEASE_PROTOCOL, () -> service.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "completed", null));
+        assertReason(Reason.RESERVED_FOR_LEASE_PROTOCOL, () -> service.report(
+                TENANT, CLIENT, TASK, AGENT_A, "completed", null));
         assertEquals("artifact-real", value("SELECT result_artifact_id FROM agent_task_work_item"));
     }
 
     @Test
     void legacyLeaseAndDeterministicWorkItemIdentityMustMatchExactly() {
         insertTask(TASK, TENANT, "assigned", 0L);
-        service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false);
-        service.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "running", null);
+        service.assign(TENANT, CLIENT, TASK, List.of(AGENT_A), false);
+        service.report(TENANT, CLIENT, TASK, AGENT_A, "running", null);
         String exactLease = (String) value("SELECT lease_token FROM agent_task_work_item");
         long exactHorizon = number("SELECT lease_until FROM agent_task_work_item");
 
         jdbc.update("UPDATE agent_task_work_item SET lease_token=?, version=version+1",
                 exactLease + "x");
-        assertReason(Reason.RESERVED_FOR_LEASE_PROTOCOL, () -> service.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "completed", null));
+        assertReason(Reason.RESERVED_FOR_LEASE_PROTOCOL, () -> service.report(
+                TENANT, CLIENT, TASK, AGENT_A, "completed", null));
         jdbc.update("UPDATE agent_task_work_item SET lease_token=?, lease_until=?, version=version+1",
                 exactLease, exactHorizon - 1);
-        assertReason(Reason.RESERVED_FOR_LEASE_PROTOCOL, () -> service.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "completed", null));
+        assertReason(Reason.RESERVED_FOR_LEASE_PROTOCOL, () -> service.report(
+                TENANT, CLIENT, TASK, AGENT_A, "completed", null));
 
         jdbc.update("UPDATE agent_task_work_item SET lease_until=?, work_item_id='wrong-id', "
                 + "version=version+1", exactHorizon);
-        assertReason(Reason.INVALID_PERSISTED_STATE, () -> service.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "completed", null));
+        assertReason(Reason.INVALID_PERSISTED_STATE, () -> service.report(
+                TENANT, CLIENT, TASK, AGENT_A, "completed", null));
     }
 
     @Test
@@ -540,11 +569,11 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
         try {
             Future<AgentLegacyTaskCompatibilityService.AssignOutcome> left = executor.submit(() -> {
                 start.await(5, TimeUnit.SECONDS);
-                return service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A, AGENT_B), false);
+                return service.assign(TENANT, CLIENT, TASK, List.of(AGENT_A, AGENT_B), false);
             });
             Future<AgentLegacyTaskCompatibilityService.AssignOutcome> right = executor.submit(() -> {
                 start.await(5, TimeUnit.SECONDS);
-                return service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A, AGENT_B), false);
+                return service.assign(TENANT, CLIENT, TASK, List.of(AGENT_A, AGENT_B), false);
             });
             start.countDown();
             List<Boolean> changes = List.of(
@@ -605,11 +634,11 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
     @Test
     void missingMultipleAndMixedLegacyDefaultItemsHaveDistinctFailClosedReasons() {
         insertTask(TASK, TENANT, "assigned", 0L);
-        service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false);
+        service.assign(TENANT, CLIENT, TASK, List.of(AGENT_A), false);
 
         jdbc.update("DELETE FROM agent_task_work_item");
         assertReasonMessage(Reason.INVALID_PERSISTED_STATE, "no legacy default work item",
-                () -> service.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "completed", null));
+                () -> service.report(TENANT, CLIENT, TASK, AGENT_A, "completed", null));
 
         jdbc.update("INSERT INTO agent_task_work_item "
                         + "(work_item_id,task_id,title,work_type,assignee_agent_id,status,"
@@ -625,7 +654,7 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
                 TASK, AGENT_A, TENANT, CLIENT);
         assertReasonMessage(Reason.INVALID_PERSISTED_STATE,
                 "multiple legacy default work items",
-                () -> service.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "completed", null));
+                () -> service.report(TENANT, CLIENT, TASK, AGENT_A, "completed", null));
 
         jdbc.update("DELETE FROM agent_task_work_item WHERE work_item_id='legacy-two'");
         jdbc.update("INSERT INTO agent_task_work_item "
@@ -636,13 +665,13 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
                 TASK, AGENT_A, TENANT, CLIENT);
         assertReasonMessage(Reason.RESERVED_FOR_LEASE_PROTOCOL,
                 "mixes legacy default and non-legacy work items",
-                () -> service.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "completed", null));
+                () -> service.report(TENANT, CLIENT, TASK, AGENT_A, "completed", null));
     }
 
     @Test
     void mixedLegacyAndNonLegacyWorkItemsAreClassifiedAsReservedProtocol() {
         insertTask(TASK, TENANT, "assigned", 0L);
-        service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false);
+        service.assign(TENANT, CLIENT, TASK, List.of(AGENT_A), false);
         for (int i = 0; i < 5; i++) {
             jdbc.update("INSERT INTO agent_task_work_item "
                             + "(work_item_id,task_id,title,work_type,assignee_agent_id,status,"
@@ -652,7 +681,8 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
                     "other-" + i, TASK, "other-" + i, AGENT_A, TENANT, CLIENT);
         }
 
-        assertReason(Reason.RESERVED_FOR_LEASE_PROTOCOL, () -> service.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "completed", null));
+        assertReason(Reason.RESERVED_FOR_LEASE_PROTOCOL, () -> service.report(
+                TENANT, CLIENT, TASK, AGENT_A, "completed", null));
         assertEquals("assigned", value("SELECT reward_status FROM agent_task_meta"));
         assertEquals("accepted", value("SELECT member_status FROM agent_task_member"));
         assertEquals("ready", value("SELECT status FROM agent_task_work_item "
@@ -665,11 +695,12 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
     @Test
     void b04OwnedLeaseIsRejectedAndMemberUpdateRollsBack() {
         insertTask(TASK, TENANT, "assigned", 0L);
-        service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false);
+        service.assign(TENANT, CLIENT, TASK, List.of(AGENT_A), false);
         jdbc.update("UPDATE agent_task_work_item SET status='claimed', lease_token='lease_real', "
                 + "lease_until=5000, version=version+1");
 
-        assertReason(Reason.RESERVED_FOR_LEASE_PROTOCOL, () -> service.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "completed", null));
+        assertReason(Reason.RESERVED_FOR_LEASE_PROTOCOL, () -> service.report(
+                TENANT, CLIENT, TASK, AGENT_A, "completed", null));
         assertEquals("accepted", value("SELECT member_status FROM agent_task_member"));
         assertEquals(0L, number("SELECT version FROM agent_task_member"));
         assertEquals("claimed", value("SELECT status FROM agent_task_work_item"));
@@ -680,9 +711,10 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
     @Test
     void failedReportAdvancesOnlyMemberItemAndAggregatesFailure() {
         insertTask(TASK, TENANT, "assigned", 0L);
-        service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false);
+        service.assign(TENANT, CLIENT, TASK, List.of(AGENT_A), false);
 
-        AgentLegacyTaskCompatibilityService.ReportOutcome failed = service.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "failed", "compile failed");
+        AgentLegacyTaskCompatibilityService.ReportOutcome failed = service.report(
+                TENANT, CLIENT, TASK, AGENT_A, "failed", "compile failed");
         assertEquals("failed", failed.taskStatus());
         assertEquals("failed", value("SELECT member_status FROM agent_task_member"));
         assertEquals("compile failed", value("SELECT failure_reason FROM agent_task_member"));
@@ -695,11 +727,12 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
     @Test
     void partialMemberWorkItemStateIsNeverHealedByLegacyReport() {
         insertTask(TASK, TENANT, "assigned", 0L);
-        service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false);
+        service.assign(TENANT, CLIENT, TASK, List.of(AGENT_A), false);
         jdbc.update("UPDATE agent_task_member SET member_status='working', started_at=900, "
                 + "version=version+1 WHERE agent_id=?", AGENT_A);
 
-        assertReason(Reason.INVALID_PERSISTED_STATE, () -> service.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "running", null));
+        assertReason(Reason.INVALID_PERSISTED_STATE, () -> service.report(
+                TENANT, CLIENT, TASK, AGENT_A, "running", null));
         assertEquals("working", value("SELECT member_status FROM agent_task_member"));
         assertEquals("ready", value("SELECT status FROM agent_task_work_item"));
         assertEquals("assigned", value("SELECT reward_status FROM agent_task_meta"));
@@ -708,12 +741,14 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
     @Test
     void terminalDuplicateRejectsAggregateResultDrift() {
         insertTask(TASK, TENANT, "assigned", 0L);
-        service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A, AGENT_B), false);
-        AgentLegacyTaskCompatibilityService.ReportOutcome first = service.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "completed", null);
+        service.assign(TENANT, CLIENT, TASK, List.of(AGENT_A, AGENT_B), false);
+        AgentLegacyTaskCompatibilityService.ReportOutcome first = service.report(
+                TENANT, CLIENT, TASK, AGENT_A, "completed", null);
         assertEquals("running", first.taskStatus());
         jdbc.update("UPDATE agent_task_meta SET reward_status='completed' WHERE task_id=?", TASK);
 
-        assertReason(Reason.INVALID_PERSISTED_STATE, () -> service.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "completed", null));
+        assertReason(Reason.INVALID_PERSISTED_STATE, () -> service.report(
+                TENANT, CLIENT, TASK, AGENT_A, "completed", null));
         assertEquals("completed", value("SELECT reward_status FROM agent_task_meta"));
         assertEquals("ready", value("SELECT status FROM agent_task_work_item "
                 + "WHERE assignee_agent_id='" + AGENT_B + "'"));
@@ -722,11 +757,14 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
     @Test
     void mixedCompletionAndFailureAggregatesFailedAndDuplicateMustBeExact() {
         insertTask(TASK, TENANT, "assigned", 0L);
-        service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A, AGENT_B), false);
-        assertEquals("running", service.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "completed", null).taskStatus());
+        service.assign(TENANT, CLIENT, TASK, List.of(AGENT_A, AGENT_B), false);
+        assertEquals("running", service.report(
+                TENANT, CLIENT, TASK, AGENT_A, "completed", null).taskStatus());
 
-        AgentLegacyTaskCompatibilityService.ReportOutcome failed = service.report(TENANT, CLIENT, TENANT, TASK, AGENT_B, "failed", "byte-exact failure");
-        AgentLegacyTaskCompatibilityService.ReportOutcome duplicate = service.report(TENANT, CLIENT, TENANT, TASK, AGENT_B, "failed", "byte-exact failure");
+        AgentLegacyTaskCompatibilityService.ReportOutcome failed = service.report(
+                TENANT, CLIENT, TASK, AGENT_B, "failed", "byte-exact failure");
+        AgentLegacyTaskCompatibilityService.ReportOutcome duplicate = service.report(
+                TENANT, CLIENT, TASK, AGENT_B, "failed", "byte-exact failure");
 
         assertEquals("failed", failed.taskStatus());
         assertTrue(failed.terminalTransition());
@@ -735,7 +773,8 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
                 + "WHERE agent_id='" + AGENT_A + "'"));
         assertEquals("failed", value("SELECT member_status FROM agent_task_member "
                 + "WHERE agent_id='" + AGENT_B + "'"));
-        assertReason(Reason.INVALID_REQUEST, () -> service.report(TENANT, CLIENT, TENANT, TASK, AGENT_B, "failed", "different failure"));
+        assertReason(Reason.INVALID_REQUEST, () -> service.report(
+                TENANT, CLIENT, TASK, AGENT_B, "failed", "different failure"));
     }
 
     @Test
@@ -749,7 +788,8 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
                     "extra-" + index, TASK, "extra-" + index, TENANT, CLIENT);
         }
 
-        assertReason(Reason.INVALID_PERSISTED_STATE, () -> service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false));
+        assertReason(Reason.INVALID_PERSISTED_STATE, () -> service.assign(
+                TENANT, CLIENT, TASK, List.of(AGENT_A), false));
         assertEquals(0, count("agent_task_member"));
         assertEquals(501, count("agent_task_work_item"));
         assertNull(value("SELECT assigned_agent_id FROM agent_task_meta"));
@@ -761,7 +801,8 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
         jdbc.execute("ALTER TABLE agent_task_work_item ADD CONSTRAINT reject_agent_b "
                 + "CHECK (assignee_agent_id <> '" + AGENT_B + "')");
 
-        assertThrows(RuntimeException.class, () -> service.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A, AGENT_B), false));
+        assertThrows(RuntimeException.class, () -> service.assign(
+                TENANT, CLIENT, TASK, List.of(AGENT_A, AGENT_B), false));
         assertEquals(0, count("agent_task_member"));
         assertEquals(0, count("agent_task_work_item"));
         assertEquals("assigned", value("SELECT reward_status FROM agent_task_meta"));
@@ -775,7 +816,7 @@ class AgentLegacyTaskCompatibilityRealDatabaseTest {
             if (!start.await(10, TimeUnit.SECONDS)) {
                 return new AssertionError("assignment barrier timeout");
             }
-            return service.assign(TENANT, CLIENT, TENANT, TASK, agentIds, false);
+            return service.assign(TENANT, CLIENT, TASK, agentIds, false);
         } catch (Throwable error) {
             return error;
         }

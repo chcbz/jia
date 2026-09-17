@@ -29,7 +29,7 @@ class AgentTaskEventProjectionTest {
     private static final String TASK = "task-1";
     private static final String ACTOR = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private static final String OTHER = "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    private static final TaskScope SCOPE = new TaskScope("0", CLIENT, TENANT, TASK);
+    private static final TaskScope SCOPE = new TaskScope(TENANT, CLIENT, TASK);
 
     @Test
     void visibleProjectionHasOnlyFrozenFieldsExactDecimalStringsAndAllowedPayload() {
@@ -143,7 +143,7 @@ class AgentTaskEventProjectionTest {
                             taskCreated(1, "evt-1", numericTaskPayload(invalidNumber))));
         }
         DurableEvent crossScope = new DurableEvent(
-                new TaskScope("0", "client-b", TENANT, TASK), 1, "evt-1",
+                new TaskScope(TENANT, "client-b", TASK), 1, "evt-1",
                 TaskEventType.TASK_CREATED, "system", null, "task", TASK,
                 validTaskPayload(), 1234);
         assertThrows(IllegalArgumentException.class, () -> AgentTaskEventProjection.project(
