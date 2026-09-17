@@ -43,6 +43,9 @@ public interface AgentRuntimeMapper extends BaseMapper<AgentRuntimeEntity> {
               AND OCTET_LENGTH(r.client_id) = OCTET_LENGTH(#{clientId})
               AND CAST(r.owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
               AND OCTET_LENGTH(r.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
+              AND r.tenant_id = '0'
+              AND CAST(r.tenant_id AS BINARY) = CAST('0' AS BINARY)
+              AND OCTET_LENGTH(r.tenant_id) = OCTET_LENGTH('0')
               AND r.binding_id IS NOT NULL
               AND EXISTS (
                   SELECT 1
@@ -50,6 +53,9 @@ public interface AgentRuntimeMapper extends BaseMapper<AgentRuntimeEntity> {
                   INNER JOIN agent_identity_registry i ON i.binding_id = b.id
                   WHERE b.id = r.binding_id
                     AND b.status = 1
+                    AND b.tenant_id = '0'
+                    AND CAST(b.tenant_id AS BINARY) = CAST('0' AS BINARY)
+                    AND OCTET_LENGTH(b.tenant_id) = OCTET_LENGTH('0')
                     AND b.client_id = #{clientId}
                     AND b.jiacn = #{ownerJiacn}
                     AND CAST(b.client_id AS BINARY) = CAST(#{clientId} AS BINARY)
@@ -71,11 +77,11 @@ public interface AgentRuntimeMapper extends BaseMapper<AgentRuntimeEntity> {
                          AND CAST(i.canonical_type AS BINARY) = CAST('LEGACY_CANONICAL' AS BINARY)
                          AND OCTET_LENGTH(i.canonical_type) = OCTET_LENGTH('LEGACY_CANONICAL'))
                     )
-                    AND i.tenant_id = #{ownerJiacn}
+                    AND i.tenant_id = '0'
                     AND i.client_id = #{clientId}
                     AND i.owner_jiacn = #{ownerJiacn}
-                    AND CAST(i.tenant_id AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
-                    AND OCTET_LENGTH(i.tenant_id) = OCTET_LENGTH(#{ownerJiacn})
+                    AND CAST(i.tenant_id AS BINARY) = CAST('0' AS BINARY)
+                    AND OCTET_LENGTH(i.tenant_id) = OCTET_LENGTH('0')
                     AND CAST(i.client_id AS BINARY) = CAST(#{clientId} AS BINARY)
                     AND OCTET_LENGTH(i.client_id) = OCTET_LENGTH(#{clientId})
                     AND CAST(i.owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
@@ -98,7 +104,7 @@ public interface AgentRuntimeMapper extends BaseMapper<AgentRuntimeEntity> {
                               AND a.valid_to IS NULL
                               AND a.client_id = #{clientId}
                               AND a.owner_jiacn = #{ownerJiacn}
-                              AND a.tenant_id = #{ownerJiacn}
+                              AND a.tenant_id = '0'
                               AND CAST(a.canonical_agent_id AS BINARY) = CAST(i.canonical_agent_id AS BINARY)
                               AND OCTET_LENGTH(a.canonical_agent_id) = OCTET_LENGTH(i.canonical_agent_id)
                               AND CAST(a.alias_value AS BINARY) = CAST(b.agent_id AS BINARY)
@@ -111,8 +117,8 @@ public interface AgentRuntimeMapper extends BaseMapper<AgentRuntimeEntity> {
                               AND OCTET_LENGTH(a.client_id) = OCTET_LENGTH(#{clientId})
                               AND CAST(a.owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
                               AND OCTET_LENGTH(a.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
-                              AND CAST(a.tenant_id AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
-                              AND OCTET_LENGTH(a.tenant_id) = OCTET_LENGTH(#{ownerJiacn})
+                              AND CAST(a.tenant_id AS BINARY) = CAST('0' AS BINARY)
+                              AND OCTET_LENGTH(a.tenant_id) = OCTET_LENGTH('0')
                         )
                     )
               )
@@ -144,6 +150,9 @@ public interface AgentRuntimeMapper extends BaseMapper<AgentRuntimeEntity> {
               AND OCTET_LENGTH(r.client_id) = OCTET_LENGTH(#{clientId})
               AND CAST(r.owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
               AND OCTET_LENGTH(r.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
+              AND r.tenant_id = '0'
+              AND CAST(r.tenant_id AS BINARY) = CAST('0' AS BINARY)
+              AND OCTET_LENGTH(r.tenant_id) = OCTET_LENGTH('0')
               AND r.binding_id IS NOT NULL
               AND EXISTS (
                   SELECT 1
@@ -151,6 +160,9 @@ public interface AgentRuntimeMapper extends BaseMapper<AgentRuntimeEntity> {
                   INNER JOIN agent_identity_registry i ON i.binding_id = b.id
                   WHERE b.id = r.binding_id
                     AND b.status = 1
+                    AND b.tenant_id = '0'
+                    AND CAST(b.tenant_id AS BINARY) = CAST('0' AS BINARY)
+                    AND OCTET_LENGTH(b.tenant_id) = OCTET_LENGTH('0')
                     AND b.client_id = #{clientId}
                     AND b.jiacn = #{ownerJiacn}
                     AND CAST(b.client_id AS BINARY) = CAST(#{clientId} AS BINARY)
@@ -172,11 +184,11 @@ public interface AgentRuntimeMapper extends BaseMapper<AgentRuntimeEntity> {
                          AND CAST(i.canonical_type AS BINARY) = CAST('LEGACY_CANONICAL' AS BINARY)
                          AND OCTET_LENGTH(i.canonical_type) = OCTET_LENGTH('LEGACY_CANONICAL'))
                     )
-                    AND i.tenant_id = #{ownerJiacn}
+                    AND i.tenant_id = '0'
                     AND i.client_id = #{clientId}
                     AND i.owner_jiacn = #{ownerJiacn}
-                    AND CAST(i.tenant_id AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
-                    AND OCTET_LENGTH(i.tenant_id) = OCTET_LENGTH(#{ownerJiacn})
+                    AND CAST(i.tenant_id AS BINARY) = CAST('0' AS BINARY)
+                    AND OCTET_LENGTH(i.tenant_id) = OCTET_LENGTH('0')
                     AND CAST(i.client_id AS BINARY) = CAST(#{clientId} AS BINARY)
                     AND OCTET_LENGTH(i.client_id) = OCTET_LENGTH(#{clientId})
                     AND CAST(i.owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
@@ -199,7 +211,7 @@ public interface AgentRuntimeMapper extends BaseMapper<AgentRuntimeEntity> {
                               AND a.valid_to IS NULL
                               AND a.client_id = #{clientId}
                               AND a.owner_jiacn = #{ownerJiacn}
-                              AND a.tenant_id = #{ownerJiacn}
+                              AND a.tenant_id = '0'
                               AND CAST(a.canonical_agent_id AS BINARY) = CAST(i.canonical_agent_id AS BINARY)
                               AND OCTET_LENGTH(a.canonical_agent_id) = OCTET_LENGTH(i.canonical_agent_id)
                               AND CAST(a.alias_value AS BINARY) = CAST(b.agent_id AS BINARY)
@@ -212,8 +224,8 @@ public interface AgentRuntimeMapper extends BaseMapper<AgentRuntimeEntity> {
                               AND OCTET_LENGTH(a.client_id) = OCTET_LENGTH(#{clientId})
                               AND CAST(a.owner_jiacn AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
                               AND OCTET_LENGTH(a.owner_jiacn) = OCTET_LENGTH(#{ownerJiacn})
-                              AND CAST(a.tenant_id AS BINARY) = CAST(#{ownerJiacn} AS BINARY)
-                              AND OCTET_LENGTH(a.tenant_id) = OCTET_LENGTH(#{ownerJiacn})
+                              AND CAST(a.tenant_id AS BINARY) = CAST('0' AS BINARY)
+                              AND OCTET_LENGTH(a.tenant_id) = OCTET_LENGTH('0')
                         )
                     )
               )
@@ -237,12 +249,18 @@ public interface AgentRuntimeMapper extends BaseMapper<AgentRuntimeEntity> {
               AND CAST(r.status AS BINARY) IN (CAST('online' AS BINARY), CAST('busy' AS BINARY))
               AND r.binding_id IS NOT NULL
               AND r.owner_jiacn IS NOT NULL
+              AND r.tenant_id = '0'
+              AND CAST(r.tenant_id AS BINARY) = CAST('0' AS BINARY)
+              AND OCTET_LENGTH(r.tenant_id) = OCTET_LENGTH('0')
               AND EXISTS (
                   SELECT 1
                   FROM agent_persona_binding b
                   INNER JOIN agent_identity_registry i ON i.binding_id = b.id
                   WHERE b.id = r.binding_id
                     AND b.status = 1
+                    AND b.tenant_id = '0'
+                    AND CAST(b.tenant_id AS BINARY) = CAST('0' AS BINARY)
+                    AND OCTET_LENGTH(b.tenant_id) = OCTET_LENGTH('0')
                     AND b.client_id = r.client_id
                     AND b.jiacn = r.owner_jiacn
                     AND b.persona_code = r.persona_code
@@ -264,12 +282,12 @@ public interface AgentRuntimeMapper extends BaseMapper<AgentRuntimeEntity> {
                          AND CAST(i.canonical_type AS BINARY) = CAST('LEGACY_CANONICAL' AS BINARY)
                          AND OCTET_LENGTH(i.canonical_type) = OCTET_LENGTH('LEGACY_CANONICAL'))
                     )
-                    AND i.tenant_id = r.owner_jiacn
+                    AND i.tenant_id = '0'
                     AND i.client_id = r.client_id
                     AND i.owner_jiacn = r.owner_jiacn
                     AND i.canonical_agent_id = r.agent_id
-                    AND CAST(i.tenant_id AS BINARY) = CAST(r.owner_jiacn AS BINARY)
-                    AND OCTET_LENGTH(i.tenant_id) = OCTET_LENGTH(r.owner_jiacn)
+                    AND CAST(i.tenant_id AS BINARY) = CAST('0' AS BINARY)
+                    AND OCTET_LENGTH(i.tenant_id) = OCTET_LENGTH('0')
                     AND CAST(i.client_id AS BINARY) = CAST(r.client_id AS BINARY)
                     AND OCTET_LENGTH(i.client_id) = OCTET_LENGTH(r.client_id)
                     AND CAST(i.owner_jiacn AS BINARY) = CAST(r.owner_jiacn AS BINARY)
@@ -291,7 +309,7 @@ public interface AgentRuntimeMapper extends BaseMapper<AgentRuntimeEntity> {
                               AND a.valid_to IS NULL
                               AND a.client_id = r.client_id
                               AND a.owner_jiacn = r.owner_jiacn
-                              AND a.tenant_id = r.owner_jiacn
+                              AND a.tenant_id = '0'
                               AND CAST(a.canonical_agent_id AS BINARY) = CAST(i.canonical_agent_id AS BINARY)
                               AND OCTET_LENGTH(a.canonical_agent_id) = OCTET_LENGTH(i.canonical_agent_id)
                               AND CAST(a.alias_value AS BINARY) = CAST(b.agent_id AS BINARY)
@@ -304,8 +322,8 @@ public interface AgentRuntimeMapper extends BaseMapper<AgentRuntimeEntity> {
                               AND OCTET_LENGTH(a.client_id) = OCTET_LENGTH(r.client_id)
                               AND CAST(a.owner_jiacn AS BINARY) = CAST(r.owner_jiacn AS BINARY)
                               AND OCTET_LENGTH(a.owner_jiacn) = OCTET_LENGTH(r.owner_jiacn)
-                              AND CAST(a.tenant_id AS BINARY) = CAST(r.owner_jiacn AS BINARY)
-                              AND OCTET_LENGTH(a.tenant_id) = OCTET_LENGTH(r.owner_jiacn)
+                              AND CAST(a.tenant_id AS BINARY) = CAST('0' AS BINARY)
+                              AND OCTET_LENGTH(a.tenant_id) = OCTET_LENGTH('0')
                         )
                     )
               )

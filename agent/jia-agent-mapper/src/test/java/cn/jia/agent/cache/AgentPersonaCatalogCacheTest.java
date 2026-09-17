@@ -77,6 +77,18 @@ class AgentPersonaCatalogCacheTest {
     }
 
     @Test
+    void singleTenantZeroIsAnExactCatalogScope() {
+        AgentPersonaCatalogCache cache = new AgentPersonaCatalogCache();
+
+        AgentPersonaCatalogCache.CatalogSnapshot snapshot = cache.get("0", "Client-A",
+                () -> List.of(persona("0", "Client-A", "wuyong", "吴用")));
+
+        assertEquals("wuyong", snapshot.entries().getFirst().personaCode());
+        assertThrows(IllegalArgumentException.class,
+                () -> cache.get(" 0", "Client-A", List::of));
+    }
+
+    @Test
     void nullEmptyMalformedAndExceptionalLoadsFailClosedAndRemainRetryable() {
         AgentPersonaCatalogCache cache = new AgentPersonaCatalogCache();
         assertThrows(IllegalStateException.class,

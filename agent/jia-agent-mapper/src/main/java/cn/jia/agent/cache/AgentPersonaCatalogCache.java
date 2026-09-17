@@ -224,8 +224,8 @@ public class AgentPersonaCatalogCache {
 
     private record Scope(String tenantId, String clientId) {
         private Scope {
-            if ("0".equals(tenantId) || !validExact(tenantId, 50) || !validExact(clientId, 50)) {
-                throw new IllegalArgumentException("exact non-system persona catalog scope is required");
+            if (!validExact(tenantId, 50) || !validExact(clientId, 50)) {
+                throw new IllegalArgumentException("exact persona catalog scope is required");
             }
         }
     }

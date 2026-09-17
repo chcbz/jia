@@ -31,11 +31,13 @@ class AgentRuntimeMapperContractTest {
         assertFalse(sql.contains("for update"));
         assertFalse(sql.contains(" limit "), "PageHelper owns bounded pagination");
 
+        assertSingleTenant(sql, "r.tenant_id");
         assertExactParameter(sql, "r.client_id", "clientid");
         assertExactParameter(sql, "r.owner_jiacn", "ownerjiacn");
+        assertSingleTenant(sql, "b.tenant_id");
         assertExactParameter(sql, "b.client_id", "clientid");
         assertExactParameter(sql, "b.jiacn", "ownerjiacn");
-        assertExactParameter(sql, "i.tenant_id", "ownerjiacn");
+        assertSingleTenant(sql, "i.tenant_id");
         assertExactParameter(sql, "i.client_id", "clientid");
         assertExactParameter(sql, "i.owner_jiacn", "ownerjiacn");
         assertExactColumns(sql, "i.canonical_agent_id", "r.agent_id");
@@ -59,11 +61,13 @@ class AgentRuntimeMapperContractTest {
         assertFalse(sql.contains("r.abilities like"));
         assertFalse(sql.contains("for update"));
         assertFalse(sql.contains(" limit "));
+        assertSingleTenant(sql, "r.tenant_id");
         assertExactParameter(sql, "r.client_id", "clientid");
         assertExactParameter(sql, "r.owner_jiacn", "ownerjiacn");
+        assertSingleTenant(sql, "b.tenant_id");
         assertExactParameter(sql, "b.client_id", "clientid");
         assertExactParameter(sql, "b.jiacn", "ownerjiacn");
-        assertExactParameter(sql, "i.tenant_id", "ownerjiacn");
+        assertSingleTenant(sql, "i.tenant_id");
         assertExactParameter(sql, "i.client_id", "clientid");
         assertExactParameter(sql, "i.owner_jiacn", "ownerjiacn");
         assertExactColumns(sql, "i.canonical_agent_id", "r.agent_id");
@@ -82,16 +86,18 @@ class AgentRuntimeMapperContractTest {
         assertTrue(sql.contains("b.id = r.binding_id"));
         assertTrue(sql.contains("b.client_id = r.client_id"));
         assertTrue(sql.contains("b.jiacn = r.owner_jiacn"));
-        assertTrue(sql.contains("i.tenant_id = r.owner_jiacn"));
+        assertTrue(sql.contains("i.tenant_id = '0'"));
         assertTrue(sql.contains("i.client_id = r.client_id"));
         assertTrue(sql.contains("i.owner_jiacn = r.owner_jiacn"));
         assertTrue(sql.contains("i.canonical_agent_id = r.agent_id"));
         assertTrue(sql.contains("order by r.last_seen_at desc"));
         assertFalse(sql.contains("for update"));
+        assertSingleTenant(sql, "r.tenant_id");
         assertExactParameter(sql, "r.client_id", "clientid");
+        assertSingleTenant(sql, "b.tenant_id");
         assertExactColumns(sql, "b.client_id", "r.client_id");
         assertExactColumns(sql, "b.jiacn", "r.owner_jiacn");
-        assertExactColumns(sql, "i.tenant_id", "r.owner_jiacn");
+        assertSingleTenant(sql, "i.tenant_id");
         assertExactColumns(sql, "i.client_id", "r.client_id");
         assertExactColumns(sql, "i.owner_jiacn", "r.owner_jiacn");
         assertExactColumns(sql, "i.canonical_agent_id", "r.agent_id");
@@ -165,5 +171,11 @@ class AgentRuntimeMapperContractTest {
     private static void assertExactColumns(String sql, String left, String right) {
         assertTrue(sql.contains("cast(" + left + " as binary) = cast(" + right + " as binary)"), left);
         assertTrue(sql.contains("octet_length(" + left + ") = octet_length(" + right + ")"), left);
+    }
+
+    private static void assertSingleTenant(String sql, String column) {
+        assertTrue(sql.contains(column + " = '0'"), column);
+        assertTrue(sql.contains("cast(" + column + " as binary) = cast('0' as binary)"), column);
+        assertTrue(sql.contains("octet_length(" + column + ") = octet_length('0')"), column);
     }
 }
