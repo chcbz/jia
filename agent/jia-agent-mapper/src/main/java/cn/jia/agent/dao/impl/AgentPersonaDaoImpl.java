@@ -106,9 +106,6 @@ public class AgentPersonaDaoImpl extends BaseDaoImpl<AgentPersonaMapper, AgentPe
     private void requireExactScope(String tenantId, String clientId) {
         requireExact(tenantId, "tenantId");
         requireExact(clientId, "clientId");
-        if ("0".equals(tenantId)) {
-            throw new IllegalArgumentException("tenantId is invalid");
-        }
     }
 
     private void requireExact(String value, String field) {
