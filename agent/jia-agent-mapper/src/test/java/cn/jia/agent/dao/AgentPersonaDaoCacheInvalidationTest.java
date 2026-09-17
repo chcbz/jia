@@ -18,13 +18,28 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
 
 class AgentPersonaDaoCacheInvalidationTest {
     @AfterEach
     void clearTransactionState() {
         TransactionSynchronizationManager.clear();
+    }
+
+    @Test
+    void catalogProjectionAllowsCanonicalSingleTenantScope() throws Exception {
+        AgentPersonaMapper mapper = mock(AgentPersonaMapper.class);
+        List<AgentPersonaEntity> expected = List.of(persona("wuyong", "吴用"));
+        when(mapper.selectCatalogProjection("0", "jia_client")).thenReturn(expected);
+
+        List<AgentPersonaEntity> result = dao(mapper, new AgentPersonaCatalogCache())
+                .findCatalogProjection("0", "jia_client");
+
+        assertSame(expected, result);
+        verify(mapper).selectCatalogProjection(eq("0"), eq("jia_client"));
     }
 
     @Test
