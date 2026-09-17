@@ -90,7 +90,7 @@ class AgentTaskArtifactOutcomeEventProjectionTest {
             payload.put(TaskEventPayload.Key.SUPERSEDED_BY_ARTIFACT_ID, "artifact-new")
                     .put(TaskEventPayload.Key.SUPERSEDED_BY_ARTIFACT_VERSION, 1L);
         }
-        return new DurableEvent(new TaskScope(TENANT, CLIENT, TASK),
+        return new DurableEvent(new TaskScope("0", CLIENT, TENANT, TASK),
                 17L, "evt-outcome", eventType, "agent", VIEWER,
                 "artifact", AgentTaskWorkspaceEventValidator.artifactOutcomeAggregateId(
                         TASK, "artifact-private", 1), payload.toJson(), 1234L);
