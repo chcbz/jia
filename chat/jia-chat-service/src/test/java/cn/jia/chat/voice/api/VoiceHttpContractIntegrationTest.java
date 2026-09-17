@@ -2,6 +2,7 @@ package cn.jia.chat.voice.api;
 
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.voice.SpeechSynthesisResult;
+import cn.jia.chat.voice.VoiceIdentity;
 import cn.jia.chat.voice.config.VoiceSecurityConfiguration;
 import cn.jia.chat.voice.config.VoiceSpeechProperties;
 import cn.jia.chat.voice.service.SpeechSynthesisService;
@@ -10,6 +11,7 @@ import cn.jia.chat.voice.validation.AudioDurationInspector;
 import cn.jia.chat.voice.validation.VoiceAudioUploadFactory;
 import cn.jia.chat.voice.validation.VoiceIdentityResolver;
 import cn.jia.chat.voice.validation.VoiceRequestValidator;
+import cn.jia.core.config.CorsConfig;
 import cn.jia.core.config.ExceptionHandlerAdvice;
 import cn.jia.core.entity.JsonResult;
 import cn.jia.core.security.AllowSensitiveOutput;
@@ -18,6 +20,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
 import org.springframework.boot.http.converter.autoconfigure.HttpMessageConvertersAutoConfiguration;
@@ -62,6 +65,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -69,6 +73,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -80,6 +85,7 @@ import static org.mockito.Mockito.when;
                 "spring.servlet.multipart.max-file-size=10485760B",
                 "spring.servlet.multipart.max-request-size=52428800B",
                 "server.tomcat.max-swallow-size=52428800B",
+                "cors.allowed.origin.patterns=https://kit.chaoyoufan.cn",
                 "logging.level.root=INFO"
         })
 @ExtendWith(OutputCaptureExtension.class)
@@ -105,11 +111,14 @@ class VoiceHttpContractIntegrationTest {
     @Autowired
     private SpeechTranscriptionService transcriptionService;
     @Autowired
+    private SpeechSynthesisService synthesisService;
+    @Autowired
     private ControllerInvocationProbe controllerInvocationProbe;
 
     @Test
     void realSecurityChainAndVoiceAdviceReturnFrozenErrorsWithoutSensitiveLogs(
             CapturedOutput output) throws Exception {
+        clearInvocations(transcriptionService);
         HttpResult unauthorized = send("/chat/speech/synthesis", "application/json",
                 synthesisJson(TRANSCRIPT_SECRET), false);
         assertError(unauthorized, 401, "VOICE_UNAUTHORIZED");
@@ -132,8 +141,15 @@ class VoiceHttpContractIntegrationTest {
         assertEquals(200, valid.status());
         assertEquals("E0", json(valid).path("code").asText());
         assertEquals(SENSITIVE_TRANSCRIPT, json(valid).path("data").path("text").asText());
-        assertTrue(valid.body().getBytes(StandardCharsets.UTF_8).length
-                <= SpeechTranscriptionService.MAX_CLIENT_JSON_BYTES);
+        assertTrue(valid.headers().firstValue(HttpHeaders.CONTENT_TYPE).orElseThrow()
+                .startsWith("application/json"));
+        assertTrue(valid.body().length <= SpeechTranscriptionService.MAX_CLIENT_JSON_BYTES);
+        ArgumentCaptor<VoiceIdentity> transcriptionIdentity =
+                ArgumentCaptor.forClass(VoiceIdentity.class);
+        verify(transcriptionService).transcribe(
+                transcriptionIdentity.capture(), any(), any(), any());
+        assertEquals(new VoiceIdentity(CLAIM_SECRET, "voice-client", "voice-subject"),
+                transcriptionIdentity.getValue());
 
         String mp4Boundary = "voice-disabled-mp4-boundary";
         HttpResult disabledMp4 = send("/chat/speech/transcriptions",
@@ -186,6 +202,63 @@ class VoiceHttpContractIntegrationTest {
         assertFalse(logs.contains(CLAIM_SECRET));
         assertFalse(logs.contains(FILENAME_SECRET));
         assertFalse(logs.contains(TOKEN));
+    }
+
+    @Test
+    void actualCorsFilterAllowsUnauthenticatedPreflightAndAuthenticatedBinaryPrincipal()
+            throws Exception {
+        clearInvocations(synthesisService);
+        String origin = "https://kit.chaoyoufan.cn";
+        HttpRequest preflightRequest = HttpRequest.newBuilder(
+                        URI.create("http://127.0.0.1:" + port + "/chat/speech/synthesis"))
+                .timeout(Duration.ofSeconds(10))
+                .header(HttpHeaders.ORIGIN, origin)
+                .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                .header(HttpHeaders.ACCESS_CONTROL_REQUEST_HEADERS,
+                        "authorization, content-type")
+                .method("OPTIONS", HttpRequest.BodyPublishers.noBody())
+                .build();
+        HttpResponse<byte[]> preflight = client.send(
+                preflightRequest, HttpResponse.BodyHandlers.ofByteArray());
+
+        assertEquals(200, preflight.statusCode());
+        assertEquals(origin, preflight.headers()
+                .firstValue(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN).orElseThrow());
+        assertEquals("true", preflight.headers()
+                .firstValue(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS).orElseThrow());
+        String allowedMethods = preflight.headers()
+                .firstValue(HttpHeaders.ACCESS_CONTROL_ALLOW_METHODS).orElseThrow();
+        assertTrue(allowedMethods.contains("POST"));
+        String allowedHeaders = preflight.headers()
+                .firstValue(HttpHeaders.ACCESS_CONTROL_ALLOW_HEADERS).orElseThrow()
+                .toLowerCase(java.util.Locale.ROOT);
+        assertTrue(allowedHeaders.contains("authorization"));
+        assertTrue(allowedHeaders.contains("content-type"));
+        verifyNoInteractions(synthesisService);
+
+        HttpResult response = sendWithOrigin(
+                "/chat/speech/synthesis", "application/json",
+                synthesisJson("林冲领命。"), true, origin);
+
+        assertEquals(200, response.status());
+        assertEquals(origin, response.headers()
+                .firstValue(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN).orElseThrow());
+        assertEquals("true", response.headers()
+                .firstValue(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS).orElseThrow());
+        assertEquals("audio/mpeg", response.headers()
+                .firstValue(HttpHeaders.CONTENT_TYPE).orElseThrow());
+        assertEquals("no-store", response.headers()
+                .firstValue(HttpHeaders.CACHE_CONTROL).orElseThrow());
+        assertEquals(REQUEST_ID, response.headers()
+                .firstValue("X-Voice-Request-Id").orElseThrow());
+        assertEquals("3", response.headers()
+                .firstValue(HttpHeaders.CONTENT_LENGTH).orElseThrow());
+        assertArrayEquals(new byte[]{1, 2, 3}, response.body());
+
+        ArgumentCaptor<VoiceIdentity> identity = ArgumentCaptor.forClass(VoiceIdentity.class);
+        verify(synthesisService).synthesize(identity.capture(), any());
+        assertEquals(new VoiceIdentity(CLAIM_SECRET, "voice-client", "voice-subject"),
+                identity.getValue());
     }
 
     @Test
@@ -282,6 +355,13 @@ class VoiceHttpContractIntegrationTest {
         return send(path, contentType, HttpRequest.BodyPublishers.ofByteArray(body), authenticated);
     }
 
+    private HttpResult sendWithOrigin(
+            String path, String contentType, byte[] body, boolean authenticated, String origin)
+            throws Exception {
+        HttpRequest.BodyPublisher publisher = HttpRequest.BodyPublishers.ofByteArray(body);
+        return send(path, contentType, publisher, authenticated, origin);
+    }
+
     private HttpResult sendUnknownLength(
             String path, String contentType, byte[] body, boolean authenticated) throws Exception {
         HttpRequest.BodyPublisher publisher = HttpRequest.BodyPublishers.ofInputStream(
@@ -295,6 +375,15 @@ class VoiceHttpContractIntegrationTest {
             String contentType,
             HttpRequest.BodyPublisher body,
             boolean authenticated) throws Exception {
+        return send(path, contentType, body, authenticated, null);
+    }
+
+    private HttpResult send(
+            String path,
+            String contentType,
+            HttpRequest.BodyPublisher body,
+            boolean authenticated,
+            String origin) throws Exception {
         HttpRequest.Builder request = HttpRequest.newBuilder(
                         URI.create("http://127.0.0.1:" + port + path))
                 .timeout(Duration.ofSeconds(10))
@@ -305,17 +394,20 @@ class VoiceHttpContractIntegrationTest {
         if (authenticated) {
             request.header(HttpHeaders.AUTHORIZATION, "Bearer " + TOKEN);
         }
-        HttpResponse<String> response = client.send(
-                request.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-        return new HttpResult(response.statusCode(), response.body());
+        if (origin != null) {
+            request.header(HttpHeaders.ORIGIN, origin);
+        }
+        HttpResponse<byte[]> response = client.send(
+                request.build(), HttpResponse.BodyHandlers.ofByteArray());
+        return new HttpResult(response.statusCode(), response.headers(), response.body());
     }
 
     private void assertError(HttpResult response, int status, String code) throws Exception {
         JsonNode json = json(response);
-        assertEquals(status, response.status(), response.body());
-        assertEquals(status, json.path("status").asInt(), response.body());
-        assertEquals(code, json.path("code").asText(), response.body());
-        assertTrue(json.has("data"), response.body());
+        assertEquals(status, response.status(), response.bodyText());
+        assertEquals(status, json.path("status").asInt(), response.bodyText());
+        assertEquals(code, json.path("code").asText(), response.bodyText());
+        assertTrue(json.has("data"), response.bodyText());
     }
 
     private JsonNode json(HttpResult response) throws Exception {
@@ -340,7 +432,10 @@ class VoiceHttpContractIntegrationTest {
     private record Part(String name, String filename, String contentType, byte[] body) {
     }
 
-    private record HttpResult(int status, String body) {
+    private record HttpResult(int status, HttpHeaders headers, byte[] body) {
+        private String bodyText() {
+            return new String(body, StandardCharsets.UTF_8);
+        }
     }
 
     private static final class ControllerInvocationProbe implements HandlerInterceptor {
@@ -385,6 +480,7 @@ class VoiceHttpContractIntegrationTest {
             VoiceEarlyExceptionResolver.class,
             VoiceTranscriptionRequestBudgetFilter.class,
             VoiceSecurityConfiguration.class,
+            CorsConfig.class,
             ExceptionHandlerAdvice.class,
             SensitiveResponseBodyAdvice.class,
             NonVoiceController.class
@@ -449,7 +545,7 @@ class VoiceHttpContractIntegrationTest {
         SpeechSynthesisService speechSynthesisService() {
             SpeechSynthesisService service = mock(SpeechSynthesisService.class);
             when(service.synthesize(any(), any())).thenReturn(
-                    new SpeechSynthesisResult(new byte[]{1}, "audio/mpeg"));
+                    new SpeechSynthesisResult(new byte[]{1, 2, 3}, "audio/mpeg"));
             return service;
         }
 

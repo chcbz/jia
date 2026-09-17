@@ -39,8 +39,8 @@ public final class OpenAiCompatibleSpeechTranscriptionProvider
     public OpenAiCompatibleSpeechTranscriptionProvider(
             VoiceSpeechProperties properties, SpringAiOpenAiVoiceFacade openAi, ObjectMapper objectMapper) {
         this(properties, openAi, objectMapper, HttpClient.newBuilder()
-                .connectTimeout(Duration.ofMillis(Math.min(
-                        Math.max(1, properties.getConnectTimeoutMillis()), 3_000)))
+                .connectTimeout(Duration.ofMillis(Math.max(
+                        1, properties.getConnectTimeoutMillis())))
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .build());
     }
@@ -169,7 +169,7 @@ public final class OpenAiCompatibleSpeechTranscriptionProvider
     }
 
     private Duration deadline() {
-        return Duration.ofMillis(Math.min(Math.max(1, properties.getProviderDeadlineMillis()), 25_000));
+        return Duration.ofMillis(properties.getProviderDeadlineMillis());
     }
 
     static URI endpoint(String baseUrl, String path, Set<String> allowlist)

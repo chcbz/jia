@@ -19,6 +19,8 @@ import cn.jia.chat.voice.state.VoiceReservation;
 import cn.jia.chat.voice.state.VoiceStateUnavailableException;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.Objects;
+
 @Slf4j
 public final class SpeechSynthesisService {
     private final VoiceSpeechProperties properties;
@@ -58,16 +60,29 @@ public final class SpeechSynthesisService {
         } catch (VoiceStateUnavailableException exception) {
             throw VoiceException.of(VoiceErrorCode.UNAVAILABLE, requestId);
         }
+        if (begin == null || begin.outcome() == null) {
+            throw VoiceException.of(VoiceErrorCode.UNAVAILABLE, requestId);
+        }
         if (begin.outcome() == VoiceBeginResult.Outcome.REPLAY) {
-            byte[] payload = begin.replay().payload();
+            VoiceCachedResult replay = begin.replay();
+            byte[] payload = replay == null ? null : replay.payload();
             if (payload == null || payload.length == 0
                     || payload.length > OpenAiCompatibleSpeechSynthesisProvider.MAX_AUDIO_BYTES
-                    || !"audio/mpeg".equals(begin.replay().contentType())) {
+                    || !"audio/mpeg".equals(replay.contentType())) {
                 throw VoiceException.of(VoiceErrorCode.UNAVAILABLE, requestId);
             }
             return new SpeechSynthesisResult(payload, "audio/mpeg");
         }
         VoiceReservation reservation = VoiceServiceSupport.reservation(begin, requestId);
+        if (reservation == null
+                || reservation.operation() != VoiceOperation.SYNTHESIS
+                || !Objects.equals(identityScope, reservation.identityScope())
+                || !Objects.equals(requestId, reservation.requestId())
+                || !Objects.equals(digest, reservation.digest())
+                || reservation.leaseToken() == null
+                || reservation.leaseToken().isBlank()) {
+            throw VoiceException.of(VoiceErrorCode.UNAVAILABLE, requestId);
+        }
         long started = System.nanoTime();
         try {
             SpeechSynthesisResult result = provider.synthesize(new SpeechSynthesisRequest(

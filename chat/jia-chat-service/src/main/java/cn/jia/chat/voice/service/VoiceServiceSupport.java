@@ -29,9 +29,7 @@ final class VoiceServiceSupport {
         if (properties.getPerMinute() < 1 || properties.getPerHour() < properties.getPerMinute()
                 || properties.getGlobalConcurrency() < 1
                 || properties.getProviderDeadlineMillis() < 1
-                || properties.getProviderDeadlineMillis() > 25_000
-                || properties.getConnectTimeoutMillis() < 1
-                || properties.getConnectTimeoutMillis() > 3_000) {
+                || properties.getConnectTimeoutMillis() < 1) {
             throw VoiceException.of(VoiceErrorCode.UNAVAILABLE, requestId);
         }
     }

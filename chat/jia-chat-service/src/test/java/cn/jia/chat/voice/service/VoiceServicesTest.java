@@ -352,6 +352,69 @@ class VoiceServicesTest {
     }
 
     @Test
+    void explicitTransportTimeoutsAboveHistoricalPerformanceCapsRemainAvailable() {
+        VoiceSpeechProperties properties = properties();
+        properties.setProviderDeadlineMillis(120_001);
+        properties.setConnectTimeoutMillis(120_001);
+
+        transcriptionService(properties, transcriptionProvider(
+                        new AtomicInteger(), null, null), new FakeCoordinator(),
+                mock(VoiceAudioUploadFactory.class)).requireAvailable(REQUEST_ID);
+        synthesisService(properties, synthesisProvider(
+                        new AtomicInteger(), new byte[]{1}), new FakeCoordinator())
+                .requireAvailable(REQUEST_ID);
+    }
+
+    @Test
+    void synthesisRejectsMalformedOrCrossIdentityReservationBeforeProviderOrRelease() {
+        VoiceSpeechProperties properties = properties();
+        VoiceDigests digests = new VoiceDigests(properties);
+        String expectedScope = digests.identityScope(IDENTITY);
+        String expectedDigest = digests.synthesis(
+                "林冲领命。", "juyiting-default", "mp3");
+        VoiceSynthesisRequest request = new VoiceSynthesisRequest(
+                REQUEST_ID, "林冲领命。", "juyiting-default", "mp3");
+        for (VoiceBeginResult begin : new VoiceBeginResult[]{
+                null,
+                new VoiceBeginResult(null, null, null),
+                VoiceBeginResult.replay(null),
+                VoiceBeginResult.replay(new VoiceCachedResult(
+                        new byte[]{1}, "application/json")),
+                VoiceBeginResult.reserved(null),
+                VoiceBeginResult.reserved(new VoiceReservation(
+                        VoiceOperation.TRANSCRIPTION, expectedScope, REQUEST_ID,
+                        expectedDigest, "lease")),
+                VoiceBeginResult.reserved(new VoiceReservation(
+                        VoiceOperation.SYNTHESIS, "wrong-scope", REQUEST_ID,
+                        expectedDigest, "lease")),
+                VoiceBeginResult.reserved(new VoiceReservation(
+                        VoiceOperation.SYNTHESIS, expectedScope, "wrong-request",
+                        expectedDigest, "lease")),
+                VoiceBeginResult.reserved(new VoiceReservation(
+                        VoiceOperation.SYNTHESIS, expectedScope, REQUEST_ID,
+                        "wrong-digest", "lease")),
+                VoiceBeginResult.reserved(new VoiceReservation(
+                        VoiceOperation.SYNTHESIS, expectedScope, REQUEST_ID,
+                        expectedDigest, " "))}) {
+            FakeCoordinator coordinator = new FakeCoordinator();
+            coordinator.returnNullLegacy = begin == null;
+            coordinator.nextLegacy = begin;
+            AtomicInteger providerCalls = new AtomicInteger();
+            SpeechSynthesisService service = synthesisService(properties,
+                    synthesisProvider(providerCalls, new byte[]{1}), coordinator);
+
+            VoiceException error = assertThrows(VoiceException.class,
+                    () -> service.synthesize(IDENTITY, request));
+
+            assertEquals(VoiceErrorCode.UNAVAILABLE, error.error());
+            assertEquals(1, coordinator.legacyBeginCalls);
+            assertEquals(0, providerCalls.get());
+            assertEquals(null, coordinator.terminal);
+            assertEquals(0, coordinator.reservationReleaseCalls);
+        }
+    }
+
+    @Test
     void synthesisUnavailableEchoesValidatedRequestIdForMissingHmacOrUnknownProvider() {
         VoiceSpeechProperties missingHmac = properties();
         missingHmac.setIdentityHmacSecret(null);
@@ -482,6 +545,7 @@ class VoiceServicesTest {
         private boolean failSucceed;
         private boolean failAdmittedBegin;
         private boolean returnMismatchedReservation;
+        private boolean returnNullLegacy;
 
         @Override
         public VoiceAdmissionResult admit(
@@ -516,6 +580,9 @@ class VoiceServicesTest {
         public VoiceBeginResult begin(
                 VoiceOperation operation, String scope, String requestId, String digest) {
             legacyBeginCalls++;
+            if (returnNullLegacy) {
+                return null;
+            }
             if (nextLegacy != null) {
                 return nextLegacy;
             }

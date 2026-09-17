@@ -27,6 +27,7 @@ import org.springframework.mock.env.MockEnvironment;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.lang.reflect.Field;
 import java.net.http.HttpClient;
 import java.net.http.HttpHeaders;
 import java.net.http.HttpRequest;
@@ -301,6 +302,91 @@ class OpenAiCompatibleVoiceProviderTest {
     }
 
     @Test
+    void explicitConnectTimeoutAboveHistoricalPerformanceCapIsUsedExactly() throws Exception {
+        VoiceSpeechProperties properties = configured();
+        properties.setConnectTimeoutMillis(120_001);
+        var transcription = new OpenAiCompatibleSpeechTranscriptionProvider(
+                properties, facade(), new ObjectMapper());
+        var synthesis = new OpenAiCompatibleSpeechSynthesisProvider(
+                properties, facade(), new ObjectMapper());
+
+        assertEquals(120_001L, providerClient(transcription)
+                .connectTimeout().orElseThrow().toMillis());
+        assertEquals(120_001L, providerClient(synthesis)
+                .connectTimeout().orElseThrow().toMillis());
+    }
+
+    @Test
+    void explicitProviderDeadlineAboveHistoricalPerformanceCapIsUsedExactly() throws Exception {
+        HttpClient client = mock(HttpClient.class);
+        when(client.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
+                .thenThrow(new HttpTimeoutException("timeout"));
+        VoiceSpeechProperties properties = configured();
+        properties.setProviderDeadlineMillis(120_001);
+        Path audio = Files.createTempFile("voice-provider-deadline", ".webm");
+        Files.write(audio, new byte[]{1});
+        try (FileChannel channel = FileChannel.open(audio, StandardOpenOption.READ)) {
+            var transcription = new OpenAiCompatibleSpeechTranscriptionProvider(
+                    properties, facade(), new ObjectMapper(), client);
+            assertThrows(SpeechProviderException.class,
+                    () -> transcription.transcribe(new FileChannelSpeechTranscriptionRequest(
+                            channel, 1, "audio/webm;codecs=opus", "zh-CN", 1200)));
+
+            var synthesis = new OpenAiCompatibleSpeechSynthesisProvider(
+                    properties, facade(), new ObjectMapper(), client);
+            assertThrows(SpeechProviderException.class,
+                    () -> synthesis.synthesize(new SpeechSynthesisRequest(
+                            "林冲领命。", "juyiting-default", "mp3")));
+        } finally {
+            Files.deleteIfExists(audio);
+        }
+
+        var requests = org.mockito.ArgumentCaptor.forClass(HttpRequest.class);
+        verify(client, times(2)).send(
+                requests.capture(), any(HttpResponse.BodyHandler.class));
+        assertEquals(List.of(120_001L, 120_001L), requests.getAllValues().stream()
+                .map(request -> request.timeout().orElseThrow().toMillis())
+                .toList());
+    }
+
+    @Test
+    void providerInterruptionRestoresCancellationSignalWithoutRetry() throws Exception {
+        HttpClient client = mock(HttpClient.class);
+        when(client.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
+                .thenThrow(new InterruptedException("cancelled"));
+        VoiceSpeechProperties properties = configured();
+        Path audio = Files.createTempFile("voice-provider-interrupted", ".webm");
+        Files.write(audio, new byte[]{1});
+        try {
+            try (FileChannel channel = FileChannel.open(audio, StandardOpenOption.READ)) {
+                var transcription = new OpenAiCompatibleSpeechTranscriptionProvider(
+                        properties, facade(), new ObjectMapper(), client);
+                SpeechProviderException error = assertThrows(SpeechProviderException.class,
+                        () -> transcription.transcribe(new FileChannelSpeechTranscriptionRequest(
+                                channel, 1, "audio/webm;codecs=opus", "zh-CN", 1200)));
+                assertEquals(SpeechProviderException.FailureKind.UNKNOWN, error.failureKind());
+                assertTrue(Thread.currentThread().isInterrupted());
+            } finally {
+                Thread.interrupted();
+            }
+
+            var synthesis = new OpenAiCompatibleSpeechSynthesisProvider(
+                    properties, facade(), new ObjectMapper(), client);
+            SpeechProviderException error = assertThrows(SpeechProviderException.class,
+                    () -> synthesis.synthesize(new SpeechSynthesisRequest(
+                            "林冲领命。", "juyiting-default", "mp3")));
+            assertEquals(SpeechProviderException.FailureKind.UNKNOWN, error.failureKind());
+            assertTrue(Thread.currentThread().isInterrupted());
+        } finally {
+            Thread.interrupted();
+            Files.deleteIfExists(audio);
+        }
+
+        verify(client, times(2)).send(
+                any(HttpRequest.class), any(HttpResponse.BodyHandler.class));
+    }
+
+    @Test
     void exactAllowlistedHttpsCompatibilityGatewayDispatchesBothSafeAdapters() throws Exception {
         HttpClient client = mock(HttpClient.class);
         when(client.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
@@ -472,6 +558,12 @@ class OpenAiCompatibleVoiceProviderTest {
                 any(HttpRequest.class), any(HttpResponse.BodyHandler.class));
     }
 
+
+    private static HttpClient providerClient(Object provider) throws Exception {
+        Field client = provider.getClass().getDeclaredField("client");
+        client.setAccessible(true);
+        return (HttpClient) client.get(provider);
+    }
 
     private static SpringAiOpenAiVoiceFacade facade() {
         return facade(VoiceActivationConfigurationValidator.OPENAI_BASE_URL,

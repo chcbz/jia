@@ -28,8 +28,8 @@ public final class OpenAiCompatibleSpeechSynthesisProvider implements SpeechSynt
     public OpenAiCompatibleSpeechSynthesisProvider(
             VoiceSpeechProperties properties, SpringAiOpenAiVoiceFacade openAi, ObjectMapper objectMapper) {
         this(properties, openAi, objectMapper, HttpClient.newBuilder()
-                .connectTimeout(Duration.ofMillis(Math.min(
-                        Math.max(1, properties.getConnectTimeoutMillis()), 3_000)))
+                .connectTimeout(Duration.ofMillis(Math.max(
+                        1, properties.getConnectTimeoutMillis())))
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .build());
     }
@@ -107,8 +107,7 @@ public final class OpenAiCompatibleSpeechSynthesisProvider implements SpeechSynt
                     "voice", config.getProviderVoice(),
                     "response_format", request.format()));
             return HttpRequest.newBuilder(uri)
-                    .timeout(Duration.ofMillis(Math.min(
-                            Math.max(1, properties.getProviderDeadlineMillis()), 25_000)))
+                    .timeout(Duration.ofMillis(properties.getProviderDeadlineMillis()))
                     .header("Authorization", bearer(connection.apiKey()))
                     .header("Content-Type", "application/json")
                     .header("Accept", "audio/mpeg")

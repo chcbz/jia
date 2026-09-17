@@ -48,6 +48,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
 
 class RedisVoiceRequestCoordinatorContractTest {
     @Test
@@ -102,6 +103,19 @@ class RedisVoiceRequestCoordinatorContractTest {
         assertEquals(Duration.ofMinutes(10).toMillis(), RedisVoiceRequestCoordinator.SUCCEEDED_TTL_MS);
         assertEquals(Duration.ofMinutes(2).toMillis(), RedisVoiceRequestCoordinator.FAILED_KNOWN_TTL_MS);
         assertEquals(Duration.ofMinutes(10).toMillis(), RedisVoiceRequestCoordinator.FAILED_UNKNOWN_TTL_MS);
+    }
+
+    @Test
+    void leaseTtlTracksExplicitProviderDeadlineWithoutHistoricalPerformanceCap()
+            throws Exception {
+        VoiceSpeechProperties properties = new VoiceSpeechProperties();
+        properties.setProviderDeadlineMillis(120_001);
+        RedisVoiceRequestCoordinator coordinator = new RedisVoiceRequestCoordinator(
+                mock(StringRedisTemplate.class), properties, null);
+        Method leaseTtl = RedisVoiceRequestCoordinator.class.getDeclaredMethod("leaseTtl");
+        leaseTtl.setAccessible(true);
+
+        assertEquals(150_001L, leaseTtl.invoke(coordinator));
     }
 
     @Test

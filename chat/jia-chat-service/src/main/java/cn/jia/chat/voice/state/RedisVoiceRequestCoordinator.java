@@ -377,7 +377,11 @@ public final class RedisVoiceRequestCoordinator implements VoiceRequestCoordinat
     }
 
     private long leaseTtl() {
-        return Math.addExact(Math.min(properties.getProviderDeadlineMillis(), 25_000), 30_000);
+        try {
+            return Math.addExact(properties.getProviderDeadlineMillis(), 30_000);
+        } catch (ArithmeticException exception) {
+            throw new VoiceStateUnavailableException();
+        }
     }
 
     private void transition(
