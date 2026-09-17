@@ -81,6 +81,7 @@ public interface AgentPersonaBindingMapper extends BaseMapper<AgentPersonaBindin
                    i.canonical_type,
                    i.lifecycle_status,
                    CASE
+                     WHEN i.id IS NULL THEN NULL
                      WHEN b.agent_id = i.canonical_agent_id
                       AND CAST(b.agent_id AS BINARY) = CAST(i.canonical_agent_id AS BINARY)
                       AND OCTET_LENGTH(b.agent_id) = OCTET_LENGTH(i.canonical_agent_id)
