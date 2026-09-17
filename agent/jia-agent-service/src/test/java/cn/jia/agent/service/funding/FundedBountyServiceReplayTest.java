@@ -42,7 +42,7 @@ class FundedBountyServiceReplayTest {
                         invocation.getArgument(3)).apply(root));
 
         AgentTaskFundingCancelReceiptDTO receipt = fixture.service.cancel(
-                new FundedBountyActor("tenant", "client", "tenant", "user-1"), KEY, hash, "task-1", 0L);
+                new FundedBountyActor("tenant", "client", "user-1"), KEY, hash, "task-1", 0L);
 
         assertEquals("1", receipt.taskVersion());
         assertEquals("37", receipt.refundedMicro());
@@ -63,7 +63,7 @@ class FundedBountyServiceReplayTest {
                         invocation.getArgument(3)).apply(root(1L)));
 
         FundedBountyException failure = assertThrows(FundedBountyException.class, () ->
-                fixture.service.cancel(new FundedBountyActor("tenant", "client", "tenant", "user-1"),
+                fixture.service.cancel(new FundedBountyActor("tenant", "client", "user-1"),
                         KEY, changed, "task-1", 0L));
 
         assertEquals("IDEMPOTENCY_CONFLICT", failure.code());

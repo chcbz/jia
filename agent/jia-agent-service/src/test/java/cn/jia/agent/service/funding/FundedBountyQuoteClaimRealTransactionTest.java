@@ -90,7 +90,7 @@ class FundedBountyQuoteClaimRealTransactionTest {
     private static final String TENANT = "Tenant-W04";
     private static final String CLIENT = "Client-W04";
     private static final String USER = "jwt-sub-w04";
-    private static final FundedBountyActor ACTOR = new FundedBountyActor(TENANT, CLIENT, TENANT, USER);
+    private static final FundedBountyActor ACTOR = new FundedBountyActor(TENANT, CLIENT, USER);
     private static final String AGENT_A = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private static final String AGENT_B = "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     private static final long GROSS = 1_000_000_000L;
@@ -262,7 +262,7 @@ class FundedBountyQuoteClaimRealTransactionTest {
         assertEquals(before, quote(AGENT_A, 2));
         assertThrows(FundedBountyException.class, () -> quote(AGENT_A, 4));
         AgentTaskQuoteRequestDTO request = quoteRequest(AGENT_A);
-        assertThrows(FundedBountyException.class, () -> service.quote(new FundedBountyActor(TENANT, CLIENT, TENANT, "other"),
+        assertThrows(FundedBountyException.class, () -> service.quote(new FundedBountyActor(TENANT, CLIENT, "other"),
                 key(2), FundedBountyRequestDigest.quote(taskId, request), taskId, request));
         assertEquals(1, count("agent_task_bounty_quote"));
         assertEquals(2, count("economy_transaction"));

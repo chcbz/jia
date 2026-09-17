@@ -32,7 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AgentTaskEventAfterCommitPublisherTest {
-    private final TaskScope scope = new TaskScope("0", "client-tx", "tenant-tx", "task-tx");
+    private final TaskScope scope = new TaskScope("tenant-tx", "client-tx", "task-tx");
     private DriverManagerDataSource dataSource;
     private JdbcTemplate jdbc;
     private DataSourceTransactionManager transactionManager;

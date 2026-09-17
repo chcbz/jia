@@ -61,9 +61,10 @@ import static org.mockito.Mockito.when;
 
 class AgentTaskEventReplayServiceImplTest {
     private static final TaskScope SCOPE =
-            new TaskScope("0", "client-a", "Tenant-A", "caf\u00e9");
+            new TaskScope("Tenant-A", "client-a", "caf\u00e9");
     private static final AgentTaskEventBroker.TaskScope BROKER_SCOPE =
-            new AgentTaskEventBroker.TaskScope("0", SCOPE.clientId(), SCOPE.tenantId(), SCOPE.taskId());
+            new AgentTaskEventBroker.TaskScope(
+                    SCOPE.tenantId(), SCOPE.clientId(), SCOPE.taskId());
     private static final Duration VERIFY_TIMEOUT = Duration.ofSeconds(5);
 
     private TrackingBroker broker;
@@ -335,7 +336,7 @@ class AgentTaskEventReplayServiceImplTest {
         AgentTaskEventEntity three = entity(SCOPE, 3L);
         AgentTaskEventEntity four = entity(SCOPE, 4L);
         AgentTaskEventEntity wrongScopeTwo = entity(
-                new TaskScope("0", SCOPE.clientId(), "tenant-other", SCOPE.taskId()), 2L);
+                new TaskScope("tenant-other", SCOPE.clientId(), SCOPE.taskId()), 2L);
         return Stream.of(
                 Arguments.of("missing first event", 3L,
                         Map.of(0L, List.of(two, three)), List.of()),
@@ -1246,9 +1247,9 @@ class AgentTaskEventReplayServiceImplTest {
         assertThrows(IllegalArgumentException.class, () -> new ResyncRequired(
                 SCOPE, -1L, ResyncReason.PAGE_GAP));
         assertThrows(IllegalArgumentException.class,
-                () -> new TaskScope("0", "client", " padded", "task"));
+                () -> new TaskScope(" padded", "client", "task"));
         assertThrows(IllegalArgumentException.class,
-                () -> new TaskScope("0", "client", "tenant", "task\n"));
+                () -> new TaskScope("tenant", "client", "task\n"));
     }
 
     private void bindStore() {

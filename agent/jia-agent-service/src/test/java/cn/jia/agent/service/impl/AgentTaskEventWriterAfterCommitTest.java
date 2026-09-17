@@ -31,7 +31,10 @@ class AgentTaskEventWriterAfterCommitTest {
         fixture = AgentTaskEventTestFixture.h2("c02_writer");
         fixture.seedTask();
         received = new CopyOnWriteArrayList<>();
-        subscription = fixture.eventBroker.stream(new TaskScope("0", AgentTaskEventTestFixture.CLIENT, AgentTaskEventTestFixture.TENANT, AgentTaskEventTestFixture.TASK))
+        subscription = fixture.eventBroker.stream(new TaskScope(
+                        AgentTaskEventTestFixture.TENANT,
+                        AgentTaskEventTestFixture.CLIENT,
+                        AgentTaskEventTestFixture.TASK))
                 .subscribe(wakeup -> received.add(wakeup.eventVersion()));
     }
 
@@ -67,7 +70,10 @@ class AgentTaskEventWriterAfterCommitTest {
         CountDownLatch callbackEntered = new CountDownLatch(1);
         CountDownLatch releaseCallback = new CountDownLatch(1);
         CountDownLatch callbackExited = new CountDownLatch(1);
-        subscription = fixture.eventBroker.stream(new TaskScope("0", AgentTaskEventTestFixture.CLIENT, AgentTaskEventTestFixture.TENANT, AgentTaskEventTestFixture.TASK))
+        subscription = fixture.eventBroker.stream(new TaskScope(
+                        AgentTaskEventTestFixture.TENANT,
+                        AgentTaskEventTestFixture.CLIENT,
+                        AgentTaskEventTestFixture.TASK))
                 .subscribe(wakeup -> {
                     callbackEntered.countDown();
                     try {

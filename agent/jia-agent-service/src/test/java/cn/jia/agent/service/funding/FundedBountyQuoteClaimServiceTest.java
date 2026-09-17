@@ -51,7 +51,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class FundedBountyQuoteClaimServiceTest {
-    private static final FundedBountyActor ACTOR = new FundedBountyActor("tenant", "client", "tenant", "user");
+    private static final FundedBountyActor ACTOR = new FundedBountyActor("tenant", "client", "user");
     private static final String TASK = "task-1";
     private static final String AGENT = "agt_00000000000000000000000000000001";
     private static final String QUOTE = "q_00000000000000000000000000000001";
@@ -118,7 +118,8 @@ class FundedBountyQuoteClaimServiceTest {
         assertEquals("1", receipt.taskVersion());
         assertEquals("100", receipt.claimedAt());
         verify(fixture.quoteMapper, never()).insertClaimOperation(any());
-        verify(fixture.assignment, never()).assignResolvedVersioned(anyString(), anyString(), anyString(), anyString(), anyList(), anyBoolean(), anyLong(), any());
+        verify(fixture.assignment, never()).assignResolvedVersioned(
+                anyString(), anyString(), anyString(), anyList(), anyBoolean(), anyLong(), any());
     }
 
     @Test
@@ -131,7 +132,8 @@ class FundedBountyQuoteClaimServiceTest {
 
         assertEquals("QUOTE_EXPIRED", failure.code());
         verify(fixture.quoteMapper, never()).insertClaimOperation(any());
-        verify(fixture.assignment, never()).assignResolvedVersioned(anyString(), anyString(), anyString(), anyString(), anyList(), anyBoolean(), anyLong(), any());
+        verify(fixture.assignment, never()).assignResolvedVersioned(
+                anyString(), anyString(), anyString(), anyList(), anyBoolean(), anyLong(), any());
     }
 
     @Test
@@ -155,7 +157,8 @@ class FundedBountyQuoteClaimServiceTest {
                 fixture.service.claim(ACTOR, key(3), HASH, TASK, claim(AGENT, false)));
 
         assertEquals("INSUFFICIENT_BOUNTY_BUDGET", failure.code());
-        verify(fixture.assignment, never()).assignResolvedVersioned(anyString(), anyString(), anyString(), anyString(), anyList(), anyBoolean(), anyLong(), any());
+        verify(fixture.assignment, never()).assignResolvedVersioned(
+                anyString(), anyString(), anyString(), anyList(), anyBoolean(), anyLong(), any());
     }
 
     @Test
@@ -239,10 +242,11 @@ class FundedBountyQuoteClaimServiceTest {
     }
 
     private static void stubSuccessfulAssignment(Fixture fixture) {
-        when(fixture.assignment.assignResolvedVersioned(anyString(), anyString(), anyString(), anyString(), anyList(), anyBoolean(), anyLong(), any()))
+        when(fixture.assignment.assignResolvedVersioned(
+                anyString(), anyString(), anyString(), anyList(), anyBoolean(), anyLong(), any()))
                 .thenAnswer(invocation -> {
                     AgentLegacyTaskCompatibilityService.AssignmentPrecommitValidator validator =
-                            invocation.getArgument(7);
+                            invocation.getArgument(6);
                     validator.validate(fixture.root, List.of(AGENT));
                     fixture.root.setRewardStatus(AgentConstants.TASK_STATUS_ASSIGNED);
                     fixture.root.setAssignedAt(100L);

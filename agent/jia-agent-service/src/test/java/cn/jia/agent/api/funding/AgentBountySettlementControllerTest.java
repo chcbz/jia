@@ -39,7 +39,7 @@ class AgentBountySettlementControllerTest {
         var response = controller.complete("task", Map.of("expectedTaskVersion", "1", "actualComputeMicro", "1"), KEY, jwt("sub", "Tenant", "Client"));
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals("private, no-store", response.getHeaders().getFirst("Cache-Control"));
-        assertEquals(new FundedBountyActor("Tenant", "Client", "Tenant", "sub"), actor.get());
+        assertEquals(new FundedBountyActor("Tenant", "Client", "sub"), actor.get());
         assertEquals(new AgentTaskFundingCompleteDTO("1", "1"), request.get());
         for (Map<String, Object> body : List.<Map<String, Object>>of(
                 Map.of("expectedTaskVersion", 1, "actualComputeMicro", "1"),
