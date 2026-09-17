@@ -7,6 +7,12 @@ import cn.jia.agent.hosting.HostingRentHttp;
 import cn.jia.agent.hosting.HostingRentOwnerResolver;
 import cn.jia.agent.mapper.EconomyReadOnlyPreviewMapper;
 import org.apache.ibatis.session.SqlSessionFactory;
+import org.apache.ibatis.executor.Executor;
+import org.apache.ibatis.mapping.MappedStatement;
+import org.apache.ibatis.plugin.Interceptor;
+import org.apache.ibatis.plugin.Intercepts;
+import org.apache.ibatis.plugin.Invocation;
+import org.apache.ibatis.plugin.Signature;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -45,6 +51,7 @@ class EconomyReadOnlyPreviewSqlFixtureTest {
 
     private JdbcTemplate jdbc;
     private EconomyReadOnlyPreviewService service;
+    private EconomyReadOnlyPreviewMapper mapper;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -59,11 +66,12 @@ class EconomyReadOnlyPreviewSqlFixtureTest {
         org.apache.ibatis.session.Configuration configuration = new org.apache.ibatis.session.Configuration();
         configuration.setMapUnderscoreToCamelCase(true);
         configuration.addMapper(EconomyReadOnlyPreviewMapper.class);
+        configuration.addInterceptor(new RejectMapperWrites());
         SqlSessionFactoryBean factoryBean = new SqlSessionFactoryBean();
         factoryBean.setDataSource(dataSource);
         factoryBean.setConfiguration(configuration);
         SqlSessionFactory factory = Objects.requireNonNull(factoryBean.getObject());
-        EconomyReadOnlyPreviewMapper mapper = new SqlSessionTemplate(factory)
+        mapper = new SqlSessionTemplate(factory)
                 .getMapper(EconomyReadOnlyPreviewMapper.class);
 
         HostingRentOwnerResolver owners = mock(HostingRentOwnerResolver.class);
@@ -148,11 +156,24 @@ class EconomyReadOnlyPreviewSqlFixtureTest {
                 "case-insensitive fixture would leak Tenant-A without the mapper's binary fence");
         Principal trailingClient = new Principal("Tenant-A", "0", "0", "0",
                 "Client-A ", "Tenant-A", "actor-A");
-        assertEquals("0", service.wallet(trailingClient).availableMicro());
+        assertEquals("PREVIEW_SCOPE_UNAVAILABLE", assertThrows(EconomyReadOnlyPreviewException.class,
+                () -> service.wallet(trailingClient)).code());
+        assertEquals(0L, mapper.selectWallet("Tenant-A", "Client-A ", "actor-A").getAvailableMicro());
+        assertEquals(0L, mapper.selectWallet("Tenant-A", CLIENT, "actor-A ").getAvailableMicro());
+        assertEquals(0L, mapper.selectWallet("Tenant-A-prefix", CLIENT, "actor-A").getAvailableMicro());
 
         assertEquals(service.products(A, 0, 10), service.products(C, 0, 10),
                 "marketplace is shared at tenant 0 only within the exact client");
-        assertTrue(service.products(trailingClient, 0, 10).items().isEmpty());
+        assertEquals("PREVIEW_SCOPE_UNAVAILABLE", assertThrows(EconomyReadOnlyPreviewException.class,
+                () -> service.products(trailingClient, 0, 10)).code());
+        assertTrue(mapper.selectProducts("0", "Client-A ", 0, 10).isEmpty());
+        assertTrue(mapper.selectProducts("Tenant-A", CLIENT, 0, 10).isEmpty());
+        assertTrue(mapper.selectProduct("0", CLIENT, "PRODUCT-1").isEmpty());
+        assertTrue(mapper.selectOwnedAgent("0", CLIENT, "tenant-a", AGENT).isEmpty());
+        assertTrue(mapper.selectOwnedAgent("0", CLIENT, "Tenant-A ", AGENT).isEmpty());
+        assertNull(mapper.selectLatestLease("0", CLIENT, "actor-C", AGENT));
+        assertNull(mapper.selectLatestLease("0", CLIENT, "Actor-A", AGENT));
+        assertNull(mapper.selectLatestLease("Tenant-A", CLIENT, "actor-A", AGENT));
 
         EconomyReadOnlyPreviewException wrongSubject = assertThrows(EconomyReadOnlyPreviewException.class,
                 () -> service.agentSkills(SAME_OWNER_OTHER_SUB, AGENT));
@@ -160,6 +181,42 @@ class EconomyReadOnlyPreviewSqlFixtureTest {
         EconomyReadOnlyPreviewException wrongOwner = assertThrows(EconomyReadOnlyPreviewException.class,
                 () -> service.hostingLease(C, AGENT));
         assertEquals("PREVIEW_RESOURCE_NOT_FOUND", wrongOwner.code());
+    }
+
+    @Test
+    void ledgerCursorDoesNotGrantAccessAndEmptyWalletDoesNotCreateAccount() {
+        Map<String, Integer> before = counts();
+        LedgerPage first = service.ledger(A, null, 1);
+        assertEquals("entry-debit", first.items().getFirst().entryId());
+        var cursor = EconomyReadOnlyPreviewService.decodeCursor(first.nextCursor());
+        LedgerPage next = service.ledger(A, cursor, 1);
+        assertEquals("entry-credit", next.items().getFirst().entryId());
+        assertNull(next.nextCursor());
+        assertTrue(service.ledger(C, cursor, 10).items().isEmpty());
+        assertEquals("0", service.wallet(principal("New-Owner", "new-sub")).availableMicro());
+        assertEquals(before, counts());
+    }
+
+    @Test
+    void catalogPublicationEvidenceAndHostingAbsenceAreNotManufacturedSuccess() {
+        jdbc.update("UPDATE economy_skill_product SET status='DRAFT' WHERE product_id='product-1'");
+        assertTrue(service.products(A, 0, 10).items().isEmpty());
+        assertEquals("PREVIEW_RESOURCE_NOT_FOUND", assertThrows(EconomyReadOnlyPreviewException.class,
+                () -> service.product(A, "product-1")).code());
+        jdbc.update("UPDATE economy_skill_product SET status='PUBLISHED' WHERE product_id='product-1'");
+        jdbc.update("UPDATE economy_skill_product_version SET review_status='REJECTED' WHERE product_version_id='version-1'");
+        assertTrue(service.products(A, 0, 10).items().isEmpty());
+        jdbc.update("UPDATE economy_skill_installation SET status='FAILED',installed_at=NULL");
+        assertTrue(service.agentSkills(A, AGENT).installationEvidence().stream()
+                .allMatch(evidence -> evidence.status().equals("UNCONFIRMED")));
+        jdbc.update("DELETE FROM economy_hosting_lease");
+        assertEquals("APPLICABLE", service.hostingLease(A, AGENT).applicability());
+        assertNull(service.hostingLease(A, AGENT).lease());
+        jdbc.update("DELETE FROM agent_hosted_profile");
+        assertEquals("NOT_APPLICABLE", service.hostingLease(A, AGENT).applicability());
+        jdbc.update("DELETE FROM economy_hosting_rent_plan");
+        assertEquals("PREVIEW_PLAN_UNAVAILABLE", assertThrows(EconomyReadOnlyPreviewException.class,
+                () -> service.hostingPlan(A)).code());
     }
 
     private void seed() {
@@ -175,11 +232,11 @@ class EconomyReadOnlyPreviewSqlFixtureTest {
                 VALUES('escrow-a','HOSTING_RENT','lease-1','wallet-a','escrow-account','SILVER',
                        500,100,50,'ACTIVE',2,'Tenant-A',?,1,1)
                 """, CLIENT);
-        transaction("tx-credit", "ISSUE_SILVER", "issue-1", 100, 100);
+        transaction("tx-credit", "ISSUE_SILVER", "issue-1", 100);
         entry("entry-credit", "tx-credit", "wallet-a", 120, 100, 1_120);
-        transaction("tx-debit", "HOSTING_RENT", "lease-1", 200, 200);
+        transaction("tx-debit", "HOSTING_RENT", "lease-1", 200);
         entry("entry-debit", "tx-debit", "wallet-a", 200, -70, 1_050);
-        transaction("tx-foreign", "ISSUE_SILVER", "foreign", 300, 300, "Tenant-C", "actor-C");
+        transaction("tx-foreign", "ISSUE_SILVER", "foreign", 300, "Tenant-C", "actor-C");
         entry("entry-foreign", "tx-foreign", "wallet-c", 300, 999, 3_199, "Tenant-C");
 
         jdbc.update("""
@@ -256,11 +313,11 @@ class EconomyReadOnlyPreviewSqlFixtureTest {
                 """, accountId, actor, balance, version, tenant, client);
     }
 
-    private void transaction(String id, String type, String ref, long postedAt, long ignored) {
-        transaction(id, type, ref, postedAt, ignored, "Tenant-A", "actor-A");
+    private void transaction(String id, String type, String ref, long postedAt) {
+        transaction(id, type, ref, postedAt, "Tenant-A", "actor-A");
     }
 
-    private void transaction(String id, String type, String ref, long postedAt, long ignored,
+    private void transaction(String id, String type, String ref, long postedAt,
             String tenant, String actor) {
         jdbc.update("""
                 INSERT INTO economy_transaction
@@ -317,6 +374,17 @@ class EconomyReadOnlyPreviewSqlFixtureTest {
             result.put(table, jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Integer.class));
         }
         return result;
+    }
+
+    /** Counts alone miss UPDATE/delete+insert; reject every mapper write before it reaches JDBC. */
+    @Intercepts(@Signature(type = Executor.class, method = "update",
+            args = {MappedStatement.class, Object.class}))
+    public static final class RejectMapperWrites implements Interceptor {
+        @Override
+        public Object intercept(Invocation invocation) {
+            throw new AssertionError("Preview mapper attempted mutation: "
+                    + ((MappedStatement) invocation.getArgs()[0]).getId());
+        }
     }
 
     private static Principal principal(String owner, String actor) {

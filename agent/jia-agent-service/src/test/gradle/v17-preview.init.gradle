@@ -1,0 +1,40 @@
+// V1-7-API-READONLY-20260917 changed-scope verification only.
+// Mirrors the authorized v1.6 schema-targeted.init.gradle source-set isolation.
+// The normal test source sets/tasks remain unchanged: legacy compileTestJava debt is NOT a PASS.
+gradle.projectsEvaluated {
+    def registerScope = { p, String sourceName, String taskName, List<String> sources ->
+        def scoped = p.sourceSets.create(sourceName) {
+            java.setSrcDirs(['src/test/java'])
+            sources.each { pattern -> java.include(pattern) }
+            // Retain all existing test resources, including the preview-owned SQL fixture.
+            resources.setSrcDirs(p.sourceSets.test.resources.srcDirs)
+            compileClasspath = p.sourceSets.test.compileClasspath
+            runtimeClasspath = output + p.sourceSets.main.output + p.configurations.testRuntimeClasspath
+        }
+        p.tasks.named(scoped.compileJavaTaskName) {
+            options.annotationProcessorPath = p.configurations.testAnnotationProcessor
+        }
+        p.tasks.register(taskName, Test) {
+            description = 'Changed-scope v1.7 verification; not a full module/API result.'
+            dependsOn p.tasks.named(scoped.classesTaskName), p.tasks.named('classes')
+            testClassesDirs = scoped.output.classesDirs
+            classpath = scoped.runtimeClasspath
+            useJUnitPlatform()
+            testLogging {
+                events 'passed', 'skipped', 'failed'
+                exceptionFormat 'full'
+            }
+        }
+    }
+    registerScope(gradle.rootProject.project(':agent:jia-agent-service'),
+            'v17Preview', 'v17PreviewTest', [
+                    'cn/jia/agent/preview/**/*.java',
+                    'cn/jia/agent/**/EconomyReadOnlyPreview*.java'
+            ])
+    registerScope(gradle.rootProject.project(':agent:jia-agent-mapper'),
+            'v17ScopeCatalog', 'v17ScopeCatalogTest', [
+                    'cn/jia/agent/dao/AgentPersonaCatalogOverlaySqlTest.java',
+                    'cn/jia/agent/dao/AgentPersonaDaoCacheInvalidationTest.java',
+                    'cn/jia/agent/schema/AgentTaskCollaborationSchemaTest.java'
+            ])
+}
