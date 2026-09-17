@@ -22,6 +22,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 class AgentPersonaDaoCacheInvalidationTest {
     @AfterEach
@@ -40,6 +41,20 @@ class AgentPersonaDaoCacheInvalidationTest {
 
         assertSame(expected, result);
         verify(mapper).selectCatalogProjection(eq("0"), eq("jia_client"));
+    }
+
+    @Test
+    void catalogProjectionRejectsMissingOrMalformedTenantAndClient() throws Exception {
+        AgentPersonaMapper mapper = mock(AgentPersonaMapper.class);
+        AgentPersonaDaoImpl dao = dao(mapper, new AgentPersonaCatalogCache());
+        String[] invalid = {null, "", " ", " 0", "0 ", "\u00a0", "bad\nvalue", "x".repeat(51), "\ud800"};
+        for (String value : invalid) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> dao.findCatalogProjection(value, "jia_client"));
+            assertThrows(IllegalArgumentException.class,
+                    () -> dao.findCatalogProjection("0", value));
+        }
+        verifyNoInteractions(mapper);
     }
 
     @Test
