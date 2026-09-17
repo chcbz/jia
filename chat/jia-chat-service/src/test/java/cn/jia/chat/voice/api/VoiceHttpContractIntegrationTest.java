@@ -23,6 +23,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
+import org.springframework.boot.autoconfigure.context.PropertyPlaceholderAutoConfiguration;
 import org.springframework.boot.http.converter.autoconfigure.HttpMessageConvertersAutoConfiguration;
 import org.springframework.boot.jackson.autoconfigure.JacksonAutoConfiguration;
 import org.springframework.boot.servlet.autoconfigure.MultipartAutoConfiguration;
@@ -271,6 +272,23 @@ class VoiceHttpContractIntegrationTest {
     }
 
     @Test
+    void actualCorsFilterRejectsUntrustedOriginBeforeProviderDispatch() throws Exception {
+        clearInvocations(synthesisService);
+        HttpRequest request = HttpRequest.newBuilder(
+                        URI.create("http://127.0.0.1:" + port + "/chat/speech/synthesis"))
+                .timeout(Duration.ofSeconds(10))
+                .header(HttpHeaders.ORIGIN, "https://untrusted.example")
+                .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                .header(HttpHeaders.ACCESS_CONTROL_REQUEST_HEADERS, "authorization, content-type")
+                .method("OPTIONS", HttpRequest.BodyPublishers.noBody())
+                .build();
+        HttpResponse<byte[]> response = client.send(request, HttpResponse.BodyHandlers.ofByteArray());
+        assertEquals(403, response.statusCode());
+        assertTrue(response.headers().firstValue(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN).isEmpty());
+        verifyNoInteractions(synthesisService);
+    }
+
+    @Test
     void chunkedUnknownLengthMultipartFailsBeforeControllerAndProviderDispatch() throws Exception {
         clearInvocations(transcriptionService);
         controllerInvocationProbe.reset();
@@ -475,6 +493,7 @@ class VoiceHttpContractIntegrationTest {
     @SpringBootConfiguration(proxyBeanMethods = false)
     @EnableWebSecurity
     @ImportAutoConfiguration({
+            PropertyPlaceholderAutoConfiguration.class,
             TomcatServletWebServerAutoConfiguration.class,
             DispatcherServletAutoConfiguration.class,
             WebMvcAutoConfiguration.class,
