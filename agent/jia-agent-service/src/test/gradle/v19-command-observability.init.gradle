@@ -1,0 +1,48 @@
+// V1-9-API-READ-CAPABILITY-20260917 changed-scope verification only.
+// Isolates the new capability contract plus the smallest frozen D09 read ACL/DTO regressions.
+// The normal test source set/tasks remain unchanged: legacy compileTestJava debt is NOT a PASS.
+gradle.projectsEvaluated {
+    def p = gradle.rootProject.project(':agent:jia-agent-service')
+    def scoped = p.sourceSets.create('v19CommandObservability') {
+        java.setSrcDirs(['src/test/java'])
+        java.include('cn/jia/agent/api/AgentCommandOperationsCapabilitiesControllerTest.java')
+        java.include('cn/jia/agent/api/AgentCommandOperationsControllerTest.java')
+        resources.setSrcDirs(p.sourceSets.test.resources.srcDirs)
+        compileClasspath = p.sourceSets.test.compileClasspath
+        runtimeClasspath = output + p.sourceSets.main.output + p.configurations.testRuntimeClasspath
+    }
+    p.tasks.named(scoped.compileJavaTaskName) {
+        options.annotationProcessorPath = p.configurations.testAnnotationProcessor
+    }
+    p.tasks.register('v19CapabilitiesTest', Test) {
+        description = 'V1.9 capability auth/availability and no-infrastructure verification.'
+        dependsOn p.tasks.named(scoped.classesTaskName), p.tasks.named('classes')
+        testClassesDirs = scoped.output.classesDirs
+        classpath = scoped.runtimeClasspath
+        useJUnitPlatform()
+        filter {
+            includeTestsMatching 'cn.jia.agent.api.AgentCommandOperationsCapabilitiesControllerTest'
+        }
+        testLogging {
+            events 'passed', 'skipped', 'failed'
+            exceptionFormat 'full'
+        }
+    }
+    p.tasks.register('v19D09ReadRegressionTest', Test) {
+        description = 'Smallest frozen D09 read ACL and quoted-ID DTO regression set.'
+        dependsOn p.tasks.named(scoped.classesTaskName), p.tasks.named('classes')
+        testClassesDirs = scoped.output.classesDirs
+        classpath = scoped.runtimeClasspath
+        useJUnitPlatform()
+        filter {
+            includeTestsMatching 'cn.jia.agent.api.AgentCommandOperationsControllerTest.directJwtScopeAndDedicatedAuthorityAreSoleReadIdentity'
+            includeTestsMatching 'cn.jia.agent.api.AgentCommandOperationsControllerTest.auditIdsAndCursorAreQuotedDecimalWithoutGlobalNumericStringification'
+            includeTestsMatching 'cn.jia.agent.api.AgentCommandOperationsControllerTest.normalHallAuthorityCannotEnterAndAuthenticationPrecedesSyntax'
+            includeTestsMatching 'cn.jia.agent.api.AgentCommandOperationsControllerTest.nonJwtAndJwtNameClaimDriftFailBeforeService'
+        }
+        testLogging {
+            events 'passed', 'skipped', 'failed'
+            exceptionFormat 'full'
+        }
+    }
+}
