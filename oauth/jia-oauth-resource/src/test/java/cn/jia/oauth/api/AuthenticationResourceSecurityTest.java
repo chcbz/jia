@@ -195,8 +195,8 @@ class AuthenticationResourceSecurityTest {
     @Import({ResourceServerConfig.class, ExceptionHandlerAdvice.class})
     static class TestApplication {
         @Bean
-        AuthenticationController authenticationController() {
-            return new AuthenticationController();
+        OAuthResourceIdentityController authenticationController() {
+            return new OAuthResourceIdentityController();
         }
 
         @Bean

@@ -15,7 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 
 class AuthenticationControllerTest {
 
-    private final AuthenticationController controller = new AuthenticationController();
+    private final OAuthResourceIdentityController controller = new OAuthResourceIdentityController();
 
     @Test
     void returnsTopLevelAllowlistedIdentityWithSortedUniqueScopes() {

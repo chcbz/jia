@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.TreeSet;
 
 @RestController
-public class AuthenticationController {
+public class OAuthResourceIdentityController {
 
     @GetMapping("/resource")
     public ResponseEntity<OAuthResourceIdentityDTO> resource(Authentication authentication) {
