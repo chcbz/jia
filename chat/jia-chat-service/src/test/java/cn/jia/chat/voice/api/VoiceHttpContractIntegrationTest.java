@@ -86,7 +86,8 @@ import static org.mockito.Mockito.when;
                 "spring.servlet.multipart.max-request-size=52428800B",
                 "server.tomcat.max-swallow-size=52428800B",
                 "cors.allowed.origin.patterns=https://kit.chaoyoufan.cn",
-                "logging.level.root=INFO"
+                "logging.level.root=INFO",
+                "logging.level.org.springframework.web.cors=DEBUG"
         })
 @ExtendWith(OutputCaptureExtension.class)
 class VoiceHttpContractIntegrationTest {
@@ -221,7 +222,8 @@ class VoiceHttpContractIntegrationTest {
         HttpResponse<byte[]> preflight = client.send(
                 preflightRequest, HttpResponse.BodyHandlers.ofByteArray());
 
-        assertEquals(200, preflight.statusCode());
+        assertEquals(200, preflight.statusCode(),
+                new String(preflight.body(), StandardCharsets.UTF_8));
         assertEquals(origin, preflight.headers()
                 .firstValue(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN).orElseThrow());
         assertEquals("true", preflight.headers()
