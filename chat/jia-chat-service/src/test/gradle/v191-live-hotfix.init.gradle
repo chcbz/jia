@@ -1,0 +1,24 @@
+// Focused runtime-auth verification for preservation of already-deployed origin hotfix.
+// Does not redefine the normal source set or claim the legacy full suite passed.
+gradle.projectsEvaluated {
+    def p = gradle.rootProject.project(':chat:jia-chat-service')
+    def scoped = p.sourceSets.create('v191LiveHotfix') {
+        java.setSrcDirs(['src/test/java'])
+        java.include('cn/jia/chat/handler/AgentWebSocketRuntimeAuthenticationTest.java')
+        resources.setSrcDirs(p.sourceSets.test.resources.srcDirs)
+        compileClasspath = p.sourceSets.test.compileClasspath
+        runtimeClasspath = output + p.sourceSets.main.output + p.configurations.testRuntimeClasspath
+    }
+    p.tasks.named(scoped.compileJavaTaskName) {
+        options.annotationProcessorPath = p.configurations.testAnnotationProcessor
+    }
+    p.tasks.register('v191LiveHotfixTest', Test) {
+        dependsOn p.tasks.named(scoped.classesTaskName), p.tasks.named('classes')
+        testClassesDirs = scoped.output.classesDirs
+        classpath = scoped.runtimeClasspath
+        useJUnitPlatform()
+        filter { includeTestsMatching 'cn.jia.chat.handler.AgentWebSocketRuntimeAuthenticationTest' }
+        maxHeapSize = '128m'
+        testLogging { events 'passed', 'skipped', 'failed'; exceptionFormat 'full' }
+    }
+}
