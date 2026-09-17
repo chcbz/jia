@@ -7,6 +7,7 @@ dependencies {
     testImplementation project(':common:jia-common-test')
     // Exercise the real combined application classpath: client and resource controllers must coexist.
     testImplementation project(':oauth:jia-oauth-client-starter')
+    testImplementation(libs.spring.boot.starter.oauth2.client)
 }
 
 version = '1.1.2-SNAPSHOT'
