@@ -32,6 +32,7 @@ class AgentTaskCollaborationSchemaTest {
             assertEquals(compact(schemaDefinition), compact(migrationDefinition), table);
             assertTrue(compact(schemaDefinition).contains("tenant_id varchar(50) not null"), table);
             assertTrue(compact(schemaDefinition).contains("client_id varchar(50) not null"), table);
+            assertTrue(compact(schemaDefinition).contains("owner_jiacn varchar(50) not null"), table);
         }
     }
 
@@ -41,13 +42,13 @@ class AgentTaskCollaborationSchemaTest {
 
         Map<String, String> requiredIndexes = Map.ofEntries(
                 Map.entry("agent_task_member",
-                        "unique key uk_task_member_scope (tenant_id, client_id, task_id, agent_id)"),
+                        "unique key uk_task_member_scope (tenant_id, client_id, owner_jiacn, task_id, agent_id)"),
                 Map.entry("agent_task_work_item",
-                        "unique key uk_work_item_scope (tenant_id, client_id, work_item_id)"),
+                        "unique key uk_work_item_scope (tenant_id, client_id, owner_jiacn, work_item_id)"),
                 Map.entry("agent_task_request",
-                        "unique key uk_task_request_scope (tenant_id, client_id, request_id)"),
+                        "unique key uk_task_request_scope (tenant_id, client_id, owner_jiacn, request_id)"),
                 Map.entry("agent_task_artifact",
-                        "unique key uk_artifact_version (tenant_id, client_id, artifact_id, artifact_version)"));
+                        "unique key uk_artifact_version (tenant_id, client_id, owner_jiacn, artifact_id, artifact_version)"));
         for (Map.Entry<String, String> entry : requiredIndexes.entrySet()) {
             assertTrue(compact(tableDefinition(schema, entry.getKey())).contains(entry.getValue()), entry.getKey());
         }
@@ -58,7 +59,7 @@ class AgentTaskCollaborationSchemaTest {
         assertTrue(workItem.contains("completed_at bigint default null"));
 
         String artifact = compact(tableDefinition(schema, "agent_task_artifact"));
-        assertFalse(artifact.contains("unique key uk_artifact_scope (tenant_id, client_id, artifact_id)"));
+        assertFalse(artifact.contains("unique key uk_artifact_scope (tenant_id, client_id, owner_jiacn, artifact_id)"));
         assertFalse(artifact.contains("supersedes_artifact_id"));
     }
 
@@ -77,14 +78,14 @@ class AgentTaskCollaborationSchemaTest {
         assertTrue(meta.contains("tenant_id varchar(50) default null"));
         assertTrue(meta.contains("client_id varchar(50) default null"));
         assertTrue(meta.contains("key idx_agent_task_meta_scope_status "
-                + "(tenant_id, client_id, reward_status, update_time, id)"));
+                + "(tenant_id, client_id, owner_jiacn, reward_status, update_time, id)"));
         assertTrue(meta.contains("key idx_agent_task_meta_scope_coordinator "
-                + "(tenant_id, client_id, coordinator_agent_id, reward_status)"));
+                + "(tenant_id, client_id, owner_jiacn, coordinator_agent_id, reward_status)"));
         assertTrue(meta.contains("unique key uk_agent_task_meta_scope "
-                + "(tenant_id, client_id, task_id)"));
+                + "(tenant_id, client_id, owner_jiacn, task_id)"));
         assertFalse(meta.contains("unique key uk_agent_task_meta_task_id (task_id)"));
         assertTrue(migration.contains("create unique index uk_agent_task_meta_scope"));
-        assertTrue(migration.contains("count(*) = 3"));
+        assertTrue(migration.contains("count(*) = 4"));
         assertTrue(migration.contains("group_concat(lower(column_name) order by seq_in_index separator ',')"));
         assertTrue(migration.contains("having count(*) = 1 and max(lower(column_name)) = 'task_id'"));
     }

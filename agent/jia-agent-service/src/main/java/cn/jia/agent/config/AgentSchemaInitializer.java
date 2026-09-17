@@ -886,6 +886,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                 CREATE TABLE IF NOT EXISTS agent_task_member (
                     id                  BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
                     task_id             VARCHAR(100) NOT NULL COMMENT 'Task ID',
+                    owner_jiacn         VARCHAR(50) NOT NULL COMMENT 'Authenticated task owner',
                     agent_id            VARCHAR(100) NOT NULL COMMENT 'ADR-001 canonical agentId',
                     member_role         VARCHAR(20) NOT NULL COMMENT 'coordinator/worker/reviewer/observer',
                     member_status       VARCHAR(20) NOT NULL DEFAULT 'invited' COMMENT 'invited/accepted/working/done/rejected/blocked/failed/left',
@@ -914,6 +915,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                     id                  BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
                     work_item_id        VARCHAR(100) NOT NULL COMMENT 'Stable work item ID',
                     task_id             VARCHAR(100) NOT NULL COMMENT 'Task ID',
+                    owner_jiacn         VARCHAR(50) NOT NULL COMMENT 'Authenticated task owner',
                     title               VARCHAR(255) NOT NULL COMMENT 'Work item title',
                     description         TEXT COMMENT 'Work item description',
                     work_type           VARCHAR(30) NOT NULL COMMENT 'Work item type',
@@ -1046,6 +1048,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                     id                  BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
                     request_id          VARCHAR(100) NOT NULL COMMENT 'Stable request ID',
                     task_id             VARCHAR(100) NOT NULL COMMENT 'Task ID',
+                    owner_jiacn         VARCHAR(50) NOT NULL COMMENT 'Authenticated task owner',
                     work_item_id        VARCHAR(100) DEFAULT NULL COMMENT 'Related work item ID',
                     requester_agent_id  VARCHAR(100) NOT NULL COMMENT 'ADR-001 canonical requester agentId',
                     target_type         VARCHAR(20) NOT NULL COMMENT 'agent/role/user/system',
@@ -1077,6 +1080,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                     id                      BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
                     artifact_id             VARCHAR(100) NOT NULL COMMENT 'Stable logical artifact ID',
                     task_id                 VARCHAR(100) NOT NULL COMMENT 'Task ID',
+                    owner_jiacn             VARCHAR(50) NOT NULL COMMENT 'Authenticated task owner',
                     work_item_id            VARCHAR(100) DEFAULT NULL COMMENT 'Related work item ID',
                     producer_agent_id       VARCHAR(100) NOT NULL COMMENT 'ADR-001 canonical producer agentId',
                     artifact_type           VARCHAR(30) NOT NULL COMMENT 'summary/document/patch/commit/test_report/analysis/dataset/link',
@@ -1102,50 +1106,50 @@ public class AgentSchemaInitializer implements InitializingBean {
                 """);
 
         ensureRequiredIndex("agent_task_meta", "idx_agent_task_meta_scope_status", false,
-                List.of("tenant_id", "client_id", "reward_status", "update_time", "id"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "reward_status", "update_time", "id"),
                 "CREATE INDEX idx_agent_task_meta_scope_status "
-                        + "ON agent_task_meta (tenant_id, client_id, reward_status, update_time, id)");
+                        + "ON agent_task_meta (tenant_id, client_id, owner_jiacn, reward_status, update_time, id)");
         ensureRequiredIndex("agent_task_meta", "idx_agent_task_meta_scope_coordinator", false,
-                List.of("tenant_id", "client_id", "coordinator_agent_id", "reward_status"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "coordinator_agent_id", "reward_status"),
                 "CREATE INDEX idx_agent_task_meta_scope_coordinator "
-                        + "ON agent_task_meta (tenant_id, client_id, coordinator_agent_id, reward_status)");
+                        + "ON agent_task_meta (tenant_id, client_id, owner_jiacn, coordinator_agent_id, reward_status)");
 
         ensureRequiredIndex("agent_task_member", "uk_task_member_scope", true,
-                List.of("tenant_id", "client_id", "task_id", "agent_id"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "task_id", "agent_id"),
                 "CREATE UNIQUE INDEX uk_task_member_scope "
-                        + "ON agent_task_member (tenant_id, client_id, task_id, agent_id)");
+                        + "ON agent_task_member (tenant_id, client_id, owner_jiacn, task_id, agent_id)");
         ensureRequiredIndex("agent_task_member", "idx_task_member_agent_status", false,
-                List.of("tenant_id", "client_id", "agent_id", "member_status"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "agent_id", "member_status"),
                 "CREATE INDEX idx_task_member_agent_status "
-                        + "ON agent_task_member (tenant_id, client_id, agent_id, member_status)");
+                        + "ON agent_task_member (tenant_id, client_id, owner_jiacn, agent_id, member_status)");
         ensureRequiredIndex("agent_task_member", "idx_task_member_task_status", false,
-                List.of("tenant_id", "client_id", "task_id", "member_status"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "task_id", "member_status"),
                 "CREATE INDEX idx_task_member_task_status "
-                        + "ON agent_task_member (tenant_id, client_id, task_id, member_status)");
+                        + "ON agent_task_member (tenant_id, client_id, owner_jiacn, task_id, member_status)");
         ensureRequiredIndex("agent_task_member", "idx_task_member_task_role", false,
-                List.of("tenant_id", "client_id", "task_id", "member_role", "member_status"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "task_id", "member_role", "member_status"),
                 "CREATE INDEX idx_task_member_task_role "
-                        + "ON agent_task_member (tenant_id, client_id, task_id, member_role, member_status)");
+                        + "ON agent_task_member (tenant_id, client_id, owner_jiacn, task_id, member_role, member_status)");
 
         ensureRequiredIndex("agent_task_work_item", "uk_work_item_scope", true,
-                List.of("tenant_id", "client_id", "work_item_id"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "work_item_id"),
                 "CREATE UNIQUE INDEX uk_work_item_scope "
-                        + "ON agent_task_work_item (tenant_id, client_id, work_item_id)");
+                        + "ON agent_task_work_item (tenant_id, client_id, owner_jiacn, work_item_id)");
         ensureRequiredIndex("agent_task_work_item", "idx_work_item_task_status", false,
-                List.of("tenant_id", "client_id", "task_id", "status", "priority"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "task_id", "status", "priority"),
                 "CREATE INDEX idx_work_item_task_status "
-                        + "ON agent_task_work_item (tenant_id, client_id, task_id, status, priority)");
+                        + "ON agent_task_work_item (tenant_id, client_id, owner_jiacn, task_id, status, priority)");
         ensureRequiredIndex("agent_task_work_item", "idx_work_item_assignee_status", false,
-                List.of("tenant_id", "client_id", "assignee_agent_id", "status", "lease_until"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "assignee_agent_id", "status", "lease_until"),
                 "CREATE INDEX idx_work_item_assignee_status "
-                        + "ON agent_task_work_item (tenant_id, client_id, assignee_agent_id, status, lease_until)");
+                        + "ON agent_task_work_item (tenant_id, client_id, owner_jiacn, assignee_agent_id, status, lease_until)");
         ensureRequiredIndex("agent_task_work_item", "idx_work_item_lease", false,
                 List.of("status", "lease_until", "id"),
                 "CREATE INDEX idx_work_item_lease ON agent_task_work_item (status, lease_until, id)");
         ensureRequiredIndex("agent_task_work_item", "idx_work_item_task_required", false,
-                List.of("tenant_id", "client_id", "task_id", "required_item", "status"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "task_id", "required_item", "status"),
                 "CREATE INDEX idx_work_item_task_required "
-                        + "ON agent_task_work_item (tenant_id, client_id, task_id, required_item, status)");
+                        + "ON agent_task_work_item (tenant_id, client_id, owner_jiacn, task_id, required_item, status)");
 
         ensureRequiredIndex("agent_task_backfill_issue", "uk_task_backfill_issue_key", true,
                 List.of("issue_key"),
@@ -1196,42 +1200,42 @@ public class AgentSchemaInitializer implements InitializingBean {
                         + "ON agent_task_backfill_run (operator, completed_at, id)");
 
         ensureRequiredIndex("agent_task_request", "uk_task_request_scope", true,
-                List.of("tenant_id", "client_id", "request_id"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "request_id"),
                 "CREATE UNIQUE INDEX uk_task_request_scope "
-                        + "ON agent_task_request (tenant_id, client_id, request_id)");
+                        + "ON agent_task_request (tenant_id, client_id, owner_jiacn, request_id)");
         ensureRequiredIndex("agent_task_request", "idx_task_request_task_status", false,
-                List.of("tenant_id", "client_id", "task_id", "status", "priority", "create_time"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "task_id", "status", "priority", "create_time"),
                 "CREATE INDEX idx_task_request_task_status "
-                        + "ON agent_task_request (tenant_id, client_id, task_id, status, priority, create_time)");
+                        + "ON agent_task_request (tenant_id, client_id, owner_jiacn, task_id, status, priority, create_time)");
         ensureRequiredIndex("agent_task_request", "idx_task_request_target_status", false,
-                List.of("tenant_id", "client_id", "target_type", "target_id", "status", "due_at"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "target_type", "target_id", "status", "due_at"),
                 "CREATE INDEX idx_task_request_target_status "
-                        + "ON agent_task_request (tenant_id, client_id, target_type, target_id, status, due_at)");
+                        + "ON agent_task_request (tenant_id, client_id, owner_jiacn, target_type, target_id, status, due_at)");
         ensureRequiredIndex("agent_task_request", "idx_task_request_work_item", false,
-                List.of("tenant_id", "client_id", "work_item_id", "status"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "work_item_id", "status"),
                 "CREATE INDEX idx_task_request_work_item "
-                        + "ON agent_task_request (tenant_id, client_id, work_item_id, status)");
+                        + "ON agent_task_request (tenant_id, client_id, owner_jiacn, work_item_id, status)");
 
         ensureRequiredIndex("agent_task_artifact", "uk_artifact_version", true,
-                List.of("tenant_id", "client_id", "artifact_id", "artifact_version"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "artifact_id", "artifact_version"),
                 "CREATE UNIQUE INDEX uk_artifact_version "
-                        + "ON agent_task_artifact (tenant_id, client_id, artifact_id, artifact_version)");
+                        + "ON agent_task_artifact (tenant_id, client_id, owner_jiacn, artifact_id, artifact_version)");
         ensureRequiredIndex("agent_task_artifact", "idx_artifact_task_created", false,
-                List.of("tenant_id", "client_id", "task_id", "created_at"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "task_id", "created_at"),
                 "CREATE INDEX idx_artifact_task_created "
-                        + "ON agent_task_artifact (tenant_id, client_id, task_id, created_at)");
+                        + "ON agent_task_artifact (tenant_id, client_id, owner_jiacn, task_id, created_at)");
         ensureRequiredIndex("agent_task_artifact", "idx_artifact_work_item", false,
-                List.of("tenant_id", "client_id", "work_item_id", "artifact_type", "created_at"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "work_item_id", "artifact_type", "created_at"),
                 "CREATE INDEX idx_artifact_work_item "
-                        + "ON agent_task_artifact (tenant_id, client_id, work_item_id, artifact_type, created_at)");
+                        + "ON agent_task_artifact (tenant_id, client_id, owner_jiacn, work_item_id, artifact_type, created_at)");
         ensureRequiredIndex("agent_task_artifact", "idx_artifact_producer", false,
-                List.of("tenant_id", "client_id", "producer_agent_id", "created_at"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "producer_agent_id", "created_at"),
                 "CREATE INDEX idx_artifact_producer "
-                        + "ON agent_task_artifact (tenant_id, client_id, producer_agent_id, created_at)");
+                        + "ON agent_task_artifact (tenant_id, client_id, owner_jiacn, producer_agent_id, created_at)");
         ensureRequiredIndex("agent_task_artifact", "idx_artifact_hash", false,
-                List.of("tenant_id", "client_id", "content_hash"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "content_hash"),
                 "CREATE INDEX idx_artifact_hash "
-                        + "ON agent_task_artifact (tenant_id, client_id, content_hash)");
+                        + "ON agent_task_artifact (tenant_id, client_id, owner_jiacn, content_hash)");
 
         if (!isH2Database()) {
             if (!backfillAuditAlreadyExists || bootstrapBackfillTriggers) {
@@ -1281,9 +1285,9 @@ public class AgentSchemaInitializer implements InitializingBean {
 
     private void migrateTaskMetaScopedUniqueness() {
         ensureRequiredIndex("agent_task_meta", "uk_agent_task_meta_scope", true,
-                List.of("tenant_id", "client_id", "task_id"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "task_id"),
                 "CREATE UNIQUE INDEX uk_agent_task_meta_scope "
-                        + "ON agent_task_meta (tenant_id, client_id, task_id)");
+                        + "ON agent_task_meta (tenant_id, client_id, owner_jiacn, task_id)");
         for (String indexName : inspectSingleColumnUniqueIndexes("agent_task_meta", "task_id")) {
             if (!indexName.matches("[A-Za-z0-9_$]+")) {
                 throw new IllegalStateException("Unsafe legacy agent_task_meta index name: " + indexName);
@@ -2191,6 +2195,7 @@ BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'C01H successful run cannot be 
                 CREATE TABLE IF NOT EXISTS agent_task_note (
                     id                  BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
                     task_id             VARCHAR(100) NOT NULL COMMENT 'Task ID',
+                    owner_jiacn         VARCHAR(50) NOT NULL COMMENT 'Authenticated task owner',
                     author_id           VARCHAR(100) DEFAULT NULL COMMENT 'Author ID',
                     author_type         VARCHAR(20) NOT NULL DEFAULT 'user' COMMENT 'user/agent/system',
                     note_type           VARCHAR(20) NOT NULL DEFAULT 'summary' COMMENT 'summary/report/meeting/system',
@@ -2201,7 +2206,7 @@ BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'C01H successful run cannot be 
                     tenant_id           VARCHAR(50) DEFAULT '0' COMMENT 'Tenant ID',
                     client_id           VARCHAR(50) DEFAULT NULL COMMENT 'Client ID',
                     PRIMARY KEY (id),
-                    KEY idx_agent_task_note_task_id (task_id),
+                    KEY idx_agent_task_note_task_id (tenant_id, client_id, owner_jiacn, task_id),
                     KEY idx_agent_task_note_created_at (created_at)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Agent task notes'
                 """);
@@ -2324,6 +2329,7 @@ BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'C01H successful run cannot be 
                     CREATE TABLE IF NOT EXISTS agent_task_event (
                         id              BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
                         task_id         VARCHAR(100) NOT NULL COMMENT 'Task ID',
+                        owner_jiacn     VARCHAR(50) NOT NULL COMMENT 'Authenticated task owner',
                         event_version   BIGINT NOT NULL COMMENT 'Monotonic event version',
                         event_id        VARCHAR(100) NOT NULL COMMENT 'Deterministic stable event identifier',
                         event_type      VARCHAR(64) NOT NULL COMMENT 'Event type',
@@ -2338,11 +2344,11 @@ BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'C01H successful run cannot be 
                         create_time     BIGINT DEFAULT NULL COMMENT 'Create time',
                         update_time     BIGINT DEFAULT NULL COMMENT 'Update time',
                         PRIMARY KEY (id),
-                        UNIQUE KEY uk_task_event_version (tenant_id, client_id, task_id, event_version),
-                        UNIQUE KEY uk_task_event_id (tenant_id, client_id, event_id),
-                        KEY idx_task_event_occurred (tenant_id, client_id, task_id, occurred_at),
-                        KEY idx_event_actor_time (tenant_id, client_id, actor_type, actor_id, occurred_at),
-                        KEY idx_event_type_time (tenant_id, client_id, event_type, occurred_at)
+                        UNIQUE KEY uk_task_event_version (tenant_id, client_id, owner_jiacn, task_id, event_version),
+                        UNIQUE KEY uk_task_event_id (tenant_id, client_id, owner_jiacn, event_id),
+                        KEY idx_task_event_occurred (tenant_id, client_id, owner_jiacn, task_id, occurred_at),
+                        KEY idx_event_actor_time (tenant_id, client_id, owner_jiacn, actor_type, actor_id, occurred_at),
+                        KEY idx_event_type_time (tenant_id, client_id, owner_jiacn, event_type, occurred_at)
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Scoped task event journal'
                     """);
         }
@@ -2391,6 +2397,8 @@ BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'C01H successful run cannot be 
                 "varchar", "varchar(50)", false, "utf8mb4_0900_bin", null);
         validateIdentityColumn("agent_task_event", "client_id",
                 "varchar", "varchar(50)", false, "utf8mb4_0900_bin", null);
+        validateIdentityColumn("agent_task_event", "owner_jiacn",
+                "varchar", "varchar(50)", false, "utf8mb4_0900_bin", null);
         validateIdentityColumn("agent_task_event", "create_time",
                 "bigint", "bigint", true, null, null);
         validateIdentityColumn("agent_task_event", "update_time",
@@ -2400,25 +2408,25 @@ BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'C01H successful run cannot be 
                 List.of("id"),
                 "ALTER TABLE agent_task_event ADD PRIMARY KEY (id)");
         ensureRequiredIndex("agent_task_event", "uk_task_event_version", true,
-                List.of("tenant_id", "client_id", "task_id", "event_version"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "task_id", "event_version"),
                 "CREATE UNIQUE INDEX uk_task_event_version ON agent_task_event "
-                        + "(tenant_id, client_id, task_id, event_version)");
+                        + "(tenant_id, client_id, owner_jiacn, task_id, event_version)");
         ensureRequiredIndex("agent_task_event", "uk_task_event_id", true,
-                List.of("tenant_id", "client_id", "event_id"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "event_id"),
                 "CREATE UNIQUE INDEX uk_task_event_id ON agent_task_event "
-                        + "(tenant_id, client_id, event_id)");
+                        + "(tenant_id, client_id, owner_jiacn, event_id)");
         ensureRequiredIndex("agent_task_event", "idx_task_event_occurred", false,
-                List.of("tenant_id", "client_id", "task_id", "occurred_at"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "task_id", "occurred_at"),
                 "CREATE INDEX idx_task_event_occurred ON agent_task_event "
-                        + "(tenant_id, client_id, task_id, occurred_at)");
+                        + "(tenant_id, client_id, owner_jiacn, task_id, occurred_at)");
         ensureRequiredIndex("agent_task_event", "idx_event_actor_time", false,
-                List.of("tenant_id", "client_id", "actor_type", "actor_id", "occurred_at"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "actor_type", "actor_id", "occurred_at"),
                 "CREATE INDEX idx_event_actor_time ON agent_task_event "
-                        + "(tenant_id, client_id, actor_type, actor_id, occurred_at)");
+                        + "(tenant_id, client_id, owner_jiacn, actor_type, actor_id, occurred_at)");
         ensureRequiredIndex("agent_task_event", "idx_event_type_time", false,
-                List.of("tenant_id", "client_id", "event_type", "occurred_at"),
+                List.of("tenant_id", "client_id", "owner_jiacn", "event_type", "occurred_at"),
                 "CREATE INDEX idx_event_type_time ON agent_task_event "
-                        + "(tenant_id, client_id, event_type, occurred_at)");
+                        + "(tenant_id, client_id, owner_jiacn, event_type, occurred_at)");
 
         validateTaskEventAutoIncrement();
         validateTaskEventUniqueIndexes();
@@ -2456,9 +2464,9 @@ BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'C01H successful run cannot be 
 
         java.util.Map<String, List<String>> expected = java.util.Map.of(
                 "PRIMARY", List.of("id"),
-                "uk_task_event_id", List.of("tenant_id", "client_id", "event_id"),
+                "uk_task_event_id", List.of("tenant_id", "client_id", "owner_jiacn", "event_id"),
                 "uk_task_event_version",
-                List.of("tenant_id", "client_id", "task_id", "event_version"));
+                List.of("tenant_id", "client_id", "owner_jiacn", "task_id", "event_version"));
         java.util.Map<String, java.util.ArrayList<String>> actual = new java.util.LinkedHashMap<>();
         for (TaskEventIndexColumn row : rows) {
             if (row.indexName() == null || row.columnName() == null
