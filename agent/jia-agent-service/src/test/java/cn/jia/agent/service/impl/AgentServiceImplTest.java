@@ -2996,7 +2996,7 @@ class AgentServiceImplTest extends BaseMockTest {
         assertEquals("Wu Yong", result.getAssignedAgentName());
 
         verify(legacyTaskCompatibilityService).reportResolved(
-                "juyiting", "jia_client", "task-001", "agent-001",
+                "0", "jia_client", "jiacn", "task-001", "agent-001",
                 AgentConstants.TASK_STATUS_RUNNING, null);
 
         ArgumentCaptor<AgentRuntimeEntity> agentCaptor = ArgumentCaptor.forClass(AgentRuntimeEntity.class);
