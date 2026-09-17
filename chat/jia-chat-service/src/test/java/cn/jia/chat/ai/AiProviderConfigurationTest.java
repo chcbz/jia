@@ -1,6 +1,10 @@
 package cn.jia.chat.ai;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
@@ -36,6 +40,23 @@ class AiProviderConfigurationTest {
         OpenAiChatTransportCustomizer customizer = new OpenAiChatTransportCustomizer(properties);
         assertTrue(customizer.hasConnectTimeoutOverride());
         assertEquals(Integer.valueOf(3000), customizer.connectTimeoutMillis());
+    }
+
+
+    @Test
+    void productionProfileExplicitlyEnablesTheConfiguredOpenAiChatProvider() throws Exception {
+        List<String> declarations = Files.readAllLines(
+                        apiRoot().resolve("starter/src/main/resources/application-prod.properties"),
+                        StandardCharsets.UTF_8).stream()
+                .filter(line -> line.startsWith("jia.chat.ai.enabled=")
+                        || line.startsWith("jia.chat.ai.provider=")
+                        || line.startsWith("spring.ai.model.chat="))
+                .toList();
+
+        assertEquals(List.of(
+                "jia.chat.ai.enabled=true",
+                "jia.chat.ai.provider=openai",
+                "spring.ai.model.chat=openai"), declarations);
     }
 
     @Test
@@ -125,6 +146,18 @@ class AiProviderConfigurationTest {
         assertFalse(failure.retryable());
         assertFalse(failure.getMessage().contains("private prompt"));
         assertEquals(null, failure.getCause());
+    }
+
+
+    private static Path apiRoot() {
+        Path current = Path.of(System.getProperty("user.dir")).toAbsolutePath().normalize();
+        for (Path candidate = current; candidate != null; candidate = candidate.getParent()) {
+            if (Files.isRegularFile(candidate.resolve("settings.gradle"))
+                    && Files.isDirectory(candidate.resolve("starter"))) {
+                return candidate;
+            }
+        }
+        throw new IllegalStateException("Cannot locate API worktree root from " + current);
     }
 
     private static AiProviderProperties enabledProperties() {

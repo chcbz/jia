@@ -448,6 +448,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             sendError(session, payload, "AGENT_SERVICE_UNAVAILABLE", "Agent service is unavailable");
             return;
         }
+        String stage = "session_identity";
         try {
             String agentId = requireAllowedSessionAgentId(session, payload);
             if (agentId == null) {
@@ -467,6 +468,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             if (payload.containsKey("abilities")) {
                 request.setAbilities(asStringList(payload.get("abilities")));
             }
+            stage = "runtime_register";
             AgentRegisterResultDTO result = withSessionContext(session, () -> agentService.register(request));
             if (result == null || !agentId.equals(result.getAgentId())) {
                 throw new IllegalStateException("Agent registration returned a mismatched canonical identity");
@@ -482,10 +484,12 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             // Scope comes only from the authenticated session and is rechecked against persisted
             // identity/current registration token. This receipt is sent only on this native socket.
             if (runtimeAuthentication != null && sessionRuntimeInstanceId(session) != null) {
+                stage = "runtime_bind";
                 event.put("runtimeAuth", runtimeAuthentication.bind(session.getId(), sessionClientId(session),
                         sessionJiacn(session), result.getAgentId(), sessionRuntimeInstanceId(session),
                         sessionAttribute(session, "managedApiKeyId"), result.getToken(), session::isOpen));
             }
+            stage = "registration_receipt";
             if (!sendEvent(session, "agent_registered", event)) {
                 if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
                 successfullyRegisteredAgentIds.remove(session.getId());
@@ -494,6 +498,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             signalRegisteredReconnect(session, result.getAgentId());
             sendCapabilityIndex(session, payload);
         } catch (Exception e) {
+            // Keep peer-facing errors generic; stage and exception type are sufficient for safe operations diagnosis.
+            log.warn("Agent registration unavailable at stage={}, failure={}", stage,
+                    e.getClass().getSimpleName());
             if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
             successfullyRegisteredAgentIds.remove(session.getId());
             sendError(session, payload, "AGENT_REGISTRATION_UNAVAILABLE", "Agent registration is unavailable");
