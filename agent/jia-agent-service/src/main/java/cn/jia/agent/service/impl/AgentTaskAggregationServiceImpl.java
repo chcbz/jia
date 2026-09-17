@@ -124,13 +124,13 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
             if (updated != 1) throw invalidPersisted(
                     "Scoped task CAS updated an unexpected row count");
             resultVersion++;
-            appendAggregateEvent(tenantId, clientId, taskId, currentStatus, decision,
+            appendAggregateEvent(tenantId, clientId, ownerJiacn, taskId, currentStatus, decision,
                     expectedVersion, resultVersion, calculatedAt);
         }
         return result(taskId, currentStatus, decision, changed, resultVersion, calculatedAt);
     }
 
-    private void appendAggregateEvent(String tenantId, String clientId, String taskId,
+    private void appendAggregateEvent(String tenantId, String clientId, String ownerJiacn, String taskId,
             AgentTaskStatus currentStatus, AgentTaskAggregationCalculator.Decision decision,
             long expectedVersion, long resultVersion, long occurredAt) {
         AgentTaskAggregationCalculator.Counts counts = decision.counts();
@@ -145,7 +145,8 @@ public class AgentTaskAggregationServiceImpl implements AgentTaskAggregationServ
                 .put(TaskEventPayload.Key.COMPLETED_WORK_ITEM_COUNT,
                         counts.requiredCompletedCount())
                 .put(TaskEventPayload.Key.FAILED_WORK_ITEM_COUNT, counts.requiredFailedCount());
-        eventWriter.append(AgentTaskMutationEventSupport.command(tenantId, clientId, taskId,
+        eventWriter.append(AgentTaskMutationEventSupport.command(
+                tenantId, clientId, ownerJiacn, taskId,
                 AgentTaskMutationEventSupport.taskEvent(decision.status().value()),
                 TaskEventType.ActorType.SYSTEM, null, TaskEventType.Aggregate.TASK, taskId,
                 payload, occurredAt, resultVersion));

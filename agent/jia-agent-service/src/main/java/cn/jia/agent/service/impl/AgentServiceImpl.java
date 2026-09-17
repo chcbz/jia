@@ -740,7 +740,7 @@ public class AgentServiceImpl implements AgentService {
                 tenantId, clientId, ownerJiacn, requestedAgentId);
         requireOwnedAgent(requireAgent(agentId));
         List<AgentTaskMemberEntity> memberships = Optional.ofNullable(
-                agentTaskMemberDao.listByAgent(tenantId, clientId, agentId, null,
+                agentTaskMemberDao.listByAgent(tenantId, clientId, ownerJiacn, agentId, null,
                         TASK_MEMBERSHIP_SNAPSHOT_LIMIT))
                 .orElseGet(Collections::emptyList);
         if (!memberships.isEmpty()) {
@@ -1120,17 +1120,18 @@ public class AgentServiceImpl implements AgentService {
 
     @Override
     public List<String> listTaskMemberAgentIds(String tenantId, String clientId, String taskId) {
-        require(!StringUtil.isBlank(tenantId), "tenantId is required");
-        require(!StringUtil.isBlank(clientId), "clientId is required");
-        require(!StringUtil.isBlank(taskId), "taskId is required");
+        String ownerJiacn = resolveCurrentJiacn();
+        requireExactTaskOwnerScope(tenantId, clientId, ownerJiacn, taskId);
 
         List<AgentTaskMemberEntity> members = Optional.ofNullable(
-                agentTaskMemberDao.listByTask(tenantId, clientId, taskId)).orElseGet(Collections::emptyList);
+                agentTaskMemberDao.listByTask(tenantId, clientId, ownerJiacn, taskId))
+                .orElseGet(Collections::emptyList);
         if (!members.isEmpty()) {
             LinkedHashSet<String> agentIds = new LinkedHashSet<>();
             for (AgentTaskMemberEntity member : members) {
                 require(Objects.equals(tenantId, member.getTenantId())
                                 && Objects.equals(clientId, member.getClientId())
+                                && Objects.equals(ownerJiacn, member.getOwnerJiacn())
                                 && Objects.equals(taskId, member.getTaskId())
                                 && isExactStoredText(member.getAgentId(), 100),
                         "Persisted task member is outside the requested scope");
@@ -1144,7 +1145,8 @@ public class AgentServiceImpl implements AgentService {
             return List.copyOf(agentIds);
         }
 
-        AgentTaskMetaEntity legacyMeta = agentTaskMetaDao.findByTaskId(tenantId, clientId, taskId);
+        AgentTaskMetaEntity legacyMeta = agentTaskMetaDao.findByTaskIdInOwnerScope(
+                tenantId, clientId, ownerJiacn, taskId);
         return legacyMeta == null
                 ? List.of()
                 : parseAssignedAgentIds(legacyMeta.getAssignedAgentId());
@@ -1153,13 +1155,14 @@ public class AgentServiceImpl implements AgentService {
     @Override
     public List<String> listTaskWritableMemberAgentIds(
             String tenantId, String clientId, String taskId) {
-        require(!StringUtil.isBlank(tenantId), "tenantId is required");
-        require(!StringUtil.isBlank(clientId), "clientId is required");
-        require(!StringUtil.isBlank(taskId), "taskId is required");
+        String ownerJiacn = resolveCurrentJiacn();
+        requireExactTaskOwnerScope(tenantId, clientId, ownerJiacn, taskId);
 
-        AgentTaskMetaEntity task = agentTaskMetaDao.findByTaskId(tenantId, clientId, taskId);
+        AgentTaskMetaEntity task = agentTaskMetaDao.findByTaskIdInOwnerScope(
+                tenantId, clientId, ownerJiacn, taskId);
         if (task == null || !Objects.equals(tenantId, task.getTenantId())
                 || !Objects.equals(clientId, task.getClientId())
+                || !Objects.equals(ownerJiacn, task.getOwnerJiacn())
                 || !Objects.equals(taskId, task.getTaskId())) {
             return List.of();
         }
@@ -1170,13 +1173,14 @@ public class AgentServiceImpl implements AgentService {
         }
 
         List<AgentTaskMemberEntity> members = Optional.ofNullable(
-                agentTaskMemberDao.listByTask(tenantId, clientId, taskId))
+                agentTaskMemberDao.listByTask(tenantId, clientId, ownerJiacn, taskId))
                 .orElseGet(Collections::emptyList);
         LinkedHashSet<String> writableAgentIds = new LinkedHashSet<>();
         for (AgentTaskMemberEntity member : members) {
             require(member != null
                             && Objects.equals(tenantId, member.getTenantId())
                             && Objects.equals(clientId, member.getClientId())
+                            && Objects.equals(ownerJiacn, member.getOwnerJiacn())
                             && Objects.equals(taskId, member.getTaskId())
                             && isExactStoredText(member.getAgentId(), 100)
                             && TASK_MEMBER_ROLES.contains(member.getMemberRole())
@@ -1797,6 +1801,14 @@ public class AgentServiceImpl implements AgentService {
             require(ownerJiacn.equals(meta.getOwnerJiacn()),
                     "task owner does not match authenticated scope");
         }
+    }
+
+    private void requireExactTaskOwnerScope(
+            String tenantId, String clientId, String ownerJiacn, String taskId) {
+        require(SINGLE_TENANT_ID.equals(tenantId), "tenantId must be 0");
+        require(isExactAuthenticatedScopeId(clientId), "clientId is invalid");
+        require(isExactAuthenticatedScopeId(ownerJiacn), "ownerJiacn is invalid");
+        require(isExactStoredText(taskId, 100), "taskId is invalid");
     }
 
     private AgentTaskMetaEntity requireTask(String taskId) {

@@ -258,7 +258,7 @@ public class AgentLegacyTaskCompatibilityService {
             insertDefaultWorkItem(tenantId, clientId, ownerJiacn, taskId, agentId);
         }
         String taskAssignedEventId = appendAssignmentEvents(
-                tenantId, clientId, taskId, task, agentIds, source, fromStatus, changedAt);
+                tenantId, clientId, ownerJiacn, taskId, task, agentIds, source, fromStatus, changedAt);
         return new AssignOutcome(agentIds, true, taskAssignedEventId, changedAt);
     }
 
@@ -317,14 +317,14 @@ public class AgentLegacyTaskCompatibilityService {
                 tenantId, clientId, ownerJiacn, taskId, agentId,
                 member, reportStatus, failureReason, changedAt);
         if (memberChanged) {
-            appendMemberReportEvent(tenantId, clientId, taskId, agentId,
+            appendMemberReportEvent(tenantId, clientId, ownerJiacn, taskId, agentId,
                     member, reportStatus, changedAt);
         }
         boolean itemChanged = updateWorkItemForReport(
                 tenantId, clientId, ownerJiacn, taskId, agentId,
                 item, reportStatus, changedAt);
         if (itemChanged) {
-            appendWorkItemReportEvent(tenantId, clientId, taskId, agentId,
+            appendWorkItemReportEvent(tenantId, clientId, ownerJiacn, taskId, agentId,
                     item, reportStatus, changedAt);
         }
 
@@ -449,7 +449,7 @@ public class AgentLegacyTaskCompatibilityService {
     }
 
     private String appendAssignmentEvents(
-            String tenantId, String clientId, String taskId, AgentTaskMetaEntity task,
+            String tenantId, String clientId, String ownerJiacn, String taskId, AgentTaskMetaEntity task,
             List<String> agentIds, String source, String fromStatus, long occurredAt) {
         long taskVersion = task.getTaskVersion();
         TaskEventPayload.Builder taskPayload = TaskEventPayload.builder()
@@ -461,7 +461,7 @@ public class AgentLegacyTaskCompatibilityService {
                 .put(TaskEventPayload.Key.RESULT_VERSION, taskVersion)
                 .put(TaskEventPayload.Key.ASSIGNED_AT, occurredAt);
         AgentTaskEventWriteCommand taskAssignedCommand = AgentTaskMutationEventSupport.command(
-                tenantId, clientId, taskId, TaskEventType.TASK_ASSIGNED,
+                tenantId, clientId, ownerJiacn, taskId, TaskEventType.TASK_ASSIGNED,
                 TaskEventType.ActorType.SYSTEM, null, TaskEventType.Aggregate.TASK, taskId,
                 taskPayload, occurredAt, taskVersion);
         AgentTaskEventWriteResult taskAssignedResult = eventWriter.append(taskAssignedCommand);
@@ -486,7 +486,7 @@ public class AgentLegacyTaskCompatibilityService {
                             .put(TaskEventPayload.Key.RESULT_VERSION, 0L)
                             .put(TaskEventPayload.Key.ASSIGNED_AT, occurredAt);
                     eventWriter.append(AgentTaskMutationEventSupport.command(
-                            tenantId, clientId, taskId, TaskEventType.MEMBER_ACCEPTED,
+                            tenantId, clientId, ownerJiacn, taskId, TaskEventType.MEMBER_ACCEPTED,
                             TaskEventType.ActorType.SYSTEM, null,
                             TaskEventType.Aggregate.MEMBER, agentId,
                             memberPayload, occurredAt, 0L));
@@ -506,7 +506,7 @@ public class AgentLegacyTaskCompatibilityService {
                             .put(TaskEventPayload.Key.MAX_ATTEMPTS, 3L)
                             .put(TaskEventPayload.Key.RESULT_VERSION, 0L);
                     eventWriter.append(AgentTaskMutationEventSupport.command(
-                            tenantId, clientId, taskId, TaskEventType.WORK_ITEM_READY,
+                            tenantId, clientId, ownerJiacn, taskId, TaskEventType.WORK_ITEM_READY,
                             TaskEventType.ActorType.SYSTEM, null,
                             TaskEventType.Aggregate.WORK_ITEM, assigned.workItemId(),
                             itemPayload, occurredAt, 0L));
@@ -515,7 +515,7 @@ public class AgentLegacyTaskCompatibilityService {
     }
 
     private void appendMemberReportEvent(
-            String tenantId, String clientId, String taskId, String agentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String agentId,
             AgentTaskMemberEntity member, AgentTaskStatus reportStatus, long occurredAt) {
         String targetStatus = switch (reportStatus) {
             case RUNNING -> AgentTaskMemberStatus.WORKING.value();
@@ -534,7 +534,7 @@ public class AgentLegacyTaskCompatibilityService {
                 .put(TaskEventPayload.Key.RESULT_VERSION, resultVersion)
                 .put(TaskEventPayload.Key.UPDATED_AT, occurredAt);
         eventWriter.append(AgentTaskMutationEventSupport.command(
-                tenantId, clientId, taskId,
+                tenantId, clientId, ownerJiacn, taskId,
                 AgentTaskMutationEventSupport.memberEvent(targetStatus),
                 TaskEventType.ActorType.SYSTEM, null,
                 TaskEventType.Aggregate.MEMBER, agentId,
@@ -542,7 +542,7 @@ public class AgentLegacyTaskCompatibilityService {
     }
 
     private void appendWorkItemReportEvent(
-            String tenantId, String clientId, String taskId, String agentId,
+            String tenantId, String clientId, String ownerJiacn, String taskId, String agentId,
             AgentTaskWorkItemEntity item, AgentTaskStatus reportStatus, long occurredAt) {
         String targetStatus = switch (reportStatus) {
             case RUNNING -> AgentTaskWorkItemStatus.RUNNING.value();
@@ -564,7 +564,7 @@ public class AgentLegacyTaskCompatibilityService {
                 .put(TaskEventPayload.Key.RESULT_VERSION, resultVersion)
                 .put(TaskEventPayload.Key.UPDATED_AT, occurredAt);
         eventWriter.append(AgentTaskMutationEventSupport.command(
-                tenantId, clientId, taskId,
+                tenantId, clientId, ownerJiacn, taskId,
                 AgentTaskMutationEventSupport.workItemEvent(targetStatus),
                 TaskEventType.ActorType.SYSTEM, null,
                 TaskEventType.Aggregate.WORK_ITEM, item.getWorkItemId(),
