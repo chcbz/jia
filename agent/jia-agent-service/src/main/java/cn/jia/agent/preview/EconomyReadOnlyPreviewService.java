@@ -100,7 +100,7 @@ public class EconomyReadOnlyPreviewService {
         requireEnabled();
         return data(() -> {
             EconomyWalletSnapshotRow row = mapper.selectWallet(
-                    principal.tenantId(), principal.clientId(), principal.actorId());
+                    principal.walletTenantId(), principal.clientId(), principal.actorId());
             if (row == null) throw unavailable("Wallet snapshot is unavailable");
             long available = nonNegative(row.getAvailableMicro(), "availableMicro");
             long held = nonNegative(row.getHeldMicro(), "heldMicro");
@@ -117,7 +117,7 @@ public class EconomyReadOnlyPreviewService {
                 && (cursor.postedAt() < 0 || cursor.rowId() < 1))) throw badRequest();
         requireEnabled();
         return data(() -> {
-            List<EconomyWalletLedgerRow> rows = mapper.selectLedger(principal.tenantId(), principal.clientId(),
+            List<EconomyWalletLedgerRow> rows = mapper.selectLedger(principal.walletTenantId(), principal.clientId(),
                     principal.actorId(), cursor == null ? null : cursor.postedAt(),
                     cursor == null ? null : cursor.rowId(), Math.addExact(limit, 1));
             if (rows == null) throw unavailable("Wallet ledger is unavailable");
@@ -142,7 +142,7 @@ public class EconomyReadOnlyPreviewService {
         requireEnabled();
         return data(() -> {
             List<EconomyReadOnlyPreviewRows.ProductRow> rows = mapper.selectProducts(
-                    principal.tenantId(), principal.clientId(), offset, Math.addExact(limit, 1));
+                    principal.marketplaceTenantId(), principal.clientId(), offset, Math.addExact(limit, 1));
             if (rows == null) throw unavailable("Skill catalog is unavailable");
             boolean more = rows.size() > limit;
             List<EconomyReadOnlyPreviewRows.ProductRow> visible = more ? rows.subList(0, limit) : rows;
@@ -160,7 +160,7 @@ public class EconomyReadOnlyPreviewService {
         requireEnabled();
         return data(() -> {
             List<EconomyReadOnlyPreviewRows.ProductRow> rows = mapper.selectProduct(
-                    principal.tenantId(), principal.clientId(), productId);
+                    principal.marketplaceTenantId(), principal.clientId(), productId);
             if (rows == null) throw unavailable("Skill product is unavailable");
             if (rows.isEmpty()) throw notFound();
             if (rows.size() != 1) throw unavailable("Skill product identity is ambiguous");
@@ -176,9 +176,9 @@ public class EconomyReadOnlyPreviewService {
         return data(() -> {
             ownedAgent(principal, agentId);
             List<SkillEntitlementEntity> entitlements = mapper.selectEntitlements(
-                    principal.tenantId(), principal.clientId(), agentId);
+                    principal.marketplaceTenantId(), principal.clientId(), agentId);
             List<SkillInstallationEntity> installations = mapper.selectInstallations(
-                    principal.tenantId(), principal.clientId(), agentId);
+                    principal.marketplaceTenantId(), principal.clientId(), agentId);
             if (entitlements == null || installations == null) {
                 throw unavailable("Agent skill evidence is unavailable");
             }
@@ -219,9 +219,9 @@ public class EconomyReadOnlyPreviewService {
                 return new HostingPlan("CONFIGURATION_REFERENCE", hosting.planVersion(), hosting.amountMicro(),
                         hosting.periodSeconds(), CURRENCY, false);
             }
-            EconomyHostingRentPlanEntity row = mapper.selectLatestPlan(principal.tenantId(), principal.clientId());
+            EconomyHostingRentPlanEntity row = mapper.selectLatestPlan(principal.hostingTenantId(), principal.clientId());
             if (row == null || !"ACTIVE".equals(row.getStatus()) || !CURRENCY.equals(row.getCurrency())
-                    || !principal.tenantId().equals(row.getTenantId())
+                    || !principal.hostingTenantId().equals(row.getTenantId())
                     || !principal.clientId().equals(row.getClientId())) {
                 throw planUnavailable();
             }
@@ -244,13 +244,13 @@ public class EconomyReadOnlyPreviewService {
         requireEnabled();
         return data(() -> {
             EconomyReadOnlyPreviewRows.AgentOwnershipRow owner = ownedAgent(principal, agentId);
-            List<AgentHostedProfileEntity> hosted = mapper.selectHostedProfile(principal.tenantId(), principal.clientId(), principal.ownerJiacn(),
+            List<AgentHostedProfileEntity> hosted = mapper.selectHostedProfile(principal.agentRegistryTenantId(), principal.clientId(), principal.ownerJiacn(),
                     requiredPositive(owner.getBindingId(), "bindingId"), agentId);
             if (hosted == null) throw unavailable("Hosting applicability is unavailable");
             if (hosted.size() > 1) throw unavailable("Hosting applicability is ambiguous");
             if (hosted.isEmpty()) return new HostingLease(agentId, "NOT_APPLICABLE", null);
             requireHostedShape(hosted.getFirst(), principal, owner, agentId);
-            EconomyHostingLeaseEntity lease = mapper.selectLatestLease(principal.tenantId(), principal.clientId(),
+            EconomyHostingLeaseEntity lease = mapper.selectLatestLease(principal.hostingTenantId(), principal.clientId(),
                     principal.actorId(), agentId);
             if (lease == null) return new HostingLease(agentId, "APPLICABLE", null);
             requireLeaseShape(lease, principal, agentId);
@@ -288,19 +288,19 @@ public class EconomyReadOnlyPreviewService {
     private EconomyReadOnlyPreviewRows.AgentOwnershipRow ownedAgent(Principal principal, String agentId) {
         try {
             String provenOwner = owners.requireOwner(new HostingRentHttp.Actor(principal.actorId(),
-                    principal.tenantId(), principal.clientId(), principal.ownerJiacn()));
+                    principal.agentRegistryTenantId(), principal.clientId(), principal.ownerJiacn()));
             if (!principal.ownerJiacn().equals(provenOwner)) throw notFound();
         } catch (HostingRentApplicationException exception) {
             throw notFound();
         }
         List<EconomyReadOnlyPreviewRows.AgentOwnershipRow> rows = mapper.selectOwnedAgent(
-                principal.tenantId(), principal.clientId(), principal.ownerJiacn(), agentId);
+                principal.agentRegistryTenantId(), principal.clientId(), principal.ownerJiacn(), agentId);
         if (rows == null) throw unavailable("Agent ownership is unavailable");
         if (rows.isEmpty()) throw notFound();
         if (rows.size() != 1) throw unavailable("Agent ownership is ambiguous");
         EconomyReadOnlyPreviewRows.AgentOwnershipRow row = rows.getFirst();
         if (!agentId.equals(row.getAgentId()) || row.getBindingId() == null || row.getBindingId() < 1
-                || !principal.tenantId().equals(row.getTenantId())
+                || !principal.agentRegistryTenantId().equals(row.getTenantId())
                 || !principal.clientId().equals(row.getClientId())
                 || !principal.ownerJiacn().equals(row.getOwnerJiacn())
                 || !exact(row.getPersonaCode(), 100)) throw unavailable("Agent ownership row is invalid");
@@ -408,7 +408,7 @@ public class EconomyReadOnlyPreviewService {
                 || !exact(row.getInstallationId(), 100) || !exact(row.getProductVersionId(), 100)
                 || !agentId.equals(row.getTargetAgentId()) || !exact(row.getSkillKey(), 100)
                 || !exact(row.getSkillVersion(), 100) || !exact(row.getStatus(), 32)
-                || !principal.tenantId().equals(row.getTenantId())
+                || !principal.marketplaceTenantId().equals(row.getTenantId())
                 || !principal.clientId().equals(row.getClientId())) {
             throw unavailable("Entitlement row is invalid");
         }
@@ -420,7 +420,7 @@ public class EconomyReadOnlyPreviewService {
                 || !exact(row.getProductVersionId(), 100) || !agentId.equals(row.getTargetAgentId())
                 || !exact(row.getSkillKey(), 100) || !exact(row.getSkillVersion(), 100)
                 || !exact(row.getStatus(), 32)
-                || !principal.tenantId().equals(row.getTenantId())
+                || !principal.marketplaceTenantId().equals(row.getTenantId())
                 || !principal.clientId().equals(row.getClientId())) {
             throw unavailable("Installation row is invalid");
         }
@@ -429,7 +429,7 @@ public class EconomyReadOnlyPreviewService {
     private static void requireHostedShape(AgentHostedProfileEntity row, Principal principal,
             EconomyReadOnlyPreviewRows.AgentOwnershipRow owner, String agentId) {
         if (row == null || !Objects.equals(owner.getBindingId(), row.getBindingId())
-                || !principal.tenantId().equals(row.getTenantId())
+                || !principal.agentRegistryTenantId().equals(row.getTenantId())
                 || !principal.clientId().equals(row.getClientId())
                 || !principal.ownerJiacn().equals(row.getOwnerJiacn())
                 || !agentId.equals(row.getCanonicalAgentId())
@@ -442,7 +442,7 @@ public class EconomyReadOnlyPreviewService {
             EconomyHostingLeaseEntity row, Principal principal, String agentId) {
         if (!exact(row.getLeaseId(), 100) || !agentId.equals(row.getAgentId())
                 || !"USER".equals(row.getPrincipalType()) || !principal.actorId().equals(row.getPrincipalId())
-                || !principal.tenantId().equals(row.getTenantId())
+                || !principal.hostingTenantId().equals(row.getTenantId())
                 || !principal.clientId().equals(row.getClientId())
                 || !exact(row.getStatus(), 24)) throw unavailable("Hosting lease row is invalid");
         if ((row.getPaidFrom() == null) != (row.getPaidThrough() == null)
@@ -476,7 +476,11 @@ public class EconomyReadOnlyPreviewService {
     }
 
     private static void requirePrincipal(Principal principal) {
-        if (principal == null || !"0".equals(principal.tenantId())
+        if (principal == null || !exact(principal.walletTenantId(), 50)
+                || !principal.walletTenantId().equals(principal.ownerJiacn())
+                || !"0".equals(principal.marketplaceTenantId())
+                || !"0".equals(principal.hostingTenantId())
+                || !"0".equals(principal.agentRegistryTenantId())
                 || !exact(principal.clientId(), 50) || !exact(principal.ownerJiacn(), 50)
                 || !exact(principal.actorId(), 100) || "0".equals(principal.clientId())
                 || "0".equals(principal.ownerJiacn()) || "0".equals(principal.actorId())
@@ -495,7 +499,10 @@ public class EconomyReadOnlyPreviewService {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             digest.update("economy-readonly-scope-v1".getBytes(StandardCharsets.UTF_8));
-            put(digest, principal.tenantId());
+            put(digest, principal.walletTenantId());
+            put(digest, principal.marketplaceTenantId());
+            put(digest, principal.hostingTenantId());
+            put(digest, principal.agentRegistryTenantId());
             put(digest, principal.clientId());
             put(digest, principal.ownerJiacn());
             put(digest, principal.actorId());

@@ -58,12 +58,12 @@ class EconomyReadOnlyPreviewControllerTest {
 
     @Test
     void walletDoesNotNormalizeCaseTenantClientActorOrFallbackLegacyZero() throws Exception {
-        when(mapper.selectWallet("0", "Client-A", "actor-A"))
+        when(mapper.selectWallet("Tenant-A", "Client-A", "actor-A"))
                 .thenReturn(new EconomyWalletSnapshotRow().setAvailableMicro(1L).setHeldMicro(0L)
                         .setMinimumHeldComponentMicro(0L).setVersion(2L));
         mvc.perform(get("/economy/preview/wallet").principal(jwt("Tenant-A", "Client-A", "actor-A")))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.data.availableMicro").value("1"));
-        verify(mapper).selectWallet("0", "Client-A", "actor-A");
+        verify(mapper).selectWallet("Tenant-A", "Client-A", "actor-A");
 
         for (JwtAuthenticationToken bad : List.of(jwt("0", "Client-A", "actor-A"),
                 jwt("Tenant-A ", "Client-A", "actor-A"), jwt("Tenant-A", "0", "actor-A"),

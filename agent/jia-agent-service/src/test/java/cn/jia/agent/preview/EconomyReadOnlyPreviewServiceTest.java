@@ -27,9 +27,14 @@ import org.mockito.ArgumentCaptor;
 import static org.mockito.Mockito.*;
 
 class EconomyReadOnlyPreviewServiceTest {
-    private static final Principal A = new Principal("0", "Client-A", "Tenant-A", "actor-A");
-    private static final Principal B = new Principal("0", "Client-B", "Tenant-B", "actor-B");
-    private static final Principal C = new Principal("0", "Client-A", "Tenant-C", "actor-C");
+    private static final Principal A = new Principal(
+            "Tenant-A", "0", "0", "0", "Client-A", "Tenant-A", "actor-A");
+    private static final Principal B = new Principal(
+            "Tenant-B", "0", "0", "0", "Client-B", "Tenant-B", "actor-B");
+    private static final Principal C = new Principal(
+            "Tenant-C", "0", "0", "0", "Client-A", "Tenant-C", "actor-C");
+    private static final Principal SAME_OWNER_OTHER_SUB = new Principal(
+            "Tenant-A", "0", "0", "0", "Client-A", "Tenant-A", "actor-other");
     private static final String AGENT = "agt_0123456789abcdef0123456789abcdef";
     private EconomyReadOnlyPreviewMapper mapper;
     private HostingRentOwnerResolver owners;
@@ -58,48 +63,50 @@ class EconomyReadOnlyPreviewServiceTest {
 
     @Test
     void walletAndLedgerKeepTenantClientActorExactAcrossABAndDoNotCreateAccounts() {
-        when(mapper.selectWallet("0", "Client-A", "actor-A"))
+        when(mapper.selectWallet("Tenant-A", "Client-A", "actor-A"))
                 .thenReturn(new EconomyWalletSnapshotRow().setAvailableMicro(12L).setHeldMicro(3L)
                         .setMinimumHeldComponentMicro(3L).setVersion(9L));
-        when(mapper.selectWallet("0", "Client-B", "actor-B"))
+        when(mapper.selectWallet("Tenant-B", "Client-B", "actor-B"))
                 .thenReturn(new EconomyWalletSnapshotRow().setAvailableMicro(0L).setHeldMicro(0L)
                         .setMinimumHeldComponentMicro(0L).setVersion(0L));
         assertEquals("12", service.wallet(A).availableMicro());
         assertEquals("0", service.wallet(B).availableMicro());
 
-        when(mapper.selectLedger("0", "Client-A", "actor-A", null, null, 2))
+        when(mapper.selectLedger("Tenant-A", "Client-A", "actor-A", null, null, 2))
                 .thenReturn(List.of(row(3, 100, 9), row(2, -40, 8)));
         var page = service.ledger(A, null, 1);
         assertEquals(1, page.items().size());
         assertEquals("CREDIT", page.items().getFirst().direction());
         assertNotNull(page.nextCursor());
-        verify(mapper).selectWallet("0", "Client-A", "actor-A");
-        verify(mapper).selectWallet("0", "Client-B", "actor-B");
-        verify(mapper).selectLedger("0", "Client-A", "actor-A", null, null, 2);
+        verify(mapper).selectWallet("Tenant-A", "Client-A", "actor-A");
+        verify(mapper).selectWallet("Tenant-B", "Client-B", "actor-B");
+        verify(mapper).selectLedger("Tenant-A", "Client-A", "actor-A", null, null, 2);
         verifyNoMoreInteractions(mapper);
     }
 
 
     @Test
-    void sameClientCatalogIsSharedButWalletAndAgentProofRemainActorOwnerIsolated() {
+    void sameClientMarketplaceUsesSharedWriteScopeWhileWalletUsesExactJiacnAndActor() {
         var product = new EconomyReadOnlyPreviewRows.ProductRow().setProductId("p1").setName("Skill")
                 .setDescription("desc").setProductVersionId("pv1").setSkillKey("read")
                 .setSkillVersion("1.0.0").setPriceMicro(1L)
                 .setApprovedPermissionsManifest("[]").setDeploymentRestriction("NONE");
         when(mapper.selectProducts("0", "Client-A", 0, 2)).thenReturn(List.of(product));
-        when(mapper.selectWallet("0", "Client-A", "actor-A"))
+        when(mapper.selectWallet("Tenant-A", "Client-A", "actor-A"))
                 .thenReturn(new EconomyWalletSnapshotRow().setAvailableMicro(11L).setHeldMicro(0L)
                         .setMinimumHeldComponentMicro(0L).setVersion(1L));
-        when(mapper.selectWallet("0", "Client-A", "actor-C"))
+        when(mapper.selectWallet("Tenant-C", "Client-A", "actor-C"))
                 .thenReturn(new EconomyWalletSnapshotRow().setAvailableMicro(22L).setHeldMicro(0L)
                         .setMinimumHeldComponentMicro(0L).setVersion(2L));
 
         assertEquals(service.products(A, 0, 1), service.products(C, 0, 1));
+        assertNotEquals(service.capabilities(A).principalScopeFingerprint(),
+                service.capabilities(C).principalScopeFingerprint());
         assertEquals("11", service.wallet(A).availableMicro());
         assertEquals("22", service.wallet(C).availableMicro());
         verify(mapper, times(2)).selectProducts("0", "Client-A", 0, 2);
-        verify(mapper).selectWallet("0", "Client-A", "actor-A");
-        verify(mapper).selectWallet("0", "Client-A", "actor-C");
+        verify(mapper).selectWallet("Tenant-A", "Client-A", "actor-A");
+        verify(mapper).selectWallet("Tenant-C", "Client-A", "actor-C");
     }
 
     @Test
@@ -109,6 +116,14 @@ class EconomyReadOnlyPreviewServiceTest {
         EconomyReadOnlyPreviewException denied = assertThrows(EconomyReadOnlyPreviewException.class,
                 () -> service.agentSkills(C, AGENT));
         assertEquals("PREVIEW_RESOURCE_NOT_FOUND", denied.code());
+        verifyNoInteractions(mapper);
+
+        reset(owners);
+        when(owners.requireOwner(any(HostingRentHttp.Actor.class)))
+                .thenThrow(new HostingRentApplicationException(403, "HOSTING_RENT_OWNER_UNPROVEN"));
+        EconomyReadOnlyPreviewException wrongSubject = assertThrows(EconomyReadOnlyPreviewException.class,
+                () -> service.agentSkills(SAME_OWNER_OTHER_SUB, AGENT));
+        assertEquals("PREVIEW_RESOURCE_NOT_FOUND", wrongSubject.code());
         verifyNoInteractions(mapper);
 
         reset(owners);
@@ -235,7 +250,11 @@ class EconomyReadOnlyPreviewServiceTest {
     @Test
     void serviceRejectsInvalidScopeAndPaginationBeforeMapperAccess() {
         assertEquals("PREVIEW_SCOPE_UNAVAILABLE", assertThrows(EconomyReadOnlyPreviewException.class,
-                () -> service.wallet(new Principal("Tenant-A", "Client-A", "Tenant-A", "actor-A"))).code());
+                () -> service.wallet(new Principal(
+                        "Tenant-X", "0", "0", "0", "Client-A", "Tenant-A", "actor-A"))).code());
+        assertEquals("PREVIEW_SCOPE_UNAVAILABLE", assertThrows(EconomyReadOnlyPreviewException.class,
+                () -> service.products(new Principal(
+                        "Tenant-A", "Tenant-A", "0", "0", "Client-A", "Tenant-A", "actor-A"), 0, 1)).code());
         assertEquals("PREVIEW_BAD_REQUEST", assertThrows(EconomyReadOnlyPreviewException.class,
                 () -> service.ledger(A, null, 0)).code());
         assertEquals("PREVIEW_BAD_REQUEST", assertThrows(EconomyReadOnlyPreviewException.class,

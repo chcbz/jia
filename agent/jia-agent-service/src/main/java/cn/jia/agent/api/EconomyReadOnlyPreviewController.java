@@ -162,9 +162,10 @@ public final class EconomyReadOnlyPreviewController {
             throw new EconomyReadOnlyPreviewException(HttpStatus.FORBIDDEN,
                     "PREVIEW_SCOPE_UNAVAILABLE", "Preview scope is unavailable");
         }
-        // This deployment stores all Agent/economy rows under tenant 0. JWT jiacn remains the
-        // byte-exact personal owner key; it is never substituted for tenant or actor.
-        return new Principal("0", clientId, ownerJiacn, actorId);
+        // Existing write boundaries intentionally differ: /economy/wallet stores jiacn as tenant,
+        // while skill marketplace, hosting rent and Agent registry flows use deployment tenant 0.
+        // Do not normalize either historical domain into the other.
+        return new Principal(ownerJiacn, "0", "0", "0", clientId, ownerJiacn, actorId);
     }
 
     private static Query ledgerQuery(HttpServletRequest request) {

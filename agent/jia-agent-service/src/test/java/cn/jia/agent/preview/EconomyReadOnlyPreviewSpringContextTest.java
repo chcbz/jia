@@ -60,7 +60,7 @@ class EconomyReadOnlyPreviewSpringContextTest {
             HostingRentOwnerResolver owners = context.getBean(HostingRentOwnerResolver.class);
             when(owners.requireOwner(any(HostingRentHttp.Actor.class))).thenReturn("Tenant-A");
             AtomicBoolean transactionObserved = new AtomicBoolean();
-            when(mapper.selectWallet("0", "Client-A", "actor-A")).thenAnswer(invocation -> {
+            when(mapper.selectWallet("Tenant-A", "Client-A", "actor-A")).thenAnswer(invocation -> {
                 transactionObserved.set(TransactionSynchronizationManager.isActualTransactionActive()
                         && TransactionSynchronizationManager.isCurrentTransactionReadOnly());
                 return new EconomyWalletSnapshotRow().setAvailableMicro(9L).setHeldMicro(2L)
@@ -70,7 +70,7 @@ class EconomyReadOnlyPreviewSpringContextTest {
             EconomyReadOnlyPreviewService service = context.getBean(EconomyReadOnlyPreviewService.class);
             assertTrue(AopUtils.isCglibProxy(service));
             service.wallet(new EconomyReadOnlyPreviewDtos.Principal(
-                    "0", "Client-A", "Tenant-A", "actor-A"));
+                    "Tenant-A", "0", "0", "0", "Client-A", "Tenant-A", "actor-A"));
             assertTrue(transactionObserved.get(), "mapper read must run in an actual read-only transaction");
 
             MockMvc mvc = MockMvcBuilders.standaloneSetup(

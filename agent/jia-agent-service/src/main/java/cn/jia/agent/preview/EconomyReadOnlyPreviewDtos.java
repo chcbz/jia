@@ -9,7 +9,15 @@ import java.util.Map;
 public final class EconomyReadOnlyPreviewDtos {
     private EconomyReadOnlyPreviewDtos() { }
 
-    public record Principal(String tenantId, String clientId, String ownerJiacn, String actorId) { }
+    /**
+     * Trusted JWT identity projected into the exact historical scopes used by each write source.
+     * Wallet writes use jiacn as tenant; marketplace, hosting and Agent registry writes use the
+     * shared deployment tenant 0. Keeping the domains separate prevents either convention from
+     * being silently generalized to the other.
+     */
+    public record Principal(String walletTenantId, String marketplaceTenantId,
+            String hostingTenantId, String agentRegistryTenantId, String clientId,
+            String ownerJiacn, String actorId) { }
 
     public record Capabilities(String contractVersion, String mode, boolean enabled,
             String principalScopeFingerprint, Map<String, Boolean> features, Map<String, Boolean> actions) { }
