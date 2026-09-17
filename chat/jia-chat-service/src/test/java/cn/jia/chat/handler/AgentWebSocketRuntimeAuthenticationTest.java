@@ -67,12 +67,19 @@ class AgentWebSocketRuntimeAuthenticationTest {
         assertTrue(f.frames.isEmpty());
     }
 
-    @Test void browserRegistrationDoesNotIssueOrReturnRuntimeCredentials() throws Exception {
-        Fixture f = new Fixture(true); f.register();
-        verify(f.service, never()).register(any());
-        verify(f.auth, never()).bind(anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),any());
-        assertFalse(String.join("", f.frames).contains(TOKEN));
-        assertFalse(String.join("", f.frames).contains("runtimeAuth"));
+    @Test void authenticatedNativeRegistrationAcceptsAnOriginHeader() throws Exception {
+        Fixture f = new Fixture(true);
+        when(f.auth.bind(eq("socket-a"), eq(CLIENT), eq(OWNER), eq(AGENT), eq("runtime-a"),
+                eq("key-a"), eq(TOKEN), any())).thenReturn(new AgentRuntimeAuthenticationService.Receipt(
+                "native-runtime-v1", TENANT, CLIENT, OWNER, AGENT, "runtime-a", true));
+
+        f.register();
+
+        verify(f.service).register(any(AgentRegisterDTO.class));
+        verify(f.auth).bind(eq("socket-a"), eq(CLIENT), eq(OWNER), eq(AGENT), eq("runtime-a"),
+                eq("key-a"), eq(TOKEN), any());
+        assertTrue(String.join("", f.frames).contains("agent_registered"));
+        assertTrue(String.join("", f.frames).contains("runtimeAuth"));
     }
 
     @Test void confirmedOfflinePresenceRevokesWithoutWaitingForSocketClose() throws Exception {

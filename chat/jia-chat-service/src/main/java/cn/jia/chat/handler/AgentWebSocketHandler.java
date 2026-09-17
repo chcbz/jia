@@ -454,10 +454,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             if (agentId == null) {
                 return;
             }
-            stage = "native_transport_check";
-            if (session.getHandshakeHeaders() != null && session.getHandshakeHeaders().getOrigin() != null) {
-                throw new IllegalArgumentException("Native registration is unavailable to browsers");
-            }
+            // Origin is a browser-oriented header, not a proof of browser transport: the native
+            // ws client also sends it. Handshake API-key ownership and the bound session identity
+            // above are the authority for native registration.
             stage = "runtime_disconnect";
             if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
             stage = "registration_payload";
