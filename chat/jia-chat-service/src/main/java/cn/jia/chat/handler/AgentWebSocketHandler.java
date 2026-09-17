@@ -448,16 +448,19 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             sendError(session, payload, "AGENT_SERVICE_UNAVAILABLE", "Agent service is unavailable");
             return;
         }
-        String stage = "session_identity";
+        String stage = "session_identity_validate";
         try {
             String agentId = requireAllowedSessionAgentId(session, payload);
             if (agentId == null) {
                 return;
             }
+            stage = "native_transport_check";
             if (session.getHandshakeHeaders() != null && session.getHandshakeHeaders().getOrigin() != null) {
                 throw new IllegalArgumentException("Native registration is unavailable to browsers");
             }
+            stage = "runtime_disconnect";
             if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
+            stage = "registration_payload";
             AgentRegisterDTO request = new AgentRegisterDTO();
             request.setAgentId(agentId);
             request.setName(asString(payload.get("name")));
