@@ -886,42 +886,46 @@ class AgentServiceImplTest extends BaseMockTest {
     @Test
     void resolvesScopedTaskMembersAndUsesLegacyAssigneesOnlyWhenMemberRowsAreAbsent() {
         AgentTaskMemberEntity active = taskMember(
-                "tenant-a", "client-a", "task-1", "agent-active", "working");
+                "0", "jia_client", "task-1", "agent-active", "working");
         AgentTaskMemberEntity left = taskMember(
-                "tenant-a", "client-a", "task-1", "agent-left", "left");
-        when(agentTaskMemberDao.listByTask("tenant-a", "client-a", "task-1"))
+                "0", "jia_client", "task-1", "agent-left", "left");
+        when(agentTaskMemberDao.listByTask("0", "jia_client", "jiacn", "task-1"))
                 .thenReturn(List.of(active, left));
 
         assertEquals(List.of("agent-active"),
-                agentService.listTaskMemberAgentIds("tenant-a", "client-a", "task-1"));
-        verify(agentTaskMetaDao, never()).findByTaskId("tenant-a", "client-a", "task-1");
+                agentService.listTaskMemberAgentIds("0", "jia_client", "task-1"));
+        verify(agentTaskMetaDao, never()).findByTaskIdInOwnerScope(
+                "0", "jia_client", "jiacn", "task-1");
 
         AgentTaskMetaEntity legacy = new AgentTaskMetaEntity();
         legacy.setAssignedAgentId("[\"agent-one\",\"agent-two\"]");
-        when(agentTaskMemberDao.listByTask("tenant-a", "client-a", "task-legacy")).thenReturn(List.of());
-        when(agentTaskMetaDao.findByTaskId("tenant-a", "client-a", "task-legacy")).thenReturn(legacy);
+        when(agentTaskMemberDao.listByTask("0", "jia_client", "jiacn", "task-legacy"))
+                .thenReturn(List.of());
+        when(agentTaskMetaDao.findByTaskIdInOwnerScope(
+                "0", "jia_client", "jiacn", "task-legacy")).thenReturn(legacy);
 
         assertEquals(List.of("agent-one", "agent-two"),
-                agentService.listTaskMemberAgentIds("tenant-a", "client-a", "task-legacy"));
+                agentService.listTaskMemberAgentIds("0", "jia_client", "task-legacy"));
     }
 
     @Test
     void writableTaskMembersExcludeInvitedAndTerminalReadOnlyStatuses() {
-        AgentTaskMetaEntity task = scopedTaskRow("task-write", "tenant-a", "client-a");
-        when(agentTaskMetaDao.findByTaskId("tenant-a", "client-a", "task-write"))
+        AgentTaskMetaEntity task = scopedTaskRow("task-write", "0", "jia_client");
+        task.setOwnerJiacn("jiacn");
+        when(agentTaskMetaDao.findByTaskIdInOwnerScope("0", "jia_client", "jiacn", "task-write"))
                 .thenReturn(task);
-        when(agentTaskMemberDao.listByTask("tenant-a", "client-a", "task-write"))
+        when(agentTaskMemberDao.listByTask("0", "jia_client", "jiacn", "task-write"))
                 .thenReturn(List.of(
-                        taskMember("tenant-a", "client-a", "task-write", "accepted", "accepted"),
-                        taskMember("tenant-a", "client-a", "task-write", "working", "working"),
-                        taskMember("tenant-a", "client-a", "task-write", "blocked", "blocked"),
-                        taskMember("tenant-a", "client-a", "task-write", "invited", "invited"),
-                        taskMember("tenant-a", "client-a", "task-write", "done", "done"),
-                        taskMember("tenant-a", "client-a", "task-write", "failed", "failed")));
+                        taskMember("0", "jia_client", "task-write", "accepted", "accepted"),
+                        taskMember("0", "jia_client", "task-write", "working", "working"),
+                        taskMember("0", "jia_client", "task-write", "blocked", "blocked"),
+                        taskMember("0", "jia_client", "task-write", "invited", "invited"),
+                        taskMember("0", "jia_client", "task-write", "done", "done"),
+                        taskMember("0", "jia_client", "task-write", "failed", "failed")));
 
         assertEquals(List.of("accepted", "working", "blocked"),
                 agentService.listTaskWritableMemberAgentIds(
-                        "tenant-a", "client-a", "task-write"));
+                        "0", "jia_client", "task-write"));
     }
 
     @Test
