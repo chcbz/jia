@@ -80,7 +80,8 @@ class AgentTaskThreadRealDatabaseTest {
     private static final String JDBC_URL =
             "jdbc:h2:mem:cyf_b07_thread;MODE=MYSQL;DB_CLOSE_DELAY=-1;"
                     + "CASE_INSENSITIVE_IDENTIFIERS=TRUE;LOCK_TIMEOUT=10000";
-    private static final String TENANT = "tenant-a";
+    private static final String TENANT = "0";
+    private static final String OWNER = "owner-a";
     private static final String CLIENT = "client-a";
     private static final String TASK = "task-1";
     private static final String AGENT_A = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -145,9 +146,9 @@ class AgentTaskThreadRealDatabaseTest {
         service = new AgentTaskThreadServiceImpl(
                 realThreadDao, conversationDao, messageDao, agentService, accessService, creation);
 
-        insertTask(TENANT, CLIENT, TASK);
-        insertMember(TENANT, CLIENT, TASK, AGENT_A, "working");
-        insertMember(TENANT, CLIENT, TASK, AGENT_B, "accepted");
+        insertTask(TENANT, CLIENT, OWNER, TASK);
+        insertMember(TENANT, CLIENT, OWNER, TASK, AGENT_A, "working");
+        insertMember(TENANT, CLIENT, OWNER, TASK, AGENT_B, "accepted");
     }
 
     @AfterEach
@@ -170,10 +171,10 @@ class AgentTaskThreadRealDatabaseTest {
         try {
             Future<AgentTaskThreadDTO> first = executor.submit(() ->
                     concurrentService.getOrCreateTeamThread(
-                            TENANT, CLIENT, TASK, AGENT_A, "Team A"));
+                            TENANT, CLIENT, OWNER, TASK, AGENT_A, "Team A"));
             Future<AgentTaskThreadDTO> second = executor.submit(() ->
                     concurrentService.getOrCreateTeamThread(
-                            TENANT, CLIENT, TASK, AGENT_B, "Team B"));
+                            TENANT, CLIENT, OWNER, TASK, AGENT_B, "Team B"));
 
             AgentTaskThreadDTO a = first.get(20, TimeUnit.SECONDS);
             AgentTaskThreadDTO b = second.get(20, TimeUnit.SECONDS);
@@ -185,10 +186,10 @@ class AgentTaskThreadRealDatabaseTest {
             AgentTaskThreadMessageCreateDTO message = new AgentTaskThreadMessageCreateDTO();
             message.setActorAgentId(AGENT_A);
             message.setContent("implementation is 50% complete");
-            concurrentService.appendTeamMessage(TENANT, CLIENT, TASK, message);
+            concurrentService.appendTeamMessage(TENANT, CLIENT, OWNER, TASK, message);
 
             var shared = concurrentService.listTeamMessages(
-                    TENANT, CLIENT, TASK, AGENT_B, 20);
+                    TENANT, CLIENT, OWNER, TASK, AGENT_B, 20);
             assertEquals(1, shared.size());
             assertEquals("implementation is 50% complete", shared.getFirst().getContent());
             assertEquals("agent", shared.getFirst().getSenderType());
@@ -200,27 +201,29 @@ class AgentTaskThreadRealDatabaseTest {
     @Test
     void historicalReadOnlyAndAllCrossScopePathsFailClosed() {
         AgentTaskThreadDTO thread = service.getOrCreateTeamThread(
-                TENANT, CLIENT, TASK, AGENT_A, null);
+                TENANT, CLIENT, OWNER, TASK, AGENT_A, null);
         AgentTaskThreadMessageCreateDTO initial = new AgentTaskThreadMessageCreateDTO();
         initial.setActorAgentId(AGENT_A);
         initial.setContent("finished");
-        service.appendTeamMessage(TENANT, CLIENT, TASK, initial);
+        service.appendTeamMessage(TENANT, CLIENT, OWNER, TASK, initial);
 
         jdbc.update("""
                 UPDATE agent_task_member SET member_status = 'done'
-                WHERE tenant_id = ? AND client_id = ? AND task_id = ? AND agent_id = ?
-                """, TENANT, CLIENT, TASK, AGENT_A);
+                WHERE tenant_id = ? AND client_id = ? AND owner_jiacn = ?
+                  AND task_id = ? AND agent_id = ?
+                """, TENANT, CLIENT, OWNER, TASK, AGENT_A);
         assertEquals(1, service.listTeamMessages(
-                TENANT, CLIENT, TASK, AGENT_A, 20).size());
+                TENANT, CLIENT, OWNER, TASK, AGENT_A, 20).size());
         AgentTaskThreadMessageCreateDTO late = new AgentTaskThreadMessageCreateDTO();
         late.setActorAgentId(AGENT_A);
         late.setContent("late mutation");
-        assertUnavailable(() -> service.appendTeamMessage(TENANT, CLIENT, TASK, late));
+        assertUnavailable(() -> service.appendTeamMessage(TENANT, CLIENT, OWNER, TASK, late));
 
-        assertUnavailable(() -> service.getTeamThread(TENANT, CLIENT, TASK, OUTSIDER));
-        assertUnavailable(() -> service.getTeamThread("tenant-b", CLIENT, TASK, AGENT_B));
-        assertUnavailable(() -> service.getTeamThread(TENANT, "client-b", TASK, AGENT_B));
-        assertUnavailable(() -> service.getTeamThread(TENANT, CLIENT, "task-2", AGENT_B));
+        assertUnavailable(() -> service.getTeamThread(TENANT, CLIENT, OWNER, TASK, OUTSIDER));
+        assertUnavailable(() -> service.getTeamThread(TENANT, CLIENT, "owner-b", TASK, AGENT_B));
+        assertInvalid(() -> service.getTeamThread("tenant-b", CLIENT, OWNER, TASK, AGENT_B));
+        assertUnavailable(() -> service.getTeamThread(TENANT, "client-b", OWNER, TASK, AGENT_B));
+        assertUnavailable(() -> service.getTeamThread(TENANT, CLIENT, OWNER, "task-2", AGENT_B));
 
         assertEquals(thread.getConversationId(), jdbc.queryForObject(
                 "SELECT conversation_id FROM agent_task_thread", String.class));
@@ -247,24 +250,24 @@ class AgentTaskThreadRealDatabaseTest {
                 "0", CLIENT, "tenant-zero-task", "team", "team"));
 
         AgentTaskThreadDTO exact = service.getOrCreateTeamThread(
-                TENANT, CLIENT, TASK, AGENT_A, "Exact tenant thread");
+                TENANT, CLIENT, OWNER, TASK, AGENT_A, "Exact tenant thread");
         assertNotNull(exact);
         assertNotNull(realThreadDao.findByTaskThreadForUpdate(
                 TENANT, CLIENT, TASK, "team", "team"));
     }
 
     @Test
-    void listTeamMessagesExcludesTenantZeroAndCiScopeCollisions() {
+    void listTeamMessagesExcludesForeignAndCaseOrPaddingScopeCollisions() {
         AgentTaskThreadDTO thread = service.getOrCreateTeamThread(
-                TENANT, CLIENT, TASK, AGENT_A, null);
+                TENANT, CLIENT, OWNER, TASK, AGENT_A, null);
         AgentTaskThreadMessageCreateDTO exact = new AgentTaskThreadMessageCreateDTO();
         exact.setActorAgentId(AGENT_A);
         exact.setContent("exact-message");
-        service.appendTeamMessage(TENANT, CLIENT, TASK, exact);
+        service.appendTeamMessage(TENANT, CLIENT, OWNER, TASK, exact);
 
-        insertRawMessage("0", CLIENT, thread.getConversationId(), "tenant-zero-leak");
-        insertRawMessage(TENANT.toUpperCase(), CLIENT,
-                thread.getConversationId(), "tenant-case-leak");
+        insertRawMessage("tenant-b", CLIENT, thread.getConversationId(), "foreign-tenant-leak");
+        insertRawMessage("0 ", CLIENT,
+                thread.getConversationId(), "tenant-padding-leak");
         insertRawMessage(TENANT, CLIENT.toUpperCase(),
                 thread.getConversationId(), "client-case-leak");
         insertRawMessage(TENANT, CLIENT,
@@ -275,16 +278,16 @@ class AgentTaskThreadRealDatabaseTest {
                                 TENANT, CLIENT, thread.getConversationId(), 20)
                         .stream().map(ChatMessageEntity::getContent).toList());
         assertEquals(List.of("exact-message"),
-                service.listTeamMessages(TENANT, CLIENT, TASK, AGENT_B, 20)
+                service.listTeamMessages(TENANT, CLIENT, OWNER, TASK, AGENT_B, 20)
                         .stream().map(item -> item.getContent()).toList());
     }
 
     @Test
     void taskAndMemberLocksHoldConcurrentRevocationUntilMessageCommit() throws Exception {
-        service.getOrCreateTeamThread(TENANT, CLIENT, TASK, AGENT_A, null);
+        service.getOrCreateTeamThread(TENANT, CLIENT, OWNER, TASK, AGENT_A, null);
         CountDownLatch ownershipLocked = new CountDownLatch(1);
         CountDownLatch continueWrite = new CountDownLatch(1);
-        when(agentService.requireApiKeyOwnedAgentForUpdate(CLIENT, TENANT, AGENT_A))
+        when(agentService.requireApiKeyOwnedAgentForUpdate(CLIENT, OWNER, AGENT_A))
                 .thenAnswer(invocation -> {
                     ownershipLocked.countDown();
                     if (!continueWrite.await(10, TimeUnit.SECONDS)) {
@@ -299,12 +302,13 @@ class AgentTaskThreadRealDatabaseTest {
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
             Future<?> append = executor.submit(() ->
-                    service.appendTeamMessage(TENANT, CLIENT, TASK, message));
+                    service.appendTeamMessage(TENANT, CLIENT, OWNER, TASK, message));
             assertTrue(ownershipLocked.await(10, TimeUnit.SECONDS));
             Future<Integer> revoke = executor.submit(() -> jdbc.update("""
                     UPDATE agent_task_member SET member_status = 'left'
-                    WHERE tenant_id = ? AND client_id = ? AND task_id = ? AND agent_id = ?
-                    """, TENANT, CLIENT, TASK, AGENT_A));
+                    WHERE tenant_id = ? AND client_id = ? AND owner_jiacn = ?
+                      AND task_id = ? AND agent_id = ?
+                    """, TENANT, CLIENT, OWNER, TASK, AGENT_A));
             Thread.sleep(150L);
             assertTrue(!revoke.isDone(), "member revocation must wait for the root/member locks");
             continueWrite.countDown();
@@ -331,7 +335,7 @@ class AgentTaskThreadRealDatabaseTest {
         }).when(eventWriter).append(org.mockito.ArgumentMatchers.any());
 
         assertThrows(AgentTaskThreadException.class,
-                () -> service.getOrCreateTeamThread(TENANT, CLIENT, TASK, AGENT_A, null));
+                () -> service.getOrCreateTeamThread(TENANT, CLIENT, OWNER, TASK, AGENT_A, null));
 
         assertEquals(0, count("agent_task_thread"));
         assertEquals(0, count("chat_conversation"));
@@ -351,7 +355,7 @@ class AgentTaskThreadRealDatabaseTest {
         request.setActorAgentId(AGENT_A);
         request.setContent("must roll back with its event");
         assertThrows(AgentTaskThreadException.class,
-                () -> service.appendTeamMessage(TENANT, CLIENT, TASK, request));
+                () -> service.appendTeamMessage(TENANT, CLIENT, OWNER, TASK, request));
 
         assertEquals(0, count("agent_task_thread"));
         assertEquals(0, count("chat_conversation"));
@@ -365,7 +369,7 @@ class AgentTaskThreadRealDatabaseTest {
             AgentTaskThreadMessageCreateDTO request = new AgentTaskThreadMessageCreateDTO();
             request.setActorAgentId(AGENT_A);
             request.setContent("outer rollback");
-            service.appendTeamMessage(TENANT, CLIENT, TASK, request);
+            service.appendTeamMessage(TENANT, CLIENT, OWNER, TASK, request);
             status.setRollbackOnly();
         });
 
@@ -377,17 +381,17 @@ class AgentTaskThreadRealDatabaseTest {
     @Test
     void scopedLatestMessageReadHasStableOrderingForEqualTimestamps() {
         AgentTaskThreadDTO thread = service.getOrCreateTeamThread(
-                TENANT, CLIENT, TASK, AGENT_A, null);
+                TENANT, CLIENT, OWNER, TASK, AGENT_A, null);
         for (String content : List.of("one", "two", "three")) {
             jdbc.update("""
                     INSERT INTO chat_message
                     (conversation_id, message_type, content, metadata, create_time, update_time,
                      client_id, tenant_id, jiacn, sync_status, conversation_type, sender_type, sender_name)
                     VALUES (?, 'ASSISTANT', ?, '{}', 100, 100, ?, ?, ?, 'PENDING', 'juyiting', 'agent', 'test')
-                    """, thread.getConversationId(), content, CLIENT, TENANT, TENANT);
+                    """, thread.getConversationId(), content, CLIENT, TENANT, OWNER);
         }
 
-        var latest = service.listTeamMessages(TENANT, CLIENT, TASK, AGENT_B, 2);
+        var latest = service.listTeamMessages(TENANT, CLIENT, OWNER, TASK, AGENT_B, 2);
         assertEquals(List.of("two", "three"),
                 latest.stream().map(item -> item.getContent()).toList());
         assertTrue(latest.get(0).getMessageId() < latest.get(1).getMessageId());
@@ -401,7 +405,7 @@ class AgentTaskThreadRealDatabaseTest {
                  client_id, tenant_id, jiacn, sync_status, conversation_type, sender_type, sender_name)
                 VALUES (?, 'ASSISTANT', ?, '{}', 200, 200, ?, ?, ?,
                         'PENDING', 'juyiting', 'agent', 'collision')
-                """, conversationId, content, clientId, tenantId, tenantId);
+                """, conversationId, content, clientId, tenantId, OWNER);
     }
 
     private AgentRuntimeDTO runtime(String agentId) {
@@ -418,6 +422,12 @@ class AgentTaskThreadRealDatabaseTest {
                 exception.getReason());
         assertEquals("Task thread is not available in the requested scope",
                 exception.getMessage());
+    }
+
+    private void assertInvalid(Runnable operation) {
+        AgentTaskThreadException exception = assertThrows(
+                AgentTaskThreadException.class, operation::run);
+        assertEquals(AgentTaskThreadException.Reason.INVALID_REQUEST, exception.getReason());
     }
 
     private AgentTaskThreadCreationTransaction transactionalCreation(
@@ -458,24 +468,25 @@ class AgentTaskThreadRealDatabaseTest {
         return jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Integer.class);
     }
 
-    private void insertTask(String tenant, String client, String task) {
+    private void insertTask(String tenant, String client, String owner, String task) {
         jdbc.update("""
                 INSERT INTO agent_task_meta
-                (task_id, reward_status, collaboration_mode, risk_level, max_agents,
+                (task_id, owner_jiacn, reward_status, collaboration_mode, risk_level, max_agents,
                  review_required, task_version, current_event_version,
                  tenant_id, client_id, create_time, update_time)
-                VALUES (?, 'running', 'team', 'low', 3, 0, 0, 0, ?, ?, 1, 1)
-                """, task, tenant, client);
+                VALUES (?, ?, 'running', 'team', 'low', 3, 0, 0, 0, ?, ?, 1, 1)
+                """, task, owner, tenant, client);
     }
 
     private void insertMember(
-            String tenant, String client, String task, String agent, String status) {
+            String tenant, String client, String owner, String task,
+            String agent, String status) {
         jdbc.update("""
                 INSERT INTO agent_task_member
-                (task_id, agent_id, member_role, member_status, assignment_source,
+                (task_id, owner_jiacn, agent_id, member_role, member_status, assignment_source,
                  version, tenant_id, client_id, create_time, update_time)
-                VALUES (?, ?, 'worker', ?, 'manual', 0, ?, ?, 1, 1)
-                """, task, agent, status, tenant, client);
+                VALUES (?, ?, ?, 'worker', ?, 'manual', 0, ?, ?, 1, 1)
+                """, task, owner, agent, status, tenant, client);
     }
 
     private void createTables() {
@@ -483,6 +494,7 @@ class AgentTaskThreadRealDatabaseTest {
                 CREATE TABLE agent_task_meta (
                     id BIGINT NOT NULL AUTO_INCREMENT,
                     task_id VARCHAR(100) NOT NULL,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     reward_status VARCHAR(20) NOT NULL,
                     assigned_agent_id VARCHAR(100),
                     required_abilities TEXT,
@@ -503,12 +515,13 @@ class AgentTaskThreadRealDatabaseTest {
                     tenant_id VARCHAR(50),
                     client_id VARCHAR(50),
                     PRIMARY KEY (id),
-                    UNIQUE (task_id)
+                    UNIQUE (tenant_id, client_id, owner_jiacn, task_id)
                 )""");
         jdbc.execute("""
                 CREATE TABLE agent_task_member (
                     id BIGINT NOT NULL AUTO_INCREMENT,
                     task_id VARCHAR(100) NOT NULL,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     agent_id VARCHAR(100) NOT NULL,
                     member_role VARCHAR(20) NOT NULL,
                     member_status VARCHAR(20) NOT NULL,
@@ -525,7 +538,7 @@ class AgentTaskThreadRealDatabaseTest {
                     create_time BIGINT,
                     update_time BIGINT,
                     PRIMARY KEY (id),
-                    UNIQUE (tenant_id, client_id, task_id, agent_id)
+                    UNIQUE (tenant_id, client_id, owner_jiacn, task_id, agent_id)
                 )""");
         jdbc.execute("""
                 CREATE TABLE chat_conversation (

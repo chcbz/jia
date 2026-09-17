@@ -20,9 +20,9 @@ class AgentCommandWireNormalizerContractTest {
     @Test
     void d02WireBytesNormalizeAsTheOnlyExecutableCommandType() throws Exception {
         String commandId = AgentCommandCanonicalCodec.taskInviteCommandId(
-                "tenant-a", "client-a", "task-1", "agent-1");
+                "0", "client-a", "owner-a", "task-1", "agent-1");
         AgentCommandDraft draft = new AgentCommandDraft(
-                1, commandId, "task-1", "evt-real", "tenant-a", "client-a", "task-1",
+                1, commandId, "task-1", "evt-real", "0", "client-a", "owner-a", "task-1",
                 null, "agent-1", AgentProtocolConstants.COMMAND_TASK_INVITE, 1000L, 3601000L,
                 new AgentTaskInvitePayload(
                         "task_briefing", "宋江首领已完成悬赏分派，请按职责协作推进。",
@@ -45,6 +45,8 @@ class AgentCommandWireNormalizerContractTest {
                 "taskId", "task-1"));
 
         assertEquals(AgentProtocolConstants.TYPE_COMMAND_DISPATCH, wire.get("messageType"));
+        assertEquals("0", wire.get("tenantId"));
+        assertEquals("owner-a", wire.get("ownerJiacn"));
         assertEquals(AgentProtocolConstants.TYPE_COMMAND_DISPATCH, normalized.canonicalType());
         assertTrue(normalized.executionTrigger());
         assertEquals(AgentProtocolConstants.TYPE_TASK_EVENT, taskEvent.canonicalType());

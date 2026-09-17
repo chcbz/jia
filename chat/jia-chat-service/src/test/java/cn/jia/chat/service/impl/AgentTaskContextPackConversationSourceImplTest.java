@@ -22,7 +22,7 @@ class AgentTaskContextPackConversationSourceImplTest {
         AgentTaskContextPackConversationSourceImpl source =
                 new AgentTaskContextPackConversationSourceImpl(threadService);
         AgentTaskThreadDTO thread = new AgentTaskThreadDTO().setConversationId("31");
-        when(threadService.getTeamThread("tenant", "client", "task", "actor"))
+        when(threadService.getTeamThread("0", "client", "owner", "task", "actor"))
                 .thenReturn(thread);
         List<AgentTaskThreadMessageDTO> messages = new ArrayList<>();
         for (int index = 0; index < 101; index++) {
@@ -32,10 +32,10 @@ class AgentTaskContextPackConversationSourceImplTest {
                     .setContent("Authorization: Bearer raw-secret-" + index)
                     .setMetadata("{\"password\":\"raw-secret\"}"));
         }
-        when(threadService.listTeamMessages("tenant", "client", "task", "actor", 101))
+        when(threadService.listTeamMessages("0", "client", "owner", "task", "actor", 101))
                 .thenReturn(messages);
 
-        var result = source.findReference("tenant", "client", "task", "actor");
+        var result = source.findReference("0", "client", "owner", "task", "actor");
 
         assertTrue(result.available());
         assertTrue(result.truncated());
@@ -43,8 +43,8 @@ class AgentTaskContextPackConversationSourceImplTest {
         assertEquals(100, result.recentMessageCount());
         assertEquals(101L, result.latestMessageAt());
         assertFalse(result.toString().contains("raw-secret"));
-        verify(threadService).getTeamThread("tenant", "client", "task", "actor");
-        verify(threadService).listTeamMessages("tenant", "client", "task", "actor", 101);
+        verify(threadService).getTeamThread("0", "client", "owner", "task", "actor");
+        verify(threadService).listTeamMessages("0", "client", "owner", "task", "actor", 101);
     }
 
     @Test
@@ -52,13 +52,13 @@ class AgentTaskContextPackConversationSourceImplTest {
         AgentTaskThreadService threadService = mock(AgentTaskThreadService.class);
         AgentTaskContextPackConversationSourceImpl source =
                 new AgentTaskContextPackConversationSourceImpl(threadService);
-        when(threadService.getTeamThread("tenant", "client", "task", "actor"))
+        when(threadService.getTeamThread("0", "client", "owner", "task", "actor"))
                 .thenReturn(new AgentTaskThreadDTO().setConversationId("31"));
-        when(threadService.listTeamMessages("tenant", "client", "task", "actor", 101))
+        when(threadService.listTeamMessages("0", "client", "owner", "task", "actor", 101))
                 .thenReturn(List.of(new AgentTaskThreadMessageDTO()
                         .setConversationId("foreign").setCreatedAt(1L)));
 
-        var result = source.findReference("tenant", "client", "task", "actor");
+        var result = source.findReference("0", "client", "owner", "task", "actor");
 
         assertFalse(result.available());
         assertEquals("CONVERSATION_REFERENCE_INVALID", result.reason());

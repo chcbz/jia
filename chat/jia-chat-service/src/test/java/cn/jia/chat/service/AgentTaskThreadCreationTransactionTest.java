@@ -37,7 +37,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class AgentTaskThreadCreationTransactionTest extends BaseMockTest {
-    private static final String TENANT = "tenant-a";
+    private static final String TENANT = "0";
+    private static final String OWNER = "owner-a";
     private static final String CLIENT = "client-a";
     private static final String TASK = "task-1";
     private static final String AGENT = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -55,12 +56,12 @@ class AgentTaskThreadCreationTransactionTest extends BaseMockTest {
     void createLocksTaskRootBeforeMemberIdentityAndThreadAndAppendsBoundedEvent() {
         List<String> order = new ArrayList<>();
         stubRootLock(order);
-        when(accessService.resolveMemberAccessForUpdate(TENANT, CLIENT, TASK, AGENT))
+        when(accessService.resolveMemberAccessForUpdate(TENANT, CLIENT, OWNER, TASK, AGENT))
                 .thenAnswer(invocation -> { order.add("member"); return AgentTaskAccessLevel.READ_WRITE; });
         AgentRuntimeDTO runtime = new AgentRuntimeDTO();
         runtime.setAgentId(AGENT);
         runtime.setName("Agent A");
-        when(agentService.requireApiKeyOwnedAgentForUpdate(CLIENT, TENANT, AGENT))
+        when(agentService.requireApiKeyOwnedAgentForUpdate(CLIENT, OWNER, AGENT))
                 .thenAnswer(invocation -> { order.add("identity"); return runtime; });
         when(taskThreadDao.findByTaskThreadForUpdate(TENANT, CLIENT, TASK, "team", "team"))
                 .thenAnswer(invocation -> { order.add("thread"); return null; });
@@ -79,13 +80,14 @@ class AgentTaskThreadCreationTransactionTest extends BaseMockTest {
                 });
 
         AgentTaskThreadEntity created = transaction().createTeamThread(
-                TENANT, CLIENT, TASK, AGENT, "Team", "task-thread:" + TASK);
+                TENANT, CLIENT, OWNER, TASK, AGENT, "Team", "task-thread:" + TASK);
 
         assertEquals(List.of("root", "member", "identity", "thread"), order);
         assertEquals(8L, created.getId());
         ArgumentCaptor<AgentTaskEventWriteCommand> event =
                 ArgumentCaptor.forClass(AgentTaskEventWriteCommand.class);
         verify(eventWriter).append(event.capture());
+        assertEquals(OWNER, event.getValue().getOwnerJiacn());
         assertEquals(TaskEventType.THREAD_CREATED, event.getValue().getEventType());
         assertEquals(TaskEventType.Aggregate.THREAD, event.getValue().getAggregateType());
         assertEquals("8", event.getValue().getAggregateId());
@@ -123,7 +125,7 @@ class AgentTaskThreadCreationTransactionTest extends BaseMockTest {
 
         String body = "secret progress 正文";
         transaction().appendTeamMessage(
-                TENANT, CLIENT, TASK, AGENT, null, new ChatMessageEntity()
+                TENANT, CLIENT, OWNER, TASK, AGENT, null, new ChatMessageEntity()
                         .setMessageType("ASSISTANT").setContent(body));
 
         ArgumentCaptor<AgentTaskEventWriteCommand> events =
@@ -158,12 +160,12 @@ class AgentTaskThreadCreationTransactionTest extends BaseMockTest {
         ChatMessageEntity message = new ChatMessageEntity()
                 .setMessageType("ASSISTANT").setContent("progress");
         ChatMessageEntity saved = transaction().appendTeamMessage(
-                TENANT, CLIENT, TASK, AGENT, null, message);
+                TENANT, CLIENT, OWNER, TASK, AGENT, null, message);
 
         assertEquals("Agent A", saved.getSenderName());
         assertEquals("77", saved.getConversationId());
-        verify(agentService).requireApiKeyOwnedAgentForUpdate(CLIENT, TENANT, AGENT);
-        verify(accessService).resolveMemberAccessForUpdate(TENANT, CLIENT, TASK, AGENT);
+        verify(agentService).requireApiKeyOwnedAgentForUpdate(CLIENT, OWNER, AGENT);
+        verify(accessService).resolveMemberAccessForUpdate(TENANT, CLIENT, OWNER, TASK, AGENT);
     }
 
     @Test
@@ -175,7 +177,7 @@ class AgentTaskThreadCreationTransactionTest extends BaseMockTest {
         when(conversationDao.findScopedById(TENANT, CLIENT, "77"))
                 .thenReturn(conversation());
         assertThrows(AgentTaskThreadException.class, () -> transaction().appendTeamMessage(
-                TENANT, CLIENT, TASK, AGENT, "Other Agent",
+                TENANT, CLIENT, OWNER, TASK, AGENT, "Other Agent",
                 new ChatMessageEntity().setMessageType("ASSISTANT").setContent("body")));
         verify(messageDao, never()).insertScoped(any(), any(), any());
 
@@ -183,7 +185,7 @@ class AgentTaskThreadCreationTransactionTest extends BaseMockTest {
         stubWriter(AgentTaskAccessLevel.NONE);
         AgentTaskThreadException revoked = assertThrows(AgentTaskThreadException.class,
                 () -> transaction().appendTeamMessage(
-                        TENANT, CLIENT, TASK, AGENT, null,
+                        TENANT, CLIENT, OWNER, TASK, AGENT, null,
                         new ChatMessageEntity().setMessageType("ASSISTANT").setContent("body")));
         assertEquals(AgentTaskThreadException.Reason.NOT_FOUND_OR_FORBIDDEN, revoked.getReason());
         verify(taskThreadDao, never()).findByTaskThreadForUpdate(any(), any(), any(), any(), any());
@@ -195,21 +197,22 @@ class AgentTaskThreadCreationTransactionTest extends BaseMockTest {
         runtime.setAgentId(AGENT);
         runtime.setName("Agent A");
         if (access.canWrite()) {
-            when(agentService.requireApiKeyOwnedAgentForUpdate(CLIENT, TENANT, AGENT)).thenReturn(runtime);
+            when(agentService.requireApiKeyOwnedAgentForUpdate(CLIENT, OWNER, AGENT)).thenReturn(runtime);
         }
-        when(accessService.resolveMemberAccessForUpdate(TENANT, CLIENT, TASK, AGENT)).thenReturn(access);
+        when(accessService.resolveMemberAccessForUpdate(TENANT, CLIENT, OWNER, TASK, AGENT)).thenReturn(access);
     }
 
     private void stubRootLock(List<String> order) {
-        when(mutationTransaction.executeWithLockedTaskRoot(
-                eq(TENANT), eq(CLIENT), eq(TASK), any()))
+        when(mutationTransaction.executeWithLockedTaskRootInOwnerScope(
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), any()))
                 .thenAnswer(invocation -> {
                     order.add("root");
                     AgentTaskMetaEntity root = new AgentTaskMetaEntity()
                             .setTaskId(TASK).setTaskVersion(3L).setCurrentEventVersion(0L);
                     root.setTenantId(TENANT);
                     root.setClientId(CLIENT);
-                    AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(3);
+                    root.setOwnerJiacn(OWNER);
+                    AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(4);
                     return mutation.apply(root);
                 });
     }
@@ -231,7 +234,7 @@ class AgentTaskThreadCreationTransactionTest extends BaseMockTest {
 
     private ChatConversationEntity conversation() {
         ChatConversationEntity conversation = new ChatConversationEntity()
-                .setId(77L).setJiacn(TENANT).setConversationType("juyiting")
+                .setId(77L).setJiacn(OWNER).setConversationType("juyiting")
                 .setConversationScopeType("task_thread")
                 .setConversationScopeKey("task-thread:" + TASK)
                 .setTaskId(TASK).setStatus(0);

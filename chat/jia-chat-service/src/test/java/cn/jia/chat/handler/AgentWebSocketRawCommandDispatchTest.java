@@ -83,7 +83,7 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
     void hallTaskInviteCompatibilityBytesRemainExactThroughRawDispatch()
             throws Exception {
         WebSocketSession exact = session(
-                "task-invite-compat", "tenant-a", "client-a", "agent-1");
+                "task-invite-compat", "0", "client-a", "agent-1");
         AgentWebSocketHandler handler = handler();
         register(handler, exact, "agent-1");
         org.mockito.Mockito.clearInvocations(exact);
@@ -91,9 +91,9 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
         String commandType = AgentProtocolConstants.COMMAND_TASK_INVITE;
         AgentCommandDraft draft = new AgentCommandDraft(
                 1, AgentCommandCanonicalCodec.hallCommandId(
-                        "tenant-a", "client-a", "task-1", "agent-1",
+                        "0", "client-a", "owner-a", "task-1", "agent-1",
                         intentId, commandType),
-                "task-1", intentId, "tenant-a", "client-a", "task-1",
+                "task-1", intentId, "0", "client-a", "owner-a", "task-1",
                 null, "agent-1", commandType, 1_000L, 3_601_000L,
                 intentId, new AgentHallCommandPayload(
                         "task_briefing", "Read the task briefing", "juyiting",
@@ -101,7 +101,7 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
         byte[] raw = AgentCommandCanonicalCodec.wireBytes(draft, "message-task-invite");
 
         AgentRawCommandDispatchResult result = handler.dispatchExactRawCommand(
-                "tenant-a", "client-a", "task-1", "agent-1", raw);
+                "0", "client-a", "task-1", "agent-1", raw);
 
         assertEquals(AgentRawCommandDispatchResult.Status.SENT, result.status());
         ArgumentCaptor<TextMessage> sent = ArgumentCaptor.forClass(TextMessage.class);
@@ -276,18 +276,19 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
 
     @Test
     void skillDispatchRequiresExactDedicatedKeyAndCurrentRegistrationNotOwnerWidePresence() throws Exception {
-        var exact=session("skill-exact","tenant-a","client-a","agent-1");
-        var shared=session("skill-shared","tenant-a","client-a","agent-1");
+        var exact=session("skill-exact","0","client-a","agent-1");
+        var shared=session("skill-shared","0","client-a","agent-1");
         exact.getAttributes().put("managedApiKeyId","dedicated-key");shared.getAttributes().put("managedApiKeyId","shared-key");
         var handler=handler();register(handler,exact,"agent-1");register(handler,shared,"agent-1");
         org.mockito.Mockito.clearInvocations(exact,shared);
         byte[] hash=cn.jia.agent.skill.SkillMarketplaceService.sessionRegistrationHash("agent-1","token");
-        assertTrue(handler.isManagedSkillSessionReady("tenant-a","client-a","agent-1","dedicated-key",hash));
-        assertFalse(handler.isManagedSkillSessionReady("tenant-a","client-a","agent-1","dedicated-key",new byte[32]));
+        assertTrue(handler.isManagedSkillSessionReady("0","client-a","agent-1","dedicated-key",hash));
+        assertFalse(handler.isManagedSkillSessionReady("0","client-a","agent-1","dedicated-key",new byte[32]));
         var payload=new cn.jia.agent.entity.AgentSkillInstallPayload("order-1","install-1","version-1","repo-test","1.0.0","500","sha256:"+"a".repeat(64),"/internal/agent/skill-installations/install-1/package");
-        var draft=new AgentCommandDraft(1,"cmd_skill_install-1","order-1","install-1","tenant-a","client-a","order-1",null,"agent-1","SKILL_INSTALL",1L,3600001L,payload);
+        String commandId=AgentCommandCanonicalCodec.skillInstallCommandId("0","client-a","owner-a","install-1");
+        var draft=new AgentCommandDraft(1,commandId,"order-1","install-1","0","client-a","owner-a","order-1",null,"agent-1","SKILL_INSTALL",1L,3600001L,payload);
         byte[] raw=AgentCommandCanonicalCodec.wireBytes(draft,"message-1",1);
-        assertEquals(AgentRawCommandDispatchResult.Status.SENT,handler.dispatchManagedSkill("tenant-a","client-a","agent-1","dedicated-key",hash,raw).status());
+        assertEquals(AgentRawCommandDispatchResult.Status.SENT,handler.dispatchManagedSkill("0","client-a","agent-1","dedicated-key",hash,raw).status());
         verify(exact).sendMessage(any(TextMessage.class));verify(shared,never()).sendMessage(any(TextMessage.class));
     }
 

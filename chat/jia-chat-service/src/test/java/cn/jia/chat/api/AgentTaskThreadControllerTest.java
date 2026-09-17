@@ -24,7 +24,7 @@ class AgentTaskThreadControllerTest extends BaseMockTest {
     }
 
     @Test
-    void controllerTakesTenantAndClientOnlyFromAuthenticatedContext() {
+    void controllerTakesOwnerAndClientOnlyFromAuthenticatedContext() {
         EsContext context = new EsContext();
         context.setJiacn("tenant-a");
         context.setClientId("client-a");
@@ -37,7 +37,7 @@ class AgentTaskThreadControllerTest extends BaseMockTest {
                 .getOrCreateTeamThread("task-1", request);
 
         verify(service).getOrCreateTeamThread(
-                "tenant-a", "client-a", "task-1",
+                "0", "client-a", "tenant-a", "task-1",
                 "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "team");
     }
 

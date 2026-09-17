@@ -45,7 +45,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /** Real HTTP -> generator -> conversation adapter -> B07 thread service, without DB or AI. */
 class AgentTaskContextPackHttpActorTest {
-    private static final String TENANT = "tenant-a";
+    private static final String TENANT = "0";
+    private static final String OWNER = "owner-a";
     private static final String CLIENT = "client-a";
     private static final String TASK = "same-task";
     private static final String REQUESTER = "requester-actor";
@@ -76,10 +77,10 @@ class AgentTaskContextPackHttpActorTest {
                 new AgentTaskContextPackController(generator, gate)).build();
 
         when(gate.allows(TENANT, CLIENT)).thenReturn(true);
-        when(workspace.snapshot(TENANT, CLIENT, TASK, REQUESTER)).thenReturn(workspace());
-        when(outcomes.listAuthoritativeAccepted(TENANT, CLIENT, TASK, REQUESTER, null, 51))
+        when(workspace.snapshot(TENANT, CLIENT, OWNER, TASK, REQUESTER)).thenReturn(workspace());
+        when(outcomes.listAuthoritativeAccepted(TENANT, CLIENT, OWNER, TASK, REQUESTER, null, 51))
                 .thenReturn(List.of());
-        when(access.resolveMemberAccess(TENANT, CLIENT, TASK, REQUESTER))
+        when(access.resolveMemberAccess(TENANT, CLIENT, OWNER, TASK, REQUESTER))
                 .thenReturn(AgentTaskAccessLevel.READ_WRITE);
         // The other coordinator created this very same task's thread. That is NOT HTTP authority.
         when(threads.findByTaskThread(TENANT, CLIENT, TASK, "team", "team"))
@@ -124,16 +125,16 @@ class AgentTaskContextPackHttpActorTest {
                 .andExpect(content().string(not(containsString("raw-chat-secret"))))
                 .andExpect(content().string(not(containsString("raw-metadata-secret"))));
 
-        verify(generator).generate(TENANT, CLIENT, TASK, REQUESTER, "1");
-        verify(workspace).snapshot(TENANT, CLIENT, TASK, REQUESTER);
-        verify(outcomes).listAuthoritativeAccepted(TENANT, CLIENT, TASK, REQUESTER, null, 51);
-        verify(source).findTaskDescription(TENANT, CLIENT, TASK);
-        verify(adapter).findReference(TENANT, CLIENT, TASK, REQUESTER);
-        verify(threadService).getTeamThread(TENANT, CLIENT, TASK, REQUESTER);
-        verify(threadService).listTeamMessages(TENANT, CLIENT, TASK, REQUESTER, 101);
+        verify(generator).generate(TENANT, CLIENT, OWNER, TASK, REQUESTER, "1");
+        verify(workspace).snapshot(TENANT, CLIENT, OWNER, TASK, REQUESTER);
+        verify(outcomes).listAuthoritativeAccepted(TENANT, CLIENT, OWNER, TASK, REQUESTER, null, 51);
+        verify(source).findTaskDescription(TENANT, CLIENT, OWNER, TASK);
+        verify(adapter).findReference(TENANT, CLIENT, OWNER, TASK, REQUESTER);
+        verify(threadService).getTeamThread(TENANT, CLIENT, OWNER, TASK, REQUESTER);
+        verify(threadService).listTeamMessages(TENANT, CLIENT, OWNER, TASK, REQUESTER, 101);
         // Both real B07 reads recheck the requester, never the thread creator or other producer.
-        verify(agents, times(2)).requireApiKeyOwnedAgent(CLIENT, TENANT, REQUESTER);
-        verify(access, times(2)).resolveMemberAccess(TENANT, CLIENT, TASK, REQUESTER);
+        verify(agents, times(2)).requireApiKeyOwnedAgent(CLIENT, OWNER, REQUESTER);
+        verify(access, times(2)).resolveMemberAccess(TENANT, CLIENT, OWNER, TASK, REQUESTER);
         verify(threads, times(2)).findByTaskThread(TENANT, CLIENT, TASK, "team", "team");
         verify(conversations, times(2)).findScopedById(TENANT, CLIENT, CONVERSATION);
         verify(messages).findByConversationIdScoped(TENANT, CLIENT, CONVERSATION, 101);
@@ -144,7 +145,7 @@ class AgentTaskContextPackHttpActorTest {
 
     private static JwtAuthenticationToken requester() {
         Jwt jwt = Jwt.withTokenValue("validated-by-server-test-token").header("alg", "none")
-                .claim("jiacn", TENANT).claim("client_id", CLIENT).subject(REQUESTER)
+                .claim("jiacn", OWNER).claim("client_id", CLIENT).subject(REQUESTER)
                 .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();
         return new JwtAuthenticationToken(jwt, List.of(), REQUESTER);
     }
@@ -187,7 +188,7 @@ class AgentTaskContextPackHttpActorTest {
     }
 
     private static ChatConversationEntity conversation() {
-        ChatConversationEntity value = new ChatConversationEntity().setId(101L).setJiacn(TENANT)
+        ChatConversationEntity value = new ChatConversationEntity().setId(101L).setJiacn(OWNER)
                 .setConversationType(AgentTaskThreadConstants.CONVERSATION_TYPE)
                 .setConversationScopeType(AgentTaskThreadConstants.CONVERSATION_SCOPE_TYPE)
                 .setConversationScopeKey("task-thread:" + TASK).setTaskId(TASK).setStatus(0);
