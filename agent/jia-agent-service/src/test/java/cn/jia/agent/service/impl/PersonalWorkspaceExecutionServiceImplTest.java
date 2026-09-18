@@ -83,6 +83,30 @@ class PersonalWorkspaceExecutionServiceImplTest {
     }
 
     @Test
+    void durableQueuePinsMultipleCrossFormatMaterialsForOneExplicitOutput() throws Exception {
+        PersonalWorkspaceExecutionEntity accepted = execution("pwe_multi", "agent-a", "QUEUED");
+        accepted.setOutputContentMimeType("application/vnd.openxmlformats-officedocument.presentationml.presentation");
+        when(executions.listQueuedByTarget("0", "client-a", "owner-a", "agent-a", 16)).thenReturn(List.of(accepted));
+        when(executions.listInputs("0", "client-a", "owner-a", "pwe_multi")).thenReturn(List.of(
+                input("pwe_multi", "input_1", "pws_sheet", 3, "source.xlsx",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+                input("pwe_multi", "input_2", "pws_pdf", 1, "brief.pdf", "application/pdf")));
+
+        var items = service.runtimeQueuedCommands(RUNTIME, 16);
+
+        assertEquals(1, items.size());
+        assertEquals(List.of(
+                new PersonalWorkspaceExecutionService.RuntimeInputCommand("input_1", "inputs/input_1.xlsx",
+                        "/internal/agent/tasks/pwe_task_1/runs/pwe_run_1/inputs/input_1/content", 7L, sha("content")),
+                new PersonalWorkspaceExecutionService.RuntimeInputCommand("input_2", "inputs/input_2.pdf",
+                        "/internal/agent/tasks/pwe_task_1/runs/pwe_run_1/inputs/input_2/content", 7L, sha("content"))),
+                items.getFirst().payload().inputManifest());
+        assertEquals("application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                items.getFirst().payload().outputManifest().getFirst().contentType());
+        assertEquals("outputs/result.pptx", items.getFirst().payload().outputManifest().getFirst().relativePath());
+    }
+
+    @Test
     void configuredCapabilitiesExposeOnlyEnabledFormatsAndFailClosedWhenStorageIsUnavailable() {
         assertEquals(List.of(PersonalWorkspaceExecutionProperties.DOCX), service.capabilities().allowedMimeTypes());
         assertTrue(service.capabilities().generationEnabled());
@@ -177,10 +201,15 @@ class PersonalWorkspaceExecutionServiceImplTest {
     }
 
     private static PersonalWorkspaceExecutionInputEntity input(String executionId) {
+        return input(executionId, "input_1", "pws_1", 1, "source.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    }
+
+    private static PersonalWorkspaceExecutionInputEntity input(String executionId, String inputRef, String fileId,
+            int version, String filename, String contentMimeType) {
         PersonalWorkspaceExecutionInputEntity input = new PersonalWorkspaceExecutionInputEntity()
-                .setExecutionId(executionId).setInputRef("input_1").setFileId("pws_1").setFileVersion(1)
-                .setOriginalFilename("source.docx")
-                .setContentMimeType("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+                .setExecutionId(executionId).setInputRef(inputRef).setFileId(fileId).setFileVersion(version)
+                .setOriginalFilename(filename).setContentMimeType(contentMimeType)
                 .setByteLength(7L).setContentHash(sha("content"));
         input.setTenantId("0"); input.setClientId("client-a"); input.setOwnerJiacn("owner-a");
         return input;

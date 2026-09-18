@@ -42,6 +42,8 @@ import java.util.UUID;
 @Named
 public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceExecutionService {
     private static final String INTERNAL_PREFIX = "/internal/agent/tasks/";
+    /** Matches the runtime bridge manifest limit; every input remains independently owner-scoped and version-pinned. */
+    private static final int MAX_EXECUTION_INPUTS = 128;
     /** Every runtime output type is independently configuration-gated; upload availability does not imply execution. */
     private static final Set<String> SUPPORTED_EXECUTION_MIME_TYPES = Set.of(
             "image/png", "image/jpeg", "application/pdf",
@@ -96,7 +98,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
 
         List<InputSnapshot> snapshots = new ArrayList<>();
         List<InputSelection> ordered = new ArrayList<>(valid.inputs());
-        ordered.sort(Comparator.comparing(InputSelection::fileId));
+        ordered.sort(Comparator.comparing(InputSelection::fileId).thenComparingInt(InputSelection::version));
         for (InputSelection selected : ordered) {
             PersonalWorkspaceFileEntity file = workspace.lockFile(scope.tenantId(), scope.clientId(),
                     scope.ownerJiacn(), selected.fileId());
@@ -104,10 +106,9 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             PersonalWorkspaceVersionEntity version = workspace.findVersion(scope.tenantId(), scope.clientId(),
                     scope.ownerJiacn(), selected.fileId(), selected.version());
             if (version == null) throw failure(Reason.NOT_FOUND);
-            if (!executionMimeTypes.contains(version.getContentMimeType())
-                    || !same(version.getContentMimeType(), valid.outputContentMimeType())) {
-                throw failure(Reason.CAPABILITY_UNAVAILABLE);
-            }
+            // A source material and the requested deliverable may use different formats: for example,
+            // an XLSX/PDF reference can be used to create a PPTX. Both ends must still be explicitly enabled.
+            if (!executionMimeTypes.contains(version.getContentMimeType())) throw failure(Reason.CAPABILITY_UNAVAILABLE);
             snapshots.add(new InputSnapshot(file, version));
         }
         String executionId = identifier("pwe_");
@@ -369,25 +370,23 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     }
 
     private RuntimeCommand command(PersonalWorkspaceExecutionEntity execution, List<RuntimeInput> inputs) {
-        if (inputs.size() > 1 || !"QUEUED".equals(execution.getExecutionState())) return null;
+        if (inputs.size() > MAX_EXECUTION_INPUTS || !"QUEUED".equals(execution.getExecutionState())) return null;
         String outputMime = execution.getOutputContentMimeType();
         String extension = EXTENSIONS.get(outputMime);
         if (!executionMimeTypes.contains(outputMime) || extension == null || storage.maxContentBytes() < 1
                 || storage.maxContentBytes() > 9_007_199_254_740_991L) return null;
         String outputPath = INTERNAL_PREFIX + execution.getTaskId() + "/runs/" + execution.getRunId()
                 + "/outputs/output_1/content";
-        List<RuntimeInputCommand> inputManifest;
-        if (inputs.isEmpty()) inputManifest = List.of();
-        else {
-            RuntimeInput input = inputs.getFirst();
+        List<RuntimeInputCommand> inputManifest = new ArrayList<>();
+        for (RuntimeInput input : inputs) {
             String inputExtension = EXTENSIONS.get(input.contentMimeType());
-            if (inputExtension == null || !same(input.contentMimeType(), outputMime)) return null;
+            if (inputExtension == null || !executionMimeTypes.contains(input.contentMimeType())) return null;
             String inputPath = INTERNAL_PREFIX + execution.getTaskId() + "/runs/" + execution.getRunId()
                     + "/inputs/" + input.inputRef() + "/content";
-            inputManifest = List.of(new RuntimeInputCommand(input.inputRef(), "inputs/" + input.inputRef() + inputExtension,
+            inputManifest.add(new RuntimeInputCommand(input.inputRef(), "inputs/" + input.inputRef() + inputExtension,
                     inputPath, input.byteLength(), input.sha256()));
         }
-        return new RuntimeCommand(execution.getTaskId(), execution.getRunId(), inputManifest,
+        return new RuntimeCommand(execution.getTaskId(), execution.getRunId(), List.copyOf(inputManifest),
                 List.of(new RuntimeOutput("output_1", "outputs/result" + extension, outputMime,
                         storage.maxContentBytes(), outputPath)));
     }
@@ -415,17 +414,17 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 || !executionMimeTypes.contains(outputMime)) {
             throw failure(Reason.CAPABILITY_UNAVAILABLE);
         }
-        if (command.inputs() == null || command.inputs().size() > 1) throw failure(Reason.CAPABILITY_UNAVAILABLE);
+        if (command.inputs() == null || command.inputs().size() > MAX_EXECUTION_INPUTS) throw failure(Reason.BAD_REQUEST);
         List<InputSelection> selections = List.copyOf(command.inputs());
-        if (!selections.isEmpty()) {
-            InputSelection selected = selections.getFirst();
+        Set<String> selectedFiles = new LinkedHashSet<>();
+        for (InputSelection selected : selections) {
             if (selected == null) throw failure(Reason.BAD_REQUEST);
             id(selected.fileId(), "fileId", 100);
-            if (selected.version() < 1) throw failure(Reason.BAD_REQUEST);
+            if (selected.version() < 1 || !selectedFiles.add(selected.fileId())) throw failure(Reason.BAD_REQUEST);
         }
         return new ValidCreate(conversation, command.targetAgentId(), task, command.instruction(), outputMime, selections);
     }
-    private static String selectionsWire(List<InputSelection> inputs) { return inputs.stream().sorted(Comparator.comparing(InputSelection::fileId)).map(i -> i.fileId()+":"+i.version()).reduce("", (a,b)->a+"\n"+b); }
+    private static String selectionsWire(List<InputSelection> inputs) { return inputs.stream().sorted(Comparator.comparing(InputSelection::fileId).thenComparingInt(InputSelection::version)).map(i -> i.fileId()+":"+i.version()).reduce("", (a,b)->a+"\n"+b); }
     private static String manifestId(String taskId, String runId, List<PersonalWorkspaceExecutionOutputEntity> outputs) {
         StringBuilder source = new StringBuilder(taskId).append('\n').append(runId).append('\n');
         outputs.stream().sorted(Comparator.comparing(PersonalWorkspaceExecutionOutputEntity::getOutputId)).forEach(output -> source
