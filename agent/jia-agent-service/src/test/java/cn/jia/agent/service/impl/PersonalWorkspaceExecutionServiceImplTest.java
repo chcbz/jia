@@ -1,5 +1,6 @@
 package cn.jia.agent.service.impl;
 
+import cn.jia.agent.config.PersonalWorkspaceExecutionProperties;
 import cn.jia.agent.dao.AgentRuntimeDao;
 import cn.jia.agent.dao.PersonalWorkspaceDao;
 import cn.jia.agent.dao.PersonalWorkspaceExecutionDao;
@@ -22,6 +23,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -42,7 +44,8 @@ class PersonalWorkspaceExecutionServiceImplTest {
         when(storage.maxContentBytes()).thenReturn(4096L);
         writes = mock(PersonalWorkspaceWriteService.class);
         service = new PersonalWorkspaceExecutionServiceImpl(executions, mock(PersonalWorkspaceDao.class),
-                mock(PersonalWorkspaceTaskLinkDao.class), mock(AgentRuntimeDao.class), storage, writes);
+                mock(PersonalWorkspaceTaskLinkDao.class), mock(AgentRuntimeDao.class), storage, writes,
+                new PersonalWorkspaceExecutionProperties(List.of(PersonalWorkspaceExecutionProperties.DOCX)));
     }
 
     @Test
@@ -75,6 +78,43 @@ class PersonalWorkspaceExecutionServiceImplTest {
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document", 4096L,
                 "/internal/agent/tasks/pwe_task_1/runs/pwe_run_1/outputs/output_1/content")), item.payload().outputManifest());
         assertFalse(item.toString().contains("AgentRuntime"));
+    }
+
+    @Test
+    void configuredCapabilitiesExposeOnlyEnabledFormatsAndFailClosedWhenStorageIsUnavailable() {
+        assertEquals(List.of(PersonalWorkspaceExecutionProperties.DOCX), service.capabilities().allowedMimeTypes());
+        assertTrue(service.capabilities().generationEnabled());
+
+        PersonalWorkspaceStorage unavailableStorage = mock(PersonalWorkspaceStorage.class);
+        PersonalWorkspaceExecutionService unavailable = new PersonalWorkspaceExecutionServiceImpl(executions,
+                mock(PersonalWorkspaceDao.class), mock(PersonalWorkspaceTaskLinkDao.class),
+                mock(AgentRuntimeDao.class), unavailableStorage, writes,
+                new PersonalWorkspaceExecutionProperties(List.of(PersonalWorkspaceExecutionProperties.DOCX)));
+        assertEquals(List.of(), unavailable.capabilities().allowedMimeTypes());
+        assertFalse(unavailable.capabilities().generationEnabled());
+        var failure = assertThrows(PersonalWorkspaceExecutionService.Failure.class, () -> unavailable.create(
+                new PersonalWorkspaceExecutionService.OwnerScope("0", "client-a", "owner-a"),
+                new PersonalWorkspaceExecutionService.CreateCommand(null, "agent-a", null, "生成提纲",
+                        PersonalWorkspaceExecutionProperties.DOCX, List.of()), "create-key"));
+        assertEquals(PersonalWorkspaceExecutionService.Reason.CAPABILITY_UNAVAILABLE, failure.getReason());
+    }
+
+    @Test
+    void queuedGenerationUsesEmptyInputManifestAndConfiguredOutputFormat() throws Exception {
+        PersonalWorkspaceExecutionEntity generated = execution("pwe_generate", "agent-a", "QUEUED");
+        generated.setInstruction("生成项目介绍文档");
+        when(executions.listQueuedByTarget("0", "client-a", "owner-a", "agent-a", 16))
+                .thenReturn(List.of(generated));
+        when(executions.listInputs("0", "client-a", "owner-a", "pwe_generate")).thenReturn(List.of());
+
+        var items = service.runtimeQueuedCommands(RUNTIME, 16);
+
+        assertEquals(1, items.size());
+        assertEquals(List.of(), items.getFirst().payload().inputManifest());
+        assertEquals(List.of(new PersonalWorkspaceExecutionService.RuntimeOutput("output_1", "outputs/result.docx",
+                PersonalWorkspaceExecutionProperties.DOCX, 4096L,
+                "/internal/agent/tasks/pwe_task_1/runs/pwe_run_1/outputs/output_1/content")),
+                items.getFirst().payload().outputManifest());
     }
 
     @Test
@@ -114,7 +154,8 @@ class PersonalWorkspaceExecutionServiceImplTest {
     private static PersonalWorkspaceExecutionEntity execution(String id, String agent, String state) {
         PersonalWorkspaceExecutionEntity item = new PersonalWorkspaceExecutionEntity()
                 .setExecutionId(id).setOwnerJiacn("owner-a").setTaskId("pwe_task_1").setRunId("pwe_run_1")
-                .setTargetAgentId(agent).setInstruction("请保留标题并改正文").setExecutionState(state);
+                .setTargetAgentId(agent).setInstruction("请保留标题并改正文")
+                .setOutputContentMimeType(PersonalWorkspaceExecutionProperties.DOCX).setExecutionState(state);
         item.setTenantId("0"); item.setClientId("client-a");
         return item;
     }

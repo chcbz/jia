@@ -12,7 +12,7 @@ import java.nio.file.Path;
 import java.util.LinkedHashSet;
 
 @Configuration(proxyBeanMethods = false)
-@EnableConfigurationProperties(PersonalWorkspaceStorageProperties.class)
+@EnableConfigurationProperties({PersonalWorkspaceStorageProperties.class, PersonalWorkspaceExecutionProperties.class})
 public class PersonalWorkspaceStorageConfiguration {
     @Bean
     public PersonalWorkspaceStorage personalWorkspaceStorage(PersonalWorkspaceStorageProperties properties) {

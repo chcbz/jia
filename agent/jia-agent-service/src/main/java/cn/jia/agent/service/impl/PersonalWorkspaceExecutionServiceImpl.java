@@ -1,5 +1,6 @@
 package cn.jia.agent.service.impl;
 
+import cn.jia.agent.config.PersonalWorkspaceExecutionProperties;
 import cn.jia.agent.dao.AgentRuntimeDao;
 import cn.jia.agent.dao.PersonalWorkspaceDao;
 import cn.jia.agent.dao.PersonalWorkspaceExecutionDao;
@@ -41,9 +42,12 @@ import java.util.UUID;
 @Named
 public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceExecutionService {
     private static final String INTERNAL_PREFIX = "/internal/agent/tasks/";
-    /** 1.11 deliberately opens only the first verified file lane. Other formats stay uploadable, not executable. */
-    private static final Set<String> EXECUTION_MIME_TYPES = Set.of(
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    /** Every runtime output type is independently configuration-gated; upload availability does not imply execution. */
+    private static final Set<String> SUPPORTED_EXECUTION_MIME_TYPES = Set.of(
+            "image/png", "image/jpeg", "application/pdf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation");
     private static final Map<String, String> EXTENSIONS = Map.of(
             "image/png", ".png", "image/jpeg", ".jpg", "text/plain", ".txt", "application/pdf", ".pdf",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".docx",
@@ -55,18 +59,23 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     private final AgentRuntimeDao runtimes;
     private final PersonalWorkspaceStorage storage;
     private final PersonalWorkspaceWriteService writes;
+    private final Set<String> executionMimeTypes;
+    private final boolean executionAvailable;
 
     @Inject
     public PersonalWorkspaceExecutionServiceImpl(PersonalWorkspaceExecutionDao executions,
             PersonalWorkspaceDao workspace, PersonalWorkspaceTaskLinkDao taskLinks,
             AgentRuntimeDao runtimes, PersonalWorkspaceStorage storage,
-            PersonalWorkspaceWriteService writes) {
+            PersonalWorkspaceWriteService writes, PersonalWorkspaceExecutionProperties properties) {
         this.executions = Objects.requireNonNull(executions, "executions");
         this.workspace = Objects.requireNonNull(workspace, "workspace");
         this.taskLinks = Objects.requireNonNull(taskLinks, "taskLinks");
         this.runtimes = Objects.requireNonNull(runtimes, "runtimes");
         this.storage = Objects.requireNonNull(storage, "storage");
         this.writes = Objects.requireNonNull(writes, "writes");
+        this.executionMimeTypes = allowedMimeTypes(properties);
+        long maxOutputBytes = storage.maxContentBytes();
+        this.executionAvailable = maxOutputBytes >= 1 && maxOutputBytes <= 9_007_199_254_740_991L;
     }
 
     @Override
@@ -74,7 +83,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     public ExecutionView create(OwnerScope scope, CreateCommand command, String idempotencyKey) {
         validateOwnerScope(scope); validateIdempotency(idempotencyKey); ValidCreate valid = validCreate(command);
         String requestHash = hash("CREATE", valid.conversationId(), valid.targetAgentId(), valid.taskId(),
-                valid.instruction(), selectionsWire(valid.inputs()));
+                valid.instruction(), valid.outputContentMimeType(), selectionsWire(valid.inputs()));
         PersonalWorkspaceExecutionEntity prior = executions.findByIdempotency(scope.tenantId(),
                 scope.clientId(), scope.ownerJiacn(), idempotencyKey);
         if (prior != null) {
@@ -95,7 +104,10 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             PersonalWorkspaceVersionEntity version = workspace.findVersion(scope.tenantId(), scope.clientId(),
                     scope.ownerJiacn(), selected.fileId(), selected.version());
             if (version == null) throw failure(Reason.NOT_FOUND);
-            if (!EXECUTION_MIME_TYPES.contains(version.getContentMimeType())) throw failure(Reason.CAPABILITY_UNAVAILABLE);
+            if (!executionMimeTypes.contains(version.getContentMimeType())
+                    || !same(version.getContentMimeType(), valid.outputContentMimeType())) {
+                throw failure(Reason.CAPABILITY_UNAVAILABLE);
+            }
             snapshots.add(new InputSnapshot(file, version));
         }
         String executionId = identifier("pwe_");
@@ -105,7 +117,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         PersonalWorkspaceExecutionEntity execution = new PersonalWorkspaceExecutionEntity()
                 .setExecutionId(executionId).setOwnerJiacn(scope.ownerJiacn()).setTaskId(taskId).setRunId(runId)
                 .setConversationId(valid.conversationId()).setTargetAgentId(valid.targetAgentId())
-                .setInstruction(valid.instruction()).setExecutionState("QUEUED").setGrantRevision(1L)
+                .setInstruction(valid.instruction()).setOutputContentMimeType(valid.outputContentMimeType())
+                .setExecutionState("QUEUED").setGrantRevision(1L)
                 .setIdempotencyKey(idempotencyKey).setRequestHash(requestHash)
                 .setRevokeIdempotencyKey(null).setRevokeRequestHash(null)
                 .setCreatedAt(now).setRevokedAt(null);
@@ -132,6 +145,14 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             file.setMetadataRevision(Math.addExact(file.getMetadataRevision(), 1L)); workspace.updateFile(file);
         }
         return view(scope, execution);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ExecutionCapabilities capabilities() {
+        return executionAvailable
+                ? new ExecutionCapabilities(executionMimeTypes.stream().sorted().toList(), true)
+                : new ExecutionCapabilities(List.of(), false);
     }
 
     @Override
@@ -240,10 +261,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         PersonalWorkspaceExecutionEntity execution = runtimeExecution(scope, taskId, runId, true);
         id(outputId, "outputId", 100); filename(originalFilename, contentMimeType); validMime(contentMimeType);
         if (!"output_1".equals(outputId) || content == null || content.length == 0
-                || content.length > storage.maxContentBytes()) throw failure(Reason.BAD_REQUEST);
-        List<PersonalWorkspaceExecutionInputEntity> inputs = executions.listInputs(scope.tenantId(), scope.clientId(),
-                scope.ownerJiacn(), execution.getExecutionId());
-        if (inputs.size() != 1 || !contentMimeType.equals(inputs.getFirst().getContentMimeType())) throw failure(Reason.BAD_REQUEST);
+                || content.length > storage.maxContentBytes()
+                || !same(contentMimeType, execution.getOutputContentMimeType())) throw failure(Reason.BAD_REQUEST);
         PersonalWorkspaceExecutionOutputEntity previous = executions.lockOutput(scope.tenantId(), scope.clientId(),
                 scope.ownerJiacn(), execution.getExecutionId(), outputId);
         PersonalWorkspaceStorage.StoredObject stored = storage.store(storageScope(scope), content, contentMimeType);
@@ -328,7 +347,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         List<RuntimeInput> inputs = runtimeInputs(scope, execution.getExecutionId());
         return new ExecutionView(execution.getExecutionId(), execution.getTaskId(), execution.getRunId(),
                 execution.getConversationId(), execution.getTargetAgentId(), execution.getExecutionState(),
-                execution.getGrantRevision(), inputs, command(execution, inputs));
+                execution.getGrantRevision(), execution.getOutputContentMimeType(), inputs, command(execution, inputs));
     }
     private List<RuntimeInput> runtimeInputs(OwnerScope scope, String executionId) {
         return executions.listInputs(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), executionId).stream()
@@ -347,17 +366,26 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     }
 
     private RuntimeCommand command(PersonalWorkspaceExecutionEntity execution, List<RuntimeInput> inputs) {
-        if (inputs.size() != 1 || !"QUEUED".equals(execution.getExecutionState())) return null;
-        RuntimeInput input = inputs.getFirst(); String extension = EXTENSIONS.get(input.contentMimeType());
-        if (extension == null || storage.maxContentBytes() < 1 || storage.maxContentBytes() > 9_007_199_254_740_991L) return null;
-        String inputPath = INTERNAL_PREFIX + execution.getTaskId() + "/runs/" + execution.getRunId()
-                + "/inputs/" + input.inputRef() + "/content";
+        if (inputs.size() > 1 || !"QUEUED".equals(execution.getExecutionState())) return null;
+        String outputMime = execution.getOutputContentMimeType();
+        String extension = EXTENSIONS.get(outputMime);
+        if (!executionMimeTypes.contains(outputMime) || extension == null || storage.maxContentBytes() < 1
+                || storage.maxContentBytes() > 9_007_199_254_740_991L) return null;
         String outputPath = INTERNAL_PREFIX + execution.getTaskId() + "/runs/" + execution.getRunId()
                 + "/outputs/output_1/content";
-        return new RuntimeCommand(execution.getTaskId(), execution.getRunId(),
-                List.of(new RuntimeInputCommand(input.inputRef(), "inputs/" + input.inputRef() + extension,
-                        inputPath, input.byteLength(), input.sha256())),
-                List.of(new RuntimeOutput("output_1", "outputs/result" + extension, input.contentMimeType(),
+        List<RuntimeInputCommand> inputManifest;
+        if (inputs.isEmpty()) inputManifest = List.of();
+        else {
+            RuntimeInput input = inputs.getFirst();
+            String inputExtension = EXTENSIONS.get(input.contentMimeType());
+            if (inputExtension == null || !same(input.contentMimeType(), outputMime)) return null;
+            String inputPath = INTERNAL_PREFIX + execution.getTaskId() + "/runs/" + execution.getRunId()
+                    + "/inputs/" + input.inputRef() + "/content";
+            inputManifest = List.of(new RuntimeInputCommand(input.inputRef(), "inputs/" + input.inputRef() + inputExtension,
+                    inputPath, input.byteLength(), input.sha256()));
+        }
+        return new RuntimeCommand(execution.getTaskId(), execution.getRunId(), inputManifest,
+                List.of(new RuntimeOutput("output_1", "outputs/result" + extension, outputMime,
                         storage.maxContentBytes(), outputPath)));
     }
     private CommitView committed(String manifestId, List<PersonalWorkspaceExecutionOutputEntity> outputs) {
@@ -373,15 +401,26 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 && same(candidate.getOwnerJiacn(), scope.ownerJiacn()));
         if (!found) throw failure(Reason.NOT_FOUND);
     }
-    private static ValidCreate validCreate(CreateCommand command) {
+    private ValidCreate validCreate(CreateCommand command) {
         if (command == null) throw failure(Reason.BAD_REQUEST);
         String conversation = optional(command.conversationId(), 100);
         id(command.targetAgentId(), "targetAgentId", 100); String task = optional(command.taskId(), 100);
         text(command.instruction(), "instruction", 4000);
-        if (command.inputs() == null || command.inputs().size() != 1) throw failure(Reason.CAPABILITY_UNAVAILABLE);
-        InputSelection selected = command.inputs().getFirst(); id(selected.fileId(), "fileId", 100);
-        if (selected.version() < 1) throw failure(Reason.BAD_REQUEST);
-        return new ValidCreate(conversation, command.targetAgentId(), task, command.instruction(), List.of(selected));
+        String outputMime = command.outputContentMimeType() == null
+                ? PersonalWorkspaceExecutionProperties.DOCX : command.outputContentMimeType();
+        if (!executionAvailable || !SUPPORTED_EXECUTION_MIME_TYPES.contains(outputMime)
+                || !executionMimeTypes.contains(outputMime)) {
+            throw failure(Reason.CAPABILITY_UNAVAILABLE);
+        }
+        if (command.inputs() == null || command.inputs().size() > 1) throw failure(Reason.CAPABILITY_UNAVAILABLE);
+        List<InputSelection> selections = List.copyOf(command.inputs());
+        if (!selections.isEmpty()) {
+            InputSelection selected = selections.getFirst();
+            if (selected == null) throw failure(Reason.BAD_REQUEST);
+            id(selected.fileId(), "fileId", 100);
+            if (selected.version() < 1) throw failure(Reason.BAD_REQUEST);
+        }
+        return new ValidCreate(conversation, command.targetAgentId(), task, command.instruction(), outputMime, selections);
     }
     private static String selectionsWire(List<InputSelection> inputs) { return inputs.stream().sorted(Comparator.comparing(InputSelection::fileId)).map(i -> i.fileId()+":"+i.version()).reduce("", (a,b)->a+"\n"+b); }
     private static String manifestId(String taskId, String runId, List<PersonalWorkspaceExecutionOutputEntity> outputs) {
@@ -404,6 +443,18 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     private static String family(String mime) { if(mime.startsWith("image/"))return "IMAGE"; if("text/plain".equals(mime))return "TEXT"; if("application/pdf".equals(mime))return "PDF"; if(mime.contains("spreadsheet"))return "SPREADSHEET"; if(mime.contains("presentation"))return "PRESENTATION"; return "DOCUMENT"; }
     private static void filename(String value, String mime) { text(value,"filename",255); String expected=EXTENSIONS.get(mime); if(expected==null||value.contains("/")||value.contains("\\")||!value.toLowerCase(Locale.ROOT).endsWith(expected)) throw failure(Reason.BAD_REQUEST); }
     private static void validMime(String mime) { if (!EXECUTION_MIME_TYPES.contains(mime)) throw failure(Reason.BAD_REQUEST); }
+    private static Set<String> allowedMimeTypes(PersonalWorkspaceExecutionProperties properties) {
+        if (properties == null || properties.allowedMimeTypes() == null || properties.allowedMimeTypes().isEmpty()) {
+            throw new IllegalStateException("Personal workspace execution MIME configuration is unavailable");
+        }
+        LinkedHashSet<String> allowed = new LinkedHashSet<>();
+        for (String mime : properties.allowedMimeTypes()) {
+            if (!SUPPORTED_EXECUTION_MIME_TYPES.contains(mime) || !allowed.add(mime)) {
+                throw new IllegalStateException("Personal workspace execution MIME configuration is invalid");
+            }
+        }
+        return Set.copyOf(allowed);
+    }
     private static void validateOwnerScope(OwnerScope scope) { if(scope==null||!"0".equals(scope.tenantId()))throw failure(Reason.BAD_REQUEST); id(scope.clientId(),"clientId",50);id(scope.ownerJiacn(),"owner",50);if("0".equals(scope.ownerJiacn()))throw failure(Reason.BAD_REQUEST); }
     private static void validateRuntimeScope(RuntimeScope scope) { if(scope==null||!"0".equals(scope.tenantId()))throw failure(Reason.NOT_FOUND); id(scope.clientId(),"clientId",50);id(scope.ownerJiacn(),"owner",50);id(scope.agentId(),"agentId",100);id(scope.runtimeInstanceId(),"runtimeInstanceId",100);if("0".equals(scope.ownerJiacn()))throw failure(Reason.NOT_FOUND); }
     private static void validateIdempotency(String key) { id(key,"Idempotency-Key",100); }
@@ -416,6 +467,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     private static void scoped(cn.jia.core.entity.BaseEntity entity,OwnerScope scope){entity.setTenantId(scope.tenantId());entity.setClientId(scope.clientId());}
     private static void scoped(cn.jia.core.entity.BaseEntity entity,RuntimeScope scope){entity.setTenantId(scope.tenantId());entity.setClientId(scope.clientId());}
     private static Failure failure(Reason reason){return new Failure(reason);}
-    private record ValidCreate(String conversationId,String targetAgentId,String taskId,String instruction,List<InputSelection> inputs){}
+    private record ValidCreate(String conversationId,String targetAgentId,String taskId,String instruction,
+                               String outputContentMimeType,List<InputSelection> inputs){}
     private record InputSnapshot(PersonalWorkspaceFileEntity file, PersonalWorkspaceVersionEntity version){}
 }

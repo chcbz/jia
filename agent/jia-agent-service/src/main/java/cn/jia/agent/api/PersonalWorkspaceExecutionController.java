@@ -32,6 +32,12 @@ public class PersonalWorkspaceExecutionController {
         this.service = Objects.requireNonNull(service, "service");
     }
 
+    @GetMapping(value = "/executions/capabilities", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<PersonalWorkspaceExecutionService.ExecutionCapabilities> capabilities(Authentication authentication) {
+        scope(authentication);
+        return ok(service.capabilities());
+    }
+
     @PostMapping(value = "/executions", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<PersonalWorkspaceExecutionService.ExecutionView> create(
@@ -40,7 +46,7 @@ public class PersonalWorkspaceExecutionController {
         if (request == null || request.inputs() == null) throw new RequestFailure();
         PersonalWorkspaceExecutionService.ExecutionView view = service.create(scope(authentication),
                 new PersonalWorkspaceExecutionService.CreateCommand(request.conversationId(), request.targetAgentId(),
-                        request.taskId(), request.instruction(), request.inputs().stream()
+                        request.taskId(), request.instruction(), request.outputContentMimeType(), request.inputs().stream()
                         .map(input -> new PersonalWorkspaceExecutionService.InputSelection(input.fileId(), version(input.version())))
                         .toList()), key);
         return ResponseEntity.status(HttpStatus.ACCEPTED).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(view);
@@ -89,7 +95,8 @@ public class PersonalWorkspaceExecutionController {
     private static boolean valid(String value,int max) { return value!=null&&!value.isBlank()&&value.equals(value.strip())&&value.codePointCount(0,value.length())<=max&&!value.chars().anyMatch(Character::isISOControl); }
     private static <T> ResponseEntity<T> ok(T body) { return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).contentType(MediaType.APPLICATION_JSON).body(body); }
     private static ResponseEntity<ErrorBody> error(HttpStatus status,String code,String message) { return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8)).body(new ErrorBody(code,message)); }
-    public record CreateRequest(String conversationId, String targetAgentId, String taskId, String instruction, List<InputRequest> inputs) { }
+    public record CreateRequest(String conversationId, String targetAgentId, String taskId, String instruction,
+                                String outputContentMimeType, List<InputRequest> inputs) { }
     public record InputRequest(String fileId, String version) { }
     public record RevokeRequest(String expectedGrantRevision) { }
     public record ErrorBody(String code,String message) { }

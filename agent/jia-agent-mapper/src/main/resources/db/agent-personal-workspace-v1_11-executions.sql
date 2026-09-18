@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS agent_personal_workspace_execution (
   conversation_id VARCHAR(100) DEFAULT NULL,
   target_agent_id VARCHAR(100) NOT NULL,
   instruction TEXT NOT NULL,
+  output_content_mime_type VARCHAR(127) NOT NULL,
   execution_state VARCHAR(24) NOT NULL,
   grant_revision BIGINT NOT NULL,
   idempotency_key VARCHAR(100) NOT NULL,
@@ -29,6 +30,7 @@ CREATE TABLE IF NOT EXISTS agent_personal_workspace_execution (
   CONSTRAINT chk_pwex_tenant CHECK (tenant_id = '0'),
   CONSTRAINT chk_pwex_grant_revision CHECK (grant_revision >= 1),
   CONSTRAINT chk_pwex_state CHECK (execution_state IN ('QUEUED','INPUTS_REVOKED','OUTPUT_COMMITTED')),
+  CONSTRAINT chk_pwex_output_mime CHECK (output_content_mime_type IN ('image/png','image/jpeg','application/pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.openxmlformats-officedocument.presentationml.presentation')),
   CONSTRAINT chk_pwex_hash CHECK (CHAR_LENGTH(request_hash)=64),
   CONSTRAINT chk_pwex_revoke_hash CHECK ((revoke_idempotency_key IS NULL AND revoke_request_hash IS NULL) OR (revoke_idempotency_key IS NOT NULL AND CHAR_LENGTH(revoke_request_hash)=64))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;

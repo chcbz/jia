@@ -5,6 +5,8 @@ import java.util.List;
 /** Owner-scoped private file execution and narrow runtime bridge contract. */
 public interface PersonalWorkspaceExecutionService {
     ExecutionView create(OwnerScope scope, CreateCommand command, String idempotencyKey);
+    /** Browser-safe allow-list. An absent format is not executable, even if it is uploadable. */
+    ExecutionCapabilities capabilities();
     ExecutionView get(OwnerScope scope, String executionId);
     ExecutionView revokeInputs(OwnerScope scope, String executionId, long expectedGrantRevision,
             String idempotencyKey);
@@ -22,7 +24,7 @@ public interface PersonalWorkspaceExecutionService {
                         String runtimeInstanceId) { }
     record InputSelection(String fileId, int version) { }
     record CreateCommand(String conversationId, String targetAgentId, String taskId,
-            String instruction, List<InputSelection> inputs) { }
+            String instruction, String outputContentMimeType, List<InputSelection> inputs) { }
     record RuntimeInput(String inputRef, String fileId, int version, String originalFilename,
             String contentMimeType, long byteLength, String sha256) { }
     record RuntimeOutput(String outputId, String relativePath, String contentType, long maxLength,
@@ -36,8 +38,9 @@ public interface PersonalWorkspaceExecutionService {
     record RuntimeInputCommand(String inputId, String relativePath, String downloadPath, long length,
             String sha256) { }
     record ExecutionView(String executionId, String taskId, String runId, String conversationId,
-            String targetAgentId, String state, long grantRevision, List<RuntimeInput> inputs,
-            RuntimeCommand runtimeCommand) { }
+            String targetAgentId, String state, long grantRevision, String outputContentMimeType,
+            List<RuntimeInput> inputs, RuntimeCommand runtimeCommand) { }
+    record ExecutionCapabilities(List<String> allowedMimeTypes, boolean generationEnabled) { }
     record RuntimeContent(String filename, String contentMimeType, byte[] bytes) {
         public RuntimeContent { bytes = bytes == null ? null : bytes.clone(); }
         @Override public byte[] bytes() { return bytes == null ? null : bytes.clone(); }

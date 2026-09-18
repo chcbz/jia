@@ -25,6 +25,7 @@ public class PersonalWorkspaceExecutionEntity extends BaseEntity {
     private String conversationId;
     private String targetAgentId;
     private String instruction;
+    private String outputContentMimeType;
     private String executionState;
     private Long grantRevision;
     private String idempotencyKey;
