@@ -18,6 +18,9 @@ dependencies {
     implementation project(':common:jia-common-service')
     implementation libs.spring.rabbit
     implementation libs.jackson.databind
+    implementation libs.poi.ooxml.core
+    implementation libs.poi.ooxml.full
+    implementation libs.pdfbox.core
     testImplementation project(':common:jia-common-test')
     testImplementation project(':task:jia-task-core')
     testImplementation project(':task:jia-task-api')
