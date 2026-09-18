@@ -31,4 +31,11 @@ public class PersonalWorkspaceStorageConfiguration {
     public PersonalWorkspaceSchemaInitializer personalWorkspaceSchemaInitializer(JdbcTemplate jdbcTemplate) {
         return new PersonalWorkspaceSchemaInitializer(jdbcTemplate);
     }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "agent.personal-workspace-storage", name = "enabled", havingValue = "true")
+    public PersonalWorkspaceTaskLinkSchemaInitializer personalWorkspaceTaskLinkSchemaInitializer(
+            JdbcTemplate jdbcTemplate) {
+        return new PersonalWorkspaceTaskLinkSchemaInitializer(jdbcTemplate);
+    }
 }
