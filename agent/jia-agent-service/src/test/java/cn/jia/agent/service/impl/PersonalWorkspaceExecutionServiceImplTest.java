@@ -1,0 +1,95 @@
+package cn.jia.agent.service.impl;
+
+import cn.jia.agent.dao.AgentRuntimeDao;
+import cn.jia.agent.dao.PersonalWorkspaceDao;
+import cn.jia.agent.dao.PersonalWorkspaceExecutionDao;
+import cn.jia.agent.dao.PersonalWorkspaceTaskLinkDao;
+import cn.jia.agent.entity.PersonalWorkspaceExecutionEntity;
+import cn.jia.agent.entity.PersonalWorkspaceExecutionInputEntity;
+import cn.jia.agent.service.PersonalWorkspaceExecutionService;
+import cn.jia.agent.service.PersonalWorkspaceStorage;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+/** Focused owner/runtime queue contract; database mapper tests retain SQL exactness coverage. */
+class PersonalWorkspaceExecutionServiceImplTest {
+    private static final PersonalWorkspaceExecutionService.RuntimeScope RUNTIME =
+            new PersonalWorkspaceExecutionService.RuntimeScope("0", "client-a", "owner-a", "agent-a", "runtime-a");
+    private PersonalWorkspaceExecutionDao executions;
+    private PersonalWorkspaceExecutionService service;
+
+    @BeforeEach
+    void setUp() {
+        executions = mock(PersonalWorkspaceExecutionDao.class);
+        PersonalWorkspaceStorage storage = mock(PersonalWorkspaceStorage.class);
+        when(storage.maxContentBytes()).thenReturn(4096L);
+        service = new PersonalWorkspaceExecutionServiceImpl(executions, mock(PersonalWorkspaceDao.class),
+                mock(PersonalWorkspaceTaskLinkDao.class), mock(AgentRuntimeDao.class), storage,
+                mock(PersonalWorkspaceWriteService.class));
+    }
+
+    @Test
+    void durableQueueReturnsOnlyExactQueuedAgentItemsWithStrictRuntimePayload() throws Exception {
+        PersonalWorkspaceExecutionEntity accepted = execution("pwe_1", "agent-a", "QUEUED");
+        PersonalWorkspaceExecutionEntity wrongAgent = execution("pwe_2", "agent-b", "QUEUED");
+        PersonalWorkspaceExecutionEntity revoked = execution("pwe_3", "agent-a", "INPUTS_REVOKED");
+        when(executions.listQueuedByTarget("0", "client-a", "owner-a", "agent-a", 16))
+                .thenReturn(List.of(accepted, wrongAgent, revoked));
+        when(executions.listInputs("0", "client-a", "owner-a", "pwe_1"))
+                .thenReturn(List.of(input("pwe_1")));
+
+        List<PersonalWorkspaceExecutionService.RuntimeQueuedCommand> items = service.runtimeQueuedCommands(RUNTIME, 16);
+
+        assertEquals(1, items.size());
+        var item = items.getFirst();
+        assertEquals(1, item.schemaVersion());
+        assertEquals("command.dispatch", item.messageType());
+        assertEquals("WORKSPACE_FILE_EXECUTE", item.commandType());
+        assertEquals("agent-a", item.targetAgentId());
+        assertEquals("pwe_task_1", item.taskId());
+        assertEquals("pwe_run_1", item.runId());
+        assertEquals("请保留标题并改正文", item.instruction());
+        assertTrue(item.messageId().matches("pwe_msg_[0-9a-f]{64}"));
+        assertTrue(item.commandId().matches("pwe_cmd_[0-9a-f]{64}"));
+        assertEquals(List.of(new PersonalWorkspaceExecutionService.RuntimeInputCommand("input_1",
+                "inputs/input_1.docx", "/internal/agent/tasks/pwe_task_1/runs/pwe_run_1/inputs/input_1/content",
+                7L, sha("content"))), item.payload().inputManifest());
+        assertEquals(List.of(new PersonalWorkspaceExecutionService.RuntimeOutput("output_1", "outputs/result.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document", 4096L,
+                "/internal/agent/tasks/pwe_task_1/runs/pwe_run_1/outputs/output_1/content")), item.payload().outputManifest());
+        assertFalse(item.toString().contains("AgentRuntime"));
+    }
+
+    private static PersonalWorkspaceExecutionEntity execution(String id, String agent, String state) {
+        PersonalWorkspaceExecutionEntity item = new PersonalWorkspaceExecutionEntity()
+                .setExecutionId(id).setOwnerJiacn("owner-a").setTaskId("pwe_task_1").setRunId("pwe_run_1")
+                .setTargetAgentId(agent).setInstruction("请保留标题并改正文").setExecutionState(state);
+        item.setTenantId("0"); item.setClientId("client-a");
+        return item;
+    }
+
+    private static PersonalWorkspaceExecutionInputEntity input(String executionId) {
+        PersonalWorkspaceExecutionInputEntity input = new PersonalWorkspaceExecutionInputEntity()
+                .setExecutionId(executionId).setInputRef("input_1").setFileId("pws_1").setFileVersion(1)
+                .setOriginalFilename("source.docx")
+                .setContentMimeType("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+                .setByteLength(7L).setContentHash(sha("content"));
+        input.setTenantId("0"); input.setClientId("client-a"); input.setOwnerJiacn("owner-a");
+        return input;
+    }
+
+    private static String sha(String text) throws Exception {
+        return java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                .digest(text.getBytes(StandardCharsets.UTF_8)));
+    }
+}

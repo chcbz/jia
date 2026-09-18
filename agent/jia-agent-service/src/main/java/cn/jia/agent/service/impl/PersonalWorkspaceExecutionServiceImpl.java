@@ -41,10 +41,9 @@ import java.util.UUID;
 @Named
 public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceExecutionService {
     private static final String INTERNAL_PREFIX = "/internal/agent/tasks/";
-    private static final Set<String> MIME_TYPES = Set.of("image/png", "image/jpeg", "text/plain", "application/pdf",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation");
+    /** 1.11 deliberately opens only the first verified file lane. Other formats stay uploadable, not executable. */
+    private static final Set<String> EXECUTION_MIME_TYPES = Set.of(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
     private static final Map<String, String> EXTENSIONS = Map.of(
             "image/png", ".png", "image/jpeg", ".jpg", "text/plain", ".txt", "application/pdf", ".pdf",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".docx",
@@ -95,7 +94,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             if (file == null || !"ACTIVE".equals(file.getState())) throw failure(Reason.NOT_FOUND);
             PersonalWorkspaceVersionEntity version = workspace.findVersion(scope.tenantId(), scope.clientId(),
                     scope.ownerJiacn(), selected.fileId(), selected.version());
-            if (version == null || !MIME_TYPES.contains(version.getContentMimeType())) throw failure(Reason.NOT_FOUND);
+            if (version == null) throw failure(Reason.NOT_FOUND);
+            if (!EXECUTION_MIME_TYPES.contains(version.getContentMimeType())) throw failure(Reason.CAPABILITY_UNAVAILABLE);
             snapshots.add(new InputSnapshot(file, version));
         }
         String executionId = identifier("pwe_");
@@ -208,6 +208,13 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         OwnerScope owner = new OwnerScope(scope.tenantId(), scope.clientId(), scope.ownerJiacn());
         return executions.listQueuedByTarget(scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
                         scope.agentId(), limit).stream()
+                // DAO filtering is the primary isolation boundary; retain an in-service exact check
+                // so a mapper regression can never hand a queue item to a different runtime Agent.
+                .filter(execution -> execution != null && "QUEUED".equals(execution.getExecutionState())
+                        && same(execution.getTargetAgentId(), scope.agentId())
+                        && same(execution.getTenantId(), scope.tenantId())
+                        && same(execution.getClientId(), scope.clientId())
+                        && same(execution.getOwnerJiacn(), scope.ownerJiacn()))
                 .map(execution -> queuedCommand(owner, execution))
                 .filter(Objects::nonNull)
                 .toList();
@@ -395,7 +402,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     private static String identifier(String prefix) { return prefix + UUID.randomUUID().toString().replace("-", ""); }
     private static String family(String mime) { if(mime.startsWith("image/"))return "IMAGE"; if("text/plain".equals(mime))return "TEXT"; if("application/pdf".equals(mime))return "PDF"; if(mime.contains("spreadsheet"))return "SPREADSHEET"; if(mime.contains("presentation"))return "PRESENTATION"; return "DOCUMENT"; }
     private static void filename(String value, String mime) { text(value,"filename",255); String expected=EXTENSIONS.get(mime); if(expected==null||value.contains("/")||value.contains("\\")||!value.toLowerCase(Locale.ROOT).endsWith(expected)) throw failure(Reason.BAD_REQUEST); }
-    private static void validMime(String mime) { if (!MIME_TYPES.contains(mime)) throw failure(Reason.BAD_REQUEST); }
+    private static void validMime(String mime) { if (!EXECUTION_MIME_TYPES.contains(mime)) throw failure(Reason.BAD_REQUEST); }
     private static void validateOwnerScope(OwnerScope scope) { if(scope==null||!"0".equals(scope.tenantId()))throw failure(Reason.BAD_REQUEST); id(scope.clientId(),"clientId",50);id(scope.ownerJiacn(),"owner",50);if("0".equals(scope.ownerJiacn()))throw failure(Reason.BAD_REQUEST); }
     private static void validateRuntimeScope(RuntimeScope scope) { if(scope==null||!"0".equals(scope.tenantId()))throw failure(Reason.NOT_FOUND); id(scope.clientId(),"clientId",50);id(scope.ownerJiacn(),"owner",50);id(scope.agentId(),"agentId",100);id(scope.runtimeInstanceId(),"runtimeInstanceId",100);if("0".equals(scope.ownerJiacn()))throw failure(Reason.NOT_FOUND); }
     private static void validateIdempotency(String key) { id(key,"Idempotency-Key",100); }
