@@ -78,7 +78,34 @@ public final class FileSystemPersonalWorkspaceStorage implements PersonalWorkspa
     private Path objectPath(Path directory, String hash) { Path target=directory.resolve(hash).normalize(); if (!target.startsWith(root) || !Objects.equals(target.getParent(), directory)) corrupt(); return target; }
     private void ensureDirectory(Path target) { verifyRoot(); Path current=root; for (Path part:root.relativize(target)) { current=current.resolve(part); if (Files.exists(current,LinkOption.NOFOLLOW_LINKS)) { BasicFileAttributes a=attributes(current); if (a.isSymbolicLink() || !a.isDirectory()) corrupt(); } else try { Files.createDirectory(current); } catch (FileAlreadyExistsException raced) { BasicFileAttributes a=attributes(current); if(a.isSymbolicLink()||!a.isDirectory()) corrupt(); } catch(IOException e){unavailable(e);} permissions(current,DIR_PERMS); } }
     private Path requireDirectory(String key, String hash) { Path d=directory(key,hash); verifyRoot(); Path current=root; for(Path part:root.relativize(d)){current=current.resolve(part); BasicFileAttributes a=attributes(current);if(a.isSymbolicLink()||!a.isDirectory())corrupt();} return d; }
-    private static Path createRoot(Path target) { Path current=target.getRoot(); if(current==null) invalid(); for(Path part:target){current=current.resolve(part);if(Files.exists(current,LinkOption.NOFOLLOW_LINKS)){BasicFileAttributes a=attributes(current);if(a.isSymbolicLink()||!a.isDirectory())invalid();}else try{Files.createDirectory(current);}catch(FileAlreadyExistsException raced){BasicFileAttributes a=attributes(current);if(a.isSymbolicLink()||!a.isDirectory())invalid();}catch(IOException e){unavailable(e);} permissions(current,DIR_PERMS);}return target; }
+    /**
+     * Validates every physical ancestor without mutating it.  The configured root may
+     * live under a root-owned deployment tree; changing permissions on /opt, /tmp, or
+     * another ancestor would both break startup and exceed the storage boundary.
+     */
+    private static Path createRoot(Path target) {
+        Path current = target.getRoot();
+        if (current == null) invalid();
+        for (Path part : target) {
+            current = current.resolve(part);
+            if (Files.exists(current, LinkOption.NOFOLLOW_LINKS)) {
+                BasicFileAttributes attributes = attributes(current);
+                if (attributes.isSymbolicLink() || !attributes.isDirectory()) invalid();
+                continue;
+            }
+            try {
+                Files.createDirectory(current);
+            } catch (FileAlreadyExistsException raced) {
+                BasicFileAttributes attributes = attributes(current);
+                if (attributes.isSymbolicLink() || !attributes.isDirectory()) invalid();
+            } catch (IOException failure) {
+                unavailable(failure);
+            }
+        }
+        // Only this application-owned storage root is normalized to private mode.
+        permissions(target, DIR_PERMS);
+        return target;
+    }
     private void verifyRoot(){BasicFileAttributes a=attributes(root);if(a.isSymbolicLink()||!a.isDirectory()||(rootKey!=null&&!Objects.equals(rootKey,a.fileKey())))corrupt();}
     private void verifyExisting(Path target,String hash,long length){byte[] bytes=read(target);if(bytes.length!=length||!constant(sha(bytes),hash))corrupt();permissions(target,FILE_PERMS);}
     private byte[] read(Path target){BasicFileAttributes a=attributes(target);if(a.isSymbolicLink()||!a.isRegularFile()||a.size()>maximum)corrupt();try(FileChannel c=FileChannel.open(target,Set.<OpenOption>of(StandardOpenOption.READ,LinkOption.NOFOLLOW_LINKS));ByteArrayOutputStream out=new ByteArrayOutputStream((int)Math.min(a.size(),65536))){ByteBuffer b=ByteBuffer.allocate(8192);long count=0;while(c.read(b)!=-1){b.flip();count+=b.remaining();if(count>maximum)corrupt();out.write(b.array(),b.position(),b.remaining());b.clear();}return out.toByteArray();}catch(IOException e){unavailable(e);return null;}}

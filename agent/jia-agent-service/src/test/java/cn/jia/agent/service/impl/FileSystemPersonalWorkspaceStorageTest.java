@@ -6,16 +6,38 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class FileSystemPersonalWorkspaceStorageTest {
     @TempDir Path temporaryDirectory;
+
+    @Test
+    void makesOnlyTheConfiguredRootPrivateWithoutMutatingDeploymentAncestors() throws Exception {
+        Files.setPosixFilePermissions(temporaryDirectory, Set.of(
+                PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE, PosixFilePermission.OWNER_EXECUTE,
+                PosixFilePermission.GROUP_READ, PosixFilePermission.GROUP_EXECUTE,
+                PosixFilePermission.OTHERS_READ, PosixFilePermission.OTHERS_EXECUTE));
+        Path root = temporaryDirectory.resolve("private-workspace");
+
+        new FileSystemPersonalWorkspaceStorage(root, 4096, Set.of("text/plain"));
+
+        assertEquals(Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE, PosixFilePermission.OWNER_EXECUTE,
+                PosixFilePermission.GROUP_READ, PosixFilePermission.GROUP_EXECUTE,
+                PosixFilePermission.OTHERS_READ, PosixFilePermission.OTHERS_EXECUTE),
+                Files.getPosixFilePermissions(temporaryDirectory));
+        assertEquals(Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE, PosixFilePermission.OWNER_EXECUTE),
+                Files.getPosixFilePermissions(root));
+        assertTrue(Files.isDirectory(root));
+    }
 
     @Test
     void storesImmutableContentUnderExactOwnerScopeAndVerifiesReadback() {
