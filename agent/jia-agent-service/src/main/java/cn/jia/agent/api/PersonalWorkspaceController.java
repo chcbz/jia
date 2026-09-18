@@ -50,7 +50,7 @@ public class PersonalWorkspaceController {
     @PostMapping(value = "/files", consumes = MediaType.MULTIPART_FORM_DATA_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<PersonalWorkspaceViews.UploadView> create(@RequestParam("file") MultipartFile file,
             @RequestParam(required = false) String displayName, @RequestHeader("Idempotency-Key") String key,
-            Authentication authentication) {
+            Authentication authentication) throws IOException {
         PersonalWorkspaceViews.UploadView view = service.create(scope(authentication), upload(file, displayName, key));
         return ResponseEntity.status(HttpStatus.CREATED).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(view);
     }
@@ -74,7 +74,7 @@ public class PersonalWorkspaceController {
     public ResponseEntity<PersonalWorkspaceViews.UploadView> append(@PathVariable String fileId,
             @RequestParam("file") MultipartFile file, @RequestParam(required = false) String displayName,
             @RequestParam("expectedPreviousVersion") String expectedPreviousVersion,
-            @RequestHeader("Idempotency-Key") String key, Authentication authentication) {
+            @RequestHeader("Idempotency-Key") String key, Authentication authentication) throws IOException {
         PersonalWorkspaceViews.UploadView view = service.appendVersion(scope(authentication), fileId,
                 upload(file, displayName, key), version(expectedPreviousVersion));
         return ResponseEntity.status(HttpStatus.CREATED).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(view);
