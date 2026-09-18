@@ -76,7 +76,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
     private static final String TASK = "task-1";
     private static final String ACTOR = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private static final String OTHER = "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    private static final TaskScope SCOPE = new TaskScope(TENANT, CLIENT, TASK);
+    private static final TaskScope SCOPE = new TaskScope(TENANT, CLIENT, TENANT, TASK);
 
     @Mock AgentTaskEventAccessService accessService;
     @Mock AgentTaskEventReplayService replayService;

@@ -95,7 +95,7 @@ class FundedBountyServiceRealTransactionTest {
     private static final String CLIENT = "Client-W04";
     private static final String USER = "jwt-sub-w04";
     private static final String AGENT = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    private static final FundedBountyActor ACTOR = new FundedBountyActor(TENANT, CLIENT, USER);
+    private static final FundedBountyActor ACTOR = new FundedBountyActor(TENANT, CLIENT, TENANT, USER);
 
     private AnnotationConfigApplicationContext context;
     private JdbcTemplate jdbc;
@@ -276,7 +276,7 @@ class FundedBountyServiceRealTransactionTest {
                 services.guard().requireAssignmentAllowed(TENANT, CLIENT, pause.taskId, false, 1, false);
                 pause.precheckPassed.countDown(); // The other transaction's funding is not visible yet.
                 FundedBountyException failure = assertThrows(FundedBountyException.class, () ->
-                        services.compatibility().assignResolved(TENANT, CLIENT, pause.taskId, List.of(AGENT), false,
+                        services.compatibility().assignResolved(TENANT, CLIENT, TENANT, pause.taskId, List.of(AGENT), false,
                                 new AgentLegacyTaskCompatibilityService.AssignmentPrecommitValidator() {
                                     @Override
                                     public void beforeIdentityLock(AgentTaskMetaEntity root, List<String> agents) {

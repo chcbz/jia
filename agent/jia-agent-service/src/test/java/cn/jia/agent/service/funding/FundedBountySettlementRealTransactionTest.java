@@ -45,7 +45,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * writer all use one physical TM. Rabbit invitations remain OFF, not claimed as verified.
  */
 class FundedBountySettlementRealTransactionTest {
-    private static final FundedBountyActor ACTOR = new FundedBountyActor("Tenant-W04", "Client-W04", "jwt-sub-w04");
+    private static final FundedBountyActor ACTOR = new FundedBountyActor("Tenant-W04", "Client-W04", "Tenant-W04", "jwt-sub-w04");
     private static final String AGENT = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private static final long GROSS = 1_000_000_000L;
     private FundedBountyQuoteClaimRealTransactionTest fixture;
@@ -188,9 +188,9 @@ class FundedBountySettlementRealTransactionTest {
         assertThrows(FundedBountyException.class, () -> complete(Long.MAX_VALUE));
         assertEquals("TASK_VERSION_CONFLICT", assertThrows(FundedBountyException.class, () -> settlement.complete(
                 ACTOR, key(4), taskId, new AgentTaskFundingCompleteDTO("0", "0"))).code());
-        for (FundedBountyActor actor : List.of(new FundedBountyActor(ACTOR.tenantId(), ACTOR.clientId(), "other"),
-                new FundedBountyActor("tenant-w04", ACTOR.clientId(), ACTOR.userId()),
-                new FundedBountyActor(ACTOR.tenantId(), "Client-other", ACTOR.userId()))) {
+        for (FundedBountyActor actor : List.of(new FundedBountyActor(ACTOR.tenantId(), ACTOR.clientId(), ACTOR.ownerJiacn(), "other"),
+                new FundedBountyActor("tenant-w04", ACTOR.clientId(), ACTOR.ownerJiacn(), ACTOR.userId()),
+                new FundedBountyActor(ACTOR.tenantId(), "Client-other", ACTOR.ownerJiacn(), ACTOR.userId()))) {
             assertThrows(FundedBountyException.class, () -> settlement.complete(actor, key(4), taskId, request(1)));
             assertThrows(FundedBountyException.class, () -> settlement.read(actor, taskId));
         }

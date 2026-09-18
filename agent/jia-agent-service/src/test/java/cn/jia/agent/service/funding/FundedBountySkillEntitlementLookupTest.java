@@ -11,7 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class FundedBountySkillEntitlementLookupTest {
     private final FailClosedFundedBountySkillEntitlementLookup lookup =
             new FailClosedFundedBountySkillEntitlementLookup();
-    private final FundedBountyActor actor = new FundedBountyActor("tenant", "client", "user");
+    private final FundedBountyActor actor = new FundedBountyActor("tenant", "client", "tenant", "user");
 
     @Test
     void emptyRequirementsMatchWithoutInventingInstalledSkills() {

@@ -92,7 +92,7 @@ class AgentLegacyTaskCompatibilityEventTest extends BaseMockTest {
         when(workItemDao.insert(eq(TENANT), eq(CLIENT), any())).thenReturn(1);
 
         AgentLegacyTaskCompatibilityService.AssignOutcome outcome = service().assignResolved(
-                TENANT, CLIENT, TASK, List.of(supplementary, privateUse), false);
+                TENANT, CLIENT, TENANT, TASK, List.of(supplementary, privateUse), false);
 
         assertTrue(outcome.changed());
         ArgumentCaptor<AgentTaskEventWriteCommand> events =
@@ -134,7 +134,7 @@ class AgentLegacyTaskCompatibilityEventTest extends BaseMockTest {
         when(memberDao.listByTask(TENANT, CLIENT, TASK)).thenReturn(List.of(member));
 
         AgentLegacyTaskCompatibilityService.ReportOutcome outcome = service().reportResolved(
-                TENANT, CLIENT, TASK, AGENT, "running", null);
+                TENANT, CLIENT, TENANT, TASK, AGENT, "running", null);
 
         assertTrue(outcome.changed());
         ArgumentCaptor<AgentTaskEventWriteCommand> events =
@@ -155,7 +155,7 @@ class AgentLegacyTaskCompatibilityEventTest extends BaseMockTest {
         when(memberDao.listByTask(TENANT, CLIENT, TASK)).thenReturn(List.of(member));
 
         AgentLegacyTaskCompatibilityService.ReportOutcome duplicate = service().reportResolved(
-                TENANT, CLIENT, TASK, AGENT, "running", null);
+                TENANT, CLIENT, TENANT, TASK, AGENT, "running", null);
         assertFalse(duplicate.changed());
         verify(eventWriter, never()).append(any());
     }

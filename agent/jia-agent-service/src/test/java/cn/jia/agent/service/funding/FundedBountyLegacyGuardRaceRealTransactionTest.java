@@ -183,7 +183,7 @@ class FundedBountyLegacyGuardRaceRealTransactionTest {
         insertHeldFunding(); // Sequential hook check only; not concurrency evidence.
 
         FundedBountyException failure = assertThrows(FundedBountyException.class, () ->
-                compatibility.assignResolved(TENANT, CLIENT, TASK, List.of(AGENT), false,
+                compatibility.assignResolved(TENANT, CLIENT, TENANT, TASK, List.of(AGENT), false,
                         new AgentLegacyTaskCompatibilityService.AssignmentPrecommitValidator() {
                             @Override
                             public void beforeIdentityLock(
@@ -213,7 +213,7 @@ class FundedBountyLegacyGuardRaceRealTransactionTest {
         insertHeldFunding();
 
         FundedBountyException failure = assertThrows(FundedBountyException.class, () ->
-                compatibility.reportResolved(TENANT, CLIENT, TASK, AGENT, "running", null));
+                compatibility.reportResolved(TENANT, CLIENT, TENANT, TASK, AGENT, "running", null));
 
         assertEquals("QUOTE_REQUIRED", failure.code());
         verifyNoInteractions(identityService, memberDao, workItemDao, eventWriter);
