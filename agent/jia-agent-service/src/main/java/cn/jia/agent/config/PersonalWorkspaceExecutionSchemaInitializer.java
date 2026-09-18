@@ -17,6 +17,7 @@ import java.util.Objects;
 public final class PersonalWorkspaceExecutionSchemaInitializer implements InitializingBean {
     static final String RESOURCE = "db/agent-personal-workspace-v1_11-executions.sql";
     static final String OUTPUT_MIME_MIGRATION_RESOURCE = "db/agent-personal-workspace-v1_13-execution-output-mime.sql";
+    static final String TERMINAL_STATE_MIGRATION_RESOURCE = "db/agent-personal-workspace-v1_13-execution-terminal-state.sql";
     static final List<String> TABLES = List.of("agent_personal_workspace_execution",
             "agent_personal_workspace_execution_input", "agent_personal_workspace_execution_output");
     private final JdbcTemplate jdbc;
@@ -28,6 +29,8 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
         if (!presentTables().equals(TABLES)) throw new IllegalStateException("Personal workspace execution schema is unavailable");
         migrateOutputMime();
         verifyOutputMime();
+        migrateTerminalState();
+        verifyTerminalState();
     }
     static List<String> ddlStatements() {
         final String source;
@@ -44,12 +47,12 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
         try { source=new ClassPathResource(OUTPUT_MIME_MIGRATION_RESOURCE).getContentAsString(StandardCharsets.UTF_8); }
         catch (IOException failure) { throw new IllegalStateException("Execution output MIME migration is missing", failure); }
         String statement=source.lines().filter(line -> !line.stripLeading().startsWith("--")).reduce("", (a,b)->a+b+'\n').strip();
-        String lower=statement.toLowerCase(Locale.ROOT);
-        if (!lower.startsWith("alter table agent_personal_workspace_execution ")
-                || !lower.contains("add column output_content_mime_type varchar(127) not null default")
-                || !lower.contains("add constraint chk_pwex_output_mime check")
-                || lower.contains(" insert ") || lower.contains(" update ") || lower.contains(" delete ")
-                || lower.contains(" drop ") || lower.contains(" create trigger ") || !statement.endsWith(";")) {
+        String normalized=statement.toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").trim();
+        if (!normalized.startsWith("alter table agent_personal_workspace_execution ")
+                || !normalized.contains("add column output_content_mime_type varchar(127) not null default")
+                || !normalized.contains("add constraint chk_pwex_output_mime check")
+                || normalized.contains(" insert ") || normalized.contains(" update ") || normalized.contains(" delete ")
+                || normalized.contains(" drop ") || normalized.contains(" create trigger ") || !statement.endsWith(";")) {
             throw new IllegalStateException("Unsafe execution output MIME migration");
         }
         return statement.substring(0, statement.length() - 1);
@@ -62,6 +65,47 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
         if (present == null) throw new IllegalStateException("Execution output MIME schema discovery failed");
         if (present == 0) jdbc.execute(outputMimeMigrationStatement());
         else if (present != 1) throw new IllegalStateException("Execution output MIME column is ambiguous");
+    }
+
+    static String terminalStateMigrationStatement() {
+        final String source;
+        try { source=new ClassPathResource(TERMINAL_STATE_MIGRATION_RESOURCE).getContentAsString(StandardCharsets.UTF_8); }
+        catch (IOException failure) { throw new IllegalStateException("Execution terminal-state migration is missing", failure); }
+        String statement=source.lines().filter(line -> !line.stripLeading().startsWith("--")).reduce("", (a,b)->a+b+'\n').strip();
+        String normalized=statement.toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").trim();
+        if (!normalized.startsWith("alter table agent_personal_workspace_execution ")
+                || !normalized.contains("add column failure_code varchar(64)")
+                || !normalized.contains("add column failure_message varchar(255)")
+                || !normalized.contains("add column failed_at bigint")
+                || !normalized.contains("drop check chk_pwex_state")
+                || !normalized.contains("add constraint chk_pwex_state check")
+                || !normalized.contains("add constraint chk_pwex_failure check")
+                || normalized.contains(" insert ") || normalized.contains(" update ") || normalized.contains(" delete ")
+                || normalized.contains(" create trigger ") || !statement.endsWith(";")) {
+            throw new IllegalStateException("Unsafe execution terminal-state migration");
+        }
+        return statement.substring(0, statement.length() - 1);
+    }
+    private void migrateTerminalState() {
+        Integer present=jdbc.queryForObject("""
+                SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE()
+                 AND table_name='agent_personal_workspace_execution'
+                 AND column_name IN ('failure_code','failure_message','failed_at')
+                """, Integer.class);
+        if (present == null) throw new IllegalStateException("Execution terminal-state schema discovery failed");
+        if (present == 0) jdbc.execute(terminalStateMigrationStatement());
+        else if (present != 3) throw new IllegalStateException("Execution terminal-state schema is partial");
+    }
+    private void verifyTerminalState() {
+        Integer invalid=jdbc.queryForObject("""
+                SELECT COUNT(*) FROM agent_personal_workspace_execution
+                 WHERE execution_state NOT IN ('QUEUED','INPUTS_REVOKED','OUTPUT_COMMITTED','FAILED')
+                    OR (execution_state='FAILED' AND (failure_code IS NULL
+                        OR failure_code <> 'AGENT_DELIVERY_FAILED' OR failure_message IS NULL OR failed_at IS NULL))
+                    OR (execution_state<>'FAILED' AND (failure_code IS NOT NULL
+                        OR failure_message IS NOT NULL OR failed_at IS NOT NULL))
+                """, Integer.class);
+        if (invalid == null || invalid != 0) throw new IllegalStateException("Execution terminal-state schema is invalid");
     }
     private void verifyOutputMime() {
         Integer invalid=jdbc.queryForObject("""

@@ -27,6 +27,8 @@ public class PersonalWorkspaceExecutionEntity extends BaseEntity {
     private String instruction;
     private String outputContentMimeType;
     private String executionState;
+    private String failureCode;
+    private String failureMessage;
     private Long grantRevision;
     private String idempotencyKey;
     private String requestHash;
@@ -34,4 +36,5 @@ public class PersonalWorkspaceExecutionEntity extends BaseEntity {
     private String revokeRequestHash;
     private Long createdAt;
     private Long revokedAt;
+    private Long failedAt;
 }

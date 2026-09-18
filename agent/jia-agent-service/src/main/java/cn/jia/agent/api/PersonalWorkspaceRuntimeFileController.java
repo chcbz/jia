@@ -76,6 +76,15 @@ public class PersonalWorkspaceRuntimeFileController {
         return json(service.commitOutputs(scope(authentication),taskId,runId,manifestId,List.of(
                 new PersonalWorkspaceExecutionService.OutputDeclaration(output.outputId(), output.sha256(), output.length()))));
     }
+    @PostMapping(value = "/{taskId}/runs/{runId}/failure", consumes = MediaType.APPLICATION_JSON_VALUE,
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<PersonalWorkspaceExecutionService.ExecutionView> failure(@PathVariable String taskId,
+            @PathVariable String runId, @RequestBody FailureRequest request, HttpServletRequest servletRequest,
+            Authentication authentication) {
+        requireNoQuery(servletRequest);
+        if (request == null || request.code() == null) throw new RequestFailure();
+        return json(service.fail(scope(authentication), taskId, runId, request.code()));
+    }
     @ExceptionHandler(PersonalWorkspaceExecutionService.Failure.class)
     public ResponseEntity<ErrorBody> failure(PersonalWorkspaceExecutionService.Failure ignored) { return error(HttpStatus.NOT_FOUND,"RUNTIME_FILE_NOT_FOUND","Runtime file access is unavailable"); }
     @ExceptionHandler({RequestFailure.class,IllegalArgumentException.class,IOException.class})
@@ -96,6 +105,7 @@ public class PersonalWorkspaceRuntimeFileController {
     public record RuntimeQueueView(List<PersonalWorkspaceExecutionService.RuntimeQueuedCommand> items) { }
     public record CommitRequest(List<CommitOutput> outputs) { }
     public record CommitOutput(String outputId,String sha256,Long length) { }
+    public record FailureRequest(String code) { }
     public record ErrorBody(String code,String message) { }
     private static final class RequestFailure extends RuntimeException { }
 }

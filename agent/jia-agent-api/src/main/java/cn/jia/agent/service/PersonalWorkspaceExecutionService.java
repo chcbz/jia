@@ -18,6 +18,8 @@ public interface PersonalWorkspaceExecutionService {
             String originalFilename, String contentMimeType, byte[] content);
     CommitView commitOutputs(RuntimeScope scope, String taskId, String runId, String manifestId,
             List<OutputDeclaration> outputs);
+    /** Runtime-only terminal report. It is idempotent for the same exact owner/agent execution. */
+    ExecutionView fail(RuntimeScope scope, String taskId, String runId, String code);
 
     record OwnerScope(String tenantId, String clientId, String ownerJiacn) { }
     record RuntimeScope(String tenantId, String clientId, String ownerJiacn, String agentId,
@@ -38,8 +40,8 @@ public interface PersonalWorkspaceExecutionService {
     record RuntimeInputCommand(String inputId, String relativePath, String downloadPath, long length,
             String sha256) { }
     record ExecutionView(String executionId, String taskId, String runId, String conversationId,
-            String targetAgentId, String state, long grantRevision, String outputContentMimeType,
-            List<RuntimeInput> inputs, RuntimeCommand runtimeCommand) { }
+            String targetAgentId, String state, String failureCode, String failureMessage, long grantRevision,
+            String outputContentMimeType, List<RuntimeInput> inputs, RuntimeCommand runtimeCommand) { }
     record ExecutionCapabilities(List<String> allowedMimeTypes, boolean generationEnabled) { }
     record RuntimeContent(String filename, String contentMimeType, byte[] bytes) {
         public RuntimeContent { bytes = bytes == null ? null : bytes.clone(); }

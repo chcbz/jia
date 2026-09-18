@@ -42,6 +42,8 @@ import java.util.UUID;
 @Named
 public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceExecutionService {
     private static final String INTERNAL_PREFIX = "/internal/agent/tasks/";
+    private static final String RUNTIME_FAILURE_CODE = "AGENT_DELIVERY_FAILED";
+    private static final String RUNTIME_FAILURE_MESSAGE = "Agent 未能完成本次交付，请调整需求后重新创建执行。";
     /** Matches the runtime bridge manifest limit; every input remains independently owner-scoped and version-pinned. */
     private static final int MAX_EXECUTION_INPUTS = 128;
     /** Every runtime output type is independently configuration-gated; upload availability does not imply execution. */
@@ -119,10 +121,10 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 .setExecutionId(executionId).setOwnerJiacn(scope.ownerJiacn()).setTaskId(taskId).setRunId(runId)
                 .setConversationId(valid.conversationId()).setTargetAgentId(valid.targetAgentId())
                 .setInstruction(valid.instruction()).setOutputContentMimeType(valid.outputContentMimeType())
-                .setExecutionState("QUEUED").setGrantRevision(1L)
+                .setExecutionState("QUEUED").setFailureCode(null).setFailureMessage(null).setGrantRevision(1L)
                 .setIdempotencyKey(idempotencyKey).setRequestHash(requestHash)
                 .setRevokeIdempotencyKey(null).setRevokeRequestHash(null)
-                .setCreatedAt(now).setRevokedAt(null);
+                .setCreatedAt(now).setRevokedAt(null).setFailedAt(null);
         scoped(execution, scope);
         try { executions.insert(execution); }
         catch (DuplicateKeyException raced) {
@@ -324,8 +326,23 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         writes.archiveRuntimeOutput(writeScope(scope), file, version);
         output.setOutputState("COMMITTED").setWorkspaceFileId(fileId).setWorkspaceFileVersion(1).setCommittedAt(now);
         executions.updateOutput(output);
-        execution.setExecutionState("OUTPUT_COMMITTED"); executions.update(execution);
+        execution.setExecutionState("OUTPUT_COMMITTED").setFailureCode(null).setFailureMessage(null).setFailedAt(null); executions.update(execution);
         return committed(manifestId, List.of(output));
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public ExecutionView fail(RuntimeScope scope, String taskId, String runId, String code) {
+        runtimeFailureCode(code);
+        PersonalWorkspaceExecutionEntity execution = runtimeExecution(scope, taskId, runId, true, false, true);
+        if ("FAILED".equals(execution.getExecutionState())) {
+            return view(new OwnerScope(scope.tenantId(), scope.clientId(), scope.ownerJiacn()), execution);
+        }
+        if (!"QUEUED".equals(execution.getExecutionState())) throw failure(Reason.NOT_FOUND);
+        execution.setExecutionState("FAILED").setFailureCode(RUNTIME_FAILURE_CODE)
+                .setFailureMessage(RUNTIME_FAILURE_MESSAGE).setFailedAt(System.currentTimeMillis());
+        executions.update(execution);
+        return view(new OwnerScope(scope.tenantId(), scope.clientId(), scope.ownerJiacn()), execution);
     }
 
     private PersonalWorkspaceExecutionEntity runtimeExecution(RuntimeScope scope, String taskId, String runId,
@@ -334,13 +351,18 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     }
     private PersonalWorkspaceExecutionEntity runtimeExecution(RuntimeScope scope, String taskId, String runId,
             boolean lock, boolean allowCommitted) {
+        return runtimeExecution(scope, taskId, runId, lock, allowCommitted, false);
+    }
+    private PersonalWorkspaceExecutionEntity runtimeExecution(RuntimeScope scope, String taskId, String runId,
+            boolean lock, boolean allowCommitted, boolean allowFailed) {
         validateRuntimeScope(scope); id(taskId, "taskId", 100); id(runId, "runId", 100);
         PersonalWorkspaceExecutionEntity execution = lock
                 ? executions.lockByTaskRun(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId, runId)
                 : executions.findByTaskRun(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId, runId);
         if (execution == null) throw failure(Reason.NOT_FOUND);
         boolean stateAllowed = "QUEUED".equals(execution.getExecutionState())
-                || (allowCommitted && "OUTPUT_COMMITTED".equals(execution.getExecutionState()));
+                || (allowCommitted && "OUTPUT_COMMITTED".equals(execution.getExecutionState()))
+                || (allowFailed && "FAILED".equals(execution.getExecutionState()));
         if (!same(execution.getTargetAgentId(), scope.agentId()) || !stateAllowed) {
             throw failure(Reason.NOT_FOUND);
         }
@@ -351,7 +373,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         List<RuntimeInput> inputs = runtimeInputs(scope, execution.getExecutionId());
         return new ExecutionView(execution.getExecutionId(), execution.getTaskId(), execution.getRunId(),
                 execution.getConversationId(), execution.getTargetAgentId(), execution.getExecutionState(),
-                execution.getGrantRevision(), execution.getOutputContentMimeType(), inputs, command(execution, inputs));
+                execution.getFailureCode(), execution.getFailureMessage(), execution.getGrantRevision(),
+                execution.getOutputContentMimeType(), inputs, command(execution, inputs));
     }
     private List<RuntimeInput> runtimeInputs(OwnerScope scope, String executionId) {
         return executions.listInputs(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), executionId).stream()
@@ -446,6 +469,11 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     private static void filename(String value, String mime) { text(value,"filename",255); String expected=EXTENSIONS.get(mime); if(expected==null||value.contains("/")||value.contains("\\")||!value.toLowerCase(Locale.ROOT).endsWith(expected)) throw failure(Reason.BAD_REQUEST); }
     private void validMime(String mime) {
         if (!executionMimeTypes.contains(mime)) throw failure(Reason.BAD_REQUEST);
+    }
+    private static void runtimeFailureCode(String code) {
+        // The code is diagnostic only: the persisted public state and message are fixed server values.
+        // Keep accepting stable native failure identifiers so every no-delivery path can terminate the queue.
+        if (code == null || !code.matches("[A-Z][A-Z0-9_]{2,63}")) throw failure(Reason.BAD_REQUEST);
     }
     private static Set<String> allowedMimeTypes(PersonalWorkspaceExecutionProperties properties) {
         if (properties == null || properties.allowedMimeTypes() == null || properties.allowedMimeTypes().isEmpty()) {

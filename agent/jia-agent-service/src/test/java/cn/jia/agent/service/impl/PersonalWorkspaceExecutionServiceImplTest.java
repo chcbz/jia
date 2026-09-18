@@ -165,6 +165,45 @@ class PersonalWorkspaceExecutionServiceImplTest {
     }
 
     @Test
+    void exactRuntimeFailureMovesQueuedExecutionToTerminalStateAndPreventsQueueReplay() {
+        PersonalWorkspaceExecutionEntity execution = execution("pwe_1", "agent-a", "QUEUED");
+        when(executions.lockByTaskRun("0", "client-a", "owner-a", "pwe_task_1", "pwe_run_1"))
+                .thenReturn(execution);
+        when(executions.listInputs("0", "client-a", "owner-a", "pwe_1")).thenReturn(List.of());
+
+        var failed = service.fail(RUNTIME, "pwe_task_1", "pwe_run_1", "OUTPUT_MISSING");
+
+        assertEquals("FAILED", failed.state());
+        assertEquals("AGENT_DELIVERY_FAILED", failed.failureCode());
+        assertEquals("Agent 未能完成本次交付，请调整需求后重新创建执行。", failed.failureMessage());
+        assertEquals("FAILED", execution.getExecutionState());
+        assertTrue(execution.getFailedAt() > 0);
+        verify(executions).update(execution);
+        when(executions.listQueuedByTarget("0", "client-a", "owner-a", "agent-a", 16))
+                .thenReturn(List.of(execution));
+        assertEquals(List.of(), service.runtimeQueuedCommands(RUNTIME, 16));
+    }
+
+    @Test
+    void runtimeFailureCannotAffectAnotherAgentOrACompletedExecution() {
+        PersonalWorkspaceExecutionEntity other = execution("pwe_1", "agent-b", "QUEUED");
+        when(executions.lockByTaskRun("0", "client-a", "owner-a", "pwe_task_1", "pwe_run_1"))
+                .thenReturn(other);
+        var denied = assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                () -> service.fail(RUNTIME, "pwe_task_1", "pwe_run_1", "OUTPUT_MISSING"));
+        assertEquals(PersonalWorkspaceExecutionService.Reason.NOT_FOUND, denied.getReason());
+        verify(executions, never()).update(other);
+
+        PersonalWorkspaceExecutionEntity committed = execution("pwe_1", "agent-a", "OUTPUT_COMMITTED");
+        when(executions.lockByTaskRun("0", "client-a", "owner-a", "pwe_task_1", "pwe_run_1"))
+                .thenReturn(committed);
+        var completed = assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                () -> service.fail(RUNTIME, "pwe_task_1", "pwe_run_1", "OUTPUT_MISSING"));
+        assertEquals(PersonalWorkspaceExecutionService.Reason.NOT_FOUND, completed.getReason());
+        verify(executions, never()).update(committed);
+    }
+
+    @Test
     void committedRuntimeOutputKeepsLegacySourceAndMarksAgentDeliveryOrigin() throws Exception {
         PersonalWorkspaceExecutionEntity execution = execution("pwe_1", "agent-a", "QUEUED");
         String contentHash = sha("agent result");
@@ -202,7 +241,7 @@ class PersonalWorkspaceExecutionServiceImplTest {
         PersonalWorkspaceExecutionEntity item = new PersonalWorkspaceExecutionEntity()
                 .setExecutionId(id).setOwnerJiacn("owner-a").setTaskId("pwe_task_1").setRunId("pwe_run_1")
                 .setTargetAgentId(agent).setInstruction("请保留标题并改正文")
-                .setOutputContentMimeType(PersonalWorkspaceExecutionProperties.DOCX).setExecutionState(state);
+                .setOutputContentMimeType(PersonalWorkspaceExecutionProperties.DOCX).setExecutionState(state).setGrantRevision(1L);
         item.setTenantId("0"); item.setClientId("client-a");
         return item;
     }

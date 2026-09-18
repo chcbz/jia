@@ -12,8 +12,12 @@ class PersonalWorkspaceExecutionSchemaInitializerTest {
         assertEquals(3, statements.size());
         assertTrue(statements.getFirst().contains("uk_pwex_task_run_scope"));
         assertTrue(statements.getFirst().contains("output_content_mime_type VARCHAR(127) NOT NULL"));
+        assertTrue(statements.getFirst().contains("failure_code VARCHAR(64) DEFAULT NULL"));
+        assertTrue(statements.getFirst().contains("chk_pwex_failure"));
         assertTrue(PersonalWorkspaceExecutionSchemaInitializer.outputMimeMigrationStatement()
                 .contains("ADD COLUMN output_content_mime_type VARCHAR(127) NOT NULL DEFAULT"));
+        assertTrue(PersonalWorkspaceExecutionSchemaInitializer.terminalStateMigrationStatement()
+                .contains("DROP CHECK chk_pwex_state"));
         assertTrue(statements.get(1).contains("uk_pwexi_file_version_scope"));
         assertTrue(statements.get(2).contains("chk_pwexo_commit"));
     }
