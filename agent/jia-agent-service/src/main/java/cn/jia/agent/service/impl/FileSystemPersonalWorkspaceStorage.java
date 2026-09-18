@@ -61,6 +61,8 @@ public final class FileSystemPersonalWorkspaceStorage implements PersonalWorkspa
         verifyRoot(); return new StoredObject(uri(key, hash), hash, content.length, mimeType);
     }
 
+    @Override public long maxContentBytes() { return maximum; }
+
     @Override public StoredContent read(Scope scope, String storageUri, String expectedSha256,
             long expectedByteLength, String expectedMimeType) {
         validateScope(scope); validateMime(expectedMimeType);

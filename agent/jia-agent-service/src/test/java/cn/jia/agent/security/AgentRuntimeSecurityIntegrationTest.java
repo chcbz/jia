@@ -117,6 +117,27 @@ class AgentRuntimeSecurityIntegrationTest {
             return projection(authentication);
         }
 
+        @GetMapping({
+                "/internal/agent/tasks/{taskId}/runs/{runId}/inputs",
+                "/internal/agent/tasks/{taskId}/runs/{runId}/inputs/{inputId}/content"
+        })
+        Map<String, String> runtimeInputs(Authentication authentication) {
+            return projection(authentication);
+        }
+
+        @GetMapping("/internal/agent/tasks/workspace-executions/commands")
+        Map<String, String> runtimeQueuedCommands(Authentication authentication) {
+            return projection(authentication);
+        }
+
+        @PostMapping({
+                "/internal/agent/tasks/{taskId}/runs/{runId}/outputs/{outputId}/content",
+                "/internal/agent/tasks/{taskId}/runs/{runId}/output-commits/{manifestId}"
+        })
+        Map<String, String> runtimeOutputs(Authentication authentication) {
+            return projection(authentication);
+        }
+
         private static Map<String, String> projection(Authentication authentication) {
             assertInstanceOf(AgentRuntimeAuthentication.class, authentication);
             var scope = ((AgentRuntimeAuthentication) authentication).getPrincipal();
@@ -384,6 +405,38 @@ class AgentRuntimeSecurityIntegrationTest {
                     .andExpect(jsonPath("$.ownerJiacn").value(OWNER_A))
                     .andExpect(jsonPath("$.agentId").value(A));
         }
+    }
+
+    @Test
+    void privateWorkspaceQueuePathIsExactAndNativeOnly() throws Exception {
+        String path = "/internal/agent/tasks/workspace-executions/commands";
+        mvc.perform(headers(get(path), A, "runtime-a", TOKEN_A))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.agentId").value(A));
+        mvc.perform(headers(post(path), A, "runtime-a", TOKEN_A)).andExpect(status().isForbidden());
+        mvc.perform(headers(get(path + "/extra"), A, "runtime-a", TOKEN_A)).andExpect(status().isForbidden());
+        mvc.perform(headers(get(path), A, "runtime-a", TOKEN_A).header("Origin", "https://browser.invalid"))
+                .andExpect(status().isForbidden());
+        mvc.perform(get(path).header("Authorization", "Bearer other")
+                        .header("X-Agent-Id", A).header("X-Agent-Runtime-Id", "runtime-a"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void privateWorkspaceRuntimeFilePathsStayExactAndNativeOnly() throws Exception {
+        for (String path : List.of("/internal/agent/tasks/task-a/runs/run-a/inputs",
+                "/internal/agent/tasks/task-a/runs/run-a/inputs/input-a/content")) {
+            mvc.perform(headers(get(path), A, "runtime-a", TOKEN_A))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.agentId").value(A));
+            mvc.perform(headers(post(path), A, "runtime-a", TOKEN_A)).andExpect(status().isForbidden());
+        }
+        for (String path : List.of("/internal/agent/tasks/task-a/runs/run-a/outputs/output-a/content",
+                "/internal/agent/tasks/task-a/runs/run-a/output-commits/manifest-a")) {
+            mvc.perform(headers(post(path), A, "runtime-a", TOKEN_A))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.agentId").value(A));
+            mvc.perform(headers(get(path), A, "runtime-a", TOKEN_A)).andExpect(status().isForbidden());
+        }
+        mvc.perform(headers(get("/internal/agent/tasks/task-a/runs/run-a/inputs/input-a/content/extra"),
+                A, "runtime-a", TOKEN_A)).andExpect(status().isForbidden());
     }
 
     @Test

@@ -63,6 +63,23 @@ public class PersonalWorkspaceWriteService {
         complete(operation, fileId, version.getVersion()); return file;
     }
 
+    /** Runtime outputs are stored before this short transaction; this only makes their metadata visible. */
+    @Transactional(rollbackFor = Exception.class)
+    public PersonalWorkspaceFileEntity archiveRuntimeOutput(Scope scope,
+            PersonalWorkspaceFileEntity file, PersonalWorkspaceVersionEntity version) {
+        if (file == null || version == null || !scope.tenantId().equals(file.getTenantId())
+                || !scope.clientId().equals(file.getClientId())
+                || !scope.ownerJiacn().equals(file.getOwnerJiacn())
+                || !file.getFileId().equals(version.getFileId())
+                || !scope.ownerJiacn().equals(version.getOwnerJiacn())
+                || version.getVersion() == null || version.getVersion() != 1) {
+            throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.BAD_REQUEST);
+        }
+        dao.insertFile(file);
+        dao.insertVersion(version);
+        return file;
+    }
+
     @Transactional(rollbackFor = Exception.class)
     public PersonalWorkspaceFileEntity rename(Scope scope, PersonalWorkspaceOperationEntity operation,
             String fileId, String displayName, String ifMatch) {
