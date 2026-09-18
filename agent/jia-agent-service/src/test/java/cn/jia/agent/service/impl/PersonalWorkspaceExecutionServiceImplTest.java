@@ -84,6 +84,13 @@ class PersonalWorkspaceExecutionServiceImplTest {
 
     @Test
     void durableQueuePinsMultipleCrossFormatMaterialsForOneExplicitOutput() throws Exception {
+        service = new PersonalWorkspaceExecutionServiceImpl(executions, mock(PersonalWorkspaceDao.class),
+                mock(PersonalWorkspaceTaskLinkDao.class), mock(AgentRuntimeDao.class), storage, writes,
+                new PersonalWorkspaceExecutionProperties(List.of(
+                        PersonalWorkspaceExecutionProperties.DOCX,
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        "application/pdf",
+                        "application/vnd.openxmlformats-officedocument.presentationml.presentation")));
         PersonalWorkspaceExecutionEntity accepted = execution("pwe_multi", "agent-a", "QUEUED");
         accepted.setOutputContentMimeType("application/vnd.openxmlformats-officedocument.presentationml.presentation");
         when(executions.listQueuedByTarget("0", "client-a", "owner-a", "agent-a", 16)).thenReturn(List.of(accepted));
