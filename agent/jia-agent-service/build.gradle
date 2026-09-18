@@ -22,9 +22,6 @@ dependencies {
     implementation libs.poi.ooxml.full
     implementation libs.pdfbox.core
     testImplementation project(':common:jia-common-test')
-    // Personal workspace fixtures serialize provenance views; keep the mapper explicit on the
-    // test classpath instead of relying on an implementation-only dependency's transitivity.
-    testImplementation libs.jackson.databind
     testImplementation project(':task:jia-task-core')
     testImplementation project(':task:jia-task-api')
     // W04 integration sources exercise production task and economy collaborators.

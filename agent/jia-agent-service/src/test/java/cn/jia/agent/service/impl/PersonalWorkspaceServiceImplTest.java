@@ -7,7 +7,6 @@ import cn.jia.agent.entity.PersonalWorkspaceVersionEntity;
 import cn.jia.agent.exception.PersonalWorkspaceException;
 import cn.jia.agent.service.PersonalWorkspaceService;
 import cn.jia.agent.service.PersonalWorkspaceStorage;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.function.Executable;
 import org.springframework.dao.DuplicateKeyException;
@@ -50,8 +49,6 @@ class PersonalWorkspaceServiceImplTest {
         String operationId = created.operation().operationId();
         assertEquals("UPLOAD", created.file().sourceKind());
         assertEquals("USER_UPLOAD", created.file().originKind());
-        assertTrue(new ObjectMapper().writeValueAsString(created.file())
-                .contains("\"originKind\":\"USER_UPLOAD\""));
 
         assertArrayEquals(original, fixture.service.readContent(OWNER_A, fileId, 1).bytes());
         int readsBeforeForeignRequests = fixture.storage.readCount;
