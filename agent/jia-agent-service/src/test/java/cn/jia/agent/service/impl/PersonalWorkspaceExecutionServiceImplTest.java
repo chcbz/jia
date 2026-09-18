@@ -215,8 +215,12 @@ class PersonalWorkspaceExecutionServiceImplTest {
         return input;
     }
 
-    private static String sha(String text) throws Exception {
-        return java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                .digest(text.getBytes(StandardCharsets.UTF_8)));
+    private static String sha(String text) {
+        try {
+            return java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(text.getBytes(StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException unavailable) {
+            throw new IllegalStateException("SHA-256 is required for workspace fixture hashes", unavailable);
+        }
     }
 }
