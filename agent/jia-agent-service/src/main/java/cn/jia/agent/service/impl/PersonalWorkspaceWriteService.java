@@ -34,8 +34,11 @@ public class PersonalWorkspaceWriteService {
         PersonalWorkspaceOperationEntity operation = new PersonalWorkspaceOperationEntity()
                 .setOperationId("pwo_" + UUID.randomUUID().toString().replace("-", ""))
                 .setOwnerJiacn(scope.ownerJiacn()).setOperationType(type).setIdempotencyKey(key)
-                .setRequestHash(requestHash).setState("PROCESSING").setCreatedAt(System.currentTimeMillis())
-                .setTenantId(scope.tenantId()).setClientId(scope.clientId());
+                .setRequestHash(requestHash).setState("PROCESSING").setCreatedAt(System.currentTimeMillis());
+        // BaseEntity fluent setters are typed to BaseEntity, so scope fields must be applied after
+        // the concrete operation chain rather than changing the local variable's static type.
+        operation.setTenantId(scope.tenantId());
+        operation.setClientId(scope.clientId());
         try { dao.insertOperation(operation); return new Claim(operation, true); }
         catch (DuplicateKeyException raced) {
             existing = dao.findOperationByIdempotency(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), type, key);
