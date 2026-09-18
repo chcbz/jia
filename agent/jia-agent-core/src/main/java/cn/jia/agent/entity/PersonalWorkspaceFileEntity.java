@@ -10,7 +10,7 @@ import lombok.experimental.Accessors;
 
 import java.io.Serial;
 
-/** Owner-scoped upload metadata. It deliberately does not reuse task artifact storage. */
+/** Owner-scoped file metadata. Legacy sourceKind stays UPLOAD; originKind records provenance. */
 @Data
 @EqualsAndHashCode(callSuper = true)
 @Accessors(chain = true)
@@ -21,6 +21,7 @@ public class PersonalWorkspaceFileEntity extends BaseEntity {
     private String fileId;
     private String ownerJiacn;
     private String sourceKind;
+    private String originKind;
     private String displayName;
     private String mediaFamily;
     private String state;

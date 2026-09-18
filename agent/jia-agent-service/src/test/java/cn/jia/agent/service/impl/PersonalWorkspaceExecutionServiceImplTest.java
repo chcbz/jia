@@ -6,10 +6,14 @@ import cn.jia.agent.dao.PersonalWorkspaceExecutionDao;
 import cn.jia.agent.dao.PersonalWorkspaceTaskLinkDao;
 import cn.jia.agent.entity.PersonalWorkspaceExecutionEntity;
 import cn.jia.agent.entity.PersonalWorkspaceExecutionInputEntity;
+import cn.jia.agent.entity.PersonalWorkspaceExecutionOutputEntity;
+import cn.jia.agent.entity.PersonalWorkspaceFileEntity;
+import cn.jia.agent.entity.PersonalWorkspaceVersionEntity;
 import cn.jia.agent.service.PersonalWorkspaceExecutionService;
 import cn.jia.agent.service.PersonalWorkspaceStorage;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -18,7 +22,9 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /** Focused owner/runtime queue contract; database mapper tests retain SQL exactness coverage. */
@@ -26,6 +32,7 @@ class PersonalWorkspaceExecutionServiceImplTest {
     private static final PersonalWorkspaceExecutionService.RuntimeScope RUNTIME =
             new PersonalWorkspaceExecutionService.RuntimeScope("0", "client-a", "owner-a", "agent-a", "runtime-a");
     private PersonalWorkspaceExecutionDao executions;
+    private PersonalWorkspaceWriteService writes;
     private PersonalWorkspaceExecutionService service;
 
     @BeforeEach
@@ -33,9 +40,9 @@ class PersonalWorkspaceExecutionServiceImplTest {
         executions = mock(PersonalWorkspaceExecutionDao.class);
         PersonalWorkspaceStorage storage = mock(PersonalWorkspaceStorage.class);
         when(storage.maxContentBytes()).thenReturn(4096L);
+        writes = mock(PersonalWorkspaceWriteService.class);
         service = new PersonalWorkspaceExecutionServiceImpl(executions, mock(PersonalWorkspaceDao.class),
-                mock(PersonalWorkspaceTaskLinkDao.class), mock(AgentRuntimeDao.class), storage,
-                mock(PersonalWorkspaceWriteService.class));
+                mock(PersonalWorkspaceTaskLinkDao.class), mock(AgentRuntimeDao.class), storage, writes);
     }
 
     @Test
@@ -68,6 +75,40 @@ class PersonalWorkspaceExecutionServiceImplTest {
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document", 4096L,
                 "/internal/agent/tasks/pwe_task_1/runs/pwe_run_1/outputs/output_1/content")), item.payload().outputManifest());
         assertFalse(item.toString().contains("AgentRuntime"));
+    }
+
+    @Test
+    void committedRuntimeOutputKeepsLegacySourceAndMarksAgentDeliveryOrigin() throws Exception {
+        PersonalWorkspaceExecutionEntity execution = execution("pwe_1", "agent-a", "QUEUED");
+        String contentHash = sha("agent result");
+        PersonalWorkspaceExecutionOutputEntity output = new PersonalWorkspaceExecutionOutputEntity()
+                .setOutputId("output_1").setExecutionId("pwe_1").setOwnerJiacn("owner-a")
+                .setOriginalFilename("result.docx")
+                .setContentMimeType("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+                .setByteLength(12L).setContentHash(contentHash).setStorageUri("memory://result")
+                .setOutputState("STAGED");
+        output.setTenantId("0"); output.setClientId("client-a");
+        when(executions.lockByTaskRun("0", "client-a", "owner-a", "pwe_task_1", "pwe_run_1"))
+                .thenReturn(execution);
+        when(executions.lockOutputs("0", "client-a", "owner-a", "pwe_1"))
+                .thenReturn(List.of(output));
+        String manifestId = "pwe_m_" + sha("pwe_task_1\npwe_run_1\noutput_1\n"
+                + contentHash + "\n12\n");
+
+        var committed = service.commitOutputs(RUNTIME, "pwe_task_1", "pwe_run_1", manifestId,
+                List.of(new PersonalWorkspaceExecutionService.OutputDeclaration(
+                        "output_1", contentHash, 12L)));
+
+        ArgumentCaptor<PersonalWorkspaceFileEntity> file = ArgumentCaptor.forClass(
+                PersonalWorkspaceFileEntity.class);
+        ArgumentCaptor<PersonalWorkspaceVersionEntity> version = ArgumentCaptor.forClass(
+                PersonalWorkspaceVersionEntity.class);
+        verify(writes).archiveRuntimeOutput(any(PersonalWorkspaceWriteService.Scope.class),
+                file.capture(), version.capture());
+        assertEquals("UPLOAD", file.getValue().getSourceKind());
+        assertEquals("AGENT_DELIVERY", file.getValue().getOriginKind());
+        assertEquals(file.getValue().getFileId(), version.getValue().getFileId());
+        assertEquals("COMMITTED", committed.state());
     }
 
     private static PersonalWorkspaceExecutionEntity execution(String id, String agent, String state) {

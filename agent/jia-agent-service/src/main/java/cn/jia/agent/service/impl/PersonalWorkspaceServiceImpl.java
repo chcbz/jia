@@ -27,7 +27,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
-/** 1.10 UPLOAD-only personal workspace. It intentionally has no task/runtime/artifact access. */
+/** Owner-scoped workspace API; browser-created files are marked with USER_UPLOAD provenance. */
 @Named
 public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
     private static final Set<String> MIME_TYPES = Set.of("image/png", "image/jpeg", "text/plain", "application/pdf",
@@ -80,7 +80,7 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
         String fileId="pws_"+UUID.randomUUID().toString().replace("-","");
         try{
             PersonalWorkspaceStorage.StoredObject stored=storage.store(storageScope(scope),valid.content(),valid.mime()); long now=System.currentTimeMillis();
-            PersonalWorkspaceFileEntity file=new PersonalWorkspaceFileEntity().setFileId(fileId).setOwnerJiacn(scope.ownerJiacn()).setSourceKind("UPLOAD").setDisplayName(valid.displayName()).setMediaFamily(family(valid.mime())).setState("ACTIVE").setMetadataRevision(1L).setLatestVersion(1).setCreatedAt(now);
+            PersonalWorkspaceFileEntity file=new PersonalWorkspaceFileEntity().setFileId(fileId).setOwnerJiacn(scope.ownerJiacn()).setSourceKind("UPLOAD").setOriginKind("USER_UPLOAD").setDisplayName(valid.displayName()).setMediaFamily(family(valid.mime())).setState("ACTIVE").setMetadataRevision(1L).setLatestVersion(1).setCreatedAt(now);
             file.setTenantId(scope.tenantId()); file.setClientId(scope.clientId());
             PersonalWorkspaceVersionEntity version=new PersonalWorkspaceVersionEntity().setFileId(fileId).setOwnerJiacn(scope.ownerJiacn()).setVersion(1).setOriginalFilename(valid.filename()).setContentMimeType(valid.mime()).setByteLength(stored.byteLength()).setContentHash(stored.sha256()).setStorageUri(stored.storageUri()).setCreatedAt(now);
             version.setTenantId(scope.tenantId()); version.setClientId(scope.clientId());
@@ -124,7 +124,7 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
     private PersonalWorkspaceViews.FileView completedFile(Scope s,PersonalWorkspaceOperationEntity o){if("PROCESSING".equals(o.getState()))throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.PROCESSING);if(!"COMMITTED".equals(o.getState()))throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.OPERATION_FAILED);return view(file(s,o.getFileId()));}
     private PersonalWorkspaceFileEntity file(Scope s,String id){validateScope(s);id(id,"fileId",100);PersonalWorkspaceFileEntity f=dao.findFile(s.tenantId(),s.clientId(),s.ownerJiacn(),id);if(f==null)throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);return f;}
     private PersonalWorkspaceVersionEntity versionEntity(Scope s,String id,int n){file(s,id);if(n<1)bad();PersonalWorkspaceVersionEntity v=dao.findVersion(s.tenantId(),s.clientId(),s.ownerJiacn(),id,n);if(v==null)throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);return v;}
-    private PersonalWorkspaceViews.FileView view(PersonalWorkspaceFileEntity f){return new PersonalWorkspaceViews.FileView(f.getFileId(),f.getSourceKind(),f.getDisplayName(),f.getMediaFamily(),f.getState(),f.getMetadataRevision(),f.getLatestVersion(),f.getCreatedAt(),new PersonalWorkspaceViews.Capabilities("AVAILABLE","AVAILABLE","UNVERIFIED",previewCapability(f),"AVAILABLE"));}
+    private PersonalWorkspaceViews.FileView view(PersonalWorkspaceFileEntity f){return new PersonalWorkspaceViews.FileView(f.getFileId(),f.getSourceKind(),f.getOriginKind(),f.getDisplayName(),f.getMediaFamily(),f.getState(),f.getMetadataRevision(),f.getLatestVersion(),f.getCreatedAt(),new PersonalWorkspaceViews.Capabilities("AVAILABLE","AVAILABLE","UNVERIFIED",previewCapability(f),"AVAILABLE"));}
     private static String previewCapability(PersonalWorkspaceFileEntity f){return Set.of("IMAGE","TEXT").contains(f.getMediaFamily())?"AVAILABLE":"UNSUPPORTED";}
     private PersonalWorkspaceViews.VersionView version(PersonalWorkspaceVersionEntity v){return new PersonalWorkspaceViews.VersionView(v.getFileId(),v.getVersion(),v.getOriginalFilename(),v.getContentMimeType(),v.getByteLength(),v.getContentHash(),v.getCreatedAt(),Set.of("image/png","image/jpeg","text/plain").contains(v.getContentMimeType())?"READY":"UNSUPPORTED");}
     private static PersonalWorkspaceViews.OperationView operation(PersonalWorkspaceOperationEntity o){return new PersonalWorkspaceViews.OperationView(o.getOperationId(),o.getState(),o.getFileId(),o.getFileVersion(),o.getErrorCode());}

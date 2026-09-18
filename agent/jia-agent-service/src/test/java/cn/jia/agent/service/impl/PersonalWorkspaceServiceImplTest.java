@@ -7,6 +7,7 @@ import cn.jia.agent.entity.PersonalWorkspaceVersionEntity;
 import cn.jia.agent.exception.PersonalWorkspaceException;
 import cn.jia.agent.service.PersonalWorkspaceService;
 import cn.jia.agent.service.PersonalWorkspaceStorage;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.function.Executable;
 import org.springframework.dao.DuplicateKeyException;
@@ -40,13 +41,17 @@ class PersonalWorkspaceServiceImplTest {
             new PersonalWorkspaceService.Scope("0", "mobile", "owner-a");
 
     @Test
-    void ownerAndClientScopeHideEveryForeignObjectBeforeStorageAccess() {
+    void ownerAndClientScopeHideEveryForeignObjectBeforeStorageAccess() throws Exception {
         Fixture fixture = new Fixture();
         byte[] original = "owner-a private bytes".getBytes(StandardCharsets.UTF_8);
         var created = fixture.service.create(OWNER_A,
                 upload("create-a", "private.txt", original));
         String fileId = created.file().fileId();
         String operationId = created.operation().operationId();
+        assertEquals("UPLOAD", created.file().sourceKind());
+        assertEquals("USER_UPLOAD", created.file().originKind());
+        assertTrue(new ObjectMapper().writeValueAsString(created.file())
+                .contains("\"originKind\":\"USER_UPLOAD\""));
 
         assertArrayEquals(original, fixture.service.readContent(OWNER_A, fileId, 1).bytes());
         int readsBeforeForeignRequests = fixture.storage.readCount;
@@ -459,6 +464,7 @@ class PersonalWorkspaceServiceImplTest {
             PersonalWorkspaceFileEntity target = new PersonalWorkspaceFileEntity()
                     .setId(source.getId()).setFileId(source.getFileId())
                     .setOwnerJiacn(source.getOwnerJiacn()).setSourceKind(source.getSourceKind())
+                    .setOriginKind(source.getOriginKind())
                     .setDisplayName(source.getDisplayName()).setMediaFamily(source.getMediaFamily())
                     .setState(source.getState()).setMetadataRevision(source.getMetadataRevision())
                     .setLatestVersion(source.getLatestVersion()).setCreatedAt(source.getCreatedAt());

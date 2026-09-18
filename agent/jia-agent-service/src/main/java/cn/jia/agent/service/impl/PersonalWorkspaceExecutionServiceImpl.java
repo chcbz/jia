@@ -288,7 +288,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         long now = System.currentTimeMillis();
         String fileId = identifier("pws_");
         PersonalWorkspaceFileEntity file = new PersonalWorkspaceFileEntity().setFileId(fileId)
-                .setOwnerJiacn(scope.ownerJiacn()).setSourceKind("UPLOAD").setDisplayName(output.getOriginalFilename())
+                .setOwnerJiacn(scope.ownerJiacn()).setSourceKind("UPLOAD").setOriginKind("AGENT_DELIVERY")
+                .setDisplayName(output.getOriginalFilename())
                 .setMediaFamily(family(output.getContentMimeType())).setState("ACTIVE").setMetadataRevision(1L)
                 .setLatestVersion(1).setCreatedAt(now);
         scoped(file, scope);

@@ -6,7 +6,7 @@ import java.util.List;
 public final class PersonalWorkspaceViews {
     private PersonalWorkspaceViews() { }
 
-    public record FileView(String fileId, String sourceKind, String displayName, String mediaFamily,
+    public record FileView(String fileId, String sourceKind, String originKind, String displayName, String mediaFamily,
             String state, long metadataRevision, int latestVersion, long createdAt,
             Capabilities capabilities) { }
     public record VersionView(String fileId, int version, String originalFilename,

@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS agent_personal_workspace_file (
   file_id VARCHAR(100) NOT NULL,
   owner_jiacn VARCHAR(50) NOT NULL,
   source_kind VARCHAR(24) NOT NULL,
+  origin_kind VARCHAR(24) NOT NULL DEFAULT 'USER_UPLOAD',
   display_name VARCHAR(255) NOT NULL,
   media_family VARCHAR(32) NOT NULL,
   state VARCHAR(24) NOT NULL,
@@ -20,7 +21,8 @@ CREATE TABLE IF NOT EXISTS agent_personal_workspace_file (
   KEY idx_pws_file_media (tenant_id, client_id, owner_jiacn, media_family, created_at, file_id),
   CONSTRAINT chk_pws_file_revision CHECK (metadata_revision >= 1 AND latest_version >= 1),
   CONSTRAINT chk_pws_file_state CHECK (state IN ('ACTIVE', 'TRASHED')),
-  CONSTRAINT chk_pws_file_source CHECK (source_kind = 'UPLOAD')
+  CONSTRAINT chk_pws_file_source CHECK (source_kind = 'UPLOAD'),
+  CONSTRAINT chk_pws_file_origin CHECK (origin_kind IN ('USER_UPLOAD','AGENT_DELIVERY'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
 CREATE TABLE IF NOT EXISTS agent_personal_workspace_file_version (
