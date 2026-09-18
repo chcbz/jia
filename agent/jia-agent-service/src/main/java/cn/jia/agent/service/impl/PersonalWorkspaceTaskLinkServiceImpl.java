@@ -101,6 +101,10 @@ public class PersonalWorkspaceTaskLinkServiceImpl implements PersonalWorkspaceTa
         } else if (!"ACTIVE".equals(link.getLinkState())) {
             throw failure(Reason.UNAVAILABLE);
         }
+        if (!dao.bumpFileImpactRevision(scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
+                command.fileId())) {
+            throw failure(Reason.UNAVAILABLE);
+        }
         commit(scope, claim.operation(), link.getRelationId());
         return view(link);
     }
@@ -148,6 +152,10 @@ public class PersonalWorkspaceTaskLinkServiceImpl implements PersonalWorkspaceTa
             }
             link.setLinkState("DETACHED").setRelationRevision(next).setDetachedAt(now);
         } else if (!"DETACHED".equals(link.getLinkState())) {
+            throw failure(Reason.UNAVAILABLE);
+        }
+        if (!dao.bumpFileImpactRevision(scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
+                link.getFileId())) {
             throw failure(Reason.UNAVAILABLE);
         }
         commit(scope, claim.operation(), relationId);

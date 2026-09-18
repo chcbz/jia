@@ -20,6 +20,16 @@ public interface PersonalWorkspaceTaskLinkDao {
             String ownerJiacn, String taskId, String fileId, int version, String role);
     List<PersonalWorkspaceTaskFileLinkEntity> list(String tenantId, String clientId,
             String ownerJiacn, String taskId, Long beforeCreatedAt, String afterRelationId, int limit);
+    /** Active task references are part of the file's destructive-action impact snapshot. */
+    default List<PersonalWorkspaceTaskFileLinkEntity> listActiveByFile(String tenantId,
+            String clientId, String ownerJiacn, String fileId, int limit) {
+        return List.of();
+    }
+    /** Must run after the caller has locked the same file row. */
+    default boolean bumpFileImpactRevision(String tenantId, String clientId,
+            String ownerJiacn, String fileId) {
+        return true;
+    }
     void insert(PersonalWorkspaceTaskFileLinkEntity link);
     boolean changeState(String tenantId, String clientId, String ownerJiacn, String taskId,
             String relationId, String expectedState, long expectedRevision,

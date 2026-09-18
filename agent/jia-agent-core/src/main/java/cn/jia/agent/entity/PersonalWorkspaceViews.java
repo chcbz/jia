@@ -19,7 +19,10 @@ public final class PersonalWorkspaceViews {
     public record OperationView(String operationId, String state, String fileId,
             Integer fileVersion, String errorCode) { }
     public record UploadView(OperationView operation, FileView file, VersionView version) { }
-    public record UsageView(long impactRevision, List<Object> taskReferences, List<Object> activeExecutions) { }
+    public record UsageView(long impactRevision, List<TaskReferenceView> taskReferences,
+            List<Object> activeExecutions) { }
+    public record TaskReferenceView(String taskId, String relationId, int version, String role,
+            long relationRevision, long createdAt) { }
     public record PreviewView(String state, List<PreviewPart> parts, boolean partial, String reason) { }
     public record PreviewPart(String partId, String contentMimeType) { }
 }

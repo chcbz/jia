@@ -155,6 +155,32 @@ public interface PersonalWorkspaceTaskFileLinkMapper
             @Param("taskId") String taskId, @Param("beforeCreatedAt") Long beforeCreatedAt,
             @Param("afterRelationId") String afterRelationId, @Param("limit") int limit);
 
+    @Select("SELECT " + LINK_COLUMNS + """
+              FROM agent_personal_workspace_task_file_link
+             WHERE tenant_id=#{tenantId} AND client_id=#{clientId}
+               AND owner_jiacn=#{ownerJiacn} AND file_id=#{fileId}
+               AND link_state='ACTIVE'
+            """ + EXACT_SCOPE + EXACT_FILE + """
+               AND CAST(link_state AS BINARY)=CAST('ACTIVE' AS BINARY)
+               AND OCTET_LENGTH(link_state)=OCTET_LENGTH('ACTIVE')
+             ORDER BY created_at DESC, CAST(relation_id AS BINARY) ASC, id ASC
+             LIMIT #{limit}
+            """)
+    List<PersonalWorkspaceTaskFileLinkEntity> selectActiveByFile(
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn, @Param("fileId") String fileId,
+            @Param("limit") int limit);
+
+    @Update("""
+            UPDATE agent_personal_workspace_file
+               SET metadata_revision=metadata_revision+1, update_time=#{now}
+             WHERE tenant_id=#{tenantId} AND client_id=#{clientId}
+               AND owner_jiacn=#{ownerJiacn} AND file_id=#{fileId}
+            """ + EXACT_SCOPE + EXACT_FILE)
+    int bumpFileMetadataRevision(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("ownerJiacn") String ownerJiacn,
+            @Param("fileId") String fileId, @Param("now") long now);
+
     @Update("""
             UPDATE agent_personal_workspace_task_file_link
                SET link_state=#{nextState}, relation_revision=#{nextRevision},

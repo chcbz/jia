@@ -1,6 +1,7 @@
 package cn.jia.agent.service.impl;
 
 import cn.jia.agent.dao.PersonalWorkspaceDao;
+import cn.jia.agent.dao.PersonalWorkspaceTaskLinkDao;
 import cn.jia.agent.entity.PersonalWorkspaceFileEntity;
 import cn.jia.agent.entity.PersonalWorkspaceOperationEntity;
 import cn.jia.agent.entity.PersonalWorkspaceVersionEntity;
@@ -41,10 +42,18 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
     private final PersonalWorkspaceDao dao;
     private final PersonalWorkspaceStorage storage;
     private final PersonalWorkspaceWriteService writes;
+    private final PersonalWorkspaceTaskLinkDao taskLinks;
     private final PersonalWorkspacePreviewRenderer previewRenderer = new PersonalWorkspacePreviewRenderer();
 
     @Inject public PersonalWorkspaceServiceImpl(PersonalWorkspaceDao dao, PersonalWorkspaceStorage storage,
-            PersonalWorkspaceWriteService writes) { this.dao=dao; this.storage=storage; this.writes=writes; }
+            PersonalWorkspaceWriteService writes, PersonalWorkspaceTaskLinkDao taskLinks) {
+        this.dao=dao; this.storage=storage; this.writes=writes; this.taskLinks=taskLinks;
+    }
+    /** Compatibility constructor for narrow isolated unit fixtures. */
+    public PersonalWorkspaceServiceImpl(PersonalWorkspaceDao dao, PersonalWorkspaceStorage storage,
+            PersonalWorkspaceWriteService writes) {
+        this(dao, storage, writes, null);
+    }
 
     @Override public PersonalWorkspaceViews.ListView list(Scope scope, ListQuery query) {
         validateScope(scope); query= query == null ? new ListQuery(null,null,null,null) : query;
@@ -93,7 +102,15 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
     @Override public Content readContent(Scope scope,String fileId,int version){PersonalWorkspaceVersionEntity v=versionEntity(scope,fileId,version);PersonalWorkspaceStorage.StoredContent c=storage.read(storageScope(scope),v.getStorageUri(),v.getContentHash(),v.getByteLength(),v.getContentMimeType());return new Content(v.getOriginalFilename(),v.getContentMimeType(),c.content());}
     @Override public PersonalWorkspaceViews.PreviewView preview(Scope scope,String fileId,int version){return renderPreview(scope,fileId,version).view();}
     @Override public Content readPreviewPart(Scope scope,String fileId,int version,String partId){if(!PersonalWorkspacePreviewRenderer.CONTENT_PART_ID.equals(partId))throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);PersonalWorkspacePreviewRenderer.RenderedPreview preview=renderPreview(scope,fileId,version);if(!"READY".equals(preview.view().state()))throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.UNSUPPORTED);PersonalWorkspaceViews.PreviewPart part=preview.view().parts().get(0);PersonalWorkspaceVersionEntity v=versionEntity(scope,fileId,version);return new Content(v.getOriginalFilename(),part.contentMimeType(),preview.bytes());}
-    @Override public PersonalWorkspaceViews.UsageView usage(Scope scope,String fileId){PersonalWorkspaceFileEntity f=file(scope,fileId);return new PersonalWorkspaceViews.UsageView(f.getMetadataRevision(),List.of(),List.of());}
+    @Override public PersonalWorkspaceViews.UsageView usage(Scope scope,String fileId){
+        PersonalWorkspaceFileEntity f=file(scope,fileId);
+        List<PersonalWorkspaceViews.TaskReferenceView> references=taskLinks==null?List.of():taskLinks
+                .listActiveByFile(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),fileId,100)
+                .stream().map(link->new PersonalWorkspaceViews.TaskReferenceView(link.getTaskId(),
+                        link.getRelationId(),link.getFileVersion(),link.getLinkRole(),
+                        link.getRelationRevision(),link.getCreatedAt())).toList();
+        return new PersonalWorkspaceViews.UsageView(f.getMetadataRevision(),references,List.of());
+    }
     @Override public PersonalWorkspaceViews.OperationView operation(Scope scope,String operationId){validateScope(scope);PersonalWorkspaceOperationEntity o=dao.findOperation(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),operationId);if(o==null)throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);return operation(o);}
 
     private PersonalWorkspacePreviewRenderer.RenderedPreview renderPreview(Scope scope,String fileId,int version){PersonalWorkspaceVersionEntity v=versionEntity(scope,fileId,version);Content source=readContent(scope,fileId,version);return previewRenderer.render(v.getContentMimeType(),source.bytes());}

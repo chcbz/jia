@@ -87,6 +87,22 @@ public class PersonalWorkspaceTaskLinkDaoImpl implements PersonalWorkspaceTaskLi
     }
 
     @Override
+    public List<PersonalWorkspaceTaskFileLinkEntity> listActiveByFile(String tenantId,
+            String clientId, String ownerJiacn, String fileId, int limit) {
+        scope(tenantId, clientId, ownerJiacn); id(fileId, "fileId", 100);
+        return mapper.selectActiveByFile(tenantId, clientId, ownerJiacn, fileId,
+                Math.max(1, Math.min(limit, 100)));
+    }
+
+    @Override
+    public boolean bumpFileImpactRevision(String tenantId, String clientId,
+            String ownerJiacn, String fileId) {
+        scope(tenantId, clientId, ownerJiacn); id(fileId, "fileId", 100);
+        return mapper.bumpFileMetadataRevision(tenantId, clientId, ownerJiacn,
+                fileId, System.currentTimeMillis()) == 1;
+    }
+
+    @Override
     public void insert(PersonalWorkspaceTaskFileLinkEntity link) {
         Objects.requireNonNull(link, "link").init4Creation();
         mapper.insert(link);

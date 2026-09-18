@@ -41,9 +41,9 @@ class PersonalWorkspaceTaskLinkServiceImplTest {
         assertEquals(1, dao.links.size());
         assertEquals(1, first.version());
         assertEquals(List.of("task.lock", "operation.reserve", "file.lock.active",
-                "version.find", "selection.lock", "link.insert", "operation.complete"),
-                dao.events.subList(0, 7));
-        assertFalse(dao.events.subList(7, 10).contains("file.lock.active"),
+                "version.find", "selection.lock", "link.insert", "file.impact.bump",
+                "operation.complete"), dao.events.subList(0, 8));
+        assertFalse(dao.events.subList(8, 11).contains("file.lock.active"),
                 "same-key replay must return the committed relation without another write path");
     }
 
@@ -190,6 +190,9 @@ class PersonalWorkspaceTaskLinkServiceImplTest {
         @Override public List<PersonalWorkspaceTaskFileLinkEntity> list(
                 String t, String c, String o, String task, Long at, String relation, int limit) {
             events.add("links.list"); return links.values().stream().limit(limit).toList();
+        }
+        @Override public boolean bumpFileImpactRevision(String t, String c, String o, String file) {
+            events.add("file.impact.bump"); return true;
         }
         @Override public void insert(PersonalWorkspaceTaskFileLinkEntity link) {
             events.add("link.insert"); links.put(link.getRelationId(), link);

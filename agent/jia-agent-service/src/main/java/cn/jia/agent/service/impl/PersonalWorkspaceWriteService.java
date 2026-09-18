@@ -1,6 +1,7 @@
 package cn.jia.agent.service.impl;
 
 import cn.jia.agent.dao.PersonalWorkspaceDao;
+import cn.jia.agent.dao.PersonalWorkspaceTaskLinkDao;
 import cn.jia.agent.entity.PersonalWorkspaceFileEntity;
 import cn.jia.agent.entity.PersonalWorkspaceOperationEntity;
 import cn.jia.agent.entity.PersonalWorkspaceVersionEntity;
@@ -17,7 +18,13 @@ import java.util.UUID;
 @Named
 public class PersonalWorkspaceWriteService {
     private final PersonalWorkspaceDao dao;
-    @Inject public PersonalWorkspaceWriteService(PersonalWorkspaceDao dao) { this.dao = dao; }
+    private final PersonalWorkspaceTaskLinkDao taskLinks;
+    @Inject public PersonalWorkspaceWriteService(PersonalWorkspaceDao dao,
+            PersonalWorkspaceTaskLinkDao taskLinks) {
+        this.dao = dao; this.taskLinks = taskLinks;
+    }
+    /** Compatibility constructor for narrow isolated unit fixtures. */
+    public PersonalWorkspaceWriteService(PersonalWorkspaceDao dao) { this(dao, null); }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
     public Claim claim(Scope scope, String type, String key, String requestHash) {
@@ -70,6 +77,11 @@ public class PersonalWorkspaceWriteService {
         requireProcessing(scope, operation); PersonalWorkspaceFileEntity file = requireFile(scope, fileId); requireMatch(file, ifMatch);
         if (impactRevision != file.getMetadataRevision() || !acknowledgeExistingReferences) {
             throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.METADATA_CHANGED);
+        }
+        // Task-link writes lock this same file row before adding/removing an ACTIVE reference.
+        // Therefore this query observes a stable acknowledgement set until this transaction commits.
+        if (taskLinks != null) {
+            taskLinks.listActiveByFile(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), fileId, 100);
         }
         file.setState("TRASHED").setMetadataRevision(file.getMetadataRevision() + 1L); dao.updateFile(file);
         complete(operation, fileId, file.getLatestVersion()); return file;
