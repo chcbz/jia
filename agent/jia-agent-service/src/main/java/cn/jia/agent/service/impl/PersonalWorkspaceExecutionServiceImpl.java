@@ -262,7 +262,10 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         id(outputId, "outputId", 100); filename(originalFilename, contentMimeType); validMime(contentMimeType);
         if (!"output_1".equals(outputId) || content == null || content.length == 0
                 || content.length > storage.maxContentBytes()
-                || !same(contentMimeType, execution.getOutputContentMimeType())) throw failure(Reason.BAD_REQUEST);
+                || !same(contentMimeType, execution.getOutputContentMimeType())
+                || !PersonalWorkspaceOutputFormatValidator.isValid(contentMimeType, content)) {
+            throw failure(Reason.BAD_REQUEST);
+        }
         PersonalWorkspaceExecutionOutputEntity previous = executions.lockOutput(scope.tenantId(), scope.clientId(),
                 scope.ownerJiacn(), execution.getExecutionId(), outputId);
         PersonalWorkspaceStorage.StoredObject stored = storage.store(storageScope(scope), content, contentMimeType);
@@ -442,7 +445,9 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     private static String identifier(String prefix) { return prefix + UUID.randomUUID().toString().replace("-", ""); }
     private static String family(String mime) { if(mime.startsWith("image/"))return "IMAGE"; if("text/plain".equals(mime))return "TEXT"; if("application/pdf".equals(mime))return "PDF"; if(mime.contains("spreadsheet"))return "SPREADSHEET"; if(mime.contains("presentation"))return "PRESENTATION"; return "DOCUMENT"; }
     private static void filename(String value, String mime) { text(value,"filename",255); String expected=EXTENSIONS.get(mime); if(expected==null||value.contains("/")||value.contains("\\")||!value.toLowerCase(Locale.ROOT).endsWith(expected)) throw failure(Reason.BAD_REQUEST); }
-    private static void validMime(String mime) { if (!EXECUTION_MIME_TYPES.contains(mime)) throw failure(Reason.BAD_REQUEST); }
+    private void validMime(String mime) {
+        if (!executionMimeTypes.contains(mime)) throw failure(Reason.BAD_REQUEST);
+    }
     private static Set<String> allowedMimeTypes(PersonalWorkspaceExecutionProperties properties) {
         if (properties == null || properties.allowedMimeTypes() == null || properties.allowedMimeTypes().isEmpty()) {
             throw new IllegalStateException("Personal workspace execution MIME configuration is unavailable");

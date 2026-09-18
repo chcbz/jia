@@ -26,6 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -34,13 +35,14 @@ class PersonalWorkspaceExecutionServiceImplTest {
     private static final PersonalWorkspaceExecutionService.RuntimeScope RUNTIME =
             new PersonalWorkspaceExecutionService.RuntimeScope("0", "client-a", "owner-a", "agent-a", "runtime-a");
     private PersonalWorkspaceExecutionDao executions;
+    private PersonalWorkspaceStorage storage;
     private PersonalWorkspaceWriteService writes;
     private PersonalWorkspaceExecutionService service;
 
     @BeforeEach
     void setUp() {
         executions = mock(PersonalWorkspaceExecutionDao.class);
-        PersonalWorkspaceStorage storage = mock(PersonalWorkspaceStorage.class);
+        storage = mock(PersonalWorkspaceStorage.class);
         when(storage.maxContentBytes()).thenReturn(4096L);
         writes = mock(PersonalWorkspaceWriteService.class);
         service = new PersonalWorkspaceExecutionServiceImpl(executions, mock(PersonalWorkspaceDao.class),
@@ -115,6 +117,20 @@ class PersonalWorkspaceExecutionServiceImplTest {
                 PersonalWorkspaceExecutionProperties.DOCX, 4096L,
                 "/internal/agent/tasks/pwe_task_1/runs/pwe_run_1/outputs/output_1/content")),
                 items.getFirst().payload().outputManifest());
+    }
+
+    @Test
+    void stageOutputRejectsMislabeledRuntimeBytesBeforeDurableStorage() {
+        PersonalWorkspaceExecutionEntity execution = execution("pwe_1", "agent-a", "QUEUED");
+        when(executions.lockByTaskRun("0", "client-a", "owner-a", "pwe_task_1", "pwe_run_1"))
+                .thenReturn(execution);
+
+        var failure = assertThrows(PersonalWorkspaceExecutionService.Failure.class, () -> service.stageOutput(
+                RUNTIME, "pwe_task_1", "pwe_run_1", "output_1", "result.docx",
+                PersonalWorkspaceExecutionProperties.DOCX, "not an OOXML package".getBytes(StandardCharsets.UTF_8)));
+
+        assertEquals(PersonalWorkspaceExecutionService.Reason.BAD_REQUEST, failure.getReason());
+        verify(storage, never()).store(any(), any(), any());
     }
 
     @Test
