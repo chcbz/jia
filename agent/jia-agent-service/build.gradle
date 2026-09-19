@@ -1,4 +1,4 @@
-def poiOoxmlRuntimeVersion = libs.versions.poi.ooxml.full.asProvider().get()
+def poiOoxmlRuntimeVersion = libs.versions.poi.ooxml.full.get()
 
 dependencies {
     api project(':agent:jia-agent-api')
