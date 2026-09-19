@@ -109,10 +109,16 @@ public class AgentTaskDeliverableController {
             HttpServletRequest request,
             Authentication authentication) {
         Scope scope = requireJwtScope(authentication);
-        RequestTarget target = requireTarget(taskId, artifactId, artifactVersion, request);
-        AgentTaskDeliverablePreviewAdapter.Preview rendered = renderPreview(scope, target);
-        return ok(new PreviewResponse(rendered.state(), rendered.representation(),
-                rendered.parts().stream()
+        PreviewTarget previewTarget = requirePreviewTarget(
+                taskId, artifactId, artifactVersion, request);
+        AgentTaskDeliverablePreviewAdapter.Preview rendered =
+                renderPreview(scope, previewTarget.target());
+        List<AgentTaskDeliverablePreviewAdapter.Part> visibleParts = previewTarget.partsView()
+                ? rendered.parts() : rendered.legacyParts();
+        String representation = previewTarget.partsView()
+                ? rendered.representation() : rendered.legacyRepresentation();
+        return ok(new PreviewResponse(rendered.state(), representation,
+                visibleParts.stream()
                         .map(part -> new PreviewPartResponse(part.partId(), part.contentMimeType()))
                         .toList(),
                 rendered.partial(), rendered.reason()));
@@ -244,6 +250,29 @@ public class AgentTaskDeliverableController {
                 scope.tenantId(), scope.clientId(), scope.ownerJiacn(), target.taskId(),
                 target.artifactId(), target.artifactVersion());
         return requireContent(result, target.artifactId(), target.artifactVersion());
+    }
+
+    private static PreviewTarget requirePreviewTarget(String taskId, String artifactId,
+            String artifactVersion, HttpServletRequest request) {
+        requireSafeRequestPath(request);
+        requirePathId(taskId, 100);
+        requirePathId(artifactId, 100);
+        boolean partsView = requirePartsView(request);
+        return new PreviewTarget(
+                new RequestTarget(taskId, artifactId, positiveVersion(artifactVersion)), partsView);
+    }
+
+    private static boolean requirePartsView(HttpServletRequest request) {
+        if (request.getParameterMap().isEmpty()) return false;
+        if (request.getParameterMap().size() != 1
+                || !request.getParameterMap().containsKey("view")) {
+            throw new RequestFailure();
+        }
+        String[] values = request.getParameterValues("view");
+        if (values == null || values.length != 1 || !"parts".equals(values[0])) {
+            throw new RequestFailure();
+        }
+        return true;
     }
 
     private static RequestTarget requireTarget(String taskId, String artifactId,
@@ -473,6 +502,9 @@ public class AgentTaskDeliverableController {
     }
 
     private record RequestTarget(String taskId, String artifactId, int artifactVersion) {
+    }
+
+    private record PreviewTarget(RequestTarget target, boolean partsView) {
     }
 
     private record VerifiedContent(byte[] bytes, MediaType mediaType) {

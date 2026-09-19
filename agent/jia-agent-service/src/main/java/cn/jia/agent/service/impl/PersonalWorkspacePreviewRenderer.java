@@ -42,6 +42,10 @@ public final class PersonalWorkspacePreviewRenderer {
     static final String TEXT_MIME_TYPE = "text/plain";
     static final String PNG_MIME_TYPE = "image/png";
     static final int MAX_TEXT_CODE_POINTS = 200_000;
+    // Product preview viewport, not an admission or timeout threshold. Every slide is rendered as
+    // a derived image fitted to this box, so source-declared dimensions never size the bitmap.
+    static final int PPT_PREVIEW_MAX_WIDTH = 1_600;
+    static final int PPT_PREVIEW_MAX_HEIGHT = 1_200;
 
     private static final Set<String> IMAGE_MIME_TYPES = Set.of("image/png", "image/jpeg");
     private static final String DOCX =
@@ -120,8 +124,10 @@ public final class PersonalWorkspacePreviewRenderer {
             if (pageSize == null || pageSize.width < 1 || pageSize.height < 1) {
                 throw new IllegalArgumentException("invalid slide size");
             }
+            double previewScale = previewScale(pageSize);
+            Dimension previewSize = fittedPreviewSize(pageSize, previewScale);
             BufferedImage image = new BufferedImage(
-                    pageSize.width, pageSize.height, BufferedImage.TYPE_INT_RGB);
+                    previewSize.width, previewSize.height, BufferedImage.TYPE_INT_RGB);
             Graphics2D graphics = image.createGraphics();
             try {
                 graphics.setPaint(Color.WHITE);
@@ -130,6 +136,7 @@ public final class PersonalWorkspacePreviewRenderer {
                         RenderingHints.VALUE_ANTIALIAS_ON);
                 graphics.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING,
                         RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+                graphics.scale(previewScale, previewScale);
                 slideShow.getSlides().get(slideIndex).draw(graphics);
             } finally {
                 graphics.dispose();
@@ -141,6 +148,20 @@ public final class PersonalWorkspacePreviewRenderer {
                 return output.toByteArray();
             }
         }
+    }
+
+    private static double previewScale(Dimension sourceSize) {
+        return Math.min(
+                (double) PPT_PREVIEW_MAX_WIDTH / sourceSize.width,
+                (double) PPT_PREVIEW_MAX_HEIGHT / sourceSize.height);
+    }
+
+    private static Dimension fittedPreviewSize(Dimension sourceSize, double scale) {
+        int width = Math.max(1, Math.min(PPT_PREVIEW_MAX_WIDTH,
+                (int) Math.round(sourceSize.width * scale)));
+        int height = Math.max(1, Math.min(PPT_PREVIEW_MAX_HEIGHT,
+                (int) Math.round(sourceSize.height * scale)));
+        return new Dimension(width, height);
     }
 
     private static RenderedPreview xlsxPreview(byte[] source) throws Exception {

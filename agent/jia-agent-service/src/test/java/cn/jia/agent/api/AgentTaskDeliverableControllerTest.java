@@ -180,32 +180,32 @@ class AgentTaskDeliverableControllerTest {
     @Test
     void previewUsesOwnerScopedTrustedContentAndReturnsOrderedMultiPartMetadata() throws Exception {
         List<PreviewCase> cases = List.of(
-                new PreviewCase(1, "image/png", png(), "ORIGINAL_IMAGE",
+                new PreviewCase(1, "image/png", png(), "ORIGINAL_IMAGE", "ORIGINAL_IMAGE",
                         List.of(new ExpectedPart("content", "image/png")),
                         "content", null, true, null),
                 new PreviewCase(2, "text/plain", "plain preview".getBytes(StandardCharsets.UTF_8),
-                        "PLAIN_TEXT", List.of(new ExpectedPart("content", "text/plain")),
+                        "PLAIN_TEXT", "PLAIN_TEXT", List.of(new ExpectedPart("content", "text/plain")),
                         "content", "plain preview", false, null),
                 new PreviewCase(3,
                         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        docx(), "EXTRACTED_TEXT",
+                        docx(), "EXTRACTED_TEXT", "EXTRACTED_TEXT",
                         List.of(new ExpectedPart("content", "text/plain")),
                         "content", "Word preview", false, null),
                 new PreviewCase(4,
                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        xlsx(), "EXTRACTED_TEXT",
+                        xlsx(), "SHEET_TEXT", "EXTRACTED_TEXT",
                         List.of(new ExpectedPart("sheet-1", "text/plain"),
                                 new ExpectedPart("sheet-2", "text/plain"),
                                 new ExpectedPart("content", "text/plain")),
                         "sheet-2", "[公式未执行] =Inputs!A1*2", false, "工作表：Inputs"),
                 new PreviewCase(5,
                         "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                        pptx(), "EXTRACTED_TEXT",
+                        pptx(), "PAGED_IMAGE", "EXTRACTED_TEXT",
                         List.of(new ExpectedPart("slide-1", "image/png"),
                                 new ExpectedPart("slide-2", "image/png"),
                                 new ExpectedPart("content", "text/plain")),
                         "slide-2", null, false, "Second slide preview"),
-                new PreviewCase(6, "application/pdf", pdf(), "EXTRACTED_TEXT",
+                new PreviewCase(6, "application/pdf", pdf(), "PAGED_TEXT", "EXTRACTED_TEXT",
                         List.of(new ExpectedPart("page-1", "text/plain"),
                                 new ExpectedPart("page-2", "text/plain"),
                                 new ExpectedPart("content", "text/plain")),
@@ -219,6 +219,7 @@ class AgentTaskDeliverableControllerTest {
             var metadata = mvc.perform(get(
                             "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}/preview",
                             TASK, ARTIFACT, sample.version())
+                            .queryParam("view", "parts")
                             .principal(jwt(TENANT, CLIENT, ACTOR)))
                     .andExpect(status().isOk())
                     .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
@@ -245,6 +246,21 @@ class AgentTaskDeliverableControllerTest {
                 previousPart = partIndex;
             }
 
+            ExpectedPart legacyContent = sample.parts().stream()
+                    .filter(part -> part.partId().equals("content"))
+                    .findFirst().orElseThrow();
+            mvc.perform(get(
+                            "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}/preview",
+                            TASK, ARTIFACT, sample.version())
+                            .principal(jwt(TENANT, CLIENT, ACTOR)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.representation").value(
+                            sample.legacyRepresentation()))
+                    .andExpect(jsonPath("$.parts.length()").value(1))
+                    .andExpect(jsonPath("$.parts[0].partId").value("content"))
+                    .andExpect(jsonPath("$.parts[0].contentMimeType").value(
+                            legacyContent.mimeType()));
+
             ExpectedPart requested = sample.parts().stream()
                     .filter(part -> part.partId().equals(sample.requestPartId()))
                     .findFirst().orElseThrow();
@@ -270,7 +286,7 @@ class AgentTaskDeliverableControllerTest {
                         part.getResponse().getContentAsByteArray())) != null);
             }
 
-            int expectedReads = 2;
+            int expectedReads = 3;
             if (sample.legacyContentText() != null) {
                 mvc.perform(get(
                                 "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}"
@@ -306,6 +322,19 @@ class AgentTaskDeliverableControllerTest {
         mvc.perform(get(
                         "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}/preview",
                         TASK, ARTIFACT, 1).queryParam("actorAgentId", OTHER).principal(auth))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get(
+                        "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}/preview",
+                        TASK, ARTIFACT, 1).queryParam("view", "legacy").principal(auth))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get(
+                        "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}/preview",
+                        TASK, ARTIFACT, 1).queryParam("view", "parts", "parts").principal(auth))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get(
+                        "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}/preview",
+                        TASK, ARTIFACT, 1).queryParam("view", "parts")
+                        .queryParam("actorAgentId", OTHER).principal(auth))
                 .andExpect(status().isBadRequest());
         mvc.perform(get(
                         "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}"
@@ -530,8 +559,9 @@ class AgentTaskDeliverableControllerTest {
     }
 
     private record PreviewCase(int version, String mimeType, byte[] bytes,
-            String representation, List<ExpectedPart> parts, String requestPartId,
-            String expectedPartText, boolean expectOriginalBytes, String legacyContentText) {
+            String representation, String legacyRepresentation, List<ExpectedPart> parts,
+            String requestPartId, String expectedPartText, boolean expectOriginalBytes,
+            String legacyContentText) {
     }
 
     private static JwtAuthenticationToken jwt(String tenant, String client, String actor) {

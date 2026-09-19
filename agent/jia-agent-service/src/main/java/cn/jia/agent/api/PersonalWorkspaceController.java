@@ -3,6 +3,7 @@ package cn.jia.agent.api;
 import cn.jia.agent.entity.PersonalWorkspaceViews;
 import cn.jia.agent.exception.PersonalWorkspaceException;
 import cn.jia.agent.service.PersonalWorkspaceService;
+import cn.jia.agent.service.impl.PersonalWorkspacePreviewRenderer;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ContentDisposition;
@@ -26,6 +27,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -84,8 +86,14 @@ public class PersonalWorkspaceController {
         return binary(service.readContent(scope(authentication), fileId, version(version)), true);
     }
     @GetMapping(value = "/files/{fileId}/versions/{version}/preview", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<PersonalWorkspaceViews.PreviewView> preview(@PathVariable String fileId, @PathVariable String version, Authentication authentication) {
-        return json(service.preview(scope(authentication), fileId, version(version)));
+    public ResponseEntity<PersonalWorkspaceViews.PreviewView> preview(@PathVariable String fileId,
+            @PathVariable String version, HttpServletRequest request,
+            Authentication authentication) {
+        PersonalWorkspaceService.Scope authenticatedScope = scope(authentication);
+        boolean partsView = requirePartsView(request);
+        PersonalWorkspaceViews.PreviewView rendered =
+                service.preview(authenticatedScope, fileId, version(version));
+        return json(partsView ? rendered : legacyPreview(rendered));
     }
     @GetMapping("/files/{fileId}/versions/{version}/preview/parts/{partId}")
     public ResponseEntity<byte[]> previewPart(@PathVariable String fileId, @PathVariable String version,
@@ -132,6 +140,31 @@ public class PersonalWorkspaceController {
     public ResponseEntity<ErrorBody> malformed(Exception ignored) { return error(HttpStatus.BAD_REQUEST,"BAD_REQUEST","Invalid personal workspace request"); }
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorBody> unexpected(Exception failure, HttpServletRequest request) { log.error("Personal workspace request failed: uri={}",request.getRequestURI(),failure); return error(HttpStatus.SERVICE_UNAVAILABLE,"WORKSPACE_UNAVAILABLE","Personal workspace is temporarily unavailable"); }
+
+    private static boolean requirePartsView(HttpServletRequest request) {
+        if (request.getParameterMap().isEmpty()) return false;
+        if (request.getParameterMap().size() != 1
+                || !request.getParameterMap().containsKey("view")) {
+            throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.BAD_REQUEST);
+        }
+        String[] values = request.getParameterValues("view");
+        if (values == null || values.length != 1 || !"parts".equals(values[0])) {
+            throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.BAD_REQUEST);
+        }
+        return true;
+    }
+
+    private static PersonalWorkspaceViews.PreviewView legacyPreview(
+            PersonalWorkspaceViews.PreviewView rendered) {
+        if (!"READY".equals(rendered.state())) return rendered;
+        PersonalWorkspaceViews.PreviewPart content = rendered.parts().stream()
+                .filter(part -> PersonalWorkspacePreviewRenderer.CONTENT_PART_ID.equals(part.partId()))
+                .findFirst()
+                .orElseThrow(() -> new PersonalWorkspaceException(
+                        PersonalWorkspaceException.Reason.STORAGE_CORRUPT));
+        return new PersonalWorkspaceViews.PreviewView(rendered.state(), List.of(content),
+                rendered.partial(), rendered.reason());
+    }
 
     private PersonalWorkspaceService.Scope scope(Authentication authentication) {
         if(authentication==null||!authentication.isAuthenticated()||!(authentication instanceof JwtAuthenticationToken jwt)) throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);

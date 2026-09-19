@@ -10,6 +10,7 @@ import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.junit.jupiter.api.Test;
 
 import javax.imageio.ImageIO;
+import java.awt.Dimension;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -62,10 +63,29 @@ class PersonalWorkspacePreviewRendererTest {
         var secondSlide = ImageIO.read(new ByteArrayInputStream(preview.partBytes("slide-2")));
         assertNotNull(firstSlide);
         assertNotNull(secondSlide);
+        assertEquals(PersonalWorkspacePreviewRenderer.PPT_PREVIEW_MAX_WIDTH,
+                firstSlide.getWidth());
+        assertEquals(PersonalWorkspacePreviewRenderer.PPT_PREVIEW_MAX_HEIGHT,
+                firstSlide.getHeight());
         assertEquals(firstSlide.getWidth(), secondSlide.getWidth());
         assertEquals(firstSlide.getHeight(), secondSlide.getHeight());
         assertNull(preview.partBytes("slide-3"), "an unknown part must not fall back to content");
         assertArrayEquals(extracted.getBytes(StandardCharsets.UTF_8), preview.bytes());
+    }
+
+    @Test
+    void fitsAbnormallyLargeDeclaredSlideSizeIntoTheBoundedPreviewViewport() throws Exception {
+        var preview = renderer.render(PPTX,
+                pptxWithPageSize(new Dimension(100_000, 50_000)));
+        var image = ImageIO.read(new ByteArrayInputStream(preview.partBytes("slide-1")));
+
+        assertNotNull(image);
+        assertEquals(PersonalWorkspacePreviewRenderer.PPT_PREVIEW_MAX_WIDTH,
+                image.getWidth());
+        assertEquals(800, image.getHeight());
+        assertTrue((long) image.getWidth() * image.getHeight()
+                <= (long) PersonalWorkspacePreviewRenderer.PPT_PREVIEW_MAX_WIDTH
+                * PersonalWorkspacePreviewRenderer.PPT_PREVIEW_MAX_HEIGHT);
     }
 
     @Test
@@ -159,6 +179,16 @@ class PersonalWorkspacePreviewRendererTest {
     private static byte[] pptx() throws Exception {
         try (XMLSlideShow slideShow = new XMLSlideShow(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             slideShow.createSlide().createTextBox().setText("Slide content");
+            slideShow.write(output);
+            return output.toByteArray();
+        }
+    }
+
+    private static byte[] pptxWithPageSize(Dimension pageSize) throws Exception {
+        try (XMLSlideShow slideShow = new XMLSlideShow();
+                ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            slideShow.setPageSize(pageSize);
+            slideShow.createSlide().createTextBox().setText("Bounded preview");
             slideShow.write(output);
             return output.toByteArray();
         }

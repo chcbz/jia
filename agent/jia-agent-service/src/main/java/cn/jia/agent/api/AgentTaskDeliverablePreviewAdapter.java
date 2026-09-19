@@ -144,6 +144,15 @@ final class AgentTaskDeliverablePreviewAdapter {
         if (TEXT.equals(sourceMimeType)) {
             return "PLAIN_TEXT";
         }
+        if (PPTX.equals(sourceMimeType)) {
+            return "PAGED_IMAGE";
+        }
+        if (XLSX.equals(sourceMimeType)) {
+            return "SHEET_TEXT";
+        }
+        if (PDF.equals(sourceMimeType)) {
+            return "PAGED_TEXT";
+        }
         if (EXTRACTED_TEXT_TYPES.contains(sourceMimeType)) {
             return "EXTRACTED_TEXT";
         }
@@ -209,6 +218,21 @@ final class AgentTaskDeliverablePreviewAdapter {
             String reason, PartReader reader) {
         Preview {
             parts = List.copyOf(parts);
+        }
+
+        String legacyRepresentation() {
+            return switch (representation) {
+                case "PAGED_IMAGE", "SHEET_TEXT", "PAGED_TEXT" -> "EXTRACTED_TEXT";
+                default -> representation;
+            };
+        }
+
+        List<Part> legacyParts() {
+            if (!"READY".equals(state)) return parts;
+            Part content = parts.stream()
+                    .filter(part -> CONTENT_PART_ID.equals(part.partId()))
+                    .findFirst().orElseThrow(AgentTaskDeliverablePreviewAdapter::corrupt);
+            return List.of(content);
         }
 
         PartContent readPart(String partId) {
