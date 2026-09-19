@@ -9,8 +9,10 @@ import cn.jia.agent.service.PersonalWorkspaceService;
 import cn.jia.agent.service.PersonalWorkspaceStorage;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.function.Executable;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.dao.DuplicateKeyException;
 
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -78,6 +80,43 @@ class PersonalWorkspaceServiceImplTest {
         assertEquals(storesBeforeForeignRequests, fixture.storage.storeCount,
                 "foreign writes must not allocate private storage objects");
         assertEquals("private.txt", fixture.service.get(OWNER_A, fileId).file().displayName());
+    }
+
+    @Test
+    void multipartPreviewKeepsContentCompatibilityAndChecksAclBeforeExactPartLookup() throws Exception {
+        Fixture fixture = new Fixture();
+        byte[] workbook = xlsxWithTwoSheetsAndFormula();
+        String fileId = fixture.service.create(OWNER_A, upload(
+                "create-workbook", "workbook.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", workbook))
+                .file().fileId();
+
+        var detail = fixture.service.get(OWNER_A, fileId);
+        assertEquals("AVAILABLE", detail.file().capabilities().preview());
+        assertEquals("READY", detail.latestVersion().previewState());
+        assertEquals(List.of("sheet-1", "sheet-2", "content"),
+                fixture.service.preview(OWNER_A, fileId, 1).parts().stream()
+                        .map(part -> part.partId()).toList());
+
+        String sheet = new String(fixture.service.readPreviewPart(
+                OWNER_A, fileId, 1, "sheet-2").bytes(), StandardCharsets.UTF_8);
+        String content = new String(fixture.service.readPreviewPart(
+                OWNER_A, fileId, 1, "content").bytes(), StandardCharsets.UTF_8);
+        assertTrue(sheet.contains("[公式未执行] =Inputs!A1*2"));
+        assertTrue(content.contains("工作表：Inputs"));
+        assertTrue(content.contains("工作表：Summary"));
+
+        int readsBeforeUnknownPart = fixture.storage.readCount;
+        assertReason(PersonalWorkspaceException.Reason.NOT_FOUND,
+                () -> fixture.service.readPreviewPart(OWNER_A, fileId, 1, "sheet-99"));
+        assertEquals(readsBeforeUnknownPart + 1, fixture.storage.readCount,
+                "authorized content must be resolved before an unknown logical part is rejected");
+
+        int readsBeforeForeignPart = fixture.storage.readCount;
+        assertReason(PersonalWorkspaceException.Reason.NOT_FOUND,
+                () -> fixture.service.readPreviewPart(OWNER_B, fileId, 1, "sheet-2"));
+        assertEquals(readsBeforeForeignPart, fixture.storage.readCount,
+                "foreign scope must fail at owner metadata before private bytes are read");
     }
 
     @Test
@@ -204,9 +243,25 @@ class PersonalWorkspaceServiceImplTest {
 
     private static PersonalWorkspaceService.UploadCommand upload(
             String key, String filename, byte[] content) {
+        return upload(key, filename, "text/plain", content);
+    }
+
+    private static PersonalWorkspaceService.UploadCommand upload(
+            String key, String filename, String mimeType, byte[] content) {
         return new PersonalWorkspaceService.UploadCommand(
                 new PersonalWorkspaceService.Idempotency(key), filename, filename,
-                "text/plain", content);
+                mimeType, content);
+    }
+
+    private static byte[] xlsxWithTwoSheetsAndFormula() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook();
+                ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            workbook.createSheet("Inputs").createRow(0).createCell(0).setCellValue(7);
+            workbook.createSheet("Summary").createRow(0).createCell(0)
+                    .setCellFormula("Inputs!A1*2");
+            workbook.write(output);
+            return output.toByteArray();
+        }
     }
 
     private static byte[] bytes(String value) {

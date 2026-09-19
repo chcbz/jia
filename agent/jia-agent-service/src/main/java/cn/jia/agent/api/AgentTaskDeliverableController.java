@@ -129,19 +129,25 @@ public class AgentTaskDeliverableController {
             Authentication authentication) {
         Scope scope = requireJwtScope(authentication);
         RequestTarget target = requireTarget(taskId, artifactId, artifactVersion, request);
-        if (!AgentTaskDeliverablePreviewAdapter.CONTENT_PART_ID.equals(partId)) {
+        requirePathId(partId, 100);
+
+        // Resolve the owner-scoped artifact before interpreting a syntactically safe part id.
+        // This prevents valid-looking unknown ids from becoming an artifact existence oracle.
+        VerifiedContent content = readContent(scope, target);
+        AgentTaskDeliverablePreviewAdapter.Preview rendered = renderPreview(content);
+        AgentTaskDeliverablePreviewAdapter.PartContent selected = rendered.readPart(partId);
+        if (selected == null) {
+            if (AgentTaskDeliverablePreviewAdapter.CONTENT_PART_ID.equals(partId)
+                    && "UNSUPPORTED".equals(rendered.state())) {
+                throw new PreviewPartUnavailable();
+            }
             throw new PreviewPartNotFound();
         }
-        AgentTaskDeliverablePreviewAdapter.Preview rendered = renderPreview(scope, target);
-        if (!rendered.ready()) {
-            throw new PreviewPartUnavailable();
-        }
-        AgentTaskDeliverablePreviewAdapter.Part part = rendered.parts().getFirst();
-        byte[] bytes = rendered.bytes();
+        byte[] bytes = selected.bytes();
         return ResponseEntity.ok()
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .header("X-Content-Type-Options", NOSNIFF)
-                .contentType(MediaType.parseMediaType(part.contentMimeType()))
+                .contentType(MediaType.parseMediaType(selected.part().contentMimeType()))
                 .contentLength(bytes.length)
                 .body(bytes);
     }
@@ -226,7 +232,10 @@ public class AgentTaskDeliverableController {
 
     private AgentTaskDeliverablePreviewAdapter.Preview renderPreview(
             Scope scope, RequestTarget target) {
-        VerifiedContent content = readContent(scope, target);
+        return renderPreview(readContent(scope, target));
+    }
+
+    private AgentTaskDeliverablePreviewAdapter.Preview renderPreview(VerifiedContent content) {
         return previewAdapter.render(content.mediaType().toString(), content.bytes());
     }
 

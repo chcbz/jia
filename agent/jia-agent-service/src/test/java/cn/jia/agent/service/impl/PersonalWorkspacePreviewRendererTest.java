@@ -9,11 +9,16 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.junit.jupiter.api.Test;
 
+import javax.imageio.ImageIO;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -37,17 +42,63 @@ class PersonalWorkspacePreviewRendererTest {
     }
 
     @Test
-    void extractsEveryPowerPointSlideWithoutNotesOrMasterText() throws Exception {
+    void rendersEveryPowerPointSlideAsAnIsolatedPngAndKeepsLegacyTextContent() throws Exception {
         var preview = renderer.render(PPTX, pptxWithNotesAndMaster());
         String extracted = new String(preview.bytes(), StandardCharsets.UTF_8);
 
         assertEquals("READY", preview.view().state());
+        assertEquals(List.of("slide-1", "slide-2", "content"), preview.view().parts().stream()
+                .map(part -> part.partId()).toList());
+        assertEquals(List.of("image/png", "image/png", "text/plain"), preview.view().parts().stream()
+                .map(part -> part.contentMimeType()).toList());
         assertTrue(extracted.contains("First slide content"));
         assertTrue(extracted.contains("Second slide content"));
         assertTrue(extracted.contains("Externally linked slide text"));
         assertFalse(extracted.contains("127.0.0.1:1"));
         assertFalse(extracted.contains("Private speaker notes"));
         assertFalse(extracted.contains("Master-only boilerplate"));
+
+        var firstSlide = ImageIO.read(new ByteArrayInputStream(preview.partBytes("slide-1")));
+        var secondSlide = ImageIO.read(new ByteArrayInputStream(preview.partBytes("slide-2")));
+        assertNotNull(firstSlide);
+        assertNotNull(secondSlide);
+        assertEquals(firstSlide.getWidth(), secondSlide.getWidth());
+        assertEquals(firstSlide.getHeight(), secondSlide.getHeight());
+        assertNull(preview.partBytes("slide-3"), "an unknown part must not fall back to content");
+        assertArrayEquals(extracted.getBytes(StandardCharsets.UTF_8), preview.bytes());
+    }
+
+    @Test
+    void exposesEveryExcelSheetAsPlainTextWithoutEvaluatingFormulas() throws Exception {
+        var preview = renderer.render(XLSX, xlsxWithTwoSheetsAndFormula());
+
+        assertEquals(List.of("sheet-1", "sheet-2", "content"), preview.view().parts().stream()
+                .map(part -> part.partId()).toList());
+        String first = new String(preview.partBytes("sheet-1"), StandardCharsets.UTF_8);
+        String second = new String(preview.partBytes("sheet-2"), StandardCharsets.UTF_8);
+        String combined = new String(preview.bytes(), StandardCharsets.UTF_8);
+        assertTrue(first.contains("工作表：Inputs"));
+        assertTrue(first.contains("A1\t7"));
+        assertTrue(second.contains("工作表：Summary"));
+        assertTrue(second.contains("公式未执行"));
+        assertTrue(second.contains("[公式未执行] =Inputs!A1*2"));
+        assertTrue(combined.contains(first));
+        assertTrue(combined.contains(second));
+        assertNull(preview.partBytes("sheet-Inputs"));
+    }
+
+    @Test
+    void exposesPdfPagesSeparatelyWhileKeepingTheContentPart() throws Exception {
+        var preview = renderer.render(PDF, pdfWithTwoPages());
+
+        assertEquals(List.of("page-1", "page-2", "content"), preview.view().parts().stream()
+                .map(part -> part.partId()).toList());
+        assertTrue(new String(preview.partBytes("page-1"), StandardCharsets.UTF_8)
+                .contains("First PDF page"));
+        assertTrue(new String(preview.partBytes("page-2"), StandardCharsets.UTF_8)
+                .contains("Second PDF page"));
+        assertTrue(new String(preview.bytes(), StandardCharsets.UTF_8).contains("First PDF page"));
+        assertTrue(new String(preview.bytes(), StandardCharsets.UTF_8).contains("Second PDF page"));
     }
 
     @Test
@@ -90,8 +141,9 @@ class PersonalWorkspacePreviewRendererTest {
     private void assertReadyText(String mimeType, byte[] source, String expected) {
         var preview = renderer.render(mimeType, source);
         assertEquals("READY", preview.view().state());
-        assertEquals("content", preview.view().parts().get(0).partId());
-        assertEquals("text/plain", preview.view().parts().get(0).contentMimeType());
+        var content = preview.view().parts().stream()
+                .filter(part -> "content".equals(part.partId())).findFirst().orElseThrow();
+        assertEquals("text/plain", content.contentMimeType());
         assertFalse(preview.view().partial());
         assertTrue(new String(preview.bytes(), StandardCharsets.UTF_8).contains(expected));
     }
@@ -135,6 +187,15 @@ class PersonalWorkspacePreviewRendererTest {
         }
     }
 
+    private static byte[] xlsxWithTwoSheetsAndFormula() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            workbook.createSheet("Inputs").createRow(0).createCell(0).setCellValue(7);
+            workbook.createSheet("Summary").createRow(0).createCell(0).setCellFormula("Inputs!A1*2");
+            workbook.write(output);
+            return output.toByteArray();
+        }
+    }
+
     private static byte[] pdf() throws Exception {
         try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             PDPage page = new PDPage();
@@ -150,4 +211,25 @@ class PersonalWorkspacePreviewRendererTest {
             return output.toByteArray();
         }
     }
+    private static byte[] pdfWithTwoPages() throws Exception {
+        try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            addPdfPage(document, "First PDF page");
+            addPdfPage(document, "Second PDF page");
+            document.save(output);
+            return output.toByteArray();
+        }
+    }
+
+    private static void addPdfPage(PDDocument document, String text) throws Exception {
+        PDPage page = new PDPage();
+        document.addPage(page);
+        try (PDPageContentStream stream = new PDPageContentStream(document, page)) {
+            stream.beginText();
+            stream.setFont(PDType1Font.HELVETICA, 12);
+            stream.newLineAtOffset(72, 720);
+            stream.showText(text);
+            stream.endText();
+        }
+    }
+
 }

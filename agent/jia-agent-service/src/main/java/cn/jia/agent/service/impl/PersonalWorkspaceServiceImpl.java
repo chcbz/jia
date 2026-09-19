@@ -103,8 +103,29 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
     @Override public PersonalWorkspaceViews.FileView restore(Scope scope,String fileId,String ifMatch,Idempotency idempotency){
         validateScope(scope); file(scope,fileId); String key=key(idempotency); PersonalWorkspaceWriteService.Claim c=writes.claim(writeScope(scope),"RESTORE",key,hash("RESTORE",fileId,ifMatch)); if(!c.claimed())return completedFile(scope,c.operation()); try{return view(writes.restore(writeScope(scope),c.operation(),fileId,ifMatch));}catch(RuntimeException f){writes.fail(writeScope(scope),c.operation(),reason(f));throw f;}}
     @Override public Content readContent(Scope scope,String fileId,int version){PersonalWorkspaceVersionEntity v=versionEntity(scope,fileId,version);PersonalWorkspaceStorage.StoredContent c=storage.read(storageScope(scope),v.getStorageUri(),v.getContentHash(),v.getByteLength(),v.getContentMimeType());return new Content(v.getOriginalFilename(),v.getContentMimeType(),c.content());}
-    @Override public PersonalWorkspaceViews.PreviewView preview(Scope scope,String fileId,int version){return renderPreview(scope,fileId,version).view();}
-    @Override public Content readPreviewPart(Scope scope,String fileId,int version,String partId){if(!PersonalWorkspacePreviewRenderer.CONTENT_PART_ID.equals(partId))throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);PersonalWorkspacePreviewRenderer.RenderedPreview preview=renderPreview(scope,fileId,version);if(!"READY".equals(preview.view().state()))throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.UNSUPPORTED);PersonalWorkspaceViews.PreviewPart part=preview.view().parts().get(0);PersonalWorkspaceVersionEntity v=versionEntity(scope,fileId,version);return new Content(v.getOriginalFilename(),part.contentMimeType(),preview.bytes());}
+    @Override public PersonalWorkspaceViews.PreviewView preview(Scope scope,String fileId,int version){return renderPreview(scope,fileId,version).rendered().view();}
+    @Override public Content readPreviewPart(Scope scope,String fileId,int version,String partId){
+        PersonalWorkspaceVersionEntity sourceVersion=versionEntity(scope,fileId,version);
+        id(partId,"partId",100);
+        LoadedPreview loaded=renderPreview(scope,sourceVersion);
+        PersonalWorkspaceViews.PreviewPart part=loaded.rendered().view().parts().stream()
+                .filter(candidate->candidate.partId().equals(partId)).findFirst().orElse(null);
+        if(part==null){
+            if(PersonalWorkspacePreviewRenderer.CONTENT_PART_ID.equals(partId)
+                    &&"UNSUPPORTED".equals(loaded.rendered().view().state()))
+                throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.UNSUPPORTED);
+            throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);
+        }
+        if(!"READY".equals(loaded.rendered().view().state()))
+            throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.UNSUPPORTED);
+        try{
+            byte[] bytes=loaded.rendered().partBytes(partId);
+            if(bytes==null)throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.STORAGE_CORRUPT);
+            return new Content(loaded.version().getOriginalFilename(),part.contentMimeType(),bytes);
+        }catch(PersonalWorkspacePreviewRenderer.PreviewPartReadException failure){
+            throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.STORAGE_CORRUPT);
+        }
+    }
     @Override public PersonalWorkspaceViews.UsageView usage(Scope scope,String fileId){
         PersonalWorkspaceFileEntity f=file(scope,fileId);
         List<PersonalWorkspaceViews.TaskReferenceView> references=taskLinks==null?List.of():taskLinks
@@ -119,14 +140,18 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
     }
     @Override public PersonalWorkspaceViews.OperationView operation(Scope scope,String operationId){validateScope(scope);PersonalWorkspaceOperationEntity o=dao.findOperation(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),operationId);if(o==null)throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);return operation(o);}
 
-    private PersonalWorkspacePreviewRenderer.RenderedPreview renderPreview(Scope scope,String fileId,int version){PersonalWorkspaceVersionEntity v=versionEntity(scope,fileId,version);Content source=readContent(scope,fileId,version);return previewRenderer.render(v.getContentMimeType(),source.bytes());}
+    private LoadedPreview renderPreview(Scope scope,String fileId,int version){return renderPreview(scope,versionEntity(scope,fileId,version));}
+    private LoadedPreview renderPreview(Scope scope,PersonalWorkspaceVersionEntity v){
+        PersonalWorkspaceStorage.StoredContent source=storage.read(storageScope(scope),v.getStorageUri(),v.getContentHash(),v.getByteLength(),v.getContentMimeType());
+        return new LoadedPreview(v,previewRenderer.render(v.getContentMimeType(),source.content()));
+    }
     private PersonalWorkspaceViews.UploadView completedUpload(Scope s,PersonalWorkspaceOperationEntity o){if("PROCESSING".equals(o.getState()))throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.PROCESSING);if(!"COMMITTED".equals(o.getState()))throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.OPERATION_FAILED);PersonalWorkspaceFileEntity f=file(s,o.getFileId());PersonalWorkspaceVersionEntity v=versionEntity(s,o.getFileId(),o.getFileVersion());return new PersonalWorkspaceViews.UploadView(operation(o),view(f),version(v));}
     private PersonalWorkspaceViews.FileView completedFile(Scope s,PersonalWorkspaceOperationEntity o){if("PROCESSING".equals(o.getState()))throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.PROCESSING);if(!"COMMITTED".equals(o.getState()))throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.OPERATION_FAILED);return view(file(s,o.getFileId()));}
     private PersonalWorkspaceFileEntity file(Scope s,String id){validateScope(s);id(id,"fileId",100);PersonalWorkspaceFileEntity f=dao.findFile(s.tenantId(),s.clientId(),s.ownerJiacn(),id);if(f==null)throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);return f;}
     private PersonalWorkspaceVersionEntity versionEntity(Scope s,String id,int n){file(s,id);if(n<1)bad();PersonalWorkspaceVersionEntity v=dao.findVersion(s.tenantId(),s.clientId(),s.ownerJiacn(),id,n);if(v==null)throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);return v;}
     private PersonalWorkspaceViews.FileView view(PersonalWorkspaceFileEntity f){return new PersonalWorkspaceViews.FileView(f.getFileId(),f.getSourceKind(),f.getOriginKind(),f.getDisplayName(),f.getMediaFamily(),f.getState(),f.getMetadataRevision(),f.getLatestVersion(),f.getCreatedAt(),new PersonalWorkspaceViews.Capabilities("AVAILABLE","AVAILABLE","UNVERIFIED",previewCapability(f),"AVAILABLE"));}
-    private static String previewCapability(PersonalWorkspaceFileEntity f){return Set.of("IMAGE","TEXT").contains(f.getMediaFamily())?"AVAILABLE":"UNSUPPORTED";}
-    private PersonalWorkspaceViews.VersionView version(PersonalWorkspaceVersionEntity v){return new PersonalWorkspaceViews.VersionView(v.getFileId(),v.getVersion(),v.getOriginalFilename(),v.getContentMimeType(),v.getByteLength(),v.getContentHash(),v.getCreatedAt(),Set.of("image/png","image/jpeg","text/plain").contains(v.getContentMimeType())?"READY":"UNSUPPORTED");}
+    private static String previewCapability(PersonalWorkspaceFileEntity f){return Set.of("IMAGE","TEXT","DOCUMENT","SPREADSHEET","PRESENTATION","PDF").contains(f.getMediaFamily())?"AVAILABLE":"UNSUPPORTED";}
+    private PersonalWorkspaceViews.VersionView version(PersonalWorkspaceVersionEntity v){return new PersonalWorkspaceViews.VersionView(v.getFileId(),v.getVersion(),v.getOriginalFilename(),v.getContentMimeType(),v.getByteLength(),v.getContentHash(),v.getCreatedAt(),MIME_TYPES.contains(v.getContentMimeType())?"READY":"UNSUPPORTED");}
     private static PersonalWorkspaceViews.OperationView operation(PersonalWorkspaceOperationEntity o){return new PersonalWorkspaceViews.OperationView(o.getOperationId(),o.getState(),o.getFileId(),o.getFileVersion(),o.getErrorCode());}
     private static PersonalWorkspaceWriteService.Scope writeScope(Scope s){return new PersonalWorkspaceWriteService.Scope(s.tenantId(),s.clientId(),s.ownerJiacn());}
     private static PersonalWorkspaceStorage.Scope storageScope(Scope s){return new PersonalWorkspaceStorage.Scope(s.tenantId(),s.clientId(),s.ownerJiacn());}
@@ -147,6 +172,7 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
     private static Cursor parseCursor(String value){if(value==null||value.isBlank())return null;try{String s=new String(Base64.getUrlDecoder().decode(value),StandardCharsets.UTF_8);String[]p=s.split("\\n",-1);if(p.length!=2)bad();long t=Long.parseLong(p[0]);id(p[1],"cursor",100);return new Cursor(t,p[1]);}catch(IllegalArgumentException e){bad();return null;}}
     private static void bad(){throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.BAD_REQUEST);}
     public record ActiveExecutionView(String executionId) { }
+    private record LoadedPreview(PersonalWorkspaceVersionEntity version,PersonalWorkspacePreviewRenderer.RenderedPreview rendered) { }
     private record ValidUpload(String key,String displayName,String filename,String mime,byte[] content) { }
     private record Cursor(long createdAt,String fileId) { }
 }

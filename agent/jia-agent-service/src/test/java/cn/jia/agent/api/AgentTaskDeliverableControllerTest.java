@@ -28,6 +28,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -177,28 +178,45 @@ class AgentTaskDeliverableControllerTest {
     }
 
     @Test
-    void previewUsesOwnerScopedTrustedContentAndReturnsOnlySafeContentMetadata() throws Exception {
+    void previewUsesOwnerScopedTrustedContentAndReturnsOrderedMultiPartMetadata() throws Exception {
         List<PreviewCase> cases = List.of(
-                new PreviewCase(1, "image/png", png(), "ORIGINAL_IMAGE", null),
+                new PreviewCase(1, "image/png", png(), "ORIGINAL_IMAGE",
+                        List.of(new ExpectedPart("content", "image/png")),
+                        "content", null, true, null),
                 new PreviewCase(2, "text/plain", "plain preview".getBytes(StandardCharsets.UTF_8),
-                        "PLAIN_TEXT", "plain preview"),
+                        "PLAIN_TEXT", List.of(new ExpectedPart("content", "text/plain")),
+                        "content", "plain preview", false, null),
                 new PreviewCase(3,
                         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        docx(), "EXTRACTED_TEXT", "Word preview"),
+                        docx(), "EXTRACTED_TEXT",
+                        List.of(new ExpectedPart("content", "text/plain")),
+                        "content", "Word preview", false, null),
                 new PreviewCase(4,
                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        xlsx(), "EXTRACTED_TEXT", "Sheet preview"),
+                        xlsx(), "EXTRACTED_TEXT",
+                        List.of(new ExpectedPart("sheet-1", "text/plain"),
+                                new ExpectedPart("sheet-2", "text/plain"),
+                                new ExpectedPart("content", "text/plain")),
+                        "sheet-2", "[公式未执行] =Inputs!A1*2", false, "工作表：Inputs"),
                 new PreviewCase(5,
                         "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                        pptx(), "EXTRACTED_TEXT", "Slide preview"),
-                new PreviewCase(6, "application/pdf", pdf(), "EXTRACTED_TEXT", "PDF preview"));
+                        pptx(), "EXTRACTED_TEXT",
+                        List.of(new ExpectedPart("slide-1", "image/png"),
+                                new ExpectedPart("slide-2", "image/png"),
+                                new ExpectedPart("content", "text/plain")),
+                        "slide-2", null, false, "Second slide preview"),
+                new PreviewCase(6, "application/pdf", pdf(), "EXTRACTED_TEXT",
+                        List.of(new ExpectedPart("page-1", "text/plain"),
+                                new ExpectedPart("page-2", "text/plain"),
+                                new ExpectedPart("content", "text/plain")),
+                        "page-2", "Second PDF preview", false, "First PDF preview"));
 
         for (PreviewCase sample : cases) {
             when(contentService.readContentForTaskOwner(
                     "0", CLIENT, TENANT, TASK, ARTIFACT, sample.version()))
                     .thenReturn(artifactContent(sample.version(), sample.mimeType(), sample.bytes()));
 
-            mvc.perform(get(
+            var metadata = mvc.perform(get(
                             "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}/preview",
                             TASK, ARTIFACT, sample.version())
                             .principal(jwt(TENANT, CLIENT, ACTOR)))
@@ -207,44 +225,71 @@ class AgentTaskDeliverableControllerTest {
                     .andExpect(header().string("X-Content-Type-Options", "nosniff"))
                     .andExpect(jsonPath("$.state").value("READY"))
                     .andExpect(jsonPath("$.representation").value(sample.representation()))
-                    .andExpect(jsonPath("$.parts[0].partId").value("content"))
-                    .andExpect(jsonPath("$.parts[0].contentMimeType").value(
-                            sample.representation().equals("ORIGINAL_IMAGE")
-                                    ? sample.mimeType() : "text/plain"))
+                    .andExpect(jsonPath("$.parts.length()").value(sample.parts().size()))
                     .andExpect(jsonPath("$.partial").value(false))
                     .andExpect(jsonPath("$.storageUri").doesNotExist())
                     .andExpect(jsonPath("$.lease").doesNotExist())
                     .andExpect(jsonPath("$.prompt").doesNotExist())
                     .andExpect(jsonPath("$.content").doesNotExist())
-                    .andExpect(jsonPath("$.pages").doesNotExist())
-                    .andExpect(jsonPath("$.sheets").doesNotExist())
-                    .andExpect(jsonPath("$.slides").doesNotExist());
+                    .andReturn();
+            String metadataJson = metadata.getResponse().getContentAsString();
+            int previousPart = -1;
+            for (ExpectedPart expected : sample.parts()) {
+                int partIndex = metadataJson.indexOf(
+                        "\"partId\":\"" + expected.partId() + "\"");
+                int mimeIndex = metadataJson.indexOf(
+                        "\"contentMimeType\":\"" + expected.mimeType() + "\"",
+                        partIndex);
+                assertTrue(partIndex > previousPart, "part order changed: " + metadataJson);
+                assertTrue(mimeIndex > partIndex, "part MIME changed: " + metadataJson);
+                previousPart = partIndex;
+            }
 
+            ExpectedPart requested = sample.parts().stream()
+                    .filter(part -> part.partId().equals(sample.requestPartId()))
+                    .findFirst().orElseThrow();
             MvcResult part = mvc.perform(get(
                             "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}"
-                                    + "/preview/parts/content",
-                            TASK, ARTIFACT, sample.version())
+                                    + "/preview/parts/{partId}",
+                            TASK, ARTIFACT, sample.version(), sample.requestPartId())
                             .principal(jwt(TENANT, CLIENT, ACTOR)))
                     .andExpect(status().isOk())
                     .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
                     .andExpect(header().string("X-Content-Type-Options", "nosniff"))
-                    .andExpect(content().contentType(sample.representation().equals("ORIGINAL_IMAGE")
-                            ? sample.mimeType() : "text/plain"))
+                    .andExpect(content().contentType(requested.mimeType()))
                     .andReturn();
 
-            if (sample.expectedText() == null) {
+            if (sample.expectOriginalBytes()) {
                 assertArrayEquals(sample.bytes(), part.getResponse().getContentAsByteArray());
-            } else {
+            } else if (sample.expectedPartText() != null) {
                 assertTrue(part.getResponse().getContentAsString(StandardCharsets.UTF_8)
-                        .contains(sample.expectedText()));
+                        .contains(sample.expectedPartText()));
+            } else {
+                assertTrue(part.getResponse().getContentAsByteArray().length > 0);
+                assertTrue(ImageIO.read(new ByteArrayInputStream(
+                        part.getResponse().getContentAsByteArray())) != null);
             }
-            verify(contentService, org.mockito.Mockito.times(2)).readContentForTaskOwner(
+
+            int expectedReads = 2;
+            if (sample.legacyContentText() != null) {
+                mvc.perform(get(
+                                "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}"
+                                        + "/preview/parts/content",
+                                TASK, ARTIFACT, sample.version())
+                                .principal(jwt(TENANT, CLIENT, ACTOR)))
+                        .andExpect(status().isOk())
+                        .andExpect(content().contentType("text/plain"))
+                        .andExpect(content().string(org.hamcrest.Matchers.containsString(
+                                sample.legacyContentText())));
+                expectedReads++;
+            }
+            verify(contentService, org.mockito.Mockito.times(expectedReads)).readContentForTaskOwner(
                     "0", CLIENT, TENANT, TASK, ARTIFACT, sample.version());
         }
     }
 
     @Test
-    void previewRejectsQueryPathAndUnknownPartInjectionBeforeContentRead() throws Exception {
+    void previewRejectsMalformedRequestsBeforeReadButChecksAclBeforeUnknownPartLookup() throws Exception {
         JwtAuthenticationToken auth = jwt(TENANT, CLIENT, ACTOR);
         mvc.perform(get(
                         "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}/preview",
@@ -267,6 +312,11 @@ class AgentTaskDeliverableControllerTest {
                                 + "/preview/parts/content",
                         TASK, ARTIFACT, 1).queryParam("partId", "content").principal(auth))
                 .andExpect(status().isBadRequest());
+        verifyNoInteractions(contentService);
+
+        when(contentService.readContentForTaskOwner(
+                "0", CLIENT, TENANT, TASK, ARTIFACT, 1))
+                .thenReturn(artifactContent(1, "text/plain", BYTES));
         mvc.perform(get(
                         "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}"
                                 + "/preview/parts/prompt",
@@ -275,7 +325,20 @@ class AgentTaskDeliverableControllerTest {
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
                 .andExpect(header().string("X-Content-Type-Options", "nosniff"))
                 .andExpect(jsonPath("$.code").value("DELIVERABLE_PREVIEW_PART_NOT_FOUND"));
-        verifyNoInteractions(contentService);
+        verify(contentService).readContentForTaskOwner(
+                "0", CLIENT, TENANT, TASK, ARTIFACT, 1);
+
+        when(contentService.readContentForTaskOwner(
+                "0", CLIENT, TENANT, TASK, ARTIFACT, 2))
+                .thenThrow(new AgentTaskCollaborationException(Reason.NOT_FOUND, "foreign"));
+        mvc.perform(get(
+                        "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}"
+                                + "/preview/parts/prompt",
+                        TASK, ARTIFACT, 2).principal(auth))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("DELIVERABLE_NOT_FOUND"))
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString("foreign"))));
     }
 
     @Test
@@ -423,9 +486,9 @@ class AgentTaskDeliverableControllerTest {
     private static byte[] xlsx() throws Exception {
         try (XSSFWorkbook workbook = new XSSFWorkbook();
                 ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-            var row = workbook.createSheet("Sheet preview").createRow(0);
-            row.createCell(0).setCellValue("Cell preview");
-            row.createCell(1).setCellFormula("1+1");
+            workbook.createSheet("Inputs").createRow(0).createCell(0).setCellValue(7);
+            workbook.createSheet("Summary").createRow(0).createCell(0)
+                    .setCellFormula("Inputs!A1*2");
             workbook.write(output);
             return output.toByteArray();
         }
@@ -434,7 +497,8 @@ class AgentTaskDeliverableControllerTest {
     private static byte[] pptx() throws Exception {
         try (XMLSlideShow slideShow = new XMLSlideShow();
                 ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-            slideShow.createSlide().createTextBox().setText("Slide preview");
+            slideShow.createSlide().createTextBox().setText("First slide preview");
+            slideShow.createSlide().createTextBox().setText("Second slide preview");
             slideShow.write(output);
             return output.toByteArray();
         }
@@ -443,22 +507,31 @@ class AgentTaskDeliverableControllerTest {
     private static byte[] pdf() throws Exception {
         try (PDDocument document = new PDDocument();
                 ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-            PDPage page = new PDPage();
-            document.addPage(page);
-            try (PDPageContentStream stream = new PDPageContentStream(document, page)) {
-                stream.beginText();
-                stream.setFont(PDType1Font.HELVETICA, 12);
-                stream.newLineAtOffset(72, 720);
-                stream.showText("PDF preview");
-                stream.endText();
-            }
+            addPdfPage(document, "First PDF preview");
+            addPdfPage(document, "Second PDF preview");
             document.save(output);
             return output.toByteArray();
         }
     }
 
+    private static void addPdfPage(PDDocument document, String text) throws Exception {
+        PDPage page = new PDPage();
+        document.addPage(page);
+        try (PDPageContentStream stream = new PDPageContentStream(document, page)) {
+            stream.beginText();
+            stream.setFont(PDType1Font.HELVETICA, 12);
+            stream.newLineAtOffset(72, 720);
+            stream.showText(text);
+            stream.endText();
+        }
+    }
+
+    private record ExpectedPart(String partId, String mimeType) {
+    }
+
     private record PreviewCase(int version, String mimeType, byte[] bytes,
-            String representation, String expectedText) {
+            String representation, List<ExpectedPart> parts, String requestPartId,
+            String expectedPartText, boolean expectOriginalBytes, String legacyContentText) {
     }
 
     private static JwtAuthenticationToken jwt(String tenant, String client, String actor) {
