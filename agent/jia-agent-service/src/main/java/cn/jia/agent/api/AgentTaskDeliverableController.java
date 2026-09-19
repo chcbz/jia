@@ -53,6 +53,8 @@ public class AgentTaskDeliverableController {
 
     private final AgentTaskArtifactService artifactService;
     private final AgentTaskArtifactContentService contentService;
+    private final AgentTaskDeliverablePreviewAdapter previewAdapter =
+            new AgentTaskDeliverablePreviewAdapter();
 
     public AgentTaskDeliverableController(AgentTaskArtifactService artifactService,
             AgentTaskArtifactContentService contentService) {
@@ -66,13 +68,14 @@ public class AgentTaskDeliverableController {
             HttpServletRequest request,
             Authentication authentication) {
         Scope scope = requireJwtScope(authentication);
-        requireExact(taskId, 100);
+        requireSafeRequestPath(request);
+        requirePathId(taskId, 100);
         ListQuery query = requireListQuery(request);
 
         AgentTaskArtifactQueryDTO serviceQuery = new AgentTaskArtifactQueryDTO();
         serviceQuery.setWorkItemId(query.workItemId());
         serviceQuery.setLimit(query.limit());
-return ok(new DeliverableListResponse(
+        return ok(new DeliverableListResponse(
                 listOwnerDeliverables(scope, taskId, query, serviceQuery), null));
     }
 
@@ -84,21 +87,63 @@ return ok(new DeliverableListResponse(
             HttpServletRequest request,
             Authentication authentication) {
         Scope scope = requireJwtScope(authentication);
-        requireExact(taskId, 100);
-        requireExact(artifactId, 100);
-        requireNoQuery(request);
-        int exactVersion = positiveVersion(artifactVersion);
-AgentTaskArtifactContentDTO result = contentService.readContentForTaskOwner(
-                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId, artifactId, exactVersion);
-        Download download = requireDownload(result, artifactId, exactVersion);
+        RequestTarget target = requireTarget(taskId, artifactId, artifactVersion, request);
+        VerifiedContent content = readContent(scope, target);
+        byte[] bytes = content.bytes();
         return ResponseEntity.ok()
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .header(HttpHeaders.CONTENT_DISPOSITION,
-                        "attachment; filename=\"deliverable-v" + exactVersion + ".bin\"")
+                        "attachment; filename=\"deliverable-v" + target.artifactVersion() + ".bin\"")
                 .header("X-Content-Type-Options", NOSNIFF)
-                .contentType(download.mediaType())
-                .contentLength(download.content().length)
-                .body(download.content());
+                .contentType(content.mediaType())
+                .contentLength(bytes.length)
+                .body(bytes);
+    }
+
+    @GetMapping(value = "/{taskId}/deliverables/{artifactId}/versions/{artifactVersion}/preview",
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<PreviewResponse> preview(
+            @PathVariable String taskId,
+            @PathVariable String artifactId,
+            @PathVariable String artifactVersion,
+            HttpServletRequest request,
+            Authentication authentication) {
+        Scope scope = requireJwtScope(authentication);
+        RequestTarget target = requireTarget(taskId, artifactId, artifactVersion, request);
+        AgentTaskDeliverablePreviewAdapter.Preview rendered = renderPreview(scope, target);
+        return ok(new PreviewResponse(rendered.state(), rendered.representation(),
+                rendered.parts().stream()
+                        .map(part -> new PreviewPartResponse(part.partId(), part.contentMimeType()))
+                        .toList(),
+                rendered.partial(), rendered.reason()));
+    }
+
+    @GetMapping(value = "/{taskId}/deliverables/{artifactId}/versions/{artifactVersion}"
+            + "/preview/parts/{partId}")
+    public ResponseEntity<byte[]> previewContent(
+            @PathVariable String taskId,
+            @PathVariable String artifactId,
+            @PathVariable String artifactVersion,
+            @PathVariable String partId,
+            HttpServletRequest request,
+            Authentication authentication) {
+        Scope scope = requireJwtScope(authentication);
+        RequestTarget target = requireTarget(taskId, artifactId, artifactVersion, request);
+        if (!AgentTaskDeliverablePreviewAdapter.CONTENT_PART_ID.equals(partId)) {
+            throw new PreviewPartNotFound();
+        }
+        AgentTaskDeliverablePreviewAdapter.Preview rendered = renderPreview(scope, target);
+        if (!rendered.ready()) {
+            throw new PreviewPartUnavailable();
+        }
+        AgentTaskDeliverablePreviewAdapter.Part part = rendered.parts().getFirst();
+        byte[] bytes = rendered.bytes();
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
+                .header("X-Content-Type-Options", NOSNIFF)
+                .contentType(MediaType.parseMediaType(part.contentMimeType()))
+                .contentLength(bytes.length)
+                .body(bytes);
     }
 
     @ExceptionHandler(AuthenticationFailure.class)
@@ -111,6 +156,18 @@ AgentTaskArtifactContentDTO result = contentService.readContentForTaskOwner(
     @ExceptionHandler(RequestFailure.class)
     public ResponseEntity<ErrorBody> badRequest(RequestFailure ignored) {
         return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Invalid deliverable request");
+    }
+
+    @ExceptionHandler(PreviewPartNotFound.class)
+    public ResponseEntity<ErrorBody> previewPartNotFound(PreviewPartNotFound ignored) {
+        return error(HttpStatus.NOT_FOUND, "DELIVERABLE_PREVIEW_PART_NOT_FOUND",
+                "Deliverable preview content is unavailable");
+    }
+
+    @ExceptionHandler(PreviewPartUnavailable.class)
+    public ResponseEntity<ErrorBody> previewPartUnavailable(PreviewPartUnavailable ignored) {
+        return error(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "DELIVERABLE_PREVIEW_UNSUPPORTED",
+                "Deliverable preview content is unavailable");
     }
 
     @ExceptionHandler(AgentTaskCollaborationException.class)
@@ -138,7 +195,7 @@ AgentTaskArtifactContentDTO result = contentService.readContentForTaskOwner(
         Map<String, Object> claims = jwt.getToken().getClaims();
         String ownerJiacn = requiredClaim(claims, "jiacn", 50);
         String clientId = requiredClaim(claims, "client_id", 50);
-String subject = requiredClaim(claims, "sub", 100);
+        String subject = requiredClaim(claims, "sub", 100);
         if ("0".equals(ownerJiacn) || "0".equals(clientId)
                 || !byteExact(authentication.getName(), subject)) {
             throw new AuthenticationFailure(true);
@@ -165,6 +222,28 @@ String subject = requiredClaim(claims, "sub", 100);
         return result.stream()
                 .map(artifact -> requireDeliverable(artifact, taskId, query.workItemId()))
                 .toList();
+    }
+
+    private AgentTaskDeliverablePreviewAdapter.Preview renderPreview(
+            Scope scope, RequestTarget target) {
+        VerifiedContent content = readContent(scope, target);
+        return previewAdapter.render(content.mediaType().toString(), content.bytes());
+    }
+
+    private VerifiedContent readContent(Scope scope, RequestTarget target) {
+        AgentTaskArtifactContentDTO result = contentService.readContentForTaskOwner(
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), target.taskId(),
+                target.artifactId(), target.artifactVersion());
+        return requireContent(result, target.artifactId(), target.artifactVersion());
+    }
+
+    private static RequestTarget requireTarget(String taskId, String artifactId,
+            String artifactVersion, HttpServletRequest request) {
+        requireSafeRequestPath(request);
+        requirePathId(taskId, 100);
+        requirePathId(artifactId, 100);
+        requireNoQuery(request);
+        return new RequestTarget(taskId, artifactId, positiveVersion(artifactVersion));
     }
 
     private static ListQuery requireListQuery(HttpServletRequest request) {
@@ -250,7 +329,7 @@ String subject = requiredClaim(claims, "sub", 100);
                 artifact.getCreatedAt());
     }
 
-    private static Download requireDownload(
+    private static VerifiedContent requireContent(
             AgentTaskArtifactContentDTO result, String artifactId, int artifactVersion) {
         if (result == null
                 || !Objects.equals(artifactId, result.getArtifactId())
@@ -262,23 +341,23 @@ String subject = requiredClaim(claims, "sub", 100);
                 || !SHA256.matcher(result.getContentHash()).matches()
                 || result.getContentMimeType() == null
                 || !MIME.matcher(result.getContentMimeType()).matches()) {
-            throw new IllegalStateException("Deliverable download result is inconsistent");
+            throw new IllegalStateException("Deliverable content result is inconsistent");
         }
         MediaType mediaType;
         try {
             mediaType = MediaType.parseMediaType(result.getContentMimeType());
         } catch (IllegalArgumentException invalid) {
-            throw new IllegalStateException("Deliverable download MIME type is invalid");
+            throw new IllegalStateException("Deliverable content MIME type is invalid");
         }
         if (!mediaType.getParameters().isEmpty()) {
-            throw new IllegalStateException("Deliverable download MIME parameters are unavailable");
+            throw new IllegalStateException("Deliverable content MIME parameters are unavailable");
         }
         byte[] content = result.getContent();
         if (content == null || content.length != result.getContentByteLength()
                 || !result.getContentHash().equals(sha256(content))) {
-            throw new IllegalStateException("Deliverable download content is inconsistent");
+            throw new IllegalStateException("Deliverable content is inconsistent");
         }
-        return new Download(content, mediaType);
+        return new VerifiedContent(content, mediaType);
     }
 
     private static int effectiveLimit(Integer limit) {
@@ -287,6 +366,33 @@ String subject = requiredClaim(claims, "sub", 100);
 
     private static boolean byteExact(String left, String right) {
         return left != null && left.equals(right);
+    }
+
+    private static void requireSafeRequestPath(HttpServletRequest request) {
+        String rawPath = request.getRequestURI();
+        if (rawPath == null) {
+            throw new RequestFailure();
+        }
+        String lowerPath = rawPath.toLowerCase(java.util.Locale.ROOT);
+        if (rawPath.indexOf(';') >= 0 || rawPath.indexOf('\\') >= 0
+                || lowerPath.contains("%00") || lowerPath.contains("%25")
+                || lowerPath.contains("%2e") || lowerPath.contains("%2f")
+                || lowerPath.contains("%3b") || lowerPath.contains("%5c")) {
+            throw new RequestFailure();
+        }
+    }
+
+    private static void requirePathId(String value, int maxLength) {
+        requireExact(value, maxLength);
+        if (value.equals(".") || value.equals("..")
+                || value.codePoints().anyMatch(AgentTaskDeliverableController::isPathMetaCharacter)) {
+            throw new RequestFailure();
+        }
+    }
+
+    private static boolean isPathMetaCharacter(int codePoint) {
+        return codePoint == '/' || codePoint == '\\' || codePoint == '%'
+                || codePoint == '?' || codePoint == '#' || codePoint == ';';
     }
 
     private static void requireExact(String value, int maxLength) {
@@ -333,6 +439,7 @@ String subject = requiredClaim(claims, "sub", 100);
     private static <T> ResponseEntity<T> ok(T body) {
         return ResponseEntity.ok()
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
+                .header("X-Content-Type-Options", NOSNIFF)
                 .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8))
                 .body(body);
     }
@@ -345,17 +452,21 @@ String subject = requiredClaim(claims, "sub", 100);
     private static ResponseEntity<ErrorBody> error(HttpStatus status, String code, String message) {
         return ResponseEntity.status(status)
                 .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
+                .header("X-Content-Type-Options", NOSNIFF)
                 .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8))
                 .body(new ErrorBody(code, message));
     }
 
-private record Scope(String tenantId, String clientId, String ownerJiacn) {
+    private record Scope(String tenantId, String clientId, String ownerJiacn) {
     }
 
     private record ListQuery(String workItemId, Integer limit) {
     }
 
-    private record Download(byte[] content, MediaType mediaType) {
+    private record RequestTarget(String taskId, String artifactId, int artifactVersion) {
+    }
+
+    private record VerifiedContent(byte[] bytes, MediaType mediaType) {
     }
 
     public record DeliverableListResponse(List<DeliverableResponse> items, String nextCursor) {
@@ -365,6 +476,13 @@ private record Scope(String tenantId, String clientId, String ownerJiacn) {
             String producerAgentId, String artifactType, String title, String contentHash,
             Long contentByteLength, String contentMimeType, Integer artifactVersion,
             String visibility, Long createdAt) {
+    }
+
+    public record PreviewResponse(String state, String representation,
+            List<PreviewPartResponse> parts, boolean partial, String reason) {
+    }
+
+    public record PreviewPartResponse(String partId, String contentMimeType) {
     }
 
     public record ErrorBody(String code, String message) {
@@ -379,5 +497,11 @@ private record Scope(String tenantId, String clientId, String ownerJiacn) {
     }
 
     private static final class RequestFailure extends RuntimeException {
+    }
+
+    private static final class PreviewPartNotFound extends RuntimeException {
+    }
+
+    private static final class PreviewPartUnavailable extends RuntimeException {
     }
 }

@@ -7,6 +7,13 @@ import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.exception.AgentTaskCollaborationException.Reason;
 import cn.jia.agent.service.AgentTaskArtifactContentService;
 import cn.jia.agent.service.AgentTaskArtifactService;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.font.PDType1Font;
+import org.apache.poi.xslf.usermodel.XMLSlideShow;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -19,6 +26,9 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
@@ -27,12 +37,12 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -167,6 +177,165 @@ class AgentTaskDeliverableControllerTest {
     }
 
     @Test
+    void previewUsesOwnerScopedTrustedContentAndReturnsOnlySafeContentMetadata() throws Exception {
+        List<PreviewCase> cases = List.of(
+                new PreviewCase(1, "image/png", png(), "ORIGINAL_IMAGE", null),
+                new PreviewCase(2, "text/plain", "plain preview".getBytes(StandardCharsets.UTF_8),
+                        "PLAIN_TEXT", "plain preview"),
+                new PreviewCase(3,
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        docx(), "EXTRACTED_TEXT", "Word preview"),
+                new PreviewCase(4,
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        xlsx(), "EXTRACTED_TEXT", "Sheet preview"),
+                new PreviewCase(5,
+                        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                        pptx(), "EXTRACTED_TEXT", "Slide preview"),
+                new PreviewCase(6, "application/pdf", pdf(), "EXTRACTED_TEXT", "PDF preview"));
+
+        for (PreviewCase sample : cases) {
+            when(contentService.readContentForTaskOwner(
+                    "0", CLIENT, TENANT, TASK, ARTIFACT, sample.version()))
+                    .thenReturn(artifactContent(sample.version(), sample.mimeType(), sample.bytes()));
+
+            mvc.perform(get(
+                            "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}/preview",
+                            TASK, ARTIFACT, sample.version())
+                            .principal(jwt(TENANT, CLIENT, ACTOR)))
+                    .andExpect(status().isOk())
+                    .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
+                    .andExpect(header().string("X-Content-Type-Options", "nosniff"))
+                    .andExpect(jsonPath("$.state").value("READY"))
+                    .andExpect(jsonPath("$.representation").value(sample.representation()))
+                    .andExpect(jsonPath("$.parts[0].partId").value("content"))
+                    .andExpect(jsonPath("$.parts[0].contentMimeType").value(
+                            sample.representation().equals("ORIGINAL_IMAGE")
+                                    ? sample.mimeType() : "text/plain"))
+                    .andExpect(jsonPath("$.partial").value(false))
+                    .andExpect(jsonPath("$.storageUri").doesNotExist())
+                    .andExpect(jsonPath("$.lease").doesNotExist())
+                    .andExpect(jsonPath("$.prompt").doesNotExist())
+                    .andExpect(jsonPath("$.content").doesNotExist())
+                    .andExpect(jsonPath("$.pages").doesNotExist())
+                    .andExpect(jsonPath("$.sheets").doesNotExist())
+                    .andExpect(jsonPath("$.slides").doesNotExist());
+
+            MvcResult part = mvc.perform(get(
+                            "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}"
+                                    + "/preview/parts/content",
+                            TASK, ARTIFACT, sample.version())
+                            .principal(jwt(TENANT, CLIENT, ACTOR)))
+                    .andExpect(status().isOk())
+                    .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
+                    .andExpect(header().string("X-Content-Type-Options", "nosniff"))
+                    .andExpect(content().contentType(sample.representation().equals("ORIGINAL_IMAGE")
+                            ? sample.mimeType() : "text/plain"))
+                    .andReturn();
+
+            if (sample.expectedText() == null) {
+                assertArrayEquals(sample.bytes(), part.getResponse().getContentAsByteArray());
+            } else {
+                assertTrue(part.getResponse().getContentAsString(StandardCharsets.UTF_8)
+                        .contains(sample.expectedText()));
+            }
+            verify(contentService, org.mockito.Mockito.times(2)).readContentForTaskOwner(
+                    "0", CLIENT, TENANT, TASK, ARTIFACT, sample.version());
+        }
+    }
+
+    @Test
+    void previewRejectsQueryPathAndUnknownPartInjectionBeforeContentRead() throws Exception {
+        JwtAuthenticationToken auth = jwt(TENANT, CLIENT, ACTOR);
+        mvc.perform(get(
+                        "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}/preview",
+                        "task%bad", ARTIFACT, 1).principal(auth))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get(
+                        "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}/preview",
+                        TASK, "artifact;bad", 1).principal(auth))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get(
+                        "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}/preview",
+                        TASK, ARTIFACT, "01").principal(auth))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get(
+                        "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}/preview",
+                        TASK, ARTIFACT, 1).queryParam("actorAgentId", OTHER).principal(auth))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get(
+                        "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}"
+                                + "/preview/parts/content",
+                        TASK, ARTIFACT, 1).queryParam("partId", "content").principal(auth))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get(
+                        "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}"
+                                + "/preview/parts/prompt",
+                        TASK, ARTIFACT, 1).principal(auth))
+                .andExpect(status().isNotFound())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
+                .andExpect(header().string("X-Content-Type-Options", "nosniff"))
+                .andExpect(jsonPath("$.code").value("DELIVERABLE_PREVIEW_PART_NOT_FOUND"));
+        verifyNoInteractions(contentService);
+    }
+
+    @Test
+    void previewFailsClosedForHashMimeAndImageContentMismatch() throws Exception {
+        when(contentService.readContentForTaskOwner(
+                "0", CLIENT, TENANT, TASK, ARTIFACT, 1))
+                .thenReturn(new AgentTaskArtifactContentDTO(ARTIFACT, 1, "0".repeat(64),
+                        (long) BYTES.length, "text/plain", BYTES));
+        mvc.perform(get(
+                        "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}/preview",
+                        TASK, ARTIFACT, 1).principal(jwt(TENANT, CLIENT, ACTOR)))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("DELIVERABLE_UNAVAILABLE"));
+
+        when(contentService.readContentForTaskOwner(
+                "0", CLIENT, TENANT, TASK, ARTIFACT, 2))
+                .thenReturn(artifactContent(2, "text/plain; charset=utf-8", BYTES));
+        mvc.perform(get(
+                        "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}/preview",
+                        TASK, ARTIFACT, 2).principal(jwt(TENANT, CLIENT, ACTOR)))
+                .andExpect(status().isServiceUnavailable());
+
+        byte[] notAnImage = "not a png".getBytes(StandardCharsets.UTF_8);
+        when(contentService.readContentForTaskOwner(
+                "0", CLIENT, TENANT, TASK, ARTIFACT, 3))
+                .thenReturn(artifactContent(3, "image/png", notAnImage));
+        mvc.perform(get(
+                        "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}"
+                                + "/preview/parts/content",
+                        TASK, ARTIFACT, 3).principal(jwt(TENANT, CLIENT, ACTOR)))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString("not a png"))));
+    }
+
+    @Test
+    void unsupportedPreviewIsHonestMetadataAndHasNoContentPart() throws Exception {
+        byte[] source = new byte[] {9};
+        when(contentService.readContentForTaskOwner(
+                "0", CLIENT, TENANT, TASK, ARTIFACT, 7))
+                .thenReturn(artifactContent(7, "application/octet-stream", source));
+
+        mvc.perform(get(
+                        "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}/preview",
+                        TASK, ARTIFACT, 7).principal(jwt(TENANT, CLIENT, ACTOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.state").value("UNSUPPORTED"))
+                .andExpect(jsonPath("$.representation").value("UNSUPPORTED"))
+                .andExpect(jsonPath("$.parts").isEmpty())
+                .andExpect(jsonPath("$.reason").value("该文件类型暂不支持预览"));
+
+        mvc.perform(get(
+                        "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}"
+                                + "/preview/parts/content",
+                        TASK, ARTIFACT, 7).principal(jwt(TENANT, CLIENT, ACTOR)))
+                .andExpect(status().isUnsupportedMediaType())
+                .andExpect(jsonPath("$.code").value("DELIVERABLE_PREVIEW_UNSUPPORTED"));
+    }
+
+    @Test
     void contentDownloadRejectsQueryAndInvalidVersionsBeforeContentService() throws Exception {
         JwtAuthenticationToken auth = jwt(TENANT, CLIENT, ACTOR);
         for (String uri : List.of(
@@ -225,6 +394,71 @@ class AgentTaskDeliverableControllerTest {
         view.setMetadata(java.util.Map.of("secret", "must-not-leak"));
         view.setCreatedAt(123L);
         return view;
+    }
+
+    private static AgentTaskArtifactContentDTO artifactContent(int version, String mimeType, byte[] bytes) {
+        return new AgentTaskArtifactContentDTO(ARTIFACT, version, sha256(bytes),
+                (long) bytes.length, mimeType, bytes);
+    }
+
+    private static byte[] png() throws Exception {
+        BufferedImage image = new BufferedImage(2, 1, BufferedImage.TYPE_INT_RGB);
+        image.setRGB(0, 0, 0x112233);
+        image.setRGB(1, 0, 0x445566);
+        try (ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            assertTrue(ImageIO.write(image, "png", output));
+            return output.toByteArray();
+        }
+    }
+
+    private static byte[] docx() throws Exception {
+        try (XWPFDocument document = new XWPFDocument();
+                ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            document.createParagraph().createRun().setText("Word preview");
+            document.write(output);
+            return output.toByteArray();
+        }
+    }
+
+    private static byte[] xlsx() throws Exception {
+        try (XSSFWorkbook workbook = new XSSFWorkbook();
+                ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            var row = workbook.createSheet("Sheet preview").createRow(0);
+            row.createCell(0).setCellValue("Cell preview");
+            row.createCell(1).setCellFormula("1+1");
+            workbook.write(output);
+            return output.toByteArray();
+        }
+    }
+
+    private static byte[] pptx() throws Exception {
+        try (XMLSlideShow slideShow = new XMLSlideShow();
+                ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            slideShow.createSlide().createTextBox().setText("Slide preview");
+            slideShow.write(output);
+            return output.toByteArray();
+        }
+    }
+
+    private static byte[] pdf() throws Exception {
+        try (PDDocument document = new PDDocument();
+                ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage();
+            document.addPage(page);
+            try (PDPageContentStream stream = new PDPageContentStream(document, page)) {
+                stream.beginText();
+                stream.setFont(PDType1Font.HELVETICA, 12);
+                stream.newLineAtOffset(72, 720);
+                stream.showText("PDF preview");
+                stream.endText();
+            }
+            document.save(output);
+            return output.toByteArray();
+        }
+    }
+
+    private record PreviewCase(int version, String mimeType, byte[] bytes,
+            String representation, String expectedText) {
     }
 
     private static JwtAuthenticationToken jwt(String tenant, String client, String actor) {
