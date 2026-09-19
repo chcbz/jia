@@ -45,11 +45,21 @@ public class ConversationDeliverableReadAdapter {
                     SELECT e.execution_id, e.execution_mode, e.execution_state,
                            o.output_id, o.output_state, o.workspace_file_id,
                            o.workspace_file_version, o.content_hash,
-                           o.content_mime_type, o.byte_length, o.committed_at
+                           o.content_mime_type, o.byte_length, o.committed_at,
+                           o.artifact_id, o.artifact_version, o.formal_delivery_id,
+                           o.publication_state, d.state AS formal_delivery_state,
+                           a.content_hash AS artifact_content_hash
                       FROM agent_personal_workspace_execution e
                       LEFT JOIN agent_personal_workspace_execution_output o
                         ON o.tenant_id=e.tenant_id AND o.client_id=e.client_id
                        AND o.owner_jiacn=e.owner_jiacn AND o.execution_id=e.execution_id
+                      LEFT JOIN agent_task_formal_delivery d
+                        ON d.tenant_id=e.tenant_id AND d.client_id=e.client_id
+                       AND d.task_id=e.task_id AND d.delivery_id=o.formal_delivery_id
+                      LEFT JOIN agent_task_artifact a
+                        ON a.tenant_id=e.tenant_id AND a.client_id=e.client_id
+                       AND a.owner_jiacn=e.owner_jiacn AND a.task_id=e.task_id
+                       AND a.artifact_id=o.artifact_id AND a.artifact_version=o.artifact_version
                      WHERE e.tenant_id=? AND e.client_id=? AND e.owner_jiacn=?
                        AND e.conversation_id=?
                        AND CAST(e.tenant_id AS BINARY)=CAST(? AS BINARY)
@@ -93,22 +103,40 @@ public class ConversationDeliverableReadAdapter {
                 continue;
             }
             if (!"OUTPUT_COMMITTED".equals(executionState)) throw corrupt();
-            // Until W04 adds an authoritative output-to-artifact/formal mapping, a TASK output is
-            // explicitly a syncing stage, not a browser-visible deliverable.
-            if ("TASK".equals(executionMode)) {
-                pending = true;
-                continue;
-            }
-
             String hash = required(row, "content_hash", 64);
             String mime = required(row, "content_mime_type", 127);
             long byteLength = nonNegative(row, "byte_length");
             if (!SHA256.matcher(hash).matches() || !MIME.matcher(mime).matches()) throw corrupt();
+            if ("TASK".equals(executionMode)) {
+                String publication = required(row, "publication_state", 16);
+                if (!"PUBLISHED".equals(publication)) {
+                    if ("PENDING".equals(publication) || "FAILED".equals(publication)) {
+                        pending = true;
+                        continue;
+                    }
+                    throw corrupt();
+                }
+                String artifactId = required(row, "artifact_id", 100);
+                int artifactVersion = positiveInt(row, "artifact_version");
+                required(row, "formal_delivery_id", 100);
+                String formalState = required(row, "formal_delivery_state", 32);
+                String artifactHash = required(row, "artifact_content_hash", 64);
+                if (!SHA256.matcher(artifactHash).matches() || !sameHash(hash, artifactHash)
+                        || !Set.of("submitted", "accepted", "changes_requested").contains(formalState)) {
+                    throw corrupt();
+                }
+                items.add(new Item(required(row, "output_id", 100),
+                        required(row, "execution_id", 100), required(row, "workspace_file_id", 100),
+                        positiveInt(row, "workspace_file_version"), hash, mime, byteLength,
+                        nonNegative(row, "committed_at"), "AVAILABLE", "PUBLISHED", formalState,
+                        artifactId, artifactVersion));
+                continue;
+            }
             items.add(new Item(required(row, "output_id", 100),
                     required(row, "execution_id", 100), required(row, "workspace_file_id", 100),
                     positiveInt(row, "workspace_file_version"), hash, mime, byteLength,
                     nonNegative(row, "committed_at"), "AVAILABLE", "WORKSPACE_COMMITTED",
-                    "NOT_APPLICABLE"));
+                    "NOT_APPLICABLE", null, null));
         }
         String state = !items.isEmpty() ? "AVAILABLE" : pending ? "SYNCING" : "EMPTY";
         return new Page(state, List.copyOf(items), pending, null);
@@ -198,12 +226,19 @@ public class ConversationDeliverableReadAdapter {
         return Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint);
     }
 
+    private static boolean sameHash(String left, String right) {
+        return left != null && right != null
+                && java.security.MessageDigest.isEqual(left.getBytes(java.nio.charset.StandardCharsets.US_ASCII),
+                right.getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+    }
+
     private static Failure corrupt() { return new Failure(Reason.CORRUPT_STATE); }
 
     public record Scope(String tenantId, String clientId, String ownerJiacn) { }
     public record Item(String outputId, String executionId, String fileId, int fileVersion,
             String contentHash, String contentMimeType, long byteLength, long committedAt,
-            String state, String publicationState, String formalDeliveryState) { }
+            String state, String publicationState, String formalDeliveryState,
+            String artifactId, Integer artifactVersion) { }
     public record Page(String state, List<Item> items, boolean publicationPending, String nextCursor) {
         public Page { items = List.copyOf(items); }
     }

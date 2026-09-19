@@ -121,12 +121,36 @@ class ConversationDeliverableReadAdapterTest {
         assertTrue(stagedPage.items().isEmpty());
         assertTrue(stagedPage.publicationPending());
 
-        jdbc.rows = List.of(committed("TASK"));
+        Map<String, Object> unmapped = committed("TASK");
+        unmapped.put("publication_state", "PENDING");
+        jdbc.rows = List.of(unmapped);
         ConversationDeliverableReadAdapter.Page unmappedPage =
                 adapter.list(SCOPE, CONVERSATION, 100);
         assertEquals("SYNCING", unmappedPage.state());
         assertTrue(unmappedPage.items().isEmpty());
         assertTrue(unmappedPage.publicationPending());
+    }
+
+    @Test
+    void publishedTaskOutputRequiresExactArtifactAndFormalDeliveryReferences() {
+        Map<String, Object> published = committed("TASK");
+        published.put("publication_state", "PUBLISHED");
+        published.put("artifact_id", "artifact-1");
+        published.put("artifact_version", 1);
+        published.put("formal_delivery_id", "delivery-1");
+        published.put("formal_delivery_state", "submitted");
+        published.put("artifact_content_hash", "a".repeat(64));
+        jdbc.rows = List.of(published);
+
+        ConversationDeliverableReadAdapter.Page page = adapter.list(SCOPE, CONVERSATION, 100);
+
+        assertEquals("AVAILABLE", page.state());
+        assertFalse(page.publicationPending());
+        var item = page.items().getFirst();
+        assertEquals("PUBLISHED", item.publicationState());
+        assertEquals("submitted", item.formalDeliveryState());
+        assertEquals("artifact-1", item.artifactId());
+        assertEquals(1, item.artifactVersion());
     }
 
     @Test
