@@ -10,12 +10,12 @@ import cn.jia.agent.service.PersonalWorkspaceStorage;
 import cn.jia.agent.service.impl.FileSystemPersonalWorkspaceStorage;
 import cn.jia.agent.service.impl.PersonalWorkspaceServiceImpl;
 import cn.jia.agent.service.impl.PersonalWorkspaceWriteService;
+import cn.jia.core.util.JsonUtil;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.config.GlobalConfig;
 import com.baomidou.mybatisplus.core.incrementer.DefaultIdentifierGenerator;
 import com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -72,7 +72,6 @@ class PersonalWorkspaceHttpPersistenceIntegrationTest {
     private static final String MIME = "text/plain";
     private static final byte[] VERSION_ONE = "immutable version one\n".getBytes(StandardCharsets.UTF_8);
     private static final byte[] VERSION_TWO = "immutable version two\n".getBytes(StandardCharsets.UTF_8);
-    private static final ObjectMapper JSON = new ObjectMapper();
 
     @TempDir
     Path temporaryDirectory;
@@ -130,7 +129,7 @@ class PersonalWorkspaceHttpPersistenceIntegrationTest {
                 .andExpect(jsonPath("$.version.storageUri").doesNotExist())
                 .andExpect(jsonPath("$.storageUri").doesNotExist())
                 .andReturn();
-        JsonNode first = JSON.readTree(created.getResponse().getContentAsByteArray());
+        JsonNode first = JsonUtil.getMapper().readTree(created.getResponse().getContentAsByteArray());
         String fileId = first.at("/file/fileId").asText();
         String operationId = first.at("/operation/operationId").asText();
         assertFalse(created.getResponse().getContentAsString().contains(temporaryDirectory.toString()));
@@ -142,7 +141,7 @@ class PersonalWorkspaceHttpPersistenceIntegrationTest {
                 .andExpect(jsonPath("$.file.fileId").value(fileId))
                 .andExpect(jsonPath("$.version.version").value(1))
                 .andReturn();
-        assertEquals(first, JSON.readTree(replayed.getResponse().getContentAsByteArray()));
+        assertEquals(first, JsonUtil.getMapper().readTree(replayed.getResponse().getContentAsByteArray()));
         assertEquals(1, storage.storeCalls(), "an idempotent replay must not write storage again");
         assertCounts(1, 1, 1);
 
@@ -193,7 +192,7 @@ class PersonalWorkspaceHttpPersistenceIntegrationTest {
         MvcResult created = upload("/agent/personal-workspace/files", "isolation-key", VERSION_ONE, null)
                 .andExpect(status().isCreated())
                 .andReturn();
-        String fileId = JSON.readTree(created.getResponse().getContentAsByteArray())
+        String fileId = JsonUtil.getMapper().readTree(created.getResponse().getContentAsByteArray())
                 .at("/file/fileId").asText();
         String persistedStorageUri = jdbc.queryForObject(
                 "SELECT storage_uri FROM agent_personal_workspace_file_version WHERE file_id=? AND version=1",
