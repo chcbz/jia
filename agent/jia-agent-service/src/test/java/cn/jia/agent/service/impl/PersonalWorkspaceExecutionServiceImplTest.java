@@ -8,6 +8,7 @@ import cn.jia.agent.dao.PersonalWorkspaceExecutionDao;
 import cn.jia.agent.dao.PersonalWorkspaceTaskLinkDao;
 import cn.jia.agent.entity.AgentRuntimeEntity;
 import cn.jia.agent.entity.AgentTaskWorkItemEntity;
+import cn.jia.agent.entity.AgentTaskArtifactPublishDTO;
 import cn.jia.agent.entity.AgentTaskArtifactViewDTO;
 import cn.jia.agent.entity.AgentTaskFormalDeliveryViewDTO;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
@@ -497,6 +498,8 @@ class PersonalWorkspaceExecutionServiceImplTest {
                 .setByteLength(12L).setContentHash(contentHash).setStorageUri("memory://result")
                 .setOutputState("STAGED");
         output.setTenantId("0"); output.setClientId("client-a");
+        when(executions.findByTaskRun("0", "client-a", "owner-a", "pwe_task_1", "pwe_run_1"))
+                .thenReturn(execution);
         when(executions.lockByTaskRun("0", "client-a", "owner-a", "pwe_task_1", "pwe_run_1"))
                 .thenReturn(execution);
         when(executions.lockOutputs("0", "client-a", "owner-a", "pwe_1"))
@@ -559,11 +562,10 @@ class PersonalWorkspaceExecutionServiceImplTest {
                 org.mockito.ArgumentMatchers.eq(PersonalWorkspaceExecutionProperties.DOCX)))
                 .thenReturn(new PersonalWorkspaceStorage.StoredContent("agent result".getBytes(StandardCharsets.UTF_8),
                         contentHash, 12L, PersonalWorkspaceExecutionProperties.DOCX));
-        AgentTaskArtifactViewDTO delivery = artifact("pwe_art_pwe_task_execution", contentHash,
-                PersonalWorkspaceExecutionProperties.DOCX);
-        AgentTaskArtifactViewDTO manifest = artifact("pwe_manifest_pwe_task_execution", null, "application/json");
-        when(artifacts.publish(any(), any(), any(), any(), any(), any()))
-                .thenReturn(delivery, manifest);
+        when(artifacts.publish(any(), any(), any(), any(), any(), any())).thenAnswer(invocation -> {
+            AgentTaskArtifactPublishDTO publish = invocation.getArgument(5);
+            return artifact(publish.getArtifactId(), publish.getContentHash(), publish.getContentMimeType());
+        });
         AgentTaskFormalDeliveryViewDTO formal = new AgentTaskFormalDeliveryViewDTO();
         formal.setTaskId("task-1"); formal.setWorkItemId("work-1");
         formal.setDeliveryId("pwe_delivery_" + sha("pwe_task_execution\npwe_run_1"));

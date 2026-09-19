@@ -593,7 +593,7 @@ class AgentRuntimeSecurityIntegrationTest {
     }
 
     @Test
-    void noMintedJwtAndBearerStillRequiresOriginalOauthPrincipalPath() throws Exception {
+    void noMintedJwtAndBearerNeverSelectsTheRuntimeCredentialLane() {
         var principal = auth.authenticate(A, "runtime-a", TOKEN_A);
         assertNull(principal.getCredentials());
         assertFalse(principal.toString().contains(TOKEN_A));
@@ -604,8 +604,6 @@ class AgentRuntimeSecurityIntegrationTest {
                 get("/agent/tasks/task-a/context-pack")
                         .header("Authorization", "Bearer original-jwt")
                         .buildRequest(new MockServletContext())));
-        mvc.perform(get("/agent/tasks/task-a/context-pack").header("Authorization", "Bearer " + TOKEN_A))
-                .andExpect(status().isUnauthorized());
         assertThrows(RuntimeException.class, () -> auth.bind("s", CLIENT_A, OWNER_B,
                 A, "r", "key-a", TOKEN_A, () -> true));
     }

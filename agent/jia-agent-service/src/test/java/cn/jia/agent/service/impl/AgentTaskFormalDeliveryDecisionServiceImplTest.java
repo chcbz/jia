@@ -120,9 +120,16 @@ class AgentTaskFormalDeliveryDecisionServiceImplTest {
 
     @Test
     void crossTenantOwnerCannotDecide() {
+        when(transaction.executeWithLockedTaskRootInOwnerScope(
+                eq(TENANT), eq(CLIENT), eq("owner-b"), eq(TASK), any())).thenAnswer(invocation -> {
+            AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(4);
+            return mutation.apply(root());
+        });
+
         assertThrows(AgentTaskCollaborationException.class,
                 () -> service.decide(TENANT, CLIENT, TASK, "owner-b", accepted()));
-        verify(transaction, never()).executeWithLockedTaskRootInOwnerScope(any(), any(), any(), any(), any());
+        verify(transaction).executeWithLockedTaskRootInOwnerScope(
+                eq(TENANT), eq(CLIENT), eq("owner-b"), eq(TASK), any());
     }
 
     private static AgentTaskFormalDeliveryDecisionDTO accepted() {

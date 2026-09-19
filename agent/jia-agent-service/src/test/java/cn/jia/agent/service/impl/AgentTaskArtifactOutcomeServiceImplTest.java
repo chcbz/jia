@@ -158,8 +158,8 @@ class AgentTaskArtifactOutcomeServiceImplTest {
 
         assertEquals(first.getDecisionId(), replay.getDecisionId());
         assertEquals(first.getOutcomeVersion(), replay.getOutcomeVersion());
-        verify(outcomeDao, times(1)).insert(eq(TENANT), eq(CLIENT), any());
-        verify(outcomeDao, times(1)).insertDecision(eq(TENANT), eq(CLIENT), any());
+        verify(outcomeDao, times(1)).insert(eq(TENANT), eq(CLIENT), eq(OWNER), any());
+        verify(outcomeDao, times(1)).insertDecision(eq(TENANT), eq(CLIENT), eq(OWNER), any());
         verify(eventWriter, times(1)).append(any());
     }
 
@@ -179,7 +179,7 @@ class AgentTaskArtifactOutcomeServiceImplTest {
                         command("decision-replay", ref("artifact-replay", 1, 1))));
 
         assertEquals(Reason.VERSION_CONFLICT, failure.getReason());
-        verify(outcomeDao, never()).insert(any(), any(), any());
+        verify(outcomeDao, never()).insert(any(), any(), any(), any());
         verify(eventWriter, never()).append(any());
     }
 
@@ -200,7 +200,7 @@ class AgentTaskArtifactOutcomeServiceImplTest {
                         command("decision-latest", ref("artifact-versioned", 1, 0))));
 
         assertEquals(Reason.VERSION_CONFLICT, failure.getReason());
-        verify(outcomeDao, never()).insert(any(), any(), any());
+        verify(outcomeDao, never()).insert(any(), any(), any(), any());
     }
 
     @Test
@@ -257,7 +257,7 @@ class AgentTaskArtifactOutcomeServiceImplTest {
         root = task(OTHER);
         when(taskDao.findByTaskIdInOwnerScope(TENANT, CLIENT, OWNER, TASK)).thenReturn(root);
         when(memberDao.findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK, ACTOR))
-                .thenReturn(member(ACTOR, "reviewer", "working", TENANT));
+                .thenReturn(member(ACTOR, "reviewer", "working", OWNER));
         AgentTaskAcceptedArtifactRow accepted = acceptedRow("artifact-a", "accepted");
         when(outcomeDao.listAuthoritativeAccepted(
                 TENANT, CLIENT, OWNER, TASK, "work-1", ACTOR, true, false, 25))
@@ -294,8 +294,8 @@ class AgentTaskArtifactOutcomeServiceImplTest {
 
         assertEquals(Reason.INVALID_PERSISTED_STATE, failure.getReason());
         assertEquals("Artifact outcome storage is unavailable", failure.getMessage());
-        verify(outcomeDao, never()).insert(any(), any(), any());
-        verify(outcomeDao, never()).insertDecision(any(), any(), any());
+        verify(outcomeDao, never()).insert(any(), any(), any(), any());
+        verify(outcomeDao, never()).insertDecision(any(), any(), any(), any());
         verify(eventWriter, never()).append(any());
     }
 
