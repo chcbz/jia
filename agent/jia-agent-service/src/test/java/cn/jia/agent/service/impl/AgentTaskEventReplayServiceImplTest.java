@@ -167,12 +167,12 @@ class AgentTaskEventReplayServiceImplTest {
         assertTrue(store.pageLimits.stream().allMatch(limit -> limit == 2));
         assertTrue(store.pageCursors.containsAll(List.of(0L, 2L, 4L, 3L)));
         verify(eventDao, org.mockito.Mockito.atLeastOnce()).findEarliestVersion(
-                "Tenant-A", "client-a", "Tenant-A", "café");
+                SCOPE.tenantId(), SCOPE.clientId(), SCOPE.ownerJiacn(), SCOPE.taskId());
         verify(eventDao, org.mockito.Mockito.atLeastOnce()).findAfterVersion(
-                org.mockito.ArgumentMatchers.eq("Tenant-A"),
-                org.mockito.ArgumentMatchers.eq("client-a"),
-                org.mockito.ArgumentMatchers.eq("Tenant-A"),
-                org.mockito.ArgumentMatchers.eq("café"), anyLong(),
+                org.mockito.ArgumentMatchers.eq(SCOPE.tenantId()),
+                org.mockito.ArgumentMatchers.eq(SCOPE.clientId()),
+                org.mockito.ArgumentMatchers.eq(SCOPE.ownerJiacn()),
+                org.mockito.ArgumentMatchers.eq(SCOPE.taskId()), anyLong(),
                 org.mockito.ArgumentMatchers.eq(2));
     }
 
