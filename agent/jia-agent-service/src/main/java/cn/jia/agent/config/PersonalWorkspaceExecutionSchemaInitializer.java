@@ -19,6 +19,7 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
     static final String OUTPUT_MIME_MIGRATION_RESOURCE = "db/agent-personal-workspace-v1_13-execution-output-mime.sql";
     static final String TERMINAL_STATE_MIGRATION_RESOURCE = "db/agent-personal-workspace-v1_13-execution-terminal-state.sql";
     static final String TASK_EXECUTION_MIGRATION_RESOURCE = "db/agent-personal-workspace-v1_13-task-execution.sql";
+    static final String TASK_PUBLICATION_MIGRATION_RESOURCE = "db/agent-personal-workspace-v1_13-task-publication.sql";
     static final List<String> TABLES = List.of("agent_personal_workspace_execution",
             "agent_personal_workspace_execution_input", "agent_personal_workspace_execution_output");
     private final JdbcTemplate jdbc;
@@ -34,6 +35,8 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
         verifyTerminalState();
         migrateTaskExecution();
         verifyTaskExecution();
+        migrateTaskPublication();
+        verifyTaskPublication();
     }
     static List<String> ddlStatements() {
         final String source;
@@ -153,6 +156,52 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
                         OR lease_expires_at IS NULL OR lease_expires_at <= 0))
                 """, Integer.class);
         if (invalid == null || invalid != 0) throw new IllegalStateException("Task execution schema is invalid");
+    }
+
+    static String taskPublicationMigrationStatement() {
+        final String source;
+        try { source=new ClassPathResource(TASK_PUBLICATION_MIGRATION_RESOURCE).getContentAsString(StandardCharsets.UTF_8); }
+        catch (IOException failure) { throw new IllegalStateException("Task publication migration is missing", failure); }
+        String statement=source.lines().filter(line -> !line.stripLeading().startsWith("--")).reduce("", (a,b)->a+b+'\n').strip();
+        String normalized=statement.toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").trim();
+        if (!normalized.startsWith("alter table agent_personal_workspace_execution_output ")
+                || !normalized.contains("add column artifact_id varchar(100)")
+                || !normalized.contains("add column artifact_version int")
+                || !normalized.contains("add column formal_delivery_id varchar(100)")
+                || !normalized.contains("add column publication_state varchar(16) not null default 'pending'")
+                || !normalized.contains("add column publication_revision bigint not null default 0")
+                || !normalized.contains("add column publication_failure_code varchar(64)")
+                || !normalized.contains("add constraint chk_pwexo_publication_state check")
+                || !normalized.contains("add constraint chk_pwexo_publication_mapping check")
+                || normalized.contains(" insert ") || normalized.contains(" update ") || normalized.contains(" delete ")
+                || normalized.contains(" drop ") || normalized.contains(" create trigger ") || !statement.endsWith(";")) {
+            throw new IllegalStateException("Unsafe task publication migration");
+        }
+        return statement.substring(0, statement.length() - 1);
+    }
+    private void migrateTaskPublication() {
+        Integer present=jdbc.queryForObject("""
+                SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE()
+                 AND table_name='agent_personal_workspace_execution_output'
+                 AND column_name IN ('artifact_id','artifact_version','formal_delivery_id','publication_state',
+                                     'publication_revision','publication_failure_code')
+                """, Integer.class);
+        if (present == null) throw new IllegalStateException("Task publication schema discovery failed");
+        if (present == 0) jdbc.execute(taskPublicationMigrationStatement());
+        else if (present != 6) throw new IllegalStateException("Task publication schema is partial");
+    }
+    private void verifyTaskPublication() {
+        Integer invalid=jdbc.queryForObject("""
+                SELECT COUNT(*) FROM agent_personal_workspace_execution_output
+                 WHERE publication_state NOT IN ('PENDING','PUBLISHED','FAILED')
+                    OR publication_revision IS NULL OR publication_revision < 0
+                    OR (publication_state='PENDING' AND (artifact_id IS NOT NULL OR artifact_version IS NOT NULL
+                        OR formal_delivery_id IS NOT NULL OR publication_failure_code IS NOT NULL))
+                    OR (publication_state='PUBLISHED' AND (artifact_id IS NULL OR artifact_version IS NULL
+                        OR artifact_version < 1 OR formal_delivery_id IS NULL OR publication_failure_code IS NOT NULL))
+                    OR (publication_state='FAILED' AND publication_failure_code IS NULL)
+                """, Integer.class);
+        if (invalid == null || invalid != 0) throw new IllegalStateException("Task publication schema is invalid");
     }
 
     private void verifyOutputMime() {

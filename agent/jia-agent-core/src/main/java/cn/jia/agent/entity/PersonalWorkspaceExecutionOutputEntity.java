@@ -29,6 +29,14 @@ public class PersonalWorkspaceExecutionOutputEntity extends BaseEntity {
     private String outputState;
     private String workspaceFileId;
     private Integer workspaceFileVersion;
+    /** Task-only artifact projection. No storage URI from either storage boundary is exposed to browsers. */
+    private String artifactId;
+    private Integer artifactVersion;
+    private String formalDeliveryId;
+    /** PENDING until the staged bytes have been atomically mapped to workspace/artifact/formal delivery. */
+    private String publicationState;
+    private Long publicationRevision;
+    private String publicationFailureCode;
     private Long stagedAt;
     private Long committedAt;
 }

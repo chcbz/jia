@@ -8,6 +8,9 @@ import cn.jia.agent.dao.PersonalWorkspaceExecutionDao;
 import cn.jia.agent.dao.PersonalWorkspaceTaskLinkDao;
 import cn.jia.agent.entity.AgentRuntimeEntity;
 import cn.jia.agent.entity.AgentTaskWorkItemEntity;
+import cn.jia.agent.entity.AgentTaskArtifactViewDTO;
+import cn.jia.agent.entity.AgentTaskFormalDeliveryViewDTO;
+import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.entity.AgentWorkItemLeaseDTO;
 import cn.jia.agent.entity.PersonalWorkspaceExecutionEntity;
 import cn.jia.agent.entity.PersonalWorkspaceExecutionInputEntity;
@@ -16,6 +19,9 @@ import cn.jia.agent.entity.PersonalWorkspaceFileEntity;
 import cn.jia.agent.entity.PersonalWorkspaceVersionEntity;
 import cn.jia.agent.service.PersonalWorkspaceExecutionService;
 import cn.jia.agent.service.AgentWorkItemLeaseService;
+import cn.jia.agent.service.AgentTaskArtifactService;
+import cn.jia.agent.service.AgentTaskFormalDeliveryService;
+import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.chat.service.WorkspaceConversationAccessService;
 import cn.jia.agent.service.PersonalWorkspaceStorage;
 import org.junit.jupiter.api.BeforeEach;
@@ -36,6 +42,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.doAnswer;
 
 /** Focused owner/runtime queue contract; database mapper tests retain SQL exactness coverage. */
 class PersonalWorkspaceExecutionServiceImplTest {
@@ -292,6 +299,85 @@ class PersonalWorkspaceExecutionServiceImplTest {
         assertEquals("AGENT_DELIVERY", file.getValue().getOriginKind());
         assertEquals(file.getValue().getFileId(), version.getValue().getFileId());
         assertEquals("COMMITTED", committed.state());
+    }
+
+    @Test
+    void taskOutputPublishesTrustedWorkspaceArtifactAndFormalDeliveryInOneRootMutation() throws Exception {
+        AgentTaskWorkItemDao workItems = mock(AgentTaskWorkItemDao.class);
+        AgentWorkItemLeaseService leases = mock(AgentWorkItemLeaseService.class);
+        service.setTaskExecutionDependencies(mock(WorkspaceConversationAccessService.class), workItems, leases);
+        AgentTaskArtifactService artifacts = mock(AgentTaskArtifactService.class);
+        AgentTaskFormalDeliveryService formalDeliveries = mock(AgentTaskFormalDeliveryService.class);
+        AgentTaskMutationTransaction mutations = mock(AgentTaskMutationTransaction.class);
+        service.setTaskPublicationDependencies(artifacts, formalDeliveries, mutations);
+
+        PersonalWorkspaceExecutionEntity execution = execution("pwe_task_execution", "agent-a", "QUEUED")
+                .setTaskId("task-1").setExecutionMode("TASK").setWorkItemId("work-1")
+                .setLeaseToken("lease-secret").setLeaseWorkItemVersion(9L)
+                .setLeaseExpiresAt(9_999_999_999_999L);
+        String contentHash = sha("agent result");
+        PersonalWorkspaceExecutionOutputEntity output = new PersonalWorkspaceExecutionOutputEntity()
+                .setOutputId("output_1").setExecutionId("pwe_task_execution").setOwnerJiacn("owner-a")
+                .setOriginalFilename("result.docx")
+                .setContentMimeType(PersonalWorkspaceExecutionProperties.DOCX)
+                .setByteLength(12L).setContentHash(contentHash).setStorageUri("memory://result")
+                .setOutputState("STAGED").setPublicationState("PENDING").setPublicationRevision(0L);
+        output.setTenantId("0"); output.setClientId("client-a");
+        AgentTaskMetaEntity root = new AgentTaskMetaEntity().setTaskId("task-1")
+                .setTaskVersion(4L).setRewardStatus("running").setAssignedAgentId("agent-a");
+        root.setTenantId("0"); root.setClientId("client-a"); root.setOwnerJiacn("owner-a");
+        AgentTaskWorkItemEntity running = taskWorkItem("running", 9L, "agent-a", "lease-secret", 9_999_999_999_999L);
+        when(executions.findByTaskRun("0", "client-a", "owner-a", "task-1", "pwe_run_1"))
+                .thenReturn(execution);
+        when(executions.lockByTaskRun("0", "client-a", "owner-a", "task-1", "pwe_run_1"))
+                .thenReturn(execution);
+        when(executions.lockOutputs("0", "client-a", "owner-a", "pwe_task_execution"))
+                .thenReturn(List.of(output));
+        when(workItems.findByTaskAndWorkItemId("0", "client-a", "owner-a", "task-1", "work-1"))
+                .thenReturn(running);
+        when(storage.read(any(), org.mockito.ArgumentMatchers.eq("memory://result"),
+                org.mockito.ArgumentMatchers.eq(contentHash), org.mockito.ArgumentMatchers.eq(12L),
+                org.mockito.ArgumentMatchers.eq(PersonalWorkspaceExecutionProperties.DOCX)))
+                .thenReturn(new PersonalWorkspaceStorage.StoredContent("agent result".getBytes(StandardCharsets.UTF_8),
+                        contentHash, 12L, PersonalWorkspaceExecutionProperties.DOCX));
+        AgentTaskArtifactViewDTO delivery = artifact("pwe_art_pwe_task_execution", contentHash,
+                PersonalWorkspaceExecutionProperties.DOCX);
+        AgentTaskArtifactViewDTO manifest = artifact("pwe_manifest_pwe_task_execution", null, "application/json");
+        when(artifacts.publish(any(), any(), any(), any(), any(), any()))
+                .thenReturn(delivery, manifest);
+        AgentTaskFormalDeliveryViewDTO formal = new AgentTaskFormalDeliveryViewDTO();
+        formal.setTaskId("task-1"); formal.setWorkItemId("work-1");
+        formal.setDeliveryId("pwe_delivery_" + sha("pwe_task_execution\npwe_run_1"));
+        formal.setState("submitted");
+        when(formalDeliveries.submit(any(), any(), any(), any(), any(), any())).thenReturn(formal);
+        doAnswer(invocation -> {
+            AgentTaskMutationTransaction.LockedTaskMutation<?> callback = invocation.getArgument(4);
+            return callback.apply(root);
+        }).when(mutations).executeWithLockedTaskRootInOwnerScope(any(), any(), any(), any(), any());
+        String manifestId = "pwe_m_" + sha("task-1\npwe_run_1\noutput_1\n" + contentHash + "\n12\n");
+
+        var committed = service.commitOutputs(RUNTIME, "task-1", "pwe_run_1", manifestId,
+                List.of(new PersonalWorkspaceExecutionService.OutputDeclaration("output_1", contentHash, 12L)));
+
+        assertEquals("COMMITTED", committed.state());
+        assertEquals("PUBLISHED", output.getPublicationState());
+        assertEquals("pwe_art_pwe_task_execution", output.getArtifactId());
+        assertEquals(1, output.getArtifactVersion());
+        assertEquals(formal.getDeliveryId(), output.getFormalDeliveryId());
+        assertEquals("OUTPUT_COMMITTED", execution.getExecutionState());
+        verify(writes).archiveRuntimeOutput(any(), any(), any());
+        verify(artifacts, times(2)).publish(any(), any(), any(), org.mockito.ArgumentMatchers.eq("task-1"),
+                org.mockito.ArgumentMatchers.eq("agent-a"), any());
+        verify(formalDeliveries).submit(any(), any(), any(), org.mockito.ArgumentMatchers.eq("task-1"),
+                org.mockito.ArgumentMatchers.eq("agent-a"), any());
+    }
+
+    private static AgentTaskArtifactViewDTO artifact(String id, String contentHash, String mime) {
+        AgentTaskArtifactViewDTO value = new AgentTaskArtifactViewDTO();
+        value.setArtifactId(id).setArtifactVersion(1).setTaskId("task-1").setWorkItemId("work-1")
+                .setProducerAgentId("agent-a").setContentHash(contentHash == null ? sha("manifest") : contentHash)
+                .setContentMimeType(mime);
+        return value;
     }
 
     private static AgentTaskWorkItemEntity taskWorkItem(String state, long version, String assignee,

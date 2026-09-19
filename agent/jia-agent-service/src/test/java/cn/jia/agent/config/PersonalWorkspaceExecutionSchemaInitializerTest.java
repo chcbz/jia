@@ -22,6 +22,10 @@ class PersonalWorkspaceExecutionSchemaInitializerTest {
                 .contains("ADD COLUMN execution_mode VARCHAR(16) NOT NULL DEFAULT 'PRIVATE'"));
         assertTrue(PersonalWorkspaceExecutionSchemaInitializer.taskExecutionMigrationStatement()
                 .contains("ADD CONSTRAINT chk_pwex_task_bridge"));
+        assertTrue(PersonalWorkspaceExecutionSchemaInitializer.taskPublicationMigrationStatement()
+                .contains("ADD COLUMN publication_state VARCHAR(16) NOT NULL DEFAULT 'PENDING'"));
+        assertTrue(PersonalWorkspaceExecutionSchemaInitializer.taskPublicationMigrationStatement()
+                .contains("ADD CONSTRAINT chk_pwexo_publication_mapping"));
         assertTrue(statements.get(1).contains("uk_pwexi_file_version_scope"));
         assertTrue(statements.get(2).contains("chk_pwexo_commit"));
     }
