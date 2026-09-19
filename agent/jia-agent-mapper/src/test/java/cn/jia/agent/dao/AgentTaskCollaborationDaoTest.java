@@ -292,7 +292,7 @@ class AgentTaskCollaborationDaoTest {
                 "tenant_id", "client_id", "owner_jiacn", "task_id", "artifact_id");
         assertMapperMethodExact(AgentTaskMetaMapper.class, "selectAggregationSnapshot",
                 "tenant_id", "client_id", "owner_jiacn", "task_id");
-        assertMapperMethodExact(AgentTaskMetaMapper.class, "updateStatusByVersion",
+        assertMapperMethodExact(AgentTaskMetaMapper.class, "updateStatusByVersionInOwnerScope",
                 "tenant_id", "client_id", "owner_jiacn", "task_id");
     }
 
