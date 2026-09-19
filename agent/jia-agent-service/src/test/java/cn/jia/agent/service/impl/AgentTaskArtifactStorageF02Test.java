@@ -58,6 +58,7 @@ import static org.mockito.Mockito.when;
 class AgentTaskArtifactStorageF02Test {
     private static final String TENANT = "tenant-a";
     private static final String CLIENT = "client-a";
+    private static final String OWNER = "owner-a";
     private static final String TASK = "task-a";
     private static final String ACTOR = "agent-a";
     private static final String ARTIFACT = "artifact-a";
@@ -86,13 +87,13 @@ class AgentTaskArtifactStorageF02Test {
         transaction = mock(AgentTaskMutationTransaction.class);
         eventWriter = mock(AgentTaskEventWriter.class);
         AgentTaskMetaEntity task = task();
-        when(taskDao.findByTaskId(TENANT, CLIENT, TASK)).thenReturn(task);
-        when(transaction.executeWithLockedTaskRoot(
-                eq(TENANT), eq(CLIENT), eq(TASK), any())).thenAnswer(invocation -> {
-            AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(3);
+        when(taskDao.findByTaskIdInOwnerScope(TENANT, CLIENT, OWNER, TASK)).thenReturn(task);
+        when(transaction.executeWithLockedTaskRootInOwnerScope(
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), any())).thenAnswer(invocation -> {
+            AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(4);
             return mutation.apply(task);
         });
-        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK, ACTOR))
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK, ACTOR))
                 .thenReturn(member(ACTOR, "worker"));
     }
 
@@ -101,14 +102,14 @@ class AgentTaskArtifactStorageF02Test {
         FileSystemAgentTaskArtifactStorage storage = storage(2L * 1024L * 1024L);
         byte[] content = "x".repeat(300_000).getBytes(StandardCharsets.UTF_8);
         AgentTaskArtifactStorage.Scope firstScope =
-                new AgentTaskArtifactStorage.Scope(TENANT, CLIENT, TASK);
+                new AgentTaskArtifactStorage.Scope(TENANT, CLIENT, OWNER, TASK);
 
         AgentTaskArtifactStorage.StoredObject first = storage.store(
                 firstScope, content, "application/octet-stream");
         AgentTaskArtifactStorage.StoredObject duplicate = storage.store(
                 firstScope, content, "application/octet-stream");
         AgentTaskArtifactStorage.StoredObject otherScope = storage.store(
-                new AgentTaskArtifactStorage.Scope(TENANT, CLIENT, "task-b"),
+                new AgentTaskArtifactStorage.Scope(TENANT, CLIENT, OWNER, "task-b"),
                 content, "application/octet-stream");
 
         assertEquals(sha256(content), first.sha256());
@@ -125,7 +126,7 @@ class AgentTaskArtifactStorageF02Test {
         assertEquals(AgentTaskArtifactStorageException.Reason.CORRUPT_CONTENT,
                 assertThrows(AgentTaskArtifactStorageException.class,
                         () -> storage.read(
-                                new AgentTaskArtifactStorage.Scope(TENANT, CLIENT, "task-b"),
+                                new AgentTaskArtifactStorage.Scope(TENANT, CLIENT, OWNER, "task-b"),
                                 first.storageUri(), first.sha256(), first.byteLength(),
                                 first.mimeType())).getReason());
         assertEquals(2, managedObjectCount());
@@ -135,7 +136,7 @@ class AgentTaskArtifactStorageF02Test {
     void concurrentSameDigestPublicationCreatesExactlyOneImmutableObject() throws Exception {
         FileSystemAgentTaskArtifactStorage storage = storage(1024 * 1024);
         AgentTaskArtifactStorage.Scope scope =
-                new AgentTaskArtifactStorage.Scope(TENANT, CLIENT, TASK);
+                new AgentTaskArtifactStorage.Scope(TENANT, CLIENT, OWNER, TASK);
         byte[] content = "concurrent-content".getBytes(StandardCharsets.UTF_8);
         int writers = 8;
         CountDownLatch ready = new CountDownLatch(writers);
@@ -171,7 +172,7 @@ class AgentTaskArtifactStorageF02Test {
     void fileStoreRejectsUnboundedMimePathAndSymlinkTampering() throws Exception {
         FileSystemAgentTaskArtifactStorage storage = storage(16);
         AgentTaskArtifactStorage.Scope scope =
-                new AgentTaskArtifactStorage.Scope(TENANT, CLIENT, TASK);
+                new AgentTaskArtifactStorage.Scope(TENANT, CLIENT, OWNER, TASK);
         assertEquals(AgentTaskArtifactStorageException.Reason.INVALID_REQUEST,
                 assertThrows(AgentTaskArtifactStorageException.class,
                         () -> storage.store(scope, new byte[17], "application/octet-stream"))
@@ -183,7 +184,7 @@ class AgentTaskArtifactStorageF02Test {
         assertEquals(AgentTaskArtifactStorageException.Reason.INVALID_REQUEST,
                 assertThrows(AgentTaskArtifactStorageException.class,
                         () -> storage.store(
-                                new AgentTaskArtifactStorage.Scope(" tenant-a", CLIENT, TASK),
+                                new AgentTaskArtifactStorage.Scope(" tenant-a", CLIENT, OWNER, TASK),
                                 new byte[1], "text/plain"))
                         .getReason());
 
@@ -228,7 +229,7 @@ class AgentTaskArtifactStorageF02Test {
                 "managed bytes".getBytes(StandardCharsets.UTF_8));
         AtomicReference<AgentTaskArtifactDTO> inserted = successfulArtifactPersistence();
 
-        var published = service.publish(TENANT, CLIENT, TASK, ACTOR, command);
+        var published = service.publish(TENANT, CLIENT, OWNER, TASK, ACTOR, command);
 
         AgentTaskArtifactDTO row = inserted.get();
         assertNull(row.getContent());
@@ -241,7 +242,7 @@ class AgentTaskArtifactStorageF02Test {
         assertTrue(published.getManagedStorage());
 
         var content = service.readContent(
-                TENANT, CLIENT, TASK, ACTOR, ARTIFACT, 1);
+                TENANT, CLIENT, OWNER, TASK, ACTOR, ARTIFACT, 1);
         assertArrayEquals(command.getContentBytes(), content.getContent());
         assertEquals(row.getContentHash(), content.getContentHash());
         ArgumentCaptor<byte[]> storedBytes = ArgumentCaptor.forClass(byte[].class);
@@ -270,16 +271,16 @@ class AgentTaskArtifactStorageF02Test {
 
         AgentTaskCollaborationException forbidden = assertThrows(
                 AgentTaskCollaborationException.class,
-                () -> service.publish(TENANT, CLIENT, TASK, "outsider", command));
+                () -> service.publish(TENANT, CLIENT, OWNER, TASK, "outsider", command));
         assertEquals(Reason.FORBIDDEN, forbidden.getReason());
         verify(storage, never()).store(any(), any(), any());
 
-        when(artifactDao.findLatestVersionForUpdate(TENANT, CLIENT, TASK, ARTIFACT))
+        when(artifactDao.findLatestVersionForUpdate(TENANT, CLIENT, OWNER, TASK, ARTIFACT))
                 .thenReturn(artifactFrom(managedRow(command, "cyf-artifact://"
                         + "a".repeat(64) + "/" + "b".repeat(64), "b".repeat(64))));
         AgentTaskCollaborationException conflict = assertThrows(
                 AgentTaskCollaborationException.class,
-                () -> service.publish(TENANT, CLIENT, TASK, ACTOR, command));
+                () -> service.publish(TENANT, CLIENT, OWNER, TASK, ACTOR, command));
         assertEquals(Reason.VERSION_CONFLICT, conflict.getReason());
         verify(storage, never()).store(any(), any(), any());
     }
@@ -290,12 +291,12 @@ class AgentTaskArtifactStorageF02Test {
         AgentTaskCollaborationServiceImpl service = service(storage);
         AgentTaskArtifactPublishDTO badHash = managedCommand(new byte[] {1, 2, 3});
         badHash.setContentHash("0".repeat(64));
-        when(artifactDao.findLatestVersionForUpdate(TENANT, CLIENT, TASK, ARTIFACT))
+        when(artifactDao.findLatestVersionForUpdate(TENANT, CLIENT, OWNER, TASK, ARTIFACT))
                 .thenReturn(null);
 
         AgentTaskCollaborationException hashFailure = assertThrows(
                 AgentTaskCollaborationException.class,
-                () -> service.publish(TENANT, CLIENT, TASK, ACTOR, badHash));
+                () -> service.publish(TENANT, CLIENT, OWNER, TASK, ACTOR, badHash));
         assertEquals(Reason.INVALID_REQUEST, hashFailure.getReason());
         verify(storage, never()).store(any(), any(), any());
 
@@ -303,7 +304,7 @@ class AgentTaskArtifactStorageF02Test {
         badLength.setContentByteLength(4L);
         AgentTaskCollaborationException lengthFailure = assertThrows(
                 AgentTaskCollaborationException.class,
-                () -> service.publish(TENANT, CLIENT, TASK, ACTOR, badLength));
+                () -> service.publish(TENANT, CLIENT, OWNER, TASK, ACTOR, badLength));
         assertEquals(Reason.INVALID_REQUEST, lengthFailure.getReason());
         verify(storage, never()).store(any(), any(), any());
     }
@@ -314,22 +315,22 @@ class AgentTaskArtifactStorageF02Test {
         AgentTaskCollaborationServiceImpl service = service(storage);
         byte[] bytes = "orphan-safe".getBytes(StandardCharsets.UTF_8);
         AgentTaskArtifactPublishDTO command = managedCommand(bytes);
-        when(artifactDao.findLatestVersionForUpdate(TENANT, CLIENT, TASK, ARTIFACT))
+        when(artifactDao.findLatestVersionForUpdate(TENANT, CLIENT, OWNER, TASK, ARTIFACT))
                 .thenReturn(null);
-        when(artifactDao.insert(eq(TENANT), eq(CLIENT), any())).thenThrow(
+        when(artifactDao.insert(eq(TENANT), eq(CLIENT), eq(OWNER), any())).thenThrow(
                 new org.springframework.dao.DataIntegrityViolationException("db rejected"));
 
         AgentTaskCollaborationException failure = assertThrows(
                 AgentTaskCollaborationException.class,
-                () -> service.publish(TENANT, CLIENT, TASK, ACTOR, command));
+                () -> service.publish(TENANT, CLIENT, OWNER, TASK, ACTOR, command));
 
         assertEquals(Reason.INVALID_PERSISTED_STATE, failure.getReason());
         assertEquals(1, managedObjectCount());
-        verify(artifactDao, never()).findVersion(any(), any(), any(), any(), anyInt());
+        verify(artifactDao, never()).findVersion(any(), any(), any(), any(), any(), anyInt());
 
         org.mockito.Mockito.reset(artifactDao);
         AtomicReference<AgentTaskArtifactDTO> inserted = successfulArtifactPersistence();
-        var retried = service.publish(TENANT, CLIENT, TASK, ACTOR, command);
+        var retried = service.publish(TENANT, CLIENT, OWNER, TASK, ACTOR, command);
         assertEquals(1, managedObjectCount());
         assertEquals(sha256(bytes), inserted.get().getContentHash());
         assertEquals(sha256(bytes), retried.getContentHash());
@@ -343,10 +344,10 @@ class AgentTaskArtifactStorageF02Test {
         AgentTaskCollaborationException failure = assertThrows(
                 AgentTaskCollaborationException.class,
                 () -> service.readContent(
-                        TENANT, CLIENT, TASK, "outsider", ARTIFACT, 1));
+                        TENANT, CLIENT, OWNER, TASK, "outsider", ARTIFACT, 1));
 
         assertEquals(Reason.FORBIDDEN, failure.getReason());
-        verify(artifactDao, never()).findVersion(any(), any(), any(), any(), anyInt());
+        verify(artifactDao, never()).findVersion(any(), any(), any(), any(), any(), anyInt());
         verify(storage, never()).read(any(), any(), any(), anyLong(), any());
     }
 
@@ -363,12 +364,13 @@ class AgentTaskArtifactStorageF02Test {
                 .setCreatedAt(NOW);
         external.setTenantId(TENANT);
         external.setClientId(CLIENT);
-        when(artifactDao.findVersion(TENANT, CLIENT, TASK, ARTIFACT, 1))
+        external.setOwnerJiacn(OWNER);
+        when(artifactDao.findVersion(TENANT, CLIENT, OWNER, TASK, ARTIFACT, 1))
                 .thenReturn(external);
 
         AgentTaskCollaborationException failure = assertThrows(
                 AgentTaskCollaborationException.class,
-                () -> service.readContent(TENANT, CLIENT, TASK, ACTOR, ARTIFACT, 1));
+                () -> service.readContent(TENANT, CLIENT, OWNER, TASK, ACTOR, ARTIFACT, 1));
 
         assertEquals(Reason.INVALID_REQUEST, failure.getReason());
         verify(storage, never()).read(any(), any(), any(), anyLong(), any());
@@ -388,13 +390,13 @@ class AgentTaskArtifactStorageF02Test {
 
     private AtomicReference<AgentTaskArtifactDTO> successfulArtifactPersistence() {
         AtomicReference<AgentTaskArtifactDTO> inserted = new AtomicReference<>();
-        when(artifactDao.findLatestVersionForUpdate(TENANT, CLIENT, TASK, ARTIFACT))
+        when(artifactDao.findLatestVersionForUpdate(TENANT, CLIENT, OWNER, TASK, ARTIFACT))
                 .thenReturn(null);
-        when(artifactDao.insert(eq(TENANT), eq(CLIENT), any())).thenAnswer(invocation -> {
-            inserted.set(invocation.getArgument(2));
+        when(artifactDao.insert(eq(TENANT), eq(CLIENT), eq(OWNER), any())).thenAnswer(invocation -> {
+            inserted.set(invocation.getArgument(3));
             return 1;
         });
-        when(artifactDao.findVersion(TENANT, CLIENT, TASK, ARTIFACT, 1))
+        when(artifactDao.findVersion(TENANT, CLIENT, OWNER, TASK, ARTIFACT, 1))
                 .thenAnswer(invocation -> artifactFrom(inserted.get()));
         return inserted;
     }
@@ -454,6 +456,7 @@ class AgentTaskArtifactStorageF02Test {
         task.setCurrentEventVersion(0L);
         task.setTenantId(TENANT);
         task.setClientId(CLIENT);
+        task.setOwnerJiacn(OWNER);
         return task;
     }
 
@@ -465,6 +468,7 @@ class AgentTaskArtifactStorageF02Test {
         member.setMemberStatus("working");
         member.setTenantId(TENANT);
         member.setClientId(CLIENT);
+        member.setOwnerJiacn(OWNER);
         return member;
     }
 

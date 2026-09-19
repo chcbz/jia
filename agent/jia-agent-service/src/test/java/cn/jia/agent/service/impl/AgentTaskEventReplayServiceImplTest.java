@@ -64,7 +64,7 @@ class AgentTaskEventReplayServiceImplTest {
             new TaskScope("Tenant-A", "client-a", "Tenant-A", "caf\u00e9");
     private static final AgentTaskEventBroker.TaskScope BROKER_SCOPE =
             new AgentTaskEventBroker.TaskScope(
-                    SCOPE.tenantId(), SCOPE.clientId(), SCOPE.taskId());
+                    SCOPE.tenantId(), SCOPE.clientId(), SCOPE.ownerJiacn(), SCOPE.taskId());
     private static final Duration VERIFY_TIMEOUT = Duration.ofSeconds(5);
 
     private TrackingBroker broker;
@@ -139,7 +139,7 @@ class AgentTaskEventReplayServiceImplTest {
         assertEquals(0, store.earliestCalls.get());
         assertTrue(store.daoThreads.stream().allMatch(
                 name -> name.startsWith("c03-replay-worker-")), store.daoThreads.toString());
-        verify(eventDao).findCurrentVersion("Tenant-A", "client-a", "caf\u00e9");
+        verify(eventDao).findCurrentVersion("Tenant-A", "client-a", "Tenant-A", "caf\u00e9");
     }
 
     @Test
@@ -166,10 +166,11 @@ class AgentTaskEventReplayServiceImplTest {
         assertTrue(store.pageLimits.stream().allMatch(limit -> limit == 2));
         assertTrue(store.pageCursors.containsAll(List.of(0L, 2L, 4L, 3L)));
         verify(eventDao, org.mockito.Mockito.atLeastOnce()).findEarliestVersion(
-                "Tenant-A", "client-a", "café");
+                "Tenant-A", "client-a", "Tenant-A", "café");
         verify(eventDao, org.mockito.Mockito.atLeastOnce()).findAfterVersion(
                 org.mockito.ArgumentMatchers.eq("Tenant-A"),
                 org.mockito.ArgumentMatchers.eq("client-a"),
+                org.mockito.ArgumentMatchers.eq("Tenant-A"),
                 org.mockito.ArgumentMatchers.eq("café"), anyLong(),
                 org.mockito.ArgumentMatchers.eq(2));
     }
@@ -1253,15 +1254,15 @@ class AgentTaskEventReplayServiceImplTest {
     }
 
     private void bindStore() {
-        when(eventDao.findCurrentVersion(anyString(), anyString(), anyString()))
+        when(eventDao.findCurrentVersion(anyString(), anyString(), anyString(), anyString()))
                 .thenAnswer(ignored -> store.observe(store.currentCalls, store.currentSupplier));
-        when(eventDao.findEarliestVersion(anyString(), anyString(), anyString()))
+        when(eventDao.findEarliestVersion(anyString(), anyString(), anyString(), anyString()))
                 .thenAnswer(ignored -> store.observe(store.earliestCalls, store.earliestSupplier));
         when(eventDao.findAfterVersion(
-                anyString(), anyString(), anyString(), anyLong(), anyInt()))
+                anyString(), anyString(), anyString(), anyString(), anyLong(), anyInt()))
                 .thenAnswer(invocation -> {
-                    long cursor = invocation.getArgument(3);
-                    int limit = invocation.getArgument(4);
+                    long cursor = invocation.getArgument(4);
+                    int limit = invocation.getArgument(5);
                     store.pageCursors.add(cursor);
                     store.pageLimits.add(limit);
                     return store.observe(store.pageCalls,
