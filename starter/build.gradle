@@ -18,6 +18,10 @@ sourceSets {
         compileClasspath += sourceSets.publicArtifactVerifier.output
         runtimeClasspath += sourceSets.publicArtifactVerifier.output
     }
+    poiProductionRuntimeClasspathTest {
+        java.srcDir 'src/poiProductionRuntimeClasspathTest/java'
+        resources.setSrcDirs([])
+    }
 }
 
 dependencies {
@@ -72,6 +76,8 @@ dependencies {
 
     publicArtifactVerifierTestImplementation(libs.junit.jupiter)
     publicArtifactVerifierTestRuntimeOnly(libs.junit.platform.launcher)
+    poiProductionRuntimeClasspathTestImplementation(libs.junit.jupiter)
+    poiProductionRuntimeClasspathTestRuntimeOnly(libs.junit.platform.launcher)
 }
 
 version = '1.1.2-SNAPSHOT'
@@ -98,6 +104,19 @@ def publicArtifactVerifierTests = tasks.register('publicArtifactVerifierTest', T
     useJUnitPlatform()
 }
 
+def poiProductionRuntimeClasspathTests = tasks.register('poiProductionRuntimeClasspathTest', Test) {
+    group = 'verification'
+    description = 'Verifies the production application runtime has one coherent Apache POI schema graph.'
+    dependsOn tasks.named(sourceSets.poiProductionRuntimeClasspathTest.classesTaskName)
+    testClassesDirs = sourceSets.poiProductionRuntimeClasspathTest.output.classesDirs
+    classpath = sourceSets.poiProductionRuntimeClasspathTest.runtimeClasspath
+    inputs.files(sourceSets.main.runtimeClasspath).withPropertyName('poiMainRuntimeClasspath')
+    doFirst {
+        systemProperty 'cyf.poi.main-runtime-classpath', sourceSets.main.runtimeClasspath.asPath
+    }
+    useJUnitPlatform()
+}
+
 tasks.register('publicBootJarSecurityPolicyTest') {
     group = 'verification'
     description = 'Compatibility lifecycle alias for the isolated public artifact verifier tests.'
@@ -106,6 +125,7 @@ tasks.register('publicBootJarSecurityPolicyTest') {
 
 tasks.named('check') {
     dependsOn publicArtifactVerifierTests
+    dependsOn poiProductionRuntimeClasspathTests
 }
 
 bootJar {
@@ -115,6 +135,7 @@ bootJar {
     }
     exclude { details -> isForbiddenPublicBootJarMember(details.path) }
     dependsOn publicArtifactVerifierTests
+    dependsOn poiProductionRuntimeClasspathTests
     dependsOn tasks.named(sourceSets.publicArtifactVerifier.classesTaskName)
     doLast {
         def captured = new ByteArrayOutputStream()

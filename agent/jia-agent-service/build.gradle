@@ -1,3 +1,5 @@
+def poiOoxmlRuntimeVersion = libs.versions.poi.ooxml.full.asProvider().get()
+
 dependencies {
     api project(':agent:jia-agent-api')
     implementation project(':chat:jia-chat-api')
@@ -19,7 +21,15 @@ dependencies {
     implementation project(':common:jia-common-service')
     implementation libs.spring.rabbit
     implementation libs.jackson.databind
-    implementation libs.poi.ooxml.core
+    // Keep the workspace document runtime on one POI generation. POI 3.14
+    // combined with xmlbeans/full schemas from POI 5.4 fails at runtime with
+    // XmlOptions.put(Object) and CTPoint2D.setX(long) NoSuchMethodError. The
+    // shared poi-ooxml-core alias remains 3.14 only for legacy compile-only
+    // utilities; this production path uses the 5.4 API and full schema set.
+    // Exclude POI 5's default lite schemas so each generated class has one owner.
+    implementation("org.apache.poi:poi-ooxml:${poiOoxmlRuntimeVersion}") {
+        exclude group: 'org.apache.poi', module: 'poi-ooxml-lite'
+    }
     implementation libs.poi.ooxml.full
     implementation libs.pdfbox.core
     testImplementation project(':common:jia-common-test')
@@ -146,14 +156,6 @@ configurations.named(v1131AcceptanceSourceSet.implementationConfigurationName) {
 configurations.named(v1131AcceptanceSourceSet.runtimeOnlyConfigurationName) {
     extendsFrom configurations.testRuntimeOnly
 }
-// easypoi's legacy POI 3.x schema jar exports the same OpenXML classes as the
-// catalogued POI 5.x full artifact. Keep this isolated acceptance runtime on the
-// production-compatible POI 5.x graph; otherwise classpath order causes linkage
-// errors before the validator/preview assertions can run.
-configurations.named(v1131AcceptanceSourceSet.runtimeClasspathConfigurationName) {
-    exclude group: 'org.apache.poi', module: 'poi-ooxml-schemas'
-}
-
 tasks.register('v1131Acceptance', Test) {
     group = 'verification'
     description = 'Runs the isolated no-Provider 1.13.1 workspace acceptance API suite.'
