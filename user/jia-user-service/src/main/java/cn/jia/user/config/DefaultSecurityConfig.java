@@ -95,7 +95,8 @@ public class DefaultSecurityConfig {
                     }
                     // The dedicated actuator chain is preferred, but this exact fallback keeps
                     // lifecycle health available if another chain wins selection in a full app context.
-                    authorize.requestMatchers(DefaultSecurityConfig::selectsActuator).permitAll();
+                    // Keep unrelated management endpoints behind the ordinary authentication boundary.
+                    authorize.requestMatchers(DefaultSecurityConfig::selectsActuatorHealth).permitAll();
                     authorize.requestMatchers("/login/**", "/oauth/**", "/favicon.ico").permitAll()
                             .anyRequest().authenticated();
                 })
@@ -122,7 +123,7 @@ public class DefaultSecurityConfig {
         return http.build();
     }
 
-    static boolean selectsActuator(HttpServletRequest request) {
+    static boolean selectsActuatorHealth(HttpServletRequest request) {
         if (request == null) {
             return false;
         }
@@ -132,7 +133,7 @@ public class DefaultSecurityConfig {
             return false;
         }
         String path = requestUri.substring(contextPath.length());
-        return path.equals("/actuator") || path.startsWith("/actuator/");
+        return path.equals("/actuator/health") || path.startsWith("/actuator/health/");
     }
 
     @Bean

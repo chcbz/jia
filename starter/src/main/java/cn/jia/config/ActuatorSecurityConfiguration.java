@@ -15,8 +15,8 @@ import org.springframework.security.web.savedrequest.NullRequestCache;
 
 /**
  * Gives the loopback health endpoint its own highest-priority chain. The general
- * application rule already permits actuator routes, but an explicit chain keeps
- * lifecycle health checks outside user/OAuth chain selection.
+ * application rule retains an exact health-only fallback, while this explicit chain
+ * keeps lifecycle health checks outside user/OAuth chain selection.
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnClass(SecurityFilterChain.class)
@@ -24,7 +24,7 @@ public class ActuatorSecurityConfiguration {
     @Bean
     @Order(Ordered.HIGHEST_PRECEDENCE)
     public SecurityFilterChain actuatorSecurityFilterChain(HttpSecurity http) throws Exception {
-        http.securityMatcher(ActuatorSecurityConfiguration::selectsActuator)
+        http.securityMatcher(ActuatorSecurityConfiguration::selectsActuatorHealth)
                 .authorizeHttpRequests(authorize -> authorize.anyRequest().permitAll())
                 .csrf(AbstractHttpConfigurer::disable)
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -33,8 +33,16 @@ public class ActuatorSecurityConfiguration {
         return http.build();
     }
 
-    static boolean selectsActuator(HttpServletRequest request) {
-        String path = request.getRequestURI().substring(request.getContextPath().length());
-        return path.equals("/actuator") || path.startsWith("/actuator/");
+    static boolean selectsActuatorHealth(HttpServletRequest request) {
+        if (request == null) {
+            return false;
+        }
+        String requestUri = request.getRequestURI();
+        String contextPath = request.getContextPath();
+        if (requestUri == null || contextPath == null || !requestUri.startsWith(contextPath)) {
+            return false;
+        }
+        String path = requestUri.substring(contextPath.length());
+        return path.equals("/actuator/health") || path.startsWith("/actuator/health/");
     }
 }
