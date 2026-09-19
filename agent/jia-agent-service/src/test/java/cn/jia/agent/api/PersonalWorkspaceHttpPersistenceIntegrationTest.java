@@ -17,6 +17,7 @@ import com.baomidou.mybatisplus.core.incrementer.DefaultIdentifierGenerator;
 import com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean;
 import tools.jackson.databind.JsonNode;
 import org.apache.ibatis.session.SqlSessionFactory;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -39,6 +40,9 @@ import javax.sql.DataSource;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.security.MessageDigest;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
@@ -77,6 +81,7 @@ class PersonalWorkspaceHttpPersistenceIntegrationTest {
     Path temporaryDirectory;
 
     private DriverManagerDataSource dataSource;
+    private Connection schemaConnection;
     private JdbcTemplate jdbc;
     private PersonalWorkspaceDao dao;
     private CountingStorage storage;
@@ -91,6 +96,7 @@ class PersonalWorkspaceHttpPersistenceIntegrationTest {
         dataSource.setUsername("sa");
         dataSource.setPassword("");
         jdbc = new JdbcTemplate(dataSource);
+        schemaConnection = dataSource.getConnection();
         createCompatibleTables();
 
         MybatisConfiguration configuration = new MybatisConfiguration();
@@ -113,6 +119,13 @@ class PersonalWorkspaceHttpPersistenceIntegrationTest {
 
         storage = newStorage();
         mvc = controller(dataSource);
+    }
+
+    @AfterEach
+    void closeSchemaConnection() throws SQLException {
+        if (schemaConnection != null) {
+            schemaConnection.close();
+        }
     }
 
     @Test
@@ -323,49 +336,54 @@ class PersonalWorkspaceHttpPersistenceIntegrationTest {
      * production column plus behavioral checks/uniques. VARCHAR_IGNORECASE makes the
      * mapper's CAST/OCTET_LENGTH exact predicates observable under an adversarial CI type.
      */
-    private void createCompatibleTables() {
-        jdbc.execute("CREATE TABLE agent_personal_workspace_file ("
-                + "id BIGINT AUTO_INCREMENT PRIMARY KEY,"
-                + "file_id VARCHAR_IGNORECASE(100) NOT NULL,"
-                + "owner_jiacn VARCHAR_IGNORECASE(50) NOT NULL,"
-                + "source_kind VARCHAR(24) NOT NULL,"
-                + "origin_kind VARCHAR(24) DEFAULT 'USER_UPLOAD' NOT NULL,"
-                + "display_name VARCHAR(255) NOT NULL,"
-                + "media_family VARCHAR(32) NOT NULL,"
-                + "state VARCHAR(24) NOT NULL,"
-                + "metadata_revision BIGINT NOT NULL,latest_version INT NOT NULL,created_at BIGINT NOT NULL,"
-                + "tenant_id VARCHAR_IGNORECASE(50) NOT NULL,client_id VARCHAR_IGNORECASE(50) NOT NULL,"
-                + "create_time BIGINT,update_time BIGINT,"
-                + "CONSTRAINT uk_pws_file_scope UNIQUE (tenant_id,client_id,owner_jiacn,file_id),"
-                + "CONSTRAINT chk_pws_file_revision CHECK (metadata_revision>=1 AND latest_version>=1),"
-                + "CONSTRAINT chk_pws_file_state CHECK (state IN ('ACTIVE','TRASHED')),"
-                + "CONSTRAINT chk_pws_file_source CHECK (source_kind='UPLOAD'),"
-                + "CONSTRAINT chk_pws_file_origin CHECK (origin_kind IN ('USER_UPLOAD','AGENT_DELIVERY')))" );
-        jdbc.execute("CREATE TABLE agent_personal_workspace_file_version ("
-                + "id BIGINT AUTO_INCREMENT PRIMARY KEY,"
-                + "file_id VARCHAR_IGNORECASE(100) NOT NULL,owner_jiacn VARCHAR_IGNORECASE(50) NOT NULL,"
-                + "version INT NOT NULL,original_filename VARCHAR(255) NOT NULL,"
-                + "content_mime_type VARCHAR(127) NOT NULL,byte_length BIGINT NOT NULL,"
-                + "content_hash CHAR(64) NOT NULL,storage_uri VARCHAR(1000) NOT NULL,created_at BIGINT NOT NULL,"
-                + "tenant_id VARCHAR_IGNORECASE(50) NOT NULL,client_id VARCHAR_IGNORECASE(50) NOT NULL,"
-                + "create_time BIGINT,update_time BIGINT,"
-                + "CONSTRAINT uk_pws_version_scope UNIQUE (tenant_id,client_id,owner_jiacn,file_id,version),"
-                + "CONSTRAINT chk_pws_version_positive CHECK (version>=1 AND byte_length>=0),"
-                + "CONSTRAINT chk_pws_version_hash CHECK (CHAR_LENGTH(content_hash)=64))");
-        jdbc.execute("CREATE TABLE agent_personal_workspace_operation ("
-                + "id BIGINT AUTO_INCREMENT PRIMARY KEY,"
-                + "operation_id VARCHAR_IGNORECASE(100) NOT NULL,owner_jiacn VARCHAR_IGNORECASE(50) NOT NULL,"
-                + "operation_type VARCHAR_IGNORECASE(40) NOT NULL,idempotency_key VARCHAR_IGNORECASE(100) NOT NULL,"
-                + "request_hash CHAR(64) NOT NULL,state VARCHAR(32) NOT NULL,"
-                + "file_id VARCHAR_IGNORECASE(100),file_version INT,error_code VARCHAR(80),"
-                + "created_at BIGINT NOT NULL,completed_at BIGINT,"
-                + "tenant_id VARCHAR_IGNORECASE(50) NOT NULL,client_id VARCHAR_IGNORECASE(50) NOT NULL,"
-                + "create_time BIGINT,update_time BIGINT,"
-                + "CONSTRAINT uk_pws_operation_key UNIQUE "
-                + "(tenant_id,client_id,owner_jiacn,operation_type,idempotency_key),"
-                + "CONSTRAINT uk_pws_operation_id UNIQUE (tenant_id,client_id,operation_id),"
-                + "CONSTRAINT chk_pws_operation_hash CHECK (CHAR_LENGTH(request_hash)=64),"
-                + "CONSTRAINT chk_pws_operation_state CHECK (state IN ('PROCESSING','COMMITTED','FAILED')))" );
+    private void createCompatibleTables() throws SQLException {
+        // H2 2.4.240 binds optimized CHECK ... IN constant sets to the DDL session.
+        // Keep that session alive for the fixture lifetime instead of weakening or deleting
+        // the production-equivalent constraints; transactional DAO work uses other connections.
+        try (Statement statement = schemaConnection.createStatement()) {
+            statement.execute("CREATE TABLE agent_personal_workspace_file ("
+                    + "id BIGINT AUTO_INCREMENT PRIMARY KEY,"
+                    + "file_id VARCHAR_IGNORECASE(100) NOT NULL,"
+                    + "owner_jiacn VARCHAR_IGNORECASE(50) NOT NULL,"
+                    + "source_kind VARCHAR(24) NOT NULL,"
+                    + "origin_kind VARCHAR(24) DEFAULT 'USER_UPLOAD' NOT NULL,"
+                    + "display_name VARCHAR(255) NOT NULL,"
+                    + "media_family VARCHAR(32) NOT NULL,"
+                    + "state VARCHAR(24) NOT NULL,"
+                    + "metadata_revision BIGINT NOT NULL,latest_version INT NOT NULL,created_at BIGINT NOT NULL,"
+                    + "tenant_id VARCHAR_IGNORECASE(50) NOT NULL,client_id VARCHAR_IGNORECASE(50) NOT NULL,"
+                    + "create_time BIGINT,update_time BIGINT,"
+                    + "CONSTRAINT uk_pws_file_scope UNIQUE (tenant_id,client_id,owner_jiacn,file_id),"
+                    + "CONSTRAINT chk_pws_file_revision CHECK (metadata_revision>=1 AND latest_version>=1),"
+                    + "CONSTRAINT chk_pws_file_state CHECK (state IN ('ACTIVE','TRASHED')),"
+                    + "CONSTRAINT chk_pws_file_source CHECK (source_kind='UPLOAD'),"
+                    + "CONSTRAINT chk_pws_file_origin CHECK (origin_kind IN ('USER_UPLOAD','AGENT_DELIVERY')))" );
+            statement.execute("CREATE TABLE agent_personal_workspace_file_version ("
+                    + "id BIGINT AUTO_INCREMENT PRIMARY KEY,"
+                    + "file_id VARCHAR_IGNORECASE(100) NOT NULL,owner_jiacn VARCHAR_IGNORECASE(50) NOT NULL,"
+                    + "version INT NOT NULL,original_filename VARCHAR(255) NOT NULL,"
+                    + "content_mime_type VARCHAR(127) NOT NULL,byte_length BIGINT NOT NULL,"
+                    + "content_hash CHAR(64) NOT NULL,storage_uri VARCHAR(1000) NOT NULL,created_at BIGINT NOT NULL,"
+                    + "tenant_id VARCHAR_IGNORECASE(50) NOT NULL,client_id VARCHAR_IGNORECASE(50) NOT NULL,"
+                    + "create_time BIGINT,update_time BIGINT,"
+                    + "CONSTRAINT uk_pws_version_scope UNIQUE (tenant_id,client_id,owner_jiacn,file_id,version),"
+                    + "CONSTRAINT chk_pws_version_positive CHECK (version>=1 AND byte_length>=0),"
+                    + "CONSTRAINT chk_pws_version_hash CHECK (CHAR_LENGTH(content_hash)=64))");
+            statement.execute("CREATE TABLE agent_personal_workspace_operation ("
+                    + "id BIGINT AUTO_INCREMENT PRIMARY KEY,"
+                    + "operation_id VARCHAR_IGNORECASE(100) NOT NULL,owner_jiacn VARCHAR_IGNORECASE(50) NOT NULL,"
+                    + "operation_type VARCHAR_IGNORECASE(40) NOT NULL,idempotency_key VARCHAR_IGNORECASE(100) NOT NULL,"
+                    + "request_hash CHAR(64) NOT NULL,state VARCHAR(32) NOT NULL,"
+                    + "file_id VARCHAR_IGNORECASE(100),file_version INT,error_code VARCHAR(80),"
+                    + "created_at BIGINT NOT NULL,completed_at BIGINT,"
+                    + "tenant_id VARCHAR_IGNORECASE(50) NOT NULL,client_id VARCHAR_IGNORECASE(50) NOT NULL,"
+                    + "create_time BIGINT,update_time BIGINT,"
+                    + "CONSTRAINT uk_pws_operation_key UNIQUE "
+                    + "(tenant_id,client_id,owner_jiacn,operation_type,idempotency_key),"
+                    + "CONSTRAINT uk_pws_operation_id UNIQUE (tenant_id,client_id,operation_id),"
+                    + "CONSTRAINT chk_pws_operation_hash CHECK (CHAR_LENGTH(request_hash)=64),"
+                    + "CONSTRAINT chk_pws_operation_state CHECK (state IN ('PROCESSING','COMMITTED','FAILED')))" );
+        }
     }
 
     private static final class CountingStorage implements PersonalWorkspaceStorage {
