@@ -144,6 +144,14 @@ def v1131AcceptanceSourceSet = sourceSets.create('v1131Acceptance') {
         include 'cn/jia/agent/config/PersonalWorkspaceTaskLinkSchemaInitializerTest.java'
         include 'cn/jia/agent/config/PersonalWorkspaceConversationLinkSchemaInitializerTest.java'
         include 'cn/jia/agent/config/PersonalWorkspaceExecutionSchemaInitializerTest.java'
+        // HTTP contract and real isolated persistence slices; no Provider or production DB.
+        include 'cn/jia/agent/api/PersonalWorkspaceTaskFileLinkControllerTest.java'
+        include 'cn/jia/agent/api/PersonalWorkspaceConversationFileLinkControllerTest.java'
+        include 'cn/jia/agent/api/PersonalWorkspaceExecutionControllerTest.java'
+        include 'cn/jia/agent/api/AgentTaskWorkspaceControllerTest.java'
+        include 'cn/jia/agent/api/AgentTaskWorkspaceCacheControlFilterTest.java'
+        include 'cn/jia/agent/api/AgentTaskDeliverableControllerTest.java'
+        include 'cn/jia/agent/api/PersonalWorkspaceHttpPersistenceIntegrationTest.java'
     }
     resources.srcDir 'src/test/resources'
     compileClasspath += sourceSets.main.output
