@@ -93,8 +93,10 @@ public class DefaultSecurityConfig {
                     if (CollectionUtil.isNotNullOrEmpty(ignoreUris)) {
                         authorize.requestMatchers(ignoreUris.toArray(new String[0])).permitAll();
                     }
-                    authorize.requestMatchers("/actuator", "/actuator/**",
-                                    "/login/**", "/oauth/**", "/favicon.ico").permitAll()
+                    // The dedicated actuator chain is preferred, but this exact fallback keeps
+                    // lifecycle health available if another chain wins selection in a full app context.
+                    authorize.requestMatchers(DefaultSecurityConfig::selectsActuator).permitAll();
+                    authorize.requestMatchers("/login/**", "/oauth/**", "/favicon.ico").permitAll()
                             .anyRequest().authenticated();
                 })
                 .cors(Customizer.withDefaults())
@@ -118,6 +120,19 @@ public class DefaultSecurityConfig {
                         .successHandler(authenticationSuccessHandler()))
         ;
         return http.build();
+    }
+
+    static boolean selectsActuator(HttpServletRequest request) {
+        if (request == null) {
+            return false;
+        }
+        String requestUri = request.getRequestURI();
+        String contextPath = request.getContextPath();
+        if (requestUri == null || contextPath == null || !requestUri.startsWith(contextPath)) {
+            return false;
+        }
+        String path = requestUri.substring(contextPath.length());
+        return path.equals("/actuator") || path.startsWith("/actuator/");
     }
 
     @Bean

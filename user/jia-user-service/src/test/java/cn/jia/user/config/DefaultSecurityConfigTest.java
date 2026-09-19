@@ -9,6 +9,7 @@ import cn.jia.user.service.UserService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -31,6 +32,31 @@ class DefaultSecurityConfigTest extends BaseMockTest {
         ReflectionTestUtils.setField(config, "userService", userService);
         ReflectionTestUtils.setField(config, "permsService", permsService);
         userDetailsService = config.userDetailsService();
+    }
+
+    @Test
+    void actuatorFallbackMatcherOnlySelectsTheActuatorTree() {
+        assertFalse(DefaultSecurityConfig.selectsActuator(null));
+
+        HttpServletRequest actuator = mock(HttpServletRequest.class);
+        when(actuator.getContextPath()).thenReturn("");
+        when(actuator.getRequestURI()).thenReturn("/actuator/health");
+        assertTrue(DefaultSecurityConfig.selectsActuator(actuator));
+
+        HttpServletRequest nestedContext = mock(HttpServletRequest.class);
+        when(nestedContext.getContextPath()).thenReturn("/api");
+        when(nestedContext.getRequestURI()).thenReturn("/api/actuator");
+        assertTrue(DefaultSecurityConfig.selectsActuator(nestedContext));
+
+        HttpServletRequest lookalike = mock(HttpServletRequest.class);
+        when(lookalike.getContextPath()).thenReturn("");
+        when(lookalike.getRequestURI()).thenReturn("/actuatorx/health");
+        assertFalse(DefaultSecurityConfig.selectsActuator(lookalike));
+
+        HttpServletRequest malformed = mock(HttpServletRequest.class);
+        when(malformed.getContextPath()).thenReturn("/api");
+        when(malformed.getRequestURI()).thenReturn("/actuator/health");
+        assertFalse(DefaultSecurityConfig.selectsActuator(malformed));
     }
 
     @Test
