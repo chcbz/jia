@@ -74,7 +74,7 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
         poisoned.setClientId("cookie-client");
         EsContextHolder.setContext(poisoned);
         JwtAuthenticationToken authentication = authenticate("tenant-a", "client-a");
-        when(service.snapshot("tenant-a", "client-a", TASK, ACTOR))
+        when(service.snapshot("0", "client-a", "tenant-a", TASK, ACTOR))
                 .thenReturn(snapshot("9007199254740993"));
 
         mvc.perform(get("/agent/tasks/{taskId}/workspace", TASK)
@@ -84,7 +84,7 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
                 .andExpect(jsonPath("$.currentVersion").value("9007199254740993"))
                 .andExpect(jsonPath("$.conversationId").value(nullValue()))
                 .andExpect(jsonPath("$.data").doesNotExist());
-        verify(service).snapshot("tenant-a", "client-a", TASK, ACTOR);
+        verify(service).snapshot("0", "client-a", "tenant-a", TASK, ACTOR);
     }
 
     @Test
@@ -131,7 +131,7 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
 
     @Test
     void disabledGateReturnsNoStore503BeforeWorkspaceServiceAllocation() throws Exception {
-        when(taskEventsGate.allows("tenant-a", "client-a")).thenReturn(false);
+        when(taskEventsGate.allows("0", "client-a")).thenReturn(false);
 
         mvc.perform(get("/agent/tasks/{taskId}/workspace", TASK)
                         .queryParam("actorAgentId", ACTOR)
@@ -140,8 +140,8 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
                 .andExpect(jsonPath("$.code").value("TASK_WORKSPACE_UNAVAILABLE"));
 
-        verify(taskEventsGate).allows("tenant-a", "client-a");
-        verify(service, never()).snapshot(anyString(), anyString(), anyString(), anyString());
+        verify(taskEventsGate).allows("0", "client-a");
+        verify(service, never()).snapshot(anyString(), anyString(), anyString(), anyString(), anyString());
     }
 
     @Test
@@ -169,7 +169,7 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
 
-        when(service.snapshot("tenant-a", "client-a", TASK, ACTOR)).thenThrow(
+        when(service.snapshot("0", "client-a", "tenant-a", TASK, ACTOR)).thenThrow(
                 new AgentTaskWorkspaceException(
                         AgentTaskWorkspaceException.Reason.NOT_FOUND_OR_FORBIDDEN));
         mvc.perform(get("/agent/tasks/{taskId}/workspace", TASK)
@@ -186,13 +186,13 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
         String task = "Task-1";
         String actor = "Agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         JwtAuthenticationToken authentication = authenticate(tenant, client);
-        when(service.snapshot(tenant, client, task, actor)).thenReturn(snapshot("0"));
+        when(service.snapshot("0", client, tenant, task, actor)).thenReturn(snapshot("0"));
 
         mvc.perform(get("/agent/tasks/{taskId}/workspace", task)
                         .queryParam("actorAgentId", actor).principal(authentication))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
-        verify(service).snapshot(tenant, client, task, actor);
+        verify(service).snapshot("0", client, tenant, task, actor);
     }
 
     @Test
@@ -225,13 +225,13 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
         String task = "k" + supplementary.repeat(99);
         String actor = "a" + supplementary.repeat(99);
         JwtAuthenticationToken authentication = authenticate(tenant, client);
-        when(service.snapshot(tenant, client, task, actor)).thenReturn(snapshot("0"));
+        when(service.snapshot("0", client, tenant, task, actor)).thenReturn(snapshot("0"));
 
         mvc.perform(get("/agent/tasks/{taskId}/workspace", task)
                         .queryParam("actorAgentId", actor).principal(authentication))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
-        verify(service).snapshot(tenant, client, task, actor);
+        verify(service).snapshot("0", client, tenant, task, actor);
     }
 
     @Test
@@ -255,9 +255,9 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
         String composed = "task-\u00e9";
         String decomposed = "task-e\u0301";
         JwtAuthenticationToken authentication = authenticate("tenant-a", "client-a");
-        when(service.snapshot("tenant-a", "client-a", composed, ACTOR))
+        when(service.snapshot("0", "client-a", "tenant-a", composed, ACTOR))
                 .thenReturn(snapshot("0"));
-        when(service.snapshot("tenant-a", "client-a", decomposed, ACTOR))
+        when(service.snapshot("0", "client-a", "tenant-a", decomposed, ACTOR))
                 .thenReturn(snapshot("0"));
 
         mvc.perform(get("/agent/tasks/{taskId}/workspace", composed)
@@ -266,8 +266,8 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
         mvc.perform(get("/agent/tasks/{taskId}/workspace", decomposed)
                         .queryParam("actorAgentId", ACTOR).principal(authentication))
                 .andExpect(status().isOk());
-        verify(service).snapshot("tenant-a", "client-a", composed, ACTOR);
-        verify(service).snapshot("tenant-a", "client-a", decomposed, ACTOR);
+        verify(service).snapshot("0", "client-a", "tenant-a", composed, ACTOR);
+        verify(service).snapshot("0", "client-a", "tenant-a", decomposed, ACTOR);
     }
 
     @Test
@@ -308,7 +308,7 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
         AgentTaskWorkspaceDTO snapshot = snapshot("0");
         snapshot.getTask().setRequiredAbilities("x".repeat(
                 AgentTaskWorkspaceController.MAX_SERIALIZED_BYTES));
-        when(service.snapshot("tenant-a", "client-a", TASK, ACTOR)).thenReturn(snapshot);
+        when(service.snapshot("0", "client-a", "tenant-a", TASK, ACTOR)).thenReturn(snapshot);
 
         mvc.perform(get("/agent/tasks/{taskId}/workspace", TASK)
                         .queryParam("actorAgentId", ACTOR).principal(authentication))
