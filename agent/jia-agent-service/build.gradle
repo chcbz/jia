@@ -152,6 +152,7 @@ def v1131AcceptanceSourceSet = sourceSets.create('v1131Acceptance') {
         include 'cn/jia/agent/api/AgentTaskWorkspaceCacheControlFilterTest.java'
         include 'cn/jia/agent/api/AgentTaskDeliverableControllerTest.java'
         include 'cn/jia/agent/api/PersonalWorkspaceHttpPersistenceIntegrationTest.java'
+        include 'cn/jia/agent/api/PersonalWorkspaceControllerPreviewTest.java'
     }
     resources.srcDir 'src/test/resources'
     compileClasspath += sourceSets.main.output
