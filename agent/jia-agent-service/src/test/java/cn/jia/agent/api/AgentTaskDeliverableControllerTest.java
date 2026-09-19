@@ -288,7 +288,7 @@ class AgentTaskDeliverableControllerTest {
 
             int expectedReads = 3;
             if (sample.legacyContentText() != null) {
-                var legacyContent = mvc.perform(get(
+                var legacyContentResult = mvc.perform(get(
                                 "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}"
                                         + "/preview/parts/content",
                                 TASK, ARTIFACT, sample.version())
@@ -296,7 +296,7 @@ class AgentTaskDeliverableControllerTest {
                         .andExpect(status().isOk())
                         .andExpect(content().contentType("text/plain"))
                         .andReturn();
-                assertTrue(new String(legacyContent.getResponse().getContentAsByteArray(),
+                assertTrue(new String(legacyContentResult.getResponse().getContentAsByteArray(),
                         StandardCharsets.UTF_8).contains(sample.legacyContentText()));
                 expectedReads++;
             }
