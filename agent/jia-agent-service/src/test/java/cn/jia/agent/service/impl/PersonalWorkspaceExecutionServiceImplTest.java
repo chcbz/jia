@@ -61,7 +61,7 @@ class PersonalWorkspaceExecutionServiceImplTest {
     private AgentRuntimeDao runtimes;
     private PersonalWorkspaceStorage storage;
     private PersonalWorkspaceWriteService writes;
-    private PersonalWorkspaceExecutionService service;
+    private PersonalWorkspaceExecutionServiceImpl service;
 
     @BeforeEach
     void setUp() {
@@ -278,7 +278,7 @@ class PersonalWorkspaceExecutionServiceImplTest {
         AgentTaskWorkItemDao workItems = mock(AgentTaskWorkItemDao.class);
         AgentWorkItemLeaseService leases = mock(AgentWorkItemLeaseService.class);
         service.setTaskExecutionDependencies(access, workItems, leases);
-        when(access.requireAccessible(any())).thenReturn(new WorkspaceConversationAccessService.ConversationView(
+        when(access.requireAccessible(any(), any())).thenReturn(new WorkspaceConversationAccessService.ConversationView(
                 "conversation-1", "TASK", "task-1", "task-1", List.of("agent-a"), 1L, 1L));
         AgentTaskWorkItemEntity ready = taskWorkItem("ready", 7L, null, null, null);
         AgentTaskWorkItemEntity running = taskWorkItem("running", 9L, "agent-a", "lease-secret", 9_999_999_999_999L);
@@ -597,7 +597,7 @@ class PersonalWorkspaceExecutionServiceImplTest {
         AgentRuntimeEntity runtime = new AgentRuntimeEntity();
         runtime.setAgentId("agent-a"); runtime.setClientId("client-a"); runtime.setOwnerJiacn("owner-a");
         when(runtimes.findCandidateRosterByOwner("client-a", "owner-a")).thenReturn(List.of(runtime));
-        when(access.requireAccessible(any())).thenReturn(new WorkspaceConversationAccessService.ConversationView(
+        when(access.requireAccessible(any(), any())).thenReturn(new WorkspaceConversationAccessService.ConversationView(
                 "conversation-1", "TASK", "task-1", "task-1", List.of("agent-a"), 1L, 1L));
         AgentTaskWorkItemEntity ready = taskWorkItem("ready", 7L, null, null, null);
         AgentTaskWorkItemEntity running = taskWorkItem(
@@ -641,9 +641,13 @@ class PersonalWorkspaceExecutionServiceImplTest {
 
     private static AgentTaskArtifactViewDTO artifact(String id, String contentHash, String mime) {
         AgentTaskArtifactViewDTO value = new AgentTaskArtifactViewDTO();
-        value.setArtifactId(id).setArtifactVersion(1).setTaskId("task-1").setWorkItemId("work-1")
-                .setProducerAgentId("agent-a").setContentHash(contentHash == null ? sha("manifest") : contentHash)
-                .setContentMimeType(mime);
+        value.setArtifactId(id);
+        value.setArtifactVersion(1);
+        value.setTaskId("task-1");
+        value.setWorkItemId("work-1");
+        value.setProducerAgentId("agent-a");
+        value.setContentHash(contentHash == null ? sha("manifest") : contentHash);
+        value.setContentMimeType(mime);
         return value;
     }
 

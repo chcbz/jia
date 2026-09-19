@@ -2,6 +2,7 @@ package cn.jia.agent.service.impl;
 
 import cn.jia.agent.common.TaskEventType;
 import cn.jia.agent.dao.AgentTaskFormalDeliveryDao;
+import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.dao.AgentTaskWorkItemDao;
 import cn.jia.agent.entity.AgentTaskEventWriteCommand;
