@@ -20,8 +20,16 @@ public class PersonalWorkspaceExecutionEntity extends BaseEntity {
     @TableId(value = "id", type = IdType.AUTO) private Long id;
     private String executionId;
     private String ownerJiacn;
+    /** Runtime bridge namespace. In TASK mode it is the authoritative business task ID. */
     private String taskId;
     private String runId;
+    /** PRIVATE bridge and TASK work-item execution are distinct domains; this field never implies delivery. */
+    private String executionMode;
+    private String workItemId;
+    /** Runtime-only lease material; never exposed by browser views or queue payloads. */
+    private String leaseToken;
+    private Long leaseWorkItemVersion;
+    private Long leaseExpiresAt;
     private String conversationId;
     private String targetAgentId;
     private String instruction;

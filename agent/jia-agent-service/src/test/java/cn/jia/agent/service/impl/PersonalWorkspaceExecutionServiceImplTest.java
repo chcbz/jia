@@ -2,15 +2,21 @@ package cn.jia.agent.service.impl;
 
 import cn.jia.agent.config.PersonalWorkspaceExecutionProperties;
 import cn.jia.agent.dao.AgentRuntimeDao;
+import cn.jia.agent.dao.AgentTaskWorkItemDao;
 import cn.jia.agent.dao.PersonalWorkspaceDao;
 import cn.jia.agent.dao.PersonalWorkspaceExecutionDao;
 import cn.jia.agent.dao.PersonalWorkspaceTaskLinkDao;
+import cn.jia.agent.entity.AgentRuntimeEntity;
+import cn.jia.agent.entity.AgentTaskWorkItemEntity;
+import cn.jia.agent.entity.AgentWorkItemLeaseDTO;
 import cn.jia.agent.entity.PersonalWorkspaceExecutionEntity;
 import cn.jia.agent.entity.PersonalWorkspaceExecutionInputEntity;
 import cn.jia.agent.entity.PersonalWorkspaceExecutionOutputEntity;
 import cn.jia.agent.entity.PersonalWorkspaceFileEntity;
 import cn.jia.agent.entity.PersonalWorkspaceVersionEntity;
 import cn.jia.agent.service.PersonalWorkspaceExecutionService;
+import cn.jia.agent.service.AgentWorkItemLeaseService;
+import cn.jia.chat.service.WorkspaceConversationAccessService;
 import cn.jia.agent.service.PersonalWorkspaceStorage;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -29,12 +35,14 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.times;
 
 /** Focused owner/runtime queue contract; database mapper tests retain SQL exactness coverage. */
 class PersonalWorkspaceExecutionServiceImplTest {
     private static final PersonalWorkspaceExecutionService.RuntimeScope RUNTIME =
             new PersonalWorkspaceExecutionService.RuntimeScope("0", "client-a", "owner-a", "agent-a", "runtime-a");
     private PersonalWorkspaceExecutionDao executions;
+    private AgentRuntimeDao runtimes;
     private PersonalWorkspaceStorage storage;
     private PersonalWorkspaceWriteService writes;
     private PersonalWorkspaceExecutionService service;
@@ -42,11 +50,12 @@ class PersonalWorkspaceExecutionServiceImplTest {
     @BeforeEach
     void setUp() {
         executions = mock(PersonalWorkspaceExecutionDao.class);
+        runtimes = mock(AgentRuntimeDao.class);
         storage = mock(PersonalWorkspaceStorage.class);
         when(storage.maxContentBytes()).thenReturn(4096L);
         writes = mock(PersonalWorkspaceWriteService.class);
         service = new PersonalWorkspaceExecutionServiceImpl(executions, mock(PersonalWorkspaceDao.class),
-                mock(PersonalWorkspaceTaskLinkDao.class), mock(AgentRuntimeDao.class), storage, writes,
+                mock(PersonalWorkspaceTaskLinkDao.class), runtimes, storage, writes,
                 new PersonalWorkspaceExecutionProperties(List.of(PersonalWorkspaceExecutionProperties.DOCX)));
     }
 
@@ -151,6 +160,48 @@ class PersonalWorkspaceExecutionServiceImplTest {
     }
 
     @Test
+    void taskExecutionStartsExistingRequiredWorkItemWithoutExposingLeaseToBrowser() {
+        AgentRuntimeEntity runtime = new AgentRuntimeEntity();
+        runtime.setAgentId("agent-a"); runtime.setClientId("client-a"); runtime.setOwnerJiacn("owner-a");
+        when(runtimes.findCandidateRosterByOwner("client-a", "owner-a")).thenReturn(List.of(runtime));
+        WorkspaceConversationAccessService access = mock(WorkspaceConversationAccessService.class);
+        AgentTaskWorkItemDao workItems = mock(AgentTaskWorkItemDao.class);
+        AgentWorkItemLeaseService leases = mock(AgentWorkItemLeaseService.class);
+        service.setTaskExecutionDependencies(access, workItems, leases);
+        when(access.requireAccessible(any())).thenReturn(new WorkspaceConversationAccessService.ConversationView(
+                "conversation-1", "TASK", "task-1", "task-1", List.of("agent-a"), 1L, 1L));
+        AgentTaskWorkItemEntity ready = taskWorkItem("ready", 7L, null, null, null);
+        AgentTaskWorkItemEntity running = taskWorkItem("running", 9L, "agent-a", "lease-secret", 9_999_999_999_999L);
+        when(workItems.listByTask("0", "client-a", "owner-a", "task-1", "ready", 32)).thenReturn(List.of(ready));
+        when(workItems.findByTaskAndWorkItemId("0", "client-a", "owner-a", "task-1", "work-1")).thenReturn(running);
+        when(leases.claim(any(), any(), any(), any(), any(), any())).thenReturn(lease("claimed", 8L));
+        when(leases.start(any(), any(), any(), any(), any(), any())).thenReturn(lease("running", 9L));
+        when(executions.findByIdempotency("0", "client-a", "owner-a", "task-key")).thenReturn(null);
+        when(executions.listInputs("0", "client-a", "owner-a", "pwe_created")).thenReturn(List.of());
+        org.mockito.Mockito.doAnswer(invocation -> {
+            invocation.<PersonalWorkspaceExecutionEntity>getArgument(0).setExecutionId("pwe_created");
+            return null;
+        }).when(executions).insert(any(PersonalWorkspaceExecutionEntity.class));
+        var captured = ArgumentCaptor.forClass(PersonalWorkspaceExecutionEntity.class);
+
+        var view = service.create(new PersonalWorkspaceExecutionService.OwnerScope("0", "client-a", "owner-a"),
+                new PersonalWorkspaceExecutionService.CreateCommand("conversation-1", "agent-a", "task-1",
+                        "生成交付", PersonalWorkspaceExecutionProperties.DOCX, List.of()), "task-key");
+
+        verify(executions).insert(captured.capture());
+        assertEquals("TASK", captured.getValue().getExecutionMode());
+        assertEquals("work-1", captured.getValue().getWorkItemId());
+        assertEquals("TASK", view.executionMode());
+        assertEquals("task-1", view.businessTaskId());
+        assertEquals("work-1", view.workItemId());
+        assertEquals("running", view.workItemState());
+        assertFalse(view.toString().contains("lease-secret"));
+        assertFalse(view.toString().contains("storageUri"));
+        verify(leases, times(1)).claim(any(), any(), any(), any(), any(), any());
+        verify(leases, times(1)).start(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
     void stageOutputRejectsMislabeledRuntimeBytesBeforeDurableStorage() {
         PersonalWorkspaceExecutionEntity execution = execution("pwe_1", "agent-a", "QUEUED");
         when(executions.lockByTaskRun("0", "client-a", "owner-a", "pwe_task_1", "pwe_run_1"))
@@ -167,6 +218,8 @@ class PersonalWorkspaceExecutionServiceImplTest {
     @Test
     void exactRuntimeFailureMovesQueuedExecutionToTerminalStateAndPreventsQueueReplay() {
         PersonalWorkspaceExecutionEntity execution = execution("pwe_1", "agent-a", "QUEUED");
+        when(executions.findByTaskRun("0", "client-a", "owner-a", "pwe_task_1", "pwe_run_1"))
+                .thenReturn(execution);
         when(executions.lockByTaskRun("0", "client-a", "owner-a", "pwe_task_1", "pwe_run_1"))
                 .thenReturn(execution);
         when(executions.listInputs("0", "client-a", "owner-a", "pwe_1")).thenReturn(List.of());
@@ -187,6 +240,8 @@ class PersonalWorkspaceExecutionServiceImplTest {
     @Test
     void runtimeFailureCannotAffectAnotherAgentOrACompletedExecution() {
         PersonalWorkspaceExecutionEntity other = execution("pwe_1", "agent-b", "QUEUED");
+        when(executions.findByTaskRun("0", "client-a", "owner-a", "pwe_task_1", "pwe_run_1"))
+                .thenReturn(other);
         when(executions.lockByTaskRun("0", "client-a", "owner-a", "pwe_task_1", "pwe_run_1"))
                 .thenReturn(other);
         var denied = assertThrows(PersonalWorkspaceExecutionService.Failure.class,
@@ -195,6 +250,8 @@ class PersonalWorkspaceExecutionServiceImplTest {
         verify(executions, never()).update(other);
 
         PersonalWorkspaceExecutionEntity committed = execution("pwe_1", "agent-a", "OUTPUT_COMMITTED");
+        when(executions.findByTaskRun("0", "client-a", "owner-a", "pwe_task_1", "pwe_run_1"))
+                .thenReturn(committed);
         when(executions.lockByTaskRun("0", "client-a", "owner-a", "pwe_task_1", "pwe_run_1"))
                 .thenReturn(committed);
         var completed = assertThrows(PersonalWorkspaceExecutionService.Failure.class,
@@ -235,6 +292,24 @@ class PersonalWorkspaceExecutionServiceImplTest {
         assertEquals("AGENT_DELIVERY", file.getValue().getOriginKind());
         assertEquals(file.getValue().getFileId(), version.getValue().getFileId());
         assertEquals("COMMITTED", committed.state());
+    }
+
+    private static AgentTaskWorkItemEntity taskWorkItem(String state, long version, String assignee,
+            String token, Long until) {
+        AgentTaskWorkItemEntity item = new AgentTaskWorkItemEntity();
+        item.setTaskId("task-1"); item.setWorkItemId("work-1"); item.setRequiredItem(true);
+        item.setStatus(state); item.setVersion(version); item.setAssigneeAgentId(assignee);
+        item.setLeaseToken(token); item.setLeaseUntil(until);
+        item.setTenantId("0"); item.setClientId("client-a"); item.setOwnerJiacn("owner-a");
+        return item;
+    }
+
+    private static AgentWorkItemLeaseDTO lease(String state, long version) {
+        AgentWorkItemLeaseDTO value = new AgentWorkItemLeaseDTO();
+        value.setTaskId("task-1"); value.setWorkItemId("work-1"); value.setAgentId("agent-a");
+        value.setStatus(state); value.setLeaseToken("lease-secret"); value.setVersion(version);
+        value.setLeaseUntil(9_999_999_999_999L);
+        return value;
     }
 
     private static PersonalWorkspaceExecutionEntity execution(String id, String agent, String state) {

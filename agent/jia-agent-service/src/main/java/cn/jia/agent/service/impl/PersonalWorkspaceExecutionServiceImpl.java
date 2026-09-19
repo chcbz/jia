@@ -2,20 +2,29 @@ package cn.jia.agent.service.impl;
 
 import cn.jia.agent.config.PersonalWorkspaceExecutionProperties;
 import cn.jia.agent.dao.AgentRuntimeDao;
+import cn.jia.agent.dao.AgentTaskWorkItemDao;
 import cn.jia.agent.dao.PersonalWorkspaceDao;
 import cn.jia.agent.dao.PersonalWorkspaceExecutionDao;
 import cn.jia.agent.dao.PersonalWorkspaceTaskLinkDao;
 import cn.jia.agent.entity.AgentRuntimeEntity;
+import cn.jia.agent.entity.AgentTaskWorkItemEntity;
+import cn.jia.agent.entity.AgentWorkItemLeaseCommandDTO;
+import cn.jia.agent.entity.AgentWorkItemLeaseDTO;
 import cn.jia.agent.entity.PersonalWorkspaceExecutionEntity;
 import cn.jia.agent.entity.PersonalWorkspaceExecutionInputEntity;
 import cn.jia.agent.entity.PersonalWorkspaceExecutionOutputEntity;
 import cn.jia.agent.entity.PersonalWorkspaceFileEntity;
 import cn.jia.agent.entity.PersonalWorkspaceVersionEntity;
 import cn.jia.agent.service.PersonalWorkspaceExecutionService;
+import cn.jia.agent.service.AgentWorkItemLeaseService;
+import cn.jia.agent.exception.AgentTaskCollaborationException;
+import cn.jia.agent.exception.AgentTaskStateException;
+import cn.jia.chat.service.WorkspaceConversationAccessService;
 import cn.jia.agent.service.PersonalWorkspaceStorage;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.ByteBuffer;
@@ -35,9 +44,9 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * C1-C/D private run grant boundary. It has no public task-root/event/search side effect: the
- * generated taskId is only a stable runtime bridge namespace. A runtime-authenticated client polls
- * its own durable queue; acceptance never pretends that a model has already run.
+ * Owner-scoped runtime bridge. PRIVATE executions have no task-root side effect; TASK executions
+ * hold a real existing work-item lease but remain distinct from artifacts and formal delivery.
+ * A runtime-authenticated client polls its durable queue; browser responses never contain a lease.
  */
 @Named
 public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceExecutionService {
@@ -46,6 +55,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     private static final String RUNTIME_FAILURE_MESSAGE = "Agent 未能完成本次交付，请调整需求后重新创建执行。";
     /** Matches the runtime bridge manifest limit; every input remains independently owner-scoped and version-pinned. */
     private static final int MAX_EXECUTION_INPUTS = 128;
+    private static final long TASK_LEASE_DURATION_MILLIS = 900_000L;
     /** Every runtime output type is independently configuration-gated; upload availability does not imply execution. */
     private static final Set<String> SUPPORTED_EXECUTION_MIME_TYPES = Set.of(
             "image/png", "image/jpeg", "application/pdf",
@@ -65,6 +75,10 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     private final PersonalWorkspaceWriteService writes;
     private final Set<String> executionMimeTypes;
     private final boolean executionAvailable;
+    /** Set by the task collaboration module; private execution remains available when this lane is absent. */
+    private WorkspaceConversationAccessService conversationAccess;
+    private AgentTaskWorkItemDao workItems;
+    private AgentWorkItemLeaseService leases;
 
     @Inject
     public PersonalWorkspaceExecutionServiceImpl(PersonalWorkspaceExecutionDao executions,
@@ -82,6 +96,14 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         this.executionAvailable = maxOutputBytes >= 1 && maxOutputBytes <= 9_007_199_254_740_991L;
     }
 
+    @Autowired(required = false)
+    public void setTaskExecutionDependencies(WorkspaceConversationAccessService conversationAccess,
+            AgentTaskWorkItemDao workItems, AgentWorkItemLeaseService leases) {
+        this.conversationAccess = Objects.requireNonNull(conversationAccess, "conversationAccess");
+        this.workItems = Objects.requireNonNull(workItems, "workItems");
+        this.leases = Objects.requireNonNull(leases, "leases");
+    }
+
     @Override
     @Transactional(rollbackFor = Exception.class)
     public ExecutionView create(OwnerScope scope, CreateCommand command, String idempotencyKey) {
@@ -95,8 +117,18 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             return view(scope, prior);
         }
         requireOwnedTarget(scope, valid.targetAgentId());
-        if (valid.taskId() != null && !taskLinks.lockTask(scope.tenantId(), scope.clientId(),
-                scope.ownerJiacn(), valid.taskId())) throw failure(Reason.NOT_FOUND);
+        TaskLease taskLease;
+        try {
+            taskLease = valid.taskId() == null ? null : beginTaskExecution(scope, valid);
+        } catch (Failure taskFailure) {
+            // The other request may have held the task-root lock, committed the exact same key,
+            // then left this contender observing a running work item. Re-read the unique key
+            // before reporting a conflict so a transport retry never creates a second task run.
+            PersonalWorkspaceExecutionEntity replay = executions.findByIdempotency(scope.tenantId(),
+                    scope.clientId(), scope.ownerJiacn(), idempotencyKey);
+            if (replay != null && same(replay.getRequestHash(), requestHash)) return view(scope, replay);
+            throw taskFailure;
+        }
 
         List<InputSnapshot> snapshots = new ArrayList<>();
         List<InputSelection> ordered = new ArrayList<>(valid.inputs());
@@ -114,11 +146,18 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             snapshots.add(new InputSnapshot(file, version));
         }
         String executionId = identifier("pwe_");
+        // A private run uses its own bridge namespace. A task run retains the authoritative business
+        // task ID but is only linked to (never substituted for) its leased work item.
         String taskId = valid.taskId() == null ? identifier("pwe_task_") : valid.taskId();
         String runId = identifier("pwe_run_");
         long now = System.currentTimeMillis();
         PersonalWorkspaceExecutionEntity execution = new PersonalWorkspaceExecutionEntity()
                 .setExecutionId(executionId).setOwnerJiacn(scope.ownerJiacn()).setTaskId(taskId).setRunId(runId)
+                .setExecutionMode(taskLease == null ? "PRIVATE" : "TASK")
+                .setWorkItemId(taskLease == null ? null : taskLease.workItemId())
+                .setLeaseToken(taskLease == null ? null : taskLease.leaseToken())
+                .setLeaseWorkItemVersion(taskLease == null ? null : taskLease.version())
+                .setLeaseExpiresAt(taskLease == null ? null : taskLease.leaseUntil())
                 .setConversationId(valid.conversationId()).setTargetAgentId(valid.targetAgentId())
                 .setInstruction(valid.instruction()).setOutputContentMimeType(valid.outputContentMimeType())
                 .setExecutionState("QUEUED").setFailureCode(null).setFailureMessage(null).setGrantRevision(1L)
@@ -180,6 +219,14 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 || !same(keyed.getRevokeRequestHash(), requestHash))) {
             throw failure(Reason.IDEMPOTENCY_CONFLICT);
         }
+        // TASK leases are released while holding the task root before this execution/file lock.
+        // A private execution retains the legacy execution-first revoke path.
+        PersonalWorkspaceExecutionEntity candidate = executions.find(scope.tenantId(), scope.clientId(),
+                scope.ownerJiacn(), executionId);
+        if (candidate == null) throw failure(Reason.NOT_FOUND);
+        if ("TASK".equals(candidate.getExecutionMode()) && "QUEUED".equals(candidate.getExecutionState())) {
+            releaseTaskLease(scope, candidate);
+        }
         PersonalWorkspaceExecutionEntity execution = executions.lock(scope.tenantId(), scope.clientId(),
                 scope.ownerJiacn(), executionId);
         if (execution == null) throw failure(Reason.NOT_FOUND);
@@ -238,7 +285,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                         && same(execution.getTargetAgentId(), scope.agentId())
                         && same(execution.getTenantId(), scope.tenantId())
                         && same(execution.getClientId(), scope.clientId())
-                        && same(execution.getOwnerJiacn(), scope.ownerJiacn()))
+                        && same(execution.getOwnerJiacn(), scope.ownerJiacn())
+                        && runtimeDispatchAllowed(scope, execution))
                 .map(execution -> queuedCommand(owner, execution))
                 .filter(Objects::nonNull)
                 .toList();
@@ -310,6 +358,14 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         if (!same(expected, manifestId)) throw failure(Reason.OUTPUT_CONFLICT);
         if ("COMMITTED".equals(output.getOutputState())) return committed(manifestId, List.of(output));
         if (!"STAGED".equals(output.getOutputState())) throw failure(Reason.OUTPUT_CONFLICT);
+        // W02 only accepts the real task lease and stages bytes. W04 owns artifact publication,
+        // formal delivery and any task/workspace projection; this bridge must never fake those states.
+        if ("TASK".equals(execution.getExecutionMode())) {
+            requireLiveTaskLease(scope, execution);
+            execution.setExecutionState("OUTPUT_STAGED");
+            executions.update(execution);
+            return new CommitView(manifestId, "STAGED", List.of());
+        }
         long now = System.currentTimeMillis();
         String fileId = identifier("pws_");
         PersonalWorkspaceFileEntity file = new PersonalWorkspaceFileEntity().setFileId(fileId)
@@ -333,8 +389,17 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     @Override
     @Transactional(rollbackFor = Exception.class)
     public ExecutionView fail(RuntimeScope scope, String taskId, String runId, String code) {
-        runtimeFailureCode(code);
-        PersonalWorkspaceExecutionEntity execution = runtimeExecution(scope, taskId, runId, true, false, true);
+        runtimeFailureCode(code); validateRuntimeScope(scope); id(taskId, "taskId", 100); id(runId, "runId", 100);
+        // Do not take an execution lock before releasing the authoritative task-root lease.
+        PersonalWorkspaceExecutionEntity candidate = executions.findByTaskRun(scope.tenantId(), scope.clientId(),
+                scope.ownerJiacn(), taskId, runId);
+        if (candidate == null || !same(candidate.getTargetAgentId(), scope.agentId())) throw failure(Reason.NOT_FOUND);
+        if ("TASK".equals(candidate.getExecutionMode()) && "QUEUED".equals(candidate.getExecutionState())) {
+            releaseTaskLease(new OwnerScope(scope.tenantId(), scope.clientId(), scope.ownerJiacn()), candidate);
+        }
+        PersonalWorkspaceExecutionEntity execution = executions.lockByTaskRun(scope.tenantId(), scope.clientId(),
+                scope.ownerJiacn(), taskId, runId);
+        if (execution == null || !same(execution.getTargetAgentId(), scope.agentId())) throw failure(Reason.NOT_FOUND);
         if ("FAILED".equals(execution.getExecutionState())) {
             return view(new OwnerScope(scope.tenantId(), scope.clientId(), scope.ownerJiacn()), execution);
         }
@@ -366,15 +431,19 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         if (!same(execution.getTargetAgentId(), scope.agentId()) || !stateAllowed) {
             throw failure(Reason.NOT_FOUND);
         }
+        if ("TASK".equals(execution.getExecutionMode())) requireLiveTaskLease(scope, execution);
         return execution;
     }
 
     private ExecutionView view(OwnerScope scope, PersonalWorkspaceExecutionEntity execution) {
         List<RuntimeInput> inputs = runtimeInputs(scope, execution.getExecutionId());
+        String mode = execution.getExecutionMode() == null ? "PRIVATE" : execution.getExecutionMode();
+        String workItemState = "TASK".equals(mode) ? taskWorkItemState(scope, execution) : null;
         return new ExecutionView(execution.getExecutionId(), execution.getTaskId(), execution.getRunId(),
                 execution.getConversationId(), execution.getTargetAgentId(), execution.getExecutionState(),
                 execution.getFailureCode(), execution.getFailureMessage(), execution.getGrantRevision(),
-                execution.getOutputContentMimeType(), inputs, command(execution, inputs));
+                execution.getOutputContentMimeType(), inputs, command(execution, inputs), mode,
+                "TASK".equals(mode) ? execution.getTaskId() : null, execution.getWorkItemId(), workItemState);
     }
     private List<RuntimeInput> runtimeInputs(OwnerScope scope, String executionId) {
         return executions.listInputs(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), executionId).stream()
@@ -426,6 +495,111 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 && same(candidate.getOwnerJiacn(), scope.ownerJiacn()));
         if (!found) throw failure(Reason.NOT_FOUND);
     }
+    /**
+     * Starts the existing authoritative work-item lease before any execution/file row is locked.
+     * The resulting token remains server-side only; the runtime authenticates separately and is
+     * revalidated against this persisted snapshot for each content operation.
+     */
+    private TaskLease beginTaskExecution(OwnerScope scope, ValidCreate valid) {
+        if (conversationAccess == null || workItems == null || leases == null || valid.conversationId() == null) {
+            throw failure(Reason.CAPABILITY_UNAVAILABLE);
+        }
+        WorkspaceConversationAccessService.ConversationView conversation;
+        try {
+            conversation = conversationAccess.requireAccessible(new WorkspaceConversationAccessService.Scope(
+                    scope.tenantId(), scope.clientId(), scope.ownerJiacn()), valid.conversationId());
+        } catch (RuntimeException denied) {
+            throw failure(Reason.NOT_FOUND);
+        }
+        if (conversation == null || !same(valid.taskId(), conversation.taskId())
+                || conversation.targetAgentIds() == null
+                || !conversation.targetAgentIds().contains(valid.targetAgentId())) {
+            throw failure(Reason.NOT_FOUND);
+        }
+        List<AgentTaskWorkItemEntity> candidates = workItems.listByTask(
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), valid.taskId(), "ready", 32);
+        List<AgentTaskWorkItemEntity> eligible = candidates.stream().filter(item -> item != null
+                && Boolean.TRUE.equals(item.getRequiredItem())
+                && (item.getAssigneeAgentId() == null || same(valid.targetAgentId(), item.getAssigneeAgentId())))
+                .toList();
+        if (eligible.size() != 1) throw failure(Reason.TASK_CONFLICT);
+        AgentTaskWorkItemEntity item = eligible.getFirst();
+        try {
+            AgentWorkItemLeaseCommandDTO claim = new AgentWorkItemLeaseCommandDTO();
+            claim.setAgentId(valid.targetAgentId()); claim.setExpectedVersion(item.getVersion());
+            claim.setLeaseDurationMillis(TASK_LEASE_DURATION_MILLIS);
+            AgentWorkItemLeaseDTO claimed = leases.claim(scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
+                    valid.taskId(), item.getWorkItemId(), claim);
+            AgentWorkItemLeaseCommandDTO start = new AgentWorkItemLeaseCommandDTO();
+            start.setAgentId(valid.targetAgentId()); start.setLeaseToken(claimed.getLeaseToken());
+            start.setExpectedVersion(claimed.getVersion());
+            AgentWorkItemLeaseDTO running = leases.start(scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
+                    valid.taskId(), item.getWorkItemId(), start);
+            if (running == null || !"running".equals(running.getStatus())
+                    || !same(valid.targetAgentId(), running.getAgentId())
+                    || !same(item.getWorkItemId(), running.getWorkItemId())
+                    || running.getLeaseToken() == null || running.getVersion() == null || running.getLeaseUntil() == null) {
+                throw failure(Reason.TASK_CONFLICT);
+            }
+            return new TaskLease(item.getWorkItemId(), running.getLeaseToken(), running.getVersion(), running.getLeaseUntil());
+        } catch (AgentTaskCollaborationException conflict) {
+            throw failure(conflict.getReason() == AgentTaskCollaborationException.Reason.NOT_FOUND
+                    ? Reason.NOT_FOUND : Reason.TASK_CONFLICT);
+        } catch (AgentTaskStateException conflict) {
+            throw failure(conflict.getReason() == AgentTaskStateException.Reason.NOT_FOUND
+                    ? Reason.NOT_FOUND : Reason.TASK_CONFLICT);
+        }
+    }
+
+    /** Releases only the persisted TASK bridge lease; it never touches a formal delivery. */
+    private void releaseTaskLease(OwnerScope scope, PersonalWorkspaceExecutionEntity execution) {
+        if (leases == null || execution.getWorkItemId() == null || execution.getLeaseToken() == null
+                || execution.getLeaseWorkItemVersion() == null || !"TASK".equals(execution.getExecutionMode())) {
+            throw failure(Reason.TASK_CONFLICT);
+        }
+        try {
+            AgentWorkItemLeaseCommandDTO command = new AgentWorkItemLeaseCommandDTO();
+            command.setAgentId(execution.getTargetAgentId()); command.setLeaseToken(execution.getLeaseToken());
+            command.setExpectedVersion(execution.getLeaseWorkItemVersion());
+            leases.release(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), execution.getTaskId(),
+                    execution.getWorkItemId(), command);
+        } catch (AgentTaskCollaborationException | AgentTaskStateException conflict) {
+            throw failure(Reason.TASK_CONFLICT);
+        }
+    }
+
+    private boolean runtimeDispatchAllowed(RuntimeScope scope, PersonalWorkspaceExecutionEntity execution) {
+        if (!"TASK".equals(execution.getExecutionMode())) return true;
+        try { requireLiveTaskLease(scope, execution); return true; }
+        catch (Failure ignored) { return false; }
+    }
+
+    private void requireLiveTaskLease(RuntimeScope scope, PersonalWorkspaceExecutionEntity execution) {
+        if (workItems == null || execution.getWorkItemId() == null || execution.getLeaseToken() == null
+                || execution.getLeaseWorkItemVersion() == null || execution.getLeaseExpiresAt() == null) {
+            throw failure(Reason.NOT_FOUND);
+        }
+        AgentTaskWorkItemEntity item = workItems.findByTaskAndWorkItemId(scope.tenantId(), scope.clientId(),
+                scope.ownerJiacn(), execution.getTaskId(), execution.getWorkItemId());
+        if (item == null || !"running".equals(item.getStatus())
+                || !same(execution.getTargetAgentId(), item.getAssigneeAgentId())
+                || !same(execution.getLeaseToken(), item.getLeaseToken())
+                || !execution.getLeaseWorkItemVersion().equals(item.getVersion())
+                || item.getLeaseUntil() == null || !execution.getLeaseExpiresAt().equals(item.getLeaseUntil())
+                || item.getLeaseUntil() <= System.currentTimeMillis()) {
+            throw failure(Reason.NOT_FOUND);
+        }
+    }
+
+    private String taskWorkItemState(OwnerScope scope, PersonalWorkspaceExecutionEntity execution) {
+        if (workItems == null || execution.getWorkItemId() == null) return "UNAVAILABLE";
+        AgentTaskWorkItemEntity item = workItems.findByTaskAndWorkItemId(scope.tenantId(), scope.clientId(),
+                scope.ownerJiacn(), execution.getTaskId(), execution.getWorkItemId());
+        return item == null ? "UNAVAILABLE" : item.getStatus();
+    }
+
+    private record TaskLease(String workItemId, String leaseToken, Long version, Long leaseUntil) { }
+
     private ValidCreate validCreate(CreateCommand command) {
         if (command == null) throw failure(Reason.BAD_REQUEST);
         String conversation = optional(command.conversationId(), 100);
@@ -445,6 +619,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             id(selected.fileId(), "fileId", 100);
             if (selected.version() < 1 || !selectedFiles.add(selected.fileId())) throw failure(Reason.BAD_REQUEST);
         }
+        if (task != null && conversation == null) throw failure(Reason.BAD_REQUEST);
         return new ValidCreate(conversation, command.targetAgentId(), task, command.instruction(), outputMime, selections);
     }
     private static String selectionsWire(List<InputSelection> inputs) { return inputs.stream().sorted(Comparator.comparing(InputSelection::fileId).thenComparingInt(InputSelection::version)).map(i -> i.fileId()+":"+i.version()).reduce("", (a,b)->a+"\n"+b); }

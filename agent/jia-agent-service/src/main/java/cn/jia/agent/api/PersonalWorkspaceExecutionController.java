@@ -76,6 +76,7 @@ public class PersonalWorkspaceExecutionController {
             case GRANT_CHANGED -> error(HttpStatus.CONFLICT, "GRANT_CHANGED", "Execution input grant changed");
             case GRANT_REVOKED -> error(HttpStatus.CONFLICT, "GRANT_REVOKED", "Execution input grant was revoked");
             case CAPABILITY_UNAVAILABLE -> error(HttpStatus.UNPROCESSABLE_ENTITY, "CAPABILITY_UNAVAILABLE", "Execution capability is not available");
+            case TASK_CONFLICT -> error(HttpStatus.CONFLICT, "TASK_CONFLICT", "Task execution state changed; refresh and retry");
             case OUTPUT_CONFLICT, OUTPUT_MISSING, STORAGE_UNAVAILABLE -> error(HttpStatus.SERVICE_UNAVAILABLE, "EXECUTION_UNAVAILABLE", "Execution is temporarily unavailable");
         };
     }

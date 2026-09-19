@@ -18,6 +18,7 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
     static final String RESOURCE = "db/agent-personal-workspace-v1_11-executions.sql";
     static final String OUTPUT_MIME_MIGRATION_RESOURCE = "db/agent-personal-workspace-v1_13-execution-output-mime.sql";
     static final String TERMINAL_STATE_MIGRATION_RESOURCE = "db/agent-personal-workspace-v1_13-execution-terminal-state.sql";
+    static final String TASK_EXECUTION_MIGRATION_RESOURCE = "db/agent-personal-workspace-v1_13-task-execution.sql";
     static final List<String> TABLES = List.of("agent_personal_workspace_execution",
             "agent_personal_workspace_execution_input", "agent_personal_workspace_execution_output");
     private final JdbcTemplate jdbc;
@@ -31,6 +32,8 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
         verifyOutputMime();
         migrateTerminalState();
         verifyTerminalState();
+        migrateTaskExecution();
+        verifyTaskExecution();
     }
     static List<String> ddlStatements() {
         final String source;
@@ -107,6 +110,51 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
                 """, Integer.class);
         if (invalid == null || invalid != 0) throw new IllegalStateException("Execution terminal-state schema is invalid");
     }
+    static String taskExecutionMigrationStatement() {
+        final String source;
+        try { source=new ClassPathResource(TASK_EXECUTION_MIGRATION_RESOURCE).getContentAsString(StandardCharsets.UTF_8); }
+        catch (IOException failure) { throw new IllegalStateException("Task execution migration is missing", failure); }
+        String statement=source.lines().filter(line -> !line.stripLeading().startsWith("--")).reduce("", (a,b)->a+b+'\n').strip();
+        String normalized=statement.toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").trim();
+        if (!normalized.startsWith("alter table agent_personal_workspace_execution ")
+                || !normalized.contains("add column execution_mode varchar(16) not null default 'private'")
+                || !normalized.contains("add column work_item_id varchar(100)")
+                || !normalized.contains("add column lease_token varchar(100)")
+                || !normalized.contains("add column lease_work_item_version bigint")
+                || !normalized.contains("add column lease_expires_at bigint")
+                || !normalized.contains("drop check chk_pwex_state")
+                || !normalized.contains("add constraint chk_pwex_mode check")
+                || !normalized.contains("add constraint chk_pwex_task_bridge check")
+                || normalized.contains(" insert ") || normalized.contains(" update ") || normalized.contains(" delete ")
+                || normalized.contains(" create trigger ") || !statement.endsWith(";")) {
+            throw new IllegalStateException("Unsafe task execution migration");
+        }
+        return statement.substring(0, statement.length() - 1);
+    }
+    private void migrateTaskExecution() {
+        Integer present=jdbc.queryForObject("""
+                SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE()
+                 AND table_name='agent_personal_workspace_execution'
+                 AND column_name IN ('execution_mode','work_item_id','lease_token','lease_work_item_version','lease_expires_at')
+                """, Integer.class);
+        if (present == null) throw new IllegalStateException("Task execution schema discovery failed");
+        if (present == 0) jdbc.execute(taskExecutionMigrationStatement());
+        else if (present != 5) throw new IllegalStateException("Task execution schema is partial");
+    }
+    private void verifyTaskExecution() {
+        Integer invalid=jdbc.queryForObject("""
+                SELECT COUNT(*) FROM agent_personal_workspace_execution
+                 WHERE execution_mode NOT IN ('PRIVATE','TASK')
+                    OR execution_state NOT IN ('QUEUED','INPUTS_REVOKED','OUTPUT_STAGED','OUTPUT_COMMITTED','FAILED')
+                    OR (execution_mode='PRIVATE' AND (work_item_id IS NOT NULL OR lease_token IS NOT NULL
+                        OR lease_work_item_version IS NOT NULL OR lease_expires_at IS NOT NULL))
+                    OR (execution_mode='TASK' AND (work_item_id IS NULL OR lease_token IS NULL
+                        OR lease_work_item_version IS NULL OR lease_work_item_version < 0
+                        OR lease_expires_at IS NULL OR lease_expires_at <= 0))
+                """, Integer.class);
+        if (invalid == null || invalid != 0) throw new IllegalStateException("Task execution schema is invalid");
+    }
+
     private void verifyOutputMime() {
         Integer invalid=jdbc.queryForObject("""
                 SELECT COUNT(*) FROM agent_personal_workspace_execution

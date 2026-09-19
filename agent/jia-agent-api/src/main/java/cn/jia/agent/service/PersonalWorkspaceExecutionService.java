@@ -39,9 +39,20 @@ public interface PersonalWorkspaceExecutionService {
             List<RuntimeOutput> outputManifest) { }
     record RuntimeInputCommand(String inputId, String relativePath, String downloadPath, long length,
             String sha256) { }
+    /** Browser-safe state projection. Task lease credentials and storage URIs are intentionally absent. */
     record ExecutionView(String executionId, String taskId, String runId, String conversationId,
             String targetAgentId, String state, String failureCode, String failureMessage, long grantRevision,
-            String outputContentMimeType, List<RuntimeInput> inputs, RuntimeCommand runtimeCommand) { }
+            String outputContentMimeType, List<RuntimeInput> inputs, RuntimeCommand runtimeCommand,
+            String executionMode, String businessTaskId, String workItemId, String workItemState) {
+        /** Source-compatible private-mode constructor for existing adapters and clients. */
+        public ExecutionView(String executionId, String taskId, String runId, String conversationId,
+                String targetAgentId, String state, String failureCode, String failureMessage, long grantRevision,
+                String outputContentMimeType, List<RuntimeInput> inputs, RuntimeCommand runtimeCommand) {
+            this(executionId, taskId, runId, conversationId, targetAgentId, state, failureCode,
+                    failureMessage, grantRevision, outputContentMimeType, inputs, runtimeCommand,
+                    "PRIVATE", null, null, null);
+        }
+    }
     record ExecutionCapabilities(List<String> allowedMimeTypes, boolean generationEnabled) { }
     record RuntimeContent(String filename, String contentMimeType, byte[] bytes) {
         public RuntimeContent { bytes = bytes == null ? null : bytes.clone(); }
@@ -61,6 +72,7 @@ public interface PersonalWorkspaceExecutionService {
     }
     enum Reason {
         BAD_REQUEST, NOT_FOUND, IDEMPOTENCY_CONFLICT, GRANT_CHANGED, GRANT_REVOKED,
-        OUTPUT_CONFLICT, OUTPUT_MISSING, CAPABILITY_UNAVAILABLE, STORAGE_UNAVAILABLE
+        OUTPUT_CONFLICT, OUTPUT_MISSING, CAPABILITY_UNAVAILABLE, STORAGE_UNAVAILABLE,
+        TASK_CONFLICT
     }
 }
