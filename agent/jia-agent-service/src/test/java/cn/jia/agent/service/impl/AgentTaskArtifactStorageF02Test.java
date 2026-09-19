@@ -22,6 +22,9 @@ import cn.jia.core.util.JsonUtil;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 
 import java.nio.charset.StandardCharsets;
@@ -118,7 +121,11 @@ class AgentTaskArtifactStorageF02Test {
         assertFalse(duplicate.newlyCreated());
         assertEquals(first.storageUri(), duplicate.storageUri());
         assertNotEquals(first.storageUri(), otherScope.storageUri());
-        assertFalse(first.storageUri().contains(TENANT));
+        // Tenant "0" is also a valid digest character: validate URI structure, not substrings.
+        assertTrue(first.storageUri().matches("cyf-artifact://[0-9a-f]{64}/[0-9a-f]{64}"));
+        assertTrue(first.storageUri().endsWith("/" + first.sha256()));
+        assertFalse(first.storageUri().contains(CLIENT));
+        assertFalse(first.storageUri().contains(OWNER));
         assertFalse(first.storageUri().contains(TASK));
         assertFalse(first.storageUri().contains(temporaryDirectory.toString()));
         assertArrayEquals(content, storage.read(firstScope, first.storageUri(),
@@ -261,6 +268,31 @@ class AgentTaskArtifactStorageF02Test {
         assertFalse(eventJson.contains("application/octet-stream"));
         assertFalse(eventJson.contains("cyf-artifact"));
         assertFalse(eventJson.contains(MANAGED_KEY));
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = {"owner-other", "Owner-a"})
+    void publishRejectsPersistedArtifactWithMissingOrPollutedOwner(String persistedOwner) {
+        AgentTaskCollaborationServiceImpl service = service(storage(1024 * 1024));
+        AgentTaskArtifactPublishDTO command = managedCommand(
+                "owner scoped bytes".getBytes(StandardCharsets.UTF_8));
+        AtomicReference<AgentTaskArtifactDTO> inserted = successfulArtifactPersistence();
+        when(artifactDao.findVersion(TENANT, CLIENT, OWNER, TASK, ARTIFACT, 1))
+                .thenAnswer(invocation -> {
+                    AgentTaskArtifactEntity persisted = artifactFrom(inserted.get());
+                    if (persisted != null) {
+                        persisted.setOwnerJiacn(persistedOwner);
+                    }
+                    return persisted;
+                });
+
+        AgentTaskCollaborationException failure = assertThrows(
+                AgentTaskCollaborationException.class,
+                () -> service.publish(TENANT, CLIENT, OWNER, TASK, ACTOR, command));
+
+        assertEquals(Reason.INVALID_PERSISTED_STATE, failure.getReason());
+        verify(eventWriter, never()).append(any());
     }
 
     @Test
@@ -430,6 +462,7 @@ class AgentTaskArtifactStorageF02Test {
                 .setCreatedAt(row.getCreatedAt());
         entity.setTenantId(TENANT);
         entity.setClientId(CLIENT);
+        entity.setOwnerJiacn(OWNER);
         return entity;
     }
 

@@ -139,7 +139,8 @@ class AgentTaskEventReplayServiceImplTest {
         assertEquals(0, store.earliestCalls.get());
         assertTrue(store.daoThreads.stream().allMatch(
                 name -> name.startsWith("c03-replay-worker-")), store.daoThreads.toString());
-        verify(eventDao).findCurrentVersion("Tenant-A", "client-a", "Tenant-A", "caf\u00e9");
+        verify(eventDao).findCurrentVersion(
+                SCOPE.tenantId(), SCOPE.clientId(), SCOPE.ownerJiacn(), SCOPE.taskId());
     }
 
     @Test
@@ -338,6 +339,10 @@ class AgentTaskEventReplayServiceImplTest {
         AgentTaskEventEntity four = entity(SCOPE, 4L);
         AgentTaskEventEntity wrongScopeTwo = entity(
                 new TaskScope("0", SCOPE.clientId(), "owner-other", SCOPE.taskId()), 2L);
+        AgentTaskEventEntity missingOwnerTwo = entity(SCOPE, 2L);
+        missingOwnerTwo.setOwnerJiacn(null);
+        AgentTaskEventEntity casePollutedOwnerTwo = entity(SCOPE, 2L);
+        casePollutedOwnerTwo.setOwnerJiacn("owner-A");
         return Stream.of(
                 Arguments.of("missing first event", 3L,
                         Map.of(0L, List.of(two, three)), List.of()),
@@ -354,6 +359,10 @@ class AgentTaskEventReplayServiceImplTest {
                         Map.of(0L, List.of(one, three)), List.of(1L)),
                 Arguments.of("wrong byte exact scope", 2L,
                         Map.of(0L, List.of(one, wrongScopeTwo)), List.of(1L)),
+                Arguments.of("missing owner", 2L,
+                        Map.of(0L, List.of(one, missingOwnerTwo)), List.of(1L)),
+                Arguments.of("case polluted owner", 2L,
+                        Map.of(0L, List.of(one, casePollutedOwnerTwo)), List.of(1L)),
                 Arguments.of("null page item", 2L,
                         Map.of(0L, Arrays.asList(one, null)), List.of(1L)));
     }
@@ -1451,6 +1460,7 @@ class AgentTaskEventReplayServiceImplTest {
         AgentTaskEventEntity entity = new AgentTaskEventEntity();
         entity.setTenantId(scope.tenantId());
         entity.setClientId(scope.clientId());
+        entity.setOwnerJiacn(scope.ownerJiacn());
         entity.setTaskId(scope.taskId());
         entity.setEventVersion(version);
         entity.setEventId("event-" + version);
