@@ -37,6 +37,20 @@ class PersonalWorkspacePreviewRendererTest {
     }
 
     @Test
+    void extractsEveryPowerPointSlideWithoutNotesOrMasterText() throws Exception {
+        var preview = renderer.render(PPTX, pptxWithNotesAndMaster());
+        String extracted = new String(preview.bytes(), StandardCharsets.UTF_8);
+
+        assertEquals("READY", preview.view().state());
+        assertTrue(extracted.contains("First slide content"));
+        assertTrue(extracted.contains("Second slide content"));
+        assertTrue(extracted.contains("Externally linked slide text"));
+        assertFalse(extracted.contains("127.0.0.1:1"));
+        assertFalse(extracted.contains("Private speaker notes"));
+        assertFalse(extracted.contains("Master-only boilerplate"));
+    }
+
+    @Test
     void corruptDocumentFailsWithoutChangingTheSourcePreviewContract() {
         var preview = renderer.render(DOCX, "not an OOXML document".getBytes(StandardCharsets.UTF_8));
 
@@ -93,6 +107,21 @@ class PersonalWorkspacePreviewRendererTest {
     private static byte[] pptx() throws Exception {
         try (XMLSlideShow slideShow = new XMLSlideShow(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             slideShow.createSlide().createTextBox().setText("Slide content");
+            slideShow.write(output);
+            return output.toByteArray();
+        }
+    }
+
+    private static byte[] pptxWithNotesAndMaster() throws Exception {
+        try (XMLSlideShow slideShow = new XMLSlideShow(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            var firstSlide = slideShow.createSlide();
+            firstSlide.createTextBox().setText("First slide content");
+            var linkedRun = firstSlide.createTextBox().addNewTextParagraph().addNewTextRun();
+            linkedRun.setText("Externally linked slide text");
+            linkedRun.createHyperlink().linkToUrl("http://127.0.0.1:1/must-not-be-fetched");
+            slideShow.createSlide().createTextBox().setText("Second slide content");
+            slideShow.getNotesSlide(firstSlide).createTextBox().setText("Private speaker notes");
+            firstSlide.getSlideMaster().createTextBox().setText("Master-only boilerplate");
             slideShow.write(output);
             return output.toByteArray();
         }

@@ -4,8 +4,10 @@ import cn.jia.agent.entity.PersonalWorkspaceViews;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.encryption.InvalidPasswordException;
 import org.apache.pdfbox.text.PDFTextStripper;
-import org.apache.poi.xslf.extractor.XSLFPowerPointExtractor;
+import org.apache.poi.sl.extractor.SlideShowExtractor;
 import org.apache.poi.xslf.usermodel.XMLSlideShow;
+import org.apache.poi.xslf.usermodel.XSLFShape;
+import org.apache.poi.xslf.usermodel.XSLFTextParagraph;
 import org.apache.poi.xssf.extractor.XSSFExcelExtractor;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.apache.poi.xwpf.extractor.XWPFWordExtractor;
@@ -61,9 +63,14 @@ public final class PersonalWorkspacePreviewRenderer {
 
     private static String pptx(byte[] source) throws Exception {
         try (XMLSlideShow slideShow = new XMLSlideShow(new ByteArrayInputStream(source))) {
-            XSLFPowerPointExtractor extractor = new XSLFPowerPointExtractor(slideShow);
+            SlideShowExtractor<XSLFShape, XSLFTextParagraph> extractor = new SlideShowExtractor<>(slideShow);
+            extractor.setSlidesByDefault(true);
             extractor.setNotesByDefault(false);
+            extractor.setCommentsByDefault(false);
             extractor.setMasterByDefault(false);
+            // The enclosing XMLSlideShow owns the package lifecycle. Extraction only
+            // traverses in-memory slide shapes; it does not resolve links or OLE content.
+            extractor.setCloseFilesystem(false);
             return extractor.getText();
         }
     }
