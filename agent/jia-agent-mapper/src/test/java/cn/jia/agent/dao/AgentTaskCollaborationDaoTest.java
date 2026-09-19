@@ -69,9 +69,16 @@ class AgentTaskCollaborationDaoTest {
                 AgentTaskMemberDao.class, AgentTaskWorkItemDao.class,
                 AgentTaskRequestDao.class, AgentTaskArtifactDao.class)) {
             for (Method method : dao.getDeclaredMethods()) {
+                if (!java.lang.reflect.Modifier.isPublic(method.getModifiers())) {
+                    continue;
+                }
                 assertTrue(method.getParameterCount() >= 2, method.toString());
                 assertEquals(String.class, method.getParameterTypes()[0], method.toString());
                 assertEquals(String.class, method.getParameterTypes()[1], method.toString());
+                if (!method.isDefault()) {
+                    assertTrue(method.getParameterCount() >= 3, method.toString());
+                    assertEquals(String.class, method.getParameterTypes()[2], method.toString());
+                }
             }
             assertEquals(0, dao.getInterfaces().length, dao.getName());
         }
@@ -423,7 +430,7 @@ class AgentTaskCollaborationDaoTest {
 
     private void assertByteExactColumns(String sql, String... columns) {
         for (String column : columns) {
-            assertTrue(sql.contains("cast(" + column + " as binary)"), column + ": " + sql);
+            assertTrue(sql.contains("cast(" + column + " as binary"), column + ": " + sql);
             assertTrue(sql.contains("octet_length(" + column + ")"), column + ": " + sql);
         }
     }

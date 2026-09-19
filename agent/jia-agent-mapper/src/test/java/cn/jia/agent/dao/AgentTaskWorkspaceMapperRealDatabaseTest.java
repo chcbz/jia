@@ -29,7 +29,7 @@ import static org.mockito.Mockito.when;
 
 /** Real H2/MyBatis evidence for C04 exact predicates, ordering and fixed sentinels. */
 class AgentTaskWorkspaceMapperRealDatabaseTest {
-    private static final String TENANT = "tenant-a";
+    private static final String TENANT = "0";
     private static final String CLIENT = "client-a";
     private static final String OWNER = "owner-a";
     private static final String TASK = "task-1";
