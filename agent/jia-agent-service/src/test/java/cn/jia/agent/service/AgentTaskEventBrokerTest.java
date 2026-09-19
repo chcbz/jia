@@ -30,7 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AgentTaskEventBrokerTest {
     private final AgentTaskEventBroker broker = new AgentTaskEventBroker();
-    private final TaskScope scope = new TaskScope("tenant-a", "client-a", "tenant-a", "task-a");
+    private final TaskScope scope = new TaskScope("0", "client-a", "owner-a", "task-a");
 
     @AfterEach
     void tearDown() {
@@ -39,13 +39,13 @@ class AgentTaskEventBrokerTest {
 
     @Test
     void isolatesByteExactCaseAndUnicodeScopesWithoutNormalizing() {
-        TaskScope tenantCase = new TaskScope("Tenant-a", "client-a", "tenant-a", "task-a");
-        TaskScope clientCase = new TaskScope("tenant-a", "Client-a", "tenant-a", "task-a");
-        TaskScope taskCase = new TaskScope("tenant-a", "client-a", "tenant-a", "Task-a");
-        TaskScope composed = new TaskScope("tenant-a", "client-a", "tenant-a", "caf\u00e9");
-        TaskScope decomposed = new TaskScope("tenant-a", "client-a", "tenant-a", "cafe\u0301");
+        TaskScope clientCase = new TaskScope("0", "Client-a", "owner-a", "task-a");
+        TaskScope ownerCase = new TaskScope("0", "client-a", "Owner-a", "task-a");
+        TaskScope taskCase = new TaskScope("0", "client-a", "owner-a", "Task-a");
+        TaskScope composed = new TaskScope("0", "client-a", "owner-a", "caf\u00e9");
+        TaskScope decomposed = new TaskScope("0", "client-a", "owner-a", "cafe\u0301");
         List<TaskScope> scopes = List.of(
-                scope, tenantCase, clientCase, taskCase, composed, decomposed);
+                scope, clientCase, ownerCase, taskCase, composed, decomposed);
         List<CopyOnWriteArrayList<Long>> received = scopes.stream()
                 .map(ignored -> new CopyOnWriteArrayList<Long>())
                 .toList();
@@ -75,22 +75,26 @@ class AgentTaskEventBrokerTest {
             assertThrows(IllegalArgumentException.class,
                     () -> new TaskScope(invalid, "client", "owner", "task"));
             assertThrows(IllegalArgumentException.class,
-                    () -> new TaskScope("tenant", invalid, "owner", "task"));
+                    () -> new TaskScope("0", invalid, "owner", "task"));
             assertThrows(IllegalArgumentException.class,
-                    () -> new TaskScope("tenant", "client", "owner", invalid));
+                    () -> new TaskScope("0", "client", "owner", invalid));
         }
         assertThrows(IllegalArgumentException.class,
-                () -> new TaskScope("t".repeat(51), "client", "owner", "task"));
+                () -> new TaskScope("0", "client", "o".repeat(51), "task"));
         assertThrows(IllegalArgumentException.class,
-                () -> new TaskScope("tenant", "c".repeat(51), "owner", "task"));
+                () -> new TaskScope("0", "c".repeat(51), "owner", "task"));
         assertThrows(IllegalArgumentException.class,
-                () -> new TaskScope("tenant", "client", "owner", "x".repeat(101)));
+                () -> new TaskScope("0", "client", "owner", "x".repeat(101)));
         assertThrows(NullPointerException.class, () -> broker.stream(null));
         assertThrows(IllegalArgumentException.class, () -> broker.publish(scope, 0));
         assertThrows(IllegalArgumentException.class, () -> broker.publish(scope, -1));
         assertThrows(IllegalArgumentException.class, () -> new AgentTaskEventBroker(0));
 
-        TaskScope exact = new TaskScope("tenant", "client", "owner", "a b");
+        assertThrows(IllegalArgumentException.class,
+                () -> new TaskScope("tenant", "client", "owner", "task"));
+        assertThrows(IllegalArgumentException.class,
+                () -> new TaskScope("0", "client", "0", "task"));
+        TaskScope exact = new TaskScope("0", "client", "owner", "a b");
         assertEquals("a b", exact.taskId());
     }
 

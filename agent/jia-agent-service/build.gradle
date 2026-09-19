@@ -146,6 +146,13 @@ configurations.named(v1131AcceptanceSourceSet.implementationConfigurationName) {
 configurations.named(v1131AcceptanceSourceSet.runtimeOnlyConfigurationName) {
     extendsFrom configurations.testRuntimeOnly
 }
+// easypoi's legacy POI 3.x schema jar exports the same OpenXML classes as the
+// catalogued POI 5.x full artifact. Keep this isolated acceptance runtime on the
+// production-compatible POI 5.x graph; otherwise classpath order causes linkage
+// errors before the validator/preview assertions can run.
+configurations.named(v1131AcceptanceSourceSet.runtimeClasspathConfigurationName) {
+    exclude group: 'org.apache.poi', module: 'poi-ooxml-schemas'
+}
 
 tasks.register('v1131Acceptance', Test) {
     group = 'verification'

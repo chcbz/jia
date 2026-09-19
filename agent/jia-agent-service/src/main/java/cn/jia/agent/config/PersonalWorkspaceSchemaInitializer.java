@@ -101,7 +101,10 @@ public final class PersonalWorkspaceSchemaInitializer implements InitializingBea
             throw new IllegalStateException("Personal workspace origin migration must contain one statement");
         }
         statement = statement.substring(0, statement.length() - 1).strip();
-        String lower = statement.toLowerCase(Locale.ROOT);
+        // SQL resources are formatted across lines. Validate a whitespace-normalized view while
+        // executing the original, checked statement unchanged; this keeps the allowlist strict
+        // without rejecting the legitimate multiline ALTER resource.
+        String lower = statement.toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").trim();
         if (!lower.startsWith("alter table " + FILE_TABLE + " ")
                 || !lower.contains("add column origin_kind varchar(24) not null default 'user_upload'")
                 || !lower.contains("add constraint chk_pws_file_origin check")

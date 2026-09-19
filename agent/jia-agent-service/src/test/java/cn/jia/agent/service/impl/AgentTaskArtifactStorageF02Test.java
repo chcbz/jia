@@ -56,7 +56,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class AgentTaskArtifactStorageF02Test {
-    private static final String TENANT = "tenant-a";
+    private static final String TENANT = "0";
     private static final String CLIENT = "client-a";
     private static final String OWNER = "owner-a";
     private static final String TASK = "task-a";
@@ -184,7 +184,7 @@ class AgentTaskArtifactStorageF02Test {
         assertEquals(AgentTaskArtifactStorageException.Reason.INVALID_REQUEST,
                 assertThrows(AgentTaskArtifactStorageException.class,
                         () -> storage.store(
-                                new AgentTaskArtifactStorage.Scope(" tenant-a", CLIENT, OWNER, TASK),
+                                new AgentTaskArtifactStorage.Scope(" 0", CLIENT, OWNER, TASK),
                                 new byte[1], "text/plain"))
                         .getReason());
 

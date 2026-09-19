@@ -39,8 +39,8 @@ class PersonalWorkspaceSchemaInitializerTest {
         stubTables(jdbc);
         when(jdbc.queryForList(columnsSql())).thenReturn(List.of(sourceColumn()), completeColumns());
         when(jdbc.queryForList(checksSql())).thenReturn(List.of(sourceCheck()), completeChecks());
-        when(jdbc.queryForObject(legacyInvalidRowsSql(), eq(Integer.class))).thenReturn(0);
-        when(jdbc.queryForObject(invalidRowsSql(), eq(Integer.class))).thenReturn(0);
+        when(jdbc.queryForObject(eq(legacyInvalidRowsSql()), eq(Integer.class))).thenReturn(0);
+        when(jdbc.queryForObject(eq(invalidRowsSql()), eq(Integer.class))).thenReturn(0);
 
         new PersonalWorkspaceSchemaInitializer(jdbc).initializeSchema();
 
@@ -67,7 +67,7 @@ class PersonalWorkspaceSchemaInitializerTest {
         stubTables(jdbc);
         when(jdbc.queryForList(columnsSql())).thenReturn(List.of(sourceColumn()));
         when(jdbc.queryForList(checksSql())).thenReturn(List.of(sourceCheck()));
-        when(jdbc.queryForObject(legacyInvalidRowsSql(), eq(Integer.class))).thenReturn(0);
+        when(jdbc.queryForObject(eq(legacyInvalidRowsSql()), eq(Integer.class))).thenReturn(0);
         String migration = PersonalWorkspaceSchemaInitializer.originMigrationStatement();
         doThrow(new DataAccessResourceFailureException("migration failed")).when(jdbc).execute(migration);
 

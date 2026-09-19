@@ -61,7 +61,7 @@ import static org.mockito.Mockito.when;
 
 class AgentTaskEventReplayServiceImplTest {
     private static final TaskScope SCOPE =
-            new TaskScope("Tenant-A", "client-a", "Tenant-A", "caf\u00e9");
+            new TaskScope("0", "client-a", "Owner-A", "caf\u00e9");
     private static final AgentTaskEventBroker.TaskScope BROKER_SCOPE =
             new AgentTaskEventBroker.TaskScope(
                     SCOPE.tenantId(), SCOPE.clientId(), SCOPE.ownerJiacn(), SCOPE.taskId());
@@ -337,7 +337,7 @@ class AgentTaskEventReplayServiceImplTest {
         AgentTaskEventEntity three = entity(SCOPE, 3L);
         AgentTaskEventEntity four = entity(SCOPE, 4L);
         AgentTaskEventEntity wrongScopeTwo = entity(
-                new TaskScope("tenant-other", SCOPE.clientId(), SCOPE.ownerJiacn(), SCOPE.taskId()), 2L);
+                new TaskScope("0", SCOPE.clientId(), "owner-other", SCOPE.taskId()), 2L);
         return Stream.of(
                 Arguments.of("missing first event", 3L,
                         Map.of(0L, List.of(two, three)), List.of()),
