@@ -105,3 +105,53 @@ tasks.register('v1131Regression', Test) {
     classpath = v1131RegressionSourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+
+// A separate no-Provider acceptance slice expands the 67-test regression suite
+// with recovery, event replay, immutable storage and additive-schema contracts.
+// It is intentionally opt-in: the legacy default `test` source set remains
+// unchanged and still exposes its independent migration debt.
+def v1131AcceptanceSourceSet = sourceSets.create('v1131Acceptance') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/service/impl/PersonalWorkspaceServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/PersonalWorkspaceTaskLinkServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/PersonalWorkspaceConversationLinkServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/PersonalWorkspaceExecutionServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/PersonalWorkspaceWriteServiceTest.java'
+        include 'cn/jia/agent/service/impl/PersonalWorkspaceStorageBoundaryTest.java'
+        include 'cn/jia/agent/service/impl/PersonalWorkspacePreviewRendererTest.java'
+        include 'cn/jia/agent/service/impl/PersonalWorkspaceOutputFormatValidatorTest.java'
+        include 'cn/jia/agent/service/impl/AgentTaskArtifactStorageF02Test.java'
+        include 'cn/jia/agent/service/impl/AgentTaskArtifactOutcomeServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/AgentTaskFormalDeliveryDecisionServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/AgentTaskEventReplayServiceImplTest.java'
+        include 'cn/jia/agent/service/AgentTaskEventBrokerTest.java'
+        include 'cn/jia/agent/service/AgentTaskEventAfterCommitPublisherTest.java'
+        include 'cn/jia/agent/conversation/ConversationDeliverableReadAdapterTest.java'
+        include 'cn/jia/agent/security/AgentRuntimeSecurityIntegrationTest.java'
+        include 'cn/jia/agent/config/PersonalWorkspaceSchemaInitializerTest.java'
+        include 'cn/jia/agent/config/PersonalWorkspaceTaskLinkSchemaInitializerTest.java'
+        include 'cn/jia/agent/config/PersonalWorkspaceConversationLinkSchemaInitializerTest.java'
+        include 'cn/jia/agent/config/PersonalWorkspaceExecutionSchemaInitializerTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+
+configurations.named(v1131AcceptanceSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(v1131AcceptanceSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+
+tasks.register('v1131Acceptance', Test) {
+    group = 'verification'
+    description = 'Runs the isolated no-Provider 1.13.1 workspace acceptance API suite.'
+    dependsOn tasks.named(v1131AcceptanceSourceSet.classesTaskName)
+    testClassesDirs = v1131AcceptanceSourceSet.output.classesDirs
+    classpath = v1131AcceptanceSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
