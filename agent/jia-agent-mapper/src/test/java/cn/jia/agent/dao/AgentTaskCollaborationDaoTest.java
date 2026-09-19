@@ -51,6 +51,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 class AgentTaskCollaborationDaoTest {
+    private static final String OWNER = "owner-a";
     @BeforeAll
     static void initializeLambdaColumnMetadata() {
         MybatisConfiguration configuration = new MybatisConfiguration();
@@ -82,25 +83,25 @@ class AgentTaskCollaborationDaoTest {
         AgentTaskMemberMapper mapper = mock(AgentTaskMemberMapper.class);
         AgentTaskMemberDao dao = new AgentTaskMemberDaoImpl(mapper);
 
-        dao.findByTaskAndAgent("tenant-a", "client-a", "task-1", "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        dao.findByTaskAndAgent("0", "client-a", OWNER, "task-1", "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         dao.findByTaskAndAgentForUpdate(
-                "tenant-a", "client-a", "task-1", "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-        dao.listByTask("tenant-a", "client-a", "task-1");
-        dao.listByAgent("tenant-a", "client-a", "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "working", 50);
+                "0", "client-a", OWNER, "task-1", "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        dao.listByTask("0", "client-a", OWNER, "task-1");
+        dao.listByAgent("0", "client-a", OWNER, "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "working", 50);
 
         verify(mapper).findExactByTaskAndAgent(
-                "tenant-a", "client-a", "task-1", "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+                "0", "client-a", OWNER, "task-1", "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         verify(mapper).findExactByTaskAndAgentForUpdate(
-                "tenant-a", "client-a", "task-1", "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+                "0", "client-a", OWNER, "task-1", "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         verify(mapper, never()).selectOne(any());
 
         ArgumentCaptor<Wrapper<AgentTaskMemberEntity>> lists = ArgumentCaptor.forClass(Wrapper.class);
         verify(mapper, org.mockito.Mockito.times(2)).selectList(lists.capture());
         for (Wrapper<?> wrapper : lists.getAllValues()) {
-            assertScoped(wrapper, "tenant-a", "client-a");
+            assertScoped(wrapper, "0", "client-a", OWNER);
         }
         String taskSql = normalize(lists.getAllValues().get(0).getSqlSegment());
-        assertByteExactColumns(taskSql, "tenant_id", "client_id", "task_id");
+        assertByteExactColumns(taskSql, "tenant_id", "client_id", "owner_jiacn", "task_id");
         assertTrue(taskSql.contains("order by member_role asc,agent_id asc,id asc"), taskSql);
         String agentSql = normalize(lists.getAllValues().get(1).getSqlSegment());
         assertByteExactColumns(agentSql, "tenant_id", "client_id", "agent_id", "member_status");
@@ -113,26 +114,26 @@ class AgentTaskCollaborationDaoTest {
     void workItemAndRequestListsAreScopedBoundedAndDeterministicallyOrdered() {
         AgentTaskWorkItemMapper workMapper = mock(AgentTaskWorkItemMapper.class);
         new AgentTaskWorkItemDaoImpl(workMapper)
-                .listByTask("tenant-a", "client-a", "task-1", "ready", 9999);
+                .listByTask("0", "client-a", OWNER, "task-1", "ready", 9999);
         ArgumentCaptor<Wrapper<AgentTaskWorkItemEntity>> work = ArgumentCaptor.forClass(Wrapper.class);
         verify(workMapper).selectList(work.capture());
-        assertScoped(work.getValue(), "tenant-a", "client-a");
+        assertScoped(work.getValue(), "0", "client-a", OWNER);
         assertValues(work.getValue(), "task-1", "ready");
         String workSql = normalize(work.getValue().getSqlSegment());
-        assertByteExactColumns(workSql, "tenant_id", "client_id", "task_id", "status");
+        assertByteExactColumns(workSql, "tenant_id", "client_id", "owner_jiacn", "task_id", "status");
         assertTrue(workSql.contains("order by priority desc,create_time asc,work_item_id asc,id asc"), workSql);
         assertTrue(workSql.endsWith("limit 500"), workSql);
 
         AgentTaskRequestMapper requestMapper = mock(AgentTaskRequestMapper.class);
         new AgentTaskRequestDaoImpl(requestMapper).listByTarget(
-                "tenant-b", "client-b", "task-1", "agent", "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "open", 20);
+                "0", "client-b", OWNER, "task-1", "agent", "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "open", 20);
         ArgumentCaptor<Wrapper<AgentTaskRequestEntity>> request = ArgumentCaptor.forClass(Wrapper.class);
         verify(requestMapper).selectList(request.capture());
-        assertScoped(request.getValue(), "tenant-b", "client-b");
+        assertScoped(request.getValue(), "0", "client-b", OWNER);
         assertValues(request.getValue(), "agent", "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "open");
         String requestSql = normalize(request.getValue().getSqlSegment());
         assertByteExactColumns(requestSql,
-                "tenant_id", "client_id", "task_id", "target_type", "target_id", "status");
+                "tenant_id", "client_id", "owner_jiacn", "task_id", "target_type", "target_id", "status");
         assertTrue(requestSql.contains(
                 "order by priority desc,due_at asc,create_time asc,request_id asc,id asc"), requestSql);
         assertTrue(requestSql.endsWith("limit 20"), requestSql);
@@ -143,16 +144,16 @@ class AgentTaskCollaborationDaoTest {
     void requestWorkItemAndStatusPredicatesPrecedeDeterministicLimit() {
         AgentTaskRequestMapper mapper = mock(AgentTaskRequestMapper.class);
         new AgentTaskRequestDaoImpl(mapper).listByTask(
-                "tenant-a", "client-a", "task-1", "open", "work-501", 2);
+                "0", "client-a", OWNER, "task-1", "open", "work-501", 2);
 
         ArgumentCaptor<Wrapper<AgentTaskRequestEntity>> capture = ArgumentCaptor.forClass(Wrapper.class);
         verify(mapper).selectList(capture.capture());
         Wrapper<AgentTaskRequestEntity> wrapper = capture.getValue();
-        assertScoped(wrapper, "tenant-a", "client-a");
+        assertScoped(wrapper, "0", "client-a", OWNER);
         assertValues(wrapper, "task-1", "open", "work-501");
         String sql = normalize(wrapper.getSqlSegment());
         assertByteExactColumns(sql,
-                "tenant_id", "client_id", "task_id", "status", "work_item_id");
+                "tenant_id", "client_id", "owner_jiacn", "task_id", "status", "work_item_id");
         assertTrue(sql.contains("status"), sql);
         assertTrue(sql.contains("work_item_id"), sql);
         assertTrue(sql.contains("order by priority desc,create_time asc,request_id asc,id asc"), sql);
@@ -165,18 +166,18 @@ class AgentTaskCollaborationDaoTest {
     void artifactVisibilityAclPredicatesPrecedeDeterministicLimit() {
         AgentTaskArtifactMapper mapper = mock(AgentTaskArtifactMapper.class);
         new AgentTaskArtifactDaoImpl(mapper).listVisibleByTask(
-                "tenant-a", "client-a", "task-1", "work-1",
+                "0", "client-a", OWNER, "task-1", "work-1",
                 "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", true, false, 3);
 
         ArgumentCaptor<Wrapper<AgentTaskArtifactEntity>> capture = ArgumentCaptor.forClass(Wrapper.class);
         verify(mapper).selectList(capture.capture());
         Wrapper<AgentTaskArtifactEntity> wrapper = capture.getValue();
-        assertScoped(wrapper, "tenant-a", "client-a");
+        assertScoped(wrapper, "0", "client-a", OWNER);
         assertValues(wrapper, "task-1", "work-1", "task_members", "reviewer", "private",
                 "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         String sql = normalize(wrapper.getSqlSegment());
         assertByteExactColumns(sql,
-                "tenant_id", "client_id", "task_id", "work_item_id", "producer_agent_id");
+                "tenant_id", "client_id", "owner_jiacn", "task_id", "work_item_id", "producer_agent_id");
         assertTrue(sql.contains("visibility in"), sql);
         assertTrue(sql.contains("producer_agent_id"), sql);
         assertTrue(sql.contains("work_item_id"), sql);
@@ -194,11 +195,11 @@ class AgentTaskCollaborationDaoTest {
 
         AgentTaskArtifactDTO versionOne = artifact(1);
         AgentTaskArtifactDTO versionTwo = artifact(2);
-        dao.insert("tenant-a", "client-a", versionOne);
-        dao.insert("tenant-a", "client-a", versionTwo);
-        dao.findVersion("tenant-a", "client-a", "task-1", "artifact-1", 1);
-        dao.findLatestVersion("tenant-a", "client-a", "task-1", "artifact-1");
-        dao.listVersions("tenant-a", "client-a", "task-1", "artifact-1");
+        dao.insert("0", "client-a", OWNER, versionOne);
+        dao.insert("0", "client-a", OWNER, versionTwo);
+        dao.findVersion("0", "client-a", OWNER, "task-1", "artifact-1", 1);
+        dao.findLatestVersion("0", "client-a", OWNER, "task-1", "artifact-1");
+        dao.listVersions("0", "client-a", OWNER, "task-1", "artifact-1");
 
         ArgumentCaptor<AgentTaskArtifactEntity> inserts = ArgumentCaptor.forClass(AgentTaskArtifactEntity.class);
         verify(mapper, org.mockito.Mockito.times(2)).insert(inserts.capture());
@@ -206,8 +207,9 @@ class AgentTaskCollaborationDaoTest {
                 .map(AgentTaskArtifactEntity::getArtifactVersion).toList());
         for (AgentTaskArtifactEntity entity : inserts.getAllValues()) {
             assertEquals("artifact-1", entity.getArtifactId());
-            assertEquals("tenant-a", entity.getTenantId());
+            assertEquals("0", entity.getTenantId());
             assertEquals("client-a", entity.getClientId());
+            assertEquals(OWNER, entity.getOwnerJiacn());
         }
 
         ArgumentCaptor<Wrapper<AgentTaskArtifactEntity>> one = ArgumentCaptor.forClass(Wrapper.class);
@@ -218,7 +220,7 @@ class AgentTaskCollaborationDaoTest {
 
         ArgumentCaptor<Wrapper<AgentTaskArtifactEntity>> versions = ArgumentCaptor.forClass(Wrapper.class);
         verify(mapper).selectList(versions.capture());
-        assertScoped(versions.getValue(), "tenant-a", "client-a");
+        assertScoped(versions.getValue(), "0", "client-a", OWNER);
         assertTrue(normalize(versions.getValue().getSqlSegment())
                 .contains("order by artifact_version desc,id desc"));
     }
@@ -254,17 +256,17 @@ class AgentTaskCollaborationDaoTest {
     @Test
     void collaborationMapperIdentityPredicatesAreByteExact() throws Exception {
         assertMapperMethodExact(AgentTaskMemberMapper.class, "findExactByTaskAndAgent",
-                "tenant_id", "client_id", "task_id", "agent_id");
+                "tenant_id", "client_id", "owner_jiacn", "task_id", "agent_id");
         assertMapperMethodExact(AgentTaskMemberMapper.class, "findExactByTaskAndAgentForUpdate",
-                "tenant_id", "client_id", "task_id", "agent_id");
+                "tenant_id", "client_id", "owner_jiacn", "task_id", "agent_id");
         assertMapperMethodExact(AgentTaskMemberMapper.class, "updateByVersion",
-                "tenant_id", "client_id", "task_id", "agent_id");
+                "tenant_id", "client_id", "owner_jiacn", "task_id", "agent_id");
         for (String method : List.of(
                 "updateByVersion", "claimReadyUnassignedByVersion",
                 "claimReadyAssignedByVersion", "updateActiveLeaseByVersion",
                 "expireLeaseByVersion")) {
             assertMapperMethodExact(AgentTaskWorkItemMapper.class, method,
-                    "tenant_id", "client_id", "work_item_id");
+                    "tenant_id", "client_id", "owner_jiacn", "work_item_id");
         }
         for (String method : List.of(
                 "claimReadyUnassignedByVersion", "claimReadyAssignedByVersion",
@@ -278,13 +280,13 @@ class AgentTaskCollaborationDaoTest {
                     "assignee_agent_id", "lease_token", "status");
         }
         assertMapperMethodExact(AgentTaskRequestMapper.class, "updateByVersion",
-                "tenant_id", "client_id", "task_id", "request_id");
+                "tenant_id", "client_id", "owner_jiacn", "task_id", "request_id");
         assertMapperMethodExact(AgentTaskArtifactMapper.class, "selectLatestVersionForUpdate",
-                "tenant_id", "client_id", "task_id", "artifact_id");
+                "tenant_id", "client_id", "owner_jiacn", "task_id", "artifact_id");
         assertMapperMethodExact(AgentTaskMetaMapper.class, "selectAggregationSnapshot",
-                "tenant_id", "client_id", "task_id");
+                "tenant_id", "client_id", "owner_jiacn", "task_id");
         assertMapperMethodExact(AgentTaskMetaMapper.class, "updateStatusByVersion",
-                "tenant_id", "client_id", "task_id");
+                "tenant_id", "client_id", "owner_jiacn", "task_id");
     }
 
     @Test
@@ -299,10 +301,11 @@ class AgentTaskCollaborationDaoTest {
         AgentTaskMemberMapper memberMapper = mock(AgentTaskMemberMapper.class);
         AgentTaskMemberDTO member = member();
         new AgentTaskMemberDaoImpl(memberMapper).updateByVersion(
-                "tenant-a", "client-a", "task-1", "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 7L, member);
+                "0", "client-a", OWNER, "task-1", "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 7L, member);
         verify(memberMapper).updateByVersion(
-                org.mockito.ArgumentMatchers.eq("tenant-a"),
+                org.mockito.ArgumentMatchers.eq("0"),
                 org.mockito.ArgumentMatchers.eq("client-a"),
+                org.mockito.ArgumentMatchers.eq(OWNER),
                 org.mockito.ArgumentMatchers.eq("task-1"),
                 org.mockito.ArgumentMatchers.eq("agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
                 org.mockito.ArgumentMatchers.eq(7L),
@@ -312,10 +315,11 @@ class AgentTaskCollaborationDaoTest {
         AgentTaskWorkItemMapper workItemMapper = mock(AgentTaskWorkItemMapper.class);
         AgentTaskWorkItemDTO item = workItem();
         new AgentTaskWorkItemDaoImpl(workItemMapper).updateByVersion(
-                "tenant-b", "client-b", "work-1", 8L, item);
+                "0", "client-b", OWNER, "work-1", 8L, item);
         verify(workItemMapper).updateByVersion(
-                org.mockito.ArgumentMatchers.eq("tenant-b"),
+                org.mockito.ArgumentMatchers.eq("0"),
                 org.mockito.ArgumentMatchers.eq("client-b"),
+                org.mockito.ArgumentMatchers.eq(OWNER),
                 org.mockito.ArgumentMatchers.eq("work-1"),
                 org.mockito.ArgumentMatchers.eq(8L),
                 org.mockito.ArgumentMatchers.same(item), anyLong());
@@ -324,10 +328,11 @@ class AgentTaskCollaborationDaoTest {
         AgentTaskRequestMapper requestMapper = mock(AgentTaskRequestMapper.class);
         AgentTaskRequestDTO request = request();
         new AgentTaskRequestDaoImpl(requestMapper).updateByVersion(
-                "tenant-c", "client-c", "task-1", "request-1", 9L, request);
+                "0", "client-c", OWNER, "task-1", "request-1", 9L, request);
         verify(requestMapper).updateByVersion(
-                org.mockito.ArgumentMatchers.eq("tenant-c"),
+                org.mockito.ArgumentMatchers.eq("0"),
                 org.mockito.ArgumentMatchers.eq("client-c"),
+                org.mockito.ArgumentMatchers.eq(OWNER),
                 org.mockito.ArgumentMatchers.eq("task-1"),
                 org.mockito.ArgumentMatchers.eq("request-1"),
                 org.mockito.ArgumentMatchers.eq(9L),
@@ -339,18 +344,18 @@ class AgentTaskCollaborationDaoTest {
     void negativeExpectedVersionIsRejectedBeforeCasMapperAccess() {
         AgentTaskMemberMapper memberMapper = mock(AgentTaskMemberMapper.class);
         assertThrows(IllegalArgumentException.class, () -> new AgentTaskMemberDaoImpl(memberMapper).updateByVersion(
-                "tenant-a", "client-a", "task-1", "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", -1L, member()));
-        verify(memberMapper, never()).updateByVersion(any(), any(), any(), any(), anyLong(), any(), anyLong());
+                "0", "client-a", OWNER, "task-1", "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", -1L, member()));
+        verify(memberMapper, never()).updateByVersion(any(), any(), any(), any(), any(), anyLong(), any(), anyLong());
 
         AgentTaskWorkItemMapper workItemMapper = mock(AgentTaskWorkItemMapper.class);
         assertThrows(IllegalArgumentException.class, () -> new AgentTaskWorkItemDaoImpl(workItemMapper).updateByVersion(
-                "tenant-a", "client-a", "work-1", -1L, workItem()));
-        verify(workItemMapper, never()).updateByVersion(any(), any(), any(), anyLong(), any(), anyLong());
+                "0", "client-a", OWNER, "work-1", -1L, workItem()));
+        verify(workItemMapper, never()).updateByVersion(any(), any(), any(), any(), anyLong(), any(), anyLong());
 
         AgentTaskRequestMapper requestMapper = mock(AgentTaskRequestMapper.class);
         assertThrows(IllegalArgumentException.class, () -> new AgentTaskRequestDaoImpl(requestMapper).updateByVersion(
-                "tenant-a", "client-a", "task-1", "request-1", -1L, request()));
-        verify(requestMapper, never()).updateByVersion(any(), any(), any(), any(), anyLong(), any(), anyLong());
+                "0", "client-a", OWNER, "task-1", "request-1", -1L, request()));
+        verify(requestMapper, never()).updateByVersion(any(), any(), any(), any(), any(), anyLong(), any(), anyLong());
     }
 
     @Test
@@ -359,7 +364,7 @@ class AgentTaskCollaborationDaoTest {
         AgentTaskWorkItemDao dao = new AgentTaskWorkItemDaoImpl(mapper);
 
         assertThrows(IllegalArgumentException.class,
-                () -> dao.findByWorkItemId("", "client-a", "work-1"));
+                () -> dao.findByWorkItemId("", "client-a", OWNER, "work-1"));
 
         verify(mapper, never()).selectOne(any());
     }
@@ -430,7 +435,8 @@ class AgentTaskCollaborationDaoTest {
         String sql = normalize(String.join(" ", method.getAnnotation(Update.class).value()));
         assertTrue(sql.contains("where tenant_id = #{tenantid}"), sql);
         assertTrue(sql.contains("and client_id = #{clientid}"), sql);
-        assertByteExactColumns(sql, "tenant_id", "client_id");
+        assertTrue(sql.contains("and owner_jiacn = #{ownerjiacn}"), sql);
+        assertByteExactColumns(sql, "tenant_id", "client_id", "owner_jiacn");
         for (String businessKey : businessKeys) {
             assertTrue(sql.contains("and " + businessKey), sql);
             assertByteExactColumns(sql, businessKey.substring(0, businessKey.indexOf(' ')));
@@ -447,12 +453,13 @@ class AgentTaskCollaborationDaoTest {
         }
     }
 
-    private void assertScoped(Wrapper<?> wrapper, String tenantId, String clientId) {
-        assertValues(wrapper, tenantId, clientId);
+    private void assertScoped(Wrapper<?> wrapper, String tenantId, String clientId, String ownerJiacn) {
+        assertValues(wrapper, tenantId, clientId, ownerJiacn);
         String sql = normalize(wrapper.getSqlSegment());
         assertTrue(sql.contains("tenant_id"), sql);
         assertTrue(sql.contains("client_id"), sql);
-        assertByteExactColumns(sql, "tenant_id", "client_id");
+        assertTrue(sql.contains("owner_jiacn"), sql);
+        assertByteExactColumns(sql, "tenant_id", "client_id", "owner_jiacn");
     }
 
     private void assertValues(Wrapper<?> wrapper, Object... values) {

@@ -24,6 +24,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class AgentTaskEventReplayDaoTest extends BaseMockTest {
+    private static final String OWNER = "owner-a";
     @Mock
     AgentTaskEventMapper mapper;
 
@@ -41,23 +42,23 @@ class AgentTaskEventReplayDaoTest extends BaseMockTest {
     void boundedExclusivePageDelegatesLimitAndRejectsEveryUnboundedShape() {
         List<AgentTaskEventEntity> expected = List.of(new AgentTaskEventEntity());
         when(mapper.findExactByTaskScopeAfterVersion(
-                "Tenant-A", "client-a", "caf\u00e9", 7L, 25)).thenReturn(expected);
+                "0", "client-a", OWNER, "caf\u00e9", 7L, 25)).thenReturn(expected);
 
         assertEquals(expected, dao.findAfterVersion(
-                "Tenant-A", "client-a", "caf\u00e9", 7L, 25));
+                "0", "client-a", OWNER, "caf\u00e9", 7L, 25));
         verify(mapper).findExactByTaskScopeAfterVersion(
-                "Tenant-A", "client-a", "caf\u00e9", 7L, 25);
+                "0", "client-a", OWNER, "caf\u00e9", 7L, 25);
 
         assertThrows(IllegalArgumentException.class,
-                () -> dao.findAfterVersion("tenant", "client", "task", -1L, 1));
+                () -> dao.findAfterVersion("0", "client", OWNER, "task", -1L, 1));
         assertThrows(IllegalArgumentException.class,
-                () -> dao.findAfterVersion("tenant", "client", "task", 0L, 0));
+                () -> dao.findAfterVersion("0", "client", OWNER, "task", 0L, 0));
         assertThrows(IllegalArgumentException.class,
-                () -> dao.findAfterVersion("tenant", "client", "task", 0L,
+                () -> dao.findAfterVersion("0", "client", OWNER, "task", 0L,
                         AgentTaskEventDao.MAX_REPLAY_PAGE_SIZE + 1));
         assertFalse(java.util.Arrays.stream(AgentTaskEventDao.class.getMethods())
                 .anyMatch(method -> method.getName().equals("findAfterVersion")
-                        && method.getParameterCount() == 4));
+                        && method.getParameterCount() == 5));
         assertFalse(java.util.Arrays.stream(AgentTaskEventDao.class.getMethods())
                 .anyMatch(method -> method.getName().equals("findByTaskScope")));
         assertFalse(java.util.Arrays.stream(AgentTaskEventMapper.class.getMethods())
@@ -66,23 +67,23 @@ class AgentTaskEventReplayDaoTest extends BaseMockTest {
 
     @Test
     void currentAndEarliestVersionUseExactScopeDelegates() {
-        when(mapper.findExactCurrentEventVersion("tenant", "client", "task")).thenReturn(9L);
-        when(mapper.findExactEarliestEventVersion("tenant", "client", "task")).thenReturn(3L);
+        when(mapper.findExactCurrentEventVersion("0", "client", OWNER, "task")).thenReturn(9L);
+        when(mapper.findExactEarliestEventVersion("0", "client", OWNER, "task")).thenReturn(3L);
 
-        assertEquals(9L, dao.findCurrentVersion("tenant", "client", "task"));
-        assertEquals(3L, dao.findEarliestVersion("tenant", "client", "task"));
-        verify(mapper).findExactCurrentEventVersion("tenant", "client", "task");
-        verify(mapper).findExactEarliestEventVersion("tenant", "client", "task");
+        assertEquals(9L, dao.findCurrentVersion("0", "client", OWNER, "task"));
+        assertEquals(3L, dao.findEarliestVersion("0", "client", OWNER, "task"));
+        verify(mapper).findExactCurrentEventVersion("0", "client", OWNER, "task");
+        verify(mapper).findExactEarliestEventVersion("0", "client", OWNER, "task");
     }
 
     @Test
     void invalidExactScopesFailBeforeMapper() {
         assertThrows(IllegalArgumentException.class,
-                () -> dao.findCurrentVersion(" tenant", "client", "task"));
+                () -> dao.findCurrentVersion(" tenant", "client", OWNER, "task"));
         assertThrows(IllegalArgumentException.class,
-                () -> dao.findEarliestVersion("tenant", "client", "task "));
+                () -> dao.findEarliestVersion("tenant", "client", OWNER, "task "));
         assertThrows(IllegalArgumentException.class,
-                () -> dao.findAfterVersion("tenant", "client\n", "task", 0L, 1));
+                () -> dao.findAfterVersion("tenant", "client\n", OWNER, "task", 0L, 1));
         verifyNoInteractions(mapper);
     }
 
@@ -91,19 +92,19 @@ class AgentTaskEventReplayDaoTest extends BaseMockTest {
             throws Exception {
         String pageSql = sql(AgentTaskEventMapper.class.getMethod(
                 "findExactByTaskScopeAfterVersion",
-                String.class, String.class, String.class, long.class, int.class));
+                String.class, String.class, String.class, String.class, long.class, int.class));
         assertTrue(pageSql.contains("event_version > #{afterversion}"));
         assertTrue(pageSql.contains("order by event_version asc"));
         assertTrue(pageSql.contains("limit #{limit}"));
         assertByteExactScope(pageSql);
 
         String currentSql = sql(AgentTaskEventMapper.class.getMethod(
-                "findExactCurrentEventVersion", String.class, String.class, String.class));
+                "findExactCurrentEventVersion", String.class, String.class, String.class, String.class));
         assertTrue(currentSql.contains("current_event_version"));
         assertByteExactScope(currentSql);
 
         String earliestSql = sql(AgentTaskEventMapper.class.getMethod(
-                "findExactEarliestEventVersion", String.class, String.class, String.class));
+                "findExactEarliestEventVersion", String.class, String.class, String.class, String.class));
         assertTrue(earliestSql.contains("min(event_version)"));
         assertByteExactScope(earliestSql);
     }
@@ -116,13 +117,15 @@ class AgentTaskEventReplayDaoTest extends BaseMockTest {
     }
 
     private static void assertByteExactScope(String sql) {
-        for (String field : List.of("tenant_id", "client_id", "task_id")) {
+        for (String field : List.of("tenant_id", "client_id", "owner_jiacn", "task_id")) {
             assertTrue(sql.contains("octet_length(" + field + ")"), sql);
         }
         assertTrue(sql.contains("cast(tenant_id as binary"), sql);
         assertTrue(sql.contains("cast(#{tenantid} as binary"), sql);
         assertTrue(sql.contains("cast(client_id as binary"), sql);
         assertTrue(sql.contains("cast(#{clientid} as binary"), sql);
+        assertTrue(sql.contains("cast(owner_jiacn as binary"), sql);
+        assertTrue(sql.contains("cast(#{ownerjiacn} as binary"), sql);
         assertTrue(sql.contains("cast(task_id as binary")
                 || sql.contains("cast(substring(task_id"), sql);
         assertTrue(sql.contains("cast(#{taskid} as binary")

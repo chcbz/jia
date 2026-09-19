@@ -27,8 +27,9 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
 class AgentTaskWorkItemLeaseDaoTest {
-    private static final String TENANT = "tenant-a";
+    private static final String TENANT = "0";
     private static final String CLIENT = "client-a";
+    private static final String OWNER = "owner-a";
     private static final String TASK = "task-1";
     private static final String WORK = "work-1";
     private static final String AGENT = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -46,7 +47,7 @@ class AgentTaskWorkItemLeaseDaoTest {
         AgentTaskWorkItemMapper mapper = mock(AgentTaskWorkItemMapper.class);
         AgentTaskWorkItemDao dao = new AgentTaskWorkItemDaoImpl(mapper);
 
-        dao.listExpiredLeases(TENANT, CLIENT, 1_000L, 9999);
+        dao.listExpiredLeases(TENANT, CLIENT, OWNER, 1_000L, 9999);
 
         ArgumentCaptor<Wrapper<AgentTaskWorkItemEntity>> captor = ArgumentCaptor.forClass(Wrapper.class);
         verify(mapper).selectList(captor.capture());
@@ -55,6 +56,7 @@ class AgentTaskWorkItemLeaseDaoTest {
         String sql = normalize(wrapper.getSqlSegment());
         assertTrue(sql.contains("tenant_id"), sql);
         assertTrue(sql.contains("client_id"), sql);
+        assertTrue(sql.contains("owner_jiacn"), sql);
         assertTrue(sql.contains("status in"), sql);
         assertTrue(sql.contains("lease_until is not null"), sql);
         assertTrue(sql.contains("lease_until <="), sql);
@@ -62,6 +64,7 @@ class AgentTaskWorkItemLeaseDaoTest {
         assertTrue(sql.endsWith("limit 500"), sql);
         assertTrue(actual.getParamNameValuePairs().containsValue(TENANT));
         assertTrue(actual.getParamNameValuePairs().containsValue(CLIENT));
+        assertTrue(actual.getParamNameValuePairs().containsValue(OWNER));
         assertTrue(actual.getParamNameValuePairs().containsValue(1_000L));
     }
 
@@ -101,27 +104,27 @@ class AgentTaskWorkItemLeaseDaoTest {
         AgentTaskWorkItemDao dao = new AgentTaskWorkItemDaoImpl(mapper);
         AgentTaskWorkItemDTO snapshot = completeSnapshot();
 
-        dao.claimReadyByVersion(TENANT, CLIENT, TASK, WORK, null, 3L, snapshot);
+        dao.claimReadyByVersion(TENANT, CLIENT, OWNER, TASK, WORK, null, 3L, snapshot);
         verify(mapper).claimReadyUnassignedByVersion(
-                eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), eq(3L), same(snapshot), anyLong());
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK), eq(3L), same(snapshot), anyLong());
 
-        dao.claimReadyByVersion(TENANT, CLIENT, TASK, WORK, AGENT, 4L, snapshot);
+        dao.claimReadyByVersion(TENANT, CLIENT, OWNER, TASK, WORK, AGENT, 4L, snapshot);
         verify(mapper).claimReadyAssignedByVersion(
-                eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), eq(AGENT), eq(4L),
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK), eq(AGENT), eq(4L),
                 same(snapshot), anyLong());
 
         dao.updateActiveLeaseByVersion(
-                TENANT, CLIENT, TASK, WORK, AGENT, TOKEN, "running",
+                TENANT, CLIENT, OWNER, TASK, WORK, AGENT, TOKEN, "running",
                 2_000L, 5L, 1_000L, snapshot);
         verify(mapper).updateActiveLeaseByVersion(
-                eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), eq(AGENT), eq(TOKEN),
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK), eq(AGENT), eq(TOKEN),
                 eq("running"), eq(2_000L), eq(5L), eq(1_000L), same(snapshot), anyLong());
 
         dao.expireLeaseByVersion(
-                TENANT, CLIENT, TASK, WORK, AGENT, TOKEN, "running",
+                TENANT, CLIENT, OWNER, TASK, WORK, AGENT, TOKEN, "running",
                 2_000L, 5L, 2_001L, snapshot);
         verify(mapper).expireLeaseByVersion(
-                eq(TENANT), eq(CLIENT), eq(TASK), eq(WORK), eq(AGENT), eq(TOKEN),
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK), eq(AGENT), eq(TOKEN),
                 eq("running"), eq(2_000L), eq(5L), eq(2_001L), same(snapshot), anyLong());
     }
 
@@ -145,8 +148,8 @@ class AgentTaskWorkItemLeaseDaoTest {
     private void assertScopedTaskWorkVersion(String sql) {
         assertTrue(sql.contains("tenant_id = #{tenantid}"), sql);
         assertTrue(sql.contains("client_id = #{clientid}"), sql);
-        assertTrue(sql.contains("task_id = #{taskid}"), sql);
-        assertTrue(sql.contains("work_item_id = #{workitemid}"), sql);
+        assertTrue(sql.contains("owner_jiacn = #{ownerjiacn}"), sql);
+        assertTrue(sql.contains("task_id = #{taskid}"), sql);        assertTrue(sql.contains("work_item_id = #{workitemid}"), sql);
         assertTrue(sql.contains("version = #{expectedversion}"), sql);
     }
 

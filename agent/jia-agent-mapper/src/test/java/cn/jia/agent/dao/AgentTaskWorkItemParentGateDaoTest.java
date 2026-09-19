@@ -23,6 +23,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class AgentTaskWorkItemParentGateDaoTest {
+    private static final String OWNER = "owner-a";
     @Test
     void insertSqlAtomicallyLocksScopedParentAndAllowsOnlyCanonicalNonTerminalStates()
             throws Exception {
@@ -36,6 +37,7 @@ class AgentTaskWorkItemParentGateDaoTest {
         assertTrue(sql.contains("from agent_task_meta parent"), sql);
         assertTrue(sql.contains("parent.tenant_id = #{tenantid}"), sql);
         assertTrue(sql.contains("parent.client_id = #{clientid}"), sql);
+        assertTrue(sql.contains("parent.owner_jiacn = #{ownerjiacn}"), sql);
         assertTrue(sql.contains("parent.task_id = #{item.taskid}"), sql);
         assertTrue(sql.contains("cast(parent.tenant_id as binary(200)) "
                 + "= cast(#{tenantid} as binary(200))"), sql);
@@ -43,6 +45,9 @@ class AgentTaskWorkItemParentGateDaoTest {
         assertTrue(sql.contains("cast(parent.client_id as binary(200)) "
                 + "= cast(#{clientid} as binary(200))"), sql);
         assertTrue(sql.contains("octet_length(parent.client_id) = octet_length(#{clientid})"), sql);
+        assertTrue(sql.contains("cast(parent.owner_jiacn as binary(200)) "
+                + "= cast(#{ownerjiacn} as binary(200))"), sql);
+        assertTrue(sql.contains("octet_length(parent.owner_jiacn) = octet_length(#{ownerjiacn})"), sql);
         assertTrue(sql.contains("cast(substring(parent.task_id, 1, 50) as binary(200))"), sql);
         assertTrue(sql.contains("cast(substring(parent.task_id, 51, 50) as binary(200))"), sql);
         assertTrue(sql.contains("octet_length(parent.task_id) = octet_length(#{item.taskid})"), sql);
@@ -61,7 +66,7 @@ class AgentTaskWorkItemParentGateDaoTest {
     @Test
     void daoPreservesB02DefaultsAndUsesOnlyAtomicParentGate() {
         AgentTaskWorkItemMapper mapper = mock(AgentTaskWorkItemMapper.class);
-        when(mapper.insertIfParentNonTerminal(eq("tenant-a"), eq("client-a"), any()))
+        when(mapper.insertIfParentNonTerminal(eq("0"), eq("client-a"), eq(OWNER), any()))
                 .thenReturn(1);
         AgentTaskWorkItemDao dao = new AgentTaskWorkItemDaoImpl(mapper);
         AgentTaskWorkItemDTO item = new AgentTaskWorkItemDTO();
@@ -71,16 +76,17 @@ class AgentTaskWorkItemParentGateDaoTest {
         item.setWorkType("implementation");
         item.setStatus("ready");
 
-        assertEquals(1, dao.insert("tenant-a", "client-a", item));
+        assertEquals(1, dao.insert("0", "client-a", OWNER, item));
 
         ArgumentCaptor<AgentTaskWorkItemEntity> entity =
                 ArgumentCaptor.forClass(AgentTaskWorkItemEntity.class);
         verify(mapper).insertIfParentNonTerminal(
-                eq("tenant-a"), eq("client-a"), entity.capture());
+                eq("0"), eq("client-a"), eq(OWNER), entity.capture());
         verify(mapper, never()).insert(any(AgentTaskWorkItemEntity.class));
         AgentTaskWorkItemEntity inserted = entity.getValue();
-        assertEquals("tenant-a", inserted.getTenantId());
+        assertEquals("0", inserted.getTenantId());
         assertEquals("client-a", inserted.getClientId());
+        assertEquals(OWNER, inserted.getOwnerJiacn());
         assertEquals("task-1", inserted.getTaskId());
         assertEquals(0, inserted.getPriority());
         assertEquals(true, inserted.getRequiredItem());

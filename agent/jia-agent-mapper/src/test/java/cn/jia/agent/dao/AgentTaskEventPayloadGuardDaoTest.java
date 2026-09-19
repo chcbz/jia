@@ -70,8 +70,9 @@ class AgentTaskEventPayloadGuardDaoTest extends BaseMockTest {
 
     private AgentTaskEventEntity event(String eventJson) {
         AgentTaskEventEntity event = new AgentTaskEventEntity();
-        event.setTenantId("tenant-a");
+        event.setTenantId("0");
         event.setClientId("client-a");
+        event.setOwnerJiacn("owner-a");
         event.setTaskId("task-1");
         event.setEventVersion(1L);
         event.setEventId("evt-1");
