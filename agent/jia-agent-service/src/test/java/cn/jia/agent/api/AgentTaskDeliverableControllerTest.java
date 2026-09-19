@@ -288,15 +288,16 @@ class AgentTaskDeliverableControllerTest {
 
             int expectedReads = 3;
             if (sample.legacyContentText() != null) {
-                mvc.perform(get(
+                var legacyContent = mvc.perform(get(
                                 "/agent/tasks/{taskId}/deliverables/{artifactId}/versions/{version}"
                                         + "/preview/parts/content",
                                 TASK, ARTIFACT, sample.version())
                                 .principal(jwt(TENANT, CLIENT, ACTOR)))
                         .andExpect(status().isOk())
                         .andExpect(content().contentType("text/plain"))
-                        .andExpect(content().string(org.hamcrest.Matchers.containsString(
-                                sample.legacyContentText())));
+                        .andReturn();
+                assertTrue(new String(legacyContent.getResponse().getContentAsByteArray(),
+                        StandardCharsets.UTF_8).contains(sample.legacyContentText()));
                 expectedReads++;
             }
             verify(contentService, org.mockito.Mockito.times(expectedReads)).readContentForTaskOwner(

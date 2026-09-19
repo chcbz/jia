@@ -10,6 +10,9 @@ import org.apache.poi.ss.usermodel.DataFormatter;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.sl.extractor.SlideShowExtractor;
+import org.apache.poi.sl.draw.Drawable;
+import org.apache.poi.sl.draw.ImageRenderer;
+import org.apache.poi.sl.usermodel.PictureData;
 import org.apache.poi.xslf.usermodel.XMLSlideShow;
 import org.apache.poi.xslf.usermodel.XSLFShape;
 import org.apache.poi.xslf.usermodel.XSLFTextParagraph;
@@ -18,15 +21,28 @@ import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
 import javax.imageio.ImageIO;
+import javax.imageio.ImageReadParam;
+import javax.imageio.ImageReader;
+import javax.imageio.stream.ImageInputStream;
+import java.awt.AlphaComposite;
 import java.awt.Color;
+import java.awt.Composite;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
+import java.awt.Insets;
 import java.awt.RenderingHints;
+import java.awt.Shape;
 import java.awt.image.BufferedImage;
+import java.awt.geom.AffineTransform;
+import java.awt.geom.Dimension2D;
+import java.awt.geom.Rectangle2D;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -136,6 +152,11 @@ public final class PersonalWorkspacePreviewRenderer {
                         RenderingHints.VALUE_ANTIALIAS_ON);
                 graphics.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING,
                         RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+                // POI 5.4 BitmapImageRenderer fully decodes a picture in loadImage() before it
+                // knows the target shape size. Keep compressed package-local bytes, then decode
+                // raster pictures with ImageIO source subsampling for this bounded canvas.
+                graphics.setRenderingHint(Drawable.IMAGE_RENDERER,
+                        new PreviewImageRenderer(previewSize));
                 graphics.scale(previewScale, previewScale);
                 slideShow.getSlides().get(slideIndex).draw(graphics);
             } finally {
@@ -162,6 +183,232 @@ public final class PersonalWorkspacePreviewRenderer {
         int height = Math.max(1, Math.min(PPT_PREVIEW_MAX_HEIGHT,
                 (int) Math.round(sourceSize.height * scale)));
         return new Dimension(width, height);
+    }
+
+    /**
+     * Bitmap-only renderer for PPT previews. Vector image types continue through POI's normal
+     * renderer lookup. Raster decoding is delayed until the shape anchor and Graphics2D transform
+     * are available, then ImageIO subsampling derives at most the preview-canvas resolution.
+     */
+    private static final class PreviewImageRenderer implements ImageRenderer {
+        private static final Set<String> SUPPORTED_TYPES = Set.of(
+                PictureData.PictureType.JPEG.contentType,
+                PictureData.PictureType.PNG.contentType,
+                PictureData.PictureType.BMP.contentType,
+                PictureData.PictureType.GIF.contentType);
+        private static final Insets NO_CROP = new Insets(0, 0, 0, 0);
+
+        private final Dimension canvasSize;
+        private byte[] compressedImage;
+        private Dimension sourceSize;
+        private BufferedImage decodedImage;
+        private double alpha = 1d;
+
+        private PreviewImageRenderer(Dimension canvasSize) {
+            this.canvasSize = new Dimension(canvasSize);
+        }
+
+        @Override
+        public boolean canRender(String requestedContentType) {
+            return SUPPORTED_TYPES.contains(requestedContentType);
+        }
+
+        @Override
+        public void loadImage(InputStream input, String requestedContentType) throws IOException {
+            try {
+                loadImage(input.readAllBytes(), requestedContentType);
+            } catch (IOException failure) {
+                throw new PreviewImageRenderException(failure);
+            }
+        }
+
+        @Override
+        public void loadImage(byte[] data, String requestedContentType) throws IOException {
+            if (data == null) {
+                compressedImage = null;
+                sourceSize = null;
+                decodedImage = null;
+                return;
+            }
+            try {
+                compressedImage = data;
+                sourceSize = readImageSize(data);
+                decodedImage = null;
+                alpha = 1d;
+            } catch (IOException failure) {
+                throw new PreviewImageRenderException(failure);
+            }
+        }
+
+        @Override
+        public Rectangle2D getNativeBounds() {
+            return bounds();
+        }
+
+        @Override
+        public Rectangle2D getBounds() {
+            return bounds();
+        }
+
+        private Rectangle2D bounds() {
+            Dimension size = sourceSize;
+            if (size == null && decodedImage != null) {
+                size = new Dimension(decodedImage.getWidth(), decodedImage.getHeight());
+            }
+            return size == null
+                    ? new Rectangle2D.Double()
+                    : new Rectangle2D.Double(0, 0, size.width, size.height);
+        }
+
+        @Override
+        public void setAlpha(double requestedAlpha) {
+            alpha = Math.max(0d, Math.min(1d, requestedAlpha));
+        }
+
+        @Override
+        public BufferedImage getImage() {
+            return decodedImage;
+        }
+
+        @Override
+        public BufferedImage getImage(Dimension2D dimension) {
+            return decodedImage;
+        }
+
+        @Override
+        public boolean drawImage(Graphics2D graphics, Rectangle2D anchor) {
+            return drawImage(graphics, anchor, null);
+        }
+
+        @Override
+        public boolean drawImage(Graphics2D graphics, Rectangle2D anchor, Insets clipping) {
+            if (compressedImage == null || sourceSize == null || anchor == null
+                    || anchor.isEmpty()) {
+                return false;
+            }
+            try {
+                Dimension target = targetDecodeSize(graphics, anchor, canvasSize);
+                decodedImage = null;
+                decodedImage = decodeSubsampled(compressedImage, target);
+                if (decodedImage == null) {
+                    throw new PreviewImageRenderException("bitmap decoder returned no image");
+                }
+                drawDecodedImage(graphics, anchor, clipping == null ? NO_CROP : clipping);
+                return true;
+            } catch (IOException failure) {
+                // Do not return a PNG with a silently missing bitmap. A corrupt/unsupported
+                // embedded raster fails only this lazily requested slide part.
+                throw new PreviewImageRenderException(failure);
+            } finally {
+                compressedImage = null;
+            }
+        }
+
+        private void drawDecodedImage(Graphics2D graphics, Rectangle2D anchor, Insets clipping) {
+            int imageWidth = decodedImage.getWidth();
+            int imageHeight = decodedImage.getHeight();
+            double visibleWidth = (100_000d - clipping.left - clipping.right) / 100_000d;
+            double visibleHeight = (100_000d - clipping.top - clipping.bottom) / 100_000d;
+            if (visibleWidth <= 0d || visibleHeight <= 0d) return;
+
+            double sourceX = imageWidth * clipping.left / 100_000d;
+            double sourceY = imageHeight * clipping.top / 100_000d;
+            double sourceWidth = imageWidth * visibleWidth;
+            double sourceHeight = imageHeight * visibleHeight;
+            AffineTransform imageTransform = new AffineTransform();
+            imageTransform.translate(anchor.getX(), anchor.getY());
+            imageTransform.scale(anchor.getWidth() / sourceWidth, anchor.getHeight() / sourceHeight);
+            imageTransform.translate(-sourceX, -sourceY);
+
+            Shape previousClip = graphics.getClip();
+            Composite previousComposite = graphics.getComposite();
+            try {
+                graphics.clip(anchor);
+                if (alpha < 1d) {
+                    float effectiveAlpha = (float) alpha;
+                    if (previousComposite instanceof AlphaComposite alphaComposite) {
+                        effectiveAlpha *= alphaComposite.getAlpha();
+                    }
+                    graphics.setComposite(AlphaComposite.SrcOver.derive(effectiveAlpha));
+                }
+                graphics.drawRenderedImage(decodedImage, imageTransform);
+            } finally {
+                graphics.setComposite(previousComposite);
+                graphics.setClip(previousClip);
+            }
+        }
+
+        private static Dimension targetDecodeSize(
+                Graphics2D graphics, Rectangle2D anchor, Dimension canvasSize) {
+            Shape deviceShape = graphics.getTransform().createTransformedShape(anchor);
+            Rectangle2D deviceBounds = deviceShape.getBounds2D();
+            int width = boundedPixels(deviceBounds.getWidth(), canvasSize.width);
+            int height = boundedPixels(deviceBounds.getHeight(), canvasSize.height);
+            return new Dimension(width, height);
+        }
+
+        private static int boundedPixels(double requested, int canvasLimit) {
+            if (!Double.isFinite(requested) || requested <= 0d) return 1;
+            return Math.max(1, Math.min(canvasLimit, (int) Math.ceil(requested)));
+        }
+
+        private static Dimension readImageSize(byte[] data) throws IOException {
+            try (ImageInputStream input = ImageIO.createImageInputStream(
+                    new ByteArrayInputStream(data))) {
+                if (input == null) throw new IOException("image input unavailable");
+                ImageReader reader = firstReader(input);
+                try {
+                    reader.setInput(input, true, true);
+                    return new Dimension(reader.getWidth(0), reader.getHeight(0));
+                } finally {
+                    reader.dispose();
+                }
+            }
+        }
+
+        private static BufferedImage decodeSubsampled(byte[] data, Dimension target)
+                throws IOException {
+            try (ImageInputStream input = ImageIO.createImageInputStream(
+                    new ByteArrayInputStream(data))) {
+                if (input == null) throw new IOException("image input unavailable");
+                ImageReader reader = firstReader(input);
+                try {
+                    reader.setInput(input, true, true);
+                    int sourceWidth = reader.getWidth(0);
+                    int sourceHeight = reader.getHeight(0);
+                    ImageReadParam readParam = reader.getDefaultReadParam();
+                    readParam.setSourceSubsampling(
+                            subsampling(sourceWidth, target.width),
+                            subsampling(sourceHeight, target.height), 0, 0);
+                    return reader.read(0, readParam);
+                } finally {
+                    reader.dispose();
+                }
+            }
+        }
+
+        private static ImageReader firstReader(ImageInputStream input) throws IOException {
+            Iterator<ImageReader> readers = ImageIO.getImageReaders(input);
+            if (!readers.hasNext()) {
+                throw new IOException("unsupported bitmap content");
+            }
+            return readers.next();
+        }
+
+        private static int subsampling(int sourcePixels, int targetPixels) {
+            long sample = ((long) sourcePixels + targetPixels - 1L) / targetPixels;
+            return (int) Math.max(1L, Math.min(Integer.MAX_VALUE, sample));
+        }
+
+        private static final class PreviewImageRenderException extends RuntimeException {
+            private PreviewImageRenderException(String message) {
+                super(message);
+            }
+
+            private PreviewImageRenderException(Throwable cause) {
+                super("embedded bitmap could not be rendered", cause);
+            }
+        }
     }
 
     private static RenderedPreview xlsxPreview(byte[] source) throws Exception {

@@ -5,16 +5,26 @@ import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.poi.xslf.usermodel.XMLSlideShow;
+import org.apache.poi.sl.usermodel.PictureData;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import org.openxmlformats.schemas.presentationml.x2006.main.CTPicture;
 import org.junit.jupiter.api.Test;
 
 import javax.imageio.ImageIO;
 import java.awt.Dimension;
+import java.awt.geom.Rectangle2D;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.zip.CRC32;
+import java.util.zip.Deflater;
+import java.util.zip.DeflaterOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -86,6 +96,46 @@ class PersonalWorkspacePreviewRendererTest {
         assertTrue((long) image.getWidth() * image.getHeight()
                 <= (long) PersonalWorkspacePreviewRenderer.PPT_PREVIEW_MAX_WIDTH
                 * PersonalWorkspacePreviewRenderer.PPT_PREVIEW_MAX_HEIGHT);
+    }
+
+    @Test
+    void subsamplesHighlyCompressedLargeRasterToTheBoundedPreviewCanvas() throws Exception {
+        byte[] compressedImage = monochromePng(10_000, 10_000);
+        assertTrue(compressedImage.length < 100_000,
+                "fixture must stay compressed instead of allocating a giant source bitmap");
+
+        var preview = renderer.render(PPTX, pptxWithPicture(compressedImage));
+        var image = ImageIO.read(new ByteArrayInputStream(preview.partBytes("slide-1")));
+
+        assertNotNull(image);
+        assertEquals(PersonalWorkspacePreviewRenderer.PPT_PREVIEW_MAX_WIDTH,
+                image.getWidth());
+        assertEquals(PersonalWorkspacePreviewRenderer.PPT_PREVIEW_MAX_HEIGHT,
+                image.getHeight());
+        assertTrue((long) image.getWidth() * image.getHeight()
+                <= (long) PersonalWorkspacePreviewRenderer.PPT_PREVIEW_MAX_WIDTH
+                * PersonalWorkspacePreviewRenderer.PPT_PREVIEW_MAX_HEIGHT);
+    }
+
+    @Test
+    void externalPictureRelationshipRemainsMetadataOnlyAndDoesNotOpenLoopback() throws Exception {
+        try (ServerSocket tripwire = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+            tripwire.setSoTimeout(250);
+            String target = "http://127.0.0.1:" + tripwire.getLocalPort()
+                    + "/must-not-be-fetched.png";
+
+            var preview = renderer.render(PPTX, pptxWithExternalPicture(target));
+            var image = ImageIO.read(new ByteArrayInputStream(preview.partBytes("slide-1")));
+
+            assertNotNull(image);
+            try {
+                tripwire.accept().close();
+                throw new AssertionError(
+                        "rendering an external picture relationship made a loopback request");
+            } catch (SocketTimeoutException expected) {
+                // No connection reached the local-only tripwire.
+            }
+        }
     }
 
     @Test
@@ -191,6 +241,94 @@ class PersonalWorkspacePreviewRendererTest {
             slideShow.createSlide().createTextBox().setText("Bounded preview");
             slideShow.write(output);
             return output.toByteArray();
+        }
+    }
+
+    private static byte[] pptxWithPicture(byte[] pictureBytes) throws Exception {
+        try (XMLSlideShow slideShow = new XMLSlideShow();
+                ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            var slide = slideShow.createSlide();
+            var pictureData = slideShow.addPicture(pictureBytes, PictureData.PictureType.PNG);
+            var picture = slide.createPicture(pictureData);
+            Dimension pageSize = slideShow.getPageSize();
+            picture.setAnchor(new Rectangle2D.Double(
+                    0, 0, pageSize.getWidth(), pageSize.getHeight()));
+            slideShow.write(output);
+            return output.toByteArray();
+        }
+    }
+
+    private static byte[] pptxWithExternalPicture(String target) throws Exception {
+        try (XMLSlideShow slideShow = new XMLSlideShow();
+                ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            var slide = slideShow.createSlide();
+            var pictureData = slideShow.addPicture(monochromePng(1, 1),
+                    PictureData.PictureType.PNG);
+            var picture = slide.createPicture(pictureData);
+            picture.setAnchor(new Rectangle2D.Double(10, 10, 100, 100));
+
+            CTPicture xmlPicture = (CTPicture) picture.getXmlObject();
+            var blip = xmlPicture.getBlipFill().getBlip();
+            String embeddedRelationship = blip.getEmbed();
+            var externalRelationship = slide.getPackagePart().addExternalRelationship(
+                    target,
+                    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image");
+            blip.setLink(externalRelationship.getId());
+            blip.unsetEmbed();
+            slide.getPackagePart().removeRelationship(embeddedRelationship);
+
+            slideShow.write(output);
+            return output.toByteArray();
+        }
+    }
+
+    private static byte[] monochromePng(int width, int height) throws Exception {
+        ByteArrayOutputStream image = new ByteArrayOutputStream();
+        image.write(new byte[] {(byte) 0x89, 'P', 'N', 'G', 13, 10, 26, 10});
+        writePngHeader(image, width, height);
+
+        ByteArrayOutputStream compressed = new ByteArrayOutputStream();
+        Deflater deflater = new Deflater(Deflater.BEST_SPEED);
+        try (DeflaterOutputStream data = new DeflaterOutputStream(compressed, deflater)) {
+            byte[] row = new byte[1 + (width + 7) / 8];
+            for (int y = 0; y < height; y++) {
+                data.write(row);
+            }
+        } finally {
+            deflater.end();
+        }
+        writePngChunk(image, "IDAT", compressed.toByteArray());
+        writePngChunk(image, "IEND", new byte[0]);
+        return image.toByteArray();
+    }
+
+    private static void writePngHeader(ByteArrayOutputStream image, int width, int height)
+            throws Exception {
+        ByteArrayOutputStream header = new ByteArrayOutputStream(13);
+        try (DataOutputStream fields = new DataOutputStream(header)) {
+            fields.writeInt(width);
+            fields.writeInt(height);
+            fields.writeByte(1); // one-bit grayscale keeps the compressed fixture small
+            fields.writeByte(0);
+            fields.writeByte(0);
+            fields.writeByte(0);
+            fields.writeByte(0);
+        }
+        writePngChunk(image, "IHDR", header.toByteArray());
+    }
+
+    private static void writePngChunk(ByteArrayOutputStream image, String type, byte[] data)
+            throws Exception {
+        byte[] typeBytes = type.getBytes(StandardCharsets.US_ASCII);
+        CRC32 crc = new CRC32();
+        crc.update(typeBytes);
+        crc.update(data);
+        try (DataOutputStream output = new DataOutputStream(image)) {
+            output.writeInt(data.length);
+            output.write(typeBytes);
+            output.write(data);
+            output.writeInt((int) crc.getValue());
+            output.flush();
         }
     }
 
