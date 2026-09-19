@@ -136,6 +136,30 @@ public interface PersonalWorkspaceTaskFileLinkMapper
             @Param("fileId") String fileId, @Param("version") int version,
             @Param("role") String role);
 
+    @Select("""
+            SELECT relation_id
+              FROM agent_personal_workspace_task_file_link
+             WHERE tenant_id=#{tenantId} AND client_id=#{clientId}
+               AND owner_jiacn=#{ownerJiacn} AND task_id=#{taskId}
+               AND file_id=#{fileId} AND file_version=#{version}
+               AND link_state='ACTIVE'
+            """ + EXACT_SCOPE + EXACT_TASK + EXACT_FILE + """
+               AND CAST(link_state AS BINARY)=CAST('ACTIVE' AS BINARY)
+               AND OCTET_LENGTH(link_state)=OCTET_LENGTH('ACTIVE')
+               AND ((link_role='INPUT'
+                     AND CAST(link_role AS BINARY)=CAST('INPUT' AS BINARY)
+                     AND OCTET_LENGTH(link_role)=OCTET_LENGTH('INPUT'))
+                    OR (link_role='REFERENCE'
+                     AND CAST(link_role AS BINARY)=CAST('REFERENCE' AS BINARY)
+                     AND OCTET_LENGTH(link_role)=OCTET_LENGTH('REFERENCE')))
+             ORDER BY id ASC
+             LIMIT 1
+            """)
+    String selectActiveExecutionInputRelation(
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn, @Param("taskId") String taskId,
+            @Param("fileId") String fileId, @Param("version") int version);
+
     @Select("<script>SELECT " + LINK_COLUMNS + """
               FROM agent_personal_workspace_task_file_link
              WHERE tenant_id=#{tenantId} AND client_id=#{clientId}

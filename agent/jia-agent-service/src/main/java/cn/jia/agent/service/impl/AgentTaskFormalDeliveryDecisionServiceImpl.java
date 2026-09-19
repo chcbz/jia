@@ -274,6 +274,7 @@ public class AgentTaskFormalDeliveryDecisionServiceImpl implements AgentTaskForm
         AgentTaskFormalDeliveryViewDTO view = new AgentTaskFormalDeliveryViewDTO();
         view.setTaskId(delivery.getTaskId()); view.setWorkItemId(delivery.getWorkItemId());
         view.setDeliveryId(delivery.getDeliveryId()); view.setRevision(delivery.getRevision());
+        view.setDeliveryVersion(delivery.getVersion());
         view.setState(delivery.getState()); view.setRunId(delivery.getRunId());
         view.setProducerAgentId(delivery.getProducerAgentId()); view.setSummary(delivery.getSummary());
         view.setManifestArtifactId(delivery.getManifestArtifactId());

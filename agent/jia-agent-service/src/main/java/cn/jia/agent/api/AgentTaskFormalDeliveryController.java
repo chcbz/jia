@@ -8,6 +8,8 @@ import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.service.AgentTaskFormalDeliveryDecisionService;
 import cn.jia.agent.service.AgentTaskFormalDeliveryReadService;
 import cn.jia.agent.service.AgentTaskFormalDeliveryService;
+import cn.jia.agent.service.AgentTaskReworkExecutionService;
+import cn.jia.agent.service.PersonalWorkspaceExecutionService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -64,6 +66,9 @@ public class AgentTaskFormalDeliveryController {
             "artifactId", "artifactVersion", "contentHash", "purpose");
     private static final Set<String> DECISION_FIELDS = Set.of(
             "expectedTaskVersion", "expectedDeliveryVersion", "decision", "reviewReason");
+    private static final Set<String> REWORK_FIELDS = Set.of(
+            "expectedDecisionVersion", "conversationId", "targetAgentId", "sourceOutputId",
+            "sourceFileId", "sourceFileVersion", "instruction", "outputContentMimeType");
     private static final ObjectMapper STRICT_JSON = JsonMapper.builder()
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
@@ -72,13 +77,16 @@ public class AgentTaskFormalDeliveryController {
     private final AgentTaskFormalDeliveryService submissionService;
     private final AgentTaskFormalDeliveryDecisionService decisionService;
     private final AgentTaskFormalDeliveryReadService readService;
+    private final AgentTaskReworkExecutionService reworkService;
 
     public AgentTaskFormalDeliveryController(AgentTaskFormalDeliveryService submissionService,
             AgentTaskFormalDeliveryDecisionService decisionService,
-            AgentTaskFormalDeliveryReadService readService) {
+            AgentTaskFormalDeliveryReadService readService,
+            AgentTaskReworkExecutionService reworkService) {
         this.submissionService = Objects.requireNonNull(submissionService, "submissionService");
         this.decisionService = Objects.requireNonNull(decisionService, "decisionService");
         this.readService = Objects.requireNonNull(readService, "readService");
+        this.reworkService = Objects.requireNonNull(reworkService, "reworkService");
     }
 
     @GetMapping(value = "/{taskId}/formal-deliveries", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -135,6 +143,25 @@ public class AgentTaskFormalDeliveryController {
         return ok(response(view, taskId, Long.MAX_VALUE));
     }
 
+    @PostMapping(value = "/{taskId}/formal-deliveries/{deliveryId}/rework-executions",
+            consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<PersonalWorkspaceExecutionService.ExecutionView> createReworkExecution(
+            @PathVariable String taskId, @PathVariable String deliveryId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            HttpServletRequest request, Authentication authentication) {
+        Scope scope = requireJwtScope(authentication);
+        requireExact(taskId, 100); requireExact(deliveryId, 100); requireNoQuery(request);
+        String key = requireIdempotencyKey(idempotencyKey);
+        AgentTaskReworkExecutionService.ReworkCommand command = parseRework(
+                readBounded(request), taskId, deliveryId);
+        PersonalWorkspaceExecutionService.ExecutionView view = reworkService.create(
+                new PersonalWorkspaceExecutionService.OwnerScope(
+                        scope.tenantId(), scope.clientId(), scope.ownerJiacn()), command, key);
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
+                .contentType(MediaType.APPLICATION_JSON).body(view);
+    }
+
     @ExceptionHandler(AuthenticationFailure.class)
     public ResponseEntity<ErrorBody> authentication(AuthenticationFailure failure) {
         return error(failure.forbidden ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED,
@@ -145,6 +172,23 @@ public class AgentTaskFormalDeliveryController {
     @ExceptionHandler(RequestFailure.class)
     public ResponseEntity<ErrorBody> badRequest(RequestFailure ignored) {
         return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Invalid formal delivery request");
+    }
+
+    @ExceptionHandler(PersonalWorkspaceExecutionService.Failure.class)
+    public ResponseEntity<ErrorBody> reworkFailure(PersonalWorkspaceExecutionService.Failure failure) {
+        return switch (failure.getReason()) {
+            case BAD_REQUEST -> error(HttpStatus.BAD_REQUEST,
+                    "BAD_REQUEST", "Invalid formal delivery rework request");
+            case NOT_FOUND -> error(HttpStatus.NOT_FOUND,
+                    "FORMAL_DELIVERY_NOT_FOUND", "Formal delivery rework source is unavailable");
+            case IDEMPOTENCY_CONFLICT -> error(HttpStatus.CONFLICT,
+                    "IDEMPOTENCY_CONFLICT", "Operation key conflicts with a different rework request");
+            case TASK_CONFLICT, GRANT_CHANGED, GRANT_REVOKED -> error(HttpStatus.CONFLICT,
+                    "FORMAL_DELIVERY_CONFLICT", "Formal delivery changed; refresh before trying again");
+            case CAPABILITY_UNAVAILABLE -> error(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "CAPABILITY_UNAVAILABLE", "Execution capability is not available");
+            case OUTPUT_CONFLICT, OUTPUT_MISSING, STORAGE_UNAVAILABLE -> unavailable();
+        };
     }
 
     @ExceptionHandler(AgentTaskCollaborationException.class)
@@ -255,6 +299,18 @@ public class AgentTaskFormalDeliveryController {
         return command;
     }
 
+    private static AgentTaskReworkExecutionService.ReworkCommand parseRework(
+            byte[] body, String taskId, String deliveryId) {
+        JsonNode root = parseObject(body, REWORK_FIELDS);
+        long expectedDecisionVersion = version(root, "expectedDecisionVersion");
+        if (expectedDecisionVersion < 1) throw new RequestFailure();
+        return new AgentTaskReworkExecutionService.ReworkCommand(taskId, deliveryId,
+                expectedDecisionVersion, text(root, "conversationId", 100),
+                text(root, "targetAgentId", 100), text(root, "sourceOutputId", 100),
+                text(root, "sourceFileId", 100), positiveInt(root, "sourceFileVersion"),
+                text(root, "instruction", 4_000), text(root, "outputContentMimeType", 127));
+    }
+
     private static JsonNode parseDecisionObject(byte[] body) {
         if (body == null || body.length == 0 || body.length > MAX_BODY_BYTES) {
             throw new RequestFailure();
@@ -340,6 +396,7 @@ public class AgentTaskFormalDeliveryController {
         if (view == null || !expectedTaskId.equals(view.getTaskId())
                 || !exact(view.getWorkItemId(), 100) || !exact(view.getDeliveryId(), 100)
                 || view.getRevision() == null || view.getRevision() < 1
+                || view.getDeliveryVersion() == null || view.getDeliveryVersion() < 0
                 || view.getRevision() >= previousRevision || !validState(view.getState())
                 || !exact(view.getRunId(), 100) || !exact(view.getProducerAgentId(), 100)
                 || !exact(view.getSummary(), 4_000) || !exact(view.getManifestArtifactId(), 100)
@@ -352,11 +409,14 @@ public class AgentTaskFormalDeliveryController {
         }
         boolean submitted = "submitted".equals(view.getState());
         boolean accepted = "accepted".equals(view.getState());
-        if (submitted && (view.getReviewedAt() != null || view.getReviewReason() != null)
-                || accepted && (view.getReviewedAt() == null || view.getReviewedAt() <= 0
+        if (submitted && (view.getDeliveryVersion() != 0
+                        || view.getReviewedAt() != null || view.getReviewReason() != null)
+                || accepted && (view.getDeliveryVersion() < 1
+                        || view.getReviewedAt() == null || view.getReviewedAt() <= 0
                         || view.getReviewReason() != null)
                 || "changes_requested".equals(view.getState())
-                        && (view.getReviewedAt() == null || view.getReviewedAt() <= 0
+                        && (view.getDeliveryVersion() < 1
+                                || view.getReviewedAt() == null || view.getReviewedAt() <= 0
                                 || !exact(view.getReviewReason(), 4_000))) {
             throw new IllegalStateException("Formal delivery review is inconsistent");
         }
@@ -374,7 +434,8 @@ public class AgentTaskFormalDeliveryController {
                     item.getContentHash(), item.getPurpose()));
         }
         return new FormalDeliveryResponse(view.getTaskId(), view.getWorkItemId(), view.getDeliveryId(),
-                view.getRevision(), view.getState(), view.getRunId(), view.getProducerAgentId(),
+                view.getRevision(), view.getDeliveryVersion(), view.getState(), view.getRunId(),
+                view.getProducerAgentId(),
                 view.getSummary(), view.getManifestArtifactId(), view.getManifestArtifactVersion(),
                 view.getSubmittedAt(), view.getReviewedAt(), view.getReviewReason(), view.getTaskVersion(),
                 view.getWorkItemVersion(), List.copyOf(items));
@@ -477,8 +538,14 @@ public class AgentTaskFormalDeliveryController {
     private record Scope(String tenantId, String clientId, String ownerJiacn, String actorId) { }
     private record ArtifactKey(String artifactId, int artifactVersion) { }
     public record FormalDeliveryListResponse(List<FormalDeliveryResponse> items) { }
+    /**
+     * {@code deliveryVersion} is the exact formal-decision CAS value. After a
+     * {@code changes_requested} decision, send this value unchanged as
+     * {@code expectedDecisionVersion} when creating a rework execution.
+     */
     public record FormalDeliveryResponse(String taskId, String workItemId, String deliveryId,
-            long revision, String state, String runId, String producerAgentId, String summary,
+            long revision, long deliveryVersion, String state, String runId,
+            String producerAgentId, String summary,
             String manifestArtifactId, int manifestArtifactVersion, long submittedAt,
             Long reviewedAt, String reviewReason, long taskVersion, long workItemVersion,
             List<FormalDeliveryItemResponse> items) { }

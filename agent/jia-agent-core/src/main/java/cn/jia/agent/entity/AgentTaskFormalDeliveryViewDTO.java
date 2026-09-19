@@ -16,6 +16,11 @@ public class AgentTaskFormalDeliveryViewDTO implements Serializable {
     private String workItemId;
     private String deliveryId;
     private Long revision;
+    /**
+     * Exact formal-decision CAS version, distinct from batch revision. After changes_requested,
+     * clients pass this unchanged as expectedDecisionVersion for the rework-execution endpoint.
+     */
+    private Long deliveryVersion;
     private String state;
     private String runId;
     private String producerAgentId;

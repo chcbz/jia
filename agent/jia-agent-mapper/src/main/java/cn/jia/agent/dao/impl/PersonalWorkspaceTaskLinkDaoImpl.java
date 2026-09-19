@@ -73,6 +73,15 @@ public class PersonalWorkspaceTaskLinkDaoImpl implements PersonalWorkspaceTaskLi
     }
 
     @Override
+    public boolean hasActiveExecutionInputLink(String tenantId, String clientId,
+            String ownerJiacn, String taskId, String fileId, int fileVersion) {
+        scope(tenantId, clientId, ownerJiacn); id(taskId, "taskId", 100);
+        id(fileId, "fileId", 100); version(fileVersion);
+        return mapper.selectActiveExecutionInputRelation(tenantId, clientId, ownerJiacn,
+                taskId, fileId, fileVersion) != null;
+    }
+
+    @Override
     public List<PersonalWorkspaceTaskFileLinkEntity> list(String tenantId, String clientId,
             String ownerJiacn, String taskId, Long beforeCreatedAt,
             String afterRelationId, int limit) {

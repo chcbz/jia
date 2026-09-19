@@ -38,6 +38,10 @@ public interface PersonalWorkspaceExecutionDao {
             String ownerJiacn, String executionId, String outputId);
     List<PersonalWorkspaceExecutionOutputEntity> lockOutputs(String tenantId, String clientId,
             String ownerJiacn, String executionId);
+    /** Exact immutable, already-published TASK output eligible as a rework source. */
+    PersonalWorkspaceExecutionOutputEntity findPublishedReworkSource(String tenantId,
+            String clientId, String ownerJiacn, String taskId, String formalDeliveryId,
+            String outputId, String workspaceFileId, int workspaceFileVersion);
     void insertOutput(PersonalWorkspaceExecutionOutputEntity output);
     void updateOutput(PersonalWorkspaceExecutionOutputEntity output);
 }

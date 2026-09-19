@@ -42,12 +42,14 @@ public class ConversationDeliverableReadAdapter {
         List<Map<String, Object>> rows;
         try {
             rows = jdbc.queryForList("""
-                    SELECT e.execution_id, e.execution_mode, e.execution_state,
+                    SELECT e.execution_id, e.execution_mode, e.execution_state, e.task_id,
                            o.output_id, o.output_state, o.workspace_file_id,
                            o.workspace_file_version, o.content_hash,
                            o.content_mime_type, o.byte_length, o.committed_at,
                            o.artifact_id, o.artifact_version, o.formal_delivery_id,
-                           o.publication_state, d.state AS formal_delivery_state,
+                           o.publication_state, d.revision AS formal_delivery_revision,
+                           d.version AS formal_decision_version,
+                           d.state AS formal_delivery_state, d.reviewed_at AS formal_reviewed_at,
                            a.content_hash AS artifact_content_hash
                       FROM agent_personal_workspace_execution e
                       LEFT JOIN agent_personal_workspace_execution_output o
@@ -118,25 +120,36 @@ public class ConversationDeliverableReadAdapter {
                 }
                 String artifactId = required(row, "artifact_id", 100);
                 int artifactVersion = positiveInt(row, "artifact_version");
-                required(row, "formal_delivery_id", 100);
+                String taskId = required(row, "task_id", 100);
+                String formalDeliveryId = required(row, "formal_delivery_id", 100);
+                long formalDeliveryRevision = positive(row, "formal_delivery_revision");
+                long formalDecisionVersion = nonNegative(row, "formal_decision_version");
                 String formalState = required(row, "formal_delivery_state", 32);
+                Long formalReviewedAt = nullableNonNegative(row, "formal_reviewed_at");
                 String artifactHash = required(row, "artifact_content_hash", 64);
+                boolean submitted = "submitted".equals(formalState);
+                boolean terminal = "accepted".equals(formalState)
+                        || "changes_requested".equals(formalState);
                 if (!SHA256.matcher(artifactHash).matches() || !sameHash(hash, artifactHash)
-                        || !Set.of("submitted", "accepted", "changes_requested").contains(formalState)) {
+                        || (!submitted && !terminal)
+                        || submitted && (formalDecisionVersion != 0 || formalReviewedAt != null)
+                        || terminal && (formalDecisionVersion < 1
+                                || formalReviewedAt == null || formalReviewedAt <= 0)) {
                     throw corrupt();
                 }
                 items.add(new Item(required(row, "output_id", 100),
                         required(row, "execution_id", 100), required(row, "workspace_file_id", 100),
                         positiveInt(row, "workspace_file_version"), hash, mime, byteLength,
                         nonNegative(row, "committed_at"), "AVAILABLE", "PUBLISHED", formalState,
-                        artifactId, artifactVersion));
+                        artifactId, artifactVersion, taskId, formalDeliveryId,
+                        formalDeliveryRevision, formalDecisionVersion, formalReviewedAt));
                 continue;
             }
             items.add(new Item(required(row, "output_id", 100),
                     required(row, "execution_id", 100), required(row, "workspace_file_id", 100),
                     positiveInt(row, "workspace_file_version"), hash, mime, byteLength,
                     nonNegative(row, "committed_at"), "AVAILABLE", "WORKSPACE_COMMITTED",
-                    "NOT_APPLICABLE", null, null));
+                    "NOT_APPLICABLE", null, null, null, null, null, null, null));
         }
         String state = !items.isEmpty() ? "AVAILABLE" : pending ? "SYNCING" : "EMPTY";
         return new Page(state, List.copyOf(items), pending, null);
@@ -182,10 +195,21 @@ public class ConversationDeliverableReadAdapter {
         return (int) value;
     }
 
+    private static long positive(Map<String, Object> row, String key) {
+        long value = number(row, key);
+        if (value < 1) throw corrupt();
+        return value;
+    }
+
     private static long nonNegative(Map<String, Object> row, String key) {
         long value = number(row, key);
         if (value < 0) throw corrupt();
         return value;
+    }
+
+    private static Long nullableNonNegative(Map<String, Object> row, String key) {
+        if (value(row, key) == null) return null;
+        return nonNegative(row, key);
     }
 
     private static long number(Map<String, Object> row, String key) {
@@ -238,7 +262,8 @@ public class ConversationDeliverableReadAdapter {
     public record Item(String outputId, String executionId, String fileId, int fileVersion,
             String contentHash, String contentMimeType, long byteLength, long committedAt,
             String state, String publicationState, String formalDeliveryState,
-            String artifactId, Integer artifactVersion) { }
+            String artifactId, Integer artifactVersion, String taskId, String formalDeliveryId,
+            Long formalDeliveryRevision, Long formalDecisionVersion, Long formalReviewedAt) { }
     public record Page(String state, List<Item> items, boolean publicationPending, String nextCursor) {
         public Page { items = List.copyOf(items); }
     }

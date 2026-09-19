@@ -26,7 +26,16 @@ public interface PersonalWorkspaceExecutionService {
                         String runtimeInstanceId) { }
     record InputSelection(String fileId, int version) { }
     record CreateCommand(String conversationId, String targetAgentId, String taskId,
-            String instruction, String outputContentMimeType, List<InputSelection> inputs) { }
+            String instruction, String outputContentMimeType, List<InputSelection> inputs,
+            SourceOutputRef sourceOutputRef) {
+        public CreateCommand(String conversationId, String targetAgentId, String taskId,
+                String instruction, String outputContentMimeType, List<InputSelection> inputs) {
+            this(conversationId, targetAgentId, taskId, instruction, outputContentMimeType, inputs, null);
+        }
+    }
+    /** Exact prior output/decision binding used only for a server-authorized rework execution. */
+    record SourceOutputRef(String formalDeliveryId, long decisionVersion, String outputId,
+            String fileId, int fileVersion) { }
     record RuntimeInput(String inputRef, String fileId, int version, String originalFilename,
             String contentMimeType, long byteLength, String sha256) { }
     record RuntimeOutput(String outputId, String relativePath, String contentType, long maxLength,

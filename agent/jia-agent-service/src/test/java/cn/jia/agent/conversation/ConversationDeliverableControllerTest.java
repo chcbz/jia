@@ -39,7 +39,8 @@ class ConversationDeliverableControllerTest {
         ConversationDeliverableReadAdapter.Item item = new ConversationDeliverableReadAdapter.Item(
                 "out-1", "exec-1", "file-1", 1, "a".repeat(64),
                 "application/pdf", 42, 1234, "AVAILABLE",
-                "WORKSPACE_COMMITTED", "NOT_APPLICABLE", null, null);
+                "WORKSPACE_COMMITTED", "NOT_APPLICABLE", null, null,
+                null, null, null, null, null);
         when(adapter.list(new ConversationDeliverableReadAdapter.Scope(
                 "0", "client-a", "owner-a"), "7", 100))
                 .thenReturn(new ConversationDeliverableReadAdapter.Page(

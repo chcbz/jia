@@ -60,7 +60,8 @@ class ConversationDeliverableReadAdapterTest {
         String sql = jdbc.sql.toLowerCase();
         assertTrue(sql.contains("e.conversation_id=?"));
         for (String forbidden : List.of("storage_uri", "lease_token", "original_filename",
-                "instruction", "failure_message", "failure_code")) {
+                "instruction", "review_reason", "reviewed_by_jiacn", "summary",
+                "failure_message", "failure_code")) {
             assertFalse(sql.contains(forbidden), forbidden);
         }
     }
@@ -99,6 +100,9 @@ class ConversationDeliverableReadAdapterTest {
         assertEquals(1234, item.committedAt());
         assertEquals("WORKSPACE_COMMITTED", item.publicationState());
         assertEquals("NOT_APPLICABLE", item.formalDeliveryState());
+        assertNull(item.taskId());
+        assertNull(item.formalDeliveryId());
+        assertNull(item.formalDecisionVersion());
         List<String> fields = java.util.Arrays.stream(
                         ConversationDeliverableReadAdapter.Item.class.getRecordComponents())
                 .map(java.lang.reflect.RecordComponent::getName).toList();
@@ -138,7 +142,11 @@ class ConversationDeliverableReadAdapterTest {
         published.put("artifact_id", "artifact-1");
         published.put("artifact_version", 1);
         published.put("formal_delivery_id", "delivery-1");
+        published.put("task_id", "task-1");
         published.put("formal_delivery_state", "submitted");
+        published.put("formal_delivery_revision", 1L);
+        published.put("formal_decision_version", 0L);
+        published.put("formal_reviewed_at", null);
         published.put("artifact_content_hash", "a".repeat(64));
         jdbc.rows = List.of(published);
 
@@ -149,8 +157,42 @@ class ConversationDeliverableReadAdapterTest {
         var item = page.items().getFirst();
         assertEquals("PUBLISHED", item.publicationState());
         assertEquals("submitted", item.formalDeliveryState());
+        assertEquals("task-1", item.taskId());
+        assertEquals("delivery-1", item.formalDeliveryId());
+        assertEquals(1L, item.formalDeliveryRevision());
+        assertEquals(0L, item.formalDecisionVersion());
+        assertNull(item.formalReviewedAt());
         assertEquals("artifact-1", item.artifactId());
         assertEquals(1, item.artifactVersion());
+    }
+
+    @Test
+    void terminalFormalDecisionReturnsSafeVersionAndTimestampWithoutReasonText() {
+        Map<String, Object> published = committed("TASK");
+        published.put("publication_state", "PUBLISHED");
+        published.put("artifact_id", "artifact-1");
+        published.put("artifact_version", 1);
+        published.put("task_id", "task-1");
+        published.put("formal_delivery_id", "delivery-1");
+        published.put("formal_delivery_revision", 1L);
+        published.put("formal_decision_version", 1L);
+        published.put("formal_delivery_state", "changes_requested");
+        published.put("formal_reviewed_at", 2_000L);
+        published.put("artifact_content_hash", "a".repeat(64));
+        jdbc.rows = List.of(published);
+
+        var item = adapter.list(SCOPE, CONVERSATION, 100).items().getFirst();
+
+        assertEquals("changes_requested", item.formalDeliveryState());
+        assertEquals(1L, item.formalDecisionVersion());
+        assertEquals(2_000L, item.formalReviewedAt());
+        List<String> fields = java.util.Arrays.stream(
+                        ConversationDeliverableReadAdapter.Item.class.getRecordComponents())
+                .map(java.lang.reflect.RecordComponent::getName).toList();
+        for (String forbidden : List.of("reviewReason", "instruction", "prompt", "storageUri",
+                "leaseToken", "runtimeCredential")) {
+            assertFalse(fields.contains(forbidden), forbidden);
+        }
     }
 
     @Test

@@ -18,6 +18,14 @@ public interface PersonalWorkspaceTaskLinkDao {
             String ownerJiacn, String taskId, String relationId);
     PersonalWorkspaceTaskFileLinkEntity lockBySelection(String tenantId, String clientId,
             String ownerJiacn, String taskId, String fileId, int version, String role);
+    /**
+     * Checks the exact immutable version selected for TASK execution. Callers must already hold
+     * the owner-scoped task root; INPUT/REFERENCE are the only execution-authorizing roles.
+     */
+    default boolean hasActiveExecutionInputLink(String tenantId, String clientId,
+            String ownerJiacn, String taskId, String fileId, int version) {
+        return false;
+    }
     List<PersonalWorkspaceTaskFileLinkEntity> list(String tenantId, String clientId,
             String ownerJiacn, String taskId, Long beforeCreatedAt, String afterRelationId, int limit);
     /** Active task references are part of the file's destructive-action impact snapshot. */

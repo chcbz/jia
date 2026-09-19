@@ -5,6 +5,8 @@ import cn.jia.agent.entity.AgentTaskFormalDeliveryViewDTO;
 import cn.jia.agent.service.AgentTaskFormalDeliveryDecisionService;
 import cn.jia.agent.service.AgentTaskFormalDeliveryReadService;
 import cn.jia.agent.service.AgentTaskFormalDeliveryService;
+import cn.jia.agent.service.AgentTaskReworkExecutionService;
+import cn.jia.agent.service.PersonalWorkspaceExecutionService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -39,6 +41,7 @@ class AgentTaskFormalDeliveryControllerTest {
     private AgentTaskFormalDeliveryService submission;
     private AgentTaskFormalDeliveryDecisionService decision;
     private AgentTaskFormalDeliveryReadService read;
+    private AgentTaskReworkExecutionService rework;
     private MockMvc mvc;
 
     @BeforeEach
@@ -46,8 +49,9 @@ class AgentTaskFormalDeliveryControllerTest {
         submission = mock(AgentTaskFormalDeliveryService.class);
         decision = mock(AgentTaskFormalDeliveryDecisionService.class);
         read = mock(AgentTaskFormalDeliveryReadService.class);
+        rework = mock(AgentTaskReworkExecutionService.class);
         mvc = MockMvcBuilders.standaloneSetup(new AgentTaskFormalDeliveryController(
-                submission, decision, read)).build();
+                submission, decision, read, rework)).build();
     }
 
     @Test
@@ -93,8 +97,64 @@ class AgentTaskFormalDeliveryControllerTest {
                         .header("Idempotency-Key", "decision-key-0001")
                         .contentType("application/json").content(body).principal(jwt()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.state").value("changes_requested"));
+                .andExpect(jsonPath("$.state").value("changes_requested"))
+                .andExpect(jsonPath("$.deliveryVersion").value(1));
         verify(decision).decide(eq("0"), eq(CLIENT), eq(TASK), eq(TENANT), any());
+    }
+
+    @Test
+    void reworkRoutePinsDecisionAndExactOutputVersionWithoutReturningSecrets() throws Exception {
+        PersonalWorkspaceExecutionService.ExecutionView created =
+                new PersonalWorkspaceExecutionService.ExecutionView(
+                        "exec-rework", TASK, "run-rework", "conversation-1", "agent-a", "QUEUED",
+                        null, null, 1L, "application/pdf", List.of(), null,
+                        "TASK", TASK, "work-a", "running");
+        when(rework.create(any(), any(), eq("rework-key-0001"))).thenReturn(created);
+        String body = """
+                {"expectedDecisionVersion":1,"conversationId":"conversation-1",
+                 "targetAgentId":"agent-a","sourceOutputId":"output-1",
+                 "sourceFileId":"file-1","sourceFileVersion":3,
+                 "instruction":"按验收意见返工","outputContentMimeType":"application/pdf"}
+                """;
+
+        mvc.perform(post("/agent/tasks/" + TASK
+                        + "/formal-deliveries/delivery-a/rework-executions")
+                        .header("Idempotency-Key", "rework-key-0001")
+                        .contentType("application/json").content(body).principal(jwt()))
+                .andExpect(status().isAccepted())
+                .andExpect(header().string("Cache-Control", "private, no-store"))
+                .andExpect(jsonPath("$.executionId").value("exec-rework"))
+                .andExpect(jsonPath("$.leaseToken").doesNotExist())
+                .andExpect(jsonPath("$.storageUri").doesNotExist())
+                .andExpect(jsonPath("$.instruction").doesNotExist());
+
+        ArgumentCaptor<AgentTaskReworkExecutionService.ReworkCommand> command =
+                ArgumentCaptor.forClass(AgentTaskReworkExecutionService.ReworkCommand.class);
+        verify(rework).create(eq(new PersonalWorkspaceExecutionService.OwnerScope(
+                "0", CLIENT, TENANT)), command.capture(), eq("rework-key-0001"));
+        assertEquals(TASK, command.getValue().taskId());
+        assertEquals("delivery-a", command.getValue().formalDeliveryId());
+        assertEquals(1L, command.getValue().expectedDecisionVersion());
+        assertEquals("output-1", command.getValue().sourceOutputId());
+        assertEquals("file-1", command.getValue().sourceFileId());
+        assertEquals(3, command.getValue().sourceFileVersion());
+    }
+
+    @Test
+    void reworkRouteRejectsLatestOrUnknownFieldsBeforeService() throws Exception {
+        String body = """
+                {"expectedDecisionVersion":1,"conversationId":"conversation-1",
+                 "targetAgentId":"agent-a","sourceOutputId":"latest",
+                 "sourceFileId":"file-1","sourceFileVersion":3,
+                 "instruction":"返工","outputContentMimeType":"application/pdf",
+                 "useLatest":true}
+                """;
+        mvc.perform(post("/agent/tasks/" + TASK
+                        + "/formal-deliveries/delivery-a/rework-executions")
+                        .header("Idempotency-Key", "rework-key-0002")
+                        .contentType("application/json").content(body).principal(jwt()))
+                .andExpect(status().isBadRequest());
+        verify(rework, never()).create(any(), any(), any());
     }
 
     @Test
@@ -115,7 +175,9 @@ class AgentTaskFormalDeliveryControllerTest {
         item.setContentHash("a".repeat(64)); item.setPurpose("manifest");
         AgentTaskFormalDeliveryViewDTO view = new AgentTaskFormalDeliveryViewDTO();
         view.setTaskId(TASK); view.setWorkItemId("work-a"); view.setDeliveryId("fd_test");
-        view.setRevision(1L); view.setState(state); view.setRunId("run-a");
+        view.setRevision(1L);
+        view.setDeliveryVersion("submitted".equals(state) ? 0L : 1L);
+        view.setState(state); view.setRunId("run-a");
         view.setProducerAgentId(ACTOR); view.setSummary("summary");
         view.setManifestArtifactId("manifest-a"); view.setManifestArtifactVersion(1);
         view.setSubmittedAt(1_000L); view.setReviewedAt(reviewedAt);

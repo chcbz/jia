@@ -99,6 +99,16 @@ public class PersonalWorkspaceExecutionDaoImpl implements PersonalWorkspaceExecu
         scope(tenantId, clientId, ownerJiacn); id(executionId, "executionId");
         return outputs.lockByExecution(tenantId, clientId, ownerJiacn, executionId);
     }
+    @Override public PersonalWorkspaceExecutionOutputEntity findPublishedReworkSource(String tenantId,
+            String clientId, String ownerJiacn, String taskId, String formalDeliveryId,
+            String outputId, String workspaceFileId, int workspaceFileVersion) {
+        scope(tenantId, clientId, ownerJiacn); id(taskId, "taskId");
+        id(formalDeliveryId, "formalDeliveryId"); id(outputId, "outputId");
+        id(workspaceFileId, "workspaceFileId");
+        if (workspaceFileVersion < 1) throw new IllegalArgumentException("workspaceFileVersion");
+        return outputs.findPublishedReworkSource(tenantId, clientId, ownerJiacn, taskId,
+                formalDeliveryId, outputId, workspaceFileId, workspaceFileVersion);
+    }
     @Override public void insertOutput(PersonalWorkspaceExecutionOutputEntity output) { init(output); outputs.insert(output); }
     @Override public void updateOutput(PersonalWorkspaceExecutionOutputEntity output) { output.setUpdateTime(DateUtil.nowTime()); outputs.updateById(output); }
 

@@ -130,8 +130,12 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     @Transactional(rollbackFor = Exception.class)
     public ExecutionView create(OwnerScope scope, CreateCommand command, String idempotencyKey) {
         validateOwnerScope(scope); validateIdempotency(idempotencyKey); ValidCreate valid = validCreate(command);
-        String requestHash = hash("CREATE", valid.conversationId(), valid.targetAgentId(), valid.taskId(),
-                valid.instruction(), valid.outputContentMimeType(), selectionsWire(valid.inputs()));
+        String requestHash = valid.sourceOutputRef() == null
+                ? hash("CREATE", valid.conversationId(), valid.targetAgentId(), valid.taskId(),
+                        valid.instruction(), valid.outputContentMimeType(), selectionsWire(valid.inputs()))
+                : hash("CREATE_REWORK", valid.conversationId(), valid.targetAgentId(), valid.taskId(),
+                        valid.instruction(), valid.outputContentMimeType(), selectionsWire(valid.inputs()),
+                        sourceOutputWire(valid.sourceOutputRef()));
         PersonalWorkspaceExecutionEntity prior = executions.findByIdempotency(scope.tenantId(),
                 scope.clientId(), scope.ownerJiacn(), idempotencyKey);
         if (prior != null) {
@@ -159,6 +163,14 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             PersonalWorkspaceFileEntity file = workspace.lockFile(scope.tenantId(), scope.clientId(),
                     scope.ownerJiacn(), selected.fileId());
             if (file == null || !"ACTIVE".equals(file.getState())) throw failure(Reason.NOT_FOUND);
+            // TASK create already holds the task root through the authoritative lease transition.
+            // Check the exact version only after that root and this file lock: detach/create follows
+            // task root -> file too, so no file-to-task lock inversion or stale relationship grant.
+            if (taskLease != null && !taskLinks.hasActiveExecutionInputLink(scope.tenantId(),
+                    scope.clientId(), scope.ownerJiacn(), valid.taskId(), selected.fileId(),
+                    selected.version())) {
+                throw failure(Reason.NOT_FOUND);
+            }
             PersonalWorkspaceVersionEntity version = workspace.findVersion(scope.tenantId(), scope.clientId(),
                     scope.ownerJiacn(), selected.fileId(), selected.version());
             if (version == null) throw failure(Reason.NOT_FOUND);
@@ -842,9 +854,28 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             if (selected.version() < 1 || !selectedFiles.add(selected.fileId())) throw failure(Reason.BAD_REQUEST);
         }
         if (task != null && conversation == null) throw failure(Reason.BAD_REQUEST);
-        return new ValidCreate(conversation, command.targetAgentId(), task, command.instruction(), outputMime, selections);
+        SourceOutputRef source = command.sourceOutputRef();
+        if (source != null) {
+            if (task == null || source.decisionVersion() < 1 || selections.size() != 1) {
+                throw failure(Reason.BAD_REQUEST);
+            }
+            id(source.formalDeliveryId(), "formalDeliveryId", 100);
+            id(source.outputId(), "outputId", 100);
+            id(source.fileId(), "sourceFileId", 100);
+            if (source.fileVersion() < 1
+                    || !same(source.fileId(), selections.getFirst().fileId())
+                    || source.fileVersion() != selections.getFirst().version()) {
+                throw failure(Reason.BAD_REQUEST);
+            }
+        }
+        return new ValidCreate(conversation, command.targetAgentId(), task, command.instruction(), outputMime,
+                selections, source);
     }
     private static String selectionsWire(List<InputSelection> inputs) { return inputs.stream().sorted(Comparator.comparing(InputSelection::fileId).thenComparingInt(InputSelection::version)).map(i -> i.fileId()+":"+i.version()).reduce("", (a,b)->a+"\n"+b); }
+    private static String sourceOutputWire(SourceOutputRef source) {
+        return source.formalDeliveryId() + "\n" + source.decisionVersion() + "\n"
+                + source.outputId() + "\n" + source.fileId() + "\n" + source.fileVersion();
+    }
     private static String manifestId(String taskId, String runId, List<PersonalWorkspaceExecutionOutputEntity> outputs) {
         StringBuilder source = new StringBuilder(taskId).append('\n').append(runId).append('\n');
         outputs.stream().sorted(Comparator.comparing(PersonalWorkspaceExecutionOutputEntity::getOutputId)).forEach(output -> source
@@ -900,6 +931,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     private static void scoped(cn.jia.core.entity.BaseEntity entity,RuntimeScope scope){entity.setTenantId(scope.tenantId());entity.setClientId(scope.clientId());}
     private static Failure failure(Reason reason){return new Failure(reason);}
     private record ValidCreate(String conversationId,String targetAgentId,String taskId,String instruction,
-                               String outputContentMimeType,List<InputSelection> inputs){}
+                               String outputContentMimeType,List<InputSelection> inputs,
+                               SourceOutputRef sourceOutputRef){}
     private record InputSnapshot(PersonalWorkspaceFileEntity file, PersonalWorkspaceVersionEntity version){}
 }

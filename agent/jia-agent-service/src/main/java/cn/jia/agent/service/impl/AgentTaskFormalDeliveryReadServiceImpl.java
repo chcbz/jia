@@ -99,6 +99,7 @@ public class AgentTaskFormalDeliveryReadServiceImpl implements AgentTaskFormalDe
         AgentTaskFormalDeliveryViewDTO value = new AgentTaskFormalDeliveryViewDTO();
         value.setTaskId(delivery.getTaskId()); value.setWorkItemId(delivery.getWorkItemId());
         value.setDeliveryId(delivery.getDeliveryId()); value.setRevision(delivery.getRevision());
+        value.setDeliveryVersion(delivery.getVersion());
         value.setState(delivery.getState()); value.setRunId(delivery.getRunId());
         value.setProducerAgentId(delivery.getProducerAgentId()); value.setSummary(delivery.getSummary());
         value.setManifestArtifactId(delivery.getManifestArtifactId());
