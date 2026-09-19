@@ -5,7 +5,11 @@ import java.util.List;
 /** Owner-scoped private file execution and narrow runtime bridge contract. */
 public interface PersonalWorkspaceExecutionService {
     ExecutionView create(OwnerScope scope, CreateCommand command, String idempotencyKey);
-    /** Browser-safe allow-list. An absent format is not executable, even if it is uploadable. */
+    /**
+     * Browser-safe MIME matrix. Output formats remain explicitly enabled by the execution
+     * allow-list; input formats describe only fixed-version materials the bridge can expose to an
+     * authenticated runtime and do not claim that a Provider completed any operation.
+     */
     ExecutionCapabilities capabilities();
     ExecutionView get(OwnerScope scope, String executionId);
     ExecutionView revokeInputs(OwnerScope scope, String executionId, long expectedGrantRevision,
@@ -62,7 +66,13 @@ public interface PersonalWorkspaceExecutionService {
                     "PRIVATE", null, null, null);
         }
     }
-    record ExecutionCapabilities(List<String> allowedMimeTypes, boolean generationEnabled) { }
+    record ExecutionCapabilities(List<String> allowedMimeTypes, List<String> inputMimeTypes,
+            boolean generationEnabled) {
+        public ExecutionCapabilities {
+            allowedMimeTypes = allowedMimeTypes == null ? List.of() : List.copyOf(allowedMimeTypes);
+            inputMimeTypes = inputMimeTypes == null ? List.of() : List.copyOf(inputMimeTypes);
+        }
+    }
     record RuntimeContent(String filename, String contentMimeType, byte[] bytes) {
         public RuntimeContent { bytes = bytes == null ? null : bytes.clone(); }
         @Override public byte[] bytes() { return bytes == null ? null : bytes.clone(); }

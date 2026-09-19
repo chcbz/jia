@@ -65,8 +65,14 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     /** Matches the runtime bridge manifest limit; every input remains independently owner-scoped and version-pinned. */
     private static final int MAX_EXECUTION_INPUTS = 128;
     private static final long TASK_LEASE_DURATION_MILLIS = 900_000L;
-    /** Every runtime output type is independently configuration-gated; upload availability does not imply execution. */
-    private static final Set<String> SUPPORTED_EXECUTION_MIME_TYPES = Set.of(
+    /** Source materials are a fixed bridge contract and never inherit the output allow-list. */
+    private static final Set<String> SUPPORTED_INPUT_MIME_TYPES = Set.of(
+            "image/png", "image/jpeg", "application/pdf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation");
+    /** Every runtime output type is independently configuration-gated; input support does not enable output. */
+    private static final Set<String> SUPPORTED_OUTPUT_MIME_TYPES = Set.of(
             "image/png", "image/jpeg", "application/pdf",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -174,9 +180,11 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             PersonalWorkspaceVersionEntity version = workspace.findVersion(scope.tenantId(), scope.clientId(),
                     scope.ownerJiacn(), selected.fileId(), selected.version());
             if (version == null) throw failure(Reason.NOT_FOUND);
-            // A source material and the requested deliverable may use different formats: for example,
-            // an XLSX/PDF reference can be used to create a PPTX. Both ends must still be explicitly enabled.
-            if (!executionMimeTypes.contains(version.getContentMimeType())) throw failure(Reason.CAPABILITY_UNAVAILABLE);
+            // Source and deliverable formats are independent: a supported XLSX/PDF/image source
+            // must not require that MIME to be enabled by the output allow-list.
+            if (!SUPPORTED_INPUT_MIME_TYPES.contains(version.getContentMimeType())) {
+                throw failure(Reason.CAPABILITY_UNAVAILABLE);
+            }
             snapshots.add(new InputSnapshot(file, version));
         }
         String executionId = identifier("pwe_");
@@ -227,8 +235,9 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     @Transactional(readOnly = true)
     public ExecutionCapabilities capabilities() {
         return executionAvailable
-                ? new ExecutionCapabilities(executionMimeTypes.stream().sorted().toList(), true)
-                : new ExecutionCapabilities(List.of(), false);
+                ? new ExecutionCapabilities(executionMimeTypes.stream().sorted().toList(),
+                        SUPPORTED_INPUT_MIME_TYPES.stream().sorted().toList(), true)
+                : new ExecutionCapabilities(List.of(), List.of(), false);
     }
 
     @Override
@@ -333,7 +342,10 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         id(inputRef, "inputRef", 100);
         PersonalWorkspaceExecutionInputEntity input = executions.lockInput(scope.tenantId(), scope.clientId(),
                 scope.ownerJiacn(), execution.getExecutionId(), inputRef);
-        if (input == null || !"ACTIVE".equals(input.getGrantState())) throw failure(Reason.NOT_FOUND);
+        if (input == null || !"ACTIVE".equals(input.getGrantState())
+                || !SUPPORTED_INPUT_MIME_TYPES.contains(input.getContentMimeType())) {
+            throw failure(Reason.NOT_FOUND);
+        }
         PersonalWorkspaceStorage.StoredContent content = storage.read(storageScope(scope), input.getStorageUri(),
                 input.getContentHash(), input.getByteLength(), input.getContentMimeType());
         return new RuntimeContent(input.getOriginalFilename(), input.getContentMimeType(), content.content());
@@ -706,7 +718,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         List<RuntimeInputCommand> inputManifest = new ArrayList<>();
         for (RuntimeInput input : inputs) {
             String inputExtension = EXTENSIONS.get(input.contentMimeType());
-            if (inputExtension == null || !executionMimeTypes.contains(input.contentMimeType())) return null;
+            if (inputExtension == null || !SUPPORTED_INPUT_MIME_TYPES.contains(input.contentMimeType())) return null;
             String inputPath = INTERNAL_PREFIX + execution.getTaskId() + "/runs/" + execution.getRunId()
                     + "/inputs/" + input.inputRef() + "/content";
             inputManifest.add(new RuntimeInputCommand(input.inputRef(), "inputs/" + input.inputRef() + inputExtension,
@@ -841,7 +853,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         text(command.instruction(), "instruction", 4000);
         String outputMime = command.outputContentMimeType() == null
                 ? PersonalWorkspaceExecutionProperties.DOCX : command.outputContentMimeType();
-        if (!executionAvailable || !SUPPORTED_EXECUTION_MIME_TYPES.contains(outputMime)
+        if (!executionAvailable || !SUPPORTED_OUTPUT_MIME_TYPES.contains(outputMime)
                 || !executionMimeTypes.contains(outputMime)) {
             throw failure(Reason.CAPABILITY_UNAVAILABLE);
         }
@@ -912,7 +924,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         }
         LinkedHashSet<String> allowed = new LinkedHashSet<>();
         for (String mime : properties.allowedMimeTypes()) {
-            if (!SUPPORTED_EXECUTION_MIME_TYPES.contains(mime) || !allowed.add(mime)) {
+            if (!SUPPORTED_OUTPUT_MIME_TYPES.contains(mime) || !allowed.add(mime)) {
                 throw new IllegalStateException("Personal workspace execution MIME configuration is invalid");
             }
         }

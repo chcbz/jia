@@ -46,6 +46,13 @@ import static org.mockito.Mockito.doAnswer;
 
 /** Focused owner/runtime queue contract; database mapper tests retain SQL exactness coverage. */
 class PersonalWorkspaceExecutionServiceImplTest {
+    private static final String PDF = "application/pdf";
+    private static final String XLSX =
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    private static final String PPTX =
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+    private static final List<String> INPUT_MIME_TYPES = List.of(
+            PersonalWorkspaceExecutionProperties.DOCX, XLSX, PDF, PPTX, "image/png", "image/jpeg");
     private static final PersonalWorkspaceExecutionService.RuntimeScope RUNTIME =
             new PersonalWorkspaceExecutionService.RuntimeScope("0", "client-a", "owner-a", "agent-a", "runtime-a");
     private PersonalWorkspaceExecutionDao executions;
@@ -106,18 +113,14 @@ class PersonalWorkspaceExecutionServiceImplTest {
     void durableQueuePinsMultipleCrossFormatMaterialsForOneExplicitOutput() throws Exception {
         service = new PersonalWorkspaceExecutionServiceImpl(executions, mock(PersonalWorkspaceDao.class),
                 mock(PersonalWorkspaceTaskLinkDao.class), mock(AgentRuntimeDao.class), storage, writes,
-                new PersonalWorkspaceExecutionProperties(List.of(
-                        PersonalWorkspaceExecutionProperties.DOCX,
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        "application/pdf",
-                        "application/vnd.openxmlformats-officedocument.presentationml.presentation")));
+                new PersonalWorkspaceExecutionProperties(List.of(PPTX)));
         PersonalWorkspaceExecutionEntity accepted = execution("pwe_multi", "agent-a", "QUEUED");
-        accepted.setOutputContentMimeType("application/vnd.openxmlformats-officedocument.presentationml.presentation");
+        accepted.setOutputContentMimeType(PPTX);
         when(executions.listQueuedByTarget("0", "client-a", "owner-a", "agent-a", 16)).thenReturn(List.of(accepted));
         when(executions.listInputs("0", "client-a", "owner-a", "pwe_multi")).thenReturn(List.of(
                 input("pwe_multi", "input_1", "pws_sheet", 3, "source.xlsx",
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
-                input("pwe_multi", "input_2", "pws_pdf", 1, "brief.pdf", "application/pdf")));
+                        XLSX),
+                input("pwe_multi", "input_2", "pws_pdf", 1, "brief.pdf", PDF)));
 
         var items = service.runtimeQueuedCommands(RUNTIME, 16);
 
@@ -128,14 +131,14 @@ class PersonalWorkspaceExecutionServiceImplTest {
                 new PersonalWorkspaceExecutionService.RuntimeInputCommand("input_2", "inputs/input_2.pdf",
                         "/internal/agent/tasks/pwe_task_1/runs/pwe_run_1/inputs/input_2/content", 7L, sha("content"))),
                 items.getFirst().payload().inputManifest());
-        assertEquals("application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                items.getFirst().payload().outputManifest().getFirst().contentType());
+        assertEquals(PPTX, items.getFirst().payload().outputManifest().getFirst().contentType());
         assertEquals("outputs/result.pptx", items.getFirst().payload().outputManifest().getFirst().relativePath());
     }
 
     @Test
     void configuredCapabilitiesExposeOnlyEnabledFormatsAndFailClosedWhenStorageIsUnavailable() {
         assertEquals(List.of(PersonalWorkspaceExecutionProperties.DOCX), service.capabilities().allowedMimeTypes());
+        assertEquals(INPUT_MIME_TYPES.stream().sorted().toList(), service.capabilities().inputMimeTypes());
         assertTrue(service.capabilities().generationEnabled());
 
         PersonalWorkspaceStorage unavailableStorage = mock(PersonalWorkspaceStorage.class);
@@ -144,12 +147,108 @@ class PersonalWorkspaceExecutionServiceImplTest {
                 mock(AgentRuntimeDao.class), unavailableStorage, writes,
                 new PersonalWorkspaceExecutionProperties(List.of(PersonalWorkspaceExecutionProperties.DOCX)));
         assertEquals(List.of(), unavailable.capabilities().allowedMimeTypes());
+        assertEquals(List.of(), unavailable.capabilities().inputMimeTypes());
         assertFalse(unavailable.capabilities().generationEnabled());
         var failure = assertThrows(PersonalWorkspaceExecutionService.Failure.class, () -> unavailable.create(
                 new PersonalWorkspaceExecutionService.OwnerScope("0", "client-a", "owner-a"),
                 new PersonalWorkspaceExecutionService.CreateCommand(null, "agent-a", null, "生成提纲",
                         PersonalWorkspaceExecutionProperties.DOCX, List.of()), "create-key"));
         assertEquals(PersonalWorkspaceExecutionService.Reason.CAPABILITY_UNAVAILABLE, failure.getReason());
+    }
+
+    @Test
+    void createAcceptsSixFixedInputFormatsWhileKeepingDocxAsTheOnlyOutput() {
+        AgentRuntimeEntity runtime = new AgentRuntimeEntity();
+        runtime.setAgentId("agent-a"); runtime.setClientId("client-a"); runtime.setOwnerJiacn("owner-a");
+        when(runtimes.findCandidateRosterByOwner("client-a", "owner-a")).thenReturn(List.of(runtime));
+        List<PersonalWorkspaceExecutionService.InputSelection> selections = new java.util.ArrayList<>();
+        for (int index = 0; index < INPUT_MIME_TYPES.size(); index++) {
+            String fileId = "file-" + index;
+            String mime = INPUT_MIME_TYPES.get(index);
+            selections.add(new PersonalWorkspaceExecutionService.InputSelection(fileId, 1));
+            when(workspace.lockFile("0", "client-a", "owner-a", fileId))
+                    .thenReturn(workspaceFile(fileId));
+            when(workspace.findVersion("0", "client-a", "owner-a", fileId, 1))
+                    .thenReturn(workspaceVersion(fileId, 1, "source" + extension(mime), mime));
+        }
+        when(executions.findByIdempotency("0", "client-a", "owner-a", "six-inputs-key"))
+                .thenReturn(null);
+        when(executions.listInputs("0", "client-a", "owner-a", "pwe_created")).thenReturn(List.of());
+        doAnswer(invocation -> {
+            invocation.<PersonalWorkspaceExecutionEntity>getArgument(0).setExecutionId("pwe_created");
+            return null;
+        }).when(executions).insert(any(PersonalWorkspaceExecutionEntity.class));
+
+        var created = service.create(new PersonalWorkspaceExecutionService.OwnerScope(
+                        "0", "client-a", "owner-a"),
+                new PersonalWorkspaceExecutionService.CreateCommand(null, "agent-a", null,
+                        "用全部资料生成 Word", PersonalWorkspaceExecutionProperties.DOCX, selections),
+                "six-inputs-key");
+
+        assertEquals(PersonalWorkspaceExecutionProperties.DOCX, created.outputContentMimeType());
+        var captured = ArgumentCaptor.forClass(PersonalWorkspaceExecutionInputEntity.class);
+        verify(executions, times(INPUT_MIME_TYPES.size())).insertInput(captured.capture());
+        assertEquals(INPUT_MIME_TYPES.stream().sorted().toList(), captured.getAllValues().stream()
+                .map(PersonalWorkspaceExecutionInputEntity::getContentMimeType).sorted().toList());
+        assertEquals(List.of(PersonalWorkspaceExecutionProperties.DOCX),
+                service.capabilities().allowedMimeTypes());
+    }
+
+    @Test
+    void uploadedButUnsupportedInputMimeFailsBeforeExecutionCreation() {
+        AgentRuntimeEntity runtime = new AgentRuntimeEntity();
+        runtime.setAgentId("agent-a"); runtime.setClientId("client-a"); runtime.setOwnerJiacn("owner-a");
+        when(runtimes.findCandidateRosterByOwner("client-a", "owner-a")).thenReturn(List.of(runtime));
+        when(workspace.lockFile("0", "client-a", "owner-a", "file-text"))
+                .thenReturn(workspaceFile("file-text"));
+        when(workspace.findVersion("0", "client-a", "owner-a", "file-text", 1))
+                .thenReturn(workspaceVersion("file-text", 1, "source.txt", "text/plain"));
+
+        var failure = assertThrows(PersonalWorkspaceExecutionService.Failure.class, () -> service.create(
+                new PersonalWorkspaceExecutionService.OwnerScope("0", "client-a", "owner-a"),
+                new PersonalWorkspaceExecutionService.CreateCommand(null, "agent-a", null, "处理资料",
+                        PersonalWorkspaceExecutionProperties.DOCX,
+                        List.of(new PersonalWorkspaceExecutionService.InputSelection("file-text", 1))),
+                "unsupported-input-key"));
+
+        assertEquals(PersonalWorkspaceExecutionService.Reason.CAPABILITY_UNAVAILABLE, failure.getReason());
+        verify(executions, never()).insert(any(PersonalWorkspaceExecutionEntity.class));
+        verify(executions, never()).insertInput(any(PersonalWorkspaceExecutionInputEntity.class));
+    }
+
+    @Test
+    void supportedInputMimeDoesNotEnableTheSameMimeAsOutput() {
+        var failure = assertThrows(PersonalWorkspaceExecutionService.Failure.class, () -> service.create(
+                new PersonalWorkspaceExecutionService.OwnerScope("0", "client-a", "owner-a"),
+                new PersonalWorkspaceExecutionService.CreateCommand(null, "agent-a", null, "生成 PDF",
+                        PDF, List.of()), "disabled-output-key"));
+
+        assertEquals(PersonalWorkspaceExecutionService.Reason.CAPABILITY_UNAVAILABLE, failure.getReason());
+        verify(runtimes, never()).findCandidateRosterByOwner(any(), any());
+        verify(executions, never()).insert(any(PersonalWorkspaceExecutionEntity.class));
+    }
+
+    @Test
+    void persistedUnsupportedInputCannotBeDispatchedOrDownloaded() {
+        PersonalWorkspaceExecutionEntity accepted = execution("pwe_legacy", "agent-a", "QUEUED");
+        PersonalWorkspaceExecutionInputEntity unsupported = input(
+                "pwe_legacy", "input_1", "pws_text", 1, "source.txt", "text/plain");
+        unsupported.setGrantState("ACTIVE");
+        when(executions.listQueuedByTarget("0", "client-a", "owner-a", "agent-a", 16))
+                .thenReturn(List.of(accepted));
+        when(executions.listInputs("0", "client-a", "owner-a", "pwe_legacy"))
+                .thenReturn(List.of(unsupported));
+        when(executions.lockByTaskRun("0", "client-a", "owner-a", "pwe_task_1", "pwe_run_1"))
+                .thenReturn(accepted);
+        when(executions.lockInput("0", "client-a", "owner-a", "pwe_legacy", "input_1"))
+                .thenReturn(unsupported);
+
+        assertEquals(List.of(), service.runtimeQueuedCommands(RUNTIME, 16));
+        var failure = assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                () -> service.runtimeInputContent(RUNTIME, "pwe_task_1", "pwe_run_1", "input_1"));
+        assertEquals(PersonalWorkspaceExecutionService.Reason.NOT_FOUND, failure.getReason());
+        verify(storage, never()).read(any(), any(), any(),
+                org.mockito.ArgumentMatchers.anyLong(), any());
     }
 
     @Test
@@ -511,6 +610,25 @@ class PersonalWorkspaceExecutionServiceImplTest {
         when(leases.start(any(), any(), any(), any(), any(), any())).thenReturn(lease("running", 9L));
         when(executions.findByIdempotency("0", "client-a", "owner-a", "task-input-key"))
                 .thenReturn(null);
+    }
+
+    private static PersonalWorkspaceVersionEntity workspaceVersion(String fileId, int version,
+            String filename, String mime) {
+        return new PersonalWorkspaceVersionEntity().setFileId(fileId).setVersion(version)
+                .setOriginalFilename(filename).setContentMimeType(mime).setByteLength(7L)
+                .setContentHash(sha("content-" + fileId)).setStorageUri("memory://" + fileId);
+    }
+
+    private static String extension(String mime) {
+        return switch (mime) {
+            case PersonalWorkspaceExecutionProperties.DOCX -> ".docx";
+            case XLSX -> ".xlsx";
+            case PDF -> ".pdf";
+            case PPTX -> ".pptx";
+            case "image/png" -> ".png";
+            case "image/jpeg" -> ".jpg";
+            default -> throw new IllegalArgumentException(mime);
+        };
     }
 
     private static PersonalWorkspaceFileEntity workspaceFile(String fileId) {

@@ -34,13 +34,16 @@ class PersonalWorkspaceExecutionControllerTest {
     @Test
     void capabilitiesReturnOnlyServerConfirmedFormatsWithPrivateNoStoreResponse() {
         when(service.capabilities()).thenReturn(new PersonalWorkspaceExecutionService.ExecutionCapabilities(
-                List.of(PersonalWorkspaceExecutionProperties.DOCX), true));
+                List.of(PersonalWorkspaceExecutionProperties.DOCX),
+                List.of("application/pdf", PersonalWorkspaceExecutionProperties.DOCX), true));
 
         var response = controller.capabilities(jwt());
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals("private, no-store", response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL));
         assertEquals(List.of(PersonalWorkspaceExecutionProperties.DOCX), response.getBody().allowedMimeTypes());
+        assertEquals(List.of("application/pdf", PersonalWorkspaceExecutionProperties.DOCX),
+                response.getBody().inputMimeTypes());
         assertEquals(true, response.getBody().generationEnabled());
         verify(service).capabilities();
     }
