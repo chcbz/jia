@@ -66,3 +66,42 @@ tasks.withType(org.gradle.api.tasks.testing.Test).configureEach {
         }
     }
 }
+
+// The default `test` task compiles every historical test source before honoring
+// `--tests`. A number of legacy fixtures still target pre-owner-scope APIs, so
+// they currently prevent the 1.13.1 workspace regression tests from starting.
+// Keep the default suite unchanged (and its debt visible); this source set is a
+// separately named, auditable local regression suite for the closed-loop
+// contracts below. It never contributes production classes or masks `test`.
+def v1131RegressionSourceSet = sourceSets.create('v1131Regression') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/service/impl/PersonalWorkspaceServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/PersonalWorkspaceTaskLinkServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/PersonalWorkspaceConversationLinkServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/PersonalWorkspaceExecutionServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/AgentTaskArtifactOutcomeServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/AgentTaskFormalDeliveryDecisionServiceImplTest.java'
+        include 'cn/jia/agent/conversation/ConversationDeliverableReadAdapterTest.java'
+        include 'cn/jia/agent/security/AgentRuntimeSecurityIntegrationTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+
+configurations.named(v1131RegressionSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(v1131RegressionSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+
+tasks.register('v1131Regression', Test) {
+    group = 'verification'
+    description = 'Runs the isolated 1.13.1 workspace closed-loop API regression suite.'
+    dependsOn tasks.named(v1131RegressionSourceSet.classesTaskName)
+    testClassesDirs = v1131RegressionSourceSet.output.classesDirs
+    classpath = v1131RegressionSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
