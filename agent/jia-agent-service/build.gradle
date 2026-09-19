@@ -1,5 +1,6 @@
 dependencies {
     api project(':agent:jia-agent-api')
+    implementation project(':chat:jia-chat-api')
     implementation project(':economy:jia-economy-api')
     implementation project(':economy:jia-economy-mapper')
     implementation project(':economy:jia-economy-service')
