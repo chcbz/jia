@@ -18,7 +18,9 @@ dependencies {
     api(libs.spring.boot.starter.test) {
         exclude module: 'android-json'
     }
-    api("org.junit.platform:junit-platform-launcher")
+    // Spring Boot 4 resolves Jupiter/Platform 6.0.1; keep the launcher on that
+    // platform generation rather than letting the older DBUnit BOM pin 1.10.1.
+    api("org.junit.platform:junit-platform-launcher:6.0.1")
     api(libs.dbunit) {
         exclude module: 'junit'
     }
