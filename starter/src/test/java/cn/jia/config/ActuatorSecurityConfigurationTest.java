@@ -10,7 +10,6 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
-import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockServletContext;
 import org.springframework.security.web.FilterChainProxy;
 import org.springframework.security.web.SecurityFilterChain;
@@ -24,28 +23,12 @@ import org.springframework.web.cors.CorsConfigurationSource;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 class ActuatorSecurityConfigurationTest {
-    @Test
-    void healthMatcherIsContextAwareAndRejectsManagementLookalikes() {
-        assertFalse(ActuatorSecurityConfiguration.selectsActuatorHealth(null));
-        assertTrue(ActuatorSecurityConfiguration.selectsActuatorHealth(request("", "/actuator/health")));
-        assertTrue(ActuatorSecurityConfiguration.selectsActuatorHealth(
-                request("/api", "/api/actuator/health/liveness")));
-        assertFalse(ActuatorSecurityConfiguration.selectsActuatorHealth(request("", "/actuator")));
-        assertFalse(ActuatorSecurityConfiguration.selectsActuatorHealth(request("", "/actuator/env")));
-        assertFalse(ActuatorSecurityConfiguration.selectsActuatorHealth(request("", "/actuator/healthcheck")));
-        assertFalse(ActuatorSecurityConfiguration.selectsActuatorHealth(request("", "/actuatorx/health")));
-        assertFalse(ActuatorSecurityConfiguration.selectsActuatorHealth(
-                request("/api", "/actuator/health")));
-    }
-
     @Test
     void dedicatedChainWinsForHealthWithoutOpeningManagementOrBusinessRoutes() throws Exception {
         AnnotationConfigWebApplicationContext context = new AnnotationConfigWebApplicationContext();

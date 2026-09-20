@@ -22,7 +22,6 @@ import cn.jia.user.security.AccountSecuritySnapshot;
 import cn.jia.user.security.AccountState;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.Cookie;
-import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.Getter;
 import lombok.Setter;
@@ -93,10 +92,12 @@ public class DefaultSecurityConfig {
                     if (CollectionUtil.isNotNullOrEmpty(ignoreUris)) {
                         authorize.requestMatchers(ignoreUris.toArray(new String[0])).permitAll();
                     }
-                    // The dedicated actuator chain is preferred, but this exact fallback keeps
+                    // The dedicated actuator chain is preferred, but this exact path fallback keeps
                     // lifecycle health available if another chain wins selection in a full app context.
-                    // Keep unrelated management endpoints behind the ordinary authentication boundary.
-                    authorize.requestMatchers(DefaultSecurityConfig::selectsActuatorHealth).permitAll();
+                    // Use Spring Security's path matcher so the matcher sees the same servlet/context
+                    // path normalization as production authorization. Keep every other management endpoint
+                    // behind the ordinary authentication boundary.
+                    authorize.requestMatchers("/actuator/health", "/actuator/health/**").permitAll();
                     authorize.requestMatchers("/login/**", "/oauth/**", "/favicon.ico").permitAll()
                             .anyRequest().authenticated();
                 })
@@ -121,19 +122,6 @@ public class DefaultSecurityConfig {
                         .successHandler(authenticationSuccessHandler()))
         ;
         return http.build();
-    }
-
-    static boolean selectsActuatorHealth(HttpServletRequest request) {
-        if (request == null) {
-            return false;
-        }
-        String requestUri = request.getRequestURI();
-        String contextPath = request.getContextPath();
-        if (requestUri == null || contextPath == null || !requestUri.startsWith(contextPath)) {
-            return false;
-        }
-        String path = requestUri.substring(contextPath.length());
-        return path.equals("/actuator/health") || path.startsWith("/actuator/health/");
     }
 
     @Bean

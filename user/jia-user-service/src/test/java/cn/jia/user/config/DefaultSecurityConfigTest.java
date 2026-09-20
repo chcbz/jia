@@ -11,7 +11,6 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
-import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.MediaType;
@@ -50,31 +49,6 @@ class DefaultSecurityConfigTest extends BaseMockTest {
         ReflectionTestUtils.setField(config, "userService", userService);
         ReflectionTestUtils.setField(config, "permsService", permsService);
         userDetailsService = config.userDetailsService();
-    }
-
-    @Test
-    void actuatorFallbackMatcherOnlySelectsTheHealthTree() {
-        assertFalse(DefaultSecurityConfig.selectsActuatorHealth(null));
-
-        HttpServletRequest actuator = mock(HttpServletRequest.class);
-        when(actuator.getContextPath()).thenReturn("");
-        when(actuator.getRequestURI()).thenReturn("/actuator/health");
-        assertTrue(DefaultSecurityConfig.selectsActuatorHealth(actuator));
-
-        HttpServletRequest nestedContext = mock(HttpServletRequest.class);
-        when(nestedContext.getContextPath()).thenReturn("/api");
-        when(nestedContext.getRequestURI()).thenReturn("/api/actuator/health/readiness");
-        assertTrue(DefaultSecurityConfig.selectsActuatorHealth(nestedContext));
-
-        HttpServletRequest lookalike = mock(HttpServletRequest.class);
-        when(lookalike.getContextPath()).thenReturn("");
-        when(lookalike.getRequestURI()).thenReturn("/actuator/healthcheck");
-        assertFalse(DefaultSecurityConfig.selectsActuatorHealth(lookalike));
-
-        HttpServletRequest malformed = mock(HttpServletRequest.class);
-        when(malformed.getContextPath()).thenReturn("/api");
-        when(malformed.getRequestURI()).thenReturn("/actuator/health");
-        assertFalse(DefaultSecurityConfig.selectsActuatorHealth(malformed));
     }
 
     @Test
