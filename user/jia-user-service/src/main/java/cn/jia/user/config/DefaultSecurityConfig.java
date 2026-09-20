@@ -120,6 +120,10 @@ public class DefaultSecurityConfig {
                 )
 //                .httpBasic(Customizer.withDefaults())
                 .formLogin(v -> v.loginPage("/login/index.html").loginProcessingUrl("/login")
+                        // Register the configured login routes with form-login itself.  The
+                        // explicit permitAll is required to prevent the HTML entry point from
+                        // redirecting the login page back to itself.
+                        .permitAll()
                         .successHandler(authenticationSuccessHandler()))
         ;
         return http.build();
