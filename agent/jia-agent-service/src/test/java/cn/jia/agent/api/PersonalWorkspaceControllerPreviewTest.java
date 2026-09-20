@@ -6,6 +6,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
@@ -17,6 +18,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -32,6 +34,25 @@ class PersonalWorkspaceControllerPreviewTest {
     void setUp() {
         service = mock(PersonalWorkspaceService.class);
         mvc = MockMvcBuilders.standaloneSetup(new PersonalWorkspaceController(service)).build();
+    }
+
+    @Test
+    void uploadInfersTextMimeWhenBrowserMultipartMetadataIsMissing() throws Exception {
+        PersonalWorkspaceService.Scope scope = new PersonalWorkspaceService.Scope("0", CLIENT, OWNER);
+        MockMultipartFile text = new MockMultipartFile("file", "notes.txt", null,
+                "portable text".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        mvc.perform(multipart("/agent/personal-workspace/files")
+                        .file(text)
+                        .header("Idempotency-Key", "text-upload-key")
+                        .principal(jwt()))
+                .andExpect(status().isCreated());
+
+        verify(service).create(org.mockito.ArgumentMatchers.eq(scope),
+                org.mockito.ArgumentMatchers.argThat(command -> command != null
+                        && "notes.txt".equals(command.originalFilename())
+                        && "text/plain".equals(command.contentMimeType())
+                        && "text-upload-key".equals(command.idempotency().key())));
     }
 
     @Test

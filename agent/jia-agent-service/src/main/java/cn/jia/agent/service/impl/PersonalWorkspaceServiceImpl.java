@@ -34,11 +34,12 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             "application/vnd.openxmlformats-officedocument.presentationml.presentation");
-    private static final Map<String, String> EXTENSIONS = Map.of(
-            "image/png", ".png", "image/jpeg", ".jpg", "text/plain", ".txt", "application/pdf", ".pdf",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".docx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xlsx",
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation", ".pptx");
+    private static final Map<String, Set<String>> EXTENSIONS = Map.of(
+            "image/png", Set.of(".png"), "image/jpeg", Set.of(".jpg", ".jpeg"),
+            "text/plain", Set.of(".txt"), "application/pdf", Set.of(".pdf"),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document", Set.of(".docx"),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", Set.of(".xlsx"),
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation", Set.of(".pptx"));
     private static final int PAGE_SIZE = 50;
     private final PersonalWorkspaceDao dao;
     private final PersonalWorkspaceStorage storage;
@@ -156,13 +157,13 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
     private static PersonalWorkspaceWriteService.Scope writeScope(Scope s){return new PersonalWorkspaceWriteService.Scope(s.tenantId(),s.clientId(),s.ownerJiacn());}
     private static PersonalWorkspaceStorage.Scope storageScope(Scope s){return new PersonalWorkspaceStorage.Scope(s.tenantId(),s.clientId(),s.ownerJiacn());}
     private static ValidUpload validate(UploadCommand c){if(c==null)bad();String key=key(c.idempotency());String mime=lower(c.contentMimeType());if(!MIME_TYPES.contains(mime))throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.UNSUPPORTED);String name=filename(c.originalFilename(),mime);String display=blankToNull(c.displayName());if(display==null)display=name;text(display,255);byte[] bytes=c.content();if(bytes==null||bytes.length==0)bad();return new ValidUpload(key,display,name,mime,bytes);}
-    private static String filename(String raw,String mime){text(raw,255);String base=raw.replace('\\','/');if(base.contains("/"))bad();String ext=EXTENSIONS.get(mime);if(!base.toLowerCase(Locale.ROOT).endsWith(ext))throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.UNSUPPORTED);return base;}
+    private static String filename(String raw,String mime){text(raw,255);String base=raw.replace('\\','/');if(base.contains("/"))bad();Set<String> extensions=EXTENSIONS.get(mime);String normalized=base.toLowerCase(Locale.ROOT);if(extensions==null||extensions.stream().noneMatch(normalized::endsWith))throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.UNSUPPORTED);return base;}
     private static String family(String mime){if(mime.startsWith("image/"))return "IMAGE";if("text/plain".equals(mime))return "TEXT";if("application/pdf".equals(mime))return "PDF";if(mime.contains("spreadsheet"))return "SPREADSHEET";if(mime.contains("presentation"))return "PRESENTATION";return "DOCUMENT";}
     private static String key(Idempotency i){if(i==null)bad();id(i.key(),"Idempotency-Key",100);return i.key();}
     private static void validateScope(Scope s){if(s==null||!"0".equals(s.tenantId()))bad();id(s.clientId(),"clientId",50);id(s.ownerJiacn(),"owner",50);if("0".equals(s.ownerJiacn()))bad();}
     private static void id(String value,String name,int max){if(value==null||value.isBlank()||!value.equals(value.strip())||value.codePointCount(0,value.length())>max||value.chars().anyMatch(Character::isISOControl))bad();}
     private static void text(String value,int max){id(value,"text",max);}
-    private static String lower(String v){return v==null?null:v.toLowerCase(Locale.ROOT);}
+    private static String lower(String v){if(v==null)return null;String mime=v.split(";",2)[0].trim().toLowerCase(Locale.ROOT);return "image/jpg".equals(mime)?"image/jpeg":mime;}
     private static String blankToNull(String value){return value==null||value.isBlank()?null:value;}
     private static String hash(String... values){try{MessageDigest d=MessageDigest.getInstance("SHA-256");for(String v:values){byte[]b=Objects.requireNonNullElse(v,"").getBytes(StandardCharsets.UTF_8);d.update(ByteBuffer.allocate(4).putInt(b.length).array());d.update(b);}return HexFormat.of().formatHex(d.digest());}catch(NoSuchAlgorithmException e){throw new IllegalStateException(e);}}
     private static String hash(byte[] bytes){try{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(Objects.requireNonNull(bytes,"bytes")));}catch(NoSuchAlgorithmException e){throw new IllegalStateException(e);}}

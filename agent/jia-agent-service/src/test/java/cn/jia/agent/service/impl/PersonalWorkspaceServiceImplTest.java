@@ -120,6 +120,20 @@ class PersonalWorkspaceServiceImplTest {
     }
 
     @Test
+    void acceptsBrowserMimeParametersAndJpegAliases() {
+        Fixture fixture = new Fixture();
+
+        var text = fixture.service.create(OWNER_A,
+                upload("browser-text", "notes.txt", "text/plain; charset=UTF-8", bytes("plain text")));
+        var jpeg = fixture.service.create(OWNER_A,
+                upload("browser-jpeg", "portrait.jpeg", "image/jpg", bytes("jpeg bytes")));
+
+        assertEquals("text/plain", text.version().contentMimeType());
+        assertEquals("image/jpeg", jpeg.version().contentMimeType());
+        assertEquals("IMAGE", jpeg.file().mediaFamily());
+    }
+
+    @Test
     void idempotencyReceiptIsScopedAndPayloadConflictFailsBeforeStorage() {
         Fixture fixture = new Fixture();
         var command = upload("shared-key", "same.txt", bytes("same request"));

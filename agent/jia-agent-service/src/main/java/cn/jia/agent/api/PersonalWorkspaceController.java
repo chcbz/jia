@@ -38,6 +38,12 @@ import java.util.Objects;
 public class PersonalWorkspaceController {
     static final String CACHE_CONTROL = "private, no-store";
     static final String NOSNIFF = "nosniff";
+    private static final Map<String, String> FILENAME_MIME_TYPES = Map.of(
+            "png", "image/png", "jpg", "image/jpeg", "jpeg", "image/jpeg", "txt", "text/plain",
+            "pdf", "application/pdf",
+            "docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation");
     private final PersonalWorkspaceService service;
 
     public PersonalWorkspaceController(PersonalWorkspaceService service) { this.service = Objects.requireNonNull(service, "service"); }
@@ -174,7 +180,22 @@ public class PersonalWorkspaceController {
     }
     private PersonalWorkspaceService.UploadCommand upload(MultipartFile file,String displayName,String key) throws IOException {
         if(file==null) throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.BAD_REQUEST);
-        return new PersonalWorkspaceService.UploadCommand(new PersonalWorkspaceService.Idempotency(key),displayName,file.getOriginalFilename(),file.getContentType(),file.getBytes());
+        return new PersonalWorkspaceService.UploadCommand(new PersonalWorkspaceService.Idempotency(key),displayName,
+                file.getOriginalFilename(), contentMimeType(file), file.getBytes());
+    }
+    private static String contentMimeType(MultipartFile file) {
+        String supplied = normalizedMime(file.getContentType());
+        if (supplied != null && !MediaType.APPLICATION_OCTET_STREAM_VALUE.equals(supplied)) return supplied;
+        String filename = file.getOriginalFilename();
+        int dot = filename == null ? -1 : filename.lastIndexOf('.');
+        if (dot < 0 || dot == filename.length() - 1) return supplied;
+        return FILENAME_MIME_TYPES.getOrDefault(filename.substring(dot + 1).toLowerCase(java.util.Locale.ROOT), supplied);
+    }
+    private static String normalizedMime(String value) {
+        if (value == null) return null;
+        String mime = value.split(";", 2)[0].trim().toLowerCase(java.util.Locale.ROOT);
+        if (mime.isEmpty()) return null;
+        return "image/jpg".equals(mime) ? "image/jpeg" : mime;
     }
     private static int version(String value){if(value==null||!value.matches("[1-9][0-9]{0,9}"))throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.BAD_REQUEST);try{return Math.toIntExact(Long.parseLong(value));}catch(ArithmeticException ex){throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.BAD_REQUEST);}}
     private static ResponseEntity<byte[]> binary(PersonalWorkspaceService.Content content,boolean attachment) {
