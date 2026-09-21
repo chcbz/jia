@@ -1,0 +1,14 @@
+agent/jia-agent-mapper/src/main/resources/db/hall-request-draft-v1.sql
+agent/jia-agent-mapper/src/main/resources/db/hall-private-case-v1.sql
+agent/jia-agent-service/src/test/resources/db/hall-b02-task-read-fixture.sql
+agent/jia-agent-service/src/test/java/cn/jia/agent/service/impl/HallReadServiceImplTest.java
+agent/jia-agent-service/src/test/java/cn/jia/agent/api/HallReadControllerTest.java
+agent/jia-agent-service/src/test/java/cn/jia/agent/mapper/HallReadMapperContractTest.java
+agent/jia-agent-service/src/test/java/cn/jia/agent/service/impl/HallTaskCreationServiceImplTest.java
+agent/jia-agent-service/src/test/java/cn/jia/agent/service/impl/HallRequestDraftTaskCreateTest.java
+agent/jia-agent-service/src/test/java/cn/jia/agent/service/impl/HallReadTaskCreateMySqlTest.java
+agent/jia-agent-service/src/test/java/cn/jia/agent/service/impl/HallRequestDraftSubmissionServiceTest.java
+agent/jia-agent-service/src/test/java/cn/jia/agent/service/impl/HallRequestDraftSubmissionMySqlTest.java
+agent/jia-agent-service/src/test/java/cn/jia/agent/api/HallSubmissionControllerTest.java
+agent/jia-agent-service/src/test/java/cn/jia/agent/api/HallRequestDraftControllerTest.java
+agent/jia-agent-service/src/test/java/cn/jia/agent/api/HallRequestDraftCacheControlFilterTest.java

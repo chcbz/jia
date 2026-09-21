@@ -31,6 +31,22 @@ class HallSubmissionControllerTest {
     }
 
     @Test
+    void taskCreateReceiptReconcilesWithoutAnExecution() throws Exception {
+        var scope = new HallRequestDraftService.OwnerScope("0", "client-a", "owner-a");
+        var receipt = new HallRequestDraftService.SubmissionReceipt(
+                new HallRequestDraftService.SubmissionReference("TASK", "42"), null,
+                new HallRequestDraftService.TaskReference("42", "0"), 1000L);
+        when(service.getSubmissionByIdempotencyKey(scope, "task-submit")).thenReturn(receipt);
+        mvc.perform(get("/agent/hall/submissions/request").principal(jwt()).header("Idempotency-Key", "task-submit"))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
+                .andExpect(jsonPath("$.ref.sourceType").value("TASK"))
+                .andExpect(jsonPath("$.task.taskId").value("42"))
+                .andExpect(jsonPath("$.task.taskVersion").value("0"))
+                .andExpect(jsonPath("$.execution").value(org.hamcrest.Matchers.nullValue()));
+    }
+
+    @Test
     void reconciliationUsesHeaderOnlyAndReturnsIdenticalReceiptShape() throws Exception {
         var scope = new HallRequestDraftService.OwnerScope("0", "client-a", "owner-a");
         var receipt = new HallRequestDraftService.SubmissionReceipt(

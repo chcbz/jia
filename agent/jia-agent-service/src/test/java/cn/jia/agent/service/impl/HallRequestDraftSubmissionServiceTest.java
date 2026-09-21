@@ -107,7 +107,7 @@ class HallRequestDraftSubmissionServiceTest {
     }
 
     @Test
-    void taskCreateIsExplicit422BeforeKeyReservationOrExecution() {
+    void taskCreateWithoutApplicationAdapterIsExplicit422BeforeKeyReservationOrExecution() {
         HallRequestDraftEntity editing = draft("hdr_task", "TASK_CREATE", 1, "EDITING");
         when(drafts.findBySubmitKey("0", "client-a", "owner-a", "key")).thenReturn(null);
         when(drafts.lock("0", "client-a", "owner-a", "hdr_task")).thenReturn(editing);

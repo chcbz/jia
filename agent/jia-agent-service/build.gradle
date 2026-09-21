@@ -268,3 +268,39 @@ tasks.register('jytUxB03', Test) {
     classpath = jytUxB03SourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+// B02 first slice: explicit read partitions + unfunded TASK_CREATE. Private marks/review projection
+// are intentionally not claimed. MySQL fixtures require the existing isolated-fixture opt-in.
+def jytUxB02SourceSet = sourceSets.create('jytUxB02') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/service/impl/HallReadServiceImplTest.java'
+        include 'cn/jia/agent/api/HallReadControllerTest.java'
+        include 'cn/jia/agent/mapper/HallReadMapperContractTest.java'
+        include 'cn/jia/agent/service/impl/HallTaskCreationServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/HallRequestDraftTaskCreateTest.java'
+        include 'cn/jia/agent/service/impl/HallReadTaskCreateMySqlTest.java'
+        include 'cn/jia/agent/service/impl/HallRequestDraftSubmissionServiceTest.java'
+        include 'cn/jia/agent/service/impl/HallRequestDraftSubmissionMySqlTest.java'
+        include 'cn/jia/agent/api/HallSubmissionControllerTest.java'
+        include 'cn/jia/agent/api/HallRequestDraftControllerTest.java'
+        include 'cn/jia/agent/api/HallRequestDraftCacheControlFilterTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(jytUxB02SourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(jytUxB02SourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('jytUxB02', Test) {
+    group = 'verification'
+    description = 'Runs scoped Hall read partitions, task submission and opt-in real MySQL transaction fixtures.'
+    dependsOn tasks.named(jytUxB02SourceSet.classesTaskName)
+    testClassesDirs = jytUxB02SourceSet.output.classesDirs
+    classpath = jytUxB02SourceSet.runtimeClasspath
+    useJUnitPlatform()
+}

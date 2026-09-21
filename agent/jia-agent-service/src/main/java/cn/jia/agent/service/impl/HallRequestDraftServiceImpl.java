@@ -14,6 +14,7 @@ import cn.jia.agent.entity.HallRequestDraftEntity;
 import cn.jia.agent.entity.PersonalWorkspaceFileEntity;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.HallRequestDraftService;
+import cn.jia.agent.service.HallTaskCreationService;
 import cn.jia.agent.service.PersonalWorkspaceExecutionService;
 import cn.jia.chat.service.WorkspaceConversationAccessService;
 import cn.jia.core.util.JsonUtil;
@@ -42,8 +43,8 @@ import java.util.UUID;
 import java.util.function.LongSupplier;
 
 /**
- * DRAFT-v1 transaction boundary. Lock order is draft-only in this wave: source ACL reads happen
- * before the single draft CAS statement, and no execution, case, task mutation, or Provider call is made.
+ * Hall transaction boundary: draft -> private case or existing task-root -> files.
+ * TASK_CREATE joins the existing task application transaction; no Provider runs inside submission.
  */
 @Named
 public class HallRequestDraftServiceImpl implements HallRequestDraftService {
@@ -66,16 +67,18 @@ public class HallRequestDraftServiceImpl implements HallRequestDraftService {
     private final WorkspaceConversationAccessService conversations;
     private final Set<String> allowedOutputMimes;
     private final LongSupplier clock;
+    private final HallTaskCreationService taskCreation;
 
     @Inject
     public HallRequestDraftServiceImpl(HallRequestDraftDao drafts, HallPrivateCaseDao cases,
             PersonalWorkspaceExecutionService executions, PersonalWorkspaceDao workspace,
             AgentTaskMetaDao tasks, AgentService agents,
             ObjectProvider<WorkspaceConversationAccessService> conversations,
-            PersonalWorkspaceExecutionProperties executionProperties) {
+            PersonalWorkspaceExecutionProperties executionProperties,
+            HallTaskCreationService taskCreation) {
         this(drafts, cases, executions, workspace, tasks, agents,
                 conversations == null ? null : conversations.getIfAvailable(),
-                executionProperties, System::currentTimeMillis);
+                executionProperties, System::currentTimeMillis, taskCreation);
     }
 
     HallRequestDraftServiceImpl(HallRequestDraftDao drafts, HallPrivateCaseDao cases,
@@ -83,6 +86,17 @@ public class HallRequestDraftServiceImpl implements HallRequestDraftService {
             AgentTaskMetaDao tasks, AgentService agents,
             WorkspaceConversationAccessService conversations,
             PersonalWorkspaceExecutionProperties executionProperties, LongSupplier clock) {
+        this(drafts, cases, executions, workspace, tasks, agents, conversations,
+                executionProperties, clock, null);
+    }
+
+    HallRequestDraftServiceImpl(HallRequestDraftDao drafts, HallPrivateCaseDao cases,
+            PersonalWorkspaceExecutionService executions, PersonalWorkspaceDao workspace,
+            AgentTaskMetaDao tasks, AgentService agents,
+            WorkspaceConversationAccessService conversations,
+            PersonalWorkspaceExecutionProperties executionProperties, LongSupplier clock,
+            HallTaskCreationService taskCreation) {
+        this.taskCreation = taskCreation;
         this.drafts = Objects.requireNonNull(drafts, "drafts");
         this.cases = Objects.requireNonNull(cases, "cases");
         this.executions = Objects.requireNonNull(executions, "executions");
@@ -245,10 +259,9 @@ public class HallRequestDraftServiceImpl implements HallRequestDraftService {
         if (current.getRevision() == null || current.getRevision() != expectedRevision) {
             throw failure(Reason.REVISION_CHANGED);
         }
-        if ("TASK_CREATE".equals(current.getKind())) throw failure(Reason.SUBMISSION_UNAVAILABLE);
-
         EditableFields fields = editable(current);
-        requireComplete(fields);
+        if ("TASK_CREATE".equals(current.getKind())) requireTaskCreate(current, fields);
+        else requireComplete(fields);
         validatePersistedSources(scope, current, fields);
         long submittedAt = now();
         int reserved = drafts.reserveSubmitIntent(scope.tenantId(), scope.clientId(),
@@ -264,11 +277,16 @@ public class HallRequestDraftServiceImpl implements HallRequestDraftService {
             case "CREATE" -> submitCreate(scope, current, fields, idempotencyKey, submittedAt);
             case "REVISION" -> submitRevision(scope, current, fields, idempotencyKey, submittedAt);
             case "TASK_ACTION" -> submitTaskAction(scope, current, fields, idempotencyKey);
+            case "TASK_CREATE" -> {
+                TaskReference task = taskCreation.create(scope, fields.title(), fields.instruction());
+                if (task == null || !safePersistedId(task.taskId(), 100)) throw failure(Reason.STORAGE_UNAVAILABLE);
+                yield new SubmissionWork(null, new SubmissionReference("TASK", task.taskId()), null);
+            }
             default -> throw failure(Reason.SUBMISSION_UNAVAILABLE);
         };
         int changed = drafts.markSubmitted(scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
                 draftId, expectedRevision, idempotencyKey, submitHash, work.caseId(),
-                work.reference().sourceId(), work.execution().executionId(), submittedAt);
+                work.reference().sourceId(), work.execution() == null ? null : work.execution().executionId(), submittedAt);
         if (changed != 1) throw failure(Reason.STORAGE_UNAVAILABLE);
         HallRequestDraftEntity stored = drafts.find(
                 scope.tenantId(), scope.clientId(), scope.ownerJiacn(), draftId);
@@ -520,6 +538,13 @@ public class HallRequestDraftServiceImpl implements HallRequestDraftService {
     }
 
     private SubmissionReceipt receipt(OwnerScope scope, HallRequestDraftEntity row) {
+        if ("TASK_CREATE".equals(row.getKind())) {
+            if (taskCreation == null) throw failure(Reason.STORAGE_UNAVAILABLE);
+            String taskId = requirePersistedId(row.getSubmissionRef(), "submissionRef");
+            TaskReference task = taskCreation.get(scope, taskId);
+            if (task == null || !taskId.equals(task.taskId())) throw failure(Reason.STORAGE_UNAVAILABLE);
+            return new SubmissionReceipt(new SubmissionReference("TASK", taskId), null, task, row.getUpdatedAt());
+        }
         String executionId = requirePersistedId(row.getSubmittedExecutionId(), "submittedExecutionId");
         String sourceId = requirePersistedId(row.getSubmissionRef(), "submissionRef");
         String sourceType = switch (row.getKind()) {
@@ -583,6 +608,20 @@ public class HallRequestDraftServiceImpl implements HallRequestDraftService {
     private static PersonalWorkspaceExecutionService.OwnerScope executionScope(OwnerScope scope) {
         return new PersonalWorkspaceExecutionService.OwnerScope(
                 scope.tenantId(), scope.clientId(), scope.ownerJiacn());
+    }
+
+    private void requireTaskCreate(HallRequestDraftEntity row, EditableFields fields) {
+        if (taskCreation == null) throw failure(Reason.SUBMISSION_UNAVAILABLE);
+        if (fields.title() == null || fields.title().isBlank()) throw failure(Reason.BAD_REQUEST);
+        // Existing taskPlanFor uses String.substring(0,30/200), not a new product-size gate.
+        if (fields.title().length() > 30 || (fields.instruction() != null && fields.instruction().length() > 200)) {
+            throw sourceUnavailable("title/instruction", "TASK_CREATE");
+        }
+        if (fields.targetAgentId() != null) throw sourceUnavailable("targetAgentId", "TASK_CREATE");
+        if (fields.outputMime() != null) throw sourceUnavailable("outputMime", "TASK_CREATE");
+        if (!fields.inputs().isEmpty()) throw sourceUnavailable("inputs", "TASK_CREATE");
+        if (row.getSourceType() != null) throw sourceUnavailable("sourceRef", "TASK_CREATE");
+        if (row.getConversationId() != null) throw sourceUnavailable("conversationId", "TASK_CREATE");
     }
 
     private static void requireComplete(EditableFields fields) {
@@ -1074,7 +1113,10 @@ public class HallRequestDraftServiceImpl implements HallRequestDraftService {
         }
         if ("SUBMITTED".equals(row.getState())
                 && (row.getSubmitKey() == null || row.getSubmitHash() == null
-                    || row.getSubmissionRef() == null || row.getSubmittedExecutionId() == null
+                    || row.getSubmissionRef() == null
+                    || ("TASK_CREATE".equals(row.getKind())
+                        ? row.getSubmittedExecutionId() != null || row.getCaseId() != null || row.getTaskId() != null
+                        : row.getSubmittedExecutionId() == null)
                     || row.getDiscardKey() != null || row.getDiscardHash() != null)) {
             throw failure(Reason.STORAGE_UNAVAILABLE);
         }
