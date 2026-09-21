@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.nio.charset.StandardCharsets;
@@ -50,6 +51,27 @@ public class PersonalWorkspaceExecutionController {
                         .map(input -> new PersonalWorkspaceExecutionService.InputSelection(input.fileId(), version(input.version())))
                         .toList()), key);
         return ResponseEntity.status(HttpStatus.ACCEPTED).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(view);
+    }
+
+    @GetMapping(value = "/executions", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<PersonalWorkspaceExecutionService.ExecutionHistoryView> list(
+            @RequestParam(required = false) String limit,
+            @RequestParam(required = false) String beforeCreatedAt,
+            @RequestParam(required = false) String beforeExecutionId,
+            Authentication authentication) {
+        if ((beforeCreatedAt == null) != (beforeExecutionId == null)) throw new RequestFailure();
+        Long cursorCreatedAt = beforeCreatedAt == null ? null : epochMillis(beforeCreatedAt);
+        if (beforeExecutionId != null && !valid(beforeExecutionId, 100)) throw new RequestFailure();
+        return ok(service.list(scope(authentication), historyLimit(limit),
+                cursorCreatedAt, beforeExecutionId));
+    }
+
+    @GetMapping(value = "/executions/request", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<PersonalWorkspaceExecutionService.ExecutionView> request(
+            @RequestHeader(value = "Idempotency-Key", required = false) String key,
+            Authentication authentication) {
+        if (!valid(key, 100)) throw new RequestFailure();
+        return ok(service.getByIdempotencyKey(scope(authentication), key));
     }
 
     @GetMapping(value = "/executions/{executionId}", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -90,6 +112,22 @@ public class PersonalWorkspaceExecutionController {
         Map<String,Object> claims = jwt.getToken().getClaims(); Object owner=claims.get("jiacn"), client=claims.get("client_id");
         if (!(owner instanceof String o) || !(client instanceof String c) || !valid(o,50) || !valid(c,50) || "0".equals(o)) throw new RequestFailure();
         return new PersonalWorkspaceExecutionService.OwnerScope("0", c, o);
+    }
+    private static int historyLimit(String value) {
+        if (value == null) return 20;
+        if (!value.matches("[1-9][0-9]{0,2}")) throw new RequestFailure();
+        try {
+            int parsed = Integer.parseInt(value);
+            if (parsed > 100) throw new RequestFailure();
+            return parsed;
+        } catch (NumberFormatException malformed) {
+            throw new RequestFailure();
+        }
+    }
+    private static long epochMillis(String value) {
+        if (value == null || !value.matches("(?:0|[1-9][0-9]{0,18})")) throw new RequestFailure();
+        try { return Long.parseLong(value); }
+        catch (NumberFormatException malformed) { throw new RequestFailure(); }
     }
     private static int version(String value) { if (value==null || !value.matches("[1-9][0-9]{0,9}")) throw new RequestFailure(); try { return Math.toIntExact(Long.parseLong(value)); } catch (ArithmeticException failure) { throw new RequestFailure(); } }
     private static long decimal(String value) { if(value==null||!value.matches("[1-9][0-9]{0,18}"))throw new RequestFailure(); try{return Long.parseLong(value);}catch(NumberFormatException failure){throw new RequestFailure();} }

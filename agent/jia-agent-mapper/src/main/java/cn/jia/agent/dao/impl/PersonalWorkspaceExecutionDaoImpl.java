@@ -38,6 +38,24 @@ public class PersonalWorkspaceExecutionDaoImpl implements PersonalWorkspaceExecu
         scope(tenantId, clientId, ownerJiacn); id(idempotencyKey, "idempotencyKey");
         return executions.findByIdempotency(tenantId, clientId, ownerJiacn, idempotencyKey);
     }
+    @Override public PersonalWorkspaceExecutionEntity findRequestByIdempotency(String tenantId,
+            String clientId, String ownerJiacn, String idempotencyKey) {
+        scope(tenantId, clientId, ownerJiacn); id(idempotencyKey, "idempotencyKey");
+        return executions.findRequestByIdempotency(tenantId, clientId, ownerJiacn, idempotencyKey);
+    }
+    @Override public List<PersonalWorkspaceExecutionEntity> listHistory(String tenantId,
+            String clientId, String ownerJiacn, Long beforeCreatedAt,
+            String beforeExecutionId, int limit) {
+        scope(tenantId, clientId, ownerJiacn);
+        if ((beforeCreatedAt == null) != (beforeExecutionId == null)
+                || (beforeCreatedAt != null && beforeCreatedAt < 0)
+                || limit < 1 || limit > 101) {
+            throw new IllegalArgumentException("history");
+        }
+        if (beforeExecutionId != null) id(beforeExecutionId, "beforeExecutionId");
+        return executions.listHistory(tenantId, clientId, ownerJiacn,
+                beforeCreatedAt, beforeExecutionId, limit);
+    }
     @Override public PersonalWorkspaceExecutionEntity findByRevokeIdempotency(String tenantId,
             String clientId, String ownerJiacn, String idempotencyKey) {
         scope(tenantId, clientId, ownerJiacn); id(idempotencyKey, "idempotencyKey");

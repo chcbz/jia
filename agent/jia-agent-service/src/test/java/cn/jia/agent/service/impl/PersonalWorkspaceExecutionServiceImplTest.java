@@ -79,6 +79,179 @@ class PersonalWorkspaceExecutionServiceImplTest {
     }
 
     @Test
+    void ownerHistoryUsesLimitPlusOneAndByteExactTieCursorWithoutDuplicates() {
+        PersonalWorkspaceExecutionEntity upper = historyExecution("pwe_A", 1_790_000_000_000L);
+        PersonalWorkspaceExecutionEntity lower = historyExecution("pwe_a", 1_790_000_000_000L);
+        PersonalWorkspaceExecutionEntity later = historyExecution("pwe_b", 1_790_000_000_000L);
+        when(executions.listHistory("0", "client-a", "owner-a", null, null, 3))
+                .thenReturn(List.of(upper, later, lower));
+
+        var first = service.list(new PersonalWorkspaceExecutionService.OwnerScope(
+                "0", "client-a", "owner-a"), 2, null, null);
+
+        assertEquals(List.of("pwe_b", "pwe_a"), first.items().stream()
+                .map(PersonalWorkspaceExecutionService.ExecutionSummary::executionId).toList());
+        assertEquals(new PersonalWorkspaceExecutionService.ExecutionCursor(
+                1_790_000_000_000L, "pwe_a"), first.nextCursor());
+        assertTrue(first.items().stream().noneMatch(item -> item.toString().contains("secret")));
+        verify(executions, never()).listInputs(any(), any(), any(), any());
+
+        when(executions.listHistory("0", "client-a", "owner-a",
+                1_790_000_000_000L, "pwe_a", 3)).thenReturn(List.of(upper));
+        var second = service.list(new PersonalWorkspaceExecutionService.OwnerScope(
+                        "0", "client-a", "owner-a"), 2,
+                1_790_000_000_000L, "pwe_a");
+
+        assertEquals(List.of("pwe_A"), second.items().stream()
+                .map(PersonalWorkspaceExecutionService.ExecutionSummary::executionId).toList());
+        assertEquals(null, second.nextCursor());
+        assertTrue(first.items().stream().noneMatch(second.items()::contains));
+    }
+
+    @Test
+    void ownerHistoryRejectsDuplicateOrNonAdvancingDaoRows() {
+        var owner = new PersonalWorkspaceExecutionService.OwnerScope("0", "client-a", "owner-a");
+        PersonalWorkspaceExecutionEntity duplicate = historyExecution("pwe_b", 1000L);
+        when(executions.listHistory("0", "client-a", "owner-a", null, null, 3))
+                .thenReturn(List.of(duplicate, duplicate));
+        var duplicated = assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                () -> service.list(owner, 2, null, null));
+        assertEquals(PersonalWorkspaceExecutionService.Reason.STORAGE_UNAVAILABLE,
+                duplicated.getReason());
+
+        when(executions.listHistory("0", "client-a", "owner-a", 1000L, "pwe_b", 3))
+                .thenReturn(List.of(historyExecution("pwe_b", 1000L)));
+        var nonAdvancing = assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                () -> service.list(owner, 2, 1000L, "pwe_b"));
+        assertEquals(PersonalWorkspaceExecutionService.Reason.STORAGE_UNAVAILABLE,
+                nonAdvancing.getReason());
+    }
+
+    @Test
+    void ownerHistoryRejectsMalformedBoundsBeforeDao() {
+        var owner = new PersonalWorkspaceExecutionService.OwnerScope("0", "client-a", "owner-a");
+        for (Object[] input : List.of(
+                new Object[] {0, null, null},
+                new Object[] {101, null, null},
+                new Object[] {20, 10L, null},
+                new Object[] {20, null, "pwe_a"},
+                new Object[] {20, -1L, "pwe_a"},
+                new Object[] {20, 10L, " pwe_a"})) {
+            var failure = assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                    () -> service.list(owner, (Integer) input[0], (Long) input[1], (String) input[2]));
+            assertEquals(PersonalWorkspaceExecutionService.Reason.BAD_REQUEST, failure.getReason());
+        }
+        verify(executions, never()).listHistory(any(), any(), any(), any(), any(),
+                org.mockito.ArgumentMatchers.anyInt());
+    }
+
+    @Test
+    void ownerHistoryFailsClosedOnOtherTenantOwnerClientCaseOrSpaceDaoRows() {
+        var owner = new PersonalWorkspaceExecutionService.OwnerScope("0", "client-a", "owner-a");
+        List<PersonalWorkspaceExecutionEntity> contaminated = List.of(
+                historyExecution("pwe_other_tenant", 7L),
+                historyExecution("pwe_tenant_space", 6L),
+                historyExecution("pwe_other_owner", 5L).setOwnerJiacn("owner-b"),
+                historyExecution("pwe_other_client", 6L),
+                historyExecution("pwe_owner_case", 5L).setOwnerJiacn("Owner-a"),
+                historyExecution("pwe_owner_space", 4L).setOwnerJiacn("owner-a "),
+                historyExecution("pwe_client_case", 3L),
+                historyExecution("pwe_client_space", 2L));
+        contaminated.get(0).setTenantId("1");
+        contaminated.get(1).setTenantId("0 ");
+        contaminated.get(3).setClientId("client-b");
+        contaminated.get(6).setClientId("Client-a");
+        contaminated.get(7).setClientId("client-a ");
+        for (PersonalWorkspaceExecutionEntity leaked : contaminated) {
+            when(executions.listHistory("0", "client-a", "owner-a", null, null, 21))
+                    .thenReturn(List.of(leaked));
+            var failure = assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                    () -> service.list(owner, 20, null, null));
+            assertEquals(PersonalWorkspaceExecutionService.Reason.STORAGE_UNAVAILABLE,
+                    failure.getReason());
+        }
+    }
+
+    @Test
+    void idempotencyRecoveryIsReadOnlyAndRequiresExactPersistedScopeAndKey() throws Exception {
+        var owner = new PersonalWorkspaceExecutionService.OwnerScope("0", "client-a", "owner-a");
+        PersonalWorkspaceExecutionEntity existing = historyExecution("pwe_existing", 10L)
+                .setTaskId("pwe_task_1").setRunId("pwe_run_1").setConversationId(null)
+                .setGrantRevision(1L).setIdempotencyKey("paid-create-key")
+                .setExecutionMode("PRIVATE");
+        when(executions.findRequestByIdempotency(
+                "0", "client-a", "owner-a", "paid-create-key")).thenReturn(existing);
+        when(executions.listInputs("0", "client-a", "owner-a", "pwe_existing"))
+                .thenReturn(List.of());
+
+        var recovered = service.getByIdempotencyKey(owner, "paid-create-key");
+
+        assertEquals("pwe_existing", recovered.executionId());
+        verify(executions, never()).insert(any(PersonalWorkspaceExecutionEntity.class));
+        verify(executions, never()).insertInput(any(PersonalWorkspaceExecutionInputEntity.class));
+        verify(runtimes, never()).findCandidateRosterByOwner(any(), any());
+        var method = PersonalWorkspaceExecutionServiceImpl.class.getMethod(
+                "getByIdempotencyKey", PersonalWorkspaceExecutionService.OwnerScope.class, String.class);
+        assertTrue(method.getAnnotation(org.springframework.transaction.annotation.Transactional.class).readOnly());
+    }
+
+    @Test
+    void idempotencyRecoveryTreatsContaminatedDaoRowsAsNotFoundWithoutViewExpansion() {
+        var owner = new PersonalWorkspaceExecutionService.OwnerScope("0", "client-a", "owner-a");
+        List<PersonalWorkspaceExecutionEntity> contaminated = List.of(
+                historyExecution("pwe_other_tenant", 8L).setIdempotencyKey("paid-create-key"),
+                historyExecution("pwe_tenant_space", 7L).setIdempotencyKey("paid-create-key"),
+                historyExecution("pwe_other_owner", 5L).setOwnerJiacn("owner-b")
+                        .setIdempotencyKey("paid-create-key"),
+                historyExecution("pwe_other_client", 7L).setIdempotencyKey("paid-create-key"),
+                historyExecution("pwe_owner_case", 6L).setOwnerJiacn("Owner-a")
+                        .setIdempotencyKey("paid-create-key"),
+                historyExecution("pwe_owner_space", 5L).setOwnerJiacn("owner-a ")
+                        .setIdempotencyKey("paid-create-key"),
+                historyExecution("pwe_client_case", 4L).setIdempotencyKey("paid-create-key"),
+                historyExecution("pwe_client_space", 3L).setIdempotencyKey("paid-create-key"),
+                historyExecution("pwe_other_key", 1L).setIdempotencyKey("Paid-create-key"));
+        contaminated.get(0).setTenantId("1");
+        contaminated.get(1).setTenantId("0 ");
+        contaminated.get(3).setClientId("client-b");
+        contaminated.get(6).setClientId("Client-a");
+        contaminated.get(7).setClientId("client-a ");
+        for (PersonalWorkspaceExecutionEntity leaked : contaminated) {
+            when(executions.findRequestByIdempotency(
+                    "0", "client-a", "owner-a", "paid-create-key")).thenReturn(leaked);
+            var failure = assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                    () -> service.getByIdempotencyKey(owner, "paid-create-key"));
+            assertEquals(PersonalWorkspaceExecutionService.Reason.NOT_FOUND, failure.getReason());
+        }
+        verify(executions, never()).listInputs(any(), any(), any(), any());
+    }
+
+    @Test
+    void idempotencyRecoveryRejectsInputRowsOutsideExactExecutionScope() {
+        var owner = new PersonalWorkspaceExecutionService.OwnerScope("0", "client-a", "owner-a");
+        PersonalWorkspaceExecutionEntity existing = historyExecution("pwe_existing", 10L)
+                .setTaskId("pwe_task_1").setRunId("pwe_run_1").setConversationId(null)
+                .setGrantRevision(1L).setIdempotencyKey("paid-create-key")
+                .setExecutionMode("PRIVATE");
+        when(executions.findRequestByIdempotency(
+                "0", "client-a", "owner-a", "paid-create-key")).thenReturn(existing);
+        List<PersonalWorkspaceExecutionInputEntity> contaminated = List.of(
+                input("pwe_existing").setExecutionId("pwe_other"),
+                input("pwe_existing").setOwnerJiacn("owner-b"),
+                input("pwe_existing"),
+                input("pwe_existing"));
+        contaminated.get(2).setClientId("Client-a");
+        contaminated.get(3).setTenantId("0 ");
+        for (PersonalWorkspaceExecutionInputEntity leaked : contaminated) {
+            when(executions.listInputs("0", "client-a", "owner-a", "pwe_existing"))
+                    .thenReturn(List.of(leaked));
+            var failure = assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                    () -> service.getByIdempotencyKey(owner, "paid-create-key"));
+            assertEquals(PersonalWorkspaceExecutionService.Reason.NOT_FOUND, failure.getReason());
+        }
+    }
+
+    @Test
     void durableQueueReturnsOnlyExactQueuedAgentItemsWithStrictRuntimePayload() throws Exception {
         PersonalWorkspaceExecutionEntity accepted = execution("pwe_1", "agent-a", "QUEUED");
         PersonalWorkspaceExecutionEntity wrongAgent = execution("pwe_2", "agent-b", "QUEUED");
@@ -669,6 +842,13 @@ class PersonalWorkspaceExecutionServiceImplTest {
         value.setStatus(state); value.setLeaseToken("lease-secret"); value.setVersion(version);
         value.setLeaseUntil(9_999_999_999_999L);
         return value;
+    }
+
+    private static PersonalWorkspaceExecutionEntity historyExecution(String id, long createdAt) {
+        PersonalWorkspaceExecutionEntity item = execution(id, "agent-a", "QUEUED")
+                .setCreatedAt(createdAt).setInstruction("secret instruction")
+                .setLeaseToken("secret runtime credential");
+        return item;
     }
 
     private static PersonalWorkspaceExecutionEntity execution(String id, String agent, String state) {

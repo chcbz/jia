@@ -12,6 +12,12 @@ public interface PersonalWorkspaceExecutionDao {
             String executionId);
     PersonalWorkspaceExecutionEntity findByIdempotency(String tenantId, String clientId,
             String ownerJiacn, String idempotencyKey);
+    /** Browser-safe persisted create reconciliation; excludes instruction and runtime credentials. */
+    PersonalWorkspaceExecutionEntity findRequestByIdempotency(String tenantId, String clientId,
+            String ownerJiacn, String idempotencyKey);
+    /** Bounded keyset history query. The limit is the caller's lookahead size (maximum 101). */
+    List<PersonalWorkspaceExecutionEntity> listHistory(String tenantId, String clientId,
+            String ownerJiacn, Long beforeCreatedAt, String beforeExecutionId, int limit);
     PersonalWorkspaceExecutionEntity findByRevokeIdempotency(String tenantId, String clientId,
             String ownerJiacn, String idempotencyKey);
     PersonalWorkspaceExecutionEntity lock(String tenantId, String clientId, String ownerJiacn,

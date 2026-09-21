@@ -242,6 +242,58 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
 
     @Override
     @Transactional(readOnly = true, rollbackFor = Exception.class)
+    public ExecutionHistoryView list(OwnerScope scope, int limit, Long beforeCreatedAt,
+            String beforeExecutionId) {
+        validateOwnerScope(scope);
+        if (limit < 1 || limit > 100
+                || (beforeCreatedAt == null) != (beforeExecutionId == null)
+                || (beforeCreatedAt != null && beforeCreatedAt < 0)) {
+            throw failure(Reason.BAD_REQUEST);
+        }
+        if (beforeExecutionId != null) id(beforeExecutionId, "beforeExecutionId", 100);
+        List<PersonalWorkspaceExecutionEntity> rows = executions.listHistory(
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
+                beforeCreatedAt, beforeExecutionId, limit + 1);
+        if (rows == null || rows.size() > limit + 1) throw failure(Reason.STORAGE_UNAVAILABLE);
+        List<PersonalWorkspaceExecutionEntity> owned = new ArrayList<>(rows.size());
+        Set<String> executionIds = new LinkedHashSet<>();
+        for (PersonalWorkspaceExecutionEntity row : rows) {
+            if (!isExactOwner(scope, row) || !validHistoryRow(row)
+                    || !executionIds.add(row.getExecutionId())
+                    || !strictlyBeforeCursor(row, beforeCreatedAt, beforeExecutionId)) {
+                // Mapper exactness is the primary boundary. Treat any contaminated row as an
+                // unavailable page rather than returning a partial page or advancing past it.
+                throw failure(Reason.STORAGE_UNAVAILABLE);
+            }
+            owned.add(row);
+        }
+        owned.sort(PersonalWorkspaceExecutionServiceImpl::compareHistoryRows);
+        boolean more = owned.size() > limit;
+        if (more) owned = new ArrayList<>(owned.subList(0, limit));
+        List<ExecutionSummary> items = owned.stream().map(row -> new ExecutionSummary(
+                row.getExecutionId(), row.getTargetAgentId(), row.getExecutionState(),
+                row.getOutputContentMimeType(), row.getCreatedAt())).toList();
+        ExecutionCursor next = more
+                ? new ExecutionCursor(owned.getLast().getCreatedAt(), owned.getLast().getExecutionId())
+                : null;
+        return new ExecutionHistoryView(items, next);
+    }
+
+    @Override
+    @Transactional(readOnly = true, rollbackFor = Exception.class)
+    public ExecutionView getByIdempotencyKey(OwnerScope scope, String idempotencyKey) {
+        validateOwnerScope(scope); validateIdempotency(idempotencyKey);
+        PersonalWorkspaceExecutionEntity execution = executions.findRequestByIdempotency(
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), idempotencyKey);
+        if (execution == null || !isExactOwner(scope, execution)
+                || !same(execution.getIdempotencyKey(), idempotencyKey)) {
+            throw failure(Reason.NOT_FOUND);
+        }
+        return requestView(scope, execution);
+    }
+
+    @Override
+    @Transactional(readOnly = true, rollbackFor = Exception.class)
     public ExecutionView get(OwnerScope scope, String executionId) {
         validateOwnerScope(scope); id(executionId, "executionId", 100);
         PersonalWorkspaceExecutionEntity execution = executions.find(scope.tenantId(), scope.clientId(),
@@ -682,7 +734,20 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     }
 
     private ExecutionView view(OwnerScope scope, PersonalWorkspaceExecutionEntity execution) {
-        List<RuntimeInput> inputs = runtimeInputs(scope, execution.getExecutionId());
+        return view(scope, execution, runtimeInputs(scope, execution.getExecutionId()));
+    }
+    private ExecutionView requestView(OwnerScope scope, PersonalWorkspaceExecutionEntity execution) {
+        List<PersonalWorkspaceExecutionInputEntity> rows = executions.listInputs(
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), execution.getExecutionId());
+        if (rows == null || rows.stream().anyMatch(row -> !isExactInput(
+                scope, execution.getExecutionId(), row))) {
+            throw failure(Reason.NOT_FOUND);
+        }
+        return view(scope, execution, rows.stream().map(PersonalWorkspaceExecutionServiceImpl::runtimeInput)
+                .toList());
+    }
+    private ExecutionView view(OwnerScope scope, PersonalWorkspaceExecutionEntity execution,
+            List<RuntimeInput> inputs) {
         String mode = execution.getExecutionMode() == null ? "PRIVATE" : execution.getExecutionMode();
         String workItemState = "TASK".equals(mode) ? taskWorkItemState(scope, execution) : null;
         return new ExecutionView(execution.getExecutionId(), execution.getTaskId(), execution.getRunId(),
@@ -693,9 +758,12 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     }
     private List<RuntimeInput> runtimeInputs(OwnerScope scope, String executionId) {
         return executions.listInputs(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), executionId).stream()
-                .map(input -> new RuntimeInput(input.getInputRef(), input.getFileId(), input.getFileVersion(),
-                        input.getOriginalFilename(), input.getContentMimeType(), input.getByteLength(), input.getContentHash()))
-                .toList();
+                .map(PersonalWorkspaceExecutionServiceImpl::runtimeInput).toList();
+    }
+    private static RuntimeInput runtimeInput(PersonalWorkspaceExecutionInputEntity input) {
+        return new RuntimeInput(input.getInputRef(), input.getFileId(), input.getFileVersion(),
+                input.getOriginalFilename(), input.getContentMimeType(), input.getByteLength(),
+                input.getContentHash());
     }
     private RuntimeQueuedCommand queuedCommand(OwnerScope scope, PersonalWorkspaceExecutionEntity execution) {
         RuntimeCommand payload = command(execution, runtimeInputs(scope, execution.getExecutionId()));
@@ -904,6 +972,52 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     private static String hash(String... values) {
         try { MessageDigest digest=MessageDigest.getInstance("SHA-256"); for (String value:values) { byte[] bytes=Objects.requireNonNullElse(value,"").getBytes(StandardCharsets.UTF_8); digest.update(ByteBuffer.allocate(4).putInt(bytes.length).array()); digest.update(bytes); } return HexFormat.of().formatHex(digest.digest()); }
         catch(NoSuchAlgorithmException impossible){throw new IllegalStateException(impossible);}
+    }
+    private static boolean isExactOwner(OwnerScope scope, PersonalWorkspaceExecutionEntity execution) {
+        return execution != null && same(execution.getTenantId(), scope.tenantId())
+                && same(execution.getClientId(), scope.clientId())
+                && same(execution.getOwnerJiacn(), scope.ownerJiacn());
+    }
+    private static boolean isExactInput(OwnerScope scope, String executionId,
+            PersonalWorkspaceExecutionInputEntity input) {
+        return input != null && same(input.getTenantId(), scope.tenantId())
+                && same(input.getClientId(), scope.clientId())
+                && same(input.getOwnerJiacn(), scope.ownerJiacn())
+                && same(input.getExecutionId(), executionId);
+    }
+    private static boolean validHistoryRow(PersonalWorkspaceExecutionEntity row) {
+        return safeId(row.getExecutionId(), 100) && safeId(row.getTargetAgentId(), 100)
+                && safeId(row.getExecutionState(), 40)
+                && safeId(row.getOutputContentMimeType(), 127)
+                && row.getCreatedAt() != null && row.getCreatedAt() >= 0;
+    }
+    private static boolean strictlyBeforeCursor(PersonalWorkspaceExecutionEntity row,
+            Long beforeCreatedAt, String beforeExecutionId) {
+        if (beforeCreatedAt == null) return true;
+        return row.getCreatedAt() < beforeCreatedAt
+                || (row.getCreatedAt().equals(beforeCreatedAt)
+                    && compareUtf8(row.getExecutionId(), beforeExecutionId) < 0);
+    }
+    private static int compareHistoryRows(PersonalWorkspaceExecutionEntity left,
+            PersonalWorkspaceExecutionEntity right) {
+        int created = Long.compare(right.getCreatedAt(), left.getCreatedAt());
+        return created != 0 ? created : compareUtf8(right.getExecutionId(), left.getExecutionId());
+    }
+    private static int compareUtf8(String left, String right) {
+        byte[] leftBytes = left.getBytes(StandardCharsets.UTF_8);
+        byte[] rightBytes = right.getBytes(StandardCharsets.UTF_8);
+        int length = Math.min(leftBytes.length, rightBytes.length);
+        for (int index = 0; index < length; index++) {
+            int compared = Integer.compare(Byte.toUnsignedInt(leftBytes[index]),
+                    Byte.toUnsignedInt(rightBytes[index]));
+            if (compared != 0) return compared;
+        }
+        return Integer.compare(leftBytes.length, rightBytes.length);
+    }
+    private static boolean safeId(String value, int max) {
+        return value != null && !value.isBlank() && value.equals(value.strip())
+                && value.codePointCount(0, value.length()) <= max
+                && value.chars().noneMatch(Character::isISOControl);
     }
     private static boolean same(String left, String right) { return left != null && right != null && MessageDigest.isEqual(left.getBytes(StandardCharsets.UTF_8), right.getBytes(StandardCharsets.UTF_8)); }
     private static boolean sha(String value) { return value != null && value.matches("[0-9a-f]{64}"); }

@@ -11,6 +11,11 @@ public interface PersonalWorkspaceExecutionService {
      * authenticated runtime and do not claim that a Provider completed any operation.
      */
     ExecutionCapabilities capabilities();
+    /** Bounded, newest-first owner history. The summary is an explicit browser-safe allow-list. */
+    ExecutionHistoryView list(OwnerScope scope, int limit, Long beforeCreatedAt,
+            String beforeExecutionId);
+    /** Read-only reconciliation of an already persisted create request. */
+    ExecutionView getByIdempotencyKey(OwnerScope scope, String idempotencyKey);
     ExecutionView get(OwnerScope scope, String executionId);
     ExecutionView revokeInputs(OwnerScope scope, String executionId, long expectedGrantRevision,
             String idempotencyKey);
@@ -40,6 +45,14 @@ public interface PersonalWorkspaceExecutionService {
     /** Exact prior output/decision binding used only for a server-authorized rework execution. */
     record SourceOutputRef(String formalDeliveryId, long decisionVersion, String outputId,
             String fileId, int fileVersion) { }
+    record ExecutionSummary(String executionId, String targetAgentId, String state,
+            String outputContentMimeType, long createdAt) { }
+    record ExecutionCursor(long createdAt, String executionId) { }
+    record ExecutionHistoryView(List<ExecutionSummary> items, ExecutionCursor nextCursor) {
+        public ExecutionHistoryView {
+            items = items == null ? List.of() : List.copyOf(items);
+        }
+    }
     record RuntimeInput(String inputRef, String fileId, int version, String originalFilename,
             String contentMimeType, long byteLength, String sha256) { }
     record RuntimeOutput(String outputId, String relativePath, String contentType, long maxLength,

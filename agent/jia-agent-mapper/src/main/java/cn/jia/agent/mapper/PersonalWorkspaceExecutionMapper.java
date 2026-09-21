@@ -8,6 +8,54 @@ import org.apache.ibatis.annotations.Select;
 public interface PersonalWorkspaceExecutionMapper extends BaseMapper<PersonalWorkspaceExecutionEntity> {
 
     @Select("""
+            <script>
+            SELECT tenant_id, client_id, owner_jiacn, execution_id, target_agent_id,
+                   execution_state, output_content_mime_type, created_at
+              FROM agent_personal_workspace_execution
+             WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
+               AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
+               AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
+               AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
+               AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
+               AND CAST(owner_jiacn AS BINARY)=CAST(#{ownerJiacn} AS BINARY)
+               AND OCTET_LENGTH(owner_jiacn)=OCTET_LENGTH(#{ownerJiacn})
+            <if test='beforeCreatedAt != null and beforeExecutionId != null'>
+               AND (created_at &lt; #{beforeCreatedAt}
+                    OR (created_at=#{beforeCreatedAt}
+                        AND CAST(execution_id AS BINARY) &lt; CAST(#{beforeExecutionId} AS BINARY)))
+            </if>
+             ORDER BY created_at DESC, CAST(execution_id AS BINARY) DESC
+             LIMIT #{limit}
+            </script>
+            """)
+    java.util.List<PersonalWorkspaceExecutionEntity> listHistory(
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn, @Param("beforeCreatedAt") Long beforeCreatedAt,
+            @Param("beforeExecutionId") String beforeExecutionId, @Param("limit") int limit);
+
+    @Select("""
+            SELECT tenant_id, client_id, owner_jiacn, execution_id, task_id, run_id,
+                   execution_mode, work_item_id, conversation_id, target_agent_id,
+                   output_content_mime_type, execution_state, failure_code, failure_message,
+                   grant_revision, idempotency_key, created_at, revoked_at, failed_at
+              FROM agent_personal_workspace_execution
+             WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
+               AND idempotency_key=#{idempotencyKey}
+               AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
+               AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
+               AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
+               AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
+               AND CAST(owner_jiacn AS BINARY)=CAST(#{ownerJiacn} AS BINARY)
+               AND OCTET_LENGTH(owner_jiacn)=OCTET_LENGTH(#{ownerJiacn})
+               AND CAST(idempotency_key AS BINARY)=CAST(#{idempotencyKey} AS BINARY)
+               AND OCTET_LENGTH(idempotency_key)=OCTET_LENGTH(#{idempotencyKey})
+             LIMIT 1
+            """)
+    PersonalWorkspaceExecutionEntity findRequestByIdempotency(
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn, @Param("idempotencyKey") String idempotencyKey);
+
+    @Select("""
             SELECT * FROM agent_personal_workspace_execution
              WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
                AND target_agent_id=#{targetAgentId} AND execution_state='QUEUED'

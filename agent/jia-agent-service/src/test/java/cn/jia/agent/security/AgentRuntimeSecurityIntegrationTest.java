@@ -1,5 +1,6 @@
 package cn.jia.agent.security;
 
+import cn.jia.agent.api.PersonalWorkspaceRuntimeFileController;
 import cn.jia.agent.common.AgentConstants;
 import cn.jia.agent.config.AgentRuntimeSecurityConfiguration;
 import cn.jia.agent.config.AgentTaskEventsGate;
@@ -13,6 +14,7 @@ import cn.jia.agent.entity.AgentIdentityRegistryEntity;
 import cn.jia.agent.entity.AgentPersonaBindingEntity;
 import cn.jia.agent.entity.AgentRuntimeEntity;
 import cn.jia.agent.service.AgentIdentityService;
+import cn.jia.agent.service.PersonalWorkspaceExecutionService;
 import cn.jia.agent.service.impl.AgentIdentityServiceImpl;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.oauth.entity.OauthApiKeyEntity;
@@ -29,6 +31,8 @@ import org.springframework.context.annotation.Import;
 import org.springframework.mock.web.MockServletContext;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.security.web.FilterChainProxy;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
@@ -38,6 +42,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.context.support.AnnotationConfigWebApplicationContext;
 
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -68,7 +73,9 @@ class AgentRuntimeSecurityIntegrationTest {
     AgentPersonaBindingDao identityBindingDao;
     ApiKeyService keys;
     AccountSecurityService accounts;
+    PersonalWorkspaceExecutionService workspaceExecutions;
     MockMvc mvc;
+    MockMvc runtimeFailureMvc;
     final Map<String, AgentRuntimeEntity> persisted = new HashMap<>();
     final Map<Long, AgentPersonaBindingEntity> persistedBindings = new HashMap<>();
     final Map<Long, AgentIdentityRegistryEntity> persistedIdentitiesByBinding = new HashMap<>();
@@ -90,6 +97,9 @@ class AgentRuntimeSecurityIntegrationTest {
         }
         @Bean ApiKeyService keys() { return mock(ApiKeyService.class); }
         @Bean AccountSecurityService accounts() { return mock(AccountSecurityService.class); }
+        @Bean PersonalWorkspaceExecutionService workspaceExecutions() {
+            return mock(PersonalWorkspaceExecutionService.class);
+        }
         @Bean AgentTaskEventsGate gate() {
             return new AgentTaskEventsGate(new AgentTaskEventsProperties(true,
                     List.of(new AgentTaskEventsProperties.AllowedScope(TENANT, CLIENT_A),
@@ -165,6 +175,7 @@ class AgentRuntimeSecurityIntegrationTest {
         identityBindingDao = context.getBean(AgentPersonaBindingDao.class);
         keys = context.getBean(ApiKeyService.class);
         accounts = context.getBean(AccountSecurityService.class);
+        workspaceExecutions = context.getBean(PersonalWorkspaceExecutionService.class);
         when(rows.findByAgentId(anyString())).thenAnswer(inv -> persisted.get(inv.getArgument(0)));
         when(identityRegistryDao.findExactByBindingInScope(
                 anyString(), anyString(), anyString(), anyLong())).thenAnswer(inv -> scopedIdentityByBinding(
@@ -184,8 +195,12 @@ class AgentRuntimeSecurityIntegrationTest {
         seed(B, OWNER_B, "b", TOKEN_B);
         auth.bind("socket-a", CLIENT_A, OWNER_A, A, "runtime-a", "key-a", TOKEN_A, openA::get);
         auth.bind("socket-b", CLIENT_B, OWNER_B, B, "runtime-b", "key-b", TOKEN_B, () -> true);
+        FilterChainProxy filters = context.getBean(FilterChainProxy.class);
         mvc = MockMvcBuilders.standaloneSetup(new RuntimeScopeProbeController())
-                .addFilters(context.getBean(FilterChainProxy.class)).build();
+                .addFilters(filters).build();
+        runtimeFailureMvc = MockMvcBuilders.standaloneSetup(
+                        new PersonalWorkspaceRuntimeFileController(workspaceExecutions))
+                .addFilters(filters).build();
     }
 
     @AfterEach
@@ -255,6 +270,15 @@ class AgentRuntimeSecurityIntegrationTest {
             MockHttpServletRequestBuilder request, String agent, String runtime, String token) {
         return request.header("Authorization", "AgentRuntime " + token)
                 .header("X-Agent-Id", agent).header("X-Agent-Runtime-Id", runtime);
+    }
+
+    JwtAuthenticationToken browserJwt() {
+        Jwt jwt = Jwt.withTokenValue("browser-jwt").header("alg", "none")
+                .claim("jiacn", OWNER_A).claim("client_id", CLIENT_A)
+                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(600)).build();
+        JwtAuthenticationToken authentication = new JwtAuthenticationToken(jwt);
+        authentication.setAuthenticated(true);
+        return authentication;
     }
 
     MockHttpServletRequestBuilder requestA() {
@@ -437,6 +461,56 @@ class AgentRuntimeSecurityIntegrationTest {
         }
         mvc.perform(headers(get("/internal/agent/tasks/task-a/runs/run-a/inputs/input-a/content/extra"),
                 A, "runtime-a", TOKEN_A)).andExpect(status().isForbidden());
+    }
+
+    @Test
+    void nativeFailurePostPassesRealFilterControllerBoundaryWhileVariantsStayBlocked() throws Exception {
+        var runtimeScope = new PersonalWorkspaceExecutionService.RuntimeScope(
+                TENANT, CLIENT_A, OWNER_A, A, "runtime-a");
+        var failed = new PersonalWorkspaceExecutionService.ExecutionView(
+                "pwe_1", "task-a", "run-a", null, A, "FAILED",
+                "AGENT_DELIVERY_FAILED", "Agent 未能完成本次交付，请调整需求后重新创建执行。", 1L,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                List.of(), null);
+        when(workspaceExecutions.fail(runtimeScope, "task-a", "run-a", "OUTPUT_NOT_DECLARED"))
+                .thenReturn(failed);
+        String path = "/internal/agent/tasks/task-a/runs/run-a/failure";
+
+        runtimeFailureMvc.perform(headers(post(path), A, "runtime-a", TOKEN_A)
+                        .contentType("application/json")
+                        .content("{\"code\":\"OUTPUT_NOT_DECLARED\"}"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "private, no-store"))
+                .andExpect(jsonPath("$.state").value("FAILED"));
+        verify(workspaceExecutions).fail(runtimeScope, "task-a", "run-a", "OUTPUT_NOT_DECLARED");
+
+        runtimeFailureMvc.perform(headers(get(path), A, "runtime-a", TOKEN_A))
+                .andExpect(status().isForbidden());
+        for (String trick : List.of(path + "/extra", path + ".json", path + ";v=1")) {
+            runtimeFailureMvc.perform(headers(post(trick), A, "runtime-a", TOKEN_A)
+                            .contentType("application/json")
+                            .content("{\"code\":\"OUTPUT_NOT_DECLARED\"}"))
+                    .andExpect(status().isForbidden());
+        }
+        runtimeFailureMvc.perform(headers(post(path), A, "runtime-a", TOKEN_A)
+                        .header("Origin", "https://browser.invalid")
+                        .contentType("application/json")
+                        .content("{\"code\":\"OUTPUT_NOT_DECLARED\"}"))
+                .andExpect(status().isForbidden());
+        runtimeFailureMvc.perform(headers(post(path), B, "runtime-b", TOKEN_A)
+                        .contentType("application/json")
+                        .content("{\"code\":\"OUTPUT_NOT_DECLARED\"}"))
+                .andExpect(status().isUnauthorized());
+        runtimeFailureMvc.perform(headers(post(path), A, "runtime-b", TOKEN_A)
+                        .contentType("application/json")
+                        .content("{\"code\":\"OUTPUT_NOT_DECLARED\"}"))
+                .andExpect(status().isUnauthorized());
+        runtimeFailureMvc.perform(post(path).principal(browserJwt())
+                        .header("Authorization", "Bearer browser-jwt")
+                        .contentType("application/json")
+                        .content("{\"code\":\"OUTPUT_NOT_DECLARED\"}"))
+                .andExpect(status().isBadRequest());
+        verifyNoMoreInteractions(workspaceExecutions);
     }
 
     @Test
