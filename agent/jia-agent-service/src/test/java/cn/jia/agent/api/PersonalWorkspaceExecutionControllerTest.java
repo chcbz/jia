@@ -117,12 +117,19 @@ class PersonalWorkspaceExecutionControllerTest {
                 "/agent/personal-workspace/executions?limit=01",
                 "/agent/personal-workspace/executions?beforeCreatedAt=1000",
                 "/agent/personal-workspace/executions?beforeExecutionId=pwe_1",
-                "/agent/personal-workspace/executions?beforeCreatedAt=-1&beforeExecutionId=pwe_1",
-                "/agent/personal-workspace/executions?beforeCreatedAt=1000&beforeExecutionId=%20pwe_1")) {
+                "/agent/personal-workspace/executions?beforeCreatedAt=-1&beforeExecutionId=pwe_1")) {
             mvc.perform(get(path).principal(jwt()))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.code").value("BAD_REQUEST"));
         }
+        // queryParam supplies the decoded servlet parameter. Embedding "%20" in the MockMvc
+        // URI string leaves a literal percent sequence and does not model a decoded leading space.
+        mvc.perform(get("/agent/personal-workspace/executions")
+                        .queryParam("beforeCreatedAt", "1000")
+                        .queryParam("beforeExecutionId", " pwe_1")
+                        .principal(jwt()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("BAD_REQUEST"));
         verifyNoInteractions(service);
     }
 

@@ -486,12 +486,18 @@ class AgentRuntimeSecurityIntegrationTest {
 
         runtimeFailureMvc.perform(headers(get(path), A, "runtime-a", TOKEN_A))
                 .andExpect(status().isForbidden());
-        for (String trick : List.of(path + "/extra", path + ".json", path + ";v=1")) {
+        for (String trick : List.of(path + "/extra", path + ".json")) {
             runtimeFailureMvc.perform(headers(post(trick), A, "runtime-a", TOKEN_A)
                             .contentType("application/json")
                             .content("{\"code\":\"OUTPUT_NOT_DECLARED\"}"))
                     .andExpect(status().isForbidden());
         }
+        // Spring Security's strict HTTP firewall rejects matrix parameters before the runtime
+        // filter executes. A 400 here is still fail-closed and must not reach the controller.
+        runtimeFailureMvc.perform(headers(post(path + ";v=1"), A, "runtime-a", TOKEN_A)
+                        .contentType("application/json")
+                        .content("{\"code\":\"OUTPUT_NOT_DECLARED\"}"))
+                .andExpect(status().isBadRequest());
         runtimeFailureMvc.perform(headers(post(path), A, "runtime-a", TOKEN_A)
                         .header("Origin", "https://browser.invalid")
                         .contentType("application/json")
