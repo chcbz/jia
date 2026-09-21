@@ -1,0 +1,40 @@
+package cn.jia.agent.api;
+
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.server.PathContainer;
+import org.springframework.stereotype.Component;
+import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.web.util.ServletRequestPathUtils;
+import org.springframework.web.util.pattern.PathPattern;
+import org.springframework.web.util.pattern.PathPatternParser;
+
+import java.io.IOException;
+
+/** Adds private/no-store before security can emit a Hall draft 401/403. */
+@Component
+@Order(Ordered.HIGHEST_PRECEDENCE)
+public class HallRequestDraftCacheControlFilter extends OncePerRequestFilter {
+    private static final PathPattern ROOT = PathPatternParser.defaultInstance.parse(
+            "/agent/hall/drafts");
+    private static final PathPattern DESCENDANT = PathPatternParser.defaultInstance.parse(
+            "/agent/hall/drafts/{*remainder}");
+
+    @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        PathContainer path = ServletRequestPathUtils.parse(request).pathWithinApplication();
+        return !ROOT.matches(path) && !DESCENDANT.matches(path);
+    }
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
+            FilterChain filterChain) throws ServletException, IOException {
+        response.setHeader(HttpHeaders.CACHE_CONTROL, HallRequestDraftController.CACHE_CONTROL);
+        filterChain.doFilter(request, response);
+    }
+}

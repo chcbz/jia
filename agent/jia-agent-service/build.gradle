@@ -173,3 +173,33 @@ tasks.register('v1131Acceptance', Test) {
     classpath = v1131AcceptanceSourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+// JYT-UX-B01A source-only verification slice. It compiles only the DRAFT-v1 tests so the
+// isolated runner does not inherit unrelated historical test-source compilation debt.
+def jytUxB01aSourceSet = sourceSets.create('jytUxB01a') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/service/impl/HallRequestDraftServiceImplTest.java'
+        include 'cn/jia/agent/api/HallRequestDraftControllerTest.java'
+        include 'cn/jia/agent/api/HallRequestDraftCacheControlFilterTest.java'
+        include 'cn/jia/agent/config/HallRequestDraftSchemaInitializerTest.java'
+        include 'cn/jia/agent/mapper/HallRequestDraftMapperContractTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(jytUxB01aSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(jytUxB01aSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('jytUxB01a', Test) {
+    group = 'verification'
+    description = 'Runs the Juyiting DRAFT-v1 owner-scope, idempotency, CAS, schema and HTTP tests.'
+    dependsOn tasks.named(jytUxB01aSourceSet.classesTaskName)
+    testClassesDirs = jytUxB01aSourceSet.output.classesDirs
+    classpath = jytUxB01aSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
