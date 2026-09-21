@@ -7,6 +7,7 @@ import cn.jia.user.entity.UserEntity;
 import cn.jia.user.security.AccountState;
 import cn.jia.user.service.PermsService;
 import cn.jia.user.service.UserService;
+import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -15,6 +16,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.mock.web.MockServletContext;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
@@ -78,6 +80,30 @@ class DefaultSecurityConfigTest extends BaseMockTest {
                         .andExpect(status().isUnauthorized());
             }
             assertEquals(2, routes.hits.get());
+        } finally {
+            context.close();
+            SpringContextHolder.cleanApplicationContext();
+        }
+    }
+
+    @Test
+    void internalErrorDispatchReachesErrorRendererWithoutLoginRedirect() throws Exception {
+        AnnotationConfigWebApplicationContext context = new AnnotationConfigWebApplicationContext();
+        context.setServletContext(new MockServletContext());
+        new SpringContextHolder().setApplicationContext(context);
+        context.register(DefaultSecurityConfig.class, SecurityWiring.class);
+        try {
+            context.refresh();
+            FilterChainProxy proxy = context.getBean(FilterChainProxy.class);
+            MockHttpServletRequest errorRequest = request("", "/error");
+            errorRequest.setDispatcherType(DispatcherType.ERROR);
+            MockHttpServletResponse response = new MockHttpServletResponse();
+            AtomicInteger rendererHits = new AtomicInteger();
+
+            proxy.doFilter(errorRequest, response, (request, servletResponse) -> rendererHits.incrementAndGet());
+
+            assertEquals(1, rendererHits.get());
+            assertNull(response.getRedirectedUrl());
         } finally {
             context.close();
             SpringContextHolder.cleanApplicationContext();

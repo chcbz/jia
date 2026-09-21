@@ -2,6 +2,7 @@ package cn.jia.core.audit;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
@@ -76,6 +77,23 @@ class BoundedAuditDispatcherTest {
             assertTrue(secondPersisted.await(1, TimeUnit.SECONDS));
             assertEquals(2, attempts.get());
             assertEquals(2, order.get());
+        }
+    }
+
+    @Test
+    void dropsPermanentlyInvalidRecordAndContinuesWithLaterTelemetry() throws Exception {
+        try (BoundedAuditDispatcher dispatcher = dispatcher(2)) {
+            AtomicInteger invalidAttempts = new AtomicInteger();
+            CountDownLatch laterRecordPersisted = new CountDownLatch(1);
+
+            dispatcher.dispatch(() -> {
+                invalidAttempts.incrementAndGet();
+                throw new DataIntegrityViolationException("synthetic invalid audit row");
+            });
+            dispatcher.dispatch(laterRecordPersisted::countDown);
+
+            assertTrue(laterRecordPersisted.await(1, TimeUnit.SECONDS));
+            assertEquals(1, invalidAttempts.get());
         }
     }
 

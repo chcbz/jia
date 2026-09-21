@@ -41,7 +41,6 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -75,7 +74,7 @@ class UriAccessLogFilterTest {
     }
 
     @Test
-    void admissionFailureStopsDownstreamBeforeBusinessSideEffects() throws Exception {
+    void admissionFailureDoesNotBlockDownstreamBusinessSideEffects() throws Exception {
         LogService logService = mock(LogService.class);
         AuditDispatcher rejecting = new AuditDispatcher() {
             @Override
@@ -92,12 +91,14 @@ class UriAccessLogFilterTest {
         when(logService.captureLog(any(EsRequestWrapper.class))).thenReturn(sanitizedAudit);
         AtomicBoolean chainCalled = new AtomicBoolean();
 
-        assertThrows(AuditAdmissionException.class, () -> filter.doFilter(
-                new MockHttpServletRequest("POST", "/write"), new MockHttpServletResponse(),
-                (request, response) -> chainCalled.set(true)));
+        filter.doFilter(new MockHttpServletRequest("POST", "/write"), new MockHttpServletResponse(),
+                (request, response) -> {
+                    assertInstanceOf(EsRequestWrapper.class, request);
+                    chainCalled.set(true);
+                });
 
         verify(logService, never()).persistLog(any());
-        assertFalse(chainCalled.get());
+        assertTrue(chainCalled.get());
     }
 
     @Test

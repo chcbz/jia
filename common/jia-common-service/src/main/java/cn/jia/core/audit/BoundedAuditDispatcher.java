@@ -2,6 +2,7 @@ package cn.jia.core.audit;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
@@ -123,6 +124,13 @@ public final class BoundedAuditDispatcher implements AuditDispatcher, AutoClosea
                 auditWrite.run();
                 return;
             } catch (RuntimeException failure) {
+                if (failure instanceof DataIntegrityViolationException) {
+                    // A violated database constraint is a property of this record, not a transient
+                    // availability failure. Retrying it forever blocks every later access log.
+                    log.error("Audit persistence rejected permanently; dropping one access telemetry record, error_type={}, queued={}",
+                            failure.getClass().getName(), queue.size());
+                    return;
+                }
                 log.warn("Audit persistence failed; retrying in order, error_type={}, queued={}",
                         failure.getClass().getName(), queue.size());
                 try {

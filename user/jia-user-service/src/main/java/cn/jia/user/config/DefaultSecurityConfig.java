@@ -20,6 +20,7 @@ import cn.jia.user.service.PermsService;
 import cn.jia.user.service.UserService;
 import cn.jia.user.security.AccountSecuritySnapshot;
 import cn.jia.user.security.AccountState;
+import jakarta.servlet.DispatcherType;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
@@ -89,6 +90,10 @@ public class DefaultSecurityConfig {
     @DependsOn("userPermitProperties")
     public SecurityFilterChain defaultSecurityFilterChain(HttpSecurity http) {
         http.authorizeHttpRequests((authorize) -> {
+                    // ERROR is an internal container dispatch after an earlier request failure.
+                    // Do not turn a server error into a form-login redirect loop; direct user
+                    // requests cannot select this dispatcher type.
+                    authorize.dispatcherTypeMatchers(DispatcherType.ERROR).permitAll();
                     List<String> ignoreUris = SpringContextHolder.getBean(UserPermitProperties.class).getIgnoreUris();
                     if (CollectionUtil.isNotNullOrEmpty(ignoreUris)) {
                         authorize.requestMatchers(ignoreUris.toArray(new String[0])).permitAll();
