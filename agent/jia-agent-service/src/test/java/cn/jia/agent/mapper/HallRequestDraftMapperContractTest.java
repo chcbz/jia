@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
 import java.util.Arrays;
+import java.util.Locale;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -61,5 +62,26 @@ class HallRequestDraftMapperContractTest {
             assertTrue(sql.contains("revision=revision+1"), method);
             assertTrue(sql.contains("CAST(draft_id AS BINARY)=CAST(#{draftId} AS BINARY)"), method);
         }
+    }
+
+    @Test
+    void resultIndexIsPrivateExactScopedAndSensitiveColumnAllowlisted() throws Exception {
+        Method target = HallRequestDraftMapper.class.getMethod("listPrivateExecutionResults",
+                String.class, String.class, String.class, String.class);
+        String sql = String.join(" ", target.getAnnotation(Select.class).value())
+                .replaceAll("\\s+", " ").trim().toLowerCase(Locale.ROOT);
+        assertTrue(sql.contains("e.execution_mode='private'"));
+        for (String identity : new String[] {"e.tenant_id", "e.client_id", "e.owner_jiacn",
+                "e.execution_id"}) {
+            assertTrue(sql.contains("cast(" + identity + " as binary)=cast(#{"), identity);
+            assertTrue(sql.contains("octet_length(" + identity + ")=octet_length(#{"), identity);
+        }
+        String projection = sql.substring(0, sql.indexOf(" from "));
+        for (String sensitive : new String[] {"storage_uri", "instruction", "lease_token",
+                "idempotency_key", "request_hash", "failure_message"}) {
+            assertTrue(!projection.contains(sensitive), sensitive);
+        }
+        assertTrue(sql.contains("v.version=o.workspace_file_version"));
+        assertTrue(sql.contains("order by cast(o.output_id as binary) asc"));
     }
 }

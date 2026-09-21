@@ -19,6 +19,7 @@ public interface HallRequestDraftService {
             boolean authorizationAcknowledgement, String idempotencyKey);
     SubmissionReceipt getSubmissionByIdempotencyKey(OwnerScope scope, String idempotencyKey);
     CaseView getCase(OwnerScope scope, String caseId);
+    ExecutionResultsView getExecutionResults(OwnerScope scope, String executionId);
 
     record OwnerScope(String tenantId, String clientId, String ownerJiacn) { }
     record InputSelection(String fileId, int version) { }
@@ -55,6 +56,15 @@ public interface HallRequestDraftService {
             List<CaseExecutionView> executions, List<String> allowedActions, CaseSourceRef sourceRef) {
         public CaseView {
             executions = executions == null ? List.of() : List.copyOf(executions);
+            allowedActions = allowedActions == null ? List.of() : List.copyOf(allowedActions);
+        }
+    }
+    record ResultItemView(String outputId, String fileId, int fileVersion, String mime,
+            String filename, long byteLength, String sha256, String availability) { }
+    record ExecutionResultsView(String executionId, String state, String manifestId,
+            List<ResultItemView> items, List<String> allowedActions) {
+        public ExecutionResultsView {
+            items = items == null ? List.of() : List.copyOf(items);
             allowedActions = allowedActions == null ? List.of() : List.copyOf(allowedActions);
         }
     }

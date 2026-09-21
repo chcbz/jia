@@ -43,6 +43,16 @@ public class HallSubmissionController {
                 HallRequestDraftController.scope(authentication), caseId));
     }
 
+    @GetMapping(value = "/executions/{executionId}/results",
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<HallRequestDraftService.ExecutionResultsView> executionResults(
+            @PathVariable String executionId, HttpServletRequest request,
+            Authentication authentication) {
+        HallRequestDraftController.requireNoQuery(request);
+        return HallRequestDraftController.ok(service.getExecutionResults(
+                HallRequestDraftController.scope(authentication), executionId));
+    }
+
     @ExceptionHandler(HallRequestDraftController.AuthenticationFailure.class)
     public ResponseEntity<HallRequestDraftController.ErrorBody> authentication(
             HallRequestDraftController.AuthenticationFailure failure) {

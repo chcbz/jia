@@ -88,6 +88,41 @@ class HallSubmissionControllerTest {
                 .andExpect(status().isUnauthorized());
     }
 
+    @Test
+    void executionResultsExposeOnlyFixedManifestMetadata() throws Exception {
+        var scope = new HallRequestDraftService.OwnerScope("0", "client-a", "owner-a");
+        var view = new HallRequestDraftService.ExecutionResultsView(
+                "execution-1", "OUTPUT_COMMITTED", "pwe_m_manifest",
+                List.of(new HallRequestDraftService.ResultItemView(
+                        "output_1", "file-1", 1, "application/pdf", "result.pdf",
+                        512, "a".repeat(64), "AVAILABLE")),
+                List.of("VIEW", "CREATE_REVISION"));
+        when(service.getExecutionResults(scope, "execution-1")).thenReturn(view);
+
+        mvc.perform(get("/agent/hall/executions/execution-1/results").principal(jwt()))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
+                .andExpect(jsonPath("$.executionId").value("execution-1"))
+                .andExpect(jsonPath("$.manifestId").value("pwe_m_manifest"))
+                .andExpect(jsonPath("$.items[0].fileId").value("file-1"))
+                .andExpect(jsonPath("$.items[0].fileVersion").value(1))
+                .andExpect(jsonPath("$.items[0].availability").value("AVAILABLE"))
+                .andExpect(jsonPath("$.items[0].storageUri").doesNotExist());
+        verify(service).getExecutionResults(scope, "execution-1");
+
+        mvc.perform(get("/agent/hall/executions/execution-1/results?fileId=victim")
+                        .principal(jwt()))
+                .andExpect(status().isBadRequest());
+
+        when(service.getExecutionResults(scope, "foreign")).thenThrow(
+                new HallRequestDraftService.Failure(HallRequestDraftService.Reason.NOT_FOUND));
+        mvc.perform(get("/agent/hall/executions/foreign/results").principal(jwt()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("HALL_RESOURCE_NOT_FOUND"));
+        mvc.perform(get("/agent/hall/executions/execution-1/results"))
+                .andExpect(status().isUnauthorized());
+    }
+
     private static PersonalWorkspaceExecutionService.ExecutionView execution(
             String id, String mode, String businessTaskId) {
         return new PersonalWorkspaceExecutionService.ExecutionView(id,

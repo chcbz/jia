@@ -1,5 +1,6 @@
 package cn.jia.agent.dao;
 
+import cn.jia.agent.entity.HallExecutionResultRow;
 import cn.jia.agent.entity.HallRequestDraftEntity;
 
 import java.util.List;
@@ -31,4 +32,6 @@ public interface HallRequestDraftDao {
             String executionId, String outputId, String fileId, int fileVersion);
     boolean lockPrivateCommittedOutputExists(String tenantId, String clientId, String ownerJiacn,
             String executionId, String outputId, String fileId, int fileVersion);
+    List<HallExecutionResultRow> listPrivateExecutionResults(String tenantId, String clientId,
+            String ownerJiacn, String executionId);
 }

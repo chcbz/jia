@@ -54,7 +54,9 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * Real isolated MySQL 8.0.21 evidence for Hall CHECK catalog, unique-key races, CAS and rollback.
+ * Real isolated production-parity MySQL 8.0.21 evidence for Hall CHECK catalog, unique-key races,
+ * CAS and rollback. The exact version is an evidence target for the deployed engine, not an
+ * application runtime rejection of otherwise supported MySQL versions.
  * The fixture creates and drops only a task-prefixed temporary database acknowledged by the caller.
  */
 @EnabledIfEnvironmentVariable(named = "JYT_UX_B01B_MYSQL_URL", matches = ".+")
@@ -63,6 +65,8 @@ class HallRequestDraftSubmissionMySqlTest {
             new HallRequestDraftService.OwnerScope("0", "client-a", "owner-a");
     private static final HallRequestDraftService.OwnerScope OTHER_OWNER =
             new HallRequestDraftService.OwnerScope("0", "client-a", "owner-b");
+    private static final HallRequestDraftService.OwnerScope OTHER_CLIENT =
+            new HallRequestDraftService.OwnerScope("0", "client-b", "owner-a");
     private static final String MIME = PersonalWorkspaceExecutionProperties.DOCX;
 
     private JdbcTemplate admin;
@@ -102,7 +106,8 @@ class HallRequestDraftSubmissionMySqlTest {
                   execution_id VARCHAR(100) NOT NULL,
                   tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL,
                   owner_jiacn VARCHAR(50) NOT NULL, execution_mode VARCHAR(16) NOT NULL,
-                  execution_state VARCHAR(32) NOT NULL,
+                  execution_state VARCHAR(32) NOT NULL, task_id VARCHAR(100) NOT NULL,
+                  run_id VARCHAR(100) NOT NULL,
                   PRIMARY KEY (execution_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
                 """);
@@ -112,7 +117,9 @@ class HallRequestDraftSubmissionMySqlTest {
                   tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL,
                   owner_jiacn VARCHAR(50) NOT NULL, workspace_file_id VARCHAR(100) NOT NULL,
                   workspace_file_version INT NOT NULL, output_state VARCHAR(32) NOT NULL,
-                  publication_state VARCHAR(32) NOT NULL,
+                  publication_state VARCHAR(32) NOT NULL, original_filename VARCHAR(255) NOT NULL,
+                  content_mime_type VARCHAR(160) NOT NULL, byte_length BIGINT NOT NULL,
+                  content_hash CHAR(64) NOT NULL,
                   PRIMARY KEY (output_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
                 """);
@@ -120,7 +127,9 @@ class HallRequestDraftSubmissionMySqlTest {
                 CREATE TABLE agent_personal_workspace_file_version (
                   file_id VARCHAR(100) NOT NULL, version INT NOT NULL,
                   tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL,
-                  owner_jiacn VARCHAR(50) NOT NULL,
+                  owner_jiacn VARCHAR(50) NOT NULL, original_filename VARCHAR(255) NOT NULL,
+                  content_mime_type VARCHAR(160) NOT NULL, byte_length BIGINT NOT NULL,
+                  content_hash CHAR(64) NOT NULL,
                   PRIMARY KEY (file_id,version)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
                 """);
@@ -199,6 +208,12 @@ class HallRequestDraftSubmissionMySqlTest {
             Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM fixture_execution "
                             + "WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND execution_id=?",
                     Integer.class, scope.tenantId(), scope.clientId(), scope.ownerJiacn(), executionId);
+            if (count == null || count == 0) {
+                count = jdbc.queryForObject("SELECT COUNT(*) FROM agent_personal_workspace_execution "
+                                + "WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND execution_id=? "
+                                + "AND execution_mode='PRIVATE'",
+                        Integer.class, scope.tenantId(), scope.clientId(), scope.ownerJiacn(), executionId);
+            }
             if (count == null || count != 1) {
                 throw new PersonalWorkspaceExecutionService.Failure(
                         PersonalWorkspaceExecutionService.Reason.NOT_FOUND);
@@ -367,6 +382,36 @@ class HallRequestDraftSubmissionMySqlTest {
                 () -> service.getCase(OTHER_OWNER, receipt.ref().sourceId()));
     }
 
+    @Test
+    void legacyCommittedResultIsReadableBeforeCaseAndRemainsPinnedAfterLazyRevision() {
+        seedLegacyOutput();
+        seedTaskOutput();
+        HallRequestDraftService.ExecutionResultsView before =
+                service.getExecutionResults(OWNER, "legacy-execution");
+        assertEquals("OUTPUT_COMMITTED", before.state());
+        assertEquals("legacy-file", before.items().getFirst().fileId());
+        assertEquals(1, before.items().getFirst().fileVersion());
+        assertEquals("AVAILABLE", before.items().getFirst().availability());
+        assertTrue(before.manifestId().startsWith("pwe_m_"));
+        assertFailure(HallRequestDraftService.Reason.NOT_FOUND,
+                () -> service.getExecutionResults(OTHER_OWNER, "legacy-execution"));
+        assertFailure(HallRequestDraftService.Reason.NOT_FOUND,
+                () -> service.getExecutionResults(OTHER_CLIENT, "legacy-execution"));
+        assertFailure(HallRequestDraftService.Reason.NOT_FOUND,
+                () -> service.getExecutionResults(OWNER, "task-execution"));
+
+        String draft = createRevisionDraft("legacy-results-revision");
+        HallRequestDraftService.SubmissionReceipt receipt =
+                service.submit(OWNER, draft, 1, true, "legacy-results-submit");
+        HallRequestDraftService.CaseView privateCase = service.getCase(OWNER, receipt.ref().sourceId());
+        assertEquals(2, privateCase.executions().size());
+        assertEquals("legacy-execution", privateCase.executions().get(1).parentExecutionId());
+        assertEquals("legacy-file",
+                privateCase.executions().get(1).sourceOutputRef().fileId());
+        assertEquals(before, service.getExecutionResults(OWNER, "legacy-execution"),
+                "lazy association and a new run must not rewrite the old fixed result");
+    }
+
     private String createRevisionDraft(String key) {
         HallRequestDraftService.EditableFields fields = new HallRequestDraftService.EditableFields(
                 "revision", "revise this result", "agent-a", MIME, List.of());
@@ -381,16 +426,33 @@ class HallRequestDraftSubmissionMySqlTest {
     }
 
     private void seedLegacyOutput() {
-        jdbc.update("INSERT INTO agent_personal_workspace_execution VALUES (?,?,?,?,?,?)",
+        jdbc.update("INSERT INTO agent_personal_workspace_execution VALUES (?,?,?,?,?,?,?,?)",
                 "legacy-execution", "0", "client-a", "owner-a",
-                "PRIVATE", "OUTPUT_COMMITTED");
+                "PRIVATE", "OUTPUT_COMMITTED", "legacy-task", "legacy-run");
         jdbc.update("INSERT INTO agent_personal_workspace_file VALUES (?,?,?,?,?)",
                 "legacy-file", "0", "client-a", "owner-a", "ACTIVE");
-        jdbc.update("INSERT INTO agent_personal_workspace_file_version VALUES (?,?,?,?,?)",
-                "legacy-file", 1, "0", "client-a", "owner-a");
-        jdbc.update("INSERT INTO agent_personal_workspace_execution_output VALUES (?,?,?,?,?,?,?,?,?)",
+        jdbc.update("INSERT INTO agent_personal_workspace_file_version VALUES (?,?,?,?,?,?,?,?,?)",
+                "legacy-file", 1, "0", "client-a", "owner-a", "legacy.docx", MIME,
+                123L, "a".repeat(64));
+        jdbc.update("INSERT INTO agent_personal_workspace_execution_output VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 "legacy-output", "legacy-execution", "0", "client-a", "owner-a",
-                "legacy-file", 1, "COMMITTED", "PENDING");
+                "legacy-file", 1, "COMMITTED", "PENDING", "legacy.docx", MIME,
+                123L, "a".repeat(64));
+    }
+
+    private void seedTaskOutput() {
+        jdbc.update("INSERT INTO agent_personal_workspace_execution VALUES (?,?,?,?,?,?,?,?)",
+                "task-execution", "0", "client-a", "owner-a",
+                "TASK", "OUTPUT_COMMITTED", "formal-task", "formal-run");
+        jdbc.update("INSERT INTO agent_personal_workspace_file VALUES (?,?,?,?,?)",
+                "task-file", "0", "client-a", "owner-a", "ACTIVE");
+        jdbc.update("INSERT INTO agent_personal_workspace_file_version VALUES (?,?,?,?,?,?,?,?,?)",
+                "task-file", 1, "0", "client-a", "owner-a", "formal.docx", MIME,
+                321L, "b".repeat(64));
+        jdbc.update("INSERT INTO agent_personal_workspace_execution_output VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "task-output", "task-execution", "0", "client-a", "owner-a",
+                "task-file", 1, "COMMITTED", "PUBLISHED", "formal.docx", MIME,
+                321L, "b".repeat(64));
     }
 
     private String createDraft(HallRequestDraftService.OwnerScope scope, String key) {

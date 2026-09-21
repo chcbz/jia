@@ -238,3 +238,33 @@ tasks.register('jytUxB01b', Test) {
     classpath = jytUxB01bSourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+// JYT-UX-B03 source-only slice. It reuses the B01B real transaction fixture and adds the
+// owner-scoped fixed-manifest result index; no Provider, production database or container is used.
+def jytUxB03SourceSet = sourceSets.create('jytUxB03') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/service/impl/HallRequestDraftSubmissionServiceTest.java'
+        include 'cn/jia/agent/service/impl/HallRequestDraftSubmissionMySqlTest.java'
+        include 'cn/jia/agent/api/HallSubmissionControllerTest.java'
+        include 'cn/jia/agent/mapper/HallRequestDraftMapperContractTest.java'
+        include 'cn/jia/agent/mapper/HallPrivateCaseMapperContractTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(jytUxB03SourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(jytUxB03SourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('jytUxB03', Test) {
+    group = 'verification'
+    description = 'Runs Hall fixed-manifest results, ACL, private revision lineage and legacy-run fixtures.'
+    dependsOn tasks.named(jytUxB03SourceSet.classesTaskName)
+    testClassesDirs = jytUxB03SourceSet.output.classesDirs
+    classpath = jytUxB03SourceSet.runtimeClasspath
+    useJUnitPlatform()
+}

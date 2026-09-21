@@ -8,6 +8,7 @@ import cn.jia.agent.dao.PersonalWorkspaceDao;
 import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.entity.HallCaseExecutionEntity;
+import cn.jia.agent.entity.HallExecutionResultRow;
 import cn.jia.agent.entity.HallPrivateCaseEntity;
 import cn.jia.agent.entity.HallRequestDraftEntity;
 import cn.jia.agent.entity.PersonalWorkspaceFileEntity;
@@ -30,6 +31,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
@@ -329,6 +331,64 @@ public class HallRequestDraftServiceImpl implements HallRequestDraftService {
                 new CaseSourceRef(privateCase.getOriginRef()));
     }
 
+    @Override
+    @Transactional(readOnly = true, rollbackFor = Exception.class)
+    public ExecutionResultsView getExecutionResults(OwnerScope scope, String executionId) {
+        requireScope(scope); requireId(executionId, "executionId", 100);
+        List<HallExecutionResultRow> rows;
+        try {
+            rows = drafts.listPrivateExecutionResults(
+                    scope.tenantId(), scope.clientId(), scope.ownerJiacn(), executionId);
+        } catch (RuntimeException unavailable) {
+            throw new Failure(Reason.STORAGE_UNAVAILABLE, unavailable);
+        }
+        if (rows == null) throw failure(Reason.STORAGE_UNAVAILABLE);
+        if (rows.isEmpty()) throw failure(Reason.NOT_FOUND);
+
+        HallExecutionResultRow first = rows.getFirst();
+        requireResultExecution(scope, executionId, first);
+        String state = first.getExecutionState();
+        for (HallExecutionResultRow row : rows) {
+            requireResultExecution(scope, executionId, row);
+            if (!Objects.equals(first.getTaskId(), row.getTaskId())
+                    || !Objects.equals(first.getRunId(), row.getRunId())
+                    || !state.equals(row.getExecutionState())) {
+                throw failure(Reason.STORAGE_UNAVAILABLE);
+            }
+        }
+
+        if (!"OUTPUT_COMMITTED".equals(state)) {
+            if (rows.stream().anyMatch(HallRequestDraftServiceImpl::isCommittedResultRow)) {
+                throw failure(Reason.STORAGE_UNAVAILABLE);
+            }
+            return new ExecutionResultsView(executionId, state, null, List.of(), List.of());
+        }
+        if (rows.stream().anyMatch(row -> row.getOutputId() == null)) {
+            throw failure(Reason.STORAGE_UNAVAILABLE);
+        }
+
+        List<HallExecutionResultRow> ordered = rows.stream()
+                .sorted(Comparator.comparing(HallExecutionResultRow::getOutputId))
+                .toList();
+        Set<String> outputIds = new HashSet<>();
+        List<ResultItemView> items = new ArrayList<>(ordered.size());
+        boolean revisable = false;
+        for (HallExecutionResultRow row : ordered) {
+            requireCommittedResultRow(row);
+            if (!outputIds.add(row.getOutputId())) throw failure(Reason.STORAGE_UNAVAILABLE);
+            boolean available = isAvailableResult(row);
+            revisable |= available;
+            items.add(new ResultItemView(row.getOutputId(), row.getWorkspaceFileId(),
+                    row.getWorkspaceFileVersion(), row.getOutputContentMimeType(),
+                    row.getOutputOriginalFilename(), row.getOutputByteLength(),
+                    row.getOutputContentHash(), available ? "AVAILABLE" : "UNAVAILABLE"));
+        }
+        List<String> actions = revisable
+                ? List.of("VIEW", "CREATE_REVISION") : List.of("VIEW");
+        return new ExecutionResultsView(executionId, state, resultManifestId(first, ordered),
+                items, actions);
+    }
+
     private SubmissionWork submitCreate(OwnerScope scope, HallRequestDraftEntity draft,
             EditableFields fields, String key, long submittedAt) {
         String caseId = "hpc_" + UUID.randomUUID().toString().replace("-", "");
@@ -558,6 +618,87 @@ public class HallRequestDraftServiceImpl implements HallRequestDraftService {
                 || row.getCreatedAt() < 0) {
             throw failure(Reason.STORAGE_UNAVAILABLE);
         }
+    }
+
+    private static void requireResultExecution(OwnerScope scope, String executionId,
+            HallExecutionResultRow row) {
+        if (row == null || !executionId.equals(row.getExecutionId())
+                || !scope.tenantId().equals(row.getTenantId())
+                || !scope.clientId().equals(row.getClientId())
+                || !scope.ownerJiacn().equals(row.getOwnerJiacn())
+                || !"PRIVATE".equals(row.getExecutionMode())
+                || !safePersistedId(row.getTaskId(), 100)
+                || !safePersistedId(row.getRunId(), 100)
+                || !Set.of("QUEUED", "INPUTS_REVOKED", "OUTPUT_COMMITTED", "FAILED")
+                        .contains(row.getExecutionState())) {
+            throw failure(Reason.STORAGE_UNAVAILABLE);
+        }
+    }
+
+    private static boolean isCommittedResultRow(HallExecutionResultRow row) {
+        return row != null && ("COMMITTED".equals(row.getOutputState())
+                || row.getWorkspaceFileId() != null || row.getWorkspaceFileVersion() != null);
+    }
+
+    private static void requireCommittedResultRow(HallExecutionResultRow row) {
+        if (row == null || !safePersistedId(row.getOutputId(), 100)
+                || !safePersistedId(row.getWorkspaceFileId(), 100)
+                || row.getWorkspaceFileVersion() == null || row.getWorkspaceFileVersion() < 1
+                || !safeResultFilename(row.getOutputOriginalFilename())
+                || !safeMime(row.getOutputContentMimeType())
+                || row.getOutputByteLength() == null || row.getOutputByteLength() < 0
+                || row.getOutputByteLength() > MAX_SAFE_REVISION
+                || !safeSha256(row.getOutputContentHash())
+                || !"COMMITTED".equals(row.getOutputState())
+                || !"PENDING".equals(row.getPublicationState())) {
+            throw failure(Reason.STORAGE_UNAVAILABLE);
+        }
+    }
+
+    private static boolean isAvailableResult(HallExecutionResultRow row) {
+        return "ACTIVE".equals(row.getFileState())
+                && row.getOutputOriginalFilename().equals(row.getFileOriginalFilename())
+                && row.getOutputContentMimeType().equals(row.getFileContentMimeType())
+                && row.getOutputByteLength().equals(row.getFileByteLength())
+                && row.getOutputContentHash().equals(row.getFileContentHash());
+    }
+
+    private static String resultManifestId(HallExecutionResultRow execution,
+            List<HallExecutionResultRow> outputs) {
+        StringBuilder source = new StringBuilder(execution.getTaskId()).append('\n')
+                .append(execution.getRunId()).append('\n');
+        for (HallExecutionResultRow output : outputs) {
+            source.append(output.getOutputId()).append('\n')
+                    .append(output.getOutputContentHash()).append('\n')
+                    .append(output.getOutputByteLength()).append('\n');
+        }
+        return "pwe_m_" + plainSha(source.toString());
+    }
+
+    private static String plainSha(String value) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException(impossible);
+        }
+    }
+
+    private static boolean safeResultFilename(String value) {
+        return value != null && !value.isBlank() && value.equals(value.strip())
+                && value.codePointCount(0, value.length()) <= 255
+                && value.indexOf('/') < 0 && value.indexOf('\\') < 0
+                && !value.chars().anyMatch(Character::isISOControl);
+    }
+
+    private static boolean safeMime(String value) {
+        return value != null && !value.isBlank() && value.equals(value.strip())
+                && value.length() <= 160 && value.indexOf('/') > 0
+                && !value.chars().anyMatch(Character::isISOControl);
+    }
+
+    private static boolean safeSha256(String value) {
+        return value != null && value.matches("[0-9a-f]{64}");
     }
 
     private DraftView matchingCreateReplay(OwnerScope scope, HallRequestDraftEntity row, String hash) {

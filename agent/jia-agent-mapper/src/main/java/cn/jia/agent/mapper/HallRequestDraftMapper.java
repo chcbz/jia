@@ -1,5 +1,6 @@
 package cn.jia.agent.mapper;
 
+import cn.jia.agent.entity.HallExecutionResultRow;
 import cn.jia.agent.entity.HallRequestDraftEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import org.apache.ibatis.annotations.Insert;
@@ -288,5 +289,70 @@ public interface HallRequestDraftMapper extends BaseMapper<HallRequestDraftEntit
             @Param("clientId") String clientId, @Param("ownerJiacn") String ownerJiacn,
             @Param("executionId") String executionId, @Param("outputId") String outputId,
             @Param("fileId") String fileId, @Param("fileVersion") int fileVersion);
+
+    @Select("""
+            SELECT e.tenant_id,e.client_id,e.owner_jiacn,e.execution_id,e.task_id,e.run_id,
+                   e.execution_mode,e.execution_state,
+                   o.output_id,o.workspace_file_id,o.workspace_file_version,
+                   o.original_filename AS output_original_filename,
+                   o.content_mime_type AS output_content_mime_type,
+                   o.byte_length AS output_byte_length,o.content_hash AS output_content_hash,
+                   o.output_state,o.publication_state,f.state AS file_state,
+                   v.original_filename AS file_original_filename,
+                   v.content_mime_type AS file_content_mime_type,
+                   v.byte_length AS file_byte_length,v.content_hash AS file_content_hash
+              FROM agent_personal_workspace_execution e
+              LEFT JOIN agent_personal_workspace_execution_output o
+                ON o.tenant_id=e.tenant_id AND o.client_id=e.client_id
+               AND o.owner_jiacn=e.owner_jiacn AND o.execution_id=e.execution_id
+               AND CAST(o.tenant_id AS BINARY)=CAST(e.tenant_id AS BINARY)
+               AND OCTET_LENGTH(o.tenant_id)=OCTET_LENGTH(e.tenant_id)
+               AND CAST(o.client_id AS BINARY)=CAST(e.client_id AS BINARY)
+               AND OCTET_LENGTH(o.client_id)=OCTET_LENGTH(e.client_id)
+               AND CAST(o.owner_jiacn AS BINARY)=CAST(e.owner_jiacn AS BINARY)
+               AND OCTET_LENGTH(o.owner_jiacn)=OCTET_LENGTH(e.owner_jiacn)
+               AND CAST(o.execution_id AS BINARY)=CAST(e.execution_id AS BINARY)
+               AND OCTET_LENGTH(o.execution_id)=OCTET_LENGTH(e.execution_id)
+              LEFT JOIN agent_personal_workspace_file f
+                ON f.tenant_id=o.tenant_id AND f.client_id=o.client_id
+               AND f.owner_jiacn=o.owner_jiacn AND f.file_id=o.workspace_file_id
+               AND CAST(f.tenant_id AS BINARY)=CAST(o.tenant_id AS BINARY)
+               AND OCTET_LENGTH(f.tenant_id)=OCTET_LENGTH(o.tenant_id)
+               AND CAST(f.client_id AS BINARY)=CAST(o.client_id AS BINARY)
+               AND OCTET_LENGTH(f.client_id)=OCTET_LENGTH(o.client_id)
+               AND CAST(f.owner_jiacn AS BINARY)=CAST(o.owner_jiacn AS BINARY)
+               AND OCTET_LENGTH(f.owner_jiacn)=OCTET_LENGTH(o.owner_jiacn)
+               AND CAST(f.file_id AS BINARY)=CAST(o.workspace_file_id AS BINARY)
+               AND OCTET_LENGTH(f.file_id)=OCTET_LENGTH(o.workspace_file_id)
+              LEFT JOIN agent_personal_workspace_file_version v
+                ON v.tenant_id=o.tenant_id AND v.client_id=o.client_id
+               AND v.owner_jiacn=o.owner_jiacn AND v.file_id=o.workspace_file_id
+               AND v.version=o.workspace_file_version
+               AND CAST(v.tenant_id AS BINARY)=CAST(o.tenant_id AS BINARY)
+               AND OCTET_LENGTH(v.tenant_id)=OCTET_LENGTH(o.tenant_id)
+               AND CAST(v.client_id AS BINARY)=CAST(o.client_id AS BINARY)
+               AND OCTET_LENGTH(v.client_id)=OCTET_LENGTH(o.client_id)
+               AND CAST(v.owner_jiacn AS BINARY)=CAST(o.owner_jiacn AS BINARY)
+               AND OCTET_LENGTH(v.owner_jiacn)=OCTET_LENGTH(o.owner_jiacn)
+               AND CAST(v.file_id AS BINARY)=CAST(o.workspace_file_id AS BINARY)
+               AND OCTET_LENGTH(v.file_id)=OCTET_LENGTH(o.workspace_file_id)
+             WHERE e.tenant_id=#{tenantId} AND e.client_id=#{clientId}
+               AND e.owner_jiacn=#{ownerJiacn} AND e.execution_id=#{executionId}
+               AND e.execution_mode='PRIVATE'
+               AND CAST(e.tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
+               AND OCTET_LENGTH(e.tenant_id)=OCTET_LENGTH(#{tenantId})
+               AND CAST(e.client_id AS BINARY)=CAST(#{clientId} AS BINARY)
+               AND OCTET_LENGTH(e.client_id)=OCTET_LENGTH(#{clientId})
+               AND CAST(e.owner_jiacn AS BINARY)=CAST(#{ownerJiacn} AS BINARY)
+               AND OCTET_LENGTH(e.owner_jiacn)=OCTET_LENGTH(#{ownerJiacn})
+               AND CAST(e.execution_id AS BINARY)=CAST(#{executionId} AS BINARY)
+               AND OCTET_LENGTH(e.execution_id)=OCTET_LENGTH(#{executionId})
+               AND CAST(e.execution_mode AS BINARY)=CAST('PRIVATE' AS BINARY)
+               AND OCTET_LENGTH(e.execution_mode)=OCTET_LENGTH('PRIVATE')
+             ORDER BY CAST(o.output_id AS BINARY) ASC
+            """)
+    List<HallExecutionResultRow> listPrivateExecutionResults(
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn, @Param("executionId") String executionId);
 
 }

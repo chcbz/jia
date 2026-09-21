@@ -7,6 +7,7 @@ import cn.jia.agent.dao.HallRequestDraftDao;
 import cn.jia.agent.dao.PersonalWorkspaceDao;
 import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
+import cn.jia.agent.entity.HallExecutionResultRow;
 import cn.jia.agent.entity.HallPrivateCaseEntity;
 import cn.jia.agent.entity.HallRequestDraftEntity;
 import cn.jia.agent.service.AgentService;
@@ -208,6 +209,119 @@ class HallRequestDraftSubmissionServiceTest {
         verifyNoInteractions(executions);
     }
 
+    @Test
+    void committedPrivateResultsUseFixedManifestAndExactWorkspaceVersion() {
+        HallExecutionResultRow row = resultRow("pwe_result", "owner-a", "OUTPUT_COMMITTED", "ACTIVE");
+        when(drafts.listPrivateExecutionResults("0", "client-a", "owner-a", "pwe_result"))
+                .thenReturn(List.of(row));
+
+        HallRequestDraftService.ExecutionResultsView result =
+                service.getExecutionResults(SCOPE, "pwe_result");
+
+        assertEquals("pwe_result", result.executionId());
+        assertEquals("OUTPUT_COMMITTED", result.state());
+        assertEquals(manifestForTest("private-task\nrun-1\noutput_1\n"
+                        + "a".repeat(64) + "\n123\n"), result.manifestId());
+        assertEquals(List.of(new HallRequestDraftService.ResultItemView(
+                "output_1", "file-1", 1, MIME, "result.docx", 123,
+                "a".repeat(64), "AVAILABLE")), result.items());
+        assertEquals(List.of("VIEW", "CREATE_REVISION"), result.allowedActions());
+    }
+
+    @Test
+    void manifestUsesRuntimeUtf8FieldsAndOutputIdOrdering() {
+        HallExecutionResultRow output2 = resultRow(
+                "pwe_ordered", "owner-a", "OUTPUT_COMMITTED", "ACTIVE")
+                .setTaskId("任务").setRunId("运行").setOutputId("output_2")
+                .setWorkspaceFileId("file-2").setOutputByteLength(2L)
+                .setOutputContentHash("b".repeat(64)).setFileByteLength(2L)
+                .setFileContentHash("b".repeat(64));
+        HallExecutionResultRow output10 = resultRow(
+                "pwe_ordered", "owner-a", "OUTPUT_COMMITTED", "ACTIVE")
+                .setTaskId("任务").setRunId("运行").setOutputId("output_10")
+                .setWorkspaceFileId("file-10").setOutputByteLength(10L)
+                .setOutputContentHash("a".repeat(64)).setFileByteLength(10L)
+                .setFileContentHash("a".repeat(64));
+        when(drafts.listPrivateExecutionResults("0", "client-a", "owner-a", "pwe_ordered"))
+                .thenReturn(List.of(output2, output10));
+
+        HallRequestDraftService.ExecutionResultsView result =
+                service.getExecutionResults(SCOPE, "pwe_ordered");
+
+        assertEquals(List.of("output_10", "output_2"), result.items().stream()
+                .map(HallRequestDraftService.ResultItemView::outputId).toList());
+        assertEquals(manifestForTest("任务\n运行\noutput_10\n" + "a".repeat(64)
+                + "\n10\noutput_2\n" + "b".repeat(64) + "\n2\n"), result.manifestId());
+    }
+
+    @Test
+    void unavailableFixedFileRetainsTraceButCannotAuthorizeRevision() {
+        HallExecutionResultRow row = resultRow("pwe_result", "owner-a", "OUTPUT_COMMITTED", "TRASHED")
+                .setFileOriginalFilename(null).setFileContentMimeType(null)
+                .setFileByteLength(null).setFileContentHash(null);
+        when(drafts.listPrivateExecutionResults("0", "client-a", "owner-a", "pwe_result"))
+                .thenReturn(List.of(row));
+
+        HallRequestDraftService.ExecutionResultsView result =
+                service.getExecutionResults(SCOPE, "pwe_result");
+
+        assertEquals("UNAVAILABLE", result.items().getFirst().availability());
+        assertEquals("file-1", result.items().getFirst().fileId());
+        assertEquals(1, result.items().getFirst().fileVersion());
+        assertEquals(List.of("VIEW"), result.allowedActions());
+    }
+
+    @Test
+    void resultProjectionFailuresAreNotSwallowedAsEmptyResults() {
+        when(drafts.listPrivateExecutionResults("0", "client-a", "owner-a", "pwe_null"))
+                .thenReturn(null);
+        assertReason(HallRequestDraftService.Reason.STORAGE_UNAVAILABLE,
+                () -> service.getExecutionResults(SCOPE, "pwe_null"));
+
+        when(drafts.listPrivateExecutionResults("0", "client-a", "owner-a", "pwe_error"))
+                .thenThrow(new IllegalStateException("fixture storage failure"));
+        assertReason(HallRequestDraftService.Reason.STORAGE_UNAVAILABLE,
+                () -> service.getExecutionResults(SCOPE, "pwe_error"));
+    }
+
+    @Test
+    void mismatchedScopeOrTaskModeFromStorageFailsClosed() {
+        HallExecutionResultRow foreign = resultRow(
+                "pwe_foreign", "owner-b", "OUTPUT_COMMITTED", "ACTIVE");
+        when(drafts.listPrivateExecutionResults("0", "client-a", "owner-a", "pwe_foreign"))
+                .thenReturn(List.of(foreign));
+        assertReason(HallRequestDraftService.Reason.STORAGE_UNAVAILABLE,
+                () -> service.getExecutionResults(SCOPE, "pwe_foreign"));
+
+        HallExecutionResultRow task = resultRow(
+                "pwe_task", "owner-a", "OUTPUT_COMMITTED", "ACTIVE")
+                .setExecutionMode("TASK");
+        when(drafts.listPrivateExecutionResults("0", "client-a", "owner-a", "pwe_task"))
+                .thenReturn(List.of(task));
+        assertReason(HallRequestDraftService.Reason.STORAGE_UNAVAILABLE,
+                () -> service.getExecutionResults(SCOPE, "pwe_task"));
+    }
+
+    @Test
+    void pendingExecutionNeverExposesStagedOutputAndForeignScopeIs404() {
+        HallExecutionResultRow staged = resultRow("pwe_pending", "owner-a", "QUEUED", "ACTIVE")
+                .setOutputState("STAGED").setPublicationState("PENDING")
+                .setWorkspaceFileId(null).setWorkspaceFileVersion(null)
+                .setFileState(null).setFileOriginalFilename(null).setFileContentMimeType(null)
+                .setFileByteLength(null).setFileContentHash(null);
+        when(drafts.listPrivateExecutionResults("0", "client-a", "owner-a", "pwe_pending"))
+                .thenReturn(List.of(staged));
+        when(drafts.listPrivateExecutionResults("0", "client-a", "owner-a", "pwe_foreign"))
+                .thenReturn(List.of());
+
+        HallRequestDraftService.ExecutionResultsView pending =
+                service.getExecutionResults(SCOPE, "pwe_pending");
+        assertEquals(null, pending.manifestId());
+        assertEquals(List.of(), pending.items());
+        assertReason(HallRequestDraftService.Reason.NOT_FOUND,
+                () -> service.getExecutionResults(SCOPE, "pwe_foreign"));
+    }
+
     private HallRequestDraftEntity draft(String id, String kind, long revision, String state) {
         return new HallRequestDraftEntity().setDraftId(id).setTenantId("0")
                 .setClientId("client-a").setOwnerJiacn("owner-a").setKind(kind)
@@ -233,6 +347,31 @@ class HallRequestDraftSubmissionServiceTest {
         return new PersonalWorkspaceExecutionService.ExecutionView(id, "private-task", "run-1",
                 null, "agent-a", "QUEUED", null, null, 1, MIME, List.of(), null,
                 "PRIVATE", null, null, null);
+    }
+
+    private static HallExecutionResultRow resultRow(String executionId, String owner,
+            String state, String fileState) {
+        return new HallExecutionResultRow().setTenantId("0").setClientId("client-a")
+                .setOwnerJiacn(owner).setExecutionId(executionId)
+                .setTaskId("private-task").setRunId("run-1")
+                .setExecutionMode("PRIVATE").setExecutionState(state)
+                .setOutputId("output_1").setWorkspaceFileId("file-1")
+                .setWorkspaceFileVersion(1).setOutputOriginalFilename("result.docx")
+                .setOutputContentMimeType(MIME).setOutputByteLength(123L)
+                .setOutputContentHash("a".repeat(64)).setOutputState("COMMITTED")
+                .setPublicationState("PENDING").setFileState(fileState)
+                .setFileOriginalFilename("result.docx").setFileContentMimeType(MIME)
+                .setFileByteLength(123L).setFileContentHash("a".repeat(64));
+    }
+
+    private static String manifestForTest(String source) {
+        try {
+            return "pwe_m_" + java.util.HexFormat.of().formatHex(
+                    java.security.MessageDigest.getInstance("SHA-256")
+                            .digest(source.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new AssertionError(impossible);
+        }
     }
 
     private static void assertReason(HallRequestDraftService.Reason reason, Runnable call) {

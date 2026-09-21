@@ -1,6 +1,7 @@
 package cn.jia.agent.dao.impl;
 
 import cn.jia.agent.dao.HallRequestDraftDao;
+import cn.jia.agent.entity.HallExecutionResultRow;
 import cn.jia.agent.entity.HallRequestDraftEntity;
 import cn.jia.agent.mapper.HallRequestDraftMapper;
 import jakarta.inject.Inject;
@@ -110,6 +111,11 @@ public class HallRequestDraftDaoImpl implements HallRequestDraftDao {
         if (fileVersion < 1) throw new IllegalArgumentException("fileVersion");
         return mapper.lockPrivateCommittedOutput(tenantId, clientId, ownerJiacn,
                 executionId, outputId, fileId, fileVersion) != null;
+    }
+    @Override public List<HallExecutionResultRow> listPrivateExecutionResults(String tenantId,
+            String clientId, String ownerJiacn, String executionId) {
+        scope(tenantId, clientId, ownerJiacn); id(executionId, "executionId", 100);
+        return mapper.listPrivateExecutionResults(tenantId, clientId, ownerJiacn, executionId);
     }
 
     private static void scope(String tenant, String client, String owner) {
