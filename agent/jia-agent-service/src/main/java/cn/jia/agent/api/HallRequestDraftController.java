@@ -32,7 +32,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
-/** Browser JWT DRAFT-v1 adapter. It exposes persistence only and has no submit/run route. */
+/** Browser JWT Hall draft adapter. Submit delegates only to the transactional application service. */
 @RestController
 @RequestMapping("/agent/hall/drafts")
 public class HallRequestDraftController {
@@ -101,6 +101,24 @@ public class HallRequestDraftController {
                 idempotencyKey));
     }
 
+    @PostMapping(value = "/{draftId}/submit", consumes = MediaType.APPLICATION_JSON_VALUE,
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<HallRequestDraftService.SubmissionReceipt> submit(
+            @PathVariable String draftId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            HttpServletRequest request, Authentication authentication) {
+        requireNoQuery(request);
+        SubmitRequest body = parse(readBounded(request), SubmitRequest.class);
+        if (body.expectedRevision() == null || body.authorizationAcknowledgement() == null) {
+            throw new RequestFailure();
+        }
+        HallRequestDraftService.SubmissionReceipt receipt = service.submit(scope(authentication),
+                draftId, body.expectedRevision(), body.authorizationAcknowledgement(), idempotencyKey);
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
+                .contentType(MediaType.APPLICATION_JSON).body(receipt);
+    }
+
     @ExceptionHandler(AuthenticationFailure.class)
     public ResponseEntity<ErrorBody> authentication(AuthenticationFailure failure) {
         return error(failure.forbidden ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED,
@@ -125,6 +143,12 @@ public class HallRequestDraftController {
                     "HALL_DRAFT_SOURCE_UNAVAILABLE",
                     "Referenced source is unavailable or not opened for Hall drafts", false,
                     failure.safeDetails());
+            case SUBMISSION_UNAVAILABLE -> error(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "HALL_SUBMISSION_KIND_UNAVAILABLE",
+                    "This Hall submission kind is not available", false, Map.of());
+            case EXECUTION_CONFLICT -> error(HttpStatus.CONFLICT,
+                    "HALL_SUBMISSION_EXECUTION_CONFLICT",
+                    "The referenced execution changed; reload before submitting", false, Map.of());
             case STORAGE_UNAVAILABLE -> error(HttpStatus.SERVICE_UNAVAILABLE,
                     "HALL_DRAFT_STORAGE_UNAVAILABLE",
                     "Hall draft storage is temporarily unavailable", true, Map.of());
@@ -178,7 +202,7 @@ public class HallRequestDraftController {
                 source.fileId(), source.fileVersion());
     }
 
-    private static HallRequestDraftService.OwnerScope scope(Authentication authentication) {
+    static HallRequestDraftService.OwnerScope scope(Authentication authentication) {
         if (!(authentication instanceof JwtAuthenticationToken jwt)
                 || !authentication.isAuthenticated()) throw new AuthenticationFailure(false);
         Map<String, Object> claims = jwt.getToken().getClaims();
@@ -209,7 +233,7 @@ public class HallRequestDraftController {
         }
     }
 
-    private static void requireNoQuery(HttpServletRequest request) {
+    static void requireNoQuery(HttpServletRequest request) {
         if (request == null || !request.getParameterMap().isEmpty()) throw new RequestFailure();
     }
 
@@ -255,12 +279,12 @@ public class HallRequestDraftController {
         }
     }
 
-    private static <T> ResponseEntity<T> ok(T body) {
+    static <T> ResponseEntity<T> ok(T body) {
         return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(MediaType.APPLICATION_JSON).body(body);
     }
 
-    private static ResponseEntity<ErrorBody> error(HttpStatus status, String code, String message,
+    static ResponseEntity<ErrorBody> error(HttpStatus status, String code, String message,
             boolean retryable, Map<String, String> details) {
         return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(new MediaType(MediaType.APPLICATION_JSON, StandardCharsets.UTF_8))
@@ -275,6 +299,7 @@ public class HallRequestDraftController {
     public record ReplaceRequest(String title, String instruction, String targetAgentId,
             String outputMime, List<InputRequest> inputs) { }
     public record DiscardRequest(Long expectedRevision) { }
+    public record SubmitRequest(Long expectedRevision, Boolean authorizationAcknowledgement) { }
     public record InputRequest(String fileId, Integer version) { }
     public record SourceRefRequest(String sourceType, String sourceId, Integer version) { }
     public record SourceOutputRefRequest(String executionId, String outputId,
@@ -282,9 +307,9 @@ public class HallRequestDraftController {
     public record ErrorBody(String code, String message, String traceId,
             boolean retryable, Map<String, String> details) { }
 
-    private static final class RequestFailure extends RuntimeException { }
-    private static final class AuthenticationFailure extends RuntimeException {
-        private final boolean forbidden;
+    static final class RequestFailure extends RuntimeException { }
+    static final class AuthenticationFailure extends RuntimeException {
+        final boolean forbidden;
         private AuthenticationFailure(boolean forbidden) { this.forbidden = forbidden; }
     }
 }

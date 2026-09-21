@@ -2,6 +2,7 @@ package cn.jia.agent.service.impl;
 
 import cn.jia.agent.config.PersonalWorkspaceExecutionProperties;
 import cn.jia.agent.dao.AgentTaskMetaDao;
+import cn.jia.agent.dao.HallPrivateCaseDao;
 import cn.jia.agent.dao.HallRequestDraftDao;
 import cn.jia.agent.dao.PersonalWorkspaceDao;
 import cn.jia.agent.entity.HallRequestDraftEntity;
@@ -9,6 +10,7 @@ import cn.jia.agent.entity.PersonalWorkspaceFileEntity;
 import cn.jia.agent.entity.PersonalWorkspaceVersionEntity;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.HallRequestDraftService;
+import cn.jia.agent.service.PersonalWorkspaceExecutionService;
 import cn.jia.chat.service.WorkspaceConversationAccessService;
 import org.junit.jupiter.api.Test;
 import org.springframework.transaction.annotation.Isolation;
@@ -52,8 +54,12 @@ class HallRequestDraftServiceImplTest {
         Transactional discard = HallRequestDraftServiceImpl.class.getMethod("discard",
                 HallRequestDraftService.OwnerScope.class, String.class, long.class, String.class)
                 .getAnnotation(Transactional.class);
+        Transactional submit = HallRequestDraftServiceImpl.class.getMethod("submit",
+                HallRequestDraftService.OwnerScope.class, String.class, long.class,
+                boolean.class, String.class).getAnnotation(Transactional.class);
         assertEquals(Isolation.READ_COMMITTED, create.isolation());
         assertEquals(Isolation.READ_COMMITTED, discard.isolation());
+        assertEquals(Isolation.READ_COMMITTED, submit.isolation());
     }
 
     @Test
@@ -76,8 +82,8 @@ class HallRequestDraftServiceImplTest {
         assertNotEquals(first.draftId(), otherClient.draftId());
         assertEquals(3, fixture.dao.rows.size());
 
-        // The DRAFT-v1 service has no execution dependency; source ACL collaborators also stay idle
-        // for an incomplete source-free draft.
+        // Draft creation never calls execution; source ACL collaborators also stay idle for an
+        // incomplete source-free draft.
         verifyNoInteractions(fixture.workspace, fixture.tasks, fixture.agents, fixture.conversations);
         assertNull(first.submissionRef());
         assertEquals("EDITING", first.state());
@@ -326,6 +332,8 @@ class HallRequestDraftServiceImplTest {
 
     private static final class Fixture {
         private final FakeDao dao = new FakeDao();
+        private final HallPrivateCaseDao cases = mock(HallPrivateCaseDao.class);
+        private final PersonalWorkspaceExecutionService executions = mock(PersonalWorkspaceExecutionService.class);
         private final PersonalWorkspaceDao workspace = mock(PersonalWorkspaceDao.class);
         private final AgentTaskMetaDao tasks = mock(AgentTaskMetaDao.class);
         private final AgentService agents = mock(AgentService.class);
@@ -336,8 +344,8 @@ class HallRequestDraftServiceImplTest {
         private Fixture() { this(mock(WorkspaceConversationAccessService.class)); }
         private Fixture(WorkspaceConversationAccessService conversations) {
             this.conversations = conversations;
-            this.service = new HallRequestDraftServiceImpl(dao, workspace, tasks, agents,
-                    conversations, new PersonalWorkspaceExecutionProperties(
+            this.service = new HallRequestDraftServiceImpl(dao, cases, executions,
+                    workspace, tasks, agents, conversations, new PersonalWorkspaceExecutionProperties(
                             List.of(PersonalWorkspaceExecutionProperties.DOCX)), now::get);
         }
     }
@@ -349,6 +357,15 @@ class HallRequestDraftServiceImplTest {
                 String owner, String draftId) {
             HallRequestDraftEntity row = rows.get(draftId);
             return scoped(row, tenant, client, owner) ? row : null;
+        }
+        @Override public synchronized HallRequestDraftEntity lock(String tenant, String client,
+                String owner, String draftId) {
+            return find(tenant, client, owner, draftId);
+        }
+        @Override public synchronized HallRequestDraftEntity findBySubmitKey(String tenant,
+                String client, String owner, String key) {
+            return rows.values().stream().filter(row -> scoped(row, tenant, client, owner)
+                    && key.equals(row.getSubmitKey())).findFirst().orElse(null);
         }
         @Override public synchronized HallRequestDraftEntity findByCreateKey(String tenant,
                 String client, String owner, String key) {
@@ -385,6 +402,24 @@ class HallRequestDraftServiceImplTest {
                     .setInputsJson(inputs).setRevision(revision + 1).setUpdatedAt(updatedAt);
             return 1;
         }
+        @Override public synchronized int reserveSubmitIntent(String tenant, String client,
+                String owner, String draftId, long revision, String key, String hash, long updatedAt) {
+            if (findBySubmitKey(tenant, client, owner, key) != null) return 0;
+            HallRequestDraftEntity row = find(tenant, client, owner, draftId);
+            if (row == null || !"EDITING".equals(row.getState()) || row.getRevision() != revision) return 0;
+            row.setSubmitKey(key).setSubmitHash(hash).setUpdatedAt(updatedAt);
+            return 1;
+        }
+        @Override public synchronized int markSubmitted(String tenant, String client, String owner,
+                String draftId, long revision, String key, String hash, String caseId,
+                String submissionRef, String executionId, long updatedAt) {
+            HallRequestDraftEntity row = find(tenant, client, owner, draftId);
+            if (row == null || !"EDITING".equals(row.getState()) || row.getRevision() != revision
+                    || !key.equals(row.getSubmitKey()) || !hash.equals(row.getSubmitHash())) return 0;
+            row.setState("SUBMITTED").setCaseId(caseId).setSubmissionRef(submissionRef)
+                    .setSubmittedExecutionId(executionId).setRevision(revision + 1).setUpdatedAt(updatedAt);
+            return 1;
+        }
         @Override public synchronized int discardEditing(String tenant, String client, String owner,
                 String draftId, long revision, String key, String hash, long updatedAt) {
             if (findByDiscardKey(tenant, client, owner, key) != null) return 0;
@@ -395,6 +430,10 @@ class HallRequestDraftServiceImplTest {
             return 1;
         }
         @Override public boolean privateCommittedOutputExists(String tenant, String client,
+                String owner, String execution, String output, String file, int version) {
+            return false;
+        }
+        @Override public boolean lockPrivateCommittedOutputExists(String tenant, String client,
                 String owner, String execution, String output, String file, int version) {
             return false;
         }

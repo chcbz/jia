@@ -2,14 +2,18 @@ package cn.jia.agent.service.impl;
 
 import cn.jia.agent.config.PersonalWorkspaceExecutionProperties;
 import cn.jia.agent.dao.AgentTaskMetaDao;
+import cn.jia.agent.dao.HallPrivateCaseDao;
 import cn.jia.agent.dao.HallRequestDraftDao;
 import cn.jia.agent.dao.PersonalWorkspaceDao;
 import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
+import cn.jia.agent.entity.HallCaseExecutionEntity;
+import cn.jia.agent.entity.HallPrivateCaseEntity;
 import cn.jia.agent.entity.HallRequestDraftEntity;
 import cn.jia.agent.entity.PersonalWorkspaceFileEntity;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.HallRequestDraftService;
+import cn.jia.agent.service.PersonalWorkspaceExecutionService;
 import cn.jia.chat.service.WorkspaceConversationAccessService;
 import cn.jia.core.util.JsonUtil;
 import jakarta.inject.Inject;
@@ -52,6 +56,8 @@ public class HallRequestDraftServiceImpl implements HallRequestDraftService {
     private static final TypeReference<SourceOutputRef> SOURCE_OUTPUT = new TypeReference<>() { };
 
     private final HallRequestDraftDao drafts;
+    private final HallPrivateCaseDao cases;
+    private final PersonalWorkspaceExecutionService executions;
     private final PersonalWorkspaceDao workspace;
     private final AgentTaskMetaDao tasks;
     private final AgentService agents;
@@ -60,20 +66,24 @@ public class HallRequestDraftServiceImpl implements HallRequestDraftService {
     private final LongSupplier clock;
 
     @Inject
-    public HallRequestDraftServiceImpl(HallRequestDraftDao drafts,
-            PersonalWorkspaceDao workspace, AgentTaskMetaDao tasks, AgentService agents,
+    public HallRequestDraftServiceImpl(HallRequestDraftDao drafts, HallPrivateCaseDao cases,
+            PersonalWorkspaceExecutionService executions, PersonalWorkspaceDao workspace,
+            AgentTaskMetaDao tasks, AgentService agents,
             ObjectProvider<WorkspaceConversationAccessService> conversations,
             PersonalWorkspaceExecutionProperties executionProperties) {
-        this(drafts, workspace, tasks, agents,
+        this(drafts, cases, executions, workspace, tasks, agents,
                 conversations == null ? null : conversations.getIfAvailable(),
                 executionProperties, System::currentTimeMillis);
     }
 
-    HallRequestDraftServiceImpl(HallRequestDraftDao drafts,
-            PersonalWorkspaceDao workspace, AgentTaskMetaDao tasks, AgentService agents,
+    HallRequestDraftServiceImpl(HallRequestDraftDao drafts, HallPrivateCaseDao cases,
+            PersonalWorkspaceExecutionService executions, PersonalWorkspaceDao workspace,
+            AgentTaskMetaDao tasks, AgentService agents,
             WorkspaceConversationAccessService conversations,
             PersonalWorkspaceExecutionProperties executionProperties, LongSupplier clock) {
         this.drafts = Objects.requireNonNull(drafts, "drafts");
+        this.cases = Objects.requireNonNull(cases, "cases");
+        this.executions = Objects.requireNonNull(executions, "executions");
         this.workspace = Objects.requireNonNull(workspace, "workspace");
         this.tasks = Objects.requireNonNull(tasks, "tasks");
         this.agents = Objects.requireNonNull(agents, "agents");
@@ -209,6 +219,347 @@ public class HallRequestDraftServiceImpl implements HallRequestDraftService {
         return matchingDiscardReplay(scope, stored, draftId, discardHash);
     }
 
+    @Override
+    @Transactional(isolation = Isolation.READ_COMMITTED, rollbackFor = Exception.class)
+    public SubmissionReceipt submit(OwnerScope scope, String draftId, long expectedRevision,
+            boolean authorizationAcknowledgement, String idempotencyKey) {
+        requireScope(scope); requireId(draftId, "draftId", 100);
+        requireMutableRevision(expectedRevision); requireId(idempotencyKey, "Idempotency-Key", 100);
+        if (!authorizationAcknowledgement) throw failure(Reason.BAD_REQUEST);
+        String submitHash = hash("SUBMIT", draftId, Long.toString(expectedRevision), "true");
+
+        HallRequestDraftEntity replay = drafts.findBySubmitKey(
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), idempotencyKey);
+        if (replay != null) return matchingSubmitReplay(scope, replay, draftId, idempotencyKey, submitHash);
+
+        HallRequestDraftEntity current = drafts.lock(
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), draftId);
+        if (current == null) throw failure(Reason.NOT_FOUND);
+        requirePersistedScope(scope, current); requirePersistedLifecycle(current);
+        if ("SUBMITTED".equals(current.getState())) {
+            return matchingSubmitReplay(scope, current, draftId, idempotencyKey, submitHash);
+        }
+        if (!"EDITING".equals(current.getState())) throw failure(Reason.STATE_CONFLICT);
+        if (current.getRevision() == null || current.getRevision() != expectedRevision) {
+            throw failure(Reason.REVISION_CHANGED);
+        }
+        if ("TASK_CREATE".equals(current.getKind())) throw failure(Reason.SUBMISSION_UNAVAILABLE);
+
+        EditableFields fields = editable(current);
+        requireComplete(fields);
+        validatePersistedSources(scope, current, fields);
+        long submittedAt = now();
+        int reserved = drafts.reserveSubmitIntent(scope.tenantId(), scope.clientId(),
+                scope.ownerJiacn(), draftId, expectedRevision, idempotencyKey, submitHash, submittedAt);
+        if (reserved != 1) {
+            replay = drafts.findBySubmitKey(
+                    scope.tenantId(), scope.clientId(), scope.ownerJiacn(), idempotencyKey);
+            if (replay != null) return matchingSubmitReplay(scope, replay, draftId, idempotencyKey, submitHash);
+            throw mutationFailure(scope, draftId, expectedRevision);
+        }
+
+        SubmissionWork work = switch (current.getKind()) {
+            case "CREATE" -> submitCreate(scope, current, fields, idempotencyKey, submittedAt);
+            case "REVISION" -> submitRevision(scope, current, fields, idempotencyKey, submittedAt);
+            case "TASK_ACTION" -> submitTaskAction(scope, current, fields, idempotencyKey);
+            default -> throw failure(Reason.SUBMISSION_UNAVAILABLE);
+        };
+        int changed = drafts.markSubmitted(scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
+                draftId, expectedRevision, idempotencyKey, submitHash, work.caseId(),
+                work.reference().sourceId(), work.execution().executionId(), submittedAt);
+        if (changed != 1) throw failure(Reason.STORAGE_UNAVAILABLE);
+        HallRequestDraftEntity stored = drafts.find(
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), draftId);
+        if (stored == null) throw failure(Reason.STORAGE_UNAVAILABLE);
+        return matchingSubmitReplay(scope, stored, draftId, idempotencyKey, submitHash);
+    }
+
+    @Override
+    @Transactional(readOnly = true, rollbackFor = Exception.class)
+    public SubmissionReceipt getSubmissionByIdempotencyKey(OwnerScope scope, String idempotencyKey) {
+        requireScope(scope); requireId(idempotencyKey, "Idempotency-Key", 100);
+        HallRequestDraftEntity row = drafts.findBySubmitKey(
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), idempotencyKey);
+        if (row == null || !"SUBMITTED".equals(row.getState())) throw failure(Reason.NOT_FOUND);
+        requirePersistedScope(scope, row); requirePersistedLifecycle(row);
+        return receipt(scope, row);
+    }
+
+    @Override
+    @Transactional(readOnly = true, rollbackFor = Exception.class)
+    public CaseView getCase(OwnerScope scope, String caseId) {
+        requireScope(scope); requireId(caseId, "caseId", 100);
+        HallPrivateCaseEntity privateCase = cases.find(
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), caseId);
+        if (privateCase == null) throw failure(Reason.NOT_FOUND);
+        requireCaseScope(scope, privateCase);
+        List<HallCaseExecutionEntity> rows = cases.listExecutions(
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), caseId);
+        if (rows == null || rows.isEmpty()
+                || privateCase.getRevision() == null || privateCase.getRevision() != rows.size()) {
+            throw failure(Reason.STORAGE_UNAVAILABLE);
+        }
+        List<CaseExecutionView> views = new ArrayList<>(rows.size());
+        Set<String> priorExecutions = new HashSet<>();
+        long expected = 1;
+        for (HallCaseExecutionEntity row : rows) {
+            requireCaseExecutionScope(scope, caseId, row);
+            if (row.getRevisionNo() == null || row.getRevisionNo() != expected++) {
+                throw failure(Reason.STORAGE_UNAVAILABLE);
+            }
+            SourceOutputRef source = persistedSourceOutput(row.getSourceOutputRefJson());
+            if ((row.getRevisionNo() == 1
+                        && (row.getParentExecutionId() != null || source != null))
+                    || (row.getRevisionNo() > 1
+                        && (!safePersistedId(row.getParentExecutionId(), 100) || source == null
+                            || !row.getParentExecutionId().equals(source.executionId())
+                            || !priorExecutions.contains(row.getParentExecutionId())))) {
+                throw failure(Reason.STORAGE_UNAVAILABLE);
+            }
+            PersonalWorkspaceExecutionService.ExecutionView execution = execution(scope, row.getExecutionId());
+            if (!"PRIVATE".equals(execution.executionMode())
+                    || !priorExecutions.add(row.getExecutionId())) {
+                throw failure(Reason.STORAGE_UNAVAILABLE);
+            }
+            views.add(new CaseExecutionView(row.getRevisionNo(), row.getParentExecutionId(),
+                    source, execution));
+        }
+        return new CaseView(privateCase.getCaseId(), privateCase.getTitle(), privateCase.getRevision(),
+                views, List.of("VIEW", "CREATE_REVISION"),
+                new CaseSourceRef(privateCase.getOriginRef()));
+    }
+
+    private SubmissionWork submitCreate(OwnerScope scope, HallRequestDraftEntity draft,
+            EditableFields fields, String key, long submittedAt) {
+        String caseId = "hpc_" + UUID.randomUUID().toString().replace("-", "");
+        HallPrivateCaseEntity privateCase = new HallPrivateCaseEntity().setCaseId(caseId)
+                .setTenantId(scope.tenantId()).setClientId(scope.clientId())
+                .setOwnerJiacn(scope.ownerJiacn()).setTitle(fields.title())
+                .setOriginRef(draft.getOriginRef()).setRevision(1L)
+                .setCreatedAt(submittedAt).setUpdatedAt(submittedAt);
+        cases.insert(privateCase);
+        PersonalWorkspaceExecutionService.ExecutionView execution = createExecution(
+                scope, draft, fields, key, fields.inputs());
+        cases.insertExecution(relation(scope, caseId, execution.executionId(), 1L,
+                null, null, submittedAt));
+        return new SubmissionWork(caseId,
+                new SubmissionReference("PRIVATE_CASE", caseId), execution);
+    }
+
+    private SubmissionWork submitRevision(OwnerScope scope, HallRequestDraftEntity draft,
+            EditableFields fields, String key, long submittedAt) {
+        SourceOutputRef source = persistedSourceOutput(draft.getSourceOutputRefJson());
+        if (source == null) throw failure(Reason.STORAGE_UNAVAILABLE);
+        HallCaseExecutionEntity parent = cases.findByExecution(scope.tenantId(), scope.clientId(),
+                scope.ownerJiacn(), source.executionId());
+        String requestedCase = draft.getCaseId();
+        if (requestedCase != null && parent != null && !requestedCase.equals(parent.getCaseId())) {
+            throw sourceUnavailable("caseId", "PRIVATE_CASE");
+        }
+
+        HallPrivateCaseEntity privateCase;
+        long nextRevision;
+        if (requestedCase != null || parent != null) {
+            String caseId = requestedCase != null ? requestedCase : parent.getCaseId();
+            privateCase = cases.lock(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), caseId);
+            if (privateCase == null) throw sourceUnavailable("caseId", "PRIVATE_CASE");
+            requireCaseScope(scope, privateCase);
+            parent = cases.findByExecution(scope.tenantId(), scope.clientId(),
+                    scope.ownerJiacn(), source.executionId());
+            if (parent == null || !caseId.equals(parent.getCaseId())) {
+                throw sourceUnavailable("sourceOutputRef", "EXECUTION_OUTPUT");
+            }
+            requireCaseExecutionScope(scope, caseId, parent);
+            if (privateCase.getRevision() >= MAX_SAFE_REVISION) {
+                throw failure(Reason.STATE_CONFLICT);
+            }
+            nextRevision = privateCase.getRevision() + 1;
+        } else {
+            if (!drafts.lockPrivateCommittedOutputExists(scope.tenantId(), scope.clientId(),
+                    scope.ownerJiacn(), source.executionId(), source.outputId(),
+                    source.fileId(), source.fileVersion())) {
+                throw sourceUnavailable("sourceOutputRef", "EXECUTION_OUTPUT");
+            }
+            parent = cases.findByExecution(scope.tenantId(), scope.clientId(),
+                    scope.ownerJiacn(), source.executionId());
+            if (parent != null) throw failure(Reason.EXECUTION_CONFLICT);
+            String caseId = "hpc_" + UUID.randomUUID().toString().replace("-", "");
+            privateCase = new HallPrivateCaseEntity().setCaseId(caseId)
+                    .setTenantId(scope.tenantId()).setClientId(scope.clientId())
+                    .setOwnerJiacn(scope.ownerJiacn()).setTitle(fields.title())
+                    .setOriginRef(draft.getOriginRef()).setRevision(1L)
+                    .setCreatedAt(submittedAt).setUpdatedAt(submittedAt);
+            cases.insert(privateCase);
+            cases.insertExecution(relation(scope, caseId, source.executionId(), 1L,
+                    null, null, submittedAt));
+            parent = cases.findByExecution(scope.tenantId(), scope.clientId(),
+                    scope.ownerJiacn(), source.executionId());
+            nextRevision = 2L;
+        }
+
+        List<InputSelection> inputs = revisionInputs(fields.inputs(), source);
+        PersonalWorkspaceExecutionService.ExecutionView execution = createExecution(
+                scope, draft, fields, key, inputs);
+        cases.insertExecution(relation(scope, privateCase.getCaseId(), execution.executionId(),
+                nextRevision, source.executionId(), json(source), submittedAt));
+        int updated = cases.updateRevision(scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
+                privateCase.getCaseId(), nextRevision - 1, nextRevision, fields.title(), submittedAt);
+        if (updated != 1) throw failure(Reason.EXECUTION_CONFLICT);
+        return new SubmissionWork(privateCase.getCaseId(),
+                new SubmissionReference("PRIVATE_CASE", privateCase.getCaseId()), execution);
+    }
+
+    private SubmissionWork submitTaskAction(OwnerScope scope, HallRequestDraftEntity draft,
+            EditableFields fields, String key) {
+        if (draft.getTaskId() == null || draft.getConversationId() == null) {
+            throw failure(Reason.BAD_REQUEST);
+        }
+        PersonalWorkspaceExecutionService.ExecutionView execution = createExecution(
+                scope, draft, fields, key, fields.inputs());
+        if (!"TASK".equals(execution.executionMode())
+                || !draft.getTaskId().equals(execution.businessTaskId())) {
+            throw failure(Reason.STORAGE_UNAVAILABLE);
+        }
+        return new SubmissionWork(null,
+                new SubmissionReference("TASK", draft.getTaskId()), execution);
+    }
+
+    private PersonalWorkspaceExecutionService.ExecutionView createExecution(OwnerScope scope,
+            HallRequestDraftEntity draft, EditableFields fields, String key,
+            List<InputSelection> inputs) {
+        PersonalWorkspaceExecutionService.CreateCommand command =
+                new PersonalWorkspaceExecutionService.CreateCommand(
+                        draft.getConversationId(), fields.targetAgentId(), draft.getTaskId(),
+                        fields.instruction(), fields.outputMime(), inputs.stream().map(input ->
+                                new PersonalWorkspaceExecutionService.InputSelection(
+                                        input.fileId(), input.version())).toList(), null);
+        try {
+            return executions.create(executionScope(scope), command, key);
+        } catch (PersonalWorkspaceExecutionService.Failure failure) {
+            throw switch (failure.getReason()) {
+                case IDEMPOTENCY_CONFLICT -> failure(Reason.IDEMPOTENCY_CONFLICT);
+                case TASK_CONFLICT, OUTPUT_CONFLICT -> failure(Reason.EXECUTION_CONFLICT);
+                case STORAGE_UNAVAILABLE -> failure(Reason.STORAGE_UNAVAILABLE);
+                default -> sourceUnavailable("submission", "EXECUTION");
+            };
+        } catch (RuntimeException unavailable) {
+            throw new Failure(Reason.STORAGE_UNAVAILABLE, unavailable);
+        }
+    }
+
+    private SubmissionReceipt matchingSubmitReplay(OwnerScope scope, HallRequestDraftEntity row,
+            String draftId, String key, String hash) {
+        requirePersistedScope(scope, row);
+        if (!draftId.equals(row.getDraftId()) || !secureEquals(row.getSubmitKey(), key)
+                || !secureEquals(row.getSubmitHash(), hash)) {
+            throw failure(Reason.IDEMPOTENCY_CONFLICT);
+        }
+        if (!"SUBMITTED".equals(row.getState())) throw failure(Reason.STATE_CONFLICT);
+        requirePersistedLifecycle(row);
+        return receipt(scope, row);
+    }
+
+    private SubmissionReceipt receipt(OwnerScope scope, HallRequestDraftEntity row) {
+        String executionId = requirePersistedId(row.getSubmittedExecutionId(), "submittedExecutionId");
+        String sourceId = requirePersistedId(row.getSubmissionRef(), "submissionRef");
+        String sourceType = switch (row.getKind()) {
+            case "CREATE", "REVISION" -> "PRIVATE_CASE";
+            case "TASK_ACTION" -> "TASK";
+            default -> throw failure(Reason.STORAGE_UNAVAILABLE);
+        };
+        if ("PRIVATE_CASE".equals(sourceType) && !sourceId.equals(row.getCaseId())) {
+            throw failure(Reason.STORAGE_UNAVAILABLE);
+        }
+        PersonalWorkspaceExecutionService.ExecutionView execution = execution(scope, executionId);
+        if (("PRIVATE_CASE".equals(sourceType) && !"PRIVATE".equals(execution.executionMode()))
+                || ("TASK".equals(sourceType) && (!"TASK".equals(execution.executionMode())
+                    || !sourceId.equals(execution.businessTaskId())))) {
+            throw failure(Reason.STORAGE_UNAVAILABLE);
+        }
+        return new SubmissionReceipt(new SubmissionReference(sourceType, sourceId),
+                execution, null, row.getUpdatedAt());
+    }
+
+    private PersonalWorkspaceExecutionService.ExecutionView execution(OwnerScope scope,
+            String executionId) {
+        try {
+            PersonalWorkspaceExecutionService.ExecutionView view = executions.get(
+                    executionScope(scope), requirePersistedId(executionId, "executionId"));
+            if (view == null || !executionId.equals(view.executionId())) {
+                throw failure(Reason.STORAGE_UNAVAILABLE);
+            }
+            return view;
+        } catch (Failure failure) {
+            throw failure;
+        } catch (PersonalWorkspaceExecutionService.Failure hidden) {
+            throw new Failure(Reason.STORAGE_UNAVAILABLE, hidden);
+        }
+    }
+
+    private static HallCaseExecutionEntity relation(OwnerScope scope, String caseId,
+            String executionId, long revision, String parentExecutionId,
+            String sourceOutputJson, long createdAt) {
+        return new HallCaseExecutionEntity().setTenantId(scope.tenantId())
+                .setClientId(scope.clientId()).setOwnerJiacn(scope.ownerJiacn())
+                .setCaseId(caseId).setExecutionId(executionId).setRevisionNo(revision)
+                .setParentExecutionId(parentExecutionId)
+                .setSourceOutputRefJson(sourceOutputJson).setCreatedAt(createdAt);
+    }
+
+    private static List<InputSelection> revisionInputs(List<InputSelection> inputs,
+            SourceOutputRef source) {
+        List<InputSelection> result = new ArrayList<>(inputs);
+        InputSelection pinned = new InputSelection(source.fileId(), source.fileVersion());
+        for (InputSelection input : inputs) {
+            if (input.fileId().equals(source.fileId())) {
+                if (input.version() != source.fileVersion()) throw failure(Reason.BAD_REQUEST);
+                return inputs;
+            }
+        }
+        result.add(pinned);
+        return List.copyOf(result);
+    }
+
+    private static PersonalWorkspaceExecutionService.OwnerScope executionScope(OwnerScope scope) {
+        return new PersonalWorkspaceExecutionService.OwnerScope(
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn());
+    }
+
+    private static void requireComplete(EditableFields fields) {
+        if (fields.title() == null || fields.title().isBlank()
+                || fields.instruction() == null || fields.instruction().isBlank()
+                || fields.targetAgentId() == null || fields.outputMime() == null) {
+            throw failure(Reason.BAD_REQUEST);
+        }
+    }
+
+    private static void requireCaseScope(OwnerScope scope, HallPrivateCaseEntity row) {
+        if (row == null || !safePersistedId(row.getCaseId(), 100)
+                || !safePersistedText(row.getTitle(), 200)
+                || !safePersistedId(row.getOriginRef(), 120)
+                || !scope.tenantId().equals(row.getTenantId())
+                || !scope.clientId().equals(row.getClientId())
+                || !scope.ownerJiacn().equals(row.getOwnerJiacn())
+                || row.getRevision() == null || row.getRevision() < 1
+                || row.getRevision() > MAX_SAFE_REVISION || row.getCreatedAt() == null
+                || row.getUpdatedAt() == null || row.getCreatedAt() < 0
+                || row.getUpdatedAt() < row.getCreatedAt()) {
+            throw failure(Reason.STORAGE_UNAVAILABLE);
+        }
+    }
+
+    private static void requireCaseExecutionScope(OwnerScope scope, String caseId,
+            HallCaseExecutionEntity row) {
+        if (row == null || !safePersistedId(row.getExecutionId(), 100)
+                || !scope.tenantId().equals(row.getTenantId())
+                || !scope.clientId().equals(row.getClientId())
+                || !scope.ownerJiacn().equals(row.getOwnerJiacn())
+                || !caseId.equals(row.getCaseId()) || row.getCreatedAt() == null
+                || row.getCreatedAt() < 0) {
+            throw failure(Reason.STORAGE_UNAVAILABLE);
+        }
+    }
+
     private DraftView matchingCreateReplay(OwnerScope scope, HallRequestDraftEntity row, String hash) {
         requirePersistedScope(scope, row);
         if (!secureEquals(row.getCreateHash(), hash)) throw failure(Reason.IDEMPOTENCY_CONFLICT);
@@ -248,7 +599,7 @@ public class HallRequestDraftServiceImpl implements HallRequestDraftService {
         SourceOutputRef sourceOutput = validSourceOutput(command.sourceOutputRef());
         EditableFields fields = validEditable(command.editableFields());
 
-        if (caseId != null) throw sourceUnavailable("caseId", "PRIVATE_CASE");
+        if (caseId != null && !"REVISION".equals(kind)) throw failure(Reason.BAD_REQUEST);
         if ("REVISION".equals(kind) && sourceOutput == null) throw failure(Reason.BAD_REQUEST);
         if (!"REVISION".equals(kind) && sourceOutput != null) throw failure(Reason.BAD_REQUEST);
         if ("TASK_ACTION".equals(kind) && taskId == null) throw failure(Reason.BAD_REQUEST);
@@ -317,6 +668,18 @@ public class HallRequestDraftServiceImpl implements HallRequestDraftService {
             throw sourceUnavailable("conversationId", "CONVERSATION");
         }
         if (valid.sourceOutputRef() != null) requirePrivateOutput(scope, valid.sourceOutputRef());
+        if (valid.caseId() != null) {
+            HallPrivateCaseEntity privateCase = cases.find(
+                    scope.tenantId(), scope.clientId(), scope.ownerJiacn(), valid.caseId());
+            if (privateCase == null) throw sourceUnavailable("caseId", "PRIVATE_CASE");
+            requireCaseScope(scope, privateCase);
+            HallCaseExecutionEntity parent = cases.findByExecution(scope.tenantId(),
+                    scope.clientId(), scope.ownerJiacn(), valid.sourceOutputRef().executionId());
+            if (parent == null || !valid.caseId().equals(parent.getCaseId())) {
+                throw sourceUnavailable("sourceOutputRef", "EXECUTION_OUTPUT");
+            }
+            requireCaseExecutionScope(scope, valid.caseId(), parent);
+        }
         if (valid.sourceRef() == null) return;
         switch (valid.sourceRef().sourceType()) {
             case "FILE" -> requireFileVersion(scope, valid.sourceRef().sourceId(),
@@ -348,7 +711,6 @@ public class HallRequestDraftServiceImpl implements HallRequestDraftService {
     private void validatePersistedSources(OwnerScope scope, HallRequestDraftEntity row,
             EditableFields fields) {
         validateEditableSources(scope, fields);
-        if (row.getCaseId() != null) throw sourceUnavailable("caseId", "PRIVATE_CASE");
 
         WorkspaceConversationAccessService.ConversationView conversation = null;
         if (row.getConversationId() != null) {
@@ -365,6 +727,17 @@ public class HallRequestDraftServiceImpl implements HallRequestDraftService {
 
         SourceOutputRef output = persistedSourceOutput(row.getSourceOutputRefJson());
         if (output != null) requirePrivateOutput(scope, output);
+        if (row.getCaseId() != null) {
+            HallPrivateCaseEntity privateCase = cases.find(scope.tenantId(), scope.clientId(),
+                    scope.ownerJiacn(), requirePersistedId(row.getCaseId(), "caseId"));
+            if (privateCase == null) throw sourceUnavailable("caseId", "PRIVATE_CASE");
+            requireCaseScope(scope, privateCase);
+            HallCaseExecutionEntity parent = cases.findByExecution(scope.tenantId(),
+                    scope.clientId(), scope.ownerJiacn(), output.executionId());
+            if (parent == null || !row.getCaseId().equals(parent.getCaseId())) {
+                throw sourceUnavailable("sourceOutputRef", "EXECUTION_OUTPUT");
+            }
+        }
         if (row.getSourceType() == null) {
             if (row.getSourceId() != null || row.getSourceVersion() != null) {
                 throw failure(Reason.STORAGE_UNAVAILABLE);
@@ -542,15 +915,26 @@ public class HallRequestDraftServiceImpl implements HallRequestDraftService {
         if (!KINDS.contains(row.getKind()) || row.getRevision() == null
                 || row.getRevision() < 1 || row.getRevision() > MAX_SAFE_REVISION
                 || row.getUpdatedAt() == null || row.getUpdatedAt() < 0
-                || !("EDITING".equals(row.getState()) || "DISCARDED".equals(row.getState()))) {
+                || !("EDITING".equals(row.getState()) || "DISCARDED".equals(row.getState())
+                    || "SUBMITTED".equals(row.getState()))) {
             throw failure(Reason.STORAGE_UNAVAILABLE);
         }
         if ("EDITING".equals(row.getState())
-                && (row.getDiscardKey() != null || row.getDiscardHash() != null)) {
+                && (row.getSubmitKey() != null || row.getSubmitHash() != null
+                    || row.getDiscardKey() != null || row.getDiscardHash() != null
+                    || row.getSubmissionRef() != null || row.getSubmittedExecutionId() != null)) {
             throw failure(Reason.STORAGE_UNAVAILABLE);
         }
         if ("DISCARDED".equals(row.getState())
-                && (row.getDiscardKey() == null || row.getDiscardHash() == null)) {
+                && (row.getDiscardKey() == null || row.getDiscardHash() == null
+                    || row.getSubmitKey() != null || row.getSubmitHash() != null
+                    || row.getSubmissionRef() != null || row.getSubmittedExecutionId() != null)) {
+            throw failure(Reason.STORAGE_UNAVAILABLE);
+        }
+        if ("SUBMITTED".equals(row.getState())
+                && (row.getSubmitKey() == null || row.getSubmitHash() == null
+                    || row.getSubmissionRef() == null || row.getSubmittedExecutionId() == null
+                    || row.getDiscardKey() != null || row.getDiscardHash() != null)) {
             throw failure(Reason.STORAGE_UNAVAILABLE);
         }
     }
@@ -711,6 +1095,14 @@ public class HallRequestDraftServiceImpl implements HallRequestDraftService {
             throw failure(Reason.STORAGE_UNAVAILABLE);
         }
     }
+    private static boolean safePersistedId(String value, int max) {
+        try { requireId(value, "persisted", max); return true; }
+        catch (Failure corrupt) { return false; }
+    }
+    private static boolean safePersistedText(String value, int max) {
+        try { optionalText(value, "persisted", max); return value != null; }
+        catch (Failure corrupt) { return false; }
+    }
     private static Failure sourceUnavailable(String field, String sourceType) {
         return new Failure(Reason.SOURCE_UNAVAILABLE,
                 Map.of("field", field, "sourceType", sourceType));
@@ -721,4 +1113,6 @@ public class HallRequestDraftServiceImpl implements HallRequestDraftService {
     private record ValidCreate(String kind, String originRef, SourceRef sourceRef,
             String caseId, String taskId, String conversationId,
             EditableFields editableFields, SourceOutputRef sourceOutputRef) { }
+    private record SubmissionWork(String caseId, SubmissionReference reference,
+            PersonalWorkspaceExecutionService.ExecutionView execution) { }
 }

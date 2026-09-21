@@ -3,7 +3,10 @@ package cn.jia.agent.service;
 import java.util.List;
 import java.util.Map;
 
-/** DRAFT-v1 owner-scoped persistence contract. No method starts work or calls a Provider. */
+/**
+ * Owner-scoped Hall draft/case application contract. Submit persists an existing execution-service
+ * request in the same transaction; this boundary never calls a Provider directly.
+ */
 public interface HallRequestDraftService {
     DraftView create(OwnerScope scope, CreateCommand command, String idempotencyKey);
     DraftView get(OwnerScope scope, String draftId);
@@ -12,6 +15,10 @@ public interface HallRequestDraftService {
             EditableFields editableFields);
     DraftView discard(OwnerScope scope, String draftId, long expectedRevision,
             String idempotencyKey);
+    SubmissionReceipt submit(OwnerScope scope, String draftId, long expectedRevision,
+            boolean authorizationAcknowledgement, String idempotencyKey);
+    SubmissionReceipt getSubmissionByIdempotencyKey(OwnerScope scope, String idempotencyKey);
+    CaseView getCase(OwnerScope scope, String caseId);
 
     record OwnerScope(String tenantId, String clientId, String ownerJiacn) { }
     record InputSelection(String fileId, int version) { }
@@ -35,6 +42,21 @@ public interface HallRequestDraftService {
             String title, String targetAgentId, String outputMime, SourceSummary sourceSummary) { }
     record DraftPage(List<DraftSummary> items, String nextCursor) {
         public DraftPage { items = items == null ? List.of() : List.copyOf(items); }
+    }
+    record SubmissionReference(String sourceType, String sourceId) { }
+    record TaskReference(String taskId, String taskVersion) { }
+    record SubmissionReceipt(SubmissionReference ref,
+            PersonalWorkspaceExecutionService.ExecutionView execution, TaskReference task,
+            long submittedAt) { }
+    record CaseExecutionView(long revisionNo, String parentExecutionId,
+            SourceOutputRef sourceOutputRef, PersonalWorkspaceExecutionService.ExecutionView execution) { }
+    record CaseSourceRef(String originRef) { }
+    record CaseView(String caseId, String title, long revision,
+            List<CaseExecutionView> executions, List<String> allowedActions, CaseSourceRef sourceRef) {
+        public CaseView {
+            executions = executions == null ? List.of() : List.copyOf(executions);
+            allowedActions = allowedActions == null ? List.of() : List.copyOf(allowedActions);
+        }
     }
 
     final class Failure extends RuntimeException {
@@ -61,6 +83,8 @@ public interface HallRequestDraftService {
         STATE_CONFLICT,
         REVISION_CHANGED,
         SOURCE_UNAVAILABLE,
+        SUBMISSION_UNAVAILABLE,
+        EXECUTION_CONFLICT,
         STORAGE_UNAVAILABLE
     }
 }

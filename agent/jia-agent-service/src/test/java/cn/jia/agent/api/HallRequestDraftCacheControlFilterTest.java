@@ -35,12 +35,13 @@ class HallRequestDraftCacheControlFilterTest {
                 .addFilters(new HallRequestDraftCacheControlFilter(), security).build();
 
         for (String path : java.util.List.of(
-                "/agent/hall/drafts", "/agent/hall/drafts/hdr_1",
-                "/agent/hall/drafts/hdr_1/discard")) {
+                "/agent/hall", "/agent/hall/drafts", "/agent/hall/drafts/hdr_1",
+                "/agent/hall/drafts/hdr_1/discard", "/agent/hall/cases/hpc_1",
+                "/agent/hall/submissions/request")) {
             mvc.perform(get(path)).andExpect(status().isUnauthorized())
                     .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
         }
-        mvc.perform(get("/agent/hall/drafts-extra"))
+        mvc.perform(get("/agent/hall-extra"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(header().doesNotExist(HttpHeaders.CACHE_CONTROL));
     }

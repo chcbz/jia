@@ -203,3 +203,38 @@ tasks.register('jytUxB01a', Test) {
     classpath = jytUxB01aSourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+// JYT-UX-B01B isolated Hall submission/case verification slice. The MySQL fixture is opt-in
+// through JYT_UX_B01B_MYSQL_* and creates only task-prefixed temporary databases.
+def jytUxB01bSourceSet = sourceSets.create('jytUxB01b') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/service/impl/HallRequestDraftServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/HallRequestDraftSubmissionServiceTest.java'
+        include 'cn/jia/agent/service/impl/HallRequestDraftSubmissionMySqlTest.java'
+        include 'cn/jia/agent/api/HallRequestDraftControllerTest.java'
+        include 'cn/jia/agent/api/HallSubmissionControllerTest.java'
+        include 'cn/jia/agent/api/HallRequestDraftCacheControlFilterTest.java'
+        include 'cn/jia/agent/config/HallRequestDraftSchemaInitializerTest.java'
+        include 'cn/jia/agent/config/HallPrivateCaseSchemaInitializerTest.java'
+        include 'cn/jia/agent/mapper/HallRequestDraftMapperContractTest.java'
+        include 'cn/jia/agent/mapper/HallPrivateCaseMapperContractTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(jytUxB01bSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(jytUxB01bSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('jytUxB01b', Test) {
+    group = 'verification'
+    description = 'Runs Hall atomic submit, private case, reconciliation, schema and isolated MySQL fixtures.'
+    dependsOn tasks.named(jytUxB01bSourceSet.classesTaskName)
+    testClassesDirs = jytUxB01bSourceSet.output.classesDirs
+    classpath = jytUxB01bSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}

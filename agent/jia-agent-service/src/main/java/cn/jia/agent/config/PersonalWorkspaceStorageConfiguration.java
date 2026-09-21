@@ -53,6 +53,12 @@ public class PersonalWorkspaceStorageConfiguration {
 
     @Bean
     @ConditionalOnProperty(prefix = "agent.personal-workspace-storage", name = "enabled", havingValue = "true")
+    public HallPrivateCaseSchemaInitializer hallPrivateCaseSchemaInitializer(JdbcTemplate jdbcTemplate) {
+        return new HallPrivateCaseSchemaInitializer(jdbcTemplate);
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "agent.personal-workspace-storage", name = "enabled", havingValue = "true")
     public PersonalWorkspaceConversationLinkSchemaInitializer personalWorkspaceConversationLinkSchemaInitializer(
             JdbcTemplate jdbcTemplate) {
         return new PersonalWorkspaceConversationLinkSchemaInitializer(jdbcTemplate);

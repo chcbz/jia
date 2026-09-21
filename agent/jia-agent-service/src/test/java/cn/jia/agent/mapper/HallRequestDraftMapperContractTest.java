@@ -13,7 +13,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class HallRequestDraftMapperContractTest {
     @Test
     void everyObjectReadUsesExactTenantClientOwnerPredicates() throws Exception {
-        for (String method : new String[] {"findExact", "findByCreateKey", "findByDiscardKey", "listEditing"}) {
+        for (String method : new String[] {"findExact", "lockExact", "findByCreateKey", "findBySubmitKey",
+                    "findByDiscardKey", "listEditing"}) {
             Method target = Arrays.stream(HallRequestDraftMapper.class.getMethods())
                     .filter(candidate -> method.equals(candidate.getName())).findFirst().orElseThrow();
             Select select = target.getAnnotation(Select.class);
@@ -45,7 +46,14 @@ class HallRequestDraftMapperContractTest {
                 cn.jia.agent.entity.HallRequestDraftEntity.class).getAnnotation(Insert.class);
         assertTrue(String.join(" ", create.value()).contains("ON DUPLICATE KEY UPDATE draft_id=draft_id"));
 
-        for (String method : new String[] {"replaceEditing", "discardEditing"}) {
+
+        Method reserve = HallRequestDraftMapper.class.getMethod("reserveSubmitIntent",
+                String.class, String.class, String.class, String.class, long.class,
+                String.class, String.class, long.class);
+        String reserveSql = String.join(" ", reserve.getAnnotation(Update.class).value());
+        assertTrue(reserveSql.contains("UPDATE IGNORE hall_request_draft"));
+        assertTrue(reserveSql.contains("submit_key IS NULL AND submit_hash IS NULL"));
+        for (String method : new String[] {"replaceEditing", "markSubmitted", "discardEditing"}) {
             Method target = Arrays.stream(HallRequestDraftMapper.class.getMethods())
                     .filter(candidate -> method.equals(candidate.getName())).findFirst().orElseThrow();
             String sql = String.join(" ", target.getAnnotation(Update.class).value());

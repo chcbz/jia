@@ -16,14 +16,14 @@ import org.springframework.web.util.pattern.PathPatternParser;
 
 import java.io.IOException;
 
-/** Adds private/no-store before security can emit a Hall draft 401/403. */
+/** Adds private/no-store before security can emit any Hall API 401/403. */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class HallRequestDraftCacheControlFilter extends OncePerRequestFilter {
     private static final PathPattern ROOT = PathPatternParser.defaultInstance.parse(
-            "/agent/hall/drafts");
+            "/agent/hall");
     private static final PathPattern DESCENDANT = PathPatternParser.defaultInstance.parse(
-            "/agent/hall/drafts/{*remainder}");
+            "/agent/hall/{*remainder}");
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {

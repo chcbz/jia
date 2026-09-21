@@ -43,6 +43,32 @@ public interface HallRequestDraftMapper extends BaseMapper<HallRequestDraftEntit
     @Select("SELECT " + COLUMNS + """
               FROM hall_request_draft
              WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
+               AND draft_id=#{draftId}
+            """ + EXACT_SCOPE + """
+               AND CAST(draft_id AS BINARY)=CAST(#{draftId} AS BINARY)
+               AND OCTET_LENGTH(draft_id)=OCTET_LENGTH(#{draftId})
+             LIMIT 1 FOR UPDATE
+            """)
+    HallRequestDraftEntity lockExact(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("ownerJiacn") String ownerJiacn,
+            @Param("draftId") String draftId);
+
+    @Select("SELECT " + COLUMNS + """
+              FROM hall_request_draft
+             WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
+               AND submit_key=#{submitKey}
+            """ + EXACT_SCOPE + """
+               AND CAST(submit_key AS BINARY)=CAST(#{submitKey} AS BINARY)
+               AND OCTET_LENGTH(submit_key)=OCTET_LENGTH(#{submitKey})
+             LIMIT 1
+            """)
+    HallRequestDraftEntity findBySubmitKey(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("ownerJiacn") String ownerJiacn,
+            @Param("submitKey") String submitKey);
+
+    @Select("SELECT " + COLUMNS + """
+              FROM hall_request_draft
+             WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
                AND create_key=#{createKey}
             """ + EXACT_SCOPE + """
                AND CAST(create_key AS BINARY)=CAST(#{createKey} AS BINARY)
@@ -129,6 +155,48 @@ public interface HallRequestDraftMapper extends BaseMapper<HallRequestDraftEntit
             @Param("inputsJson") String inputsJson, @Param("updatedAt") long updatedAt);
 
     @Update("""
+            UPDATE IGNORE hall_request_draft
+               SET submit_key=#{submitKey},submit_hash=#{submitHash},updated_at=#{updatedAt}
+             WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
+               AND draft_id=#{draftId} AND state='EDITING' AND revision=#{expectedRevision}
+               AND submit_key IS NULL AND submit_hash IS NULL
+            """ + EXACT_SCOPE + """
+               AND CAST(draft_id AS BINARY)=CAST(#{draftId} AS BINARY)
+               AND OCTET_LENGTH(draft_id)=OCTET_LENGTH(#{draftId})
+               AND CAST(state AS BINARY)=CAST('EDITING' AS BINARY)
+               AND OCTET_LENGTH(state)=OCTET_LENGTH('EDITING')
+            """)
+    int reserveSubmitIntent(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("ownerJiacn") String ownerJiacn,
+            @Param("draftId") String draftId, @Param("expectedRevision") long expectedRevision,
+            @Param("submitKey") String submitKey, @Param("submitHash") String submitHash,
+            @Param("updatedAt") long updatedAt);
+
+    @Update("""
+            UPDATE hall_request_draft
+               SET state='SUBMITTED',case_id=#{caseId},submission_ref=#{submissionRef},
+                   submitted_execution_id=#{submittedExecutionId},revision=revision+1,
+                   updated_at=#{updatedAt}
+             WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
+               AND draft_id=#{draftId} AND state='EDITING' AND revision=#{expectedRevision}
+               AND submit_key=#{submitKey} AND submit_hash=#{submitHash}
+            """ + EXACT_SCOPE + """
+               AND CAST(draft_id AS BINARY)=CAST(#{draftId} AS BINARY)
+               AND OCTET_LENGTH(draft_id)=OCTET_LENGTH(#{draftId})
+               AND CAST(state AS BINARY)=CAST('EDITING' AS BINARY)
+               AND OCTET_LENGTH(state)=OCTET_LENGTH('EDITING')
+               AND CAST(submit_key AS BINARY)=CAST(#{submitKey} AS BINARY)
+               AND OCTET_LENGTH(submit_key)=OCTET_LENGTH(#{submitKey})
+            """)
+    int markSubmitted(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("ownerJiacn") String ownerJiacn,
+            @Param("draftId") String draftId, @Param("expectedRevision") long expectedRevision,
+            @Param("submitKey") String submitKey, @Param("submitHash") String submitHash,
+            @Param("caseId") String caseId, @Param("submissionRef") String submissionRef,
+            @Param("submittedExecutionId") String submittedExecutionId,
+            @Param("updatedAt") long updatedAt);
+
+    @Update("""
             UPDATE hall_request_draft
                SET state='DISCARDED',discard_key=#{discardKey},discard_hash=#{discardHash},
                    revision=revision+1,updated_at=#{updatedAt}
@@ -182,4 +250,43 @@ public interface HallRequestDraftMapper extends BaseMapper<HallRequestDraftEntit
             @Param("clientId") String clientId, @Param("ownerJiacn") String ownerJiacn,
             @Param("executionId") String executionId, @Param("outputId") String outputId,
             @Param("fileId") String fileId, @Param("fileVersion") int fileVersion);
+
+    @Select("""
+            SELECT e.execution_id
+              FROM agent_personal_workspace_execution e
+              JOIN agent_personal_workspace_execution_output o
+                ON o.tenant_id=e.tenant_id AND o.client_id=e.client_id
+               AND o.owner_jiacn=e.owner_jiacn AND o.execution_id=e.execution_id
+              JOIN agent_personal_workspace_file_version v
+                ON v.tenant_id=o.tenant_id AND v.client_id=o.client_id
+               AND v.owner_jiacn=o.owner_jiacn AND v.file_id=o.workspace_file_id
+               AND v.version=o.workspace_file_version
+              JOIN agent_personal_workspace_file f
+                ON f.tenant_id=o.tenant_id AND f.client_id=o.client_id
+               AND f.owner_jiacn=o.owner_jiacn AND f.file_id=o.workspace_file_id
+             WHERE e.tenant_id=#{tenantId} AND e.client_id=#{clientId} AND e.owner_jiacn=#{ownerJiacn}
+               AND e.execution_id=#{executionId} AND o.output_id=#{outputId}
+               AND o.workspace_file_id=#{fileId} AND o.workspace_file_version=#{fileVersion}
+               AND e.execution_mode='PRIVATE' AND e.execution_state='OUTPUT_COMMITTED'
+               AND o.output_state='COMMITTED' AND o.publication_state='PENDING'
+               AND f.state='ACTIVE'
+               AND CAST(e.tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
+               AND OCTET_LENGTH(e.tenant_id)=OCTET_LENGTH(#{tenantId})
+               AND CAST(e.client_id AS BINARY)=CAST(#{clientId} AS BINARY)
+               AND OCTET_LENGTH(e.client_id)=OCTET_LENGTH(#{clientId})
+               AND CAST(e.owner_jiacn AS BINARY)=CAST(#{ownerJiacn} AS BINARY)
+               AND OCTET_LENGTH(e.owner_jiacn)=OCTET_LENGTH(#{ownerJiacn})
+               AND CAST(e.execution_id AS BINARY)=CAST(#{executionId} AS BINARY)
+               AND OCTET_LENGTH(e.execution_id)=OCTET_LENGTH(#{executionId})
+               AND CAST(o.output_id AS BINARY)=CAST(#{outputId} AS BINARY)
+               AND OCTET_LENGTH(o.output_id)=OCTET_LENGTH(#{outputId})
+               AND CAST(o.workspace_file_id AS BINARY)=CAST(#{fileId} AS BINARY)
+               AND OCTET_LENGTH(o.workspace_file_id)=OCTET_LENGTH(#{fileId})
+             LIMIT 1 FOR UPDATE
+            """)
+    String lockPrivateCommittedOutput(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("ownerJiacn") String ownerJiacn,
+            @Param("executionId") String executionId, @Param("outputId") String outputId,
+            @Param("fileId") String fileId, @Param("fileVersion") int fileVersion);
+
 }

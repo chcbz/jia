@@ -16,8 +16,6 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -186,15 +184,37 @@ class HallRequestDraftControllerTest {
     }
 
     @Test
-    void submitAndCaseRunRoutesAreNotExposedInDraftWave() throws Exception {
+    void submitUsesFrozenBodyKeyAndReturns202WhileRunRouteRemainsAbsent() throws Exception {
+        HallRequestDraftService.SubmissionReceipt receipt = new HallRequestDraftService.SubmissionReceipt(
+                new HallRequestDraftService.SubmissionReference("PRIVATE_CASE", "hpc_1"),
+                execution("pwe_1", "PRIVATE", null), null, 1_790_000_000_000L);
+        when(service.submit(any(), eq("hdr_1"), eq(3L), eq(true), eq("submit-key")))
+                .thenReturn(receipt);
+
         mvc.perform(post("/agent/hall/drafts/hdr_1/submit").principal(jwt())
-                        .contentType("application/json").content("{}"))
-                .andExpect(status().isNotFound());
+                        .header("Idempotency-Key", "submit-key")
+                        .contentType("application/json")
+                        .content("{\"expectedRevision\":3,\"authorizationAcknowledgement\":true}"))
+                .andExpect(status().isAccepted())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
+                .andExpect(jsonPath("$.ref.sourceType").value("PRIVATE_CASE"))
+                .andExpect(jsonPath("$.ref.sourceId").value("hpc_1"))
+                .andExpect(jsonPath("$.execution.executionId").value("pwe_1"))
+                .andExpect(jsonPath("$.task").doesNotExist())
+                .andExpect(jsonPath("$.submittedAt").value(1_790_000_000_000L));
+        verify(service).submit(new HallRequestDraftService.OwnerScope("0", "client-a", "owner-a"),
+                "hdr_1", 3, true, "submit-key");
+
+        for (String body : List.of("{}", "{\"expectedRevision\":3}",
+                "{\"expectedRevision\":3,\"authorizationAcknowledgement\":1}")) {
+            mvc.perform(post("/agent/hall/drafts/hdr_1/submit").principal(jwt())
+                            .header("Idempotency-Key", "other-key")
+                            .contentType("application/json").content(body))
+                    .andExpect(status().isBadRequest());
+        }
         mvc.perform(post("/agent/hall/drafts/hdr_1/run").principal(jwt())
                         .contentType("application/json").content("{}"))
                 .andExpect(status().isNotFound());
-        verify(service, never()).create(any(), any(), any());
-        verify(service, never()).discard(any(), any(), anyLong(), any());
     }
 
     private static HallRequestDraftService.DraftView view(String id, long revision, String state) {
@@ -202,6 +222,14 @@ class HallRequestDraftControllerTest {
                 "CREATE", new HallRequestDraftService.EditableFields("方案", "私密正文", null,
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document", List.of()),
                 new HallRequestDraftService.SourceSummary("map", null, null, null, null, null), null);
+    }
+
+    private static cn.jia.agent.service.PersonalWorkspaceExecutionService.ExecutionView execution(
+            String id, String mode, String taskId) {
+        return new cn.jia.agent.service.PersonalWorkspaceExecutionService.ExecutionView(
+                id, taskId == null ? "pwe_task_1" : taskId, "run_1", null, "agent-a",
+                "QUEUED", null, null, 1, "application/pdf", List.of(), null,
+                mode, taskId, null, null);
     }
 
     private static JwtAuthenticationToken jwt() { return jwt("owner-a", "client-a"); }

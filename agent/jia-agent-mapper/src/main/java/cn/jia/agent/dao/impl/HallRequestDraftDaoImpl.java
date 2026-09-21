@@ -23,6 +23,16 @@ public class HallRequestDraftDaoImpl implements HallRequestDraftDao {
         scope(tenantId, clientId, ownerJiacn); id(draftId, "draftId", 100);
         return mapper.findExact(tenantId, clientId, ownerJiacn, draftId);
     }
+    @Override public HallRequestDraftEntity lock(String tenantId, String clientId,
+            String ownerJiacn, String draftId) {
+        scope(tenantId, clientId, ownerJiacn); id(draftId, "draftId", 100);
+        return mapper.lockExact(tenantId, clientId, ownerJiacn, draftId);
+    }
+    @Override public HallRequestDraftEntity findBySubmitKey(String tenantId, String clientId,
+            String ownerJiacn, String submitKey) {
+        scope(tenantId, clientId, ownerJiacn); id(submitKey, "submitKey", 100);
+        return mapper.findBySubmitKey(tenantId, clientId, ownerJiacn, submitKey);
+    }
     @Override public HallRequestDraftEntity findByCreateKey(String tenantId, String clientId,
             String ownerJiacn, String createKey) {
         scope(tenantId, clientId, ownerJiacn); id(createKey, "createKey", 100);
@@ -54,6 +64,28 @@ public class HallRequestDraftDaoImpl implements HallRequestDraftDao {
         return mapper.replaceEditing(tenantId, clientId, ownerJiacn, draftId,
                 expectedRevision, title, instruction, targetAgentId, outputMime, inputsJson, updatedAt);
     }
+    @Override public int reserveSubmitIntent(String tenantId, String clientId, String ownerJiacn,
+            String draftId, long expectedRevision, String submitKey, String submitHash,
+            long updatedAt) {
+        scope(tenantId, clientId, ownerJiacn); id(draftId, "draftId", 100);
+        id(submitKey, "submitKey", 100); id(submitHash, "submitHash", 64);
+        positive(expectedRevision, "revision"); nonnegative(updatedAt, "updatedAt");
+        return mapper.reserveSubmitIntent(tenantId, clientId, ownerJiacn, draftId,
+                expectedRevision, submitKey, submitHash, updatedAt);
+    }
+    @Override public int markSubmitted(String tenantId, String clientId, String ownerJiacn,
+            String draftId, long expectedRevision, String submitKey, String submitHash,
+            String caseId, String submissionRef, String submittedExecutionId, long updatedAt) {
+        scope(tenantId, clientId, ownerJiacn); id(draftId, "draftId", 100);
+        id(submitKey, "submitKey", 100); id(submitHash, "submitHash", 64);
+        if (caseId != null) id(caseId, "caseId", 100);
+        id(submissionRef, "submissionRef", 100);
+        id(submittedExecutionId, "submittedExecutionId", 100);
+        positive(expectedRevision, "revision"); nonnegative(updatedAt, "updatedAt");
+        return mapper.markSubmitted(tenantId, clientId, ownerJiacn, draftId,
+                expectedRevision, submitKey, submitHash, caseId, submissionRef,
+                submittedExecutionId, updatedAt);
+    }
     @Override public int discardEditing(String tenantId, String clientId, String ownerJiacn,
             String draftId, long expectedRevision, String discardKey, String discardHash,
             long updatedAt) {
@@ -70,6 +102,14 @@ public class HallRequestDraftDaoImpl implements HallRequestDraftDao {
         if (fileVersion < 1) throw new IllegalArgumentException("fileVersion");
         return mapper.countPrivateCommittedOutput(tenantId, clientId, ownerJiacn,
                 executionId, outputId, fileId, fileVersion) == 1;
+    }
+    @Override public boolean lockPrivateCommittedOutputExists(String tenantId, String clientId,
+            String ownerJiacn, String executionId, String outputId, String fileId, int fileVersion) {
+        scope(tenantId, clientId, ownerJiacn); id(executionId, "executionId", 100);
+        id(outputId, "outputId", 100); id(fileId, "fileId", 100);
+        if (fileVersion < 1) throw new IllegalArgumentException("fileVersion");
+        return mapper.lockPrivateCommittedOutput(tenantId, clientId, ownerJiacn,
+                executionId, outputId, fileId, fileVersion) != null;
     }
 
     private static void scope(String tenant, String client, String owner) {
