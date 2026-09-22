@@ -6,6 +6,7 @@ import cn.jia.agent.dao.HallPrivateCaseDao;
 import cn.jia.agent.dao.HallRequestDraftDao;
 import cn.jia.agent.dao.PersonalWorkspaceDao;
 import cn.jia.agent.entity.HallRequestDraftEntity;
+import cn.jia.agent.entity.HallExecutionResultRow;
 import cn.jia.agent.entity.PersonalWorkspaceFileEntity;
 import cn.jia.agent.entity.PersonalWorkspaceVersionEntity;
 import cn.jia.agent.service.AgentService;
@@ -16,6 +17,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -43,6 +46,46 @@ class HallRequestDraftServiceImplTest {
             new HallRequestDraftService.OwnerScope("0", "client-a", "owner-b");
     private static final HallRequestDraftService.OwnerScope CLIENT_B =
             new HallRequestDraftService.OwnerScope("0", "client-b", "owner-a");
+
+    @Test
+    void resultFakePreservesExactScopePrivateModeBinaryOrderAndUnavailableBindings() {
+        FakeDao dao = new FakeDao();
+        var later = resultRow("0", "client-a", "owner-a", "run-a", "PRIVATE", "z");
+        var earlier = resultRow("0", "client-a", "owner-a", "run-a", "PRIVATE", "A");
+        // A deleted/invisible file must remain a result binding, not disappear as empty success.
+        later.setFileState("DELETED");
+        dao.resultRows.addAll(List.of(later, earlier,
+                resultRow("0", "client-a", "owner-b", "run-a", "PRIVATE", "foreign-owner"),
+                resultRow("0", "client-b", "owner-a", "run-a", "PRIVATE", "foreign-client"),
+                resultRow("1", "client-a", "owner-a", "run-a", "PRIVATE", "foreign-tenant"),
+                resultRow("0", "client-a", "owner-a", "run-b", "PRIVATE", "other-run"),
+                resultRow("0", "client-a", "owner-a", "run-a", "TASK", "formal"),
+                resultRow("0", "client-a", "owner-a", "run-a", "private", "wrong-mode"),
+                resultRow("0", "client-a", "owner-a", "empty-run", "PRIVATE", null)));
+
+        assertEquals(List.of(earlier, later),
+                dao.listPrivateExecutionResults("0", "client-a", "owner-a", "run-a"));
+        assertEquals("DELETED", dao.listPrivateExecutionResults(
+                "0", "client-a", "owner-a", "run-a").get(1).getFileState());
+        for (String[] scope : List.of(
+                new String[]{"0 ", "client-a", "owner-a", "run-a"},
+                new String[]{"0", "CLIENT-A", "owner-a", "run-a"},
+                new String[]{"0", "client-a", "owner-a ", "run-a"},
+                new String[]{"0", "client-a", "owner-a", "RUN-A"})) {
+            assertTrue(dao.listPrivateExecutionResults(scope[0], scope[1], scope[2], scope[3]).isEmpty());
+        }
+        assertTrue(dao.listPrivateExecutionResults("0", "client-a", "owner-a", "missing").isEmpty());
+        var noOutputs = dao.listPrivateExecutionResults("0", "client-a", "owner-a", "empty-run");
+        assertEquals(1, noOutputs.size()); // Existing execution survives the SQL LEFT JOIN.
+        assertNull(noOutputs.get(0).getOutputId());
+    }
+
+    private static HallExecutionResultRow resultRow(String tenant, String client, String owner,
+            String execution, String mode, String output) {
+        return new HallExecutionResultRow().setTenantId(tenant).setClientId(client)
+                .setOwnerJiacn(owner).setExecutionId(execution).setExecutionMode(mode)
+                .setExecutionState("OUTPUT_COMMITTED").setOutputId(output);
+    }
 
     @Test
     void idempotentCommandsUseReadCommittedSoConcurrentWinnerCanBeReplayed()
@@ -352,6 +395,21 @@ class HallRequestDraftServiceImplTest {
 
     private static final class FakeDao implements HallRequestDraftDao {
         private final Map<String, HallRequestDraftEntity> rows = new LinkedHashMap<>();
+        // Seeded LEFT JOIN projections, including null-output rows and invisible file bindings.
+        private final List<HallExecutionResultRow> resultRows = new ArrayList<>();
+
+        @Override public synchronized List<HallExecutionResultRow> listPrivateExecutionResults(
+                String tenant, String client, String owner, String execution) {
+            Comparator<String> binaryOrder = (left, right) -> Arrays.compareUnsigned(
+                    left.getBytes(StandardCharsets.UTF_8), right.getBytes(StandardCharsets.UTF_8));
+            return resultRows.stream()
+                    .filter(row -> tenant.equals(row.getTenantId()) && client.equals(row.getClientId())
+                            && owner.equals(row.getOwnerJiacn()) && execution.equals(row.getExecutionId())
+                            && "PRIVATE".equals(row.getExecutionMode()))
+                    .sorted(Comparator.comparing(HallExecutionResultRow::getOutputId,
+                            Comparator.nullsFirst(binaryOrder)))
+                    .toList();
+        }
 
         @Override public synchronized HallRequestDraftEntity find(String tenant, String client,
                 String owner, String draftId) {
