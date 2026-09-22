@@ -37,6 +37,7 @@ import org.springframework.transaction.interceptor.TransactionInterceptor;
 
 import javax.sql.DataSource;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -47,6 +48,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -240,6 +242,87 @@ class HallRequestDraftSubmissionMySqlTest {
         if (admin == null || database == null) return;
         if (!database.startsWith(namespace)) throw new IllegalStateException("Unowned fixture database");
         admin.execute("DROP DATABASE IF EXISTS `" + database + "`");
+    }
+
+    @Test
+    void draftListEmptyFirstPageExecutesRealMapperWithoutWritingOrExecuting() {
+        HallRequestDraftService.DraftPage page = service.list(OWNER, null);
+        assertEquals(List.of(), page.items());
+        assertNull(page.nextCursor());
+        assertEquals(0, count("hall_request_draft"));
+        assertEquals(0, count("fixture_execution"));
+        assertEquals(0, executionSequence.get());
+    }
+
+    @Test
+    void draftListFirstPageReturnsOnlyEditingRowsInStableBinaryOrder() {
+        String left = createDraft(OWNER, "list-first-left");
+        String right = createDraft(OWNER, "list-first-right");
+        String discarded = createDraft(OWNER, "list-first-discarded");
+        service.discard(OWNER, discarded, 1, "list-discard");
+
+        HallRequestDraftService.DraftPage page = service.list(OWNER, null);
+        assertEquals(List.of(left, right).stream().sorted(Comparator.reverseOrder()).toList(),
+                draftIds(page));
+        assertTrue(page.items().stream().allMatch(row -> row.state().equals("EDITING")));
+        assertNull(page.nextCursor());
+        assertEquals(3, count("hall_request_draft"), "listing must not rewrite recovery rows");
+        assertEquals(0, executionSequence.get());
+    }
+
+    @Test
+    void draftListCursorTraversesTimestampTiesAndOlderRowsWithoutDuplicates() {
+        List<String> tied = new ArrayList<>();
+        // Existing public draft page size is20; 21 tied rows cross that boundary.
+        for (int index = 0; index < 21; index++) {
+            tied.add(createDraft(OWNER, "list-cursor-" + index));
+        }
+        // All writes are confined to this fixture's task-prefixed temporary database.
+        assertEquals(21, jdbc.update("UPDATE hall_request_draft SET updated_at=?",
+                1_790_000_000_001L));
+        String older = createDraft(OWNER, "list-cursor-older");
+        List<String> expected = new ArrayList<>(tied.stream()
+                .sorted(Comparator.reverseOrder()).toList());
+        expected.add(older);
+
+        HallRequestDraftService.DraftPage first = service.list(OWNER, null);
+        assertEquals(expected.subList(0, 20), draftIds(first));
+        assertNotNull(first.nextCursor());
+        HallRequestDraftService.DraftPage second = service.list(OWNER, first.nextCursor());
+        assertEquals(expected.subList(20, 22), draftIds(second),
+                "both same-timestamp binary ID seek and older timestamp seek must execute");
+        assertNull(second.nextCursor());
+        List<String> all = new ArrayList<>(draftIds(first));
+        all.addAll(draftIds(second));
+        assertEquals(22L, all.stream().distinct().count());
+        assertEquals(expected, all);
+        assertEquals(22, count("hall_request_draft"));
+        assertEquals(0, executionSequence.get());
+    }
+
+    @Test
+    void draftListScopesOwnerClientAndCaseDistinctIdentityWithoutCrossScopeRows() {
+        HallRequestDraftService.OwnerScope caseDistinct =
+                new HallRequestDraftService.OwnerScope("0", "client-a", "Owner-a");
+        List<HallRequestDraftService.OwnerScope> scopes =
+                List.of(OWNER, OTHER_OWNER, OTHER_CLIENT, caseDistinct);
+        List<String> ids = new ArrayList<>();
+        for (int index = 0; index < scopes.size(); index++) {
+            ids.add(createDraft(scopes.get(index), "list-scope-" + index));
+        }
+        for (int index = 0; index < scopes.size(); index++) {
+            HallRequestDraftService.DraftPage page = service.list(scopes.get(index), null);
+            assertEquals(List.of(ids.get(index)), draftIds(page));
+            assertNull(page.nextCursor());
+        }
+        assertTrue(service.list(new HallRequestDraftService.OwnerScope(
+                "0", "client-a", "unrelated-owner"), null).items().isEmpty());
+        assertEquals(4, count("hall_request_draft"));
+        assertEquals(0, executionSequence.get());
+    }
+
+    private static List<String> draftIds(HallRequestDraftService.DraftPage page) {
+        return page.items().stream().map(HallRequestDraftService.DraftSummary::draftId).toList();
     }
 
     @Test
