@@ -279,7 +279,9 @@ public class AgentExecutionReportServiceImpl implements AgentExecutionReportServ
             if (map.containsKey("manifestDigest")) digest(map, "manifestDigest");
             if (map.containsKey("outputStageRefs")) {
                 Object refs = map.get("outputStageRefs");
-                if (!(refs instanceof List<?> list) || list.size() > 32) invalid();
+                if (!(refs instanceof List<?>)) invalid();
+                List<?> list = (List<?>) refs;
+                if (list.size() > 32) invalid();
                 for (Object value : list) if (!(value instanceof String text) || !validText(text, 100)) invalid();
             }
         });
