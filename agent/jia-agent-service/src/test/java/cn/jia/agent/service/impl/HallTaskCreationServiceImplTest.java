@@ -84,14 +84,24 @@ class HallTaskCreationServiceImplTest {
         assertReason(HallRequestDraftService.Reason.NOT_FOUND, () -> service.get(SCOPE, "42"));
         verifyNoInteractions(plans, agents);
     }
+    @Test void unauthenticatedJwtCannotCreateOrReconcileEvenWithMatchingOwnerContext() {
+        SecurityContextHolder.getContext().getAuthentication().setAuthenticated(false);
+        assertReason(HallRequestDraftService.Reason.SOURCE_UNAVAILABLE,
+                () -> service.create(SCOPE, "title", "body"));
+        assertReason(HallRequestDraftService.Reason.SOURCE_UNAVAILABLE,
+                () -> service.get(SCOPE, "42"));
+        verifyNoInteractions(agents, tasks, plans, provider);
+    }
     private static TaskPlanEntity plan(String owner) {
         TaskPlanEntity plan = new TaskPlanEntity().setId(42L).setJiacn(owner).setName("title").setDescription("body");
         plan.setClientId("c"); plan.setTenantId("0"); return plan;
     }
     private static void identity(String owner, String client) {
-        SecurityContextHolder.getContext().setAuthentication(new JwtAuthenticationToken(Jwt.withTokenValue("fixture")
+        JwtAuthenticationToken authentication = new JwtAuthenticationToken(Jwt.withTokenValue("fixture")
                 .header("alg", "none").subject(owner).claim("jiacn", owner).claim("client_id", client)
-                .issuedAt(Instant.ofEpochSecond(1)).expiresAt(Instant.ofEpochSecond(2)).build()));
+                .issuedAt(Instant.ofEpochSecond(1)).expiresAt(Instant.ofEpochSecond(2)).build());
+        authentication.setAuthenticated(true); // fixture models the post-authentication principal
+        SecurityContextHolder.getContext().setAuthentication(authentication);
         EsContext context = new EsContext(); context.setJiacn(owner); context.setClientId(client); EsContextHolder.setContext(context);
     }
     private static void assertReason(HallRequestDraftService.Reason reason, Runnable call) {

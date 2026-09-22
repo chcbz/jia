@@ -81,7 +81,10 @@ public class HallRequestDraftDaoImpl implements HallRequestDraftDao {
         id(submitKey, "submitKey", 100); id(submitHash, "submitHash", 64);
         if (caseId != null) id(caseId, "caseId", 100);
         id(submissionRef, "submissionRef", 100);
-        id(submittedExecutionId, "submittedExecutionId", 100);
+        // TASK_CREATE has no execution. The UPDATE additionally checks the persisted kind,
+        // so null cannot turn an execution-bearing draft into a task-only receipt.
+        if (submittedExecutionId != null) id(submittedExecutionId, "submittedExecutionId", 100);
+        else if (caseId != null) throw new IllegalArgumentException("submittedExecutionId");
         positive(expectedRevision, "revision"); nonnegative(updatedAt, "updatedAt");
         return mapper.markSubmitted(tenantId, clientId, ownerJiacn, draftId,
                 expectedRevision, submitKey, submitHash, caseId, submissionRef,

@@ -70,6 +70,7 @@ class HallReadTaskCreateMySqlTest {
     private String namespace;
     private DataSourceTransactionManager transactionManager;
     private HallRequestDraftService hall;
+    private HallRequestDraftDao drafts;
     private HallReadService reads;
     private HallPrivateMarkService marks;
     private HallReadMapper readMapper;
@@ -128,7 +129,7 @@ class HallReadTaskCreateMySqlTest {
                 new AgentTaskMutationTransactionImpl(tasks, transactionManager), writer);
         AgentService agents = proxy(rawAgents, AgentService.class);
         HallTaskCreationService creation = proxy(new HallTaskCreationServiceImpl(agents, tasks, provider((TaskService) taskService)), HallTaskCreationService.class);
-        HallRequestDraftDao drafts = spy(new HallRequestDraftDaoImpl(template.getMapper(HallRequestDraftMapper.class)));
+        drafts = spy(new HallRequestDraftDaoImpl(template.getMapper(HallRequestDraftMapper.class)));
         failReceipt = new AtomicBoolean();
         doAnswer(invocation -> failReceipt.get() ? 0 : invocation.callRealMethod()).when(drafts)
                 .markSubmitted(anyString(), anyString(), anyString(), anyString(), anyLong(), anyString(), anyString(),
@@ -163,6 +164,8 @@ class HallReadTaskCreateMySqlTest {
         for (String table : List.of("task_plan", "task_item", "agent_task_meta", "agent_task_event")) assertEquals(1, count(table));
         assertEquals(0, count("hall_private_case")); assertEquals(0, count("hall_case_execution"));
         assertEquals("SUBMITTED", jdbc.queryForObject("SELECT state FROM hall_request_draft WHERE draft_id=?", String.class, draft));
+        assertNull(jdbc.queryForObject("SELECT submitted_execution_id FROM hall_request_draft WHERE draft_id=?", String.class, draft));
+        assertNull(jdbc.queryForObject("SELECT case_id FROM hall_request_draft WHERE draft_id=?", String.class, draft));
         assertEquals("body", jdbc.queryForObject("SELECT description FROM task_plan", String.class));
         assertNull(jdbc.queryForObject("SELECT amount FROM task_plan", java.math.BigDecimal.class));
         assertEquals(1, jdbc.queryForObject("SELECT current_event_version FROM agent_task_meta", Integer.class));
@@ -171,9 +174,44 @@ class HallReadTaskCreateMySqlTest {
         assertEquals("complete", page.section().status()); assertEquals(receipt.task().taskId(), page.section().partitions().get("task").items().getFirst().ref().sourceId());
     }
 
+    @Test void unauthenticatedJwtRollsBackSubmitReservationWithoutAnyTaskSideEffect() {
+        String draft = draft("unauthenticated");
+        SecurityContextHolder.getContext().getAuthentication().setAuthenticated(false);
+        assertEquals(HallRequestDraftService.Reason.SOURCE_UNAVAILABLE,
+                assertThrows(HallRequestDraftService.Failure.class,
+                        () -> hall.submit(OWNER, draft, 1, true, "unauthenticated-submit")).reason());
+        assertNoTaskWrites();
+        assertEquals("EDITING", jdbc.queryForObject("SELECT state FROM hall_request_draft WHERE draft_id=?", String.class, draft));
+        assertNull(jdbc.queryForObject("SELECT submit_key FROM hall_request_draft WHERE draft_id=?", String.class, draft));
+        verifyNoInteractions(broker, events, executions);
+    }
+
+    @Test void receiptSqlRejectsTaskExecutionAndNonTaskMissingExecutionBindings() {
+        String draft = draft("receipt-shape");
+        String hash = "a".repeat(64);
+        new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+            assertEquals(1, drafts.reserveSubmitIntent("0", "client-a", "owner-a", draft,
+                    1, "shape-key", hash, 1000));
+            assertEquals(0, drafts.markSubmitted("0", "client-a", "owner-a", draft,
+                    1, "shape-key", hash, null, "42", "unexpected-execution", 1000));
+            assertEquals(1, jdbc.update("UPDATE hall_request_draft SET kind='CREATE' WHERE draft_id=?", draft));
+            assertEquals(0, drafts.markSubmitted("0", "client-a", "owner-a", draft,
+                    1, "shape-key", hash, null, "42", null, 1000));
+            status.setRollbackOnly();
+        });
+        assertNoTaskWrites();
+        assertEquals("EDITING", jdbc.queryForObject("SELECT state FROM hall_request_draft WHERE draft_id=?", String.class, draft));
+        assertNull(jdbc.queryForObject("SELECT submit_key FROM hall_request_draft WHERE draft_id=?", String.class, draft));
+        verifyNoInteractions(broker, events, executions);
+    }
+
     @Test void finalReceiptFailureRollsBackEveryTaskSideEffectAndSubmitKey() {
         String draft = draft("rollback"); failReceipt.set(true);
-        assertThrows(HallRequestDraftService.Failure.class, () -> hall.submit(OWNER, draft, 1, true, "submit"));
+        assertEquals(HallRequestDraftService.Reason.STORAGE_UNAVAILABLE,
+                assertThrows(HallRequestDraftService.Failure.class,
+                        () -> hall.submit(OWNER, draft, 1, true, "submit")).reason());
+        verify(drafts).markSubmitted(eq("0"), eq("client-a"), eq("owner-a"), eq(draft),
+                eq(1L), eq("submit"), anyString(), isNull(), anyString(), isNull(), anyLong());
         assertNoTaskWrites();
         assertEquals("EDITING", jdbc.queryForObject("SELECT state FROM hall_request_draft WHERE draft_id=?", String.class, draft));
         assertNull(jdbc.queryForObject("SELECT submit_key FROM hall_request_draft WHERE draft_id=?", String.class, draft));
@@ -416,9 +454,11 @@ class HallReadTaskCreateMySqlTest {
     }
     private static void identity(HallRequestDraftService.OwnerScope scope) {
         EsContext context = new EsContext(); context.setJiacn(scope.ownerJiacn()); context.setClientId(scope.clientId()); EsContextHolder.setContext(context);
-        SecurityContextHolder.getContext().setAuthentication(new JwtAuthenticationToken(Jwt.withTokenValue("fixture").header("alg", "none")
+        JwtAuthenticationToken authentication = new JwtAuthenticationToken(Jwt.withTokenValue("fixture").header("alg", "none")
                 .subject(scope.ownerJiacn()).claim("jiacn", scope.ownerJiacn()).claim("client_id", scope.clientId())
-                .issuedAt(Instant.ofEpochSecond(1)).expiresAt(Instant.ofEpochSecond(2)).build()));
+                .issuedAt(Instant.ofEpochSecond(1)).expiresAt(Instant.ofEpochSecond(2)).build());
+        authentication.setAuthenticated(true); // applies independently in each concurrent submit thread
+        SecurityContextHolder.getContext().setAuthentication(authentication);
     }
     private static void clearIdentity() { SecurityContextHolder.clearContext(); EsContextHolder.setContext(new EsContext()); }
     private static DriverManagerDataSource dataSource(String url, String user, String password) {

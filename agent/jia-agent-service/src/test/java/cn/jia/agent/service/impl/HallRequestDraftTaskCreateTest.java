@@ -2,6 +2,8 @@ package cn.jia.agent.service.impl;
 
 import cn.jia.agent.config.PersonalWorkspaceExecutionProperties;
 import cn.jia.agent.dao.*;
+import cn.jia.agent.dao.impl.HallRequestDraftDaoImpl;
+import cn.jia.agent.mapper.HallRequestDraftMapper;
 import cn.jia.agent.entity.HallRequestDraftEntity;
 import cn.jia.agent.service.*;
 import org.junit.jupiter.api.BeforeEach;
@@ -76,6 +78,27 @@ class HallRequestDraftTaskCreateTest {
         editing.setState("SUBMITTED").setSubmissionRef("42").setSubmitKey("key").setSubmitHash("hash").setSubmittedExecutionId("foreign");
         when(drafts.findBySubmitKey("0", "c", "o", "key")).thenReturn(editing);
         assertReason(HallRequestDraftService.Reason.STORAGE_UNAVAILABLE, () -> service.getSubmissionByIdempotencyKey(SCOPE, "key"));
+    }
+    @Test void realDaoForwardsNullableTaskReceiptToKindGuardedSql() {
+        HallRequestDraftMapper mapper = mock(HallRequestDraftMapper.class);
+        HallRequestDraftDao dao = new HallRequestDraftDaoImpl(mapper);
+        String hash = "a".repeat(64);
+        when(mapper.markSubmitted("0", "c", "o", "d", 1, "key", hash, null, "42", null, 1000))
+                .thenReturn(1);
+        assertEquals(1, dao.markSubmitted("0", "c", "o", "d", 1, "key", hash, null, "42", null, 1000));
+        verify(mapper).markSubmitted("0", "c", "o", "d", 1, "key", hash, null, "42", null, 1000);
+    }
+    @Test void realDaoStillRejectsMalformedExecutionAndCaseWithoutExecutionBeforeSql() {
+        HallRequestDraftMapper mapper = mock(HallRequestDraftMapper.class);
+        HallRequestDraftDao dao = new HallRequestDraftDaoImpl(mapper);
+        String hash = "a".repeat(64);
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.markSubmitted("0", "c", "o", "d", 1, "key", hash, null, "42", " ", 1000));
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.markSubmitted("0", "c", "o", "d", 1, "key", hash, "case", "case", null, 1000));
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.markSubmitted("foreign", "c", "o", "d", 1, "key", hash, null, "42", null, 1000));
+        verifyNoInteractions(mapper);
     }
     private static void assertReason(HallRequestDraftService.Reason reason, Runnable call) {
         assertEquals(reason, assertThrows(HallRequestDraftService.Failure.class, call::run).reason());

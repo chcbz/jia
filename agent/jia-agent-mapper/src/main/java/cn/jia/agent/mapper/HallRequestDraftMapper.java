@@ -181,6 +181,10 @@ public interface HallRequestDraftMapper extends BaseMapper<HallRequestDraftEntit
              WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
                AND draft_id=#{draftId} AND state='EDITING' AND revision=#{expectedRevision}
                AND submit_key=#{submitKey} AND submit_hash=#{submitHash}
+               AND ((kind='TASK_CREATE' AND #{caseId,jdbcType=VARCHAR} IS NULL
+                     AND #{submittedExecutionId,jdbcType=VARCHAR} IS NULL)
+                    OR (kind IN ('CREATE','REVISION','TASK_ACTION')
+                        AND #{submittedExecutionId,jdbcType=VARCHAR} IS NOT NULL))
             """ + EXACT_SCOPE + """
                AND CAST(draft_id AS BINARY)=CAST(#{draftId} AS BINARY)
                AND OCTET_LENGTH(draft_id)=OCTET_LENGTH(#{draftId})
