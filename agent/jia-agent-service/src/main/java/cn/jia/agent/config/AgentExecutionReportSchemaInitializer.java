@@ -8,7 +8,6 @@ import javax.sql.DataSource;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -69,13 +68,7 @@ public final class AgentExecutionReportSchemaInitializer implements Initializing
         } catch (IOException failure) {
             throw new IllegalStateException("Agent execution report DDL is missing", failure);
         }
-        String stripped = source.lines()
-                .filter(line -> !line.stripLeading().startsWith("--"))
-                .reduce("", (left, right) -> left + right + '\n');
-        List<String> statements = new ArrayList<>();
-        for (String raw : stripped.split(";")) {
-            if (!raw.isBlank()) statements.add(raw.strip());
-        }
+        List<String> statements = HallSchemaSql.split(source);
         if (statements.size() != TABLES.size()) {
             throw new IllegalStateException("Agent execution report DDL must contain exactly two statements");
         }
