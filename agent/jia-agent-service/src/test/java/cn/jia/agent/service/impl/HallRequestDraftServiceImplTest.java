@@ -229,16 +229,19 @@ class HallRequestDraftServiceImplTest {
     }
 
     @Test
-    void unsupportedCaseSourceFailsClosedRatherThanPersistingAnUnverifiedReference() {
+    void unavailableOutputSourceFailsBeforeCaseLookupAndDraftReservation() {
         Fixture fixture = new Fixture();
+        // Cases are supported; this fixture has no authorized committed output binding.
+        // The output ACL must reject the reference before any case lookup or draft reservation.
         var command = new HallRequestDraftService.CreateCommand("REVISION", "results", null,
-                "case-not-yet-supported", null, null, editable("title", "body"),
+                "case-with-unverified-output", null, null, editable("title", "body"),
                 new HallRequestDraftService.SourceOutputRef("exec-1", "output-1", "file-1", 1));
         HallRequestDraftService.Failure failure = assertThrows(HallRequestDraftService.Failure.class,
-                () -> fixture.service.create(OWNER_A, command, "unsupported-case"));
+                () -> fixture.service.create(OWNER_A, command, "unavailable-output"));
         assertEquals(HallRequestDraftService.Reason.SOURCE_UNAVAILABLE, failure.reason());
-        assertEquals("PRIVATE_CASE", failure.safeDetails().get("sourceType"));
+        assertEquals(Map.of("field", "sourceOutputRef", "sourceType", "EXECUTION_OUTPUT"), failure.safeDetails());
         assertTrue(fixture.dao.rows.isEmpty());
+        verifyNoInteractions(fixture.cases, fixture.executions);
     }
 
     @Test
