@@ -12,7 +12,10 @@ public interface HallReadService {
     record Status(String code, String evidenceSource, long observedAt) { }
     record TargetAgent(String agentId) { }
     record ItemSummary(Ref ref, String title, Status status, TargetAgent targetAgent,
-                       String nextAction, List<String> allowedActions, long updatedAt) { }
+                       String nextAction, List<String> allowedActions, long updatedAt,
+                       PersonalMark personalMark, Review review) { }
+    record PersonalMark(long revision, boolean archived, HallPrivateMarkService.ResultRef viewedResultRef) { }
+    record Review(String code, String deliveryId, String workItemId, String deliveryVersion, String taskVersion) { }
     /** count is unknown (null); complete means the source query succeeded, not end-of-pagination. */
     record Partition(List<ItemSummary> items, String status, String nextCursor,
                      Long count, String errorCode) { }

@@ -12,5 +12,5 @@ public interface HallReadMapper {
             @Param("view") String view, @Param("q") String q,
             @Param("beforeUpdatedAt") Long beforeUpdatedAt,
             @Param("beforeSourceType") String beforeSourceType, @Param("beforeId") String beforeId,
-            @Param("limit") int limit);
+            @Param("limit") int limit, @Param("formalEnabled") boolean formalEnabled);
 }

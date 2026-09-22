@@ -245,7 +245,7 @@ public class HallRequestDraftController {
         }
     }
 
-    private static byte[] readBounded(HttpServletRequest request) {
+    static byte[] readBounded(HttpServletRequest request) {
         if (request == null) throw new RequestFailure();
         int declared = request.getContentLength();
         if (declared == 0 || declared > MAX_BODY_BYTES) throw new RequestFailure();
@@ -267,7 +267,7 @@ public class HallRequestDraftController {
         }
     }
 
-    private static <T> T parse(byte[] body, Class<T> type) {
+    static <T> T parse(byte[] body, Class<T> type) {
         try {
             T parsed = STRICT_JSON.readValue(body, type);
             if (parsed == null) throw new RequestFailure();

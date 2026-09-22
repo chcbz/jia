@@ -50,11 +50,6 @@ CREATE TABLE task_item (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
 
-CREATE TABLE IF NOT EXISTS, idempotent).
--- Run before C01B (business write path wiring) or C02+ (Broker/SSE).
--- Historical data backfill is intentionally excluded (C01H).
--- Design: docs/juyiting-multi-agent-collaboration-design.md §7.5
-
 CREATE TABLE IF NOT EXISTS agent_task_event (
     id              BIGINT NOT NULL AUTO_INCREMENT COMMENT 'Primary key',
     task_id         VARCHAR(100) NOT NULL COMMENT 'Task ID',
@@ -86,4 +81,44 @@ CREATE TABLE agent_personal_workspace_execution (
  owner_jiacn VARCHAR(50) NOT NULL, execution_mode VARCHAR(16) NOT NULL, execution_state VARCHAR(32) NOT NULL,
  target_agent_id VARCHAR(100), created_at BIGINT NOT NULL, update_time BIGINT, failed_at BIGINT, revoked_at BIGINT,
  PRIMARY KEY(tenant_id,client_id,owner_jiacn,execution_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
+
+-- Minimal original formal-read/decision evidence fields. No private mark can update these tables.
+CREATE TABLE agent_task_work_item (
+ work_item_id VARCHAR(100) NOT NULL,task_id VARCHAR(100) NOT NULL,
+ tenant_id VARCHAR(50) NOT NULL,client_id VARCHAR(50) NOT NULL,owner_jiacn VARCHAR(50) NOT NULL,
+ status VARCHAR(32) NOT NULL,result_artifact_id VARCHAR(100),lease_token VARCHAR(100),lease_until BIGINT,version BIGINT,
+ PRIMARY KEY(tenant_id,client_id,owner_jiacn,work_item_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
+CREATE TABLE agent_task_formal_delivery (
+ id BIGINT NOT NULL AUTO_INCREMENT,task_id VARCHAR(100) NOT NULL,work_item_id VARCHAR(100) NOT NULL,
+ tenant_id VARCHAR(50) NOT NULL,client_id VARCHAR(50) NOT NULL,delivery_id VARCHAR(100) NOT NULL,
+ revision BIGINT NOT NULL,version BIGINT NOT NULL,state VARCHAR(32) NOT NULL,
+ manifest_artifact_id VARCHAR(100) NOT NULL,manifest_artifact_version INT NOT NULL,
+ submitted_at BIGINT,reviewed_at BIGINT,review_reason TEXT,PRIMARY KEY(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
+CREATE TABLE agent_task_formal_delivery_item (
+ tenant_id VARCHAR(50) NOT NULL,client_id VARCHAR(50) NOT NULL,delivery_id VARCHAR(100) NOT NULL,
+ artifact_id VARCHAR(100) NOT NULL,artifact_version INT NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
+
+-- Fixed-result metadata used by the real B03 manifest/ACL service in mark transaction tests.
+ALTER TABLE agent_personal_workspace_execution ADD COLUMN task_id VARCHAR(100) NOT NULL DEFAULT 'private-task';
+ALTER TABLE agent_personal_workspace_execution ADD COLUMN run_id VARCHAR(100) NOT NULL DEFAULT 'private-run';
+CREATE TABLE agent_personal_workspace_execution_output (
+ output_id VARCHAR(100) NOT NULL,execution_id VARCHAR(100) NOT NULL,
+ tenant_id VARCHAR(50) NOT NULL,client_id VARCHAR(50) NOT NULL,owner_jiacn VARCHAR(50) NOT NULL,
+ workspace_file_id VARCHAR(100) NOT NULL,workspace_file_version INT NOT NULL,
+ output_state VARCHAR(32) NOT NULL,publication_state VARCHAR(32) NOT NULL,original_filename VARCHAR(255) NOT NULL,
+ content_mime_type VARCHAR(160) NOT NULL,byte_length BIGINT NOT NULL,content_hash CHAR(64) NOT NULL,
+ PRIMARY KEY(tenant_id,client_id,owner_jiacn,execution_id,output_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
+CREATE TABLE agent_personal_workspace_file (
+ file_id VARCHAR(100) NOT NULL,tenant_id VARCHAR(50) NOT NULL,client_id VARCHAR(50) NOT NULL,owner_jiacn VARCHAR(50) NOT NULL,state VARCHAR(32) NOT NULL,
+ PRIMARY KEY(tenant_id,client_id,owner_jiacn,file_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
+CREATE TABLE agent_personal_workspace_file_version (
+ file_id VARCHAR(100) NOT NULL,version INT NOT NULL,tenant_id VARCHAR(50) NOT NULL,client_id VARCHAR(50) NOT NULL,owner_jiacn VARCHAR(50) NOT NULL,
+ original_filename VARCHAR(255) NOT NULL,content_mime_type VARCHAR(160) NOT NULL,byte_length BIGINT NOT NULL,content_hash CHAR(64) NOT NULL,
+ PRIMARY KEY(tenant_id,client_id,owner_jiacn,file_id,version)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;

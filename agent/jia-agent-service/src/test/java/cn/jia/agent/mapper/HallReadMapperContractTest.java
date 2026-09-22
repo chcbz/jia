@@ -37,9 +37,15 @@ class HallReadMapperContractTest {
     @Test void needsActionUsesOnlyEvidenceAndArchiveCannotBeQueriedAsSuccessfulEmpty() {
         String sql = HallReadSql.page(Map.of("kind", "task", "view", "needsAction", "q", ""));
         assertTrue(sql.contains("CAST('failed' AS BINARY)"));
+        String review = HallReadSql.page(Map.of("kind", "task", "view", "needsAction", "formalEnabled", true));
+        assertTrue(review.contains("CAST(w.owner_jiacn AS BINARY)"));
+        assertTrue(review.contains("CAST(ownw.owner_jiacn AS BINARY)"));
+        assertTrue(review.contains("w.lease_token IS NULL"));
+        assertTrue(review.contains("agent_task_formal_delivery_item"));
         assertFalse(sql.contains("QUEUED")); assertFalse(sql.contains("completed'"));
         assertTrue(sql.contains("CAST(p.jiacn AS BINARY)"));
+        assertTrue(HallReadSql.page(Map.of("kind", "task", "view", "archive")).contains("CAST('archived' AS BINARY)"));
         assertThrows(IllegalArgumentException.class,
-                () -> HallReadSql.page(Map.of("kind", "task", "view", "archive")));
+                () -> HallReadSql.page(Map.of("kind", "draft", "view", "archive")));
     }
 }

@@ -16,4 +16,15 @@ public class HallItemRow {
     private String state;
     private String targetAgentId;
     private Long updatedAt;
+    private String executionId;
+    private Long markRevision;
+    private Boolean archived;
+    private String viewedExecutionId;
+    private String viewedManifestId;
+    private Boolean reviewReady;
+    private String deliveryId;
+    private String workItemId;
+    private Long deliveryVersion;
+    private Long taskVersion;
+
 }

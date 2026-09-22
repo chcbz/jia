@@ -3,6 +3,9 @@ package cn.jia.agent.service.impl;
 import cn.jia.agent.dao.HallReadDao;
 import cn.jia.agent.entity.HallItemRow;
 import cn.jia.agent.service.HallReadService;
+import cn.jia.agent.service.HallPrivateMarkService;
+import cn.jia.agent.state.AgentTaskStatus;
+import org.springframework.beans.factory.annotation.Value;
 import cn.jia.agent.service.HallRequestDraftService.OwnerScope;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
@@ -33,15 +36,21 @@ public class HallReadServiceImpl implements HallReadService {
     private static final List<String> SOURCES = List.of("private", "task", "draft");
     private static final Set<String> PRIVATE_STATES = Set.of(
             "QUEUED", "OUTPUT_STAGED", "OUTPUT_COMMITTED", "FAILED", "INPUTS_REVOKED");
-    private static final Set<String> TASK_STATES = Set.of(
-            "open", "assigned", "running", "completed", "failed", "cancelled", "archived");
+    private static final Set<String> TASK_STATES = Arrays.stream(AgentTaskStatus.values())
+            .map(AgentTaskStatus::value).collect(java.util.stream.Collectors.toUnmodifiableSet());
     private final HallReadDao reads;
     private final LongSupplier clock;
+    private final boolean formalEnabled;
 
-    @Inject
-    public HallReadServiceImpl(HallReadDao reads) { this(reads, System::currentTimeMillis); }
-    HallReadServiceImpl(HallReadDao reads, LongSupplier clock) {
+    public HallReadServiceImpl(HallReadDao reads) { this(reads, System::currentTimeMillis, false); }
+    @Inject public HallReadServiceImpl(HallReadDao reads,
+            @Value("${jia.agent.formal-delivery.enabled:false}") boolean formalEnabled) {
+        this(reads, System::currentTimeMillis, formalEnabled);
+    }
+    HallReadServiceImpl(HallReadDao reads, LongSupplier clock) { this(reads, clock, false); }
+    HallReadServiceImpl(HallReadDao reads, LongSupplier clock, boolean formalEnabled) {
         this.reads = Objects.requireNonNull(reads); this.clock = Objects.requireNonNull(clock);
+        this.formalEnabled = formalEnabled;
     }
 
     @Override public Overview overview(OwnerScope scope) {
@@ -59,8 +68,7 @@ public class HallReadServiceImpl implements HallReadService {
         view = view == null ? "recent" : view;
         q = q == null ? "" : q.strip();
         if (!("all".equals(kind) || SOURCES.contains(kind)) || !text(q, 200, true)) throw bad();
-        if ("archive".equals(view)) throw new Failure(Reason.VIEW_UNAVAILABLE);
-        if (!Set.of("recent", "needsAction").contains(view)) throw bad();
+        if (!Set.of("recent", "needsAction", "archive").contains(view)) throw bad();
         Cursor before = null;
         if (cursor != null) {
             if ("all".equals(kind)) throw bad(); // only independent source continuation is defined
@@ -85,6 +93,9 @@ public class HallReadServiceImpl implements HallReadService {
 
     private Partition partition(OwnerScope scope, String kind, String view, String q,
             Cursor before, long asOf) {
+        if ("draft".equals(kind) && "archive".equals(view)) {
+            return new Partition(List.of(), "error", null, null, "HALL_DRAFT_ARCHIVE_UNAVAILABLE");
+        }
         try {
             List<HallItemRow> rows = reads.page(scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
                     kind, view, q, before == null ? null : before.updatedAt(),
@@ -103,11 +114,8 @@ public class HallReadServiceImpl implements HallReadService {
             String next = rows.size() <= PAGE_SIZE ? null : encode(scope, kind, view, q,
                     new Cursor(rows.get(PAGE_SIZE - 1).getUpdatedAt(),
                             rows.get(PAGE_SIZE - 1).getSourceType(), rows.get(PAGE_SIZE - 1).getSourceId()));
-            String gap = "needsAction".equals(view) ? switch (kind) {
-                case "private" -> "VIEWED_RESULT_NOT_TRACKED";
-                case "task" -> "TASK_REVIEW_NOT_PROJECTED";
-                default -> null;
-            } : null;
+            String gap = "needsAction".equals(view) && "task".equals(kind) && !formalEnabled
+                    ? "FORMAL_REVIEW_UNAVAILABLE" : null;
             return new Partition(List.copyOf(items), gap == null ? "complete" : "partial", next, null, gap);
         } catch (RuntimeException unavailable) {
             // A failed query or corrupt/foreign projection is NOT an empty successful source.
@@ -131,12 +139,18 @@ public class HallReadServiceImpl implements HallReadService {
             case "TASK" -> "AGENT_TASK_META";
             default -> "PERSONAL_WORKSPACE_EXECUTION";
         };
+        PersonalMark mark = Set.of("PRIVATE_CASE", "LEGACY_EXECUTION").contains(row.getSourceType())
+                ? new PersonalMark(row.getMarkRevision() == null ? 0 : row.getMarkRevision(), Boolean.TRUE.equals(row.getArchived()),
+                    row.getViewedExecutionId() == null ? null : new HallPrivateMarkService.ResultRef(row.getViewedExecutionId(), row.getViewedManifestId())) : null;
+        Review review = "TASK".equals(row.getSourceType()) && Boolean.TRUE.equals(row.getReviewReady())
+                ? new Review("FORMAL_DELIVERY_SUBMITTED", row.getDeliveryId(), row.getWorkItemId(),
+                    Long.toString(row.getDeliveryVersion()), Long.toString(row.getTaskVersion())) : null;
         return new ItemSummary(new Ref(row.getSourceType(), row.getSourceId()), row.getTitle(),
                 new Status(row.getState(), evidence, asOf), row.getTargetAgentId() == null ? null
-                    : new TargetAgent(row.getTargetAgentId()), action, actions, row.getUpdatedAt());
+                    : new TargetAgent(row.getTargetAgentId()), action, actions, row.getUpdatedAt(), mark, review);
     }
 
-    private static void validate(OwnerScope scope, String kind, String view, HallItemRow row) {
+    private void validate(OwnerScope scope, String kind, String view, HallItemRow row) {
         if (row == null || !scope.tenantId().equals(row.getTenantId())
                 || !scope.clientId().equals(row.getClientId()) || !scope.ownerJiacn().equals(row.getOwnerJiacn())
                 || !id(row.getSourceId(), 100) || row.getUpdatedAt() == null || row.getUpdatedAt() < 0
@@ -152,9 +166,25 @@ public class HallReadServiceImpl implements HallReadService {
             case "task" -> TASK_STATES.contains(row.getState());
             default -> false;
         };
-        if (!valid || ("needsAction".equals(view)
-                && !Set.of("EDITING", "FAILED", "failed").contains(row.getState()))) {
-            throw new IllegalStateException();
+        if (!valid) throw new IllegalStateException();
+        if ("private".equals(kind)) {
+            if (!id(row.getExecutionId(),100) || row.getMarkRevision()==null || row.getArchived()==null
+                    || (row.getViewedExecutionId() == null) != (row.getViewedManifestId() == null)
+                    || (row.getViewedExecutionId()!=null && (!id(row.getViewedExecutionId(),100) || !id(row.getViewedManifestId(),100)))
+                    || row.getMarkRevision() < 0 || row.getMarkRevision() > 9_007_199_254_740_991L
+                    || ("archive".equals(view) != Boolean.TRUE.equals(row.getArchived()))) throw new IllegalStateException();
+            if ("needsAction".equals(view) && !("FAILED".equals(row.getState())
+                    || ("OUTPUT_COMMITTED".equals(row.getState()) && row.getExecutionId() != null
+                        && !row.getExecutionId().equals(row.getViewedExecutionId())))) throw new IllegalStateException();
+        }
+        if ("task".equals(kind)) {
+            if ("archive".equals(view) != "archived".equals(row.getState())) throw new IllegalStateException();
+            if (formalEnabled && "reviewing".equals(row.getState()) && !Boolean.TRUE.equals(row.getReviewReady())) throw new IllegalStateException();
+            if (Boolean.TRUE.equals(row.getReviewReady()) && (!"reviewing".equals(row.getState())
+                    || !id(row.getDeliveryId(), 100) || !id(row.getWorkItemId(), 100)
+                    || row.getDeliveryVersion() == null || row.getDeliveryVersion() < 0
+                    || row.getTaskVersion() == null || row.getTaskVersion() < 0)) throw new IllegalStateException();
+            if ("needsAction".equals(view) && !Set.of("failed", "blocked", "reviewing").contains(row.getState())) throw new IllegalStateException();
         }
     }
 

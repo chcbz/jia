@@ -47,13 +47,17 @@ class HallReadControllerTest {
         mvc.perform(get("/agent/hall/items?kind=private&kind=task").principal(jwt("owner-a", "client-a"))).andExpect(status().isBadRequest());
         verifyNoInteractions(service);
     }
-    @Test void itemQueryIsForwardedExactlyAndArchiveIsExplicit422() throws Exception {
+    @Test void itemQueryIsForwardedExactlyAndPrivateArchiveReturnsItsPartition() throws Exception {
         var scope = new OwnerScope("0", "client-a", "owner-a");
+        var section = new HallReadService.Section("complete", Map.of("private",
+                new HallReadService.Partition(List.of(), "complete", null, null, null)));
         when(service.items(scope, "private", "archive", null, null))
-                .thenThrow(new HallReadService.Failure(HallReadService.Reason.VIEW_UNAVAILABLE));
+                .thenReturn(new HallReadService.Items(1,"private","archive","",section,
+                        Map.of("private",new HallReadService.SourceStatus("complete",null)),1000));
         mvc.perform(get("/agent/hall/items?kind=private&view=archive").principal(jwt("owner-a", "client-a")))
-                .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.code").value("HALL_READ_VIEW_UNAVAILABLE"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.view").value("archive"))
+                .andExpect(jsonPath("$.section.partitions.private.status").value("complete"));
         verify(service).items(scope, "private", "archive", null, null);
     }
     private static JwtAuthenticationToken jwt(String owner, String client) {

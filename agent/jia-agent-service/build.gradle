@@ -270,11 +270,16 @@ tasks.register('jytUxB03', Test) {
     useJUnitPlatform()
 }
 
-// B02 first slice: explicit read partitions + unfunded TASK_CREATE. Private marks/review projection
-// are intentionally not claimed. MySQL fixtures require the existing isolated-fixture opt-in.
+// B02 scoped reads, private organization marks, formal review projection and unfunded TASK_CREATE.
+// MySQL fixtures require the existing isolated-fixture opt-in; test sources are not execution evidence.
 def jytUxB02SourceSet = sourceSets.create('jytUxB02') {
     java {
         srcDir 'src/test/java'
+        include 'cn/jia/agent/config/HallPrivateCaseSchemaInitializerTest.java'
+        include 'cn/jia/agent/mapper/HallPrivateMarkMapperContractTest.java'
+        include 'cn/jia/agent/service/impl/HallPrivateMarkServiceImplTest.java'
+        include 'cn/jia/agent/api/HallPrivateMarkControllerTest.java'
+        include 'cn/jia/agent/config/HallPrivateMarkSchemaInitializerTest.java'
         include 'cn/jia/agent/service/impl/HallReadServiceImplTest.java'
         include 'cn/jia/agent/api/HallReadControllerTest.java'
         include 'cn/jia/agent/mapper/HallReadMapperContractTest.java'

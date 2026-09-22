@@ -12,3 +12,9 @@ agent/jia-agent-service/src/test/java/cn/jia/agent/service/impl/HallRequestDraft
 agent/jia-agent-service/src/test/java/cn/jia/agent/api/HallSubmissionControllerTest.java
 agent/jia-agent-service/src/test/java/cn/jia/agent/api/HallRequestDraftControllerTest.java
 agent/jia-agent-service/src/test/java/cn/jia/agent/api/HallRequestDraftCacheControlFilterTest.java
+agent/jia-agent-mapper/src/main/resources/db/hall-private-mark-v1.sql
+agent/jia-agent-service/src/test/java/cn/jia/agent/service/impl/HallPrivateMarkServiceImplTest.java
+agent/jia-agent-service/src/test/java/cn/jia/agent/api/HallPrivateMarkControllerTest.java
+agent/jia-agent-service/src/test/java/cn/jia/agent/config/HallPrivateMarkSchemaInitializerTest.java
+agent/jia-agent-service/src/test/java/cn/jia/agent/mapper/HallPrivateMarkMapperContractTest.java
+agent/jia-agent-service/src/test/java/cn/jia/agent/config/HallPrivateCaseSchemaInitializerTest.java

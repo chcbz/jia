@@ -29,8 +29,8 @@ class HallReadServiceImplTest {
         assertEquals(1, result.schemaVersion()); assertEquals(1000L, result.asOf());
         assertEquals("complete", result.sections().get("recent").status());
         assertEquals("partial", result.sections().get("needsAction").status());
-        assertEquals("VIEWED_RESULT_NOT_TRACKED", result.sourceStatus().get("needsAction").get("private").errorCode());
-        assertEquals("TASK_REVIEW_NOT_PROJECTED", result.sourceStatus().get("needsAction").get("task").errorCode());
+        assertEquals("complete", result.sourceStatus().get("needsAction").get("private").status());
+        assertEquals("FORMAL_REVIEW_UNAVAILABLE", result.sourceStatus().get("needsAction").get("task").errorCode());
         assertNull(result.sections().get("recent").partitions().get("draft").count());
         for (String kind : List.of("private", "task", "draft")) {
             verify(dao).page("0", "client-a", "owner-a", kind, "recent", "", null, null, null, 21);
@@ -97,9 +97,9 @@ class HallReadServiceImplTest {
                 .thenReturn(List.of(row("PRIVATE_CASE", "c", "QUEUED", 12)));
         assertEquals("error", service.items(SCOPE, "private", "needsAction", null, null).section().status());
     }
-    @Test void archiveIsUnavailableNotAnEmptyListAndMalformedInputDoesNotQuery() {
-        var failure = assertThrows(HallReadService.Failure.class, () -> service.items(SCOPE, "private", "archive", null, null));
-        assertEquals(HallReadService.Reason.VIEW_UNAVAILABLE, failure.reason());
+    @Test void draftArchiveIsUnavailableNotEmptySuccessAndMalformedInputDoesNotQuery() {
+        assertEquals("HALL_DRAFT_ARCHIVE_UNAVAILABLE", service.items(SCOPE, "draft", "archive", null, null)
+                .section().partitions().get("draft").errorCode());
         assertBad(() -> service.items(SCOPE, "x", null, null, null));
         assertBad(() -> service.items(SCOPE, "draft", "x", null, null));
         assertBad(() -> service.items(SCOPE, "draft", null, "x".repeat(201), null));
@@ -107,9 +107,30 @@ class HallReadServiceImplTest {
         assertBad(() -> service.overview(new OwnerScope("1", "client-a", "owner-a")));
         verifyNoInteractions(dao);
     }
+    @Test void privateMarkAndFormalReviewAreAdditiveButNeverPrivateAcceptanceActions() {
+        var privateRow = row("LEGACY_EXECUTION","e","OUTPUT_COMMITTED",9)
+                .setMarkRevision(2L).setArchived(true).setViewedExecutionId("e").setViewedManifestId("fixed");
+        when(dao.page("0","client-a","owner-a","private","archive","",null,null,null,21))
+                .thenReturn(List.of(privateRow));
+        var item = service.items(SCOPE,"private","archive",null,null).section().partitions().get("private").items().getFirst();
+        assertEquals(2,item.personalMark().revision()); assertTrue(item.personalMark().archived());
+        assertEquals("fixed",item.personalMark().viewedResultRef().manifestId()); assertNull(item.review());
+        service = new HallReadServiceImpl(dao,()->1000L,true);
+        var task = row("TASK","task","reviewing",9).setReviewReady(true).setDeliveryId("delivery")
+                .setWorkItemId("work").setDeliveryVersion(0L).setTaskVersion(4L);
+        when(dao.page("0","client-a","owner-a","task","needsAction","",null,null,null,21)).thenReturn(List.of(task));
+        var partition = service.items(SCOPE,"task","needsAction",null,null).section().partitions().get("task");
+        assertEquals("complete",partition.status()); item = partition.items().getFirst();
+        assertEquals("FORMAL_DELIVERY_SUBMITTED",item.review().code()); assertEquals("4",item.review().taskVersion());
+        assertNull(item.personalMark()); assertEquals(List.of("OPEN_TASK"),item.allowedActions());
+        task.setReviewReady(false);
+        assertEquals("error",service.items(SCOPE,"task","needsAction",null,null).section().status());
+    }
+
     private static HallItemRow row(String type, String id, String state, long time) {
         return new HallItemRow().setTenantId("0").setClientId("client-a").setOwnerJiacn("owner-a")
-                .setSourceType(type).setSourceId(id).setTitle("name").setState(state).setUpdatedAt(time);
+                .setSourceType(type).setSourceId(id).setTitle("name").setState(state).setUpdatedAt(time)
+                .setExecutionId(id).setMarkRevision(0L).setArchived(false);
     }
     private static void assertBad(Runnable call) {
         assertEquals(HallReadService.Reason.BAD_REQUEST,
