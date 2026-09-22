@@ -310,3 +310,30 @@ tasks.register('jytUxB02', Test) {
     classpath = jytUxB02SourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+// D01 direct-@ / private-meeting request contract. Keep this focused source set independent of
+// legacy default-test compilation debt; it compiles and runs only the new admission boundary tests.
+def juyitingCollaborationSourceSet = sourceSets.create('juyitingCollaboration') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/api/AgentCollaborationRequestControllerTest.java'
+        include 'cn/jia/agent/service/impl/AgentCollaborationRequestServiceImplTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(juyitingCollaborationSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(juyitingCollaborationSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('juyitingCollaboration', Test) {
+    group = 'verification'
+    description = 'Runs focused direct-@ and private-meeting execution admission tests.'
+    dependsOn tasks.named(juyitingCollaborationSourceSet.classesTaskName)
+    testClassesDirs = juyitingCollaborationSourceSet.output.classesDirs
+    classpath = juyitingCollaborationSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
