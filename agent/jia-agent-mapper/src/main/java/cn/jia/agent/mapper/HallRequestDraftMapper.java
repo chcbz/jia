@@ -93,9 +93,8 @@ public interface HallRequestDraftMapper extends BaseMapper<HallRequestDraftEntit
             @Param("clientId") String clientId, @Param("ownerJiacn") String ownerJiacn,
             @Param("discardKey") String discardKey);
 
-    @Select("""
-            <script>
-            SELECT """ + COLUMNS + """
+    // Keep the SQL keyword separator explicit: text blocks strip trailing spaces.
+    @Select("<script>\nSELECT " + COLUMNS + """
               FROM hall_request_draft
              WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
                AND state='EDITING'

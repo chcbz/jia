@@ -3,15 +3,73 @@ package cn.jia.agent.mapper;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
+import org.apache.ibatis.mapping.BoundSql;
+import org.apache.ibatis.mapping.ParameterMapping;
+import org.apache.ibatis.scripting.xmltags.XMLLanguageDriver;
+import org.apache.ibatis.session.Configuration;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class HallRequestDraftMapperContractTest {
+    @Test
+    void listEditingFirstPageBoundSqlSeparatesSelectFromProjection() throws Exception {
+        BoundSql bound = listEditingBoundSql(null, null);
+        String sql = bound.getSql().replaceAll("\\s+", " ").trim();
+        assertTrue(sql.startsWith("SELECT draft_id,"), sql);
+        assertTrue(sql.contains(" FROM hall_request_draft "), sql);
+        assertTrue(sql.endsWith("ORDER BY updated_at DESC, CAST(draft_id AS BINARY) DESC LIMIT ?"), sql);
+        assertFalse(sql.contains("updated_at < ?"), sql);
+        List<String> parameters = bound.getParameterMappings().stream()
+                .map(ParameterMapping::getProperty).toList();
+        assertFalse(parameters.contains("beforeUpdatedAt"));
+        assertFalse(parameters.contains("beforeDraftId"));
+        assertTrue(parameters.containsAll(List.of("tenantId", "clientId", "ownerJiacn", "limit")));
+    }
+
+    @Test
+    void listEditingCursorBoundSqlKeepsParameterizedExactScopedSeek() throws Exception {
+        BoundSql bound = listEditingBoundSql(1_790_000_000_000L, "draft-cursor");
+        String sql = bound.getSql().replaceAll("\\s+", " ").trim();
+        assertTrue(sql.startsWith("SELECT draft_id,"), sql);
+        assertTrue(sql.contains("updated_at < ?"), sql);
+        assertTrue(sql.contains("CAST(draft_id AS BINARY) < CAST(? AS BINARY)"), sql);
+        for (String column : List.of("tenant_id", "client_id", "owner_jiacn")) {
+            assertTrue(sql.contains("CAST(" + column + " AS BINARY)=CAST(? AS BINARY)"), sql);
+            assertTrue(sql.contains("OCTET_LENGTH(" + column + ")=OCTET_LENGTH(?)"), sql);
+        }
+        List<String> parameters = bound.getParameterMappings().stream()
+                .map(ParameterMapping::getProperty).toList();
+        assertEquals(2L, parameters.stream().filter("beforeUpdatedAt"::equals).count());
+        assertEquals(1L, parameters.stream().filter("beforeDraftId"::equals).count());
+        assertFalse(sql.contains("draft-cursor"), "cursor value must remain JDBC-bound");
+    }
+
+    private static BoundSql listEditingBoundSql(Long beforeUpdatedAt, String beforeDraftId)
+            throws Exception {
+        Method target = HallRequestDraftMapper.class.getMethod("listEditing", String.class,
+                String.class, String.class, Long.class, String.class, int.class);
+        String script = String.join(" ", target.getAnnotation(Select.class).value());
+        Map<String, Object> parameters = new HashMap<>();
+        parameters.put("tenantId", "0");
+        parameters.put("clientId", "client-a");
+        parameters.put("ownerJiacn", "owner-a");
+        parameters.put("beforeUpdatedAt", beforeUpdatedAt);
+        parameters.put("beforeDraftId", beforeDraftId);
+        parameters.put("limit", 21);
+        return new XMLLanguageDriver().createSqlSource(new Configuration(), script, Map.class)
+                .getBoundSql(parameters);
+    }
+
     @Test
     void everyObjectReadUsesExactTenantClientOwnerPredicates() throws Exception {
         for (String method : new String[] {"findExact", "lockExact", "findByCreateKey", "findBySubmitKey",
