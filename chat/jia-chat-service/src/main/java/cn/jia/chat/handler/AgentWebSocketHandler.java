@@ -254,7 +254,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             return;
         }
         String declaredMessageType = strictString(payload.get("messageType"));
-        if (EXECUTION_REPORT_TYPES.contains(declaredMessageType)) {
+        if (declaredMessageType != null && EXECUTION_REPORT_TYPES.contains(declaredMessageType)) {
             try {
                 Map<String, Object> strict = STRICT_RAW_COMMAND_JSON.readValue(
                         message.getPayload(), MESSAGE_TYPE);
