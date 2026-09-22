@@ -46,3 +46,25 @@ dependencies {
 
 version = '1.1.2-SNAPSHOT'
 description = 'jia-chat-service'
+
+// D02 source-only verification slice. It avoids compiling unrelated historical chat tests.
+def juyitingExecutionReportSourceSet = sourceSets.create('juyitingExecutionReport') {
+    java.srcDir 'src/juyitingExecutionReportTest/java'
+    resources.srcDir 'src/juyitingExecutionReportTest/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(juyitingExecutionReportSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(juyitingExecutionReportSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('juyitingExecutionReport', Test) {
+    group = 'verification'
+    description = 'Runs D02 durable Agent report service, WebSocket and schema contract tests.'
+    dependsOn tasks.named(juyitingExecutionReportSourceSet.classesTaskName)
+    testClassesDirs = juyitingExecutionReportSourceSet.output.classesDirs
+    classpath = juyitingExecutionReportSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}

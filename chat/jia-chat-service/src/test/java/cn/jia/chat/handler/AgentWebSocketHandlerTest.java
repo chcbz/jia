@@ -1404,7 +1404,8 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         verify(session, org.mockito.Mockito.atLeast(2)).sendMessage(messageCaptor.capture());
         String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
         assertTrue(messages.contains("\"type\":\"protocol_error\""));
-        assertTrue(messages.contains("\"code\":\"PROTOCOL_HANDLER_NOT_AVAILABLE\""));
+        assertTrue(messages.contains("\"code\":\"REPORT_INVALID\""));
+        assertTrue(messages.contains("\"cacheControl\":\"private, no-store\""));
     }
 
     @Test

@@ -21,6 +21,7 @@ import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.event.AgentEventPublisher;
 import cn.jia.agent.service.AgentCommandAckService;
 import cn.jia.agent.service.AgentCommandReconnectSignal;
+import cn.jia.agent.service.AgentExecutionReportService;
 import cn.jia.agent.service.AgentRawCommandDispatcher;
 import cn.jia.agent.service.AgentService;
 import cn.jia.chat.dao.ChatMessageDao;
@@ -58,8 +59,11 @@ import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -90,6 +94,14 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
             .build();
+    private static final Set<String> EXECUTION_REPORT_TYPES = Set.of(
+            AgentProtocolConstants.TYPE_WORK_PROGRESS,
+            AgentProtocolConstants.TYPE_WORK_HEARTBEAT,
+            AgentProtocolConstants.TYPE_WORK_RESULT,
+            AgentProtocolConstants.TYPE_HELP_REQUEST,
+            AgentProtocolConstants.TYPE_ARTIFACT_PUBLISH);
+    private static final String CODEX_EXECUTION_RESULT = "CODEX_EXECUTION_RESULT";
+
     private static final Set<String> TASK_SCOPED_OUTBOUND_TYPES = Set.of(
             AgentProtocolConstants.TYPE_COMMAND_DISPATCH,
             AgentProtocolConstants.TYPE_COMMAND_ACK,
@@ -109,6 +121,14 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     private cn.jia.agent.skill.SkillInstallResultService skillResults;
     @Autowired
     public void setSkillResults(cn.jia.agent.skill.SkillInstallResultService results) { this.skillResults=results; }
+    private Supplier<AgentExecutionReportService> executionReportServiceSupplier = () -> null;
+    @Autowired
+    public void setExecutionReportServiceProvider(ObjectProvider<AgentExecutionReportService> services) {
+        this.executionReportServiceSupplier = services == null ? () -> null : services::getIfAvailable;
+    }
+    void setExecutionReportService(AgentExecutionReportService service) {
+        this.executionReportServiceSupplier = () -> service;
+    }
     private ChatConversationService chatConversationService;
     @Autowired
     public void setChatConversationService(ChatConversationService service) {
@@ -208,6 +228,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 AgentProtocolConstants.TYPE_CHAT_MESSAGE_DELTA, AgentProtocolConstants.TYPE_COMMAND_DISPATCH,
                 AgentProtocolConstants.TYPE_COMMAND_ACK, AgentProtocolConstants.TYPE_WORK_PROGRESS,
                 AgentProtocolConstants.TYPE_WORK_HEARTBEAT, AgentProtocolConstants.TYPE_WORK_RESULT,
+                AgentProtocolConstants.TYPE_HELP_REQUEST, AgentProtocolConstants.TYPE_ARTIFACT_PUBLISH,
                 AgentProtocolConstants.TYPE_TASK_EVENT, AgentProtocolConstants.TYPE_CAPABILITY_LOOKUP,
                 "agent.status", "agent.message", "task.assign", "task.report"});
         sendEvent(session, "connected", connected);
@@ -229,6 +250,19 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 handleSkillInstallResult(session,STRICT_RAW_COMMAND_JSON.readValue(message.getPayload(),MESSAGE_TYPE));
             } catch (RuntimeException malformed) {
                 sendProtocolError(session,Map.of(),"SKILL_RESULT_REJECTED","Malformed skill result");
+            }
+            return;
+        }
+        String declaredMessageType = strictString(payload.get("messageType"));
+        if (EXECUTION_REPORT_TYPES.contains(declaredMessageType)) {
+            try {
+                Map<String, Object> strict = STRICT_RAW_COMMAND_JSON.readValue(
+                        message.getPayload(), MESSAGE_TYPE);
+                handleExecutionReport(session, strict, declaredMessageType);
+            } catch (RuntimeException malformed) {
+                sendReportError(session, payload, "REPORT_INVALID", "Execution report was rejected");
+            } catch (Exception malformed) {
+                sendReportError(session, payload, "REPORT_INVALID", "Execution report was rejected");
             }
             return;
         }
@@ -256,14 +290,15 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 if (normalized.legacyTaskReport()) {
                     reportTask(session, payload);
                 } else {
-                    sendDeferredProtocolHandler(session, payload, normalized);
+                    handleExecutionReport(session, payload, normalized.canonicalType());
                 }
             }
             case AgentProtocolConstants.TYPE_COMMAND_ACK -> handleCommandAck(session, payload);
             case AgentProtocolConstants.TYPE_WORK_PROGRESS,
                  AgentProtocolConstants.TYPE_WORK_HEARTBEAT,
                  AgentProtocolConstants.TYPE_HELP_REQUEST,
-                 AgentProtocolConstants.TYPE_ARTIFACT_PUBLISH -> sendDeferredProtocolHandler(session, payload, normalized);
+                 AgentProtocolConstants.TYPE_ARTIFACT_PUBLISH ->
+                    handleExecutionReport(session, payload, normalized.canonicalType());
             case AgentProtocolConstants.TYPE_COMMAND_DISPATCH -> sendProtocolError(session, payload,
                     "MESSAGE_DIRECTION_INVALID", "command.dispatch is server-to-Agent only");
             case AgentProtocolConstants.TYPE_TASK_EVENT -> sendProtocolError(session, payload,
@@ -305,13 +340,216 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         sendEvent(session, "protocol_hello", event);
     }
 
-    private void sendDeferredProtocolHandler(WebSocketSession session, Map<String, Object> payload,
-            AgentProtocolMessageNormalizer.NormalizedMessage normalized) {
-        if (requireAllowedSessionAgentId(session, payload) == null) {
+    private void handleExecutionReport(WebSocketSession session, Map<String, Object> payload,
+            String messageType) {
+        String reportMessageId = exactReportString(payload.get("messageId"), 100);
+        String agentId = sessionAgentId(session);
+        String runtimeInstanceId = sessionRuntimeInstanceId(session);
+        String ownerJiacn = sessionJiacn(session);
+        String clientId = sessionClientId(session);
+        boolean codexResult = AgentProtocolConstants.TYPE_WORK_RESULT.equals(messageType)
+                && CODEX_EXECUTION_RESULT.equals(payload.get("resultType"));
+        Set<String> businessFields = reportBusinessFields(messageType, codexResult);
+        Set<String> allowed = new java.util.HashSet<>(Set.of(
+                "schemaVersion", "messageType", "messageId",
+                "sourceAgentId", "agentId", "targetAgentId", "runtimeInstanceId",
+                "commandId", "correlationId"));
+        allowed.addAll(businessFields);
+        if (!codexResult) {
+            allowed.addAll(Set.of("tenantId", "clientId", "ownerJiacn", "reportId",
+                    "executionRef", "grantRevision", "attempt", "fencingToken",
+                    "sequence", "occurredAt", "payload"));
+        }
+        if (!Integer.valueOf(AgentProtocolConstants.VERSION_1).equals(payload.get("schemaVersion"))
+                || !messageType.equals(strictString(payload.get("messageType")))
+                || reportMessageId == null || agentId == null || runtimeInstanceId == null
+                || ownerJiacn == null || clientId == null || !allowed.containsAll(payload.keySet())
+                || !validExactDispatchId(agentId, 100)
+                || !validExactDispatchId(runtimeInstanceId, 100)
+                || !validExactDispatchId(ownerJiacn, 50)
+                || !validExactDispatchId(clientId, 50)
+                || !successfullyRegisteredAgentIds(session.getId()).contains(agentId)
+                || !exactReportSourceIdentity(payload, agentId, codexResult)
+                || !agentId.equals(exactReportString(payload.get("targetAgentId"), 100))
+                || !runtimeInstanceId.equals(exactReportString(payload.get("runtimeInstanceId"), 100))
+                || declaredReportScopeConflict(payload, ownerJiacn, clientId)
+                || exactReportString(payload.get("commandId"), 100) == null
+                || exactReportString(payload.get("correlationId"), 100) == null) {
+            sendReportError(session, payload, "REPORT_INVALID", "Execution report was rejected");
             return;
         }
-        sendProtocolError(session, payload, "PROTOCOL_HANDLER_NOT_AVAILABLE",
-                normalized.canonicalType() + " is recognized, but its durable handler belongs to a later task");
+
+        Map<String, Object> reportPayload = extractReportPayload(payload, businessFields, codexResult);
+        if (reportPayload == null) {
+            sendReportError(session, payload, "REPORT_INVALID", "Execution report was rejected");
+            return;
+        }
+        String reportId = codexResult ? reportMessageId
+                : exactReportString(payload.get("reportId"), 100);
+        String executionRef = codexResult ? null
+                : exactReportString(payload.get("executionRef"), 100);
+        Long grantRevision = codexResult ? 0L : exactReportLong(payload.get("grantRevision"));
+        Integer attempt = codexResult ? 0 : exactReportInteger(payload.get("attempt"));
+        String fencingToken = codexResult ? null
+                : exactReportString(payload.get("fencingToken"), 100);
+        Long sequence = codexResult ? 0L : exactReportLong(payload.get("sequence"));
+        Long occurredAt = codexResult ? 0L : exactReportLong(payload.get("occurredAt"));
+        if (!codexResult && (reportId == null || executionRef == null || grantRevision == null
+                || grantRevision < 1 || attempt == null || attempt < 1 || fencingToken == null
+                || sequence == null || sequence < 1 || occurredAt == null || occurredAt < 1)) {
+            sendReportError(session, payload, "REPORT_INVALID", "Execution report was rejected");
+            return;
+        }
+
+        AgentExecutionReportService service = executionReportServiceSupplier.get();
+        if (service == null) {
+            sendReportError(session, payload, "REPORT_UNAVAILABLE",
+                    "Execution report could not be committed");
+            return;
+        }
+        try {
+            AgentExecutionReportService.ReportReceipt receipt = service.accept(
+                    new AgentExecutionReportService.RuntimeScope(
+                            "0", clientId, ownerJiacn, agentId, runtimeInstanceId),
+                    new AgentExecutionReportService.ReportCommand(messageType, reportMessageId, reportId,
+                            exactReportString(payload.get("commandId"), 100),
+                            exactReportString(payload.get("correlationId"), 100), executionRef,
+                            grantRevision == null ? 0L : grantRevision, attempt == null ? 0 : attempt,
+                            fencingToken, sequence == null ? 0L : sequence,
+                            occurredAt == null ? 0L : occurredAt, reportPayload));
+            sendExecutionReportReceipt(session, codexResult, reportMessageId, agentId,
+                    exactReportString(payload.get("commandId"), 100), receipt);
+        } catch (AgentExecutionReportService.Failure failure) {
+            String code = switch (failure.reason()) {
+                case INVALID_REQUEST -> "REPORT_INVALID";
+                case NOT_FOUND -> "REPORT_NOT_FOUND";
+                case CONFLICT -> "REPORT_CONFLICT";
+                case STORAGE_UNAVAILABLE -> "REPORT_UNAVAILABLE";
+            };
+            String message = failure.reason() == AgentExecutionReportService.Reason.NOT_FOUND
+                    ? "Execution report target was not found"
+                    : failure.reason() == AgentExecutionReportService.Reason.CONFLICT
+                            ? "Execution report conflicted with committed state"
+                            : failure.reason() == AgentExecutionReportService.Reason.INVALID_REQUEST
+                                    ? "Execution report was rejected"
+                                    : "Execution report could not be committed";
+            sendReportError(session, payload, code, message);
+        } catch (RuntimeException unavailable) {
+            sendReportError(session, payload, "REPORT_UNAVAILABLE",
+                    "Execution report could not be committed");
+        }
+    }
+
+    private Set<String> reportBusinessFields(String messageType, boolean codexResult) {
+        if (codexResult) return Set.of("resultType", "status", "exitCode");
+        return switch (messageType) {
+            case AgentProtocolConstants.TYPE_WORK_PROGRESS -> Set.of("status", "summary", "percent");
+            case AgentProtocolConstants.TYPE_WORK_HEARTBEAT -> Set.of("status");
+            case AgentProtocolConstants.TYPE_WORK_RESULT -> Set.of("outcome", "exitCode",
+                    "failureCode", "summary", "manifestDigest", "outputStageRefs");
+            case AgentProtocolConstants.TYPE_HELP_REQUEST -> Set.of("reasonCode", "summary");
+            case AgentProtocolConstants.TYPE_ARTIFACT_PUBLISH -> Set.of("artifactId",
+                    "artifactVersion", "stageRef", "sha256", "byteLength", "contentType");
+            default -> Set.of();
+        };
+    }
+
+    private Map<String, Object> extractReportPayload(Map<String, Object> envelope,
+            Set<String> businessFields, boolean codexResult) {
+        Object nestedValue = envelope.get("payload");
+        Map<?, ?> nested = nestedValue instanceof Map<?, ?> map ? map : Map.of();
+        if (codexResult && nestedValue != null) return null;
+        if (nestedValue != null && !(nestedValue instanceof Map<?, ?>)
+                || !businessFields.containsAll(nested.keySet())) return null;
+        Map<String, Object> projected = new HashMap<>();
+        for (String field : businessFields) {
+            Object outer = envelope.get(field);
+            Object inner = nested.get(field);
+            if (outer != null && inner != null && !java.util.Objects.deepEquals(outer, inner)) return null;
+            Object value = outer != null ? outer : inner;
+            if (value != null) projected.put(field, value);
+        }
+        return Map.copyOf(projected);
+    }
+
+    private boolean declaredReportScopeConflict(Map<String, Object> payload,
+            String ownerJiacn, String clientId) {
+        return payload.containsKey("tenantId") && !"0".equals(strictString(payload.get("tenantId")))
+                || payload.containsKey("clientId")
+                        && !clientId.equals(strictString(payload.get("clientId")))
+                || payload.containsKey("ownerJiacn")
+                        && !ownerJiacn.equals(strictString(payload.get("ownerJiacn")));
+    }
+
+    private boolean exactReportSourceIdentity(Map<String, Object> payload, String expected,
+            boolean requireAgentAlias) {
+        if (!expected.equals(exactReportString(payload.get("sourceAgentId"), 100))) return false;
+        if (requireAgentAlias) {
+            return expected.equals(exactReportString(payload.get("agentId"), 100));
+        }
+        return !payload.containsKey("agentId")
+                || expected.equals(exactReportString(payload.get("agentId"), 100));
+    }
+
+    private String exactReportString(Object value, int maxLength) {
+        if (!(value instanceof String text) || !validExactDispatchId(text, maxLength)) return null;
+        return text;
+    }
+
+    private Long exactReportLong(Object value) {
+        if (!(value instanceof String text) || !text.matches("[1-9][0-9]{0,15}")) return null;
+        try { return Long.valueOf(text); } catch (NumberFormatException invalid) { return null; }
+    }
+
+    private Integer exactReportInteger(Object value) {
+        if (!(value instanceof Byte || value instanceof Short || value instanceof Integer)) return null;
+        return ((Number) value).intValue();
+    }
+
+    private void sendExecutionReportReceipt(WebSocketSession session, boolean codexResult,
+            String reportMessageId, String targetAgentId, String commandId,
+            AgentExecutionReportService.ReportReceipt receipt) {
+        Map<String, Object> event = new HashMap<>();
+        event.put("schemaVersion", AgentProtocolConstants.VERSION_1);
+        event.put("messageType", codexResult ? "work.result.receipt" : "work.report.receipt");
+        event.put("messageId", reportReceiptMessageId(reportMessageId, receipt.resultRef()));
+        event.put("correlationId", reportMessageId);
+        event.put("commandId", commandId);
+        event.put("targetAgentId", targetAgentId);
+        event.put("resultRef", receipt.resultRef());
+        event.put("committedVersion", receipt.committedVersion());
+        event.put("duplicate", receipt.duplicate());
+        if (codexResult) {
+            event.put("resultType", CODEX_EXECUTION_RESULT);
+            event.put("receiptStatus", "ACCEPTED");
+        } else {
+            event.put("reportId", receipt.reportId());
+        }
+        sendEvent(session, codexResult ? "work.result.receipt" : "work.report.receipt", event);
+    }
+
+    private String reportReceiptMessageId(String reportMessageId, String resultRef) {
+        try {
+            byte[] hash = MessageDigest.getInstance("SHA-256").digest(
+                    ("report-receipt\n" + reportMessageId + "\n" + resultRef)
+                            .getBytes(StandardCharsets.UTF_8));
+            return "wrr_" + HexFormat.of().formatHex(hash);
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException(impossible);
+        }
+    }
+
+    private void sendReportError(WebSocketSession session, Map<String, Object> payload,
+            String code, String message) {
+        Map<String, Object> event = new HashMap<>();
+        event.put("schemaVersion", AgentProtocolConstants.VERSION_1);
+        event.put("messageType", AgentProtocolConstants.TYPE_PROTOCOL_ERROR);
+        String messageId = exactReportString(payload == null ? null : payload.get("messageId"), 100);
+        if (messageId != null) event.put("correlationId", messageId);
+        event.put("code", code);
+        event.put("message", message);
+        event.put("cacheControl", "private, no-store");
+        sendEvent(session, "protocol_error", event);
     }
 
     private void startChatStream(WebSocketSession session, Map<String, Object> payload) {
