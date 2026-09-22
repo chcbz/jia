@@ -60,9 +60,25 @@ class HallReadControllerTest {
                 .andExpect(jsonPath("$.section.partitions.private.status").value("complete"));
         verify(service).items(scope, "private", "archive", null, null);
     }
+    @Test void jwtClaimsWithoutAuthenticationCannotReadOverviewOrItems() throws Exception {
+        JwtAuthenticationToken unauthenticated = jwt("owner-a", "client-a");
+        unauthenticated.setAuthenticated(false);
+        for (String route : List.of("/agent/hall/overview", "/agent/hall/items?kind=private")) {
+            mvc.perform(get(route).principal(unauthenticated))
+                    .andExpect(status().isUnauthorized())
+                    .andExpect(jsonPath("$.code").value("HALL_UNAUTHENTICATED"))
+                    .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
+        }
+        verifyNoInteractions(service);
+    }
     private static JwtAuthenticationToken jwt(String owner, String client) {
-        return new JwtAuthenticationToken(Jwt.withTokenValue("fixture").header("alg", "none")
-                .subject(owner).claim("jiacn", owner).claim("client_id", client)
-                .issuedAt(Instant.ofEpochSecond(1)).expiresAt(Instant.ofEpochSecond(2)).build());
+        JwtAuthenticationToken authentication = new JwtAuthenticationToken(
+                Jwt.withTokenValue("fixture").header("alg", "none")
+                        .subject(owner).claim("jiacn", owner).claim("client_id", client)
+                        .issuedAt(Instant.ofEpochSecond(1)).expiresAt(Instant.ofEpochSecond(2)).build());
+        // Standalone MVC receives the post-authentication principal; no decoder/filter runs here.
+        // The single-argument constructor alone intentionally does not authenticate a JWT.
+        authentication.setAuthenticated(true);
+        return authentication;
     }
 }

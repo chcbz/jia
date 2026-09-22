@@ -51,8 +51,28 @@ class HallPrivateMarkControllerTest {
         mvc.perform(get("/agent/hall/items/PRIVATE_CASE/case/mark?ownerJiacn=foreign").principal(jwt())).andExpect(status().isBadRequest());
         verifyNoInteractions(service);
     }
+    @Test void jwtClaimsWithoutAuthenticationCannotReadOrWritePrivateMarks() throws Exception {
+        JwtAuthenticationToken unauthenticated = jwt();
+        unauthenticated.setAuthenticated(false);
+        mvc.perform(get("/agent/hall/items/PRIVATE_CASE/case/mark").principal(unauthenticated))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("HALL_UNAUTHENTICATED"))
+                .andExpect(header().string("Cache-Control", "private, no-store"));
+        mvc.perform(patch("/agent/hall/items/PRIVATE_CASE/case/mark").principal(unauthenticated)
+                        .header("Idempotency-Key", "key").contentType("application/json")
+                        .content("{\"expectedRevision\":0,\"archived\":true}"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("HALL_UNAUTHENTICATED"));
+        verifyNoInteractions(service);
+    }
     private static JwtAuthenticationToken jwt() {
-        return new JwtAuthenticationToken(Jwt.withTokenValue("fixture").header("alg","none").subject("o")
-                .claim("jiacn","o").claim("client_id","c").issuedAt(Instant.ofEpochSecond(1)).expiresAt(Instant.ofEpochSecond(2)).build());
+        JwtAuthenticationToken authentication = new JwtAuthenticationToken(
+                Jwt.withTokenValue("fixture").header("alg","none").subject("o")
+                        .claim("jiacn","o").claim("client_id","c")
+                        .issuedAt(Instant.ofEpochSecond(1)).expiresAt(Instant.ofEpochSecond(2)).build());
+        // Standalone MVC receives the post-authentication principal; no decoder/filter runs here.
+        // The single-argument constructor alone intentionally does not authenticate a JWT.
+        authentication.setAuthenticated(true);
+        return authentication;
     }
 }
