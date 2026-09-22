@@ -18,4 +18,6 @@ public interface MpUserMapper extends BaseMapper<MpUserEntity> {
 
     List<MpUserEntity> selectByAppIdAndOpenIdExact(
             @Param("appid") String appid, @Param("openId") String openId);
+
+    int touchLastActive(@Param("id") long id, @Param("lastActiveTime") long lastActiveTime);
 }

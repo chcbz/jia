@@ -90,7 +90,7 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
         when(mpInfoService.findCachedByKey(APPID)).thenReturn(account);
         when(mpInfoService.findByKey(APPID)).thenReturn(account);
         when(mpUserService.findByAppIdAndOpenId(APPID, OPENID)).thenReturn(new MpUserEntity()
-                .setAppid(APPID).setOpenId(OPENID).setJiacn("user-1"));
+                .setId(17L).setAppid(APPID).setOpenId(OPENID).setJiacn("user-1"));
     }
 
     private void stubValidDailyVoteRequest() {
@@ -140,6 +140,29 @@ class WxMpControllerDailyVoteTest extends BaseMockTest {
         assertEquals(OPENID, delivery.getValue().getToUser());
         assertEquals("水浒第一题\n\nA 及时雨宋江\n", delivery.getValue().getContent());
         verify(voteService).findOneQuestion("user-1");
+        verify(redisService).set("vote_user-1", "337", 2L, java.util.concurrent.TimeUnit.HOURS);
+        verify(mpUserService).touchLastActive(eq(17L), anyLong());
+    }
+
+    @Test
+    void questionDeliveryContinuesWhenLastActivePersistenceFails() throws Exception {
+        stubValidDailyVoteRequest();
+        MatVoteQuestionVO question = new MatVoteQuestionVO();
+        question.setId(337L);
+        question.setTitle("水浒第一题");
+        question.setItems(java.util.List.of(new MatVoteItemEntity().setOpt("A").setContent("及时雨宋江")));
+        when(voteService.findOneQuestion("user-1")).thenReturn(question);
+        when(wxMpService.getKefuService().sendKefuMessage(any(WxMpKefuMessage.class))).thenReturn(true);
+        doThrow(new IllegalStateException("last-active column unavailable"))
+                .when(mpUserService).touchLastActive(eq(17L), anyLong());
+
+        controller.receiveMsg(XML.replace("<![CDATA[A]]>", "<![CDATA[我要做题]]>"), request);
+        ArgumentCaptor<Runnable> task = ArgumentCaptor.forClass(Runnable.class);
+        verify(dailyVoteQuestionExecutor).execute(task.capture());
+        task.getValue().run();
+
+        verify(wxMpService.getKefuService()).sendKefuMessage(any(WxMpKefuMessage.class));
+        verify(redisService).set("active_mp_user_" + OPENID, "Y", java.time.Duration.ofDays(2));
         verify(redisService).set("vote_user-1", "337", 2L, java.util.concurrent.TimeUnit.HOURS);
     }
 

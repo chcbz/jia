@@ -20,4 +20,19 @@
         LIMIT 2
     </select>
 
+    <update id="touchLastActive">
+        UPDATE wx_mp_user
+        SET last_active_time = CASE
+                WHEN last_active_time IS NULL OR last_active_time &lt; #{lastActiveTime,jdbcType=BIGINT}
+                    THEN #{lastActiveTime,jdbcType=BIGINT}
+                ELSE last_active_time
+            END,
+            update_time = CASE
+                WHEN update_time IS NULL OR update_time &lt; #{lastActiveTime,jdbcType=BIGINT}
+                    THEN #{lastActiveTime,jdbcType=BIGINT}
+                ELSE update_time
+            END
+        WHERE id = #{id,jdbcType=BIGINT}
+    </update>
+
 </mapper>

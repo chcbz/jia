@@ -25,6 +25,11 @@ public class MpUserDaoImpl extends BaseDaoImpl<MpUserMapper, MpUserEntity> imple
     }
 
     @Override
+    public int touchLastActive(long id, long lastActiveTime) {
+        return baseMapper.touchLastActive(id, lastActiveTime);
+    }
+
+    @Override
     public int unsubscribe(MpUserEntity example) {
         UpdateWrapper<MpUserEntity> updateWrapper = new UpdateWrapper<>();
         updateWrapper.lambda()

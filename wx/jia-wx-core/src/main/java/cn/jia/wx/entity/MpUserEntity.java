@@ -3,6 +3,7 @@ package cn.jia.wx.entity;
 import cn.jia.core.entity.BaseEntity;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
@@ -90,5 +91,14 @@ public class MpUserEntity extends BaseEntity {
 
     @Schema(description = "简短说明")
     private String remark;
+
+    /**
+     * The value is written through the scoped callback update statement.  It remains excluded
+     * from generic CRUD until the additive production migration has been applied, so a rolling
+     * application deployment cannot make inbound WeChat callbacks depend on uninstalled DDL.
+     */
+    @TableField(exist = false)
+    @Schema(description = "最后一次收到微信公众号用户消息的服务端时间")
+    private Long lastActiveTime;
 
 }

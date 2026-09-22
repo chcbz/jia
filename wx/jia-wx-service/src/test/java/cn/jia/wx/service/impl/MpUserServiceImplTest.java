@@ -113,6 +113,16 @@ class MpUserServiceImplTest extends BaseMockTest {
     }
 
     @Test
+    void touchLastActiveDelegatesOnlyValidInputs() {
+        when(mpUserDao.touchLastActive(12L, 1720000000L)).thenReturn(1);
+
+        assertEquals(1, mpUserService.touchLastActive(12L, 1720000000L));
+        verify(mpUserDao).touchLastActive(12L, 1720000000L);
+        assertThrows(IllegalArgumentException.class, () -> mpUserService.touchLastActive(0, 1720000000L));
+        assertThrows(IllegalArgumentException.class, () -> mpUserService.touchLastActive(12L, 0));
+    }
+
+    @Test
     void sync() {
         when(mpUserDao.selectByEntity(any())).thenReturn(Collections.emptyList())
                 .thenReturn(Collections.singletonList(new MpUserEntity()));

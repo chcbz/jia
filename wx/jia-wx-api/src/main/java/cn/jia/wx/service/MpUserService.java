@@ -12,6 +12,12 @@ public interface MpUserService extends IBaseService<MpUserEntity> {
 
     MpUserEntity findByJiacn(String jiacn);
 
+    /**
+     * Persist the server-observed time of a verified inbound WeChat message. Returns zero when
+     * the user record no longer exists.
+     */
+    int touchLastActive(long id, long lastActiveTime);
+
     void sync(List<MpUserEntity> userList);
 
     int unsubscribe(MpUserEntity example);

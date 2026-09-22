@@ -17,4 +17,6 @@ public interface MpUserDao extends IBaseDao<MpUserEntity> {
     int unsubscribe(MpUserEntity example);
 
     List<MpUserEntity> selectByAppIdAndOpenIdExact(String appid, String openId);
+
+    int touchLastActive(long id, long lastActiveTime);
 }

@@ -107,6 +107,14 @@ public class MpUserServiceImpl extends BaseServiceImpl<MpUserDao, MpUserEntity> 
 	}
 
 	@Override
+	public int touchLastActive(long id, long lastActiveTime) {
+		if (id <= 0 || lastActiveTime <= 0) {
+			throw new IllegalArgumentException("WeChat user id and last-active time are required");
+		}
+		return baseDao.touchLastActive(id, lastActiveTime);
+	}
+
+	@Override
 	@Async
 	public void sync(List<MpUserEntity> userList) {
 		for(MpUserEntity user : userList) {

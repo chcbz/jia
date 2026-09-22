@@ -15,6 +15,7 @@ CREATE TABLE wx_mp_info (
   password varchar(32) NOT NULL COMMENT '登录密码',
   create_time bigint DEFAULT NULL COMMENT '创建时间',
   update_time bigint DEFAULT NULL COMMENT '最后更新时间',
+  last_active_time bigint DEFAULT NULL COMMENT '最后一次收到公众号用户消息的服务端时间',
   client_id varchar(50) DEFAULT NULL COMMENT '应用标识符',
   tenant_id varchar(50) DEFAULT '0' COMMENT '租户ID',
   status int DEFAULT '1' COMMENT '状态 1有效 0无效',

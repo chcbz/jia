@@ -585,11 +585,26 @@ public class WxMpController {
     }
 
     private void updateActiveMpUser(MpUserEntity mpUser, String appid, String messageType, String messageKey) {
-        // 活跃标记是非关键缓存，故障不得阻断已验签消息或题目投递。
+        // A verified inbound callback is the only local evidence used for the customer-service window.
+        // Redis keeps the fast two-day eligibility marker; MySQL retains the observable last-active time.
+        long activeAt = DateUtil.nowTime();
         try {
             redisService.set("active_mp_user_" + mpUser.getOpenId(), "Y", Duration.ofDays(2));
         } catch (RuntimeException e) {
             log.warn("Wx active marker update failed: appid={}, type={}, trace={}, error={}",
+                    appid, messageType, WxDailyVoteKeys.trace(messageKey), e.getClass().getSimpleName());
+        }
+        if (mpUser.getId() == null) {
+            log.warn("Wx last-active persistence skipped because user id is absent: appid={}, type={}, trace={}",
+                    appid, messageType, WxDailyVoteKeys.trace(messageKey));
+            return;
+        }
+        try {
+            mpUserService.touchLastActive(mpUser.getId(), activeAt);
+        } catch (RuntimeException e) {
+            // The additive column is installed separately. Its absence or a database fault must not
+            // prevent acknowledging a verified callback or delivering an already-requested question.
+            log.warn("Wx last-active persistence failed: appid={}, type={}, trace={}, error={}",
                     appid, messageType, WxDailyVoteKeys.trace(messageKey), e.getClass().getSimpleName());
         }
     }
