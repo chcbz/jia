@@ -244,6 +244,7 @@ tasks.register('jytUxB01b', Test) {
 def jytUxB03SourceSet = sourceSets.create('jytUxB03') {
     java {
         srcDir 'src/test/java'
+        include 'cn/jia/agent/config/HallPrivateCaseSchemaInitializerTest.java'
         include 'cn/jia/agent/service/impl/HallRequestDraftSubmissionServiceTest.java'
         include 'cn/jia/agent/service/impl/HallRequestDraftSubmissionMySqlTest.java'
         include 'cn/jia/agent/api/HallSubmissionControllerTest.java'

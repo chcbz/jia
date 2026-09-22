@@ -76,13 +76,11 @@ public final class HallPrivateCaseSchemaInitializer implements InitializingBean 
         } catch (IOException failure) {
             throw new IllegalStateException("Hall private case DDL is missing", failure);
         }
-        String stripped = source.lines().filter(line -> !line.stripLeading().startsWith("--"))
-                .reduce("", (left, right) -> left + right + '\n');
-        List<String> statements = new ArrayList<>();
-        for (String raw : stripped.split(";")) {
-            String statement = raw.strip();
-            if (!statement.isEmpty()) statements.add(statement);
-        }
+        return ddlStatements(source);
+    }
+
+    static List<String> ddlStatements(String source) {
+        List<String> statements = HallSchemaSql.split(source);
         if (statements.size() != TABLES.size()) {
             throw new IllegalStateException("Hall private case DDL must contain exactly two statements");
         }
