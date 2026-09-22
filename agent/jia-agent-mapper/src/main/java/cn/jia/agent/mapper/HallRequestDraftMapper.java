@@ -156,7 +156,7 @@ public interface HallRequestDraftMapper extends BaseMapper<HallRequestDraftEntit
             @Param("inputsJson") String inputsJson, @Param("updatedAt") long updatedAt);
 
     @Update("""
-            UPDATE IGNORE hall_request_draft
+            UPDATE hall_request_draft
                SET submit_key=#{submitKey},submit_hash=#{submitHash},updated_at=#{updatedAt}
              WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
                AND draft_id=#{draftId} AND state='EDITING' AND revision=#{expectedRevision}

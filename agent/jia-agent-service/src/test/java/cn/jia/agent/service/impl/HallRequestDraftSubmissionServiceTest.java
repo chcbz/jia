@@ -17,11 +17,14 @@ import cn.jia.chat.service.WorkspaceConversationAccessService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DuplicateKeyException;
 
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -198,6 +201,36 @@ class HallRequestDraftSubmissionServiceTest {
         assertReason(HallRequestDraftService.Reason.IDEMPOTENCY_CONFLICT,
                 () -> service.submit(SCOPE, "hdr_target", 1, true, "shared"));
         verify(drafts, never()).lock(any(), any(), any(), any());
+        verifyNoInteractions(cases, executions);
+    }
+
+    @Test
+    void duplicateSubmitReservationFailsBeforeCaseOrExecutionSideEffects() {
+        HallRequestDraftEntity editing = draft("hdr_target", "CREATE", 1, "EDITING");
+        when(drafts.lock("0", "client-a", "owner-a", "hdr_target")).thenReturn(editing);
+        when(drafts.reserveSubmitIntent(eq("0"), eq("client-a"), eq("owner-a"),
+                eq("hdr_target"), eq(1L), eq("shared"), any(), eq(now.get())))
+                .thenThrow(new DuplicateKeyException("scoped submit key already reserved"));
+
+        assertReason(HallRequestDraftService.Reason.IDEMPOTENCY_CONFLICT,
+                () -> service.submit(SCOPE, "hdr_target", 1, true, "shared"));
+        verifyNoInteractions(cases, executions);
+        verify(drafts, never()).markSubmitted(any(), any(), any(), any(),
+                org.mockito.ArgumentMatchers.anyLong(), any(), any(), any(), any(), any(),
+                org.mockito.ArgumentMatchers.anyLong());
+    }
+
+    @Test
+    void nonDuplicateReservationIntegrityFailureIsNotMisclassifiedAsIdempotency() {
+        HallRequestDraftEntity editing = draft("hdr_target", "CREATE", 1, "EDITING");
+        when(drafts.lock("0", "client-a", "owner-a", "hdr_target")).thenReturn(editing);
+        DataIntegrityViolationException invalid = new DataIntegrityViolationException("CHECK failure");
+        when(drafts.reserveSubmitIntent(eq("0"), eq("client-a"), eq("owner-a"),
+                eq("hdr_target"), eq(1L), eq("shared"), any(), eq(now.get())))
+                .thenThrow(invalid);
+
+        assertSame(invalid, assertThrows(DataIntegrityViolationException.class,
+                () -> service.submit(SCOPE, "hdr_target", 1, true, "shared")));
         verifyNoInteractions(cases, executions);
     }
 

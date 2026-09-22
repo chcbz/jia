@@ -22,6 +22,7 @@ import jakarta.inject.Inject;
 import jakarta.inject.Named;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.type.TypeReference;
@@ -264,8 +265,16 @@ public class HallRequestDraftServiceImpl implements HallRequestDraftService {
         else requireComplete(fields);
         validatePersistedSources(scope, current, fields);
         long submittedAt = now();
-        int reserved = drafts.reserveSubmitIntent(scope.tenantId(), scope.clientId(),
-                scope.ownerJiacn(), draftId, expectedRevision, idempotencyKey, submitHash, submittedAt);
+        int reserved;
+        try {
+            reserved = drafts.reserveSubmitIntent(scope.tenantId(), scope.clientId(),
+                    scope.ownerJiacn(), draftId, expectedRevision, idempotencyKey, submitHash, submittedAt);
+        } catch (DuplicateKeyException competingSubmitKey) {
+            // This UPDATE changes only the scoped submit key/hash and timestamp. A duplicate
+            // therefore belongs to another draft's submit key. Roll back before any work;
+            // UPDATE IGNORE's matched-row count is not proof that the key was reserved.
+            throw new Failure(Reason.IDEMPOTENCY_CONFLICT, competingSubmitKey);
+        }
         if (reserved != 1) {
             replay = drafts.findBySubmitKey(
                     scope.tenantId(), scope.clientId(), scope.ownerJiacn(), idempotencyKey);

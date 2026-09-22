@@ -52,7 +52,9 @@ class HallRequestDraftMapperContractTest {
                 String.class, String.class, String.class, String.class, long.class,
                 String.class, String.class, long.class);
         String reserveSql = String.join(" ", reserve.getAnnotation(Update.class).value());
-        assertTrue(reserveSql.contains("UPDATE IGNORE hall_request_draft"));
+        assertTrue(reserveSql.contains("UPDATE hall_request_draft"));
+        assertTrue(!reserveSql.contains("IGNORE"),
+                "a matched-row count must not hide a duplicate submit-key reservation");
         assertTrue(reserveSql.contains("submit_key IS NULL AND submit_hash IS NULL"));
         for (String method : new String[] {"replaceEditing", "markSubmitted", "discardEditing"}) {
             Method target = Arrays.stream(HallRequestDraftMapper.class.getMethods())

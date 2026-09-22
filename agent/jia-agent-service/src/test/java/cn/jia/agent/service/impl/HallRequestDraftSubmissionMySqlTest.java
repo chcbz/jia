@@ -50,7 +50,11 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 
 /**
@@ -74,8 +78,10 @@ class HallRequestDraftSubmissionMySqlTest {
     private String database;
     private String namespace;
     private HallRequestDraftService service;
+    private HallRequestDraftDao drafts;
     private AtomicBoolean failExecution;
     private AtomicInteger executionSequence;
+    private CountDownLatch raceGate;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -168,8 +174,8 @@ class HallRequestDraftSubmissionMySqlTest {
         SqlSessionFactory factory = factoryBean.getObject();
         assertNotNull(factory);
         SqlSessionTemplate template = new SqlSessionTemplate(factory);
-        HallRequestDraftDao drafts = new HallRequestDraftDaoImpl(
-                template.getMapper(HallRequestDraftMapper.class));
+        drafts = spy(new HallRequestDraftDaoImpl(
+                template.getMapper(HallRequestDraftMapper.class)));
         HallPrivateCaseDao cases = new HallPrivateCaseDaoImpl(
                 template.getMapper(HallPrivateCaseMapper.class),
                 template.getMapper(HallCaseExecutionMapper.class));
@@ -274,6 +280,16 @@ class HallRequestDraftSubmissionMySqlTest {
     void concurrentDifferentDraftsWithOneSubmitKeyCreateExactlyOneExecution() throws Exception {
         String left = createDraft(OWNER, "create-left");
         String right = createDraft(OWNER, "create-right");
+        // Force both transactions past the absent-key lookup, retaining the real mapper SQL.
+        // The loser must fail before invoking execution creation, not merely roll it back later.
+        CountDownLatch reserving = new CountDownLatch(2);
+        raceGate = reserving;
+        doAnswer(invocation -> {
+            reserving.countDown();
+            reserving.await();
+            return invocation.callRealMethod();
+        }).when(drafts).reserveSubmitIntent(eq("0"), eq("client-a"), eq("owner-a"),
+                any(), eq(1L), eq("shared-submit"), any(), anyLong());
         CountDownLatch start = new CountDownLatch(1);
         List<Object> results = concurrently(start,
                 () -> submitResult(left, "shared-submit"),
@@ -283,10 +299,15 @@ class HallRequestDraftSubmissionMySqlTest {
         assertEquals(1, results.stream().filter(HallRequestDraftService.Failure.class::isInstance)
                 .map(HallRequestDraftService.Failure.class::cast)
                 .filter(failure -> failure.reason()
-                        == HallRequestDraftService.Reason.IDEMPOTENCY_CONFLICT).count());
+                        == HallRequestDraftService.Reason.IDEMPOTENCY_CONFLICT).count(),
+                () -> "submit result types/reasons: " + resultKinds(results));
+        assertEquals(1, executionSequence.get(), "loser must not call execution creation");
         assertEquals(1, count("fixture_execution"));
         assertEquals(1, count("hall_private_case"));
         assertEquals(1, count("hall_case_execution"));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM hall_request_draft "
+                + "WHERE state='EDITING' AND revision=1 AND submit_key IS NULL "
+                + "AND submit_hash IS NULL AND submission_ref IS NULL", Integer.class));
     }
 
     @Test
@@ -331,6 +352,16 @@ class HallRequestDraftSubmissionMySqlTest {
         seedLegacyOutput();
         String left = createRevisionDraft("legacy-left");
         String right = createRevisionDraft("legacy-right");
+        // Both sessions must have read an absent binding before either locks the source.
+        // In particular, do not globally change the fixture's default MyBatis SESSION cache.
+        CountDownLatch lockingLegacyOutput = new CountDownLatch(2);
+        raceGate = lockingLegacyOutput;
+        doAnswer(invocation -> {
+            lockingLegacyOutput.countDown();
+            lockingLegacyOutput.await();
+            return invocation.callRealMethod();
+        }).when(drafts).lockPrivateCommittedOutputExists("0", "client-a", "owner-a",
+                "legacy-execution", "legacy-output", "legacy-file", 1);
         CountDownLatch start = new CountDownLatch(1);
         List<Object> results = concurrently(start,
                 () -> submitResult(left, "legacy-submit-left"),
@@ -341,15 +372,38 @@ class HallRequestDraftSubmissionMySqlTest {
                 .map(HallRequestDraftService.Failure.class::cast)
                 .filter(failure -> failure.reason()
                         == HallRequestDraftService.Reason.EXECUTION_CONFLICT).count();
-        assertTrue(receipts == 1 || receipts == 2,
-                "the second contender may observe the committed binding and append revision 3");
-        assertEquals(2, receipts + conflicts);
+        assertEquals(1, receipts, "both contenders observed the missing legacy binding");
+        assertEquals(1, conflicts, () -> "legacy result types/reasons: " + resultKinds(results));
+        assertEquals(receipts, executionSequence.get(), "loser must not create an execution");
         assertEquals(1, count("hall_private_case"));
         assertEquals(1 + receipts, count("hall_case_execution"));
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM hall_case_execution "
                 + "WHERE execution_id='legacy-execution' AND revision_no=1 "
                 + "AND parent_execution_id IS NULL", Integer.class));
         assertEquals(receipts, count("fixture_execution"));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM hall_request_draft "
+                + "WHERE state='EDITING' AND revision=1 AND submit_key IS NULL "
+                + "AND submit_hash IS NULL", Integer.class));
+
+        // A user retry of the rolled-back contender reuses the committed parent/case, not
+        // the old Provider execution. The failed submit key was not durably consumed.
+        String retryDraft = results.get(0) instanceof HallRequestDraftService.Failure ? left : right;
+        String retryKey = retryDraft.equals(left) ? "legacy-submit-left" : "legacy-submit-right";
+        HallRequestDraftService.SubmissionReceipt retried =
+                service.submit(OWNER, retryDraft, 1, true, retryKey);
+        HallRequestDraftService.SubmissionReceipt winner = results.stream()
+                .filter(HallRequestDraftService.SubmissionReceipt.class::isInstance)
+                .map(HallRequestDraftService.SubmissionReceipt.class::cast).findFirst().orElseThrow();
+        assertEquals(winner.ref(), retried.ref());
+        assertEquals(2, executionSequence.get());
+        assertEquals(2, count("fixture_execution"));
+        assertEquals(1, count("hall_private_case"));
+        assertEquals(3, count("hall_case_execution"));
+        assertEquals(3L, jdbc.queryForObject("SELECT revision FROM hall_private_case", Long.class));
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM hall_case_execution "
+                + "WHERE parent_execution_id='legacy-execution' AND revision_no IN (2,3)", Integer.class));
+        assertEquals(retried, service.submit(OWNER, retryDraft, 1, true, retryKey));
+        assertEquals(2, executionSequence.get(), "receipt replay must not create another execution");
     }
 
     @Test
@@ -473,14 +527,29 @@ class HallRequestDraftSubmissionMySqlTest {
     private List<Object> concurrently(CountDownLatch start,
             ThrowingSupplier left, ThrowingSupplier right) throws Exception {
         try (var pool = Executors.newFixedThreadPool(2)) {
-            Future<Object> first = pool.submit(() -> { start.await(); return left.get(); });
-            Future<Object> second = pool.submit(() -> { start.await(); return right.get(); });
+            Future<Object> first = pool.submit(() -> concurrentCall(start, left));
+            Future<Object> second = pool.submit(() -> concurrentCall(start, right));
             start.countDown();
             List<Object> values = new ArrayList<>();
             values.add(first.get());
             values.add(second.get());
             return values;
         }
+    }
+
+    private Object concurrentCall(CountDownLatch start, ThrowingSupplier call) throws Exception {
+        try {
+            start.await();
+            return call.get();
+        } finally {
+            // A contender failing before the rendezvous must not strand its peer in the fixture.
+            if (raceGate != null) raceGate.countDown();
+        }
+    }
+
+    private static List<String> resultKinds(List<Object> results) {
+        return results.stream().map(result -> result instanceof HallRequestDraftService.Failure failure
+                ? failure.reason().name() : result.getClass().getSimpleName()).toList();
     }
 
     private int count(String table) {

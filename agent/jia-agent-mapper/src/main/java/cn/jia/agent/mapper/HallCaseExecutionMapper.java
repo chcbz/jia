@@ -2,6 +2,7 @@ package cn.jia.agent.mapper;
 
 import cn.jia.agent.entity.HallCaseExecutionEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import org.apache.ibatis.annotations.Options;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 
@@ -18,6 +19,9 @@ public interface HallCaseExecutionMapper extends BaseMapper<HallCaseExecutionEnt
                AND OCTET_LENGTH(owner_jiacn)=OCTET_LENGTH(#{ownerJiacn})
             """;
 
+    // READ_COMMITTED must reach MySQL again after waiting for the legacy output/case lock.
+    // A session-cached null from before that wait would race the immutable execution binding.
+    @Options(useCache = false, flushCache = Options.FlushCachePolicy.TRUE)
     @Select("SELECT " + COLUMNS + " FROM hall_case_execution"
             + " WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}"
             + " AND execution_id=#{executionId}" + EXACT_SCOPE
