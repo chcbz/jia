@@ -397,6 +397,13 @@ class HallRequestDraftServiceImplTest {
     }
 
     private static final class FakeDao implements HallRequestDraftDao {
+        @Override public int countSubmittedTaskCreates(String tenant, String client,
+                String owner, String taskId) {
+            return (int) rows.values().stream().filter(row -> tenant.equals(row.getTenantId())
+                    && client.equals(row.getClientId()) && owner.equals(row.getOwnerJiacn())
+                    && "TASK_CREATE".equals(row.getKind()) && "SUBMITTED".equals(row.getState())
+                    && taskId.equals(row.getSubmissionRef())).count();
+        }
         private final Map<String, HallRequestDraftEntity> rows = new LinkedHashMap<>();
         // Seeded LEFT JOIN projections, including null-output rows and invisible file bindings.
         private final List<HallExecutionResultRow> resultRows = new ArrayList<>();

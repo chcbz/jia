@@ -7,6 +7,7 @@ import java.util.List;
 
 /** Every lookup includes the exact authenticated tenant/client/owner scope. */
 public interface HallRequestDraftDao {
+    int countSubmittedTaskCreates(String tenantId, String clientId, String ownerJiacn, String taskId);
     HallRequestDraftEntity find(String tenantId, String clientId, String ownerJiacn, String draftId);
     HallRequestDraftEntity findByCreateKey(String tenantId, String clientId, String ownerJiacn,
             String createKey);
