@@ -181,7 +181,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         verify(session, org.mockito.Mockito.atLeast(1)).sendMessage(messages.capture());
         assertTrue(messages.getAllValues().stream()
                 .map(TextMessage::getPayload)
-                .anyMatch(payload -> payload.contains("abilities must be an array")));
+                .anyMatch(payload -> payload.contains("AGENT_REGISTRATION_UNAVAILABLE")));
     }
 
     @Test
@@ -267,7 +267,8 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         verify(session, org.mockito.Mockito.times(2)).sendMessage(messageCaptor.capture());
         String messages = messageCaptor.getAllValues().stream()
                 .map(TextMessage::getPayload).reduce("", String::concat);
-        assertTrue(messages.contains("abilities must be an array"));
+        assertTrue(messages.contains("AGENT_REGISTRATION_UNAVAILABLE"));
+        assertFalse(messages.contains("abilities must be an array"), "registration error must stay sanitized");
         assertTrue(messages.contains("abilities must contain non-blank strings"));
     }
 
@@ -1750,7 +1751,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
         when(agentService.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO("agent-wuyong", "token-001", AgentConstants.STATUS_ONLINE));
-        when(agentService.listTaskWritableMemberAgentIds("juyiting", "jia_client", "task-001"))
+        when(agentService.listTaskWritableMemberAgentIds("0", "jia_client", "task-001"))
                 .thenReturn(List.of("agent-wuyong"));
 
         AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
@@ -1764,7 +1765,16 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(session.isOpen()).thenReturn(true);
         EsContextHolder.setContext(commandContext);
 
-        HallActionDispatcher dispatcher = new HallActionDispatcher(handler);
+        cn.jia.agent.config.AgentRabbitSafetyGate gate = org.mockito.Mockito.mock(
+                cn.jia.agent.config.AgentRabbitSafetyGate.class);
+        when(gate.state()).thenReturn(cn.jia.agent.config.AgentRabbitActivationState.OFF);
+        cn.jia.agent.service.AgentTaskCollaborationAccessService access = org.mockito.Mockito.mock(
+                cn.jia.agent.service.AgentTaskCollaborationAccessService.class);
+        when(access.resolveMemberAccess("0", "jia_client", "juyiting", "task-001", "agent-wuyong"))
+                .thenReturn(cn.jia.agent.access.AgentTaskAccessLevel.READ_WRITE);
+        HallActionDispatcher dispatcher = new HallActionDispatcher(handler, gate,
+                org.mockito.Mockito.mock(ObjectProvider.class), org.mockito.Mockito.mock(ObjectProvider.class),
+                agentService, access);
 
         HallActionIntent intent = new HallActionIntent();
         intent.setIntentId("intent-dispatch-1");
@@ -1776,7 +1786,11 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         intent.setInstruction("请向林冲说明阻塞并请求替代方案");
         intent.setReason("接口依赖阻塞");
 
-        HallActionDispatchResult result = dispatcher.dispatch(intent);
+        assertEquals("failed", dispatcher.dispatch(intent).getStatus(),
+                "owner-less dispatch must remain fail closed");
+        verify(session, never()).sendMessage(any(TextMessage.class));
+        HallActionDispatchResult result = dispatcher.dispatch(intent,
+                new cn.jia.chat.service.HallTrustedCaller("0", "jia_client", "juyiting", "agent-wuyong"));
 
         assertEquals("dispatched", result.getStatus());
 
