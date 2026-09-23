@@ -26,9 +26,35 @@ class CorsConfigTest {
         assertEquals(List.of("authorization", "content-type", "idempotency-key", "if-match", "last-event-id", "x-request-id"),
                 cors.checkHeaders(List.of("authorization", "content-type", "idempotency-key", "if-match", "last-event-id", "x-request-id")));
         assertTrue(cors.getAllowedMethods().containsAll(List.of("POST", "PATCH", "OPTIONS")));
+        assertEquals(List.of("ETag"), cors.getExposedHeaders());
         assertEquals(Boolean.TRUE, cors.getAllowCredentials());
         assertEquals(Ordered.HIGHEST_PRECEDENCE,
                 config.corsFilterFilterRegistrationBean().getOrder());
+    }
+
+    @Test
+    void trustedBrowserCanReadMutationEtagWithoutExposingItToUntrustedOrigins() throws Exception {
+        var filter = configured(new String[]{"https://kit.chaoyoufan.cn"})
+                .corsFilterFilterRegistrationBean().getFilter();
+        var request = new MockHttpServletRequest("POST", "/agent/tasks/396/file-links");
+        request.addHeader("Origin", "https://kit.chaoyoufan.cn");
+        var response = new MockHttpServletResponse();
+        filter.doFilter(request, response, (req, res) -> {
+            var http = (jakarta.servlet.http.HttpServletResponse) res;
+            http.setStatus(201);
+            http.setHeader("ETag", "\"rel_1:1\"");
+        });
+        assertEquals(201, response.getStatus());
+        assertEquals("https://kit.chaoyoufan.cn", response.getHeader("Access-Control-Allow-Origin"));
+        assertEquals("ETag", response.getHeader("Access-Control-Expose-Headers"));
+        assertEquals("\"rel_1:1\"", response.getHeader("ETag"));
+
+        var untrusted = new MockHttpServletRequest("POST", "/agent/tasks/396/file-links");
+        untrusted.addHeader("Origin", "https://untrusted.example");
+        var rejected = new MockHttpServletResponse();
+        filter.doFilter(untrusted, rejected, (req, res) -> fail("untrusted origin must not proceed"));
+        assertEquals(403, rejected.getStatus());
+        assertNull(rejected.getHeader("Access-Control-Allow-Origin"));
     }
 
     @Test

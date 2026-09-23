@@ -37,6 +37,9 @@ public class CorsConfig {
         corsConfiguration.setAllowedOriginPatterns(origins);
         corsConfiguration.setAllowedHeaders(requiredCredentialHeaders(nonblank(allowedHeaders)));
         corsConfiguration.setAllowedMethods(nonblank(allowedMethods));
+        // Task/conversation link mutations return an ETag used by the browser to verify
+        // the persisted revision before treating a 201 as a confirmed association.
+        corsConfiguration.setExposedHeaders(List.of("ETag"));
         corsConfiguration.setAllowCredentials(true);
         return corsConfiguration;
     }
