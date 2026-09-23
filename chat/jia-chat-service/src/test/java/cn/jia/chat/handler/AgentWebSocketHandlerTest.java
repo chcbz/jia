@@ -1116,11 +1116,13 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(chatConversationService.getOwned("juyiting", "jia_client", "2003")).thenReturn(missingTask);
         when(chatConversationService.getOwned("juyiting", "jia_client", "2004")).thenReturn(queryFailure);
         when(chatConversationService.getOwned("juyiting", "jia_client", "2005")).thenReturn(crossTask);
-        when(agentService.listTaskWritableMemberAgentIds("juyiting", "jia_client", "task-7"))
-                .thenReturn(List.of("agent-001"));
-        when(agentService.listTaskWritableMemberAgentIds("juyiting", "jia_client", "task-8"))
+        when(agentService.listTaskWritableMemberAgentIds("0", "jia_client", "task-7"))
+                .thenAnswer(invocation -> "juyiting".equals(EsContextHolder.getContext().getJiacn())
+                        && "jia_client".equals(EsContextHolder.getContext().getClientId())
+                        ? List.of("agent-001") : List.of());
+        when(agentService.listTaskWritableMemberAgentIds("0", "jia_client", "task-8"))
                 .thenReturn(List.of("agent-other"));
-        when(agentService.listTaskWritableMemberAgentIds("juyiting", "jia_client", "task-10"))
+        when(agentService.listTaskWritableMemberAgentIds("0", "jia_client", "task-10"))
                 .thenThrow(new IllegalStateException("query failed"));
         when(chatConversationService.appendOwnedMessage(
                 org.mockito.ArgumentMatchers.eq("juyiting"),
@@ -1146,9 +1148,9 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 org.mockito.ArgumentMatchers.eq("jia_client"), any(ChatMessageEntity.class),
                 org.mockito.ArgumentMatchers.eq(1L));
         verify(agentService, org.mockito.Mockito.times(2))
-                .listTaskWritableMemberAgentIds("juyiting", "jia_client", "task-7");
-        verify(agentService).listTaskWritableMemberAgentIds("juyiting", "jia_client", "task-8");
-        verify(agentService).listTaskWritableMemberAgentIds("juyiting", "jia_client", "task-10");
+                .listTaskWritableMemberAgentIds("0", "jia_client", "task-7");
+        verify(agentService).listTaskWritableMemberAgentIds("0", "jia_client", "task-8");
+        verify(agentService).listTaskWritableMemberAgentIds("0", "jia_client", "task-10");
     }
 
     @Test
@@ -1221,7 +1223,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                     request.getAgentId(), "token", AgentConstants.STATUS_ONLINE);
         });
         when(agentService.listTaskWritableMemberAgentIds(
-                "juyiting", "jia_client", "task-recipients"))
+                "0", "jia_client", "task-recipients"))
                 .thenReturn(List.of("agent-current"));
         ChatConversationEntity conversation = new ChatConversationEntity()
                 .setId(2012L).setJiacn("juyiting").setConversationType("juyiting")
@@ -1258,7 +1260,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         verify(senderSession, org.mockito.Mockito.atLeastOnce()).sendMessage(any(TextMessage.class));
         verify(revokedSession, never()).sendMessage(any(TextMessage.class));
         verify(agentService, org.mockito.Mockito.times(2))
-                .listTaskWritableMemberAgentIds("juyiting", "jia_client", "task-recipients");
+                .listTaskWritableMemberAgentIds("0", "jia_client", "task-recipients");
     }
 
     @Test

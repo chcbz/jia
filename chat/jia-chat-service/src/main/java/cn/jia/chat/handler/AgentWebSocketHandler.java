@@ -1179,7 +1179,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         if (!expectedScopeKey.equals(scopeKey)) {
             return denyConversationAgentScope(session, payload);
         }
-        Set<String> authoritativeMembers = resolveTaskMemberAgentIds(
+        // The WebSocket jiacn is the owner, not the task tenant (always "0").
+        // The persisted conversation and the receiving session were matched above.
+        Set<String> authoritativeMembers = resolveConversationTaskMembers(
                 sessionJiacn(session), sessionClientId(session), taskId);
         if (!authoritativeMembers.contains(agentId)) {
             return denyConversationAgentScope(session, payload);
@@ -1215,6 +1217,22 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         return persistedTargets;
     }
 
+    private Set<String> resolveConversationTaskMembers(String ownerJiacn, String clientId,
+            String taskId) {
+        if (!validExactDispatchId(ownerJiacn, 50) || !validExactDispatchId(clientId, 50)
+                || !isCanonicalScopeId(taskId)) return Set.of();
+        EsContext previous = EsContextHolder.getContext();
+        EsContext ownerContext = new EsContext();
+        ownerContext.setJiacn(ownerJiacn);
+        ownerContext.setClientId(clientId);
+        EsContextHolder.setContext(ownerContext);
+        try {
+            return resolveTaskMemberAgentIds("0", clientId, taskId);
+        } finally {
+            EsContextHolder.setContext(previous);
+        }
+    }
+
     private List<String> currentConversationRecipientAgentIds(
             ChatConversationEntity conversation, String tenantId, String clientId) {
         List<String> persistedTargets = persistedConversationTargetAgentIds(conversation);
@@ -1227,7 +1245,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         if (!taskScoped) {
             return persistedTargets;
         }
-        Set<String> currentMembers = resolveTaskMemberAgentIds(tenantId, clientId, taskId);
+        Set<String> currentMembers = resolveConversationTaskMembers(tenantId, clientId, taskId);
         if (currentMembers.isEmpty()) {
             return List.of();
         }
