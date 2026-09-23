@@ -43,6 +43,7 @@ import static org.mockito.Mockito.when;
 class AgentLegacyTaskCompatibilityEventTest extends BaseMockTest {
     private static final String TENANT = "tenant-a";
     private static final String CLIENT = "client-a";
+    private static final String OWNER = "owner-a";
     private static final String TASK = "task-1";
     private static final String AGENT = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -53,28 +54,30 @@ class AgentLegacyTaskCompatibilityEventTest extends BaseMockTest {
     @Mock AgentIdentityService identityService;
     @Mock AgentTaskMutationTransaction mutationTransaction;
     @Mock AgentTaskEventWriter eventWriter;
+    @Mock cn.jia.agent.dao.HallRequestDraftDao drafts;
+    @Mock org.springframework.beans.factory.ObjectProvider<cn.jia.agent.dao.HallRequestDraftDao> draftProvider;
 
     private AgentTaskMetaEntity task;
 
     @BeforeEach
     void setUp() {
         task = root("open", 0L);
-        org.mockito.Mockito.lenient().when(mutationTransaction.executeAfterTaskRootReservation(
-                eq(TENANT), eq(CLIENT), eq(TASK), any(), any()))
+        org.mockito.Mockito.lenient().when(mutationTransaction.executeAfterTaskRootReservationInOwnerScope(
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), any(), any()))
                 .thenAnswer(invocation -> {
-                    AgentTaskMutationTransaction.TaskRootReservation reservation = invocation.getArgument(3);
+                    AgentTaskMutationTransaction.TaskRootReservation reservation = invocation.getArgument(4);
                     boolean created = reservation.reserve() == 1;
-                    AgentTaskMutationTransaction.ReservedTaskMutation<?> mutation = invocation.getArgument(4);
+                    AgentTaskMutationTransaction.ReservedTaskMutation<?> mutation = invocation.getArgument(5);
                     return mutation.apply(task, created);
                 });
-        org.mockito.Mockito.lenient().when(mutationTransaction.executeWithLockedTaskRoot(
-                eq(TENANT), eq(CLIENT), eq(TASK), any()))
+        org.mockito.Mockito.lenient().when(mutationTransaction.executeWithLockedTaskRootInOwnerScope(
+                eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), any()))
                 .thenAnswer(invocation -> {
-                    AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(3);
+                    AgentTaskMutationTransaction.LockedTaskMutation<?> mutation = invocation.getArgument(4);
                     return mutation.apply(task);
                 });
         when(identityService.lockActiveCanonicalAgentIdsInScope(
-                eq(TENANT), eq(CLIENT), eq(TENANT), anyList()))
+                eq(TENANT), eq(CLIENT), eq(OWNER), anyList()))
                 .thenAnswer(invocation -> List.copyOf(invocation.getArgument(3)));
         org.mockito.Mockito.lenient().when(eventWriter.append(any()))
                 .thenAnswer(invocation -> persisted(invocation.getArgument(0)));
@@ -84,15 +87,15 @@ class AgentLegacyTaskCompatibilityEventTest extends BaseMockTest {
     void assignAppendsTaskThenCanonicalUtf8MembersThenWorkItems() {
         String supplementary = "agt_😀";
         String privateUse = "agt_\uE000";
-        when(taskMetaDao.reserveOpenTaskRoot(TENANT, CLIENT, TASK, 1_000L)).thenReturn(0);
-        when(memberDao.listByTask(TENANT, CLIENT, TASK)).thenReturn(List.of());
-        when(workItemDao.listByTask(TENANT, CLIENT, TASK, null, 500)).thenReturn(List.of());
+        when(taskMetaDao.reserveOpenTaskRootInOwnerScope(TENANT, CLIENT, OWNER, TASK, 1_000L)).thenReturn(0);
+        when(memberDao.listByTask(TENANT, CLIENT, OWNER, TASK)).thenReturn(List.of());
+        when(workItemDao.listByTask(TENANT, CLIENT, OWNER, TASK, null, 500)).thenReturn(List.of());
         when(taskMetaDao.updateById(any())).thenReturn(1);
-        when(memberDao.insert(eq(TENANT), eq(CLIENT), any())).thenReturn(1);
-        when(workItemDao.insert(eq(TENANT), eq(CLIENT), any())).thenReturn(1);
+        when(memberDao.insert(eq(TENANT), eq(CLIENT), eq(OWNER), any())).thenReturn(1);
+        when(workItemDao.insert(eq(TENANT), eq(CLIENT), eq(OWNER), any())).thenReturn(1);
 
         AgentLegacyTaskCompatibilityService.AssignOutcome outcome = service().assignResolved(
-                TENANT, CLIENT, TENANT, TASK, List.of(supplementary, privateUse), false);
+                TENANT, CLIENT, OWNER, TASK, List.of(supplementary, privateUse), false);
 
         assertTrue(outcome.changed());
         ArgumentCaptor<AgentTaskEventWriteCommand> events =
@@ -120,21 +123,21 @@ class AgentLegacyTaskCompatibilityEventTest extends BaseMockTest {
         AgentTaskMemberEntity member = member("accepted", 0L);
         AgentTaskWorkItemEntity item = workItem("ready", 0L);
         when(identityService.lockActiveCanonicalAgentIdsInScope(
-                TENANT, CLIENT, TENANT, List.of(AGENT))).thenReturn(List.of(AGENT));
-        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK, AGENT)).thenReturn(member);
-        when(workItemDao.listByTaskAndAssignee(TENANT, CLIENT, TASK, AGENT, 500))
+                TENANT, CLIENT, OWNER, List.of(AGENT))).thenReturn(List.of(AGENT));
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK, AGENT)).thenReturn(member);
+        when(workItemDao.listByTaskAndAssignee(TENANT, CLIENT, OWNER, TASK, AGENT, 500))
                 .thenReturn(List.of(item));
-        when(memberDao.updateByVersion(eq(TENANT), eq(CLIENT), eq(TASK), eq(AGENT), eq(0L), any()))
+        when(memberDao.updateByVersion(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(AGENT), eq(0L), any()))
                 .thenReturn(1);
-        when(workItemDao.updateByVersion(eq(TENANT), eq(CLIENT), eq(item.getWorkItemId()), eq(0L), any()))
+        when(workItemDao.updateByVersion(eq(TENANT), eq(CLIENT), eq(OWNER), eq(item.getWorkItemId()), eq(0L), any()))
                 .thenReturn(1);
         AgentTaskAggregationDTO aggregate = aggregate("running", 1L, true);
-        when(aggregationService.aggregate(eq(TENANT), eq(CLIENT), eq(TASK), any()))
+        when(aggregationService.aggregate(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), any()))
                 .thenReturn(aggregate);
-        when(memberDao.listByTask(TENANT, CLIENT, TASK)).thenReturn(List.of(member));
+        when(memberDao.listByTask(TENANT, CLIENT, OWNER, TASK)).thenReturn(List.of(member));
 
         AgentLegacyTaskCompatibilityService.ReportOutcome outcome = service().reportResolved(
-                TENANT, CLIENT, TENANT, TASK, AGENT, "running", null);
+                TENANT, CLIENT, OWNER, TASK, AGENT, "running", null);
 
         assertTrue(outcome.changed());
         ArgumentCaptor<AgentTaskEventWriteCommand> events =
@@ -147,23 +150,26 @@ class AgentLegacyTaskCompatibilityEventTest extends BaseMockTest {
         member.setMemberStatus("working").setStartedAt(1_000L).setVersion(1L);
         item.setStatus("running").setLeaseToken(legacyLeaseToken()).setLeaseUntil(Long.MAX_VALUE - 1)
                 .setVersion(1L);
-        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, TASK, AGENT)).thenReturn(member);
-        when(workItemDao.listByTaskAndAssignee(TENANT, CLIENT, TASK, AGENT, 500))
+        when(memberDao.findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK, AGENT)).thenReturn(member);
+        when(workItemDao.listByTaskAndAssignee(TENANT, CLIENT, OWNER, TASK, AGENT, 500))
                 .thenReturn(List.of(item));
-        when(aggregationService.aggregate(eq(TENANT), eq(CLIENT), eq(TASK), any()))
+        when(aggregationService.aggregate(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), any()))
                 .thenReturn(aggregate("running", 0L, false));
-        when(memberDao.listByTask(TENANT, CLIENT, TASK)).thenReturn(List.of(member));
+        when(memberDao.listByTask(TENANT, CLIENT, OWNER, TASK)).thenReturn(List.of(member));
 
         AgentLegacyTaskCompatibilityService.ReportOutcome duplicate = service().reportResolved(
-                TENANT, CLIENT, TENANT, TASK, AGENT, "running", null);
+                TENANT, CLIENT, OWNER, TASK, AGENT, "running", null);
         assertFalse(duplicate.changed());
         verify(eventWriter, never()).append(any());
     }
 
     private AgentLegacyTaskCompatibilityService service() {
-        return new AgentLegacyTaskCompatibilityService(
+        AgentLegacyTaskCompatibilityService service = new AgentLegacyTaskCompatibilityService(
                 taskMetaDao, memberDao, workItemDao, aggregationService, identityService,
                 mutationTransaction, eventWriter, () -> 1_000L);
+        when(draftProvider.getIfAvailable()).thenReturn(drafts);
+        service.configureHallDraftGuard(draftProvider);
+        return service;
     }
 
     private AgentTaskMetaEntity root(String status, long version) {
@@ -173,6 +179,7 @@ class AgentLegacyTaskCompatibilityEventTest extends BaseMockTest {
                 .setRiskLevel("low").setMaxAgents(1).setReviewRequired(false);
         root.setTenantId(TENANT);
         root.setClientId(CLIENT);
+        root.setOwnerJiacn(OWNER);
         return root;
     }
 
@@ -183,6 +190,7 @@ class AgentLegacyTaskCompatibilityEventTest extends BaseMockTest {
                 .setJoinedAt(900L).setAcceptedAt(900L).setVersion(version);
         member.setTenantId(TENANT);
         member.setClientId(CLIENT);
+        member.setOwnerJiacn(OWNER);
         return member;
     }
 
@@ -195,6 +203,7 @@ class AgentLegacyTaskCompatibilityEventTest extends BaseMockTest {
                 .setAttemptCount(0).setMaxAttempts(3).setVersion(version);
         item.setTenantId(TENANT);
         item.setClientId(CLIENT);
+        item.setOwnerJiacn(OWNER);
         return item;
     }
 
