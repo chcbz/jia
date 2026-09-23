@@ -53,7 +53,7 @@ class PersonalWorkspaceExecutionServiceImplTest {
     private static final String PPTX =
             "application/vnd.openxmlformats-officedocument.presentationml.presentation";
     private static final List<String> INPUT_MIME_TYPES = List.of(
-            PersonalWorkspaceExecutionProperties.DOCX, XLSX, PDF, PPTX, "image/png", "image/jpeg");
+            PersonalWorkspaceExecutionProperties.DOCX, XLSX, PDF, PPTX, "image/png", "image/jpeg", "text/plain");
     private static final PersonalWorkspaceExecutionService.RuntimeScope RUNTIME =
             new PersonalWorkspaceExecutionService.RuntimeScope("0", "client-a", "owner-a", "agent-a", "runtime-a");
     private PersonalWorkspaceExecutionDao executions;
@@ -331,7 +331,7 @@ class PersonalWorkspaceExecutionServiceImplTest {
     }
 
     @Test
-    void createAcceptsSixFixedInputFormatsWhileKeepingDocxAsTheOnlyOutput() {
+    void createAcceptsSevenFixedInputFormatsWhileKeepingDocxAsTheOnlyOutput() {
         AgentRuntimeEntity runtime = new AgentRuntimeEntity();
         runtime.setAgentId("agent-a"); runtime.setClientId("client-a"); runtime.setOwnerJiacn("owner-a");
         when(runtimes.findCandidateRosterByOwner("client-a", "owner-a")).thenReturn(List.of(runtime));
@@ -345,7 +345,7 @@ class PersonalWorkspaceExecutionServiceImplTest {
             when(workspace.findVersion("0", "client-a", "owner-a", fileId, 1))
                     .thenReturn(workspaceVersion(fileId, 1, "source" + extension(mime), mime));
         }
-        when(executions.findByIdempotency("0", "client-a", "owner-a", "six-inputs-key"))
+        when(executions.findByIdempotency("0", "client-a", "owner-a", "seven-inputs-key"))
                 .thenReturn(null);
         when(executions.listInputs("0", "client-a", "owner-a", "pwe_created")).thenReturn(List.of());
         doAnswer(invocation -> {
@@ -357,7 +357,7 @@ class PersonalWorkspaceExecutionServiceImplTest {
                         "0", "client-a", "owner-a"),
                 new PersonalWorkspaceExecutionService.CreateCommand(null, "agent-a", null,
                         "用全部资料生成 Word", PersonalWorkspaceExecutionProperties.DOCX, selections),
-                "six-inputs-key");
+                "seven-inputs-key");
 
         assertEquals(PersonalWorkspaceExecutionProperties.DOCX, created.outputContentMimeType());
         var captured = ArgumentCaptor.forClass(PersonalWorkspaceExecutionInputEntity.class);
@@ -369,7 +369,7 @@ class PersonalWorkspaceExecutionServiceImplTest {
     }
 
     @Test
-    void uploadedButUnsupportedInputMimeFailsBeforeExecutionCreation() {
+    void uploadedPlainTextInputIsQueuedWithItsFixedVersion() {
         AgentRuntimeEntity runtime = new AgentRuntimeEntity();
         runtime.setAgentId("agent-a"); runtime.setClientId("client-a"); runtime.setOwnerJiacn("owner-a");
         when(runtimes.findCandidateRosterByOwner("client-a", "owner-a")).thenReturn(List.of(runtime));
@@ -377,17 +377,25 @@ class PersonalWorkspaceExecutionServiceImplTest {
                 .thenReturn(workspaceFile("file-text"));
         when(workspace.findVersion("0", "client-a", "owner-a", "file-text", 1))
                 .thenReturn(workspaceVersion("file-text", 1, "source.txt", "text/plain"));
+        when(executions.findByIdempotency("0", "client-a", "owner-a", "plain-text-input-key"))
+                .thenReturn(null);
+        when(executions.listInputs("0", "client-a", "owner-a", "pwe_text")).thenReturn(List.of());
+        doAnswer(invocation -> {
+            invocation.<PersonalWorkspaceExecutionEntity>getArgument(0).setExecutionId("pwe_text");
+            return null;
+        }).when(executions).insert(any(PersonalWorkspaceExecutionEntity.class));
 
-        var failure = assertThrows(PersonalWorkspaceExecutionService.Failure.class, () -> service.create(
-                new PersonalWorkspaceExecutionService.OwnerScope("0", "client-a", "owner-a"),
+        var created = service.create(new PersonalWorkspaceExecutionService.OwnerScope("0", "client-a", "owner-a"),
                 new PersonalWorkspaceExecutionService.CreateCommand(null, "agent-a", null, "处理资料",
                         PersonalWorkspaceExecutionProperties.DOCX,
                         List.of(new PersonalWorkspaceExecutionService.InputSelection("file-text", 1))),
-                "unsupported-input-key"));
+                "plain-text-input-key");
 
-        assertEquals(PersonalWorkspaceExecutionService.Reason.CAPABILITY_UNAVAILABLE, failure.getReason());
-        verify(executions, never()).insert(any(PersonalWorkspaceExecutionEntity.class));
-        verify(executions, never()).insertInput(any(PersonalWorkspaceExecutionInputEntity.class));
+        assertEquals("pwe_text", created.executionId());
+        var captured = ArgumentCaptor.forClass(PersonalWorkspaceExecutionInputEntity.class);
+        verify(executions).insertInput(captured.capture());
+        assertEquals("text/plain", captured.getValue().getContentMimeType());
+        assertEquals("source.txt", captured.getValue().getOriginalFilename());
     }
 
     @Test
@@ -406,7 +414,7 @@ class PersonalWorkspaceExecutionServiceImplTest {
     void persistedUnsupportedInputCannotBeDispatchedOrDownloaded() {
         PersonalWorkspaceExecutionEntity accepted = execution("pwe_legacy", "agent-a", "QUEUED");
         PersonalWorkspaceExecutionInputEntity unsupported = input(
-                "pwe_legacy", "input_1", "pws_text", 1, "source.txt", "text/plain");
+                "pwe_legacy", "input_1", "pws_binary", 1, "source.bin", "application/octet-stream");
         unsupported.setGrantState("ACTIVE");
         when(executions.listQueuedByTarget("0", "client-a", "owner-a", "agent-a", 16))
                 .thenReturn(List.of(accepted));
