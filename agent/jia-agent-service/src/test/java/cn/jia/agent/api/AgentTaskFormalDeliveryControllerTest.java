@@ -79,7 +79,7 @@ class AgentTaskFormalDeliveryControllerTest {
         ArgumentCaptor<cn.jia.agent.entity.AgentTaskFormalDeliverySubmitDTO> command =
                 ArgumentCaptor.forClass(cn.jia.agent.entity.AgentTaskFormalDeliverySubmitDTO.class);
         verify(submission).submit(eq("0"), eq(CLIENT), eq(TENANT), eq(TASK), eq(ACTOR), command.capture());
-        assertEquals("fd_de3a458cf563ceb3f0d65b59b4fdad01913a98b3efc690265730518a31209a3c",
+        assertEquals("fd_6a534706edae6d0eabd9c29b3a3d212f6f74073296d8abf27ac31d40b95c31f0",
                 command.getValue().getDeliveryId());
         assertEquals("lease-secret-a", command.getValue().getLeaseToken());
     }

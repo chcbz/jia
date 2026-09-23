@@ -307,7 +307,8 @@ class AgentTaskFormalDeliveryServiceImplTest {
     }
 
     private static String commandDigest(String summary) {
-        StringBuilder canonical = new StringBuilder("formal-delivery-r2\n");
+        // Persisted protocol domain prefix contains literal backslash-n; do not migrate stored digests.
+        StringBuilder canonical = new StringBuilder("formal-delivery-r2\\n");
         for (String value : List.of(DELIVERY, RUN, WORK, "3", "7", summary, ARTIFACT, "1",
                 ARTIFACT, "1", HASH, "manifest")) {
             canonical.append(value.length()).append(':').append(value).append('\n');
