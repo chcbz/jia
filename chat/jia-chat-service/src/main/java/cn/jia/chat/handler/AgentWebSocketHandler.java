@@ -1426,8 +1426,12 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             hallAnnouncementService.recordTaskEvent(eventType, payload);
         }
 
-        Set<String> memberAgentIds = resolveTaskMemberAgentIds(
-                task.getTenantId(), task.getClientId(), task.getId());
+        // Tenant "0" is shared by all task owners; the task DTO carries no owner jiacn.
+        // Candidate ids are only hints. Every delivery below rechecks membership against
+        // the authenticated receiving session's owner/client before sending a byte.
+        Set<String> memberAgentIds = "0".equals(task.getTenantId())
+                ? Set.copyOf(Optional.ofNullable(task.getAssignedAgentIds()).orElseGet(List::of))
+                : resolveTaskMemberAgentIds(task.getTenantId(), task.getClientId(), task.getId());
         for (String memberAgentId : memberAgentIds) {
             Map<String, Object> targetedPayload = new HashMap<>(payload);
             targetedPayload.put("targetAgentId", memberAgentId);
@@ -1773,7 +1777,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         }
         String messageType = asString(outbound.get("messageType"));
         TaskDeliveryScope taskScope = taskDeliveryScope(outbound);
-        if (requiresTaskScope(messageType)) {
+        boolean ownerScopedTask = taskScope != null && "0".equals(taskScope.tenantId());
+        if (requiresTaskScope(messageType) && !ownerScopedTask) {
             Set<String> memberAgentIds = trustedTaskMemberAgentIds == null
                     ? resolveTaskMemberAgentIds(taskScope.tenantId(), taskScope.clientId(), taskScope.taskId())
                     : trustedTaskMemberAgentIds;
@@ -1811,13 +1816,57 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                     || !requiredClientId.equals(sessionClientId(session)))) {
                 continue;
             }
-            if (taskScope != null && (!taskScope.tenantId().equals(sessionJiacn(session))
-                    || !taskScope.clientId().equals(sessionClientId(session)))) {
+            if (taskScope != null && !taskScope.clientId().equals(sessionClientId(session))) {
+                continue;
+            }
+            if (ownerScopedTask) {
+                // The canonical task tenant is not a jiacn. Resolve the authoritative task
+                // under the receiver's authenticated owner context, never from payload hints
+                // or the thread's potentially empty after-commit context. Invites/events can
+                // reach assigned members; chat and other commands require writable members.
+                if (trustedTaskMemberAgentIds != null && !trustedTaskMemberAgentIds.contains(agentId)) {
+                    continue;
+                }
+                boolean inviteOrEvent = AgentProtocolConstants.TYPE_TASK_EVENT.equals(messageType)
+                        || (AgentProtocolConstants.TYPE_COMMAND_DISPATCH.equals(messageType)
+                        && AgentProtocolConstants.COMMAND_TASK_INVITE.equals(asString(outbound.get("commandType"))));
+                if (!isAuthorizedTaskRecipient(session, taskScope, agentId, inviteOrEvent)) {
+                    continue;
+                }
+            } else if (taskScope != null && !taskScope.tenantId().equals(sessionJiacn(session))) {
                 continue;
             }
             delivered = sendEvent(session, outerType, outbound) || delivered;
         }
         return delivered;
+    }
+
+    private boolean isAuthorizedTaskRecipient(WebSocketSession session,
+            TaskDeliveryScope taskScope, String agentId, boolean allowAssignedMember) {
+        AgentService agentService = agentServiceProvider.getIfAvailable();
+        if (agentService == null || !validExactDispatchId(sessionJiacn(session), 50)
+                || !validExactDispatchId(sessionClientId(session), 50)
+                || !isCanonicalScopeId(taskScope.taskId())) {
+            return false;
+        }
+        EsContext originalContext = EsContextHolder.getContext();
+        EsContext ownerContext = new EsContext();
+        ownerContext.setJiacn(sessionJiacn(session));
+        ownerContext.setClientId(sessionClientId(session));
+        EsContextHolder.setContext(ownerContext);
+        try {
+            List<String> members = allowAssignedMember
+                    ? agentService.listTaskMemberAgentIds("0", taskScope.clientId(), taskScope.taskId())
+                    : agentService.listTaskWritableMemberAgentIds("0", taskScope.clientId(), taskScope.taskId());
+            return members != null && members.contains(agentId);
+        } catch (RuntimeException denied) {
+            log.warn("Refusing owner-scoped task delivery because membership could not be verified, "
+                            + "clientId={}, taskId={}, agentId={}",
+                    taskScope.clientId(), taskScope.taskId(), agentId, denied);
+            return false;
+        } finally {
+            EsContextHolder.setContext(originalContext);
+        }
     }
 
     private boolean directCompatibilityType(String messageType) {

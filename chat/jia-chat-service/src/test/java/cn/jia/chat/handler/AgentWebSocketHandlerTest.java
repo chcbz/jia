@@ -840,6 +840,70 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
     }
 
     @Test
+    void canonicalTaskTenantChecksAuthenticatedReceiverOwnerBeforeSendingInvite() throws Exception {
+        WebSocketSession owner = org.mockito.Mockito.mock(WebSocketSession.class);
+        WebSocketSession otherOwner = org.mockito.Mockito.mock(WebSocketSession.class);
+        stubAgentSession(owner, "session-owner-395", "agent-wuyong", "owner-a", "client-a", null);
+        stubAgentSession(otherOwner, "session-other-395", "agent-wuyong", "owner-b", "client-a", null);
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.register(any(AgentRegisterDTO.class))).thenAnswer(invocation -> {
+            AgentRegisterDTO register = invocation.getArgument(0);
+            return new AgentRegisterResultDTO(register.getAgentId(), "token", AgentConstants.STATUS_ONLINE);
+        });
+        when(agentService.listTaskMemberAgentIds("0", "client-a", "395"))
+                .thenAnswer(invocation -> "owner-a".equals(EsContextHolder.getContext().getJiacn())
+                        ? List.of("agent-wuyong") : List.of());
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        for (WebSocketSession session : List.of(owner, otherOwner)) {
+            handler.afterConnectionEstablished(session);
+            handler.handleTextMessage(session, new TextMessage(
+                    "{\"type\":\"agent.register\",\"agentId\":\"agent-wuyong\",\"name\":\"Wu Yong\"}"));
+        }
+        org.mockito.Mockito.clearInvocations(owner, otherOwner);
+        AgentActionIntentDTO invite = new AgentActionIntentDTO();
+        invite.setIntentId("invite-395");
+        invite.setTenantId("0");
+        invite.setClientId("client-a");
+        invite.setActorAgentId("agent-wuyong");
+        invite.setTaskId("395");
+        invite.setCommandType(AgentProtocolConstants.COMMAND_TASK_INVITE);
+        invite.setInstruction("请阅读榜文");
+        assertEquals("dispatched", handler.publishAgentAction(invite).getStatus());
+        verify(owner).sendMessage(any(TextMessage.class));
+        verify(otherOwner, never()).sendMessage(any(TextMessage.class));
+        org.mockito.Mockito.verify(agentService, org.mockito.Mockito.atLeastOnce())
+                .listTaskMemberAgentIds("0", "client-a", "395");
+    }
+
+    @Test
+    void canonicalTaskTenantRejectsNonWritableChatAndOtherCommands() throws Exception {
+        stubAgentSession("session-owner-blocked", "agent-wuyong");
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.register(any(AgentRegisterDTO.class)))
+                .thenReturn(new AgentRegisterResultDTO("agent-wuyong", "token", AgentConstants.STATUS_ONLINE));
+        // A registered Agent with no writable membership cannot receive other task commands.
+        when(agentService.listTaskWritableMemberAgentIds("0", "jia_client", "395"))
+                .thenReturn(List.of());
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        handler.afterConnectionEstablished(session);
+        handler.handleTextMessage(session, new TextMessage(
+                "{\"type\":\"agent.register\",\"agentId\":\"agent-wuyong\",\"name\":\"Wu Yong\"}"));
+        org.mockito.Mockito.clearInvocations(session);
+        AgentActionIntentDTO command = new AgentActionIntentDTO();
+        command.setIntentId("command-395");
+        command.setTenantId("0");
+        command.setClientId("jia_client");
+        command.setActorAgentId("agent-wuyong");
+        command.setTaskId("395");
+        command.setCommandType("TASK_EXECUTE");
+        command.setInstruction("not authorized");
+        assertEquals("queued", handler.publishAgentAction(command).getStatus());
+        verify(session, never()).sendMessage(any(TextMessage.class));
+    }
+
+    @Test
     void taskScopedDirectDeliveryFailsClosedForMissingConflictingOrMaliciousScope() throws Exception {
         stubAgentSession("session-fail-closed", "agent-target");
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);

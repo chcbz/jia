@@ -293,7 +293,7 @@ class ChatControllerTest extends BaseMockTest {
         setObjectField(request, "conversationScopeKey", "task:372");
         setObjectField(request, "taskId", "372");
         setObjectField(request, "targetAgentIds", List.of("agent-wuyong", "agent-linchong"));
-        when(agentService.listTaskWritableMemberAgentIds("tester", "web-client", "372"))
+        when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "372"))
                 .thenReturn(List.of("agent-wuyong", "agent-linchong"));
         when(chatConversationService.create(any(ChatConversationEntity.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
@@ -374,7 +374,7 @@ class ChatControllerTest extends BaseMockTest {
         setObjectField(request, "targetAgentIds", List.of("agent-linchong"));
         request.setMetadata(Map.of("participantAgentIds", List.of("agent-wuyong")));
 
-        when(agentService.listTaskWritableMemberAgentIds("tester", "web-client", "372"))
+        when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "372"))
                 .thenReturn(List.of("agent-wuyong"));
 
         assertThrows(AgentTaskThreadException.class,
@@ -393,7 +393,7 @@ class ChatControllerTest extends BaseMockTest {
         EsContextHolder.setContext(context);
         List<String> members = List.of("agent-wuyong", "agent-linchong");
         ChatController controller = newController();
-        when(agentService.listTaskWritableMemberAgentIds("tester", "web-client", "task-7"))
+        when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "task-7"))
                 .thenReturn(members);
         when(chatConversationService.create(any(ChatConversationEntity.class)))
                 .thenAnswer(invocation -> ((ChatConversationEntity) invocation.getArgument(0))

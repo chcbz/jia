@@ -84,7 +84,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
 
     @Test
     void participantMetadataCannotForgeTaskAuthorization() {
-        when(agentService.listTaskWritableMemberAgentIds("tester", "web-client", "task-7"))
+        when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "task-7"))
                 .thenReturn(List.of("agent-wuyong"));
         ChatMessageDTO request = request("bounty", "task-7", List.of("agent-linchong"));
         request.setMetadata(Map.of("participantAgentIds", List.of("agent-linchong")));
@@ -102,13 +102,13 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
     @Test
     void taskQueryExceptionAndEmptyTaskFailClosed() {
         ChatMessageDTO request = request("bounty", "task-7", List.of("agent-wuyong"));
-        when(agentService.listTaskWritableMemberAgentIds("tester", "web-client", "task-7"))
+        when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "task-7"))
                 .thenThrow(new IllegalStateException("query"));
         assertTrue(service().relay(request, "1001", Flux::empty)
                 .stream().blockFirst().contains("scope unavailable"));
 
         org.mockito.Mockito.doReturn(List.of()).when(agentService)
-                .listTaskWritableMemberAgentIds("tester", "web-client", "task-7");
+                .listTaskWritableMemberAgentIds("0", "web-client", "task-7");
         assertTrue(service().relay(request, "1001", Flux::empty)
                 .stream().blockFirst().contains("scope unavailable"));
     }
@@ -117,7 +117,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
     void bountyRelaysEveryPersistedAuthoritativeTarget() {
         stubLiveConversation();
         List<String> members = List.of("agent-wuyong", "agent-linchong");
-        when(agentService.listTaskWritableMemberAgentIds("tester", "web-client", "task-7"))
+        when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "task-7"))
                 .thenReturn(members);
         when(chatConversationService.getOwned("tester", "web-client", "1001"))
                 .thenReturn(conversation("bounty", "task:task-7", "task-7", members));
@@ -147,7 +147,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
     @Test
     void emptyPersistedTargetSnapshotFailsClosed() {
         when(agentService.listTaskWritableMemberAgentIds(
-                "tester", "web-client", "task-7"))
+                "0", "web-client", "task-7"))
                 .thenReturn(List.of("agent-wuyong"));
         ChatConversationEntity legacy = conversation(
                 "bounty", "task:task-7", "task-7", List.of("agent-wuyong"));
@@ -171,7 +171,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         stubLiveConversation();
         List<String> members = List.of("agent-wuyong", "agent-linchong");
         when(agentService.listTaskWritableMemberAgentIds(
-                "tester", "web-client", "task-7")).thenReturn(members);
+                "0", "web-client", "task-7")).thenReturn(members);
         when(chatConversationService.getOwned("tester", "web-client", "1001"))
                 .thenReturn(conversation("bounty", "task:task-7", "task-7", members));
         for (String member : members) {
@@ -212,7 +212,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
 
     @Test
     void requestedTargetOutsidePersistedSetIsRejected() {
-        when(agentService.listTaskWritableMemberAgentIds("tester", "web-client", "task-7"))
+        when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "task-7"))
                 .thenReturn(List.of("agent-wuyong", "agent-linchong"));
         when(chatConversationService.getOwned("tester", "web-client", "1001"))
                 .thenReturn(conversation("bounty", "task:task-7", "task-7",

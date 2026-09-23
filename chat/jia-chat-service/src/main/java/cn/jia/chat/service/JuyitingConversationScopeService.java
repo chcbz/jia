@@ -50,7 +50,8 @@ public class JuyitingConversationScopeService {
     }
 
     /**
-     * Resolves task membership from the authenticated tenant/client and returns an ACL-frozen scope.
+     * Resolves task membership in the authenticated owner's scope. The Agent task tenant is
+     * the canonical "0", whereas the Hall caller's jiacn identifies the owner, not the tenant.
      * Caller participant metadata is intentionally ignored for authorization.
      */
     public JuyitingConversationScope authorize(
@@ -82,7 +83,7 @@ public class JuyitingConversationScopeService {
         List<String> members;
         try {
             members = normalizeAuthoritativeAgentIds(
-                    agentService.listTaskWritableMemberAgentIds(tenantId, clientId, taskId));
+                    agentService.listTaskWritableMemberAgentIds("0", clientId, taskId));
         } catch (RuntimeException queryFailure) {
             throw denied();
         }
