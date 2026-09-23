@@ -1,6 +1,7 @@
 package cn.jia.agent.api;
 
 import cn.jia.agent.config.AgentTaskEventsGate;
+import cn.jia.agent.config.AgentTaskEventsProperties;
 import cn.jia.agent.entity.AgentTaskWorkspaceDTO;
 import cn.jia.agent.exception.AgentTaskWorkspaceException;
 import cn.jia.agent.service.AgentTaskWorkspaceService;
@@ -47,8 +48,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 class AgentTaskWorkspaceControllerTest extends BaseMockTest {
-    private static final String TASK = "task-1";
-    private static final String ACTOR = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    private static final String TASK = "395";
+    private static final String ACTOR = "jyt-jiafewnnv58ec2379c-wuyong";
+    private static final String OWNER = "chcbz";
+    private static final String PRODUCTION_CLIENT = "jiafewnnv58ec2379c";
 
     @Mock AgentTaskWorkspaceService service;
     @Mock AgentTaskEventsGate taskEventsGate;
@@ -85,6 +88,35 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
                 .andExpect(jsonPath("$.conversationId").value(nullValue()))
                 .andExpect(jsonPath("$.data").doesNotExist());
         verify(service).snapshot("0", "client-a", "tenant-a", TASK, ACTOR);
+    }
+
+    @Test
+    void bf05ObservedOwnerClientTaskAndWuYongScopePassesExactProductionGate()
+            throws Exception {
+        AgentTaskEventsGate productionGate = new AgentTaskEventsGate(
+                new AgentTaskEventsProperties(true, List.of(
+                        new AgentTaskEventsProperties.AllowedScope(
+                                "0", PRODUCTION_CLIENT))));
+        MockMvc productionMvc = MockMvcBuilders.standaloneSetup(
+                new AgentTaskWorkspaceController(service, productionGate)).build();
+        when(service.snapshot("0", PRODUCTION_CLIENT, OWNER, TASK, ACTOR))
+                .thenReturn(snapshot("7"));
+
+        productionMvc.perform(get("/agent/tasks/{taskId}/workspace", TASK)
+                        .queryParam("actorAgentId", ACTOR)
+                        .principal(authenticate(OWNER, PRODUCTION_CLIENT)))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
+                .andExpect(jsonPath("$.currentVersion").value("7"));
+        verify(service).snapshot("0", PRODUCTION_CLIENT, OWNER, TASK, ACTOR);
+
+        productionMvc.perform(get("/agent/tasks/{taskId}/workspace", TASK)
+                        .queryParam("actorAgentId", ACTOR)
+                        .principal(authenticate(OWNER, "foreign-client")))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("TASK_WORKSPACE_UNAVAILABLE"));
+        verify(service, never()).snapshot(
+                "0", "foreign-client", OWNER, TASK, ACTOR);
     }
 
     @Test

@@ -337,3 +337,34 @@ tasks.register('juyitingCollaboration', Test) {
     classpath = juyitingCollaborationSourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+// BF-05 isolated workspace/events activation slice. It keeps the default test source-set debt
+// visible while compiling only the immutable gate, owner-scoped HTTP/SSE, replay-cursor and
+// fail-closed dependency regressions touched by the 1.13.19 fix.
+def bf05TaskWorkspaceEventsSourceSet = sourceSets.create('bf05TaskWorkspaceEvents') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/config/AgentTaskEventsConfigurationTest.java'
+        include 'cn/jia/agent/config/AgentTaskEventsProfileTest.java'
+        include 'cn/jia/agent/api/AgentTaskWorkspaceControllerTest.java'
+        include 'cn/jia/agent/api/AgentTaskEventStreamControllerTest.java'
+        include 'cn/jia/agent/api/AgentTaskEventStreamArchitectureTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(bf05TaskWorkspaceEventsSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(bf05TaskWorkspaceEventsSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('bf05TaskWorkspaceEvents', Test) {
+    group = 'verification'
+    description = 'Runs BF-05 exact-scope activation, owner ACL, unavailable dependency and SSE cursor regressions.'
+    dependsOn tasks.named(bf05TaskWorkspaceEventsSourceSet.classesTaskName)
+    testClassesDirs = bf05TaskWorkspaceEventsSourceSet.output.classesDirs
+    classpath = bf05TaskWorkspaceEventsSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}

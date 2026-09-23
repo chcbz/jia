@@ -71,12 +71,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 class AgentTaskEventStreamControllerTest extends BaseMockTest {
-    private static final String TENANT = "tenant-a";
-    private static final String CLIENT = "client-a";
-    private static final String TASK = "task-1";
-    private static final String ACTOR = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    private static final String OTHER = "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    private static final TaskScope SCOPE = new TaskScope(TENANT, CLIENT, TENANT, TASK);
+    private static final String TENANT = "0";
+    private static final String OWNER = "chcbz";
+    private static final String CLIENT = "jiafewnnv58ec2379c";
+    private static final String TASK = "395";
+    private static final String ACTOR = "jyt-jiafewnnv58ec2379c-wuyong";
+    private static final String OTHER = "jyt-jiafewnnv58ec2379c-linchong";
+    private static final TaskScope SCOPE = new TaskScope(TENANT, CLIENT, OWNER, TASK);
 
     @Mock AgentTaskEventAccessService accessService;
     @Mock AgentTaskEventReplayService replayService;
@@ -90,7 +91,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
         controller = new AgentTaskEventStreamController(accessService, replayService, taskEventsGate);
         mvc = MockMvcBuilders.standaloneSetup(controller).build();
         lenient().when(taskEventsGate.allows(any(), any())).thenReturn(true);
-        lenient().when(accessService.authorize(TENANT, CLIENT, TASK, ACTOR))
+        lenient().when(accessService.authorize(TENANT, CLIENT, OWNER, TASK, ACTOR))
                 .thenReturn(subject());
     }
 
@@ -113,7 +114,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
         MvcResult result = complete(mvc.perform(get("/agent/tasks/{taskId}/events", TASK)
                 .queryParam("actorAgentId", ACTOR)
                 .accept(MediaType.TEXT_EVENT_STREAM)
-                .principal(authenticate(TENANT, CLIENT)))
+                .principal(authenticate(OWNER, CLIENT)))
                 .andExpect(request().asyncStarted())
                 .andReturn());
 
@@ -145,10 +146,10 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
         assertEquals(wirePayload(wireData), wirePayload(roundTrip));
         assertInstanceOf(String.class, wirePayload(roundTrip).get("resultVersion"));
         assertInstanceOf(String.class, wirePayload(roundTrip).get("createdAt"));
-        assertFalse(body.contains("tenant-a"), body);
-        assertFalse(body.contains("client-a"), body);
+        assertFalse(body.contains(OWNER), body);
+        assertFalse(body.contains(CLIENT), body);
         assertFalse(body.contains("eventJson"), body);
-        verify(accessService).authorize(TENANT, CLIENT, TASK, ACTOR);
+        verify(accessService).authorize(TENANT, CLIENT, OWNER, TASK, ACTOR);
         verify(replayService).replay(SCOPE, 0L);
     }
 
@@ -162,7 +163,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
 
         Jwt invalid = Jwt.withTokenValue("token")
                 .header("alg", "none")
-                .claim("jiacn", TENANT)
+                .claim("jiacn", OWNER)
                 .claim("client_id", 123)
                 .claim("sub", "fallback-sub")
                 .claim("clientId", "fallback-client")
@@ -181,13 +182,13 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
                 .andExpect(status().isUnauthorized())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
         mvc.perform(get("/agent/tasks/{taskId}/events", " padded ")
-                        .principal(authenticateClaims(TENANT, 123)))
+                        .principal(authenticateClaims(OWNER, 123)))
                 .andExpect(status().isForbidden())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
         mvc.perform(get("/agent/tasks/{taskId}/events", TASK)
                         .queryParam("actorAgentId", ACTOR)
                         .queryParam("sinceVersion", "01")
-                        .principal(authenticate(TENANT, CLIENT)))
+                        .principal(authenticate(OWNER, CLIENT)))
                 .andExpect(status().isBadRequest())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
 
@@ -201,7 +202,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
 
         mvc.perform(get("/agent/tasks/{taskId}/events", TASK)
                         .queryParam("actorAgentId", ACTOR)
-                        .principal(authenticate(TENANT, CLIENT)))
+                        .principal(authenticate(OWNER, CLIENT)))
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(request().asyncNotStarted())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
@@ -225,11 +226,11 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
                 "x".repeat(51))) {
             mvc.perform(get("/agent/tasks/{taskId}/events", TASK)
                             .queryParam("actorAgentId", ACTOR)
-                            .principal(authenticateClaims(TENANT, client)))
+                            .principal(authenticateClaims(OWNER, client)))
                     .andExpect(status().isForbidden())
                     .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
         }
-        verify(accessService, never()).authorize(any(), any(), any(), any());
+        verify(accessService, never()).authorize(any(), any(), any(), any(), any());
         verifyNoInteractions(replayService);
     }
 
@@ -241,10 +242,10 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
         mvc.perform(get("/agent/tasks/{taskId}/events", TASK)
                         .queryParam("actorAgentId", ACTOR)
                         .queryParam("sinceVersion", cursor)
-                        .principal(authenticate(TENANT, CLIENT)))
+                        .principal(authenticate(OWNER, CLIENT)))
                 .andExpect(status().isBadRequest())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
-        verify(accessService, never()).authorize(any(), any(), any(), any());
+        verify(accessService, never()).authorize(any(), any(), any(), any(), any());
         verifyNoInteractions(replayService);
     }
 
@@ -256,17 +257,17 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
         mvc.perform(get("/agent/tasks/{taskId}/events", TASK)
                         .queryParam("actorAgentId", ACTOR)
                         .header("Last-Event-ID", cursor)
-                        .principal(authenticate(TENANT, CLIENT)))
+                        .principal(authenticate(OWNER, CLIENT)))
                 .andExpect(status().isBadRequest())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
-        verify(accessService, never()).authorize(any(), any(), any(), any());
+        verify(accessService, never()).authorize(any(), any(), any(), any(), any());
         verifyNoInteractions(replayService);
     }
 
     @Test
     void requiredActorAndRouteIdentifiersAreByteExactBoundedAndControlFree()
             throws Exception {
-        JwtAuthenticationToken auth = authenticate(TENANT, CLIENT);
+        JwtAuthenticationToken auth = authenticate(OWNER, CLIENT);
         for (String actor : List.of("", " padded", "padded ", "bad\nactor", "x".repeat(101))) {
             mvc.perform(get("/agent/tasks/{taskId}/events", TASK)
                             .queryParam("actorAgentId", actor).principal(auth))
@@ -278,14 +279,14 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
                 .andExpect(status().isBadRequest());
         mvc.perform(get("/agent/tasks/{taskId}/events", TASK).principal(auth))
                 .andExpect(status().isBadRequest());
-        verify(accessService, never()).authorize(any(), any(), any(), any());
+        verify(accessService, never()).authorize(any(), any(), any(), any(), any());
         verifyNoInteractions(replayService);
     }
 
     @Test
     void duplicateQueryRepeatedOrCommaJoinedHeaderAndDuplicateActorAre400()
             throws Exception {
-        JwtAuthenticationToken auth = authenticate(TENANT, CLIENT);
+        JwtAuthenticationToken auth = authenticate(OWNER, CLIENT);
         mvc.perform(get("/agent/tasks/{taskId}/events", TASK)
                         .queryParam("actorAgentId", ACTOR)
                         .queryParam("sinceVersion", "1", "2").principal(auth))
@@ -310,7 +311,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
         when(replayService.replay(any(), anyLong())).thenAnswer(invocation -> Flux.just(
                 new ResyncRequired(SCOPE, invocation.getArgument(1),
                         ResyncReason.CURSOR_AHEAD)));
-        JwtAuthenticationToken auth = authenticate(TENANT, CLIENT);
+        JwtAuthenticationToken auth = authenticate(OWNER, CLIENT);
 
         complete(mvc.perform(get("/agent/tasks/{taskId}/events", TASK)
                 .queryParam("actorAgentId", ACTOR)
@@ -338,7 +339,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
 
         MvcResult result = complete(mvc.perform(get("/agent/tasks/{taskId}/events", TASK)
                 .queryParam("actorAgentId", ACTOR)
-                .principal(authenticate(TENANT, CLIENT)))
+                .principal(authenticate(OWNER, CLIENT)))
                 .andExpect(request().asyncStarted()).andReturn());
         String body = result.getResponse().getContentAsString(StandardCharsets.UTF_8);
         assertEquals(1, body.lines().filter(line -> line.startsWith("event:")).count(), body);
@@ -363,7 +364,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
 
         MvcResult result = complete(mvc.perform(get("/agent/tasks/{taskId}/events", TASK)
                 .queryParam("actorAgentId", ACTOR)
-                .principal(authenticate(TENANT, CLIENT)))
+                .principal(authenticate(OWNER, CLIENT)))
                 .andExpect(request().asyncStarted()).andReturn());
         String body = result.getResponse().getContentAsString(StandardCharsets.UTF_8);
         assertTrue(body.contains("id:5") || body.contains("id: 5"), body);
@@ -374,14 +375,14 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
 
     @Test
     void generic404BodyIsByteEqualAcrossAllHiddenSubjectCategories() throws Exception {
-        when(accessService.authorize(TENANT, CLIENT, TASK, ACTOR)).thenThrow(
+        when(accessService.authorize(TENANT, CLIENT, OWNER, TASK, ACTOR)).thenThrow(
                 new AgentTaskWorkspaceException(
                         AgentTaskWorkspaceException.Reason.NOT_FOUND_OR_FORBIDDEN));
         byte[] expected = null;
         for (int index = 0; index < 4; index++) {
             MvcResult result = mvc.perform(get("/agent/tasks/{taskId}/events", TASK)
                             .queryParam("actorAgentId", ACTOR)
-                            .principal(authenticate(TENANT, CLIENT)))
+                            .principal(authenticate(OWNER, CLIENT)))
                     .andExpect(status().isNotFound())
                     .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
                     .andReturn();
@@ -405,7 +406,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
             when(replayService.replay(SCOPE, 0L)).thenReturn(source);
             MvcResult initial = mvc.perform(get("/agent/tasks/{taskId}/events", TASK)
                             .queryParam("actorAgentId", ACTOR)
-                            .principal(authenticate(TENANT, CLIENT)))
+                            .principal(authenticate(OWNER, CLIENT)))
                     .andExpect(request().asyncStarted()).andReturn();
             MvcResult result = complete(initial);
             assertEquals(503, result.getResponse().getStatus());
@@ -425,7 +426,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
                 Flux.error(new ReplayBackpressureException())));
         MvcResult result = complete(mvc.perform(get("/agent/tasks/{taskId}/events", TASK)
                 .queryParam("actorAgentId", ACTOR)
-                .principal(authenticate(TENANT, CLIENT)))
+                .principal(authenticate(OWNER, CLIENT)))
                 .andExpect(request().asyncStarted()).andReturn());
         assertEquals(200, result.getResponse().getStatus());
         String body = result.getResponse().getContentAsString(StandardCharsets.UTF_8);
@@ -436,7 +437,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
 
     @Test
     void aclReturnsBeforeReplayAndNoTransactionExistsDuringSubscriptionOrSend() throws Exception {
-        when(accessService.authorize(TENANT, CLIENT, TASK, ACTOR)).thenAnswer(invocation -> {
+        when(accessService.authorize(TENANT, CLIENT, OWNER, TASK, ACTOR)).thenAnswer(invocation -> {
             assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
             return subject();
         });
@@ -449,7 +450,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
         });
         complete(mvc.perform(get("/agent/tasks/{taskId}/events", TASK)
                 .queryParam("actorAgentId", ACTOR)
-                .principal(authenticate(TENANT, CLIENT)))
+                .principal(authenticate(OWNER, CLIENT)))
                 .andExpect(request().asyncStarted()).andReturn());
     }
 
@@ -544,7 +545,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
     void earliestCacheFilterCoversEventsSecurityResponses() throws Exception {
         AgentTaskWorkspaceCacheControlFilter filter = new AgentTaskWorkspaceCacheControlFilter();
         MockHttpServletRequest request = new MockHttpServletRequest(
-                "GET", "/agent/tasks/task-1/events");
+                "GET", "/agent/tasks/395/events");
         org.springframework.mock.web.MockHttpServletResponse response =
                 new org.springframework.mock.web.MockHttpServletResponse();
         filter.doFilter(request, response, (req, res) ->
@@ -589,11 +590,11 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
     }
 
     private static AuthorizedSubject subject() {
-        return new AuthorizedSubject(TENANT, CLIENT, TASK, ACTOR, "worker", OTHER);
+        return new AuthorizedSubject(TENANT, CLIENT, OWNER, TASK, ACTOR, "worker", OTHER);
     }
 
     private static String largeIntegralTaskPayload() {
-        return "{\"taskId\":\"task-1\",\"taskType\":\"agent_task\","
+        return "{\"taskId\":\"" + TASK + "\",\"taskType\":\"agent_task\","
                 + "\"status\":\"assigned\","
                 + "\"resultVersion\":9007199254740993,"
                 + "\"expectedVersion\":9223372036854775807,"
@@ -603,7 +604,7 @@ class AgentTaskEventStreamControllerTest extends BaseMockTest {
 
     private static DurableEvent taskCreated(long version) {
         return taskCreatedWithJson(version,
-                "{\"taskId\":\"task-1\",\"taskType\":\"agent_task\","
+                "{\"taskId\":\"" + TASK + "\",\"taskType\":\"agent_task\","
                         + "\"status\":\"assigned\",\"resultVersion\":1,"
                         + "\"createdAt\":1234}");
     }
