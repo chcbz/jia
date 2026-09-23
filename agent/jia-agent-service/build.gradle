@@ -368,3 +368,38 @@ tasks.register('bf05TaskWorkspaceEvents', Test) {
     classpath = bf05TaskWorkspaceEventsSourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+// 1.13.20 BF07/BF08 focused regression; default test remains unchanged.
+// Compile and run separately on the shared low-memory local build host.
+def bf08FormalFlowSourceSet = sourceSets.create('bf08FormalFlow') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/service/impl/HallFormalLegacyReportGuardTest.java'
+        include 'cn/jia/agent/service/impl/AgentLegacyTaskCompatibilityEventTest.java'
+        include 'cn/jia/agent/service/impl/HallRequestDraftServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/HallRequestDraftSubmissionServiceTest.java'
+        include 'cn/jia/agent/service/impl/HallRequestDraftTaskCreateTest.java'
+        include 'cn/jia/agent/mapper/HallRequestDraftMapperContractTest.java'
+        include 'cn/jia/agent/service/impl/AgentTaskFormalDeliveryServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/AgentTaskFormalDeliveryDecisionServiceImplTest.java'
+        include 'cn/jia/agent/api/AgentTaskFormalDeliveryControllerTest.java'
+        include 'cn/jia/agent/config/AgentTaskFormalDeliveryProfileTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(bf08FormalFlowSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(bf08FormalFlowSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('bf08FormalFlow', Test) {
+    group = 'verification'
+    description = 'Runs BF07/BF08 formal origin, legacy, delivery, chat scope and reference regressions.'
+    dependsOn tasks.named(bf08FormalFlowSourceSet.classesTaskName)
+    testClassesDirs = bf08FormalFlowSourceSet.output.classesDirs
+    classpath = bf08FormalFlowSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}

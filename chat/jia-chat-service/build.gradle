@@ -68,3 +68,30 @@ tasks.register('juyitingExecutionReport', Test) {
     classpath = juyitingExecutionReportSourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+// 1.13.20 BF07/BF08 focused regression; default test remains unchanged.
+// Compile and run separately on the shared low-memory local build host.
+def bf08FormalFlowSourceSet = sourceSets.create('bf08FormalFlow') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/chat/handler/AgentWebSocketHandlerTest.java'
+        include 'cn/jia/chat/api/ChatControllerTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(bf08FormalFlowSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(bf08FormalFlowSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('bf08FormalFlow', Test) {
+    group = 'verification'
+    description = 'Runs BF07/BF08 formal origin, legacy, delivery, chat scope and reference regressions.'
+    dependsOn tasks.named(bf08FormalFlowSourceSet.classesTaskName)
+    testClassesDirs = bf08FormalFlowSourceSet.output.classesDirs
+    classpath = bf08FormalFlowSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}

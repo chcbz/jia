@@ -1154,6 +1154,38 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
     }
 
     @Test
+    void taskMemberLookupRestoresCallingContextAfterSuccessAndFailure() {
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.listTaskWritableMemberAgentIds("0", "jia_client", "task-7"))
+                .thenAnswer(invocation -> {
+                    assertEquals("juyiting", EsContextHolder.getContext().getJiacn());
+                    assertEquals("jia_client", EsContextHolder.getContext().getClientId());
+                    return List.of("agent-001");
+                });
+        when(agentService.listTaskWritableMemberAgentIds("0", "jia_client", "task-8"))
+                .thenThrow(new IllegalStateException("authoritative lookup unavailable"));
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(
+                chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker);
+        EsContext previous = EsContextHolder.getContext();
+        EsContext caller = new EsContext();
+        caller.setJiacn("unrelated-owner");
+        caller.setClientId("unrelated-client");
+        EsContextHolder.setContext(caller);
+        try {
+            Set<String> success = org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                    handler, "resolveConversationTaskMembers", "juyiting", "jia_client", "task-7");
+            assertEquals(Set.of("agent-001"), success);
+            org.junit.jupiter.api.Assertions.assertSame(caller, EsContextHolder.getContext());
+            Set<String> failure = org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                    handler, "resolveConversationTaskMembers", "juyiting", "jia_client", "task-8");
+            assertEquals(Set.of(), failure);
+            org.junit.jupiter.api.Assertions.assertSame(caller, EsContextHolder.getContext());
+        } finally {
+            EsContextHolder.setContext(previous);
+        }
+    }
+
+    @Test
     void emptyCanonicalConversationTargetsCannotFallBackToLegacyTarget() throws Exception {
         stubAgentSession("session-empty-targets", "agent-001");
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
