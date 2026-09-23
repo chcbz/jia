@@ -125,6 +125,8 @@ class ChatControllerTest extends BaseMockTest {
         assertTrue("USER".equals(saved.getMessageType()));
         assertTrue("请吴用回报当前进度".equals(saved.getContent()));
         assertTrue(saved.getMetadata().contains("\"selectedAgentId\":\"agent-wuyong\""));
+        assertTrue(chunks.getFirst().contains("\"conversationId\":\"1001\""));
+        assertFalse(chunks.getFirst().contains("agentDelivery"));
         assertTrue(chunks.stream().anyMatch(item -> item.contains("\"agentDelivery\"")));
         assertTrue(chunks.stream().anyMatch(item -> item.contains("\"conversationId\": \"1001\"")));
     }

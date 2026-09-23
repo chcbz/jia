@@ -143,7 +143,15 @@ public class ChatController {
                         resolveConversationType(conversation), needSummary, summary,
                         skipAdvisorUserPersistence));
 
-        Flux<String> backendStream = agentDelivery.stream()
+        // Publish the persisted ID before waiting for an Agent event. A broken SSE/HTTP2
+        // transport can then be recovered by owner-scoped GET without repeating the POST.
+        // This frame is a reference, never a delivery receipt or final reply.
+        Flux<String> conversationReference = agentDelivery.attempted()
+                && CONVERSATION_TYPE_JUYITING.equals(chatMessage.getConversationType())
+                ? Flux.just("{\"conversationId\":\"" + escapeJson(conversationId)
+                        + "\",\"conversationType\":\"" + CONVERSATION_TYPE_JUYITING + "\"}")
+                : Flux.empty();
+        Flux<String> backendStream = conversationReference.concatWith(agentDelivery.stream())
                 .concatWith(aiStream)
                 .concatWith(Flux.defer(() -> Flux.just("{\"conversationId\": \"" + conversationId + "\", \"conversationType\": \"" + resolveConversationType(conversation) + "\"}")))
                 .concatWith(Flux.defer(() -> handleSummary(
