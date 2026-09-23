@@ -23,7 +23,7 @@ public class CorsConfig {
             "Authorization", "Content-Type", "X-API-Key", "Idempotency-Key", "If-Match", "Last-Event-ID", "X-Request-Id");
     @Value("${cors.allowed.origin.patterns:}")
     private String[] allowedOriginPatterns;
-    @Value("${cors.allowed.methods:GET,POST,PUT,DELETE,OPTIONS}")
+    @Value("${cors.allowed.methods:GET,POST,PUT,PATCH,DELETE,OPTIONS}")
     private String[] allowedMethods;
     @Value("${cors.allowed.headers:Authorization,Content-Type,X-API-Key,Idempotency-Key,If-Match,Last-Event-ID,X-Request-Id}")
     private String[] allowedHeaders;
