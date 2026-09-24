@@ -859,6 +859,57 @@ class PersonalWorkspaceExecutionServiceImplTest {
         return item;
     }
 
+    @Test
+    void ownerRevokeOfExpiredTaskUsesExactExpiryThenRevokesWithoutCreatingAnotherExecution() {
+        var workItems = mock(AgentTaskWorkItemDao.class);
+        var leases = mock(AgentWorkItemLeaseService.class);
+        service.setTaskExecutionDependencies(mock(WorkspaceConversationAccessService.class), workItems, leases);
+        var owner = new PersonalWorkspaceExecutionService.OwnerScope("0", "client-a", "owner-a");
+        var value = execution("pwe_expired", "agent-a", "QUEUED").setExecutionMode("TASK")
+                .setTaskId("task-1").setWorkItemId("work-1").setLeaseToken("lease-secret")
+                .setLeaseWorkItemVersion(9L).setLeaseExpiresAt(1L);
+        when(executions.find("0", "client-a", "owner-a", "pwe_expired")).thenReturn(value);
+        when(executions.lock("0", "client-a", "owner-a", "pwe_expired")).thenReturn(value);
+        var result = service.revokeInputs(owner, "pwe_expired", 1L, "revoke-expired-1");
+        assertEquals("INPUTS_REVOKED", result.state());
+        assertEquals(2L, result.grantRevision());
+        var command = ArgumentCaptor.forClass(cn.jia.agent.entity.AgentWorkItemLeaseCommandDTO.class);
+        verify(leases).expireExactLease(org.mockito.ArgumentMatchers.eq("0"), org.mockito.ArgumentMatchers.eq("client-a"),
+                org.mockito.ArgumentMatchers.eq("owner-a"), org.mockito.ArgumentMatchers.eq("task-1"),
+                org.mockito.ArgumentMatchers.eq("work-1"), command.capture());
+        assertEquals("lease-secret", command.getValue().getLeaseToken());
+        assertEquals(9L, command.getValue().getExpectedVersion());
+        assertEquals("agent-a", command.getValue().getAgentId());
+        verify(leases, never()).release(any(), any(), any(), any(), any(), any());
+        verify(executions, never()).insert(any());
+        var order = org.mockito.Mockito.inOrder(leases, executions);
+        order.verify(leases).expireExactLease(any(), any(), any(), any(), any(), any());
+        order.verify(executions).lock("0", "client-a", "owner-a", "pwe_expired");
+        // Same idempotent owner request does not expire or charge a second time.
+        assertEquals("INPUTS_REVOKED", service.revokeInputs(owner, "pwe_expired", 1L, "revoke-expired-1").state());
+        verify(leases, times(1)).expireExactLease(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void expiredTaskRevokeLeaseConflictLeavesExecutionAndGrantsUntouched() {
+        var workItems = mock(AgentTaskWorkItemDao.class);
+        var leases = mock(AgentWorkItemLeaseService.class);
+        service.setTaskExecutionDependencies(mock(WorkspaceConversationAccessService.class), workItems, leases);
+        var owner = new PersonalWorkspaceExecutionService.OwnerScope("0", "client-a", "owner-a");
+        var value = execution("pwe_expired", "agent-a", "QUEUED").setExecutionMode("TASK")
+                .setTaskId("task-1").setWorkItemId("work-1").setLeaseToken("lease-secret")
+                .setLeaseWorkItemVersion(9L).setLeaseExpiresAt(1L);
+        when(executions.find("0", "client-a", "owner-a", "pwe_expired")).thenReturn(value);
+        org.mockito.Mockito.doThrow(new cn.jia.agent.exception.AgentTaskStateException(
+                cn.jia.agent.exception.AgentTaskStateException.Reason.VERSION_CONFLICT, "changed"))
+                .when(leases).expireExactLease(any(), any(), any(), any(), any(), any());
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                () -> service.revokeInputs(owner, "pwe_expired", 1L, "revoke-expired-1"));
+        assertEquals("QUEUED", value.getExecutionState());
+        verify(executions, never()).update(any());
+        verify(executions, never()).updateInput(any());
+    }
+
     private static PersonalWorkspaceExecutionEntity execution(String id, String agent, String state) {
         PersonalWorkspaceExecutionEntity item = new PersonalWorkspaceExecutionEntity()
                 .setExecutionId(id).setOwnerJiacn("owner-a").setTaskId("pwe_task_1").setRunId("pwe_run_1")

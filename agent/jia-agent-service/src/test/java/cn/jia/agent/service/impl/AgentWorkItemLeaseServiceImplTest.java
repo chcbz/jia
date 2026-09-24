@@ -26,6 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
@@ -566,6 +567,65 @@ class AgentWorkItemLeaseServiceImplTest extends BaseMockTest {
         assertEquals(List.of("WORK_ITEM_REQUEUED", "WORK_ITEM_FAILED"),
                 events.getAllValues().stream().map(
                         cn.jia.agent.entity.AgentTaskEventWriteCommand::getEventType).toList());
+    }
+
+    @Test
+    void exactOwnerRecoveryExpiresOnlyTheExpectedLeaseAndNeverScansOtherTasks() {
+        var current = item("running", 4L, AGENT, TOKEN, 900L, 0, 3);
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, OWNER, TASK, WORK)).thenReturn(current);
+        when(workItemDao.expireLeaseByVersion(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK),
+                eq(AGENT), eq(TOKEN), eq("running"), eq(900L), eq(4L), eq(NOW), any())).thenReturn(1);
+        var result = service.expireExactLease(TENANT, CLIENT, OWNER, TASK, WORK, actionCommand(AGENT, TOKEN, 4L));
+        assertEquals("ready", result.getStatus());
+        assertEquals(5L, result.getVersion());
+        assertEquals(1, result.getAttemptCount());
+        assertNull(result.getLeaseToken());
+        verify(workItemDao, never()).listExpiredLeases(any(), any(), any(), anyLong(), anyInt());
+        verify(mutationTransaction).executeWithLockedTaskRootInOwnerScope(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), any());
+        verify(eventWriter).append(any());
+    }
+
+    @Test
+    void exactExpiryRejectsLiveRenewedReassignedForeignAndNonleasedSnapshots() {
+        var cases = List.of(
+                item("running", 4L, AGENT, TOKEN, NOW + 1L, 0, 3),
+                item("running", 5L, AGENT, TOKEN, 900L, 0, 3),
+                item("running", 4L, OTHER_AGENT, TOKEN, 900L, 0, 3),
+                item("running", 4L, AGENT, "other-token", 900L, 0, 3),
+                item("ready", 4L, AGENT, null, null, 1, 3),
+                item("submitted", 4L, AGENT, TOKEN, 900L, 0, 3));
+        for (var current : cases) {
+            when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, OWNER, TASK, WORK)).thenReturn(current);
+            assertThrows(AgentTaskStateException.class, () -> service.expireExactLease(
+                    TENANT, CLIENT, OWNER, TASK, WORK, actionCommand(AGENT, TOKEN, 4L)));
+        }
+        var foreign = item("running", 4L, AGENT, TOKEN, 900L, 0, 3);
+        foreign.setOwnerJiacn("other-owner");
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, OWNER, TASK, WORK)).thenReturn(foreign);
+        assertThrows(AgentTaskStateException.class, () -> service.expireExactLease(
+                TENANT, CLIENT, OWNER, TASK, WORK, actionCommand(AGENT, TOKEN, 4L)));
+        verify(workItemDao, never()).expireLeaseByVersion(any(), any(), any(), any(), any(), any(), any(), any(), anyLong(), anyLong(), anyLong(), any());
+        verifyNoInteractions(eventWriter);
+    }
+
+    @Test
+    void exactExpiryCasConflictDoesNotEmitSuccess() {
+        var current = item("running", 4L, AGENT, TOKEN, 900L, 0, 3);
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, OWNER, TASK, WORK)).thenReturn(current);
+        assertThrows(AgentTaskStateException.class, () -> service.expireExactLease(
+                TENANT, CLIENT, OWNER, TASK, WORK, actionCommand(AGENT, TOKEN, 4L)));
+        verifyNoInteractions(eventWriter);
+    }
+
+    @Test
+    void exactExpiryExhaustedAttemptBecomesFailedWithoutNewClaim() {
+        var current = item("running", 4L, AGENT, TOKEN, 900L, 2, 3);
+        when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, OWNER, TASK, WORK)).thenReturn(current);
+        when(workItemDao.expireLeaseByVersion(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK),
+                eq(AGENT), eq(TOKEN), eq("running"), eq(900L), eq(4L), eq(NOW), any())).thenReturn(1);
+        assertEquals("failed", service.expireExactLease(TENANT, CLIENT, OWNER, TASK, WORK,
+                actionCommand(AGENT, TOKEN, 4L)).getStatus());
+        verify(workItemDao, never()).claimReadyByVersion(any(), any(), any(), any(), any(), any(), anyLong(), any());
     }
 
     private AgentTaskMemberEntity member(String agentId, String status) {

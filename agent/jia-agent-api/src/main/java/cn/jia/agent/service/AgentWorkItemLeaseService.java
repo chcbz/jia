@@ -34,5 +34,10 @@ public interface AgentWorkItemLeaseService {
             String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             AgentWorkItemLeaseCommandDTO command);
 
+    /** Exact expired-lease reclamation for an authorized owner operation; never renews a lease. */
+    AgentWorkItemLeaseDTO expireExactLease(
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
+            AgentWorkItemLeaseCommandDTO command);
+
     AgentWorkItemLeaseScanDTO expireLeases(String tenantId, String clientId, String ownerJiacn, int limit);
 }

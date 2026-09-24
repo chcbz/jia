@@ -875,8 +875,15 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             AgentWorkItemLeaseCommandDTO command = new AgentWorkItemLeaseCommandDTO();
             command.setAgentId(execution.getTargetAgentId()); command.setLeaseToken(execution.getLeaseToken());
             command.setExpectedVersion(execution.getLeaseWorkItemVersion());
-            leases.release(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), execution.getTaskId(),
-                    execution.getWorkItemId(), command);
+            if (execution.getLeaseExpiresAt() != null && execution.getLeaseExpiresAt() <= System.currentTimeMillis()) {
+                // The exact expiry service rechecks owner/task/token/version and the live
+                // clock under the task root. Never extend the stale lease or scan others.
+                leases.expireExactLease(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), execution.getTaskId(),
+                        execution.getWorkItemId(), command);
+            } else {
+                leases.release(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), execution.getTaskId(),
+                        execution.getWorkItemId(), command);
+            }
         } catch (AgentTaskCollaborationException | AgentTaskStateException conflict) {
             throw failure(Reason.TASK_CONFLICT);
         }

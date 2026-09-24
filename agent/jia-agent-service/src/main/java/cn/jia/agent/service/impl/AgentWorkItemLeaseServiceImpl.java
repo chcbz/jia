@@ -254,6 +254,41 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    public AgentWorkItemLeaseDTO expireExactLease(
+            String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
+            AgentWorkItemLeaseCommandDTO command) {
+        requireScopeAndIds(tenantId, clientId, ownerJiacn, taskId, workItemId);
+        RequiredCommand required = requireCommand(command, false, true);
+        requireAgentReference(required.agentId());
+        return withLockedTaskRoot(tenantId, clientId, ownerJiacn, taskId, root -> {
+            AgentTaskWorkItemEntity current = workItemDao.findByTaskAndWorkItemId(
+                    tenantId, clientId, ownerJiacn, taskId, workItemId);
+            if (current == null) throw notFound();
+            requireCompleteSnapshot(tenantId, clientId, ownerJiacn, current);
+            if (!Objects.equals(current.getTaskId(), taskId)
+                    || !Objects.equals(current.getWorkItemId(), workItemId)) throw notFound();
+            requireVersion(current.getVersion(), required.expectedVersion());
+            AgentTaskWorkItemStatus status = persistedStatus(current.getStatus());
+            if (status != AgentTaskWorkItemStatus.CLAIMED && status != AgentTaskWorkItemStatus.RUNNING) {
+                throw leaseInvalid("Only the exact expired active lease can be reclaimed");
+            }
+            requireLeaseIdentity(current);
+            if (!required.agentId().equals(current.getAssigneeAgentId())
+                    || !required.leaseToken().equals(current.getLeaseToken())) {
+                throw leaseInvalid("Lease credentials are no longer current");
+            }
+            long now = now();
+            if (current.getLeaseUntil() > now) throw leaseInvalid("Lease is still active");
+            // Reuse the same scoped CAS/event/attempt accounting as expiry scanning,
+            // but never scan or mutate another task during this owner operation.
+            ExpiryOutcome outcome = expireCandidate(tenantId, clientId, ownerJiacn, current, now);
+            if (outcome.conflict()) throw conflict();
+            return outcome.result();
+        });
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
     public AgentWorkItemLeaseScanDTO expireLeases(
             String tenantId, String clientId, String ownerJiacn, int limit) {
         requireScope(tenantId, clientId, ownerJiacn);
