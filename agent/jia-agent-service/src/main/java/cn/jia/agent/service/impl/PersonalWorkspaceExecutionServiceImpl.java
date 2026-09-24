@@ -26,6 +26,8 @@ import cn.jia.agent.service.AgentWorkItemLeaseService;
 import cn.jia.agent.service.AgentTaskArtifactService;
 import cn.jia.agent.service.AgentTaskFormalDeliveryService;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
+import cn.jia.agent.service.AgentTaskStateService;
+import cn.jia.agent.entity.AgentTaskStateTransitionDTO;
 import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.exception.AgentTaskStateException;
 import cn.jia.chat.service.WorkspaceConversationAccessService;
@@ -98,6 +100,12 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     private AgentTaskArtifactService taskArtifacts;
     private AgentTaskFormalDeliveryService formalDeliveries;
     private AgentTaskMutationTransaction taskMutations;
+    private AgentTaskStateService taskStates;
+
+    @Autowired(required = false)
+    public void setTaskStateService(AgentTaskStateService taskStates) {
+        this.taskStates = Objects.requireNonNull(taskStates, "taskStates");
+    }
 
     @Inject
     public PersonalWorkspaceExecutionServiceImpl(PersonalWorkspaceExecutionDao executions,
@@ -357,6 +365,50 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 .setRevokeIdempotencyKey(idempotencyKey).setRevokeRequestHash(requestHash).setRevokedAt(now);
         executions.update(execution);
         return view(scope, execution);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public RuntimeStartView start(RuntimeScope scope, String taskId, String runId,
+            String commandId, String messageId) {
+        // Unlocked scope/command lookup chooses the lock hierarchy; never lock execution first.
+        PersonalWorkspaceExecutionEntity candidate = runtimeExecution(scope, taskId, runId, false);
+        requireStartCommand(candidate, commandId, messageId);
+        if (!"TASK".equals(candidate.getExecutionMode())) {
+            PersonalWorkspaceExecutionEntity current = runtimeExecution(scope, taskId, runId, true);
+            requireStartCommand(current, commandId, messageId);
+            return new RuntimeStartView(current.getExecutionId(), taskId, runId, "STARTED");
+        }
+        if (taskMutations == null || taskStates == null) throw failure(Reason.TASK_CONFLICT);
+        return taskMutations.executeWithLockedTaskRootInOwnerScope(
+                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId, root -> {
+                    PersonalWorkspaceExecutionEntity current = runtimeExecution(scope, taskId, runId, true);
+                    requireStartCommand(current, commandId, messageId);
+                    if (!"TASK".equals(current.getExecutionMode())
+                            || !same(root.getTaskId(), taskId)
+                            || !same(root.getAssignedAgentId(), scope.agentId())) {
+                        throw failure(Reason.TASK_CONFLICT);
+                    }
+                    if ("assigned".equals(root.getRewardStatus())) {
+                        AgentTaskStateTransitionDTO transition = new AgentTaskStateTransitionDTO();
+                        transition.setTargetStatus("running");
+                        transition.setExpectedVersion(root.getTaskVersion());
+                        taskStates.transitionTask(scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
+                                taskId, transition);
+                    } else if (!"running".equals(root.getRewardStatus())) {
+                        // Rework requires an authoritative decision; never resume blocked/terminal tasks.
+                        throw failure(Reason.TASK_CONFLICT);
+                    }
+                    return new RuntimeStartView(current.getExecutionId(), taskId, runId, "STARTED");
+                });
+    }
+
+    private static void requireStartCommand(PersonalWorkspaceExecutionEntity execution,
+            String commandId, String messageId) {
+        if (!same("pwe_cmd_" + plainSha("command\n" + execution.getExecutionId()), commandId)
+                || !same("pwe_msg_" + plainSha("message\n" + execution.getExecutionId()), messageId)) {
+            throw failure(Reason.NOT_FOUND);
+        }
     }
 
     @Override

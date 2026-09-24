@@ -23,6 +23,8 @@ import cn.jia.agent.service.AgentWorkItemLeaseService;
 import cn.jia.agent.service.AgentTaskArtifactService;
 import cn.jia.agent.service.AgentTaskFormalDeliveryService;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
+import cn.jia.agent.service.AgentTaskStateService;
+import cn.jia.agent.entity.AgentTaskStateTransitionDTO;
 import cn.jia.chat.service.WorkspaceConversationAccessService;
 import cn.jia.agent.service.PersonalWorkspaceStorage;
 import org.junit.jupiter.api.BeforeEach;
@@ -702,6 +704,97 @@ class PersonalWorkspaceExecutionServiceImplTest {
         assertEquals("AGENT_DELIVERY", file.getValue().getOriginKind());
         assertEquals(file.getValue().getFileId(), version.getValue().getFileId());
         assertEquals("COMMITTED", committed.state());
+    }
+
+    @Test
+    void nativeStartLocksTaskBeforeExecutionAndTransitionsOnlyTheExactAssignedTask() throws Exception {
+        var f = startFixture("assigned");
+        var receipt = service.start(RUNTIME, "task-1", "pwe_run_1", startCommand(), startMessage());
+        assertEquals("STARTED", receipt.state());
+        ArgumentCaptor<AgentTaskStateTransitionDTO> change = ArgumentCaptor.forClass(AgentTaskStateTransitionDTO.class);
+        verify(f.states()).transitionTask(org.mockito.ArgumentMatchers.eq("0"), org.mockito.ArgumentMatchers.eq("client-a"),
+                org.mockito.ArgumentMatchers.eq("owner-a"), org.mockito.ArgumentMatchers.eq("task-1"), change.capture());
+        assertEquals("running", change.getValue().getTargetStatus());
+        assertEquals(4L, change.getValue().getExpectedVersion());
+        var order = org.mockito.Mockito.inOrder(f.mutations(), executions, f.states());
+        order.verify(f.mutations()).executeWithLockedTaskRootInOwnerScope(any(), any(), any(), any(), any());
+        order.verify(executions).lockByTaskRun("0", "client-a", "owner-a", "task-1", "pwe_run_1");
+        order.verify(f.states()).transitionTask(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void nativeStartReplayDoesNotDuplicateTaskTransition() throws Exception {
+        var f = startFixture("running");
+        assertEquals("STARTED", service.start(RUNTIME, "task-1", "pwe_run_1", startCommand(), startMessage()).state());
+        verify(f.states(), never()).transitionTask(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void nativeStartRejectsWrongCommandMessageAgentRevokedAndExpiredLease() throws Exception {
+        var f = startFixture("assigned");
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                () -> service.start(RUNTIME, "task-1", "pwe_run_1", "wrong", startMessage()));
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                () -> service.start(RUNTIME, "task-1", "pwe_run_1", startCommand(), "wrong"));
+        f.execution().setTargetAgentId("agent-b");
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                () -> service.start(RUNTIME, "task-1", "pwe_run_1", startCommand(), startMessage()));
+        f.execution().setTargetAgentId("agent-a").setExecutionState("INPUTS_REVOKED");
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                () -> service.start(RUNTIME, "task-1", "pwe_run_1", startCommand(), startMessage()));
+        f.execution().setExecutionState("QUEUED").setLeaseExpiresAt(1L);
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                () -> service.start(RUNTIME, "task-1", "pwe_run_1", startCommand(), startMessage()));
+        verify(f.states(), never()).transitionTask(any(), any(), any(), any(), any());
+        verify(executions, never()).lockByTaskRun(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void nativeStartRejectsReassignmentAndNonRunningLifecycleStates() throws Exception {
+        var f = startFixture("assigned");
+        f.root().setAssignedAgentId("agent-b");
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                () -> service.start(RUNTIME, "task-1", "pwe_run_1", startCommand(), startMessage()));
+        f.root().setAssignedAgentId("agent-a");
+        for (String status : List.of("blocked", "reviewing", "completed", "failed", "cancelled", "archived")) {
+            f.root().setRewardStatus(status);
+            assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                    () -> service.start(RUNTIME, "task-1", "pwe_run_1", startCommand(), startMessage()));
+        }
+        verify(f.states(), never()).transitionTask(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void nativeStartRechecksRevocationAfterAcquiringRootAndDoesNotTransition() throws Exception {
+        var f = startFixture("assigned");
+        var revoked = execution("pwe_start", "agent-a", "INPUTS_REVOKED").setTaskId("task-1").setExecutionMode("TASK");
+        when(executions.lockByTaskRun("0", "client-a", "owner-a", "task-1", "pwe_run_1")).thenReturn(revoked);
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                () -> service.start(RUNTIME, "task-1", "pwe_run_1", startCommand(), startMessage()));
+        verify(f.states(), never()).transitionTask(any(), any(), any(), any(), any());
+    }
+
+    private record StartFixture(AgentTaskStateService states, AgentTaskMutationTransaction mutations,
+            PersonalWorkspaceExecutionEntity execution, AgentTaskMetaEntity root) { }
+    private String startCommand() throws Exception { return "pwe_cmd_" + sha("command\npwe_start"); }
+    private String startMessage() throws Exception { return "pwe_msg_" + sha("message\npwe_start"); }
+    private StartFixture startFixture(String status) {
+        var items = mock(AgentTaskWorkItemDao.class);
+        service.setTaskExecutionDependencies(mock(WorkspaceConversationAccessService.class), items, mock(AgentWorkItemLeaseService.class));
+        var mutations = mock(AgentTaskMutationTransaction.class);
+        service.setTaskPublicationDependencies(mock(AgentTaskArtifactService.class), mock(AgentTaskFormalDeliveryService.class), mutations);
+        var states = mock(AgentTaskStateService.class);
+        service.setTaskStateService(states);
+        var execution = execution("pwe_start", "agent-a", "QUEUED").setTaskId("task-1").setExecutionMode("TASK")
+                .setWorkItemId("work-1").setLeaseToken("lease-secret").setLeaseWorkItemVersion(9L).setLeaseExpiresAt(9_999_999_999_999L);
+        when(executions.findByTaskRun("0", "client-a", "owner-a", "task-1", "pwe_run_1")).thenReturn(execution);
+        when(executions.lockByTaskRun("0", "client-a", "owner-a", "task-1", "pwe_run_1")).thenReturn(execution);
+        when(items.findByTaskAndWorkItemId("0", "client-a", "owner-a", "task-1", "work-1"))
+                .thenReturn(taskWorkItem("running", 9L, "agent-a", "lease-secret", 9_999_999_999_999L));
+        var root = new AgentTaskMetaEntity().setTaskId("task-1").setTaskVersion(4L).setRewardStatus(status).setAssignedAgentId("agent-a");
+        doAnswer(invocation -> ((AgentTaskMutationTransaction.LockedTaskMutation<?>) invocation.getArgument(4)).apply(root))
+                .when(mutations).executeWithLockedTaskRootInOwnerScope(any(), any(), any(), any(), any());
+        return new StartFixture(states, mutations, execution, root);
     }
 
     @Test

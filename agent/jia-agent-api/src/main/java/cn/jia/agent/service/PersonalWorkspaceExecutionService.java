@@ -19,6 +19,9 @@ public interface PersonalWorkspaceExecutionService {
     ExecutionView get(OwnerScope scope, String executionId);
     ExecutionView revokeInputs(OwnerScope scope, String executionId, long expectedGrantRevision,
             String idempotencyKey);
+    /** Native execution-start fact, exact-command bound; never invoked by an owner GET. */
+    RuntimeStartView start(RuntimeScope scope, String taskId, String runId, String commandId, String messageId);
+    record RuntimeStartView(String executionId, String taskId, String runId, String state) { }
     List<RuntimeInput> runtimeInputs(RuntimeScope scope, String taskId, String runId);
     /** Durable, agent-scoped pickup lane. The returned command payload is usable only with runtime credentials. */
     List<RuntimeQueuedCommand> runtimeQueuedCommands(RuntimeScope scope, int limit);

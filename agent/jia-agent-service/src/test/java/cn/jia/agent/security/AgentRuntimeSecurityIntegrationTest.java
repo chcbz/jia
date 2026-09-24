@@ -286,6 +286,25 @@ class AgentRuntimeSecurityIntegrationTest {
     }
 
     @Test
+    void nativeStartUsesAuthenticatedScopeAndRejectsBrowserWrongRuntimeAndAlternatePaths() throws Exception {
+        var scope = new PersonalWorkspaceExecutionService.RuntimeScope(TENANT, CLIENT_A, OWNER_A, A, "runtime-a");
+        when(workspaceExecutions.start(scope, "task-a", "run-a", "cmd-a", "msg-a"))
+                .thenReturn(new PersonalWorkspaceExecutionService.RuntimeStartView("pwe-a", "task-a", "run-a", "STARTED"));
+        String path = "/internal/agent/tasks/task-a/runs/run-a/start";
+        String body = "{\"commandId\":\"cmd-a\",\"messageId\":\"msg-a\"}";
+        runtimeFailureMvc.perform(headers(post(path), A, "runtime-a", TOKEN_A).contentType("application/json").content(body))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.state").value("STARTED"));
+        runtimeFailureMvc.perform(headers(get(path), A, "runtime-a", TOKEN_A)).andExpect(status().isForbidden());
+        runtimeFailureMvc.perform(headers(post(path + "/extra"), A, "runtime-a", TOKEN_A).contentType("application/json").content(body))
+                .andExpect(status().isForbidden());
+        runtimeFailureMvc.perform(headers(post(path), A, "runtime-a", TOKEN_A).header("Origin", "https://browser.invalid")
+                .contentType("application/json").content(body)).andExpect(status().isForbidden());
+        runtimeFailureMvc.perform(headers(post(path), A, "runtime-b", TOKEN_A).contentType("application/json").content(body))
+                .andExpect(status().isUnauthorized());
+        verify(workspaceExecutions, times(1)).start(scope, "task-a", "run-a", "cmd-a", "msg-a");
+    }
+
+    @Test
     void persistedLegacyCanonicalRegistrationAuthorizesClosedRuntimeRoutesWithFullScope() throws Exception {
         seedDirect(LEGACY, OWNER_A, CLIENT_A, 3L, "key-legacy", "3".repeat(32),
                 AgentConstants.IDENTITY_TYPE_LEGACY_CANONICAL);

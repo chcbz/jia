@@ -42,7 +42,7 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
                 || "POST".equals(request.getMethod()) && path.matches("/internal/agent/tasks/" + id
                 + "/runs/" + id + "/output-commits/" + id)
                 || "POST".equals(request.getMethod()) && path.matches("/internal/agent/tasks/" + id
-                + "/runs/" + id + "/failure");
+                + "/runs/" + id + "/(?:failure|start)");
     }
 
     @Override protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
