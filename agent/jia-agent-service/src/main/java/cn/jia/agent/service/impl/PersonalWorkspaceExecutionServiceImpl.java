@@ -368,14 +368,16 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public RuntimeStartView start(RuntimeScope scope, String taskId, String runId,
             String commandId, String messageId) {
-        // Unlocked scope/command lookup chooses the lock hierarchy; never lock execution first.
+        // Keep this lookup outside a method-level transaction. TASK start must let the canonical
+        // task-root mutation own the complete root -> execution -> state/event transaction.
         PersonalWorkspaceExecutionEntity candidate = runtimeExecution(scope, taskId, runId, false);
         requireStartCommand(candidate, commandId, messageId);
         if (!"TASK".equals(candidate.getExecutionMode())) {
-            PersonalWorkspaceExecutionEntity current = runtimeExecution(scope, taskId, runId, true);
+            // PRIVATE start is validation-only. A row lock without a surrounding transaction is
+            // ineffective and would imply a transaction boundary that this path does not need.
+            PersonalWorkspaceExecutionEntity current = runtimeExecution(scope, taskId, runId, false);
             requireStartCommand(current, commandId, messageId);
             return new RuntimeStartView(current.getExecutionId(), taskId, runId, "STARTED");
         }

@@ -40,6 +40,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.interceptor.NameMatchTransactionAttributeSource;
 import org.springframework.transaction.interceptor.RuleBasedTransactionAttribute;
 import org.springframework.transaction.interceptor.TransactionInterceptor;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import javax.sql.DataSource;
 import java.util.HashMap;
@@ -51,6 +52,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -385,7 +387,7 @@ class AgentTaskStateServiceRealTransactionTest {
 
     @Test
     void nativeWorkspaceStartPersistsStatusTimestampAndOneEventAndReplayIsIdempotent() throws Exception {
-        var service = nativeStartFixture();
+        var service = nativeStartFixture(true, transactionalService);
         var scope = new cn.jia.agent.service.PersonalWorkspaceExecutionService.RuntimeScope(TENANT, CLIENT, OWNER, AGENT_ID, "runtime-a");
         service.start(scope, TASK_ID, "run-a", nativeStartId("command"), nativeStartId("message"));
         service.start(scope, TASK_ID, "run-a", nativeStartId("command"), nativeStartId("message"));
@@ -398,7 +400,7 @@ class AgentTaskStateServiceRealTransactionTest {
 
     @Test
     void nativeWorkspaceStartRollsBackTaskTimestampVersionAndEventWithOuterTransaction() throws Exception {
-        var service = nativeStartFixture();
+        var service = nativeStartFixture(false, transactionalService);
         var scope = new cn.jia.agent.service.PersonalWorkspaceExecutionService.RuntimeScope(TENANT, CLIENT, OWNER, AGENT_ID, "runtime-a");
         String command = nativeStartId("command"), message = nativeStartId("message");
         var transaction = new org.springframework.transaction.support.TransactionTemplate(transactionManager);
@@ -413,14 +415,43 @@ class AgentTaskStateServiceRealTransactionTest {
         assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_event", Integer.class));
     }
 
+    @Test
+    void nativeWorkspaceStartRollsBackTaskTimestampVersionAndEventWhenEventAppendFails() throws Exception {
+        AgentTaskMutationTransactionImpl stateMutation =
+                new AgentTaskMutationTransactionImpl(taskMetaDao, transactionManager);
+        AgentTaskStateService failingStateService = transactionalProxy(
+                new AgentTaskStateServiceImpl(
+                        taskMetaDao, memberDao, workItemDao, stateMutation,
+                        command -> { throw new IllegalStateException("event append failed"); }),
+                transactionManager);
+        var service = nativeStartFixture(true, failingStateService);
+        var scope = new cn.jia.agent.service.PersonalWorkspaceExecutionService.RuntimeScope(
+                TENANT, CLIENT, OWNER, AGENT_ID, "runtime-a");
+
+        assertThrows(IllegalStateException.class, () -> service.start(
+                scope, TASK_ID, "run-a", nativeStartId("command"), nativeStartId("message")));
+
+        var root = taskMetaDao.findByTaskIdInOwnerScope(TENANT, CLIENT, OWNER, TASK_ID);
+        assertEquals("assigned", root.getRewardStatus());
+        assertEquals(0L, root.getTaskVersion());
+        assertNull(root.getStartedAt());
+        assertEquals(0, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM agent_task_event", Integer.class));
+    }
+
     private static String nativeStartId(String kind) throws Exception {
         String hash = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
                 .digest((kind + "\npwe-native-start").getBytes(java.nio.charset.StandardCharsets.UTF_8)));
         return ("command".equals(kind) ? "pwe_cmd_" : "pwe_msg_") + hash;
     }
 
-    /** Real H2 task/work-item/event DAOs and transaction services; execution storage is mocked. */
-    private cn.jia.agent.service.PersonalWorkspaceExecutionService nativeStartFixture() {
+    /**
+     * Real H2 task/work-item/event DAOs and transaction services; execution storage is mocked.
+     * The returned service is proxied exactly like production so a method-level transaction on
+     * start would be observable before the candidate lookup.
+     */
+    private cn.jia.agent.service.PersonalWorkspaceExecutionService nativeStartFixture(
+            boolean requireCandidateOutsideTransaction, AgentTaskStateService stateService) {
         jdbc.update("UPDATE agent_task_meta SET reward_status='assigned', assigned_agent_id=? WHERE task_id=?", AGENT_ID, TASK_ID);
         insertWorkItem("running", 9L, AGENT_ID);
         jdbc.update("UPDATE agent_task_work_item SET lease_token='lease-a', lease_until=9999999999999 WHERE work_item_id=?", WORK_ITEM_ID);
@@ -430,22 +461,41 @@ class AgentTaskStateServiceRealTransactionTest {
                 .setTargetAgentId(AGENT_ID).setOwnerJiacn(OWNER).setWorkItemId(WORK_ITEM_ID)
                 .setLeaseToken("lease-a").setLeaseWorkItemVersion(9L).setLeaseExpiresAt(9999999999999L);
         execution.setTenantId(TENANT); execution.setClientId(CLIENT);
-        org.mockito.Mockito.when(executions.findByTaskRun(TENANT, CLIENT, OWNER, TASK_ID, "run-a")).thenReturn(execution);
-        org.mockito.Mockito.when(executions.lockByTaskRun(TENANT, CLIENT, OWNER, TASK_ID, "run-a")).thenReturn(execution);
-        var service = new PersonalWorkspaceExecutionServiceImpl(executions,
+        org.mockito.Mockito.when(executions.findByTaskRun(TENANT, CLIENT, OWNER, TASK_ID, "run-a"))
+                .thenAnswer(invocation -> {
+                    if (requireCandidateOutsideTransaction) {
+                        assertFalse(TransactionSynchronizationManager.isActualTransactionActive(),
+                                "candidate lookup must precede the task mutation transaction");
+                    }
+                    return execution;
+                });
+        org.mockito.Mockito.when(executions.lockByTaskRun(TENANT, CLIENT, OWNER, TASK_ID, "run-a"))
+                .thenAnswer(invocation -> {
+                    assertTrue(TransactionSynchronizationManager.isActualTransactionActive(),
+                            "execution lock must participate in the task-root transaction");
+                    return execution;
+                });
+        var rawService = new PersonalWorkspaceExecutionServiceImpl(executions,
                 org.mockito.Mockito.mock(cn.jia.agent.dao.PersonalWorkspaceDao.class),
                 org.mockito.Mockito.mock(cn.jia.agent.dao.PersonalWorkspaceTaskLinkDao.class),
                 org.mockito.Mockito.mock(cn.jia.agent.dao.AgentRuntimeDao.class),
                 org.mockito.Mockito.mock(cn.jia.agent.service.PersonalWorkspaceStorage.class),
                 org.mockito.Mockito.mock(PersonalWorkspaceWriteService.class),
                 new cn.jia.agent.config.PersonalWorkspaceExecutionProperties(null));
-        service.setTaskExecutionDependencies(org.mockito.Mockito.mock(cn.jia.chat.service.WorkspaceConversationAccessService.class),
+        rawService.setTaskExecutionDependencies(org.mockito.Mockito.mock(cn.jia.chat.service.WorkspaceConversationAccessService.class),
                 workItemDao, org.mockito.Mockito.mock(cn.jia.agent.service.AgentWorkItemLeaseService.class));
-        service.setTaskPublicationDependencies(org.mockito.Mockito.mock(cn.jia.agent.service.AgentTaskArtifactService.class),
+        rawService.setTaskPublicationDependencies(org.mockito.Mockito.mock(cn.jia.agent.service.AgentTaskArtifactService.class),
                 org.mockito.Mockito.mock(cn.jia.agent.service.AgentTaskFormalDeliveryService.class),
                 new AgentTaskMutationTransactionImpl(taskMetaDao, transactionManager));
-        service.setTaskStateService(transactionalService);
-        return service;
+        rawService.setTaskStateService(stateService);
+        TransactionInterceptor interceptor = new TransactionInterceptor();
+        interceptor.setTransactionManager(transactionManager);
+        interceptor.setTransactionAttributeSource(
+                new org.springframework.transaction.annotation.AnnotationTransactionAttributeSource());
+        ProxyFactory factory = new ProxyFactory(rawService);
+        factory.setInterfaces(cn.jia.agent.service.PersonalWorkspaceExecutionService.class);
+        factory.addAdvice(interceptor);
+        return (cn.jia.agent.service.PersonalWorkspaceExecutionService) factory.getProxy();
     }
 
     // ── helpers ──

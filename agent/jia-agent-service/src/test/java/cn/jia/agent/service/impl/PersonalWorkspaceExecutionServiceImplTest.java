@@ -37,6 +37,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
@@ -707,6 +708,31 @@ class PersonalWorkspaceExecutionServiceImplTest {
     }
 
     @Test
+    void nativeStartLeavesTaskMutationAsTheOnlyTransactionBoundary() throws Exception {
+        var method = PersonalWorkspaceExecutionServiceImpl.class.getMethod(
+                "start", PersonalWorkspaceExecutionService.RuntimeScope.class,
+                String.class, String.class, String.class, String.class);
+
+        assertNull(method.getAnnotation(org.springframework.transaction.annotation.Transactional.class));
+    }
+
+    @Test
+    void privateNativeStartIsReadOnlyAndDoesNotTakeExecutionOrTaskRootLocks() throws Exception {
+        var execution = execution("pwe_start", "agent-a", "QUEUED")
+                .setTaskId("task-1").setExecutionMode("PRIVATE");
+        when(executions.findByTaskRun("0", "client-a", "owner-a", "task-1", "pwe_run_1"))
+                .thenReturn(execution);
+
+        var receipt = service.start(
+                RUNTIME, "task-1", "pwe_run_1", startCommand(), startMessage());
+
+        assertEquals("STARTED", receipt.state());
+        verify(executions, times(2)).findByTaskRun(
+                "0", "client-a", "owner-a", "task-1", "pwe_run_1");
+        verify(executions, never()).lockByTaskRun(any(), any(), any(), any(), any());
+    }
+
+    @Test
     void nativeStartLocksTaskBeforeExecutionAndTransitionsOnlyTheExactAssignedTask() throws Exception {
         var f = startFixture("assigned");
         var receipt = service.start(RUNTIME, "task-1", "pwe_run_1", startCommand(), startMessage());
@@ -716,7 +742,8 @@ class PersonalWorkspaceExecutionServiceImplTest {
                 org.mockito.ArgumentMatchers.eq("owner-a"), org.mockito.ArgumentMatchers.eq("task-1"), change.capture());
         assertEquals("running", change.getValue().getTargetStatus());
         assertEquals(4L, change.getValue().getExpectedVersion());
-        var order = org.mockito.Mockito.inOrder(f.mutations(), executions, f.states());
+        var order = org.mockito.Mockito.inOrder(executions, f.mutations(), f.states());
+        order.verify(executions).findByTaskRun("0", "client-a", "owner-a", "task-1", "pwe_run_1");
         order.verify(f.mutations()).executeWithLockedTaskRootInOwnerScope(any(), any(), any(), any(), any());
         order.verify(executions).lockByTaskRun("0", "client-a", "owner-a", "task-1", "pwe_run_1");
         order.verify(f.states()).transitionTask(any(), any(), any(), any(), any());
