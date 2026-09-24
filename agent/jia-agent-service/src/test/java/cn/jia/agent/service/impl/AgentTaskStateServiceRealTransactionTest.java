@@ -383,6 +383,71 @@ class AgentTaskStateServiceRealTransactionTest {
         assertEquals(3L, memberAfter.getVersion());
     }
 
+    @Test
+    void nativeWorkspaceStartPersistsStatusTimestampAndOneEventAndReplayIsIdempotent() throws Exception {
+        var service = nativeStartFixture();
+        var scope = new cn.jia.agent.service.PersonalWorkspaceExecutionService.RuntimeScope(TENANT, CLIENT, OWNER, AGENT_ID, "runtime-a");
+        service.start(scope, TASK_ID, "run-a", nativeStartId("command"), nativeStartId("message"));
+        service.start(scope, TASK_ID, "run-a", nativeStartId("command"), nativeStartId("message"));
+        var root = taskMetaDao.findByTaskIdInOwnerScope(TENANT, CLIENT, OWNER, TASK_ID);
+        assertEquals("running", root.getRewardStatus());
+        assertEquals(1L, root.getTaskVersion());
+        assertNotNull(root.getStartedAt());
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_event WHERE event_type='TASK_STARTED'", Integer.class));
+    }
+
+    @Test
+    void nativeWorkspaceStartRollsBackTaskTimestampVersionAndEventWithOuterTransaction() throws Exception {
+        var service = nativeStartFixture();
+        var scope = new cn.jia.agent.service.PersonalWorkspaceExecutionService.RuntimeScope(TENANT, CLIENT, OWNER, AGENT_ID, "runtime-a");
+        String command = nativeStartId("command"), message = nativeStartId("message");
+        var transaction = new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+        assertThrows(IllegalStateException.class, () -> transaction.execute(status -> {
+            service.start(scope, TASK_ID, "run-a", command, message);
+            throw new IllegalStateException("simulated rollback after start");
+        }));
+        var root = taskMetaDao.findByTaskIdInOwnerScope(TENANT, CLIENT, OWNER, TASK_ID);
+        assertEquals("assigned", root.getRewardStatus());
+        assertEquals(0L, root.getTaskVersion());
+        assertNull(root.getStartedAt());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_event", Integer.class));
+    }
+
+    private static String nativeStartId(String kind) throws Exception {
+        String hash = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                .digest((kind + "\npwe-native-start").getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        return ("command".equals(kind) ? "pwe_cmd_" : "pwe_msg_") + hash;
+    }
+
+    /** Real H2 task/work-item/event DAOs and transaction services; execution storage is mocked. */
+    private cn.jia.agent.service.PersonalWorkspaceExecutionService nativeStartFixture() {
+        jdbc.update("UPDATE agent_task_meta SET reward_status='assigned', assigned_agent_id=? WHERE task_id=?", AGENT_ID, TASK_ID);
+        insertWorkItem("running", 9L, AGENT_ID);
+        jdbc.update("UPDATE agent_task_work_item SET lease_token='lease-a', lease_until=9999999999999 WHERE work_item_id=?", WORK_ITEM_ID);
+        var executions = org.mockito.Mockito.mock(cn.jia.agent.dao.PersonalWorkspaceExecutionDao.class);
+        var execution = new cn.jia.agent.entity.PersonalWorkspaceExecutionEntity().setExecutionId("pwe-native-start")
+                .setTaskId(TASK_ID).setRunId("run-a").setExecutionMode("TASK").setExecutionState("QUEUED")
+                .setTargetAgentId(AGENT_ID).setOwnerJiacn(OWNER).setWorkItemId(WORK_ITEM_ID)
+                .setLeaseToken("lease-a").setLeaseWorkItemVersion(9L).setLeaseExpiresAt(9999999999999L);
+        execution.setTenantId(TENANT); execution.setClientId(CLIENT);
+        org.mockito.Mockito.when(executions.findByTaskRun(TENANT, CLIENT, OWNER, TASK_ID, "run-a")).thenReturn(execution);
+        org.mockito.Mockito.when(executions.lockByTaskRun(TENANT, CLIENT, OWNER, TASK_ID, "run-a")).thenReturn(execution);
+        var service = new PersonalWorkspaceExecutionServiceImpl(executions,
+                org.mockito.Mockito.mock(cn.jia.agent.dao.PersonalWorkspaceDao.class),
+                org.mockito.Mockito.mock(cn.jia.agent.dao.PersonalWorkspaceTaskLinkDao.class),
+                org.mockito.Mockito.mock(cn.jia.agent.dao.AgentRuntimeDao.class),
+                org.mockito.Mockito.mock(cn.jia.agent.service.PersonalWorkspaceStorage.class),
+                org.mockito.Mockito.mock(PersonalWorkspaceWriteService.class),
+                new cn.jia.agent.config.PersonalWorkspaceExecutionProperties(null));
+        service.setTaskExecutionDependencies(org.mockito.Mockito.mock(cn.jia.chat.service.WorkspaceConversationAccessService.class),
+                workItemDao, org.mockito.Mockito.mock(cn.jia.agent.service.AgentWorkItemLeaseService.class));
+        service.setTaskPublicationDependencies(org.mockito.Mockito.mock(cn.jia.agent.service.AgentTaskArtifactService.class),
+                org.mockito.Mockito.mock(cn.jia.agent.service.AgentTaskFormalDeliveryService.class),
+                new AgentTaskMutationTransactionImpl(taskMetaDao, transactionManager));
+        service.setTaskStateService(transactionalService);
+        return service;
+    }
+
     // ── helpers ──
 
     private void createTables() {

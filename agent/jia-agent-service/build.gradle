@@ -91,6 +91,7 @@ def v1131RegressionSourceSet = sourceSets.create('v1131Regression') {
         include 'cn/jia/agent/service/impl/PersonalWorkspaceConversationLinkServiceImplTest.java'
         include 'cn/jia/agent/service/impl/PersonalWorkspaceExecutionServiceImplTest.java'
         include 'cn/jia/agent/service/impl/AgentWorkItemLeaseServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/AgentTaskStateServiceRealTransactionTest.java'
         include 'cn/jia/agent/service/impl/AgentTaskArtifactOutcomeServiceImplTest.java'
         include 'cn/jia/agent/service/impl/AgentTaskFormalDeliveryDecisionServiceImplTest.java'
         include 'cn/jia/agent/conversation/ConversationDeliverableReadAdapterTest.java'
