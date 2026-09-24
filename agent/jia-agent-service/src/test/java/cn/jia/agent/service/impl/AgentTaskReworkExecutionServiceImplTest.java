@@ -156,6 +156,42 @@ class AgentTaskReworkExecutionServiceImplTest {
         verify(executionService, never()).create(any(), any(), any());
     }
 
+    @Test
+    void realSpringTransactionRollsBackInputLinkWhenQueueFails() {
+        var ds = new org.springframework.jdbc.datasource.DriverManagerDataSource(
+                "jdbc:h2:mem:bf23_" + java.util.UUID.randomUUID() + ";DB_CLOSE_DELAY=-1", "sa", "");
+        var jdbc = new org.springframework.jdbc.core.JdbcTemplate(ds);
+        jdbc.execute("CREATE TABLE rework_link_fixture(file_id VARCHAR(100), file_version INT)");
+        try {
+            when(formalDeliveries.findForUpdate("0", "client-a", "delivery-1"))
+                    .thenReturn(changesRequested(1L));
+            when(executions.findPublishedReworkSource("0", "client-a", "owner-a", "task-1",
+                    "delivery-1", "output-1", "file-1", 3)).thenReturn(source());
+            when(taskLinks.create(any(), any(), any())).thenAnswer(inv -> {
+                org.junit.jupiter.api.Assertions.assertTrue(org.springframework.transaction.support
+                        .TransactionSynchronizationManager.isActualTransactionActive());
+                PersonalWorkspaceTaskLinkService.CreateCommand link = inv.getArgument(2);
+                jdbc.update("INSERT INTO rework_link_fixture VALUES (?, ?)", link.fileId(), link.version());
+                return null;
+            });
+            when(executionService.create(any(), any(), any())).thenAnswer(inv -> {
+                assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM rework_link_fixture", Integer.class));
+                throw new PersonalWorkspaceExecutionService.Failure(PersonalWorkspaceExecutionService.Reason.TASK_CONFLICT);
+            });
+            var proxy = new org.springframework.aop.framework.ProxyFactory(service);
+            proxy.addAdvice(new org.springframework.transaction.interceptor.TransactionInterceptor(
+                    new org.springframework.jdbc.datasource.DataSourceTransactionManager(ds),
+                    new org.springframework.transaction.annotation.AnnotationTransactionAttributeSource()));
+            var transactional = (AgentTaskReworkExecutionService) proxy.getProxy();
+            var failure = assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                    () -> transactional.create(SCOPE, command(1L), "rework-rollback-key"));
+            assertEquals(PersonalWorkspaceExecutionService.Reason.TASK_CONFLICT, failure.getReason());
+            assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM rework_link_fixture", Integer.class));
+        } finally {
+            jdbc.execute("SHUTDOWN");
+        }
+    }
+
     private static AgentTaskReworkExecutionService.ReworkCommand command(long decisionVersion) {
         return new AgentTaskReworkExecutionService.ReworkCommand(
                 "task-1", "delivery-1", decisionVersion, "conversation-1", "agent-a",
