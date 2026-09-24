@@ -810,6 +810,7 @@ class PersonalWorkspaceExecutionServiceImplTest {
             case PPTX -> ".pptx";
             case "image/png" -> ".png";
             case "image/jpeg" -> ".jpg";
+            case "text/plain" -> ".txt";
             default -> throw new IllegalArgumentException(mime);
         };
     }
