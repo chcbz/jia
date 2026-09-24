@@ -589,7 +589,7 @@ class AgentTaskStateServiceRealTransactionTest {
                 INSERT INTO agent_task_member
                 (task_id, agent_id, member_role, member_status, assignment_source,
                  version, tenant_id, client_id, owner_jiacn, create_time, update_time)
-                VALUES (?, ?, 'worker', ?, 'manual', ?, ?, ?, ?, ?)
+                VALUES (?, ?, 'worker', ?, 'manual', ?, ?, ?, ?, ?, ?)
                 """, TASK_ID, AGENT_ID, status, version, TENANT, CLIENT, OWNER, now, now);
     }
 
