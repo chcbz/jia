@@ -867,6 +867,64 @@ class PersonalWorkspaceExecutionServiceImplTest {
                 org.mockito.ArgumentMatchers.eq("agent-a"), any());
     }
 
+    @Test
+    void formalReworkWithoutPreexistingInputRelationUsesRealTaskQueueAfterExplicitLink() {
+        service = new PersonalWorkspaceExecutionServiceImpl(executions, workspace,
+                taskLinks, runtimes, storage, writes,
+                new PersonalWorkspaceExecutionProperties(List.of(PDF)));
+        configureTaskCreate(mock(WorkspaceConversationAccessService.class),
+                mock(AgentTaskWorkItemDao.class), mock(AgentWorkItemLeaseService.class));
+        var formalDao = mock(cn.jia.agent.dao.AgentTaskFormalDeliveryDao.class);
+        var mutations = mock(AgentTaskMutationTransaction.class);
+        var linkService = mock(cn.jia.agent.service.PersonalWorkspaceTaskLinkService.class);
+        var root = new AgentTaskMetaEntity().setTaskId("task-1");
+        root.setOwnerJiacn("owner-a"); root.setTenantId("0"); root.setClientId("client-a");
+        doAnswer(inv -> {
+            AgentTaskMutationTransaction.LockedTaskMutation<?> callback = inv.getArgument(4);
+            return callback.apply(root);
+        }).when(mutations).executeWithLockedTaskRootInOwnerScope(any(), any(), any(), any(), any());
+        var delivery = new cn.jia.agent.entity.AgentTaskFormalDeliveryEntity()
+                .setTaskId("task-1").setDeliveryId("delivery-1").setState("changes_requested")
+                .setVersion(1L).setReviewedAt(2000L).setReviewedByJiacn("owner-a");
+        delivery.setTenantId("0"); delivery.setClientId("client-a");
+        when(formalDao.findForUpdate("0", "client-a", "delivery-1")).thenReturn(delivery);
+        var source = new PersonalWorkspaceExecutionOutputEntity().setOutputId("output-1")
+                .setFormalDeliveryId("delivery-1").setWorkspaceFileId("file-1")
+                .setWorkspaceFileVersion(3).setOutputState("COMMITTED").setPublicationState("PUBLISHED");
+        source.setTenantId("0"); source.setClientId("client-a"); source.setOwnerJiacn("owner-a");
+        when(executions.findPublishedReworkSource("0", "client-a", "owner-a", "task-1",
+                "delivery-1", "output-1", "file-1", 3)).thenReturn(source);
+        var linked = new java.util.concurrent.atomic.AtomicBoolean(false);
+        when(taskLinks.hasActiveExecutionInputLink("0", "client-a", "owner-a", "task-1", "file-1", 3))
+                .thenAnswer(inv -> linked.get());
+        when(linkService.create(any(), any(), any())).thenAnswer(inv -> {
+            assertEquals(new cn.jia.agent.service.PersonalWorkspaceTaskLinkService.Scope(
+                    "0", "client-a", "owner-a"), inv.getArgument(0));
+            assertEquals("task-1", inv.getArgument(1));
+            cn.jia.agent.service.PersonalWorkspaceTaskLinkService.CreateCommand link = inv.getArgument(2);
+            assertEquals("file-1", link.fileId()); assertEquals(3, link.version());
+            assertEquals("INPUT", link.role()); linked.set(true);
+            return null;
+        });
+        when(workspace.lockFile("0", "client-a", "owner-a", "file-1"))
+                .thenReturn(workspaceFile("file-1"));
+        when(workspace.findVersion("0", "client-a", "owner-a", "file-1", 3))
+                .thenReturn(workspaceVersion("file-1", 3, "original.pdf", PDF));
+        var rework = new AgentTaskReworkExecutionServiceImpl(formalDao, executions,
+                service, mutations, linkService);
+        var result = rework.create(new PersonalWorkspaceExecutionService.OwnerScope("0", "client-a", "owner-a"),
+                new cn.jia.agent.service.AgentTaskReworkExecutionService.ReworkCommand("task-1", "delivery-1",
+                        1L, "conversation-1", "agent-a", "output-1", "file-1", 3, "追加应急方案", PDF),
+                "rework-real-queue");
+        assertTrue(linked.get()); assertEquals("QUEUED", result.state());
+        assertEquals("TASK", result.executionMode()); assertEquals("task-1", result.taskId());
+        var input = ArgumentCaptor.forClass(PersonalWorkspaceExecutionInputEntity.class);
+        verify(executions).insertInput(input.capture());
+        assertEquals("file-1", input.getValue().getFileId());
+        assertEquals(3, input.getValue().getFileVersion());
+        assertEquals(PDF, input.getValue().getContentMimeType());
+    }
+
     private void configureTaskCreate(WorkspaceConversationAccessService access,
             AgentTaskWorkItemDao workItems, AgentWorkItemLeaseService leases) {
         service.setTaskExecutionDependencies(access, workItems, leases);

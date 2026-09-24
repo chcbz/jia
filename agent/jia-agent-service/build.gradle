@@ -386,6 +386,9 @@ def bf08FormalFlowSourceSet = sourceSets.create('bf08FormalFlow') {
         include 'cn/jia/agent/service/impl/AgentTaskFormalDeliveryDecisionServiceImplTest.java'
         include 'cn/jia/agent/api/AgentTaskFormalDeliveryControllerTest.java'
         include 'cn/jia/agent/config/AgentTaskFormalDeliveryProfileTest.java'
+        include 'cn/jia/agent/service/impl/AgentTaskReworkExecutionServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/PersonalWorkspaceTaskLinkServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/PersonalWorkspaceExecutionServiceImplTest.java'
     }
     resources.srcDir 'src/test/resources'
     compileClasspath += sourceSets.main.output
