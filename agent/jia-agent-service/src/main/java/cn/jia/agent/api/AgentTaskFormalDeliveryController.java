@@ -34,6 +34,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
@@ -451,11 +452,14 @@ public class AgentTaskFormalDeliveryController {
         if (declaredLength == 0 || declaredLength > MAX_BODY_BYTES) throw new RequestFailure();
         int initial = declaredLength > 0 ? (int) Math.min(declaredLength, BODY_BUFFER_BYTES)
                 : BODY_BUFFER_BYTES;
-        try (ByteArrayOutputStream result = new ByteArrayOutputStream(initial)) {
+        // Cached request wrappers may return a fresh stream per access. Read one stream
+        // exactly once; reacquiring inside the loop repeats the body until the size cap.
+        try (InputStream input = request.getInputStream();
+             ByteArrayOutputStream result = new ByteArrayOutputStream(initial)) {
             byte[] buffer = new byte[BODY_BUFFER_BYTES];
             int total = 0;
             int count;
-            while ((count = request.getInputStream().read(buffer)) != -1) {
+            while ((count = input.read(buffer)) != -1) {
                 if (count == 0) continue;
                 if (count > MAX_BODY_BYTES - total) throw new RequestFailure();
                 result.write(buffer, 0, count);

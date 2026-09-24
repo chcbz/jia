@@ -1,5 +1,7 @@
 package cn.jia.agent.api;
 
+import cn.jia.core.common.EsRequestWrapper;
+import jakarta.servlet.http.HttpServletRequest;
 import cn.jia.agent.entity.AgentTaskFormalDeliveryItemDTO;
 import cn.jia.agent.entity.AgentTaskFormalDeliveryViewDTO;
 import cn.jia.agent.service.AgentTaskFormalDeliveryDecisionService;
@@ -51,7 +53,10 @@ class AgentTaskFormalDeliveryControllerTest {
         read = mock(AgentTaskFormalDeliveryReadService.class);
         rework = mock(AgentTaskReworkExecutionService.class);
         mvc = MockMvcBuilders.standaloneSetup(new AgentTaskFormalDeliveryController(
-                submission, decision, read, rework)).build();
+                submission, decision, read, rework))
+                // Production logging uses a replayable body, unlike MockHttpServletRequest.
+                .addFilters((request, response, chain) -> chain.doFilter(
+                        new EsRequestWrapper((HttpServletRequest) request), response)).build();
     }
 
     @Test
@@ -90,7 +95,7 @@ class AgentTaskFormalDeliveryControllerTest {
                 .thenReturn(view("changes_requested", 2_000L, "add tests"));
         String body = """
                 {"expectedTaskVersion":4,"expectedDeliveryVersion":0,
-                 "decision":"changes_requested","reviewReason":"add tests"}
+                 "decision":"changes_requested","reviewReason":"补充现场应急联络方案"}
                 """;
 
         mvc.perform(post("/agent/tasks/" + TASK + "/formal-deliveries/delivery-a/decision")
