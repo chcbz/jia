@@ -26,7 +26,7 @@ class ManagedHostingCredentialsTest {
     private final HostingRentOwnerResolver owners = mock(HostingRentOwnerResolver.class);
     private final AgentIdentityService identities = mock(AgentIdentityService.class);
     private final AgentPersonaBindingDao bindings = mock(AgentPersonaBindingDao.class);
-    private final ManagedHostingProvisioner.Preparation p = new ManagedHostingProvisioner.Preparation("Tenant-A", "Client-A", "Tenant-A",
+    private final ManagedHostingProvisioner.Preparation p = new ManagedHostingProvisioner.Preparation("0", "Client-A", "Tenant-A",
             "agt_0123456789abcdef0123456789abcdef", "hri-original", "hrl-one", "17", 1000);
     private JdbcTemplate jdbc;
     private DataSourceTransactionManager manager;
@@ -40,21 +40,21 @@ class ManagedHostingCredentialsTest {
         jdbc.execute("CREATE TABLE effects(name VARCHAR(100))");
         ObjectProvider<ApiKeyService> provider = mock(ObjectProvider.class); when(provider.getIfAvailable()).thenReturn(keys);
         service = new ManagedHostingCredentials(provider, rent, owners, identities, bindings, manager);
-        when(rent.selectIntentForUpdate("Tenant-A", "Client-A", p.intentId())).thenAnswer(call -> {
+        when(rent.selectIntentForUpdate("0", "Client-A", p.intentId())).thenAnswer(call -> {
             assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
             String ref = jdbc.queryForObject("SELECT key_ref FROM association WHERE id=1 FOR UPDATE", String.class);
             return new EconomyHostingProvisioningIntentEntity().setManagedApiKeyId(ref).setIntentId(p.intentId())
                     .setLeaseId(p.leaseId()).setAgentId(p.agentId()).setQuotePurpose("INITIAL").setPrincipalType("USER")
                     .setPrincipalId("login-sub-not-tenant").setReservedAt(1000L).setStatus("PROVISIONING_UNKNOWN");
         });
-        when(rent.selectLeaseForUpdate("Tenant-A", "Client-A", p.leaseId())).thenReturn(new EconomyHostingLeaseEntity()
+        when(rent.selectLeaseForUpdate("0", "Client-A", p.leaseId())).thenReturn(new EconomyHostingLeaseEntity()
                 .setAgentId(p.agentId()).setLeaseId(p.leaseId()).setBindingId("17").setStatus("PROVISIONING")
                 .setLatestIntentId(p.intentId()).setPrincipalType("USER").setPrincipalId("login-sub-not-tenant"));
-        when(owners.requireOwner(new HostingRentHttp.Actor("login-sub-not-tenant", "Tenant-A", "Client-A"))).thenReturn("Tenant-A");
+        when(owners.requireOwner(new HostingRentHttp.Actor("login-sub-not-tenant", "0", "Client-A", "Tenant-A"))).thenReturn("Tenant-A");
         var binding = new AgentPersonaBindingEntity().setId(17L).setAgentId(p.agentId()).setJiacn("Tenant-A").setStatus(1);
         binding.setClientId("Client-A"); when(bindings.findByIdForUpdate(17L)).thenReturn(binding);
         var identity = new AgentIdentityRegistryEntity().setCanonicalAgentId(p.agentId()).setBindingId(17L);
-        when(identities.requireRegistrationIdentityInScope("Tenant-A", "Client-A", "Tenant-A", p.agentId())).thenReturn(identity);
+        when(identities.requireRegistrationIdentityInScope("0", "Client-A", "Tenant-A", p.agentId())).thenReturn(identity);
         when(identities.requireActiveBinding(identity, null)).thenReturn(binding);
         when(keys.create(any())).thenAnswer(call -> {
             assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
@@ -62,14 +62,14 @@ class ManagedHostingCredentialsTest {
             jdbc.update("INSERT INTO effects VALUES('key')"); return saved;
         });
         when(keys.get("31")).thenAnswer(call -> saved);
-        when(rent.attachManagedKey("Tenant-A", "Client-A", p.intentId(), "31")).thenAnswer(call ->
+        when(rent.attachManagedKey("0", "Client-A", p.intentId(), "31")).thenAnswer(call ->
                 jdbc.update("UPDATE association SET key_ref='31' WHERE id=1 AND key_ref IS NULL"));
     }
     @AfterEach void close() { jdbc.execute("DROP ALL OBJECTS"); }
     @Test void existingOauthServiceCreatesOneExactScopedKeyAndPersistsOnlyItsReference() {
         String key = service.credential(p);
         assertEquals(key, service.credential(p));
-        assertEquals("Tenant-A", saved.getTenantId()); assertEquals("Tenant-A", saved.getJiacn()); assertEquals("Client-A", saved.getClientId());
+        assertEquals("0", saved.getTenantId()); assertEquals("Tenant-A", saved.getJiacn()); assertEquals("Client-A", saved.getClientId());
         assertEquals("hosting:"+p.intentId(), saved.getKeyName()); assertEquals("31", jdbc.queryForObject("SELECT key_ref FROM association", String.class));
         verify(keys, times(1)).create(any()); verify(keys).get("31");
     }
@@ -86,10 +86,36 @@ class ManagedHostingCredentialsTest {
         saved.setJiacn("wrong-owner");
         assertThrows(IllegalStateException.class, () -> service.credential(p)); verify(keys, never()).create(any());
     }
+    @Test void crossOwnerCannotReuseBindingIdentityOrExistingManagedCredential() {
+        service.credential(p);
+        var otherOwner = new ManagedHostingProvisioner.Preparation("0", "Client-A", "Owner-B",
+                p.agentId(), p.intentId(), p.leaseId(), p.bindingId(), p.reservedAt());
+        when(owners.requireOwner(new HostingRentHttp.Actor(
+                "login-sub-not-tenant", "0", "Client-A", "Owner-B"))).thenReturn("Owner-B");
+        clearInvocations(keys, identities);
+
+        assertThrows(IllegalStateException.class, () -> service.credential(otherOwner));
+        verify(identities, never()).requireRegistrationIdentityInScope("0", "Client-A", "Owner-B", p.agentId());
+        verify(keys, never()).get("31");
+
+        var ownerBinding = new AgentPersonaBindingEntity().setId(17L).setAgentId(p.agentId())
+                .setJiacn("Owner-B").setStatus(1);
+        ownerBinding.setClientId("Client-A");
+        var ownerIdentity = new AgentIdentityRegistryEntity().setCanonicalAgentId(p.agentId()).setBindingId(17L);
+        when(bindings.findByIdForUpdate(17L)).thenReturn(ownerBinding);
+        when(identities.requireRegistrationIdentityInScope("0", "Client-A", "Owner-B", p.agentId()))
+                .thenReturn(ownerIdentity);
+        when(identities.requireActiveBinding(ownerIdentity, null)).thenReturn(ownerBinding);
+        clearInvocations(keys);
+
+        assertThrows(IllegalStateException.class, () -> service.credential(otherOwner));
+        verify(keys).get("31");
+        verify(keys, never()).create(any());
+    }
 
     @Test void failedNoEffectRefundDisablesOnlyTheExactIntentAssociatedManagedKey() {
         EconomyHostingProvisioningIntentEntity failed = failedIntent();
-        when(keys.disableManagedKey("31", "Tenant-A", "Client-A", "Tenant-A", "hosting:hri-original"))
+        when(keys.disableManagedKey("31", "0", "Client-A", "Tenant-A", "hosting:hri-original"))
                 .thenAnswer(call -> {
                     assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
                     return true;
@@ -98,7 +124,7 @@ class ManagedHostingCredentialsTest {
         new org.springframework.transaction.support.TransactionTemplate(manager).executeWithoutResult(
                 status -> service.disableForRefund(p, failed));
 
-        verify(keys).disableManagedKey("31", "Tenant-A", "Client-A", "Tenant-A", "hosting:hri-original");
+        verify(keys).disableManagedKey("31", "0", "Client-A", "Tenant-A", "hosting:hri-original");
         verify(keys, never()).disableManagedKey(eq("other-key"), anyString(), anyString(), anyString(), anyString());
     }
 
@@ -118,7 +144,7 @@ class ManagedHostingCredentialsTest {
         }
         verify(keys, never()).disableManagedKey(anyString(), anyString(), anyString(), anyString(), anyString());
 
-        when(keys.disableManagedKey("31", "Tenant-A", "Client-A", "Tenant-A", "hosting:hri-original"))
+        when(keys.disableManagedKey("31", "0", "Client-A", "Tenant-A", "hosting:hri-original"))
                 .thenReturn(false);
         assertThrows(IllegalStateException.class, () ->
                 new org.springframework.transaction.support.TransactionTemplate(manager).executeWithoutResult(
@@ -127,7 +153,7 @@ class ManagedHostingCredentialsTest {
 
     private EconomyHostingProvisioningIntentEntity failedIntent() {
         return new EconomyHostingProvisioningIntentEntity().setId(1L).setManagedApiKeyId("31")
-                .setTenantId("Tenant-A").setClientId("Client-A")
+                .setTenantId("0").setClientId("Client-A")
                 .setIntentId(p.intentId()).setLeaseId(p.leaseId()).setAgentId(p.agentId())
                 .setQuotePurpose("INITIAL").setPrincipalType("USER").setPrincipalId("login-sub-not-tenant")
                 .setReservedAt(p.reservedAt()).setStatus("FAILED_NO_EFFECT");

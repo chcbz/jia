@@ -24,7 +24,10 @@ class UnixManagedHostingProvisionerTest {
     private final ManagedHostingCredentials credentials = mock(ManagedHostingCredentials.class);
     private static final String AGENT = "agt_0123456789abcdef0123456789abcdef";
     private ManagedHostingProvisioner.Preparation preparation() {
-        return new ManagedHostingProvisioner.Preparation("Tenant-A", "Client-A", "Tenant-A", AGENT,
+        return preparation("Tenant-A");
+    }
+    private ManagedHostingProvisioner.Preparation preparation(String ownerJiacn) {
+        return new ManagedHostingProvisioner.Preparation("Tenant-A", "Client-A", ownerJiacn, AGENT,
                 "hri_00000000-0000-0000-0000-000000000001", "hrl_00000000-0000-0000-0000-000000000002", "17", System.currentTimeMillis()-10000);
     }
     private Map<String,Object> ready(ManagedHostingProvisioner.Preparation p) {
@@ -36,8 +39,11 @@ class UnixManagedHostingProvisionerTest {
         return reply;
     }
     private UnixManagedHostingProvisioner adapter(Path socket, long uid, boolean enabled) {
+        return adapter(socket, uid, enabled, "Tenant-A");
+    }
+    private UnixManagedHostingProvisioner adapter(Path socket, long uid, boolean enabled, String configuredOwner) {
         return new UnixManagedHostingProvisioner(new AgentHostingRentProperties(enabled, null, null, null),
-                new ManagedHostingAdapterProperties(socket.toString(), uid, "Tenant-A", "Client-A", "Tenant-A", 2000), credentials);
+                new ManagedHostingAdapterProperties(socket.toString(), uid, "Tenant-A", "Client-A", configuredOwner, 2000), credentials);
     }
     @Test void exactEngineRegistrationProofAndCanonicalStringTimeAreRequired() {
         var p = preparation(); var valid = ready(p);
@@ -50,7 +56,7 @@ class UnixManagedHostingProvisionerTest {
         valid.remove("engineThreadId");
         assertEquals(ManagedHostingProvisioner.Outcome.UNKNOWN, UnixManagedHostingProvisioner.decode(p, valid).outcome());
     }
-    @Test void disabledAndCrossScopeCannotCreateKeysAndTransactionsCannotReachIo() {
+    @Test void fixedOwnerCompatibilityStillRequiresExactFullScope() {
         var adapter = adapter(Path.of("/private/host.sock"), 1, false);
         assertFalse(adapter.available()); assertEquals(ManagedHostingProvisioner.Outcome.UNKNOWN, adapter.prepareAndObserve(preparation()).outcome());
         verifyNoInteractions(credentials);
@@ -62,6 +68,45 @@ class UnixManagedHostingProvisionerTest {
         TransactionSynchronizationManager.setActualTransactionActive(true);
         try { assertThrows(IllegalStateException.class, () -> adapter.prepareAndObserve(preparation())); }
         finally { TransactionSynchronizationManager.clear(); }
+    }
+    @Test void wildcardOpensOnlyConcreteOwnerWithinStillFixedTenantAndClient() {
+        when(credentials.available()).thenReturn(true);
+        var live = adapter(Path.of("/private/host.sock"), 1, true, "*");
+        assertTrue(live.availableFor("Tenant-A", "Client-A", "Owner-A"));
+        assertTrue(live.availableFor("Tenant-A", "Client-A", "Owner-B"));
+        assertFalse(live.availableFor("Tenant-B", "Client-A", "Owner-A"));
+        assertFalse(live.availableFor("Tenant-A", "Client-B", "Owner-A"));
+        assertFalse(live.availableFor("Tenant-A", "Client-A", null));
+        assertFalse(live.availableFor("Tenant-A", "Client-A", ""));
+        assertFalse(live.availableFor("Tenant-A", "Client-A", "   "));
+        assertFalse(live.availableFor("Tenant-A", "Client-A", "*"));
+    }
+    @Test void wildcardRequestCarriesExactResolvedOwnerAndNeverConfigurationMarker() throws Exception {
+        var p = preparation("Owner-B");
+        var adapter = spy(adapter(Path.of("/private/host.sock"), 1, true, "*"));
+        when(credentials.available()).thenReturn(true);
+        when(credentials.credential(p)).thenReturn("fixture-key");
+        List<Map<String, Object>> requests = new ArrayList<>();
+        doAnswer(call -> {
+            Map<String, Object> request = new LinkedHashMap<>(call.getArgument(0));
+            requests.add(request);
+            return requests.size() == 1 ? Map.of() : ready(p);
+        }).when(adapter).exchange(anyMap());
+
+        assertEquals(ManagedHostingProvisioner.Outcome.SERVICE_READY, adapter.prepareAndObserve(p).outcome());
+        assertEquals(List.of("observe", "ensure"), requests.stream().map(request -> request.get("method")).toList());
+        assertTrue(requests.stream().allMatch(request -> "Owner-B".equals(request.get("ownerJiacn"))));
+        assertTrue(requests.stream().noneMatch(request -> "*".equals(request.get("ownerJiacn"))));
+        verify(credentials).credential(p);
+    }
+    @Test void emptyOrWildcardCallerOwnerIsRejectedBeforeCredentialLookup() {
+        when(credentials.available()).thenReturn(true);
+        var adapter = adapter(Path.of("/private/host.sock"), 1, true, "*");
+        for (String owner : Arrays.asList(null, "", "   ", "*")) {
+            assertEquals(ManagedHostingProvisioner.Outcome.UNKNOWN,
+                    adapter.prepareAndObserve(preparation(owner)).outcome());
+        }
+        verify(credentials, never()).credential(any());
     }
     @Test void observeBeforeEnsureAndTimeoutNeverBecomeRefundableFailure() throws Exception {
         var p = preparation(); var adapter = spy(adapter(Path.of("/private/host.sock"), 1, true));

@@ -39,14 +39,13 @@ public final class UnixManagedHostingProvisioner implements ManagedHostingProvis
     @Override public boolean available() { return rent.configured() && config.configured() && credentials.available(); }
 
     @Override public boolean availableFor(String tenantId, String clientId, String ownerJiacn) {
-        return available() && config.tenantId().equals(tenantId) && config.clientId().equals(clientId)
-                && config.ownerJiacn().equals(ownerJiacn);
+        return available() && config.allowsScope(tenantId, clientId, ownerJiacn);
     }
 
     @Override public Observation prepareAndObserve(Preparation preparation) {
         outsideTransaction();
-        if (!available() || !config.tenantId().equals(preparation.tenantId())
-                || !config.clientId().equals(preparation.clientId()) || !config.ownerJiacn().equals(preparation.ownerJiacn())) return unknown(preparation);
+        if (!available() || preparation == null || !config.allowsScope(
+                preparation.tenantId(), preparation.clientId(), preparation.ownerJiacn())) return unknown(preparation);
         try {
             String key = credentials.credential(preparation); // Short DB-only transaction, committed before channel access.
             var request = request(preparation, key, "observe");

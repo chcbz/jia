@@ -7,6 +7,8 @@ import java.nio.file.Path;
 @ConfigurationProperties(prefix = "agent.hosting-rent.managed")
 public record ManagedHostingAdapterProperties(String socketPath, Long runnerUid, String tenantId,
         String clientId, String ownerJiacn, Integer timeoutMs) {
+    private static final String ANY_OWNER = "*";
+
     public ManagedHostingAdapterProperties { timeoutMs = timeoutMs == null ? 2000 : timeoutMs; }
     public boolean configured() {
         boolean absolute;
@@ -15,5 +17,13 @@ public record ManagedHostingAdapterProperties(String socketPath, Long runnerUid,
         return absolute && runnerUid != null && runnerUid >= 0 && tenantId != null && !tenantId.isBlank()
                 && clientId != null && !clientId.isBlank() && ownerJiacn != null && !ownerJiacn.isBlank()
                 && timeoutMs >= 100 && timeoutMs <= 20000;
+    }
+
+    /** Keeps tenant/client fixed while reserving {@code *} solely as the configured owner wildcard. */
+    public boolean allowsScope(String tenantId, String clientId, String resolvedOwnerJiacn) {
+        return configured() && this.tenantId.equals(tenantId) && this.clientId.equals(clientId)
+                && resolvedOwnerJiacn != null && !resolvedOwnerJiacn.isBlank()
+                && !ANY_OWNER.equals(resolvedOwnerJiacn)
+                && (ANY_OWNER.equals(ownerJiacn) || ownerJiacn.equals(resolvedOwnerJiacn));
     }
 }
