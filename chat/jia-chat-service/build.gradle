@@ -95,3 +95,25 @@ tasks.register('bf08FormalFlow', Test) {
     classpath = bf08FormalFlowSourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+// T10/T11/T15 focused P0 slice; avoids compiling unrelated historical chat tests on low-disk hosts.
+def chatDeliberationSourceSet = sourceSets.create('chatDeliberation') {
+    java.srcDir 'src/chatDeliberationTest/java'
+    resources.srcDir 'src/chatDeliberationTest/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(chatDeliberationSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(chatDeliberationSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('chatDeliberation', Test) {
+    group = 'verification'
+    description = 'Runs T10/T11/T15 route, snapshot, durable turn and protocol compatibility tests.'
+    dependsOn tasks.named(chatDeliberationSourceSet.classesTaskName)
+    testClassesDirs = chatDeliberationSourceSet.output.classesDirs
+    classpath = chatDeliberationSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
