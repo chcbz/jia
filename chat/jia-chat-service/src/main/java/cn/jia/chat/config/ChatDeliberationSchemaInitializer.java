@@ -11,6 +11,9 @@ import org.springframework.stereotype.Component;
 import javax.sql.DataSource;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -25,6 +28,7 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
             "chat_context_snapshot", "chat_request", "chat_turn", "chat_dispatch_outbox",
             "chat_conversation_event");
     private static final String COLLATION = "utf8mb4_0900_bin";
+    private static final String MIGRATION_LOCK = "cyf:chat-deliberation:v2";
     private static final Map<String, Map<String, ColumnDef>> COLUMNS = columns();
     private static final Map<String, Map<String, IndexDef>> INDEXES = indexes();
 
@@ -37,19 +41,50 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
     @Override
     public void run(ApplicationArguments args) throws Exception {
         if (isH2()) return;
+        DataSource source = jdbc.getDataSource();
+        if (source == null) throw new IllegalStateException("Chat deliberation schema requires a DataSource");
+        try (Connection lockConnection = source.getConnection()) {
+            acquireMigrationLock(lockConnection);
+            try { initializeWhileLocked(); }
+            finally { releaseMigrationLock(lockConnection); }
+        }
+    }
+
+    private void initializeWhileLocked() throws Exception {
         String sql = new String(new ClassPathResource("db/chat-deliberation-schema.sql")
                 .getInputStream().readAllBytes(), StandardCharsets.UTF_8);
         for (String statement : sql.replaceAll("(?m)^--.*$", "").split(";")) {
             if (!statement.isBlank()) jdbc.execute(statement.strip());
         }
         if (allowAdditiveMigration) recordMigrationStage("PREFLIGHT");
+        for (String table : TABLES) if (allowAdditiveMigration) addKnownMissingColumnsAndIndexes(table);
+        if (allowAdditiveMigration) backfillLegacyData();
         for (String table : TABLES) {
-            if (allowAdditiveMigration) addKnownMissingColumnsAndIndexes(table);
             validateTable(table);
             validateColumns(table);
             validateIndexes(table);
         }
         if (allowAdditiveMigration) recordMigrationStage("APPLIED");
+    }
+
+    private void acquireMigrationLock(Connection connection) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT GET_LOCK(?,10)")) {
+            statement.setString(1, MIGRATION_LOCK);
+            try (ResultSet result = statement.executeQuery()) {
+                if (!result.next() || result.getInt(1) != 1 || result.wasNull())
+                    throw new IllegalStateException("Timed out acquiring chat deliberation migration lock");
+            }
+        }
+    }
+
+    private void releaseMigrationLock(Connection connection) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT RELEASE_LOCK(?)")) {
+            statement.setString(1, MIGRATION_LOCK);
+            try (ResultSet result = statement.executeQuery()) {
+                if (!result.next() || result.getInt(1) != 1 || result.wasNull())
+                    throw new IllegalStateException("Chat deliberation migration lock was not held");
+            }
+        }
     }
 
     private void recordMigrationStage(String stage) {
@@ -104,6 +139,109 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
             jdbc.execute("ALTER TABLE " + table + " ALGORITHM=INPLACE, LOCK=NONE, " + prefix + " ("
                     + String.join(",", def.columns()) + ")");
         }
+    }
+
+    private void backfillLegacyData() {
+        // 1b5fa4ce rows predate relay metadata and the durable event journal. Rebuild only from
+        // authoritative request/turn/snapshot/message rows; unrecoverable work is terminalized.
+        jdbc.update("""
+                UPDATE chat_dispatch_outbox o
+                JOIN chat_turn t ON t.turn_id=o.turn_id AND t.dispatch_id=o.dispatch_id
+                JOIN chat_context_snapshot s ON s.snapshot_id=t.snapshot_id
+                JOIN chat_request r ON r.tenant_id=t.tenant_id AND r.owner_jiacn=t.owner_jiacn
+                  AND r.client_id=t.client_id AND r.request_id=t.request_id AND r.request_revision=t.request_revision
+                JOIN chat_message m ON m.id=r.user_message_id
+                SET o.payload_json=JSON_OBJECT(
+                  'conversationId',t.conversation_id,'conversationGeneration',CAST(t.conversation_generation AS CHAR),
+                  'requestId',t.request_id,'requestRevision',CAST(t.request_revision AS CHAR),
+                  'turnId',t.turn_id,'dispatchId',t.dispatch_id,'targetAgentId',t.target_agent_id,
+                  'contextSnapshotId',t.snapshot_id,'contextHash',t.context_digest,'route',t.route,
+                  'content',m.content,'sourceVector',CAST(s.source_vector_json AS JSON),
+                  'factsManifest',CAST(s.facts_manifest_json AS JSON)),
+                  o.status=CASE WHEN o.status IN ('SENT','DEAD') THEN o.status ELSE 'READY' END,
+                  o.available_at=COALESCE(o.available_at,o.created_at),o.last_error=NULL
+                WHERE o.event_type='DISPATCH' AND JSON_VALID(s.source_vector_json)
+                  AND JSON_VALID(s.facts_manifest_json)
+                  AND (NOT JSON_VALID(o.payload_json) OR JSON_EXTRACT(o.payload_json,'$.conversationGeneration') IS NULL
+                    OR JSON_EXTRACT(o.payload_json,'$.contextSnapshotId') IS NULL)
+                """);
+        jdbc.update("""
+                UPDATE chat_dispatch_outbox o LEFT JOIN chat_turn t ON t.turn_id=o.turn_id AND t.dispatch_id=o.dispatch_id
+                LEFT JOIN chat_context_snapshot s ON s.snapshot_id=t.snapshot_id
+                LEFT JOIN chat_request r ON r.tenant_id=t.tenant_id AND r.owner_jiacn=t.owner_jiacn
+                  AND r.client_id=t.client_id AND r.request_id=t.request_id AND r.request_revision=t.request_revision
+                LEFT JOIN chat_message m ON m.id=r.user_message_id
+                SET o.status='DEAD',o.last_error='LEGACY_DISPATCH_UNRECOVERABLE',o.available_at=NULL,
+                    o.lease_owner=NULL,o.lease_until=NULL,o.updated_at=GREATEST(o.updated_at,UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3))*1000)
+                WHERE o.event_type='DISPATCH' AND o.status NOT IN ('SENT','DEAD')
+                  AND (t.turn_id IS NULL OR s.snapshot_id IS NULL OR r.id IS NULL OR m.id IS NULL
+                    OR NOT JSON_VALID(s.source_vector_json) OR NOT JSON_VALID(s.facts_manifest_json))
+                """);
+        jdbc.update("""
+                INSERT IGNORE INTO chat_conversation_event
+                  (event_id,tenant_id,owner_jiacn,client_id,conversation_id,conversation_generation,request_id,
+                   turn_id,dispatch_id,event_type,event_version,payload_json,occurred_at)
+                SELECT COALESCE(o.event_id,SHA2(CONCAT('legacy-final:',t.dispatch_id),256)),
+                  t.tenant_id,t.owner_jiacn,t.client_id,t.conversation_id,t.conversation_generation,
+                  t.request_id,t.turn_id,t.dispatch_id,'agent_message',0,
+                  JSON_OBJECT('type','agent_message','requestId',t.request_id,'turnId',t.turn_id,
+                    'dispatchId',t.dispatch_id,'targetAgentId',t.target_agent_id,'contextSnapshotId',t.snapshot_id,
+                    'messageId',CAST(m.id AS CHAR),'content',m.content,'senderType','agent',
+                    'senderName',COALESCE(m.sender_name,t.target_agent_id)),COALESCE(m.create_time,t.updated_at)
+                FROM chat_turn t JOIN chat_message m ON m.id=t.final_message_id
+                LEFT JOIN chat_dispatch_outbox o ON o.turn_id=t.turn_id AND o.event_type='FINAL_PERSISTED'
+                WHERE t.state IN ('FINAL_PERSISTED','PUBLISHED') AND t.final_digest IS NOT NULL
+                """);
+        jdbc.update("UPDATE chat_conversation_event SET event_version=event_sequence WHERE event_version=0");
+        jdbc.update("""
+                UPDATE chat_dispatch_outbox o
+                JOIN chat_turn t ON t.turn_id=o.turn_id AND t.dispatch_id=o.dispatch_id
+                JOIN chat_message m ON m.id=t.final_message_id
+                JOIN chat_conversation_event e ON e.event_id=o.event_id AND e.turn_id=t.turn_id
+                SET o.payload_json=JSON_OBJECT('requestId',t.request_id,'turnId',t.turn_id,
+                  'dispatchId',t.dispatch_id,'targetAgentId',t.target_agent_id,
+                  'contextSnapshotId',t.snapshot_id,'messageId',CAST(m.id AS CHAR),
+                  'conversationId',t.conversation_id,'conversationGeneration',CAST(t.conversation_generation AS CHAR),
+                  'content',m.content,'senderName',COALESCE(m.sender_name,t.target_agent_id),
+                  'eventSequence',CAST(e.event_sequence AS CHAR),'eventVersion',CAST(e.event_version AS CHAR),
+                  'finalDigest',t.final_digest),
+                  o.status=CASE WHEN o.status IN ('SENT','DEAD') THEN o.status ELSE 'READY' END,
+                  o.available_at=COALESCE(o.available_at,o.created_at),o.last_error=NULL
+                WHERE o.event_type='FINAL_PERSISTED'
+                  AND (NOT JSON_VALID(o.payload_json) OR JSON_EXTRACT(o.payload_json,'$.eventSequence') IS NULL)
+                """);
+        jdbc.update("""
+                UPDATE chat_dispatch_outbox o LEFT JOIN chat_turn t ON t.turn_id=o.turn_id AND t.dispatch_id=o.dispatch_id
+                LEFT JOIN chat_message m ON m.id=t.final_message_id
+                LEFT JOIN chat_conversation_event e ON e.event_id=o.event_id AND e.turn_id=t.turn_id
+                SET o.status='DEAD',o.last_error='LEGACY_FINAL_UNRECOVERABLE',o.available_at=NULL,
+                    o.lease_owner=NULL,o.lease_until=NULL,o.updated_at=GREATEST(o.updated_at,UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3))*1000)
+                WHERE o.event_type='FINAL_PERSISTED' AND o.status NOT IN ('SENT','DEAD')
+                  AND (t.turn_id IS NULL OR m.id IS NULL OR e.event_sequence IS NULL OR t.final_digest IS NULL)
+                """);
+        jdbc.update("""
+                UPDATE chat_dispatch_outbox o JOIN chat_turn t ON t.turn_id=o.turn_id AND t.dispatch_id=o.dispatch_id
+                SET o.payload_json=JSON_OBJECT('requestId',t.request_id,'turnId',t.turn_id,
+                  'dispatchId',t.dispatch_id,'targetAgentId',t.target_agent_id,
+                  'conversationId',t.conversation_id,'conversationGeneration',CAST(t.conversation_generation AS CHAR),
+                  'reason',COALESCE(t.terminal_reason,'USER_REQUESTED')),
+                  o.status=CASE WHEN o.status IN ('SENT','DEAD') THEN o.status ELSE 'READY' END,
+                  o.available_at=COALESCE(o.available_at,o.created_at),o.last_error=NULL
+                WHERE o.event_type='CANCEL_REQUESTED' AND NOT JSON_VALID(o.payload_json)
+                """);
+        jdbc.update("""
+                INSERT IGNORE INTO chat_conversation_event
+                  (event_id,tenant_id,owner_jiacn,client_id,conversation_id,conversation_generation,request_id,
+                   turn_id,dispatch_id,event_type,event_version,payload_json,occurred_at)
+                SELECT SHA2(CONCAT('legacy-resync:',t.dispatch_id),256),t.tenant_id,t.owner_jiacn,t.client_id,
+                  t.conversation_id,t.conversation_generation,t.request_id,t.turn_id,t.dispatch_id,'resync_required',0,
+                  JSON_OBJECT('type','resync_required','requestId',t.request_id,'turnId',t.turn_id,
+                    'dispatchId',t.dispatch_id,'reason','LEGACY_FINAL_UNRECOVERABLE'),t.updated_at
+                FROM chat_turn t LEFT JOIN chat_message m ON m.id=t.final_message_id
+                WHERE t.state IN ('FINAL_PERSISTED','PUBLISHED') AND (t.final_digest IS NULL OR m.id IS NULL)
+                """);
+        jdbc.update("UPDATE chat_conversation_event SET event_version=event_sequence WHERE event_version=0");
+        recordMigrationStage("DATA_BACKFILLED");
     }
 
     private void validateExistingColumnsBeforeExpansion(String table, Map<String, Map<String, Object>> actual) {

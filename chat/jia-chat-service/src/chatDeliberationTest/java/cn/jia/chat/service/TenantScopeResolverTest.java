@@ -24,6 +24,32 @@ class TenantScopeResolverTest {
         assertThrows(ChatDeliberationException.class, () -> resolver.resolve(null));
     }
 
+
+    @Test
+    void canonicalAliasConflictAndVersionedTokenWithoutTenantFailClosed() {
+        Jwt conflict = Jwt.withTokenValue("token").header("alg", "none").subject("user-1")
+                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60))
+                .claim("client_id", "client-a").claim("token_kind", "user").claim("jiacn", "owner-a")
+                .claim("tenant_id", "tenant-a").claim("tenantId", "tenant-b").build();
+        assertThrows(ChatDeliberationException.class, () -> resolver.resolve(
+                new JwtAuthenticationToken(conflict, java.util.List.of(new SimpleGrantedAuthority("ROLE_USER")))));
+        Jwt versionedMissing = Jwt.withTokenValue("token").header("alg", "none").subject("user-1")
+                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60))
+                .claim("client_id", "client-a").claim("token_kind", "user").claim("jiacn", "owner-a")
+                .claim("tenant_claim_version", "1").build();
+        assertThrows(ChatDeliberationException.class, () -> resolver.resolve(
+                new JwtAuthenticationToken(versionedMissing, java.util.List.of(new SimpleGrantedAuthority("ROLE_USER")))));
+    }
+
+    @Test
+    void matchingLegacyAliasIsAccepted() {
+        Jwt jwt = Jwt.withTokenValue("token").header("alg", "none").subject("user-1")
+                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60))
+                .claim("client_id", "client-a").claim("token_kind", "user").claim("jiacn", "owner-a")
+                .claim("tenant_id", "tenant-a").claim("tenantId", "tenant-a").build();
+        assertEquals("tenant-a", resolver.resolve(new JwtAuthenticationToken(jwt,
+                java.util.List.of(new SimpleGrantedAuthority("ROLE_USER")))));
+    }
     private JwtAuthenticationToken token(String tenant, boolean user) {
         Jwt.Builder builder = Jwt.withTokenValue("token").header("alg", "none")
                 .subject(user ? "user-1" : "client-a").issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60))

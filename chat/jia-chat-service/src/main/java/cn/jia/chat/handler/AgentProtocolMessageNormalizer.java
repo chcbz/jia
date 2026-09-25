@@ -21,6 +21,7 @@ public class AgentProtocolMessageNormalizer {
             AgentProtocolConstants.TYPE_PROTOCOL_ERROR,
             AgentProtocolConstants.TYPE_CHAT_MESSAGE,
             AgentProtocolConstants.TYPE_CHAT_MESSAGE_DELTA,
+            AgentProtocolConstants.TYPE_CHAT_DISPATCH_ACK,
             AgentProtocolConstants.TYPE_COMMAND_DISPATCH,
             AgentProtocolConstants.TYPE_COMMAND_ACK,
             AgentProtocolConstants.TYPE_WORK_PROGRESS,
@@ -361,6 +362,7 @@ public class AgentProtocolMessageNormalizer {
     private boolean requiresMessageId(String type) {
         return AgentProtocolConstants.TYPE_CHAT_MESSAGE.equals(type)
                 || AgentProtocolConstants.TYPE_CHAT_MESSAGE_DELTA.equals(type)
+                || AgentProtocolConstants.TYPE_CHAT_DISPATCH_ACK.equals(type)
                 || AgentProtocolConstants.TYPE_COMMAND_DISPATCH.equals(type)
                 || AgentProtocolConstants.TYPE_COMMAND_ACK.equals(type)
                 || AgentProtocolConstants.TYPE_WORK_PROGRESS.equals(type)

@@ -44,6 +44,32 @@ class ChatConversationDurabilityContractTest {
         assertFalse(controller.contains("createBuiltinSongJiangStream"));
     }
 
+
+    @Test
+    void liveBufferCapturesEventPublishedBeforeReactiveSubscription() {
+        ChatConversationEventBroker broker = new ChatConversationEventBroker();
+        ChatConversationEventBroker.LiveSubscription subscription =
+                broker.subscribeBuffered("42", 3L, () -> true);
+        assertNotNull(subscription);
+        assertTrue(broker.publishIfSubscribed("42", 3L, () -> true,
+                Map.of("eventSequence", "9223372036854775806", "eventId", "evt-race")));
+        String buffered = subscription.flux().blockFirst(Duration.ofSeconds(1));
+        assertNotNull(buffered);
+        assertTrue(buffered.contains("9223372036854775806"));
+        subscription.close();
+    }
+
+    @Test
+    void controllerRegistersBeforeWatermarkAndKeepsLiveAfterMultiPageReplay() throws Exception {
+        String controller = source("src/main/java/cn/jia/chat/api/ChatController.java");
+        int register = controller.indexOf("subscribeBuffered(id, generation");
+        int watermark = controller.indexOf("eventHighWatermark(tenantId", register);
+        assertTrue(register >= 0 && watermark > register);
+        assertTrue(controller.contains("ChatConversationReplayPager.load"));
+        assertTrue(controller.contains("nextCursor"));
+        assertTrue(controller.contains("concatWith(catchUpThenLive)"));
+        assertFalse(controller.contains("replay.size() == 500"));
+    }
     private String source(String relative) throws Exception {
         return java.nio.file.Files.readString(java.nio.file.Path.of(relative), StandardCharsets.UTF_8);
     }

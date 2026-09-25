@@ -296,8 +296,10 @@ class ChatDeliberationServiceTest {
                     &&c.equals(x.getClientId())&&turn.equals(x.getTurnId())&&event.equals(x.getEventType())).findFirst().orElse(null);
         }
         public ChatDispatchOutboxEntity lockOutboxById(String t,String o,String c,String id){ return outboxes.get(id); }
+        public ChatDispatchOutboxEntity lockOutboxByDispatch(String t,String o,String c,String id){ return outboxes.values().stream().filter(x->id.equals(x.getDispatchId())&&"DISPATCH".equals(x.getEventType())).findFirst().orElse(null); }
         public List<ChatDispatchOutboxEntity> findDueOutbox(long now,int limit){ return outboxes.values().stream().filter(x->x.getAvailableAt()!=null&&x.getAvailableAt()<=now).limit(limit).toList(); }
-        public List<ChatConversationEventEntity> replayEvents(String t,String o,String c,String id,long g,long after,int limit){ return events.stream().filter(e->t.equals(e.getTenantId())&&o.equals(e.getOwnerJiacn())&&c.equals(e.getClientId())&&id.equals(e.getConversationId())&&g==e.getConversationGeneration()&&e.getEventSequence()>after).limit(limit).toList(); }
+        public List<ChatConversationEventEntity> replayEvents(String t,String o,String c,String id,long g,long after,long through,int limit){ return events.stream().filter(e->t.equals(e.getTenantId())&&o.equals(e.getOwnerJiacn())&&c.equals(e.getClientId())&&id.equals(e.getConversationId())&&g==e.getConversationGeneration()&&e.getEventSequence()>after&&e.getEventSequence()<=through).limit(limit).toList(); }
+        public long eventHighWatermark(String t,String o,String c,String id,long g){ return events.stream().filter(e->t.equals(e.getTenantId())&&o.equals(e.getOwnerJiacn())&&c.equals(e.getClientId())&&id.equals(e.getConversationId())&&g==e.getConversationGeneration()).mapToLong(ChatConversationEventEntity::getEventSequence).max().orElse(0L); }
         public int acceptDelta(ChatTurnEntity turn,long seq,String digest,long now){ return 1; }
         public int persistFinal(ChatTurnEntity turn,String digest,long message,long now){ return 1; }
         public int updateTurnState(ChatTurnEntity turn,String state,String reason,long now){ return 1; }
@@ -305,6 +307,8 @@ class ChatDeliberationServiceTest {
         public int updateOutbox(ChatDispatchOutboxEntity outbox,String status,long now){
             outbox.setStatus(status).setVersion(outbox.getVersion()+1).setUpdatedAt(now); return 1; }
         public int claimOutbox(ChatDispatchOutboxEntity row,String owner,long until,long fence,long now){ row.setStatus("CLAIMED").setLeaseOwner(owner).setLeaseUntil(until).setFencingToken(fence).setVersion(row.getVersion()+1); return 1; }
+        public int renewOutbox(ChatDispatchOutboxEntity row,long until,long now){ row.setLeaseUntil(until).setVersion(row.getVersion()+1); return 1; }
+        public int acknowledgeOutbox(ChatDispatchOutboxEntity row,long now){ row.setStatus("SENT").setVersion(row.getVersion()+1); return 1; }
         public int settleOutbox(ChatDispatchOutboxEntity row,String status,Long available,String error,Long sent,long now){ row.setStatus(status).setAvailableAt(available).setLastError(error).setSentAt(sent).setVersion(row.getVersion()+1); return 1; }
         public int updateRequestState(ChatRequestEntity request,String state,long now){ request.setAggregateState(state); return 1; }
         private ChatRequestEntity scoped(ChatRequestEntity value,String t,String o,String c){

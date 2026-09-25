@@ -179,8 +179,19 @@ public interface ChatDeliberationMapper {
             @Param("eventId") String eventId);
 
     @Select("""
+            SELECT * FROM chat_dispatch_outbox WHERE
+            """ + EXACT_SCOPE + """
+              AND dispatch_id=#{dispatchId} AND event_type='DISPATCH'
+              AND CAST(dispatch_id AS BINARY)=CAST(#{dispatchId} AS BINARY)
+              AND OCTET_LENGTH(dispatch_id)=OCTET_LENGTH(#{dispatchId}) LIMIT 1 FOR UPDATE
+            """)
+    ChatDispatchOutboxEntity lockOutboxByDispatch(@Param("tenantId") String tenantId,
+            @Param("ownerJiacn") String ownerJiacn, @Param("clientId") String clientId,
+            @Param("dispatchId") String dispatchId);
+
+    @Select("""
             SELECT * FROM chat_dispatch_outbox
-            WHERE ((status IN ('READY','RETRY') AND available_at<=#{now})
+            WHERE ((status IN ('READY','RETRY','AWAITING_ACK') AND available_at<=#{now})
                 OR (status='CLAIMED' AND lease_until<=#{now}))
             ORDER BY available_at,event_id LIMIT #{limit}
             """)
@@ -190,7 +201,7 @@ public interface ChatDeliberationMapper {
             SELECT * FROM chat_conversation_event WHERE
             """ + EXACT_SCOPE + """
               AND conversation_id=#{conversationId} AND conversation_generation=#{generation}
-              AND event_sequence>#{afterSequence}
+              AND event_sequence>#{afterSequence} AND event_sequence<=#{throughSequence}
               AND CAST(conversation_id AS BINARY)=CAST(#{conversationId} AS BINARY)
               AND OCTET_LENGTH(conversation_id)=OCTET_LENGTH(#{conversationId})
             ORDER BY event_sequence LIMIT #{limit}
@@ -198,7 +209,19 @@ public interface ChatDeliberationMapper {
     List<ChatConversationEventEntity> replayEvents(@Param("tenantId") String tenantId,
             @Param("ownerJiacn") String ownerJiacn, @Param("clientId") String clientId,
             @Param("conversationId") String conversationId, @Param("generation") long generation,
-            @Param("afterSequence") long afterSequence, @Param("limit") int limit);
+            @Param("afterSequence") long afterSequence, @Param("throughSequence") long throughSequence,
+            @Param("limit") int limit);
+
+    @Select("""
+            SELECT COALESCE(MAX(event_sequence),0) FROM chat_conversation_event WHERE
+            """ + EXACT_SCOPE + """
+              AND conversation_id=#{conversationId} AND conversation_generation=#{generation}
+              AND CAST(conversation_id AS BINARY)=CAST(#{conversationId} AS BINARY)
+              AND OCTET_LENGTH(conversation_id)=OCTET_LENGTH(#{conversationId})
+            """)
+    Long eventHighWatermark(@Param("tenantId") String tenantId,
+            @Param("ownerJiacn") String ownerJiacn, @Param("clientId") String clientId,
+            @Param("conversationId") String conversationId, @Param("generation") long generation);
 
     @Update("""
             UPDATE chat_turn SET state=#{state}, state_version=state_version+1,
@@ -262,13 +285,24 @@ public interface ChatDeliberationMapper {
               version=version+1, updated_at=#{updatedAt}
             WHERE tenant_id=#{tenantId} AND owner_jiacn=#{ownerJiacn} AND client_id=#{clientId}
               AND event_id=#{eventId} AND version=#{version}
-              AND ((status IN ('READY','RETRY') AND available_at<=#{updatedAt})
+              AND ((status IN ('READY','RETRY','AWAITING_ACK') AND available_at<=#{updatedAt})
                 OR (status='CLAIMED' AND lease_until<=#{updatedAt}))
             """)
     int claimOutbox(@Param("tenantId") String tenantId, @Param("ownerJiacn") String ownerJiacn,
             @Param("clientId") String clientId, @Param("eventId") String eventId, @Param("version") long version,
             @Param("leaseOwner") String leaseOwner, @Param("leaseUntil") long leaseUntil,
             @Param("fencingToken") long fencingToken, @Param("updatedAt") long updatedAt);
+
+    @Update("""
+            UPDATE chat_dispatch_outbox SET lease_until=#{leaseUntil},version=version+1,updated_at=#{updatedAt}
+            WHERE tenant_id=#{tenantId} AND owner_jiacn=#{ownerJiacn} AND client_id=#{clientId}
+              AND event_id=#{eventId} AND version=#{version} AND status='CLAIMED'
+              AND lease_owner=#{leaseOwner} AND fencing_token=#{fencingToken}
+            """)
+    int renewOutbox(@Param("tenantId") String tenantId, @Param("ownerJiacn") String ownerJiacn,
+            @Param("clientId") String clientId, @Param("eventId") String eventId, @Param("version") long version,
+            @Param("leaseOwner") String leaseOwner, @Param("fencingToken") long fencingToken,
+            @Param("leaseUntil") long leaseUntil, @Param("updatedAt") long updatedAt);
 
     @Update("""
             UPDATE chat_dispatch_outbox SET status=#{status}, available_at=#{availableAt},
@@ -283,6 +317,17 @@ public interface ChatDeliberationMapper {
             @Param("leaseOwner") String leaseOwner, @Param("fencingToken") long fencingToken,
             @Param("status") String status, @Param("availableAt") Long availableAt,
             @Param("lastError") String lastError, @Param("sentAt") Long sentAt,
+            @Param("updatedAt") long updatedAt);
+
+    @Update("""
+            UPDATE chat_dispatch_outbox SET status='SENT',available_at=NULL,lease_owner=NULL,lease_until=NULL,
+              last_error=NULL,sent_at=#{updatedAt},version=version+1,updated_at=#{updatedAt}
+            WHERE tenant_id=#{tenantId} AND owner_jiacn=#{ownerJiacn} AND client_id=#{clientId}
+              AND event_id=#{eventId} AND version=#{version}
+              AND status IN ('CLAIMED','AWAITING_ACK','RETRY')
+            """)
+    int acknowledgeOutbox(@Param("tenantId") String tenantId, @Param("ownerJiacn") String ownerJiacn,
+            @Param("clientId") String clientId, @Param("eventId") String eventId, @Param("version") long version,
             @Param("updatedAt") long updatedAt);
 
     @Update("""

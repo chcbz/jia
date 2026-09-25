@@ -30,6 +30,7 @@ import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.service.ChatConversationEventBroker;
 import cn.jia.chat.service.ChatConversationService;
 import cn.jia.chat.service.ChatDeliberationService;
+import cn.jia.chat.service.ChatDeliberationOutboxService;
 import cn.jia.chat.service.ConversationMetadataPolicy;
 import cn.jia.chat.service.HallAnnouncementService;
 import cn.jia.core.context.EsContext;
@@ -140,6 +141,11 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     public void setChatDeliberationService(ChatDeliberationService service) {
         this.chatDeliberationService = service;
     }
+    private ChatDeliberationOutboxService chatDeliberationOutboxService;
+    @Autowired(required = false)
+    public void setChatDeliberationOutboxService(ChatDeliberationOutboxService service) {
+        this.chatDeliberationOutboxService = service;
+    }
     private final ChatClient chatClient;
     private final ObjectProvider<AgentService> agentServiceProvider;
     private final ChatMessageDao chatMessageDao;
@@ -231,7 +237,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 AgentProtocolConstants.TYPE_CHAT_STREAM, AgentProtocolConstants.TYPE_CHAT_STOP,
                 AgentProtocolConstants.TYPE_PING, AgentProtocolConstants.TYPE_AGENT_REGISTER,
                 AgentProtocolConstants.TYPE_AGENT_PRESENCE, AgentProtocolConstants.TYPE_CHAT_MESSAGE,
-                AgentProtocolConstants.TYPE_CHAT_MESSAGE_DELTA, AgentProtocolConstants.TYPE_COMMAND_DISPATCH,
+                AgentProtocolConstants.TYPE_CHAT_MESSAGE_DELTA, AgentProtocolConstants.TYPE_CHAT_DISPATCH_ACK,
+                AgentProtocolConstants.TYPE_COMMAND_DISPATCH,
                 AgentProtocolConstants.TYPE_COMMAND_ACK, AgentProtocolConstants.TYPE_WORK_PROGRESS,
                 AgentProtocolConstants.TYPE_WORK_HEARTBEAT, AgentProtocolConstants.TYPE_WORK_RESULT,
                 AgentProtocolConstants.TYPE_HELP_REQUEST, AgentProtocolConstants.TYPE_ARTIFACT_PUBLISH,
@@ -291,6 +298,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             case AgentProtocolConstants.TYPE_AGENT_PRESENCE -> updateAgentStatus(session, payload);
             case AgentProtocolConstants.TYPE_CHAT_MESSAGE -> saveAgentMessage(session, payload);
             case AgentProtocolConstants.TYPE_CHAT_MESSAGE_DELTA -> publishAgentMessageDelta(session, payload);
+            case AgentProtocolConstants.TYPE_CHAT_DISPATCH_ACK -> acknowledgeChatDispatch(session, payload);
             case AgentProtocolConstants.TYPE_TASK_ASSIGN_LEGACY -> assignTask(session, payload);
             case AgentProtocolConstants.TYPE_WORK_RESULT -> {
                 if (normalized.legacyTaskReport()) {
@@ -1006,6 +1014,42 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         }
     }
 
+    private void acknowledgeHostedReceipt(WebSocketSession session, String agentId, String dispatchId) {
+        if (chatDeliberationOutboxService == null) return;
+        try {
+            chatDeliberationOutboxService.acknowledgeHostedReceipt(sessionTenantId(session),
+                    sessionJiacn(session), sessionClientId(session), agentId, dispatchId, System.currentTimeMillis());
+        } catch (RuntimeException ignored) {
+            // The durable final/delta remains authoritative; explicit chat.dispatch.ack can be retried.
+        }
+    }
+
+    private void acknowledgeChatDispatch(WebSocketSession session, Map<String, Object> payload) {
+        String agentId = requireAllowedSessionAgentId(session, payload);
+        if (agentId == null || chatDeliberationOutboxService == null) {
+            sendProtocolError(session, payload, "CHAT_DISPATCH_ACK_UNAVAILABLE",
+                    "Durable chat dispatch acknowledgement is unavailable");
+            return;
+        }
+        String dispatchId = strictString(payload.get("dispatchId"));
+        String messageId = strictString(payload.get("messageId"));
+        try {
+            boolean acknowledged = chatDeliberationOutboxService.acknowledgeHostedDispatch(
+                    sessionTenantId(session), sessionJiacn(session), sessionClientId(session),
+                    agentId, dispatchId, messageId, System.currentTimeMillis());
+            if (!acknowledged) {
+                sendProtocolError(session, payload, "CHAT_DISPATCH_ACK_REJECTED",
+                        "Durable chat dispatch acknowledgement was rejected");
+                return;
+            }
+            sendEvent(session, "chat_dispatch_acknowledged", Map.of(
+                    "messageId", messageId, "dispatchId", dispatchId, "duplicateSafe", true));
+        } catch (RuntimeException rejected) {
+            sendProtocolError(session, payload, "CHAT_DISPATCH_ACK_REJECTED",
+                    "Durable chat dispatch acknowledgement was rejected");
+        }
+    }
+
     private void saveAgentMessage(WebSocketSession session, Map<String, Object> payload) {
         String conversationId = asString(payload.get("conversationId"));
         String content = asString(payload.get("content"));
@@ -1069,6 +1113,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 sendError(session, payload, "CHAT_TURN_FINAL_REJECTED", "Durable chat final was rejected");
                 return;
             }
+            acknowledgeHostedReceipt(session, agentId, asString(payload.get("dispatchId")));
             if (finalResult.status() == ChatDeliberationService.FinalStatus.DUPLICATE) {
                 sendEvent(session, "agent_message_saved", Map.of(
                         "turnId", finalResult.turn().getTurnId(),
@@ -1186,6 +1231,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 sendError(session, payload, "CHAT_DELTA_REJECTED", "Durable chat delta was rejected");
                 return;
             }
+            acknowledgeHostedReceipt(session, agentId, asString(payload.get("dispatchId")));
             if (result.status() == ChatDeliberationService.DeltaStatus.GAP) {
                 publishStoredConversationEvent(result.event());
                 sendError(session, payload, "CHAT_DELTA_GAP", "deltaSeq is not contiguous");

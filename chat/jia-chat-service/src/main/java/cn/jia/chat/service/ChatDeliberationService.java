@@ -504,13 +504,33 @@ public class ChatDeliberationService {
     }
 
     @Transactional(readOnly = true)
-    public List<ChatConversationEventEntity> replayEvents(String tenantId, String ownerJiacn, String clientId,
-            String conversationId, long generation, long afterSequence, int limit) {
+    public long eventHighWatermark(String tenantId, String ownerJiacn, String clientId,
+            String conversationId, long generation) {
         requireIdentity(tenantId, 50); requireIdentity(ownerJiacn, 50); requireIdentity(clientId, 50);
         requireIdentity(conversationId, MAX_ID);
-        if (generation < 1 || afterSequence < 0 || limit < 1 || limit > 500) throw invalid("Invalid event cursor");
+        if (generation < 1) throw invalid("Invalid event cursor");
         requireLockedConversation(tenantId, ownerJiacn, clientId, conversationId, generation);
-        return dao.replayEvents(tenantId, ownerJiacn, clientId, conversationId, generation, afterSequence, limit);
+        return dao.eventHighWatermark(tenantId, ownerJiacn, clientId, conversationId, generation);
+    }
+
+    @Transactional(readOnly = true)
+    public List<ChatConversationEventEntity> replayEvents(String tenantId, String ownerJiacn, String clientId,
+            String conversationId, long generation, long afterSequence, int limit) {
+        long highWatermark = eventHighWatermark(tenantId, ownerJiacn, clientId, conversationId, generation);
+        return replayEventsThrough(tenantId, ownerJiacn, clientId, conversationId, generation,
+                afterSequence, highWatermark, limit);
+    }
+
+    @Transactional(readOnly = true)
+    public List<ChatConversationEventEntity> replayEventsThrough(String tenantId, String ownerJiacn, String clientId,
+            String conversationId, long generation, long afterSequence, long throughSequence, int limit) {
+        requireIdentity(tenantId, 50); requireIdentity(ownerJiacn, 50); requireIdentity(clientId, 50);
+        requireIdentity(conversationId, MAX_ID);
+        if (generation < 1 || afterSequence < 0 || throughSequence < afterSequence
+                || limit < 1 || limit > 500) throw invalid("Invalid event cursor");
+        requireLockedConversation(tenantId, ownerJiacn, clientId, conversationId, generation);
+        return dao.replayEvents(tenantId, ownerJiacn, clientId, conversationId, generation,
+                afterSequence, throughSequence, limit);
     }
 
     private Set<String> normalizeTurnSelection(List<String> turnIds) {

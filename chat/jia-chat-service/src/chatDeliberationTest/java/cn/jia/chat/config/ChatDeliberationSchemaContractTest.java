@@ -61,6 +61,17 @@ class ChatDeliberationSchemaContractTest {
         assertTrue(source.contains("DROP INDEX idx_chat_outbox_ready"));
         String migration = java.nio.file.Files.readString(java.nio.file.Path.of(
                 "../jia-chat-mapper/src/main/resources/db/chat-deliberation-v2-migration.sql"));
-        assertTrue(migration.contains("PREFLIGHT -> EXPANDED -> BACKFILLED -> TIGHTENED -> APPLIED"));
+        assertTrue(migration.contains("GET_LOCK('cyf:chat-deliberation:v2', 10)"));
+        assertTrue(migration.contains("RELEASE_LOCK('cyf:chat-deliberation:v2')"));
+        assertTrue(migration.contains("CREATE TABLE IF NOT EXISTS chat_conversation_event"));
+        assertTrue(migration.contains("LEGACY_DISPATCH_UNRECOVERABLE"));
+        assertTrue(migration.contains("legacy-final:"));
+        assertTrue(migration.contains("legacy-resync:"));
+        assertTrue(migration.contains("'APPLIED'"));
+        assertTrue(migration.contains("PREFLIGHT -> EXPANDED -> BACKFILLED -> TIGHTENED -> DATA_BACKFILLED -> APPLIED"));
+        assertTrue(source.contains("acquireMigrationLock"));
+        assertTrue(source.contains("initializeWhileLocked"));
+        assertTrue(source.contains("backfillLegacyData"));
+        assertTrue(source.contains("releaseMigrationLock"));
     }
 }

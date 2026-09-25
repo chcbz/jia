@@ -41,4 +41,17 @@ class AgentProtocolDurableTurnCompatibilityTest {
         assertEquals("transport-final-1", normalized.envelope().getMessageId());
         assertEquals("request-1", normalized.payload().get("requestId"));
     }
+
+    @Test
+    void durableDispatchAckFreezesStableMessageAndDispatchIds() {
+        var normalized = normalizer.normalizeInbound(new HashMap<>(Map.of(
+                "schemaVersion", 1,
+                "messageType", AgentProtocolConstants.TYPE_CHAT_DISPATCH_ACK,
+                "messageId", "dispatch-event-1",
+                "dispatchId", "dispatch-1",
+                "agentId", "agent-a")));
+        assertEquals(AgentProtocolConstants.TYPE_CHAT_DISPATCH_ACK, normalized.canonicalType());
+        assertEquals("dispatch-event-1", normalized.envelope().getMessageId());
+        assertEquals("dispatch-1", normalized.payload().get("dispatchId"));
+    }
 }

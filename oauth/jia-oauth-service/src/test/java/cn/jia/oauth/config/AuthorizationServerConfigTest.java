@@ -152,6 +152,8 @@ class AuthorizationServerConfigTest extends BaseMockTest {
         assertEquals("17", claims.get("uid"));
         assertEquals("Jia-A", claims.get("jiacn"));
         assertEquals(4L, claims.get("auth_epoch"));
+        assertEquals("0", claims.get("tenant_id"));
+        assertEquals("1", claims.get("tenant_claim_version"));
 
         when(accountSecurityService.findByUserId(17)).thenReturn(java.util.Optional.of(
                 new AccountSecuritySnapshot(17, "Jia-A", AccountState.ACTIVE, 5)));

@@ -2,6 +2,7 @@ package cn.jia.oauth.filter;
 
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
+import cn.jia.core.security.TenantClaimPolicy;
 import jakarta.servlet.Filter;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -15,6 +16,12 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
 import java.io.IOException;
 
 public class EsSecurityContextFilter implements Filter {
+    private final String legacySingleTenantId;
+
+    public EsSecurityContextFilter() { this(TenantClaimPolicy.defaultSingleTenant()); }
+    public EsSecurityContextFilter(String legacySingleTenantId) {
+        this.legacySingleTenantId = TenantClaimPolicy.exact(legacySingleTenantId);
+    }
     @Override
     public void doFilter(ServletRequest req, ServletResponse res, FilterChain chain) throws IOException, ServletException {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
@@ -25,9 +32,10 @@ public class EsSecurityContextFilter implements Filter {
         chain.doFilter(req, res);
     }
 
-    private static void overwriteFromJwt(EsContext context, Jwt jwt) {
-        String tenant = stringClaim(jwt, "tenant_id");
-        if (tenant == null && stringClaim(jwt, "jiacn") != null) tenant = cn.jia.core.mybatis.TenantScopeHelper.DEFAULT_TENANT;
+    private void overwriteFromJwt(EsContext context, Jwt jwt) {
+        String tenant;
+        try { tenant = TenantClaimPolicy.resolve(jwt.getClaims(), legacySingleTenantId); }
+        catch (IllegalArgumentException invalid) { tenant = null; }
         context.setTenantId(tenant);
         context.setJiacn(stringClaim(jwt, "jiacn"));
         context.setAppcn(stringClaim(jwt, "appcn"));

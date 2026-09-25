@@ -24,6 +24,7 @@ import cn.jia.chat.service.ChatDeliberationService;
 import cn.jia.chat.service.InteractionRouter;
 import cn.jia.chat.service.TenantScopeResolver;
 import cn.jia.chat.service.ChatConversationEventBroker;
+import cn.jia.chat.service.ChatConversationReplayPager;
 import cn.jia.chat.service.BuiltinHallAgentSupport;
 import cn.jia.chat.service.JuyitingAgentRelayResult;
 import cn.jia.chat.service.JuyitingAgentRelayService;
@@ -65,6 +66,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Agent聊天控制器
@@ -626,18 +628,33 @@ public class ChatController {
                     "Conflicting event cursors");
         }
         long after = cursor != null && !cursor.isBlank() ? queryCursor : headerCursor;
-        List<String> replay = requireDeliberationService().replayEvents(tenantId, ownerJiacn, ownerClientId,
-                        id, generation, after, 500).stream().map(this::sseStoredEvent).toList();
-        Flux<String> live = chatConversationEventBroker.stream(
-                        id, generation, () -> chatConversationService.isLiveGeneration(
-                                ownerJiacn, ownerClientId, id, generation),
-                        "{\"type\":\"stream_ready\",\"cursor\":\"" + after + "\"}")
-                .map(this::sseLiveEvent);
-        // A full replay page completes deliberately so EventSource reconnects with its latest id;
-        // this avoids silently skipping a backlog larger than one bounded DB page.
-        Flux<String> stream = replay.size() == 500 ? Flux.fromIterable(replay)
-                : Flux.fromIterable(replay).concatWith(live);
-        return ChatStreamPolicy.firstFrame(ChatStreamPolicy.bounded(stream));
+        ChatConversationEventBroker.LiveSubscription liveSubscription =
+                chatConversationEventBroker.subscribeBuffered(id, generation,
+                        () -> chatConversationService.isLiveGeneration(
+                                ownerJiacn, ownerClientId, id, generation));
+        if (liveSubscription == null) return Flux.empty();
+        try {
+            ChatDeliberationService service = requireDeliberationService();
+            long watermark = service.eventHighWatermark(tenantId, ownerJiacn, ownerClientId, id, generation);
+            if (after > watermark) {
+                throw new ChatDeliberationException(ChatDeliberationException.Reason.INVALID_REQUEST,
+                        "Event cursor is ahead of the conversation watermark");
+            }
+            List<String> replay = loadReplayThrough(service, tenantId, ownerJiacn, ownerClientId,
+                    id, generation, after, watermark);
+            AtomicLong deliveredSequence = new AtomicLong(watermark);
+            Flux<String> catchUpThenLive = liveSubscription.flux()
+                    .concatMap(json -> durableCatchUp(service, tenantId, ownerJiacn, ownerClientId,
+                            id, generation, deliveredSequence, json));
+            String ready = "data: {\"type\":\"stream_ready\",\"cursor\":\"" + watermark
+                    + "\",\"nextCursor\":\"" + watermark + "\"}\n\n";
+            Flux<String> stream = Flux.fromIterable(replay).concatWithValues(ready).concatWith(catchUpThenLive)
+                    .doFinally(ignored -> liveSubscription.close());
+            return ChatStreamPolicy.firstFrame(ChatStreamPolicy.bounded(stream));
+        } catch (RuntimeException failure) {
+            liveSubscription.close();
+            throw failure;
+        }
     }
 
     /** Direct-call compatibility for legacy focused tests; not an HTTP mapping. */
@@ -651,6 +668,46 @@ public class ChatController {
                                 ownerJiacn, ownerClientId, id, generation),
                         "{\"type\":\"stream_ready\"}")
                 .map(event -> "data: " + event + "\n\n")));
+    }
+
+    private List<String> loadReplayThrough(ChatDeliberationService service, String tenantId,
+            String ownerJiacn, String clientId, String conversationId, long generation,
+            long after, long watermark) {
+        try {
+            return ChatConversationReplayPager.load(after, watermark, 500,
+                            (pageCursor, through, limit) -> service.replayEventsThrough(tenantId, ownerJiacn,
+                                    clientId, conversationId, generation, pageCursor, through, limit),
+                            cn.jia.chat.deliberation.ChatConversationEventEntity::getEventSequence)
+                    .stream().map(this::sseStoredEvent).toList();
+        } catch (IllegalArgumentException | IllegalStateException invalid) {
+            throw new ChatDeliberationException(ChatDeliberationException.Reason.PERSISTENCE_ERROR,
+                    "Stored chat event replay is invalid");
+        }
+    }
+
+    private Flux<String> durableCatchUp(ChatDeliberationService service, String tenantId,
+            String ownerJiacn, String clientId, String conversationId, long generation,
+            AtomicLong deliveredSequence, String liveJson) {
+        long signalled = eventSequence(liveJson);
+        long current = deliveredSequence.get();
+        if (signalled <= current) return Flux.empty();
+        List<String> recovered = loadReplayThrough(service, tenantId, ownerJiacn, clientId,
+                conversationId, generation, current, signalled);
+        if (!recovered.isEmpty()) deliveredSequence.set(signalled);
+        return Flux.fromIterable(recovered);
+    }
+
+    @SuppressWarnings("unchecked")
+    private long eventSequence(String json) {
+        try {
+            Map<String,Object> event = JsonUtil.getMapper().readValue(json, Map.class);
+            String value = String.valueOf(event.get("eventSequence"));
+            if (!value.matches("[1-9][0-9]*")) throw new IllegalArgumentException();
+            return Long.parseLong(value);
+        } catch (Exception invalid) {
+            throw new ChatDeliberationException(ChatDeliberationException.Reason.PERSISTENCE_ERROR,
+                    "Live chat event sequence is invalid");
+        }
     }
 
     private long parseEventCursor(String value) {

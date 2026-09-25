@@ -34,6 +34,7 @@ public final class AgentProtocolConstants {
 
     public static final String TYPE_CHAT_MESSAGE = "chat.message";
     public static final String TYPE_CHAT_MESSAGE_DELTA = "chat.message.delta";
+    public static final String TYPE_CHAT_DISPATCH_ACK = "chat.dispatch.ack";
     public static final String TYPE_COMMAND_DISPATCH = "command.dispatch";
     public static final String TYPE_COMMAND_ACK = "command.ack";
     public static final String TYPE_WORK_PROGRESS = "work.progress";
@@ -62,7 +63,7 @@ public final class AgentProtocolConstants {
             TYPE_PROTOCOL_HELLO, TYPE_PROTOCOL_ERROR, TYPE_PING, TYPE_PONG,
             TYPE_CHAT_STREAM, TYPE_CHAT_STOP, TYPE_AGENT_REGISTER, TYPE_AGENT_PRESENCE,
             TYPE_CAPABILITY_LOOKUP, TYPE_TASK_ASSIGN_LEGACY, TYPE_CHAT_MESSAGE,
-            TYPE_CHAT_MESSAGE_DELTA, TYPE_COMMAND_DISPATCH, TYPE_COMMAND_ACK,
+            TYPE_CHAT_MESSAGE_DELTA, TYPE_CHAT_DISPATCH_ACK, TYPE_COMMAND_DISPATCH, TYPE_COMMAND_ACK,
             TYPE_WORK_PROGRESS, TYPE_WORK_HEARTBEAT, TYPE_WORK_RESULT,
             TYPE_HELP_REQUEST, TYPE_ARTIFACT_PUBLISH, TYPE_TASK_EVENT);
 
@@ -78,7 +79,8 @@ public final class AgentProtocolConstants {
     }
 
     public static String categoryOf(String type) {
-        if (TYPE_CHAT_MESSAGE.equals(type) || TYPE_CHAT_MESSAGE_DELTA.equals(type)) {
+        if (TYPE_CHAT_MESSAGE.equals(type) || TYPE_CHAT_MESSAGE_DELTA.equals(type)
+                || TYPE_CHAT_DISPATCH_ACK.equals(type)) {
             return CATEGORY_CHAT;
         }
         if (TYPE_COMMAND_DISPATCH.equals(type) || TYPE_COMMAND_ACK.equals(type)) {

@@ -63,6 +63,24 @@ class EsSecurityContextFilterTest {
                 });
     }
 
+
+    @Test
+    void conflictingTenantClaimsFailClosedThroughSharedPolicy() throws Exception {
+        SecurityContextHolder.getContext().setAuthentication(auth(Map.of(
+                "token_kind", "user", "jiacn", "Jia-A", "client_id", "web",
+                "tenant_id", "tenant-a", "tenantId", "tenant-b")));
+        new EsSecurityContextFilter().doFilter(new MockHttpServletRequest(), new MockHttpServletResponse(),
+                (request, response) -> assertNull(EsContextHolder.getContext().getTenantId()));
+    }
+
+    @Test
+    void matchingAliasAndCanonicalTenantAreAccepted() throws Exception {
+        SecurityContextHolder.getContext().setAuthentication(auth(Map.of(
+                "token_kind", "user", "jiacn", "Jia-A", "client_id", "web",
+                "tenant_id", "tenant-a", "tenantId", "tenant-a", "tenant_claim_version", "1")));
+        new EsSecurityContextFilter().doFilter(new MockHttpServletRequest(), new MockHttpServletResponse(),
+                (request, response) -> assertEquals("tenant-a", EsContextHolder.getContext().getTenantId()));
+    }
     private static JwtAuthenticationToken auth(Map<String, Object> claims) {
         Jwt.Builder builder = Jwt.withTokenValue("token").header("alg", "RS256")
                 .issuedAt(Instant.now().minusSeconds(5)).expiresAt(Instant.now().plusSeconds(300));

@@ -9,9 +9,10 @@ import org.springframework.ai.chat.client.ChatClient;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 
+import java.time.Duration;
 import java.util.Map;
 
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -37,6 +38,7 @@ class ChatDeliberationOutboxRelayTest {
         relay = new ChatDeliberationOutboxRelay(outbox, deliberation, sockets, builtin,
                 broker, conversations, chatClient);
         when(conversations.isLiveGeneration("owner-a", "client-a", "42", 3L)).thenReturn(true);
+        when(outbox.renew(any(), anyLong(), anyLong())).thenReturn(true);
     }
 
     @Test
@@ -64,7 +66,8 @@ class ChatDeliberationOutboxRelayTest {
         verify(sockets).sendDirectMessageToAgent(eq("tenant-a"), eq("owner-a"), eq("client-a"),
                 eq("hosted-a"), anyMap());
         verify(deliberation).markDispatch("tenant-a", "owner-a", "client-a", "turn-h", true);
-        verify(outbox).sent(any(), anyLong());
+        verify(outbox).awaitingAck(any(), anyLong(), anyLong());
+        verify(outbox, never()).sent(any(), anyLong());
     }
 
     @Test
@@ -115,6 +118,75 @@ class ChatDeliberationOutboxRelayTest {
         subscriber.dispose();
     }
 
+
+    @Test
+    void heartbeatKeepsLegitimateBuiltinCallAliveBeyondOriginalLease() {
+        ChatDispatchOutboxEntity row = dispatch("evt-b", "turn-b", "dispatch-b", "builtin-songjiang");
+        when(builtin.isBuiltinAgent("builtin-songjiang")).thenReturn(true);
+        when(chatClient.prompt(any(org.springframework.ai.chat.prompt.Prompt.class))
+                .messages().stream().content()).thenReturn(Flux.interval(Duration.ofMillis(30)).take(5).map(i -> "忠"));
+        when(deliberation.acceptDelta(anyString(), anyString(), anyString(), anyString(), anyLong(),
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyLong(), anyString()))
+                .thenReturn(new ChatDeliberationService.DeltaResult(
+                        ChatDeliberationService.DeltaStatus.ACCEPTED, null, null));
+        relay = new ChatDeliberationOutboxRelay(outbox, deliberation, sockets, builtin, broker,
+                conversations, chatClient, 120L, 20L);
+        assertTimeout(Duration.ofSeconds(2), () -> relay.deliverClaim(
+                new ChatDeliberationOutboxService.Claim(row, false)));
+        verify(outbox, atLeast(2)).renew(any(), anyLong(), eq(120L));
+        verify(deliberation).persistFinal(anyString(), anyString(), anyString(), anyString(), anyLong(),
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), eq("忠忠忠忠忠"), anyString());
+        verify(outbox).sent(any(), anyLong());
+        relay.close();
+    }
+
+    @Test
+    void failedHeartbeatActivelyCancelsBlockedBuiltinFlowWithoutWrongWorkerSettlement() {
+        ChatDispatchOutboxEntity row = dispatch("evt-b", "turn-b", "dispatch-b", "builtin-songjiang");
+        when(builtin.isBuiltinAgent("builtin-songjiang")).thenReturn(true);
+        when(chatClient.prompt(any(org.springframework.ai.chat.prompt.Prompt.class))
+                .messages().stream().content()).thenReturn(Flux.never());
+        when(outbox.renew(any(), anyLong(), anyLong())).thenReturn(false);
+        relay = new ChatDeliberationOutboxRelay(outbox, deliberation, sockets, builtin, broker,
+                conversations, chatClient, 120L, 20L);
+        assertTimeout(Duration.ofSeconds(2), () -> relay.deliverClaim(
+                new ChatDeliberationOutboxService.Claim(row, false)));
+        verify(deliberation, never()).persistFinal(anyString(), anyString(), anyString(), anyString(), anyLong(),
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+        verify(outbox, never()).sent(any(), anyLong());
+        verify(outbox, never()).dead(any(), anyString(), anyLong());
+        relay.close();
+    }
+
+    @Test
+    void deletedConversationIsFencedBeforeHostedExternalSend() {
+        ChatDispatchOutboxEntity row = dispatch("evt-h", "turn-h", "dispatch-h", "hosted-a");
+        when(builtin.isBuiltinAgent("hosted-a")).thenReturn(false);
+        when(conversations.isLiveGeneration("owner-a", "client-a", "42", 3L)).thenReturn(false);
+        var claim = new ChatDeliberationOutboxService.Claim(row, false);
+        relay.deliverClaim(claim);
+        verifyNoInteractions(sockets);
+        verify(outbox).dead(eq(claim), eq("CONVERSATION_DELETED_OR_GENERATION_STALE"), anyLong());
+    }
+
+    @Test
+    void crashAfterHostedSendRetriesSameStableMessageAndDispatchIdentity() {
+        ChatDispatchOutboxEntity row = dispatch("evt-h", "turn-h", "dispatch-h", "hosted-a");
+        when(builtin.isBuiltinAgent("hosted-a")).thenReturn(false);
+        when(sockets.sendDirectMessageToAgent(eq("tenant-a"),eq("owner-a"),eq("client-a"),
+                eq("hosted-a"),anyMap())).thenReturn(true);
+        relay.deliverClaim(new ChatDeliberationOutboxService.Claim(row, false));
+        ChatDispatchOutboxEntity retry = dispatch("evt-h", "turn-h", "dispatch-h", "hosted-a");
+        relay.deliverClaim(new ChatDeliberationOutboxService.Claim(retry, true));
+        @SuppressWarnings("unchecked") org.mockito.ArgumentCaptor<Map<String,Object>> payloads =
+                org.mockito.ArgumentCaptor.forClass(Map.class);
+        verify(sockets, times(2)).sendDirectMessageToAgent(eq("tenant-a"),eq("owner-a"),eq("client-a"),
+                eq("hosted-a"),payloads.capture());
+        assertEquals("evt-h", payloads.getAllValues().get(0).get("messageId"));
+        assertEquals("evt-h", payloads.getAllValues().get(1).get("messageId"));
+        assertEquals("dispatch-h", payloads.getAllValues().get(0).get("dispatchId"));
+        assertEquals(true, payloads.getAllValues().get(0).get("ackRequired"));
+    }
     private ChatDispatchOutboxEntity dispatch(String eventId, String turnId, String dispatchId, String agentId) {
         return row(eventId, turnId, dispatchId, "DISPATCH", Map.ofEntries(
                 Map.entry("conversationId", "42"), Map.entry("conversationGeneration", "3"),
