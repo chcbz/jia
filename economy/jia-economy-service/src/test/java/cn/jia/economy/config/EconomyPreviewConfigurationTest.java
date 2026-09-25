@@ -35,13 +35,16 @@ class EconomyPreviewConfigurationTest {
     }
 
     @Test
-    void hostingSchemaRequiresItsOwnExplicitFlagAndNeverFollowsPreviewAlone() {
-        RUNNER.withPropertyValues(
-                        "economy.preview.enabled=true",
-                        "economy.preview.allowed-scopes[0].tenant-id=Tenant-A",
-                        "economy.preview.allowed-scopes[0].client-id=Client-A")
-                .run(context -> assertTrue(
-                        context.getBeansOfType(EconomyHostingRentSchemaInitializer.class).isEmpty()));
+    void hostingSchemaRequiresItsOwnExplicitFlagAndNeverFollowsPreviewAlone() throws Exception {
+        var method = EconomyConfiguration.class.getMethod(
+                "economyHostingRentSchemaInitializer", org.springframework.jdbc.core.JdbcTemplate.class);
+        var condition = method.getAnnotation(
+                org.springframework.boot.autoconfigure.condition.ConditionalOnProperty.class);
+        assertNotNull(condition);
+        assertEquals("economy.hosting-rent", condition.prefix());
+        assertEquals(List.of("schema-enabled"), List.of(condition.name()));
+        assertEquals("true", condition.havingValue());
+        assertFalse(condition.matchIfMissing());
     }
 
     @Test
