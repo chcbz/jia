@@ -53,14 +53,21 @@ class EconomyPreviewConfigurationTest {
                         "economy.preview.enabled=true",
                         "economy.preview.test-issuance-enabled=true",
                         "economy.preview.allowed-scopes[0].tenant-id=Tenant-A",
-                        "economy.preview.allowed-scopes[0].client-id=Client-A")
+                        "economy.preview.allowed-scopes[0].client-id=Client-A",
+                        "economy.onboarding-grant.enabled=true",
+                        "economy.onboarding-grant.amount-micro=1000000000",
+                        "economy.onboarding-grant.campaign-ref=hosting-welcome-v1")
                 .run(context -> {
                     assertNull(context.getStartupFailure());
                     EconomyPreviewProperties properties = context.getBean(EconomyPreviewProperties.class);
+                    EconomyOnboardingGrantProperties grant = context.getBean(EconomyOnboardingGrantProperties.class);
                     assertTrue(properties.enabled());
                     assertTrue(properties.testIssuanceEnabled());
                     assertEquals(List.of(new EconomyPreviewProperties.AllowedScope("Tenant-A", "Client-A")),
                             properties.allowedScopes());
+                    assertTrue(grant.enabled());
+                    assertEquals(1000000000L, grant.amountMicro());
+                    assertEquals("hosting-welcome-v1", grant.campaignRef());
                 });
 
         PROPERTIES_RUNNER.withPropertyValues(

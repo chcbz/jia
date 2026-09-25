@@ -58,7 +58,7 @@ class AgentHostingRentControllerTest {
         verify(admissionService).requireQuoteAvailable(principal.capture(),
                 org.mockito.ArgumentMatchers.eq("wuyong"));
         assertEquals("actor-1", principal.getValue().actorId());
-        assertEquals("Tenant-A", principal.getValue().tenantId());
+        assertEquals("0", principal.getValue().tenantId());
         assertEquals("Client-A", principal.getValue().clientId());
     }
 

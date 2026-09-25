@@ -13,12 +13,13 @@ CREATE TABLE IF NOT EXISTS agent_task_funding_operation (
     receipt_updated_at      BIGINT DEFAULT NULL,
     tenant_id               VARCHAR(50) NOT NULL,
     client_id               VARCHAR(50) NOT NULL,
+    owner_jiacn              VARCHAR(50) NOT NULL,
     create_time             BIGINT NOT NULL,
     update_time             BIGINT NOT NULL,
     PRIMARY KEY (id),
     UNIQUE KEY uk_task_funding_operation_actor_key
-        (tenant_id, client_id, principal_type, principal_id, idempotency_key),
-    UNIQUE KEY uk_task_funding_operation_task (tenant_id, client_id, task_id),
+        (tenant_id, client_id, owner_jiacn, principal_type, principal_id, idempotency_key),
+    UNIQUE KEY uk_task_funding_operation_task (tenant_id, client_id, owner_jiacn, task_id),
     CONSTRAINT chk_task_funding_operation_key CHECK (OCTET_LENGTH(idempotency_key) = 36),
     CONSTRAINT chk_task_funding_operation_hash CHECK (OCTET_LENGTH(request_hash) = 32),
     CONSTRAINT chk_task_funding_operation_status CHECK (
@@ -56,13 +57,14 @@ CREATE TABLE IF NOT EXISTS agent_task_funding (
     version                         BIGINT NOT NULL DEFAULT 0,
     tenant_id                       VARCHAR(50) NOT NULL,
     client_id                       VARCHAR(50) NOT NULL,
+    owner_jiacn                      VARCHAR(50) NOT NULL,
     create_time                     BIGINT NOT NULL,
     update_time                     BIGINT NOT NULL,
     PRIMARY KEY (id),
-    UNIQUE KEY uk_agent_task_funding_task (tenant_id, client_id, task_id),
-    UNIQUE KEY uk_agent_task_funding_escrow (tenant_id, client_id, escrow_id),
+    UNIQUE KEY uk_agent_task_funding_task (tenant_id, client_id, owner_jiacn, task_id),
+    UNIQUE KEY uk_agent_task_funding_escrow (tenant_id, client_id, owner_jiacn, escrow_id),
     KEY idx_agent_task_funding_payer
-        (tenant_id, client_id, payer_principal_type, payer_principal_id, funding_status, id),
+        (tenant_id, client_id, owner_jiacn, payer_principal_type, payer_principal_id, funding_status, id),
     CONSTRAINT chk_agent_task_funding_amount CHECK (
         gross_bounty_amount_micro > 0 AND remaining_micro >= 0
         AND remaining_micro <= gross_bounty_amount_micro),

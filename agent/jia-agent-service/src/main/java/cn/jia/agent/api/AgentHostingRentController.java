@@ -130,9 +130,10 @@ public final class AgentHostingRentController {
         }
         Map<String, Object> claims = jwt.getToken().getClaims();
         String actor = requiredClaim(claims, "sub", 100);
-        String tenant = requiredClaim(claims, "jiacn", 50);
+        String ownerJiacn = requiredClaim(claims, "jiacn", 50);
+        if ("0".equals(ownerJiacn)) throw new AuthenticationFailure(true);
         String client = requiredClaim(claims, "client_id", 50);
-        return new HostingRentAdmissionService.Principal(actor, tenant, client);
+        return new HostingRentAdmissionService.Principal(actor, "0", client);
     }
 
     private static String requiredClaim(Map<String, Object> claims, String name, int maxBytes) {
