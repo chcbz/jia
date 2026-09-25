@@ -49,4 +49,18 @@ class InteractionRouterTest {
         request.setMetadata(Map.of("route", "inspect"));
         assertThrows(ChatDeliberationException.class, () -> router.routeStream(request));
     }
+
+    @Test
+    void everyLegacyAliasAndEnumSpellingRejectsExecute() {
+        ChatMessageDTO dto = new ChatMessageDTO();
+        dto.setContent("harmless text");
+        dto.setInteractionMode("command_execution");
+        assertThrows(ChatDeliberationException.class, () -> router.routeStream(dto));
+        dto.setInteractionMode(null); dto.setRoute("EXECUTE-COMMAND");
+        assertThrows(ChatDeliberationException.class, () -> router.routeStream(dto));
+        dto.setRoute(null); dto.setIntent("Run");
+        assertThrows(ChatDeliberationException.class, () -> router.routeStream(dto));
+        dto.setIntent(null); dto.setMetadata(Map.of("interaction_type", "execution_mode"));
+        assertThrows(ChatDeliberationException.class, () -> router.routeStream(dto));
+    }
 }

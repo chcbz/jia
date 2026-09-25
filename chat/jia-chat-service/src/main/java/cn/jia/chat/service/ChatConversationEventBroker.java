@@ -110,6 +110,21 @@ public class ChatConversationEventBroker {
         });
     }
 
+    /** Publishes only when at least one SSE subscriber is present; durable relay rows remain retryable otherwise. */
+    public boolean publishIfSubscribed(String conversationId, long generation,
+            BooleanSupplier persistentLiveCheck, Map<String, ?> event) {
+        AtomicBoolean delivered = new AtomicBoolean();
+        boolean live = runIfLive(conversationId, generation, persistentLiveCheck, () -> {
+            EventSink eventSink = sinks.get(conversationId);
+            if (eventSink != null && eventSink.generation == generation && !eventSink.invalidated
+                    && eventSink.subscribers.get() > 0) {
+                Sinks.EmitResult result = eventSink.events.tryEmitNext(JsonUtil.toSafeJson(event));
+                delivered.set(result.isSuccess());
+            }
+        });
+        return live && delivered.get();
+    }
+
     /** Atomically validates persistent state and performs one outbound publication action. */
     public boolean runIfLive(
             String conversationId,

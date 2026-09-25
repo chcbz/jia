@@ -20,11 +20,18 @@ public class InteractionRouter {
         if (request == null) throw invalid("Chat request is required");
         Set<String> declared = new LinkedHashSet<>();
         addRouteToken(declared, request.getInteractionHint(), true);
+        addRouteToken(declared, request.getInteractionMode(), true);
+        addRouteToken(declared, request.getRoute(), true);
+        addRouteToken(declared, request.getIntent(), true);
         Map<String, Object> metadata = request.getMetadata();
         if (metadata != null) {
             addRouteToken(declared, metadata.get("interactionHint"), true);
             addRouteToken(declared, metadata.get("interactionMode"), true);
             addRouteToken(declared, metadata.get("route"), true);
+            addRouteToken(declared, metadata.get("intent"), true);
+            addRouteToken(declared, metadata.get("interaction_type"), true);
+            addRouteToken(declared, metadata.get("interactionType"), true);
+            addRouteToken(declared, metadata.get("action"), true);
             // mode is historically conversation scope (public/private/bounty); inspect it only if it is a route token.
             addRouteToken(declared, metadata.get("mode"), false);
         }

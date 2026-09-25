@@ -40,6 +40,12 @@ public class JuyitingAgentRelayService {
     private final ChatDeliberationService deliberationService;
 
     public JuyitingAgentRelayResult relay(ChatMessageDTO chatMessage, String conversationId,
+            InteractionRoute route) {
+        return relay(chatMessage, conversationId, route, ignored -> Flux.empty());
+    }
+
+    /** Compatibility overload; builtin work is intentionally not tied to this HTTP-supplied Flux. */
+    public JuyitingAgentRelayResult relay(ChatMessageDTO chatMessage, String conversationId,
             InteractionRoute route, Function<ChatDeliberationService.Dispatch, Flux<String>> builtinAgentStream) {
         JuyitingConversationScope requestedScope = scopeService.resolve(chatMessage);
         if (!JuyitingConversationScopeService.CONVERSATION_TYPE_JUYITING.equals(scopeService.resolveConversationType(chatMessage))
@@ -66,7 +72,10 @@ public class JuyitingAgentRelayService {
             ))));
         }
         long generation = lifecycleGeneration(conversation);
-        String tenantId = requireIdentityPart(conversation.getTenantId());
+        String tenantId = requireIdentityPart(EsContextHolder.getContext().getTenantId());
+        if (!tenantId.equals(requireIdentityPart(conversation.getTenantId()))) {
+            return deniedScope(conversationId, scope);
+        }
 
         Optional<String> forbiddenTarget = forbiddenOwnedRosterTarget(
                 scope, ownerJiacn, ownerClientId);
@@ -87,90 +96,19 @@ public class JuyitingAgentRelayService {
             return replayAdmission(admission);
         }
 
-        if (scope.targetAgentIds().size() > 1) {
-            return relayMultiTargetAgentMessage(
-                    chatMessage, conversationId, scope, tenantId, ownerJiacn, ownerClientId, generation, admission);
-        }
-
-        ChatDeliberationService.Dispatch dispatch = admission.dispatches().getFirst();
-        String selectedAgentId = dispatch.targetAgentId();
-        if (builtinHallAgentSupport.isBuiltinAgent(selectedAgentId)) {
-            deliberationService.markDispatch(tenantId, ownerJiacn, ownerClientId, dispatch.turnId(), true);
-            return new JuyitingAgentRelayResult(
-                    true, Mono.just(true), builtinAgentStream.apply(dispatch).takeUntilOther(
-                    chatConversationEventBroker.deletionSignal(
-                            conversationId, generation,
-                            () -> chatConversationService.isLiveGeneration(
-                                    ownerJiacn, ownerClientId, conversationId, generation))));
-        }
-
-        Map<String, Object> payload = buildDirectAgentPayload(chatMessage, conversationId, selectedAgentId, scope, admission, dispatch);
-        Sinks.One<Boolean> deliveryOutcome = Sinks.one();
-        Flux<String> stream = Flux.<String>create(emitter -> {
-            final Disposable[] subscriptionRef = new Disposable[1];
-            Disposable disposable = chatConversationEventBroker.stream(
-                            conversationId, generation,
-                            () -> chatConversationService.isLiveGeneration(
-                                    ownerJiacn, ownerClientId, conversationId, generation))
-                    .filter(this::isDirectAgentEvent)
-                    .subscribe(eventJson -> {
-                        emitter.next(eventJson);
-                        if (isDirectAgentFinalEvent(eventJson)) {
-                            Disposable current = subscriptionRef[0];
-                            if (current != null && !current.isDisposed()) {
-                                current.dispose();
-                            }
-                            emitter.complete();
-                        }
-                    }, emitter::error);
-            subscriptionRef[0] = disposable;
-            emitter.onDispose(disposable);
-
-            AtomicBoolean sent = new AtomicBoolean();
-            boolean live = chatConversationEventBroker.runIfLive(
-                    conversationId, generation,
-                    () -> chatConversationService.isLiveGeneration(
-                            ownerJiacn, ownerClientId, conversationId, generation),
-                    () -> {
-                        agentService.requireHostingNewWork(
-                                ownerJiacn, ownerClientId, selectedAgentId);
-                        requireNoActiveTransaction();
-                        sent.set(agentWebSocketHandler.sendDirectMessageToAgent(
-                                ownerJiacn, ownerClientId, selectedAgentId, payload));
-                    });
-            if (live) {
-                deliberationService.markDispatch(tenantId, ownerJiacn, ownerClientId, dispatch.turnId(), sent.get());
-            }
-            // DB admission, not socket delivery, is the acceptance boundary. Offline turns remain queued.
-            deliveryOutcome.tryEmitValue(live);
-            if (!live) {
-                disposable.dispose();
-                emitter.complete();
-                return;
-            }
-            emitter.next(buildAgentDeliveryEventJson(
-                    conversationId, selectedAgentId, sent.get(), dispatch));
-
-            if (!sent.get()) {
-                disposable.dispose();
-                emitter.complete();
-            }
-
-        }, FluxSink.OverflowStrategy.ERROR)
-                .transform(ChatStreamPolicy::bounded)
-                .takeUntilOther(chatConversationEventBroker.deletionSignal(
+        // Admission commit is the only acceptance boundary. The SmartLifecycle durable relay
+        // independently claims every child DISPATCH and routes builtin/hosted work per target.
+        List<String> accepted = admission.dispatches().stream()
+                .map(dispatch -> buildAgentDeliveryEventJson(
+                        conversationId, dispatch.targetAgentId(), false, dispatch))
+                .toList();
+        Flux<String> durableEvents = chatConversationEventBroker.stream(
                         conversationId, generation,
                         () -> chatConversationService.isLiveGeneration(
-                                ownerJiacn, ownerClientId, conversationId, generation)))
-                .doFinally(ignored -> deliveryOutcome.tryEmitValue(false));
-        return new JuyitingAgentRelayResult(
-                true, deliveryOutcome.asMono().defaultIfEmpty(false), stream);
-    }
-
-    private void requireNoActiveTransaction() {
-        if (TransactionSynchronizationManager.isActualTransactionActive()) {
-            throw new IllegalStateException("Agent delivery attempted before transaction commit");
-        }
+                                ownerJiacn, ownerClientId, conversationId, generation))
+                .filter(event -> event.contains("\"requestId\":\"" + admission.requestId() + "\""));
+        return new JuyitingAgentRelayResult(true, Mono.just(true),
+                Flux.fromIterable(accepted).concatWith(durableEvents));
     }
 
     public String selectedAgentId(ChatMessageDTO chatMessage) {
@@ -192,133 +130,6 @@ public class JuyitingAgentRelayService {
             }
         }
         return Optional.empty();
-    }
-
-    private JuyitingAgentRelayResult relayMultiTargetAgentMessage(
-            ChatMessageDTO chatMessage, String conversationId, JuyitingConversationScope scope,
-            String tenantId, String ownerJiacn, String ownerClientId, long generation,
-            ChatDeliberationService.Admission admission) {
-        Sinks.One<Boolean> deliveryOutcome = Sinks.one();
-        Flux<String> events = Flux.defer(() -> {
-            List<String> deliveryEvents = new ArrayList<>();
-            AtomicBoolean anyDelivered = new AtomicBoolean();
-            for (ChatDeliberationService.Dispatch dispatch : admission.dispatches()) {
-                String agentId = dispatch.targetAgentId();
-                AtomicBoolean delivered = new AtomicBoolean();
-                boolean live = chatConversationEventBroker.runIfLive(
-                        conversationId, generation,
-                        () -> chatConversationService.isLiveGeneration(
-                                ownerJiacn, ownerClientId, conversationId, generation),
-                        () -> {
-                            agentService.requireHostingNewWork(
-                                    ownerJiacn, ownerClientId, agentId);
-                            requireNoActiveTransaction();
-                            delivered.set(agentWebSocketHandler.sendDirectMessageToAgent(
-                                    ownerJiacn, ownerClientId, agentId,
-                                    buildDirectAgentPayload(
-                                            chatMessage, conversationId, agentId, scope, admission, dispatch)));
-                            deliberationService.markDispatch(
-                                    tenantId, ownerJiacn, ownerClientId, dispatch.turnId(), delivered.get());
-                            if (delivered.get()) {
-                                anyDelivered.set(true);
-                            }
-                        });
-                if (!live) {
-                    break;
-                }
-                deliveryEvents.add(buildAgentDeliveryEventJson(
-                        conversationId, agentId, delivered.get(), dispatch));
-            }
-            deliveryOutcome.tryEmitValue(true);
-            return Flux.fromIterable(deliveryEvents);
-        }).takeUntilOther(chatConversationEventBroker.deletionSignal(
-                        conversationId, generation,
-                        () -> chatConversationService.isLiveGeneration(
-                                ownerJiacn, ownerClientId, conversationId, generation)))
-                .doFinally(ignored -> deliveryOutcome.tryEmitValue(false));
-        return new JuyitingAgentRelayResult(
-                true, deliveryOutcome.asMono().defaultIfEmpty(false), events);
-    }
-
-    private Map<String, Object> buildDirectAgentPayload(ChatMessageDTO chatMessage, String conversationId,
-            String agentId, JuyitingConversationScope scope,
-            ChatDeliberationService.Admission admission, ChatDeliberationService.Dispatch dispatch) {
-        long sentAt = System.currentTimeMillis();
-        String messageId = UUID.randomUUID().toString();
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("schemaVersion", AgentProtocolConstants.VERSION_1);
-        payload.put("messageId", messageId);
-        payload.put("messageType", AgentProtocolConstants.TYPE_CHAT_MESSAGE);
-        payload.put("correlationId", conversationId);
-        payload.put("requestId", admission.requestId());
-        payload.put("requestRevision", admission.requestRevision());
-        payload.put("turnId", dispatch.turnId());
-        payload.put("dispatchId", dispatch.dispatchId());
-        payload.put("route", dispatch.route());
-        payload.put("contextSnapshotId", dispatch.contextSnapshotId());
-        payload.put("contextHash", dispatch.contextHash());
-        payload.put("targetAgentId", agentId);
-        payload.put("conversationId", conversationId);
-        payload.put("conversationGeneration", admission.conversationGeneration());
-        payload.put("conversationType", JuyitingConversationScopeService.CONVERSATION_TYPE_JUYITING);
-        payload.put("conversationScopeType", scope.scopeType());
-        payload.put("conversationScopeKey", scope.scopeKey());
-        payload.put("agentId", agentId);
-        payload.put("content", chatMessage.getContent());
-        payload.put("senderType", Optional.ofNullable(chatMessage.getSenderType()).orElse("user"));
-        payload.put("senderName", Optional.ofNullable(chatMessage.getSenderName()).orElse("用户"));
-        payload.put("metadata", trustedConversationMetadata(
-                chatMessage, conversationId, scope));
-        payload.put("contextSnapshot", Map.of(
-                "schemaVersion", "1",
-                "contextSnapshotId", dispatch.contextSnapshotId(),
-                "contextHash", dispatch.contextHash(),
-                "sourceVector", dispatch.sourceVector(),
-                "facts", dispatch.factsManifest()));
-        payload.put("sentAt", sentAt);
-        payload.put("timestamp", sentAt);
-
-        Map<String, Object> protocolPayload = new HashMap<>();
-        protocolPayload.put("content", chatMessage.getContent());
-        protocolPayload.put("conversationId", conversationId);
-        protocolPayload.put("conversationGeneration", admission.conversationGeneration());
-        protocolPayload.put("requestId", admission.requestId());
-        protocolPayload.put("requestRevision", admission.requestRevision());
-        protocolPayload.put("turnId", dispatch.turnId());
-        protocolPayload.put("dispatchId", dispatch.dispatchId());
-        protocolPayload.put("route", dispatch.route());
-        protocolPayload.put("contextSnapshotId", dispatch.contextSnapshotId());
-        protocolPayload.put("contextHash", dispatch.contextHash());
-        protocolPayload.put("contextSnapshot", payload.get("contextSnapshot"));
-        protocolPayload.put("senderType", Optional.ofNullable(chatMessage.getSenderType()).orElse("user"));
-        protocolPayload.put("senderName", Optional.ofNullable(chatMessage.getSenderName()).orElse("用户"));
-        protocolPayload.put("conversationScopeType", scope.scopeType());
-        protocolPayload.put("conversationScopeKey", scope.scopeKey());
-        putIfPresent(protocolPayload, "taskContextId", scope.taskId());
-        protocolPayload.put("metadata", trustedConversationMetadata(
-                chatMessage, conversationId, scope));
-        payload.put("payload", protocolPayload);
-        return payload;
-    }
-
-    private Map<String, Object> trustedConversationMetadata(
-            ChatMessageDTO chatMessage, String conversationId, JuyitingConversationScope scope) {
-        Map<String, Object> metadata = new HashMap<>(
-                ConversationMetadataPolicy.copyAllowed(chatMessage.getMetadata()));
-        // Trusted conversation scope always wins over caller-provided metadata aliases.
-        metadata.put("conversationId", conversationId);
-        metadata.put("conversationType", JuyitingConversationScopeService.CONVERSATION_TYPE_JUYITING);
-        metadata.put("selectedAgentId", scope.targetAgentId());
-        metadata.put("mode", scope.scopeType());
-        metadata.put("scopeKey", scope.scopeKey());
-        metadata.put("conversationScopeType", scope.scopeType());
-        metadata.put("conversationScopeKey", scope.scopeKey());
-        metadata.put("targetAgentIds", scope.targetAgentIds());
-        metadata.put("selectedTaskId", scope.taskId());
-        if (!scope.authoritativeAgentIds().isEmpty()) {
-            metadata.put("participantAgentIds", scope.authoritativeAgentIds());
-        }
-        return metadata;
     }
 
     private boolean conversationMatchesScope(
@@ -405,8 +216,8 @@ public class JuyitingAgentRelayService {
                 "dispatchId", dispatch == null ? "" : dispatch.dispatchId(),
                 "targetAgentId", agentId,
                 "eventId", UUID.randomUUID().toString(),
-                "eventVersion", 1,
-                "occurredAt", System.currentTimeMillis()));
+                "eventVersion", "1",
+                "occurredAt", Long.toString(System.currentTimeMillis())));
     }
 
     private JuyitingAgentRelayResult replayAdmission(ChatDeliberationService.Admission admission) {
@@ -414,14 +225,14 @@ public class JuyitingAgentRelayService {
                 Map.entry("type", "chat_request_replay"),
                 Map.entry("conversationId", admission.conversationId()),
                 Map.entry("requestId", admission.requestId()),
-                Map.entry("requestRevision", admission.requestRevision()),
+                Map.entry("requestRevision", Long.toString(admission.requestRevision())),
                 Map.entry("turnId", dispatch.turnId()),
                 Map.entry("dispatchId", dispatch.dispatchId()),
                 Map.entry("targetAgentId", dispatch.targetAgentId()),
                 Map.entry("state", dispatch.state()),
                 Map.entry("eventId", UUID.randomUUID().toString()),
-                Map.entry("eventVersion", 1),
-                Map.entry("occurredAt", System.currentTimeMillis())))).toList();
+                Map.entry("eventVersion", "1"),
+                Map.entry("occurredAt", Long.toString(System.currentTimeMillis()))))).toList();
         return new JuyitingAgentRelayResult(true, Mono.just(true), Flux.fromIterable(events));
     }
 

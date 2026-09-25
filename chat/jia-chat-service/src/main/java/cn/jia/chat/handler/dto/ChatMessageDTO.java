@@ -25,6 +25,10 @@ public class ChatMessageDTO {
     private Long requestRevision;
     /** Untrusted routing hint. Only chat and inspect are accepted by /chat/stream. */
     private String interactionHint;
+    /** Legacy additive aliases are normalized by the server and never grant EXECUTE. */
+    private String interactionMode;
+    private String route;
+    private String intent;
     /** Advisory client watermark; never grants access. */
     private Map<String, Object> clientSeenVector;
     /** Candidate references re-authorized by the server before INSPECT. */

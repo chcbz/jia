@@ -5,6 +5,7 @@ import cn.jia.agent.service.AgentService;
 import cn.jia.chat.dao.ChatConversationDao;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.deliberation.ChatContextSnapshotEntity;
+import cn.jia.chat.deliberation.ChatConversationEventEntity;
 import cn.jia.chat.deliberation.ChatDeliberationDao;
 import cn.jia.chat.deliberation.ChatDeliberationStates;
 import cn.jia.chat.deliberation.ChatDispatchOutboxEntity;
@@ -163,17 +164,40 @@ public class ChatDeliberationService {
                     .setSnapshotId(snapshotId).setContextDigest(contextDigest).setDispatchId(dispatchId)
                     .setRoute(route.name()).setState(ChatDeliberationStates.RECEIVED).setStateVersion(0L)
                     .setLastDeltaSeq(0L).setCreatedAt(now).setUpdatedAt(now);
-            Map<String, Object> eventPayload = Map.of(
-                    "requestId", requestId, "requestRevision", revision,
-                    "turnId", turnId, "dispatchId", dispatchId,
-                    "targetAgentId", targetAgentId, "contextSnapshotId", snapshotId,
-                    "route", route.name());
+            Map<String, Object> eventPayload = new LinkedHashMap<>();
+            eventPayload.put("tenantId", tenantId);
+            eventPayload.put("ownerJiacn", ownerJiacn);
+            eventPayload.put("clientId", clientId);
+            eventPayload.put("conversationId", conversationId);
+            eventPayload.put("conversationGeneration", Long.toString(expectedGeneration));
+            eventPayload.put("requestId", requestId);
+            eventPayload.put("requestRevision", Long.toString(revision));
+            eventPayload.put("turnId", turnId);
+            eventPayload.put("dispatchId", dispatchId);
+            eventPayload.put("targetAgentId", targetAgentId);
+            eventPayload.put("contextSnapshotId", snapshotId);
+            eventPayload.put("contextHash", contextDigest);
+            eventPayload.put("route", route.name());
+            eventPayload.put("content", content);
+            eventPayload.put("conversationType", JuyitingConversationScopeService.CONVERSATION_TYPE_JUYITING);
+            eventPayload.put("agentId", targetAgentId);
+            eventPayload.put("senderType", Optional.ofNullable(input.getSenderType()).orElse("user"));
+            eventPayload.put("senderName", Optional.ofNullable(input.getSenderName()).orElse("用户"));
+            eventPayload.put("metadata", trustedUserMetadata(input, scope, requestId, revision, route));
+            eventPayload.put("sentAt", Long.toString(now));
+            eventPayload.put("timestamp", Long.toString(now));
+            eventPayload.put("conversationScopeType", scope.scopeType());
+            eventPayload.put("conversationScopeKey", scope.scopeKey());
+            eventPayload.put("taskId", scope.taskId());
+            eventPayload.put("sourceVector", sourceVector);
+            eventPayload.put("factsManifest", facts);
             ChatDispatchOutboxEntity outbox = new ChatDispatchOutboxEntity()
                     .setEventId(stableId("evt", dispatchId, "DISPATCH"))
                     .setTenantId(tenantId).setOwnerJiacn(ownerJiacn).setClientId(clientId)
                     .setTurnId(turnId).setDispatchId(dispatchId).setEventType("DISPATCH")
                     .setStatus("READY").setPayloadJson(CanonicalContextJson.write(eventPayload))
-                    .setVersion(0L).setCreatedAt(now).setUpdatedAt(now);
+                    .setVersion(0L).setAvailableAt(now).setAttemptCount(0).setFencingToken(0L)
+                    .setCreatedAt(now).setUpdatedAt(now);
             if (dao.insertSnapshot(snapshot) != 1 || dao.insertTurn(turn) != 1 || dao.insertOutbox(outbox) != 1) {
                 throw persistence("Unable to persist chat turn admission");
             }
@@ -190,21 +214,13 @@ public class ChatDeliberationService {
                 candidate.getConversationGeneration());
         ChatTurnEntity turn = requireLockedTurn(tenantId, ownerJiacn, clientId, turnId);
         if (terminal(turn.getState())) return;
-        ChatDispatchOutboxEntity outbox = dao.lockOutbox(tenantId, ownerJiacn, clientId, turnId, "DISPATCH");
-        if (outbox == null) throw persistence("Dispatch outbox is unavailable");
-        if ("SENT".equals(outbox.getStatus())) return;
         String next = delivered ? ChatDeliberationStates.DISPATCHED : ChatDeliberationStates.QUEUED;
+        if (Objects.equals(next, turn.getState())) return;
         long now = System.currentTimeMillis();
-        if (!Objects.equals(next, turn.getState())) {
-            if (dao.updateTurnState(turn, next, null, now) != 1) {
-                throw persistence("Unable to advance dispatch state");
-            }
-            turn.setState(next).setUpdatedAt(now).setStateVersion(turn.getStateVersion() + 1);
+        if (dao.updateTurnState(turn, next, null, now) != 1) {
+            throw conflict("Concurrent dispatch state change");
         }
-        String nextOutbox = delivered ? "SENT" : "READY";
-        if (!Objects.equals(nextOutbox, outbox.getStatus()) && dao.updateOutbox(outbox, nextOutbox, now) != 1) {
-            throw persistence("Unable to advance dispatch outbox");
-        }
+        turn.setState(next).setUpdatedAt(now).setStateVersion(turn.getStateVersion() + 1);
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -222,11 +238,11 @@ public class ChatDeliberationService {
         if (deltaSeq <= last) {
             if (deltaSeq == last) {
                 return new DeltaResult(Objects.equals(deltaDigest, turn.getLastDeltaDigest())
-                        ? DeltaStatus.DUPLICATE : DeltaStatus.CONFLICTING_DUPLICATE, turn);
+                        ? DeltaStatus.DUPLICATE : DeltaStatus.CONFLICTING_DUPLICATE, turn, null);
             }
-            return new DeltaResult(DeltaStatus.STALE, turn);
+            return new DeltaResult(DeltaStatus.STALE, turn, null);
         }
-        if (terminal(turn.getState())) return new DeltaResult(DeltaStatus.TERMINAL, turn);
+        if (terminal(turn.getState())) return new DeltaResult(DeltaStatus.TERMINAL, turn, null);
         if (deltaSeq != last + 1) {
             String reason = "DELTA_GAP_EXPECTED_" + (last + 1) + "_GOT_" + deltaSeq;
             if (!ChatDeliberationStates.RECOVERY_REQUIRED.equals(turn.getState())) {
@@ -236,15 +252,24 @@ public class ChatDeliberationService {
                 }
                 turn.setState(ChatDeliberationStates.RECOVERY_REQUIRED).setTerminalReason(reason)
                         .setUpdatedAt(now).setStateVersion(turn.getStateVersion() + 1);
+                ChatConversationEventEntity event = persistEvent(turn,
+                        stableId("evt", dispatchId, "RESYNC_REQUIRED", Long.toString(deltaSeq)),
+                        "resync_required", Map.of("expectedDeltaSeq", Long.toString(last + 1),
+                                "receivedDeltaSeq", Long.toString(deltaSeq), "reason", reason), now);
+                return new DeltaResult(DeltaStatus.GAP, turn, event);
             }
-            return new DeltaResult(DeltaStatus.GAP, turn);
+            return new DeltaResult(DeltaStatus.GAP, turn, null);
         }
         if (dao.acceptDelta(turn, deltaSeq, deltaDigest, System.currentTimeMillis()) != 1) {
             throw conflict("Concurrent delta state change");
         }
         turn.setLastDeltaSeq(deltaSeq).setLastDeltaDigest(deltaDigest)
                 .setState(ChatDeliberationStates.STREAMING).setStateVersion(turn.getStateVersion() + 1);
-        return new DeltaResult(DeltaStatus.ACCEPTED, turn);
+        ChatConversationEventEntity event = persistEvent(turn,
+                stableId("evt", dispatchId, "DELTA", Long.toString(deltaSeq)),
+                "agent_message_delta", Map.of("content", content, "deltaSeq", Long.toString(deltaSeq)),
+                System.currentTimeMillis());
+        return new DeltaResult(DeltaStatus.ACCEPTED, turn, event);
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -271,7 +296,7 @@ public class ChatDeliberationService {
                 if (existingRequest == null) throw unavailable();
                 return new FinalResult(FinalStatus.DUPLICATE, turn.getFinalMessageId(),
                         Long.toString(existingRequest.getUserMessageId()),
-                        stableId("evt", dispatchId, "FINAL_PERSISTED"), turn);
+                        stableId("evt", dispatchId, "FINAL_PERSISTED"), turn, null);
             }
             throw conflict("Turn final already differs");
         }
@@ -309,6 +334,9 @@ public class ChatDeliberationService {
             throw conflict("Concurrent final state change");
         }
         String finalEventId = stableId("evt", dispatchId, "FINAL_PERSISTED");
+        ChatConversationEventEntity finalEvent = persistEvent(turn, finalEventId, "agent_message",
+                Map.ofEntries(Map.entry("content", safeContent), Map.entry("messageId", Long.toString(message.getId())),
+                        Map.entry("senderType", "agent"), Map.entry("senderName", senderName == null ? agentId : senderName)), now);
         ChatDispatchOutboxEntity outbox = new ChatDispatchOutboxEntity()
                 .setEventId(finalEventId)
                 .setTenantId(tenantId).setOwnerJiacn(ownerJiacn).setClientId(clientId)
@@ -317,14 +345,19 @@ public class ChatDeliberationService {
                         Map.entry("requestId", requestId), Map.entry("turnId", turnId),
                         Map.entry("dispatchId", dispatchId), Map.entry("targetAgentId", turn.getTargetAgentId()),
                         Map.entry("contextSnapshotId", snapshotId), Map.entry("messageId", Long.toString(message.getId())),
-                        Map.entry("finalDigest", finalDigest)))).setVersion(0L).setCreatedAt(now).setUpdatedAt(now);
+                        Map.entry("conversationId", conversationId), Map.entry("conversationGeneration", Long.toString(conversationGeneration)),
+                        Map.entry("content", safeContent), Map.entry("senderName", senderName == null ? agentId : senderName),
+                        Map.entry("eventSequence", Long.toString(finalEvent.getEventSequence())),
+                        Map.entry("eventVersion", Long.toString(finalEvent.getEventVersion())),
+                        Map.entry("finalDigest", finalDigest)))).setVersion(0L).setAvailableAt(now)
+                .setAttemptCount(0).setFencingToken(0L).setCreatedAt(now).setUpdatedAt(now);
         if (dao.insertOutbox(outbox) != 1) throw persistence("Unable to persist final event");
         turn.setState(ChatDeliberationStates.FINAL_PERSISTED).setFinalDigest(finalDigest)
                 .setFinalMessageId(message.getId()).setUpdatedAt(now)
                 .setStateVersion(turn.getStateVersion() + 1);
         refreshAggregate(tenantId, ownerJiacn, clientId, turn.getRequestId(), now);
         return new FinalResult(FinalStatus.PERSISTED, message.getId(),
-                Long.toString(request.getUserMessageId()), finalEventId, turn);
+                Long.toString(request.getUserMessageId()), finalEventId, turn, finalEvent);
     }
 
     @Transactional(readOnly = true)
@@ -394,18 +427,31 @@ public class ChatDeliberationService {
         if (!ChatDeliberationStates.FINAL_PERSISTED.equals(turn.getState())) {
             throw conflict("Only a persisted final can be published");
         }
-        ChatDispatchOutboxEntity outbox = dao.lockOutbox(
-                tenantId, ownerJiacn, clientId, turnId, "FINAL_PERSISTED");
-        if (outbox == null) throw persistence("Final outbox is unavailable");
         long now = System.currentTimeMillis();
         if (dao.publishFinal(turn, now) != 1) {
             throw conflict("Concurrent final publication state change");
         }
-        if (!"SENT".equals(outbox.getStatus()) && dao.updateOutbox(outbox, "SENT", now) != 1) {
-            throw conflict("Concurrent final outbox publication state change");
-        }
         turn.setState(ChatDeliberationStates.PUBLISHED).setUpdatedAt(now)
                 .setStateVersion(turn.getStateVersion() + 1);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public void failBuiltinRecovery(String tenantId, String ownerJiacn, String clientId, String turnId) {
+        ChatTurnEntity visible = requireVisibleTurn(tenantId, ownerJiacn, clientId, turnId);
+        requireLockedConversation(tenantId, ownerJiacn, clientId, visible.getConversationId(),
+                visible.getConversationGeneration());
+        ChatTurnEntity turn = requireLockedTurn(tenantId, ownerJiacn, clientId, turnId);
+        if (terminal(turn.getState())) return;
+        long now = System.currentTimeMillis();
+        String reason = "BUILTIN_WORKER_RESTART_DURING_GENERATION";
+        if (dao.updateTurnState(turn, ChatDeliberationStates.FAILED, reason, now) != 1) {
+            throw conflict("Concurrent builtin recovery state change");
+        }
+        turn.setState(ChatDeliberationStates.FAILED).setTerminalReason(reason)
+                .setStateVersion(turn.getStateVersion() + 1).setUpdatedAt(now);
+        persistEvent(turn, stableId("evt", turn.getDispatchId(), "BUILTIN_RECOVERY_REQUIRED"),
+                "resync_required", Map.of("reason", reason), now);
+        refreshAggregate(tenantId, ownerJiacn, clientId, turn.getRequestId(), now);
     }
 
     private void cancelLockedTurn(ChatTurnEntity turn, String reason, long now) {
@@ -419,11 +465,52 @@ public class ChatDeliberationService {
                 .setTurnId(turn.getTurnId()).setDispatchId(turn.getDispatchId()).setEventType("CANCEL_REQUESTED")
                 .setStatus("READY").setPayloadJson(CanonicalContextJson.write(Map.of(
                         "requestId", turn.getRequestId(), "turnId", turn.getTurnId(),
-                        "dispatchId", turn.getDispatchId(), "reason", reason)))
-                .setVersion(0L).setCreatedAt(now).setUpdatedAt(now);
+                        "dispatchId", turn.getDispatchId(), "targetAgentId", turn.getTargetAgentId(),
+                        "conversationId", turn.getConversationId(),
+                        "conversationGeneration", Long.toString(turn.getConversationGeneration()), "reason", reason)))
+                .setVersion(0L).setAvailableAt(now).setAttemptCount(0).setFencingToken(0L)
+                .setCreatedAt(now).setUpdatedAt(now);
+        persistEvent(turn, stableId("evt", turn.getDispatchId(), "CANCEL_REQUESTED"),
+                "cancel_requested", Map.of("reason", reason), now);
         if (dao.insertOutbox(cancel) != 1) throw persistence("Unable to persist cancellation event");
         turn.setState(ChatDeliberationStates.CANCELLED).setTerminalReason(reason)
                 .setUpdatedAt(now).setStateVersion(turn.getStateVersion() + 1);
+    }
+
+    private ChatConversationEventEntity persistEvent(ChatTurnEntity turn, String eventId,
+            String eventType, Map<String, Object> payload, long now) {
+        Map<String, Object> wire = new LinkedHashMap<>();
+        wire.put("type", eventType);
+        wire.put("requestId", turn.getRequestId());
+        wire.put("requestRevision", Long.toString(turn.getRequestRevision()));
+        wire.put("turnId", turn.getTurnId());
+        wire.put("dispatchId", turn.getDispatchId());
+        wire.put("targetAgentId", turn.getTargetAgentId());
+        wire.put("contextSnapshotId", turn.getSnapshotId());
+        wire.put("route", turn.getRoute());
+        wire.putAll(payload);
+        ChatConversationEventEntity event = new ChatConversationEventEntity()
+                .setEventId(eventId).setTenantId(turn.getTenantId()).setOwnerJiacn(turn.getOwnerJiacn())
+                .setClientId(turn.getClientId()).setConversationId(turn.getConversationId())
+                .setConversationGeneration(turn.getConversationGeneration()).setRequestId(turn.getRequestId())
+                .setTurnId(turn.getTurnId()).setDispatchId(turn.getDispatchId()).setEventType(eventType)
+                .setEventVersion(0L).setPayloadJson(CanonicalContextJson.write(wire)).setOccurredAt(now);
+        if (dao.insertEvent(event) != 1 || event.getEventSequence() == null
+                || dao.assignEventVersion(event.getEventSequence()) != 1) {
+            throw persistence("Unable to persist conversation event");
+        }
+        event.setEventVersion(event.getEventSequence());
+        return event;
+    }
+
+    @Transactional(readOnly = true)
+    public List<ChatConversationEventEntity> replayEvents(String tenantId, String ownerJiacn, String clientId,
+            String conversationId, long generation, long afterSequence, int limit) {
+        requireIdentity(tenantId, 50); requireIdentity(ownerJiacn, 50); requireIdentity(clientId, 50);
+        requireIdentity(conversationId, MAX_ID);
+        if (generation < 1 || afterSequence < 0 || limit < 1 || limit > 500) throw invalid("Invalid event cursor");
+        requireLockedConversation(tenantId, ownerJiacn, clientId, conversationId, generation);
+        return dao.replayEvents(tenantId, ownerJiacn, clientId, conversationId, generation, afterSequence, limit);
     }
 
     private Set<String> normalizeTurnSelection(List<String> turnIds) {
@@ -538,9 +625,9 @@ public class ChatDeliberationService {
 
     private Map<String, Object> sourceVector(long generation, long messageId, AgentTaskDTO task) {
         Map<String, Object> vector = new LinkedHashMap<>();
-        vector.put("conversationGeneration", generation);
+        vector.put("conversationGeneration", Long.toString(generation));
         vector.put("messageHighWatermark", Long.toString(messageId));
-        vector.put("taskRevision", task == null ? null : task.getTaskVersion());
+        vector.put("taskRevision", task == null || task.getTaskVersion() == null ? null : String.valueOf(task.getTaskVersion()));
         vector.put("executionRevision", null);
         vector.put("bindingVersion", null);
         vector.put("summaryRevision", null);
@@ -554,7 +641,7 @@ public class ChatDeliberationService {
         Map<String, Object> facts = new LinkedHashMap<>();
         facts.put("schemaVersion", "1");
         facts.put("conversation", Map.of(
-                "id", Long.toString(conversation.getId()), "generation", conversation.getLifecycleGeneration(),
+                "id", Long.toString(conversation.getId()), "generation", Long.toString(conversation.getLifecycleGeneration()),
                 "scopeType", scope.scopeType(), "scopeKey", scope.scopeKey()));
         facts.put("targetAgentId", targetAgentId);
         facts.put("participantAgentIds", scope.authoritativeAgentIds().isEmpty()
@@ -575,7 +662,7 @@ public class ChatDeliberationService {
         value.put("status", task.getStatus());
         value.put("assignedAgentId", task.getAssignedAgentId());
         value.put("assignedAgentIds", Optional.ofNullable(task.getAssignedAgentIds()).orElse(List.of()));
-        value.put("revision", task.getTaskVersion());
+        value.put("revision", task.getTaskVersion() == null ? null : String.valueOf(task.getTaskVersion()));
         return value;
     }
 
@@ -702,18 +789,18 @@ public class ChatDeliberationService {
     }
 
     private RequestView requestView(ChatRequestEntity request, List<ChatTurnEntity> turns) {
-        return new RequestView(request.getRequestId(), request.getRequestRevision(), request.getConversationId(),
-                request.getConversationGeneration(), Long.toString(request.getUserMessageId()),
-                request.getAggregateState(), request.getStateVersion(), turns.stream().map(this::turnView).toList());
+        return new RequestView(request.getRequestId(), Long.toString(request.getRequestRevision()), request.getConversationId(),
+                Long.toString(request.getConversationGeneration()), Long.toString(request.getUserMessageId()),
+                request.getAggregateState(), Long.toString(request.getStateVersion()), turns.stream().map(this::turnView).toList());
     }
 
     private TurnView turnView(ChatTurnEntity turn) {
-        return new TurnView(turn.getTurnId(), turn.getRequestId(), turn.getRequestRevision(),
-                turn.getConversationId(), turn.getConversationGeneration(), turn.getTargetAgentId(),
+        return new TurnView(turn.getTurnId(), turn.getRequestId(), Long.toString(turn.getRequestRevision()),
+                turn.getConversationId(), Long.toString(turn.getConversationGeneration()), turn.getTargetAgentId(),
                 turn.getSnapshotId(), turn.getDispatchId(), turn.getRoute(), turn.getState(),
-                turn.getStateVersion(), turn.getLastDeltaSeq(), turn.getTerminalReason(),
+                Long.toString(turn.getStateVersion()), Long.toString(turn.getLastDeltaSeq()), turn.getTerminalReason(),
                 turn.getFinalMessageId() == null ? null : Long.toString(turn.getFinalMessageId()),
-                turn.getCreatedAt(), turn.getUpdatedAt());
+                Long.toString(turn.getCreatedAt()), Long.toString(turn.getUpdatedAt()));
     }
 
     private boolean terminal(String state) {
@@ -775,15 +862,15 @@ public class ChatDeliberationService {
             String state, String contextSnapshotId, String contextHash,
             Map<String, Object> sourceVector, Map<String, Object> factsManifest) { }
     public enum DeltaStatus { ACCEPTED, DUPLICATE, CONFLICTING_DUPLICATE, STALE, GAP, TERMINAL }
-    public record DeltaResult(DeltaStatus status, ChatTurnEntity turn) { }
+    public record DeltaResult(DeltaStatus status, ChatTurnEntity turn, ChatConversationEventEntity event) { }
     public enum FinalStatus { PERSISTED, DUPLICATE }
     public record FinalResult(FinalStatus status, Long messageId, String replyToMessageId,
-            String eventId, ChatTurnEntity turn) { }
-    public record RequestView(String requestId, long requestRevision, String conversationId,
-            long conversationGeneration, String userMessageId, String state, long stateVersion,
+            String eventId, ChatTurnEntity turn, ChatConversationEventEntity event) { }
+    public record RequestView(String requestId, String requestRevision, String conversationId,
+            String conversationGeneration, String userMessageId, String state, String stateVersion,
             List<TurnView> turns) { }
-    public record TurnView(String turnId, String requestId, long requestRevision, String conversationId,
-            long conversationGeneration, String targetAgentId, String contextSnapshotId,
-            String dispatchId, String route, String state, long stateVersion, long lastDeltaSeq,
-            String terminalReason, String finalMessageId, long createdAt, long updatedAt) { }
+    public record TurnView(String turnId, String requestId, String requestRevision, String conversationId,
+            String conversationGeneration, String targetAgentId, String contextSnapshotId,
+            String dispatchId, String route, String state, String stateVersion, String lastDeltaSeq,
+            String terminalReason, String finalMessageId, String createdAt, String updatedAt) { }
 }

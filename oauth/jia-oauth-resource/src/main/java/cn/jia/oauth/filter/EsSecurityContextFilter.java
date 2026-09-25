@@ -26,6 +26,9 @@ public class EsSecurityContextFilter implements Filter {
     }
 
     private static void overwriteFromJwt(EsContext context, Jwt jwt) {
+        String tenant = stringClaim(jwt, "tenant_id");
+        if (tenant == null && stringClaim(jwt, "jiacn") != null) tenant = cn.jia.core.mybatis.TenantScopeHelper.DEFAULT_TENANT;
+        context.setTenantId(tenant);
         context.setJiacn(stringClaim(jwt, "jiacn"));
         context.setAppcn(stringClaim(jwt, "appcn"));
         context.setClientId(stringClaim(jwt, "client_id"));

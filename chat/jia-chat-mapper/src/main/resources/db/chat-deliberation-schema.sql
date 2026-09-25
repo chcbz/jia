@@ -86,10 +86,47 @@ CREATE TABLE IF NOT EXISTS chat_dispatch_outbox (
   status VARCHAR(30) NOT NULL,
   payload_json MEDIUMTEXT NOT NULL,
   version BIGINT NOT NULL DEFAULT 0,
+  available_at BIGINT NOT NULL,
+  lease_owner VARCHAR(100) DEFAULT NULL,
+  lease_until BIGINT DEFAULT NULL,
+  attempt_count INT NOT NULL DEFAULT 0,
+  fencing_token BIGINT NOT NULL DEFAULT 0,
+  last_error VARCHAR(500) DEFAULT NULL,
+  sent_at BIGINT DEFAULT NULL,
   created_at BIGINT NOT NULL,
   updated_at BIGINT NOT NULL,
   PRIMARY KEY (event_id),
   UNIQUE KEY uk_chat_outbox_turn_event (turn_id, event_type),
   KEY idx_chat_outbox_ready
-    (tenant_id, owner_jiacn, client_id, status, updated_at)
+    (status, available_at, event_id),
+  KEY idx_chat_outbox_scope
+    (tenant_id, owner_jiacn, client_id, turn_id, event_type)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
+
+CREATE TABLE IF NOT EXISTS chat_conversation_event (
+  event_sequence BIGINT NOT NULL AUTO_INCREMENT,
+  event_id VARCHAR(64) NOT NULL,
+  tenant_id VARCHAR(50) NOT NULL,
+  owner_jiacn VARCHAR(50) NOT NULL,
+  client_id VARCHAR(50) NOT NULL,
+  conversation_id VARCHAR(100) NOT NULL,
+  conversation_generation BIGINT NOT NULL,
+  request_id VARCHAR(100) DEFAULT NULL,
+  turn_id VARCHAR(64) DEFAULT NULL,
+  dispatch_id VARCHAR(64) DEFAULT NULL,
+  event_type VARCHAR(40) NOT NULL,
+  event_version BIGINT NOT NULL,
+  payload_json MEDIUMTEXT NOT NULL,
+  occurred_at BIGINT NOT NULL,
+  PRIMARY KEY (event_sequence),
+  UNIQUE KEY uk_chat_conversation_event_id (event_id),
+  KEY idx_chat_conversation_event_replay
+    (tenant_id, owner_jiacn, client_id, conversation_id, conversation_generation, event_sequence)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
+
+CREATE TABLE IF NOT EXISTS chat_deliberation_schema_version (
+  version BIGINT NOT NULL,
+  stage VARCHAR(30) NOT NULL,
+  updated_at BIGINT NOT NULL,
+  PRIMARY KEY (version)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;

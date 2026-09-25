@@ -27,7 +27,9 @@ public final class AccountSecurityTokenCustomizer implements OAuth2TokenCustomiz
 
     @Override
     public void customize(JwtEncodingContext context) {
-        context.getClaims().claim("client_id", context.getRegisteredClient().getClientId());
+        context.getClaims()
+                .claim("client_id", context.getRegisteredClient().getClientId())
+                .claim("tenant_id", cn.jia.core.mybatis.TenantScopeHelper.DEFAULT_TENANT);
 
         CustomUserDetails userDetails = findUserDetails(context);
         if (userDetails != null) {

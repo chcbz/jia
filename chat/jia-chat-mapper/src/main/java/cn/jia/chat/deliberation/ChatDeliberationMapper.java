@@ -59,12 +59,27 @@ public interface ChatDeliberationMapper {
     @Insert("""
             INSERT INTO chat_dispatch_outbox
               (event_id,tenant_id,owner_jiacn,client_id,turn_id,dispatch_id,event_type,status,payload_json,
-               version,created_at,updated_at)
+               version,available_at,lease_owner,lease_until,attempt_count,fencing_token,last_error,sent_at,created_at,updated_at)
             VALUES
               (#{eventId},#{tenantId},#{ownerJiacn},#{clientId},#{turnId},#{dispatchId},#{eventType},#{status},
-               #{payloadJson},#{version},#{createdAt},#{updatedAt})
+               #{payloadJson},#{version},#{availableAt},#{leaseOwner},#{leaseUntil},#{attemptCount},#{fencingToken},
+               #{lastError},#{sentAt},#{createdAt},#{updatedAt})
             """)
     int insertOutbox(ChatDispatchOutboxEntity entity);
+
+    @Insert("""
+            INSERT INTO chat_conversation_event
+              (event_id,tenant_id,owner_jiacn,client_id,conversation_id,conversation_generation,
+               request_id,turn_id,dispatch_id,event_type,event_version,payload_json,occurred_at)
+            VALUES
+              (#{eventId},#{tenantId},#{ownerJiacn},#{clientId},#{conversationId},#{conversationGeneration},
+               #{requestId},#{turnId},#{dispatchId},#{eventType},0,#{payloadJson},#{occurredAt})
+            """)
+    @Options(useGeneratedKeys = true, keyProperty = "eventSequence")
+    int insertEvent(ChatConversationEventEntity entity);
+
+    @Update("UPDATE chat_conversation_event SET event_version=event_sequence WHERE event_sequence=#{eventSequence} AND event_version=0")
+    int assignEventVersion(@Param("eventSequence") long eventSequence);
 
     @Select("""
             SELECT * FROM chat_request WHERE
@@ -152,6 +167,39 @@ public interface ChatDeliberationMapper {
             @Param("ownerJiacn") String ownerJiacn, @Param("clientId") String clientId,
             @Param("turnId") String turnId, @Param("eventType") String eventType);
 
+    @Select("""
+            SELECT * FROM chat_dispatch_outbox WHERE
+            """ + EXACT_SCOPE + """
+            AND event_id=#{eventId}
+            AND CAST(event_id AS BINARY)=CAST(#{eventId} AS BINARY)
+            AND OCTET_LENGTH(event_id)=OCTET_LENGTH(#{eventId}) LIMIT 1 FOR UPDATE
+            """)
+    ChatDispatchOutboxEntity lockOutboxById(@Param("tenantId") String tenantId,
+            @Param("ownerJiacn") String ownerJiacn, @Param("clientId") String clientId,
+            @Param("eventId") String eventId);
+
+    @Select("""
+            SELECT * FROM chat_dispatch_outbox
+            WHERE ((status IN ('READY','RETRY') AND available_at<=#{now})
+                OR (status='CLAIMED' AND lease_until<=#{now}))
+            ORDER BY available_at,event_id LIMIT #{limit}
+            """)
+    List<ChatDispatchOutboxEntity> findDueOutbox(@Param("now") long now, @Param("limit") int limit);
+
+    @Select("""
+            SELECT * FROM chat_conversation_event WHERE
+            """ + EXACT_SCOPE + """
+              AND conversation_id=#{conversationId} AND conversation_generation=#{generation}
+              AND event_sequence>#{afterSequence}
+              AND CAST(conversation_id AS BINARY)=CAST(#{conversationId} AS BINARY)
+              AND OCTET_LENGTH(conversation_id)=OCTET_LENGTH(#{conversationId})
+            ORDER BY event_sequence LIMIT #{limit}
+            """)
+    List<ChatConversationEventEntity> replayEvents(@Param("tenantId") String tenantId,
+            @Param("ownerJiacn") String ownerJiacn, @Param("clientId") String clientId,
+            @Param("conversationId") String conversationId, @Param("generation") long generation,
+            @Param("afterSequence") long afterSequence, @Param("limit") int limit);
+
     @Update("""
             UPDATE chat_turn SET state=#{state}, state_version=state_version+1,
               last_delta_seq=#{deltaSeq}, last_delta_digest=#{deltaDigest}, updated_at=#{updatedAt}
@@ -206,6 +254,35 @@ public interface ChatDeliberationMapper {
     int updateOutbox(@Param("tenantId") String tenantId, @Param("ownerJiacn") String ownerJiacn,
             @Param("clientId") String clientId, @Param("turnId") String turnId, @Param("eventType") String eventType,
             @Param("version") long version, @Param("status") String status,
+            @Param("updatedAt") long updatedAt);
+
+    @Update("""
+            UPDATE chat_dispatch_outbox SET status='CLAIMED', lease_owner=#{leaseOwner}, lease_until=#{leaseUntil},
+              attempt_count=attempt_count+1, fencing_token=#{fencingToken}, last_error=NULL,
+              version=version+1, updated_at=#{updatedAt}
+            WHERE tenant_id=#{tenantId} AND owner_jiacn=#{ownerJiacn} AND client_id=#{clientId}
+              AND event_id=#{eventId} AND version=#{version}
+              AND ((status IN ('READY','RETRY') AND available_at<=#{updatedAt})
+                OR (status='CLAIMED' AND lease_until<=#{updatedAt}))
+            """)
+    int claimOutbox(@Param("tenantId") String tenantId, @Param("ownerJiacn") String ownerJiacn,
+            @Param("clientId") String clientId, @Param("eventId") String eventId, @Param("version") long version,
+            @Param("leaseOwner") String leaseOwner, @Param("leaseUntil") long leaseUntil,
+            @Param("fencingToken") long fencingToken, @Param("updatedAt") long updatedAt);
+
+    @Update("""
+            UPDATE chat_dispatch_outbox SET status=#{status}, available_at=#{availableAt},
+              lease_owner=NULL, lease_until=NULL, last_error=#{lastError}, sent_at=#{sentAt},
+              version=version+1, updated_at=#{updatedAt}
+            WHERE tenant_id=#{tenantId} AND owner_jiacn=#{ownerJiacn} AND client_id=#{clientId}
+              AND event_id=#{eventId} AND version=#{version} AND status='CLAIMED'
+              AND lease_owner=#{leaseOwner} AND fencing_token=#{fencingToken}
+            """)
+    int settleOutbox(@Param("tenantId") String tenantId, @Param("ownerJiacn") String ownerJiacn,
+            @Param("clientId") String clientId, @Param("eventId") String eventId, @Param("version") long version,
+            @Param("leaseOwner") String leaseOwner, @Param("fencingToken") long fencingToken,
+            @Param("status") String status, @Param("availableAt") Long availableAt,
+            @Param("lastError") String lastError, @Param("sentAt") Long sentAt,
             @Param("updatedAt") long updatedAt);
 
     @Update("""

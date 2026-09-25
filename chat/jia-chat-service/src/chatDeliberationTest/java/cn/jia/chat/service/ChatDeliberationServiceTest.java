@@ -4,6 +4,7 @@ import cn.jia.agent.service.AgentService;
 import cn.jia.chat.dao.ChatConversationDao;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.deliberation.ChatContextSnapshotEntity;
+import cn.jia.chat.deliberation.ChatConversationEventEntity;
 import cn.jia.chat.deliberation.ChatDeliberationDao;
 import cn.jia.chat.deliberation.ChatDeliberationStates;
 import cn.jia.chat.deliberation.ChatDispatchOutboxEntity;
@@ -206,9 +207,41 @@ class ChatDeliberationServiceTest {
         assertEquals(ChatDeliberationStates.RECOVERY_REQUIRED, dao.turns.get(dispatch.turnId()).getState());
         service.markDispatch("0", "owner-a", "client-a", dispatch.turnId(), true);
         service.markDispatch("0", "owner-a", "client-a", dispatch.turnId(), true);
-        assertEquals("SENT", dao.lockOutbox("0", "owner-a", "client-a", dispatch.turnId(), "DISPATCH").getStatus());
+        assertEquals("READY", dao.lockOutbox("0", "owner-a", "client-a", dispatch.turnId(), "DISPATCH").getStatus());
     }
 
+
+    @Test
+    void mixedBuiltinAndHostedGroupCreatesIndependentDurableDispatches() throws Exception {
+        conversation.setTargetAgentIds("[\"builtin-songjiang\",\"hosted-a\"]");
+        ChatMessageDTO request = request("req-mixed", "council");
+        request.setTargetAgentIds(List.of("builtin-songjiang", "hosted-a"));
+        JuyitingConversationScope mixed = new JuyitingConversationScope("public", "public", null,
+                "builtin-songjiang", List.of("builtin-songjiang", "hosted-a"),
+                List.of("builtin-songjiang", "hosted-a"));
+        var admission = service.admit("0", "owner-a", "client-a", "42", 3L, mixed,
+                InteractionRoute.CHAT, request);
+        assertEquals(List.of("builtin-songjiang", "hosted-a"), admission.dispatches().stream()
+                .map(ChatDeliberationService.Dispatch::targetAgentId).toList());
+        for (var dispatch : admission.dispatches()) {
+            ChatDispatchOutboxEntity event = dao.lockOutbox("0", "owner-a", "client-a",
+                    dispatch.turnId(), "DISPATCH");
+            assertTrue(event.getPayloadJson().contains("\"targetAgentId\":\"" + dispatch.targetAgentId() + "\""));
+        }
+    }
+
+    @Test
+    void durableViewsAndEventsExposeBigintsAsDecimalStrings() {
+        var admission = admit("req-long", "hello");
+        ChatRequestEntity request = dao.requests.get("req-long");
+        request.setStateVersion(Long.MAX_VALUE - 1);
+        ChatTurnEntity turn = dao.turns.get(admission.dispatches().getFirst().turnId());
+        turn.setStateVersion(Long.MAX_VALUE - 2).setLastDeltaSeq(Long.MAX_VALUE - 3);
+        var view = service.getRequest("0", "owner-a", "client-a", "req-long");
+        assertEquals(Long.toString(Long.MAX_VALUE - 1), view.stateVersion());
+        assertEquals(Long.toString(Long.MAX_VALUE - 2), view.turns().getFirst().stateVersion());
+        assertEquals(Long.toString(Long.MAX_VALUE - 3), view.turns().getFirst().lastDeltaSeq());
+    }
     private ChatDeliberationService.Admission admit(String requestId, String content) {
         return service.admit("0", "owner-a", "client-a", "42", 3L, scope(),
                 InteractionRoute.CHAT, request(requestId, content));
@@ -236,12 +269,16 @@ class ChatDeliberationServiceTest {
         private final Map<String, ChatTurnEntity> turns = new LinkedHashMap<>();
         private final Map<String, ChatContextSnapshotEntity> snapshots = new LinkedHashMap<>();
         private final Map<String, ChatDispatchOutboxEntity> outboxes = new LinkedHashMap<>();
+        private final List<ChatConversationEventEntity> events = new ArrayList<>();
         private long requestPk;
+        private long eventPk;
 
         public int insertSnapshot(ChatContextSnapshotEntity e) { snapshots.put(e.getSnapshotId(), e); return 1; }
         public int insertRequest(ChatRequestEntity e) { e.setId(++requestPk); requests.put(e.getRequestId(), e); return 1; }
         public int insertTurn(ChatTurnEntity e) { turns.put(e.getTurnId(), e); return 1; }
         public int insertOutbox(ChatDispatchOutboxEntity e) { outboxes.put(e.getEventId(), e); return 1; }
+        public int insertEvent(ChatConversationEventEntity e) { e.setEventSequence(++eventPk); events.add(e); return 1; }
+        public int assignEventVersion(long sequence) { events.stream().filter(e->e.getEventSequence()==sequence).findFirst().orElseThrow().setEventVersion(sequence); return 1; }
         public ChatRequestEntity lockRequest(String t,String o,String c,String r,long v){
             ChatRequestEntity found=requests.get(r); return found!=null && t.equals(found.getTenantId()) && o.equals(found.getOwnerJiacn()) && c.equals(found.getClientId()) && found.getRequestRevision()==v ? found:null; }
         public ChatRequestEntity findRequest(String t,String o,String c,String r){ return scoped(requests.get(r),t,o,c); }
@@ -258,12 +295,17 @@ class ChatDeliberationServiceTest {
             return outboxes.values().stream().filter(x->t.equals(x.getTenantId())&&o.equals(x.getOwnerJiacn())
                     &&c.equals(x.getClientId())&&turn.equals(x.getTurnId())&&event.equals(x.getEventType())).findFirst().orElse(null);
         }
+        public ChatDispatchOutboxEntity lockOutboxById(String t,String o,String c,String id){ return outboxes.get(id); }
+        public List<ChatDispatchOutboxEntity> findDueOutbox(long now,int limit){ return outboxes.values().stream().filter(x->x.getAvailableAt()!=null&&x.getAvailableAt()<=now).limit(limit).toList(); }
+        public List<ChatConversationEventEntity> replayEvents(String t,String o,String c,String id,long g,long after,int limit){ return events.stream().filter(e->t.equals(e.getTenantId())&&o.equals(e.getOwnerJiacn())&&c.equals(e.getClientId())&&id.equals(e.getConversationId())&&g==e.getConversationGeneration()&&e.getEventSequence()>after).limit(limit).toList(); }
         public int acceptDelta(ChatTurnEntity turn,long seq,String digest,long now){ return 1; }
         public int persistFinal(ChatTurnEntity turn,String digest,long message,long now){ return 1; }
         public int updateTurnState(ChatTurnEntity turn,String state,String reason,long now){ return 1; }
         public int publishFinal(ChatTurnEntity turn,long now){ return 1; }
         public int updateOutbox(ChatDispatchOutboxEntity outbox,String status,long now){
             outbox.setStatus(status).setVersion(outbox.getVersion()+1).setUpdatedAt(now); return 1; }
+        public int claimOutbox(ChatDispatchOutboxEntity row,String owner,long until,long fence,long now){ row.setStatus("CLAIMED").setLeaseOwner(owner).setLeaseUntil(until).setFencingToken(fence).setVersion(row.getVersion()+1); return 1; }
+        public int settleOutbox(ChatDispatchOutboxEntity row,String status,Long available,String error,Long sent,long now){ row.setStatus(status).setAvailableAt(available).setLastError(error).setSentAt(sent).setVersion(row.getVersion()+1); return 1; }
         public int updateRequestState(ChatRequestEntity request,String state,long now){ request.setAggregateState(state); return 1; }
         private ChatRequestEntity scoped(ChatRequestEntity value,String t,String o,String c){
             return value!=null&&value.getTenantId().equals(t)&&value.getOwnerJiacn().equals(o)&&value.getClientId().equals(c)?value:null; }

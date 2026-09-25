@@ -19,6 +19,7 @@ import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.service.ChatConversationEventBroker;
 import cn.jia.chat.service.ChatConversationService;
+import cn.jia.chat.service.ChatDeliberationService;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
 import cn.jia.chat.service.BuiltinHallAgentSupport;
 import cn.jia.chat.service.HallActionDispatchResult;
@@ -1852,15 +1853,11 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         conversation.setTenantId("0"); conversation.setClientId("web-client");
         when(chatConversationService.getOwned("tester", "web-client", "1001"))
                 .thenReturn(conversation);
-        when(chatConversationService.appendOwnedMessage(
-                org.mockito.ArgumentMatchers.eq("tester"),
-                org.mockito.ArgumentMatchers.eq("web-client"), any(ChatMessageEntity.class),
-                org.mockito.ArgumentMatchers.eq(1L)))
-                .thenAnswer(invocation -> invocation.getArgument(2));
         JuyitingConversationScopeService scopeService = new JuyitingConversationScopeService(builtinHallAgentSupport, agentService);
+        ChatDeliberationService deliberationService = org.mockito.Mockito.mock(ChatDeliberationService.class);
         JuyitingAgentRelayService relayService = new JuyitingAgentRelayService(
                 handler, chatConversationEventBroker, builtinHallAgentSupport,
-                chatConversationService, agentService, scopeService);
+                chatConversationService, agentService, scopeService, deliberationService);
 
         ChatMessageDTO chatMessage = new ChatMessageDTO();
         chatMessage.setContent("请回报当前进度");
@@ -1877,13 +1874,33 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 .thenReturn(Flux.just("{\"type\":\"agent_message\",\"content\":\"ok\"}"));
 
         EsContext relayContext = new EsContext();
+        relayContext.setTenantId("0");
         relayContext.setJiacn("tester");
         relayContext.setClientId("web-client");
         EsContextHolder.setContext(relayContext);
-        JuyitingAgentRelayResult relayResult = relayService.relay(chatMessage, "1001", () -> Flux.just("builtin"));
+        ChatDeliberationService.Dispatch dispatch = new ChatDeliberationService.Dispatch(
+                "req-1", "turn-1", "dispatch-1", "event-1", "agent-wuyong", "CHAT",
+                "RECEIVED", "snapshot-1", "sha256:ctx", Map.of(), Map.of());
+        when(deliberationService.admit(any(), any(), any(), any(),
+                org.mockito.ArgumentMatchers.anyLong(), any(), any(), any()))
+                .thenReturn(new ChatDeliberationService.Admission("req-1", 1L, "9007199254740993",
+                        "1001", 1L, cn.jia.chat.deliberation.InteractionRoute.CHAT, List.of(dispatch), false));
+        JuyitingAgentRelayResult relayResult = relayService.relay(
+                chatMessage, "1001", cn.jia.chat.deliberation.InteractionRoute.CHAT,
+                ignored -> Flux.just("builtin"));
         List<String> events = relayResult.stream().collectList().block(Duration.ofSeconds(5));
-
         assertTrue(relayResult.attempted());
+        assertTrue(handler.sendDirectMessageToAgent("0", "tester", "web-client", "agent-wuyong", Map.ofEntries(
+                Map.entry("schemaVersion", AgentProtocolConstants.VERSION_1),
+                Map.entry("messageType", AgentProtocolConstants.TYPE_CHAT_MESSAGE),
+                Map.entry("messageId", "event-1"), Map.entry("correlationId", "1001"),
+                Map.entry("tenantId", "0"), Map.entry("clientId", "web-client"),
+                Map.entry("targetAgentId", "agent-wuyong"), Map.entry("agentId", "agent-wuyong"),
+                Map.entry("requestId", "req-1"), Map.entry("requestRevision", "1"),
+                Map.entry("turnId", "turn-1"), Map.entry("dispatchId", "dispatch-1"),
+                Map.entry("conversationId", "1001"), Map.entry("conversationGeneration", "1"),
+                Map.entry("content", "请回报当前进度"), Map.entry("sentAt", "1"), Map.entry("timestamp", "1"),
+                Map.entry("payload", Map.of("content", "请回报当前进度", "conversationId", "1001")))));
 
         ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
         verify(session, org.mockito.Mockito.atLeast(1)).sendMessage(messageCaptor.capture());
@@ -1948,6 +1965,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
             String tenantId, String clientId, String runtimeInstanceId) {
         Map<String, Object> attributes = new java.util.HashMap<>();
         attributes.put("agentId", agentId);
+        attributes.put("tenantId", "0");
         attributes.put("clientId", clientId);
         attributes.put("jiacn", tenantId);
         if (runtimeInstanceId != null) {

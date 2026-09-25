@@ -8,26 +8,21 @@ import lombok.experimental.Accessors;
 
 @Data
 @Accessors(chain = true)
-@TableName("chat_dispatch_outbox")
-public class ChatDispatchOutboxEntity {
-    @TableId(value = "event_id", type = IdType.INPUT)
+@TableName("chat_conversation_event")
+public class ChatConversationEventEntity {
+    @TableId(value = "event_sequence", type = IdType.AUTO)
+    private Long eventSequence;
     private String eventId;
     private String tenantId;
     private String ownerJiacn;
     private String clientId;
+    private String conversationId;
+    private Long conversationGeneration;
+    private String requestId;
     private String turnId;
     private String dispatchId;
     private String eventType;
-    private String status;
+    private Long eventVersion;
     private String payloadJson;
-    private Long version;
-    private Long availableAt;
-    private String leaseOwner;
-    private Long leaseUntil;
-    private Integer attemptCount;
-    private Long fencingToken;
-    private String lastError;
-    private Long sentAt;
-    private Long createdAt;
-    private Long updatedAt;
+    private Long occurredAt;
 }

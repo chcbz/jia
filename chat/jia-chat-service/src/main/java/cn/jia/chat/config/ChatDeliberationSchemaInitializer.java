@@ -22,7 +22,8 @@ import java.util.Objects;
 @Component
 public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
     static final List<String> TABLES = List.of(
-            "chat_context_snapshot", "chat_request", "chat_turn", "chat_dispatch_outbox");
+            "chat_context_snapshot", "chat_request", "chat_turn", "chat_dispatch_outbox",
+            "chat_conversation_event");
     private static final String COLLATION = "utf8mb4_0900_bin";
     private static final Map<String, Map<String, ColumnDef>> COLUMNS = columns();
     private static final Map<String, Map<String, IndexDef>> INDEXES = indexes();
@@ -41,32 +42,93 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
         for (String statement : sql.replaceAll("(?m)^--.*$", "").split(";")) {
             if (!statement.isBlank()) jdbc.execute(statement.strip());
         }
+        if (allowAdditiveMigration) recordMigrationStage("PREFLIGHT");
         for (String table : TABLES) {
             if (allowAdditiveMigration) addKnownMissingColumnsAndIndexes(table);
             validateTable(table);
             validateColumns(table);
             validateIndexes(table);
         }
+        if (allowAdditiveMigration) recordMigrationStage("APPLIED");
+    }
+
+    private void recordMigrationStage(String stage) {
+        jdbc.update("""
+                INSERT INTO chat_deliberation_schema_version(version,stage,updated_at) VALUES(2,?,?)
+                ON DUPLICATE KEY UPDATE stage=VALUES(stage),updated_at=VALUES(updated_at)
+                """, stage, System.currentTimeMillis());
     }
 
     private void addKnownMissingColumnsAndIndexes(String table) {
         Map<String, Map<String, Object>> actualColumns = readColumns(table);
+        validateExistingColumnsBeforeExpansion(table, actualColumns);
         for (var entry : COLUMNS.get(table).entrySet()) {
             if (!actualColumns.containsKey(entry.getKey())) {
+                String ddl = entry.getValue().ddl();
+                if ("chat_dispatch_outbox".equals(table)
+                        && ("available_at".equals(entry.getKey()) || "attempt_count".equals(entry.getKey())
+                        || "fencing_token".equals(entry.getKey()))) {
+                    ddl = ddl.replace(" NOT NULL", " DEFAULT NULL").replace(" DEFAULT 0", "");
+                }
                 jdbc.execute("ALTER TABLE " + table + " ALGORITHM=INPLACE, LOCK=NONE, ADD COLUMN "
-                        + entry.getKey() + " " + entry.getValue().ddl());
+                        + entry.getKey() + " " + ddl);
             }
+        }
+        if ("chat_dispatch_outbox".equals(table)) {
+            recordMigrationStage("EXPANDED");
+            jdbc.update("UPDATE chat_dispatch_outbox SET available_at=COALESCE(available_at,created_at), "
+                    + "attempt_count=COALESCE(attempt_count,0), fencing_token=COALESCE(fencing_token,0) "
+                    + "WHERE available_at IS NULL OR attempt_count IS NULL OR fencing_token IS NULL");
+            recordMigrationStage("BACKFILLED");
+            jdbc.execute("ALTER TABLE chat_dispatch_outbox ALGORITHM=INPLACE, LOCK=NONE, "
+                    + "MODIFY available_at BIGINT NOT NULL, MODIFY attempt_count INT NOT NULL DEFAULT 0, "
+                    + "MODIFY fencing_token BIGINT NOT NULL DEFAULT 0");
+            recordMigrationStage("TIGHTENED");
         }
         Map<String, IndexDef> actualIndexes = readIndexes(table);
         for (var entry : INDEXES.get(table).entrySet()) {
-            if (!actualIndexes.containsKey(entry.getKey())) {
-                IndexDef def = entry.getValue();
-                String prefix = "PRIMARY".equals(entry.getKey()) ? "ADD PRIMARY KEY"
-                        : def.unique() ? "ADD UNIQUE INDEX " + entry.getKey() : "ADD INDEX " + entry.getKey();
-                jdbc.execute("ALTER TABLE " + table + " ALGORITHM=INPLACE, LOCK=NONE, " + prefix + " ("
-                        + String.join(",", def.columns()) + ")");
+            IndexDef actual = actualIndexes.get(entry.getKey());
+            if (entry.getValue().equals(actual)) continue;
+            if (actual != null && isLegacyReadyIndex(table, entry.getKey(), actual)) {
+                jdbc.execute("ALTER TABLE chat_dispatch_outbox ALGORITHM=INPLACE, LOCK=NONE, "
+                        + "DROP INDEX idx_chat_outbox_ready, ADD INDEX idx_chat_outbox_ready "
+                        + "(status,available_at,event_id)");
+                continue;
+            }
+            if (actual != null) {
+                throw incompatible(table + " index " + entry.getKey(), entry.getValue().toString(), actual.toString());
+            }
+            IndexDef def = entry.getValue();
+            String prefix = "PRIMARY".equals(entry.getKey()) ? "ADD PRIMARY KEY"
+                    : def.unique() ? "ADD UNIQUE INDEX " + entry.getKey() : "ADD INDEX " + entry.getKey();
+            jdbc.execute("ALTER TABLE " + table + " ALGORITHM=INPLACE, LOCK=NONE, " + prefix + " ("
+                    + String.join(",", def.columns()) + ")");
+        }
+    }
+
+    private void validateExistingColumnsBeforeExpansion(String table, Map<String, Map<String, Object>> actual) {
+        for (var entry : actual.entrySet()) {
+            ColumnDef expected = COLUMNS.get(table).get(entry.getKey());
+            if (expected == null) continue; // Harmless additive columns are validated by the final strict contract.
+            Map<String, Object> row = entry.getValue();
+            boolean nullable = "YES".equalsIgnoreCase(text(row, "is_nullable"));
+            boolean expandableRelayColumn = "chat_dispatch_outbox".equals(table)
+                    && ("available_at".equals(entry.getKey()) || "attempt_count".equals(entry.getKey())
+                    || "fencing_token".equals(entry.getKey()));
+            String collation = nullableText(row, "collation_name");
+            if (!expected.type().equalsIgnoreCase(text(row, "data_type"))
+                    || !Objects.equals(expected.length(), nullableNumber(row, "character_maximum_length"))
+                    || !expected.extra().equals(text(row, "extra").toLowerCase(Locale.ROOT))
+                    || expected.collated() && !COLLATION.equalsIgnoreCase(collation)
+                    || !expandableRelayColumn && expected.nullable() != nullable) {
+                throw incompatible(table + "." + entry.getKey(), expected.toString(), row.toString());
             }
         }
+    }
+
+    private boolean isLegacyReadyIndex(String table, String name, IndexDef actual) {
+        return "chat_dispatch_outbox".equals(table) && "idx_chat_outbox_ready".equals(name)
+                && actual.equals(ix(false, "tenant_id", "owner_jiacn", "client_id", "status", "updated_at"));
     }
 
     private void validateTable(String table) {
@@ -105,7 +167,12 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
     private void validateIndexes(String table) {
         Map<String, IndexDef> actual = readIndexes(table);
         Map<String, IndexDef> expected = INDEXES.get(table);
-        if (!actual.equals(expected)) throw incompatible(table + " indexes", expected.toString(), actual.toString());
+        for (var entry : expected.entrySet()) {
+            if (!entry.getValue().equals(actual.get(entry.getKey()))) {
+                throw incompatible(table + " index " + entry.getKey(), entry.getValue().toString(),
+                        String.valueOf(actual.get(entry.getKey())));
+            }
+        }
     }
 
     private Map<String, Map<String, Object>> readColumns(String table) {
@@ -164,7 +231,15 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
                 c("owner_jiacn",v(50,false)), c("client_id",v(50,false)), c("turn_id",v(64,false)),
                 c("dispatch_id",v(64,false)), c("event_type",v(30,false)), c("status",v(30,false)),
                 c("payload_json",txt("mediumtext",false)), c("version",b(false,"0")),
-                c("created_at",b(false,null)), c("updated_at",b(false,null))));
+                c("available_at",b(false,null)), c("lease_owner",v(100,true)), c("lease_until",b(true,null)),
+                c("attempt_count",i(false,"0")), c("fencing_token",b(false,"0")), c("last_error",v(500,true)),
+                c("sent_at",b(true,null)), c("created_at",b(false,null)), c("updated_at",b(false,null))));
+        all.put("chat_conversation_event", ordered(c("event_sequence",auto()), c("event_id",v(64,false)),
+                c("tenant_id",v(50,false)), c("owner_jiacn",v(50,false)), c("client_id",v(50,false)),
+                c("conversation_id",v(100,false)), c("conversation_generation",b(false,null)),
+                c("request_id",v(100,true)), c("turn_id",v(64,true)), c("dispatch_id",v(64,true)),
+                c("event_type",v(40,false)), c("event_version",b(false,null)), c("payload_json",txt("mediumtext",false)),
+                c("occurred_at",b(false,null))));
         return Map.copyOf(all);
     }
 
@@ -183,7 +258,11 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
                 "idx_chat_turn_conversation",ix(false,"tenant_id","owner_jiacn","client_id","conversation_id","conversation_generation","state","updated_at")));
         all.put("chat_dispatch_outbox", Map.of("PRIMARY",ix(true,"event_id"),
                 "uk_chat_outbox_turn_event",ix(true,"turn_id","event_type"),
-                "idx_chat_outbox_ready",ix(false,"tenant_id","owner_jiacn","client_id","status","updated_at")));
+                "idx_chat_outbox_ready",ix(false,"status","available_at","event_id"),
+                "idx_chat_outbox_scope",ix(false,"tenant_id","owner_jiacn","client_id","turn_id","event_type")));
+        all.put("chat_conversation_event", Map.of("PRIMARY",ix(true,"event_sequence"),
+                "uk_chat_conversation_event_id",ix(true,"event_id"),
+                "idx_chat_conversation_event_replay",ix(false,"tenant_id","owner_jiacn","client_id","conversation_id","conversation_generation","event_sequence")));
         return Map.copyOf(all);
     }
 
@@ -194,6 +273,7 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
     private static ColumnDef v(long n,boolean nullable){return new ColumnDef("varchar",n,nullable,null,"",true,"VARCHAR("+n+") CHARACTER SET utf8mb4 COLLATE "+COLLATION+(nullable?" DEFAULT NULL":" NOT NULL"));}
     private static ColumnDef b(boolean nullable,String d){return new ColumnDef("bigint",null,nullable,d,"",false,"BIGINT"+(nullable?" DEFAULT NULL":" NOT NULL")+(d==null?"":" DEFAULT "+d));}
     private static ColumnDef auto(){return new ColumnDef("bigint",null,false,null,"auto_increment",false,"BIGINT NOT NULL AUTO_INCREMENT");}
+    private static ColumnDef i(boolean nullable,String d){return new ColumnDef("int",null,nullable,d,"",false,"INT"+(nullable?" DEFAULT NULL":" NOT NULL")+(d==null?"":" DEFAULT "+d));}
     private static ColumnDef txt(String type,boolean nullable){return new ColumnDef(type,null,nullable,null,"",true,type.toUpperCase()+" CHARACTER SET utf8mb4 COLLATE "+COLLATION+(nullable?" DEFAULT NULL":" NOT NULL"));}
     private static IndexDef ix(boolean unique,String... c){return new IndexDef(unique,List.of(c));}
     private static String text(Map<String,Object> row,String key){Object v=value(row,key); return v==null?"":String.valueOf(v);}

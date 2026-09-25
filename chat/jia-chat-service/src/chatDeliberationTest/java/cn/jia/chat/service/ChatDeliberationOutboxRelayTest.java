@@ -1,0 +1,155 @@
+package cn.jia.chat.service;
+
+import cn.jia.chat.deliberation.ChatDeliberationStates;
+import cn.jia.chat.deliberation.ChatDispatchOutboxEntity;
+import cn.jia.chat.handler.AgentWebSocketHandler;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.ai.chat.client.ChatClient;
+import reactor.core.Disposable;
+import reactor.core.publisher.Flux;
+
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+class ChatDeliberationOutboxRelayTest {
+    private ChatDeliberationOutboxService outbox;
+    private ChatDeliberationService deliberation;
+    private AgentWebSocketHandler sockets;
+    private BuiltinHallAgentSupport builtin;
+    private ChatConversationEventBroker broker;
+    private ChatConversationService conversations;
+    private ChatClient chatClient;
+    private ChatDeliberationOutboxRelay relay;
+
+    @BeforeEach
+    void setUp() {
+        outbox = mock(ChatDeliberationOutboxService.class);
+        deliberation = mock(ChatDeliberationService.class);
+        sockets = mock(AgentWebSocketHandler.class);
+        builtin = mock(BuiltinHallAgentSupport.class);
+        broker = new ChatConversationEventBroker();
+        conversations = mock(ChatConversationService.class);
+        chatClient = mock(ChatClient.class, RETURNS_DEEP_STUBS);
+        relay = new ChatDeliberationOutboxRelay(outbox, deliberation, sockets, builtin,
+                broker, conversations, chatClient);
+        when(conversations.isLiveGeneration("owner-a", "client-a", "42", 3L)).thenReturn(true);
+    }
+
+    @Test
+    void mixedBuiltinAndHostedChildrenAreRoutedIndependentlyAfterAdmission() {
+        ChatDispatchOutboxEntity builtinRow = dispatch("evt-b", "turn-b", "dispatch-b", "builtin-songjiang");
+        when(builtin.isBuiltinAgent("builtin-songjiang")).thenReturn(true);
+        when(chatClient.prompt(any(org.springframework.ai.chat.prompt.Prompt.class))
+                .messages().stream().content()).thenReturn(Flux.just("忠义"));
+        when(deliberation.acceptDelta(anyString(), anyString(), anyString(), anyString(), anyLong(),
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyLong(), anyString()))
+                .thenReturn(new ChatDeliberationService.DeltaResult(
+                        ChatDeliberationService.DeltaStatus.ACCEPTED, null, null));
+        relay.deliverClaim(new ChatDeliberationOutboxService.Claim(builtinRow, false));
+        verify(deliberation).persistFinal(eq("tenant-a"), eq("owner-a"), eq("client-a"), eq("42"), eq(3L),
+                eq("builtin-songjiang"), eq("req-1"), eq("turn-b"), eq("dispatch-b"),
+                eq("snapshot-1"), eq("sha256:ctx"), eq("忠义"), eq(BuiltinHallAgentSupport.SONGJIANG_NAME));
+        verify(outbox).sent(any(), anyLong());
+
+        clearInvocations(outbox);
+        ChatDispatchOutboxEntity hostedRow = dispatch("evt-h", "turn-h", "dispatch-h", "hosted-a");
+        when(builtin.isBuiltinAgent("hosted-a")).thenReturn(false);
+        when(sockets.sendDirectMessageToAgent(eq("tenant-a"), eq("owner-a"), eq("client-a"),
+                eq("hosted-a"), anyMap())).thenReturn(true);
+        relay.deliverClaim(new ChatDeliberationOutboxService.Claim(hostedRow, false));
+        verify(sockets).sendDirectMessageToAgent(eq("tenant-a"), eq("owner-a"), eq("client-a"),
+                eq("hosted-a"), anyMap());
+        verify(deliberation).markDispatch("tenant-a", "owner-a", "client-a", "turn-h", true);
+        verify(outbox).sent(any(), anyLong());
+    }
+
+    @Test
+    void builtinFailureBecomesExplicitTerminalRecoveryAndNeverRetriesModel() {
+        ChatDispatchOutboxEntity row = dispatch("evt-b", "turn-b", "dispatch-b", "builtin-songjiang");
+        when(builtin.isBuiltinAgent("builtin-songjiang")).thenReturn(true);
+        when(chatClient.prompt(any(org.springframework.ai.chat.prompt.Prompt.class))
+                .messages().stream().content()).thenReturn(Flux.error(new IllegalStateException("model down")));
+        when(deliberation.getTurn("tenant-a", "owner-a", "client-a", "turn-b"))
+                .thenReturn(turnView("turn-b", ChatDeliberationStates.DISPATCHED));
+
+        relay.deliverClaim(new ChatDeliberationOutboxService.Claim(row, false));
+
+        verify(deliberation).failBuiltinRecovery("tenant-a", "owner-a", "client-a", "turn-b");
+        verify(outbox).dead(any(), eq("BUILTIN_GENERATION_FAILED"), anyLong());
+        verify(outbox, never()).retry(any(), anyString(), anyLong());
+    }
+
+    @Test
+    void staleBuiltinLeaseAfterCommittedFinalSettlesWithoutCallingModelAgain() {
+        ChatDispatchOutboxEntity row = dispatch("evt-b", "turn-b", "dispatch-b", "builtin-songjiang");
+        when(builtin.isBuiltinAgent("builtin-songjiang")).thenReturn(true);
+        when(deliberation.getTurn("tenant-a", "owner-a", "client-a", "turn-b"))
+                .thenReturn(turnView("turn-b", ChatDeliberationStates.FINAL_PERSISTED));
+
+        relay.deliverClaim(new ChatDeliberationOutboxService.Claim(row, true));
+
+        verify(outbox).sent(any(), anyLong());
+        verify(deliberation, never()).failBuiltinRecovery(anyString(), anyString(), anyString(), anyString());
+        verifyNoInteractions(chatClient);
+    }
+
+    @Test
+    void finalWithoutSubscriberRemainsRetryableThenCanBeDeliveredWithSameEventId() {
+        ChatDispatchOutboxEntity row = finalEvent();
+        ChatDeliberationOutboxService.Claim claim = new ChatDeliberationOutboxService.Claim(row, false);
+        relay.deliverClaim(claim);
+        verify(outbox).retry(eq(claim), eq("NO_ACTIVE_SSE_SUBSCRIBER"), anyLong());
+        verify(outbox, never()).sent(any(), anyLong());
+        verify(deliberation, never()).markPublished(anyString(), anyString(), anyString(), anyString());
+
+        Disposable subscriber = broker.stream("42", 3L, () -> true).subscribe(event ->
+                assertTrue(event.contains("evt-final")));
+        clearInvocations(outbox);
+        relay.deliverClaim(claim);
+        verify(deliberation).markPublished("tenant-a", "owner-a", "client-a", "turn-b");
+        verify(outbox).sent(eq(claim), anyLong());
+        subscriber.dispose();
+    }
+
+    private ChatDispatchOutboxEntity dispatch(String eventId, String turnId, String dispatchId, String agentId) {
+        return row(eventId, turnId, dispatchId, "DISPATCH", Map.ofEntries(
+                Map.entry("conversationId", "42"), Map.entry("conversationGeneration", "3"),
+                Map.entry("requestId", "req-1"), Map.entry("requestRevision", "1"),
+                Map.entry("turnId", turnId), Map.entry("dispatchId", dispatchId),
+                Map.entry("targetAgentId", agentId), Map.entry("contextSnapshotId", "snapshot-1"),
+                Map.entry("contextHash", "sha256:ctx"), Map.entry("route", "CHAT"),
+                Map.entry("content", "议事"), Map.entry("sourceVector", Map.of()),
+                Map.entry("factsManifest", Map.of())));
+    }
+
+    private ChatDispatchOutboxEntity finalEvent() {
+        return row("evt-final", "turn-b", "dispatch-b", "FINAL_PERSISTED", Map.ofEntries(
+                Map.entry("conversationId", "42"), Map.entry("conversationGeneration", "3"),
+                Map.entry("requestId", "req-1"), Map.entry("turnId", "turn-b"),
+                Map.entry("dispatchId", "dispatch-b"), Map.entry("targetAgentId", "hosted-a"),
+                Map.entry("contextSnapshotId", "snapshot-1"), Map.entry("messageId", "9007199254740993"),
+                Map.entry("content", "完成"), Map.entry("senderName", "Agent A"),
+                Map.entry("eventSequence", "9223372036854775806"),
+                Map.entry("eventVersion", "9223372036854775806")));
+    }
+
+    private ChatDispatchOutboxEntity row(String eventId, String turnId, String dispatchId,
+            String eventType, Map<String, Object> payload) {
+        return new ChatDispatchOutboxEntity().setEventId(eventId).setTenantId("tenant-a")
+                .setOwnerJiacn("owner-a").setClientId("client-a").setTurnId(turnId)
+                .setDispatchId(dispatchId).setEventType(eventType).setStatus("CLAIMED")
+                .setPayloadJson(cn.jia.core.util.JsonUtil.toJson(payload)).setVersion(1L)
+                .setAvailableAt(1L).setAttemptCount(1).setFencingToken(1L)
+                .setLeaseOwner("worker").setLeaseUntil(100L).setCreatedAt(1L).setUpdatedAt(1L);
+    }
+
+    private ChatDeliberationService.TurnView turnView(String turnId, String state) {
+        return new ChatDeliberationService.TurnView(turnId, "req-1", "1", "42", "3",
+                "builtin-songjiang", "snapshot-1", "dispatch-b", "CHAT", state,
+                "1", "0", null, null, "1", "1");
+    }
+}

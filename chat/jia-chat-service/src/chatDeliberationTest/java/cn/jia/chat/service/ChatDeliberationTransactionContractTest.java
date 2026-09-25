@@ -76,11 +76,15 @@ class ChatDeliberationTransactionContractTest {
     @Test
     void deliveryCodeGuardsAgainstActiveTransactionsAndOutboxVersionIsRead() throws Exception {
         String service = source("src/main/java/cn/jia/chat/service/ChatDeliberationService.java");
-        String relay = source("src/main/java/cn/jia/chat/service/JuyitingAgentRelayService.java");
+        String outbox = source("src/main/java/cn/jia/chat/service/ChatDeliberationOutboxService.java");
+        String worker = source("src/main/java/cn/jia/chat/service/ChatDeliberationOutboxRelay.java");
         String handler = source("src/main/java/cn/jia/chat/handler/AgentWebSocketHandler.java");
-        assertTrue(service.contains("lockOutbox("));
+        assertTrue(outbox.contains("lockOutboxById("));
+        assertTrue(outbox.contains("getFencingToken()"));
+        assertTrue(outbox.contains("getLeaseUntil()"));
+        assertTrue(worker.contains("SmartLifecycle"));
+        assertTrue(worker.contains("NO_ACTIVE_SSE_SUBSCRIBER"));
         assertFalse(service.contains("updateOutbox(turnId, \"DISPATCH\", 0L"));
-        assertTrue(relay.contains("TransactionSynchronizationManager.isActualTransactionActive()"));
         assertTrue(handler.contains("TransactionSynchronizationManager.isActualTransactionActive()"));
     }
 

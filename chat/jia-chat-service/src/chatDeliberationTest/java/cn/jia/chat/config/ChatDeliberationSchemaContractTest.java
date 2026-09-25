@@ -18,6 +18,13 @@ class ChatDeliberationSchemaContractTest {
             assertTrue(sql.contains("create table if not exists chat_request"));
             assertTrue(sql.contains("create table if not exists chat_turn"));
             assertTrue(sql.contains("create table if not exists chat_dispatch_outbox"));
+            assertTrue(sql.contains("create table if not exists chat_conversation_event"));
+            assertTrue(sql.contains("create table if not exists chat_deliberation_schema_version"));
+            assertTrue(compact.contains("idx_chat_outbox_ready (status, available_at, event_id)"));
+            assertTrue(sql.contains("lease_owner"));
+            assertTrue(sql.contains("lease_until"));
+            assertTrue(sql.contains("attempt_count"));
+            assertTrue(sql.contains("fencing_token"));
             assertTrue(sql.contains("uk_chat_request_scope_revision"));
             assertTrue(sql.contains("tenant_id, owner_jiacn, client_id, request_id, request_revision"));
             assertTrue(sql.contains("uk_chat_turn_request_target"));
@@ -45,5 +52,15 @@ class ChatDeliberationSchemaContractTest {
         assertTrue(source.contains("allow-additive-migration:false"));
         assertTrue(source.contains("ALGORITHM=INPLACE, LOCK=NONE"));
         assertFalse(source.contains("index_name.contains"));
+        assertTrue(source.contains("PREFLIGHT"));
+        assertTrue(source.contains("BACKFILLED"));
+        assertTrue(source.contains("TIGHTENED"));
+        assertTrue(source.contains("for (var entry : expected.entrySet())"));
+        assertTrue(source.contains("validateExistingColumnsBeforeExpansion"));
+        assertTrue(source.contains("isLegacyReadyIndex"));
+        assertTrue(source.contains("DROP INDEX idx_chat_outbox_ready"));
+        String migration = java.nio.file.Files.readString(java.nio.file.Path.of(
+                "../jia-chat-mapper/src/main/resources/db/chat-deliberation-v2-migration.sql"));
+        assertTrue(migration.contains("PREFLIGHT -> EXPANDED -> BACKFILLED -> TIGHTENED -> APPLIED"));
     }
 }
