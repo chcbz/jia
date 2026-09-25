@@ -183,7 +183,7 @@ class EconomyPreviewConfigurationTest {
     }
 
     @Configuration(proxyBeanMethods = false)
-    @EnableConfigurationProperties(EconomyPreviewProperties.class)
+    @EnableConfigurationProperties({EconomyPreviewProperties.class, EconomyOnboardingGrantProperties.class})
     static class PropertiesOnlyConfiguration {
     }
 

@@ -96,7 +96,7 @@ class EconomyWalletControllerTest {
                 .andExpect(status().isOk());
         mvc.perform(get("/economy/wallet").principal(auth(OWNER, "Client-B", USER)))
                 .andExpect(status().isForbidden());
-        verify(mapper).selectUserWalletSnapshot(TENANT, CLIENT, USER);
+        verify(mapper, org.mockito.Mockito.times(2)).selectUserWalletSnapshot(TENANT, CLIENT, USER);
     }
 
     @Test
