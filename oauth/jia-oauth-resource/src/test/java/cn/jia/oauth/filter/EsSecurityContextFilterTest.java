@@ -15,6 +15,7 @@ import java.time.Instant;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 class EsSecurityContextFilterTest {
     @AfterEach
@@ -51,7 +52,8 @@ class EsSecurityContextFilterTest {
         cookie.setAppcn("cookie-app");
         cookie.setClientId("cookie-client");
         SecurityContextHolder.getContext().setAuthentication(auth(Map.of(
-                "token_kind", "machine", "sub", "agent", "client_id", "agent")));
+                "token_kind", "machine", "sub", "agent", "client_id", "agent",
+                "tenant_id", "0", "tenant_claim_version", "1")));
 
         new EsSecurityContextFilter().doFilter(new MockHttpServletRequest(), new MockHttpServletResponse(),
                 (request, response) -> {
@@ -65,12 +67,16 @@ class EsSecurityContextFilterTest {
 
 
     @Test
-    void conflictingTenantClaimsFailClosedThroughSharedPolicy() throws Exception {
+    void conflictingTenantClaimsFailClosedThroughSharedPolicy() {
         SecurityContextHolder.getContext().setAuthentication(auth(Map.of(
                 "token_kind", "user", "jiacn", "Jia-A", "client_id", "web",
                 "tenant_id", "tenant-a", "tenantId", "tenant-b")));
-        new EsSecurityContextFilter().doFilter(new MockHttpServletRequest(), new MockHttpServletResponse(),
-                (request, response) -> assertNull(EsContextHolder.getContext().getTenantId()));
+        var chain = mock(jakarta.servlet.FilterChain.class);
+        assertThrows(jakarta.servlet.ServletException.class,
+                () -> new EsSecurityContextFilter().doFilter(
+                        new MockHttpServletRequest(), new MockHttpServletResponse(), chain));
+        assertNull(EsContextHolder.getContext().getTenantId());
+        verifyNoInteractions(chain);
     }
 
     @Test

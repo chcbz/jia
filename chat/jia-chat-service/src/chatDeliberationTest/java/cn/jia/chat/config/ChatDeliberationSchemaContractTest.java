@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -61,17 +62,54 @@ class ChatDeliberationSchemaContractTest {
         assertTrue(source.contains("DROP INDEX idx_chat_outbox_ready"));
         String migration = java.nio.file.Files.readString(java.nio.file.Path.of(
                 "../jia-chat-mapper/src/main/resources/db/chat-deliberation-v2-migration.sql"));
+        assertTrue(migration.contains("CREATE PROCEDURE cyf_migrate_chat_deliberation_v2()"));
+        assertTrue(migration.contains("DECLARE EXIT HANDLER FOR SQLEXCEPTION"));
+        assertTrue(migration.contains("IF v_lock_acquired THEN"));
         assertTrue(migration.contains("GET_LOCK('cyf:chat-deliberation:v2', 10)"));
+        assertTrue(migration.contains("IF v_lock_result IS NULL OR v_lock_result <> 1 THEN"));
+        assertTrue(migration.contains("SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='chat deliberation v2 migration lock unavailable'"));
         assertTrue(migration.contains("RELEASE_LOCK('cyf:chat-deliberation:v2')"));
         assertTrue(migration.contains("CREATE TABLE IF NOT EXISTS chat_conversation_event"));
         assertTrue(migration.contains("LEGACY_DISPATCH_UNRECOVERABLE"));
+        assertTrue(migration.contains("LEGACY_CANCEL_UNRECOVERABLE_RESYNC_REQUIRED"));
+        assertTrue(migration.contains("legacy-cancel-recovery:"));
         assertTrue(migration.contains("legacy-final:"));
         assertTrue(migration.contains("legacy-resync:"));
-        assertTrue(migration.contains("'APPLIED'"));
+        assertTrue(migration.contains("chat outbox relay column contract mismatch"));
+        assertTrue(migration.contains("active cancel payload scope contract mismatch"));
+        int invariantGuard = migration.indexOf("-- APPLIED is reachable only after all schema and data guards above succeed.");
+        int applied = migration.indexOf("VALUES(2,'APPLIED'");
+        assertTrue(invariantGuard > 0 && applied > invariantGuard);
+        assertTrue(migration.indexOf("SIGNAL SQLSTATE '45000'", migration.indexOf("DATA_BACKFILLED")) < applied);
         assertTrue(migration.contains("PREFLIGHT -> EXPANDED -> BACKFILLED -> TIGHTENED -> DATA_BACKFILLED -> APPLIED"));
         assertTrue(source.contains("acquireMigrationLock"));
         assertTrue(source.contains("initializeWhileLocked"));
         assertTrue(source.contains("backfillLegacyData"));
         assertTrue(source.contains("releaseMigrationLock"));
     }
+    @Test
+    void real1b5fa4ceCancelFixtureIsCanonicalizedInsteadOfTrustedAsValidJson() throws Exception {
+        String fixture;
+        try (var stream = getClass().getResourceAsStream("/fixtures/1b5fa4ce-cancel-payload.json")) {
+            if (stream == null) throw new AssertionError("1b5fa4ce fixture missing");
+            fixture = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+        }
+        @SuppressWarnings("unchecked")
+        var legacy = (java.util.Map<String, Object>) cn.jia.core.util.JsonUtil.getMapper()
+                .readValue(fixture, java.util.Map.class);
+        assertEquals(java.util.Set.of("requestId", "turnId", "dispatchId", "reason"), legacy.keySet());
+        assertFalse(legacy.containsKey("targetAgentId"));
+        assertFalse(legacy.containsKey("conversationId"));
+        assertFalse(legacy.containsKey("tenantId"));
+
+        String migration = java.nio.file.Files.readString(java.nio.file.Path.of(
+                "../jia-chat-mapper/src/main/resources/db/chat-deliberation-v2-migration.sql"));
+        assertTrue(migration.contains("Canonicalize every turn-backed cancel"));
+        assertTrue(migration.contains("t.tenant_id=o.tenant_id AND t.owner_jiacn=o.owner_jiacn AND t.client_id=o.client_id"));
+        assertTrue(migration.contains("'targetAgentId',t.target_agent_id"));
+        assertTrue(migration.contains("'conversationId',t.conversation_id"));
+        assertTrue(migration.contains("'tenantId',t.tenant_id"));
+        assertTrue(migration.contains("WHERE o.event_type='CANCEL_REQUESTED';"));
+    }
+
 }

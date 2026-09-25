@@ -156,6 +156,13 @@ class ChatDeliberationServiceTest {
         service.cancelTurn("0", "owner-a", "client-a", first, 0L, "test cancel");
         assertEquals(ChatDeliberationStates.CANCELLED, dao.turns.get(first).getState());
         assertEquals(ChatDeliberationStates.RECEIVED, dao.turns.get(second).getState());
+        String cancelPayload = dao.lockOutbox("0", "owner-a", "client-a", first, "CANCEL_REQUESTED")
+                .getPayloadJson();
+        assertTrue(cancelPayload.contains("\"tenantId\":\"0\""));
+        assertTrue(cancelPayload.contains("\"ownerJiacn\":\"owner-a\""));
+        assertTrue(cancelPayload.contains("\"clientId\":\"client-a\""));
+        assertTrue(cancelPayload.contains("\"targetAgentId\":"));
+        assertTrue(cancelPayload.contains("\"conversationGeneration\":\"3\""));
     }
 
     @Test

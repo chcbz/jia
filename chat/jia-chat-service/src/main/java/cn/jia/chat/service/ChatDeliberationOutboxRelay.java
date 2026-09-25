@@ -23,12 +23,15 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** Durable restart-scanning relay. Socket/SSE sends are optimizations; DB state remains authoritative. */
 @Slf4j
@@ -37,6 +40,7 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
     private static final long DEFAULT_LEASE_MILLIS = 300_000L;
     private static final long DEFAULT_HEARTBEAT_MILLIS = 30_000L;
     private static final long HOSTED_ACK_TIMEOUT_MILLIS = 30_000L;
+    private static final int DEFAULT_MAX_CONCURRENT_DELIVERIES = 4;
     private final ChatDeliberationOutboxService outbox;
     private final ChatDeliberationService deliberation;
     private final AgentWebSocketHandler sockets;
@@ -47,15 +51,18 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
     private final String leaseOwner = ChatDeliberationOutboxService.leaseOwner();
     private final long leaseMillis;
     private final long heartbeatMillis;
+    private final int maxConcurrentDeliveries;
+    private final Semaphore deliverySlots;
     private final AtomicBoolean running = new AtomicBoolean();
-    private volatile ScheduledExecutorService executor;
+    private volatile ScheduledExecutorService scheduler;
+    private volatile ExecutorService deliveryExecutor;
 
     public ChatDeliberationOutboxRelay(ChatDeliberationOutboxService outbox,
             ChatDeliberationService deliberation, AgentWebSocketHandler sockets,
             BuiltinHallAgentSupport builtin, ChatConversationEventBroker broker,
             ChatConversationService conversations, @Lazy ChatClient chatClient) {
         this(outbox, deliberation, sockets, builtin, broker, conversations, chatClient,
-                DEFAULT_LEASE_MILLIS, DEFAULT_HEARTBEAT_MILLIS);
+                DEFAULT_LEASE_MILLIS, DEFAULT_HEARTBEAT_MILLIS, DEFAULT_MAX_CONCURRENT_DELIVERIES);
     }
 
     ChatDeliberationOutboxRelay(ChatDeliberationOutboxService outbox,
@@ -63,35 +70,79 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
             BuiltinHallAgentSupport builtin, ChatConversationEventBroker broker,
             ChatConversationService conversations, ChatClient chatClient,
             long leaseMillis, long heartbeatMillis) {
+        this(outbox, deliberation, sockets, builtin, broker, conversations, chatClient,
+                leaseMillis, heartbeatMillis, DEFAULT_MAX_CONCURRENT_DELIVERIES);
+    }
+
+    ChatDeliberationOutboxRelay(ChatDeliberationOutboxService outbox,
+            ChatDeliberationService deliberation, AgentWebSocketHandler sockets,
+            BuiltinHallAgentSupport builtin, ChatConversationEventBroker broker,
+            ChatConversationService conversations, ChatClient chatClient,
+            long leaseMillis, long heartbeatMillis, int maxConcurrentDeliveries) {
         if (leaseMillis < 3 || heartbeatMillis < 1 || heartbeatMillis * 3 >= leaseMillis) {
             throw new IllegalArgumentException("Heartbeat must be materially shorter than the lease");
+        }
+        if (maxConcurrentDeliveries < 1 || maxConcurrentDeliveries > 32) {
+            throw new IllegalArgumentException("Invalid chat relay concurrency bound");
         }
         this.outbox = outbox; this.deliberation = deliberation; this.sockets = sockets;
         this.builtin = builtin; this.broker = broker; this.conversations = conversations;
         this.chatClient = chatClient; this.leaseMillis = leaseMillis; this.heartbeatMillis = heartbeatMillis;
+        this.maxConcurrentDeliveries = maxConcurrentDeliveries;
+        this.deliverySlots = new Semaphore(maxConcurrentDeliveries, true);
     }
 
     @Override public synchronized void start() {
         if (!running.compareAndSet(false, true)) return;
-        executor = Executors.newScheduledThreadPool(2, r -> {
-            Thread t = new Thread(r, "chat-deliberation-outbox-relay"); t.setDaemon(true); return t;
+        scheduler = newScheduler();
+        deliveryExecutor = Executors.newFixedThreadPool(maxConcurrentDeliveries, r -> {
+            Thread t = new Thread(r, "chat-deliberation-outbox-delivery"); t.setDaemon(true); return t;
         });
-        executor.scheduleWithFixedDelay(this::safePoll, 0, 500, TimeUnit.MILLISECONDS);
+        scheduler.scheduleWithFixedDelay(this::safePoll, 0, 500, TimeUnit.MILLISECONDS);
     }
 
     void pollOnce() {
         if (!running.get()) return;
+        int capacity = Math.min(8, deliverySlots.availablePermits());
+        if (capacity < 1) return;
         long now = System.currentTimeMillis();
-        for (ChatDispatchOutboxEntity candidate : outbox.discover(now, 8)) {
-            ChatDeliberationOutboxService.Claim claim = outbox.claim(candidate, leaseOwner, now, leaseMillis);
-            if (claim == null) continue;
-            try { deliverClaim(claim); }
-            catch (RuntimeException failure) {
-                log.warn("Durable chat outbox delivery failed, eventId={}", candidate.getEventId(), failure);
-                try { outbox.retry(claim, failure.getClass().getSimpleName(), System.currentTimeMillis()); }
-                catch (RuntimeException stale) { log.debug("Chat outbox retry lost lease", stale); }
+        for (ChatDispatchOutboxEntity candidate : outbox.discover(now, capacity)) {
+            if (!deliverySlots.tryAcquire()) break;
+            ChatDeliberationOutboxService.Claim claim = null;
+            try {
+                claim = outbox.claim(candidate, leaseOwner, now, leaseMillis);
+                if (claim == null) {
+                    deliverySlots.release();
+                    continue;
+                }
+                submitClaim(claim);
+            } catch (RuntimeException failure) {
+                deliverySlots.release();
+                if (claim != null) settleUnexpectedFailure(claim, candidate.getEventId(), failure);
+                else log.warn("Durable chat outbox claim failed, eventId={}", candidate.getEventId(), failure);
             }
         }
+    }
+
+    private void submitClaim(ChatDeliberationOutboxService.Claim claim) {
+        try {
+            ensureDeliveryExecutor().execute(() -> {
+                try { deliverClaim(claim); }
+                catch (RuntimeException failure) {
+                    settleUnexpectedFailure(claim, claim.row().getEventId(), failure);
+                } finally { deliverySlots.release(); }
+            });
+        } catch (RuntimeException rejected) {
+            deliverySlots.release();
+            settleUnexpectedFailure(claim, claim.row().getEventId(), rejected);
+        }
+    }
+
+    private void settleUnexpectedFailure(ChatDeliberationOutboxService.Claim claim,
+            String eventId, RuntimeException failure) {
+        log.warn("Durable chat outbox delivery failed, eventId={}", eventId, failure);
+        try { outbox.retry(claim, failure.getClass().getSimpleName(), System.currentTimeMillis()); }
+        catch (RuntimeException stale) { log.debug("Chat outbox retry lost lease", stale); }
     }
 
     private void safePoll() { try { pollOnce(); } catch (RuntimeException e) { log.warn("Chat outbox poll failed", e); } }
@@ -118,13 +169,17 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
             try {
                 runBuiltinWithHeartbeat(claim, p);
                 outbox.sent(claim, System.currentTimeMillis());
+            } catch (BuiltinUserCancelled cancelled) {
+                outbox.sent(claim, System.currentTimeMillis());
+            } catch (BuiltinTerminal terminal) {
+                outbox.sent(claim, System.currentTimeMillis());
             } catch (LeaseLost lost) {
                 log.warn("Builtin chat generation aborted after fenced lease renewal failed, dispatchId={}",
                         row.getDispatchId());
             } catch (RuntimeException generationFailure) {
                 // A builtin model call is never retried because that could repeat generation/finalization.
-                // If final commit won immediately before the failure, only settle the durable dispatch.
-                if (hasPersistedFinal(row)) {
+                // Cancellation/final may win the row lock immediately before a model callback returns.
+                if (isCancelled(row) || hasPersistedFinal(row)) {
                     outbox.sent(claim, System.currentTimeMillis());
                 } else {
                     deliberation.failBuiltinRecovery(row.getTenantId(), row.getOwnerJiacn(),
@@ -169,6 +224,11 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
         outbox.dead(claim, "BUILTIN_RESTART_RECOVERY_REQUIRED", System.currentTimeMillis());
     }
 
+    private boolean isCancelled(ChatDispatchOutboxEntity row) {
+        return ChatDeliberationStates.CANCELLED.equals(deliberation.getTurn(row.getTenantId(), row.getOwnerJiacn(),
+                row.getClientId(), row.getTurnId()).state());
+    }
+
     private boolean hasPersistedFinal(ChatDispatchOutboxEntity row) {
         String state = deliberation.getTurn(row.getTenantId(), row.getOwnerJiacn(),
                 row.getClientId(), row.getTurnId()).state();
@@ -177,37 +237,85 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
     }
 
     private void runBuiltinWithHeartbeat(ChatDeliberationOutboxService.Claim claim, Map<String,Object> p) {
-        ScheduledExecutorService scheduler = ensureExecutor();
+        ScheduledExecutorService heartbeatScheduler = ensureScheduler();
         Sinks.One<Boolean> leaseLost = Sinks.one();
-        AtomicBoolean lost = new AtomicBoolean();
-        ScheduledFuture<?> heartbeat = scheduler.scheduleAtFixedRate(() -> {
+        Sinks.One<Boolean> cancelled = Sinks.one();
+        AtomicReference<BuiltinStop> stop = new AtomicReference<>(BuiltinStop.NONE);
+        signalTerminalTurn(claim.row(), stop, cancelled);
+        ScheduledFuture<?> heartbeat = heartbeatScheduler.scheduleAtFixedRate(() -> {
+            if (stop.get() != BuiltinStop.NONE) return;
             try {
-                if (!outbox.renew(claim, System.currentTimeMillis(), leaseMillis)) { lost.set(true); leaseLost.tryEmitValue(Boolean.TRUE); }
+                signalTerminalTurn(claim.row(), stop, cancelled);
+                if (stop.get() == BuiltinStop.NONE
+                        && !outbox.renew(claim, System.currentTimeMillis(), leaseMillis)) {
+                    signalLeaseLoss(stop, leaseLost);
+                }
             } catch (RuntimeException failure) {
-                lost.set(true); leaseLost.tryEmitValue(Boolean.TRUE);
+                signalLeaseLoss(stop, leaseLost);
             }
         }, heartbeatMillis, heartbeatMillis, TimeUnit.MILLISECONDS);
         try {
+            if (stop.get() != BuiltinStop.NONE) throwForStop(stop.get());
             deliberation.markDispatch(claim.row().getTenantId(), claim.row().getOwnerJiacn(),
                     claim.row().getClientId(), claim.row().getTurnId(), true);
-            runBuiltin(claim.row(), p, leaseLost.asMono(), lost);
-            if (lost.get() || !claim.active()) throw new LeaseLost();
-            if (!outbox.renew(claim, System.currentTimeMillis(), leaseMillis)) throw new LeaseLost();
+            signalTerminalTurn(claim.row(), stop, cancelled);
+            if (stop.get() != BuiltinStop.NONE) throwForStop(stop.get());
+            runBuiltin(claim.row(), p, leaseLost.asMono(), cancelled, stop);
+            signalTerminalTurn(claim.row(), stop, cancelled);
+            if (stop.get() != BuiltinStop.NONE) throwForStop(stop.get());
+            if (!claim.active() || !outbox.renew(claim, System.currentTimeMillis(), leaseMillis)) throw new LeaseLost();
         } finally {
             heartbeat.cancel(true);
         }
     }
 
-    private synchronized ScheduledExecutorService ensureExecutor() {
-        if (executor == null || executor.isShutdown()) {
-            executor = Executors.newScheduledThreadPool(2, r -> {
-                Thread t = new Thread(r, "chat-deliberation-outbox-relay"); t.setDaemon(true); return t;
-            });
-        }
-        return executor;
+    private void signalTerminalTurn(ChatDispatchOutboxEntity row, AtomicReference<BuiltinStop> stop,
+            Sinks.One<Boolean> cancelled) {
+        ChatDeliberationService.TurnView turn = deliberation.getTurn(
+                row.getTenantId(), row.getOwnerJiacn(), row.getClientId(), row.getTurnId());
+        if (turn == null || turn.state() == null || !terminalTurnState(turn.state())) return;
+        BuiltinStop reason = ChatDeliberationStates.CANCELLED.equals(turn.state())
+                ? BuiltinStop.USER_CANCELLED : BuiltinStop.TERMINAL;
+        if (stop.compareAndSet(BuiltinStop.NONE, reason)) cancelled.tryEmitValue(Boolean.TRUE);
     }
 
-    private void runBuiltin(ChatDispatchOutboxEntity row, Map<String,Object> p, Mono<Boolean> leaseLost, AtomicBoolean lost) {
+    private boolean terminalTurnState(String state) {
+        return ChatDeliberationStates.CANCELLED.equals(state) || ChatDeliberationStates.FAILED.equals(state)
+                || ChatDeliberationStates.FINAL_PERSISTED.equals(state) || ChatDeliberationStates.PUBLISHED.equals(state);
+    }
+
+    private void signalLeaseLoss(AtomicReference<BuiltinStop> stop, Sinks.One<Boolean> leaseLost) {
+        if (stop.compareAndSet(BuiltinStop.NONE, BuiltinStop.LEASE_LOST)) leaseLost.tryEmitValue(Boolean.TRUE);
+    }
+
+    private void throwForStop(BuiltinStop stop) {
+        if (stop == BuiltinStop.USER_CANCELLED) throw new BuiltinUserCancelled();
+        if (stop == BuiltinStop.TERMINAL) throw new BuiltinTerminal();
+        if (stop == BuiltinStop.LEASE_LOST) throw new LeaseLost();
+    }
+
+    private synchronized ScheduledExecutorService ensureScheduler() {
+        if (scheduler == null || scheduler.isShutdown()) scheduler = newScheduler();
+        return scheduler;
+    }
+
+    private ScheduledExecutorService newScheduler() {
+        return Executors.newScheduledThreadPool(maxConcurrentDeliveries + 1, r -> {
+            Thread t = new Thread(r, "chat-deliberation-outbox-relay"); t.setDaemon(true); return t;
+        });
+    }
+
+    private synchronized ExecutorService ensureDeliveryExecutor() {
+        if (deliveryExecutor == null || deliveryExecutor.isShutdown()) {
+            deliveryExecutor = Executors.newFixedThreadPool(maxConcurrentDeliveries, r -> {
+                Thread t = new Thread(r, "chat-deliberation-outbox-delivery"); t.setDaemon(true); return t;
+            });
+        }
+        return deliveryExecutor;
+    }
+
+    private void runBuiltin(ChatDispatchOutboxEntity row, Map<String,Object> p, Mono<Boolean> leaseLost,
+            Sinks.One<Boolean> cancelled, AtomicReference<BuiltinStop> stop) {
         String conversationId=text(p,"conversationId"), requestId=text(p,"requestId"), agentId=text(p,"targetAgentId");
         long generation=decimal(p,"conversationGeneration"), seqStart=0L;
         String turnId=text(p,"turnId"), dispatchId=text(p,"dispatchId"), snapshot=text(p,"contextSnapshotId"), hash=text(p,"contextHash");
@@ -216,7 +324,7 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
             Flux<String> chunks = chatClient.prompt(Prompt.builder()
                     .messages(UserMessage.builder().text(text(p,"content")).build()).build())
                     .messages().stream().content();
-            chunks.takeUntilOther(leaseLost).doOnNext(chunk -> {
+            chunks.takeUntilOther(Flux.merge(leaseLost, cancelled.asMono()).next()).doOnNext(chunk -> {
                 ChatDeliberationService.DeltaResult result = deliberation.acceptDelta(row.getTenantId(), row.getOwnerJiacn(),
                         row.getClientId(), conversationId, generation, agentId, requestId, turnId, dispatchId,
                         snapshot, hash, seq.incrementAndGet(), chunk);
@@ -225,12 +333,13 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
                 answer.append(chunk);
                 publishPersistedEvent(result.event());
             }).blockLast();
-            if (lost.get()) throw new LeaseLost();
+            signalTerminalTurn(row, stop, cancelled);
+            if (stop.get() != BuiltinStop.NONE) throwForStop(stop.get());
             if (answer.isEmpty()) answer.append("诸位稍安，宋江已收到传令。此事先记入议程，待诸位好汉回报后再作定夺。");
             deliberation.persistFinal(row.getTenantId(), row.getOwnerJiacn(), row.getClientId(), conversationId,
                     generation, agentId, requestId, turnId, dispatchId, snapshot, hash, answer.toString(),
                     BuiltinHallAgentSupport.SONGJIANG_NAME);
-        } catch (TurnCancelled cancelled) {
+        } catch (TurnCancelled terminalDelta) {
             return;
         }
     }
@@ -286,12 +395,19 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
     private String text(Map<String,Object> p,String k){Object v=p.get(k);return v==null?null:String.valueOf(v);}
     private long decimal(Map<String,Object> p,String k){try{return Long.parseLong(text(p,k));}catch(Exception e){throw new IllegalStateException("Invalid "+k);}}
 
-    @Override public synchronized void stop(){running.set(false);if(executor!=null)executor.shutdownNow();}
+    @Override public synchronized void stop(){
+        running.set(false);
+        if(scheduler!=null)scheduler.shutdownNow();
+        if(deliveryExecutor!=null)deliveryExecutor.shutdownNow();
+    }
     @Override public void stop(Runnable callback){stop();callback.run();}
     @Override public boolean isRunning(){return running.get();}
     @Override public boolean isAutoStartup(){return true;}
     @Override public int getPhase(){return Integer.MAX_VALUE-90;}
     @Override public void close(){stop();}
+    private enum BuiltinStop { NONE, USER_CANCELLED, TERMINAL, LEASE_LOST }
     private static final class TurnCancelled extends RuntimeException { }
+    private static final class BuiltinUserCancelled extends RuntimeException { }
+    private static final class BuiltinTerminal extends RuntimeException { }
     private static final class LeaseLost extends RuntimeException { }
 }

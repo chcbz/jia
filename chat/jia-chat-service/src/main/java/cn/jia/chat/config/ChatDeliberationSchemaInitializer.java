@@ -219,15 +219,43 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
                 WHERE o.event_type='FINAL_PERSISTED' AND o.status NOT IN ('SENT','DEAD')
                   AND (t.turn_id IS NULL OR m.id IS NULL OR e.event_sequence IS NULL OR t.final_digest IS NULL)
                 """);
+        // 1b5fa4ce emitted valid JSON containing only requestId/turnId/dispatchId/reason. Never
+        // trust that legacy shape: rebuild every turn-backed cancel from authoritative scoped rows.
         jdbc.update("""
                 UPDATE chat_dispatch_outbox o JOIN chat_turn t ON t.turn_id=o.turn_id AND t.dispatch_id=o.dispatch_id
-                SET o.payload_json=JSON_OBJECT('requestId',t.request_id,'turnId',t.turn_id,
+                  AND t.tenant_id=o.tenant_id AND t.owner_jiacn=o.owner_jiacn AND t.client_id=o.client_id
+                SET o.payload_json=JSON_OBJECT('tenantId',t.tenant_id,'ownerJiacn',t.owner_jiacn,
+                  'clientId',t.client_id,'requestId',t.request_id,'turnId',t.turn_id,
                   'dispatchId',t.dispatch_id,'targetAgentId',t.target_agent_id,
                   'conversationId',t.conversation_id,'conversationGeneration',CAST(t.conversation_generation AS CHAR),
                   'reason',COALESCE(t.terminal_reason,'USER_REQUESTED')),
                   o.status=CASE WHEN o.status IN ('SENT','DEAD') THEN o.status ELSE 'READY' END,
-                  o.available_at=COALESCE(o.available_at,o.created_at),o.last_error=NULL
-                WHERE o.event_type='CANCEL_REQUESTED' AND NOT JSON_VALID(o.payload_json)
+                  o.available_at=CASE WHEN o.status IN ('SENT','DEAD') THEN o.available_at
+                    ELSE COALESCE(o.available_at,o.created_at) END,
+                  o.last_error=CASE WHEN o.status IN ('SENT','DEAD') THEN o.last_error ELSE NULL END
+                WHERE o.event_type='CANCEL_REQUESTED'
+                """);
+        jdbc.update("""
+                UPDATE chat_dispatch_outbox o LEFT JOIN chat_turn t ON t.turn_id=o.turn_id
+                  AND t.dispatch_id=o.dispatch_id AND t.tenant_id=o.tenant_id
+                  AND t.owner_jiacn=o.owner_jiacn AND t.client_id=o.client_id
+                SET o.status='DEAD',o.last_error='LEGACY_CANCEL_UNRECOVERABLE_RESYNC_REQUIRED',
+                  o.available_at=NULL,o.lease_owner=NULL,o.lease_until=NULL,
+                  o.updated_at=GREATEST(o.updated_at,UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3))*1000)
+                WHERE o.event_type='CANCEL_REQUESTED' AND o.status NOT IN ('SENT','DEAD')
+                  AND t.turn_id IS NULL
+                """);
+        jdbc.update("""
+                INSERT IGNORE INTO chat_conversation_event
+                  (event_id,tenant_id,owner_jiacn,client_id,conversation_id,conversation_generation,request_id,
+                   turn_id,dispatch_id,event_type,event_version,payload_json,occurred_at)
+                SELECT SHA2(CONCAT('legacy-cancel-recovery:',o.event_id),256),o.tenant_id,o.owner_jiacn,o.client_id,
+                  CONCAT('__migration_recovery__:',o.event_id),1,NULL,o.turn_id,o.dispatch_id,'recovery_required',0,
+                  JSON_OBJECT('type','recovery_required','turnId',o.turn_id,'dispatchId',o.dispatch_id,
+                    'outboxEventId',o.event_id,'reason','LEGACY_CANCEL_UNRECOVERABLE'),o.updated_at
+                FROM chat_dispatch_outbox o
+                WHERE o.event_type='CANCEL_REQUESTED' AND o.status='DEAD'
+                  AND o.last_error='LEGACY_CANCEL_UNRECOVERABLE_RESYNC_REQUIRED'
                 """);
         jdbc.update("""
                 INSERT IGNORE INTO chat_conversation_event

@@ -463,11 +463,14 @@ public class ChatDeliberationService {
                 .setEventId(stableId("evt", turn.getDispatchId(), "CANCEL_REQUESTED"))
                 .setTenantId(turn.getTenantId()).setOwnerJiacn(turn.getOwnerJiacn()).setClientId(turn.getClientId())
                 .setTurnId(turn.getTurnId()).setDispatchId(turn.getDispatchId()).setEventType("CANCEL_REQUESTED")
-                .setStatus("READY").setPayloadJson(CanonicalContextJson.write(Map.of(
-                        "requestId", turn.getRequestId(), "turnId", turn.getTurnId(),
-                        "dispatchId", turn.getDispatchId(), "targetAgentId", turn.getTargetAgentId(),
-                        "conversationId", turn.getConversationId(),
-                        "conversationGeneration", Long.toString(turn.getConversationGeneration()), "reason", reason)))
+                .setStatus("READY").setPayloadJson(CanonicalContextJson.write(Map.ofEntries(
+                        Map.entry("tenantId", turn.getTenantId()), Map.entry("ownerJiacn", turn.getOwnerJiacn()),
+                        Map.entry("clientId", turn.getClientId()), Map.entry("requestId", turn.getRequestId()),
+                        Map.entry("turnId", turn.getTurnId()), Map.entry("dispatchId", turn.getDispatchId()),
+                        Map.entry("targetAgentId", turn.getTargetAgentId()),
+                        Map.entry("conversationId", turn.getConversationId()),
+                        Map.entry("conversationGeneration", Long.toString(turn.getConversationGeneration())),
+                        Map.entry("reason", reason))))
                 .setVersion(0L).setAvailableAt(now).setAttemptCount(0).setFencingToken(0L)
                 .setCreatedAt(now).setUpdatedAt(now);
         persistEvent(turn, stableId("evt", turn.getDispatchId(), "CANCEL_REQUESTED"),

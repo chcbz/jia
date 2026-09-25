@@ -10,7 +10,11 @@ import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -39,6 +43,8 @@ class ChatDeliberationOutboxRelayTest {
                 broker, conversations, chatClient);
         when(conversations.isLiveGeneration("owner-a", "client-a", "42", 3L)).thenReturn(true);
         when(outbox.renew(any(), anyLong(), anyLong())).thenReturn(true);
+        lenient().when(deliberation.getTurn(anyString(), anyString(), anyString(), anyString()))
+                .thenAnswer(invocation -> turnView(invocation.getArgument(3), ChatDeliberationStates.DISPATCHED));
     }
 
     @Test
@@ -156,6 +162,66 @@ class ChatDeliberationOutboxRelayTest {
         verify(outbox, never()).sent(any(), anyLong());
         verify(outbox, never()).dead(any(), anyString(), anyLong());
         relay.close();
+    }
+
+
+    @Test
+    void userCancellationStopsNeverEndingBuiltinAndBoundedRelayStillProcessesHostedWork() throws Exception {
+        ChatDispatchOutboxEntity builtinRow = dispatch("evt-b", "turn-b", "dispatch-b", "builtin-songjiang");
+        ChatDispatchOutboxEntity hostedRow = dispatch("evt-h", "turn-h", "dispatch-h", "hosted-a");
+        var builtinClaim = new ChatDeliberationOutboxService.Claim(builtinRow, false);
+        var hostedClaim = new ChatDeliberationOutboxService.Claim(hostedRow, false);
+        AtomicReference<String> builtinState = new AtomicReference<>(ChatDeliberationStates.DISPATCHED);
+        CountDownLatch modelSubscribed = new CountDownLatch(1);
+        CountDownLatch modelCancelled = new CountDownLatch(1);
+
+        when(builtin.isBuiltinAgent("builtin-songjiang")).thenReturn(true);
+        when(builtin.isBuiltinAgent("hosted-a")).thenReturn(false);
+        when(deliberation.getTurn("tenant-a", "owner-a", "client-a", "turn-b"))
+                .thenAnswer(ignored -> turnView("turn-b", builtinState.get()));
+        when(deliberation.cancelTurn("tenant-a", "owner-a", "client-a", "turn-b", null, "USER_REQUESTED"))
+                .thenAnswer(ignored -> {
+                    builtinState.set(ChatDeliberationStates.CANCELLED);
+                    return turnView("turn-b", ChatDeliberationStates.CANCELLED);
+                });
+        when(chatClient.prompt(any(org.springframework.ai.chat.prompt.Prompt.class))
+                .messages().stream().content()).thenReturn(Flux.<String>never()
+                        .doOnSubscribe(ignored -> modelSubscribed.countDown())
+                        .doOnCancel(modelCancelled::countDown));
+        when(sockets.sendDirectMessageToAgent(eq("tenant-a"), eq("owner-a"), eq("client-a"),
+                eq("hosted-a"), anyMap())).thenReturn(true);
+        when(outbox.discover(anyLong(), anyInt())).thenReturn(List.of(builtinRow, hostedRow), List.of());
+        when(outbox.claim(same(builtinRow), anyString(), anyLong(), eq(120L))).thenReturn(builtinClaim);
+        when(outbox.claim(same(hostedRow), anyString(), anyLong(), eq(120L))).thenReturn(hostedClaim);
+
+        relay = new ChatDeliberationOutboxRelay(outbox, deliberation, sockets, builtin, broker,
+                conversations, chatClient, 120L, 20L, 2);
+        relay.start();
+        assertTrue(modelSubscribed.await(1, TimeUnit.SECONDS));
+        verify(outbox, timeout(1000)).awaitingAck(same(hostedClaim), anyLong(), anyLong());
+
+        Thread cancellingRequest = new Thread(() -> deliberation.cancelTurn(
+                "tenant-a", "owner-a", "client-a", "turn-b", null, "USER_REQUESTED"));
+        cancellingRequest.start();
+        cancellingRequest.join();
+        assertTrue(modelCancelled.await(1, TimeUnit.SECONDS));
+        verify(outbox, timeout(1000)).sent(same(builtinClaim), anyLong());
+        verify(deliberation).cancelTurn("tenant-a", "owner-a", "client-a", "turn-b", null, "USER_REQUESTED");
+        assertEquals(ChatDeliberationStates.CANCELLED,
+                deliberation.getTurn("tenant-a", "owner-a", "client-a", "turn-b").state());
+        verify(deliberation, never()).persistFinal(anyString(), anyString(), anyString(), anyString(), anyLong(),
+                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+        verify(deliberation, never()).failBuiltinRecovery(anyString(), anyString(), anyString(), anyString());
+        verify(outbox, never()).dead(same(builtinClaim), anyString(), anyLong());
+        relay.close();
+    }
+
+    @Test
+    void relayRejectsUnboundedOrInvalidDeliveryConcurrency() {
+        assertThrows(IllegalArgumentException.class, () -> new ChatDeliberationOutboxRelay(
+                outbox, deliberation, sockets, builtin, broker, conversations, chatClient, 120L, 20L, 0));
+        assertThrows(IllegalArgumentException.class, () -> new ChatDeliberationOutboxRelay(
+                outbox, deliberation, sockets, builtin, broker, conversations, chatClient, 120L, 20L, 33));
     }
 
     @Test

@@ -32,10 +32,14 @@ public class EsSecurityContextFilter implements Filter {
         chain.doFilter(req, res);
     }
 
-    private void overwriteFromJwt(EsContext context, Jwt jwt) {
+    private void overwriteFromJwt(EsContext context, Jwt jwt) throws ServletException {
         String tenant;
-        try { tenant = TenantClaimPolicy.resolve(jwt.getClaims(), legacySingleTenantId); }
-        catch (IllegalArgumentException invalid) { tenant = null; }
+        try {
+            tenant = TenantClaimPolicy.resolve(jwt.getClaims(), legacySingleTenantId);
+        } catch (IllegalArgumentException invalid) {
+            context.setTenantId(null);
+            throw new ServletException("Authenticated token has invalid tenant scope", invalid);
+        }
         context.setTenantId(tenant);
         context.setJiacn(stringClaim(jwt, "jiacn"));
         context.setAppcn(stringClaim(jwt, "appcn"));
