@@ -408,3 +408,39 @@ tasks.register('bf08FormalFlow', Test) {
     classpath = bf08FormalFlowSourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+
+// Managed-hosting regression slice. The legacy default test source set contains
+// unrelated pre-owner-scope fixtures that do not compile, so --tests cannot reach
+// these ACL, credential, provisioning and readiness tests. Keep that debt visible
+// and compile only the production-hosting contract here.
+def managedHostingRegressionSourceSet = sourceSets.create('managedHostingRegression') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/hosting/UnixManagedHostingProvisionerTest.java'
+        include 'cn/jia/agent/hosting/ManagedHostingCredentialsTest.java'
+        include 'cn/jia/agent/hosting/HostingRentApplicationServiceTest.java'
+        include 'cn/jia/agent/hosting/HostingRentReconcilerTest.java'
+        include 'cn/jia/agent/config/AgentHostingRentConfigurationTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(managedHostingRegressionSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(managedHostingRegressionSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('managedHostingRegression', Test) {
+    maxParallelForks = 1
+    maxHeapSize = '256m'
+    jvmArgs '-XX:MaxMetaspaceSize=160m', '-Xss256k'
+    group = 'verification'
+    description = 'Runs isolated managed-hosting owner ACL, credential and readiness regressions.'
+    dependsOn tasks.named(managedHostingRegressionSourceSet.classesTaskName)
+    testClassesDirs = managedHostingRegressionSourceSet.output.classesDirs
+    classpath = managedHostingRegressionSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
