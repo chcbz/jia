@@ -146,8 +146,7 @@ public class ChatDeliberationService {
                     conversation, scope, targetAgentId, task, inputRefs, userMessage.getId());
             String sourceJson = CanonicalContextJson.write(sourceVector);
             String factsJson = CanonicalContextJson.write(facts);
-            String contextDigest = "sha256:" + sha256(CanonicalContextJson.write(Map.of(
-                    "sourceVector", sourceVector, "facts", facts)));
+            String contextDigest = contextDigest(sourceVector, facts);
             String snapshotId = stableId("ctx", turnId, contextDigest);
 
             ChatContextSnapshotEntity snapshot = new ChatContextSnapshotEntity()
@@ -164,33 +163,10 @@ public class ChatDeliberationService {
                     .setSnapshotId(snapshotId).setContextDigest(contextDigest).setDispatchId(dispatchId)
                     .setRoute(route.name()).setState(ChatDeliberationStates.RECEIVED).setStateVersion(0L)
                     .setLastDeltaSeq(0L).setCreatedAt(now).setUpdatedAt(now);
-            Map<String, Object> eventPayload = new LinkedHashMap<>();
-            eventPayload.put("tenantId", tenantId);
-            eventPayload.put("ownerJiacn", ownerJiacn);
-            eventPayload.put("clientId", clientId);
-            eventPayload.put("conversationId", conversationId);
-            eventPayload.put("conversationGeneration", Long.toString(expectedGeneration));
-            eventPayload.put("requestId", requestId);
-            eventPayload.put("requestRevision", Long.toString(revision));
-            eventPayload.put("turnId", turnId);
-            eventPayload.put("dispatchId", dispatchId);
-            eventPayload.put("targetAgentId", targetAgentId);
-            eventPayload.put("contextSnapshotId", snapshotId);
-            eventPayload.put("contextHash", contextDigest);
-            eventPayload.put("route", route.name());
-            eventPayload.put("content", content);
-            eventPayload.put("conversationType", JuyitingConversationScopeService.CONVERSATION_TYPE_JUYITING);
-            eventPayload.put("agentId", targetAgentId);
-            eventPayload.put("senderType", Optional.ofNullable(input.getSenderType()).orElse("user"));
-            eventPayload.put("senderName", Optional.ofNullable(input.getSenderName()).orElse("用户"));
-            eventPayload.put("metadata", trustedUserMetadata(input, scope, requestId, revision, route));
-            eventPayload.put("sentAt", Long.toString(now));
-            eventPayload.put("timestamp", Long.toString(now));
-            eventPayload.put("conversationScopeType", scope.scopeType());
-            eventPayload.put("conversationScopeKey", scope.scopeKey());
-            eventPayload.put("taskId", scope.taskId());
-            eventPayload.put("sourceVector", sourceVector);
-            eventPayload.put("factsManifest", facts);
+            Map<String, Object> eventPayload = eventPayload(tenantId, ownerJiacn, clientId,
+                    conversationId, expectedGeneration, requestId, revision, turnId, dispatchId,
+                    targetAgentId, snapshotId, contextDigest, route, content, input, scope, now,
+                    sourceVector, facts);
             ChatDispatchOutboxEntity outbox = new ChatDispatchOutboxEntity()
                     .setEventId(stableId("evt", dispatchId, "DISPATCH"))
                     .setTenantId(tenantId).setOwnerJiacn(ownerJiacn).setClientId(clientId)
@@ -584,6 +560,46 @@ public class ChatDeliberationService {
         } catch (Exception e) {
             throw persistence("Stored context JSON is invalid");
         }
+    }
+
+    Map<String, Object> eventPayload(String tenantId, String ownerJiacn, String clientId,
+            String conversationId, long conversationGeneration, String requestId, long requestRevision,
+            String turnId, String dispatchId, String targetAgentId, String snapshotId,
+            String contextDigest, InteractionRoute route, String content, ChatMessageDTO input,
+            JuyitingConversationScope scope, long occurredAt, Map<String, Object> sourceVector,
+            Map<String, Object> facts) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("tenantId", tenantId);
+        payload.put("ownerJiacn", ownerJiacn);
+        payload.put("clientId", clientId);
+        payload.put("conversationId", conversationId);
+        payload.put("conversationGeneration", Long.toString(conversationGeneration));
+        payload.put("requestId", requestId);
+        payload.put("requestRevision", Long.toString(requestRevision));
+        payload.put("turnId", turnId);
+        payload.put("dispatchId", dispatchId);
+        payload.put("targetAgentId", targetAgentId);
+        payload.put("contextSnapshotId", snapshotId);
+        payload.put("contextHash", contextDigest);
+        payload.put("route", route.name());
+        payload.put("content", content);
+        payload.put("conversationType", JuyitingConversationScopeService.CONVERSATION_TYPE_JUYITING);
+        payload.put("agentId", targetAgentId);
+        payload.put("senderType", Optional.ofNullable(input.getSenderType()).orElse("user"));
+        payload.put("senderName", Optional.ofNullable(input.getSenderName()).orElse("用户"));
+        payload.put("metadata", trustedUserMetadata(input, scope, requestId, requestRevision, route));
+        payload.put("sentAt", Long.toString(occurredAt));
+        payload.put("timestamp", Long.toString(occurredAt));
+        payload.put("conversationScopeType", scope.scopeType());
+        payload.put("conversationScopeKey", scope.scopeKey());
+        payload.put("taskId", scope.taskId());
+        payload.put("sourceVector", sourceVector);
+        payload.put("factsManifest", facts);
+        return payload;
+    }
+
+    static String contextDigest(Map<String, Object> sourceVector, Map<String, Object> facts) {
+        return digest(Map.of("sourceVector", sourceVector, "facts", facts));
     }
 
     private Map<String, Object> trustedUserMetadata(ChatMessageDTO input, JuyitingConversationScope scope,

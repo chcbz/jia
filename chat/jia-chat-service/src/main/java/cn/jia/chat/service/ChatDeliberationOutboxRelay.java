@@ -374,7 +374,7 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
                 () -> conversations.isLiveGeneration(stored.getOwnerJiacn(),stored.getClientId(),stored.getConversationId(),stored.getConversationGeneration()), event);
     }
 
-    private Map<String,Object> hostedWire(ChatDispatchOutboxEntity row, Map<String,Object> p) {
+    Map<String,Object> hostedWire(ChatDispatchOutboxEntity row, Map<String,Object> p) {
         Map<String,Object> wire=new LinkedHashMap<>(p); wire.put("schemaVersion",AgentProtocolConstants.VERSION_1);
         wire.put("messageType",AgentProtocolConstants.TYPE_CHAT_MESSAGE); wire.put("messageId",row.getEventId());
         wire.put("dispatchAckType", AgentProtocolConstants.TYPE_CHAT_DISPATCH_ACK);
