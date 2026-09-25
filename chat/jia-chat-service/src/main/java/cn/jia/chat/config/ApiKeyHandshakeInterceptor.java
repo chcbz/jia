@@ -1,5 +1,6 @@
 package cn.jia.chat.config;
 
+import cn.jia.agent.hosting.ManagedHostingCredentials;
 import cn.jia.agent.service.AgentService;
 import cn.jia.core.common.EsConstants;
 import cn.jia.core.context.EsContext;
@@ -36,6 +37,7 @@ public class ApiKeyHandshakeInterceptor implements HandshakeInterceptor {
 
     private final ObjectProvider<ApiKeyService> apiKeyServiceProvider;
     private final ObjectProvider<AgentService> agentServiceProvider;
+    private final ObjectProvider<ManagedHostingCredentials> managedHostingCredentialsProvider;
 
     @Override
     public boolean beforeHandshake(ServerHttpRequest request, ServerHttpResponse response,
@@ -82,13 +84,22 @@ public class ApiKeyHandshakeInterceptor implements HandshakeInterceptor {
         context.setJiacn(apiKeyEntity.getJiacn());
         try {
             agentService.requireApiKeyOwnedAgent(apiKeyEntity.getClientId(), apiKeyEntity.getJiacn(), agentId);
-        } catch (Exception e) {
-            log.warn("Reject OpenClaw websocket handshake: agent ownership validation failed, agentId={}, clientId={}, jiacn={}",
-                    agentId, apiKeyEntity.getClientId(), apiKeyEntity.getJiacn());
-            response.setStatusCode(HttpStatus.FORBIDDEN);
-            return false;
+            return true;
+        } catch (Exception activeOwnershipFailure) {
+            ManagedHostingCredentials managed = managedHostingCredentialsProvider.getIfAvailable();
+            try {
+                if (managed == null) throw activeOwnershipFailure;
+                managed.authorizeProvisionedHandshake(apiKeyEntity.getTenantId(),
+                        apiKeyEntity.getClientId(), apiKeyEntity.getJiacn(), agentId,
+                        apiKeyEntity.getId(), apiKeyEntity.getKeyName());
+                return true;
+            } catch (Exception managedOwnershipFailure) {
+                log.warn("Reject OpenClaw websocket handshake: agent ownership validation failed, agentId={}, clientId={}, jiacn={}",
+                        agentId, apiKeyEntity.getClientId(), apiKeyEntity.getJiacn());
+                response.setStatusCode(HttpStatus.FORBIDDEN);
+                return false;
+            }
         }
-        return true;
     }
 
     @Override

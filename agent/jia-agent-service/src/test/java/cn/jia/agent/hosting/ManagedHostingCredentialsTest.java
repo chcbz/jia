@@ -32,6 +32,7 @@ class ManagedHostingCredentialsTest {
     private DataSourceTransactionManager manager;
     private ManagedHostingCredentials service;
     private OauthApiKeyEntity saved;
+    private AgentIdentityRegistryEntity identity;
     @BeforeEach void setUp() {
         var source = new DriverManagerDataSource("jdbc:h2:mem:managed_key_" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1", "sa", "");
         manager = new DataSourceTransactionManager(source);
@@ -45,7 +46,8 @@ class ManagedHostingCredentialsTest {
             String ref = jdbc.queryForObject("SELECT key_ref FROM association WHERE id=1 FOR UPDATE", String.class);
             return new EconomyHostingProvisioningIntentEntity().setManagedApiKeyId(ref).setIntentId(p.intentId())
                     .setLeaseId(p.leaseId()).setAgentId(p.agentId()).setQuotePurpose("INITIAL").setPrincipalType("USER")
-                    .setPrincipalId("login-sub-not-tenant").setReservedAt(1000L).setStatus("PROVISIONING_UNKNOWN");
+                    .setPrincipalId("login-sub-not-tenant").setReservedAt(1000L).setStatus("PROVISIONING_UNKNOWN")
+                    .setTenantId("0").setClientId("Client-A");
         });
         when(rent.selectLeaseForUpdate("0", "Client-A", p.leaseId())).thenReturn(new EconomyHostingLeaseEntity()
                 .setAgentId(p.agentId()).setLeaseId(p.leaseId()).setBindingId("17").setStatus("PROVISIONING")
@@ -53,7 +55,8 @@ class ManagedHostingCredentialsTest {
         when(owners.requireOwner(new HostingRentHttp.Actor("login-sub-not-tenant", "0", "Client-A", "Tenant-A"))).thenReturn("Tenant-A");
         var binding = new AgentPersonaBindingEntity().setId(17L).setAgentId(p.agentId()).setJiacn("Tenant-A").setStatus(1);
         binding.setClientId("Client-A"); when(bindings.findByIdForUpdate(17L)).thenReturn(binding);
-        var identity = new AgentIdentityRegistryEntity().setCanonicalAgentId(p.agentId()).setBindingId(17L);
+        identity = new AgentIdentityRegistryEntity().setCanonicalAgentId(p.agentId()).setBindingId(17L)
+                .setLifecycleStatus("PROVISIONED");
         when(identities.requireRegistrationIdentityInScope("0", "Client-A", "Tenant-A", p.agentId())).thenReturn(identity);
         when(identities.requireActiveBinding(identity, null)).thenReturn(binding);
         when(keys.create(any())).thenAnswer(call -> {
@@ -73,6 +76,36 @@ class ManagedHostingCredentialsTest {
         assertEquals("hosting:"+p.intentId(), saved.getKeyName()); assertEquals("31", jdbc.queryForObject("SELECT key_ref FROM association", String.class));
         verify(keys, times(1)).create(any()); verify(keys).get("31");
     }
+    @Test void exactManagedKeyMayAuthorizeOnlyTheProvisionedFirstHandshake() {
+        service.credential(p);
+
+        assertDoesNotThrow(() -> service.authorizeProvisionedHandshake(
+                "0", "Client-A", "Tenant-A", p.agentId(), "31", "hosting:" + p.intentId()));
+
+        identity.setLifecycleStatus("ACTIVE");
+        assertThrows(IllegalStateException.class, () -> service.authorizeProvisionedHandshake(
+                "0", "Client-A", "Tenant-A", p.agentId(), "31", "hosting:" + p.intentId()));
+        identity.setLifecycleStatus("SUSPENDED");
+        assertThrows(IllegalStateException.class, () -> service.authorizeProvisionedHandshake(
+                "0", "Client-A", "Tenant-A", p.agentId(), "31", "hosting:" + p.intentId()));
+        identity.setLifecycleStatus("RETIRED");
+        assertThrows(IllegalStateException.class, () -> service.authorizeProvisionedHandshake(
+                "0", "Client-A", "Tenant-A", p.agentId(), "31", "hosting:" + p.intentId()));
+    }
+
+    @Test void ordinaryOrMismatchedManagedKeysCannotUseTheProvisionedFallback() {
+        service.credential(p);
+        for (String[] candidate : java.util.List.of(
+                new String[] {"0", "Client-A", "Tenant-A", p.agentId(), "31", "ordinary"},
+                new String[] {"0", "Client-A", "Tenant-A", p.agentId(), "other", "hosting:" + p.intentId()},
+                new String[] {"0", "Client-B", "Tenant-A", p.agentId(), "31", "hosting:" + p.intentId()},
+                new String[] {"0", "Client-A", "Owner-B", p.agentId(), "31", "hosting:" + p.intentId()},
+                new String[] {"0", "Client-A", "Tenant-A", "agt_ffffffffffffffffffffffffffffffff", "31", "hosting:" + p.intentId()})) {
+            assertThrows(IllegalStateException.class, () -> service.authorizeProvisionedHandshake(
+                    candidate[0], candidate[1], candidate[2], candidate[3], candidate[4], candidate[5]));
+        }
+    }
+
     @Test void associationCasFailureRollsBackNewKeyAndUnprovedActorNeverGetsCredential() {
         doReturn(0).when(rent).attachManagedKey(anyString(), anyString(), anyString(), anyString());
         assertThrows(IllegalStateException.class, () -> service.credential(p));

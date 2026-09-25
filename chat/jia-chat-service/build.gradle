@@ -95,3 +95,34 @@ tasks.register('bf08FormalFlow', Test) {
     classpath = bf08FormalFlowSourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+
+// Managed onboarding websocket authorization slice. It proves that only the exact
+// paid managed key may bridge a PROVISIONED identity into its first registration.
+def managedHostingHandshakeSourceSet = sourceSets.create('managedHostingHandshake') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/chat/config/ApiKeyHandshakeInterceptorManagedOnboardingTest.java'
+        include 'cn/jia/chat/config/ApiKeyHandshakeInterceptorManagedRefundTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(managedHostingHandshakeSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(managedHostingHandshakeSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('managedHostingHandshake', Test) {
+    maxParallelForks = 1
+    maxHeapSize = '256m'
+    jvmArgs '-XX:MaxMetaspaceSize=160m', '-Xss256k'
+    group = 'verification'
+    description = 'Runs exact managed-key first-websocket authorization regressions.'
+    dependsOn tasks.named(managedHostingHandshakeSourceSet.classesTaskName)
+    testClassesDirs = managedHostingHandshakeSourceSet.output.classesDirs
+    classpath = managedHostingHandshakeSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}

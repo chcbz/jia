@@ -1,5 +1,6 @@
 package cn.jia.chat.config;
 
+import cn.jia.agent.hosting.ManagedHostingCredentials;
 import cn.jia.agent.security.AgentRuntimeAuthenticationService;
 import cn.jia.agent.config.AgentRuntimeSecurityConfiguration;
 import cn.jia.agent.service.AgentService;
@@ -71,9 +72,10 @@ class AgentRuntimeWebSocketSecurityChainRegressionTest {
         ApiKeyHandshakeInterceptor apiKeyHandshakeInterceptor(ApiKeyService keys, AgentService agents) {
             ObjectProvider<ApiKeyService> keyProvider = mock(ObjectProvider.class);
             ObjectProvider<AgentService> agentProvider = mock(ObjectProvider.class);
+            ObjectProvider<ManagedHostingCredentials> managedProvider = mock(ObjectProvider.class);
             when(keyProvider.getIfAvailable()).thenReturn(keys);
             when(agentProvider.getIfAvailable()).thenReturn(agents);
-            return new ApiKeyHandshakeInterceptor(keyProvider, agentProvider);
+            return new ApiKeyHandshakeInterceptor(keyProvider, agentProvider, managedProvider);
         }
 
         @Bean RouteProbe routeProbe(ApiKeyHandshakeInterceptor interceptor) {
