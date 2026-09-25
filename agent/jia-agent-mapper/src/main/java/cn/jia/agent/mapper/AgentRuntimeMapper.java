@@ -65,9 +65,11 @@ public interface AgentRuntimeMapper extends BaseMapper<AgentRuntimeEntity> {
                     AND b.persona_code = r.persona_code
                     AND CAST(b.persona_code AS BINARY) = CAST(r.persona_code AS BINARY)
                     AND OCTET_LENGTH(b.persona_code) = OCTET_LENGTH(r.persona_code)
-                    AND i.lifecycle_status = 'ACTIVE'
-                    AND CAST(i.lifecycle_status AS BINARY) = CAST('ACTIVE' AS BINARY)
-                    AND OCTET_LENGTH(i.lifecycle_status) = OCTET_LENGTH('ACTIVE')
+                    AND i.lifecycle_status IN ('PROVISIONED', 'ACTIVE')
+                    AND CAST(i.lifecycle_status AS BINARY) IN (
+                        CAST('PROVISIONED' AS BINARY), CAST('ACTIVE' AS BINARY))
+                    AND OCTET_LENGTH(i.lifecycle_status) IN (
+                        OCTET_LENGTH('PROVISIONED'), OCTET_LENGTH('ACTIVE'))
                     AND (
                         (i.canonical_type = 'OPAQUE'
                          AND CAST(i.canonical_type AS BINARY) = CAST('OPAQUE' AS BINARY)
