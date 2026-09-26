@@ -6,7 +6,6 @@ import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.handler.AgentWebSocketHandler;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
-import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.StringUtil;
 import lombok.RequiredArgsConstructor;
@@ -36,15 +35,18 @@ public class JuyitingAgentRelayService {
     private final AgentService agentService;
     private final JuyitingConversationScopeService scopeService;
 
-    public JuyitingAgentRelayResult relay(ChatMessageDTO chatMessage, String conversationId, Supplier<Flux<String>> builtinAgentStream) {
+    public JuyitingAgentRelayResult relay(
+            ChatMessageDTO chatMessage, String conversationId, ServerResolvedSender sender,
+            Supplier<Flux<String>> builtinAgentStream) {
         JuyitingConversationScope requestedScope = scopeService.resolve(chatMessage);
         if (!JuyitingConversationScopeService.CONVERSATION_TYPE_JUYITING.equals(scopeService.resolveConversationType(chatMessage))
                 || requestedScope.scopeType() == null) {
             return new JuyitingAgentRelayResult(false, Mono.just(false), Flux.empty());
         }
 
-        String ownerJiacn = requireIdentityPart(EsContextHolder.getContext().getJiacn());
-        String ownerClientId = requireIdentityPart(EsContextHolder.getContext().getClientId());
+        ServerResolvedSender trustedSender = requireTrustedSender(sender);
+        String ownerJiacn = trustedSender.jiacn();
+        String ownerClientId = trustedSender.clientId();
         JuyitingConversationScope scope;
         try {
             scope = scopeService.authorize(
@@ -77,11 +79,11 @@ public class JuyitingAgentRelayService {
         }
 
         saveDirectUserMessage(
-                chatMessage, conversationId, scope, ownerJiacn, ownerClientId, generation);
+                chatMessage, conversationId, scope, trustedSender, generation);
 
         if (scope.targetAgentIds().size() > 1) {
             return relayMultiTargetAgentMessage(
-                    chatMessage, conversationId, scope, ownerJiacn, ownerClientId, generation);
+                    chatMessage, conversationId, scope, trustedSender, generation);
         }
 
         String selectedAgentId = scope.targetAgentIds().getFirst();
@@ -94,7 +96,8 @@ public class JuyitingAgentRelayService {
                                     ownerJiacn, ownerClientId, conversationId, generation))));
         }
 
-        Map<String, Object> payload = buildDirectAgentPayload(chatMessage, conversationId, selectedAgentId, scope);
+        Map<String, Object> payload = buildDirectAgentPayload(
+                chatMessage, conversationId, selectedAgentId, scope, trustedSender);
         String tenantId = ownerJiacn;
         String clientId = ownerClientId;
         Sinks.One<Boolean> deliveryOutcome = Sinks.one();
@@ -177,7 +180,9 @@ public class JuyitingAgentRelayService {
 
     private JuyitingAgentRelayResult relayMultiTargetAgentMessage(
             ChatMessageDTO chatMessage, String conversationId, JuyitingConversationScope scope,
-            String ownerJiacn, String ownerClientId, long generation) {
+            ServerResolvedSender sender, long generation) {
+        String ownerJiacn = sender.jiacn();
+        String ownerClientId = sender.clientId();
         Sinks.One<Boolean> deliveryOutcome = Sinks.one();
         Flux<String> events = Flux.defer(() -> {
             List<String> deliveryEvents = new ArrayList<>();
@@ -194,7 +199,7 @@ public class JuyitingAgentRelayService {
                             delivered.set(agentWebSocketHandler.sendDirectMessageToAgent(
                                     ownerJiacn, ownerClientId, agentId,
                                     buildDirectAgentPayload(
-                                            chatMessage, conversationId, agentId, scope)));
+                                            chatMessage, conversationId, agentId, scope, sender)));
                             if (delivered.get()) {
                                 anyDelivered.set(true);
                             }
@@ -216,7 +221,9 @@ public class JuyitingAgentRelayService {
                 true, deliveryOutcome.asMono().defaultIfEmpty(false), events);
     }
 
-    private Map<String, Object> buildDirectAgentPayload(ChatMessageDTO chatMessage, String conversationId, String agentId, JuyitingConversationScope scope) {
+    private Map<String, Object> buildDirectAgentPayload(
+            ChatMessageDTO chatMessage, String conversationId, String agentId,
+            JuyitingConversationScope scope, ServerResolvedSender sender) {
         long sentAt = System.currentTimeMillis();
         String messageId = UUID.randomUUID().toString();
         Map<String, Object> payload = new HashMap<>();
@@ -231,29 +238,31 @@ public class JuyitingAgentRelayService {
         payload.put("conversationScopeKey", scope.scopeKey());
         payload.put("agentId", agentId);
         payload.put("content", chatMessage.getContent());
-        payload.put("senderType", Optional.ofNullable(chatMessage.getSenderType()).orElse("user"));
-        payload.put("senderName", Optional.ofNullable(chatMessage.getSenderName()).orElse("用户"));
+        payload.put("senderType", sender.type());
+        payload.put("senderName", sender.displayName());
         payload.put("metadata", trustedConversationMetadata(
-                chatMessage, conversationId, scope));
+                chatMessage, conversationId, scope, sender));
         payload.put("sentAt", sentAt);
         payload.put("timestamp", sentAt);
 
         Map<String, Object> protocolPayload = new HashMap<>();
         protocolPayload.put("content", chatMessage.getContent());
-        protocolPayload.put("senderType", Optional.ofNullable(chatMessage.getSenderType()).orElse("user"));
-        protocolPayload.put("senderName", Optional.ofNullable(chatMessage.getSenderName()).orElse("用户"));
+        protocolPayload.put("senderType", sender.type());
+        protocolPayload.put("senderName", sender.displayName());
         protocolPayload.put("conversationScopeType", scope.scopeType());
         protocolPayload.put("conversationScopeKey", scope.scopeKey());
         putIfPresent(protocolPayload, "taskContextId", scope.taskId());
         protocolPayload.put("metadata", trustedConversationMetadata(
-                chatMessage, conversationId, scope));
+                chatMessage, conversationId, scope, sender));
         payload.put("payload", protocolPayload);
         return payload;
     }
 
     private void saveDirectUserMessage(
             ChatMessageDTO chatMessage, String conversationId, JuyitingConversationScope scope,
-            String ownerJiacn, String ownerClientId, long generation) {
+            ServerResolvedSender sender, long generation) {
+        String ownerJiacn = sender.jiacn();
+        String ownerClientId = sender.clientId();
         ChatMessageEntity entity = new ChatMessageEntity();
         entity.setJiacn(ownerJiacn);
         entity.setClientId(ownerClientId);
@@ -262,17 +271,18 @@ public class JuyitingAgentRelayService {
         entity.setContent(chatMessage.getContent());
         entity.setSyncStatus("PENDING");
         entity.setConversationType(JuyitingConversationScopeService.CONVERSATION_TYPE_JUYITING);
-        entity.setSenderType(Optional.ofNullable(chatMessage.getSenderType()).orElse("user"));
-        entity.setSenderName(Optional.ofNullable(chatMessage.getSenderName()).orElse("用户"));
+        entity.setSenderType(sender.type());
+        entity.setSenderName(sender.displayName());
 
         entity.setMetadata(JsonUtil.toJson(
-                trustedConversationMetadata(chatMessage, conversationId, scope)));
+                trustedConversationMetadata(chatMessage, conversationId, scope, sender)));
         chatConversationService.appendOwnedMessage(
                 ownerJiacn, ownerClientId, entity, generation);
     }
 
     private Map<String, Object> trustedConversationMetadata(
-            ChatMessageDTO chatMessage, String conversationId, JuyitingConversationScope scope) {
+            ChatMessageDTO chatMessage, String conversationId, JuyitingConversationScope scope,
+            ServerResolvedSender sender) {
         Map<String, Object> metadata = new HashMap<>(
                 ConversationMetadataPolicy.copyAllowed(chatMessage.getMetadata()));
         // Trusted conversation scope always wins over caller-provided metadata aliases.
@@ -288,6 +298,10 @@ public class JuyitingAgentRelayService {
         if (!scope.authoritativeAgentIds().isEmpty()) {
             metadata.put("participantAgentIds", scope.authoritativeAgentIds());
         }
+        // Authenticated sender fields are written last and override every request alias.
+        metadata.put("senderType", sender.type());
+        metadata.put("senderName", sender.displayName());
+        metadata.put("jiacn", sender.jiacn());
         return metadata;
     }
 
@@ -341,6 +355,21 @@ public class JuyitingAgentRelayService {
             throw new IllegalStateException("Conversation generation is unavailable");
         }
         return generation;
+    }
+
+    private ServerResolvedSender requireTrustedSender(ServerResolvedSender sender) {
+        if (sender == null || !ServerResolvedSender.USER_TYPE.equals(sender.type())) {
+            throw new IllegalStateException("Authenticated sender identity is unavailable");
+        }
+        requireIdentityPart(sender.jiacn());
+        requireIdentityPart(sender.clientId());
+        if (sender.displayName() == null || sender.displayName().isBlank()
+                || !sender.displayName().equals(sender.displayName().strip())
+                || sender.displayName().codePointCount(0, sender.displayName().length()) > 100
+                || sender.displayName().codePoints().anyMatch(Character::isISOControl)) {
+            throw new IllegalStateException("Authenticated sender identity is unavailable");
+        }
+        return sender;
     }
 
     private String requireIdentityPart(String value) {

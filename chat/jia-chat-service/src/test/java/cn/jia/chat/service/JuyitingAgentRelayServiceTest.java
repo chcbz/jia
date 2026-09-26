@@ -64,7 +64,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
                 .thenReturn(true);
 
         JuyitingAgentRelayResult result = service().relay(
-                request("public", null, List.of("agent-wuyong")), "1001", Flux::empty);
+                request("public", null, List.of("agent-wuyong")), "1001", sender(), Flux::empty);
         CompletableFuture<List<String>> eventsFuture = result.stream()
                 .take(2).collectList().toFuture();
         assertTrue(broker.publishIfLive("1001", 1L, () -> true, Map.of(
@@ -83,13 +83,39 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
     }
 
     @Test
+    void builtinRelayPersistsAuthoritativeHumanSenderAndIgnoresSpoofedFields() {
+        stubLiveConversation();
+        when(builtinHallAgentSupport.isBuiltinAgent("songjiang")).thenReturn(true);
+        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+                .thenReturn(conversation("public", "public", null, List.of("songjiang")));
+        ChatMessageDTO request = request("public", null, List.of("songjiang"));
+        request.setSenderType("agent");
+        request.setSenderName("宋江");
+        request.setMetadata(Map.of("senderType", "agent", "senderName", "宋江"));
+
+        JuyitingAgentRelayResult result = service().relay(
+                request, "1001", sender(), () -> Flux.just("builtin"));
+
+        assertEquals(List.of("builtin"), result.stream().collectList().block());
+        ArgumentCaptor<ChatMessageEntity> message = ArgumentCaptor.forClass(ChatMessageEntity.class);
+        verify(chatConversationService).appendOwnedMessage(
+                eq("tester"), eq("web-client"), message.capture(), eq(1L));
+        assertEquals("user", message.getValue().getSenderType());
+        assertEquals("权威用户", message.getValue().getSenderName());
+        assertTrue(message.getValue().getMetadata().contains("\"senderType\":\"user\""));
+        assertTrue(message.getValue().getMetadata().contains("\"senderName\":\"权威用户\""));
+        verify(agentWebSocketHandler, never()).sendDirectMessageToAgent(
+                any(), any(), any(), any(Map.class));
+    }
+
+    @Test
     void participantMetadataCannotForgeTaskAuthorization() {
         when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "task-7"))
                 .thenReturn(List.of("agent-wuyong"));
         ChatMessageDTO request = request("bounty", "task-7", List.of("agent-linchong"));
         request.setMetadata(Map.of("participantAgentIds", List.of("agent-linchong")));
 
-        JuyitingAgentRelayResult result = service().relay(request, "1001", Flux::empty);
+        JuyitingAgentRelayResult result = service().relay(request, "1001", sender(), Flux::empty);
 
         assertTrue(result.attempted());
         assertTrue(result.stream().blockFirst().contains("task conversation scope unavailable"));
@@ -104,12 +130,12 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         ChatMessageDTO request = request("bounty", "task-7", List.of("agent-wuyong"));
         when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "task-7"))
                 .thenThrow(new IllegalStateException("query"));
-        assertTrue(service().relay(request, "1001", Flux::empty)
+        assertTrue(service().relay(request, "1001", sender(), Flux::empty)
                 .stream().blockFirst().contains("scope unavailable"));
 
         org.mockito.Mockito.doReturn(List.of()).when(agentService)
                 .listTaskWritableMemberAgentIds("0", "web-client", "task-7");
-        assertTrue(service().relay(request, "1001", Flux::empty)
+        assertTrue(service().relay(request, "1001", sender(), Flux::empty)
                 .stream().blockFirst().contains("scope unavailable"));
     }
 
@@ -128,7 +154,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         }
 
         JuyitingAgentRelayResult result = service().relay(
-                request("bounty", "task-7", members), "1001", Flux::empty);
+                request("bounty", "task-7", members), "1001", sender(), Flux::empty);
         List<String> events = result.stream().collectList().block();
 
         assertTrue(result.delivered().block());
@@ -158,7 +184,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
 
         JuyitingAgentRelayResult result = service().relay(
                 request("bounty", "task-7", List.of("agent-wuyong")),
-                "1001", Flux::empty);
+                "1001", sender(), Flux::empty);
 
         assertTrue(result.stream().blockFirst().contains("conversation scope mismatch"));
         verify(chatConversationService, never()).appendOwnedMessage(
@@ -181,7 +207,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         }
 
         JuyitingAgentRelayResult result = service().relay(
-                request("bounty", "task-7", members), "1001", Flux::empty);
+                request("bounty", "task-7", members), "1001", sender(), Flux::empty);
         List<String> events = result.stream().collectList().block();
 
         assertFalse(result.delivered().block());
@@ -202,7 +228,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
 
         JuyitingAgentRelayResult result = service().relay(
                 request("public", null, List.of("agent-wuyong")),
-                "1001", Flux::empty);
+                "1001", sender(), Flux::empty);
 
         assertTrue(result.stream().collectList().block(Duration.ofSeconds(2)).isEmpty());
         assertFalse(result.delivered().block(Duration.ofSeconds(2)));
@@ -220,7 +246,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
 
         JuyitingAgentRelayResult result = service().relay(
                 request("bounty", "task-7", List.of("agent-linchong")),
-                "1001", Flux::empty);
+                "1001", sender(), Flux::empty);
 
         assertTrue(result.stream().blockFirst().contains("conversation scope mismatch"));
         verify(chatConversationService, never()).appendOwnedMessage(
@@ -239,7 +265,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
 
         var subscription = service().relay(
                         request("public", null, List.of("agent-wuyong")),
-                        "1001", Flux::empty)
+                        "1001", sender(), Flux::empty)
                 .stream().subscribe();
         assertEquals(1, broker.subscriberCount("1001"));
         assertEquals(1, broker.watcherCount("1001"));
@@ -263,7 +289,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
 
         var subscription = service().relay(
                         request("public", null, List.of("agent-wuyong")),
-                        "1001", Flux::empty)
+                        "1001", sender(), Flux::empty)
                 .stream().subscribe(ignored -> { }, ignored -> { }, complete::countDown);
         assertEquals(1, broker.subscriberCount("1001"));
 
@@ -277,6 +303,12 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         assertFalse(broker.publishIfLive("1001", 1L, () -> false,
                 Map.of("type", "agent_message")));
         subscription.dispose();
+    }
+
+    private ServerResolvedSender sender() {
+        return new ServerResolvedSender(
+                ServerResolvedSender.USER_TYPE, "权威用户", "tester", "web-client",
+                DisplayNameSource.NICKNAME);
     }
 
     private void stubLiveConversation() {

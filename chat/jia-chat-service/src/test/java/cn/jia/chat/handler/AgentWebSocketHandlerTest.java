@@ -26,6 +26,8 @@ import cn.jia.chat.service.HallActionDispatcher;
 import cn.jia.chat.service.HallActionIntent;
 import cn.jia.chat.service.JuyitingAgentRelayResult;
 import cn.jia.chat.service.JuyitingAgentRelayService;
+import cn.jia.chat.service.DisplayNameSource;
+import cn.jia.chat.service.ServerResolvedSender;
 import cn.jia.chat.service.JuyitingConversationScopeService;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
@@ -1006,6 +1008,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
         when(agentService.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO("agent-001", "token-001", AgentConstants.STATUS_ONLINE));
+        when(agentService.get("agent-001")).thenReturn(runtime("agent-001", "Wu Yong"));
 
         ChatConversationEntity conversation = new ChatConversationEntity()
                 .setId(1001L).setJiacn("juyiting").setConversationType("juyiting")
@@ -1033,7 +1036,10 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 {"type":"agent.register","requestId":"reg-1","agentId":"agent-001","name":"Wu Yong"}
                 """));
         handler.handleTextMessage(session, new TextMessage("""
-                {"type":"agent.message","requestId":"reply-1","conversationId":"1001","conversationType":"juyiting","agentId":"agent-001","senderName":"Wu Yong","content":"Inspect the current state first."}
+                {"type":"agent.message.delta","requestId":"reply-1-delta","conversationId":"1001","conversationType":"juyiting","agentId":"agent-001","senderName":"宋江","agentName":"林冲","content":"Inspect "}
+                """));
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"agent.message","requestId":"reply-1","conversationId":"1001","conversationType":"juyiting","agentId":"agent-001","senderName":"宋江","agentName":"林冲","content":"Inspect the current state first."}
                 """));
 
         verify(chatConversationService).appendOwnedMessage(
@@ -1052,6 +1058,12 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 "agent-001".equals(event.get("agentId"))
                         && "Wu Yong".equals(event.get("senderName"))
                         && "Inspect the current state first.".equals(event.get("content"))));
+
+        verify(chatConversationEventBroker).publishIfLive(
+                org.mockito.Mockito.eq("1001"), org.mockito.Mockito.eq(1L), any(), argThat(event ->
+                "agent_message_delta".equals(event.get("type"))
+                        && "Wu Yong".equals(event.get("senderName"))
+                        && "Inspect ".equals(event.get("content"))));
 
         ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
         verify(session, org.mockito.Mockito.atLeast(4)).sendMessage(messageCaptor.capture());
@@ -1880,7 +1892,11 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         relayContext.setJiacn("tester");
         relayContext.setClientId("web-client");
         EsContextHolder.setContext(relayContext);
-        JuyitingAgentRelayResult relayResult = relayService.relay(chatMessage, "1001", () -> Flux.just("builtin"));
+        JuyitingAgentRelayResult relayResult = relayService.relay(
+                chatMessage, "1001",
+                new ServerResolvedSender("user", "测试用户", "tester", "web-client",
+                        DisplayNameSource.NICKNAME),
+                () -> Flux.just("builtin"));
         List<String> events = relayResult.stream().collectList().block(Duration.ofSeconds(5));
 
         assertTrue(relayResult.attempted());

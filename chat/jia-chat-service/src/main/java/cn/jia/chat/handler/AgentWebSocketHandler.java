@@ -29,6 +29,8 @@ import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.service.ChatConversationEventBroker;
 import cn.jia.chat.service.ChatConversationService;
+import cn.jia.chat.service.AgentSenderIdentityResolver;
+import cn.jia.chat.service.ServerResolvedAgentSender;
 import cn.jia.chat.service.ConversationMetadataPolicy;
 import cn.jia.chat.service.HallAnnouncementService;
 import cn.jia.core.context.EsContext;
@@ -570,8 +572,10 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         String ownerJiacn = sessionJiacn(session);
         String ownerClientId = sessionClientId(session);
         long generation = lifecycleGeneration(conversation);
-        String senderType = asString(payload.get("senderType"));
-        String senderName = asString(payload.get("senderName"));
+        ServerResolvedAgentSender sender = resolveAgentSender(session, payload, agentId);
+        if (sender == null) {
+            return;
+        }
         String content = asString(payload.get("content"));
         if (content == null || content.isBlank()) {
             sendError(session, payload, "content is required");
@@ -584,12 +588,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         Map<String, Object> started = copyTrace(payload);
         started.put("conversationId", conversationId);
         started.put("conversationType", conversationType);
-        if (senderType != null) {
-            started.put("senderType", senderType);
-        }
-        if (senderName != null) {
-            started.put("senderName", senderName);
-        }
+        started.put("senderType", sender.type());
+        started.put("senderName", sender.displayName());
         boolean live = chatConversationEventBroker.runIfLive(
                 conversationId, generation,
                 () -> chatConversationService.isLiveGeneration(
@@ -605,14 +605,15 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                         .param("jiacn", ownerJiacn)
                         .param("clientId", ownerClientId)
                         .param("conversationType", conversationType)
-                        .param("senderType", Optional.ofNullable(asString(payload.get("senderType"))).orElse(""))
-                        .param("senderName", Optional.ofNullable(asString(payload.get("senderName"))).orElse("")))
+                        .param(cn.jia.chat.advisor.DatabaseChatMemoryAdvisor.SERVER_RESOLVED_SENDER, sender))
                 .stream()
                 .content()
                 .concatMap(chunk -> Mono.fromRunnable(() -> {
                     Map<String, Object> event = copyTrace(payload);
                     event.put("conversationId", conversationId);
                     event.put("conversationType", conversationType);
+                    event.put("senderType", sender.type());
+                    event.put("senderName", sender.displayName());
                     event.put("content", chunk);
                     chatConversationEventBroker.runIfLive(
                             conversationId, generation,
@@ -633,6 +634,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                     Map<String, Object> done = copyTrace(payload);
                     done.put("conversationId", conversationId);
                     done.put("conversationType", conversationType);
+                    done.put("senderType", sender.type());
+                    done.put("senderName", sender.displayName());
                     chatConversationEventBroker.runIfLive(
                             conversationId, generation,
                             () -> chatConversationService.isLiveGeneration(
@@ -1039,8 +1042,11 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         }
         String conversationType = Optional.ofNullable(conversation.getConversationType()).orElse("normal");
         long generation = lifecycleGeneration(conversation);
-        String senderName = Optional.ofNullable(asString(payload.get("senderName")))
-                .orElse(Optional.ofNullable(asString(payload.get("agentName"))).orElse(agentId));
+        ServerResolvedAgentSender sender = resolveAgentSender(session, payload, agentId);
+        if (sender == null) {
+            return;
+        }
+        String senderName = sender.displayName();
 
         ChatMessageEntity entity = new ChatMessageEntity();
         entity.init4Creation();
@@ -1115,8 +1121,11 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         }
         String conversationType = Optional.ofNullable(conversation.getConversationType()).orElse("normal");
         long generation = lifecycleGeneration(conversation);
-        String senderName = Optional.ofNullable(asString(payload.get("senderName")))
-                .orElse(Optional.ofNullable(asString(payload.get("agentName"))).orElse(agentId));
+        ServerResolvedAgentSender sender = resolveAgentSender(session, payload, agentId);
+        if (sender == null) {
+            return;
+        }
+        String senderName = sender.displayName();
 
         Map<String, Object> event = copyTrace(payload);
         event.put("type", "agent_message_delta");
@@ -2167,6 +2176,32 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     private void putIfPresent(Map<String, Object> target, String key, Object value) {
         if (value != null) {
             target.put(key, value);
+        }
+    }
+
+    private ServerResolvedAgentSender resolveAgentSender(
+            WebSocketSession session, Map<String, Object> payload, String authenticatedAgentId) {
+        try {
+            AgentRuntimeDTO runtime = null;
+            AgentService agentService = agentServiceProvider.getIfAvailable();
+            if (agentService != null) {
+                try {
+                    runtime = withSessionContext(session, () -> agentService.get(authenticatedAgentId));
+                } catch (RuntimeException unavailableRuntime) {
+                    log.debug("Agent runtime display name unavailable; using authenticated agent id");
+                }
+            }
+            String displayName = AgentSenderIdentityResolver.resolve(runtime, authenticatedAgentId);
+            return new ServerResolvedAgentSender(
+                    ServerResolvedAgentSender.AGENT_TYPE,
+                    displayName,
+                    sessionJiacn(session),
+                    sessionClientId(session),
+                    authenticatedAgentId);
+        } catch (RuntimeException invalidIdentity) {
+            sendError(session, payload, "AGENT_IDENTITY_UNAVAILABLE",
+                    "Authenticated Agent identity is unavailable");
+            return null;
         }
     }
 

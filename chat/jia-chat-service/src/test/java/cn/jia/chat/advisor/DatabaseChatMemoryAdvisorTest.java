@@ -1,6 +1,8 @@
 package cn.jia.chat.advisor;
 
 import cn.jia.chat.service.ChatConversationService;
+import cn.jia.chat.service.DisplayNameSource;
+import cn.jia.chat.service.ServerResolvedSender;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.Test;
@@ -37,8 +39,11 @@ class DatabaseChatMemoryAdvisorTest extends BaseMockTest {
         context.put("jiacn", "test-user");
         context.put("clientId", "test-client");
         context.put("conversationType", "juyiting");
-        context.put("senderType", "user");
+        context.put("senderType", "agent");
         context.put("senderName", "宋江");
+        context.put(DatabaseChatMemoryAdvisor.SERVER_RESOLVED_SENDER,
+                new ServerResolvedSender("user", "测试用户", "test-user", "test-client",
+                        DisplayNameSource.NICKNAME));
 
         UserMessage userMessage = UserMessage.builder().text("大家好").build();
 
@@ -52,8 +57,11 @@ class DatabaseChatMemoryAdvisorTest extends BaseMockTest {
         ChatMessageEntity entity = captor.getValue();
         assertEquals("juyiting", entity.getConversationType());
         assertEquals("user", entity.getSenderType());
-        assertEquals("宋江", entity.getSenderName());
+        assertEquals("测试用户", entity.getSenderName());
         assertEquals("test-conv", entity.getConversationId());
+        org.junit.jupiter.api.Assertions.assertTrue(entity.getMetadata().contains("\"senderType\":\"user\""));
+        org.junit.jupiter.api.Assertions.assertTrue(entity.getMetadata().contains("\"senderName\":\"测试用户\""));
+        org.junit.jupiter.api.Assertions.assertTrue(entity.getMetadata().contains("\"jiacn\":\"test-user\""));
         assertEquals("USER", entity.getMessageType());
         assertEquals("大家好", entity.getContent());
     }

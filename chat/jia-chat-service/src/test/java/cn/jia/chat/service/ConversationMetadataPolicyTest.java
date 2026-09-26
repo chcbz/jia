@@ -16,13 +16,15 @@ class ConversationMetadataPolicyTest {
                 "chunkIndex", 2,
                 "targetAgentIds", List.of("agent-a", "agent-b"),
                 "accessToken", "secret",
-                "senderName", Map.of("nested", "payload"),
+                "senderType", "agent",
+                "senderName", "宋江",
                 "taskId", "x".repeat(513)));
 
         assertEquals("41", safe.get("conversationId"));
         assertEquals(2, safe.get("chunkIndex"));
         assertEquals(List.of("agent-a", "agent-b"), safe.get("targetAgentIds"));
         assertFalse(safe.containsKey("accessToken"));
+        assertFalse(safe.containsKey("senderType"));
         assertFalse(safe.containsKey("senderName"));
         assertFalse(safe.containsKey("taskId"));
     }

@@ -2,6 +2,9 @@ package cn.jia.chat.advisor;
 
 import cn.jia.chat.service.ChatConversationService;
 import cn.jia.chat.service.ConversationMetadataPolicy;
+import cn.jia.chat.service.ServerResolvedAgentSender;
+import cn.jia.chat.service.ServerResolvedSender;
+import cn.jia.chat.service.ServerTrustedSender;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.StringUtil;
@@ -55,6 +58,7 @@ public class DatabaseChatMemoryAdvisor implements BaseChatMemoryAdvisor {
     public static final String USER_MESSAGE = "user_message";
     public static final String SKIP_USER_MESSAGE_PERSISTENCE = "skipUserMessagePersistence";
     public static final String SKIP_ASSISTANT_MESSAGE_PERSISTENCE = "skipAssistantMessagePersistence";
+    public static final String SERVER_RESOLVED_SENDER = "serverResolvedSender";
 
     private static final String MEMORY_TEMPLATE = """
         {instructions}
@@ -211,14 +215,21 @@ public class DatabaseChatMemoryAdvisor implements BaseChatMemoryAdvisor {
             // 设置同步状态为 PENDING，标记该会话需要同步到向量库
             entity.setSyncStatus("PENDING");
             entity.setConversationType(String.valueOf(context.getOrDefault("conversationType", "normal")));
-            entity.setSenderType(String.valueOf(context.getOrDefault("senderType", "")));
-            entity.setSenderName(String.valueOf(context.getOrDefault("senderName", "")));
+            ServerTrustedSender sender = resolvedSender(context, ownerJiacn, ownerClientId);
+            entity.setSenderType(sender == null ? "" : sender.type());
+            entity.setSenderName(sender == null ? "" : sender.displayName());
 
             Map<String, Object> metadata = Optional.ofNullable(message.getMetadata())
                     .map(ConversationMetadataPolicy::copyAllowed)
                     .orElseGet(HashMap::new);
             // Advisor context contains the captured conversation scope and must win on conflicts.
             metadata.putAll(ConversationMetadataPolicy.copyAllowed(context));
+            if (sender != null) {
+                // Server-authenticated identity is written last and cannot be supplied by metadata.
+                metadata.put("senderType", sender.type());
+                metadata.put("senderName", sender.displayName());
+                metadata.put("jiacn", sender.jiacn());
+            }
             entity.setMetadata(JsonUtil.toJson(metadata));
 
             chatConversationService.appendOwnedMessage(ownerJiacn, ownerClientId, entity);
@@ -227,6 +238,37 @@ public class DatabaseChatMemoryAdvisor implements BaseChatMemoryAdvisor {
             log.error("Failed to save message for conversation ID: {}", conversationId, e);
             throw new RuntimeException("Failed to save message for conversation ID: " + conversationId, e);
         }
+    }
+
+    private ServerTrustedSender resolvedSender(
+            Map<String, Object> context, String ownerJiacn, String ownerClientId) {
+        Object raw = context.get(SERVER_RESOLVED_SENDER);
+        if (raw == null) {
+            return null;
+        }
+        if (!(raw instanceof ServerTrustedSender sender)
+                || !trustedTypeMatches(sender)
+                || sender.displayName() == null
+                || sender.displayName().isBlank()
+                || !sender.displayName().equals(sender.displayName().strip())
+                || sender.displayName().length() > 100
+                || sender.displayName().chars().anyMatch(Character::isISOControl)
+                || !ownerJiacn.equals(sender.jiacn())
+                || !ownerClientId.equals(sender.clientId())) {
+            throw new IllegalStateException("Server-resolved sender scope mismatch");
+        }
+        return sender;
+    }
+
+    private boolean trustedTypeMatches(ServerTrustedSender sender) {
+        return sender instanceof ServerResolvedSender
+                ? ServerResolvedSender.USER_TYPE.equals(sender.type())
+                : sender instanceof ServerResolvedAgentSender agentSender
+                && ServerResolvedAgentSender.AGENT_TYPE.equals(sender.type())
+                && agentSender.agentId() != null
+                && !agentSender.agentId().isBlank()
+                && agentSender.agentId().equals(agentSender.agentId().strip())
+                && agentSender.agentId().chars().noneMatch(Character::isISOControl);
     }
 
     private String requireIdentity(Map<String, Object> context, String field) {

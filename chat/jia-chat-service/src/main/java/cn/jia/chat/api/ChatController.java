@@ -8,6 +8,7 @@ import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.exception.AgentTaskThreadException;
 import cn.jia.core.util.JsonUtil;
+import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.entity.JsonRequestPage;
 import cn.jia.core.entity.JsonResult;
@@ -24,6 +25,8 @@ import cn.jia.chat.service.JuyitingAgentRelayResult;
 import cn.jia.chat.service.JuyitingAgentRelayService;
 import cn.jia.chat.service.JuyitingConversationScope;
 import cn.jia.chat.service.JuyitingConversationScopeService;
+import cn.jia.chat.service.HumanSenderIdentityResolver;
+import cn.jia.chat.service.ServerResolvedSender;
 import cn.jia.chat.service.impl.AgentTaskThreadMemoryGuard;
 import com.github.pagehelper.PageInfo;
 import io.micrometer.core.instrument.util.StringEscapeUtils;
@@ -81,12 +84,14 @@ public class ChatController {
     private final JuyitingAgentRelayService juyitingAgentRelayService;
     private final MemoryRepository memoryRepository;
     private final AgentTaskThreadMemoryGuard taskThreadMemoryGuard;
+    private final HumanSenderIdentityResolver humanSenderIdentityResolver;
     public ChatController(@Lazy ChatClient chatClient, ChatConversationService chatConversationService,
             RedisService redisService, ChatClient.Builder chatClientBuilder,
             ChatConversationEventBroker chatConversationEventBroker, BuiltinHallAgentSupport builtinHallAgentSupport,
             JuyitingConversationScopeService juyitingConversationScopeService,
             JuyitingAgentRelayService juyitingAgentRelayService, @Lazy MemoryRepository memoryRepository,
-            AgentTaskThreadMemoryGuard taskThreadMemoryGuard) {
+            AgentTaskThreadMemoryGuard taskThreadMemoryGuard,
+            HumanSenderIdentityResolver humanSenderIdentityResolver) {
         this.chatClient = chatClient;
         this.chatConversationService = chatConversationService;
         this.redisService = redisService;
@@ -97,6 +102,7 @@ public class ChatController {
         this.juyitingAgentRelayService = juyitingAgentRelayService;
         this.memoryRepository = memoryRepository;
         this.taskThreadMemoryGuard = taskThreadMemoryGuard;
+        this.humanSenderIdentityResolver = humanSenderIdentityResolver;
     }
 
     private static final PromptTemplate SUMMARY_PROMPT_TEMPLATE = new PromptTemplate("""
@@ -120,26 +126,29 @@ public class ChatController {
      */
     @RequestMapping(value = "/stream", method = RequestMethod.POST, produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<String> handleChat(@RequestBody ChatMessageDTO chatMessage) {
-        ChatConversationEntity conversation = getOrCreateConversation(chatMessage);
+        EsContext context = EsContextHolder.getContext();
+        ServerResolvedSender sender = humanSenderIdentityResolver.resolve(context);
+        ChatConversationEntity conversation = getOrCreateConversation(chatMessage, sender);
         boolean needSummary = StringUtil.isBlank(conversation.getTitle());
         StringBuilder summary = new StringBuilder();
         String conversationId = String.valueOf(conversation.getId());
-        String ownerJiacn = requireIdentityPart(EsContextHolder.getContext().getJiacn());
-        String ownerClientId = requireIdentityPart(EsContextHolder.getContext().getClientId());
+        String ownerJiacn = sender.jiacn();
+        String ownerClientId = sender.clientId();
         long generation = lifecycleGeneration(conversation);
 
         Flux<String> cancelSignal = redisService.subscribeToChannel(conversationId);
         JuyitingAgentRelayResult agentDelivery = juyitingAgentRelayService.relay(
                 chatMessage,
                 conversationId,
+                sender,
                 () -> createBuiltinSongJiangStream(
-                        chatMessage, conversationId, ownerJiacn, ownerClientId,
+                        chatMessage, conversationId, sender,
                         generation, needSummary, summary)
         );
         boolean skipAdvisorUserPersistence = agentDelivery.attempted();
         Flux<String> aiStream = agentDelivery.delivered().flatMapMany(delivered -> delivered
                 ? Flux.empty()
-                : createAIStream(chatMessage, conversationId, ownerJiacn, ownerClientId,
+                : createAIStream(chatMessage, conversationId, sender,
                         resolveConversationType(conversation), needSummary, summary,
                         skipAdvisorUserPersistence));
 
@@ -216,13 +225,14 @@ public class ChatController {
                 + escapeJson(resolveConversationType(conversation)) + "\"}";
     }
 
-    private ChatConversationEntity getOrCreateConversation(ChatMessageDTO chatMessage) {
+    private ChatConversationEntity getOrCreateConversation(
+            ChatMessageDTO chatMessage, ServerResolvedSender sender) {
         ChatConversationEntity message;
         if (StringUtil.isBlank(chatMessage.getConversationId()) || Boolean.TRUE.equals(chatMessage.getForceNewConversation())) {
             message = new ChatConversationEntity();
             message.setStatus(0);
-            message.setJiacn(EsContextHolder.getContext().getJiacn());
-            message.setClientId(EsContextHolder.getContext().getClientId());
+            message.setJiacn(sender.jiacn());
+            message.setClientId(sender.clientId());
             message.setConversationType(
                     StringUtil.isNotBlank(chatMessage.getConversationType())
                             ? chatMessage.getConversationType()
@@ -240,8 +250,8 @@ public class ChatController {
                     scope = juyitingConversationScopeService.authorize(
                             chatMessage,
                             juyitingConversationScopeService.resolve(chatMessage),
-                            requireIdentityPart(EsContextHolder.getContext().getJiacn()),
-                            requireIdentityPart(EsContextHolder.getContext().getClientId()));
+                            sender.jiacn(),
+                            sender.clientId());
                 } catch (RuntimeException denied) {
                     throw new AgentTaskThreadException(
                             AgentTaskThreadException.Reason.NOT_FOUND_OR_FORBIDDEN,
@@ -339,9 +349,11 @@ public class ChatController {
 
     private Flux<String> createAIStream(
             ChatMessageDTO chatMessage, String conversationId,
-            String ownerJiacn, String ownerClientId, String conversationType,
+            ServerResolvedSender sender, String conversationType,
             boolean needSummary, StringBuilder summary,
             boolean skipAdvisorUserPersistence) {
+        String ownerJiacn = sender.jiacn();
+        String ownerClientId = sender.clientId();
         String filterExpression = "metadata.jiacn == '" + ownerJiacn + "' AND role == 'ASSISTANT'";
         
         return chatClient.prompt(
@@ -351,8 +363,7 @@ public class ChatController {
                         .param("jiacn", ownerJiacn)
                         .param("clientId", ownerClientId)
                         .param("conversationType", conversationType)
-                        .param("senderType", Optional.ofNullable(chatMessage.getSenderType()).orElse(""))
-                        .param("senderName", Optional.ofNullable(chatMessage.getSenderName()).orElse(""))
+                        .param(DatabaseChatMemoryAdvisor.SERVER_RESOLVED_SENDER, sender)
                         .param("selectedAgentId", Optional.ofNullable(juyitingAgentRelayService.selectedAgentId(chatMessage)).orElse(""))
                         .param(DatabaseChatMemoryAdvisor.SKIP_USER_MESSAGE_PERSISTENCE, skipAdvisorUserPersistence)
                         .param(QuestionAnswerAdvisor.FILTER_EXPRESSION, filterExpression))
@@ -363,8 +374,10 @@ public class ChatController {
 
     private Flux<String> createBuiltinSongJiangStream(
             ChatMessageDTO chatMessage, String conversationId,
-            String ownerJiacn, String ownerClientId, long generation,
+            ServerResolvedSender sender, long generation,
             boolean needSummary, StringBuilder summary) {
+        String ownerJiacn = sender.jiacn();
+        String ownerClientId = sender.clientId();
         StringBuilder answer = new StringBuilder();
         Flux<String> deliveryEvent = Flux.just(buildAgentDeliveryEventJson(conversationId, builtinHallAgentSupport.defaultAgentId(), true));
 
@@ -375,8 +388,7 @@ public class ChatController {
                         .param("jiacn", ownerJiacn)
                         .param("clientId", ownerClientId)
                         .param("conversationType", CONVERSATION_TYPE_JUYITING)
-                        .param("senderType", Optional.ofNullable(chatMessage.getSenderType()).orElse("user"))
-                        .param("senderName", Optional.ofNullable(chatMessage.getSenderName()).orElse("用户"))
+                        .param(DatabaseChatMemoryAdvisor.SERVER_RESOLVED_SENDER, sender)
                         .param("selectedAgentId", builtinHallAgentSupport.defaultAgentId())
                         .param(DatabaseChatMemoryAdvisor.SKIP_USER_MESSAGE_PERSISTENCE, true)
                         .param(DatabaseChatMemoryAdvisor.SKIP_ASSISTANT_MESSAGE_PERSISTENCE, true)

@@ -10,7 +10,11 @@ public class ChatMessageDTO {
     private String conversationId;
     private String content;
     private String conversationType;
+    /** @deprecated accepted for wire compatibility but ignored by the server. */
+    @Deprecated
     private String senderType;
+    /** @deprecated accepted for wire compatibility but ignored by the server. */
+    @Deprecated
     private String senderName;
     private String model;
     private String conversationScopeType;
