@@ -206,6 +206,11 @@ class ChatControllerTest extends BaseMockTest {
 
     @Test
     void genericChatCannotCreateReservedTaskThreadScope() {
+        EsContext context = new EsContext();
+        context.setJiacn("tester");
+        context.setClientId("web-client");
+        EsContextHolder.setContext(context);
+
         ChatMessageDTO request = new ChatMessageDTO();
         request.setContent("spoof task thread");
         request.setConversationType(ChatController.CONVERSATION_TYPE_JUYITING);
