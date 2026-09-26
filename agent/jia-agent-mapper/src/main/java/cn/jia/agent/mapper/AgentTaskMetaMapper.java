@@ -295,16 +295,16 @@ public interface AgentTaskMetaMapper extends BaseMapper<AgentTaskMetaEntity> {
               AND OCTET_LENGTH(task.tenant_id) = OCTET_LENGTH(#{tenantId})
               AND CAST(task.client_id AS BINARY(200)) = CAST(#{clientId} AS BINARY(200))
               AND OCTET_LENGTH(task.client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(task.reward_status AS BINARY) IN (
+                  CAST('open' AS BINARY), CAST('planning' AS BINARY),
+                  CAST('assigned' AS BINARY), CAST('running' AS BINARY),
+                  CAST('reviewing' AS BINARY), CAST('blocked' AS BINARY)
+              )
               AND (
                   (
                       task.assigned_agent_id = #{agentId}
                       AND CAST(task.assigned_agent_id AS BINARY(400)) = CAST(#{agentId} AS BINARY(400))
                       AND OCTET_LENGTH(task.assigned_agent_id) = OCTET_LENGTH(#{agentId})
-                      AND CAST(task.reward_status AS BINARY) IN (
-                          CAST('open' AS BINARY), CAST('planning' AS BINARY),
-                          CAST('assigned' AS BINARY), CAST('running' AS BINARY),
-                          CAST('reviewing' AS BINARY), CAST('blocked' AS BINARY)
-                      )
                   )
                   OR EXISTS (
                       SELECT 1

@@ -3,6 +3,7 @@ package cn.jia.agent.service.impl;
 import cn.jia.agent.common.TaskEventPayload;
 import cn.jia.agent.common.TaskEventType;
 import cn.jia.agent.dao.AgentTaskFormalDeliveryDao;
+import cn.jia.agent.dao.AgentTaskMemberDao;
 import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.dao.AgentTaskWorkItemDao;
 import cn.jia.agent.entity.AgentTaskEventWriteCommand;
@@ -11,6 +12,8 @@ import cn.jia.agent.entity.AgentTaskFormalDeliveryEntity;
 import cn.jia.agent.entity.AgentTaskFormalDeliveryItemDTO;
 import cn.jia.agent.entity.AgentTaskFormalDeliveryItemEntity;
 import cn.jia.agent.entity.AgentTaskFormalDeliveryViewDTO;
+import cn.jia.agent.entity.AgentTaskMemberDTO;
+import cn.jia.agent.entity.AgentTaskMemberEntity;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.entity.AgentTaskWorkItemDTO;
 import cn.jia.agent.entity.AgentTaskWorkItemEntity;
@@ -20,6 +23,7 @@ import cn.jia.agent.service.AgentTaskEventWriter;
 import cn.jia.agent.service.AgentTaskFormalDeliveryDecisionService;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.state.AgentTaskFormalDeliveryState;
+import cn.jia.agent.state.AgentTaskMemberStatus;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 import org.springframework.transaction.annotation.Transactional;
@@ -47,6 +51,7 @@ public class AgentTaskFormalDeliveryDecisionServiceImpl implements AgentTaskForm
 
     private final AgentTaskFormalDeliveryDao deliveryDao;
     private final AgentTaskMetaDao taskMetaDao;
+    private final AgentTaskMemberDao memberDao;
     private final AgentTaskWorkItemDao workItemDao;
     private final AgentTaskMutationTransaction mutationTransaction;
     private final AgentTaskEventWriter eventWriter;
@@ -54,18 +59,20 @@ public class AgentTaskFormalDeliveryDecisionServiceImpl implements AgentTaskForm
 
     @Inject
     public AgentTaskFormalDeliveryDecisionServiceImpl(AgentTaskFormalDeliveryDao deliveryDao,
-            AgentTaskMetaDao taskMetaDao, AgentTaskWorkItemDao workItemDao,
-            AgentTaskMutationTransaction mutationTransaction, AgentTaskEventWriter eventWriter) {
-        this(deliveryDao, taskMetaDao, workItemDao, mutationTransaction, eventWriter,
+            AgentTaskMetaDao taskMetaDao, AgentTaskMemberDao memberDao,
+            AgentTaskWorkItemDao workItemDao, AgentTaskMutationTransaction mutationTransaction,
+            AgentTaskEventWriter eventWriter) {
+        this(deliveryDao, taskMetaDao, memberDao, workItemDao, mutationTransaction, eventWriter,
                 System::currentTimeMillis);
     }
 
     AgentTaskFormalDeliveryDecisionServiceImpl(AgentTaskFormalDeliveryDao deliveryDao,
-            AgentTaskMetaDao taskMetaDao, AgentTaskWorkItemDao workItemDao,
-            AgentTaskMutationTransaction mutationTransaction, AgentTaskEventWriter eventWriter,
-            LongSupplier clock) {
+            AgentTaskMetaDao taskMetaDao, AgentTaskMemberDao memberDao,
+            AgentTaskWorkItemDao workItemDao, AgentTaskMutationTransaction mutationTransaction,
+            AgentTaskEventWriter eventWriter, LongSupplier clock) {
         this.deliveryDao = Objects.requireNonNull(deliveryDao, "deliveryDao");
         this.taskMetaDao = Objects.requireNonNull(taskMetaDao, "taskMetaDao");
+        this.memberDao = Objects.requireNonNull(memberDao, "memberDao");
         this.workItemDao = Objects.requireNonNull(workItemDao, "workItemDao");
         this.mutationTransaction = Objects.requireNonNull(mutationTransaction, "mutationTransaction");
         this.eventWriter = Objects.requireNonNull(eventWriter, "eventWriter");
@@ -98,6 +105,9 @@ public class AgentTaskFormalDeliveryDecisionServiceImpl implements AgentTaskForm
         AgentTaskWorkItemEntity workItem = workItemDao.findByTaskAndWorkItemId(
                 tenantId, clientId, ownerJiacn, taskId, delivery.getWorkItemId());
         requireSubmittedWorkItem(workItem, tenantId, clientId, ownerJiacn, taskId, delivery);
+        AgentTaskMemberEntity member = decision.state() == AgentTaskFormalDeliveryState.ACCEPTED
+                ? requireActiveAssignee(tenantId, clientId, ownerJiacn, taskId, workItem)
+                : null;
 
         long decidedAt = now();
         int reviewed = deliveryDao.reviewByVersion(tenantId, clientId, delivery.getDeliveryId(),
@@ -124,9 +134,10 @@ public class AgentTaskFormalDeliveryDecisionServiceImpl implements AgentTaskForm
                 tenantId, clientId, ownerJiacn, workItem.getWorkItemId(), workItem.getVersion(), workUpdate);
         if (workUpdated == 0) throw conflict("Work item changed during formal delivery decision");
         requireOne(workUpdated, "Formal delivery work-item CAS affected an unexpected row count");
+        if (member != null) completeMember(tenantId, clientId, ownerJiacn, taskId, member, decidedAt);
 
         AgentTaskFormalDeliveryEntity result = copyDecision(delivery, decision, ownerJiacn, decidedAt);
-        appendEvents(tenantId, clientId, ownerJiacn, taskId, decision, workItem, root, decidedAt);
+        appendEvents(tenantId, clientId, ownerJiacn, taskId, decision, member, workItem, root, decidedAt);
         return view(result, deliveryDao.listItems(tenantId, clientId, delivery.getDeliveryId()),
                 root.getTaskVersion() + 1, workItem.getVersion() + 1, false);
     }
@@ -139,8 +150,46 @@ public class AgentTaskFormalDeliveryDecisionServiceImpl implements AgentTaskForm
         requireOne(updated, "Formal delivery task CAS affected an unexpected row count");
     }
 
+    private AgentTaskMemberEntity requireActiveAssignee(String tenantId, String clientId, String ownerJiacn,
+            String taskId, AgentTaskWorkItemEntity workItem) {
+        String agentId = workItem.getAssigneeAgentId();
+        if (agentId == null || agentId.isBlank()) {
+            throw invalidPersisted("Submitted formal work item has no assignee");
+        }
+        AgentTaskMemberEntity member = memberDao.findByTaskAndAgentForUpdate(
+                tenantId, clientId, ownerJiacn, taskId, agentId);
+        if (member == null || !tenantId.equals(member.getTenantId()) || !clientId.equals(member.getClientId())
+                || !ownerJiacn.equals(member.getOwnerJiacn()) || !taskId.equals(member.getTaskId())
+                || !agentId.equals(member.getAgentId()) || member.getVersion() == null
+                || member.getVersion() < 0 || member.getCompletedAt() != null) {
+            throw invalidPersisted("Formal delivery assignee member is invalid");
+        }
+        AgentTaskMemberStatus status;
+        try {
+            status = AgentTaskMemberStatus.fromPersistedValue(member.getMemberStatus());
+        } catch (IllegalArgumentException invalid) {
+            throw invalidPersisted("Formal delivery assignee member status is invalid");
+        }
+        if (status != AgentTaskMemberStatus.ACCEPTED && status != AgentTaskMemberStatus.WORKING) {
+            throw invalidPersisted("Formal delivery assignee member is not active");
+        }
+        return member;
+    }
+
+    private void completeMember(String tenantId, String clientId, String ownerJiacn, String taskId,
+            AgentTaskMemberEntity member, long completedAt) {
+        AgentTaskMemberDTO update = copyMember(member);
+        update.setMemberStatus(AgentTaskMemberStatus.DONE.value());
+        update.setCompletedAt(completedAt);
+        update.setFailureReason(null);
+        int updated = memberDao.updateByVersion(tenantId, clientId, ownerJiacn, taskId,
+                member.getAgentId(), member.getVersion(), update);
+        if (updated == 0) throw conflict("Task member changed during formal delivery decision");
+        requireOne(updated, "Formal delivery member CAS affected an unexpected row count");
+    }
+
     private void appendEvents(String tenantId, String clientId, String ownerJiacn, String taskId, Decision decision,
-            AgentTaskWorkItemEntity workItem, AgentTaskMetaEntity root, long occurredAt) {
+            AgentTaskMemberEntity member, AgentTaskWorkItemEntity workItem, AgentTaskMetaEntity root, long occurredAt) {
         String formalEvent = decision.state() == AgentTaskFormalDeliveryState.ACCEPTED
                 ? TaskEventType.FORMAL_DELIVERY_ACCEPTED
                 : TaskEventType.FORMAL_DELIVERY_CHANGES_REQUESTED;
@@ -158,6 +207,19 @@ public class AgentTaskFormalDeliveryDecisionServiceImpl implements AgentTaskForm
                 formalEvent, TaskEventType.ActorType.ROLE, OWNER_ROLE,
                 TaskEventType.Aggregate.FORMAL_DELIVERY, decision.deliveryId(), formal, occurredAt,
                 decision.expectedDeliveryVersion() + 1));
+
+        if (member != null) {
+            long memberResult = member.getVersion() + 1;
+            eventWriter.append(AgentTaskMutationEventSupport.command(tenantId, clientId, ownerJiacn, taskId,
+                    TaskEventType.MEMBER_DONE, TaskEventType.ActorType.SYSTEM, null,
+                    TaskEventType.Aggregate.MEMBER, member.getAgentId(), TaskEventPayload.builder()
+                            .put(TaskEventPayload.Key.AGENT_ID, member.getAgentId())
+                            .put(TaskEventPayload.Key.ROLE, member.getMemberRole())
+                            .put(TaskEventPayload.Key.FROM_STATUS, member.getMemberStatus())
+                            .put(TaskEventPayload.Key.TO_STATUS, AgentTaskMemberStatus.DONE.value())
+                            .put(TaskEventPayload.Key.EXPECTED_VERSION, member.getVersion())
+                            .put(TaskEventPayload.Key.RESULT_VERSION, memberResult), occurredAt, memberResult));
+        }
 
         long workResult = workItem.getVersion() + 1;
         String workTarget = decision.state() == AgentTaskFormalDeliveryState.ACCEPTED
@@ -283,6 +345,17 @@ public class AgentTaskFormalDeliveryDecisionServiceImpl implements AgentTaskForm
         view.setReviewReason(delivery.getReviewReason()); view.setTaskVersion(taskVersion);
         view.setWorkItemVersion(workItemVersion); view.setReplayed(replayed); view.setItems(List.copyOf(items));
         return view;
+    }
+
+    private AgentTaskMemberDTO copyMember(AgentTaskMemberEntity source) {
+        AgentTaskMemberDTO result = new AgentTaskMemberDTO();
+        result.setTaskId(source.getTaskId()); result.setAgentId(source.getAgentId());
+        result.setMemberRole(source.getMemberRole()); result.setMemberStatus(source.getMemberStatus());
+        result.setAssignmentSource(source.getAssignmentSource()); result.setJoinedAt(source.getJoinedAt());
+        result.setAcceptedAt(source.getAcceptedAt()); result.setStartedAt(source.getStartedAt());
+        result.setCompletedAt(source.getCompletedAt()); result.setLastHeartbeatAt(source.getLastHeartbeatAt());
+        result.setFailureReason(source.getFailureReason()); result.setVersion(source.getVersion());
+        return result;
     }
 
     private AgentTaskWorkItemDTO copyWorkItem(AgentTaskWorkItemEntity source) {

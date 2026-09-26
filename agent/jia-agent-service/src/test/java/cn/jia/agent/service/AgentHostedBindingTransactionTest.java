@@ -33,7 +33,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class AgentHostedBindingTransactionTest {
-    private static final Scope SCOPE = new Scope("owner-a", "client-a", "owner-a");
+    private static final Scope SCOPE = new Scope("0", "client-a", "owner-a");
     private static final String AGENT_ID = "agt_0123456789abcdef0123456789abcdef";
 
     @Test
@@ -48,8 +48,8 @@ class AgentHostedBindingTransactionTest {
 
         when(fixture.bindingDao.findByIdForUpdate(12L)).thenReturn(binding);
         when(fixture.identityService.requireRegistrationIdentityInScope(
-                "owner-a", "client-a", "owner-a", AGENT_ID)).thenReturn(identity);
-        when(fixture.hostedDao.findExactForUpdate("owner-a", "client-a", "owner-a", 12L))
+                "0", "client-a", "owner-a", AGENT_ID)).thenReturn(identity);
+        when(fixture.hostedDao.findExactForUpdate("0", "client-a", "owner-a", 12L))
                 .thenReturn(hosted);
         when(fixture.runtimeDao.findByAgentIdForUpdate(AGENT_ID)).thenReturn(runtime);
         when(fixture.runtimeDao.findByAgentId(AGENT_ID)).thenReturn(runtime);
@@ -78,7 +78,7 @@ class AgentHostedBindingTransactionTest {
             verify(fixture.eventPublisher, never()).publishAgentStatus(any(), any(), any());
             InOrder order = inOrder(fixture.bindingDao, fixture.hostedDao, fixture.runtimeDao);
             order.verify(fixture.bindingDao).findByIdForUpdate(12L);
-            order.verify(fixture.hostedDao).findExactForUpdate("owner-a", "client-a", "owner-a", 12L);
+            order.verify(fixture.hostedDao).findExactForUpdate("0", "client-a", "owner-a", 12L);
             order.verify(fixture.runtimeDao).findByAgentIdForUpdate(AGENT_ID);
             order.verify(fixture.bindingDao).updateById(binding);
             order.verify(fixture.runtimeDao).clearBindingAfterUnbind(
@@ -96,7 +96,7 @@ class AgentHostedBindingTransactionTest {
         assertNull(snapshot.getValue().getOwnerJiacn());
         assertNull(snapshot.getValue().getEndpoint());
         verify(fixture.apiKeys, never()).update(any());
-        verify(fixture.identityService).suspendForBinding("owner-a", "client-a", "owner-a", 12L);
+        verify(fixture.identityService).suspendForBinding("0", "client-a", "owner-a", 12L);
     }
 
     @Test
@@ -110,10 +110,10 @@ class AgentHostedBindingTransactionTest {
 
         when(fixture.personaDao.findByCode("wuyong")).thenReturn(persona());
         when(fixture.bindingDao.findExactActiveByScopeAndPersonaForUpdate(
-                "owner-a", "client-a", "owner-a", "wuyong")).thenReturn(binding);
+                "0", "client-a", "owner-a", "wuyong")).thenReturn(binding);
         when(fixture.identityService.requireRegistrationIdentityInScope(
-                "owner-a", "client-a", "owner-a", AGENT_ID)).thenReturn(identity);
-        when(fixture.hostedDao.findExactForUpdate("owner-a", "client-a", "owner-a", 12L))
+                "0", "client-a", "owner-a", AGENT_ID)).thenReturn(identity);
+        when(fixture.hostedDao.findExactForUpdate("0", "client-a", "owner-a", 12L))
                 .thenReturn(null);
         when(fixture.runtimeDao.findByAgentIdForUpdate(AGENT_ID)).thenReturn(freshRuntime);
 
@@ -142,8 +142,8 @@ class AgentHostedBindingTransactionTest {
 
         when(fixture.bindingDao.findByIdForUpdate(12L)).thenReturn(binding);
         when(fixture.identityService.requireRegistrationIdentityInScope(
-                "owner-a", "client-a", "owner-a", AGENT_ID)).thenReturn(identity());
-        when(fixture.hostedDao.findExactForUpdate("owner-a", "client-a", "owner-a", 12L))
+                "0", "client-a", "owner-a", AGENT_ID)).thenReturn(identity());
+        when(fixture.hostedDao.findExactForUpdate("0", "client-a", "owner-a", 12L))
                 .thenReturn(hosted);
         when(fixture.runtimeDao.findByAgentIdForUpdate(AGENT_ID)).thenReturn(runtime);
 
@@ -169,21 +169,21 @@ class AgentHostedBindingTransactionTest {
         AgentRuntimeEntity runtime = runtime(AgentConstants.STATUS_ONLINE);
         AgentTaskMetaEntity assigned = new AgentTaskMetaEntity();
         assigned.setTaskId("durable-task");
-        assigned.setTenantId("owner-a");
+        assigned.setTenantId("0");
         assigned.setClientId("client-a");
         assigned.setAssignedAgentId(AGENT_ID);
         assigned.setRewardStatus(AgentConstants.TASK_STATUS_ASSIGNED);
 
         when(fixture.personaDao.findByCode("wuyong")).thenReturn(persona());
         when(fixture.bindingDao.findExactActiveByScopeAndPersonaForUpdate(
-                "owner-a", "client-a", "owner-a", "wuyong")).thenReturn(binding);
+                "0", "client-a", "owner-a", "wuyong")).thenReturn(binding);
         when(fixture.identityService.requireRegistrationIdentityInScope(
-                "owner-a", "client-a", "owner-a", AGENT_ID)).thenReturn(identity());
-        when(fixture.hostedDao.findExactForUpdate("owner-a", "client-a", "owner-a", 12L))
+                "0", "client-a", "owner-a", AGENT_ID)).thenReturn(identity());
+        when(fixture.hostedDao.findExactForUpdate("0", "client-a", "owner-a", 12L))
                 .thenReturn(null);
         when(fixture.runtimeDao.findByAgentIdForUpdate(AGENT_ID)).thenReturn(runtime);
         when(fixture.taskMetaDao.findDurableActiveAssignmentByAgentForUpdate(
-                "owner-a", "client-a", AGENT_ID)).thenReturn(assigned);
+                "0", "client-a", AGENT_ID)).thenReturn(assigned);
 
         AgentServiceImpl.AgentBizException failure = assertThrows(
                 AgentServiceImpl.AgentBizException.class,
@@ -193,12 +193,12 @@ class AgentHostedBindingTransactionTest {
         InOrder order = inOrder(fixture.bindingDao, fixture.hostedDao,
                 fixture.runtimeDao, fixture.taskMetaDao);
         order.verify(fixture.bindingDao).findExactActiveByScopeAndPersonaForUpdate(
-                "owner-a", "client-a", "owner-a", "wuyong");
+                "0", "client-a", "owner-a", "wuyong");
         order.verify(fixture.hostedDao).findExactForUpdate(
-                "owner-a", "client-a", "owner-a", 12L);
+                "0", "client-a", "owner-a", 12L);
         order.verify(fixture.runtimeDao).findByAgentIdForUpdate(AGENT_ID);
         order.verify(fixture.taskMetaDao).findDurableActiveAssignmentByAgentForUpdate(
-                "owner-a", "client-a", AGENT_ID);
+                "0", "client-a", AGENT_ID);
         verify(fixture.bindingDao, never()).updateById(any());
         verify(fixture.runtimeDao, never()).clearBindingAfterUnbind(
                 anyLong(), anyString(), anyLong(), anyString(), anyString(), anyLong());
@@ -217,10 +217,10 @@ class AgentHostedBindingTransactionTest {
 
         when(fixture.personaDao.findByCode("wuyong")).thenReturn(persona());
         when(fixture.bindingDao.findExactActiveByScopeAndPersonaForUpdate(
-                "owner-a", "client-a", "owner-a", "wuyong")).thenReturn(binding);
+                "0", "client-a", "owner-a", "wuyong")).thenReturn(binding);
         when(fixture.identityService.requireRegistrationIdentityInScope(
-                "owner-a", "client-a", "owner-a", AGENT_ID)).thenReturn(identity());
-        when(fixture.hostedDao.findExactForUpdate("owner-a", "client-a", "owner-a", 12L))
+                "0", "client-a", "owner-a", AGENT_ID)).thenReturn(identity());
+        when(fixture.hostedDao.findExactForUpdate("0", "client-a", "owner-a", 12L))
                 .thenReturn(null);
         when(fixture.runtimeDao.findByAgentIdForUpdate(AGENT_ID)).thenReturn(runtime);
         when(fixture.bindingDao.updateById(binding)).thenReturn(1);
@@ -247,10 +247,10 @@ class AgentHostedBindingTransactionTest {
         Fixture fixture = fixture();
         when(fixture.personaDao.findByCode("wuyong")).thenReturn(persona());
         when(fixture.bindingDao.findExactActiveByScopeAndPersonaForUpdate(
-                "owner-a", "client-a", "owner-a", "wuyong")).thenReturn(binding());
+                "0", "client-a", "owner-a", "wuyong")).thenReturn(binding());
         when(fixture.identityService.requireRegistrationIdentityInScope(
-                "owner-a", "client-a", "owner-a", AGENT_ID)).thenReturn(identity());
-        when(fixture.hostedDao.findExactForUpdate("owner-a", "client-a", "owner-a", 12L))
+                "0", "client-a", "owner-a", AGENT_ID)).thenReturn(identity());
+        when(fixture.hostedDao.findExactForUpdate("0", "client-a", "owner-a", 12L))
                 .thenReturn(null);
         AgentRuntimeEntity runtime = runtime(AgentConstants.STATUS_ONLINE);
         when(fixture.runtimeDao.findByAgentIdForUpdate(AGENT_ID)).thenReturn(runtime);
@@ -276,7 +276,7 @@ class AgentHostedBindingTransactionTest {
         AgentPersonaBindingEntity binding = binding();
         AgentHostedProfileEntity winner = hosted(AgentHostedProfileState.ACTIVE, 8L);
         when(fixture.bindingDao.findByIdForUpdate(12L)).thenReturn(binding);
-        when(fixture.hostedDao.findExactForUpdate("owner-a", "client-a", "owner-a", 12L))
+        when(fixture.hostedDao.findExactForUpdate("0", "client-a", "owner-a", 12L))
                 .thenReturn(winner);
         when(fixture.hostedDao.markRepair(5L, AgentHostedProfileState.FILE_ENABLED,
                 null, 7L, AgentHostedProfileState.FILE_ENABLED,
@@ -303,7 +303,7 @@ class AgentHostedBindingTransactionTest {
         OauthApiKeyEntity key = key(1);
 
         when(fixture.bindingDao.findByIdForUpdate(12L)).thenReturn(binding);
-        when(fixture.hostedDao.findExactForUpdate("owner-a", "client-a", "owner-a", 12L))
+        when(fixture.hostedDao.findExactForUpdate("0", "client-a", "owner-a", 12L))
                 .thenReturn(hosted);
         when(fixture.runtimeDao.findByAgentIdForUpdate(AGENT_ID)).thenReturn(runtime);
         when(fixture.hostedDao.resumeRepair(5L, AgentHostedProfileState.STAGED_DISABLED, 6L)).thenReturn(1);
@@ -316,7 +316,7 @@ class AgentHostedBindingTransactionTest {
         assertNull(result.hosted().getResumeState());
         InOrder order = inOrder(fixture.bindingDao, fixture.hostedDao, fixture.runtimeDao);
         order.verify(fixture.bindingDao).findByIdForUpdate(12L);
-        order.verify(fixture.hostedDao).findExactForUpdate("owner-a", "client-a", "owner-a", 12L);
+        order.verify(fixture.hostedDao).findExactForUpdate("0", "client-a", "owner-a", 12L);
         order.verify(fixture.runtimeDao).findByAgentIdForUpdate(AGENT_ID);
         order.verify(fixture.hostedDao).resumeRepair(5L, AgentHostedProfileState.STAGED_DISABLED, 6L);
     }
@@ -329,11 +329,11 @@ class AgentHostedBindingTransactionTest {
         AgentHostedProfileEntity hosted = hosted(AgentHostedProfileState.PREPARED, Long.MAX_VALUE);
         when(fixture.personaDao.findByCode("wuyong")).thenReturn(persona());
         when(fixture.bindingDao.findExactActiveByScopeAndPersonaForUpdate(
-                "owner-a", "client-a", "owner-a", "wuyong")).thenReturn(binding);
+                "0", "client-a", "owner-a", "wuyong")).thenReturn(binding);
         when(fixture.identityService.requireRegistrationIdentityInScope(
-                "owner-a", "client-a", "owner-a", AGENT_ID)).thenReturn(identity);
+                "0", "client-a", "owner-a", AGENT_ID)).thenReturn(identity);
         when(fixture.identityService.requireActiveBinding(identity, null)).thenReturn(binding);
-        when(fixture.hostedDao.findExactForUpdate("owner-a", "client-a", "owner-a", 12L))
+        when(fixture.hostedDao.findExactForUpdate("0", "client-a", "owner-a", 12L))
                 .thenReturn(hosted);
 
         assertThrows(AgentServiceImpl.AgentBizException.class,
@@ -357,10 +357,10 @@ class AgentHostedBindingTransactionTest {
         AgentHostedProfileEntity hosted = hosted(AgentHostedProfileState.ACTIVE, Long.MAX_VALUE);
         when(fixture.personaDao.findByCode("wuyong")).thenReturn(persona());
         when(fixture.bindingDao.findExactActiveByScopeAndPersonaForUpdate(
-                "owner-a", "client-a", "owner-a", "wuyong")).thenReturn(binding);
+                "0", "client-a", "owner-a", "wuyong")).thenReturn(binding);
         when(fixture.identityService.requireRegistrationIdentityInScope(
-                "owner-a", "client-a", "owner-a", AGENT_ID)).thenReturn(identity);
-        when(fixture.hostedDao.findExactForUpdate("owner-a", "client-a", "owner-a", 12L))
+                "0", "client-a", "owner-a", AGENT_ID)).thenReturn(identity);
+        when(fixture.hostedDao.findExactForUpdate("0", "client-a", "owner-a", 12L))
                 .thenReturn(hosted);
 
         assertThrows(AgentServiceImpl.AgentBizException.class,
@@ -396,7 +396,7 @@ class AgentHostedBindingTransactionTest {
         AgentHostedProfileEntity hosted = hosted(AgentHostedProfileState.REPAIR_REQUIRED, Long.MAX_VALUE);
         hosted.setResumeState(AgentHostedProfileState.PREPARED);
         when(fixture.bindingDao.findByIdForUpdate(12L)).thenReturn(binding());
-        when(fixture.hostedDao.findExactForUpdate("owner-a", "client-a", "owner-a", 12L))
+        when(fixture.hostedDao.findExactForUpdate("0", "client-a", "owner-a", 12L))
                 .thenReturn(hosted);
 
         assertThrows(AgentServiceImpl.AgentBizException.class,
@@ -426,11 +426,11 @@ class AgentHostedBindingTransactionTest {
         hosted.setResumeState(AgentHostedProfileState.PREPARED);
         when(fixture.personaDao.findByCode("wuyong")).thenReturn(persona());
         when(fixture.bindingDao.findExactActiveByScopeAndPersonaForUpdate(
-                "owner-a", "client-a", "owner-a", "wuyong")).thenReturn(binding);
+                "0", "client-a", "owner-a", "wuyong")).thenReturn(binding);
         when(fixture.identityService.requireRegistrationIdentityInScope(
-                "owner-a", "client-a", "owner-a", AGENT_ID)).thenReturn(identity);
+                "0", "client-a", "owner-a", AGENT_ID)).thenReturn(identity);
         when(fixture.identityService.requireActiveBinding(identity, null)).thenReturn(binding);
-        when(fixture.hostedDao.findExactForUpdate("owner-a", "client-a", "owner-a", 12L))
+        when(fixture.hostedDao.findExactForUpdate("0", "client-a", "owner-a", 12L))
                 .thenReturn(hosted);
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> service.bind(SCOPE, "wuyong", "server"));
@@ -462,10 +462,10 @@ class AgentHostedBindingTransactionTest {
 
         when(fixture.personaDao.findByCode("wuyong")).thenReturn(persona());
         when(fixture.bindingDao.findExactActiveByScopeAndPersonaForUpdate(
-                "owner-a", "client-a", "owner-a", "wuyong")).thenReturn(binding);
+                "0", "client-a", "owner-a", "wuyong")).thenReturn(binding);
         when(fixture.identityService.requireRegistrationIdentityInScope(
-                "owner-a", "client-a", "owner-a", AGENT_ID)).thenReturn(identity);
-        when(fixture.hostedDao.findExactForUpdate("owner-a", "client-a", "owner-a", 12L))
+                "0", "client-a", "owner-a", AGENT_ID)).thenReturn(identity);
+        when(fixture.hostedDao.findExactForUpdate("0", "client-a", "owner-a", 12L))
                 .thenReturn(null);
         when(fixture.runtimeDao.findByAgentIdForUpdate(AGENT_ID)).thenReturn(unbound);
         when(fixture.runtimeDao.findByAgentId(AGENT_ID)).thenReturn(reconnected);
@@ -617,7 +617,7 @@ class AgentHostedBindingTransactionTest {
     private static AgentPersonaBindingEntity binding() {
         AgentPersonaBindingEntity binding = new AgentPersonaBindingEntity();
         binding.setId(12L);
-        binding.setTenantId("owner-a");
+        binding.setTenantId("0");
         binding.setClientId("client-a");
         binding.setJiacn("owner-a");
         binding.setPersonaCode("wuyong");
@@ -636,7 +636,7 @@ class AgentHostedBindingTransactionTest {
         AgentHostedProfileEntity hosted = new AgentHostedProfileEntity();
         hosted.setId(5L);
         hosted.setBindingId(12L);
-        hosted.setTenantId("owner-a");
+        hosted.setTenantId("0");
         hosted.setClientId("client-a");
         hosted.setOwnerJiacn("owner-a");
         hosted.setCanonicalAgentId(AGENT_ID);
