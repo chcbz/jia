@@ -1,6 +1,7 @@
 package cn.jia.chat.api;
 
 import cn.jia.agent.service.AgentService;
+import cn.jia.agent.service.PersonalWorkspaceTaskLinkService;
 import cn.jia.chat.entity.AgentTaskThreadConstants;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
@@ -79,6 +80,8 @@ class ChatControllerTest extends BaseMockTest {
     AgentTaskThreadMemoryGuard taskThreadMemoryGuard;
     @Mock
     AgentService agentService;
+    @Mock
+    PersonalWorkspaceTaskLinkService taskLinkService;
     @Mock
     UserService userService;
 
@@ -492,7 +495,7 @@ class ChatControllerTest extends BaseMockTest {
                 broker, builtinHallAgentSupport, scopeService,
                 new JuyitingAgentRelayService(
                         agentWebSocketHandler, broker, builtinHallAgentSupport,
-                        chatConversationService, agentService, scopeService),
+                        chatConversationService, agentService, scopeService, taskLinkService),
                 memoryRepository, taskThreadMemoryGuard,
                 new HumanSenderIdentityResolver(userService));
         java.util.List<String> events = new java.util.concurrent.CopyOnWriteArrayList<>();
@@ -603,7 +606,8 @@ class ChatControllerTest extends BaseMockTest {
                 builtinHallAgentSupport,
                 chatConversationService,
                 agentService,
-                scopeService
+                scopeService,
+                taskLinkService
         );
         return new ChatController(
                 chatClient,

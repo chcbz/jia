@@ -2,6 +2,7 @@ package cn.jia.chat.service;
 
 import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.service.AgentService;
+import cn.jia.agent.service.PersonalWorkspaceTaskLinkService;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.handler.AgentWebSocketHandler;
@@ -34,6 +35,10 @@ public class JuyitingAgentRelayService {
     private final ChatConversationService chatConversationService;
     private final AgentService agentService;
     private final JuyitingConversationScopeService scopeService;
+    private final PersonalWorkspaceTaskLinkService taskLinkService;
+
+    private static final String MATERIALS_AVAILABLE = "AVAILABLE";
+    private static final String MATERIALS_UNAVAILABLE = "UNAVAILABLE";
 
     public JuyitingAgentRelayResult relay(
             ChatMessageDTO chatMessage, String conversationId, ServerResolvedSender sender,
@@ -78,12 +83,13 @@ public class JuyitingAgentRelayService {
             ))));
         }
 
+        Map<String, Object> taskMaterials = trustedTaskMaterials(scope, trustedSender);
         saveDirectUserMessage(
-                chatMessage, conversationId, scope, trustedSender, generation);
+                chatMessage, conversationId, scope, trustedSender, generation, taskMaterials);
 
         if (scope.targetAgentIds().size() > 1) {
             return relayMultiTargetAgentMessage(
-                    chatMessage, conversationId, scope, trustedSender, generation);
+                    chatMessage, conversationId, scope, trustedSender, generation, taskMaterials);
         }
 
         String selectedAgentId = scope.targetAgentIds().getFirst();
@@ -97,7 +103,7 @@ public class JuyitingAgentRelayService {
         }
 
         Map<String, Object> payload = buildDirectAgentPayload(
-                chatMessage, conversationId, selectedAgentId, scope, trustedSender);
+                chatMessage, conversationId, selectedAgentId, scope, trustedSender, taskMaterials);
         String tenantId = ownerJiacn;
         String clientId = ownerClientId;
         Sinks.One<Boolean> deliveryOutcome = Sinks.one();
@@ -180,7 +186,7 @@ public class JuyitingAgentRelayService {
 
     private JuyitingAgentRelayResult relayMultiTargetAgentMessage(
             ChatMessageDTO chatMessage, String conversationId, JuyitingConversationScope scope,
-            ServerResolvedSender sender, long generation) {
+            ServerResolvedSender sender, long generation, Map<String, Object> taskMaterials) {
         String ownerJiacn = sender.jiacn();
         String ownerClientId = sender.clientId();
         Sinks.One<Boolean> deliveryOutcome = Sinks.one();
@@ -199,7 +205,8 @@ public class JuyitingAgentRelayService {
                             delivered.set(agentWebSocketHandler.sendDirectMessageToAgent(
                                     ownerJiacn, ownerClientId, agentId,
                                     buildDirectAgentPayload(
-                                            chatMessage, conversationId, agentId, scope, sender)));
+                                            chatMessage, conversationId, agentId, scope, sender,
+                                            taskMaterials)));
                             if (delivered.get()) {
                                 anyDelivered.set(true);
                             }
@@ -223,7 +230,8 @@ public class JuyitingAgentRelayService {
 
     private Map<String, Object> buildDirectAgentPayload(
             ChatMessageDTO chatMessage, String conversationId, String agentId,
-            JuyitingConversationScope scope, ServerResolvedSender sender) {
+            JuyitingConversationScope scope, ServerResolvedSender sender,
+            Map<String, Object> taskMaterials) {
         long sentAt = System.currentTimeMillis();
         String messageId = UUID.randomUUID().toString();
         Map<String, Object> payload = new HashMap<>();
@@ -240,8 +248,9 @@ public class JuyitingAgentRelayService {
         payload.put("content", chatMessage.getContent());
         payload.put("senderType", sender.type());
         payload.put("senderName", sender.displayName());
-        payload.put("metadata", trustedConversationMetadata(
-                chatMessage, conversationId, scope, sender));
+        Map<String, Object> trustedMetadata = trustedConversationMetadata(
+                chatMessage, conversationId, scope, sender, taskMaterials);
+        payload.put("metadata", trustedMetadata);
         payload.put("sentAt", sentAt);
         payload.put("timestamp", sentAt);
 
@@ -252,15 +261,14 @@ public class JuyitingAgentRelayService {
         protocolPayload.put("conversationScopeType", scope.scopeType());
         protocolPayload.put("conversationScopeKey", scope.scopeKey());
         putIfPresent(protocolPayload, "taskContextId", scope.taskId());
-        protocolPayload.put("metadata", trustedConversationMetadata(
-                chatMessage, conversationId, scope, sender));
+        protocolPayload.put("metadata", trustedMetadata);
         payload.put("payload", protocolPayload);
         return payload;
     }
 
     private void saveDirectUserMessage(
             ChatMessageDTO chatMessage, String conversationId, JuyitingConversationScope scope,
-            ServerResolvedSender sender, long generation) {
+            ServerResolvedSender sender, long generation, Map<String, Object> taskMaterials) {
         String ownerJiacn = sender.jiacn();
         String ownerClientId = sender.clientId();
         ChatMessageEntity entity = new ChatMessageEntity();
@@ -275,14 +283,15 @@ public class JuyitingAgentRelayService {
         entity.setSenderName(sender.displayName());
 
         entity.setMetadata(JsonUtil.toJson(
-                trustedConversationMetadata(chatMessage, conversationId, scope, sender)));
+                trustedConversationMetadata(
+                        chatMessage, conversationId, scope, sender, taskMaterials)));
         chatConversationService.appendOwnedMessage(
                 ownerJiacn, ownerClientId, entity, generation);
     }
 
     private Map<String, Object> trustedConversationMetadata(
             ChatMessageDTO chatMessage, String conversationId, JuyitingConversationScope scope,
-            ServerResolvedSender sender) {
+            ServerResolvedSender sender, Map<String, Object> taskMaterials) {
         Map<String, Object> metadata = new HashMap<>(
                 ConversationMetadataPolicy.copyAllowed(chatMessage.getMetadata()));
         // Trusted conversation scope always wins over caller-provided metadata aliases.
@@ -298,11 +307,68 @@ public class JuyitingAgentRelayService {
         if (!scope.authoritativeAgentIds().isEmpty()) {
             metadata.put("participantAgentIds", scope.authoritativeAgentIds());
         }
+        if (taskMaterials != null) {
+            metadata.put("taskMaterials", taskMaterials);
+        }
         // Authenticated sender fields are written last and override every request alias.
         metadata.put("senderType", sender.type());
         metadata.put("senderName", sender.displayName());
         metadata.put("jiacn", sender.jiacn());
         return metadata;
+    }
+
+    private Map<String, Object> trustedTaskMaterials(
+            JuyitingConversationScope scope, ServerResolvedSender sender) {
+        if (scope.taskId() == null) {
+            return null;
+        }
+        try {
+            PersonalWorkspaceTaskLinkService.LinkListView page = taskLinkService.list(
+                    new PersonalWorkspaceTaskLinkService.Scope(
+                            "0", sender.clientId(), sender.jiacn()),
+                    scope.taskId(), null);
+            if (page == null || page.items() == null) {
+                return unavailableTaskMaterials();
+            }
+            List<Map<String, Object>> items = page.items().stream()
+                    .filter(link -> isActiveTaskMaterial(link, scope.taskId()))
+                    .map(link -> Map.<String, Object>of(
+                            "fileId", link.fileId(),
+                            "version", link.version(),
+                            "role", link.role()))
+                    .toList();
+            return Map.of(
+                    "status", MATERIALS_AVAILABLE,
+                    "complete", page.nextCursor() == null,
+                    "items", items);
+        } catch (RuntimeException unavailable) {
+            return unavailableTaskMaterials();
+        }
+    }
+
+    private boolean isActiveTaskMaterial(
+            PersonalWorkspaceTaskLinkService.LinkView link, String authorizedTaskId) {
+        return link != null
+                && authorizedTaskId.equals(link.taskId())
+                && "ACTIVE".equals(link.state())
+                && ("INPUT".equals(link.role()) || "REFERENCE".equals(link.role()))
+                && validMaterialFileId(link.fileId())
+                && link.version() > 0;
+    }
+
+    private boolean validMaterialFileId(String fileId) {
+        return fileId != null
+                && !fileId.isBlank()
+                && fileId.equals(fileId.strip())
+                && fileId.codePointCount(0, fileId.length()) <= 100
+                && fileId.chars().noneMatch(Character::isISOControl);
+    }
+
+    private Map<String, Object> unavailableTaskMaterials() {
+        return Map.of(
+                "status", MATERIALS_UNAVAILABLE,
+                "complete", false,
+                "items", List.of());
     }
 
     private boolean conversationMatchesScope(

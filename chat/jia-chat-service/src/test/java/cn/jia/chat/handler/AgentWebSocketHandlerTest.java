@@ -14,6 +14,7 @@ import cn.jia.agent.entity.AgentTaskAssignDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.service.AgentService;
+import cn.jia.agent.service.PersonalWorkspaceTaskLinkService;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
@@ -76,6 +77,8 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
     WebSocketSession session;
     @Mock
     BuiltinHallAgentSupport builtinHallAgentSupport;
+    @Mock
+    PersonalWorkspaceTaskLinkService taskLinkService;
 
 
     @BeforeEach
@@ -1872,7 +1875,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         JuyitingConversationScopeService scopeService = new JuyitingConversationScopeService(builtinHallAgentSupport, agentService);
         JuyitingAgentRelayService relayService = new JuyitingAgentRelayService(
                 handler, chatConversationEventBroker, builtinHallAgentSupport,
-                chatConversationService, agentService, scopeService);
+                chatConversationService, agentService, scopeService, taskLinkService);
 
         ChatMessageDTO chatMessage = new ChatMessageDTO();
         chatMessage.setContent("请回报当前进度");

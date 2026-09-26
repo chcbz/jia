@@ -1,6 +1,7 @@
 package cn.jia.chat.service;
 
 import cn.jia.agent.service.AgentService;
+import cn.jia.agent.service.PersonalWorkspaceTaskLinkService;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.handler.AgentWebSocketHandler;
@@ -28,6 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -36,6 +38,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
     @Mock BuiltinHallAgentSupport builtinHallAgentSupport;
     @Mock ChatConversationService chatConversationService;
     @Mock AgentService agentService;
+    @Mock PersonalWorkspaceTaskLinkService taskLinkService;
 
     private ChatConversationEventBroker broker;
 
@@ -78,6 +81,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         assertTrue(events.stream().anyMatch(value -> value.contains("\"content\":\"ok\"")));
         verify(chatConversationService).appendOwnedMessage(
                 eq("tester"), eq("web-client"), any(ChatMessageEntity.class), eq(1L));
+        verify(taskLinkService, never()).list(any(), any(), any());
         assertEquals(0, broker.subscriberCount("1001"));
         assertEquals(0, broker.watcherCount("1001"));
     }
@@ -123,6 +127,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
                 any(), any(), any(ChatMessageEntity.class), org.mockito.ArgumentMatchers.anyLong());
         verify(agentWebSocketHandler, never()).sendDirectMessageToAgent(
                 any(), any(), any(), any(Map.class));
+        verify(taskLinkService, never()).list(any(), any(), any());
     }
 
     @Test
@@ -168,6 +173,119 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
                 eq("tester"), eq("web-client"), message.capture(), eq(1L));
         assertTrue(message.getValue().getMetadata().contains(
                 "\"participantAgentIds\":[\"agent-wuyong\",\"agent-linchong\"]"));
+    }
+
+    @Test
+    void taskRelayAddsOnlyTrustedActiveMaterialMetadataOnceForAllTargets() {
+        stubLiveConversation();
+        List<String> members = List.of("agent-wuyong", "agent-linchong");
+        when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "task-7"))
+                .thenReturn(members);
+        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+                .thenReturn(conversation("bounty", "task:task-7", "task-7", members));
+        when(taskLinkService.list(
+                new PersonalWorkspaceTaskLinkService.Scope("0", "web-client", "tester"),
+                "task-7", null)).thenReturn(new PersonalWorkspaceTaskLinkService.LinkListView(
+                List.of(
+                        link("rel-input", "file-input", 3, "INPUT", "ACTIVE"),
+                        link("rel-reference", "file-reference", 2, "REFERENCE", "ACTIVE"),
+                        link("rel-detached", "file-detached", 1, "INPUT", "DETACHED"),
+                        link("rel-output", "file-output", 1, "OUTPUT", "ACTIVE"),
+                        new PersonalWorkspaceTaskLinkService.LinkView(
+                                "rel-foreign", "foreign-task", "foreign-file", 1,
+                                "INPUT", "ACTIVE", 1L, 1L)),
+                "next-page"));
+        for (String member : members) {
+            when(agentWebSocketHandler.sendDirectMessageToAgent(
+                    eq("tester"), eq("web-client"), eq(member), any(Map.class)))
+                    .thenReturn(true);
+        }
+        ChatMessageDTO request = request("bounty", "task-7", members);
+        request.setMetadata(Map.of(
+                "taskMaterials", Map.of("status", "FORGED", "items", List.of(
+                        Map.of("fileId", "foreign-file", "version", 99, "role", "INPUT"))),
+                "selectedTaskId", "task-7"));
+
+        JuyitingAgentRelayResult result = service().relay(
+                request, "1001", sender(), Flux::empty);
+
+        assertEquals(2, result.stream().collectList().block().size());
+        verify(taskLinkService, times(1)).list(
+                new PersonalWorkspaceTaskLinkService.Scope("0", "web-client", "tester"),
+                "task-7", null);
+        ArgumentCaptor<Map<String, Object>> payload = ArgumentCaptor.forClass(Map.class);
+        for (String member : members) {
+            verify(agentWebSocketHandler).sendDirectMessageToAgent(
+                    eq("tester"), eq("web-client"), eq(member), payload.capture());
+        }
+        for (Map<String, Object> outbound : payload.getAllValues()) {
+            Map<String, Object> outerMetadata = map(outbound.get("metadata"));
+            Map<String, Object> nestedMetadata = map(map(outbound.get("payload")).get("metadata"));
+            assertEquals(outerMetadata, nestedMetadata);
+            Map<String, Object> materials = map(outerMetadata.get("taskMaterials"));
+            assertEquals("AVAILABLE", materials.get("status"));
+            assertEquals(false, materials.get("complete"));
+            assertEquals(List.of(
+                    Map.of("fileId", "file-input", "version", 3, "role", "INPUT"),
+                    Map.of("fileId", "file-reference", "version", 2, "role", "REFERENCE")),
+                    materials.get("items"));
+            assertFalse(outbound.containsKey("taskMaterials"));
+            assertFalse(materials.toString().contains("foreign-file"));
+            assertFalse(materials.toString().contains("rel-input"));
+            assertFalse(materials.toString().contains("download"));
+            assertFalse(materials.toString().contains("content"));
+        }
+        ArgumentCaptor<ChatMessageEntity> saved = ArgumentCaptor.forClass(ChatMessageEntity.class);
+        verify(chatConversationService).appendOwnedMessage(
+                eq("tester"), eq("web-client"), saved.capture(), eq(1L));
+        assertTrue(saved.getValue().getMetadata().contains("\"taskMaterials\""));
+        assertTrue(saved.getValue().getMetadata().contains("\"file-input\""));
+        assertFalse(saved.getValue().getMetadata().contains("foreign-file"));
+        assertFalse(saved.getValue().getMetadata().contains("rel-input"));
+    }
+
+    @Test
+    void taskMaterialLookupFailureDoesNotInterruptOrdinaryRelayOrLeakForeignData() {
+        stubLiveConversation();
+        when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "task-7"))
+                .thenReturn(List.of("agent-wuyong"));
+        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+                .thenReturn(conversation(
+                        "bounty", "task:task-7", "task-7", List.of("agent-wuyong")));
+        when(taskLinkService.list(
+                new PersonalWorkspaceTaskLinkService.Scope("0", "web-client", "tester"),
+                "task-7", null)).thenThrow(new PersonalWorkspaceTaskLinkService.Failure(
+                PersonalWorkspaceTaskLinkService.Reason.NOT_FOUND));
+        when(agentWebSocketHandler.sendDirectMessageToAgent(
+                eq("tester"), eq("web-client"), eq("agent-wuyong"), any(Map.class)))
+                .thenReturn(false);
+        ChatMessageDTO request = request(
+                "bounty", "task-7", List.of("agent-wuyong"));
+        request.setMetadata(Map.of("taskMaterials", Map.of(
+                "status", "AVAILABLE",
+                "complete", true,
+                "items", List.of(Map.of(
+                        "fileId", "foreign-file", "version", 7, "role", "REFERENCE")))));
+
+        JuyitingAgentRelayResult result = service().relay(
+                request, "1001", sender(), Flux::empty);
+
+        assertTrue(result.attempted());
+        assertEquals(1, result.stream().collectList().block().size());
+        assertFalse(result.delivered().block());
+        ArgumentCaptor<Map<String, Object>> payload = ArgumentCaptor.forClass(Map.class);
+        verify(agentWebSocketHandler).sendDirectMessageToAgent(
+                eq("tester"), eq("web-client"), eq("agent-wuyong"), payload.capture());
+        Map<String, Object> outerMetadata = map(payload.getValue().get("metadata"));
+        Map<String, Object> materials = map(outerMetadata.get("taskMaterials"));
+        assertEquals(Map.of(
+                "status", "UNAVAILABLE",
+                "complete", false,
+                "items", List.of()), materials);
+        assertEquals(outerMetadata, map(map(payload.getValue().get("payload")).get("metadata")));
+        assertFalse(payload.getValue().toString().contains("foreign-file"));
+        verify(chatConversationService).appendOwnedMessage(
+                eq("tester"), eq("web-client"), any(ChatMessageEntity.class), eq(1L));
     }
 
     @Test
@@ -323,7 +441,19 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         return new JuyitingAgentRelayService(
                 agentWebSocketHandler, broker, builtinHallAgentSupport,
                 chatConversationService, agentService,
-                new JuyitingConversationScopeService(builtinHallAgentSupport, agentService));
+                new JuyitingConversationScopeService(builtinHallAgentSupport, agentService),
+                taskLinkService);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> map(Object value) {
+        return (Map<String, Object>) value;
+    }
+
+    private PersonalWorkspaceTaskLinkService.LinkView link(
+            String relationId, String fileId, int version, String role, String state) {
+        return new PersonalWorkspaceTaskLinkService.LinkView(
+                relationId, "task-7", fileId, version, role, state, 1L, 1L);
     }
 
     private ChatConversationEntity conversation(
