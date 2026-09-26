@@ -106,12 +106,13 @@ class ChatControllerTest extends BaseMockTest {
 
         assertEquals("请结合关联资料说明下一步", prompt.getUserMessage().getText());
         String system = prompt.getSystemMessage().getText();
+        String normalizedSystem = system.replaceAll("\\s+", " ");
         assertTrue(system.contains("resolved and authorized by the server"));
         assertTrue(system.contains("file-input"));
         assertTrue(system.contains("\"version\":3"));
         assertTrue(system.contains("\"role\":\"REFERENCE\""));
-        assertTrue(system.contains("do not grant permission to read files"));
-        assertTrue(system.contains("Do not claim knowledge"));
+        assertTrue(normalizedSystem.contains("do not grant permission to read files"));
+        assertTrue(normalizedSystem.contains("Do not claim knowledge"));
         assertFalse(system.contains("downloadUrl"));
         assertFalse(system.contains("file contents here"));
     }
