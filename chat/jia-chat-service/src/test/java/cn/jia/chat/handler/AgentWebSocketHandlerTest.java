@@ -1899,7 +1899,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 chatMessage, "1001",
                 new ServerResolvedSender("user", "测试用户", "tester", "web-client",
                         DisplayNameSource.NICKNAME),
-                () -> Flux.just("builtin"));
+                ignored -> Flux.just("builtin"));
         List<String> events = relayResult.stream().collectList().block(Duration.ofSeconds(5));
 
         assertTrue(relayResult.attempted());

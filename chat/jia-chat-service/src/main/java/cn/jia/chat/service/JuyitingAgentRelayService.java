@@ -24,7 +24,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Supplier;
+import java.util.function.Function;
 
 @Service
 @RequiredArgsConstructor
@@ -42,7 +42,7 @@ public class JuyitingAgentRelayService {
 
     public JuyitingAgentRelayResult relay(
             ChatMessageDTO chatMessage, String conversationId, ServerResolvedSender sender,
-            Supplier<Flux<String>> builtinAgentStream) {
+            Function<Map<String, Object>, Flux<String>> builtinAgentStream) {
         JuyitingConversationScope requestedScope = scopeService.resolve(chatMessage);
         if (!JuyitingConversationScopeService.CONVERSATION_TYPE_JUYITING.equals(scopeService.resolveConversationType(chatMessage))
                 || requestedScope.scopeType() == null) {
@@ -95,7 +95,7 @@ public class JuyitingAgentRelayService {
         String selectedAgentId = scope.targetAgentIds().getFirst();
         if (builtinHallAgentSupport.isBuiltinAgent(selectedAgentId)) {
             return new JuyitingAgentRelayResult(
-                    true, Mono.just(true), builtinAgentStream.get().takeUntilOther(
+                    true, Mono.just(true), builtinAgentStream.apply(taskMaterials).takeUntilOther(
                     chatConversationEventBroker.deletionSignal(
                             conversationId, generation,
                             () -> chatConversationService.isLiveGeneration(

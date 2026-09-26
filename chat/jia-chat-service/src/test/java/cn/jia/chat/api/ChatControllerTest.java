@@ -32,6 +32,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.core.MethodParameter;
 import org.springframework.http.MediaType;
 import reactor.core.publisher.Flux;
@@ -88,6 +89,31 @@ class ChatControllerTest extends BaseMockTest {
     @AfterEach
     void tearDown() {
         EsContextHolder.setContext(new EsContext());
+    }
+
+    @Test
+    void builtinPromptCarriesTrustedTaskReferencesWithoutClaimingFileContents() {
+        ChatMessageDTO request = new ChatMessageDTO();
+        request.setContent("请结合关联资料说明下一步");
+        Map<String, Object> materials = Map.of(
+                "status", "AVAILABLE",
+                "complete", true,
+                "items", List.of(
+                        Map.of("fileId", "file-input", "version", 3, "role", "INPUT"),
+                        Map.of("fileId", "file-reference", "version", 2, "role", "REFERENCE")));
+
+        Prompt prompt = newController().buildBuiltinSongJiangPrompt(request, materials);
+
+        assertEquals("请结合关联资料说明下一步", prompt.getUserMessage().getText());
+        String system = prompt.getSystemMessage().getText();
+        assertTrue(system.contains("resolved and authorized by the server"));
+        assertTrue(system.contains("file-input"));
+        assertTrue(system.contains("\"version\":3"));
+        assertTrue(system.contains("\"role\":\"REFERENCE\""));
+        assertTrue(system.contains("do not grant permission to read files"));
+        assertTrue(system.contains("Do not claim knowledge"));
+        assertFalse(system.contains("downloadUrl"));
+        assertFalse(system.contains("file contents here"));
     }
 
     @Test

@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -67,7 +68,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
                 .thenReturn(true);
 
         JuyitingAgentRelayResult result = service().relay(
-                request("public", null, List.of("agent-wuyong")), "1001", sender(), Flux::empty);
+                request("public", null, List.of("agent-wuyong")), "1001", sender(), ignored -> Flux.empty());
         CompletableFuture<List<String>> eventsFuture = result.stream()
                 .take(2).collectList().toFuture();
         assertTrue(broker.publishIfLive("1001", 1L, () -> true, Map.of(
@@ -98,7 +99,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         request.setMetadata(Map.of("senderType", "agent", "senderName", "宋江"));
 
         JuyitingAgentRelayResult result = service().relay(
-                request, "1001", sender(), () -> Flux.just("builtin"));
+                request, "1001", sender(), ignored -> Flux.just("builtin"));
 
         assertEquals(List.of("builtin"), result.stream().collectList().block());
         ArgumentCaptor<ChatMessageEntity> message = ArgumentCaptor.forClass(ChatMessageEntity.class);
@@ -113,13 +114,88 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
     }
 
     @Test
+    void builtinTaskRelayHandsOnlyTrustedMaterialReferencesToPromptFactory() {
+        stubLiveConversation();
+        when(builtinHallAgentSupport.isBuiltinAgent("songjiang")).thenReturn(true);
+        when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "task-7"))
+                .thenReturn(List.of("songjiang"));
+        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+                .thenReturn(conversation("bounty", "task:task-7", "task-7", List.of("songjiang")));
+        when(taskLinkService.list(
+                new PersonalWorkspaceTaskLinkService.Scope("0", "web-client", "tester"),
+                "task-7", null)).thenReturn(new PersonalWorkspaceTaskLinkService.LinkListView(
+                List.of(
+                        link("rel-input", "file-input", 3, "INPUT", "ACTIVE"),
+                        link("rel-reference", "file-reference", 2, "REFERENCE", "ACTIVE"),
+                        link("rel-output", "file-output", 1, "OUTPUT", "ACTIVE")),
+                null));
+        ChatMessageDTO request = request("bounty", "task-7", List.of("songjiang"));
+        request.setMetadata(Map.of("taskMaterials", Map.of(
+                "status", "AVAILABLE",
+                "complete", true,
+                "items", List.of(Map.of(
+                        "fileId", "forged-file", "version", 99, "role", "INPUT")))));
+        AtomicReference<Map<String, Object>> promptMaterials = new AtomicReference<>();
+
+        JuyitingAgentRelayResult result = service().relay(
+                request, "1001", sender(), materials -> {
+                    promptMaterials.set(materials);
+                    return Flux.just("builtin");
+                });
+
+        assertEquals(List.of("builtin"), result.stream().collectList().block());
+        assertEquals(Map.of(
+                "status", "AVAILABLE",
+                "complete", true,
+                "items", List.of(
+                        Map.of("fileId", "file-input", "version", 3, "role", "INPUT"),
+                        Map.of("fileId", "file-reference", "version", 2, "role", "REFERENCE"))),
+                promptMaterials.get());
+        assertFalse(promptMaterials.get().toString().contains("forged-file"));
+        assertFalse(promptMaterials.get().toString().contains("rel-input"));
+        assertFalse(promptMaterials.get().toString().contains("file-output"));
+        assertFalse(promptMaterials.get().toString().contains("content"));
+        assertFalse(promptMaterials.get().toString().contains("download"));
+        verify(taskLinkService, times(1)).list(
+                new PersonalWorkspaceTaskLinkService.Scope("0", "web-client", "tester"),
+                "task-7", null);
+    }
+
+    @Test
+    void builtinTaskRelayContinuesWithUnavailableMarkerWhenMaterialLookupFails() {
+        stubLiveConversation();
+        when(builtinHallAgentSupport.isBuiltinAgent("songjiang")).thenReturn(true);
+        when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "task-7"))
+                .thenReturn(List.of("songjiang"));
+        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+                .thenReturn(conversation("bounty", "task:task-7", "task-7", List.of("songjiang")));
+        when(taskLinkService.list(
+                new PersonalWorkspaceTaskLinkService.Scope("0", "web-client", "tester"),
+                "task-7", null)).thenThrow(new IllegalStateException("lookup failed"));
+        AtomicReference<Map<String, Object>> promptMaterials = new AtomicReference<>();
+
+        JuyitingAgentRelayResult result = service().relay(
+                request("bounty", "task-7", List.of("songjiang")),
+                "1001", sender(), materials -> {
+                    promptMaterials.set(materials);
+                    return Flux.just("builtin");
+                });
+
+        assertEquals(List.of("builtin"), result.stream().collectList().block());
+        assertEquals(Map.of(
+                "status", "UNAVAILABLE",
+                "complete", false,
+                "items", List.of()), promptMaterials.get());
+    }
+
+    @Test
     void participantMetadataCannotForgeTaskAuthorization() {
         when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "task-7"))
                 .thenReturn(List.of("agent-wuyong"));
         ChatMessageDTO request = request("bounty", "task-7", List.of("agent-linchong"));
         request.setMetadata(Map.of("participantAgentIds", List.of("agent-linchong")));
 
-        JuyitingAgentRelayResult result = service().relay(request, "1001", sender(), Flux::empty);
+        JuyitingAgentRelayResult result = service().relay(request, "1001", sender(), ignored -> Flux.empty());
 
         assertTrue(result.attempted());
         assertTrue(result.stream().blockFirst().contains("task conversation scope unavailable"));
@@ -135,12 +211,12 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         ChatMessageDTO request = request("bounty", "task-7", List.of("agent-wuyong"));
         when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "task-7"))
                 .thenThrow(new IllegalStateException("query"));
-        assertTrue(service().relay(request, "1001", sender(), Flux::empty)
+        assertTrue(service().relay(request, "1001", sender(), ignored -> Flux.empty())
                 .stream().blockFirst().contains("scope unavailable"));
 
         org.mockito.Mockito.doReturn(List.of()).when(agentService)
                 .listTaskWritableMemberAgentIds("0", "web-client", "task-7");
-        assertTrue(service().relay(request, "1001", sender(), Flux::empty)
+        assertTrue(service().relay(request, "1001", sender(), ignored -> Flux.empty())
                 .stream().blockFirst().contains("scope unavailable"));
     }
 
@@ -159,7 +235,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         }
 
         JuyitingAgentRelayResult result = service().relay(
-                request("bounty", "task-7", members), "1001", sender(), Flux::empty);
+                request("bounty", "task-7", members), "1001", sender(), ignored -> Flux.empty());
         List<String> events = result.stream().collectList().block();
 
         assertTrue(result.delivered().block());
@@ -207,7 +283,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
                 "selectedTaskId", "task-7"));
 
         JuyitingAgentRelayResult result = service().relay(
-                request, "1001", sender(), Flux::empty);
+                request, "1001", sender(), ignored -> Flux.empty());
 
         assertEquals(2, result.stream().collectList().block().size());
         verify(taskLinkService, times(1)).list(
@@ -268,7 +344,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
                         "fileId", "foreign-file", "version", 7, "role", "REFERENCE")))));
 
         JuyitingAgentRelayResult result = service().relay(
-                request, "1001", sender(), Flux::empty);
+                request, "1001", sender(), ignored -> Flux.empty());
 
         assertTrue(result.attempted());
         assertEquals(1, result.stream().collectList().block().size());
@@ -302,7 +378,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
 
         JuyitingAgentRelayResult result = service().relay(
                 request("bounty", "task-7", List.of("agent-wuyong")),
-                "1001", sender(), Flux::empty);
+                "1001", sender(), ignored -> Flux.empty());
 
         assertTrue(result.stream().blockFirst().contains("conversation scope mismatch"));
         verify(chatConversationService, never()).appendOwnedMessage(
@@ -325,7 +401,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         }
 
         JuyitingAgentRelayResult result = service().relay(
-                request("bounty", "task-7", members), "1001", sender(), Flux::empty);
+                request("bounty", "task-7", members), "1001", sender(), ignored -> Flux.empty());
         List<String> events = result.stream().collectList().block();
 
         assertFalse(result.delivered().block());
@@ -346,7 +422,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
 
         JuyitingAgentRelayResult result = service().relay(
                 request("public", null, List.of("agent-wuyong")),
-                "1001", sender(), Flux::empty);
+                "1001", sender(), ignored -> Flux.empty());
 
         assertTrue(result.stream().collectList().block(Duration.ofSeconds(2)).isEmpty());
         assertFalse(result.delivered().block(Duration.ofSeconds(2)));
@@ -364,7 +440,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
 
         JuyitingAgentRelayResult result = service().relay(
                 request("bounty", "task-7", List.of("agent-linchong")),
-                "1001", sender(), Flux::empty);
+                "1001", sender(), ignored -> Flux.empty());
 
         assertTrue(result.stream().blockFirst().contains("conversation scope mismatch"));
         verify(chatConversationService, never()).appendOwnedMessage(
@@ -383,7 +459,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
 
         var subscription = service().relay(
                         request("public", null, List.of("agent-wuyong")),
-                        "1001", sender(), Flux::empty)
+                        "1001", sender(), ignored -> Flux.empty())
                 .stream().subscribe();
         assertEquals(1, broker.subscriberCount("1001"));
         assertEquals(1, broker.watcherCount("1001"));
@@ -407,7 +483,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
 
         var subscription = service().relay(
                         request("public", null, List.of("agent-wuyong")),
-                        "1001", sender(), Flux::empty)
+                        "1001", sender(), ignored -> Flux.empty())
                 .stream().subscribe(ignored -> { }, ignored -> { }, complete::countDown);
         assertEquals(1, broker.subscriberCount("1001"));
 
