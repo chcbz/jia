@@ -107,7 +107,8 @@ class OauthConsentTemplateTest {
     void controllerBuildsConsentModelFromStandardQueryParametersWithoutNimbusSessionModel() {
         OauthController controller = new OauthController(
                 mock(ClientService.class), mock(UserService.class), mock(AccountSecurityService.class),
-                mock(PermsService.class), mock(OauthExternalHttpClient.class), mock(ThirdPartyLoginTransactionService.class));
+                mock(PermsService.class), mock(OauthExternalHttpClient.class),
+                new ExternalIdentityDisplayNamePolicy(), mock(ThirdPartyLoginTransactionService.class));
 
         ModelAndView view = controller.getAccessConfirmation(
                 "public-web", "consent-state", "openid profile openid");

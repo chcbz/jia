@@ -7,11 +7,11 @@ import cn.jia.core.exception.EsErrorConstants;
 import cn.jia.core.exception.EsRuntimeException;
 import cn.jia.core.util.CollectionUtil;
 import cn.jia.core.util.HttpUtil;
-import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.StringUtil;
 import cn.jia.core.redis.ThirdPartyLoginTransactionService;
 import cn.jia.user.entity.CustomUserDetails;
 import cn.jia.user.entity.UserEntity;
+import cn.jia.oauth.config.ExternalIdentityDisplayNamePolicy;
 import cn.jia.oauth.config.OauthExternalHttpClient;
 import cn.jia.oauth.dto.GithubOauthTokenDTO;
 import cn.jia.oauth.dto.GithubOauthUserDTO;
@@ -35,7 +35,6 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -72,6 +71,7 @@ public class OauthController {
     private final AccountSecurityService accountSecurityService;
     private final PermsService permsService;
     private final OauthExternalHttpClient externalHttpClient;
+    private final ExternalIdentityDisplayNamePolicy displayNamePolicy;
     private final ThirdPartyLoginTransactionService thirdPartyLoginTransactionService;
 
     @Value("${oauth.third-party.wxmp.appid:}")
@@ -121,9 +121,8 @@ public class OauthController {
         
         WeiXinOauthTokenDTO tokenDTO;
         try {
-            ResponseEntity<String> responseEntity = externalHttpClient.exchange(url, HttpMethod.GET, entity);
-            String tokenStr = responseEntity.getBody();
-            tokenDTO = JsonUtil.fromJson(tokenStr, WeiXinOauthTokenDTO.class);
+            tokenDTO = externalHttpClient.exchangeJson(
+                    url, HttpMethod.GET, entity, WeiXinOauthTokenDTO.class);
         } catch (RuntimeException exception) {
             return providerFailure("wxmp", "token", exception);
         }
@@ -146,9 +145,8 @@ public class OauthController {
             
             WeiXinOauthUserDTO userDTO;
             try {
-                ResponseEntity<String> userResponseEntity = externalHttpClient.exchange(url, HttpMethod.GET, entity);
-                String userStr = userResponseEntity.getBody();
-                userDTO = JsonUtil.fromJson(userStr, WeiXinOauthUserDTO.class);
+                userDTO = externalHttpClient.exchangeJson(
+                        url, HttpMethod.GET, entity, WeiXinOauthUserDTO.class);
             } catch (RuntimeException exception) {
                 return providerFailure("wxmp", "user", exception);
             }
@@ -163,7 +161,7 @@ public class OauthController {
             user.setProvince(StringUtil.isEmpty(province) ? null : province);
             String city = userDTO.getCity();
             user.setCity(StringUtil.isEmpty(city) ? null : city);
-            user.setNickname(userDTO.getNickname());
+            user.setNickname(acceptedDisplayName(ExternalIdentityDisplayNamePolicy.Source.WXMP, userDTO.getNickname()));
             user.setSex(userDTO.getSex());
             user.setAvatar(userDTO.getHeadImgUrl());
             log.debug("微信公众号用户信息获取成功");
@@ -202,9 +200,8 @@ public class OauthController {
         
         WeiXinOauthTokenDTO tokenDTO;
         try {
-            ResponseEntity<String> responseEntity = externalHttpClient.exchange(url, HttpMethod.GET, entity);
-            String tokenStr = responseEntity.getBody();
-            tokenDTO = JsonUtil.fromJson(tokenStr, WeiXinOauthTokenDTO.class);
+            tokenDTO = externalHttpClient.exchangeJson(
+                    url, HttpMethod.GET, entity, WeiXinOauthTokenDTO.class);
         } catch (RuntimeException exception) {
             return providerFailure("weixin", "token", exception);
         }
@@ -258,9 +255,7 @@ public class OauthController {
         WeiBoOauthTokenDTO tokenDTO;
         try {
             log.debug("请求微博 API 获取 token");
-            ResponseEntity<String> responseEntity = externalHttpClient.postForEntity(url, entity);
-            String tokenStr = responseEntity.getBody();
-            tokenDTO = JsonUtil.fromJson(tokenStr, WeiBoOauthTokenDTO.class);
+            tokenDTO = externalHttpClient.postJson(url, entity, WeiBoOauthTokenDTO.class);
         } catch (RuntimeException exception) {
             return providerFailure("weibo", "token", exception);
         }
@@ -280,9 +275,8 @@ public class OauthController {
             headers.setAccept(List.of(MediaType.APPLICATION_JSON));
             HttpEntity<?> userEntity = new HttpEntity<>(headers);
             log.debug("请求微博 API 获取用户信息");
-            ResponseEntity<String> userResponseEntity = externalHttpClient.exchange(url, HttpMethod.GET, userEntity);
-            String userStr = userResponseEntity.getBody();
-            userDTO = JsonUtil.fromJson(userStr, WeiBoOauthUserDTO.class);
+            userDTO = externalHttpClient.exchangeJson(
+                    url, HttpMethod.GET, userEntity, WeiBoOauthUserDTO.class);
         } catch (RuntimeException exception) {
             return providerFailure("weibo", "user", exception);
         }
@@ -301,7 +295,7 @@ public class OauthController {
         user.setCity(StringUtil.isEmpty(city) ? null : city);
         String remark = userDTO.getDescription();
         user.setRemark(StringUtil.isEmpty(remark) ? null : remark);
-        user.setNickname(userDTO.getScreenName());
+        user.setNickname(acceptedDisplayName(ExternalIdentityDisplayNamePolicy.Source.WEIBO, userDTO.getScreenName()));
         String sex = userDTO.getGender();
         user.setSex("m".equals(sex) ? 1 : ("f".equals(sex) ? 2 : 0));
         Optional.ofNullable(userDTO.getProfileImageUrl()).ifPresent(user::setAvatar);
@@ -340,9 +334,8 @@ public class OauthController {
         GithubOauthUserDTO userDTO;
         try {
             log.debug("请求 GitHub API 获取 token");
-            ResponseEntity<String> responseEntity = externalHttpClient.postForEntity(url, entity);
-            String tokenStr = responseEntity.getBody();
-            GithubOauthTokenDTO tokenDTO = JsonUtil.fromJson(tokenStr, GithubOauthTokenDTO.class);
+            GithubOauthTokenDTO tokenDTO = externalHttpClient.postJson(
+                    url, entity, GithubOauthTokenDTO.class);
             if (tokenDTO == null || StringUtil.isEmpty(tokenDTO.getAccessToken())) {
                 return providerFailure("github", "token-response", null);
             }
@@ -355,10 +348,8 @@ public class OauthController {
             headers.setAccept(List.of(MediaType.APPLICATION_JSON));
             HttpEntity<?> userEntity = new HttpEntity<>(headers);
             log.debug("请求 GitHub API 获取用户信息");
-            ResponseEntity<String> userResponseEntity = externalHttpClient.exchange(
-                    url, HttpMethod.GET, userEntity);
-            String userStr = userResponseEntity.getBody();
-            userDTO = JsonUtil.fromJson(userStr, GithubOauthUserDTO.class);
+            userDTO = externalHttpClient.exchangeJson(
+                    url, HttpMethod.GET, userEntity, GithubOauthUserDTO.class);
         } catch (RuntimeException exception) {
             return providerFailure("github", "provider", exception);
         }
@@ -369,7 +360,7 @@ public class OauthController {
         UserEntity user = new UserEntity();
         user.setGithubid(String.valueOf(userDTO.getId())); // 使用GitHub ID作为UID
         user.setUsername(userDTO.getLogin());
-        user.setNickname(userDTO.getName() != null ? userDTO.getName() : userDTO.getLogin());
+        user.setNickname(acceptedDisplayName(ExternalIdentityDisplayNamePolicy.Source.GITHUB, userDTO.getName()));
         user.setEmail(userDTO.getEmail());
         Optional.ofNullable(userDTO.getAvatar_url()).ifPresent(user::setAvatar);
         user.setLocation(userDTO.getLocation());
@@ -418,6 +409,16 @@ public class OauthController {
     private String thirdPartyLoginFailed(String provider) {
         log.warn("第三方登录回调未完成，返回不可自动重试的登录页，provider: {}", provider);
         return "redirect:/login/index.html?thirdPartyLoginError=1";
+    }
+
+    private String acceptedDisplayName(ExternalIdentityDisplayNamePolicy.Source source, String rawValue) {
+        ExternalIdentityDisplayNamePolicy.Decision decision = displayNamePolicy.evaluate(source, rawValue);
+        if (decision.classification() != ExternalIdentityDisplayNamePolicy.Classification.ACCEPTED
+                && decision.classification() != ExternalIdentityDisplayNamePolicy.Classification.EMPTY) {
+            log.warn("第三方显示名被拒绝，provider: {}, classification: {}, preserved: {}",
+                    source.provider(), decision.classification(), decision.preserveExisting());
+        }
+        return decision.acceptedValue();
     }
 
     private String providerFailure(String provider, String stage, RuntimeException exception) {

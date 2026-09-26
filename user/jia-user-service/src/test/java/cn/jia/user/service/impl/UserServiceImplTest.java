@@ -368,6 +368,37 @@ class UserServiceImplTest extends BaseMockTest {
         Assertions.assertNull(updated.getValue().getAccountState());
         Assertions.assertNull(updated.getValue().getAuthEpoch());
     }
+
+    @Test
+    void externalIdentityUpsertWithoutNicknamePreservesMysqlAndLdapValues() {
+        UserEntity existing = new UserEntity()
+                .setId(1L)
+                .setJiacn("existing-jiacn")
+                .setUsername("existing-user")
+                .setNickname("数据库好昵称")
+                .setSubscribe("vote");
+        LdapUser ldapUser = new LdapUser("existing-jiacn");
+        ldapUser.setNickname("LDAP好昵称");
+        when(userInfoDao.searchByExample(any())).thenReturn(List.of(existing));
+        when(userInfoDao.updateById(any())).thenReturn(1);
+        when(ldapUserService.findByUid("existing-jiacn")).thenReturn(ldapUser);
+        when(ldapUserService.modifyLdapUser(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        UserEntity requested = new UserEntity()
+                .setGithubid("42")
+                .setUsername("provider-login")
+                .setNickname(null);
+        userServiceImpl.upsert(requested);
+
+        ArgumentCaptor<UserEntity> mysqlPatch = ArgumentCaptor.forClass(UserEntity.class);
+        verify(userInfoDao).updateById(mysqlPatch.capture());
+        Assertions.assertNull(mysqlPatch.getValue().getNickname());
+
+        ArgumentCaptor<LdapUser> ldapPatch = ArgumentCaptor.forClass(LdapUser.class);
+        verify(ldapUserService).modifyLdapUser(ldapPatch.capture());
+        Assertions.assertEquals("LDAP好昵称", ldapPatch.getValue().getNickname());
+    }
+
     @Test
     void userListRelationsUseOneBoundedBatchQueryAndPreserveDuplicates() {
         when(userInfoDao.selectRelationsByUserIds(List.of(10L, 20L))).thenReturn(List.of(

@@ -35,6 +35,12 @@ class UserEntitySecurityBoundaryTest {
     }
 
     @Test
+    void nullExternalNicknamePatchCannotClearPersistedNickname() throws Exception {
+        TableField field = UserEntity.class.getDeclaredField("nickname").getAnnotation(TableField.class);
+        assertEquals(FieldStrategy.NOT_NULL, field.updateStrategy());
+    }
+
+    @Test
     void userGetMyListAndSearchResponseShapesDoNotExposeAccountSecurityFields() throws Exception {
         UserEntity entity = new UserEntity()
                 .setId(17L)
