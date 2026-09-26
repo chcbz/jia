@@ -67,6 +67,36 @@ class DatabaseChatMemoryAdvisorTest extends BaseMockTest {
     }
 
     @Test
+    void assistantPersistenceNeverReusesTheAuthenticatedHumanDisplayName() throws Exception {
+        DatabaseChatMemoryAdvisor advisor = DatabaseChatMemoryAdvisor.builder(chatConversationService)
+                .conversationId("test-conv")
+                .maxMessages(10)
+                .build();
+        Method saveMessageMethod = DatabaseChatMemoryAdvisor.class.getDeclaredMethod(
+                "saveMessage", org.springframework.ai.chat.messages.Message.class, Map.class);
+        saveMessageMethod.setAccessible(true);
+
+        Map<String, Object> context = new HashMap<>();
+        context.put("jiacn", "test-user");
+        context.put("clientId", "test-client");
+        context.put(DatabaseChatMemoryAdvisor.SERVER_RESOLVED_SENDER,
+                new ServerResolvedSender("user", "陈惠超", "test-user", "test-client",
+                        DisplayNameSource.NICKNAME));
+
+        saveMessageMethod.invoke(advisor, new AssistantMessage("响应内容"), context);
+
+        ArgumentCaptor<ChatMessageEntity> captor = ArgumentCaptor.forClass(ChatMessageEntity.class);
+        verify(chatConversationService).appendOwnedMessage(
+                org.mockito.ArgumentMatchers.eq("test-user"),
+                org.mockito.ArgumentMatchers.eq("test-client"), captor.capture());
+        ChatMessageEntity entity = captor.getValue();
+        assertEquals("ASSISTANT", entity.getMessageType());
+        assertEquals("assistant", entity.getSenderType());
+        assertEquals("助手", entity.getSenderName());
+        org.junit.jupiter.api.Assertions.assertFalse(entity.getMetadata().contains("陈惠超"));
+    }
+
+    @Test
     void saveMessageDefaultsToNormalWhenConversationTypeMissing() throws Exception {
         DatabaseChatMemoryAdvisor advisor = DatabaseChatMemoryAdvisor.builder(chatConversationService)
                 .conversationId("test-conv")

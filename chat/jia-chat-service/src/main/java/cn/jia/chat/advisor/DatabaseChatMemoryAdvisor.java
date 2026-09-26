@@ -215,7 +215,7 @@ public class DatabaseChatMemoryAdvisor implements BaseChatMemoryAdvisor {
             // 设置同步状态为 PENDING，标记该会话需要同步到向量库
             entity.setSyncStatus("PENDING");
             entity.setConversationType(String.valueOf(context.getOrDefault("conversationType", "normal")));
-            ServerTrustedSender sender = resolvedSender(context, ownerJiacn, ownerClientId);
+            PersistedSender sender = persistedSender(message, context, ownerJiacn, ownerClientId);
             entity.setSenderType(sender == null ? "" : sender.type());
             entity.setSenderName(sender == null ? "" : sender.displayName());
 
@@ -240,6 +240,22 @@ public class DatabaseChatMemoryAdvisor implements BaseChatMemoryAdvisor {
         }
     }
 
+    private PersistedSender persistedSender(
+            Message message, Map<String, Object> context,
+            String ownerJiacn, String ownerClientId) {
+        ServerTrustedSender trusted = resolvedSender(context, ownerJiacn, ownerClientId);
+        if (trusted == null) {
+            return null;
+        }
+        if (trusted instanceof ServerResolvedSender
+                && !"USER".equals(message.getMessageType().name())) {
+            String type = message.getMessageType().name().toLowerCase(java.util.Locale.ROOT);
+            String displayName = "ASSISTANT".equals(message.getMessageType().name()) ? "助手" : "系统";
+            return new PersistedSender(type, displayName, trusted.jiacn());
+        }
+        return new PersistedSender(trusted.type(), trusted.displayName(), trusted.jiacn());
+    }
+
     private ServerTrustedSender resolvedSender(
             Map<String, Object> context, String ownerJiacn, String ownerClientId) {
         Object raw = context.get(SERVER_RESOLVED_SENDER);
@@ -258,6 +274,9 @@ public class DatabaseChatMemoryAdvisor implements BaseChatMemoryAdvisor {
             throw new IllegalStateException("Server-resolved sender scope mismatch");
         }
         return sender;
+    }
+
+    private record PersistedSender(String type, String displayName, String jiacn) {
     }
 
     private boolean trustedTypeMatches(ServerTrustedSender sender) {
