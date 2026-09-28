@@ -74,6 +74,12 @@ public class ApiKeyHandshakeInterceptor implements HandshakeInterceptor {
             return false;
         }
 
+        if (StringUtil.isEmpty(apiKeyEntity.getTenantId())) {
+            log.warn("Reject OpenClaw websocket handshake: authenticated tenant is unavailable");
+            response.setStatusCode(HttpStatus.FORBIDDEN);
+            return false;
+        }
+        attributes.put("tenantId", apiKeyEntity.getTenantId());
         attributes.put("clientId", apiKeyEntity.getClientId());
         attributes.put("jiacn", apiKeyEntity.getJiacn());
         attributes.put("apiKeyName", apiKeyEntity.getKeyName());

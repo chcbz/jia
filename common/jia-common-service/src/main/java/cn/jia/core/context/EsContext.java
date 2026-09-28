@@ -6,6 +6,8 @@ import lombok.Setter;
 @Getter
 @Setter
 public class EsContext {
+    private String tenantId;
+
     private String clientId;
 
     private String appcn;

@@ -4,6 +4,7 @@ import cn.jia.oauth.filter.EsSecurityContextFilter;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.beans.factory.annotation.Value;
 
 /**
  * 安全上下文配置类，用于配置和注册安全相关的过滤器
@@ -20,9 +21,10 @@ public class EsSecurityContextConfig {
      * @return 配置好的过滤器注册Bean
      */
     @Bean
-    public FilterRegistrationBean<EsSecurityContextFilter> esSecurityContextFilter() {
+    public FilterRegistrationBean<EsSecurityContextFilter> esSecurityContextFilter(
+            @Value("${cyf.security.legacy-single-tenant-id:0}") String legacySingleTenantId) {
         FilterRegistrationBean<EsSecurityContextFilter> filterRegistrationBean = new FilterRegistrationBean<>();
-        filterRegistrationBean.setFilter(new EsSecurityContextFilter());
+        filterRegistrationBean.setFilter(new EsSecurityContextFilter(legacySingleTenantId));
         filterRegistrationBean.addUrlPatterns("/*");
         filterRegistrationBean.setOrder(2);
         return filterRegistrationBean;

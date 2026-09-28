@@ -18,6 +18,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -118,8 +119,9 @@ public class AuthorizationServerConfig {
     }
 
     @Bean
-    public OAuth2TokenCustomizer<JwtEncodingContext> jwtTokenCustomizer() {
-        return new AccountSecurityTokenCustomizer(accountSecurityService);
+    public OAuth2TokenCustomizer<JwtEncodingContext> jwtTokenCustomizer(
+            @Value("${cyf.security.legacy-single-tenant-id:0}") String canonicalTenantId) {
+        return new AccountSecurityTokenCustomizer(accountSecurityService, canonicalTenantId);
     }
 
     static class CustomAuthenticationEntryPoint extends LoginUrlAuthenticationEntryPoint {

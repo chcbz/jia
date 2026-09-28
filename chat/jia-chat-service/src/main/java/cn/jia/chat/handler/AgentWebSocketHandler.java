@@ -31,6 +31,8 @@ import cn.jia.chat.service.ChatConversationEventBroker;
 import cn.jia.chat.service.ChatConversationService;
 import cn.jia.chat.service.AgentSenderIdentityResolver;
 import cn.jia.chat.service.ServerResolvedAgentSender;
+import cn.jia.chat.service.ChatDeliberationService;
+import cn.jia.chat.service.ChatDeliberationOutboxService;
 import cn.jia.chat.service.ConversationMetadataPolicy;
 import cn.jia.chat.service.HallAnnouncementService;
 import cn.jia.core.context.EsContext;
@@ -136,6 +138,16 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     public void setChatConversationService(ChatConversationService service) {
         this.chatConversationService = service;
     }
+    private ChatDeliberationService chatDeliberationService;
+    @Autowired(required = false)
+    public void setChatDeliberationService(ChatDeliberationService service) {
+        this.chatDeliberationService = service;
+    }
+    private ChatDeliberationOutboxService chatDeliberationOutboxService;
+    @Autowired(required = false)
+    public void setChatDeliberationOutboxService(ChatDeliberationOutboxService service) {
+        this.chatDeliberationOutboxService = service;
+    }
     private final ChatClient chatClient;
     private final ObjectProvider<AgentService> agentServiceProvider;
     private final ChatMessageDao chatMessageDao;
@@ -227,7 +239,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 AgentProtocolConstants.TYPE_CHAT_STREAM, AgentProtocolConstants.TYPE_CHAT_STOP,
                 AgentProtocolConstants.TYPE_PING, AgentProtocolConstants.TYPE_AGENT_REGISTER,
                 AgentProtocolConstants.TYPE_AGENT_PRESENCE, AgentProtocolConstants.TYPE_CHAT_MESSAGE,
-                AgentProtocolConstants.TYPE_CHAT_MESSAGE_DELTA, AgentProtocolConstants.TYPE_COMMAND_DISPATCH,
+                AgentProtocolConstants.TYPE_CHAT_MESSAGE_DELTA, AgentProtocolConstants.TYPE_CHAT_DISPATCH_ACK,
+                AgentProtocolConstants.TYPE_COMMAND_DISPATCH,
                 AgentProtocolConstants.TYPE_COMMAND_ACK, AgentProtocolConstants.TYPE_WORK_PROGRESS,
                 AgentProtocolConstants.TYPE_WORK_HEARTBEAT, AgentProtocolConstants.TYPE_WORK_RESULT,
                 AgentProtocolConstants.TYPE_HELP_REQUEST, AgentProtocolConstants.TYPE_ARTIFACT_PUBLISH,
@@ -287,6 +300,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             case AgentProtocolConstants.TYPE_AGENT_PRESENCE -> updateAgentStatus(session, payload);
             case AgentProtocolConstants.TYPE_CHAT_MESSAGE -> saveAgentMessage(session, payload);
             case AgentProtocolConstants.TYPE_CHAT_MESSAGE_DELTA -> publishAgentMessageDelta(session, payload);
+            case AgentProtocolConstants.TYPE_CHAT_DISPATCH_ACK -> acknowledgeChatDispatch(session, payload);
             case AgentProtocolConstants.TYPE_TASK_ASSIGN_LEGACY -> assignTask(session, payload);
             case AgentProtocolConstants.TYPE_WORK_RESULT -> {
                 if (normalized.legacyTaskReport()) {
@@ -1003,6 +1017,42 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         }
     }
 
+    private void acknowledgeHostedReceipt(WebSocketSession session, String agentId, String dispatchId) {
+        if (chatDeliberationOutboxService == null) return;
+        try {
+            chatDeliberationOutboxService.acknowledgeHostedReceipt(sessionTenantId(session),
+                    sessionJiacn(session), sessionClientId(session), agentId, dispatchId, System.currentTimeMillis());
+        } catch (RuntimeException ignored) {
+            // The durable final/delta remains authoritative; explicit chat.dispatch.ack can be retried.
+        }
+    }
+
+    private void acknowledgeChatDispatch(WebSocketSession session, Map<String, Object> payload) {
+        String agentId = requireAllowedSessionAgentId(session, payload);
+        if (agentId == null || chatDeliberationOutboxService == null) {
+            sendProtocolError(session, payload, "CHAT_DISPATCH_ACK_UNAVAILABLE",
+                    "Durable chat dispatch acknowledgement is unavailable");
+            return;
+        }
+        String dispatchId = strictString(payload.get("dispatchId"));
+        String messageId = strictString(payload.get("messageId"));
+        try {
+            boolean acknowledged = chatDeliberationOutboxService.acknowledgeHostedDispatch(
+                    sessionTenantId(session), sessionJiacn(session), sessionClientId(session),
+                    agentId, dispatchId, messageId, System.currentTimeMillis());
+            if (!acknowledged) {
+                sendProtocolError(session, payload, "CHAT_DISPATCH_ACK_REJECTED",
+                        "Durable chat dispatch acknowledgement was rejected");
+                return;
+            }
+            sendEvent(session, "chat_dispatch_acknowledged", Map.of(
+                    "messageId", messageId, "dispatchId", dispatchId, "duplicateSafe", true));
+        } catch (RuntimeException rejected) {
+            sendProtocolError(session, payload, "CHAT_DISPATCH_ACK_REJECTED",
+                    "Durable chat dispatch acknowledgement was rejected");
+        }
+    }
+
     private void saveAgentMessage(WebSocketSession session, Map<String, Object> payload) {
         String conversationId = asString(payload.get("conversationId"));
         String content = asString(payload.get("content"));
@@ -1048,6 +1098,44 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         }
         String senderName = sender.displayName();
 
+        if (hasDurableTurnBinding(payload)) {
+            if (chatDeliberationService == null) {
+                sendError(session, payload, "CHAT_TURN_STATE_UNAVAILABLE", "Durable chat turn service is unavailable");
+                return;
+            }
+            Long declaredGeneration = exactPositiveLong(payload.get("conversationGeneration"));
+            if (declaredGeneration == null || declaredGeneration != generation) {
+                sendError(session, payload, "CHAT_TURN_FINAL_REJECTED", "Durable chat generation was rejected");
+                return;
+            }
+            ChatDeliberationService.FinalResult finalResult;
+            try {
+                finalResult = chatDeliberationService.persistFinal(
+                        sessionTenantId(session), jiacn, clientId, conversationId, generation, agentId,
+                        asString(payload.get("requestId")), asString(payload.get("turnId")),
+                        asString(payload.get("dispatchId")), contextValue(payload, "contextSnapshotId"),
+                        contextValue(payload, "contextHash"), content, sender);
+            } catch (RuntimeException rejected) {
+                sendError(session, payload, "CHAT_TURN_FINAL_REJECTED", "Durable chat final was rejected");
+                return;
+            }
+            acknowledgeHostedReceipt(session, agentId, asString(payload.get("dispatchId")));
+            if (finalResult.status() == ChatDeliberationService.FinalStatus.DUPLICATE) {
+                sendEvent(session, "agent_message_saved", Map.of(
+                        "turnId", finalResult.turn().getTurnId(),
+                        "messageId", ExactWireIds.decimal(finalResult.messageId()),
+                        "duplicate", true));
+                return;
+            }
+            // The FINAL_PERSISTED outbox is the sole conversation-delivery authority.
+            // This socket receipt is after the final transaction committed and does not mark the outbox SENT.
+            sendEvent(session, "agent_message_saved", Map.of(
+                    "turnId", finalResult.turn().getTurnId(),
+                    "messageId", ExactWireIds.decimal(finalResult.messageId()),
+                    "eventId", finalResult.eventId(), "duplicate", false));
+            return;
+        }
+
         ChatMessageEntity entity = new ChatMessageEntity();
         entity.init4Creation();
         entity.setJiacn(jiacn);
@@ -1084,6 +1172,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         event.put("senderType", "agent");
         event.put("senderName", senderName);
         event.put("content", content);
+        addEventMetadata(event);
         chatConversationEventBroker.runIfLive(
                 conversationId, generation,
                 () -> chatConversationService.isLiveGeneration(
@@ -1127,6 +1216,41 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         }
         String senderName = sender.displayName();
 
+        if (hasDurableTurnBinding(payload)) {
+            if (chatDeliberationService == null) return;
+            Long declaredGeneration = exactPositiveLong(payload.get("conversationGeneration"));
+            if (declaredGeneration == null || declaredGeneration != generation) {
+                sendError(session, payload, "CHAT_DELTA_REJECTED", "Durable chat generation was rejected");
+                return;
+            }
+            Long deltaSeq = exactPositiveLong(payload.get("deltaSeq"));
+            if (deltaSeq == null) {
+                sendError(session, payload, "CHAT_DELTA_SEQUENCE_REQUIRED", "deltaSeq is required");
+                return;
+            }
+            ChatDeliberationService.DeltaResult result;
+            try {
+                result = chatDeliberationService.acceptDelta(
+                        sessionTenantId(session), sessionJiacn(session), sessionClientId(session),
+                        conversationId, generation, agentId,
+                        asString(payload.get("requestId")), asString(payload.get("turnId")),
+                        asString(payload.get("dispatchId")), contextValue(payload, "contextSnapshotId"),
+                        contextValue(payload, "contextHash"), deltaSeq, content, sender);
+            } catch (RuntimeException rejected) {
+                sendError(session, payload, "CHAT_DELTA_REJECTED", "Durable chat delta was rejected");
+                return;
+            }
+            acknowledgeHostedReceipt(session, agentId, asString(payload.get("dispatchId")));
+            if (result.status() == ChatDeliberationService.DeltaStatus.GAP) {
+                publishStoredConversationEvent(result.event());
+                sendError(session, payload, "CHAT_DELTA_GAP", "deltaSeq is not contiguous");
+                return;
+            }
+            if (result.status() != ChatDeliberationService.DeltaStatus.ACCEPTED) return;
+            publishStoredConversationEvent(result.event());
+            return;
+        }
+
         Map<String, Object> event = copyTrace(payload);
         event.put("type", "agent_message_delta");
         event.put("conversationId", conversationId);
@@ -1138,12 +1262,75 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         putIfPresent(event, "phase", payload.get("phase"));
         putIfPresent(event, "chunkIndex", payload.get("chunkIndex"));
         putIfPresent(event, "chunkCount", payload.get("chunkCount"));
+        addEventMetadata(event);
         chatConversationEventBroker.publishIfLive(
                 conversationId, generation,
                 () -> chatConversationService.isLiveGeneration(
                         sessionJiacn(session), sessionClientId(session),
                         conversationId, generation),
                 event);
+    }
+
+    private boolean hasDurableTurnBinding(Map<String, Object> payload) {
+        return payload != null && (payload.containsKey("turnId")
+                || payload.containsKey("dispatchId") || payload.containsKey("contextSnapshotId")
+                || payload.containsKey("contextHash") || payload.containsKey("deltaSeq"));
+    }
+
+    @SuppressWarnings("unchecked")
+    private String contextValue(Map<String, Object> payload, String key) {
+        String direct = asString(payload.get(key));
+        if (direct != null) return direct;
+        Object nested = payload.get("contextSnapshot");
+        return nested instanceof Map<?, ?> map ? asString(((Map<String, Object>) map).get(key)) : null;
+    }
+
+    private Long exactPositiveLong(Object value) {
+        long result;
+        if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) {
+            result = ((Number) value).longValue();
+        } else if (value instanceof String text && text.matches("[1-9][0-9]*")) {
+            try { result = Long.parseLong(text); } catch (NumberFormatException invalid) { return null; }
+        } else return null;
+        return result > 0 ? result : null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private void publishStoredConversationEvent(cn.jia.chat.deliberation.ChatConversationEventEntity stored) {
+        if (stored == null) return;
+        try {
+            Map<String,Object> event = JsonUtil.getMapper().readValue(stored.getPayloadJson(), Map.class);
+            event.put("eventId", stored.getEventId());
+            event.put("eventSequence", Long.toString(stored.getEventSequence()));
+            event.put("eventVersion", Long.toString(stored.getEventVersion()));
+            event.put("occurredAt", Long.toString(stored.getOccurredAt()));
+            requireNoActiveTransactionForChatDelivery();
+            chatConversationEventBroker.publishIfSubscribed(stored.getConversationId(), stored.getConversationGeneration(),
+                    () -> chatConversationService.isLiveGeneration(stored.getOwnerJiacn(), stored.getClientId(),
+                            stored.getConversationId(), stored.getConversationGeneration()), event);
+        } catch (Exception ignored) {
+            // Durable DB replay remains available; a best-effort live publication never changes persisted state.
+        }
+    }
+
+    private Map<String, Object> durableEvent(Map<String, Object> payload, String type,
+            cn.jia.chat.deliberation.ChatTurnEntity turn) {
+        Map<String, Object> event = copyTrace(payload);
+        event.put("type", type);
+        event.put("requestId", turn.getRequestId());
+        event.put("turnId", turn.getTurnId());
+        event.put("dispatchId", turn.getDispatchId());
+        event.put("targetAgentId", turn.getTargetAgentId());
+        event.put("contextSnapshotId", turn.getSnapshotId());
+        event.put("route", turn.getRoute());
+        addEventMetadata(event);
+        return event;
+    }
+
+    private void addEventMetadata(Map<String, Object> event) {
+        event.putIfAbsent("eventId", UUID.randomUUID().toString());
+        event.putIfAbsent("eventVersion", 1);
+        event.putIfAbsent("occurredAt", System.currentTimeMillis());
     }
 
     private boolean requireConversationAgentScope(
@@ -1312,7 +1499,12 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             return null;
         }
         try {
-            return chatConversationService.getOwned(jiacn, clientId, conversationId);
+            ChatConversationEntity conversation = chatConversationService.getOwned(jiacn, clientId, conversationId);
+            if (!isExactConversationIdentity(sessionTenantId(session))
+                    || !sessionTenantId(session).equals(conversation.getTenantId())) {
+                throw new IllegalStateException("tenant mismatch");
+            }
+            return conversation;
         } catch (RuntimeException denied) {
             sendError(session, payload, "CONVERSATION_NOT_AVAILABLE",
                     "Conversation is not available to this agent session");
@@ -1774,27 +1966,32 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     }
 
     public boolean sendDirectMessageToAgent(String agentId, Map<String, ?> payload) {
-        return sendDirectMessageToAgent(agentId, payload, null, null, null);
+        return sendDirectMessageToAgent(agentId, payload, null, null, null, null);
     }
 
-    /** Exact owner/client-scoped delivery for generic conversation traffic. */
+    /** Exact tenant/owner/client-scoped delivery for generic conversation traffic. */
+    public boolean sendDirectMessageToAgent(String tenantId, String ownerJiacn, String clientId,
+            String agentId, Map<String, ?> payload) {
+        if (!validExactDispatchId(tenantId, 50) || !validExactDispatchId(ownerJiacn, 50)
+                || !validExactDispatchId(clientId, 50)) return false;
+        return sendDirectMessageToAgent(agentId, payload, null, tenantId, ownerJiacn, clientId);
+    }
+
+    /** Legacy exact owner/client overload; retained for non-deliberation callers. */
     public boolean sendDirectMessageToAgent(
             String ownerJiacn, String clientId, String agentId, Map<String, ?> payload) {
-        if (!validExactDispatchId(ownerJiacn, 50)
-                || !validExactDispatchId(clientId, 50)) {
-            return false;
-        }
-        return sendDirectMessageToAgent(agentId, payload, null, ownerJiacn, clientId);
+        if (!validExactDispatchId(ownerJiacn, 50) || !validExactDispatchId(clientId, 50)) return false;
+        return sendDirectMessageToAgent(agentId, payload, null, null, ownerJiacn, clientId);
     }
 
     private boolean sendDirectMessageToAgent(String agentId, Map<String, ?> payload,
             Set<String> trustedTaskMemberAgentIds) {
-        return sendDirectMessageToAgent(agentId, payload, trustedTaskMemberAgentIds, null, null);
+        return sendDirectMessageToAgent(agentId, payload, trustedTaskMemberAgentIds, null, null, null);
     }
 
     private boolean sendDirectMessageToAgent(
             String agentId, Map<String, ?> payload, Set<String> trustedTaskMemberAgentIds,
-            String requiredOwnerJiacn, String requiredClientId) {
+            String requiredTenantId, String requiredOwnerJiacn, String requiredClientId) {
         if (isBlank(agentId)) {
             return false;
         }
@@ -1836,6 +2033,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             }
             WebSocketSession session = sessions.get(sessionId);
             if (session == null || !session.isOpen() || !agentId.equals(sessionAgentId(session))) {
+                continue;
+            }
+            if (requiredTenantId != null && !requiredTenantId.equals(sessionTenantId(session))) {
                 continue;
             }
             if (requiredOwnerJiacn != null
@@ -2282,6 +2482,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
 
     private <T> T withSessionContext(WebSocketSession session, Supplier<T> action) {
         EsContext context = new EsContext();
+        context.setTenantId(sessionTenantId(session));
         context.setClientId(sessionClientId(session));
         context.setJiacn(sessionJiacn(session));
         EsContextHolder.setContext(context);
@@ -2304,6 +2505,16 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         String handshakeRuntimeInstanceId = sessionAttribute(session, "runtimeInstanceId");
         rememberSessionRuntimeInstance(session, handshakeRuntimeInstanceId);
         return handshakeRuntimeInstanceId;
+    }
+
+    private void requireNoActiveTransactionForChatDelivery() {
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new IllegalStateException("Chat delivery attempted before transaction commit");
+        }
+    }
+
+    private String sessionTenantId(WebSocketSession session) {
+        return sessionAttribute(session, "tenantId");
     }
 
     private String sessionClientId(WebSocketSession session) {

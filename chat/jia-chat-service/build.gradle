@@ -97,7 +97,6 @@ tasks.register('bf08FormalFlow', Test) {
     useJUnitPlatform()
 }
 
-
 // Managed onboarding websocket authorization slice. It proves that only the exact
 // paid managed key may bridge a PROVISIONED identity into its first registration.
 def managedHostingHandshakeSourceSet = sourceSets.create('managedHostingHandshake') {
@@ -106,7 +105,6 @@ def managedHostingHandshakeSourceSet = sourceSets.create('managedHostingHandshak
         include 'cn/jia/chat/config/ApiKeyHandshakeInterceptorManagedOnboardingTest.java'
         include 'cn/jia/chat/config/ApiKeyHandshakeInterceptorManagedRefundTest.java'
     }
-    resources.srcDir 'src/test/resources'
     compileClasspath += sourceSets.main.output
     runtimeClasspath += output + compileClasspath
 }
@@ -125,5 +123,27 @@ tasks.register('managedHostingHandshake', Test) {
     dependsOn tasks.named(managedHostingHandshakeSourceSet.classesTaskName)
     testClassesDirs = managedHostingHandshakeSourceSet.output.classesDirs
     classpath = managedHostingHandshakeSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
+
+// T10/T11/T15 focused P0 slice; avoids compiling unrelated historical chat tests on low-disk hosts.
+def chatDeliberationSourceSet = sourceSets.create('chatDeliberation') {
+    java.srcDir 'src/chatDeliberationTest/java'
+    resources.srcDir 'src/chatDeliberationTest/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(chatDeliberationSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(chatDeliberationSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('chatDeliberation', Test) {
+    group = 'verification'
+    description = 'Runs T10/T11/T15 route, snapshot, durable turn and protocol compatibility tests.'
+    dependsOn tasks.named(chatDeliberationSourceSet.classesTaskName)
+    testClassesDirs = chatDeliberationSourceSet.output.classesDirs
+    classpath = chatDeliberationSourceSet.runtimeClasspath
     useJUnitPlatform()
 }
