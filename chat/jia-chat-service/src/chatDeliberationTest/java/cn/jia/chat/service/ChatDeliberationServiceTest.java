@@ -290,6 +290,70 @@ class ChatDeliberationServiceTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void snapshotReconstructsTargetAuthorizedHistoryAndSeparatesAvailableFromMaterializedRefs() {
+        List<ChatMessageEntity> history = new ArrayList<>();
+        for (int i = 1; i <= 25; i++) {
+            history.add(historyMessage((long) i, "USER", "user-" + i, null));
+        }
+        history.add(historyMessage(26L, "ASSISTANT", "agent-a-only",
+                "{\"targetAgentId\":\"agent-a\",\"toolTrace\":\"must-not-copy\"}"));
+        history.add(historyMessage(27L, "ASSISTANT", "agent-b-secret",
+                "{\"targetAgentId\":\"agent-b\"}"));
+        history.add(historyMessage(28L, "ASSISTANT", "malformed-secret", "not-json"));
+        history.add(historyMessage(29L, "TOOL", "tool-secret", null));
+        when(messages.findOwnedByConversationIdWithLimit("owner-a", "client-a", "42", 200))
+                .thenReturn(history);
+
+        ChatMessageDTO input = request("req-history", "current-question");
+        input.setInputRefs(List.of(Map.of("type", "message", "id", "25")));
+        Map<String, Object> materials = Map.of("status", "AVAILABLE", "complete", true,
+                "items", List.of(Map.of("fileId", "file-1", "version", 2, "role", "INPUT")));
+        var admission = service.admit("0", humanSender(), "42", 3L, scope(),
+                InteractionRoute.CHAT, input, materials);
+        Map<String, Object> facts = admission.dispatches().getFirst().factsManifest();
+        Map<String, Object> context = (Map<String, Object>) facts.get("authorizedContext");
+        List<Map<String, Object>> recent = (List<Map<String, Object>>) context.get("recentMessages");
+        Map<String, Object> summary = (Map<String, Object>) context.get("summary");
+        Map<String, Object> current = (Map<String, Object>) context.get("currentUserMessage");
+        List<Map<String, Object>> available = (List<Map<String, Object>>) context.get("availableRefs");
+
+        assertEquals("2", facts.get("schemaVersion"));
+        assertTrue(recent.stream().anyMatch(message -> "agent-a-only".equals(message.get("content"))));
+        assertFalse(recent.stream().anyMatch(message -> "agent-b-secret".equals(message.get("content"))));
+        assertFalse(recent.stream().anyMatch(message -> "malformed-secret".equals(message.get("content"))));
+        assertFalse(recent.stream().anyMatch(message -> "tool-secret".equals(message.get("content"))));
+        assertTrue(String.valueOf(summary.get("content")).contains("user-1"));
+        assertFalse(((List<String>) summary.get("sourceMessageIds")).isEmpty());
+        assertTrue(String.valueOf(summary.get("contentHash")).startsWith("sha256:"));
+        assertEquals("current-question", current.get("content"));
+        assertTrue(String.valueOf(current.get("contentHash")).startsWith("sha256:"));
+        assertTrue(available.stream().anyMatch(ref -> "message".equals(ref.get("type"))));
+        assertTrue(available.stream().anyMatch(ref -> "taskMaterial".equals(ref.get("type"))));
+        assertEquals(List.of(), context.get("materializedRefs"));
+        assertTrue(String.valueOf(admission.dispatches().getFirst().sourceVector()
+                .get("authorizedHistoryDigest")).startsWith("sha256:"));
+        assertFalse(CanonicalContextJson.write(facts).contains("toolTrace"));
+    }
+
+    @Test
+    void capabilityFailureIsExactScopedTerminalAndDurablyReplayable() {
+        var admission = admit("req-capability", "hello");
+        var dispatch = admission.dispatches().getFirst();
+        ChatConversationEventEntity event = service.failTargetCapability(
+                "0", "owner-a", "client-a", dispatch.turnId(), "TARGET_PROFILE_UNSUPPORTED",
+                Map.of("decision", "UNSUPPORTED", "profile", "CHAT", "runtimeVersion", "private-runtime",
+                        "policy", Map.of("supported", false, "enabled", false)));
+        assertEquals(ChatDeliberationStates.FAILED, dao.turns.get(dispatch.turnId()).getState());
+        assertEquals("target_capability_unavailable", event.getEventType());
+        assertTrue(event.getPayloadJson().contains("TARGET_PROFILE_UNSUPPORTED"));
+        assertFalse(event.getPayloadJson().contains("private-runtime"));
+        assertEquals(ChatDeliberationStates.PARTIAL, dao.requests.get("req-capability").getAggregateState());
+        assertThrows(ChatDeliberationException.class, () -> service.failTargetCapability(
+                "0", "owner-b", "client-a", dispatch.turnId(), "TARGET_PROFILE_UNSUPPORTED", Map.of()));
+    }
+
+    @Test
     void durableViewsAndEventsExposeBigintsAsDecimalStrings() {
         var admission = admit("req-long", "hello");
         ChatRequestEntity request = dao.requests.get("req-long");
@@ -301,6 +365,14 @@ class ChatDeliberationServiceTest {
         assertEquals(Long.toString(Long.MAX_VALUE - 2), view.turns().getFirst().stateVersion());
         assertEquals(Long.toString(Long.MAX_VALUE - 3), view.turns().getFirst().lastDeltaSeq());
     }
+    private ChatMessageEntity historyMessage(Long id, String type, String content, String metadata) {
+        ChatMessageEntity message = new ChatMessageEntity().setId(id).setConversationId("42")
+                .setMessageType(type).setContent(content).setMetadata(metadata).setJiacn("owner-a");
+        message.setTenantId("0");
+        message.setClientId("client-a");
+        return message;
+    }
+
     private ChatDeliberationService.Admission admit(String requestId, String content) {
         return service.admit("0", humanSender(), "42", 3L, scope(),
                 InteractionRoute.CHAT, request(requestId, content), Map.of());

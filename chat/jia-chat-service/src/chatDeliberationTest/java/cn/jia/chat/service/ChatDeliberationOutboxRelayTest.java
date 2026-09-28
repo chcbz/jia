@@ -45,18 +45,29 @@ class ChatDeliberationOutboxRelayTest {
         when(outbox.renew(any(), anyLong(), anyLong())).thenReturn(true);
         lenient().when(deliberation.getTurn(anyString(), anyString(), anyString(), anyString()))
                 .thenAnswer(invocation -> turnView(invocation.getArgument(3), ChatDeliberationStates.DISPATCHED));
+        lenient().when(sockets.sendNegotiatedChatMessageToAgent(anyString(), anyString(), anyString(),
+                anyString(), any(cn.jia.chat.deliberation.InteractionRoute.class), anyMap()))
+                .thenReturn(new AgentWebSocketHandler.CapabilityDispatchResult(
+                        AgentWebSocketHandler.CapabilityDispatchStatus.READY, true,
+                        Map.of("decision", "READY", "profile", "CHAT")));
     }
 
     @Test
-    void builtinPromptUsesOnlyTrustedOpaqueTaskMaterialReferences() {
+    void builtinPromptConsumesPersistedAuthorizedSnapshotWithoutClaimingAvailableRefsWereRead() {
+        Map<String, Object> facts = Map.of("authorizedContext", Map.of(
+                "summary", Map.of("content", "旧议事"),
+                "recentMessages", List.of(Map.of("messageId", "7", "content", "前情")),
+                "availableRefs", List.of(Map.of("type", "taskMaterial", "fileId", "file-1")),
+                "materializedRefs", List.of()));
         org.springframework.ai.chat.prompt.Prompt prompt = ChatDeliberationOutboxRelay.buildBuiltinPrompt(
-                "请结合资料", Map.of("status", "AVAILABLE", "items",
-                        List.of(Map.of("fileId", "file-1", "version", 2, "role", "INPUT"))));
+                "请结合资料", facts);
         assertEquals("请结合资料", prompt.getUserMessage().getText());
         String system = prompt.getSystemMessage().getText();
-        assertTrue(system.contains("resolved and authorized by the server"));
+        assertTrue(system.contains("exact conversation owner/client scope"));
+        assertTrue(system.contains("旧议事"));
         assertTrue(system.contains("file-1"));
-        assertTrue(system.contains("grant permission to read files"));
+        assertTrue(system.contains("absent from materializedRefs"));
+        assertTrue(system.contains("strict no-tools has not been provider-verified"));
         assertFalse(system.contains("downloadUrl"));
     }
 
@@ -83,11 +94,9 @@ class ChatDeliberationOutboxRelayTest {
         clearInvocations(outbox);
         ChatDispatchOutboxEntity hostedRow = dispatch("evt-h", "turn-h", "dispatch-h", "hosted-a");
         when(builtin.isBuiltinAgent("hosted-a")).thenReturn(false);
-        when(sockets.sendDirectMessageToAgent(eq("tenant-a"), eq("owner-a"), eq("client-a"),
-                eq("hosted-a"), anyMap())).thenReturn(true);
         relay.deliverClaim(new ChatDeliberationOutboxService.Claim(hostedRow, false));
-        verify(sockets).sendDirectMessageToAgent(eq("tenant-a"), eq("owner-a"), eq("client-a"),
-                eq("hosted-a"), anyMap());
+        verify(sockets).sendNegotiatedChatMessageToAgent(eq("tenant-a"), eq("owner-a"), eq("client-a"),
+                eq("hosted-a"), eq(cn.jia.chat.deliberation.InteractionRoute.CHAT), anyMap());
         verify(deliberation).markDispatch("tenant-a", "owner-a", "client-a", "turn-h", true);
         verify(outbox).awaitingAck(any(), anyLong(), anyLong());
         verify(outbox, never()).sent(any(), anyLong());
@@ -208,8 +217,6 @@ class ChatDeliberationOutboxRelayTest {
                 .messages().stream().content()).thenReturn(Flux.<String>never()
                         .doOnSubscribe(ignored -> modelSubscribed.countDown())
                         .doOnCancel(modelCancelled::countDown));
-        when(sockets.sendDirectMessageToAgent(eq("tenant-a"), eq("owner-a"), eq("client-a"),
-                eq("hosted-a"), anyMap())).thenReturn(true);
         when(outbox.discover(anyLong(), anyInt())).thenReturn(List.of(builtinRow, hostedRow), List.of());
         when(outbox.claim(same(builtinRow), anyString(), anyLong(), eq(120L))).thenReturn(builtinClaim);
         when(outbox.claim(same(hostedRow), anyString(), anyLong(), eq(120L))).thenReturn(hostedClaim);
@@ -246,6 +253,61 @@ class ChatDeliberationOutboxRelayTest {
     }
 
     @Test
+    void disabledModernTargetRemainsRetryableWithoutLegacySend() {
+        ChatDispatchOutboxEntity row = dispatch("evt-h", "turn-h", "dispatch-h", "hosted-a");
+        when(builtin.isBuiltinAgent("hosted-a")).thenReturn(false);
+        when(sockets.sendNegotiatedChatMessageToAgent(anyString(), anyString(), anyString(), anyString(),
+                any(cn.jia.chat.deliberation.InteractionRoute.class), anyMap()))
+                .thenReturn(new AgentWebSocketHandler.CapabilityDispatchResult(
+                        AgentWebSocketHandler.CapabilityDispatchStatus.WAITING_DISABLED, false,
+                        Map.of("decision", "WAITING_DISABLED", "profile", "CHAT")));
+        var claim = new ChatDeliberationOutboxService.Claim(row, false);
+        relay.deliverClaim(claim);
+        verify(outbox).retry(eq(claim), eq("TARGET_CHAT_PROFILE_DISABLED"), anyLong());
+        verify(deliberation, never()).failTargetCapability(anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyMap());
+    }
+
+    @Test
+    void unsupportedModernTargetFailsDurablyAndNeverFallsBack() {
+        ChatDispatchOutboxEntity row = dispatch("evt-h", "turn-h", "dispatch-h", "hosted-a");
+        when(builtin.isBuiltinAgent("hosted-a")).thenReturn(false);
+        Map<String, Object> profile = Map.of("decision", "UNSUPPORTED", "profile", "CHAT");
+        when(sockets.sendNegotiatedChatMessageToAgent(anyString(), anyString(), anyString(), anyString(),
+                any(cn.jia.chat.deliberation.InteractionRoute.class), anyMap()))
+                .thenReturn(new AgentWebSocketHandler.CapabilityDispatchResult(
+                        AgentWebSocketHandler.CapabilityDispatchStatus.UNSUPPORTED, false, profile));
+        var claim = new ChatDeliberationOutboxService.Claim(row, false);
+        relay.deliverClaim(claim);
+        verify(deliberation).failTargetCapability("tenant-a", "owner-a", "client-a", "turn-h",
+                "TARGET_PROFILE_UNSUPPORTED", profile);
+        verify(outbox).dead(eq(claim), eq("TARGET_PROFILE_UNSUPPORTED"), anyLong());
+        verify(outbox, never()).retry(eq(claim), anyString(), anyLong());
+    }
+
+    @Test
+    void inspectWithoutMaterializedBytesFailsBeforeAnySocketSend() {
+        ChatDispatchOutboxEntity row = row("evt-i", "turn-i", "dispatch-i", "DISPATCH", Map.ofEntries(
+                Map.entry("conversationId", "42"), Map.entry("conversationGeneration", "3"),
+                Map.entry("requestId", "req-1"), Map.entry("requestRevision", "1"),
+                Map.entry("turnId", "turn-i"), Map.entry("dispatchId", "dispatch-i"),
+                Map.entry("targetAgentId", "hosted-a"), Map.entry("contextSnapshotId", "snapshot-1"),
+                Map.entry("contextHash", "sha256:ctx"), Map.entry("route", "INSPECT"),
+                Map.entry("content", "inspect"), Map.entry("sourceVector", Map.of()),
+                Map.entry("factsManifest", Map.of("authorizedContext", Map.of(
+                        "availableRefs", List.of(Map.of("type", "message", "id", "7")),
+                        "materializedRefs", List.of())))));
+        when(builtin.isBuiltinAgent("hosted-a")).thenReturn(false);
+        var claim = new ChatDeliberationOutboxService.Claim(row, false);
+        relay.deliverClaim(claim);
+        verifyNoInteractions(sockets);
+        verify(deliberation).failTargetCapability("tenant-a", "owner-a", "client-a", "turn-i",
+                "TARGET_INSPECT_INPUT_NOT_MATERIALIZED",
+                Map.of("decision", "UNSUPPORTED", "profile", "INSPECT"));
+        verify(outbox).dead(eq(claim), eq("TARGET_INSPECT_INPUT_NOT_MATERIALIZED"), anyLong());
+    }
+
+    @Test
     void deletedConversationIsFencedBeforeHostedExternalSend() {
         ChatDispatchOutboxEntity row = dispatch("evt-h", "turn-h", "dispatch-h", "hosted-a");
         when(builtin.isBuiltinAgent("hosted-a")).thenReturn(false);
@@ -260,15 +322,14 @@ class ChatDeliberationOutboxRelayTest {
     void crashAfterHostedSendRetriesSameStableMessageAndDispatchIdentity() {
         ChatDispatchOutboxEntity row = dispatch("evt-h", "turn-h", "dispatch-h", "hosted-a");
         when(builtin.isBuiltinAgent("hosted-a")).thenReturn(false);
-        when(sockets.sendDirectMessageToAgent(eq("tenant-a"),eq("owner-a"),eq("client-a"),
-                eq("hosted-a"),anyMap())).thenReturn(true);
         relay.deliverClaim(new ChatDeliberationOutboxService.Claim(row, false));
         ChatDispatchOutboxEntity retry = dispatch("evt-h", "turn-h", "dispatch-h", "hosted-a");
         relay.deliverClaim(new ChatDeliberationOutboxService.Claim(retry, true));
         @SuppressWarnings("unchecked") org.mockito.ArgumentCaptor<Map<String,Object>> payloads =
                 org.mockito.ArgumentCaptor.forClass(Map.class);
-        verify(sockets, times(2)).sendDirectMessageToAgent(eq("tenant-a"),eq("owner-a"),eq("client-a"),
-                eq("hosted-a"),payloads.capture());
+        verify(sockets, times(2)).sendNegotiatedChatMessageToAgent(
+                eq("tenant-a"), eq("owner-a"), eq("client-a"), eq("hosted-a"),
+                eq(cn.jia.chat.deliberation.InteractionRoute.CHAT), payloads.capture());
         assertEquals("evt-h", payloads.getAllValues().get(0).get("messageId"));
         assertEquals("evt-h", payloads.getAllValues().get(1).get("messageId"));
         assertEquals("dispatch-h", payloads.getAllValues().get(0).get("dispatchId"));

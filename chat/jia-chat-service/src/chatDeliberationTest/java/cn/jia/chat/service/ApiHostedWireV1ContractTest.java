@@ -7,6 +7,7 @@ import cn.jia.chat.deliberation.ChatDeliberationDao;
 import cn.jia.chat.deliberation.ChatDispatchOutboxEntity;
 import cn.jia.chat.deliberation.InteractionRoute;
 import cn.jia.chat.entity.ChatConversationEntity;
+import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.handler.AgentWebSocketHandler;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
 import cn.jia.agent.service.AgentService;
@@ -113,12 +114,25 @@ class ApiHostedWireV1ContractTest {
                 Map.of("type", "task", "id", "task-contract-17"),
                 Map.of("type", "message", "id", Long.toString(messageId - 1)));
 
+        ChatMessageEntity previousUser = scopedMessage(tenantId, ownerJiacn, clientId,
+                conversationId, messageId - 1, "USER", "Previous authorized user context", null);
+        ChatMessageEntity previousAssistant = scopedMessage(tenantId, ownerJiacn, clientId,
+                conversationId, messageId - 2, "ASSISTANT", "Previous target answer",
+                "{\"targetAgentId\":\"hosted-agent-contract\"}");
+        ChatMessageEntity currentUser = scopedMessage(tenantId, ownerJiacn, clientId,
+                conversationId, messageId, "USER", "Inspect the fixed contract context", null);
+        Map<String, Object> authorizedContext = invoke(service, "authorizedContext",
+                new Class<?>[]{String.class, String.class, String.class, String.class, String.class,
+                        List.class, ChatMessageEntity.class, List.class, Map.class},
+                tenantId, ownerJiacn, clientId, conversationId, targetAgentId,
+                List.of(previousAssistant, previousUser), currentUser, inputRefs, null);
         Map<String, Object> sourceVector = invoke(service, "sourceVector",
-                new Class<?>[]{long.class, long.class, AgentTaskDTO.class}, generation, messageId, task);
+                new Class<?>[]{long.class, long.class, AgentTaskDTO.class, Map.class},
+                generation, messageId, task, authorizedContext);
         Map<String, Object> facts = invoke(service, "factsManifest",
                 new Class<?>[]{ChatConversationEntity.class, JuyitingConversationScope.class,
-                        String.class, AgentTaskDTO.class, List.class, long.class, Map.class},
-                conversation, scope, targetAgentId, task, inputRefs, messageId, null);
+                        String.class, AgentTaskDTO.class, Map.class, Map.class},
+                conversation, scope, targetAgentId, task, null, authorizedContext);
         String contextHash = ChatDeliberationService.contextDigest(sourceVector, facts);
         String turnId = stableId(service, "turn", tenantId, ownerJiacn, clientId, requestId, targetAgentId);
         String dispatchId = stableId(service, "dispatch", tenantId, ownerJiacn, clientId, requestId,
@@ -155,6 +169,15 @@ class ApiHostedWireV1ContractTest {
         assertNotNull(wire.get("payload"));
         assertEquals(contextHash, wire.get("contextHash"));
         return (CanonicalContextJson.write(wire) + "\n").getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static ChatMessageEntity scopedMessage(String tenantId, String ownerJiacn,
+            String clientId, String conversationId, long id, String type, String content, String metadata) {
+        ChatMessageEntity message = new ChatMessageEntity().setId(id).setConversationId(conversationId)
+                .setMessageType(type).setContent(content).setMetadata(metadata).setJiacn(ownerJiacn);
+        message.setTenantId(tenantId);
+        message.setClientId(clientId);
+        return message;
     }
 
     private static String stableId(ChatDeliberationService service, String prefix, String... parts)

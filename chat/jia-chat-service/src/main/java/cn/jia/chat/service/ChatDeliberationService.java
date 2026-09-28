@@ -38,6 +38,15 @@ import java.util.UUID;
 @Service
 public class ChatDeliberationService {
     private static final int MAX_ID = 100;
+    private static final int HISTORY_QUERY_LIMIT = 200;
+    private static final int RECENT_HISTORY_LIMIT = 24;
+    private static final int MAX_HISTORY_CONTENT = 200_000;
+    private static final int SUMMARY_EXCERPT_LIMIT = 2_000;
+    private static final int SUMMARY_CONTENT_LIMIT = 64_000;
+    private static final Set<String> CAPABILITY_FAILURE_REASONS = Set.of(
+            "TARGET_PROFILE_UNSUPPORTED",
+            "TARGET_INSPECT_INPUT_NOT_MATERIALIZED",
+            "TARGET_EXECUTE_VIA_CHAT_FORBIDDEN");
 
     private final ChatDeliberationDao dao;
     private final ChatConversationDao conversationDao;
@@ -79,7 +88,8 @@ public class ChatDeliberationService {
                 tenantId, ownerJiacn, clientId, conversationId, expectedGeneration);
         requireConversationScope(conversation, scope);
         List<ChatMessageEntity> existingMessages = messageDao.findOwnedByConversationIdWithLimit(
-                ownerJiacn, clientId, conversationId, 200);
+                ownerJiacn, clientId, conversationId, HISTORY_QUERY_LIMIT);
+        if (existingMessages == null) throw unavailable();
         List<Map<String, Object>> inputRefs = authorizeInputRefs(
                 input.getInputRefs(), route, conversation, scope, existingMessages);
         AgentTaskDTO task = taskFacts(scope, tenantId, clientId);
@@ -142,11 +152,13 @@ public class ChatDeliberationService {
         for (String targetAgentId : scope.targetAgentIds()) {
             String turnId = stableId("turn", tenantId, ownerJiacn, clientId, requestId, targetAgentId);
             String dispatchId = stableId("dispatch", tenantId, ownerJiacn, clientId, requestId, targetAgentId);
+            Map<String, Object> authorizedContext = authorizedContext(
+                    tenantId, ownerJiacn, clientId, conversationId, targetAgentId,
+                    existingMessages, userMessage, inputRefs, taskMaterials);
             Map<String, Object> sourceVector = sourceVector(
-                    expectedGeneration, userMessage.getId(), task);
+                    expectedGeneration, userMessage.getId(), task, authorizedContext);
             Map<String, Object> facts = factsManifest(
-                    conversation, scope, targetAgentId, task, inputRefs,
-                    userMessage.getId(), taskMaterials);
+                    conversation, scope, targetAgentId, task, taskMaterials, authorizedContext);
             String sourceJson = CanonicalContextJson.write(sourceVector);
             String factsJson = CanonicalContextJson.write(facts);
             String contextDigest = contextDigest(sourceVector, facts);
@@ -451,6 +463,58 @@ public class ChatDeliberationService {
         refreshAggregate(tenantId, ownerJiacn, clientId, turn.getRequestId(), now);
     }
 
+    @Transactional(rollbackFor = Exception.class)
+    public ChatConversationEventEntity failTargetCapability(String tenantId, String ownerJiacn,
+            String clientId, String turnId, String reason, Map<String, Object> negotiatedProfile) {
+        requireIdentity(tenantId, 50); requireIdentity(ownerJiacn, 50);
+        requireIdentity(clientId, 50); requireIdentity(turnId, MAX_ID);
+        if (!CAPABILITY_FAILURE_REASONS.contains(reason)) throw invalid("Invalid capability failure reason");
+        ChatTurnEntity visible = requireVisibleTurn(tenantId, ownerJiacn, clientId, turnId);
+        requireLockedConversation(tenantId, ownerJiacn, clientId, visible.getConversationId(),
+                visible.getConversationGeneration());
+        ChatTurnEntity turn = requireLockedTurn(tenantId, ownerJiacn, clientId, turnId);
+        if (terminal(turn.getState())) return null;
+        long now = System.currentTimeMillis();
+        if (dao.updateTurnState(turn, ChatDeliberationStates.FAILED, reason, now) != 1) {
+            throw conflict("Concurrent target capability state change");
+        }
+        turn.setState(ChatDeliberationStates.FAILED).setTerminalReason(reason)
+                .setStateVersion(turn.getStateVersion() + 1).setUpdatedAt(now);
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("reason", reason);
+        payload.put("targetCapability", capabilityEventView(negotiatedProfile));
+        ChatConversationEventEntity event = persistEvent(turn,
+                stableId("evt", turn.getDispatchId(), "TARGET_CAPABILITY_UNAVAILABLE"),
+                "target_capability_unavailable", payload, now);
+        refreshAggregate(tenantId, ownerJiacn, clientId, turn.getRequestId(), now);
+        return event;
+    }
+
+    private Map<String, Object> capabilityEventView(Map<String, Object> input) {
+        if (input == null || input.isEmpty()) return Map.of();
+        Map<String, Object> result = new LinkedHashMap<>();
+        copyCapabilityScalar(input, result, "decision", String.class);
+        copyCapabilityScalar(input, result, "profile", String.class);
+        copyCapabilityScalar(input, result, "capabilityContractVersion", Number.class);
+        Object policyValue = input.get("policy");
+        if (policyValue instanceof Map<?, ?> policy) {
+            Map<String, Object> safePolicy = new LinkedHashMap<>();
+            copyCapabilityScalar(policy, safePolicy, "supported", Boolean.class);
+            copyCapabilityScalar(policy, safePolicy, "enabled", Boolean.class);
+            copyCapabilityScalar(policy, safePolicy, "toolPolicy", String.class);
+            copyCapabilityScalar(policy, safePolicy, "manifestPolicy", String.class);
+            copyCapabilityScalar(policy, safePolicy, "strictNoToolsVerified", Boolean.class);
+            if (!safePolicy.isEmpty()) result.put("policy", Map.copyOf(safePolicy));
+        }
+        return Map.copyOf(result);
+    }
+
+    private void copyCapabilityScalar(Map<?, ?> source, Map<String, Object> target,
+            String key, Class<?> type) {
+        Object value = source.get(key);
+        if (type.isInstance(value)) target.put(key, value);
+    }
+
     private void cancelLockedTurn(ChatTurnEntity turn, String reason, long now) {
         if (InteractionRoute.EXECUTE.name().equals(turn.getRoute())) throw unavailable();
         if (dao.updateTurnState(turn, ChatDeliberationStates.CANCELLED, reason, now) != 1) {
@@ -696,24 +760,30 @@ public class ChatDeliberationService {
         return List.copyOf(result);
     }
 
-    private Map<String, Object> sourceVector(long generation, long messageId, AgentTaskDTO task) {
+    private Map<String, Object> sourceVector(long generation, long messageId, AgentTaskDTO task,
+            Map<String, Object> authorizedContext) {
         Map<String, Object> vector = new LinkedHashMap<>();
         vector.put("conversationGeneration", Long.toString(generation));
         vector.put("messageHighWatermark", Long.toString(messageId));
-        vector.put("taskRevision", task == null || task.getTaskVersion() == null ? null : String.valueOf(task.getTaskVersion()));
+        vector.put("taskRevision", task == null || task.getTaskVersion() == null
+                ? null : String.valueOf(task.getTaskVersion()));
         vector.put("executionRevision", null);
         vector.put("bindingVersion", null);
-        vector.put("summaryRevision", null);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> summary = authorizedContext.get("summary") instanceof Map<?, ?> value
+                ? (Map<String, Object>) value : Map.of();
+        vector.put("summaryRevision", digest(summary));
+        vector.put("authorizedHistoryDigest", authorizedContext.get("historyDigest"));
+        vector.put("sourceMessageIds", authorizedContext.get("sourceMessageIds"));
         vector.put("workspaceTreeSha", null);
         return vector;
     }
 
     private Map<String, Object> factsManifest(ChatConversationEntity conversation,
             JuyitingConversationScope scope, String targetAgentId, AgentTaskDTO task,
-            List<Map<String, Object>> inputRefs, long messageId,
-            Map<String, Object> taskMaterials) {
+            Map<String, Object> taskMaterials, Map<String, Object> authorizedContext) {
         Map<String, Object> facts = new LinkedHashMap<>();
-        facts.put("schemaVersion", "1");
+        facts.put("schemaVersion", "2");
         facts.put("conversation", Map.of(
                 "id", Long.toString(conversation.getId()), "generation", Long.toString(conversation.getLifecycleGeneration()),
                 "scopeType", scope.scopeType(), "scopeKey", scope.scopeKey()));
@@ -721,13 +791,171 @@ public class ChatDeliberationService {
         facts.put("participantAgentIds", scope.authoritativeAgentIds().isEmpty()
                 ? scope.targetAgentIds() : scope.authoritativeAgentIds());
         facts.put("task", task == null ? null : taskManifest(task));
-        facts.put("taskMaterials", taskMaterials);
-        facts.put("inputRefs", inputRefs);
-        // Message正文 stays in chat_message and the outbound top-level content field; snapshots keep only refs.
-        facts.put("userMessage", Map.of("id", Long.toString(messageId)));
+        facts.put("taskMaterials", sanitizeTaskMaterials(taskMaterials));
+        facts.put("authorizedContext", authorizedContext);
         facts.put("responsePolicy", Map.of(
-                "mustNotClaimToolUse", true, "mustStateMissingFacts", true));
+                "toolPolicy", "read-only-constrained",
+                "strictNoToolsVerified", false,
+                "mustNotClaimUnmaterializedReferenceRead", true,
+                "mustStateMissingFacts", true));
         return facts;
+    }
+
+    private Map<String, Object> authorizedContext(String tenantId, String ownerJiacn, String clientId,
+            String conversationId, String targetAgentId, List<ChatMessageEntity> existingMessages,
+            ChatMessageEntity currentUserMessage, List<Map<String, Object>> inputRefs,
+            Map<String, Object> taskMaterials) {
+        List<Map<String, Object>> authorized = new ArrayList<>();
+        for (ChatMessageEntity message : existingMessages) {
+            Map<String, Object> safe = authorizedHistoryMessage(
+                    tenantId, ownerJiacn, clientId, conversationId, targetAgentId, message);
+            if (safe != null) authorized.add(safe);
+        }
+        int recentFrom = Math.max(0, authorized.size() - RECENT_HISTORY_LIMIT);
+        List<Map<String, Object>> older = List.copyOf(authorized.subList(0, recentFrom));
+        List<Map<String, Object>> recent = List.copyOf(authorized.subList(recentFrom, authorized.size()));
+        Map<String, Object> summary = extractiveSummary(older);
+        Map<String, Object> current = messageView(currentUserMessage, "USER");
+        List<String> sourceIds = authorized.stream().map(value -> String.valueOf(value.get("messageId"))).toList();
+        List<Map<String, Object>> digestVector = new ArrayList<>();
+        for (Map<String, Object> message : authorized) {
+            digestVector.add(Map.of(
+                    "messageId", message.get("messageId"),
+                    "role", message.get("role"),
+                    "contentHash", message.get("contentHash")));
+        }
+        digestVector.add(Map.of(
+                "messageId", current.get("messageId"),
+                "role", current.get("role"),
+                "contentHash", current.get("contentHash")));
+        Map<String, Object> context = new LinkedHashMap<>();
+        context.put("summary", summary);
+        context.put("recentMessages", recent);
+        context.put("currentUserMessage", current);
+        context.put("sourceMessageIds", sourceIds);
+        context.put("historyDigest", digest(digestVector));
+        context.put("availableRefs", availableRefs(inputRefs, taskMaterials));
+        context.put("materializedRefs", List.of());
+        return Map.copyOf(context);
+    }
+
+    private Map<String, Object> authorizedHistoryMessage(String tenantId, String ownerJiacn,
+            String clientId, String conversationId, String targetAgentId, ChatMessageEntity message) {
+        if (message == null || message.getId() == null
+                || !Objects.equals(tenantId, message.getTenantId())
+                || !Objects.equals(ownerJiacn, message.getJiacn())
+                || !Objects.equals(clientId, message.getClientId())
+                || !Objects.equals(conversationId, message.getConversationId())
+                || message.getContent() == null || message.getContent().isBlank()
+                || message.getContent().length() > MAX_HISTORY_CONTENT) return null;
+        if ("USER".equals(message.getMessageType())) return messageView(message, "USER");
+        if (!"ASSISTANT".equals(message.getMessageType())
+                || !assistantTargets(message.getMetadata(), targetAgentId)) return null;
+        return messageView(message, "ASSISTANT");
+    }
+
+    private boolean assistantTargets(String metadataJson, String targetAgentId) {
+        if (metadataJson == null || metadataJson.isBlank()) return false;
+        try {
+            Object parsed = JsonUtil.getMapper().readValue(metadataJson, Map.class);
+            if (!(parsed instanceof Map<?, ?> metadata)) return false;
+            Object target = metadata.get("targetAgentId");
+            Object agent = metadata.get("agentId");
+            if (target != null && !(target instanceof String)) return false;
+            if (agent != null && !(agent instanceof String)) return false;
+            if (target instanceof String targetValue && agent instanceof String agentValue
+                    && !targetValue.equals(agentValue)) return false;
+            String binding = target instanceof String value ? value
+                    : agent instanceof String value ? value : null;
+            return targetAgentId.equals(binding);
+        } catch (Exception malformed) {
+            return false;
+        }
+    }
+
+    private Map<String, Object> messageView(ChatMessageEntity message, String role) {
+        String content = message.getContent();
+        return Map.of(
+                "messageId", Long.toString(message.getId()),
+                "role", role,
+                "content", content,
+                "contentHash", "sha256:" + sha256(content));
+    }
+
+    private Map<String, Object> extractiveSummary(List<Map<String, Object>> older) {
+        StringBuilder content = new StringBuilder();
+        List<String> sourceIds = new ArrayList<>();
+        List<Map<String, Object>> sources = new ArrayList<>();
+        for (Map<String, Object> message : older) {
+            String body = String.valueOf(message.get("content"));
+            String excerpt = body.substring(0, Math.min(body.length(), SUMMARY_EXCERPT_LIMIT));
+            String line = "[" + message.get("role") + " " + message.get("messageId") + "] " + excerpt;
+            int remaining = SUMMARY_CONTENT_LIMIT - content.length();
+            if (remaining <= 0) break;
+            if (!content.isEmpty()) {
+                if (remaining == 1) break;
+                content.append('\n');
+                remaining--;
+            }
+            if (line.length() > remaining) line = line.substring(0, remaining);
+            content.append(line);
+            String id = String.valueOf(message.get("messageId"));
+            sourceIds.add(id);
+            sources.add(Map.of("messageId", id, "contentHash", message.get("contentHash")));
+            if (content.length() >= SUMMARY_CONTENT_LIMIT) break;
+        }
+        String summaryContent = content.toString();
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("kind", "extractive-v1");
+        summary.put("content", summaryContent);
+        summary.put("sourceMessageIds", List.copyOf(sourceIds));
+        summary.put("sources", List.copyOf(sources));
+        summary.put("contentHash", "sha256:" + sha256(summaryContent));
+        return Map.copyOf(summary);
+    }
+
+    private List<Map<String, Object>> availableRefs(List<Map<String, Object>> inputRefs,
+            Map<String, Object> taskMaterials) {
+        List<Map<String, Object>> refs = new ArrayList<>();
+        if (inputRefs != null) refs.addAll(inputRefs);
+        Map<String, Object> materials = sanitizeTaskMaterials(taskMaterials);
+        Object itemsValue = materials.get("items");
+        if (itemsValue instanceof List<?> items) {
+            for (Object itemValue : items) {
+                if (!(itemValue instanceof Map<?, ?> item)) continue;
+                refs.add(Map.of(
+                        "type", "taskMaterial",
+                        "fileId", item.get("fileId"),
+                        "version", item.get("version"),
+                        "role", item.get("role")));
+            }
+        }
+        return List.copyOf(refs);
+    }
+
+    private Map<String, Object> sanitizeTaskMaterials(Map<String, Object> taskMaterials) {
+        if (taskMaterials == null) return Map.of("status", "UNAVAILABLE", "complete", false, "items", List.of());
+        Object statusValue = taskMaterials.get("status");
+        String status = statusValue instanceof String value
+                && ("AVAILABLE".equals(value) || "UNAVAILABLE".equals(value)) ? value : "UNAVAILABLE";
+        boolean complete = taskMaterials.get("complete") instanceof Boolean value && value;
+        List<Map<String, Object>> items = new ArrayList<>();
+        Object rawItems = taskMaterials.get("items");
+        if (rawItems instanceof List<?> list) {
+            for (Object raw : list) {
+                if (!(raw instanceof Map<?, ?> item)) continue;
+                Object fileId = item.get("fileId");
+                Object version = item.get("version");
+                Object role = item.get("role");
+                if (!(fileId instanceof String id) || id.isBlank() || !id.equals(id.strip())
+                        || id.length() > MAX_ID || id.chars().anyMatch(Character::isISOControl)
+                        || !(version instanceof Number number) || number.longValue() < 1
+                        || !(role instanceof String roleValue)
+                        || !("INPUT".equals(roleValue) || "REFERENCE".equals(roleValue))) continue;
+                items.add(Map.of("fileId", id, "version", number.longValue(), "role", roleValue));
+            }
+        }
+        return Map.of("status", status, "complete", complete, "items", List.copyOf(items));
     }
 
     private Map<String, Object> taskManifest(AgentTaskDTO task) {

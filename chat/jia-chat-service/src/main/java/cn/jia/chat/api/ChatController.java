@@ -495,16 +495,21 @@ public class ChatController {
 
     @RequestMapping(value = "/capabilities", method = RequestMethod.GET)
     public Object chatCapabilities() {
-        return JsonResult.success(Map.of(
-                "schemaVersion", "2",
-                "interactionHints", List.of("chat", "inspect"),
-                "executeViaChat", false,
-                "requestId", true,
-                "requestRevision", true,
-                "contextSnapshot", true,
-                "durableTurns", true,
-                "deltaSequence", true,
-                "cancel", true));
+        return JsonResult.success(Map.ofEntries(
+                Map.entry("schemaVersion", "2"),
+                Map.entry("interactionHints", List.of("chat", "inspect")),
+                Map.entry("routeVocabulary", List.of("CHAT", "CHAT_STATUS", "INSPECT")),
+                Map.entry("targetCapabilityScope", "authenticated-agent-connection"),
+                Map.entry("targetSupportImplied", false),
+                Map.entry("capabilityContractVersion", 1),
+                Map.entry("executeViaChat", false),
+                Map.entry("inspectRequiresMaterializedRefs", true),
+                Map.entry("requestId", true),
+                Map.entry("requestRevision", true),
+                Map.entry("contextSnapshot", true),
+                Map.entry("durableTurns", true),
+                Map.entry("deltaSequence", true),
+                Map.entry("cancel", true)));
     }
 
     @RequestMapping(value = "/requests/{requestId}", method = RequestMethod.GET)

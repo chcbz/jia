@@ -26,6 +26,7 @@ import cn.jia.agent.service.AgentRawCommandDispatcher;
 import cn.jia.agent.service.AgentService;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.ChatConversationEntity;
+import cn.jia.chat.deliberation.InteractionRoute;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.service.ChatConversationEventBroker;
 import cn.jia.chat.service.ChatConversationService;
@@ -68,6 +69,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -161,6 +163,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     private final Map<String, Set<String>> sessionAgentIds = new ConcurrentHashMap<>();
     private final Map<String, Set<String>> successfullyRegisteredAgentIds = new ConcurrentHashMap<>();
     private final Map<String, String> sessionRuntimeInstanceIds = new ConcurrentHashMap<>();
+    private final Map<String, AgentRuntimeCapabilities> sessionRuntimeCapabilities = new ConcurrentHashMap<>();
     private final Map<String, StreamState> runningStreams = new ConcurrentHashMap<>();
 
     public AgentWebSocketHandler(ChatClient chatClient, ObjectProvider<AgentService> agentServiceProvider,
@@ -335,6 +338,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         sessionAgentIds.remove(session.getId());
         successfullyRegisteredAgentIds.remove(session.getId());
         sessionRuntimeInstanceIds.remove(session.getId());
+        sessionRuntimeCapabilities.remove(session.getId());
         runningStreams.entrySet().removeIf(entry -> {
             StreamState stream = entry.getValue();
             if (session.getId().equals(stream.sessionId())) {
@@ -715,6 +719,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             stage = "runtime_disconnect";
             if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
             stage = "registration_payload";
+            AgentRuntimeCapabilities runtimeCapabilities = AgentRuntimeCapabilities.parse(
+                    payload.get("runtimeCapabilities"));
             AgentRegisterDTO request = new AgentRegisterDTO();
             request.setAgentId(agentId);
             request.setName(asString(payload.get("name")));
@@ -733,11 +739,13 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             rememberSessionAgent(session.getId(), result.getAgentId());
             session.getAttributes().put("skillRegistrationHash", cn.jia.agent.skill.SkillMarketplaceService.sessionRegistrationHash(result.getAgentId(),result.getToken()));
             rememberSuccessfulRegistration(session.getId(), result.getAgentId());
+            sessionRuntimeCapabilities.put(session.getId(), runtimeCapabilities);
             Map<String, Object> event = copyTrace(payload);
             event.put("agentId", result.getAgentId());
             putIfPresent(event, "runtimeInstanceId", sessionRuntimeInstanceId(session));
             event.put("status", result.getStatus());
             event.put("token", result.getToken());
+            event.put("runtimeCapabilities", runtimeCapabilities.normalizedForReceipt());
             // Scope comes only from the authenticated session and is rechecked against persisted
             // identity/current registration token. This receipt is sent only on this native socket.
             if (runtimeAuthentication != null && sessionRuntimeInstanceId(session) != null) {
@@ -750,6 +758,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             if (!sendEvent(session, "agent_registered", event)) {
                 if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
                 successfullyRegisteredAgentIds.remove(session.getId());
+                sessionRuntimeCapabilities.remove(session.getId());
                 return;
             }
             signalRegisteredReconnect(session, result.getAgentId());
@@ -760,6 +769,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                     e.getClass().getSimpleName());
             if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
             successfullyRegisteredAgentIds.remove(session.getId());
+            sessionRuntimeCapabilities.remove(session.getId());
             sendError(session, payload, "AGENT_REGISTRATION_UNAVAILABLE", "Agent registration is unavailable");
         }
     }
@@ -909,6 +919,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                     || AgentConstants.STATUS_ERROR.equals(agent.getStatus()))) {
                 runtimeAuthentication.disconnect(session.getId());
                 successfullyRegisteredAgentIds.remove(session.getId());
+                sessionRuntimeCapabilities.remove(session.getId());
             }
             if (agent.getAgentId() != null) {
                 rememberSessionAgent(session.getId(), agent.getAgentId());
@@ -1964,6 +1975,86 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 && value.equals(value.strip())
                 && value.codePoints().noneMatch(Character::isISOControl);
     }
+
+    /**
+     * Sends durable deliberation chat only to exact authenticated connections that advertised the
+     * requested profile. A modern declaration is authoritative and is never downgraded to legacy.
+     */
+    public CapabilityDispatchResult sendNegotiatedChatMessageToAgent(
+            String tenantId, String ownerJiacn, String clientId, String agentId,
+            InteractionRoute route, Map<String, ?> payload) {
+        requireNoActiveTransactionForChatDelivery();
+        if (!validExactDispatchId(tenantId, 50) || !validExactDispatchId(ownerJiacn, 50)
+                || !validExactDispatchId(clientId, 50) || !validExactDispatchId(agentId, 100)
+                || route == null || route == InteractionRoute.EXECUTE) {
+            return new CapabilityDispatchResult(CapabilityDispatchStatus.UNSUPPORTED, false, Map.of());
+        }
+        Map<String, AgentRuntimeCapabilities> exact = new LinkedHashMap<>();
+        for (Map.Entry<String, Set<String>> entry : successfullyRegisteredAgentIds.entrySet()) {
+            String sessionId = entry.getKey();
+            if (!entry.getValue().contains(agentId) || !registeredAgentIds(sessionId).contains(agentId)) continue;
+            WebSocketSession session = sessions.get(sessionId);
+            if (session == null || !session.isOpen()
+                    || !agentId.equals(sessionAgentId(session))
+                    || !tenantId.equals(sessionTenantId(session))
+                    || !ownerJiacn.equals(sessionJiacn(session))
+                    || !clientId.equals(sessionClientId(session))) continue;
+            exact.put(sessionId, sessionRuntimeCapabilities.getOrDefault(
+                    sessionId, AgentRuntimeCapabilities.legacy()));
+        }
+        if (exact.isEmpty()) {
+            return new CapabilityDispatchResult(CapabilityDispatchStatus.OFFLINE, false, Map.of());
+        }
+
+        boolean hasModern = exact.values().stream().anyMatch(AgentRuntimeCapabilities::modern);
+        Map<String, AgentRuntimeCapabilities> eligible = new LinkedHashMap<>();
+        AgentRuntimeCapabilities.Decision blocked = AgentRuntimeCapabilities.Decision.UNSUPPORTED;
+        for (Map.Entry<String, AgentRuntimeCapabilities> entry : exact.entrySet()) {
+            AgentRuntimeCapabilities capabilities = entry.getValue();
+            if (hasModern && !capabilities.modern()) continue;
+            AgentRuntimeCapabilities.Decision decision = capabilities.decision(route);
+            if (decision == AgentRuntimeCapabilities.Decision.READY
+                    || decision == AgentRuntimeCapabilities.Decision.LEGACY_COMPATIBLE) {
+                eligible.put(entry.getKey(), capabilities);
+            } else if (decision == AgentRuntimeCapabilities.Decision.WAITING_DISABLED) {
+                blocked = decision;
+            }
+        }
+        if (eligible.isEmpty()) {
+            CapabilityDispatchStatus status = blocked == AgentRuntimeCapabilities.Decision.WAITING_DISABLED
+                    ? CapabilityDispatchStatus.WAITING_DISABLED : CapabilityDispatchStatus.UNSUPPORTED;
+            AgentRuntimeCapabilities sample = exact.values().stream()
+                    .filter(capability -> !hasModern || capability.modern()).findFirst().orElse(exact.values().iterator().next());
+            return new CapabilityDispatchResult(status, false,
+                    sample.negotiatedProfile(route, sample.decision(route)));
+        }
+
+        Map<String, Object> outbound = prepareDirectOutboundPayload(agentId, payload);
+        if (outbound == null || !AgentProtocolConstants.TYPE_CHAT_MESSAGE.equals(outbound.get("messageType"))) {
+            return new CapabilityDispatchResult(CapabilityDispatchStatus.UNSUPPORTED, false, Map.of());
+        }
+        boolean delivered = false;
+        Map<String, Object> negotiated = Map.of();
+        for (Map.Entry<String, AgentRuntimeCapabilities> entry : eligible.entrySet()) {
+            WebSocketSession session = sessions.get(entry.getKey());
+            if (session == null || !session.isOpen()) continue;
+            AgentRuntimeCapabilities.Decision decision = entry.getValue().decision(route);
+            Map<String, Object> wire = new LinkedHashMap<>(outbound);
+            negotiated = entry.getValue().negotiatedProfile(route, decision);
+            wire.put("targetCapability", negotiated);
+            delivered = sendEvent(session, AgentProtocolConstants.LEGACY_AGENT_DIRECT_MESSAGE, wire) || delivered;
+        }
+        CapabilityDispatchStatus status = eligible.values().stream().allMatch(AgentRuntimeCapabilities::modern)
+                ? CapabilityDispatchStatus.READY : CapabilityDispatchStatus.LEGACY_COMPATIBLE;
+        return new CapabilityDispatchResult(status, delivered, negotiated);
+    }
+
+    public enum CapabilityDispatchStatus {
+        READY, LEGACY_COMPATIBLE, WAITING_DISABLED, UNSUPPORTED, OFFLINE
+    }
+
+    public record CapabilityDispatchResult(CapabilityDispatchStatus status, boolean delivered,
+            Map<String, Object> negotiatedProfile) { }
 
     public boolean sendDirectMessageToAgent(String agentId, Map<String, ?> payload) {
         return sendDirectMessageToAgent(agentId, payload, null, null, null, null);
