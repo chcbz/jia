@@ -1,0 +1,419 @@
+package cn.jia.agent.service.impl;
+
+import cn.jia.agent.dao.AgentTaskExecutionGrantDao;
+import cn.jia.agent.dao.PersonalWorkspaceDao;
+import cn.jia.agent.dao.PersonalWorkspaceTaskLinkDao;
+import cn.jia.agent.entity.AgentTaskAssignDTO;
+import cn.jia.agent.entity.AgentTaskExecutionGrantDTO;
+import cn.jia.agent.entity.AgentTaskExecutionGrantEntity;
+import cn.jia.agent.entity.AgentTaskGrantInputDTO;
+import cn.jia.agent.entity.AgentTaskMetaEntity;
+import cn.jia.agent.entity.PersonalWorkspaceFileEntity;
+import cn.jia.agent.entity.PersonalWorkspaceTaskFileLinkEntity;
+import cn.jia.agent.entity.PersonalWorkspaceVersionEntity;
+import cn.jia.agent.exception.AgentTaskCollaborationException;
+import cn.jia.agent.service.AgentTaskExecutionGrantException;
+import cn.jia.agent.service.AgentTaskExecutionGrantService;
+import cn.jia.agent.service.AgentIdentityService;
+import cn.jia.agent.service.AgentTaskMutationTransaction;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.inject.Inject;
+import jakarta.inject.Named;
+import org.springframework.dao.DataIntegrityViolationException;
+
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HexFormat;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
+
+import static cn.jia.agent.service.AgentTaskExecutionGrantException.Reason;
+
+@Named
+public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecutionGrantService {
+    static final String ACTION = "assign_and_start";
+    static final String POLICY_REVISION = "MMD_U1_V1";
+    static final String TOOL_POLICY = "NO_TOOLS_V1";
+    private static final Set<String> OPERATIONS = Set.of(
+            "INSPECT_INPUTS", "GENERATE_IMAGE", "EDIT_IMAGE", "GENERATE_AUDIO", "EDIT_AUDIO");
+    private static final Set<String> PURPOSES = Set.of("INPUT", "REFERENCE");
+    private static final int MAX_INPUTS = 32;
+
+    private final AgentTaskExecutionGrantDao grants;
+    private final PersonalWorkspaceTaskLinkDao taskLinks;
+    private final PersonalWorkspaceDao workspace;
+    private final AgentLegacyTaskCompatibilityService legacyAssignments;
+    private final AgentIdentityService identities;
+    private final AgentTaskMutationTransaction transactions;
+    private final ObjectMapper json;
+
+    @Inject
+    public AgentTaskExecutionGrantServiceImpl(AgentTaskExecutionGrantDao grants,
+            PersonalWorkspaceTaskLinkDao taskLinks, PersonalWorkspaceDao workspace,
+            AgentLegacyTaskCompatibilityService legacyAssignments, AgentIdentityService identities,
+            AgentTaskMutationTransaction transactions, ObjectMapper json) {
+        this.grants = Objects.requireNonNull(grants,"grants");
+        this.taskLinks = Objects.requireNonNull(taskLinks,"taskLinks");
+        this.workspace = Objects.requireNonNull(workspace,"workspace");
+        this.legacyAssignments = Objects.requireNonNull(legacyAssignments,"legacyAssignments");
+        this.identities = Objects.requireNonNull(identities,"identities");
+        this.transactions = Objects.requireNonNull(transactions,"transactions");
+        this.json = Objects.requireNonNull(json,"json");
+    }
+
+    @Override
+    public AgentTaskExecutionGrantDTO assignAndGrant(Scope scope, String taskId,
+            String idempotencyKey, AgentTaskAssignDTO request) {
+        ValidAssign valid = validateAssign(scope,taskId,idempotencyKey,request);
+        String canonicalAgent = legacyAssignments.resolveAgentId(scope.tenantId(),scope.clientId(),
+                scope.ownerJiacn(),valid.requestedAgentId());
+        String requestHash = hashAssign(valid,canonicalAgent);
+        String actionId = "ASSIGN_AND_START:" + valid.idempotencyKey();
+        try {
+            return transactions.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),
+                    scope.ownerJiacn(),valid.taskId(),root -> assignLocked(scope,valid,canonicalAgent,
+                            requestHash,actionId,root));
+        } catch (AgentTaskCollaborationException failure) {
+            throw translate(failure);
+        }
+    }
+
+    private AgentTaskExecutionGrantDTO assignLocked(Scope scope, ValidAssign valid,
+            String canonicalAgent, String requestHash, String actionId, AgentTaskMetaEntity root) {
+        AgentTaskExecutionGrantEntity replay = grants.findByActionForUpdate(scope.tenantId(),
+                scope.clientId(),scope.ownerJiacn(),actionId);
+        if (replay != null) return replay(requestHash,valid.taskId(),replay);
+
+        AtomicReference<List<InputSnapshot>> snapshot = new AtomicReference<>();
+        AgentLegacyTaskCompatibilityService.AssignOutcome assignment =
+                legacyAssignments.assignResolvedVersionedWithLockedTask(scope.tenantId(),
+                        scope.clientId(),scope.ownerJiacn(),valid.taskId(),List.of(canonicalAgent),
+                        false,valid.expectedTaskVersion(),(task,agentIds) -> snapshot.set(
+                                validateAndSnapshotInputs(scope,valid.taskId(),valid.inputs())),root);
+        long assignmentRevision = assignment.changed()
+                ? Math.addExact(valid.expectedTaskVersion(),1L) : valid.expectedTaskVersion();
+        if (snapshot.get() == null) throw invalidState("Grant input snapshot was not produced");
+
+        long now=System.currentTimeMillis();
+        grants.supersedeActiveForTask(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                valid.taskId(),now);
+        AgentTaskExecutionGrantEntity entity = new AgentTaskExecutionGrantEntity()
+                .setGrantId("grant_" + UUID.randomUUID().toString().replace("-",""))
+                .setTenantId(scope.tenantId()).setClientId(scope.clientId())
+                .setOwnerJiacn(scope.ownerJiacn()).setTaskId(valid.taskId())
+                .setRequirementRevision(valid.requirementRevision())
+                .setAssignmentRevision(assignmentRevision).setTargetAgentId(canonicalAgent)
+                .setPermittedOperationsJson(write(valid.operations()))
+                .setPermittedToolPolicyRef(TOOL_POLICY).setInputScopeJson(write(snapshot.get()))
+                .setAllowOwnTaskDerivedAssets(false).setCostAuthorizationRef(null)
+                .setSourceBusinessActionId(actionId).setIdempotencyKey(valid.idempotencyKey())
+                .setRequestHash(requestHash).setPolicyRevision(POLICY_REVISION)
+                .setGrantVersion(1L).setState("ACTIVE").setIssuedBy(scope.ownerJiacn())
+                .setCreatedAt(now).setRevokedAt(null);
+        try {
+            grants.insert(entity);
+        } catch (DataIntegrityViolationException collision) {
+            AgentTaskExecutionGrantEntity winner=grants.findByActionForUpdate(scope.tenantId(),
+                    scope.clientId(),scope.ownerJiacn(),actionId);
+            if (winner != null) return replay(requestHash,valid.taskId(),winner);
+            throw new AgentTaskExecutionGrantException(Reason.CONFLICT,
+                    "A concurrent task authorization changed the active grant");
+        }
+        return view(entity);
+    }
+
+    @Override
+    public AgentTaskExecutionGrantDTO revoke(Scope scope, String taskId, String grantId,
+            String idempotencyKey, long expectedGrantVersion) {
+        validateScope(scope); exact(taskId,"taskId",100); exact(grantId,"grantId",100);
+        exact(idempotencyKey,"Idempotency-Key",100);
+        if (expectedGrantVersion < 1) throw bad("expectedVersion is invalid");
+        String requestHash=sha256("REVOKE\n"+taskId+"\n"+grantId+"\n"+expectedGrantVersion);
+        try {
+            return transactions.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),
+                    scope.ownerJiacn(),taskId,root -> revokeLocked(scope,taskId,grantId,
+                            idempotencyKey,expectedGrantVersion,requestHash));
+        } catch (AgentTaskCollaborationException failure) { throw translate(failure); }
+    }
+
+    private AgentTaskExecutionGrantDTO revokeLocked(Scope scope,String taskId,String grantId,
+            String idempotencyKey,long expectedVersion,String requestHash) {
+        AgentTaskExecutionGrantEntity grant=grants.findByGrantForUpdate(scope.tenantId(),
+                scope.clientId(),scope.ownerJiacn(),taskId,grantId);
+        if (grant==null) throw notFound();
+        if (grant.getRevokeIdempotencyKey()!=null) {
+            if (same(idempotencyKey,grant.getRevokeIdempotencyKey())
+                    && same(requestHash,grant.getRevokeRequestHash())) return view(grant);
+            throw conflict("Grant revoke idempotency key or payload conflicts");
+        }
+        if (!"ACTIVE".equals(grant.getState()) || !Objects.equals(expectedVersion,grant.getGrantVersion())) {
+            throw conflict("Grant version or state changed before revoke");
+        }
+        long now=System.currentTimeMillis();
+        if (!grants.revoke(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,grantId,
+                expectedVersion,idempotencyKey,requestHash,now)) {
+            throw conflict("Grant changed before revoke");
+        }
+        grant.setState("REVOKED").setGrantVersion(expectedVersion+1).setRevokedAt(now)
+                .setRevokeIdempotencyKey(idempotencyKey).setRevokeRequestHash(requestHash);
+        return view(grant);
+    }
+
+    @Override
+    public Admission admit(Scope scope, String taskId, String grantId, long expectedGrantVersion,
+            long expectedAssignmentRevision, String targetAgentId, String operation,
+            boolean paidExecution) {
+        validateScope(scope); exact(taskId,"taskId",100); exact(grantId,"grantId",100);
+        exact(targetAgentId,"targetAgentId",100); exact(operation,"operation",40);
+        if (expectedGrantVersion < 1 || expectedAssignmentRevision < 0) throw bad("Expected version is invalid");
+        try {
+            return transactions.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),
+                    scope.ownerJiacn(),taskId,root -> admitLocked(scope,taskId,grantId,
+                            expectedGrantVersion,expectedAssignmentRevision,targetAgentId,operation,
+                            paidExecution,root));
+        } catch (AgentTaskCollaborationException failure) { throw translate(failure); }
+    }
+
+    private Admission admitLocked(Scope scope,String taskId,String grantId,long grantVersion,
+            long assignmentRevision,String targetAgentId,String operation,boolean paid,
+            AgentTaskMetaEntity root) {
+        AgentTaskExecutionGrantEntity observed=grants.findByGrant(scope.tenantId(),
+                scope.clientId(),scope.ownerJiacn(),taskId,grantId);
+        if (observed==null) throw notFound();
+        lockTargetAndPersistedInputs(scope,taskId,targetAgentId,observed);
+        AgentTaskExecutionGrantEntity grant=grants.findByGrantForUpdate(scope.tenantId(),
+                scope.clientId(),scope.ownerJiacn(),taskId,grantId);
+        if (grant==null || !same(observed.getRequestHash(),grant.getRequestHash())) throw conflict("Grant changed during admission");
+        return verifyAdmission(root,grant,grantVersion,assignmentRevision,targetAgentId,operation,paid);
+    }
+
+    private Admission verifyAdmission(AgentTaskMetaEntity root,AgentTaskExecutionGrantEntity grant,
+            long grantVersion,long assignmentRevision,String targetAgentId,String operation,boolean paid) {
+        if (!"ACTIVE".equals(grant.getState()) || !Objects.equals(grantVersion,grant.getGrantVersion())
+                || !Objects.equals(assignmentRevision,grant.getAssignmentRevision())
+                || !Objects.equals(assignmentRevision,root.getTaskVersion())
+                || !same(targetAgentId,grant.getTargetAgentId())
+                || !same(targetAgentId,root.getAssignedAgentId())) {
+            throw conflict("Grant, assignment, or target is stale");
+        }
+        List<String> allowed=readOperations(grant.getPermittedOperationsJson());
+        if (!allowed.contains(operation)) throw new AgentTaskExecutionGrantException(
+                Reason.FORBIDDEN_OPERATION,"Operation is outside the persisted grant/capability policy");
+        if (paid && (grant.getCostAuthorizationRef()==null || grant.getCostAuthorizationRef().isBlank())) {
+            throw new AgentTaskExecutionGrantException(Reason.PAID_EXECUTION_NOT_AUTHORIZED,
+                    "Paid execution has no persisted cost authorization");
+        }
+        return new Admission(grant.getGrantId(),grantVersion,assignmentRevision,targetAgentId,operation,
+                paid && grant.getCostAuthorizationRef()!=null);
+    }
+
+    @Override
+    public Admission resolveAndAdmit(Scope scope, String taskId, long expectedAssignmentRevision,
+            String targetAgentId, String operation, boolean paidExecution) {
+        validateScope(scope); exact(taskId,"taskId",100); exact(targetAgentId,"targetAgentId",100);
+        exact(operation,"operation",40);
+        if (expectedAssignmentRevision < 0) throw bad("expectedAssignmentRevision is invalid");
+        try {
+            return transactions.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),
+                    scope.ownerJiacn(),taskId,root -> {
+                        AgentTaskExecutionGrantEntity observed=grants.findActiveByTask(scope.tenantId(),
+                                scope.clientId(),scope.ownerJiacn(),taskId);
+                        if (observed==null) throw notFound();
+                        lockTargetAndPersistedInputs(scope,taskId,targetAgentId,observed);
+                        AgentTaskExecutionGrantEntity locked=grants.findByGrantForUpdate(scope.tenantId(),
+                                scope.clientId(),scope.ownerJiacn(),taskId,observed.getGrantId());
+                        if (locked==null || !same(observed.getRequestHash(),locked.getRequestHash())) {
+                            throw conflict("Active grant changed during server-side resolution");
+                        }
+                        return verifyAdmission(root,locked,locked.getGrantVersion(),expectedAssignmentRevision,
+                                targetAgentId,operation,paidExecution);
+                    });
+        } catch (AgentTaskCollaborationException failure) { throw translate(failure); }
+    }
+
+    private void lockTargetAndPersistedInputs(Scope scope,String taskId,String targetAgentId,
+            AgentTaskExecutionGrantEntity observed) {
+        List<String> locked=identities.lockActiveCanonicalAgentIdsInScope(scope.tenantId(),
+                scope.clientId(),scope.ownerJiacn(),List.of(targetAgentId));
+        if (!List.of(targetAgentId).equals(locked) || !same(targetAgentId,observed.getTargetAgentId())) throw notFound();
+        for (InputSnapshot input:readInputs(observed.getInputScopeJson())) {
+            PersonalWorkspaceFileEntity file=workspace.lockFile(scope.tenantId(),scope.clientId(),
+                    scope.ownerJiacn(),input.fileId());
+            if (file==null || !"ACTIVE".equals(file.getState())) throw notFound();
+            PersonalWorkspaceTaskFileLinkEntity link=taskLinks.lockBySelection(scope.tenantId(),
+                    scope.clientId(),scope.ownerJiacn(),taskId,input.fileId(),input.version(),input.purpose());
+            PersonalWorkspaceVersionEntity version=workspace.findVersion(scope.tenantId(),scope.clientId(),
+                    scope.ownerJiacn(),input.fileId(),input.version());
+            if (link==null || !"ACTIVE".equals(link.getLinkState()) || version==null
+                    || !same(input.contentHash(),version.getContentHash())
+                    || !same(input.contentMimeType(),version.getContentMimeType())
+                    || !Objects.equals(input.byteLength(),version.getByteLength())) throw notFound();
+        }
+    }
+
+    private List<InputSnapshot> validateAndSnapshotInputs(Scope scope,String taskId,
+            List<ValidInput> inputs) {
+        List<InputSnapshot> result=new ArrayList<>();
+        for (ValidInput input:inputs) {
+            PersonalWorkspaceFileEntity file=workspace.lockFile(scope.tenantId(),scope.clientId(),
+                    scope.ownerJiacn(),input.fileId());
+            PersonalWorkspaceTaskFileLinkEntity link=taskLinks.lockBySelection(scope.tenantId(),
+                    scope.clientId(),scope.ownerJiacn(),taskId,input.fileId(),input.version(),input.purpose());
+            if (link==null || !"ACTIVE".equals(link.getLinkState())) throw notFound();
+            if (file==null || !"ACTIVE".equals(file.getState())) throw notFound();
+            PersonalWorkspaceVersionEntity version=workspace.findVersion(scope.tenantId(),
+                    scope.clientId(),scope.ownerJiacn(),input.fileId(),input.version());
+            if (version==null || version.getContentHash()==null
+                    || !version.getContentHash().matches("[0-9a-f]{64}")
+                    || version.getContentMimeType()==null || version.getContentMimeType().isBlank()
+                    || version.getByteLength()==null || version.getByteLength()<0) throw notFound();
+            result.add(new InputSnapshot(input.fileId(),input.version(),input.purpose(),
+                    version.getContentMimeType(),version.getByteLength(),version.getContentHash()));
+        }
+        return List.copyOf(result);
+    }
+
+    private ValidAssign validateAssign(Scope scope,String taskId,String key,AgentTaskAssignDTO request) {
+        validateScope(scope); exact(taskId,"taskId",100); exact(key,"Idempotency-Key",100);
+        if (request==null || !Objects.equals(request.getWorkflowVersion(),2)
+                || !ACTION.equals(request.getBusinessAction())) throw bad("Unsupported v2 assignment action");
+        if (request.getExpectedTaskVersion()==null || request.getExpectedTaskVersion()<0
+                || request.getExpectedTaskVersion()==Long.MAX_VALUE) throw bad("expectedTaskVersion is invalid");
+        if (request.getRequirementRevision()==null || request.getRequirementRevision()<1) throw bad("requirementRevision is invalid");
+        if (request.getAgentIds()!=null || Boolean.TRUE.equals(request.getAllowQueue())) throw bad("v2 assignment requires one explicit agentId");
+        exact(request.getAgentId(),"agentId",100);
+        if (request.getExistingCostAuthorizationRef()!=null || request.getCostAuthorizationRef()!=null
+                || request.getPermittedToolPolicyRef()!=null || request.getTools()!=null
+                || request.getAuthorized()!=null || request.getPaidExecutionAuthorized()!=null) {
+            throw bad("Client authority fields are forbidden");
+        }
+        List<String> operations=canonicalOperations(request.getRequestedOperations());
+        List<ValidInput> inputs=canonicalInputs(request.getInputRefs());
+        return new ValidAssign(taskId,key,request.getAgentId(),request.getExpectedTaskVersion(),
+                request.getRequirementRevision(),operations,inputs);
+    }
+
+    private static List<String> canonicalOperations(List<String> source) {
+        if (source==null || source.isEmpty() || source.size()>OPERATIONS.size()) throw bad("requestedOperations is invalid");
+        LinkedHashSet<String> result=new LinkedHashSet<>();
+        for (String operation:source) {
+            exact(operation,"requestedOperation",40);
+            if (!OPERATIONS.contains(operation) || !result.add(operation)) throw bad("requestedOperations is invalid");
+        }
+        return result.stream().sorted().toList();
+    }
+    private static List<ValidInput> canonicalInputs(List<AgentTaskGrantInputDTO> source) {
+        if (source==null) return List.of();
+        if (source.size()>MAX_INPUTS) throw bad("inputRefs exceeds the safe limit");
+        LinkedHashSet<String> unique=new LinkedHashSet<>(); List<ValidInput> result=new ArrayList<>();
+        for (AgentTaskGrantInputDTO input:source) {
+            if (input==null) throw bad("inputRef is invalid");
+            exact(input.getFileId(),"fileId",100);
+            if (input.getVersion()==null || input.getVersion()<1 || !PURPOSES.contains(input.getPurpose())) throw bad("inputRef is invalid");
+            String identity=input.getFileId()+"\u0000"+input.getVersion()+"\u0000"+input.getPurpose();
+            if (!unique.add(identity)) throw bad("Duplicate inputRef");
+            result.add(new ValidInput(input.getFileId(),input.getVersion(),input.getPurpose()));
+        }
+        result.sort(Comparator.comparing(ValidInput::fileId,AgentTaskExecutionGrantServiceImpl::compareUtf8)
+                .thenComparingInt(ValidInput::version).thenComparing(ValidInput::purpose));
+        return List.copyOf(result);
+    }
+
+    private String hashAssign(ValidAssign valid,String canonicalAgent) {
+        return sha256("ASSIGN_AND_START\n"+valid.taskId()+"\n"+canonicalAgent+"\n"
+                +valid.expectedTaskVersion()+"\n"+valid.requirementRevision()+"\n"
+                +write(valid.operations())+"\n"+write(valid.inputs()));
+    }
+    private AgentTaskExecutionGrantDTO replay(String requestHash,String taskId,
+            AgentTaskExecutionGrantEntity entity) {
+        if (!same(requestHash,entity.getRequestHash()) || !same(taskId,entity.getTaskId())) {
+            throw new AgentTaskExecutionGrantException(Reason.IDEMPOTENCY_CONFLICT,
+                    "Idempotency key was already used with another payload");
+        }
+        return view(entity);
+    }
+    private AgentTaskExecutionGrantDTO view(AgentTaskExecutionGrantEntity entity) {
+        List<InputSnapshot> inputs=readInputs(entity.getInputScopeJson());
+        return new AgentTaskExecutionGrantDTO().setGrantId(entity.getGrantId()).setTaskId(entity.getTaskId())
+                .setRequirementRevision(entity.getRequirementRevision()).setAssignmentRevision(entity.getAssignmentRevision())
+                .setTargetAgentId(entity.getTargetAgentId()).setPermittedOperations(readOperations(entity.getPermittedOperationsJson()))
+                .setInputs(inputs.stream().map(i -> new AgentTaskExecutionGrantDTO.InputSummary(i.fileId(),i.version(),i.purpose(),i.contentMimeType(),i.byteLength(),i.contentHash())).toList())
+                .setState(entity.getState()).setGrantVersion(entity.getGrantVersion())
+                .setPaidExecutionAuthorized(false).setCreatedAt(entity.getCreatedAt()).setRevokedAt(entity.getRevokedAt());
+    }
+    private String write(Object value) {
+        try { return json.writeValueAsString(value); }
+        catch (Exception failure) { throw new IllegalStateException("Grant canonical JSON failed",failure); }
+    }
+    private List<String> readOperations(String value) {
+        try {
+            List<String> result=json.readValue(value,new TypeReference<List<String>>(){});
+            if (result==null || !OPERATIONS.containsAll(result)) throw invalidState("Persisted grant operations are invalid");
+            return List.copyOf(result);
+        } catch (AgentTaskExecutionGrantException failure) { throw failure; }
+        catch (Exception failure) { throw invalidState("Persisted grant operations are invalid"); }
+    }
+    private List<InputSnapshot> readInputs(String value) {
+        try { return List.copyOf(json.readValue(value,new TypeReference<List<InputSnapshot>>(){})); }
+        catch (Exception failure) { throw invalidState("Persisted grant inputs are invalid"); }
+    }
+    private static void validateScope(Scope scope) {
+        if (scope==null || !"0".equals(scope.tenantId())) throw bad("JWT scope is invalid");
+        exact(scope.clientId(),"clientId",50); exact(scope.ownerJiacn(),"ownerJiacn",50);
+        if ("0".equals(scope.ownerJiacn())) throw bad("JWT scope is invalid");
+    }
+    private static void exact(String value,String name,int max) {
+        if (value==null || value.isBlank() || !value.equals(value.strip())
+                || value.codePointCount(0,value.length())>max || hasUnpairedSurrogate(value)
+                || value.chars().anyMatch(Character::isISOControl)) throw bad(name+" is invalid");
+    }
+    private static boolean hasUnpairedSurrogate(String value) {
+        for (int index=0;index<value.length();index++) {
+            char current=value.charAt(index);
+            if (Character.isHighSurrogate(current)) {
+                if (index+1>=value.length() || !Character.isLowSurrogate(value.charAt(index+1))) return true;
+                index++;
+            } else if (Character.isLowSurrogate(current)) return true;
+        }
+        return false;
+    }
+    private static String sha256(String value) {
+        try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8))); }
+        catch (NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
+    }
+    private static boolean same(String left,String right) {
+        return left!=null && right!=null && MessageDigest.isEqual(left.getBytes(StandardCharsets.UTF_8),right.getBytes(StandardCharsets.UTF_8));
+    }
+    private static int compareUtf8(String left,String right) {
+        byte[] a=left.getBytes(StandardCharsets.UTF_8),b=right.getBytes(StandardCharsets.UTF_8);
+        for (int i=0;i<Math.min(a.length,b.length);i++) { int c=Integer.compare(Byte.toUnsignedInt(a[i]),Byte.toUnsignedInt(b[i])); if(c!=0)return c; }
+        return Integer.compare(a.length,b.length);
+    }
+    private static AgentTaskExecutionGrantException translate(AgentTaskCollaborationException failure) {
+        return switch (failure.getReason()) {
+            case NOT_FOUND, FORBIDDEN -> notFound();
+            case VERSION_CONFLICT, INVALID_TRANSITION -> conflict("Task assignment changed");
+            case INVALID_REQUEST -> bad("Task assignment request is invalid");
+            case INVALID_PERSISTED_STATE -> invalidState("Task assignment state is invalid");
+            case RESERVED_FOR_LEASE_PROTOCOL -> conflict("Task is reserved for another protocol");
+        };
+    }
+    private static AgentTaskExecutionGrantException bad(String message) { return new AgentTaskExecutionGrantException(Reason.BAD_REQUEST,message); }
+    private static AgentTaskExecutionGrantException conflict(String message) { return new AgentTaskExecutionGrantException(Reason.CONFLICT,message); }
+    private static AgentTaskExecutionGrantException notFound() { return new AgentTaskExecutionGrantException(Reason.NOT_FOUND,"Task authorization resource was not found"); }
+    private static AgentTaskExecutionGrantException invalidState(String message) { return new AgentTaskExecutionGrantException(Reason.INVALID_PERSISTED_STATE,message); }
+
+    private record ValidAssign(String taskId,String idempotencyKey,String requestedAgentId,
+            long expectedTaskVersion,long requirementRevision,List<String> operations,List<ValidInput> inputs) { }
+    private record ValidInput(String fileId,int version,String purpose) { }
+    private record InputSnapshot(String fileId,int version,String purpose,String contentMimeType,
+            long byteLength,String contentHash) { }
+}

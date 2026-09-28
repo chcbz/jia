@@ -444,3 +444,30 @@ tasks.register('managedHostingRegression', Test) {
     classpath = managedHostingRegressionSourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+// MMD-U1-AGENT-GRANT isolated authorization/ACL/idempotency/schema verification slice.
+def mmdU1GrantSourceSet = sourceSets.create('mmdU1Grant') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/service/impl/AgentTaskExecutionGrantServiceImplTest.java'
+        include 'cn/jia/agent/api/AgentTaskExecutionGrantControllerTest.java'
+        include 'cn/jia/agent/config/AgentTaskExecutionGrantSchemaContractTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(mmdU1GrantSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(mmdU1GrantSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('mmdU1Grant', Test) {
+    group = 'verification'
+    description = 'Runs MMD U1 task grant JWT, ACL, idempotency, revoke, admission and DDL tests.'
+    dependsOn tasks.named(mmdU1GrantSourceSet.classesTaskName)
+    testClassesDirs = mmdU1GrantSourceSet.output.classesDirs
+    classpath = mmdU1GrantSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
