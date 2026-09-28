@@ -61,11 +61,15 @@ class ChatDeliberationOutboxRelayTest {
                 "materializedRefs", List.of()));
         org.springframework.ai.chat.prompt.Prompt prompt = ChatDeliberationOutboxRelay.buildBuiltinPrompt(
                 "请结合资料", facts);
-        assertEquals("请结合资料", prompt.getUserMessage().getText());
         String system = prompt.getSystemMessage().getText().replaceAll("\\s+", " ");
+        String userData = prompt.getUserMessage().getText();
         assertTrue(system.contains("conversation owner/client scope"));
-        assertTrue(system.contains("旧议事"));
-        assertTrue(system.contains("file-1"));
+        assertTrue(system.contains("untrusted data"));
+        assertFalse(system.contains("旧议事"));
+        assertFalse(system.contains("file-1"));
+        assertTrue(userData.startsWith("请结合资料"));
+        assertTrue(userData.contains("旧议事"));
+        assertTrue(userData.contains("file-1"));
         assertTrue(system.contains("absent from materializedRefs"));
         assertTrue(system.contains("strict no-tools has not been provider-verified"));
         assertFalse(system.contains("downloadUrl"));
