@@ -54,6 +54,8 @@ class ApiHostedWireV1ContractTest {
                 "Hosted wire contract drift requires an intentional cross-repository contract update");
         String wire = new String(generated, StandardCharsets.UTF_8);
         assertFalse(wire.contains("伪造代理身份"));
+        assertTrue(wire.contains("\"authorizedContext\""));
+        assertTrue(wire.contains("\"materializedRefs\":[]"));
         assertTrue(wire.contains("\"senderName\":\"契约用户\""));
         assertTrue(wire.contains("\"jiacn\":\"owner-contract\""));
     }
