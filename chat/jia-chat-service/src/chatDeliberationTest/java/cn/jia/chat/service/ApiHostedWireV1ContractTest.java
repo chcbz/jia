@@ -132,7 +132,9 @@ class ApiHostedWireV1ContractTest {
                 tenantId, ownerJiacn, clientId, conversationId, generation, requestId,
                 requestRevision, turnId, dispatchId, targetAgentId, snapshotId, contextHash,
                 InteractionRoute.INSPECT, "Inspect the fixed contract context", input, scope,
-                occurredAt, sourceVector, facts);
+                new ServerResolvedSender(ServerResolvedSender.USER_TYPE, "契约用户",
+                        ownerJiacn, clientId, DisplayNameSource.NICKNAME),
+                null, occurredAt, sourceVector, facts);
 
         ChatDispatchOutboxEntity row = new ChatDispatchOutboxEntity()
                 .setEventId(eventId).setTenantId(tenantId).setOwnerJiacn(ownerJiacn)
