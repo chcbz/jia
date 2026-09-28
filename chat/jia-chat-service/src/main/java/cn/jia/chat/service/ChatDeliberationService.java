@@ -772,7 +772,12 @@ public class ChatDeliberationService {
         @SuppressWarnings("unchecked")
         Map<String, Object> summary = authorizedContext.get("summary") instanceof Map<?, ?> value
                 ? (Map<String, Object>) value : Map.of();
-        vector.put("summaryRevision", digest(summary));
+        // Existing durable wire treats summaryRevision as a canonical decimal Long.
+        // Content-level changes are independently bound by authorizedHistoryDigest.
+        Object ids = summary.get("sourceMessageIds");
+        List<?> summaryIds = ids instanceof List<?> values ? values : List.of();
+        vector.put("summaryRevision", summaryIds.isEmpty() ? "0"
+                : String.valueOf(summaryIds.get(summaryIds.size() - 1)));
         vector.put("authorizedHistoryDigest", authorizedContext.get("historyDigest"));
         vector.put("sourceMessageIds", authorizedContext.get("sourceMessageIds"));
         vector.put("workspaceTreeSha", null);

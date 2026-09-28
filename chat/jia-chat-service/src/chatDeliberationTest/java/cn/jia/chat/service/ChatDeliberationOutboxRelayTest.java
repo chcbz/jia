@@ -62,7 +62,7 @@ class ChatDeliberationOutboxRelayTest {
         org.springframework.ai.chat.prompt.Prompt prompt = ChatDeliberationOutboxRelay.buildBuiltinPrompt(
                 "请结合资料", facts);
         assertEquals("请结合资料", prompt.getUserMessage().getText());
-        String system = prompt.getSystemMessage().getText();
+        String system = prompt.getSystemMessage().getText().replaceAll("\\s+", " ");
         assertTrue(system.contains("conversation owner/client scope"));
         assertTrue(system.contains("旧议事"));
         assertTrue(system.contains("file-1"));
