@@ -46,7 +46,7 @@ class ApiHostedWireV1ContractTest {
     void hostedWireMatchesCheckedInCanonicalFixtureByteForByte() throws Exception {
         byte[] generated = generatedWire();
         // Explicit maintenance-only diagnostic; tests never rewrite checked-in golden bytes.
-        String fixtureOutput = System.getProperty("cyf.hostedWireFixtureOutput");
+        String fixtureOutput = System.getenv("CYF_HOSTED_WIRE_FIXTURE_OUTPUT");
         if (fixtureOutput != null && !fixtureOutput.isBlank()) {
             Files.write(Path.of(fixtureOutput), generated);
         }
