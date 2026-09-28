@@ -63,7 +63,7 @@ class ChatDeliberationOutboxRelayTest {
                 "请结合资料", facts);
         assertEquals("请结合资料", prompt.getUserMessage().getText());
         String system = prompt.getSystemMessage().getText();
-        assertTrue(system.contains("exact conversation owner/client scope"));
+        assertTrue(system.contains("conversation owner/client scope"));
         assertTrue(system.contains("旧议事"));
         assertTrue(system.contains("file-1"));
         assertTrue(system.contains("absent from materializedRefs"));

@@ -16,6 +16,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
 
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -43,6 +45,11 @@ class ApiHostedWireV1ContractTest {
     @Test
     void hostedWireMatchesCheckedInCanonicalFixtureByteForByte() throws Exception {
         byte[] generated = generatedWire();
+        // Explicit maintenance-only diagnostic; tests never rewrite checked-in golden bytes.
+        String fixtureOutput = System.getProperty("cyf.hostedWireFixtureOutput");
+        if (fixtureOutput != null && !fixtureOutput.isBlank()) {
+            Files.write(Path.of(fixtureOutput), generated);
+        }
         assertArrayEquals(resource("/contracts/" + FIXTURE), generated,
                 "Hosted wire contract drift requires an intentional cross-repository contract update");
         String wire = new String(generated, StandardCharsets.UTF_8);
