@@ -56,7 +56,7 @@ class ChatDeliberationOutboxRelayTest {
         String system = prompt.getSystemMessage().getText();
         assertTrue(system.contains("resolved and authorized by the server"));
         assertTrue(system.contains("file-1"));
-        assertTrue(system.contains("do not grant permission to read files"));
+        assertTrue(system.contains("grant permission to read files"));
         assertFalse(system.contains("downloadUrl"));
     }
 

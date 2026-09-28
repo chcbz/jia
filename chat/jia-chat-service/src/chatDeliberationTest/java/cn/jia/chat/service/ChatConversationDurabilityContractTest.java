@@ -38,7 +38,7 @@ class ChatConversationDurabilityContractTest {
         assertTrue(worker.contains("failBuiltinRecovery"));
         assertTrue(worker.contains("builtin.isBuiltinAgent(agentId)"));
         assertTrue(worker.contains("sendDirectMessageToAgent(row.getTenantId()"));
-        assertTrue(relay.contains("builtin work is intentionally not tied"));
+        assertTrue(relay.contains("Admission commit is the only acceptance boundary"));
         assertTrue(controller.contains("Last-Event-ID"));
         assertTrue(controller.contains("eventSequence"));
         assertFalse(controller.contains("createBuiltinSongJiangStream"));

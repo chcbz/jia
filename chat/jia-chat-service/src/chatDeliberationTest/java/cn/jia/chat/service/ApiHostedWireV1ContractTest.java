@@ -27,11 +27,13 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 
 class ApiHostedWireV1ContractTest {
-    private static final String BASELINE_COMMIT = "0e879cc9dd8ff2927a9a5e56ea8cadc781105cb1";
+    private static final String BASELINE_COMMIT = "3e608552a4750ad073e8c8bf4f821053e79fc660";
     private static final String FIXTURE = "api-hosted-wire-v1.json";
     private static final String GENERATOR = "cn.jia.chat.service.ApiHostedWireV1ContractTest";
     private static final String CANONICAL_RULE = "CanonicalContextJson v1; UTF-8; lexical object keys; "
@@ -42,6 +44,10 @@ class ApiHostedWireV1ContractTest {
         byte[] generated = generatedWire();
         assertArrayEquals(resource("/contracts/" + FIXTURE), generated,
                 "Hosted wire contract drift requires an intentional cross-repository contract update");
+        String wire = new String(generated, StandardCharsets.UTF_8);
+        assertFalse(wire.contains("伪造代理身份"));
+        assertTrue(wire.contains("\"senderName\":\"契约用户\""));
+        assertTrue(wire.contains("\"jiacn\":\"owner-contract\""));
     }
 
     @Test
@@ -111,8 +117,8 @@ class ApiHostedWireV1ContractTest {
                 new Class<?>[]{long.class, long.class, AgentTaskDTO.class}, generation, messageId, task);
         Map<String, Object> facts = invoke(service, "factsManifest",
                 new Class<?>[]{ChatConversationEntity.class, JuyitingConversationScope.class,
-                        String.class, AgentTaskDTO.class, List.class, long.class},
-                conversation, scope, targetAgentId, task, inputRefs, messageId);
+                        String.class, AgentTaskDTO.class, List.class, long.class, Map.class},
+                conversation, scope, targetAgentId, task, inputRefs, messageId, null);
         String contextHash = ChatDeliberationService.contextDigest(sourceVector, facts);
         String turnId = stableId(service, "turn", tenantId, ownerJiacn, clientId, requestId, targetAgentId);
         String dispatchId = stableId(service, "dispatch", tenantId, ownerJiacn, clientId, requestId,
@@ -121,12 +127,14 @@ class ApiHostedWireV1ContractTest {
         String eventId = stableId(service, "evt", dispatchId, "DISPATCH");
 
         ChatMessageDTO input = new ChatMessageDTO();
-        input.setSenderType("user");
-        input.setSenderName("契约用户");
+        input.setSenderType("agent");
+        input.setSenderName("伪造代理身份");
         input.setMetadata(Map.of(
                 "schemaVersion", "1",
                 "correlationId", "correlation-contract-v1",
                 "participantAgentIds", List.of(targetAgentId, "builtin-songjiang"),
+                "senderType", "agent",
+                "senderName", "伪造代理身份",
                 "untrustedIgnored", "must-not-appear"));
         Map<String, Object> eventPayload = service.eventPayload(
                 tenantId, ownerJiacn, clientId, conversationId, generation, requestId,
