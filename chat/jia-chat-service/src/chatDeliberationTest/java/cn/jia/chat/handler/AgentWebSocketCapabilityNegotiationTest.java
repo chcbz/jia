@@ -1,5 +1,6 @@
 package cn.jia.chat.handler;
 
+import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.deliberation.InteractionRoute;
 import cn.jia.chat.service.ChatConversationEventBroker;
