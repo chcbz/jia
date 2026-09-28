@@ -43,6 +43,9 @@ public class ChatDeliberationService {
     private static final int MAX_HISTORY_CONTENT = 200_000;
     private static final int SUMMARY_EXCERPT_LIMIT = 2_000;
     private static final int SUMMARY_CONTENT_LIMIT = 64_000;
+    // Client chat-runtime.mjs v1 validates every facts value recursively against 8192 UTF-8 bytes.
+    // This is a measured protocol bound, not a performance deadline or reason to drop a request.
+    private static final int CLIENT_FACT_VALUE_BYTES = 8_192;
     private static final Set<String> CAPABILITY_FAILURE_REASONS = Set.of(
             "TARGET_PROFILE_UNSUPPORTED",
             "TARGET_INSPECT_INPUT_NOT_MATERIALIZED",
@@ -841,7 +844,116 @@ public class ChatDeliberationService {
         context.put("historyDigest", digest(digestVector));
         context.put("availableRefs", availableRefs(inputRefs, taskMaterials));
         context.put("materializedRefs", List.of());
-        return Map.copyOf(context);
+        if (factBytes(context) <= CLIENT_FACT_VALUE_BYTES) return Map.copyOf(context);
+        return boundContext(context, older, recent, sourceIds);
+    }
+
+    private int factBytes(Object value) {
+        return CanonicalContextJson.write(value).getBytes(StandardCharsets.UTF_8).length;
+    }
+
+    private String utf8Prefix(String text, int maxBytes) {
+        int used = 0;
+        int offset = 0;
+        while (offset < text.length()) {
+            int codePoint = text.codePointAt(offset);
+            int next = Character.charCount(codePoint);
+            int length = new String(Character.toChars(codePoint)).getBytes(StandardCharsets.UTF_8).length;
+            if (used + length > maxBytes) break;
+            used += length;
+            offset += next;
+        }
+        return text.substring(0, offset);
+    }
+
+    private Map<String, Object> boundContext(Map<String, Object> full,
+            List<Map<String, Object>> older, List<Map<String, Object>> recent, List<String> sourceIds) {
+        Map<String, Object> bounded = new LinkedHashMap<>();
+        Map<String, Object> originalCurrent = castContextMap(full.get("currentUserMessage"));
+        bounded.put("currentUserMessage", Map.of(
+                "messageId", originalCurrent.get("messageId"), "role", "USER",
+                "contentHash", originalCurrent.get("contentHash"), "contentSource", "dispatch.content"));
+        bounded.put("historyDigest", full.get("historyDigest"));
+        bounded.put("coverage", "BOUNDED_EXTRACTIVE_NOT_COMPLETE");
+        bounded.put("sourceMessageIds", sourceIds.size() <= 2 ? sourceIds
+                : List.of(sourceIds.getFirst(), sourceIds.getLast()));
+        bounded.put("sourceMessageCount", sourceIds.size());
+        bounded.put("sourceMessageIdsDigest", digest(sourceIds));
+        bounded.put("materializedRefs", List.of());
+        if (older.isEmpty()) {
+            bounded.put("summary", full.get("summary"));
+        } else {
+            Map<String, Object> last = older.getLast();
+            String excerpt = utf8Prefix((String) last.get("content"), CLIENT_FACT_VALUE_BYTES / 8);
+            bounded.put("summary", Map.of(
+                    "kind", "bounded-extractive-v1", "content", excerpt,
+                    "contentHash", "sha256:" + sha256(excerpt),
+                    "sourceMessageIds", List.of(last.get("messageId")),
+                    "sources", List.of(Map.of("messageId", last.get("messageId"),
+                            "contentHash", last.get("contentHash"))),
+                    "sourceCount", older.size(), "omittedSourceCount", older.size() - 1,
+                    "sourceDigest", digest(older), "truncated", true));
+        }
+        List<Map<String, Object>> boundedRecent = new ArrayList<>();
+        for (Map<String, Object> message : recent) {
+            boundedRecent.add(new LinkedHashMap<>(Map.of(
+                    "messageId", message.get("messageId"), "role", message.get("role"),
+                    "contentHash", message.get("contentHash"), "contentTruncated", true)));
+        }
+        bounded.put("recentMessages", boundedRecent);
+        bounded.put("recentOmittedCount", 0);
+        bounded.put("availableRefs", new ArrayList<Map<String, Object>>());
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> refs = (List<Map<String, Object>>) full.get("availableRefs");
+        bounded.put("availableRefsOmittedCount", refs.size());
+        // History and references remain bound by hashes/IDs even when the wire displays excerpts.
+        while (factBytes(bounded) > CLIENT_FACT_VALUE_BYTES && !boundedRecent.isEmpty()) {
+            boundedRecent.removeFirst();
+            bounded.put("recentOmittedCount", (int) bounded.get("recentOmittedCount") + 1);
+        }
+        if (factBytes(bounded) > CLIENT_FACT_VALUE_BYTES) {
+            Map<String, Object> summary = castContextMap(bounded.get("summary"));
+            bounded.put("summary", Map.of("kind", "bounded-extractive-v1", "content", "",
+                    "contentHash", "sha256:" + sha256(""), "sourceCount", older.size(),
+                    "omittedSourceCount", older.size(), "sourceDigest", digest(older),
+                    "truncated", true));
+        }
+        if (factBytes(bounded) > CLIENT_FACT_VALUE_BYTES) {
+            throw persistence("Bounded context exceeds the negotiated Client wire format");
+        }
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> keptRefs = (List<Map<String, Object>>) bounded.get("availableRefs");
+        for (Map<String, Object> ref : refs) {
+            keptRefs.add(ref);
+            bounded.put("availableRefsOmittedCount", refs.size() - keptRefs.size());
+            if (factBytes(bounded) <= CLIENT_FACT_VALUE_BYTES) continue;
+            keptRefs.removeLast();
+            bounded.put("availableRefsOmittedCount", refs.size() - keptRefs.size());
+            break;
+        }
+        // Spend only the remaining protocol space on the most recent *data* first. Old message
+        // text never becomes a system instruction and full source hashes remain recoverable.
+        for (int index = boundedRecent.size() - 1; index >= 0; index--) {
+            Map<String, Object> item = boundedRecent.get(index);
+            int originalIndex = recent.size() - boundedRecent.size() + index;
+            String original = (String) recent.get(originalIndex).get("content");
+            int room = Math.max(0, CLIENT_FACT_VALUE_BYTES - factBytes(bounded) - 128);
+            String excerpt = utf8Prefix(original, room);
+            if (excerpt.isEmpty()) break;
+            item.put("content", excerpt);
+            item.put("contentTruncated", excerpt.length() != original.length());
+            if (factBytes(bounded) > CLIENT_FACT_VALUE_BYTES) {
+                item.remove("content");
+                item.put("contentTruncated", true);
+                break;
+            }
+        }
+        return Map.copyOf(bounded);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> castContextMap(Object value) {
+        return (Map<String, Object>) value;
     }
 
     private Map<String, Object> authorizedHistoryMessage(String tenantId, String ownerJiacn,
@@ -960,7 +1072,21 @@ public class ChatDeliberationService {
                 items.add(Map.of("fileId", id, "version", number.longValue(), "role", roleValue));
             }
         }
-        return Map.of("status", status, "complete", complete, "items", List.copyOf(items));
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("status", status);
+        result.put("complete", complete);
+        result.put("items", items);
+        if (factBytes(result) > CLIENT_FACT_VALUE_BYTES) {
+            int originalCount = items.size();
+            result.put("complete", false);
+            result.put("omittedCount", 0);
+            while (!items.isEmpty() && factBytes(result) > CLIENT_FACT_VALUE_BYTES) {
+                items.removeLast();
+                result.put("omittedCount", originalCount - items.size());
+            }
+        }
+        result.put("items", List.copyOf(items));
+        return Map.copyOf(result);
     }
 
     private Map<String, Object> taskManifest(AgentTaskDTO task) {

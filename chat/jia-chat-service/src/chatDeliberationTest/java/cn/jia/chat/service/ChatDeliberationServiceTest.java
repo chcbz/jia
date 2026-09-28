@@ -17,6 +17,7 @@ import cn.jia.chat.handler.dto.ChatMessageDTO;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -334,6 +335,42 @@ class ChatDeliberationServiceTest {
         assertTrue(String.valueOf(admission.dispatches().getFirst().sourceVector()
                 .get("authorizedHistoryDigest")).startsWith("sha256:"));
         assertFalse(CanonicalContextJson.write(facts).contains("toolTrace"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void longMultibyteHistoryAndLargeMaterialCatalogStayInsideExistingClientFactsWireLimit() {
+        List<ChatMessageEntity> history = new ArrayList<>();
+        for (int id = 1; id <= 200; id++) {
+            history.add(historyMessage((long) id, "USER", "历史".repeat(1_500) + id, null));
+        }
+        when(messages.findOwnedByConversationIdWithLimit("owner-a", "client-a", "42", 200))
+                .thenReturn(history);
+        List<Map<String, Object>> items = new ArrayList<>();
+        for (int index = 0; index < 180; index++) {
+            items.add(Map.of("fileId", "reference-" + index + "-" + "中".repeat(18),
+                    "version", 1, "role", "REFERENCE"));
+        }
+        String currentContent = "当前需求".repeat(1_500);
+        var admission = service.admit("0", humanSender(), "42", 3L, scope(),
+                InteractionRoute.CHAT, request("req-bounded-long", currentContent),
+                Map.of("status", "AVAILABLE", "complete", true, "items", items));
+        for (var dispatch : admission.dispatches()) {
+            Map<String, Object> facts = dispatch.factsManifest();
+            Map<String, Object> context = (Map<String, Object>) facts.get("authorizedContext");
+            Map<String, Object> materials = (Map<String, Object>) facts.get("taskMaterials");
+            assertTrue(CanonicalContextJson.write(context).getBytes(StandardCharsets.UTF_8).length <= 8_192);
+            assertTrue(CanonicalContextJson.write(materials).getBytes(StandardCharsets.UTF_8).length <= 8_192);
+            assertEquals("BOUNDED_EXTRACTIVE_NOT_COMPLETE", context.get("coverage"));
+            assertEquals(200, context.get("sourceMessageCount"));
+            assertTrue(((List<?>) context.get("sourceMessageIds")).size() <= 2);
+            assertTrue(String.valueOf(context.get("historyDigest")).startsWith("sha256:"));
+            assertEquals("dispatch.content", ((Map<?, ?>) context.get("currentUserMessage")).get("contentSource"));
+            assertFalse(CanonicalContextJson.write(context).contains(currentContent));
+            assertEquals(false, materials.get("complete"));
+            assertTrue((int) materials.get("omittedCount") > 0);
+            assertTrue((int) context.get("availableRefsOmittedCount") > 0);
+        }
     }
 
     @Test
