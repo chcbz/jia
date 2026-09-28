@@ -20,6 +20,14 @@ class ChatDeliberationSchemaContractTest {
             assertTrue(sql.contains("create table if not exists chat_turn"));
             assertTrue(sql.contains("create table if not exists chat_dispatch_outbox"));
             assertTrue(sql.contains("create table if not exists chat_conversation_event"));
+            assertTrue(sql.contains("create table if not exists chat_interaction_step"));
+            assertTrue(sql.contains("create table if not exists chat_step_execution_link"));
+            assertTrue(compact.contains("uk_chat_step_request_number (tenant_id, owner_jiacn, client_id, request_id, request_revision, step_number)"));
+            assertTrue(compact.contains("idx_chat_step_task (tenant_id, owner_jiacn, client_id, task_id, assignment_revision, target_agent_id)"));
+            assertTrue(compact.contains("fk_chat_step_request_scope foreign key (tenant_id, owner_jiacn, client_id, request_id, request_revision)"));
+            assertTrue(compact.contains("fk_chat_exec_step_scope foreign key (tenant_id, owner_jiacn, client_id, step_id)"));
+            assertTrue(compact.contains("uk_chat_exec_step (step_id)"));
+            assertTrue(compact.contains("uk_chat_exec_execution (execution_id)"));
             assertTrue(sql.contains("create table if not exists chat_deliberation_schema_version"));
             assertTrue(compact.contains("idx_chat_outbox_ready (status, available_at, event_id)"));
             assertTrue(sql.contains("lease_owner"));
@@ -51,6 +59,10 @@ class ChatDeliberationSchemaContractTest {
         assertTrue(source.contains("non_unique"));
         assertTrue(source.contains("seq_in_index"));
         assertTrue(source.contains("allow-additive-migration:false"));
+        assertTrue(source.contains("chat_interaction_step"));
+        assertTrue(source.contains("chat_step_execution_link"));
+        assertTrue(source.contains("validateForeignKeys(table)"));
+        assertTrue(source.contains("information_schema.key_column_usage"));
         assertTrue(source.contains("ALGORITHM=INPLACE, LOCK=NONE"));
         assertFalse(source.contains("index_name.contains"));
         assertTrue(source.contains("PREFLIGHT"));

@@ -124,6 +124,62 @@ CREATE TABLE IF NOT EXISTS chat_conversation_event (
     (tenant_id, owner_jiacn, client_id, conversation_id, conversation_generation, event_sequence)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
+-- U1: steps are request-scoped, grant-bound business decisions. No model callback may insert them.
+CREATE TABLE IF NOT EXISTS chat_interaction_step (
+  step_id VARCHAR(64) NOT NULL,
+  tenant_id VARCHAR(50) NOT NULL,
+  owner_jiacn VARCHAR(50) NOT NULL,
+  client_id VARCHAR(50) NOT NULL,
+  request_id VARCHAR(100) NOT NULL,
+  request_revision BIGINT NOT NULL,
+  step_number BIGINT NOT NULL,
+  conversation_id VARCHAR(100) NOT NULL,
+  conversation_generation BIGINT NOT NULL,
+  task_id VARCHAR(100) NOT NULL,
+  assignment_revision BIGINT NOT NULL,
+  grant_id VARCHAR(100) NOT NULL,
+  grant_version BIGINT NOT NULL,
+  target_agent_id VARCHAR(100) NOT NULL,
+  kind VARCHAR(20) NOT NULL,
+  state VARCHAR(30) NOT NULL,
+  state_version BIGINT NOT NULL DEFAULT 0,
+  input_snapshot_digest VARCHAR(100) NOT NULL,
+  created_at BIGINT NOT NULL,
+  updated_at BIGINT NOT NULL,
+  PRIMARY KEY (step_id),
+  UNIQUE KEY uk_chat_step_request_number
+    (tenant_id, owner_jiacn, client_id, request_id, request_revision, step_number),
+  UNIQUE KEY uk_chat_step_scope_identity
+    (tenant_id, owner_jiacn, client_id, step_id),
+  KEY idx_chat_step_task
+    (tenant_id, owner_jiacn, client_id, task_id, assignment_revision, target_agent_id),
+  CONSTRAINT fk_chat_step_request_scope FOREIGN KEY
+    (tenant_id, owner_jiacn, client_id, request_id, request_revision)
+    REFERENCES chat_request (tenant_id, owner_jiacn, client_id, request_id, request_revision)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
+
+-- A single persisted intent maps to one exact execution; unknown provider outcomes
+-- must reconcile this link, not allocate a second intent for the same step.
+CREATE TABLE IF NOT EXISTS chat_step_execution_link (
+  execution_intent_id VARCHAR(64) NOT NULL,
+  tenant_id VARCHAR(50) NOT NULL,
+  owner_jiacn VARCHAR(50) NOT NULL,
+  client_id VARCHAR(50) NOT NULL,
+  step_id VARCHAR(64) NOT NULL,
+  execution_id VARCHAR(64) DEFAULT NULL,
+  state VARCHAR(30) NOT NULL,
+  state_version BIGINT NOT NULL DEFAULT 0,
+  created_at BIGINT NOT NULL,
+  updated_at BIGINT NOT NULL,
+  PRIMARY KEY (execution_intent_id),
+  UNIQUE KEY uk_chat_exec_step (step_id),
+  UNIQUE KEY uk_chat_exec_execution (execution_id),
+  KEY idx_chat_exec_scope_step (tenant_id, owner_jiacn, client_id, step_id),
+  CONSTRAINT fk_chat_exec_step_scope FOREIGN KEY
+    (tenant_id, owner_jiacn, client_id, step_id)
+    REFERENCES chat_interaction_step (tenant_id, owner_jiacn, client_id, step_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
+
 CREATE TABLE IF NOT EXISTS chat_deliberation_schema_version (
   version BIGINT NOT NULL,
   stage VARCHAR(30) NOT NULL,

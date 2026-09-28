@@ -26,11 +26,18 @@ import java.util.Objects;
 public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
     static final List<String> TABLES = List.of(
             "chat_context_snapshot", "chat_request", "chat_turn", "chat_dispatch_outbox",
-            "chat_conversation_event");
+            "chat_conversation_event", "chat_interaction_step", "chat_step_execution_link");
     private static final String COLLATION = "utf8mb4_0900_bin";
     private static final String MIGRATION_LOCK = "cyf:chat-deliberation:v2";
     private static final Map<String, Map<String, ColumnDef>> COLUMNS = columns();
     private static final Map<String, Map<String, IndexDef>> INDEXES = indexes();
+    private static final Map<String, Map<String, ForeignKeyDef>> FOREIGN_KEYS = Map.of(
+            "chat_interaction_step", Map.of("fk_chat_step_request_scope", new ForeignKeyDef(
+                    "chat_request", List.of("tenant_id", "owner_jiacn", "client_id", "request_id", "request_revision"),
+                    List.of("tenant_id", "owner_jiacn", "client_id", "request_id", "request_revision"))),
+            "chat_step_execution_link", Map.of("fk_chat_exec_step_scope", new ForeignKeyDef(
+                    "chat_interaction_step", List.of("tenant_id", "owner_jiacn", "client_id", "step_id"),
+                    List.of("tenant_id", "owner_jiacn", "client_id", "step_id"))));
 
     private final JdbcTemplate jdbc;
     @Value("${cyf.chat.deliberation-schema.allow-additive-migration:false}")
@@ -63,6 +70,7 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
             validateTable(table);
             validateColumns(table);
             validateIndexes(table);
+            if (FOREIGN_KEYS.containsKey(table)) validateForeignKeys(table);
         }
         if (allowAdditiveMigration) recordMigrationStage("APPLIED");
     }
@@ -341,6 +349,34 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
         }
     }
 
+    private void validateForeignKeys(String table) {
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+                SELECT constraint_name, column_name, referenced_table_name, referenced_column_name, ordinal_position
+                FROM information_schema.key_column_usage
+                WHERE table_schema=DATABASE() AND table_name=? AND referenced_table_name IS NOT NULL
+                ORDER BY constraint_name, ordinal_position
+                """, table);
+        Map<String, List<String>> columns = new LinkedHashMap<>();
+        Map<String, List<String>> references = new LinkedHashMap<>();
+        Map<String, String> parents = new LinkedHashMap<>();
+        for (Map<String, Object> row : rows) {
+            String name = text(row, "constraint_name");
+            String parent = text(row, "referenced_table_name");
+            String previous = parents.putIfAbsent(name, parent);
+            if (previous != null && !previous.equals(parent)) {
+                throw incompatible(table + " foreign key " + name, previous, parent);
+            }
+            columns.computeIfAbsent(name, ignored -> new java.util.ArrayList<>()).add(text(row, "column_name"));
+            references.computeIfAbsent(name, ignored -> new java.util.ArrayList<>()).add(text(row, "referenced_column_name"));
+        }
+        Map<String, ForeignKeyDef> actual = new LinkedHashMap<>();
+        parents.forEach((name, parent) -> actual.put(name,
+                new ForeignKeyDef(parent, List.copyOf(columns.get(name)), List.copyOf(references.get(name)))));
+        if (!actual.equals(FOREIGN_KEYS.get(table))) {
+            throw incompatible(table + " foreign keys", FOREIGN_KEYS.get(table).toString(), actual.toString());
+        }
+    }
+
     private Map<String, Map<String, Object>> readColumns(String table) {
         List<Map<String, Object>> rows = jdbc.queryForList("""
                 SELECT column_name,data_type,character_maximum_length,is_nullable,column_default,collation_name,extra
@@ -406,6 +442,19 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
                 c("request_id",v(100,true)), c("turn_id",v(64,true)), c("dispatch_id",v(64,true)),
                 c("event_type",v(40,false)), c("event_version",b(false,null)), c("payload_json",txt("mediumtext",false)),
                 c("occurred_at",b(false,null))));
+        all.put("chat_interaction_step", ordered(c("step_id",v(64,false)), c("tenant_id",v(50,false)),
+                c("owner_jiacn",v(50,false)), c("client_id",v(50,false)), c("request_id",v(100,false)),
+                c("request_revision",b(false,null)), c("step_number",b(false,null)),
+                c("conversation_id",v(100,false)), c("conversation_generation",b(false,null)),
+                c("task_id",v(100,false)), c("assignment_revision",b(false,null)),
+                c("grant_id",v(100,false)), c("grant_version",b(false,null)),
+                c("target_agent_id",v(100,false)), c("kind",v(20,false)), c("state",v(30,false)),
+                c("state_version",b(false,"0")), c("input_snapshot_digest",v(100,false)),
+                c("created_at",b(false,null)), c("updated_at",b(false,null))));
+        all.put("chat_step_execution_link", ordered(c("execution_intent_id",v(64,false)),
+                c("tenant_id",v(50,false)), c("owner_jiacn",v(50,false)), c("client_id",v(50,false)),
+                c("step_id",v(64,false)), c("execution_id",v(64,true)), c("state",v(30,false)),
+                c("state_version",b(false,"0")), c("created_at",b(false,null)), c("updated_at",b(false,null))));
         return Map.copyOf(all);
     }
 
@@ -429,6 +478,13 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
         all.put("chat_conversation_event", Map.of("PRIMARY",ix(true,"event_sequence"),
                 "uk_chat_conversation_event_id",ix(true,"event_id"),
                 "idx_chat_conversation_event_replay",ix(false,"tenant_id","owner_jiacn","client_id","conversation_id","conversation_generation","event_sequence")));
+        all.put("chat_interaction_step", Map.of("PRIMARY",ix(true,"step_id"),
+                "uk_chat_step_request_number",ix(true,"tenant_id","owner_jiacn","client_id","request_id","request_revision","step_number"),
+                "uk_chat_step_scope_identity",ix(true,"tenant_id","owner_jiacn","client_id","step_id"),
+                "idx_chat_step_task",ix(false,"tenant_id","owner_jiacn","client_id","task_id","assignment_revision","target_agent_id")));
+        all.put("chat_step_execution_link", Map.of("PRIMARY",ix(true,"execution_intent_id"),
+                "uk_chat_exec_step",ix(true,"step_id"), "uk_chat_exec_execution",ix(true,"execution_id"),
+                "idx_chat_exec_scope_step",ix(false,"tenant_id","owner_jiacn","client_id","step_id")));
         return Map.copyOf(all);
     }
 
@@ -451,4 +507,5 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
     private boolean isH2() throws Exception { DataSource source=jdbc.getDataSource(); if(source==null)return false; try(Connection c=source.getConnection()){String n=c.getMetaData().getDatabaseProductName();return n!=null&&n.toLowerCase(Locale.ROOT).contains("h2");}}
     private record ColumnDef(String type,Long length,boolean nullable,String defaultValue,String extra,boolean collated,String ddl) { }
     private record IndexDef(boolean unique,List<String> columns) { }
+    private record ForeignKeyDef(String referencedTable, List<String> columns, List<String> referencedColumns) { }
 }
