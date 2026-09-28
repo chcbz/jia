@@ -25,6 +25,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.HexFormat;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -76,7 +77,30 @@ class ApiHostedWireV1ContractTest {
         assertEquals(sha256(fixture), manifest.get("fixtureSha256"));
     }
 
-    private byte[] generatedWire() throws Exception {
+    @Test
+    @SuppressWarnings("unchecked")
+    void longHistoryProducesBoundedButTruthfulHostedWireForRealClientContract() throws Exception {
+        byte[] generated = generatedWire(true);
+        String output = System.getenv("CYF_LONG_HISTORY_WIRE_OUTPUT");
+        if (output != null && !output.isBlank()) Files.write(Path.of(output), generated);
+        Map<String, Object> wire = JsonUtil.getMapper().readValue(generated, Map.class);
+        Map<String, Object> snapshot = (Map<String, Object>) wire.get("contextSnapshot");
+        Map<String, Object> facts = (Map<String, Object>) snapshot.get("facts");
+        Map<String, Object> history = (Map<String, Object>) facts.get("authorizedContext");
+        Map<String, Object> materials = (Map<String, Object>) facts.get("taskMaterials");
+        assertTrue(CanonicalContextJson.write(history).getBytes(StandardCharsets.UTF_8).length <= 8192);
+        assertTrue(CanonicalContextJson.write(materials).getBytes(StandardCharsets.UTF_8).length <= 8192);
+        assertEquals("BOUNDED_EXTRACTIVE_NOT_COMPLETE", history.get("coverage"));
+        assertEquals(200, history.get("sourceMessageCount"));
+        assertTrue(((Number) history.get("availableRefsOmittedCount")).intValue() > 0);
+        assertTrue(((Number) materials.get("omittedCount")).intValue() > 0);
+        assertEquals(false, materials.get("complete"));
+        assertTrue(String.valueOf(history.get("historyDigest")).startsWith("sha256:"));
+    }
+
+    private byte[] generatedWire() throws Exception { return generatedWire(false); }
+
+    private byte[] generatedWire(boolean longHistory) throws Exception {
         ChatDeliberationService service = new ChatDeliberationService(
                 mock(ChatDeliberationDao.class), mock(ChatConversationDao.class),
                 mock(ChatMessageDao.class), mock(AgentService.class));
@@ -122,26 +146,45 @@ class ApiHostedWireV1ContractTest {
                 Map.of("type", "conversation", "id", conversationId),
                 Map.of("type", "task", "id", "task-contract-17"),
                 Map.of("type", "message", "id", Long.toString(messageId - 1)));
-
-        ChatMessageEntity previousUser = scopedMessage(tenantId, ownerJiacn, clientId,
-                conversationId, messageId - 1, "USER", "Previous authorized user context", null);
-        ChatMessageEntity previousAssistant = scopedMessage(tenantId, ownerJiacn, clientId,
-                conversationId, messageId - 2, "ASSISTANT", "Previous target answer",
-                "{\"targetAgentId\":\"hosted-agent-contract\"}");
+        List<ChatMessageEntity> history = new ArrayList<>();
+        String currentText;
+        Map<String, Object> taskMaterials = null;
+        if (longHistory) {
+            for (int index = 0; index < 200; index++) {
+                history.add(scopedMessage(tenantId, ownerJiacn, clientId, conversationId,
+                        messageId - 201 + index, "USER", "历史资料".repeat(1200) + index, null));
+            }
+            List<Map<String, Object>> references = new ArrayList<>();
+            for (int index = 0; index < 180; index++) {
+                references.add(Map.of("fileId", "reference-" + index + "-" + "图".repeat(12),
+                        "version", 1, "role", "REFERENCE"));
+            }
+            taskMaterials = Map.of("status", "AVAILABLE", "complete", true, "items", references);
+            currentText = "请参照这只鸟".repeat(1_200);
+        } else {
+            ChatMessageEntity previousUser = scopedMessage(tenantId, ownerJiacn, clientId,
+                    conversationId, messageId - 1, "USER", "Previous authorized user context", null);
+            ChatMessageEntity previousAssistant = scopedMessage(tenantId, ownerJiacn, clientId,
+                    conversationId, messageId - 2, "ASSISTANT", "Previous target answer",
+                    "{\"targetAgentId\":\"hosted-agent-contract\"}");
+            history.add(previousAssistant);
+            history.add(previousUser);
+            currentText = "Inspect the fixed contract context";
+        }
         ChatMessageEntity currentUser = scopedMessage(tenantId, ownerJiacn, clientId,
-                conversationId, messageId, "USER", "Inspect the fixed contract context", null);
+                conversationId, messageId, "USER", currentText, null);
         Map<String, Object> authorizedContext = invoke(service, "authorizedContext",
                 new Class<?>[]{String.class, String.class, String.class, String.class, String.class,
                         List.class, ChatMessageEntity.class, List.class, Map.class},
                 tenantId, ownerJiacn, clientId, conversationId, targetAgentId,
-                List.of(previousAssistant, previousUser), currentUser, inputRefs, null);
+                history, currentUser, inputRefs, taskMaterials);
         Map<String, Object> sourceVector = invoke(service, "sourceVector",
                 new Class<?>[]{long.class, long.class, AgentTaskDTO.class, Map.class},
                 generation, messageId, task, authorizedContext);
         Map<String, Object> facts = invoke(service, "factsManifest",
                 new Class<?>[]{ChatConversationEntity.class, JuyitingConversationScope.class,
                         String.class, AgentTaskDTO.class, Map.class, Map.class},
-                conversation, scope, targetAgentId, task, null, authorizedContext);
+                conversation, scope, targetAgentId, task, taskMaterials, authorizedContext);
         String contextHash = ChatDeliberationService.contextDigest(sourceVector, facts);
         String turnId = stableId(service, "turn", tenantId, ownerJiacn, clientId, requestId, targetAgentId);
         String dispatchId = stableId(service, "dispatch", tenantId, ownerJiacn, clientId, requestId,
@@ -162,10 +205,10 @@ class ApiHostedWireV1ContractTest {
         Map<String, Object> eventPayload = service.eventPayload(
                 tenantId, ownerJiacn, clientId, conversationId, generation, requestId,
                 requestRevision, turnId, dispatchId, targetAgentId, snapshotId, contextHash,
-                InteractionRoute.INSPECT, "Inspect the fixed contract context", input, scope,
+                longHistory ? InteractionRoute.CHAT : InteractionRoute.INSPECT, currentText, input, scope,
                 new ServerResolvedSender(ServerResolvedSender.USER_TYPE, "契约用户",
                         ownerJiacn, clientId, DisplayNameSource.NICKNAME),
-                null, occurredAt, sourceVector, facts);
+                taskMaterials, occurredAt, sourceVector, facts);
 
         ChatDispatchOutboxEntity row = new ChatDispatchOutboxEntity()
                 .setEventId(eventId).setTenantId(tenantId).setOwnerJiacn(ownerJiacn)
