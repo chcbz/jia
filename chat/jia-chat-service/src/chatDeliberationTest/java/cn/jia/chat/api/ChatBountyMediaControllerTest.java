@@ -76,6 +76,37 @@ class ChatBountyMediaControllerTest {
         assertTrue(download.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION).startsWith("attachment"));
         assertFalse(download.getHeaders().toString().contains("bird.png"));
     }
+    @Test void catalogReturnsOnlyScopedVerifiedOutputsAndOwnerUrls() {
+        ready();
+        when(executions.listConversationOutputs(owner,"task-1","run-1")).thenReturn(List.of(
+                new PersonalWorkspaceExecutionService.ConversationOutputInfo("exec-1",
+                        "out-1","image/png",sha(PHOTO),PHOTO.length)));
+        var response=controller.outputs("request-1","step-1",authentication);
+        assertEquals("no-store",response.getHeaders().getCacheControl());
+        var item=response.getBody().getData().getFirst();
+        assertEquals("/chat/requests/request-1/steps/step-1/outputs/out-1",item.previewUrl());
+        assertEquals(item.previewUrl()+"?download=true",item.downloadUrl());
+        assertFalse(response.toString().contains("bird.png"));
+        assertFalse(response.toString().contains("run-1"));
+        verify(executions,never()).readConversationOutput(any(),any(),any(),any());
+    }
+    @Test void catalogRejectsMismatchedOrUnsupportedOutputAndNeverExposesForeignRequest() {
+        ready();
+        when(executions.listConversationOutputs(owner,"task-1","run-1")).thenReturn(List.of(
+                new PersonalWorkspaceExecutionService.ConversationOutputInfo("different-execution",
+                        "out-1","image/png",sha(PHOTO),PHOTO.length)));
+        assertThrows(ChatDeliberationException.class,()->controller.outputs("request-1","step-1",authentication));
+        when(executions.listConversationOutputs(owner,"task-1","run-1")).thenReturn(List.of(
+                new PersonalWorkspaceExecutionService.ConversationOutputInfo("exec-1",
+                        "out-1","image/svg+xml",sha(PHOTO),PHOTO.length)));
+        assertNull(controller.outputs("request-1","step-1",authentication).getBody().getData().getFirst().previewUrl());
+        when(requests.getRequest("0","owner","client","request-1"))
+                .thenThrow(new ChatDeliberationException(ChatDeliberationException.Reason.NOT_FOUND_OR_FORBIDDEN,
+                        "Unavailable"));
+        clearInvocations(executions);
+        assertThrows(ChatDeliberationException.class,()->controller.outputs("request-1","step-1",authentication));
+        verifyNoInteractions(executions);
+    }
     @Test void foreignRequestOrUnlinkedStepIsNeverReadFromAgentStorage() {
         ready();
         when(requests.getRequest("0", "owner", "client", "request-1"))

@@ -346,6 +346,48 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 });
     }
 
+    /** No browser-provided output IDs, URIs or filenames. Verify each stored byte object before listing it. */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public List<ConversationOutputInfo> listConversationOutputs(OwnerScope scope, String taskId, String runId) {
+        validateOwnerScope(scope); id(taskId,"taskId",100); id(runId,"runId",100);
+        if (taskMutations==null || conversationGrants==null) throw failure(Reason.CAPABILITY_UNAVAILABLE);
+        return taskMutations.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),
+                scope.ownerJiacn(),taskId,root -> {
+                    var row=executions.findByTaskRun(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,runId);
+                    if (row==null || !"CONVERSATION".equals(row.getExecutionMode())
+                            || !"OUTPUT_COMMITTED".equals(row.getExecutionState())) throw failure(Reason.NOT_FOUND);
+                    requireConversationRoot(root,scope,taskId,row.getTargetAgentId(),row.getAssignmentRevision());
+                    requireConversationGrant(scope,row);
+                    var locked=executions.lockByTaskRun(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,runId);
+                    if (locked==null || !same(row.getExecutionId(),locked.getExecutionId())
+                            || !"OUTPUT_COMMITTED".equals(locked.getExecutionState())) throw failure(Reason.NOT_FOUND);
+                    var outputs=executions.lockOutputs(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),row.getExecutionId());
+                    if (outputs==null || outputs.isEmpty() || outputs.size()>128) throw failure(Reason.NOT_FOUND);
+                    var result=new java.util.ArrayList<ConversationOutputInfo>(outputs.size());
+                    for (var output: outputs) {
+                        if (output==null || !same(row.getExecutionId(),output.getExecutionId())
+                                || !same(scope.ownerJiacn(),output.getOwnerJiacn())
+                                || !"CONVERSATION".equals(output.getOutputPurpose())
+                                || !"COMMITTED".equals(output.getOutputState())
+                                || output.getWorkspaceFileId()!=null || output.getArtifactId()!=null
+                                || output.getFormalDeliveryId()!=null || output.getByteLength()==null
+                                || output.getByteLength()<0 || !sha(output.getContentHash()))
+                            throw failure(Reason.NOT_FOUND);
+                        id(output.getOutputId(),"outputId",100);
+                        validMime(output.getContentMimeType());
+                        var stored=storage.read(storageScope(scope),output.getStorageUri(),output.getContentHash(),
+                                output.getByteLength(),output.getContentMimeType());
+                        byte[] bytes=stored==null ? null : stored.content();
+                        if (bytes==null || bytes.length!=output.getByteLength()
+                                || !same(plainSha(bytes),output.getContentHash())) throw failure(Reason.STORAGE_UNAVAILABLE);
+                        result.add(new ConversationOutputInfo(row.getExecutionId(),output.getOutputId(),
+                                output.getContentMimeType(),output.getContentHash(),output.getByteLength()));
+                    }
+                    return List.copyOf(result);
+                });
+    }
+
     private static void requireConversationRoot(AgentTaskMetaEntity root,OwnerScope scope,
             String taskId,String agentId,Long assignmentRevision) {
         if (root==null || !same(taskId,root.getTaskId())

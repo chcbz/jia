@@ -256,6 +256,32 @@ class PersonalWorkspaceConversationExecutionTest {
         verifyNoInteractions(writes);
     }
 
+    @Test void catalogOnlyListsVerifiedBytesUnderOwnerGrantAndAssignmentFence() throws Exception {
+        var bytes=png();var hash=sha(bytes);execution.setExecutionState("OUTPUT_COMMITTED");
+        output=new PersonalWorkspaceExecutionOutputEntity().setOutputId("output_1")
+                .setExecutionId("exec-1").setOwnerJiacn("owner").setOutputPurpose("CONVERSATION")
+                .setOutputState("COMMITTED").setContentMimeType("image/png")
+                .setContentHash(hash).setByteLength((long)bytes.length).setStorageUri("private/object");
+        when(rows.lockOutputs("0","client","owner","exec-1")).thenReturn(List.of(output));
+        when(storage.read(any(),eq("private/object"),eq(hash),eq((long)bytes.length),eq("image/png")))
+                .thenReturn(new PersonalWorkspaceStorage.StoredContent(bytes,hash,bytes.length,"image/png"));
+        var listed=service.listConversationOutputs(OWNER,"task-1","run-1");
+        assertEquals(List.of(new PersonalWorkspaceExecutionService.ConversationOutputInfo(
+                "exec-1","output_1","image/png",hash,bytes.length)),listed);
+        assertFalse(listed.toString().contains("private/object"));
+        root.setAssignedAgentId("different-agent");
+        assertEquals(PersonalWorkspaceExecutionService.Reason.GRANT_REVOKED,assertThrows(
+                PersonalWorkspaceExecutionService.Failure.class,()->service.listConversationOutputs(
+                        OWNER,"task-1","run-1")).getReason());
+        verify(storage,times(1)).read(any(),anyString(),anyString(),anyLong(),anyString());
+        root.setAssignedAgentId("agent");
+        when(storage.read(any(),eq("private/object"),eq(hash),eq((long)bytes.length),eq("image/png")))
+                .thenReturn(new PersonalWorkspaceStorage.StoredContent(new byte[bytes.length],hash,bytes.length,"image/png"));
+        assertEquals(PersonalWorkspaceExecutionService.Reason.STORAGE_UNAVAILABLE,assertThrows(
+                PersonalWorkspaceExecutionService.Failure.class,()->service.listConversationOutputs(
+                        OWNER,"task-1","run-1")).getReason());
+    }
+
     @Test void defaultOffAndLegacyUnfencedRuntimeLaneNeverStartsConversation() {
         assertEquals(PersonalWorkspaceExecutionService.Reason.CAPABILITY_UNAVAILABLE,assertThrows(
                 PersonalWorkspaceExecutionService.Failure.class,()-> service.claimConversationStart(
