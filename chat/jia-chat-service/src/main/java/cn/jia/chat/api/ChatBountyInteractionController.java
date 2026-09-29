@@ -2,6 +2,7 @@ package cn.jia.chat.api;
 
 import cn.jia.agent.service.AgentTaskExecutionGrantException;
 import cn.jia.chat.service.ChatBountyInteractionAdmissionService;
+import cn.jia.chat.service.ChatBountyDiscussionAdmissionService;
 import cn.jia.chat.service.ChatDeliberationException;
 import cn.jia.chat.service.HumanSenderIdentityResolver;
 import cn.jia.chat.service.TenantScopeResolver;
@@ -25,12 +26,15 @@ import org.springframework.web.bind.annotation.RestController;
 @ConditionalOnProperty(prefix = "chat.bounty-interactions", name = "enabled", havingValue = "true")
 public class ChatBountyInteractionController {
     private final ChatBountyInteractionAdmissionService admissions;
+    private final ChatBountyDiscussionAdmissionService discussion;
     private final HumanSenderIdentityResolver identities;
     private final TenantScopeResolver tenants;
 
     public ChatBountyInteractionController(ChatBountyInteractionAdmissionService admissions,
-            HumanSenderIdentityResolver identities, TenantScopeResolver tenants) {
+            ChatBountyDiscussionAdmissionService discussion, HumanSenderIdentityResolver identities,
+            TenantScopeResolver tenants) {
         this.admissions = admissions;
+        this.discussion = discussion;
         this.identities = identities;
         this.tenants = tenants;
     }
@@ -39,15 +43,39 @@ public class ChatBountyInteractionController {
             String content, java.util.List<?> inputRefs, Object replyTo, Object continuationOf,
             ActionProposal actionProposal) { }
     public record ActionProposal(String kind) { }
+    public record Accepted(String requestId, String userMessageId, String stepId,
+            java.util.List<String> turnIds, String state, String stateVersion,
+            long eventCursor, String statusUrl, boolean replay) { }
 
     @PostMapping("/{conversationId}/interactions")
-    public ResponseEntity<JsonResult<ChatBountyInteractionAdmissionService.Admission>> interact(
+    public ResponseEntity<JsonResult<Accepted>> interact(
             @PathVariable String conversationId,
             @RequestHeader("Idempotency-Key") String idempotencyKey,
             @RequestBody Request request, Authentication authentication) {
-        if (request == null || request.schemaVersion() != 2 || request.actionProposal() == null) {
+        if (request == null || request.schemaVersion() != 2) {
             throw new ChatDeliberationException(ChatDeliberationException.Reason.INVALID_REQUEST,
-                    "Explicit v2 action proposal is required until conversational routing is available");
+                    "Bounty interaction schemaVersion must be 2");
+        }
+        String tenantId = tenants.resolve(authentication);
+        cn.jia.chat.service.ServerResolvedSender sender;
+        try {
+            sender = identities.resolve(EsContextHolder.getContext());
+        } catch (IllegalStateException unavailableIdentity) {
+            throw new ChatDeliberationException(ChatDeliberationException.Reason.NOT_FOUND_OR_FORBIDDEN,
+                    "Bounty discussion is unavailable");
+        }
+        if (request.actionProposal() == null) {
+            if (request.inputRefs() != null && !request.inputRefs().isEmpty()
+                    || request.replyTo() != null || request.continuationOf() != null) {
+                throw new ChatDeliberationException(ChatDeliberationException.Reason.INVALID_REQUEST,
+                        "Referenced discussion requires verified materials or clarification context");
+            }
+            var admitted = discussion.admit(tenantId, sender, conversationId, idempotencyKey,
+                    request.taskId(), request.expectedAssignmentRevision(), request.content());
+            var accepted = new Accepted(admitted.requestId(), admitted.userMessageId(), null,
+                    admitted.turnIds(), admitted.state(), admitted.stateVersion(),
+                    admitted.eventCursor(), "/chat/requests/" + admitted.requestId(), admitted.replay());
+            return ResponseEntity.status(HttpStatus.ACCEPTED).body(JsonResult.success(accepted));
         }
         String operation = switch (request.actionProposal().kind() == null
                 ? "" : request.actionProposal().kind()) {
@@ -59,19 +87,14 @@ public class ChatBountyInteractionController {
             default -> throw new ChatDeliberationException(ChatDeliberationException.Reason.INVALID_ROUTE,
                     "Unsupported bounty interaction proposal");
         };
-        String tenantId = tenants.resolve(authentication);
-        cn.jia.chat.service.ServerResolvedSender sender;
-        try {
-            sender = identities.resolve(EsContextHolder.getContext());
-        } catch (IllegalStateException unavailableIdentity) {
-            throw new ChatDeliberationException(ChatDeliberationException.Reason.NOT_FOUND_OR_FORBIDDEN,
-                    "Bounty discussion is unavailable");
-        }
         var admitted = admissions.admit(tenantId, sender, conversationId, idempotencyKey,
                 new ChatBountyInteractionAdmissionService.Intent(request.taskId(),
                         request.expectedAssignmentRevision(), request.content(), operation,
                         request.inputRefs(), request.replyTo(), request.continuationOf()));
-        return ResponseEntity.status(HttpStatus.ACCEPTED).body(JsonResult.success(admitted));
+        var accepted = new Accepted(admitted.requestId(), admitted.userMessageId(), admitted.stepId(),
+                java.util.List.of(), admitted.state(), Long.toString(admitted.stateVersion()),
+                admitted.eventCursor(), "/chat/requests/" + admitted.requestId(), admitted.replay());
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(JsonResult.success(accepted));
     }
 
     @ExceptionHandler(ChatDeliberationException.class)
