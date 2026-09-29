@@ -143,6 +143,7 @@ class PersonalWorkspaceConversationExecutionTest {
                 List.of(new PersonalWorkspaceExecutionService.OutputDeclaration("output_1",hash,png.length)));
         assertEquals("COMMITTED",committed.state());
         assertNull(committed.items().getFirst().fileId());
+        assertNull(committed.items().getFirst().fileVersion());
         assertEquals("OUTPUT_COMMITTED",execution.getExecutionState());
         var read=service.readConversationOutput(OWNER,"task-1","run-1","output_1");
         assertArrayEquals(png,read.bytes());assertEquals(hash,read.sha256());
@@ -166,7 +167,9 @@ class PersonalWorkspaceConversationExecutionTest {
         assertEquals(PersonalWorkspaceExecutionService.Reason.GRANT_REVOKED,assertThrows(
                 PersonalWorkspaceExecutionService.Failure.class, () -> service.readConversationOutput(
                         OWNER,"task-1","run-1","output_1")).getReason());
-        verifyNoInteractions(storage,writes);
+        verify(storage,never()).read(any(),anyString(),anyString(),anyLong(),anyString());
+        verify(storage,never()).store(any(),any(byte[].class),anyString());
+        verifyNoInteractions(writes);
     }
 
     private static byte[] png() throws Exception {

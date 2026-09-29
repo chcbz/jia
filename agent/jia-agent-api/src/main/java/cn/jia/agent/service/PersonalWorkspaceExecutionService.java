@@ -108,7 +108,8 @@ public interface PersonalWorkspaceExecutionService {
     }
     record StagedOutput(String outputId, String sha256, long byteLength, String state) { }
     record OutputDeclaration(String outputId, String sha256, long byteLength) { }
-    record CommitItem(String outputId, String fileId, int fileVersion, String sha256,
+    /** File reference is absent for CONVERSATION output; version must not unbox null. */
+    record CommitItem(String outputId, String fileId, Integer fileVersion, String sha256,
                       String contentMimeType, long byteLength) { }
     record CommitView(String manifestId, String state, List<CommitItem> items) { }
 
