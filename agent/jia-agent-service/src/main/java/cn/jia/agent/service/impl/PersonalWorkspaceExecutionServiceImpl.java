@@ -287,7 +287,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                                 new WorkspaceConversationAccessService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),
                                 valid.conversationId());
                         if (conversation==null || !same(valid.taskId(),conversation.taskId())
-                                || !same("TASK",conversation.scopeType()) || !same(valid.taskId(),conversation.scopeKey())
+                                || !same("bounty",conversation.scopeType())
+                                || !same("task:"+valid.taskId(),conversation.scopeKey())
                                 || conversation.targetAgentIds()==null
                                 || !conversation.targetAgentIds().contains(valid.targetAgentId()))
                             throw failure(Reason.NOT_FOUND);
