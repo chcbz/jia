@@ -73,7 +73,7 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
     void staleOrCrossOwnerFenceCannotReconcile() {
         var claim = service.claimNext(scope(), "chat-consumer", 1000);
         var stale = new AgentTaskBountyBootstrapReconcileDTO(claim.bootstrapId(),
-                claim.outboxVersion() - 1, claim.leaseOwner(), claim.claimAttempt(),
+                claim.outboxVersion() + 1, claim.leaseOwner(), claim.claimAttempt(),
                 AgentTaskBountyBootstrapReconcileDTO.Outcome.ADMITTED,
                 "conversation-1", "request-1", null);
         assertThrows(IllegalStateException.class, () -> service.reconcile(scope(), stale, 1100));
