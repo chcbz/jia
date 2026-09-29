@@ -106,9 +106,13 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         grants.supersedeActiveForTask(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
                 valid.taskId(),now);
         AgentTaskExecutionGrantEntity entity = new AgentTaskExecutionGrantEntity()
-                .setGrantId("grant_" + UUID.randomUUID().toString().replace("-",""))
-                .setTenantId(scope.tenantId()).setClientId(scope.clientId())
-                .setOwnerJiacn(scope.ownerJiacn()).setTaskId(valid.taskId())
+                .setGrantId("grant_" + UUID.randomUUID().toString().replace("-",""));
+        // BaseEntity's fluent setters return BaseEntity, so crossing that boundary in the
+        // subclass chain hides grant-specific setters at compile time. Keep scope assignment
+        // explicit, then resume the grant entity chain.
+        entity.setTenantId(scope.tenantId());
+        entity.setClientId(scope.clientId());
+        entity.setOwnerJiacn(scope.ownerJiacn()).setTaskId(valid.taskId())
                 .setRequirementRevision(valid.requirementRevision())
                 .setAssignmentRevision(assignmentRevision).setTargetAgentId(canonicalAgent)
                 .setPermittedOperationsJson(write(valid.operations()))
