@@ -424,6 +424,30 @@ class AgentRuntimeSecurityIntegrationTest {
     }
 
     @Test
+    void nativeProviderStartRequiresExactRuntimeFenceAndRejectsBrowserRoutes() throws Exception {
+        var scope=new PersonalWorkspaceExecutionService.RuntimeScope(TENANT,CLIENT_A,OWNER_A,A,"runtime-a");
+        String path="/internal/agent/tasks/task-a/runs/run-a/conversation/provider-start";
+        String body="{\"version\":1,\"token\":\"01234567-89ab-cdef-0123-456789abcdef\"}";
+        conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A)
+                .contentType("application/json").content(body))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.started").value(true));
+        verify(workspaceExecutions).beginConversationProviderStart(scope,"task-a","run-a",
+                new PersonalWorkspaceExecutionService.ConversationFence(1,
+                        "01234567-89ab-cdef-0123-456789abcdef"));
+        conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A)
+                .contentType("application/json").content("{\"version\":0,\"token\":\"bad\"}"))
+                .andExpect(status().isBadRequest());
+        conversationMvc.perform(headers(post(path),A,"runtime-b",TOKEN_A)
+                .contentType("application/json").content(body)).andExpect(status().isUnauthorized());
+        conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A)
+                .header("Origin","https://browser.invalid").contentType("application/json").content(body))
+                .andExpect(status().isForbidden());
+        conversationMvc.perform(headers(post(path+"/extra"),A,"runtime-a",TOKEN_A)
+                .contentType("application/json").content(body)).andExpect(status().isForbidden());
+        verifyNoMoreInteractions(workspaceExecutions);
+    }
+
+    @Test
     void conversationOutputAndFailureRoutesRejectCrossRuntimeAndUnfencedPaths() throws Exception {
         var scope=new PersonalWorkspaceExecutionService.RuntimeScope(TENANT,CLIENT_A,OWNER_A,A,"runtime-a");
         var fence=new PersonalWorkspaceExecutionService.ConversationFence(1L,

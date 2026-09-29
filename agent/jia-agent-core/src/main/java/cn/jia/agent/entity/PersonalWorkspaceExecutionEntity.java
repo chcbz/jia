@@ -35,6 +35,9 @@ public class PersonalWorkspaceExecutionEntity extends BaseEntity {
     private String conversationLeaseRuntimeId;
     private Long conversationLeaseVersion;
     private Long conversationLeaseExpiresAt;
+    /** Permanently records the first authorized paid Provider START; never reset on failure. */
+    private Long conversationProviderStartedAt;
+    private Long conversationProviderLeaseVersion;
     private String workItemId;
     /** Runtime-only lease material; never exposed by browser views or queue payloads. */
     private String leaseToken;

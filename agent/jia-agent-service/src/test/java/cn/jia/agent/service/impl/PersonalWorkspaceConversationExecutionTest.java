@@ -234,6 +234,21 @@ class PersonalWorkspaceConversationExecutionTest {
         verify(rows,never()).insert(any());
     }
 
+    @Test void providerStartIsDurableOneShotEvenWhenLeaseOrClientRetries() {
+        enable();
+        var lease=service.claimConversationStart(RUNTIME,"task-1","run-1",commandId(),messageId());
+        service.beginConversationProviderStart(RUNTIME,"task-1","run-1",lease.fence());
+        assertNotNull(execution.getConversationProviderStartedAt());
+        assertEquals(lease.version(),execution.getConversationProviderLeaseVersion());
+        assertEquals(PersonalWorkspaceExecutionService.Reason.TASK_CONFLICT,
+                assertThrows(PersonalWorkspaceExecutionService.Failure.class,()->
+                        service.beginConversationProviderStart(RUNTIME,"task-1","run-1",lease.fence())).getReason());
+        assertEquals(PersonalWorkspaceExecutionService.Reason.TASK_CONFLICT,
+                assertThrows(PersonalWorkspaceExecutionService.Failure.class,()->
+                        service.claimConversationStart(RUNTIME,"task-1","run-1",commandId(),messageId())).getReason());
+        verify(rows).update(execution);
+    }
+
     @Test void statusVersionDriftAllowsCreateStartRenewAndReadWithLiveEpoch() throws Exception {
         root.setTaskVersion(9L);
         var command=new PersonalWorkspaceExecutionService.ConversationCreate(

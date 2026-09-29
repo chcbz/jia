@@ -670,6 +670,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 afterExecutionId=candidate.getExecutionId();
                 if (result.size()>=limit) continue;
                 if (!"CONVERSATION".equals(candidate.getExecutionMode())
+                        || candidate.getConversationProviderStartedAt()!=null
                         || !"QUEUED".equals(candidate.getExecutionState())
                         || !same(candidate.getTenantId(),scope.tenantId())
                         || !same(candidate.getClientId(),scope.clientId())
@@ -707,6 +708,9 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         requireStartCommand(candidate,commandId,messageId);
         return withConversationRoot(scope,taskId,runId,true,execution -> {
             requireStartCommand(execution,commandId,messageId);
+            // A previously admitted Provider call may be complete, in flight or outcome-unknown.
+            // Do not reissue it merely because the client or lease changed.
+            if (execution.getConversationProviderStartedAt()!=null) throw failure(Reason.TASK_CONFLICT);
             long now=System.currentTimeMillis();
             Long expiry=execution.getConversationLeaseExpiresAt();
             if (expiry!=null && expiry>now) {
@@ -735,6 +739,26 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             execution.setConversationLeaseExpiresAt(Math.addExact(System.currentTimeMillis(),CONVERSATION_LEASE_MILLIS));
             executions.update(execution);
             return conversationLease(execution);
+        });
+    }
+
+    /** Persist before any paid call, under the task-root/grant/execution lock. A lost ACK
+     * is outcome-unknown: neither the same lease nor a fresh runtime may pay twice. */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void beginConversationProviderStart(RuntimeScope scope, String taskId, String runId,
+            ConversationFence fence) {
+        requireConversationExecutionEnabled();
+        withConversationRoot(scope,taskId,runId,true,execution -> {
+            requireConversationFence(scope,execution,fence,false);
+            verifiedConversationInputs(scope,execution);
+            if (execution.getConversationProviderStartedAt()!=null ||
+                    execution.getConversationProviderLeaseVersion()!=null)
+                throw failure(Reason.TASK_CONFLICT);
+            execution.setConversationProviderStartedAt(System.currentTimeMillis())
+                    .setConversationProviderLeaseVersion(fence.version());
+            executions.update(execution);
+            return null;
         });
     }
 

@@ -69,6 +69,10 @@ class PersonalWorkspaceExecutionSchemaInitializerTest {
                 .contains("ADD CONSTRAINT chk_pwexo_publication_mapping"));
         assertTrue(statements.get(1).contains("uk_pwexi_file_version_scope"));
         assertTrue(statements.get(2).contains("chk_pwexo_commit"));
+        var provider=PersonalWorkspaceExecutionSchemaInitializer.conversationProviderStartMigrationStatement();
+        assertTrue(provider.contains("conversation_provider_started_at BIGINT DEFAULT NULL"));
+        assertTrue(provider.contains("chk_pwex_provider_start"));
+        assertTrue(provider.contains("execution_mode='CONVERSATION'"));
         var lease=PersonalWorkspaceExecutionSchemaInitializer.conversationLeaseMigrationStatement();
         assertTrue(lease.contains("conversation_lease_version BIGINT NOT NULL DEFAULT 0"));
         assertTrue(lease.contains("chk_pwex_conversation_lease"));

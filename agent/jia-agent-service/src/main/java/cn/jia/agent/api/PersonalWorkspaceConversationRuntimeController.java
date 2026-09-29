@@ -31,6 +31,7 @@ import java.util.Objects;
 @RequestMapping("/internal/agent/tasks")
 public final class PersonalWorkspaceConversationRuntimeController {
     private static final String CACHE_CONTROL = "private, no-store";
+    public record ProviderStartReceipt(boolean started) { }
     private final PersonalWorkspaceExecutionService executions;
 
     public PersonalWorkspaceConversationRuntimeController(PersonalWorkspaceExecutionService executions) {
@@ -61,6 +62,16 @@ public final class PersonalWorkspaceConversationRuntimeController {
             Authentication authentication) {
         noQuery(servletRequest);
         return ok(executions.renewConversationLease(scope(authentication),taskId,runId,fence(request)));
+    }
+
+    @PostMapping(value="/{taskId}/runs/{runId}/conversation/provider-start",
+            consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<ProviderStartReceipt> providerStart(@PathVariable String taskId,
+            @PathVariable String runId,@RequestBody FenceRequest request,
+            HttpServletRequest servletRequest,Authentication authentication) {
+        noQuery(servletRequest);
+        executions.beginConversationProviderStart(scope(authentication),taskId,runId,fence(request));
+        return ok(new ProviderStartReceipt(true));
     }
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/inputs",consumes=MediaType.APPLICATION_JSON_VALUE,

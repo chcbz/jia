@@ -22,6 +22,8 @@ public interface PersonalWorkspaceExecutionService {
     ConversationLease claimConversationStart(RuntimeScope scope, String taskId, String runId,
             String commandId, String messageId);
     ConversationLease renewConversationLease(RuntimeScope scope, String taskId, String runId, ConversationFence fence);
+    /** Irreversible one-shot Provider admission; an uncertain result must be reconciled, not re-generated. */
+    void beginConversationProviderStart(RuntimeScope scope, String taskId, String runId, ConversationFence fence);
     /** Server-verified source manifest under live task/grant and exact lease. No legacy /inputs fallback. */
     ConversationInputSnapshot conversationInputs(RuntimeScope scope, String taskId, String runId, ConversationFence fence);
     /** Runtime byte read; exact input ref must belong to this fenced execution and grant. */
