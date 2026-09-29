@@ -52,6 +52,7 @@ import cn.jia.agent.service.AgentSceneService;
 import cn.jia.agent.service.AgentScopePublicationCoordinator;
 import cn.jia.agent.service.AgentTaskEventWriter;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
+import cn.jia.agent.service.AgentTaskRequirementSnapshotService;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.util.JsonUtil;
@@ -102,6 +103,7 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -177,6 +179,15 @@ class AgentServiceImplTest extends BaseMockTest {
                 agentTaskMemberDao, legacyTaskCompatibilityService, agentTaskNoteDao, dialogueTemplateDao, eventPublisherProvider, taskServiceProvider,
                 apiKeyServiceProvider, sceneServiceProvider, scopePublicationCoordinator,
                 new AgentSceneFeatureFlags(true, true), mutationTransaction, taskEventWriter);
+        AgentTaskRequirementSnapshotService snapshots = mock(AgentTaskRequirementSnapshotService.class);
+        agentService.setRequirementSnapshots(snapshots);
+        org.mockito.Mockito.lenient().when(snapshots.captureOnCreate(any(),anyString(),anyString(),any()))
+                .thenAnswer(i -> {
+                    var scope=(cn.jia.agent.service.AgentTaskExecutionGrantService.Scope)i.getArgument(0);
+                    return new AgentTaskRequirementSnapshotService.Snapshot(
+                            scope.tenantId(),scope.clientId(),scope.ownerJiacn(),i.getArgument(1),
+                            1L,i.getArgument(2),i.getArgument(3),"a".repeat(64),"CREATE");
+                });
         org.mockito.Mockito.lenient().when(legacyTaskCompatibilityService.resolveAgentIds(
                         any(), any(), any(), any()))
                 .thenAnswer(invocation -> List.copyOf(invocation.<List<String>>getArgument(3)));
@@ -859,7 +870,7 @@ class AgentServiceImplTest extends BaseMockTest {
     }
 
     @Test
-    void duplicateCreateRootIsNoOpAndAllocatesNoPersistentEvent() {
+    void duplicateCreateRootWithoutOriginalSnapshotFailsClosedAndAllocatesNoPersistentEvent() {
         org.mockito.Mockito.doAnswer(invocation -> {
             String reservedTaskId = invocation.getArgument(2);
             AgentTaskMetaEntity existing = new AgentTaskMetaEntity()
@@ -876,9 +887,8 @@ class AgentServiceImplTest extends BaseMockTest {
 
         AgentTaskCreateDTO request = new AgentTaskCreateDTO();
         request.setTitle("duplicate");
-        AgentTaskDTO result = agentService.createTask(request);
+        assertThrows(IllegalStateException.class, () -> agentService.createTask(request));
 
-        assertEquals("duplicate", result.getTitle());
         verify(taskService, never()).create(any());
         verify(taskEventWriter, never()).append(any());
         verify(eventPublisherProvider, never()).getIfAvailable();

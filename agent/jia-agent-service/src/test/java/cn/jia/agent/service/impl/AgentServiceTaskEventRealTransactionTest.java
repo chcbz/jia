@@ -136,6 +136,7 @@ class AgentServiceTaskEventRealTransactionTest {
                 new AgentScopePublicationCoordinator(),
                 new AgentSceneFeatureFlags(false, false),
                 mutationTransaction, eventWriter);
+        raw.setRequirementSnapshots(new AgentTaskRequirementSnapshotServiceImpl(jdbc,mutationTransaction));
         service = transactionalProxy(raw);
     }
 
@@ -158,6 +159,7 @@ class AgentServiceTaskEventRealTransactionTest {
         assertEquals(0, count("agent_task_meta"));
         assertEquals(0, count("task_plan_fixture"));
         assertEquals(0, count("task_item_fixture"));
+        assertEquals(0, count("agent_task_requirement_snapshot"));
         verify(eventPublisher, never()).publishTaskEvent(any(), any());
 
         reset(eventWriter, eventPublisher);
@@ -169,6 +171,7 @@ class AgentServiceTaskEventRealTransactionTest {
         assertEquals(0, count("agent_task_meta"));
         assertEquals(0, count("task_plan_fixture"));
         assertEquals(0, count("task_item_fixture"));
+        assertEquals(0, count("agent_task_requirement_snapshot"));
         verify(eventPublisher, never()).publishTaskEvent(any(), any());
     }
 
@@ -193,6 +196,7 @@ class AgentServiceTaskEventRealTransactionTest {
                 "SELECT event_id FROM agent_task_event", String.class));
         assertEquals(0, count("task_plan_fixture"));
         assertEquals(0, count("task_item_fixture"));
+        assertEquals(0, count("agent_task_requirement_snapshot"));
         verify(eventWriter, never()).append(any());
         verify(eventPublisher, never()).publishTaskEvent(any(), any());
     }
@@ -206,7 +210,24 @@ class AgentServiceTaskEventRealTransactionTest {
                 "SELECT task_id FROM agent_task_meta", String.class));
         assertEquals(1, count("task_plan_fixture"));
         assertEquals(1, count("task_item_fixture"));
+        assertEquals(1, count("agent_task_requirement_snapshot"));
+        assertEquals("42",jdbc.queryForObject(
+                "SELECT task_id FROM agent_task_requirement_snapshot",String.class));
         verify(eventPublisher).publishTaskEvent("task_created", created);
+    }
+
+    @Test
+    void creationPreservesFullUnicodeSourceAcrossFinalPlanIdRekey() {
+        AgentTaskCreateDTO request=createRequest();
+        request.setTitle("a".repeat(29)+"🚀"+" untruncated title");
+        request.setDescription("b".repeat(199)+"🚀"+" complete original body");
+        assertEquals("42",service.createTask(request).getId());
+        assertEquals(request.getTitle(),jdbc.queryForObject(
+                "SELECT title FROM agent_task_requirement_snapshot WHERE task_id='42'",String.class));
+        assertEquals(request.getDescription(),jdbc.queryForObject(
+                "SELECT description FROM agent_task_requirement_snapshot WHERE task_id='42'",String.class));
+        assertEquals("a".repeat(29),jdbc.queryForObject(
+                "SELECT name FROM task_plan_fixture",String.class));
     }
 
     @Test
@@ -388,6 +409,23 @@ class AgentServiceTaskEventRealTransactionTest {
                     client_id VARCHAR(50) NOT NULL,
                     PRIMARY KEY (id),
                     UNIQUE (tenant_id, client_id, task_id)
+                )""");
+        jdbc.execute("""
+                CREATE TABLE agent_task_requirement_snapshot (
+                    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    tenant_id VARCHAR(50) NOT NULL,
+                    client_id VARCHAR(50) NOT NULL,
+                    owner_jiacn VARCHAR(50) NOT NULL,
+                    task_id VARCHAR(100) NOT NULL,
+                    revision BIGINT NOT NULL,
+                    confirmation_id VARCHAR(100) NOT NULL,
+                    task_version_at_confirmation BIGINT NOT NULL,
+                    title CLOB NOT NULL,
+                    description CLOB,
+                    content_sha256 VARCHAR(64) NOT NULL,
+                    source VARCHAR(20) NOT NULL,
+                    created_at BIGINT NOT NULL,
+                    UNIQUE (tenant_id,client_id,owner_jiacn,task_id,revision)
                 )""");
         jdbc.execute("""
                 CREATE TABLE task_plan_fixture (

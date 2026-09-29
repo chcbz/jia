@@ -5,6 +5,7 @@ import cn.jia.agent.entity.AgentTaskBountyBootstrapClaimDTO;
 import cn.jia.agent.entity.AgentTaskBountyBootstrapOutboxEntity;
 import cn.jia.agent.entity.AgentTaskBountyBootstrapReconcileDTO;
 import cn.jia.agent.service.AgentTaskExecutionGrantService;
+import cn.jia.agent.service.AgentTaskRequirementSnapshotService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -27,13 +28,35 @@ import static org.junit.jupiter.api.Assertions.*;
 class AgentTaskBountyBootstrapOutboxServiceImplTest {
     private final ObjectMapper json = new ObjectMapper();
     private final MemoryDao dao = new MemoryDao();
+    private final AgentTaskRequirementSnapshotService requirementSnapshots =
+            org.mockito.Mockito.mock(AgentTaskRequirementSnapshotService.class);
     private AgentTaskBountyBootstrapOutboxServiceImpl service;
 
     @BeforeEach
     void setUp() {
         service = new AgentTaskBountyBootstrapOutboxServiceImpl(dao, json,
-                new DirectPlatformTransactionManager());
+                new DirectPlatformTransactionManager(), requirementSnapshots);
         dao.insert(valid("owner", "action-1"));
+        org.mockito.Mockito.when(requirementSnapshots.read(
+                org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyLong())).thenAnswer(call -> {
+            AgentTaskExecutionGrantService.Scope scope = call.getArgument(0);
+            String taskId = call.getArgument(1);
+            long revision = call.getArgument(2);
+            return new AgentTaskRequirementSnapshotService.Snapshot(scope.tenantId(),scope.clientId(),
+                    scope.ownerJiacn(),taskId,revision,"Title","Original description","a".repeat(64),"CREATE");
+        });
+    }
+
+    @Test
+    void historicalIntentWithoutConfirmedRevisionNeverReachesChat() {
+        org.mockito.Mockito.when(requirementSnapshots.read(
+                org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyLong()))
+                .thenThrow(new IllegalStateException("No confirmed revision"));
+        assertNull(service.claimNextAvailable("chat-worker",1000));
+        assertEquals("DEAD",dao.rows.get("bootstrap-1").getStatus());
+        assertEquals("CORRUPT_BOOTSTRAP_INTENT",dao.rows.get("bootstrap-1").getLastErrorCode());
     }
 
     @Test
@@ -99,10 +122,35 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
                 first.claimAttempt(), AgentTaskBountyBootstrapReconcileDTO.Outcome.RETRYABLE_FAILURE,
                 null, null, "CHAT_TRANSACTION_RETRY"), 1100);
         assertEquals("RETRY", retry.status());
-        var second = service.claimNext(scope(), "chat-b", 1101);
+        assertNull(service.claimNext(scope(), "chat-b", 2099));
+        var second = service.claimNext(scope(), "chat-b", 2100);
         assertEquals(first.bootstrapId(), second.bootstrapId());
         assertEquals(first.claimAttempt() + 1, second.claimAttempt());
         assertTrue(second.outboxVersion() > first.outboxVersion());
+    }
+
+    @Test
+    void repeatedRetryUsesBoundedExponentialDelayWithoutTightPollOrTerminalReclaim() {
+        long now = 1_000;
+        for (int i = 1; i <= 11; i++) {
+            var claim = service.claimNextAvailable("worker", now);
+            assertNotNull(claim);
+            long reconciledAt = now + 1;
+            service.reconcile(scope(), new AgentTaskBountyBootstrapReconcileDTO(
+                    claim.bootstrapId(), claim.outboxVersion(), claim.leaseOwner(),
+                    claim.claimAttempt(), AgentTaskBountyBootstrapReconcileDTO.Outcome.RETRYABLE_FAILURE,
+                    null, null, "CHAT_TRANSACTION_RETRY"), reconciledAt);
+            long delay = Math.min(300_000L, 1_000L << Math.min(i - 1, 9));
+            assertEquals(reconciledAt + delay, dao.rows.get(claim.bootstrapId()).getNextRetryAt());
+            assertNull(service.claimNextAvailable("worker", reconciledAt + delay - 1));
+            now = reconciledAt + delay;
+        }
+        var claim = service.claimNextAvailable("worker", now);
+        service.reconcile(scope(), new AgentTaskBountyBootstrapReconcileDTO(
+                claim.bootstrapId(), claim.outboxVersion(), claim.leaseOwner(),
+                claim.claimAttempt(), AgentTaskBountyBootstrapReconcileDTO.Outcome.TERMINAL_FAILURE,
+                null, null, "CHAT_TERMINAL"), now + 1);
+        assertNull(service.claimNextAvailable("worker", now + 1));
     }
 
     @Test
@@ -191,7 +239,7 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
         concurrent.insert(valid("owner", "action-1"));
         concurrent.insert(valid("another-owner", "action-2").setBootstrapId("bootstrap-2"));
         var worker = new AgentTaskBountyBootstrapOutboxServiceImpl(concurrent, json,
-                new DirectPlatformTransactionManager());
+                new DirectPlatformTransactionManager(), requirementSnapshots);
         var executor = Executors.newSingleThreadExecutor();
         try {
             var first = executor.submit(() -> worker.claimNextAvailable("worker-1", 1000));

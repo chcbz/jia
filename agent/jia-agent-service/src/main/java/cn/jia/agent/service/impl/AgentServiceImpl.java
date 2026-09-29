@@ -62,6 +62,8 @@ import cn.jia.agent.service.AgentSceneService;
 import cn.jia.agent.service.AgentScopePublicationCoordinator;
 import cn.jia.agent.service.AgentTaskEventWriter;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
+import cn.jia.agent.service.AgentTaskRequirementSnapshotService;
+import cn.jia.agent.service.AgentTaskExecutionGrantService;
 import cn.jia.agent.service.HostingRentAdmissionService;
 import cn.jia.agent.service.funding.FundedBountyLegacyGuard;
 import cn.jia.agent.service.funding.FundedBountyService;
@@ -143,6 +145,12 @@ public class AgentServiceImpl implements AgentService {
     private final AgentPersonaBindingDao agentPersonaBindingDao;
     private AgentPersonaCatalogCache personaCatalogCache = new AgentPersonaCatalogCache();
     private final AgentTaskMetaDao agentTaskMetaDao;
+    private AgentTaskRequirementSnapshotService requirementSnapshots;
+
+    @Autowired
+    public void setRequirementSnapshots(AgentTaskRequirementSnapshotService snapshots) {
+        this.requirementSnapshots = Objects.requireNonNull(snapshots);
+    }
     private final AgentTaskMemberDao agentTaskMemberDao;
     private final AgentLegacyTaskCompatibilityService legacyTaskCompatibilityService;
     private final AgentTaskNoteDao agentTaskNoteDao;
@@ -1018,6 +1026,9 @@ public class AgentServiceImpl implements AgentService {
     @Transactional(rollbackFor = Exception.class)
     public AgentTaskDTO createTask(AgentTaskCreateDTO request) {
         require(request != null && !StringUtil.isBlank(request.getTitle()), "title is required");
+        // Validate full original Unicode and SQL MEDIUMTEXT capacity before lossy TaskPlan work.
+        AgentTaskRequirementSnapshotServiceImpl.validateOriginalInput(
+                request.getTitle(), request.getDescription());
         require(request.getGrossBountyAmountMicro() == null && request.getSettlementPolicy() == null
                         && request.getRequiredSkillRequirements() == null,
                 "funded task fields require the funded bounty endpoint");
@@ -1047,6 +1058,15 @@ public class AgentServiceImpl implements AgentService {
                     requireOwnedTaskProjection(
                             reservedRoot, tenantId, clientId, ownerJiacn, reservedTaskId);
                     if (!rootCreated) {
+                        // A pre-existing root cannot acquire a fabricated creation snapshot.
+                        if (requirementSnapshots == null)
+                            throw new IllegalStateException("Requirement snapshot writer is unavailable");
+                        var confirmed = requirementSnapshots.requireCurrent(
+                                new AgentTaskExecutionGrantService.Scope(tenantId,clientId,ownerJiacn),
+                                reservedTaskId,1);
+                        if (confirmed == null || !Objects.equals(confirmed.title(),request.getTitle())
+                                || !Objects.equals(confirmed.description(),request.getDescription()))
+                            throw new IllegalStateException("Task creation reservation conflicts with snapshot");
                         return taskCreateResult(reservedRoot, request);
                     }
 
@@ -1081,6 +1101,20 @@ public class AgentServiceImpl implements AgentService {
                         reservedRoot.setUpdateTime(rekeyedAt);
                     }
 
+                    // The plan is a lossy 30/200 projection; persist the original source before
+                    // the task creation event in the SAME owner-root transaction.
+                    if (requirementSnapshots == null)
+                        throw new IllegalStateException("Requirement snapshot writer is unavailable");
+                    var captured = requirementSnapshots.captureOnCreate(
+                            new AgentTaskExecutionGrantService.Scope(tenantId,clientId,ownerJiacn),
+                            taskRoot.getTaskId(),request.getTitle(),request.getDescription());
+                    if (captured == null || captured.revision()!=1
+                            || !tenantId.equals(captured.tenantId()) || !clientId.equals(captured.clientId())
+                            || !ownerJiacn.equals(captured.ownerJiacn())
+                            || !taskRoot.getTaskId().equals(captured.taskId())
+                            || !Objects.equals(request.getTitle(),captured.title())
+                            || !Objects.equals(request.getDescription(),captured.description()))
+                        throw new IllegalStateException("Original task requirement snapshot was not persisted");
                     AgentTaskDTO task = taskCreateResult(taskRoot, request);
                     appendTaskCreatedEvent(tenantId, clientId, taskRoot);
                     publishOptionalAfterCommit(
@@ -3367,7 +3401,10 @@ public class AgentServiceImpl implements AgentService {
         if (value == null || value.length() <= maxLength) {
             return value;
         }
-        return value.substring(0, maxLength);
+        int end=maxLength;
+        if (Character.isHighSurrogate(value.charAt(end-1))
+                && Character.isLowSurrogate(value.charAt(end))) end--;
+        return value.substring(0, end);
     }
 
     private void require(boolean condition, String message) {
