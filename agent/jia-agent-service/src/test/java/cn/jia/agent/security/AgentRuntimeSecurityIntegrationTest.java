@@ -388,7 +388,7 @@ class AgentRuntimeSecurityIntegrationTest {
                 .contentType("application/json").content(json)).andExpect(status().isForbidden());
         conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A).queryParam("token",fence.token())
                 .contentType("application/json").content(json)).andExpect(status().isBadRequest());
-        conversationMvc.perform(headers(post(path+"/../inputs"),A,"runtime-a",TOKEN_A)
+        conversationMvc.perform(headers(post(path+"/extra"),A,"runtime-a",TOKEN_A)
                 .contentType("application/json").content(json)).andExpect(status().isForbidden());
         verify(workspaceExecutions,times(1)).conversationInputs(scope,"task-a","run-a",fence);
         verifyNoMoreInteractions(workspaceExecutions);
