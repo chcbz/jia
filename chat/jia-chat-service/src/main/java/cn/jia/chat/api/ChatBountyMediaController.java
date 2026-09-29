@@ -12,6 +12,10 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -27,6 +31,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.Map;
 import java.util.Objects;
@@ -86,10 +91,13 @@ public class ChatBountyMediaController {
 
     private static String encode(String part) { return UriUtils.encodePathSegment(part, StandardCharsets.UTF_8); }
 
-    @GetMapping("/{requestId}/steps/{stepId}/outputs/{outputId}")
+    @RequestMapping(path = "/{requestId}/steps/{stepId}/outputs/{outputId}",
+            method = {RequestMethod.GET, RequestMethod.HEAD})
     public ResponseEntity<byte[]> content(@PathVariable String requestId, @PathVariable String stepId,
             @PathVariable String outputId, @RequestParam(defaultValue = "false") boolean download,
-            Authentication authentication) {
+            @RequestHeader(value = HttpHeaders.RANGE, required = false) String range,
+            @RequestHeader(value = HttpHeaders.IF_RANGE, required = false) String ifRange,
+            HttpServletRequest request, Authentication authentication) {
         if (!safeId(requestId) || !safeId(stepId) || !safeId(outputId)) throw unavailable();
         var allowed = authorize(requestId, stepId, authentication);
         var scope = allowed.scope();
@@ -104,14 +112,62 @@ public class ChatBountyMediaController {
         // Unsupported/misleading MIME is never rendered as active content in the browser.
         boolean inline = extension != null && !download;
         String filename = "output." + (extension == null ? "bin" : extension);
-        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+        byte[] bytes = output.bytes();
+        boolean head = "HEAD".equals(request.getMethod());
+        String etag = "\"" + output.sha256() + "\"";
+        var response = ResponseEntity.status(HttpStatus.OK).cacheControl(CacheControl.noStore())
                 .header(HttpHeaders.CONTENT_DISPOSITION, (inline ? "inline" : "attachment")
                         + "; filename=\"" + filename + "\"")
                 .header("X-Content-Type-Options", "nosniff")
-                .eTag("\"" + output.sha256() + "\"")
+                .header(HttpHeaders.ACCEPT_RANGES, "bytes")
+                .eTag(etag)
                 .contentType(inline ? MediaType.parseMediaType(output.contentMimeType())
-                        : MediaType.APPLICATION_OCTET_STREAM)
-                .contentLength(output.byteLength()).body(output.bytes());
+                        : MediaType.APPLICATION_OCTET_STREAM);
+        // Never interpret a Range before authenticating and verifying the committed bytes.
+        // A mismatched If-Range requests the full representation, not a stale partial result.
+        if (range != null && (ifRange == null || ifRange.equals(etag))) {
+            ByteRange wanted = singleRange(range, bytes.length);
+            if (wanted == null) return ResponseEntity.status(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+                    .cacheControl(CacheControl.noStore()).header("X-Content-Type-Options", "nosniff")
+                    .header(HttpHeaders.CONTENT_RANGE, "bytes */" + bytes.length)
+                    .header(HttpHeaders.ACCEPT_RANGES, "bytes").build();
+            int start = (int) wanted.start();
+            int endExclusive = (int) wanted.end() + 1;
+            return ResponseEntity.status(HttpStatus.PARTIAL_CONTENT).cacheControl(CacheControl.noStore())
+                    .header(HttpHeaders.CONTENT_DISPOSITION, (inline ? "inline" : "attachment")
+                            + "; filename=\"" + filename + "\"")
+                    .header("X-Content-Type-Options", "nosniff")
+                    .header(HttpHeaders.ACCEPT_RANGES, "bytes")
+                    .header(HttpHeaders.CONTENT_RANGE, "bytes " + start + "-" + wanted.end() + "/" + bytes.length)
+                    .eTag(etag)
+                    .contentType(inline ? MediaType.parseMediaType(output.contentMimeType())
+                            : MediaType.APPLICATION_OCTET_STREAM)
+                    .contentLength(endExclusive - start)
+                    .body(head ? null : Arrays.copyOfRange(bytes, start, endExclusive));
+        }
+        return response.contentLength(bytes.length).body(head ? null : bytes);
+    }
+
+    private record ByteRange(long start, long end) { }
+
+    /** Single byte range only; never allocate for unbounded or multi-part requests. */
+    private static ByteRange singleRange(String value, int size) {
+        if (size < 1 || value == null || !value.startsWith("bytes=")) return null;
+        String spec = value.substring("bytes=".length());
+        if (spec.indexOf(',') >= 0 || !spec.matches("(?:[0-9]+-[0-9]*|-[0-9]+)")) return null;
+        int dash = spec.indexOf('-');
+        try {
+            if (dash == 0) {
+                long suffix = Long.parseLong(spec.substring(1));
+                if (suffix < 1) return null;
+                return new ByteRange(Math.max(0L, (long) size - suffix), size - 1L);
+            }
+            long start = Long.parseLong(spec.substring(0, dash));
+            if (start >= size) return null;
+            long end = dash == spec.length() - 1 ? size - 1L
+                    : Math.min(Long.parseLong(spec.substring(dash + 1)), size - 1L);
+            return end < start ? null : new ByteRange(start, end);
+        } catch (NumberFormatException invalid) { return null; }
     }
 
     private Authorized authorize(String requestId, String stepId, Authentication authentication) {
