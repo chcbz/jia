@@ -285,13 +285,16 @@ class PersonalWorkspaceConversationExecutionTest {
 
     @Test void nativeConversationInboxSqlHasByteExactOwnerTargetModeAndStableOrder() throws Exception {
         var select=cn.jia.agent.mapper.PersonalWorkspaceExecutionMapper.class.getMethod(
-                        "listQueuedConversationsByTarget",String.class,String.class,String.class,String.class,int.class)
+                        "listQueuedConversationsByTarget",String.class,String.class,String.class,String.class,Long.class,String.class,int.class)
                 .getAnnotation(org.apache.ibatis.annotations.Select.class);
         assertNotNull(select);
         String sql=String.join(" ",select.value());
         assertTrue(sql.contains("execution_mode='CONVERSATION'"));
         assertTrue(sql.contains("execution_state='QUEUED'"));
-        assertTrue(sql.contains("ORDER BY created_at ASC, execution_id ASC LIMIT #{limit}"));
+        assertTrue(sql.contains("ORDER BY created_at ASC, CAST(execution_id AS BINARY) ASC LIMIT #{limit}"));
+        assertTrue(sql.contains("created_at &gt; #{afterCreatedAt}"));
+        assertTrue(sql.contains("CAST(execution_id AS BINARY) &gt; CAST(#{afterExecutionId} AS BINARY)"));
+        assertTrue(sql.contains("<if test='afterCreatedAt != null and afterExecutionId != null'>"));
         for (String key:List.of("tenant_id","client_id","owner_jiacn","target_agent_id","execution_mode")) {
             assertTrue(sql.contains("CAST("+key+" AS BINARY)"),key);
             assertTrue(sql.contains("OCTET_LENGTH("+key+")"),key);
@@ -299,12 +302,13 @@ class PersonalWorkspaceConversationExecutionTest {
     }
 
     @Test void nativeConversationInboxIsClosedOffByDefaultAndScopedToLiveGrant() {
-        when(rows.listQueuedConversationsByTarget("0","client","owner","agent",16))
+        execution.setCreatedAt(100L);
+        when(rows.listQueuedConversationsByTarget("0","client","owner","agent",null,null,16))
                 .thenReturn(List.of(execution));
         assertEquals(PersonalWorkspaceExecutionService.Reason.CAPABILITY_UNAVAILABLE,assertThrows(
                 PersonalWorkspaceExecutionService.Failure.class,
                 () -> service.runtimeConversationCommands(RUNTIME,16)).getReason());
-        verify(rows,never()).listQueuedConversationsByTarget(any(),any(),any(),any(),anyInt());
+        verify(rows,never()).listQueuedConversationsByTarget(any(),any(),any(),any(),any(),any(),anyInt());
         enable();
         var commands=service.runtimeConversationCommands(RUNTIME,16);
         assertEquals(1,commands.size());
@@ -321,6 +325,73 @@ class PersonalWorkspaceConversationExecutionTest {
         assertTrue(service.runtimeConversationCommands(RUNTIME,16).isEmpty());
         verify(rows,never()).update(any());
 
+    }
+
+    @Test void sixteenRevokedHeadsDoNotStarveSeventeenthOwnedCommandAtSameTimestamp() {
+        enable();
+        var revoked=new java.util.ArrayList<PersonalWorkspaceExecutionEntity>();
+        for (int i=0;i<16;i++) {
+            var row=new PersonalWorkspaceExecutionEntity().setExecutionId("exec-"+String.format("%02d",i))
+                    .setTaskId("task-1").setRunId("run-"+i).setCreatedAt(100L)
+                    .setExecutionMode("CONVERSATION").setExecutionState("QUEUED")
+                    .setTargetAgentId("agent").setTaskGrantId("grant-revoked")
+                    .setTaskGrantVersion(1L).setAssignmentRevision(7L)
+                    .setPermittedOperation("GENERATE_IMAGE");
+            row.setTenantId("0");row.setClientId("client");row.setOwnerJiacn("owner");
+            revoked.add(row);
+        }
+        execution.setExecutionId("exec-16").setRunId("run-16").setCreatedAt(100L);
+        when(rows.listQueuedConversationsByTarget("0","client","owner","agent",null,null,16))
+                .thenReturn(revoked);
+        when(rows.listQueuedConversationsByTarget("0","client","owner","agent",100L,"exec-15",16))
+                .thenReturn(List.of(execution));
+        when(rows.findByTaskRun(eq("0"),eq("client"),eq("owner"),eq("task-1"),anyString()))
+                .thenAnswer(i -> "run-16".equals(i.getArgument(4)) ? execution :
+                        revoked.stream().filter(row -> row.getRunId().equals(i.getArgument(4))).findFirst().orElse(null));
+        when(grants.admit(any(),eq("task-1"),eq("grant-revoked"),anyLong(),anyLong(),any(),any(),eq(true)))
+                .thenThrow(new IllegalStateException("revoked"));
+        var result=service.runtimeConversationCommands(RUNTIME,16);
+        assertEquals(1,result.size());
+        assertEquals("pwe_cmd_"+sha("command\nexec-16".getBytes(StandardCharsets.UTF_8)),result.getFirst().commandId());
+        verify(rows).listQueuedConversationsByTarget("0","client","owner","agent",100L,"exec-15",16);
+        verify(rows,never()).update(any());
+        verifyNoInteractions(writes);
+    }
+
+    @Test void hostileScopeRowCannotLeakAndRepeatedCursorFailsClosed() {
+        enable();
+        var foreignRows=new java.util.ArrayList<PersonalWorkspaceExecutionEntity>();
+        for (int i=0;i<4;i++) {
+            var row=new PersonalWorkspaceExecutionEntity().setExecutionId("exec-foreign-"+i)
+                    .setTaskId("foreign-task").setRunId("foreign-run").setCreatedAt(100L+i)
+                    .setExecutionMode("CONVERSATION").setExecutionState("QUEUED")
+                    .setTargetAgentId(i==3 ? "other-agent" : "agent");
+            row.setTenantId(i==0 ? "other-tenant" : "0");
+            row.setClientId(i==1 ? "other-client" : "client");
+            row.setOwnerJiacn(i==2 ? "other-owner" : "owner");
+            foreignRows.add(row);
+        }
+        execution.setCreatedAt(104L);
+        var page=new java.util.ArrayList<>(foreignRows);
+        page.add(execution);
+        when(rows.listQueuedConversationsByTarget("0","client","owner","agent",null,null,16))
+                .thenReturn(page);
+        assertEquals(List.of("task-1"),service.runtimeConversationCommands(RUNTIME,16).stream()
+                .map(PersonalWorkspaceExecutionService.ConversationRuntimeCommand::taskId).toList());
+        verify(rows,never()).findByTaskRun(any(),any(),any(),eq("foreign-task"),any());
+        var repeated=new java.util.ArrayList<PersonalWorkspaceExecutionEntity>();
+        for(int i=0;i<16;i++) {
+            var row=new PersonalWorkspaceExecutionEntity().setExecutionId("page-"+String.format("%02d",i)).setCreatedAt(200L)
+                    .setExecutionMode("CONVERSATION").setExecutionState("QUEUED").setTargetAgentId("other");
+            repeated.add(row);
+        }
+        when(rows.listQueuedConversationsByTarget("0","client","owner","agent",null,null,16))
+                .thenReturn(repeated);
+        when(rows.listQueuedConversationsByTarget("0","client","owner","agent",200L,"page-15",16))
+                .thenReturn(List.of(repeated.get(15)));
+        assertEquals(PersonalWorkspaceExecutionService.Reason.TASK_CONFLICT,assertThrows(
+                PersonalWorkspaceExecutionService.Failure.class,
+                () -> service.runtimeConversationCommands(RUNTIME,16)).getReason());
     }
 
     @Test void defaultOffAndLegacyUnfencedRuntimeLaneNeverStartsConversation() {

@@ -83,10 +83,14 @@ public class PersonalWorkspaceExecutionDaoImpl implements PersonalWorkspaceExecu
                 Math.max(1, Math.min(limit, 16)));
     }
     @Override public List<PersonalWorkspaceExecutionEntity> listQueuedConversationsByTarget(
-            String tenantId, String clientId, String ownerJiacn, String targetAgentId, int limit) {
+            String tenantId, String clientId, String ownerJiacn, String targetAgentId,
+            Long afterCreatedAt, String afterExecutionId, int limit) {
         scope(tenantId, clientId, ownerJiacn); id(targetAgentId, "targetAgentId");
+        if ((afterCreatedAt == null) != (afterExecutionId == null)
+                || (afterCreatedAt != null && (afterCreatedAt < 0 || afterExecutionId.isBlank())))
+            throw new IllegalArgumentException("invalid conversation inbox cursor");
         return executions.listQueuedConversationsByTarget(tenantId, clientId, ownerJiacn, targetAgentId,
-                Math.max(1, Math.min(limit, 16)));
+                afterCreatedAt, afterExecutionId, Math.max(1, Math.min(limit, 16)));
     }
     @Override public void insert(PersonalWorkspaceExecutionEntity execution) { init(execution); executions.insert(execution); }
     @Override public void update(PersonalWorkspaceExecutionEntity execution) { execution.setUpdateTime(DateUtil.nowTime()); executions.updateById(execution); }

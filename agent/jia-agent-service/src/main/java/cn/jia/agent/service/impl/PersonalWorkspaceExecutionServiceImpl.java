@@ -594,32 +594,50 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     public List<ConversationRuntimeCommand> runtimeConversationCommands(RuntimeScope scope,int limit) {
         requireConversationExecutionEnabled();validateRuntimeScope(scope);
         if (limit<1 || limit>16) throw failure(Reason.BAD_REQUEST);
-        var candidates=executions.listQueuedConversationsByTarget(scope.tenantId(),scope.clientId(),
-                scope.ownerJiacn(),scope.agentId(),limit);
-        if (candidates==null) throw failure(Reason.NOT_FOUND);
         List<ConversationRuntimeCommand> result=new ArrayList<>();
-        for (var candidate:candidates) {
-            if (candidate==null || !"CONVERSATION".equals(candidate.getExecutionMode())
-                    || !"QUEUED".equals(candidate.getExecutionState())
-                    || !same(candidate.getTenantId(),scope.tenantId())
-                    || !same(candidate.getClientId(),scope.clientId())
-                    || !same(candidate.getOwnerJiacn(),scope.ownerJiacn())
-                    || !same(candidate.getTargetAgentId(),scope.agentId())) continue;
-            try {
-                result.add(withConversationRoot(scope,candidate.getTaskId(),candidate.getRunId(),false,
-                        execution -> {
-                            if (!same(candidate.getExecutionId(),execution.getExecutionId()))
-                                throw failure(Reason.NOT_FOUND);
-                            String seed=execution.getExecutionId();
-                            return new ConversationRuntimeCommand(1,execution.getTaskId(),execution.getRunId(),
-                                    execution.getConversationId(),"pwe_cmd_"+plainSha("command\n"+seed),
-                                    "pwe_msg_"+plainSha("message\n"+seed),execution.getInstruction(),
-                                    execution.getOutputContentMimeType(),"output_1");
-                        }));
-            } catch (Failure stale) { // One revoked candidate must not suppress other owned work.
-                if (stale.getReason()!=Reason.NOT_FOUND && stale.getReason()!=Reason.GRANT_REVOKED
-                        && stale.getReason()!=Reason.TASK_CONFLICT) throw stale;
+        Long afterCreatedAt=null;
+        String afterExecutionId=null;
+        while (result.size()<limit) {
+            var candidates=executions.listQueuedConversationsByTarget(scope.tenantId(),scope.clientId(),
+                    scope.ownerJiacn(),scope.agentId(),afterCreatedAt,afterExecutionId,16);
+            if (candidates==null) throw failure(Reason.NOT_FOUND);
+            if (candidates.isEmpty()) break;
+            if (candidates.size()>16) throw failure(Reason.TASK_CONFLICT);
+            for (var candidate:candidates) {
+                // Advance on raw rows, including revoked ones; neither an invalid head nor
+                // equal timestamps may indefinitely hide a later authorized command.
+                if (candidate==null || candidate.getCreatedAt()==null || candidate.getCreatedAt()<0
+                        || !safeId(candidate.getExecutionId(),100)
+                        || (afterCreatedAt!=null && (candidate.getCreatedAt()<afterCreatedAt
+                            || (candidate.getCreatedAt().equals(afterCreatedAt)
+                                && compareUtf8(candidate.getExecutionId(),afterExecutionId)<=0))))
+                    throw failure(Reason.TASK_CONFLICT);
+                afterCreatedAt=candidate.getCreatedAt();
+                afterExecutionId=candidate.getExecutionId();
+                if (result.size()>=limit) continue;
+                if (!"CONVERSATION".equals(candidate.getExecutionMode())
+                        || !"QUEUED".equals(candidate.getExecutionState())
+                        || !same(candidate.getTenantId(),scope.tenantId())
+                        || !same(candidate.getClientId(),scope.clientId())
+                        || !same(candidate.getOwnerJiacn(),scope.ownerJiacn())
+                        || !same(candidate.getTargetAgentId(),scope.agentId())) continue;
+                try {
+                    result.add(withConversationRoot(scope,candidate.getTaskId(),candidate.getRunId(),false,
+                            execution -> {
+                                if (!same(candidate.getExecutionId(),execution.getExecutionId()))
+                                    throw failure(Reason.NOT_FOUND);
+                                String seed=execution.getExecutionId();
+                                return new ConversationRuntimeCommand(1,execution.getTaskId(),execution.getRunId(),
+                                        execution.getConversationId(),"pwe_cmd_"+plainSha("command\n"+seed),
+                                        "pwe_msg_"+plainSha("message\n"+seed),execution.getInstruction(),
+                                        execution.getOutputContentMimeType(),"output_1");
+                            }));
+                } catch (Failure stale) { // One revoked candidate must not suppress other owned work.
+                    if (stale.getReason()!=Reason.NOT_FOUND && stale.getReason()!=Reason.GRANT_REVOKED
+                            && stale.getReason()!=Reason.TASK_CONFLICT) throw stale;
+                }
             }
+            if (candidates.size()<16) break;
         }
         return List.copyOf(result);
     }

@@ -75,6 +75,7 @@ public interface PersonalWorkspaceExecutionMapper extends BaseMapper<PersonalWor
             @Param("limit") int limit);
 
     @Select("""
+            <script>
             SELECT * FROM agent_personal_workspace_execution
              WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
                AND target_agent_id=#{targetAgentId} AND execution_state='QUEUED'
@@ -89,12 +90,19 @@ public interface PersonalWorkspaceExecutionMapper extends BaseMapper<PersonalWor
                AND OCTET_LENGTH(target_agent_id)=OCTET_LENGTH(#{targetAgentId})
                AND CAST(execution_mode AS BINARY)=CAST('CONVERSATION' AS BINARY)
                AND OCTET_LENGTH(execution_mode)=OCTET_LENGTH('CONVERSATION')
-             ORDER BY created_at ASC, execution_id ASC LIMIT #{limit}
+            <if test='afterCreatedAt != null and afterExecutionId != null'>
+               AND (created_at &gt; #{afterCreatedAt}
+                    OR (created_at=#{afterCreatedAt}
+                        AND CAST(execution_id AS BINARY) &gt; CAST(#{afterExecutionId} AS BINARY)))
+            </if>
+             ORDER BY created_at ASC, CAST(execution_id AS BINARY) ASC LIMIT #{limit}
+            </script>
             """)
     java.util.List<PersonalWorkspaceExecutionEntity> listQueuedConversationsByTarget(
             @Param("tenantId") String tenantId, @Param("clientId") String clientId,
             @Param("ownerJiacn") String ownerJiacn, @Param("targetAgentId") String targetAgentId,
-            @Param("limit") int limit);
+            @Param("afterCreatedAt") Long afterCreatedAt,
+            @Param("afterExecutionId") String afterExecutionId, @Param("limit") int limit);
 
     @Select("""
             SELECT * FROM agent_personal_workspace_execution
