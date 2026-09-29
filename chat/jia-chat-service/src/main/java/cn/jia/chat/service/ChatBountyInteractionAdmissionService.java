@@ -97,27 +97,8 @@ public class ChatBountyInteractionAdmissionService {
         ChatConversationEntity observed = conversations.findScopedById(owner, client, conversationId);
         requireDiscussion(observed, tenantId, owner, client, intent.taskId(), conversationId);
         ChatRequestEntity prior = deliberation.findRequest(tenantId, owner, client, requestId);
-        if (prior != null) {
-            if (!digest.equals(prior.getRequestDigest())
-                    || !conversationId.equals(prior.getConversationId())
-                    || !Objects.equals(observed.getLifecycleGeneration(), prior.getConversationGeneration())) {
-                throw conflict("Idempotency key was already used for another interaction");
-            }
-            ChatInteractionStepStore.Step recorded = steps.findStep(tenantId, owner, client, requestId, 1, 1);
-            if (recorded == null || !stepId.equals(recorded.stepId())
-                    || !intent.taskId().equals(recorded.taskId())
-                    || recorded.assignmentRevision() != intent.expectedAssignmentRevision()) {
-                throw unavailable();
-            }
-            var link = "EXECUTE".equals(recorded.kind())
-                    ? steps.findLink(tenantId, owner, client, stepId) : null;
-            if ("EXECUTE".equals(recorded.kind()) && (link == null
-                    || !executionIntentId.equals(link.executionIntentId()))) throw unavailable();
-            return new Admission(requestId, Long.toString(prior.getUserMessageId()), stepId,
-                    prior.getAggregateState(), prior.getStateVersion(),
-                    deliberation.eventHighWatermark(tenantId, owner, client, conversationId,
-                            observed.getLifecycleGeneration()), true);
-        }
+        if (prior != null) return replay(prior, digest, requestId, stepId, executionIntentId,
+                tenantId, owner, client, conversationId, observed.getLifecycleGeneration(), intent);
         List<String> targets = scopeService.parsePersistedTargetAgentIds(observed.getTargetAgentIds());
         if (targets.size() != 1) throw unavailable();
         String targetId = targets.getFirst();
@@ -143,18 +124,8 @@ public class ChatBountyInteractionAdmissionService {
         // The binding and conversation row lock serialize the same-key insert. The second
         // request must reconcile instead of inserting a second billable intent.
         prior = deliberation.findRequest(tenantId, owner, client, requestId);
-        if (prior != null) {
-            if (!digest.equals(prior.getRequestDigest()) || !conversationId.equals(prior.getConversationId()))
-                throw conflict("Idempotency key conflicts with an existing interaction");
-            var recorded = steps.findStep(tenantId, owner, client, requestId, 1, 1);
-            var link = steps.findLink(tenantId, owner, client, stepId);
-            if (recorded == null || !stepId.equals(recorded.stepId()) || link == null
-                    || !executionIntentId.equals(link.executionIntentId())) throw unavailable();
-            return new Admission(requestId, Long.toString(prior.getUserMessageId()), stepId,
-                    prior.getAggregateState(), prior.getStateVersion(),
-                    deliberation.eventHighWatermark(tenantId, owner, client, conversationId,
-                            locked.getLifecycleGeneration()), true);
-        }
+        if (prior != null) return replay(prior, digest, requestId, stepId, executionIntentId,
+                tenantId, owner, client, conversationId, locked.getLifecycleGeneration(), intent);
         long now = System.currentTimeMillis();
         String inputDigest = sha(CanonicalContextJson.write(Map.of(
                 "taskId", intent.taskId(), "assignmentRevision", intent.expectedAssignmentRevision(),
@@ -216,6 +187,35 @@ public class ChatBountyInteractionAdmissionService {
         }
         return new Admission(requestId, Long.toString(message.getId()), stepId,
                 "PLANNING", 0L, event.getEventSequence(), false);
+    }
+
+    private Admission replay(ChatRequestEntity prior, String digest, String requestId,
+            String stepId, String executionIntentId, String tenantId, String owner, String client,
+            String conversationId, long generation, Intent intent) {
+        if (!digest.equals(prior.getRequestDigest()) || !conversationId.equals(prior.getConversationId())
+                || !Objects.equals(generation, prior.getConversationGeneration())
+                || !Objects.equals(prior.getRequestRevision(), 1L)) {
+            throw conflict("Idempotency key was already used for another interaction");
+        }
+        var recorded = steps.findStep(tenantId, owner, client, requestId, 1, 1);
+        String kind = "INSPECT_INPUTS".equals(intent.operation()) ? "INSPECT" : "EXECUTE";
+        if (recorded == null || !stepId.equals(recorded.stepId())
+                || !kind.equals(recorded.kind()) || !intent.taskId().equals(recorded.taskId())
+                || recorded.assignmentRevision() != intent.expectedAssignmentRevision()
+                || !conversationId.equals(recorded.conversationId())
+                || generation != recorded.conversationGeneration()
+                || !tenantId.equals(recorded.tenantId()) || !owner.equals(recorded.ownerJiacn())
+                || !client.equals(recorded.clientId()) || prior.getUserMessageId() == null
+                || prior.getStateVersion() == null || prior.getAggregateState() == null) throw unavailable();
+        if ("EXECUTE".equals(kind)) {
+            var link = steps.findLink(tenantId, owner, client, stepId);
+            if (link == null || !executionIntentId.equals(link.executionIntentId())
+                    || !stepId.equals(link.stepId()) || !tenantId.equals(link.tenantId())
+                    || !owner.equals(link.ownerJiacn()) || !client.equals(link.clientId())) throw unavailable();
+        }
+        return new Admission(requestId, Long.toString(prior.getUserMessageId()), stepId,
+                prior.getAggregateState(), prior.getStateVersion(),
+                deliberation.eventHighWatermark(tenantId, owner, client, conversationId, generation), true);
     }
 
     private static void requireDiscussion(ChatConversationEntity conversation, String tenantId,

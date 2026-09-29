@@ -9,6 +9,7 @@ import cn.jia.chat.deliberation.ChatConversationEventEntity;
 import cn.jia.chat.deliberation.ChatDeliberationDao;
 import cn.jia.chat.deliberation.ChatDeliberationStates;
 import cn.jia.chat.deliberation.ChatDispatchOutboxEntity;
+import cn.jia.chat.deliberation.ChatInteractionStepStore;
 import cn.jia.chat.deliberation.ChatRequestEntity;
 import cn.jia.chat.deliberation.ChatTurnEntity;
 import cn.jia.chat.deliberation.InteractionRoute;
@@ -17,6 +18,7 @@ import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
 import cn.jia.core.util.JsonUtil;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
@@ -55,6 +57,14 @@ public class ChatDeliberationService {
     private final ChatConversationDao conversationDao;
     private final ChatMessageDao messageDao;
     private final AgentService agentService;
+    private ChatInteractionStepStore interactionSteps;
+
+    // Retain the existing constructor for legacy tests and integrations. In production the
+    // scoped store is injected, so durable v2 requests can be read from the same GET endpoint.
+    @Autowired
+    public void setInteractionSteps(ChatInteractionStepStore interactionSteps) {
+        this.interactionSteps = interactionSteps;
+    }
 
     public ChatDeliberationService(ChatDeliberationDao dao, ChatConversationDao conversationDao,
             ChatMessageDao messageDao, AgentService agentService) {
@@ -1223,9 +1233,55 @@ public class ChatDeliberationService {
     }
 
     private RequestView requestView(ChatRequestEntity request, List<ChatTurnEntity> turns) {
+        List<StepView> scopedSteps = interactionStepViews(request);
         return new RequestView(request.getRequestId(), Long.toString(request.getRequestRevision()), request.getConversationId(),
                 Long.toString(request.getConversationGeneration()), Long.toString(request.getUserMessageId()),
-                request.getAggregateState(), Long.toString(request.getStateVersion()), turns.stream().map(this::turnView).toList());
+                request.getAggregateState(), Long.toString(request.getStateVersion()),
+                turns.stream().map(this::turnView).toList(), scopedSteps);
+    }
+
+    private List<StepView> interactionStepViews(ChatRequestEntity request) {
+        if (interactionSteps == null) {
+            if ("PLANNING".equals(request.getAggregateState())) throw persistence("Interaction steps unavailable");
+            return List.of(); // Old CHAT requests and existing manual service clients.
+        }
+        List<ChatInteractionStepStore.Step> candidates = interactionSteps.findSteps(
+                request.getTenantId(), request.getOwnerJiacn(), request.getClientId(),
+                request.getRequestId(), request.getRequestRevision());
+        if (candidates == null || candidates.isEmpty()) {
+            if ("PLANNING".equals(request.getAggregateState())) throw persistence("Interaction steps unavailable");
+            return List.of();
+        }
+        List<StepView> result = new ArrayList<>(candidates.size());
+        for (ChatInteractionStepStore.Step step : candidates) {
+            if (step == null || !Objects.equals(request.getConversationId(), step.conversationId())
+                    || !Objects.equals(request.getConversationGeneration(), step.conversationGeneration())
+                    || !Objects.equals(request.getRequestId(), step.requestId())
+                    || !Objects.equals(request.getRequestRevision(), step.requestRevision())
+                    || !Objects.equals(request.getTenantId(), step.tenantId())
+                    || !Objects.equals(request.getOwnerJiacn(), step.ownerJiacn())
+                    || !Objects.equals(request.getClientId(), step.clientId())
+                    || !Set.of("EXECUTE", "INSPECT", "CHAT").contains(step.kind())) {
+                throw persistence("Interaction step scope mismatch");
+            }
+            ChatInteractionStepStore.ExecutionLink link = "EXECUTE".equals(step.kind())
+                    ? interactionSteps.findLink(request.getTenantId(), request.getOwnerJiacn(),
+                            request.getClientId(), step.stepId()) : null;
+            if ("EXECUTE".equals(step.kind()) && (link == null
+                    || !Objects.equals(step.stepId(), link.stepId())
+                    || !Objects.equals(request.getTenantId(), link.tenantId())
+                    || !Objects.equals(request.getOwnerJiacn(), link.ownerJiacn())
+                    || !Objects.equals(request.getClientId(), link.clientId()))) {
+                throw persistence("Interaction execution link unavailable");
+            }
+            result.add(new StepView(step.stepId(), Long.toString(step.stepNumber()), step.taskId(),
+                    Long.toString(step.assignmentRevision()), step.targetAgentId(),
+                    step.kind(), step.state(), Long.toString(step.stateVersion()),
+                    link == null ? null : link.executionIntentId(),
+                    link == null ? null : link.executionId(),
+                    link == null ? null : link.state()));
+        }
+        return List.copyOf(result);
     }
 
     private TurnView turnView(ChatTurnEntity turn) {
@@ -1331,7 +1387,10 @@ public class ChatDeliberationService {
             String eventId, ChatTurnEntity turn, ChatConversationEventEntity event) { }
     public record RequestView(String requestId, String requestRevision, String conversationId,
             String conversationGeneration, String userMessageId, String state, String stateVersion,
-            List<TurnView> turns) { }
+            List<TurnView> turns, List<StepView> steps) { }
+    public record StepView(String stepId, String stepNumber, String taskId,
+            String assignmentRevision, String targetAgentId, String kind, String state,
+            String stateVersion, String executionIntentId, String executionId, String executionState) { }
     public record TurnView(String turnId, String requestId, String requestRevision, String conversationId,
             String conversationGeneration, String targetAgentId, String contextSnapshotId,
             String dispatchId, String route, String state, String stateVersion, String lastDeltaSeq,

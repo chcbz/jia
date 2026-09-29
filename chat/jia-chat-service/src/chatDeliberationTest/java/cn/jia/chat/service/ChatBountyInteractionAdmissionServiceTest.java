@@ -122,6 +122,19 @@ class ChatBountyInteractionAdmissionServiceTest {
         verify(steps, times(1)).insertLink(any());
     }
 
+    @Test void corruptReplayRevisionNeverReturnsAnUnrelatedRequest() {
+        authorized();
+        var admitted = admit("same-key");
+        var persisted = org.mockito.ArgumentCaptor.forClass(ChatRequestEntity.class);
+        verify(deliberation).insertRequest(persisted.capture());
+        persisted.getValue().setRequestRevision(2L);
+        when(deliberation.findRequest("0", "owner", "client", admitted.requestId()))
+                .thenReturn(persisted.getValue());
+        assertEquals(ChatDeliberationException.Reason.CONFLICT,
+                assertThrows(ChatDeliberationException.class, () -> admit("same-key")).reason());
+        verify(messages, times(1)).insertScoped(anyString(), anyString(), any());
+    }
+
     @Test void sameKeyDifferentContentIsConflictBeforeGrantOrWrite() {
         authorized();
         var admitted = admit("same-key");

@@ -60,7 +60,13 @@ public class ChatBountyInteractionController {
                     "Unsupported bounty interaction proposal");
         };
         String tenantId = tenants.resolve(authentication);
-        var sender = identities.resolve(EsContextHolder.getContext());
+        cn.jia.chat.service.ServerResolvedSender sender;
+        try {
+            sender = identities.resolve(EsContextHolder.getContext());
+        } catch (IllegalStateException unavailableIdentity) {
+            throw new ChatDeliberationException(ChatDeliberationException.Reason.NOT_FOUND_OR_FORBIDDEN,
+                    "Bounty discussion is unavailable");
+        }
         var admitted = admissions.admit(tenantId, sender, conversationId, idempotencyKey,
                 new ChatBountyInteractionAdmissionService.Intent(request.taskId(),
                         request.expectedAssignmentRevision(), request.content(), operation,
