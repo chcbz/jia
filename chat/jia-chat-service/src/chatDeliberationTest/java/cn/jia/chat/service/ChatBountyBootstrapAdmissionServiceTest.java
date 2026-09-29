@@ -104,6 +104,7 @@ class ChatBountyBootstrapAdmissionServiceTest {
         verify(messages).insertScoped(eq("0"), eq("client"), message.capture());
         assertEquals("画一只鸟\n\n蓝色羽毛", message.getValue().getContent());
         assertFalse(message.getValue().getMetadata().contains("/home/"));
+        assertTrue(message.getValue().getMetadata().contains("\"permittedOperation\":\"GENERATE_IMAGE\""));
         var request = org.mockito.ArgumentCaptor.forClass(ChatRequestEntity.class);
         verify(deliberation).insertRequest(request.capture());
         assertEquals("PLANNING", request.getValue().getAggregateState());

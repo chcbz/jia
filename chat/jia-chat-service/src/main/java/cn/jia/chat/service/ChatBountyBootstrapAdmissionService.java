@@ -187,6 +187,9 @@ public class ChatBountyBootstrapAdmissionService {
         metadata.put("referenceSummaries", references);
         metadata.put("referenceSummarySha256", referenceHash);
         metadata.put("targetAgentId", claim.targetAgentId());
+        // Persist the server-authorized operation for later exact intent reconstruction.
+        // The request/step digest still binds grant, revision and reference summaries.
+        metadata.put("permittedOperation", claim.permittedOperation());
         metadata.put("interactionMode", "INSPECT_INPUTS".equals(claim.permittedOperation())
                 ? "INSPECT" : "EXECUTE");
         ChatMessageEntity message = new ChatMessageEntity().setConversationId(discussion.conversationId())

@@ -84,6 +84,7 @@ class ChatBountyInteractionAdmissionServiceTest {
         var user = org.mockito.ArgumentCaptor.forClass(ChatMessageEntity.class);
         verify(messages).insertScoped(eq("0"), eq("client"), user.capture());
         assertEquals("把鸟的羽毛改成蓝色", user.getValue().getContent());
+        assertTrue(user.getValue().getMetadata().contains("\"permittedOperation\":\"EDIT_IMAGE\""));
         assertEquals("Human", user.getValue().getSenderName());
         var step = org.mockito.ArgumentCaptor.forClass(ChatInteractionStepStore.Step.class);
         verify(steps).insertStep(step.capture());

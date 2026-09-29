@@ -135,6 +135,7 @@ public class ChatBountyInteractionAdmissionService {
                 .setMessageType("USER").setContent(intent.content())
                 .setMetadata(JsonUtil.toJson(Map.of("schemaVersion", 2, "requestId", requestId,
                         "taskId", intent.taskId(), "targetAgentId", targetId,
+                        "permittedOperation", intent.operation(),
                         "interactionMode", "INSPECT_INPUTS".equals(intent.operation()) ? "INSPECT" : "EXECUTE")))
                 .setJiacn(owner).setSyncStatus("PENDING").setConversationType("juyiting")
                 .setSenderType(sender.type()).setSenderName(sender.displayName());
