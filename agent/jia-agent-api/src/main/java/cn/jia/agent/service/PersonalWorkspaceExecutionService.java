@@ -22,6 +22,12 @@ public interface PersonalWorkspaceExecutionService {
     ConversationLease claimConversationStart(RuntimeScope scope, String taskId, String runId,
             String commandId, String messageId);
     ConversationLease renewConversationLease(RuntimeScope scope, String taskId, String runId, ConversationFence fence);
+    /** Server-verified source manifest under live task/grant and exact lease. No legacy /inputs fallback. */
+    ConversationInputSnapshot conversationInputs(RuntimeScope scope, String taskId, String runId, ConversationFence fence);
+    record ConversationInputSnapshot(String executionId, long leaseVersion, boolean noReferencedMaterials,
+            List<RuntimeInput> inputs) {
+        public ConversationInputSnapshot { inputs = List.copyOf(inputs); }
+    }
     StagedOutput stageConversationOutput(RuntimeScope scope, String taskId, String runId, ConversationFence fence,
             String outputId, String filename, String contentMimeType, byte[] content);
     CommitView commitConversationOutput(RuntimeScope scope, String taskId, String runId, ConversationFence fence,

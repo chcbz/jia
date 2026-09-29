@@ -684,6 +684,24 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         });
     }
 
+    /** The no-reference fact comes from persisted execution inputs, never inbox/model text. */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public ConversationInputSnapshot conversationInputs(RuntimeScope scope, String taskId, String runId,
+            ConversationFence fence) {
+        requireConversationExecutionEnabled();
+        return withConversationRoot(scope, taskId, runId, true, execution -> {
+            requireConversationFence(scope, execution, fence, false);
+            var rowsForExecution = executions.listInputs(scope.tenantId(), scope.clientId(),
+                    scope.ownerJiacn(), execution.getExecutionId());
+            // U2 image-only lane has no approved reference resolver yet. Never treat an
+            // unmaterialized/unknown input as 'none' or disclose it via the old endpoint.
+            if (rowsForExecution == null || !rowsForExecution.isEmpty())
+                throw failure(Reason.CAPABILITY_UNAVAILABLE);
+            return new ConversationInputSnapshot(execution.getExecutionId(), fence.version(), true, List.of());
+        });
+    }
+
     @Override
     @Transactional(rollbackFor = Exception.class)
     public StagedOutput stageConversationOutput(RuntimeScope scope, String taskId, String runId,

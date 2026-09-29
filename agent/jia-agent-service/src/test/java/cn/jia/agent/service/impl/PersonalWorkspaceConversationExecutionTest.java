@@ -167,6 +167,35 @@ class PersonalWorkspaceConversationExecutionTest {
         assertArrayEquals(png(),service.readConversationOutput(OWNER,"task-1","run-1","output_1").bytes());
     }
 
+    @Test void exactNativeNoReferenceManifestRequiresActiveFenceAndLiveGrant() {
+        enable();
+        var lease=service.claimConversationStart(RUNTIME,"task-1","run-1",commandId(),messageId());
+        var input=service.conversationInputs(RUNTIME,"task-1","run-1",lease.fence());
+        assertEquals("exec-1",input.executionId());
+        assertEquals(lease.version(),input.leaseVersion());
+        assertTrue(input.noReferencedMaterials());
+        assertTrue(input.inputs().isEmpty());
+        assertEquals(PersonalWorkspaceExecutionService.Reason.TASK_CONFLICT,assertThrows(
+                PersonalWorkspaceExecutionService.Failure.class,()->service.conversationInputs(
+                        RUNTIME,"task-1","run-1",new PersonalWorkspaceExecutionService.ConversationFence(
+                                lease.version(),"stale"))).getReason());
+        var other=new PersonalWorkspaceExecutionService.RuntimeScope("0","client","owner","agent","other-runtime");
+        assertEquals(PersonalWorkspaceExecutionService.Reason.TASK_CONFLICT,assertThrows(
+                PersonalWorkspaceExecutionService.Failure.class,()->service.conversationInputs(
+                        other,"task-1","run-1",lease.fence())).getReason());
+        when(rows.listInputs("0","client","owner","exec-1")).thenReturn(List.of(
+                new PersonalWorkspaceExecutionInputEntity()));
+        assertEquals(PersonalWorkspaceExecutionService.Reason.CAPABILITY_UNAVAILABLE,assertThrows(
+                PersonalWorkspaceExecutionService.Failure.class,()->service.conversationInputs(
+                        RUNTIME,"task-1","run-1",lease.fence())).getReason());
+        when(rows.listInputs("0","client","owner","exec-1")).thenReturn(List.of());
+        root.setAssignedAgentId("other-agent");
+        assertEquals(PersonalWorkspaceExecutionService.Reason.GRANT_REVOKED,assertThrows(
+                PersonalWorkspaceExecutionService.Failure.class,()->service.conversationInputs(
+                        RUNTIME,"task-1","run-1",lease.fence())).getReason());
+        verify(storage,never()).read(any(),anyString(),anyString(),anyLong(),anyString());
+    }
+
     @Test void targetRepointOrStaleGrantRejectsStartRenewAndRead() {
         enable();
         var lease=service.claimConversationStart(RUNTIME,"task-1","run-1",commandId(),messageId());

@@ -63,6 +63,15 @@ public final class PersonalWorkspaceConversationRuntimeController {
         return ok(executions.renewConversationLease(scope(authentication),taskId,runId,fence(request)));
     }
 
+    @PostMapping(value="/{taskId}/runs/{runId}/conversation/inputs",consumes=MediaType.APPLICATION_JSON_VALUE,
+            produces=MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<PersonalWorkspaceExecutionService.ConversationInputSnapshot> inputs(
+            @PathVariable String taskId,@PathVariable String runId,@RequestBody FenceRequest fence,
+            HttpServletRequest request,Authentication authentication) {
+        noQuery(request);
+        return ok(executions.conversationInputs(scope(authentication),taskId,runId,fence(fence)));
+    }
+
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/outputs/{outputId}/content",
             consumes=MediaType.MULTIPART_FORM_DATA_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<PersonalWorkspaceExecutionService.StagedOutput> stage(@PathVariable String taskId,
