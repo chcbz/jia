@@ -36,6 +36,12 @@ public final class AgentTaskBountyBootstrapOutboxDaoImpl
     }
 
     @Override
+    public AgentTaskBountyBootstrapOutboxEntity findClaimableAvailableForUpdate(long now) {
+        if (now <= 0) throw new IllegalArgumentException("now");
+        return mapper.selectClaimableAvailableForUpdate(now);
+    }
+
+    @Override
     public AgentTaskBountyBootstrapOutboxEntity findByBootstrapForUpdate(String tenantId,
             String clientId, String ownerJiacn, String bootstrapId) {
         scope(tenantId, clientId, ownerJiacn);

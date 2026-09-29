@@ -12,6 +12,11 @@ public interface AgentTaskBountyBootstrapOutboxService {
     AgentTaskBountyBootstrapClaimDTO claimNext(AgentTaskExecutionGrantService.Scope scope,
             String consumerId, long now);
 
+    /** Internal worker only: scope comes exclusively from a locked, persisted intent.
+     * No client-supplied scope, HTTP endpoint, Agent command, or delivery assertion.
+     */
+    AgentTaskBountyBootstrapClaimDTO claimNextAvailable(String consumerId, long now);
+
     AgentTaskBountyBootstrapReconcileResultDTO reconcile(
             AgentTaskExecutionGrantService.Scope scope,
             AgentTaskBountyBootstrapReconcileDTO command, long now);

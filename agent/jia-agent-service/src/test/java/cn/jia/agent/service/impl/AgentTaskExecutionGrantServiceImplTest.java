@@ -254,6 +254,7 @@ class AgentTaskExecutionGrantServiceImplTest {
         private boolean failInsert;
         @Override public AgentTaskBountyBootstrapOutboxEntity findByActionForUpdate(String t,String c,String o,String a){return byAction.get(a);}
         @Override public AgentTaskBountyBootstrapOutboxEntity findClaimableForUpdate(String t,String c,String o,long now){throw new UnsupportedOperationException();}
+        @Override public AgentTaskBountyBootstrapOutboxEntity findClaimableAvailableForUpdate(long now){throw new UnsupportedOperationException();}
         @Override public AgentTaskBountyBootstrapOutboxEntity findByBootstrapForUpdate(String t,String c,String o,String id){return byId.get(id);}
         @Override public void insert(AgentTaskBountyBootstrapOutboxEntity row){
             if(failInsert)throw new IllegalStateException("bootstrap insert failed");

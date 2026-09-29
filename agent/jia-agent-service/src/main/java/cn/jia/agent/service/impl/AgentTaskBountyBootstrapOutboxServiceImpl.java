@@ -44,15 +44,32 @@ public final class AgentTaskBountyBootstrapOutboxServiceImpl
     public AgentTaskBountyBootstrapClaimDTO claimNext(AgentTaskExecutionGrantService.Scope scope,
             String consumerId, long now) {
         validateScope(scope);
+        long leaseUntil = leaseUntil(consumerId, now);
+        return transaction.execute(ignored -> claimLocked(scope, consumerId, now, leaseUntil));
+    }
+
+    @Override
+    public AgentTaskBountyBootstrapClaimDTO claimNextAvailable(String consumerId, long now) {
+        long leaseUntil = leaseUntil(consumerId, now);
+        return transaction.execute(ignored -> {
+            AgentTaskBountyBootstrapOutboxEntity row = outbox.findClaimableAvailableForUpdate(now);
+            if (row == null) return null;
+            // Scope is derived solely from the row locked by MySQL, never from a caller.
+            AgentTaskExecutionGrantService.Scope scope = new AgentTaskExecutionGrantService.Scope(
+                    row.getTenantId(), row.getClientId(), row.getOwnerJiacn());
+            validateScope(scope);
+            return claimLockedRow(scope, row, consumerId, now, leaseUntil);
+        });
+    }
+
+    private static long leaseUntil(String consumerId, long now) {
         exact(consumerId, "consumerId", 100);
         if (now <= 0) throw new IllegalArgumentException("now is invalid");
-        Long leaseUntil;
         try {
-            leaseUntil = Math.addExact(now, CLAIM_LEASE_MILLIS);
+            return Math.addExact(now, CLAIM_LEASE_MILLIS);
         } catch (ArithmeticException overflow) {
             throw new IllegalArgumentException("claim lease time overflow", overflow);
         }
-        return transaction.execute(ignored -> claimLocked(scope, consumerId, now, leaseUntil));
     }
 
     private AgentTaskBountyBootstrapClaimDTO claimLocked(
@@ -60,7 +77,12 @@ public final class AgentTaskBountyBootstrapOutboxServiceImpl
             long now, long leaseUntil) {
         AgentTaskBountyBootstrapOutboxEntity row = outbox.findClaimableForUpdate(
                 scope.tenantId(), scope.clientId(), scope.ownerJiacn(), now);
-        if (row == null) return null;
+        return row == null ? null : claimLockedRow(scope, row, consumerId, now, leaseUntil);
+    }
+
+    private AgentTaskBountyBootstrapClaimDTO claimLockedRow(
+            AgentTaskExecutionGrantService.Scope scope, AgentTaskBountyBootstrapOutboxEntity row,
+            String consumerId, long now, long leaseUntil) {
         requireScope(scope, row);
         if (row.getAttemptCount() == null || row.getAttemptCount() < 0
                 || row.getAttemptCount() == Integer.MAX_VALUE

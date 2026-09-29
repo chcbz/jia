@@ -9,6 +9,8 @@ public interface AgentTaskBountyBootstrapOutboxDao {
     AgentTaskBountyBootstrapOutboxEntity findClaimableForUpdate(String tenantId, String clientId,
             String ownerJiacn, long now);
 
+    AgentTaskBountyBootstrapOutboxEntity findClaimableAvailableForUpdate(long now);
+
     AgentTaskBountyBootstrapOutboxEntity findByBootstrapForUpdate(String tenantId, String clientId,
             String ownerJiacn, String bootstrapId);
 
