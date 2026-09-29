@@ -246,7 +246,7 @@ class PersonalWorkspaceConversationExecutionTest {
         assertEquals(PersonalWorkspaceExecutionService.Reason.TASK_CONFLICT,
                 assertThrows(PersonalWorkspaceExecutionService.Failure.class,()->
                         service.claimConversationStart(RUNTIME,"task-1","run-1",commandId(),messageId())).getReason());
-        verify(rows).update(execution);
+        verify(rows, times(2)).update(execution); // lease claim then the single durable admission
     }
 
     @Test void statusVersionDriftAllowsCreateStartRenewAndReadWithLiveEpoch() throws Exception {
