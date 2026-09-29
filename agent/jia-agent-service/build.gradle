@@ -511,6 +511,7 @@ def mmdU2ConversationOutputSourceSet = sourceSets.create('mmdU2ConversationOutpu
         include 'cn/jia/agent/service/impl/PersonalWorkspaceConversationExecutionTest.java'
         include 'cn/jia/agent/security/AgentRuntimeSecurityIntegrationTest.java'
         include 'cn/jia/agent/config/PersonalWorkspaceExecutionSchemaInitializerTest.java'
+        include 'cn/jia/agent/config/PersonalWorkspaceProviderStartMySqlTest.java'
     }
     resources.srcDir 'src/test/resources'
     compileClasspath += sourceSets.main.output
