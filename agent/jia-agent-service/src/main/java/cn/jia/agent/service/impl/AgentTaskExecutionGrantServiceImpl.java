@@ -1,9 +1,12 @@
 package cn.jia.agent.service.impl;
 
+import cn.jia.agent.dao.AgentTaskBountyBootstrapOutboxDao;
 import cn.jia.agent.dao.AgentTaskExecutionGrantDao;
 import cn.jia.agent.dao.PersonalWorkspaceDao;
 import cn.jia.agent.dao.PersonalWorkspaceTaskLinkDao;
 import cn.jia.agent.entity.AgentTaskAssignDTO;
+import cn.jia.agent.entity.AgentTaskBountyBootstrapClaimDTO;
+import cn.jia.agent.entity.AgentTaskBountyBootstrapOutboxEntity;
 import cn.jia.agent.entity.AgentTaskExecutionGrantDTO;
 import cn.jia.agent.entity.AgentTaskExecutionGrantEntity;
 import cn.jia.agent.entity.AgentTaskGrantInputDTO;
@@ -48,6 +51,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
     private static final int MAX_INPUTS = 32;
 
     private final AgentTaskExecutionGrantDao grants;
+    private final AgentTaskBountyBootstrapOutboxDao bootstrapOutbox;
     private final PersonalWorkspaceTaskLinkDao taskLinks;
     private final PersonalWorkspaceDao workspace;
     private final AgentLegacyTaskCompatibilityService legacyAssignments;
@@ -57,10 +61,12 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
 
     @Inject
     public AgentTaskExecutionGrantServiceImpl(AgentTaskExecutionGrantDao grants,
+            AgentTaskBountyBootstrapOutboxDao bootstrapOutbox,
             PersonalWorkspaceTaskLinkDao taskLinks, PersonalWorkspaceDao workspace,
             AgentLegacyTaskCompatibilityService legacyAssignments, AgentIdentityService identities,
             AgentTaskMutationTransaction transactions, ObjectMapper json) {
         this.grants = Objects.requireNonNull(grants,"grants");
+        this.bootstrapOutbox = Objects.requireNonNull(bootstrapOutbox,"bootstrapOutbox");
         this.taskLinks = Objects.requireNonNull(taskLinks,"taskLinks");
         this.workspace = Objects.requireNonNull(workspace,"workspace");
         this.legacyAssignments = Objects.requireNonNull(legacyAssignments,"legacyAssignments");
@@ -88,9 +94,22 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
 
     private AgentTaskExecutionGrantDTO assignLocked(Scope scope, ValidAssign valid,
             String canonicalAgent, String requestHash, String actionId, AgentTaskMetaEntity root) {
+        // Frozen task-root lock order: grant action -> bootstrap action -> target/input rows.
+        // The command-delivery outbox is intentionally not reused: this row coordinates Chat
+        // admission and must never acquire Rabbit/Agent delivery semantics.
         AgentTaskExecutionGrantEntity replay = grants.findByActionForUpdate(scope.tenantId(),
                 scope.clientId(),scope.ownerJiacn(),actionId);
-        if (replay != null) return replay(requestHash,valid.taskId(),replay);
+        AgentTaskBountyBootstrapOutboxEntity existingBootstrap =
+                bootstrapOutbox.findByActionForUpdate(scope.tenantId(), scope.clientId(),
+                        scope.ownerJiacn(), actionId);
+        if (replay != null) {
+            AgentTaskExecutionGrantDTO result = replay(requestHash,valid.taskId(),replay);
+            ensureBootstrapIntent(scope, replay, existingBootstrap);
+            return result;
+        }
+        if (existingBootstrap != null) {
+            throw invalidState("Bootstrap intent exists without its authorization fact");
+        }
 
         AtomicReference<List<InputSnapshot>> snapshot = new AtomicReference<>();
         AgentLegacyTaskCompatibilityService.AssignOutcome assignment =
@@ -125,13 +144,75 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         try {
             grants.insert(entity);
         } catch (DataIntegrityViolationException collision) {
-            AgentTaskExecutionGrantEntity winner=grants.findByActionForUpdate(scope.tenantId(),
-                    scope.clientId(),scope.ownerJiacn(),actionId);
-            if (winner != null) return replay(requestHash,valid.taskId(),winner);
+            // The task root and both action keys were locked before mutation. Treat any late
+            // grant uniqueness failure as a conflicting authorization and roll back assignment.
             throw new AgentTaskExecutionGrantException(Reason.CONFLICT,
-                    "A concurrent task authorization changed the active grant");
+                    "A concurrent task authorization changed the grant intent");
         }
+        // Keep this outside the grant collision handler: schema/payload failures must remain
+        // attributable while the surrounding task-root transaction rolls back both mutations.
+        ensureBootstrapIntent(scope, entity, null);
         return view(entity);
+    }
+
+    private void ensureBootstrapIntent(Scope scope, AgentTaskExecutionGrantEntity grant,
+            AgentTaskBountyBootstrapOutboxEntity existing) {
+        List<String> operations = readOperations(grant.getPermittedOperationsJson());
+        String initialOperation;
+        try {
+            initialOperation = AgentTaskBountyBootstrapPayload.initialOperation(operations);
+        } catch (IllegalArgumentException invalid) {
+            throw invalidState("Persisted grant has no unambiguous initial operation");
+        }
+        List<AgentTaskBountyBootstrapClaimDTO.ReferenceSummary> references = readInputs(
+                grant.getInputScopeJson()).stream().map(input ->
+                new AgentTaskBountyBootstrapClaimDTO.ReferenceSummary(input.fileId(), input.version(),
+                        input.purpose(), input.contentMimeType(), input.byteLength(),
+                        input.contentHash())).toList();
+        String referencesJson = AgentTaskBountyBootstrapPayload.referencesJson(json, references);
+        String referencesHash = AgentTaskBountyBootstrapPayload.referenceHash(json, references);
+        long intentGrantVersion = existing == null ? grant.getGrantVersion()
+                : existing.getGrantVersion() == null ? -1L : existing.getGrantVersion();
+        String payloadHash = AgentTaskBountyBootstrapPayload.payloadHash(scope.tenantId(),
+                scope.clientId(), scope.ownerJiacn(), grant.getTaskId(),
+                grant.getSourceBusinessActionId(), grant.getRequirementRevision(),
+                grant.getAssignmentRevision(), grant.getTargetAgentId(), grant.getGrantId(),
+                intentGrantVersion, initialOperation, referencesHash);
+        if (existing != null) {
+            try {
+                AgentTaskBountyBootstrapPayload.validateAndRead(existing, json);
+            } catch (RuntimeException corrupt) {
+                throw invalidState("Persisted bootstrap intent is corrupt");
+            }
+            if (intentGrantVersion < 1 || intentGrantVersion > grant.getGrantVersion()
+                    || !same(payloadHash, existing.getPayloadHash())
+                    || !same(grant.getSourceBusinessActionId(), existing.getSourceBusinessActionId())) {
+                throw invalidState("Bootstrap intent conflicts with the authorization fact");
+            }
+            return;
+        }
+        if (!"ACTIVE".equals(grant.getState())) {
+            throw invalidState("Historical inactive grant has no bootstrap intent");
+        }
+        AgentTaskBountyBootstrapOutboxEntity intent =
+                new AgentTaskBountyBootstrapOutboxEntity()
+                        .setBootstrapId("bootstrap_" + payloadHash.substring(0, 32));
+        intent.setTenantId(scope.tenantId());
+        intent.setClientId(scope.clientId());
+        intent.setOwnerJiacn(scope.ownerJiacn()).setTaskId(grant.getTaskId())
+                .setSourceBusinessActionId(grant.getSourceBusinessActionId())
+                .setPayloadHash(payloadHash).setRequirementRevision(grant.getRequirementRevision())
+                .setRequirementAnchor(AgentTaskBountyBootstrapPayload.REQUIREMENT_ANCHOR)
+                .setAssignmentRevision(grant.getAssignmentRevision())
+                .setTargetAgentId(grant.getTargetAgentId()).setGrantId(grant.getGrantId())
+                .setGrantVersion(grant.getGrantVersion()).setPermittedOperation(initialOperation)
+                .setReferenceSummaryJson(referencesJson)
+                .setReferenceSummarySha256(referencesHash).setStatus("PENDING")
+                .setAttemptCount(0).setNextRetryAt(null).setLeaseOwner(null)
+                .setLeaseUntil(null).setAdmittedConversationId(null)
+                .setAdmittedRequestId(null).setLastErrorCode(null).setVersion(0L)
+                .setCreatedAt(grant.getCreatedAt()).setReconciledAt(null);
+        bootstrapOutbox.insert(intent);
     }
 
     @Override
@@ -300,6 +381,11 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
             throw bad("Client authority fields are forbidden");
         }
         List<String> operations=canonicalOperations(request.getRequestedOperations());
+        try {
+            AgentTaskBountyBootstrapPayload.initialOperation(operations);
+        } catch (IllegalArgumentException invalid) {
+            throw bad(invalid.getMessage());
+        }
         List<ValidInput> inputs=canonicalInputs(request.getInputRefs());
         return new ValidAssign(taskId,key,request.getAgentId(),request.getExpectedTaskVersion(),
                 request.getRequirementRevision(),operations,inputs);

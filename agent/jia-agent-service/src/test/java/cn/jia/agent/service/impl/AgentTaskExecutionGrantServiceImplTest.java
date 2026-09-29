@@ -1,9 +1,11 @@
 package cn.jia.agent.service.impl;
 
+import cn.jia.agent.dao.AgentTaskBountyBootstrapOutboxDao;
 import cn.jia.agent.dao.AgentTaskExecutionGrantDao;
 import cn.jia.agent.dao.PersonalWorkspaceDao;
 import cn.jia.agent.dao.PersonalWorkspaceTaskLinkDao;
 import cn.jia.agent.entity.AgentTaskAssignDTO;
+import cn.jia.agent.entity.AgentTaskBountyBootstrapOutboxEntity;
 import cn.jia.agent.entity.AgentTaskExecutionGrantEntity;
 import cn.jia.agent.entity.AgentTaskGrantInputDTO;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
@@ -28,6 +30,7 @@ import static org.mockito.Mockito.*;
 
 class AgentTaskExecutionGrantServiceImplTest {
     private final MemoryGrantDao grants = new MemoryGrantDao();
+    private final MemoryBootstrapDao bootstraps = new MemoryBootstrapDao();
     private final PersonalWorkspaceTaskLinkDao links = mock(PersonalWorkspaceTaskLinkDao.class);
     private final PersonalWorkspaceDao workspace = mock(PersonalWorkspaceDao.class);
     private final AgentLegacyTaskCompatibilityService legacy = mock(AgentLegacyTaskCompatibilityService.class);
@@ -54,7 +57,7 @@ class AgentTaskExecutionGrantServiceImplTest {
                     ? new AgentLegacyTaskCompatibilityService.AssignOutcome(List.of("agent-1"),true,"event-1",1L)
                     : new AgentLegacyTaskCompatibilityService.AssignOutcome(List.of("agent-1"),false);
         });
-        service=new AgentTaskExecutionGrantServiceImpl(grants,links,workspace,legacy,identities,
+        service=new AgentTaskExecutionGrantServiceImpl(grants,bootstraps,links,workspace,legacy,identities,
                 new DirectTransaction(root),new ObjectMapper());
     }
 
@@ -66,6 +69,13 @@ class AgentTaskExecutionGrantServiceImplTest {
         assertEquals(first.getGrantId(),replay.getGrantId());
         assertEquals(1L,first.getAssignmentRevision());
         assertFalse(first.getPaidExecutionAuthorized());
+        assertEquals(1,bootstraps.byAction.size());
+        AgentTaskBountyBootstrapOutboxEntity intent=bootstraps.byAction.values().iterator().next();
+        assertEquals(first.getGrantId(),intent.getGrantId());
+        assertEquals(first.getGrantVersion(),intent.getGrantVersion());
+        assertEquals("GENERATE_IMAGE",intent.getPermittedOperation());
+        assertEquals("TASK_REQUIREMENT_REVISION_V1",intent.getRequirementAnchor());
+        assertEquals("PENDING",intent.getStatus());
         verify(legacy,times(1)).assignResolvedVersionedWithLockedTask(anyString(),anyString(),anyString(),
                 anyString(),anyList(),eq(false),anyLong(),any(),same(root));
 
@@ -95,8 +105,51 @@ class AgentTaskExecutionGrantServiceImplTest {
         assertEquals(1,result.getInputs().size());
         assertEquals("REFERENCE",result.getInputs().getFirst().purpose());
         String persisted=grants.byAction.values().iterator().next().getInputScopeJson();
+        String bootstrap=bootstraps.byAction.values().iterator().next().getReferenceSummaryJson();
         assertTrue(persisted.contains("a".repeat(64)));
+        assertTrue(bootstrap.contains("a".repeat(64)));
+        assertTrue(bootstrap.contains("file-1"));
         assertFalse(persisted.contains("secret/path"));
+        assertFalse(bootstrap.contains("secret/path"));
+        assertFalse(bootstrap.toLowerCase().contains("token"));
+        assertFalse(bootstrap.toLowerCase().contains("uri"));
+    }
+
+    @Test
+    void multipleInitialExecutableOperationsAreRejectedBeforeMutation() {
+        AgentTaskAssignDTO request=request();
+        request.setRequestedOperations(List.of("GENERATE_IMAGE","EDIT_IMAGE"));
+        AgentTaskExecutionGrantException failure=assertThrows(AgentTaskExecutionGrantException.class,
+                () -> service.assignAndGrant(scope(),"task-1","key-ambiguous",request));
+        assertEquals(AgentTaskExecutionGrantException.Reason.BAD_REQUEST,failure.reason());
+        verify(legacy,never()).resolveAgentId(anyString(),anyString(),anyString(),anyString());
+        assertTrue(grants.byAction.isEmpty());
+        assertTrue(bootstraps.byAction.isEmpty());
+    }
+
+    @Test
+    void bootstrapFailureRollsBackAssignmentAndGrantBoundary() {
+        bootstraps.failInsert=true;
+        service=new AgentTaskExecutionGrantServiceImpl(grants,bootstraps,links,workspace,legacy,identities,
+                new RollbackTransaction(root,grants,bootstraps),new ObjectMapper());
+        assertThrows(IllegalStateException.class,
+                () -> service.assignAndGrant(scope(),"task-1","key-rollback",request()));
+        assertNull(root.getAssignedAgentId());
+        assertEquals(0L,root.getTaskVersion());
+        assertTrue(grants.byAction.isEmpty());
+        assertTrue(bootstraps.byAction.isEmpty());
+    }
+
+    @Test
+    void replayFailsClosedWhenSameActionBootstrapPayloadDrifts() {
+        service.assignAndGrant(scope(),"task-1","key-drift",request());
+        AgentTaskBountyBootstrapOutboxEntity intent=bootstraps.byAction.values().iterator().next();
+        intent.setPermittedOperation("EDIT_IMAGE");
+        AgentTaskExecutionGrantException failure=assertThrows(AgentTaskExecutionGrantException.class,
+                () -> service.assignAndGrant(scope(),"task-1","key-drift",request()));
+        assertEquals(AgentTaskExecutionGrantException.Reason.INVALID_PERSISTED_STATE,failure.reason());
+        verify(legacy,times(1)).assignResolvedVersionedWithLockedTask(anyString(),anyString(),anyString(),
+                anyString(),anyList(),eq(false),anyLong(),any(),same(root));
     }
 
     @Test
@@ -170,6 +223,44 @@ class AgentTaskExecutionGrantServiceImplTest {
         @Override public <T>T executeWithLockedTaskRootForWorkItemInOwnerScope(String t,String c,String o,String id,LockedTaskMutation<T> m){throw new UnsupportedOperationException();}
         @Override public <T>T executeAfterTaskRootReservation(String t,String c,String id,TaskRootReservation r,ReservedTaskMutation<T> m){throw new UnsupportedOperationException();}
         @Override public <T>T executeAfterTaskRootReservationInOwnerScope(String t,String c,String o,String id,TaskRootReservation r,ReservedTaskMutation<T> m){throw new UnsupportedOperationException();}
+    }
+
+
+    private static final class RollbackTransaction implements AgentTaskMutationTransaction {
+        private final AgentTaskMetaEntity root;
+        private final MemoryGrantDao grants;
+        private final MemoryBootstrapDao bootstraps;
+        RollbackTransaction(AgentTaskMetaEntity root,MemoryGrantDao grants,MemoryBootstrapDao bootstraps){
+            this.root=root;this.grants=grants;this.bootstraps=bootstraps;
+        }
+        @Override public <T>T executeWithLockedTaskRootInOwnerScope(String t,String c,String o,String id,LockedTaskMutation<T> m){
+            String assigned=root.getAssignedAgentId();Long version=root.getTaskVersion();
+            try{return m.apply(root);}catch(RuntimeException failure){
+                root.setAssignedAgentId(assigned);root.setTaskVersion(version);
+                grants.byAction.clear();grants.byId.clear();bootstraps.byAction.clear();bootstraps.byId.clear();
+                throw failure;
+            }
+        }
+        @Override public <T>T executeWithLockedTaskRoot(String t,String c,String id,LockedTaskMutation<T> m){throw new UnsupportedOperationException();}
+        @Override public <T>T executeWithLockedTaskRootForWorkItem(String t,String c,String id,LockedTaskMutation<T> m){throw new UnsupportedOperationException();}
+        @Override public <T>T executeWithLockedTaskRootForWorkItemInOwnerScope(String t,String c,String o,String id,LockedTaskMutation<T> m){throw new UnsupportedOperationException();}
+        @Override public <T>T executeAfterTaskRootReservation(String t,String c,String id,TaskRootReservation r,ReservedTaskMutation<T> m){throw new UnsupportedOperationException();}
+        @Override public <T>T executeAfterTaskRootReservationInOwnerScope(String t,String c,String o,String id,TaskRootReservation r,ReservedTaskMutation<T> m){throw new UnsupportedOperationException();}
+    }
+
+    private static final class MemoryBootstrapDao implements AgentTaskBountyBootstrapOutboxDao {
+        private final Map<String,AgentTaskBountyBootstrapOutboxEntity> byAction=new LinkedHashMap<>();
+        private final Map<String,AgentTaskBountyBootstrapOutboxEntity> byId=new LinkedHashMap<>();
+        private boolean failInsert;
+        @Override public AgentTaskBountyBootstrapOutboxEntity findByActionForUpdate(String t,String c,String o,String a){return byAction.get(a);}
+        @Override public AgentTaskBountyBootstrapOutboxEntity findClaimableForUpdate(String t,String c,String o,long now){throw new UnsupportedOperationException();}
+        @Override public AgentTaskBountyBootstrapOutboxEntity findByBootstrapForUpdate(String t,String c,String o,String id){return byId.get(id);}
+        @Override public void insert(AgentTaskBountyBootstrapOutboxEntity row){
+            if(failInsert)throw new IllegalStateException("bootstrap insert failed");
+            byAction.put(row.getSourceBusinessActionId(),row);byId.put(row.getBootstrapId(),row);
+        }
+        @Override public boolean claim(AgentTaskBountyBootstrapOutboxEntity row,String owner,long until,long now){throw new UnsupportedOperationException();}
+        @Override public boolean reconcile(AgentTaskBountyBootstrapOutboxEntity row,String status,Long next,String conversation,String request,String error,Long reconciled,long now){throw new UnsupportedOperationException();}
     }
 
     private static final class MemoryGrantDao implements AgentTaskExecutionGrantDao {
