@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS agent_task_bounty_bootstrap_outbox (
  UNIQUE KEY uk_atbbo_scope_bootstrap (tenant_id,client_id,owner_jiacn,bootstrap_id),
  UNIQUE KEY uk_atbbo_scope_action (tenant_id,client_id,owner_jiacn,source_business_action_id),
  KEY idx_atbbo_scope_claim (tenant_id,client_id,owner_jiacn,status,next_retry_at,lease_until,id),
+ KEY idx_atbbo_available_due (tenant_id,status,next_retry_at,lease_until,id),
+ KEY idx_atbbo_available_expired (tenant_id,status,lease_until,id),
  KEY idx_atbbo_scope_task (tenant_id,client_id,owner_jiacn,task_id,assignment_revision),
  CONSTRAINT chk_atbbo_tenant CHECK (tenant_id='0'),
  CONSTRAINT chk_atbbo_revision CHECK (

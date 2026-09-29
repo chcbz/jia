@@ -16,6 +16,11 @@ import tools.jackson.databind.ObjectMapper;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -109,6 +114,98 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
         assertEquals("CORRUPT_BOOTSTRAP_INTENT", row.getLastErrorCode());
     }
 
+    @Test
+    void unattendedDiscoveryDerivesScopeAndKeepsReconcileOwnerScoped() {
+        dao.insert(valid("another-owner", "action-2").setBootstrapId("bootstrap-2"));
+        var first = service.claimNextAvailable("chat-worker", 1000);
+        var second = service.claimNextAvailable("chat-worker", 1001);
+        assertEquals("owner", first.ownerJiacn());
+        assertEquals("another-owner", second.ownerJiacn());
+        assertEquals("0", second.tenantId());
+        assertEquals("client", second.clientId());
+        var command = new AgentTaskBountyBootstrapReconcileDTO(second.bootstrapId(),
+                second.outboxVersion(), second.leaseOwner(), second.claimAttempt(),
+                AgentTaskBountyBootstrapReconcileDTO.Outcome.ADMITTED,
+                "conversation-2", "request-2", null);
+        assertThrows(IllegalStateException.class, () -> service.reconcile(scope(), command, 1100));
+        assertEquals("ADMITTED", service.reconcile(
+                new AgentTaskExecutionGrantService.Scope("0", "client", "another-owner"),
+                command, 1100).status());
+    }
+
+    @Test
+    void expiredClaimIsReclaimedWithNewVersionAndOldFenceCannotSettle() {
+        var original = service.claimNextAvailable("chat-old", 1000);
+        assertNull(service.claimNextAvailable("chat-new", original.leaseUntil() - 1));
+        var reclaimed = service.claimNextAvailable("chat-new", original.leaseUntil());
+        assertEquals(original.bootstrapId(), reclaimed.bootstrapId());
+        assertEquals(original.claimAttempt() + 1, reclaimed.claimAttempt());
+        assertTrue(reclaimed.outboxVersion() > original.outboxVersion());
+        assertThrows(IllegalStateException.class, () -> service.reconcile(scope(),
+                new AgentTaskBountyBootstrapReconcileDTO(original.bootstrapId(),
+                        original.outboxVersion(), original.leaseOwner(), original.claimAttempt(),
+                        AgentTaskBountyBootstrapReconcileDTO.Outcome.ADMITTED,
+                        "old-conversation", "old-request", null), reclaimed.leaseUntil()));
+    }
+
+    @Test
+    void corruptPayloadIsQuarantinedAndNextOwnerRemainsDiscoverable() {
+        dao.rows.get("bootstrap-1").setPayloadHash("0".repeat(64));
+        dao.insert(valid("another-owner", "action-2").setBootstrapId("bootstrap-2"));
+        assertNull(service.claimNextAvailable("chat-worker", 1000));
+        assertEquals("DEAD", dao.rows.get("bootstrap-1").getStatus());
+        assertEquals("another-owner", service.claimNextAvailable("chat-worker", 1001).ownerJiacn());
+    }
+
+    @Test
+    void invalidPersistedScopeCannotBecomeClaimOrStarveAnotherOwner() {
+        dao.rows.get("bootstrap-1").setOwnerJiacn(" ");
+        dao.insert(valid("another-owner", "action-2").setBootstrapId("bootstrap-2"));
+        assertEquals("another-owner", service.claimNextAvailable("chat-worker", 1000).ownerJiacn());
+        assertEquals("PENDING", dao.rows.get("bootstrap-1").getStatus());
+        assertThrows(IllegalArgumentException.class,
+                () -> service.claimNextAvailable("chat-worker", Long.MAX_VALUE));
+    }
+
+    @Test
+    void competingWorkersSkipLockedRowWithoutLeakingOwnerScope() throws Exception {
+        class BlockingDao extends MemoryDao {
+            private final CountDownLatch locked = new CountDownLatch(1);
+            private final CountDownLatch continueClaim = new CountDownLatch(1);
+            @Override public boolean claim(AgentTaskBountyBootstrapOutboxEntity row,
+                    String owner, long until, long now) {
+                if ("bootstrap-1".equals(row.getBootstrapId())) {
+                    locked.countDown();
+                    try {
+                        if (!continueClaim.await(5, TimeUnit.SECONDS))
+                            throw new IllegalStateException("simulated worker did not resume");
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException(interrupted);
+                    }
+                }
+                return super.claim(row, owner, until, now);
+            }
+        }
+        BlockingDao concurrent = new BlockingDao();
+        concurrent.insert(valid("owner", "action-1"));
+        concurrent.insert(valid("another-owner", "action-2").setBootstrapId("bootstrap-2"));
+        var worker = new AgentTaskBountyBootstrapOutboxServiceImpl(concurrent, json,
+                new DirectPlatformTransactionManager());
+        var executor = Executors.newSingleThreadExecutor();
+        try {
+            var first = executor.submit(() -> worker.claimNextAvailable("worker-1", 1000));
+            assertTrue(concurrent.locked.await(5, TimeUnit.SECONDS));
+            var second = worker.claimNextAvailable("worker-2", 1000);
+            assertEquals("another-owner", second.ownerJiacn());
+            concurrent.continueClaim.countDown();
+            assertEquals("owner", first.get(5, TimeUnit.SECONDS).ownerJiacn());
+        } finally {
+            concurrent.continueClaim.countDown();
+            executor.shutdownNow();
+        }
+    }
+
     private AgentTaskBountyBootstrapOutboxEntity valid(String owner, String action) {
         List<AgentTaskBountyBootstrapClaimDTO.ReferenceSummary> references = List.of(
                 new AgentTaskBountyBootstrapClaimDTO.ReferenceSummary(
@@ -145,7 +242,8 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
         @Override public void rollback(TransactionStatus status) { }
     }
 
-    private static final class MemoryDao implements AgentTaskBountyBootstrapOutboxDao {
+    private static class MemoryDao implements AgentTaskBountyBootstrapOutboxDao {
+        private final Set<String> inFlight = new HashSet<>();
         private final Map<String,AgentTaskBountyBootstrapOutboxEntity> rows=new LinkedHashMap<>();
         @Override public AgentTaskBountyBootstrapOutboxEntity findByActionForUpdate(
                 String t,String c,String o,String action) {
@@ -162,6 +260,27 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
                         || ("CLAIMED".equals(row.getStatus()) && row.getLeaseUntil()!=null
                             && row.getLeaseUntil()<=now))).findFirst().orElse(null);
         }
+        @Override public synchronized AgentTaskBountyBootstrapOutboxEntity findClaimableAvailableForUpdate(
+                long now) {
+            for (AgentTaskBountyBootstrapOutboxEntity row : rows.values()) {
+                String c = row.getClientId(), o = row.getOwnerJiacn();
+                // Mirrors the SQL scope predicates and simulated SKIP LOCKED selection.
+                if (!"0".equals(row.getTenantId()) || c == null || c.isBlank()
+                        || !c.equals(c.strip()) || o == null || o.isBlank()
+                        || "0".equals(o) || !o.equals(o.strip())
+                        || c.chars().anyMatch(Character::isISOControl)
+                        || o.chars().anyMatch(Character::isISOControl)
+                        || inFlight.contains(row.getBootstrapId())) continue;
+                if ((List.of("PENDING","RETRY").contains(row.getStatus())
+                        && (row.getNextRetryAt()==null || row.getNextRetryAt()<=now))
+                        || ("CLAIMED".equals(row.getStatus()) && row.getLeaseUntil()!=null
+                        && row.getLeaseUntil()<=now)) {
+                    inFlight.add(row.getBootstrapId());
+                    return row;
+                }
+            }
+            return null;
+        }
         @Override public AgentTaskBountyBootstrapOutboxEntity findByBootstrapForUpdate(
                 String t,String c,String o,String id) {
             AgentTaskBountyBootstrapOutboxEntity row=rows.get(id);
@@ -171,8 +290,11 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
         @Override public void insert(AgentTaskBountyBootstrapOutboxEntity row) {
             rows.put(row.getBootstrapId(),row);
         }
-        @Override public boolean claim(AgentTaskBountyBootstrapOutboxEntity row,String owner,
-                long until,long now) { return true; }
+        @Override public synchronized boolean claim(AgentTaskBountyBootstrapOutboxEntity row,
+                String owner, long until, long now) {
+            inFlight.remove(row.getBootstrapId());
+            return true;
+        }
         @Override public boolean reconcile(AgentTaskBountyBootstrapOutboxEntity row,String status,
                 Long next,String conversation,String request,String error,Long reconciled,long now) {
             return true;

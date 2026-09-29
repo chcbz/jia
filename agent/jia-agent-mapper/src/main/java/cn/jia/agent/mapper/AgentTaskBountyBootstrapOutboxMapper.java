@@ -50,6 +50,23 @@ public interface AgentTaskBountyBootstrapOutboxMapper
             @Param("tenantId") String tenantId, @Param("clientId") String clientId,
             @Param("ownerJiacn") String ownerJiacn, @Param("now") long now);
 
+    // Only structurally valid persisted owner scopes are discoverable. Never trust client input.
+    // MySQL 8 SKIP LOCKED keeps a busy owner's row from stalling another owner.
+    @Select("SELECT " + COLUMNS + " FROM agent_task_bounty_bootstrap_outbox" + """
+             WHERE tenant_id='0' AND CAST(tenant_id AS BINARY)=0x30
+               AND client_id<>'' AND client_id=TRIM(client_id)
+               AND owner_jiacn<>'' AND owner_jiacn<>'0'
+               AND owner_jiacn=TRIM(owner_jiacn)
+               AND NOT REGEXP_LIKE(client_id, '[[:cntrl:]]')
+               AND NOT REGEXP_LIKE(owner_jiacn, '[[:cntrl:]]')
+               AND ((status IN ('PENDING','RETRY')
+                     AND (next_retry_at IS NULL OR next_retry_at<=#{now}))
+                    OR (status='CLAIMED' AND lease_until IS NOT NULL AND lease_until<=#{now}))
+             ORDER BY id
+             LIMIT 1 FOR UPDATE SKIP LOCKED
+            """)
+    AgentTaskBountyBootstrapOutboxEntity selectClaimableAvailableForUpdate(@Param("now") long now);
+
     @Select("SELECT " + COLUMNS + " FROM agent_task_bounty_bootstrap_outbox"
             + " WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}"
             + " AND bootstrap_id=#{bootstrapId}" + EXACT_SCOPE + """

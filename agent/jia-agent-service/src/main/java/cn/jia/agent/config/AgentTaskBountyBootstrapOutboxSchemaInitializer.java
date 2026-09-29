@@ -31,6 +31,8 @@ public final class AgentTaskBountyBootstrapOutboxSchemaInitializer implements In
             "uk_atbbo_scope_bootstrap", List.of("tenant_id","client_id","owner_jiacn","bootstrap_id"),
             "uk_atbbo_scope_action", List.of("tenant_id","client_id","owner_jiacn","source_business_action_id"),
             "idx_atbbo_scope_claim", List.of("tenant_id","client_id","owner_jiacn","status","next_retry_at","lease_until","id"),
+            "idx_atbbo_available_due", List.of("tenant_id","status","next_retry_at","lease_until","id"),
+            "idx_atbbo_available_expired", List.of("tenant_id","status","lease_until","id"),
             "idx_atbbo_scope_task", List.of("tenant_id","client_id","owner_jiacn","task_id","assignment_revision"));
     private static final Set<String> UNIQUE_INDEXES = Set.of(
             "PRIMARY","uk_atbbo_scope_bootstrap","uk_atbbo_scope_action");
