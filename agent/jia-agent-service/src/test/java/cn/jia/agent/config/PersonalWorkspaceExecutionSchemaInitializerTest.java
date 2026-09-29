@@ -1,11 +1,40 @@
 package cn.jia.agent.config;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.jdbc.core.JdbcTemplate;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.*;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PersonalWorkspaceExecutionSchemaInitializerTest {
+    @Test
+    void conversationMigrationContainsByteOnlyAndGrantFenceChecks() {
+        var execution=PersonalWorkspaceExecutionSchemaInitializer.conversationMigrationStatement(
+                PersonalWorkspaceExecutionSchemaInitializer.CONVERSATION_EXECUTION_RESOURCE,
+                "agent_personal_workspace_execution", "drop check chk_pwex_mode", "drop check chk_pwex_task_bridge");
+        var output=PersonalWorkspaceExecutionSchemaInitializer.conversationMigrationStatement(
+                PersonalWorkspaceExecutionSchemaInitializer.CONVERSATION_OUTPUT_RESOURCE,
+                "agent_personal_workspace_execution_output", "drop check chk_pwexo_commit", "add constraint chk_pwexo_conversation");
+        assertTrue(execution.contains("task_grant_version >= 1"));
+        assertTrue(execution.contains("execution_mode='CONVERSATION'"));
+        assertTrue(output.contains("output_purpose='CONVERSATION'"));
+        assertTrue(output.contains("formal_delivery_id IS NULL"));
+        assertThrows(IllegalArgumentException.class,()->
+                PersonalWorkspaceExecutionSchemaInitializer.conversationMigrationStatement(
+                        "db/untrusted.sql", "agent_personal_workspace_execution", "", ""));
+    }
+
+    @Test
+    void absentEnforcedMysqlCheckFailsClosedEvenWithZeroBadRows() {
+        var jdbc=mock(JdbcTemplate.class);
+        when(jdbc.queryForObject(anyString(),eq(Integer.class))).thenReturn(0);
+        assertThrows(IllegalStateException.class, () ->
+                new PersonalWorkspaceExecutionSchemaInitializer(jdbc).verifyConversationMode());
+    }
+
     @Test
     void executionGrantSchemaIsStrictlyAdditiveAndComplete() {
         var statements = PersonalWorkspaceExecutionSchemaInitializer.ddlStatements();

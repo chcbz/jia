@@ -22,6 +22,7 @@ import cn.jia.agent.entity.PersonalWorkspaceExecutionOutputEntity;
 import cn.jia.agent.entity.PersonalWorkspaceFileEntity;
 import cn.jia.agent.entity.PersonalWorkspaceVersionEntity;
 import cn.jia.agent.service.PersonalWorkspaceExecutionService;
+import cn.jia.agent.service.AgentTaskExecutionGrantService;
 import cn.jia.agent.service.AgentWorkItemLeaseService;
 import cn.jia.agent.service.AgentTaskArtifactService;
 import cn.jia.agent.service.AgentTaskFormalDeliveryService;
@@ -100,6 +101,14 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     private AgentTaskArtifactService taskArtifacts;
     private AgentTaskFormalDeliveryService formalDeliveries;
     private AgentTaskMutationTransaction taskMutations;
+    private AgentTaskExecutionGrantService conversationGrants;
+
+    @Autowired(required = false)
+    public void setConversationAdmission(AgentTaskExecutionGrantService grants,
+            AgentTaskMutationTransaction transactions) {
+        this.conversationGrants = Objects.requireNonNull(grants);
+        this.taskMutations = Objects.requireNonNull(transactions);
+    }
     private AgentTaskStateService taskStates;
 
     @Autowired(required = false)
@@ -239,6 +248,128 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         return view(scope, execution);
     }
 
+    /** No-input first slice; paid generation requires persisted server-issued cost authority.
+     * Material selection needs separate exact grant/input snapshot plumbing. */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public ExecutionView createConversation(OwnerScope scope, ConversationCreate command) {
+        validateOwnerScope(scope);
+        if (command == null || conversationGrants == null || taskMutations == null || conversationAccess == null)
+            throw failure(Reason.CAPABILITY_UNAVAILABLE);
+        id(command.intentId(), "intentId", 90);
+        id(command.grantId(), "grantId", 100);
+        id(command.permittedOperation(), "permittedOperation", 40);
+        if (command.grantVersion() < 1 || command.assignmentRevision() < 0
+                || !"GENERATE_IMAGE".equals(command.permittedOperation()))
+            throw failure(Reason.BAD_REQUEST);
+        ValidCreate valid=validCreate(new CreateCommand(command.conversationId(), command.targetAgentId(),
+                command.taskId(), command.instruction(), command.outputContentMimeType(), List.of()));
+        if (valid.taskId() == null || !Set.of("image/png", "image/jpeg").contains(valid.outputContentMimeType()))
+            throw failure(Reason.CAPABILITY_UNAVAILABLE);
+        String key="conv_"+plainSha(command.intentId());
+        String requestHash=hash("CONVERSATION",valid.conversationId(),valid.taskId(),
+                valid.targetAgentId(),command.intentId(),command.grantId(),
+                Long.toString(command.grantVersion()),Long.toString(command.assignmentRevision()),
+                command.permittedOperation(),valid.instruction(),valid.outputContentMimeType());
+        return taskMutations.executeWithLockedTaskRootInOwnerScope(scope.tenantId(), scope.clientId(),
+                scope.ownerJiacn(),valid.taskId(),root -> {
+                    requireConversationRoot(root,scope,valid.taskId(),valid.targetAgentId(),command.assignmentRevision());
+                    var prior=executions.findByIdempotency(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),key);
+                    if (prior!=null) {
+                        if (!same(prior.getRequestHash(),requestHash)
+                                || !"CONVERSATION".equals(prior.getExecutionMode())) throw failure(Reason.IDEMPOTENCY_CONFLICT);
+                        requireConversationGrant(scope,prior);
+                        return view(scope,prior);
+                    }
+                    requireOwnedTarget(scope,valid.targetAgentId());
+                    try {
+                        var conversation=conversationAccess.requireAccessible(
+                                new WorkspaceConversationAccessService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),
+                                valid.conversationId());
+                        if (conversation==null || !same(valid.taskId(),conversation.taskId())
+                                || !same("TASK",conversation.scopeType()) || !same(valid.taskId(),conversation.scopeKey())
+                                || conversation.targetAgentIds()==null
+                                || !conversation.targetAgentIds().contains(valid.targetAgentId()))
+                            throw failure(Reason.NOT_FOUND);
+                    } catch (RuntimeException denied) { throw failure(Reason.NOT_FOUND); }
+                    PersonalWorkspaceExecutionEntity row=new PersonalWorkspaceExecutionEntity()
+                            .setExecutionId(identifier("pwe_")).setOwnerJiacn(scope.ownerJiacn())
+                            .setTaskId(valid.taskId()).setRunId(identifier("pwe_run_"))
+                            .setExecutionMode("CONVERSATION").setConversationId(valid.conversationId())
+                            .setTargetAgentId(valid.targetAgentId()).setInstruction(valid.instruction())
+                            .setOutputContentMimeType(valid.outputContentMimeType())
+                            .setExecutionState("QUEUED").setGrantRevision(1L)
+                            .setTaskGrantId(command.grantId()).setTaskGrantVersion(command.grantVersion())
+                            .setAssignmentRevision(command.assignmentRevision())
+                            .setPermittedOperation(command.permittedOperation())
+                            .setIdempotencyKey(key).setRequestHash(requestHash).setCreatedAt(System.currentTimeMillis());
+                    scoped(row,scope);
+                    requireConversationGrant(scope,row);
+                    executions.insert(row);
+                    return view(scope,row);
+                });
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public ConversationOutput readConversationOutput(OwnerScope scope,String taskId,String runId,String outputId) {
+        validateOwnerScope(scope); id(taskId,"taskId",100);id(runId,"runId",100);id(outputId,"outputId",100);
+        if (taskMutations==null || conversationGrants==null) throw failure(Reason.CAPABILITY_UNAVAILABLE);
+        return taskMutations.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),
+                scope.ownerJiacn(),taskId,root -> {
+                    var row=executions.findByTaskRun(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,runId);
+                    if (row==null || !"CONVERSATION".equals(row.getExecutionMode())
+                            || !"OUTPUT_COMMITTED".equals(row.getExecutionState())) throw failure(Reason.NOT_FOUND);
+                    requireConversationRoot(root,scope,taskId,row.getTargetAgentId(),row.getAssignmentRevision());
+                    requireConversationGrant(scope,row);
+                    var locked=executions.lockByTaskRun(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,runId);
+                    if (locked==null || !same(row.getExecutionId(),locked.getExecutionId())
+                            || !"OUTPUT_COMMITTED".equals(locked.getExecutionState())) throw failure(Reason.NOT_FOUND);
+                    var output=executions.lockOutput(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                            row.getExecutionId(),outputId);
+                    if (output==null || !same(row.getExecutionId(),output.getExecutionId())
+                            || !same(scope.ownerJiacn(),output.getOwnerJiacn())
+                            || !"CONVERSATION".equals(output.getOutputPurpose())
+                            || !"COMMITTED".equals(output.getOutputState())
+                            || output.getWorkspaceFileId()!=null || output.getArtifactId()!=null
+                            || output.getFormalDeliveryId()!=null) throw failure(Reason.NOT_FOUND);
+                    var content=storage.read(storageScope(scope),output.getStorageUri(),output.getContentHash(),
+                            output.getByteLength(),output.getContentMimeType());
+                    return new ConversationOutput(row.getExecutionId(),outputId,output.getOriginalFilename(),
+                            output.getContentMimeType(),output.getContentHash(),output.getByteLength(),content.content());
+                });
+    }
+
+    private static void requireConversationRoot(AgentTaskMetaEntity root,OwnerScope scope,
+            String taskId,String agentId,Long assignmentRevision) {
+        if (root==null || !same(taskId,root.getTaskId())
+                || !same(scope.tenantId(),root.getTenantId()) || !same(scope.clientId(),root.getClientId())
+                || !same(scope.ownerJiacn(),root.getOwnerJiacn())
+                || !same(agentId,root.getAssignedAgentId())
+                || !Objects.equals(assignmentRevision,root.getTaskVersion())) throw failure(Reason.GRANT_REVOKED);
+    }
+
+    private void requireConversationGrant(OwnerScope scope,PersonalWorkspaceExecutionEntity execution) {
+        if (conversationGrants==null || !"CONVERSATION".equals(execution.getExecutionMode())
+                || !same(scope.tenantId(),execution.getTenantId()) || !same(scope.clientId(),execution.getClientId())
+                || !same(scope.ownerJiacn(),execution.getOwnerJiacn()) || execution.getTaskGrantId()==null
+                || execution.getTaskGrantVersion()==null || execution.getAssignmentRevision()==null
+                || execution.getPermittedOperation()==null) throw failure(Reason.NOT_FOUND);
+        try {
+            var admission=conversationGrants.admit(new AgentTaskExecutionGrantService.Scope(scope.tenantId(),
+                    scope.clientId(),scope.ownerJiacn()),execution.getTaskId(),execution.getTaskGrantId(),
+                    execution.getTaskGrantVersion(),execution.getAssignmentRevision(),
+                    execution.getTargetAgentId(),execution.getPermittedOperation(),true);
+            if (admission==null || !same(execution.getTaskGrantId(),admission.grantId())
+                    || execution.getTaskGrantVersion()!=admission.grantVersion()
+                    || execution.getAssignmentRevision()!=admission.assignmentRevision()
+                    || !same(execution.getTargetAgentId(),admission.targetAgentId())
+                    || !same(execution.getPermittedOperation(),admission.operation())
+                    || !admission.paidExecutionAuthorized())
+                throw failure(Reason.GRANT_REVOKED);
+        } catch (RuntimeException denied) { throw failure(Reason.GRANT_REVOKED); }
+    }
+
     @Override
     @Transactional(readOnly = true)
     public ExecutionCapabilities capabilities() {
@@ -374,6 +505,18 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         // task-root mutation own the complete root -> execution -> state/event transaction.
         PersonalWorkspaceExecutionEntity candidate = runtimeExecution(scope, taskId, runId, false);
         requireStartCommand(candidate, commandId, messageId);
+        if ("CONVERSATION".equals(candidate.getExecutionMode())) {
+            if (taskMutations==null) throw failure(Reason.CAPABILITY_UNAVAILABLE);
+            return taskMutations.executeWithLockedTaskRootInOwnerScope(scope.tenantId(), scope.clientId(),
+                    scope.ownerJiacn(),taskId,root -> {
+                        var current=runtimeExecution(scope,taskId,runId,true);
+                        requireStartCommand(current,commandId,messageId);
+                        var owner=new OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());
+                        requireConversationRoot(root,owner,taskId,current.getTargetAgentId(),current.getAssignmentRevision());
+                        requireConversationGrant(owner,current);
+                        return new RuntimeStartView(current.getExecutionId(),taskId,runId,"STARTED");
+                    });
+        }
         if (!"TASK".equals(candidate.getExecutionMode())) {
             // PRIVATE start is validation-only. A row lock without a surrounding transaction is
             // ineffective and would imply a transaction boundary that this path does not need.
@@ -414,14 +557,18 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     }
 
     @Override
-    @Transactional(readOnly = true, rollbackFor = Exception.class)
+    @Transactional(rollbackFor = Exception.class)
     public List<RuntimeInput> runtimeInputs(RuntimeScope scope, String taskId, String runId) {
-        PersonalWorkspaceExecutionEntity execution = runtimeExecution(scope, taskId, runId, false);
-        return runtimeInputs(new OwnerScope(scope.tenantId(), scope.clientId(), scope.ownerJiacn()), execution.getExecutionId());
+        PersonalWorkspaceExecutionEntity candidate = runtimeExecution(scope, taskId, runId, false);
+        if ("CONVERSATION".equals(candidate.getExecutionMode())) {
+            return withConversationRoot(scope,taskId,runId,false,execution -> runtimeInputs(
+                    new OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),execution.getExecutionId()));
+        }
+        return runtimeInputs(new OwnerScope(scope.tenantId(), scope.clientId(), scope.ownerJiacn()), candidate.getExecutionId());
     }
 
     @Override
-    @Transactional(readOnly = true, rollbackFor = Exception.class)
+    @Transactional(rollbackFor = Exception.class)
     public List<RuntimeQueuedCommand> runtimeQueuedCommands(RuntimeScope scope, int limit) {
         validateRuntimeScope(scope);
         if (limit < 1 || limit > 16) throw failure(Reason.BAD_REQUEST);
@@ -444,7 +591,14 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     @Override
     @Transactional(rollbackFor = Exception.class)
     public RuntimeContent runtimeInputContent(RuntimeScope scope, String taskId, String runId, String inputRef) {
-        PersonalWorkspaceExecutionEntity execution = runtimeExecution(scope, taskId, runId, true);
+        PersonalWorkspaceExecutionEntity candidate=runtimeExecution(scope,taskId,runId,false);
+        if ("CONVERSATION".equals(candidate.getExecutionMode()))
+            return withConversationRoot(scope,taskId,runId,true,execution ->
+                    inputContent(scope,execution,inputRef));
+        return inputContent(scope,runtimeExecution(scope,taskId,runId,true),inputRef);
+    }
+
+    private RuntimeContent inputContent(RuntimeScope scope,PersonalWorkspaceExecutionEntity execution,String inputRef) {
         id(inputRef, "inputRef", 100);
         PersonalWorkspaceExecutionInputEntity input = executions.lockInput(scope.tenantId(), scope.clientId(),
                 scope.ownerJiacn(), execution.getExecutionId(), inputRef);
@@ -461,7 +615,16 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     @Transactional(rollbackFor = Exception.class)
     public StagedOutput stageOutput(RuntimeScope scope, String taskId, String runId, String outputId,
             String originalFilename, String contentMimeType, byte[] content) {
-        PersonalWorkspaceExecutionEntity execution = runtimeExecution(scope, taskId, runId, true);
+        PersonalWorkspaceExecutionEntity candidate=runtimeExecution(scope,taskId,runId,false);
+        if ("CONVERSATION".equals(candidate.getExecutionMode()))
+            return withConversationRoot(scope,taskId,runId,true,execution ->
+                    stageOutputLocked(scope,execution,outputId,originalFilename,contentMimeType,content));
+        return stageOutputLocked(scope,runtimeExecution(scope,taskId,runId,true),outputId,
+                originalFilename,contentMimeType,content);
+    }
+
+    private StagedOutput stageOutputLocked(RuntimeScope scope,PersonalWorkspaceExecutionEntity execution,
+            String outputId,String originalFilename,String contentMimeType,byte[] content) {
         id(outputId, "outputId", 100); filename(originalFilename, contentMimeType); validMime(contentMimeType);
         if (!"output_1".equals(outputId) || content == null || content.length == 0
                 || content.length > storage.maxContentBytes()
@@ -474,14 +637,17 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         PersonalWorkspaceStorage.StoredObject stored = storage.store(storageScope(scope), content, contentMimeType);
         if (previous != null) {
             if (!same(previous.getContentHash(), stored.sha256()) || previous.getByteLength() != stored.byteLength()
-                    || !"STAGED".equals(previous.getOutputState())) throw failure(Reason.OUTPUT_CONFLICT);
+                    || !same(filePurpose(previous),"CONVERSATION".equals(execution.getExecutionMode())
+                        ? "CONVERSATION" : "FILE") || !"STAGED".equals(previous.getOutputState())) throw failure(Reason.OUTPUT_CONFLICT);
             return new StagedOutput(outputId, previous.getContentHash(), previous.getByteLength(), previous.getOutputState());
         }
         long now = System.currentTimeMillis();
         PersonalWorkspaceExecutionOutputEntity output = new PersonalWorkspaceExecutionOutputEntity()
                 .setOutputId(outputId).setExecutionId(execution.getExecutionId()).setOwnerJiacn(scope.ownerJiacn())
                 .setOriginalFilename(originalFilename).setContentMimeType(contentMimeType).setByteLength(stored.byteLength())
-                .setContentHash(stored.sha256()).setStorageUri(stored.storageUri()).setOutputState("STAGED")
+                .setContentHash(stored.sha256()).setStorageUri(stored.storageUri())
+                .setOutputPurpose("CONVERSATION".equals(execution.getExecutionMode()) ? "CONVERSATION" : "FILE")
+                .setOutputState("STAGED")
                 .setWorkspaceFileId(null).setWorkspaceFileVersion(null).setArtifactId(null).setArtifactVersion(null)
                 .setFormalDeliveryId(null).setPublicationState("PENDING").setPublicationRevision(0L)
                 .setPublicationFailureCode(null).setStagedAt(now).setCommittedAt(null);
@@ -502,6 +668,9 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         if (candidate == null || !same(candidate.getTargetAgentId(), scope.agentId())) {
             throw failure(Reason.NOT_FOUND);
         }
+        if ("CONVERSATION".equals(candidate.getExecutionMode()))
+            return withConversationRoot(scope,taskId,runId,true,execution ->
+                    commitConversationOutputs(scope,execution,manifestId,declarations));
         if ("TASK".equals(candidate.getExecutionMode())) {
             requireTaskPublicationDependencies();
             return taskMutations.executeWithLockedTaskRootInOwnerScope(
@@ -512,14 +681,56 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         return commitPrivateOutputs(scope, execution, manifestId, declarations);
     }
 
+    private CommitView commitConversationOutputs(RuntimeScope scope, PersonalWorkspaceExecutionEntity execution,
+            String manifestId,List<OutputDeclaration> declarations) {
+        List<PersonalWorkspaceExecutionOutputEntity> outputs=lockAndVerifyManifest(scope,execution,manifestId,declarations);
+        var output=outputs.getFirst();
+        if (!"CONVERSATION".equals(output.getOutputPurpose()) || output.getWorkspaceFileId()!=null
+                || output.getWorkspaceFileVersion()!=null || output.getArtifactId()!=null
+                || output.getFormalDeliveryId()!=null || !"PENDING".equals(output.getPublicationState()))
+            throw failure(Reason.OUTPUT_CONFLICT);
+        if ("COMMITTED".equals(output.getOutputState())) return committed(manifestId,outputs);
+        if (!"STAGED".equals(output.getOutputState()) || !"QUEUED".equals(execution.getExecutionState()))
+            throw failure(Reason.OUTPUT_CONFLICT);
+        var content=storage.read(storageScope(scope),output.getStorageUri(),output.getContentHash(),
+                output.getByteLength(),output.getContentMimeType());
+        if (content.content()==null || content.content().length!=output.getByteLength())
+            throw failure(Reason.STORAGE_UNAVAILABLE);
+        output.setOutputState("COMMITTED").setCommittedAt(System.currentTimeMillis());
+        executions.updateOutput(output);
+        execution.setExecutionState("OUTPUT_COMMITTED");executions.update(execution);
+        return committed(manifestId,outputs);
+    }
+
+    /** Root -> grant admission -> execution/output; no execution-to-task lock inversion. */
+    private <T> T withConversationRoot(RuntimeScope scope,String taskId,String runId,boolean lock,
+            java.util.function.Function<PersonalWorkspaceExecutionEntity,T> action) {
+        return withConversationRoot(scope,taskId,runId,lock,false,action);
+    }
+    private <T> T withConversationRoot(RuntimeScope scope,String taskId,String runId,boolean lock,
+            boolean allowFailed,java.util.function.Function<PersonalWorkspaceExecutionEntity,T> action) {
+        if (taskMutations==null || conversationGrants==null) throw failure(Reason.CAPABILITY_UNAVAILABLE);
+        return taskMutations.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),
+                scope.ownerJiacn(),taskId,root -> {
+                    var execution=runtimeExecution(scope,taskId,runId,lock,false,allowFailed);
+                    if (!"CONVERSATION".equals(execution.getExecutionMode())) throw failure(Reason.NOT_FOUND);
+                    var owner=new OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());
+                    requireConversationRoot(root,owner,taskId,execution.getTargetAgentId(),execution.getAssignmentRevision());
+                    requireConversationGrant(owner,execution);
+                    return action.apply(execution);
+                });
+    }
+
     /** Private output archiving remains source-compatible and never reaches task artifact state. */
     private CommitView commitPrivateOutputs(RuntimeScope scope, PersonalWorkspaceExecutionEntity execution,
             String manifestId, List<OutputDeclaration> declarations) {
         List<PersonalWorkspaceExecutionOutputEntity> outputs = lockAndVerifyManifest(
                 scope, execution, manifestId, declarations);
         PersonalWorkspaceExecutionOutputEntity output = outputs.getFirst();
+        if (!"FILE".equals(filePurpose(output))) throw failure(Reason.OUTPUT_CONFLICT);
         if ("COMMITTED".equals(output.getOutputState())) return committed(manifestId, outputs);
-        if (!"STAGED".equals(output.getOutputState())) throw failure(Reason.OUTPUT_CONFLICT);
+        if (!"STAGED".equals(output.getOutputState()))
+            throw failure(Reason.OUTPUT_CONFLICT);
         long now = System.currentTimeMillis();
         String fileId = identifier("pws_");
         PersonalWorkspaceFileEntity file = new PersonalWorkspaceFileEntity().setFileId(fileId)
@@ -560,6 +771,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         List<PersonalWorkspaceExecutionOutputEntity> outputs = lockAndVerifyManifest(
                 scope, execution, manifestId, declarations);
         PersonalWorkspaceExecutionOutputEntity output = outputs.getFirst();
+        if (!"FILE".equals(filePurpose(output))) throw failure(Reason.OUTPUT_CONFLICT);
         if ("COMMITTED".equals(output.getOutputState())
                 && "PUBLISHED".equals(output.getPublicationState())) {
             return committed(manifestId, outputs);
@@ -746,12 +958,20 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         PersonalWorkspaceExecutionEntity candidate = executions.findByTaskRun(scope.tenantId(), scope.clientId(),
                 scope.ownerJiacn(), taskId, runId);
         if (candidate == null || !same(candidate.getTargetAgentId(), scope.agentId())) throw failure(Reason.NOT_FOUND);
+        if ("CONVERSATION".equals(candidate.getExecutionMode())) {
+            return withConversationRoot(scope,taskId,runId,true,true,
+                    execution -> failLocked(scope,execution));
+        }
         if ("TASK".equals(candidate.getExecutionMode()) && "QUEUED".equals(candidate.getExecutionState())) {
             releaseTaskLease(new OwnerScope(scope.tenantId(), scope.clientId(), scope.ownerJiacn()), candidate);
         }
         PersonalWorkspaceExecutionEntity execution = executions.lockByTaskRun(scope.tenantId(), scope.clientId(),
                 scope.ownerJiacn(), taskId, runId);
         if (execution == null || !same(execution.getTargetAgentId(), scope.agentId())) throw failure(Reason.NOT_FOUND);
+        return failLocked(scope,execution);
+    }
+
+    private ExecutionView failLocked(RuntimeScope scope,PersonalWorkspaceExecutionEntity execution) {
         if ("FAILED".equals(execution.getExecutionState())) {
             return view(new OwnerScope(scope.tenantId(), scope.clientId(), scope.ownerJiacn()), execution);
         }
@@ -784,6 +1004,9 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             throw failure(Reason.NOT_FOUND);
         }
         if ("TASK".equals(execution.getExecutionMode())) requireLiveTaskLease(scope, execution);
+        if (execution.getExecutionMode()!=null
+                && !Set.of("PRIVATE","TASK","CONVERSATION").contains(execution.getExecutionMode()))
+            throw failure(Reason.NOT_FOUND);
         return execution;
     }
 
@@ -849,6 +1072,10 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         return new RuntimeCommand(execution.getTaskId(), execution.getRunId(), List.copyOf(inputManifest),
                 List.of(new RuntimeOutput("output_1", "outputs/result" + extension, outputMime,
                         storage.maxContentBytes(), outputPath)));
+    }
+    // Historical unit fixtures omit this new NOT NULL database column; the migration defaults it to FILE.
+    private static String filePurpose(PersonalWorkspaceExecutionOutputEntity row) {
+        return row.getOutputPurpose()==null ? "FILE" : row.getOutputPurpose();
     }
     private CommitView committed(String manifestId, List<PersonalWorkspaceExecutionOutputEntity> outputs) {
         List<CommitItem> items = outputs.stream().map(output -> new CommitItem(output.getOutputId(),
@@ -944,8 +1171,14 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     }
 
     private boolean runtimeDispatchAllowed(RuntimeScope scope, PersonalWorkspaceExecutionEntity execution) {
-        if (!"TASK".equals(execution.getExecutionMode())) return true;
-        try { requireLiveTaskLease(scope, execution); return true; }
+        if ("PRIVATE".equals(execution.getExecutionMode()) || execution.getExecutionMode()==null) return true;
+        try {
+            if ("CONVERSATION".equals(execution.getExecutionMode()))
+                requireConversationGrant(new OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),execution);
+            else if ("TASK".equals(execution.getExecutionMode())) requireLiveTaskLease(scope, execution);
+            else return false;
+            return true;
+        }
         catch (Failure ignored) { return false; }
     }
 

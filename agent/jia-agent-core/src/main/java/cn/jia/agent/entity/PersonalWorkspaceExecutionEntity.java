@@ -25,6 +25,11 @@ public class PersonalWorkspaceExecutionEntity extends BaseEntity {
     private String runId;
     /** PRIVATE bridge and TASK work-item execution are distinct domains; this field never implies delivery. */
     private String executionMode;
+    /** CONVERSATION-only immutable admission fence; never from a browser authorization flag. */
+    private String taskGrantId;
+    private Long taskGrantVersion;
+    private Long assignmentRevision;
+    private String permittedOperation;
     private String workItemId;
     /** Runtime-only lease material; never exposed by browser views or queue payloads. */
     private String leaseToken;

@@ -20,6 +20,8 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
     static final String TERMINAL_STATE_MIGRATION_RESOURCE = "db/agent-personal-workspace-v1_13-execution-terminal-state.sql";
     static final String TASK_EXECUTION_MIGRATION_RESOURCE = "db/agent-personal-workspace-v1_13-task-execution.sql";
     static final String TASK_PUBLICATION_MIGRATION_RESOURCE = "db/agent-personal-workspace-v1_13-task-publication.sql";
+    static final String CONVERSATION_EXECUTION_RESOURCE = "db/agent-personal-workspace-v1_14-conversation-execution.sql";
+    static final String CONVERSATION_OUTPUT_RESOURCE = "db/agent-personal-workspace-v1_14-conversation-output.sql";
     static final List<String> TABLES = List.of("agent_personal_workspace_execution",
             "agent_personal_workspace_execution_input", "agent_personal_workspace_execution_output");
     private final JdbcTemplate jdbc;
@@ -34,9 +36,11 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
         migrateTerminalState();
         verifyTerminalState();
         migrateTaskExecution();
-        verifyTaskExecution();
         migrateTaskPublication();
+        migrateConversationMode();
+        verifyTaskExecution();
         verifyTaskPublication();
+        verifyConversationMode();
     }
     static List<String> ddlStatements() {
         final String source;
@@ -147,13 +151,18 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
     private void verifyTaskExecution() {
         Integer invalid=jdbc.queryForObject("""
                 SELECT COUNT(*) FROM agent_personal_workspace_execution
-                 WHERE execution_mode NOT IN ('PRIVATE','TASK')
+                 WHERE execution_mode NOT IN ('PRIVATE','TASK','CONVERSATION')
                     OR execution_state NOT IN ('QUEUED','INPUTS_REVOKED','OUTPUT_STAGED','OUTPUT_COMMITTED','FAILED')
                     OR (execution_mode='PRIVATE' AND (work_item_id IS NOT NULL OR lease_token IS NOT NULL
                         OR lease_work_item_version IS NOT NULL OR lease_expires_at IS NOT NULL))
                     OR (execution_mode='TASK' AND (work_item_id IS NULL OR lease_token IS NULL
                         OR lease_work_item_version IS NULL OR lease_work_item_version < 0
                         OR lease_expires_at IS NULL OR lease_expires_at <= 0))
+                    OR (execution_mode='CONVERSATION' AND (work_item_id IS NOT NULL OR lease_token IS NOT NULL
+                        OR lease_work_item_version IS NOT NULL OR lease_expires_at IS NOT NULL
+                        OR conversation_id IS NULL OR task_grant_id IS NULL OR task_grant_version IS NULL
+                        OR task_grant_version < 1 OR assignment_revision IS NULL OR assignment_revision < 0
+                        OR permitted_operation IS NULL))
                 """, Integer.class);
         if (invalid == null || invalid != 0) throw new IllegalStateException("Task execution schema is invalid");
     }
@@ -202,6 +211,81 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
                     OR (publication_state='FAILED' AND publication_failure_code IS NULL)
                 """, Integer.class);
         if (invalid == null || invalid != 0) throw new IllegalStateException("Task publication schema is invalid");
+    }
+
+    /** Atomic ALTER on each table; a crash between the two is resumable, partial ALTER fails closed. */
+    private void migrateConversationMode() {
+        int executionColumns = requiredColumnCount("agent_personal_workspace_execution",
+                "'task_grant_id','task_grant_version','assignment_revision','permitted_operation'");
+        if (executionColumns == 0) jdbc.execute(conversationMigrationStatement(CONVERSATION_EXECUTION_RESOURCE,
+                "agent_personal_workspace_execution", "drop check chk_pwex_mode", "drop check chk_pwex_task_bridge"));
+        else if (executionColumns != 4) throw new IllegalStateException("Conversation execution schema is partial");
+        int outputColumns = requiredColumnCount("agent_personal_workspace_execution_output", "'output_purpose'");
+        if (outputColumns == 0) jdbc.execute(conversationMigrationStatement(CONVERSATION_OUTPUT_RESOURCE,
+                "agent_personal_workspace_execution_output", "drop check chk_pwexo_commit", "add constraint chk_pwexo_conversation"));
+        else if (outputColumns != 1) throw new IllegalStateException("Conversation output schema is partial");
+    }
+    private int requiredColumnCount(String table, String columns) {
+        Integer count=jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.columns "
+                + "WHERE table_schema=DATABASE() AND table_name='"+table+"' AND column_name IN ("+columns+")",
+                Integer.class);
+        if (count==null) throw new IllegalStateException("Conversation schema discovery unavailable");
+        return count;
+    }
+    static String conversationMigrationStatement(String resource,String table,String drop,String add) {
+        if (!List.of(CONVERSATION_EXECUTION_RESOURCE,CONVERSATION_OUTPUT_RESOURCE).contains(resource)
+                || !List.of("agent_personal_workspace_execution","agent_personal_workspace_execution_output").contains(table))
+            throw new IllegalArgumentException("Conversation migration resource invalid");
+        final String source;
+        try { source=new ClassPathResource(resource).getContentAsString(StandardCharsets.UTF_8); }
+        catch (IOException missing) { throw new IllegalStateException("Conversation migration missing",missing); }
+        String statement=source.lines().filter(line->!line.stripLeading().startsWith("--"))
+                .reduce("",(a,b)->a+b+'\n').strip();
+        String lower=statement.toLowerCase(Locale.ROOT).replaceAll("\\s+"," ");
+        if (!lower.startsWith("alter table "+table+" ") || !lower.contains(drop)
+                || !lower.contains(add) || !lower.contains("add constraint chk_pwex")
+                || lower.contains(" insert ") || lower.contains(" update ") || lower.contains(" delete ")
+                || lower.contains(" drop table ") || lower.contains(" create trigger ")
+                || !statement.endsWith(";") || statement.substring(0,statement.length()-1).contains(";"))
+            throw new IllegalStateException("Unsafe conversation migration");
+        return statement.substring(0,statement.length()-1);
+    }
+    void verifyConversationMode() {
+        Integer invalid=jdbc.queryForObject("""
+                SELECT COUNT(*) FROM agent_personal_workspace_execution
+                 WHERE (execution_mode='CONVERSATION' AND (conversation_id IS NULL OR task_grant_id IS NULL
+                     OR task_grant_version IS NULL OR task_grant_version<1 OR assignment_revision IS NULL
+                     OR assignment_revision<0 OR permitted_operation IS NULL OR work_item_id IS NOT NULL
+                     OR lease_token IS NOT NULL OR lease_work_item_version IS NOT NULL OR lease_expires_at IS NOT NULL))
+                    OR (execution_mode<>'CONVERSATION' AND (task_grant_id IS NOT NULL
+                     OR task_grant_version IS NOT NULL OR assignment_revision IS NOT NULL OR permitted_operation IS NOT NULL))
+                """,Integer.class);
+        if (invalid==null || invalid!=0) throw new IllegalStateException("Conversation execution row drift");
+        Integer badOutputs=jdbc.queryForObject("""
+                SELECT COUNT(*) FROM agent_personal_workspace_execution_output
+                 WHERE output_purpose NOT IN ('FILE','CONVERSATION')
+                    OR (output_purpose='CONVERSATION' AND (workspace_file_id IS NOT NULL
+                       OR workspace_file_version IS NOT NULL OR publication_state<>'PENDING'
+                       OR artifact_id IS NOT NULL OR artifact_version IS NOT NULL OR formal_delivery_id IS NOT NULL))
+                """,Integer.class);
+        if (badOutputs==null || badOutputs!=0) throw new IllegalStateException("Conversation output row drift");
+        requireCheck("agent_personal_workspace_execution","chk_pwex_mode","conversation");
+        requireCheck("agent_personal_workspace_execution","chk_pwex_task_bridge","task_grant_id");
+        requireCheck("agent_personal_workspace_execution","chk_pwex_conversation_grant","assignment_revision");
+        requireCheck("agent_personal_workspace_execution_output","chk_pwexo_commit","output_purpose");
+        requireCheck("agent_personal_workspace_execution_output","chk_pwexo_conversation","formal_delivery_id");
+    }
+    private void requireCheck(String table,String name,String fragment) {
+        var rows=jdbc.queryForList("""
+                SELECT tc.enforced, cc.check_clause FROM information_schema.table_constraints tc
+                JOIN information_schema.check_constraints cc ON cc.constraint_schema=tc.constraint_schema
+                   AND cc.constraint_name=tc.constraint_name AND cc.constraint_catalog=tc.constraint_catalog
+                WHERE tc.constraint_schema=DATABASE() AND tc.table_name=?
+                  AND tc.constraint_type='CHECK' AND tc.constraint_name=?
+                """,table,name);
+        if (rows.size()!=1 || !"YES".equalsIgnoreCase(Objects.toString(rows.getFirst().get("enforced"),""))
+                || !Objects.toString(rows.getFirst().get("check_clause"),"").toLowerCase(Locale.ROOT).contains(fragment))
+            throw new IllegalStateException("Conversation CHECK missing or drifted: "+name);
     }
 
     private void verifyOutputMime() {
