@@ -29,6 +29,22 @@ class AgentTaskExecutionGrantSchemaContractTest {
 
 
     @Test
+    void latestAssignmentEpochQueryIsOwnerExactAndEventVersionOrdered() throws Exception {
+        var query=cn.jia.agent.mapper.AgentTaskExecutionGrantMapper.class
+                .getMethod("selectLatestAssignmentEventJson",String.class,String.class,String.class,String.class)
+                .getAnnotation(org.apache.ibatis.annotations.Select.class);
+        assertNotNull(query);
+        String sql=String.join(" ",query.value());
+        assertTrue(sql.contains("event_type='TASK_ASSIGNED'"));
+        assertTrue(sql.contains("AND CAST(event_type AS BINARY)"));
+        assertTrue(sql.contains("ORDER BY event_version DESC LIMIT 1"));
+        for (String key:List.of("tenant_id","client_id","owner_jiacn","task_id")) {
+            assertTrue(sql.contains("CAST("+key+" AS BINARY)"), key);
+            assertTrue(sql.contains("OCTET_LENGTH("+key+")"), key);
+        }
+    }
+
+    @Test
     void ddlFreezesScopeIdempotencyActiveAssignmentAndNoExecutionSecrets() throws Exception {
         String ddl=new ClassPathResource("db/agent-task-execution-grant-v1.sql")
                 .getContentAsString(StandardCharsets.UTF_8).toLowerCase();

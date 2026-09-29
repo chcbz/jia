@@ -11,6 +11,8 @@ public interface AgentTaskExecutionGrantDao {
             String ownerJiacn, String taskId);
     AgentTaskExecutionGrantEntity findByGrant(String tenantId, String clientId,
             String ownerJiacn, String taskId, String grantId);
+    /** Latest durable TASK_ASSIGNED payload under the locked owner-scoped root; null fails closed. */
+    String latestAssignmentEventJson(String tenantId, String clientId, String ownerJiacn, String taskId);
     void insert(AgentTaskExecutionGrantEntity grant);
     int supersedeActiveForTask(String tenantId, String clientId, String ownerJiacn,
             String taskId, long supersededAt);

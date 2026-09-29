@@ -352,7 +352,9 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 || !same(scope.tenantId(),root.getTenantId()) || !same(scope.clientId(),root.getClientId())
                 || !same(scope.ownerJiacn(),root.getOwnerJiacn())
                 || !same(agentId,root.getAssignedAgentId())
-                || !Objects.equals(assignmentRevision,root.getTaskVersion())) throw failure(Reason.GRANT_REVOKED);
+                || assignmentRevision==null || assignmentRevision<0
+                || root.getTaskVersion()==null || root.getTaskVersion()<assignmentRevision)
+            throw failure(Reason.GRANT_REVOKED);
     }
 
     private void requireConversationGrant(OwnerScope scope,PersonalWorkspaceExecutionEntity execution) {

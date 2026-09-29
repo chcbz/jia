@@ -35,6 +35,7 @@ class PersonalWorkspaceConversationExecutionTest {
     private final AgentTaskMutationTransaction transactions=mock(AgentTaskMutationTransaction.class);
     private final WorkspaceConversationAccessService conversation=mock(WorkspaceConversationAccessService.class);
     private PersonalWorkspaceExecutionServiceImpl service;
+    private AgentTaskMetaEntity root;
     private PersonalWorkspaceExecutionEntity execution;
     private PersonalWorkspaceExecutionOutputEntity output;
 
@@ -49,7 +50,7 @@ class PersonalWorkspaceConversationExecutionTest {
         service.setConversationAdmission(grants,transactions);
         service.setTaskExecutionDependencies(conversation,mock(AgentTaskWorkItemDao.class),
                 mock(AgentWorkItemLeaseService.class));
-        var root=new AgentTaskMetaEntity().setTaskId("task-1").setAssignedAgentId("agent").setTaskVersion(7L);
+        root=new AgentTaskMetaEntity().setTaskId("task-1").setAssignedAgentId("agent").setTaskVersion(7L);
         root.setTenantId("0");root.setClientId("client");root.setOwnerJiacn("owner");
         when(transactions.executeWithLockedTaskRootInOwnerScope(eq("0"),eq("client"),
                 eq("owner"),eq("task-1"),any())).thenAnswer(i ->
@@ -133,20 +134,46 @@ class PersonalWorkspaceConversationExecutionTest {
         verifyNoInteractions(writes);
     }
 
-    @Test void changedAssignmentRejectsCreateBeforeAnyInsert() {
+    @Test void statusVersionDriftAllowsCreateStartRenewAndReadWithLiveEpoch() throws Exception {
+        root.setTaskVersion(9L);
         var command=new PersonalWorkspaceExecutionService.ConversationCreate(
                 "42","task-1","agent","intent-1","grant-1",1,7,
                 "GENERATE_IMAGE","draw a bird","image/png");
-        var drift=new AgentTaskMetaEntity().setTaskId("task-1").setAssignedAgentId("agent")
-                .setTaskVersion(8L);
-        drift.setTenantId("0");drift.setClientId("client");drift.setOwnerJiacn("owner");
-        when(transactions.executeWithLockedTaskRootInOwnerScope(eq("0"),eq("client"),
-                eq("owner"),eq("task-1"),any())).thenAnswer(i ->
-                ((AgentTaskMutationTransaction.LockedTaskMutation<?>)i.getArgument(4)).apply(drift));
+        assertEquals("CONVERSATION",service.createConversation(OWNER,command).executionMode());
+        enable();
+        var lease=service.claimConversationStart(RUNTIME,"task-1","run-1",commandId(),messageId());
+        root.setTaskVersion(10L);
+        assertEquals(lease.version(),service.renewConversationLease(RUNTIME,"task-1","run-1",lease.fence()).version());
+        execution.setExecutionState("OUTPUT_COMMITTED");
+        output=new PersonalWorkspaceExecutionOutputEntity().setOutputId("output_1")
+                .setExecutionId("exec-1").setOwnerJiacn("owner").setOutputPurpose("CONVERSATION")
+                .setOutputState("COMMITTED").setContentMimeType("image/png")
+                .setContentHash(sha(png())).setByteLength((long)png().length)
+                .setStorageUri("private/object").setOriginalFilename("bird.png");
+        when(rows.lockOutput("0","client","owner","exec-1","output_1")).thenReturn(output);
+        when(storage.read(any(),eq("private/object"),eq(output.getContentHash()),eq(output.getByteLength()),eq("image/png")))
+                .thenReturn(new PersonalWorkspaceStorage.StoredContent(png(),output.getContentHash(),png().length,"image/png"));
+        assertArrayEquals(png(),service.readConversationOutput(OWNER,"task-1","run-1","output_1").bytes());
+    }
+
+    @Test void targetRepointOrStaleGrantRejectsStartRenewAndRead() {
+        enable();
+        var lease=service.claimConversationStart(RUNTIME,"task-1","run-1",commandId(),messageId());
+        root.setTaskVersion(8L);root.setAssignedAgentId("other-agent");
         assertEquals(PersonalWorkspaceExecutionService.Reason.GRANT_REVOKED,assertThrows(
-                PersonalWorkspaceExecutionService.Failure.class,
-                () -> service.createConversation(OWNER,command)).getReason());
-        verify(rows,never()).insert(any());
+                PersonalWorkspaceExecutionService.Failure.class,()->service.renewConversationLease(
+                        RUNTIME,"task-1","run-1",lease.fence())).getReason());
+        root.setAssignedAgentId("agent");
+        when(grants.admit(any(),any(),any(),anyLong(),anyLong(),any(),any(),eq(true)))
+                .thenThrow(new IllegalStateException("same-agent re-point superseded the grant"));
+        assertEquals(PersonalWorkspaceExecutionService.Reason.GRANT_REVOKED,assertThrows(
+                PersonalWorkspaceExecutionService.Failure.class,()->service.claimConversationStart(
+                        RUNTIME,"task-1","run-1",commandId(),messageId())).getReason());
+        execution.setExecutionState("OUTPUT_COMMITTED");
+        assertEquals(PersonalWorkspaceExecutionService.Reason.GRANT_REVOKED,assertThrows(
+                PersonalWorkspaceExecutionService.Failure.class,()->service.readConversationOutput(
+                        OWNER,"task-1","run-1","output_1")).getReason());
+        verify(storage,never()).read(any(),anyString(),anyString(),anyLong(),anyString());
     }
 
     @Test void replayNeedsLiveGrantNotJustIdempotencyHash() {

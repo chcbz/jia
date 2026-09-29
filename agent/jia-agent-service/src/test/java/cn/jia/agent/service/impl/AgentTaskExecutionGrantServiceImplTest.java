@@ -225,6 +225,30 @@ class AgentTaskExecutionGrantServiceImplTest {
     }
 
     @Test
+    void statusVersionDriftKeepsAssignmentButSameAgentRepointAndMissingEpochRevoke() {
+        var first=service.assignAndGrant(scope(),"task-1","epoch-first",request());
+        root.setTaskVersion(first.getAssignmentRevision()+3);
+        // Ordinary task status/event changes are not assignment changes.
+        assertEquals(first.getGrantId(),service.admit(scope(),"task-1",first.getGrantId(),
+                first.getGrantVersion(),first.getAssignmentRevision(),"agent-1","GENERATE_IMAGE",false).grantId());
+        assertEquals(first.getGrantId(),service.resolveAndAdmit(scope(),"task-1",
+                first.getAssignmentRevision(),"agent-1","GENERATE_IMAGE",false).grantId());
+        // The durable TASK_ASSIGNED event changed while the target stayed identical.
+        grants.latestAssignedVersion=first.getAssignmentRevision()+3;
+        assertEquals(AgentTaskExecutionGrantException.Reason.CONFLICT,assertThrows(
+                AgentTaskExecutionGrantException.class,()->service.admit(scope(),"task-1",first.getGrantId(),
+                        first.getGrantVersion(),first.getAssignmentRevision(),"agent-1","GENERATE_IMAGE",false)).reason());
+        grants.latestAssignedVersion=null;
+        assertThrows(AgentTaskExecutionGrantException.class,()->service.resolveAndAdmit(scope(),"task-1",
+                first.getAssignmentRevision(),"agent-1","GENERATE_IMAGE",false));
+        grants.latestAssignedVersion=1L;
+        assertThrows(AgentTaskExecutionGrantException.class,()->service.admit(scope(),"task-1",first.getGrantId(),
+                first.getGrantVersion()+1,first.getAssignmentRevision(),"agent-1","GENERATE_IMAGE",false));
+        assertThrows(AgentTaskExecutionGrantException.class,()->service.admit(scope(),"task-1",first.getGrantId(),
+                first.getGrantVersion(),first.getAssignmentRevision(),"another-agent","GENERATE_IMAGE",false));
+    }
+
+    @Test
     void revokeIsIdempotentOnlyForSameKeyAndPayloadAndBlocksAdmission() {
         var grant=service.assignAndGrant(scope(),"task-1","key-revoke-create",request());
         root.setTaskVersion(grant.getAssignmentRevision()); root.setAssignedAgentId("agent-1");
@@ -301,10 +325,14 @@ class AgentTaskExecutionGrantServiceImplTest {
     private static final class MemoryGrantDao implements AgentTaskExecutionGrantDao {
         private final Map<String,AgentTaskExecutionGrantEntity> byAction=new LinkedHashMap<>();
         private final Map<String,AgentTaskExecutionGrantEntity> byId=new LinkedHashMap<>();
+        private Long latestAssignedVersion=1L;
         @Override public AgentTaskExecutionGrantEntity findByActionForUpdate(String t,String c,String o,String a){return byAction.get(a);}
         @Override public AgentTaskExecutionGrantEntity findByGrantForUpdate(String t,String c,String o,String task,String id){return byId.get(id);}
         @Override public AgentTaskExecutionGrantEntity findActiveByTask(String t,String c,String o,String task){return byId.values().stream().filter(g->task.equals(g.getTaskId())&&"ACTIVE".equals(g.getState())).findFirst().orElse(null);}
         @Override public AgentTaskExecutionGrantEntity findByGrant(String t,String c,String o,String task,String id){return byId.get(id);}
+        @Override public String latestAssignmentEventJson(String t,String c,String o,String task){
+            return latestAssignedVersion==null?null:"{\"resultVersion\":"+latestAssignedVersion+"}";
+        }
         @Override public void insert(AgentTaskExecutionGrantEntity g){byAction.put(g.getSourceBusinessActionId(),g);byId.put(g.getGrantId(),g);}
         @Override public int supersedeActiveForTask(String t,String c,String o,String task,long at){int n=0;for(var g:byId.values())if(task.equals(g.getTaskId())&&"ACTIVE".equals(g.getState())){g.setState("SUPERSEDED").setGrantVersion(g.getGrantVersion()+1).setRevokedAt(at);n++;}return n;}
         @Override public boolean revoke(String t,String c,String o,String task,String id,long v,String key,String hash,long at){var g=byId.get(id);if(g==null||!"ACTIVE".equals(g.getState())||g.getGrantVersion()!=v)return false;g.setState("REVOKED").setGrantVersion(v+1).setRevokedAt(at).setRevokeIdempotencyKey(key).setRevokeRequestHash(hash);return true;}

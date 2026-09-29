@@ -72,6 +72,17 @@ public interface AgentTaskExecutionGrantMapper extends BaseMapper<AgentTaskExecu
             @Param("clientId") String clientId, @Param("ownerJiacn") String ownerJiacn,
             @Param("taskId") String taskId, @Param("grantId") String grantId);
 
+    @Select("SELECT event_json FROM agent_task_event"
+            + " WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}"
+            + " AND task_id=#{taskId} AND event_type='TASK_ASSIGNED'" + EXACT_SCOPE + EXACT_TASK + """
+              AND CAST(event_type AS BINARY)=CAST('TASK_ASSIGNED' AS BINARY)
+              AND OCTET_LENGTH(event_type)=OCTET_LENGTH('TASK_ASSIGNED')
+              ORDER BY event_version DESC LIMIT 1
+            """)
+    String selectLatestAssignmentEventJson(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("ownerJiacn") String ownerJiacn,
+            @Param("taskId") String taskId);
+
     @Update("""
             UPDATE agent_task_execution_grant
                SET state='SUPERSEDED', grant_version=grant_version+1,
