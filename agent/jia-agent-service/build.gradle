@@ -503,3 +503,28 @@ tasks.register('mmdU1BootstrapOutbox', Test) {
     classpath = mmdU1BootstrapOutboxSourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+// U2 Agent-only no-Provider regression; keep legacy test source compilation isolated.
+def mmdU2ConversationOutputSourceSet = sourceSets.create('mmdU2ConversationOutput') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/service/impl/PersonalWorkspaceConversationExecutionTest.java'
+        include 'cn/jia/agent/config/PersonalWorkspaceExecutionSchemaInitializerTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(mmdU2ConversationOutputSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(mmdU2ConversationOutputSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('mmdU2ConversationOutput', Test) {
+    group = 'verification'
+    dependsOn tasks.named(mmdU2ConversationOutputSourceSet.classesTaskName)
+    testClassesDirs = mmdU2ConversationOutputSourceSet.output.classesDirs
+    classpath = mmdU2ConversationOutputSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}

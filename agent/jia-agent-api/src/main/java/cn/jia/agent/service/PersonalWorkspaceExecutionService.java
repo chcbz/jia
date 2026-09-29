@@ -5,6 +5,19 @@ import java.util.List;
 /** Owner-scoped private file execution and narrow runtime bridge contract. */
 public interface PersonalWorkspaceExecutionService {
     ExecutionView create(OwnerScope scope, CreateCommand command, String idempotencyKey);
+    /** Trusted Agent/Chat application entry only: no browser-provided authority, no Provider invocation. */
+    ExecutionView createConversation(OwnerScope scope, ConversationCreate command);
+    /** Trusted Chat consumer obtains exact bytes only after owner/grant re-admission; not a public URL. */
+    ConversationOutput readConversationOutput(OwnerScope scope, String taskId, String runId, String outputId);
+    record ConversationCreate(String conversationId, String taskId, String targetAgentId,
+            String intentId, String grantId, long grantVersion, long assignmentRevision,
+            String permittedOperation, String instruction, String outputContentMimeType) { }
+    record ConversationOutput(String executionId, String outputId, String originalFilename,
+            String contentMimeType, String sha256, long byteLength, byte[] bytes) {
+        public ConversationOutput { bytes = bytes == null ? null : bytes.clone(); }
+        @Override public byte[] bytes() { return bytes == null ? null : bytes.clone(); }
+    }
+
     /**
      * Browser-safe MIME matrix. Output formats remain explicitly enabled by the execution
      * allow-list; input formats describe only fixed-version materials the bridge can expose to an
