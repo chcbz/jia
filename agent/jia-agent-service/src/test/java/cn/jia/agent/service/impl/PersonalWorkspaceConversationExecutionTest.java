@@ -256,6 +256,7 @@ class PersonalWorkspaceConversationExecutionTest {
         verifyNoInteractions(writes);
     }
 
+
     @Test void catalogOnlyListsVerifiedBytesUnderOwnerGrantAndAssignmentFence() throws Exception {
         var bytes=png();var hash=sha(bytes);execution.setExecutionState("OUTPUT_COMMITTED");
         output=new PersonalWorkspaceExecutionOutputEntity().setOutputId("output_1")
@@ -280,6 +281,45 @@ class PersonalWorkspaceConversationExecutionTest {
         assertEquals(PersonalWorkspaceExecutionService.Reason.STORAGE_UNAVAILABLE,assertThrows(
                 PersonalWorkspaceExecutionService.Failure.class,()->service.listConversationOutputs(
                         OWNER,"task-1","run-1")).getReason());
+
+@Test void nativeConversationInboxSqlHasByteExactOwnerTargetModeAndStableOrder() throws Exception {
+        var select=cn.jia.agent.mapper.PersonalWorkspaceExecutionMapper.class.getMethod(
+                        "listQueuedConversationsByTarget",String.class,String.class,String.class,String.class,int.class)
+                .getAnnotation(org.apache.ibatis.annotations.Select.class);
+        assertNotNull(select);
+        String sql=String.join(" ",select.value());
+        assertTrue(sql.contains("execution_mode='CONVERSATION'"));
+        assertTrue(sql.contains("execution_state='QUEUED'"));
+        assertTrue(sql.contains("ORDER BY created_at ASC, execution_id ASC LIMIT #{limit}"));
+        for (String key:List.of("tenant_id","client_id","owner_jiacn","target_agent_id","execution_mode")) {
+            assertTrue(sql.contains("CAST("+key+" AS BINARY)"),key);
+            assertTrue(sql.contains("OCTET_LENGTH("+key+")"),key);
+        }
+    }
+
+    @Test void nativeConversationInboxIsClosedOffByDefaultAndScopedToLiveGrant() {
+        when(rows.listQueuedConversationsByTarget("0","client","owner","agent",16))
+                .thenReturn(List.of(execution));
+        assertEquals(PersonalWorkspaceExecutionService.Reason.CAPABILITY_UNAVAILABLE,assertThrows(
+                PersonalWorkspaceExecutionService.Failure.class,
+                () -> service.runtimeConversationCommands(RUNTIME,16)).getReason());
+        verify(rows,never()).listQueuedConversationsByTarget(any(),any(),any(),any(),anyInt());
+        enable();
+        var commands=service.runtimeConversationCommands(RUNTIME,16);
+        assertEquals(1,commands.size());
+        assertEquals("task-1",commands.getFirst().taskId());
+        assertEquals(commandId(),commands.getFirst().commandId());
+        assertEquals(messageId(),commands.getFirst().messageId());
+        assertFalse(commands.toString().contains("grant-1"));
+        assertFalse(commands.toString().contains("lease"));
+        execution.setTargetAgentId("other-agent");
+        assertTrue(service.runtimeConversationCommands(RUNTIME,16).isEmpty());
+        execution.setTargetAgentId("agent");
+        when(grants.admit(any(),any(),any(),anyLong(),anyLong(),any(),any(),eq(true)))
+                .thenThrow(new IllegalStateException("revoked"));
+        assertTrue(service.runtimeConversationCommands(RUNTIME,16).isEmpty());
+        verify(rows,never()).update(any());
+
     }
 
     @Test void defaultOffAndLegacyUnfencedRuntimeLaneNeverStartsConversation() {

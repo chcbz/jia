@@ -588,6 +588,42 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 });
     }
 
+    /** Dedicated native inbox; each candidate takes an independent root transaction so a
+     * revoked row can roll back without poisoning a subsequent valid queue item. */
+    @Override
+    public List<ConversationRuntimeCommand> runtimeConversationCommands(RuntimeScope scope,int limit) {
+        requireConversationExecutionEnabled();validateRuntimeScope(scope);
+        if (limit<1 || limit>16) throw failure(Reason.BAD_REQUEST);
+        var candidates=executions.listQueuedConversationsByTarget(scope.tenantId(),scope.clientId(),
+                scope.ownerJiacn(),scope.agentId(),limit);
+        if (candidates==null) throw failure(Reason.NOT_FOUND);
+        List<ConversationRuntimeCommand> result=new ArrayList<>();
+        for (var candidate:candidates) {
+            if (candidate==null || !"CONVERSATION".equals(candidate.getExecutionMode())
+                    || !"QUEUED".equals(candidate.getExecutionState())
+                    || !same(candidate.getTenantId(),scope.tenantId())
+                    || !same(candidate.getClientId(),scope.clientId())
+                    || !same(candidate.getOwnerJiacn(),scope.ownerJiacn())
+                    || !same(candidate.getTargetAgentId(),scope.agentId())) continue;
+            try {
+                result.add(withConversationRoot(scope,candidate.getTaskId(),candidate.getRunId(),false,
+                        execution -> {
+                            if (!same(candidate.getExecutionId(),execution.getExecutionId()))
+                                throw failure(Reason.NOT_FOUND);
+                            String seed=execution.getExecutionId();
+                            return new ConversationRuntimeCommand(1,execution.getTaskId(),execution.getRunId(),
+                                    execution.getConversationId(),"pwe_cmd_"+plainSha("command\n"+seed),
+                                    "pwe_msg_"+plainSha("message\n"+seed),execution.getInstruction(),
+                                    execution.getOutputContentMimeType(),"output_1");
+                        }));
+            } catch (Failure stale) { // One revoked candidate must not suppress other owned work.
+                if (stale.getReason()!=Reason.NOT_FOUND && stale.getReason()!=Reason.GRANT_REVOKED
+                        && stale.getReason()!=Reason.TASK_CONFLICT) throw stale;
+            }
+        }
+        return List.copyOf(result);
+    }
+
     /** Root -> grant -> execution FOR UPDATE; one native claim per unexpired lease. No provider calls. */
     @Override
     @Transactional(rollbackFor = Exception.class)
