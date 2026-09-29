@@ -281,8 +281,9 @@ class PersonalWorkspaceConversationExecutionTest {
         assertEquals(PersonalWorkspaceExecutionService.Reason.STORAGE_UNAVAILABLE,assertThrows(
                 PersonalWorkspaceExecutionService.Failure.class,()->service.listConversationOutputs(
                         OWNER,"task-1","run-1")).getReason());
+    }
 
-@Test void nativeConversationInboxSqlHasByteExactOwnerTargetModeAndStableOrder() throws Exception {
+    @Test void nativeConversationInboxSqlHasByteExactOwnerTargetModeAndStableOrder() throws Exception {
         var select=cn.jia.agent.mapper.PersonalWorkspaceExecutionMapper.class.getMethod(
                         "listQueuedConversationsByTarget",String.class,String.class,String.class,String.class,int.class)
                 .getAnnotation(org.apache.ibatis.annotations.Select.class);
