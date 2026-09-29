@@ -91,6 +91,18 @@ class ChatConversationBountyLegacyTest {
         verify(conversations,never()).insert(any());
         verify(bindings,never()).attach(any(),any(),anyLong(),anyLong(),anyLong());
     }
+    @Test void genericDeletionCannotTombstoneStableBountyDiscussion() {
+        when(conversations.lockScopedByIdIncludingDeleted("owner","client","10"))
+                .thenReturn(owned(10));
+        assertThrows(AgentTaskThreadException.class, () -> service.deleteConversation("10"));
+        verify(conversations,never()).softDeleteScopedById(any(),any(),any(),anyLong());
+        verifyNoInteractions(messages);
+    }
+    @Test void malformedBountyScopeCannotFallbackToGenericCreate() {
+        assertThrows(AgentTaskThreadException.class, () -> service.create(
+                requested().setConversationScopeKey("other-task")));
+        verifyNoInteractions(conversations,bindings,agents);
+    }
     @Test void invalidTargetAndDeletedBoundConversationFailClosed() {
         authorize();
         assertThrows(AgentTaskThreadException.class,
