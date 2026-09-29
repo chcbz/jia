@@ -253,8 +253,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         return view(scope, execution);
     }
 
-    /** No-input first slice; paid generation requires persisted server-issued cost authority.
-     * Material selection needs separate exact grant/input snapshot plumbing. */
+    /** Fixed-version materialization from the live grant; paid generation still requires
+     * persisted, server-issued cost authority before the execution is inserted. */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public ExecutionView createConversation(OwnerScope scope, ConversationCreate command) {
@@ -271,11 +271,20 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 command.taskId(), command.instruction(), command.outputContentMimeType(), List.of()));
         if (valid.taskId() == null || !Set.of("image/png", "image/jpeg").contains(valid.outputContentMimeType()))
             throw failure(Reason.CAPABILITY_UNAVAILABLE);
+        if (command.references().size()>32) throw failure(Reason.BAD_REQUEST);
+        for (var ref:command.references()) {
+            id(ref.fileId(),"fileId",100);
+            if (ref.version()<1 || !Set.of("INPUT","REFERENCE").contains(ref.purpose())
+                    || !Set.of("image/png","image/jpeg").contains(ref.contentMimeType())
+                    || ref.byteLength()<0 || ref.contentHash()==null
+                    || !ref.contentHash().matches("[0-9a-f]{64}")) throw failure(Reason.BAD_REQUEST);
+        }
         String key="conv_"+plainSha(command.intentId());
         String requestHash=hash("CONVERSATION",valid.conversationId(),valid.taskId(),
                 valid.targetAgentId(),command.intentId(),command.grantId(),
                 Long.toString(command.grantVersion()),Long.toString(command.assignmentRevision()),
-                command.permittedOperation(),valid.instruction(),valid.outputContentMimeType());
+                command.permittedOperation(),valid.instruction(),valid.outputContentMimeType(),
+                referenceWire(command.references()));
         return taskMutations.executeWithLockedTaskRootInOwnerScope(scope.tenantId(), scope.clientId(),
                 scope.ownerJiacn(),valid.taskId(),root -> {
                     requireConversationRoot(root,scope,valid.taskId(),valid.targetAgentId(),command.assignmentRevision());
@@ -310,8 +319,29 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                             .setPermittedOperation(command.permittedOperation())
                             .setIdempotencyKey(key).setRequestHash(requestHash).setCreatedAt(System.currentTimeMillis());
                     scoped(row,scope);
-                    requireConversationGrant(scope,row);
+                    var authorized=requireConversationGrant(scope,row);
+                    if (!sameReferences(command.references(),authorized.inputs())) throw failure(Reason.GRANT_REVOKED);
                     executions.insert(row);
+                    int index=0;
+                    for (var ref:command.references()) {
+                        var file=workspace.lockFile(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),ref.fileId());
+                        var version=workspace.findVersion(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                                ref.fileId(),ref.version());
+                        if (file==null || !"ACTIVE".equals(file.getState()) || version==null
+                                || !same(ref.contentHash(),version.getContentHash())
+                                || !same(ref.contentMimeType(),version.getContentMimeType())
+                                || version.getByteLength()==null || version.getByteLength()!=ref.byteLength()
+                                || version.getStorageUri()==null) throw failure(Reason.GRANT_REVOKED);
+                        long now=System.currentTimeMillis();
+                        var input=new PersonalWorkspaceExecutionInputEntity()
+                                .setInputRef("input_"+(++index)).setExecutionId(row.getExecutionId())
+                                .setOwnerJiacn(scope.ownerJiacn()).setFileId(ref.fileId())
+                                .setFileVersion(ref.version()).setOriginalFilename(version.getOriginalFilename())
+                                .setContentMimeType(ref.contentMimeType()).setByteLength(ref.byteLength())
+                                .setContentHash(ref.contentHash()).setStorageUri(version.getStorageUri())
+                                .setGrantState("ACTIVE").setCreatedAt(now).setRevokedAt(null);
+                        scoped(input,scope);executions.insertInput(input);
+                    }
                     return view(scope,row);
                 });
     }
@@ -399,7 +429,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             throw failure(Reason.GRANT_REVOKED);
     }
 
-    private void requireConversationGrant(OwnerScope scope,PersonalWorkspaceExecutionEntity execution) {
+    private AgentTaskExecutionGrantService.Admission requireConversationGrant(
+            OwnerScope scope,PersonalWorkspaceExecutionEntity execution) {
         if (conversationGrants==null || !"CONVERSATION".equals(execution.getExecutionMode())
                 || !same(scope.tenantId(),execution.getTenantId()) || !same(scope.clientId(),execution.getClientId())
                 || !same(scope.ownerJiacn(),execution.getOwnerJiacn()) || execution.getTaskGrantId()==null
@@ -417,7 +448,30 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                     || !same(execution.getPermittedOperation(),admission.operation())
                     || !admission.paidExecutionAuthorized())
                 throw failure(Reason.GRANT_REVOKED);
+            return admission;
         } catch (RuntimeException denied) { throw failure(Reason.GRANT_REVOKED); }
+    }
+
+    private static boolean sameReferences(List<ReferenceSelection> expected,
+            List<AgentTaskExecutionGrantService.AuthorizedInput> authorized) {
+        if (expected==null || authorized==null || expected.size()!=authorized.size()) return false;
+        for (int i=0;i<expected.size();i++) {
+            var left=expected.get(i);var right=authorized.get(i);
+            if (left==null || right==null || !same(left.fileId(),right.fileId())
+                    || left.version()!=right.version() || !same(left.purpose(),right.purpose())
+                    || !same(left.contentMimeType(),right.contentMimeType())
+                    || left.byteLength()!=right.byteLength()
+                    || !same(left.contentHash(),right.contentHash())) return false;
+        }
+        return true;
+    }
+    private static String referenceWire(List<ReferenceSelection> refs) {
+        String[] wire=new String[refs.size()*6];int n=0;
+        for (var ref:refs) {
+            wire[n++]=ref.fileId();wire[n++]=Integer.toString(ref.version());wire[n++]=ref.purpose();
+            wire[n++]=ref.contentMimeType();wire[n++]=Long.toString(ref.byteLength());wire[n++]=ref.contentHash();
+        }
+        return hash(wire);
     }
 
     @Override
@@ -684,6 +738,40 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         });
     }
 
+    /** Only persisted ACTIVE rows exactly matching the still-valid grant can leave this boundary. */
+    private List<RuntimeInput> verifiedConversationInputs(RuntimeScope scope,
+            PersonalWorkspaceExecutionEntity execution) {
+        var authorized=requireConversationGrant(new OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),
+                execution).inputs();
+        var rows=executions.listInputs(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                execution.getExecutionId());
+        if (rows==null || rows.size()!=authorized.size() || rows.size()>32)
+            throw failure(Reason.CAPABILITY_UNAVAILABLE);
+        var indexed=new LinkedHashMap<String,PersonalWorkspaceExecutionInputEntity>();
+        for (var input:rows) {
+            if (input==null || input.getInputRef()==null
+                    || indexed.putIfAbsent(input.getInputRef(),input)!=null)
+                throw failure(Reason.CAPABILITY_UNAVAILABLE);
+        }
+        var result=new ArrayList<RuntimeInput>();
+        for (int i=0;i<rows.size();i++) {
+            var input=indexed.get("input_"+(i+1));var expected=authorized.get(i);
+            if (!isExactInput(new OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),
+                    execution.getExecutionId(),input)
+                    || !same(input.getInputRef(),"input_"+(i+1))
+                    || !"ACTIVE".equals(input.getGrantState())
+                    || !same(input.getFileId(),expected.fileId())
+                    || input.getFileVersion()==null || input.getFileVersion()!=expected.version()
+                    || !same(input.getContentMimeType(),expected.contentMimeType())
+                    || !Set.of("image/png","image/jpeg").contains(input.getContentMimeType())
+                    || input.getByteLength()==null || input.getByteLength()!=expected.byteLength()
+                    || !same(input.getContentHash(),expected.contentHash())
+                    || input.getStorageUri()==null) throw failure(Reason.CAPABILITY_UNAVAILABLE);
+            result.add(runtimeInput(input));
+        }
+        return List.copyOf(result);
+    }
+
     /** The no-reference fact comes from persisted execution inputs, never inbox/model text. */
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -692,13 +780,28 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         requireConversationExecutionEnabled();
         return withConversationRoot(scope, taskId, runId, true, execution -> {
             requireConversationFence(scope, execution, fence, false);
-            var rowsForExecution = executions.listInputs(scope.tenantId(), scope.clientId(),
-                    scope.ownerJiacn(), execution.getExecutionId());
-            // U2 image-only lane has no approved reference resolver yet. Never treat an
-            // unmaterialized/unknown input as 'none' or disclose it via the old endpoint.
-            if (rowsForExecution == null || !rowsForExecution.isEmpty())
-                throw failure(Reason.CAPABILITY_UNAVAILABLE);
-            return new ConversationInputSnapshot(execution.getExecutionId(), fence.version(), true, List.of());
+            var inputs=verifiedConversationInputs(scope,execution);
+            return new ConversationInputSnapshot(execution.getExecutionId(), fence.version(),
+                    inputs.isEmpty(),inputs);
+        });
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public RuntimeContent conversationInputContent(RuntimeScope scope, String taskId, String runId,
+            ConversationFence fence, String inputRef) {
+        requireConversationExecutionEnabled();id(inputRef,"inputRef",100);
+        return withConversationRoot(scope,taskId,runId,true,execution -> {
+            requireConversationFence(scope,execution,fence,false);
+            var inputs=verifiedConversationInputs(scope,execution);
+            var match=inputs.stream().filter(input -> same(input.inputRef(),inputRef)).findFirst()
+                    .orElseThrow(() -> failure(Reason.NOT_FOUND));
+            var content=inputContent(scope,execution,inputRef);
+            if (content==null || content.bytes()==null || content.bytes().length!=match.byteLength()
+                    || !same(plainSha(content.bytes()),match.sha256())
+                    || !same(content.contentMimeType(),match.contentMimeType()))
+                throw failure(Reason.STORAGE_UNAVAILABLE);
+            return content;
         });
     }
 

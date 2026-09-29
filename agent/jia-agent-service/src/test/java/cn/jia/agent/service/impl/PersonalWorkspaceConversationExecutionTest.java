@@ -28,6 +28,7 @@ class PersonalWorkspaceConversationExecutionTest {
     private static final PersonalWorkspaceExecutionService.RuntimeScope RUNTIME =
             new PersonalWorkspaceExecutionService.RuntimeScope("0","client","owner","agent","runtime");
     private final PersonalWorkspaceExecutionDao rows=mock(PersonalWorkspaceExecutionDao.class);
+    private final PersonalWorkspaceDao workspace=mock(PersonalWorkspaceDao.class);
     private final AgentRuntimeDao runtimes=mock(AgentRuntimeDao.class);
     private final PersonalWorkspaceStorage storage=mock(PersonalWorkspaceStorage.class);
     private final PersonalWorkspaceWriteService writes=mock(PersonalWorkspaceWriteService.class);
@@ -44,7 +45,7 @@ class PersonalWorkspaceConversationExecutionTest {
         var agent=new AgentRuntimeEntity();
         agent.setAgentId("agent");agent.setClientId("client");agent.setOwnerJiacn("owner");
         when(runtimes.findCandidateRosterByOwner("client","owner")).thenReturn(List.of(agent));
-        service=new PersonalWorkspaceExecutionServiceImpl(rows,mock(PersonalWorkspaceDao.class),
+        service=new PersonalWorkspaceExecutionServiceImpl(rows,workspace,
                 mock(PersonalWorkspaceTaskLinkDao.class),runtimes,storage,writes,
                 new PersonalWorkspaceExecutionProperties(List.of("image/png")));
         service.setConversationAdmission(grants,transactions);
@@ -108,6 +109,94 @@ class PersonalWorkspaceConversationExecutionTest {
                 && "42".equals(row.getConversationId()) && "grant-1".equals(row.getTaskGrantId())));
         verifyNoInteractions(writes);
         verify(storage,never()).store(any(),any(byte[].class),anyString());
+    }
+
+    @Test void exactGrantedImageVersionIsMaterializedOnlyInTheScopedConversationExecution() {
+        var expected=new PersonalWorkspaceExecutionService.ReferenceSelection("file-1",1,"REFERENCE",
+                "image/png",100,"a".repeat(64));
+        var granted=new AgentTaskExecutionGrantService.AuthorizedInput("file-1",1,"REFERENCE",
+                "image/png",100,"a".repeat(64));
+        when(grants.admit(any(),eq("task-1"),eq("grant-1"),eq(1L),eq(7L),
+                eq("agent"),eq("GENERATE_IMAGE"),eq(true))).thenReturn(
+                new AgentTaskExecutionGrantService.Admission("grant-1",1,7,
+                        "agent","GENERATE_IMAGE",true,List.of(granted)));
+        var file=new PersonalWorkspaceFileEntity().setFileId("file-1").setState("ACTIVE");
+        var version=new PersonalWorkspaceVersionEntity().setFileId("file-1").setVersion(1)
+                .setOriginalFilename("bird.png").setContentMimeType("image/png")
+                .setByteLength(100L).setContentHash("a".repeat(64)).setStorageUri("owner-private/object");
+        when(workspace.lockFile("0","client","owner","file-1")).thenReturn(file);
+        when(workspace.findVersion("0","client","owner","file-1",1)).thenReturn(version);
+        var created=service.createConversation(OWNER,new PersonalWorkspaceExecutionService.ConversationCreate(
+                "42","task-1","agent","intent-1","grant-1",1,7,"GENERATE_IMAGE",
+                "draw a bird using the reference","image/png",List.of(expected)));
+        assertEquals("CONVERSATION",created.executionMode());
+        verify(rows).insertInput(argThat(input -> "file-1".equals(input.getFileId())
+                && input.getFileVersion()==1 && "ACTIVE".equals(input.getGrantState())
+                && "owner-private/object".equals(input.getStorageUri())
+                && "a".repeat(64).equals(input.getContentHash()) && "0".equals(input.getTenantId())
+                && "client".equals(input.getClientId()) && "owner".equals(input.getOwnerJiacn())));
+        verifyNoInteractions(writes);
+    }
+
+    @Test void fencedRuntimeReadsOnlyMatchedVersionedReferenceBytes() {
+        byte[] bytes=new byte[100];
+        String hash=sha(bytes);
+        var granted=new AgentTaskExecutionGrantService.AuthorizedInput("file-1",1,"REFERENCE",
+                "image/png",100,hash);
+        when(grants.admit(any(),eq("task-1"),eq("grant-1"),eq(1L),eq(7L),
+                eq("agent"),eq("GENERATE_IMAGE"),eq(true))).thenReturn(
+                new AgentTaskExecutionGrantService.Admission("grant-1",1,7,
+                        "agent","GENERATE_IMAGE",true,List.of(granted)));
+        var row=new PersonalWorkspaceExecutionInputEntity().setInputRef("input_1")
+                .setExecutionId("exec-1").setOwnerJiacn("owner").setFileId("file-1")
+                .setFileVersion(1).setOriginalFilename("bird.png").setContentMimeType("image/png")
+                .setByteLength(100L).setContentHash(hash)
+                .setStorageUri("owner-private/object").setGrantState("ACTIVE");
+        row.setTenantId("0");row.setClientId("client");
+        when(rows.listInputs("0","client","owner","exec-1")).thenReturn(List.of(row));
+        when(rows.lockInput("0","client","owner","exec-1","input_1")).thenReturn(row);
+        when(storage.read(any(),eq("owner-private/object"),eq(hash),eq(100L),eq("image/png")))
+                .thenReturn(new PersonalWorkspaceStorage.StoredContent(bytes,hash,100,"image/png"));
+        enable();
+        var lease=service.claimConversationStart(RUNTIME,"task-1","run-1",commandId(),messageId());
+        var manifest=service.conversationInputs(RUNTIME,"task-1","run-1",lease.fence());
+        assertFalse(manifest.noReferencedMaterials());
+        assertEquals(List.of("input_1"),manifest.inputs().stream().map(
+                PersonalWorkspaceExecutionService.RuntimeInput::inputRef).toList());
+        assertArrayEquals(bytes,service.conversationInputContent(RUNTIME,"task-1","run-1",
+                lease.fence(),"input_1").bytes());
+        assertEquals(PersonalWorkspaceExecutionService.Reason.NOT_FOUND,assertThrows(
+                PersonalWorkspaceExecutionService.Failure.class,()->service.conversationInputContent(
+                        RUNTIME,"task-1","run-1",lease.fence(),"other")).getReason());
+        row.setFileVersion(2);
+        assertEquals(PersonalWorkspaceExecutionService.Reason.CAPABILITY_UNAVAILABLE,assertThrows(
+                PersonalWorkspaceExecutionService.Failure.class,()->service.conversationInputContent(
+                        RUNTIME,"task-1","run-1",lease.fence(),"input_1")).getReason());
+        verify(storage,times(1)).read(any(),eq("owner-private/object"),eq(hash),eq(100L),eq("image/png"));
+    }
+
+    @Test void alteredOrOmittedReferenceNeverCreatesAnExecutionWhenGrantContainsOne() {
+        var granted=new AgentTaskExecutionGrantService.AuthorizedInput("file-1",1,"REFERENCE",
+                "image/png",100,"a".repeat(64));
+        when(grants.admit(any(),eq("task-1"),eq("grant-1"),eq(1L),eq(7L),
+                eq("agent"),eq("GENERATE_IMAGE"),eq(true))).thenReturn(
+                new AgentTaskExecutionGrantService.Admission("grant-1",1,7,
+                        "agent","GENERATE_IMAGE",true,List.of(granted)));
+        for (var refs:List.of(
+                List.<PersonalWorkspaceExecutionService.ReferenceSelection>of(),
+                List.of(new PersonalWorkspaceExecutionService.ReferenceSelection("file-1",2,"REFERENCE",
+                        "image/png",100,"a".repeat(64))),
+                List.of(new PersonalWorkspaceExecutionService.ReferenceSelection("file-1",1,"REFERENCE",
+                        "image/png",100,"b".repeat(64))))) {
+            var command=new PersonalWorkspaceExecutionService.ConversationCreate("42","task-1","agent",
+                    "intent-1","grant-1",1,7,"GENERATE_IMAGE","draw a bird","image/png",refs);
+            assertEquals(PersonalWorkspaceExecutionService.Reason.GRANT_REVOKED,assertThrows(
+                    PersonalWorkspaceExecutionService.Failure.class,()->service.createConversation(
+                            OWNER,command)).getReason());
+        }
+        verify(rows,never()).insert(any());
+        verify(rows,never()).insertInput(any());
+        verifyNoInteractions(workspace);
     }
 
     @Test void publicPrivateTeamAndWrongBountyKeysAreNotExecutionAuthority() {

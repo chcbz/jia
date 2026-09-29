@@ -24,6 +24,9 @@ public interface PersonalWorkspaceExecutionService {
     ConversationLease renewConversationLease(RuntimeScope scope, String taskId, String runId, ConversationFence fence);
     /** Server-verified source manifest under live task/grant and exact lease. No legacy /inputs fallback. */
     ConversationInputSnapshot conversationInputs(RuntimeScope scope, String taskId, String runId, ConversationFence fence);
+    /** Runtime byte read; exact input ref must belong to this fenced execution and grant. */
+    RuntimeContent conversationInputContent(RuntimeScope scope, String taskId, String runId,
+            ConversationFence fence, String inputRef);
     record ConversationInputSnapshot(String executionId, long leaseVersion, boolean noReferencedMaterials,
             List<RuntimeInput> inputs) {
         public ConversationInputSnapshot { inputs = List.copyOf(inputs); }
@@ -39,9 +42,21 @@ public interface PersonalWorkspaceExecutionService {
     record ConversationLease(String executionId, long version, String token, long expiresAt) {
         public ConversationFence fence() { return new ConversationFence(version, token); }
     }
+    /** Trusted coordinator's expected material list, checked byte-for-byte against the grant. */
+    record ReferenceSelection(String fileId, int version, String purpose, String contentMimeType,
+            long byteLength, String contentHash) { }
     record ConversationCreate(String conversationId, String taskId, String targetAgentId,
             String intentId, String grantId, long grantVersion, long assignmentRevision,
-            String permittedOperation, String instruction, String outputContentMimeType) { }
+            String permittedOperation, String instruction, String outputContentMimeType,
+            List<ReferenceSelection> references) {
+        public ConversationCreate { references = List.copyOf(references); }
+        public ConversationCreate(String conversationId, String taskId, String targetAgentId,
+                String intentId, String grantId, long grantVersion, long assignmentRevision,
+                String permittedOperation, String instruction, String outputContentMimeType) {
+            this(conversationId, taskId, targetAgentId, intentId, grantId, grantVersion,
+                    assignmentRevision, permittedOperation, instruction, outputContentMimeType, List.of());
+        }
+    }
     record ConversationOutput(String executionId, String outputId, String originalFilename,
             String contentMimeType, String sha256, long byteLength, byte[] bytes) {
         public ConversationOutput { bytes = bytes == null ? null : bytes.clone(); }

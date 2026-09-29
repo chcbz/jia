@@ -72,6 +72,22 @@ public final class PersonalWorkspaceConversationRuntimeController {
         return ok(executions.conversationInputs(scope(authentication),taskId,runId,fence(fence)));
     }
 
+    @PostMapping(value="/{taskId}/runs/{runId}/conversation/inputs/{inputRef}/content",
+            consumes=MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<byte[]> inputContent(@PathVariable String taskId,@PathVariable String runId,
+            @PathVariable String inputRef,@RequestBody FenceRequest fence,
+            HttpServletRequest request,Authentication authentication) {
+        noQuery(request);
+        var content=executions.conversationInputContent(scope(authentication),taskId,runId,
+                fence(fence),inputRef);
+        if (content==null || content.bytes()==null) throw new BadRequest();
+        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL)
+                .header("X-Content-Type-Options","nosniff")
+                .header(HttpHeaders.CONTENT_DISPOSITION,"attachment; filename=reference.bin")
+                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .contentLength(content.bytes().length).body(content.bytes());
+    }
+
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/outputs/{outputId}/content",
             consumes=MediaType.MULTIPART_FORM_DATA_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<PersonalWorkspaceExecutionService.StagedOutput> stage(@PathVariable String taskId,

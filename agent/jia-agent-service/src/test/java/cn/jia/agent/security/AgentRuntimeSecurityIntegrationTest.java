@@ -395,6 +395,35 @@ class AgentRuntimeSecurityIntegrationTest {
     }
 
     @Test
+    void conversationReferenceBytesRequireExactRuntimeAndFenceBody() throws Exception {
+        var scope=new PersonalWorkspaceExecutionService.RuntimeScope(TENANT,CLIENT_A,OWNER_A,A,"runtime-a");
+        var fence=new PersonalWorkspaceExecutionService.ConversationFence(2L,
+                "01234567-89ab-cdef-0123-456789abcdef");
+        String path="/internal/agent/tasks/task-a/runs/run-a/conversation/inputs/input_1/content";
+        String body="{\"version\":2,\"token\":\""+fence.token()+"\"}";
+        when(workspaceExecutions.conversationInputContent(scope,"task-a","run-a",fence,"input_1"))
+                .thenReturn(new PersonalWorkspaceExecutionService.RuntimeContent("bird.png","image/png",new byte[]{1,2,3}));
+        conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A)
+                .contentType("application/json").content(body))
+                .andExpect(status().isOk()).andExpect(header().string("Cache-Control","private, no-store"))
+                .andExpect(header().string("Content-Type","application/octet-stream"))
+                .andExpect(header().string("Content-Disposition","attachment; filename=reference.bin"))
+                .andExpect(content().bytes(new byte[]{1,2,3}));
+        conversationMvc.perform(headers(get(path),A,"runtime-a",TOKEN_A)).andExpect(status().isForbidden());
+        conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A).queryParam("token",fence.token())
+                .contentType("application/json").content(body)).andExpect(status().isBadRequest());
+        conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A)
+                .header("Origin","https://browser.invalid").contentType("application/json").content(body))
+                .andExpect(status().isForbidden());
+        conversationMvc.perform(headers(post(path),B,"runtime-b",TOKEN_A)
+                .contentType("application/json").content(body)).andExpect(status().isUnauthorized());
+        conversationMvc.perform(headers(post(path+"/extra"),A,"runtime-a",TOKEN_A)
+                .contentType("application/json").content(body)).andExpect(status().isForbidden());
+        verify(workspaceExecutions,times(1)).conversationInputContent(scope,"task-a","run-a",fence,"input_1");
+        verifyNoMoreInteractions(workspaceExecutions);
+    }
+
+    @Test
     void conversationOutputAndFailureRoutesRejectCrossRuntimeAndUnfencedPaths() throws Exception {
         var scope=new PersonalWorkspaceExecutionService.RuntimeScope(TENANT,CLIENT_A,OWNER_A,A,"runtime-a");
         var fence=new PersonalWorkspaceExecutionService.ConversationFence(1L,

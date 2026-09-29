@@ -340,8 +340,11 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
             throw new AgentTaskExecutionGrantException(Reason.PAID_EXECUTION_NOT_AUTHORIZED,
                     "Paid execution has no persisted cost authorization");
         }
+        var authorizedInputs=readInputs(grant.getInputScopeJson()).stream()
+                .map(input -> new AuthorizedInput(input.fileId(),input.version(),input.purpose(),
+                        input.contentMimeType(),input.byteLength(),input.contentHash())).toList();
         return new Admission(grant.getGrantId(),grantVersion,assignmentRevision,targetAgentId,operation,
-                paid && grant.getCostAuthorizationRef()!=null);
+                paid && grant.getCostAuthorizationRef()!=null,authorizedInputs);
     }
 
     private void requireAssignmentEpoch(Scope scope,String taskId,long assignmentRevision,
