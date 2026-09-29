@@ -187,6 +187,12 @@ class PersonalWorkspaceConversationExecutionTest {
         assertArrayEquals(png,read.bytes());assertEquals(hash,read.sha256());
         read.bytes()[0]=0;assertArrayEquals(png,read.bytes());
         verifyNoInteractions(writes);
+        // Exercise the callback even for a hostile owner: scoped DAO must not return Alice's row.
+        // Without this explicit stub Mockito returns null and never executes the negative path.
+        when(transactions.executeWithLockedTaskRootInOwnerScope(eq("0"),eq("client"),
+                eq("other"),eq("task-1"),any())).thenAnswer(i ->
+                ((AgentTaskMutationTransaction.LockedTaskMutation<?>)i.getArgument(4)).apply(
+                        new AgentTaskMetaEntity().setTaskId("task-1")));
         assertEquals(PersonalWorkspaceExecutionService.Reason.NOT_FOUND,assertThrows(
                 PersonalWorkspaceExecutionService.Failure.class,() -> service.readConversationOutput(
                         new PersonalWorkspaceExecutionService.OwnerScope("0","client","other"),
