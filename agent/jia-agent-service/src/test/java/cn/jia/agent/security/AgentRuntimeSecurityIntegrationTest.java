@@ -362,6 +362,7 @@ class AgentRuntimeSecurityIntegrationTest {
         conversationMvc.perform(headers(post(claim),A,"runtime-a",TOKEN_A)
                 .queryParam("token",lease.token()).contentType("application/json").content(body))
                 .andExpect(status().isBadRequest());
+        verify(workspaceExecutions).runtimeConversationCommands(scope,16);
         verify(workspaceExecutions,times(1)).claimConversationStart(scope,"task-a","run-a","cmd-a","msg-a");
         verifyNoMoreInteractions(workspaceExecutions);
     }
