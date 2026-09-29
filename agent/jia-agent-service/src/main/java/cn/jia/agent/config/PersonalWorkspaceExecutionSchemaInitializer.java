@@ -21,6 +21,7 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
     static final String TASK_EXECUTION_MIGRATION_RESOURCE = "db/agent-personal-workspace-v1_13-task-execution.sql";
     static final String TASK_PUBLICATION_MIGRATION_RESOURCE = "db/agent-personal-workspace-v1_13-task-publication.sql";
     static final String CONVERSATION_EXECUTION_RESOURCE = "db/agent-personal-workspace-v1_14-conversation-execution.sql";
+    static final String CONVERSATION_LEASE_RESOURCE = "db/agent-personal-workspace-v1_15-conversation-lease.sql";
     static final String CONVERSATION_OUTPUT_RESOURCE = "db/agent-personal-workspace-v1_14-conversation-output.sql";
     static final List<String> TABLES = List.of("agent_personal_workspace_execution",
             "agent_personal_workspace_execution_input", "agent_personal_workspace_execution_output");
@@ -38,9 +39,11 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
         migrateTaskExecution();
         migrateTaskPublication();
         migrateConversationMode();
+        migrateConversationLease();
         verifyTaskExecution();
         verifyTaskPublication();
         verifyConversationMode();
+        verifyConversationLease();
     }
     static List<String> ddlStatements() {
         final String source;
@@ -250,6 +253,50 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
             throw new IllegalStateException("Unsafe conversation migration");
         return statement.substring(0,statement.length()-1);
     }
+    /** Single atomic ALTER, resumed by column discovery; missing/disabled CHECK fails closed. */
+    private void migrateConversationLease() {
+        int columns=requiredColumnCount("agent_personal_workspace_execution",
+                "'conversation_lease_token','conversation_lease_runtime_id','conversation_lease_version','conversation_lease_expires_at'");
+        if (columns==0) jdbc.execute(conversationLeaseMigrationStatement());
+        else if (columns!=4) throw new IllegalStateException("Conversation lease schema is partial");
+    }
+    static String conversationLeaseMigrationStatement() {
+        final String source;
+        try { source=new ClassPathResource(CONVERSATION_LEASE_RESOURCE).getContentAsString(StandardCharsets.UTF_8); }
+        catch (IOException missing) { throw new IllegalStateException("Conversation lease migration missing",missing); }
+        String statement=source.lines().filter(line->!line.stripLeading().startsWith("--"))
+                .reduce("",(a,b)->a+b+'\n').strip();
+        String normalized=statement.toLowerCase(Locale.ROOT).replaceAll("\\s+"," ");
+        if (!normalized.startsWith("alter table agent_personal_workspace_execution ")
+                || !normalized.contains("add column conversation_lease_token varchar(100)")
+                || !normalized.contains("add column conversation_lease_runtime_id varchar(100)")
+                || !normalized.contains("add column conversation_lease_version bigint not null default 0")
+                || !normalized.contains("add column conversation_lease_expires_at bigint")
+                || !normalized.contains("add constraint chk_pwex_conversation_lease check")
+                || normalized.contains(" insert ") || normalized.contains(" update ") || normalized.contains(" delete ")
+                || normalized.contains(" drop ") || normalized.contains(" create trigger ")
+                || !statement.endsWith(";") || statement.substring(0,statement.length()-1).contains(";"))
+            throw new IllegalStateException("Unsafe conversation lease migration");
+        return statement.substring(0,statement.length()-1);
+    }
+    void verifyConversationLease() {
+        Integer invalid=jdbc.queryForObject("""
+            SELECT COUNT(*) FROM agent_personal_workspace_execution
+             WHERE conversation_lease_version < 0
+                OR (execution_mode='CONVERSATION' AND
+                    ((conversation_lease_version=0 AND (conversation_lease_token IS NOT NULL
+                         OR conversation_lease_runtime_id IS NOT NULL OR conversation_lease_expires_at IS NOT NULL))
+                     OR (conversation_lease_version>0 AND (conversation_lease_token IS NULL
+                         OR conversation_lease_runtime_id IS NULL OR conversation_lease_expires_at IS NULL
+                         OR conversation_lease_expires_at<=0))))
+                OR (execution_mode<>'CONVERSATION' AND (conversation_lease_version<>0
+                    OR conversation_lease_token IS NOT NULL OR conversation_lease_runtime_id IS NOT NULL
+                    OR conversation_lease_expires_at IS NOT NULL))
+            """, Integer.class);
+        if (invalid==null || invalid!=0) throw new IllegalStateException("Conversation lease row drift");
+        requireCheck("agent_personal_workspace_execution","chk_pwex_conversation_lease","conversation_lease_version");
+    }
+
     void verifyConversationMode() {
         Integer invalid=jdbc.queryForObject("""
                 SELECT COUNT(*) FROM agent_personal_workspace_execution

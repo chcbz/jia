@@ -7,6 +7,7 @@ import cn.jia.agent.service.*;
 import cn.jia.chat.service.WorkspaceConversationAccessService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
@@ -172,12 +173,13 @@ class PersonalWorkspaceConversationExecutionTest {
         when(rows.lockOutput("0","client","owner","exec-1","output_1")).thenReturn(output);
         when(storage.read(any(),eq("private/object"),eq(hash),eq((long)png.length),eq("image/png")))
                 .thenReturn(new PersonalWorkspaceStorage.StoredContent(png,hash,png.length,"image/png"));
-        var started=service.start(RUNTIME,"task-1","run-1","pwe_cmd_"+sha("command\nexec-1".getBytes(StandardCharsets.UTF_8)),
-                "pwe_msg_"+sha("message\nexec-1".getBytes(StandardCharsets.UTF_8)));
-        assertEquals("STARTED",started.state());
+        enable();
+        var started=service.claimConversationStart(RUNTIME,"task-1","run-1",commandId(),messageId());
+        assertEquals(1,started.version());
+        assertNotNull(started.token());
         String manifest="pwe_m_"+sha(("task-1\nrun-1\noutput_1\n"+hash+"\n"+png.length+"\n")
                 .getBytes(StandardCharsets.UTF_8));
-        var committed=service.commitOutputs(RUNTIME,"task-1","run-1",manifest,
+        var committed=service.commitConversationOutput(RUNTIME,"task-1","run-1",started.fence(),manifest,
                 List.of(new PersonalWorkspaceExecutionService.OutputDeclaration("output_1",hash,png.length)));
         assertEquals("COMMITTED",committed.state());
         assertNull(committed.items().getFirst().fileId());
@@ -203,10 +205,10 @@ class PersonalWorkspaceConversationExecutionTest {
     @Test void revokedOrStaleGrantCannotStartOrReadBytes() {
         when(grants.admit(any(),any(),any(),anyLong(),anyLong(),any(),any(),eq(true)))
                 .thenThrow(new IllegalStateException("grant revoked"));
+        enable();
         assertEquals(PersonalWorkspaceExecutionService.Reason.GRANT_REVOKED,assertThrows(
-                PersonalWorkspaceExecutionService.Failure.class, () -> service.start(RUNTIME,
-                        "task-1","run-1","pwe_cmd_"+sha("command\nexec-1".getBytes(StandardCharsets.UTF_8)),
-                        "pwe_msg_"+sha("message\nexec-1".getBytes(StandardCharsets.UTF_8)))).getReason());
+                PersonalWorkspaceExecutionService.Failure.class, () -> service.claimConversationStart(RUNTIME,
+                        "task-1","run-1",commandId(),messageId())).getReason());
         execution.setExecutionState("OUTPUT_COMMITTED");
         assertEquals(PersonalWorkspaceExecutionService.Reason.GRANT_REVOKED,assertThrows(
                 PersonalWorkspaceExecutionService.Failure.class, () -> service.readConversationOutput(
@@ -215,6 +217,78 @@ class PersonalWorkspaceConversationExecutionTest {
         verify(storage,never()).store(any(),any(byte[].class),anyString());
         verifyNoInteractions(writes);
     }
+
+    @Test void defaultOffAndLegacyUnfencedRuntimeLaneNeverStartsConversation() {
+        assertEquals(PersonalWorkspaceExecutionService.Reason.CAPABILITY_UNAVAILABLE,assertThrows(
+                PersonalWorkspaceExecutionService.Failure.class,()-> service.claimConversationStart(
+                        RUNTIME,"task-1","run-1",commandId(),messageId())).getReason());
+        assertEquals(PersonalWorkspaceExecutionService.Reason.CAPABILITY_UNAVAILABLE,assertThrows(
+                PersonalWorkspaceExecutionService.Failure.class,()-> service.start(
+                        RUNTIME,"task-1","run-1",commandId(),messageId())).getReason());
+        assertEquals(PersonalWorkspaceExecutionService.Reason.CAPABILITY_UNAVAILABLE,assertThrows(
+                PersonalWorkspaceExecutionService.Failure.class,()-> service.stageOutput(
+                        RUNTIME,"task-1","run-1","output_1","bird.png","image/png",new byte[]{1})).getReason());
+        assertEquals(PersonalWorkspaceExecutionService.Reason.CAPABILITY_UNAVAILABLE,assertThrows(
+                PersonalWorkspaceExecutionService.Failure.class,()-> service.fail(
+                        RUNTIME,"task-1","run-1","AGENT_DELIVERY_FAILED")).getReason());
+        when(rows.listQueuedByTarget(eq("0"),eq("client"),eq("owner"),eq("agent"),anyInt()))
+                .thenReturn(List.of(execution));
+        assertTrue(service.runtimeQueuedCommands(RUNTIME,16).isEmpty());
+        verify(rows,never()).update(any());
+        verifyNoInteractions(writes);
+    }
+
+    @Test void nativeClaimIsIdempotentWhileLiveAndNewVersionFencesExpiredAttempt() {
+        enable();
+        var first=service.claimConversationStart(RUNTIME,"task-1","run-1",commandId(),messageId());
+        var replay=service.claimConversationStart(RUNTIME,"task-1","run-1",commandId(),messageId());
+        assertEquals(first,replay);
+        verify(rows,times(1)).update(execution);
+        var otherRuntime=new PersonalWorkspaceExecutionService.RuntimeScope("0","client","owner","agent","runtime-2");
+        assertEquals(PersonalWorkspaceExecutionService.Reason.TASK_CONFLICT,assertThrows(
+                PersonalWorkspaceExecutionService.Failure.class,()-> service.claimConversationStart(
+                        otherRuntime,"task-1","run-1",commandId(),messageId())).getReason());
+        execution.setConversationLeaseExpiresAt(System.currentTimeMillis()-1L);
+        assertEquals(PersonalWorkspaceExecutionService.Reason.TASK_CONFLICT,assertThrows(
+                PersonalWorkspaceExecutionService.Failure.class,()-> service.renewConversationLease(
+                        RUNTIME,"task-1","run-1",first.fence())).getReason());
+        var recovered=service.claimConversationStart(otherRuntime,"task-1","run-1",commandId(),messageId());
+        assertEquals(2,recovered.version());assertNotEquals(first.token(),recovered.token());
+        assertEquals(PersonalWorkspaceExecutionService.Reason.TASK_CONFLICT,assertThrows(
+                PersonalWorkspaceExecutionService.Failure.class,()-> service.stageConversationOutput(
+                        RUNTIME,"task-1","run-1",first.fence(),"output_1","bird.png","image/png",new byte[]{1}))
+                .getReason());
+        assertEquals(PersonalWorkspaceExecutionService.Reason.TASK_CONFLICT,assertThrows(
+                PersonalWorkspaceExecutionService.Failure.class,()-> service.failConversation(
+                        RUNTIME,"task-1","run-1",first.fence(),"AGENT_DELIVERY_FAILED")).getReason());
+        var renewed=service.renewConversationLease(otherRuntime,"task-1","run-1",recovered.fence());
+        assertEquals(recovered.version(),renewed.version());
+        assertEquals(recovered.token(),renewed.token());
+        assertTrue(renewed.expiresAt()>System.currentTimeMillis());
+        verify(storage,never()).store(any(),any(byte[].class),anyString());
+    }
+
+    @Test void leasedStageUsesWorkspacePrivateAndInvalidFenceCannotStoreBytes() throws Exception {
+        enable();var bytes=png();var hash=sha(bytes);
+        var lease=service.claimConversationStart(RUNTIME,"task-1","run-1",commandId(),messageId());
+        when(storage.store(any(),any(byte[].class),eq("image/png")))
+                .thenReturn(new PersonalWorkspaceStorage.StoredObject("private/object",hash,bytes.length,"image/png"));
+        assertEquals(PersonalWorkspaceExecutionService.Reason.TASK_CONFLICT,assertThrows(
+                PersonalWorkspaceExecutionService.Failure.class,()-> service.stageConversationOutput(
+                        RUNTIME,"task-1","run-1",new PersonalWorkspaceExecutionService.ConversationFence(
+                                lease.version()+1,lease.token()),"output_1","bird.png","image/png",bytes)).getReason());
+        verify(storage,never()).store(any(),any(byte[].class),anyString());
+        var staged=service.stageConversationOutput(RUNTIME,"task-1","run-1",lease.fence(),
+                "output_1","bird.png","image/png",bytes);
+        assertEquals(hash,staged.sha256());
+        verify(rows).insertOutput(argThat(out -> "CONVERSATION".equals(out.getOutputPurpose())
+                && out.getWorkspaceFileId()==null && out.getArtifactId()==null));
+        verifyNoInteractions(writes);
+    }
+
+    private void enable() { ReflectionTestUtils.setField(service,"conversationExecutionEnabled",true); }
+    private static String commandId() { return "pwe_cmd_"+sha("command\nexec-1".getBytes(StandardCharsets.UTF_8)); }
+    private static String messageId() { return "pwe_msg_"+sha("message\nexec-1".getBytes(StandardCharsets.UTF_8)); }
 
     private static byte[] png() throws Exception {
         var stream=new ByteArrayOutputStream();

@@ -36,6 +36,18 @@ class PersonalWorkspaceExecutionSchemaInitializerTest {
     }
 
     @Test
+    void missingOrDisabledLeaseCheckFailsStartup() {
+        var jdbc=mock(JdbcTemplate.class);
+        when(jdbc.queryForObject(anyString(),eq(Integer.class))).thenReturn(0);
+        assertThrows(IllegalStateException.class,()->
+                new PersonalWorkspaceExecutionSchemaInitializer(jdbc).verifyConversationLease());
+        when(jdbc.queryForList(anyString(),eq("agent_personal_workspace_execution"),eq("chk_pwex_conversation_lease"))).thenReturn(java.util.List.of(
+                java.util.Map.of("enforced","NO","check_clause","conversation_lease_version>=0")));
+        assertThrows(IllegalStateException.class,()->
+                new PersonalWorkspaceExecutionSchemaInitializer(jdbc).verifyConversationLease());
+    }
+
+    @Test
     void executionGrantSchemaIsStrictlyAdditiveAndComplete() {
         var statements = PersonalWorkspaceExecutionSchemaInitializer.ddlStatements();
         assertEquals(3, statements.size());
@@ -57,5 +69,8 @@ class PersonalWorkspaceExecutionSchemaInitializerTest {
                 .contains("ADD CONSTRAINT chk_pwexo_publication_mapping"));
         assertTrue(statements.get(1).contains("uk_pwexi_file_version_scope"));
         assertTrue(statements.get(2).contains("chk_pwexo_commit"));
+        var lease=PersonalWorkspaceExecutionSchemaInitializer.conversationLeaseMigrationStatement();
+        assertTrue(lease.contains("conversation_lease_version BIGINT NOT NULL DEFAULT 0"));
+        assertTrue(lease.contains("chk_pwex_conversation_lease"));
     }
 }

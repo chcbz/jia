@@ -9,6 +9,21 @@ public interface PersonalWorkspaceExecutionService {
     ExecutionView createConversation(OwnerScope scope, ConversationCreate command);
     /** Trusted Chat consumer obtains exact bytes only after owner/grant re-admission; not a public URL. */
     ConversationOutput readConversationOutput(OwnerScope scope, String taskId, String runId, String outputId);
+    /** Trusted runtime-service only. Existing HTTP START does not expose or accept this lease. */
+    ConversationLease claimConversationStart(RuntimeScope scope, String taskId, String runId,
+            String commandId, String messageId);
+    ConversationLease renewConversationLease(RuntimeScope scope, String taskId, String runId, ConversationFence fence);
+    StagedOutput stageConversationOutput(RuntimeScope scope, String taskId, String runId, ConversationFence fence,
+            String outputId, String filename, String contentMimeType, byte[] content);
+    CommitView commitConversationOutput(RuntimeScope scope, String taskId, String runId, ConversationFence fence,
+            String manifestId, List<OutputDeclaration> outputs);
+    ExecutionView failConversation(RuntimeScope scope, String taskId, String runId, ConversationFence fence,
+            String code);
+    /** Never put these values in a browser response, ordinary queue payload or logs. */
+    record ConversationFence(long version, String token) { }
+    record ConversationLease(String executionId, long version, String token, long expiresAt) {
+        public ConversationFence fence() { return new ConversationFence(version, token); }
+    }
     record ConversationCreate(String conversationId, String taskId, String targetAgentId,
             String intentId, String grantId, long grantVersion, long assignmentRevision,
             String permittedOperation, String instruction, String outputContentMimeType) { }
