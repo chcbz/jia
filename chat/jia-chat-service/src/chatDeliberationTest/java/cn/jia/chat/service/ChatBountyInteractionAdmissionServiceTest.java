@@ -186,7 +186,7 @@ class ChatBountyInteractionAdmissionServiceTest {
         reset(steps);
         when(steps.insertStep(any())).thenReturn(1);
         when(steps.insertLink(any())).thenReturn(1);
-        when(deliberation.insertEvent(any())).thenReturn(0);
+        doReturn(0).when(deliberation).insertEvent(any());
         assertThrows(ChatDeliberationException.class, () -> admit("event-fail"));
     }
 }
