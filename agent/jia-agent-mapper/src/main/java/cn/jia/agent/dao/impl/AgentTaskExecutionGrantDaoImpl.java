@@ -34,6 +34,11 @@ public final class AgentTaskExecutionGrantDaoImpl implements AgentTaskExecutionG
         scope(tenantId, clientId, ownerJiacn); id(taskId,"taskId",100); id(grantId,"grantId",100);
         return mapper.selectByGrant(tenantId,clientId,ownerJiacn,taskId,grantId);
     }
+    @Override public String latestAssignmentEventJson(String tenantId, String clientId,
+            String ownerJiacn, String taskId) {
+        scope(tenantId,clientId,ownerJiacn); id(taskId,"taskId",100);
+        return mapper.selectLatestAssignmentEventJson(tenantId,clientId,ownerJiacn,taskId);
+    }
     @Override public void insert(AgentTaskExecutionGrantEntity grant) {
         Objects.requireNonNull(grant,"grant").init4Creation();
         if (mapper.insert(grant) != 1) throw new IllegalStateException("grant insert did not affect one row");

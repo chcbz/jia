@@ -37,6 +37,7 @@ import jakarta.inject.Inject;
 import jakarta.inject.Named;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.ByteBuffer;
@@ -68,6 +69,10 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     /** Matches the runtime bridge manifest limit; every input remains independently owner-scoped and version-pinned. */
     private static final int MAX_EXECUTION_INPUTS = 128;
     private static final long TASK_LEASE_DURATION_MILLIS = 900_000L;
+    /** Security fence lease, renewable by the same authenticated runtime, not a performance timeout. */
+    private static final long CONVERSATION_LEASE_MILLIS = 900_000L;
+    @Value("${jia.agent.conversation-execution.enabled:false}")
+    private boolean conversationExecutionEnabled;
     /** Source materials are a fixed bridge contract and never inherit the output allow-list. */
     private static final Set<String> SUPPORTED_INPUT_MIME_TYPES = Set.of(
             "image/png", "image/jpeg", "text/plain", "application/pdf",
@@ -347,7 +352,9 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 || !same(scope.tenantId(),root.getTenantId()) || !same(scope.clientId(),root.getClientId())
                 || !same(scope.ownerJiacn(),root.getOwnerJiacn())
                 || !same(agentId,root.getAssignedAgentId())
-                || !Objects.equals(assignmentRevision,root.getTaskVersion())) throw failure(Reason.GRANT_REVOKED);
+                || assignmentRevision==null || assignmentRevision<0
+                || root.getTaskVersion()==null || root.getTaskVersion()<assignmentRevision)
+            throw failure(Reason.GRANT_REVOKED);
     }
 
     private void requireConversationGrant(OwnerScope scope,PersonalWorkspaceExecutionEntity execution) {
@@ -506,18 +513,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         // task-root mutation own the complete root -> execution -> state/event transaction.
         PersonalWorkspaceExecutionEntity candidate = runtimeExecution(scope, taskId, runId, false);
         requireStartCommand(candidate, commandId, messageId);
-        if ("CONVERSATION".equals(candidate.getExecutionMode())) {
-            if (taskMutations==null) throw failure(Reason.CAPABILITY_UNAVAILABLE);
-            return taskMutations.executeWithLockedTaskRootInOwnerScope(scope.tenantId(), scope.clientId(),
-                    scope.ownerJiacn(),taskId,root -> {
-                        var current=runtimeExecution(scope,taskId,runId,true);
-                        requireStartCommand(current,commandId,messageId);
-                        var owner=new OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());
-                        requireConversationRoot(root,owner,taskId,current.getTargetAgentId(),current.getAssignmentRevision());
-                        requireConversationGrant(owner,current);
-                        return new RuntimeStartView(current.getExecutionId(),taskId,runId,"STARTED");
-                    });
-        }
+        // Legacy HTTP/native bridge has no attempt fence. Never let it begin a conversation run.
+        if ("CONVERSATION".equals(candidate.getExecutionMode())) throw failure(Reason.CAPABILITY_UNAVAILABLE);
         if (!"TASK".equals(candidate.getExecutionMode())) {
             // PRIVATE start is validation-only. A row lock without a surrounding transaction is
             // ineffective and would imply a transaction boundary that this path does not need.
@@ -549,6 +546,101 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 });
     }
 
+    /** Root -> grant -> execution FOR UPDATE; one native claim per unexpired lease. No provider calls. */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public ConversationLease claimConversationStart(RuntimeScope scope, String taskId, String runId,
+            String commandId, String messageId) {
+        requireConversationExecutionEnabled();
+        var candidate=runtimeExecution(scope,taskId,runId,false);
+        if (!"CONVERSATION".equals(candidate.getExecutionMode())) throw failure(Reason.NOT_FOUND);
+        requireStartCommand(candidate,commandId,messageId);
+        return withConversationRoot(scope,taskId,runId,true,execution -> {
+            requireStartCommand(execution,commandId,messageId);
+            long now=System.currentTimeMillis();
+            Long expiry=execution.getConversationLeaseExpiresAt();
+            if (expiry!=null && expiry>now) {
+                if (!same(scope.runtimeInstanceId(),execution.getConversationLeaseRuntimeId()))
+                    throw failure(Reason.TASK_CONFLICT);
+                return conversationLease(execution);
+            }
+            long next;
+            try { next=Math.addExact(Objects.requireNonNullElse(execution.getConversationLeaseVersion(),0L),1L); }
+            catch (ArithmeticException overflow) { throw failure(Reason.TASK_CONFLICT); }
+            execution.setConversationLeaseVersion(next).setConversationLeaseToken(UUID.randomUUID().toString())
+                    .setConversationLeaseRuntimeId(scope.runtimeInstanceId())
+                    .setConversationLeaseExpiresAt(Math.addExact(now,CONVERSATION_LEASE_MILLIS));
+            executions.update(execution);
+            return conversationLease(execution);
+        });
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public ConversationLease renewConversationLease(RuntimeScope scope, String taskId, String runId,
+            ConversationFence fence) {
+        requireConversationExecutionEnabled();
+        return withConversationRoot(scope,taskId,runId,true,execution -> {
+            requireConversationFence(scope,execution,fence,false);
+            execution.setConversationLeaseExpiresAt(Math.addExact(System.currentTimeMillis(),CONVERSATION_LEASE_MILLIS));
+            executions.update(execution);
+            return conversationLease(execution);
+        });
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public StagedOutput stageConversationOutput(RuntimeScope scope, String taskId, String runId,
+            ConversationFence fence, String outputId, String filename, String mimeType, byte[] content) {
+        requireConversationExecutionEnabled();
+        return withConversationRoot(scope,taskId,runId,true,execution -> {
+            requireConversationFence(scope,execution,fence,false);
+            return stageOutputLocked(scope,execution,outputId,filename,mimeType,content);
+        });
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public CommitView commitConversationOutput(RuntimeScope scope, String taskId, String runId,
+            ConversationFence fence, String manifestId, List<OutputDeclaration> outputs) {
+        requireConversationExecutionEnabled();id(manifestId,"manifestId",100);validateManifest(outputs);
+        return withConversationRoot(scope,taskId,runId,true,true,false,execution -> {
+            requireConversationFence(scope,execution,fence,"OUTPUT_COMMITTED".equals(execution.getExecutionState()));
+            return commitConversationOutputs(scope,execution,manifestId,outputs);
+        });
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public ExecutionView failConversation(RuntimeScope scope, String taskId, String runId,
+            ConversationFence fence, String code) {
+        requireConversationExecutionEnabled();runtimeFailureCode(code);
+        return withConversationRoot(scope,taskId,runId,true,false,true,execution -> {
+            requireConversationFence(scope,execution,fence,"FAILED".equals(execution.getExecutionState()));
+            return failLocked(scope,execution);
+        });
+    }
+
+    private void requireConversationExecutionEnabled() {
+        if (!conversationExecutionEnabled) throw failure(Reason.CAPABILITY_UNAVAILABLE);
+    }
+
+    private static ConversationLease conversationLease(PersonalWorkspaceExecutionEntity execution) {
+        return new ConversationLease(execution.getExecutionId(),execution.getConversationLeaseVersion(),
+                execution.getConversationLeaseToken(),execution.getConversationLeaseExpiresAt());
+    }
+
+    private static void requireConversationFence(RuntimeScope scope,PersonalWorkspaceExecutionEntity execution,
+            ConversationFence fence, boolean terminalReplay) {
+        Long expiry=execution.getConversationLeaseExpiresAt();
+        if (fence==null || fence.version()<1 || fence.token()==null || fence.token().isBlank()
+                || execution.getConversationLeaseVersion()==null || execution.getConversationLeaseVersion()!=fence.version()
+                || !same(fence.token(),execution.getConversationLeaseToken())
+                || !same(scope.runtimeInstanceId(),execution.getConversationLeaseRuntimeId())
+                || expiry==null || (!terminalReplay && expiry<=System.currentTimeMillis()))
+            throw failure(Reason.TASK_CONFLICT);
+    }
+
     private static void requireStartCommand(PersonalWorkspaceExecutionEntity execution,
             String commandId, String messageId) {
         if (!same("pwe_cmd_" + plainSha("command\n" + execution.getExecutionId()), commandId)
@@ -561,10 +653,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     @Transactional(rollbackFor = Exception.class)
     public List<RuntimeInput> runtimeInputs(RuntimeScope scope, String taskId, String runId) {
         PersonalWorkspaceExecutionEntity candidate = runtimeExecution(scope, taskId, runId, false);
-        if ("CONVERSATION".equals(candidate.getExecutionMode())) {
-            return withConversationRoot(scope,taskId,runId,false,execution -> runtimeInputs(
-                    new OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),execution.getExecutionId()));
-        }
+        if ("CONVERSATION".equals(candidate.getExecutionMode())) throw failure(Reason.CAPABILITY_UNAVAILABLE);
         return runtimeInputs(new OwnerScope(scope.tenantId(), scope.clientId(), scope.ownerJiacn()), candidate.getExecutionId());
     }
 
@@ -578,7 +667,9 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                         scope.agentId(), limit).stream()
                 // DAO filtering is the primary isolation boundary; retain an in-service exact check
                 // so a mapper regression can never hand a queue item to a different runtime Agent.
-                .filter(execution -> execution != null && "QUEUED".equals(execution.getExecutionState())
+                // Existing HTTP pickup has no fence-bearing upload/commit contract; never dispatch CONVERSATION.
+                .filter(execution -> execution != null && !"CONVERSATION".equals(execution.getExecutionMode())
+                        && "QUEUED".equals(execution.getExecutionState())
                         && same(execution.getTargetAgentId(), scope.agentId())
                         && same(execution.getTenantId(), scope.tenantId())
                         && same(execution.getClientId(), scope.clientId())
@@ -593,9 +684,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     @Transactional(rollbackFor = Exception.class)
     public RuntimeContent runtimeInputContent(RuntimeScope scope, String taskId, String runId, String inputRef) {
         PersonalWorkspaceExecutionEntity candidate=runtimeExecution(scope,taskId,runId,false);
-        if ("CONVERSATION".equals(candidate.getExecutionMode()))
-            return withConversationRoot(scope,taskId,runId,true,execution ->
-                    inputContent(scope,execution,inputRef));
+        if ("CONVERSATION".equals(candidate.getExecutionMode())) throw failure(Reason.CAPABILITY_UNAVAILABLE);
         return inputContent(scope,runtimeExecution(scope,taskId,runId,true),inputRef);
     }
 
@@ -617,9 +706,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     public StagedOutput stageOutput(RuntimeScope scope, String taskId, String runId, String outputId,
             String originalFilename, String contentMimeType, byte[] content) {
         PersonalWorkspaceExecutionEntity candidate=runtimeExecution(scope,taskId,runId,false);
-        if ("CONVERSATION".equals(candidate.getExecutionMode()))
-            return withConversationRoot(scope,taskId,runId,true,execution ->
-                    stageOutputLocked(scope,execution,outputId,originalFilename,contentMimeType,content));
+        if ("CONVERSATION".equals(candidate.getExecutionMode())) throw failure(Reason.CAPABILITY_UNAVAILABLE);
         return stageOutputLocked(scope,runtimeExecution(scope,taskId,runId,true),outputId,
                 originalFilename,contentMimeType,content);
     }
@@ -669,9 +756,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         if (candidate == null || !same(candidate.getTargetAgentId(), scope.agentId())) {
             throw failure(Reason.NOT_FOUND);
         }
-        if ("CONVERSATION".equals(candidate.getExecutionMode()))
-            return withConversationRoot(scope,taskId,runId,true,execution ->
-                    commitConversationOutputs(scope,execution,manifestId,declarations));
+        if ("CONVERSATION".equals(candidate.getExecutionMode())) throw failure(Reason.CAPABILITY_UNAVAILABLE);
         if ("TASK".equals(candidate.getExecutionMode())) {
             requireTaskPublicationDependencies();
             return taskMutations.executeWithLockedTaskRootInOwnerScope(
@@ -706,14 +791,16 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     /** Root -> grant admission -> execution/output; no execution-to-task lock inversion. */
     private <T> T withConversationRoot(RuntimeScope scope,String taskId,String runId,boolean lock,
             java.util.function.Function<PersonalWorkspaceExecutionEntity,T> action) {
-        return withConversationRoot(scope,taskId,runId,lock,false,action);
+        return withConversationRoot(scope,taskId,runId,lock,false,false,action);
     }
     private <T> T withConversationRoot(RuntimeScope scope,String taskId,String runId,boolean lock,
-            boolean allowFailed,java.util.function.Function<PersonalWorkspaceExecutionEntity,T> action) {
+            boolean allowCommitted,boolean allowFailed,
+            java.util.function.Function<PersonalWorkspaceExecutionEntity,T> action) {
+        validateRuntimeScope(scope);id(taskId,"taskId",100);id(runId,"runId",100);
         if (taskMutations==null || conversationGrants==null) throw failure(Reason.CAPABILITY_UNAVAILABLE);
         return taskMutations.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),
                 scope.ownerJiacn(),taskId,root -> {
-                    var execution=runtimeExecution(scope,taskId,runId,lock,false,allowFailed);
+                    var execution=runtimeExecution(scope,taskId,runId,lock,allowCommitted,allowFailed);
                     if (!"CONVERSATION".equals(execution.getExecutionMode())) throw failure(Reason.NOT_FOUND);
                     var owner=new OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());
                     requireConversationRoot(root,owner,taskId,execution.getTargetAgentId(),execution.getAssignmentRevision());
@@ -959,10 +1046,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         PersonalWorkspaceExecutionEntity candidate = executions.findByTaskRun(scope.tenantId(), scope.clientId(),
                 scope.ownerJiacn(), taskId, runId);
         if (candidate == null || !same(candidate.getTargetAgentId(), scope.agentId())) throw failure(Reason.NOT_FOUND);
-        if ("CONVERSATION".equals(candidate.getExecutionMode())) {
-            return withConversationRoot(scope,taskId,runId,true,true,
-                    execution -> failLocked(scope,execution));
-        }
+        if ("CONVERSATION".equals(candidate.getExecutionMode())) throw failure(Reason.CAPABILITY_UNAVAILABLE);
         if ("TASK".equals(candidate.getExecutionMode()) && "QUEUED".equals(candidate.getExecutionState())) {
             releaseTaskLease(new OwnerScope(scope.tenantId(), scope.clientId(), scope.ownerJiacn()), candidate);
         }

@@ -139,6 +139,9 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         long assignmentRevision = assignment.changed()
                 ? Math.addExact(valid.expectedTaskVersion(),1L) : valid.expectedTaskVersion();
         if (snapshot.get() == null) throw invalidState("Grant input snapshot was not produced");
+        // Event is emitted by the controlled assignment inside this root transaction. An
+        // idempotent assignment may have an older event, but never a future one.
+        requireAssignmentEpoch(scope,valid.taskId(),assignmentRevision,root);
 
         long now=System.currentTimeMillis();
         grants.supersedeActiveForTask(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
@@ -303,11 +306,20 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
             long grantVersion,long assignmentRevision,String targetAgentId,String operation,boolean paid) {
         if (!"ACTIVE".equals(grant.getState()) || !Objects.equals(grantVersion,grant.getGrantVersion())
                 || !Objects.equals(assignmentRevision,grant.getAssignmentRevision())
-                || !Objects.equals(assignmentRevision,root.getTaskVersion())
+                || root.getTaskVersion()==null || root.getTaskVersion()<assignmentRevision
                 || !same(targetAgentId,grant.getTargetAgentId())
                 || !same(targetAgentId,root.getAssignedAgentId())) {
             throw conflict("Grant, assignment, or target is stale");
         }
+        // taskVersion also advances on ordinary status events. The last TASK_ASSIGNED
+        // event is the durable assignment epoch: unlike a matching Agent ID, it
+        // distinguishes a later re-point to the same Agent. All event writes lock root.
+        requireAssignmentEpoch(scope,grant.getTaskId(),assignmentRevision,root);
+        AgentTaskExecutionGrantEntity active=grants.findActiveByTask(scope.tenantId(),
+                scope.clientId(),scope.ownerJiacn(),grant.getTaskId());
+        if (active==null || !same(active.getGrantId(),grant.getGrantId())
+                || !Objects.equals(active.getGrantVersion(),grantVersion))
+            throw conflict("Grant is not the current assignment authorization");
         // Root lock serializes owner re-confirmation with admission. A previously
         // issued grant cannot authorize a newer, differently confirmed requirement.
         try {
@@ -330,6 +342,28 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         }
         return new Admission(grant.getGrantId(),grantVersion,assignmentRevision,targetAgentId,operation,
                 paid && grant.getCostAuthorizationRef()!=null);
+    }
+
+    private void requireAssignmentEpoch(Scope scope,String taskId,long assignmentRevision,
+            AgentTaskMetaEntity root) {
+        if (root==null || root.getTaskVersion()==null || root.getTaskVersion()<assignmentRevision)
+            throw conflict("Task predates the granted assignment");
+        String payload=grants.latestAssignmentEventJson(scope.tenantId(),scope.clientId(),
+                scope.ownerJiacn(),taskId);
+        // Do not use taskVersion as a proxy for assignment, nor infer a missing
+        // event from the currently assigned Agent. Legacy rows without this proof
+        // need a separately verified historical event repair; reconfirming the
+        // requirement alone cannot manufacture an assignment epoch.
+        try {
+            if (payload==null) throw new IllegalArgumentException("missing assignment event");
+            var event=json.readTree(payload);
+            var revision=event.get("resultVersion");
+            if (revision==null || !revision.isIntegralNumber() || !revision.canConvertToLong()
+                    || revision.longValue()<0 || revision.longValue()>assignmentRevision)
+                throw new IllegalArgumentException("stale or invalid assignment event");
+        } catch (RuntimeException badEvent) {
+            throw conflict("Current assignment epoch cannot be proven");
+        }
     }
 
     @Override

@@ -30,6 +30,11 @@ public class PersonalWorkspaceExecutionEntity extends BaseEntity {
     private Long taskGrantVersion;
     private Long assignmentRevision;
     private String permittedOperation;
+    /** CONVERSATION-only native claim. Token and runtime instance stay server-side. */
+    private String conversationLeaseToken;
+    private String conversationLeaseRuntimeId;
+    private Long conversationLeaseVersion;
+    private Long conversationLeaseExpiresAt;
     private String workItemId;
     /** Runtime-only lease material; never exposed by browser views or queue payloads. */
     private String leaseToken;
