@@ -57,22 +57,23 @@ class PersonalWorkspaceConversationExecutionTest {
                 eq("agent"),eq("GENERATE_IMAGE"),eq(true))).thenReturn(
                 new AgentTaskExecutionGrantService.Admission("grant-1",1L,7L,
                         "agent","GENERATE_IMAGE",true));
-        when(conversation.requireAccessible(any(),eq("conv-1"))).thenReturn(
-                new WorkspaceConversationAccessService.ConversationView("conv-1","TASK","task-1",
+        when(conversation.requireAccessible(any(),eq("42"))).thenReturn(
+                new WorkspaceConversationAccessService.ConversationView("42","bounty","task:task-1",
                         "task-1",List.of("agent"),1,1));
         execution=new PersonalWorkspaceExecutionEntity().setExecutionId("exec-1").setTaskId("task-1")
-                .setRunId("run-1").setExecutionMode("CONVERSATION").setConversationId("conv-1")
+                .setRunId("run-1").setExecutionMode("CONVERSATION").setConversationId("42")
                 .setTargetAgentId("agent").setTaskGrantId("grant-1").setTaskGrantVersion(1L)
                 .setAssignmentRevision(7L).setPermittedOperation("GENERATE_IMAGE")
                 .setExecutionState("QUEUED").setOutputContentMimeType("image/png");
         execution.setTenantId("0");execution.setClientId("client");execution.setOwnerJiacn("owner");
+        when(rows.listInputs(eq("0"),eq("client"),eq("owner"),anyString())).thenReturn(List.of());
         when(rows.findByTaskRun("0","client","owner","task-1","run-1")).thenReturn(execution);
         when(rows.lockByTaskRun("0","client","owner","task-1","run-1")).thenReturn(execution);
     }
 
     @Test void trustedCreateRequiresActualPaidGrantAndCorrectConversationBeforeInsert() {
         var command=new PersonalWorkspaceExecutionService.ConversationCreate(
-                "conv-1","task-1","agent","intent-1","grant-1",1,7,
+                "42","task-1","agent","intent-1","grant-1",1,7,
                 "GENERATE_IMAGE","draw a bird","image/png");
         when(grants.admit(any(),eq("task-1"),eq("grant-1"),eq(1L),eq(7L),
                 eq("agent"),eq("GENERATE_IMAGE"),eq(true))).thenReturn(
@@ -86,17 +87,54 @@ class PersonalWorkspaceConversationExecutionTest {
                 eq("agent"),eq("GENERATE_IMAGE"),eq(true))).thenReturn(
                 new AgentTaskExecutionGrantService.Admission("grant-1",1,7,"agent","GENERATE_IMAGE",true));
         // An unrelated conversation must not create an execution even with a real grant.
-        when(conversation.requireAccessible(any(),eq("conv-1"))).thenReturn(
-                new WorkspaceConversationAccessService.ConversationView("conv-1","TASK","other-task",
+        when(conversation.requireAccessible(any(),eq("42"))).thenReturn(
+                new WorkspaceConversationAccessService.ConversationView("42","bounty","task:other-task",
                         "other-task",List.of("agent"),1,1));
         assertEquals(PersonalWorkspaceExecutionService.Reason.NOT_FOUND,assertThrows(
                 PersonalWorkspaceExecutionService.Failure.class, () -> service.createConversation(OWNER,command)).getReason());
         verify(rows,never()).insert(any());
     }
 
+    @Test void authoritativeBountyTaskKeyAdmitsExactScopeButNeverStartsProviderOrWritesPersonalFile() {
+        var command=new PersonalWorkspaceExecutionService.ConversationCreate(
+                "42","task-1","agent","intent-1","grant-1",1,7,
+                "GENERATE_IMAGE","draw a bird","image/png");
+        var created=service.createConversation(OWNER,command);
+        assertEquals("CONVERSATION",created.executionMode());
+        assertEquals("QUEUED",created.state());
+        verify(rows).insert(argThat(row -> "CONVERSATION".equals(row.getExecutionMode())
+                && "42".equals(row.getConversationId()) && "grant-1".equals(row.getTaskGrantId())));
+        verifyNoInteractions(writes);
+        verify(storage,never()).store(any(),any(byte[].class),anyString());
+    }
+
+    @Test void publicPrivateTeamAndWrongBountyKeysAreNotExecutionAuthority() {
+        var command=new PersonalWorkspaceExecutionService.ConversationCreate(
+                "42","task-1","agent","intent-1","grant-1",1,7,
+                "GENERATE_IMAGE","draw a bird","image/png");
+        var rejected=new String[][]{
+                {"public","task:task-1","task-1"},
+                {"private","task:task-1:agent:agent","task-1"},
+                {"team","task:task-1","task-1"},
+                {"bounty","task:task-2","task-1"},
+                {"bounty","task:task-1","task-2"},
+                {"bounty","task:task-1:agent:agent","task-1"}
+        };
+        for (var shape:rejected) {
+            when(conversation.requireAccessible(any(),eq("42"))).thenReturn(
+                    new WorkspaceConversationAccessService.ConversationView(
+                            "42",shape[0],shape[1],shape[2],List.of("agent"),1,1));
+            assertEquals(PersonalWorkspaceExecutionService.Reason.NOT_FOUND,assertThrows(
+                    PersonalWorkspaceExecutionService.Failure.class,
+                    () -> service.createConversation(OWNER,command)).getReason(),shape[0]+"/"+shape[1]);
+        }
+        verify(rows,never()).insert(any());
+        verifyNoInteractions(writes);
+    }
+
     @Test void changedAssignmentRejectsCreateBeforeAnyInsert() {
         var command=new PersonalWorkspaceExecutionService.ConversationCreate(
-                "conv-1","task-1","agent","intent-1","grant-1",1,7,
+                "42","task-1","agent","intent-1","grant-1",1,7,
                 "GENERATE_IMAGE","draw a bird","image/png");
         var drift=new AgentTaskMetaEntity().setTaskId("task-1").setAssignedAgentId("agent")
                 .setTaskVersion(8L);
@@ -112,7 +150,7 @@ class PersonalWorkspaceConversationExecutionTest {
 
     @Test void replayNeedsLiveGrantNotJustIdempotencyHash() {
         var command=new PersonalWorkspaceExecutionService.ConversationCreate(
-                "conv-1","task-1","agent","intent-1","grant-1",1,7,
+                "42","task-1","agent","intent-1","grant-1",1,7,
                 "GENERATE_IMAGE","draw a bird","image/png");
         // Real DAO hash is intentionally not fabricated: conflicting key must fail closed.
         when(rows.findByIdempotency(eq("0"),eq("client"),eq("owner"),anyString()))
