@@ -1,14 +1,14 @@
 package cn.jia.chat.deliberation;
 
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.stereotype.Repository;
+import jakarta.inject.Named;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.List;
 
 /** Durable interaction decisions: a step has at most one execution intent and one bound execution. */
-@Repository
+@Named
 public class ChatInteractionStepStore {
     private final JdbcTemplate jdbc;
 
