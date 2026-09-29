@@ -37,6 +37,7 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
 import org.springframework.security.web.FilterChainProxy;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import org.springframework.test.web.servlet.request.MockMultipartHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -52,6 +53,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.AdditionalMatchers.aryEq;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -274,6 +276,12 @@ class AgentRuntimeSecurityIntegrationTest {
     MockHttpServletRequestBuilder headers(
             MockHttpServletRequestBuilder request, String agent, String runtime, String token) {
         return request.header("Authorization", "AgentRuntime " + token)
+                .header("X-Agent-Id", agent).header("X-Agent-Runtime-Id", runtime);
+    }
+
+    MockMultipartHttpServletRequestBuilder headers(
+            MockMultipartHttpServletRequestBuilder request, String agent, String runtime, String token) {
+        return (MockMultipartHttpServletRequestBuilder) request.header("Authorization", "AgentRuntime " + token)
                 .header("X-Agent-Id", agent).header("X-Agent-Runtime-Id", runtime);
     }
 
