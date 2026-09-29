@@ -1,6 +1,9 @@
 package cn.jia.chat.service.impl;
 
+import cn.jia.agent.entity.AgentTaskDTO;
+import cn.jia.agent.service.AgentService;
 import cn.jia.chat.dao.AgentTaskThreadDao;
+import cn.jia.chat.deliberation.ChatBountyBindingStore;
 import cn.jia.chat.dao.ChatConversationDao;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.AgentTaskThreadConstants;
@@ -13,6 +16,7 @@ import cn.jia.chat.service.ChatConversationEventBroker;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.mybatis.TenantScopeHelper;
+import cn.jia.core.util.JsonUtil;
 import com.github.pagehelper.PageHelper;
 import com.github.pagehelper.PageInfo;
 import lombok.extern.slf4j.Slf4j;
@@ -22,6 +26,9 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+import java.util.LinkedHashSet;
 
 /** Authenticated generic-conversation service. */
 @Service
@@ -33,12 +40,17 @@ public class ChatConversationServiceImpl implements ChatConversationService {
     private final ChatMessageDao chatMessageDao;
     private final AgentTaskThreadDao taskThreadDao;
     private final ChatConversationEventBroker eventBroker;
+    private final ChatBountyBindingStore bountyBindings;
+    private final AgentService agentService;
 
     public ChatConversationServiceImpl(
             ChatConversationDao chatConversationDao,
             ChatMessageDao chatMessageDao,
             AgentTaskThreadDao taskThreadDao,
-            ChatConversationEventBroker eventBroker) {
+            ChatConversationEventBroker eventBroker,
+            ChatBountyBindingStore bountyBindings, AgentService agentService) {
+        this.bountyBindings = Objects.requireNonNull(bountyBindings);
+        this.agentService = Objects.requireNonNull(agentService);
         this.chatConversationDao = chatConversationDao;
         this.chatMessageDao = chatMessageDao;
         this.taskThreadDao = taskThreadDao;
@@ -102,6 +114,13 @@ public class ChatConversationServiceImpl implements ChatConversationService {
                     || isTaskThreadEvidence(conversation)) {
                 return;
             }
+            // A bounty is the stable user-facing discussion for its task. Generic delete cannot
+            // tombstone the bound conversation and strand future point/replay; a separate
+            // lifecycle operation may retire it only after explicit task/asset retention checks.
+            if ("juyiting".equals(conversation.getConversationType())
+                    && "bounty".equals(conversation.getConversationScopeType())) {
+                throw unavailable();
+            }
             long liveGeneration = requireLifecycleGeneration(conversation);
             if (conversation.getDeletedAt() == null) {
                 long deletedAt = System.currentTimeMillis();
@@ -147,10 +166,85 @@ public class ChatConversationServiceImpl implements ChatConversationService {
         safe.setTenantId(TenantScopeHelper.DEFAULT_TENANT);
         safe.setDeletedAt(null);
         safe.setLifecycleGeneration(1L);
+        if ("bounty".equals(safe.getConversationScopeType())) {
+            return createOrReuseBounty(safe, context);
+        }
         if (chatConversationDao.insert(safe) != 1) {
             throw unavailable();
         }
         return safe;
+    }
+
+    /** Legacy /chat/stream must take the same task row lock as v2 bootstrap.
+     * Ordinary legacy discussion never issues an execution grant or upgrades CHAT to EXECUTE.
+     */
+    private ChatConversationEntity createOrReuseBounty(ChatConversationEntity safe, EsContext context) {
+        String taskId = safe.getTaskId();
+        if (!"juyiting".equals(safe.getConversationType()) || !validBountyTaskId(taskId)
+                || !("task:" + taskId).equals(safe.getConversationScopeKey())) throw unavailable();
+        List<String> requestedTargets = bountyTargets(safe.getTargetAgentIds());
+        AgentTaskDTO task;
+        List<String> authorized;
+        try {
+            task = agentService.getTask(taskId);
+            authorized = agentService.listTaskWritableMemberAgentIds("0", context.getClientId(), taskId);
+        } catch (RuntimeException denied) {
+            throw unavailable();
+        }
+        if (task == null || !taskId.equals(task.getId()) || !"0".equals(task.getTenantId())
+                || !context.getClientId().equals(task.getClientId()) || authorized == null
+                || authorized.isEmpty() || !authorized.containsAll(requestedTargets)) throw unavailable();
+        ChatBountyBindingStore.Scope scope = new ChatBountyBindingStore.Scope("0",
+                context.getJiacn(), context.getClientId());
+        long now = System.currentTimeMillis();
+        // Binding and conversation share the enclosing create transaction. A concurrent v2 ensure
+        // locks the same (owner,client,task) row before looking at chat_conversation.
+        bountyBindings.reserve(scope, taskId, 0L, now);
+        ChatBountyBindingStore.Binding binding = bountyBindings.lock(scope, taskId);
+        Long conversationId = binding.conversationId();
+        if (conversationId == null) {
+            List<Long> previous = bountyBindings.findExistingBountyConversationIds(scope, taskId);
+            if (previous == null || previous.size() > 1) throw unavailable();
+            if (previous.isEmpty()) {
+                if (chatConversationDao.insert(safe) != 1 || safe.getId() == null) throw unavailable();
+                conversationId = safe.getId();
+            } else conversationId = previous.getFirst();
+            if (bountyBindings.attach(scope, taskId, binding.assignmentRevision(), conversationId, now) != 1)
+                throw unavailable();
+        }
+        ChatConversationEntity bound = chatConversationDao.lockScopedById(context.getJiacn(),
+                context.getClientId(), Long.toString(conversationId));
+        if (bound == null || bound.getDeletedAt() != null || !"0".equals(bound.getTenantId())
+                || !"juyiting".equals(bound.getConversationType())
+                || !"bounty".equals(bound.getConversationScopeType())
+                || !taskId.equals(bound.getTaskId())
+                || !("task:" + taskId).equals(bound.getConversationScopeKey())
+                || bound.getLifecycleGeneration() == null || bound.getLifecycleGeneration() < 1
+                || !bountyTargets(bound.getTargetAgentIds()).equals(requestedTargets)) throw unavailable();
+        return bound;
+    }
+
+    private static boolean validBountyTaskId(String value) {
+        return value != null && !value.isBlank() && value.equals(value.strip())
+                && value.codePointCount(0, value.length()) <= 100
+                && value.chars().noneMatch(Character::isISOControl);
+    }
+
+    private List<String> bountyTargets(String json) {
+        try {
+            if (json == null) throw unavailable();
+            Object parsed = JsonUtil.getMapper().readValue(json, List.class);
+            if (!(parsed instanceof List<?> values) || values.isEmpty() || values.size() > 20)
+                throw unavailable();
+            Set<String> unique = new LinkedHashSet<>();
+            for (Object value : values) {
+                if (!(value instanceof String id) || !validBountyTaskId(id) || !unique.add(id))
+                    throw unavailable();
+            }
+            return List.copyOf(unique);
+        } catch (Exception invalid) {
+            throw unavailable();
+        }
     }
 
     @Override

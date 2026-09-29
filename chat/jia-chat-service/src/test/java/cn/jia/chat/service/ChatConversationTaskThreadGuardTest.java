@@ -280,7 +280,9 @@ class ChatConversationTaskThreadGuardTest extends BaseMockTest {
     private ChatConversationServiceImpl service() {
         return new ChatConversationServiceImpl(
                 conversationDao, messageDao, taskThreadDao,
-                new ChatConversationEventBroker());
+                new ChatConversationEventBroker(),
+                org.mockito.Mockito.mock(cn.jia.chat.deliberation.ChatBountyBindingStore.class),
+                org.mockito.Mockito.mock(cn.jia.agent.service.AgentService.class));
     }
 
     private ChatConversationEntity ownedConversation(long id, String tenantId) {
