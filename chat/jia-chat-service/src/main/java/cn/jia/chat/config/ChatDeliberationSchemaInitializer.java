@@ -26,7 +26,8 @@ import java.util.Objects;
 public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
     static final List<String> TABLES = List.of(
             "chat_context_snapshot", "chat_request", "chat_turn", "chat_dispatch_outbox",
-            "chat_conversation_event", "chat_interaction_step", "chat_step_execution_link");
+            "chat_conversation_event", "chat_interaction_step", "chat_step_execution_link",
+            "chat_bounty_binding");
     private static final String COLLATION = "utf8mb4_0900_bin";
     private static final String MIGRATION_LOCK = "cyf:chat-deliberation:v2";
     private static final Map<String, Map<String, ColumnDef>> COLUMNS = columns();
@@ -455,6 +456,11 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
                 c("tenant_id",v(50,false)), c("owner_jiacn",v(50,false)), c("client_id",v(50,false)),
                 c("step_id",v(64,false)), c("execution_id",v(64,true)), c("state",v(30,false)),
                 c("state_version",b(false,"0")), c("created_at",b(false,null)), c("updated_at",b(false,null))));
+        all.put("chat_bounty_binding", ordered(c("tenant_id",v(50,false)),
+                c("owner_jiacn",v(50,false)), c("client_id",v(50,false)),
+                c("task_id",v(100,false)), c("conversation_id",b(true,null)),
+                c("assignment_revision",b(false,null)), c("created_at",b(false,null)),
+                c("updated_at",b(false,null))));
         return Map.copyOf(all);
     }
 
@@ -485,6 +491,9 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
         all.put("chat_step_execution_link", Map.of("PRIMARY",ix(true,"execution_intent_id"),
                 "uk_chat_exec_step",ix(true,"step_id"), "uk_chat_exec_execution",ix(true,"execution_id"),
                 "idx_chat_exec_scope_step",ix(false,"tenant_id","owner_jiacn","client_id","step_id")));
+        all.put("chat_bounty_binding", Map.of(
+                "PRIMARY",ix(true,"tenant_id","owner_jiacn","client_id","task_id"),
+                "uk_chat_bounty_binding_conversation",ix(true,"tenant_id","owner_jiacn","client_id","conversation_id")));
         return Map.copyOf(all);
     }
 

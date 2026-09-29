@@ -22,6 +22,9 @@ class ChatDeliberationSchemaContractTest {
             assertTrue(sql.contains("create table if not exists chat_conversation_event"));
             assertTrue(sql.contains("create table if not exists chat_interaction_step"));
             assertTrue(sql.contains("create table if not exists chat_step_execution_link"));
+            assertTrue(sql.contains("create table if not exists chat_bounty_binding"));
+            assertTrue(compact.contains("primary key (tenant_id,owner_jiacn,client_id,task_id)"));
+            assertTrue(compact.contains("uk_chat_bounty_binding_conversation (tenant_id,owner_jiacn,client_id,conversation_id)"));
             assertTrue(compact.contains("uk_chat_step_request_number (tenant_id, owner_jiacn, client_id, request_id, request_revision, step_number)"));
             assertTrue(compact.contains("idx_chat_step_task (tenant_id, owner_jiacn, client_id, task_id, assignment_revision, target_agent_id)"));
             assertTrue(compact.contains("fk_chat_step_request_scope foreign key (tenant_id, owner_jiacn, client_id, request_id, request_revision)"));

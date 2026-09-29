@@ -180,6 +180,23 @@ CREATE TABLE IF NOT EXISTS chat_step_execution_link (
     REFERENCES chat_interaction_step (tenant_id, owner_jiacn, client_id, step_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
+-- A task has one durable user-facing bounty discussion, independent of internal task threads.
+-- Reserving and binding happen in one transaction; NULL exists only while the row is locked.
+CREATE TABLE IF NOT EXISTS chat_bounty_binding (
+  tenant_id VARCHAR(50) NOT NULL,
+  owner_jiacn VARCHAR(50) NOT NULL,
+  client_id VARCHAR(50) NOT NULL,
+  task_id VARCHAR(100) NOT NULL,
+  conversation_id BIGINT DEFAULT NULL,
+  assignment_revision BIGINT NOT NULL,
+  created_at BIGINT NOT NULL,
+  updated_at BIGINT NOT NULL,
+  PRIMARY KEY (tenant_id,owner_jiacn,client_id,task_id),
+  UNIQUE KEY uk_chat_bounty_binding_conversation
+    (tenant_id,owner_jiacn,client_id,conversation_id),
+  CONSTRAINT chk_chat_bounty_binding_revision CHECK (assignment_revision>=0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
+
 CREATE TABLE IF NOT EXISTS chat_deliberation_schema_version (
   version BIGINT NOT NULL,
   stage VARCHAR(30) NOT NULL,
