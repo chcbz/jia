@@ -72,6 +72,13 @@ public class PersonalWorkspaceStorageConfiguration {
 
     @Bean
     @ConditionalOnProperty(prefix = "agent.personal-workspace-storage", name = "enabled", havingValue = "true")
+    public AgentTaskBountyBootstrapOutboxSchemaInitializer agentTaskBountyBootstrapOutboxSchemaInitializer(
+            JdbcTemplate jdbcTemplate) {
+        return new AgentTaskBountyBootstrapOutboxSchemaInitializer(jdbcTemplate);
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "agent.personal-workspace-storage", name = "enabled", havingValue = "true")
     public PersonalWorkspaceConversationLinkSchemaInitializer personalWorkspaceConversationLinkSchemaInitializer(
             JdbcTemplate jdbcTemplate) {
         return new PersonalWorkspaceConversationLinkSchemaInitializer(jdbcTemplate);
