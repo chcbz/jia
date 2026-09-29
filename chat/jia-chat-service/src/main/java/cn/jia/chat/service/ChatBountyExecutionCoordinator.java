@@ -108,12 +108,12 @@ public class ChatBountyExecutionCoordinator {
                 || !Objects.equals(text(metadata,"taskId"),step.taskId())
                 || !Objects.equals(text(metadata,"targetAgentId"),step.targetAgentId()))
             throw new IllegalStateException("Bounty input scope changed");
-        // Initial bootstrap records reference summaries; first lane cannot ingest them. Never
-        // silently generate without an explicitly selected reference image.
+        // The bootstrap metadata is a durable catalogue, not authority to read files. Recheck
+        // its exact fixed versions against the live, server-issued grant after admission.
         String inputDigest;
         if (metadata.has("sourceBusinessActionId")) {
-            if (!metadata.has("referenceSummaries") || !metadata.get("referenceSummaries").isArray()
-                    || !metadata.get("referenceSummaries").isEmpty()) return waitFor(step,request,"WAITING_INPUT_RESOLVER");
+            if (!metadata.has("referenceSummaries") || !metadata.get("referenceSummaries").isArray())
+                throw new IllegalStateException("Bounty reference snapshot is unavailable");
             long revision=number(metadata,"requirementRevision");
             var exact=requirements.read(scope,step.taskId(),revision);
             if (exact == null || !Objects.equals(exact.sha256(),text(metadata,"requirementHash"))
@@ -139,8 +139,9 @@ public class ChatBountyExecutionCoordinator {
             throw new IllegalStateException("Bounty input digest changed");
         // Grant admission locks task root before any Chat row lock or execution create. Nothing
         // paid is created when the current owner has not authorized Provider cost.
+        AgentTaskExecutionGrantService.Admission admitted;
         try {
-            var admitted=grants.admit(scope,step.taskId(),step.grantId(),step.grantVersion(),
+            admitted=grants.admit(scope,step.taskId(),step.grantId(),step.grantVersion(),
                     step.assignmentRevision(),step.targetAgentId(),operation,true);
             if (admitted==null || !admitted.paidExecutionAuthorized()) return waitFor(step,request,"WAITING_AUTHORIZATION");
         } catch (AgentTaskExecutionGrantException denied) {
@@ -148,6 +149,9 @@ public class ChatBountyExecutionCoordinator {
                 return waitFor(step,request,"WAITING_AUTHORIZATION");
             throw denied;
         }
+        List<PersonalWorkspaceExecutionService.ReferenceSelection> references =
+                authorizedReferences(metadata, admitted.inputs());
+        if (references == null) return waitFor(step,request,"WAITING_INPUT_RESOLVER");
         ChatConversationEntity discussion=conversations.lockScopedById(step.ownerJiacn(),
                 step.clientId(),step.conversationId());
         if (discussion == null || discussion.getDeletedAt()!=null
@@ -165,7 +169,8 @@ public class ChatBountyExecutionCoordinator {
                 step.tenantId(),step.clientId(),step.ownerJiacn()),
                 new PersonalWorkspaceExecutionService.ConversationCreate(step.conversationId(),
                 step.taskId(),step.targetAgentId(),link.executionIntentId(),step.grantId(),
-                step.grantVersion(),step.assignmentRevision(),operation,inputs.getFirst().content(),"image/png"));
+                step.grantVersion(),step.assignmentRevision(),operation,inputs.getFirst().content(),
+                "image/png",references));
         if (execution==null || !"CONVERSATION".equals(execution.executionMode())
                 || !Objects.equals(execution.taskId(),step.taskId())
                 || !Objects.equals(execution.conversationId(),step.conversationId())
@@ -182,6 +187,37 @@ public class ChatBountyExecutionCoordinator {
         if (steps.updateStepState(step,state,now)!=1 || requests.updateRequestState(request,state,now)!=1)
             throw new IllegalStateException("Bounty waiting state was not committed");
         return state;
+    }
+
+    /** Null means an unsupported material format; inconsistent snapshots fail closed. */
+    private static List<PersonalWorkspaceExecutionService.ReferenceSelection> authorizedReferences(
+            JsonNode metadata, List<AgentTaskExecutionGrantService.AuthorizedInput> granted) {
+        if (granted == null || granted.size() > 32)
+            throw new IllegalStateException("Bounty grant input list is unavailable");
+        JsonNode catalogue = metadata.get("referenceSummaries");
+        if (catalogue == null && !metadata.has("sourceBusinessActionId")) {
+            if (!granted.isEmpty()) throw new IllegalStateException("Legacy input has unrecorded references");
+            return List.of();
+        }
+        if (catalogue == null || !catalogue.isArray() || catalogue.size() != granted.size())
+            throw new IllegalStateException("Bounty references differ from current grant");
+        var result = new java.util.ArrayList<PersonalWorkspaceExecutionService.ReferenceSelection>();
+        for (int i=0; i<granted.size(); i++) {
+            var stored=catalogue.get(i); var expected=granted.get(i);
+            if (stored==null || !stored.isObject() || expected==null
+                    || !Objects.equals(text(stored,"fileId"),expected.fileId())
+                    || number(stored,"version")!=expected.version()
+                    || !Objects.equals(text(stored,"purpose"),expected.purpose())
+                    || !Objects.equals(text(stored,"mimeType"),expected.contentMimeType())
+                    || number(stored,"byteLength")!=expected.byteLength()
+                    || !Objects.equals(text(stored,"contentHash"),expected.contentHash()))
+                throw new IllegalStateException("Bounty references differ from current grant");
+            if (!List.of("image/png","image/jpeg").contains(expected.contentMimeType())) return null;
+            result.add(new PersonalWorkspaceExecutionService.ReferenceSelection(expected.fileId(),
+                    expected.version(),expected.purpose(),expected.contentMimeType(),
+                    expected.byteLength(),expected.contentHash()));
+        }
+        return List.copyOf(result);
     }
 
     private record Input(String content,String metadata) { }
