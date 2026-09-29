@@ -1,13 +1,22 @@
 package cn.jia.chat.service;
 
+import cn.jia.agent.service.AgentTaskExecutionGrantException;
 import cn.jia.agent.service.AgentTaskExecutionGrantService;
 import cn.jia.agent.service.AgentTaskRequirementSnapshotService;
 import cn.jia.agent.service.PersonalWorkspaceExecutionService;
 import cn.jia.chat.dao.ChatConversationDao;
 import cn.jia.chat.deliberation.ChatDeliberationDao;
+import cn.jia.chat.deliberation.ChatRequestEntity;
+import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.deliberation.ChatInteractionStepStore;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.HexFormat;
+import java.util.List;
+import java.util.Map;
 import tools.jackson.databind.ObjectMapper;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -50,4 +59,69 @@ class ChatBountyExecutionCoordinatorTest {
         assertThrows(IllegalArgumentException.class,()->coordinator.pending(101));
         verifyNoInteractions(jdbc);
     }
+    private void persistedImageRequest() throws Exception {
+        String content="画一只鸟";
+        String digest=HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(
+                CanonicalContextJson.write(Map.of("taskId","task","assignmentRevision",2L,
+                        "grantId","grant","grantVersion",1L,"targetAgentId","agent",
+                        "operation","GENERATE_IMAGE","content",content))
+                        .getBytes(StandardCharsets.UTF_8)));
+        when(steps.findStep("0","owner","client","req",1,1))
+                .thenReturn(new ChatInteractionStepStore.Step("step","0","owner","client",
+                        "req",1,1,"42",1,"task",2,"grant",1,"agent","EXECUTE","ADMITTED",
+                        0,digest,1,1));
+        when(requests.findRequest("0","owner","client","req"))
+                .thenReturn(new ChatRequestEntity().setTenantId("0").setOwnerJiacn("owner")
+                        .setClientId("client").setRequestId("req").setRequestRevision(1L)
+                        .setConversationId("42").setConversationGeneration(1L)
+                        .setAggregateState("PLANNING").setUserMessageId(7L).setStateVersion(0L));
+        // Exercise the real row mapping and metadata extraction without a test DB.
+        when(jdbc.query(anyString(), org.mockito.ArgumentMatchers.<RowMapper<Object>>any(),
+                any(Object[].class))).thenAnswer(invocation->{
+            @SuppressWarnings("unchecked") RowMapper<Object> mapper=invocation.getArgument(1);
+            var row=mock(java.sql.ResultSet.class);
+            when(row.getString(1)).thenReturn(content);
+            when(row.getString(2)).thenReturn("{\"requestId\":\"req\",\"taskId\":\"task\","
+                    +"\"targetAgentId\":\"agent\",\"permittedOperation\":\"GENERATE_IMAGE\"}");
+            return List.of(mapper.mapRow(row,0));
+        });
+    }
+
+    @Test void missingPaidAuthorizationIsPersistedAsWaitingWithoutCreatingExecution() throws Exception {
+        persistedImageRequest();
+        when(grants.admit(any(),eq("task"),eq("grant"),eq(1L),eq(2L),eq("agent"),
+                eq("GENERATE_IMAGE"),eq(true)))
+                .thenThrow(new AgentTaskExecutionGrantException(
+                        AgentTaskExecutionGrantException.Reason.PAID_EXECUTION_NOT_AUTHORIZED,"no cost authorization"));
+        when(steps.updateStepState(any(),eq("WAITING_AUTHORIZATION"),anyLong())).thenReturn(1);
+        when(requests.updateRequestState(any(),eq("WAITING_AUTHORIZATION"),anyLong())).thenReturn(1);
+        assertEquals("WAITING_AUTHORIZATION",coordinator.coordinate(candidate));
+        verifyNoInteractions(executions,conversations);
+    }
+
+    @Test void authorizedExactImageIntentBindsOneExecutionAndTransitionsRequest() throws Exception {
+        persistedImageRequest();
+        when(grants.admit(any(),eq("task"),eq("grant"),eq(1L),eq(2L),eq("agent"),
+                eq("GENERATE_IMAGE"),eq(true)))
+                .thenReturn(new AgentTaskExecutionGrantService.Admission("grant",1,2,
+                        "agent","GENERATE_IMAGE",true));
+        var discussion=new ChatConversationEntity().setId(42L).setTaskId("task")
+                .setConversationScopeType("bounty").setConversationScopeKey("task:task")
+                .setLifecycleGeneration(1L);
+        when(conversations.lockScopedById("owner","client","42")).thenReturn(discussion);
+        when(steps.findLink("0","owner","client","step"))
+                .thenReturn(new ChatInteractionStepStore.ExecutionLink("intent","0","owner",
+                        "client","step",null,"WAITING_ADMISSION",0,1,1));
+        when(executions.createConversation(any(),any())).thenReturn(new PersonalWorkspaceExecutionService.ExecutionView(
+                "execution","task","run","42","agent","QUEUED",null,null,1,
+                "image/png",List.of(),null,"CONVERSATION",null,null,null));
+        when(steps.bindExecution(any(),eq("execution"),anyLong())).thenReturn(1);
+        when(steps.updateStepState(any(),eq("RUNNING"),anyLong())).thenReturn(1);
+        when(requests.updateRequestState(any(),eq("RUNNING"),anyLong())).thenReturn(1);
+        assertEquals("RUNNING",coordinator.coordinate(candidate));
+        verify(executions,times(1)).createConversation(any(),argThat(command ->
+                command.intentId().equals("intent") && command.instruction().equals("画一只鸟")
+                        && command.permittedOperation().equals("GENERATE_IMAGE")));
+    }
+
 }
