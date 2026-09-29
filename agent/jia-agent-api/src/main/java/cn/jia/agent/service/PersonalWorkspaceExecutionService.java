@@ -9,7 +9,12 @@ public interface PersonalWorkspaceExecutionService {
     ExecutionView createConversation(OwnerScope scope, ConversationCreate command);
     /** Trusted Chat consumer obtains exact bytes only after owner/grant re-admission; not a public URL. */
     ConversationOutput readConversationOutput(OwnerScope scope, String taskId, String runId, String outputId);
-    /** Trusted runtime-service only. Existing HTTP START does not expose or accept this lease. */
+    /** Native runtime inbox; intentionally separate from legacy unfenced commands. */
+    List<ConversationRuntimeCommand> runtimeConversationCommands(RuntimeScope scope, int limit);
+    record ConversationRuntimeCommand(int schemaVersion, String taskId, String runId,
+            String conversationId, String commandId, String messageId, String instruction,
+            String outputContentMimeType, String outputId) { }
+    /** Native runtime only; lease token is never sent to browsers or the legacy inbox. */
     ConversationLease claimConversationStart(RuntimeScope scope, String taskId, String runId,
             String commandId, String messageId);
     ConversationLease renewConversationLease(RuntimeScope scope, String taskId, String runId, ConversationFence fence);

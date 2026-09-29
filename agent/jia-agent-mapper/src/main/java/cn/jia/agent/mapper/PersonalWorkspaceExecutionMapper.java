@@ -77,6 +77,28 @@ public interface PersonalWorkspaceExecutionMapper extends BaseMapper<PersonalWor
     @Select("""
             SELECT * FROM agent_personal_workspace_execution
              WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
+               AND target_agent_id=#{targetAgentId} AND execution_state='QUEUED'
+               AND execution_mode='CONVERSATION'
+               AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
+               AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
+               AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
+               AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
+               AND CAST(owner_jiacn AS BINARY)=CAST(#{ownerJiacn} AS BINARY)
+               AND OCTET_LENGTH(owner_jiacn)=OCTET_LENGTH(#{ownerJiacn})
+               AND CAST(target_agent_id AS BINARY)=CAST(#{targetAgentId} AS BINARY)
+               AND OCTET_LENGTH(target_agent_id)=OCTET_LENGTH(#{targetAgentId})
+               AND CAST(execution_mode AS BINARY)=CAST('CONVERSATION' AS BINARY)
+               AND OCTET_LENGTH(execution_mode)=OCTET_LENGTH('CONVERSATION')
+             ORDER BY created_at ASC, execution_id ASC LIMIT #{limit}
+            """)
+    java.util.List<PersonalWorkspaceExecutionEntity> listQueuedConversationsByTarget(
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn, @Param("targetAgentId") String targetAgentId,
+            @Param("limit") int limit);
+
+    @Select("""
+            SELECT * FROM agent_personal_workspace_execution
+             WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
                AND execution_id=#{executionId}
                AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
                AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
