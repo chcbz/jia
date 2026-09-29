@@ -61,6 +61,15 @@ public final class AgentTaskExecutionGrantSchemaInitializer implements Initializ
         if (!columns.containsAll(REQUIRED_COLUMNS)) throw new IllegalStateException("Task grant columns are partial or drifted");
         Set<String> indexes = Set.copyOf(jdbc.queryForList("SELECT DISTINCT index_name FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name=?", String.class, TABLE));
         if (!indexes.containsAll(REQUIRED_INDEXES)) throw new IllegalStateException("Task grant indexes are partial or drifted");
+        validateIndex("PRIMARY", true, List.of("id"));
+        validateIndex("uk_atxg_scope_grant", true,
+                List.of("tenant_id","client_id","owner_jiacn","grant_id"));
+        validateIndex("uk_atxg_scope_action", true,
+                List.of("tenant_id","client_id","owner_jiacn","source_business_action_id"));
+        validateIndex("uk_atxg_active_task", true,
+                List.of("tenant_id","client_id","owner_jiacn","active_task_guard"));
+        validateIndex("idx_atxg_task_state", false,
+                List.of("tenant_id","client_id","owner_jiacn","task_id","state"));
         Set<String> checks = Set.copyOf(jdbc.queryForList("SELECT constraint_name FROM information_schema.table_constraints WHERE table_schema=DATABASE() AND table_name=? AND constraint_type='CHECK'", String.class, TABLE));
         if (!checks.containsAll(REQUIRED_CHECKS)) throw new IllegalStateException("Task grant checks are partial or drifted");
         List<Map<String,Object>> identity = jdbc.queryForList("SELECT column_name,is_nullable,collation_name FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=? AND column_name IN ('grant_id','tenant_id','client_id','owner_jiacn','task_id','target_agent_id','source_business_action_id','idempotency_key')", TABLE);
@@ -68,6 +77,28 @@ public final class AgentTaskExecutionGrantSchemaInitializer implements Initializ
             throw new IllegalStateException("Task grant identity columns are not byte-exact");
         }
     }
+    /** A matching name alone is not a uniqueness guarantee: inspect the actual ordered key. */
+    void validateIndex(String name, boolean unique, List<String> expectedColumns) {
+        List<IndexColumn> parts = jdbc.query("""
+                SELECT non_unique,seq_in_index,column_name,sub_part,expression
+                  FROM information_schema.statistics
+                 WHERE table_schema=DATABASE() AND table_name=? AND index_name=?
+                 ORDER BY seq_in_index
+                """, (rs, row) -> new IndexColumn(rs.getInt("non_unique"),
+                rs.getInt("seq_in_index"), rs.getString("column_name"),
+                rs.getObject("sub_part"), rs.getString("expression")), TABLE, name);
+        if (parts.size() != expectedColumns.size()) throw new IllegalStateException("Task grant index structure drift: " + name);
+        for (int i=0;i<parts.size();i++) {
+            IndexColumn part=parts.get(i);
+            if (part.nonUnique() != (unique ? 0 : 1) || part.sequence() != i+1
+                    || !expectedColumns.get(i).equalsIgnoreCase(part.column())
+                    || part.prefix() != null || part.expression() != null) {
+                throw new IllegalStateException("Task grant index structure drift: " + name);
+            }
+        }
+    }
+    record IndexColumn(int nonUnique,int sequence,String column,Object prefix,String expression) {}
+
     private void requireMySql() {
         DataSource source=jdbc.getDataSource();
         if (source==null) throw new IllegalStateException("Task grant schema requires JDBC");
