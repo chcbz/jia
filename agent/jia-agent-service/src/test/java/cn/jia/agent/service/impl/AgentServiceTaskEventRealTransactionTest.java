@@ -181,7 +181,7 @@ class AgentServiceTaskEventRealTransactionTest {
         jdbc.update("""
                 INSERT INTO agent_task_event
                 (task_id,event_version,event_id,event_type,event_json,tenant_id,client_id)
-                VALUES ('42',7,'evt-existing','TASK_CREATED','{}','juyiting','jia_client')
+                VALUES ('42',7,'evt-existing','TASK_CREATED','{}','0','jia_client')
                 """);
 
         assertThrows(IllegalStateException.class, () -> service.createTask(createRequest()));
@@ -346,8 +346,8 @@ class AgentServiceTaskEventRealTransactionTest {
                 INSERT INTO agent_task_meta
                 (task_id,reward_status,collaboration_mode,risk_level,max_agents,
                  review_required,task_version,current_event_version,
-                 tenant_id,client_id,create_time,update_time)
-                VALUES (?,?,'single','low',1,0,?,?,'juyiting','jia_client',1,1)
+                 tenant_id,client_id,owner_jiacn,create_time,update_time)
+                VALUES (?,?,'single','low',1,0,?,?,'0','jia_client','juyiting',1,1)
                 """, taskId, status, taskVersion, eventVersion);
     }
 
@@ -388,6 +388,7 @@ class AgentServiceTaskEventRealTransactionTest {
                 CREATE TABLE agent_task_meta (
                     id BIGINT NOT NULL AUTO_INCREMENT,
                     task_id VARCHAR(100) NOT NULL,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     reward_status VARCHAR(20) NOT NULL,
                     assigned_agent_id VARCHAR(100),
                     required_abilities TEXT,
@@ -408,7 +409,7 @@ class AgentServiceTaskEventRealTransactionTest {
                     tenant_id VARCHAR(50) NOT NULL,
                     client_id VARCHAR(50) NOT NULL,
                     PRIMARY KEY (id),
-                    UNIQUE (tenant_id, client_id, task_id)
+                    UNIQUE (tenant_id, client_id, owner_jiacn, task_id)
                 )""");
         jdbc.execute("""
                 CREATE TABLE agent_task_requirement_snapshot (
@@ -461,6 +462,7 @@ class AgentServiceTaskEventRealTransactionTest {
                     author_type VARCHAR(20),
                     note_type VARCHAR(20),
                     content TEXT,
+                    owner_jiacn VARCHAR(50),
                     created_at BIGINT,
                     create_time BIGINT,
                     update_time BIGINT,

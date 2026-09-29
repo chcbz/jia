@@ -50,10 +50,9 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
 
     @Test
     void historicalIntentWithoutConfirmedRevisionNeverReachesChat() {
-        org.mockito.Mockito.when(requirementSnapshots.read(
-                org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.anyString(),
-                org.mockito.ArgumentMatchers.anyLong()))
-                .thenThrow(new IllegalStateException("No confirmed revision"));
+        org.mockito.Mockito.doThrow(new IllegalStateException("No confirmed revision"))
+                .when(requirementSnapshots).read(org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyLong());
         assertNull(service.claimNextAvailable("chat-worker",1000));
         assertEquals("DEAD",dao.rows.get("bootstrap-1").getStatus());
         assertEquals("CORRUPT_BOOTSTRAP_INTENT",dao.rows.get("bootstrap-1").getLastErrorCode());
