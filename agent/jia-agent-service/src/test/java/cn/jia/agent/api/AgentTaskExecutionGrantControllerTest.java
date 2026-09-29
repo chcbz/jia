@@ -51,5 +51,5 @@ class AgentTaskExecutionGrantControllerTest {
     }
 
     private static AgentTaskAssignDTO request(){AgentTaskAssignDTO r=new AgentTaskAssignDTO();r.setAgentId("agent-1");r.setWorkflowVersion(2);r.setBusinessAction("assign_and_start");r.setExpectedTaskVersion(0L);r.setRequirementRevision(1L);r.setRequestedOperations(List.of("GENERATE_IMAGE"));return r;}
-    private static JwtAuthenticationToken jwt(String owner,String client){Jwt jwt=Jwt.withTokenValue("token").header("alg","none").claim("jiacn",owner).claim("client_id",client).issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();return new JwtAuthenticationToken(jwt);}
+    private static JwtAuthenticationToken jwt(String owner,String client){Jwt jwt=Jwt.withTokenValue("token").header("alg","none").claim("jiacn",owner).claim("client_id",client).issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();return new JwtAuthenticationToken(jwt,List.of());}
 }
