@@ -19,6 +19,7 @@ import cn.jia.agent.service.AgentTaskExecutionGrantException;
 import cn.jia.agent.service.AgentTaskExecutionGrantService;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
+import cn.jia.agent.service.AgentTaskRequirementSnapshotService;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 import jakarta.inject.Inject;
@@ -52,6 +53,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
 
     private final AgentTaskExecutionGrantDao grants;
     private final AgentTaskBountyBootstrapOutboxDao bootstrapOutbox;
+    private final AgentTaskRequirementSnapshotService requirementSnapshots;
     private final PersonalWorkspaceTaskLinkDao taskLinks;
     private final PersonalWorkspaceDao workspace;
     private final AgentLegacyTaskCompatibilityService legacyAssignments;
@@ -64,7 +66,8 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
             AgentTaskBountyBootstrapOutboxDao bootstrapOutbox,
             PersonalWorkspaceTaskLinkDao taskLinks, PersonalWorkspaceDao workspace,
             AgentLegacyTaskCompatibilityService legacyAssignments, AgentIdentityService identities,
-            AgentTaskMutationTransaction transactions, ObjectMapper json) {
+            AgentTaskMutationTransaction transactions, ObjectMapper json,
+            AgentTaskRequirementSnapshotService requirementSnapshots) {
         this.grants = Objects.requireNonNull(grants,"grants");
         this.bootstrapOutbox = Objects.requireNonNull(bootstrapOutbox,"bootstrapOutbox");
         this.taskLinks = Objects.requireNonNull(taskLinks,"taskLinks");
@@ -73,6 +76,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         this.identities = Objects.requireNonNull(identities,"identities");
         this.transactions = Objects.requireNonNull(transactions,"transactions");
         this.json = Objects.requireNonNull(json,"json");
+        this.requirementSnapshots = Objects.requireNonNull(requirementSnapshots,"requirementSnapshots");
     }
 
     @Override
@@ -94,9 +98,24 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
 
     private AgentTaskExecutionGrantDTO assignLocked(Scope scope, ValidAssign valid,
             String canonicalAgent, String requestHash, String actionId, AgentTaskMetaEntity root) {
-        // Frozen task-root lock order: grant action -> bootstrap action -> target/input rows.
+        // Frozen task-root lock order: requirement latest read -> grant action ->
+        // bootstrap action -> target/input rows. Requirement history is append-only.
         // The command-delivery outbox is intentionally not reused: this row coordinates Chat
         // admission and must never acquire Rabbit/Agent delivery semantics.
+        // Root is already locked. Client revision is only a hint: compare with latest
+        // server-owned immutable requirement before taking grant/outbox action locks.
+        try {
+            var confirmed = requirementSnapshots.requireCurrent(scope,valid.taskId(),valid.requirementRevision());
+            if (confirmed == null || confirmed.revision()!=valid.requirementRevision()
+                    || !scope.tenantId().equals(confirmed.tenantId())
+                    || !scope.clientId().equals(confirmed.clientId())
+                    || !scope.ownerJiacn().equals(confirmed.ownerJiacn())
+                    || !valid.taskId().equals(confirmed.taskId()))
+                throw new IllegalStateException("Requirement snapshot scope/revision mismatch");
+        }
+        catch (IllegalArgumentException | IllegalStateException absent) {
+            throw invalidState("Current owner-confirmed requirement revision is missing or stale");
+        }
         AgentTaskExecutionGrantEntity replay = grants.findByActionForUpdate(scope.tenantId(),
                 scope.clientId(),scope.ownerJiacn(),actionId);
         AgentTaskBountyBootstrapOutboxEntity existingBootstrap =
@@ -277,10 +296,10 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         AgentTaskExecutionGrantEntity grant=grants.findByGrantForUpdate(scope.tenantId(),
                 scope.clientId(),scope.ownerJiacn(),taskId,grantId);
         if (grant==null || !same(observed.getRequestHash(),grant.getRequestHash())) throw conflict("Grant changed during admission");
-        return verifyAdmission(root,grant,grantVersion,assignmentRevision,targetAgentId,operation,paid);
+        return verifyAdmission(scope,root,grant,grantVersion,assignmentRevision,targetAgentId,operation,paid);
     }
 
-    private Admission verifyAdmission(AgentTaskMetaEntity root,AgentTaskExecutionGrantEntity grant,
+    private Admission verifyAdmission(Scope scope,AgentTaskMetaEntity root,AgentTaskExecutionGrantEntity grant,
             long grantVersion,long assignmentRevision,String targetAgentId,String operation,boolean paid) {
         if (!"ACTIVE".equals(grant.getState()) || !Objects.equals(grantVersion,grant.getGrantVersion())
                 || !Objects.equals(assignmentRevision,grant.getAssignmentRevision())
@@ -288,6 +307,19 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                 || !same(targetAgentId,grant.getTargetAgentId())
                 || !same(targetAgentId,root.getAssignedAgentId())) {
             throw conflict("Grant, assignment, or target is stale");
+        }
+        // Root lock serializes owner re-confirmation with admission. A previously
+        // issued grant cannot authorize a newer, differently confirmed requirement.
+        try {
+            var current=requirementSnapshots.requireCurrent(scope,grant.getTaskId(),grant.getRequirementRevision());
+            if (current==null || current.revision()!=grant.getRequirementRevision()
+                    || !scope.tenantId().equals(current.tenantId())
+                    || !scope.clientId().equals(current.clientId())
+                    || !scope.ownerJiacn().equals(current.ownerJiacn())
+                    || !grant.getTaskId().equals(current.taskId()))
+                throw new IllegalStateException("Requirement revision drift");
+        } catch (IllegalArgumentException | IllegalStateException absent) {
+            throw invalidState("Current requirement revision is missing or stale");
         }
         List<String> allowed=readOperations(grant.getPermittedOperationsJson());
         if (!allowed.contains(operation)) throw new AgentTaskExecutionGrantException(
@@ -318,7 +350,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                         if (locked==null || !same(observed.getRequestHash(),locked.getRequestHash())) {
                             throw conflict("Active grant changed during server-side resolution");
                         }
-                        return verifyAdmission(root,locked,locked.getGrantVersion(),expectedAssignmentRevision,
+                        return verifyAdmission(scope,root,locked,locked.getGrantVersion(),expectedAssignmentRevision,
                                 targetAgentId,operation,paidExecution);
                     });
         } catch (AgentTaskCollaborationException failure) { throw translate(failure); }

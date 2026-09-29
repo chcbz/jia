@@ -16,6 +16,7 @@ import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentTaskExecutionGrantException;
 import cn.jia.agent.service.AgentTaskExecutionGrantService;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
+import cn.jia.agent.service.AgentTaskRequirementSnapshotService;
 import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -35,6 +36,7 @@ class AgentTaskExecutionGrantServiceImplTest {
     private final PersonalWorkspaceDao workspace = mock(PersonalWorkspaceDao.class);
     private final AgentLegacyTaskCompatibilityService legacy = mock(AgentLegacyTaskCompatibilityService.class);
     private final AgentIdentityService identities = mock(AgentIdentityService.class);
+    private final AgentTaskRequirementSnapshotService requirementSnapshots = mock(AgentTaskRequirementSnapshotService.class);
     private final AgentTaskMetaEntity root = new AgentTaskMetaEntity();
     private AgentTaskExecutionGrantServiceImpl service;
 
@@ -43,6 +45,10 @@ class AgentTaskExecutionGrantServiceImplTest {
         root.setTenantId("0"); root.setClientId("client"); root.setOwnerJiacn("owner");
         root.setTaskId("task-1"); root.setTaskVersion(0L); root.setCurrentEventVersion(0L);
         root.setRewardStatus("open");
+        when(requirementSnapshots.requireCurrent(any(),eq("task-1"),anyLong()))
+                .thenAnswer(i -> new AgentTaskRequirementSnapshotService.Snapshot(
+                        "0","client","owner","task-1",i.getArgument(2),
+                        "Original title","Full original description","a".repeat(64),"CREATE"));
         when(legacy.resolveAgentId("0","client","owner","agent-1")).thenReturn("agent-1");
         when(identities.lockActiveCanonicalAgentIdsInScope("0","client","owner",List.of("agent-1")))
                 .thenReturn(List.of("agent-1"));
@@ -58,7 +64,19 @@ class AgentTaskExecutionGrantServiceImplTest {
                     : new AgentLegacyTaskCompatibilityService.AssignOutcome(List.of("agent-1"),false);
         });
         service=new AgentTaskExecutionGrantServiceImpl(grants,bootstraps,links,workspace,legacy,identities,
-                new DirectTransaction(root),new ObjectMapper());
+                new DirectTransaction(root),new ObjectMapper(),requirementSnapshots);
+    }
+
+    @Test
+    void missingOrStaleServerRequirementPreventsAssignmentAndOutbox() {
+        when(requirementSnapshots.requireCurrent(any(),eq("task-1"),anyLong()))
+                .thenThrow(new IllegalStateException("No persisted owner confirmation"));
+        var failure=assertThrows(AgentTaskExecutionGrantException.class,
+                () -> service.assignAndGrant(scope(),"task-1","key-unconfirmed",request()));
+        assertEquals(AgentTaskExecutionGrantException.Reason.INVALID_PERSISTED_STATE,failure.reason());
+        assertNull(root.getAssignedAgentId());
+        assertTrue(grants.byAction.isEmpty());
+        assertTrue(bootstraps.byAction.isEmpty());
     }
 
     @Test
@@ -131,7 +149,7 @@ class AgentTaskExecutionGrantServiceImplTest {
     void bootstrapFailureRollsBackAssignmentAndGrantBoundary() {
         bootstraps.failInsert=true;
         service=new AgentTaskExecutionGrantServiceImpl(grants,bootstraps,links,workspace,legacy,identities,
-                new RollbackTransaction(root,grants,bootstraps),new ObjectMapper());
+                new RollbackTransaction(root,grants,bootstraps),new ObjectMapper(),requirementSnapshots);
         assertThrows(IllegalStateException.class,
                 () -> service.assignAndGrant(scope(),"task-1","key-rollback",request()));
         assertNull(root.getAssignedAgentId());
@@ -176,6 +194,22 @@ class AgentTaskExecutionGrantServiceImplTest {
                 () -> service.resolveAndAdmit(scope(),"task-1",grant.getAssignmentRevision(),
                         "agent-1","GENERATE_IMAGE",true));
         assertEquals(AgentTaskExecutionGrantException.Reason.PAID_EXECUTION_NOT_AUTHORIZED,paid.reason());
+    }
+
+    @Test
+    void ownerReconfirmationInvalidatesPreviouslyIssuedGrantForBothAdmissionPaths() {
+        var grant=service.assignAndGrant(scope(),"task-1","key-reconfirmed",request());
+        root.setTaskVersion(grant.getAssignmentRevision()); root.setAssignedAgentId("agent-1");
+        when(requirementSnapshots.requireCurrent(any(),eq("task-1"),eq(1L)))
+                .thenThrow(new IllegalStateException("Owner has confirmed revision 2"));
+        var explicit=assertThrows(AgentTaskExecutionGrantException.class, () ->
+                service.admit(scope(),"task-1",grant.getGrantId(),grant.getGrantVersion(),
+                        grant.getAssignmentRevision(),"agent-1","GENERATE_IMAGE",false));
+        assertEquals(AgentTaskExecutionGrantException.Reason.INVALID_PERSISTED_STATE,explicit.reason());
+        var resolved=assertThrows(AgentTaskExecutionGrantException.class, () ->
+                service.resolveAndAdmit(scope(),"task-1",grant.getAssignmentRevision(),
+                        "agent-1","GENERATE_IMAGE",false));
+        assertEquals(AgentTaskExecutionGrantException.Reason.INVALID_PERSISTED_STATE,resolved.reason());
     }
 
     @Test

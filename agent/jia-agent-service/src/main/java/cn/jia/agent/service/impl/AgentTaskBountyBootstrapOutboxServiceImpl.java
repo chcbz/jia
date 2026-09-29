@@ -7,6 +7,7 @@ import cn.jia.agent.entity.AgentTaskBountyBootstrapReconcileDTO;
 import cn.jia.agent.entity.AgentTaskBountyBootstrapReconcileResultDTO;
 import cn.jia.agent.service.AgentTaskBountyBootstrapOutboxService;
 import cn.jia.agent.service.AgentTaskExecutionGrantService;
+import cn.jia.agent.service.AgentTaskRequirementSnapshotService;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -24,16 +25,22 @@ public final class AgentTaskBountyBootstrapOutboxServiceImpl
         implements AgentTaskBountyBootstrapOutboxService {
     // Recovery lease only. Expiry never cancels Chat work; Chat must consume by stable action id.
     static final long CLAIM_LEASE_MILLIS = 300_000L;
+    // Prevent a permanently failing Chat dependency from being reclaimed every poll.
+    static final long RETRY_BASE_MILLIS = 1_000L;
+    static final long RETRY_MAX_MILLIS = 300_000L;
     private static final Pattern ERROR_CODE = Pattern.compile("[A-Z][A-Z0-9_]{0,99}");
 
     private final AgentTaskBountyBootstrapOutboxDao outbox;
+    private final AgentTaskRequirementSnapshotService requirementSnapshots;
     private final ObjectMapper json;
     private final TransactionTemplate transaction;
 
     @Inject
     public AgentTaskBountyBootstrapOutboxServiceImpl(AgentTaskBountyBootstrapOutboxDao outbox,
-            ObjectMapper json, PlatformTransactionManager transactionManager) {
+            ObjectMapper json, PlatformTransactionManager transactionManager,
+            AgentTaskRequirementSnapshotService requirementSnapshots) {
         this.outbox = Objects.requireNonNull(outbox, "outbox");
+        this.requirementSnapshots = Objects.requireNonNull(requirementSnapshots, "requirementSnapshots");
         this.json = Objects.requireNonNull(json, "json");
         Objects.requireNonNull(transactionManager, "transactionManager");
         this.transaction = new TransactionTemplate(transactionManager);
@@ -97,6 +104,8 @@ public final class AgentTaskBountyBootstrapOutboxServiceImpl
                 .setNextRetryAt(null).setLeaseOwner(consumerId).setLeaseUntil(leaseUntil)
                 .setLastErrorCode(null).setVersion(row.getVersion() + 1);
         try {
+            // Missing/corrupt historical requirement must never reach Chat admission.
+            requireSnapshot(scope, row);
             List<AgentTaskBountyBootstrapClaimDTO.ReferenceSummary> references =
                     AgentTaskBountyBootstrapPayload.validateAndRead(row, json);
             return new AgentTaskBountyBootstrapClaimDTO(row.getBootstrapId(), row.getTenantId(),
@@ -143,6 +152,7 @@ public final class AgentTaskBountyBootstrapOutboxServiceImpl
             throw new IllegalStateException("Bootstrap claim fence is stale");
         }
         AgentTaskBountyBootstrapPayload.validateAndRead(row, json);
+        requireSnapshot(scope, row);
 
         String status;
         Long nextRetryAt = null;
@@ -166,7 +176,7 @@ public final class AgentTaskBountyBootstrapOutboxServiceImpl
                 rejectIds(command);
                 errorCode = errorCode(command.errorCode());
                 status = "RETRY";
-                nextRetryAt = now;
+                nextRetryAt = retryAt(now, row.getAttemptCount());
             }
             case TERMINAL_FAILURE -> {
                 rejectIds(command);
@@ -185,6 +195,17 @@ public final class AgentTaskBountyBootstrapOutboxServiceImpl
                 .setLastErrorCode(errorCode).setReconciledAt(reconciledAt)
                 .setVersion(row.getVersion() + 1);
         return result(row);
+    }
+
+    private static long retryAt(long now, Integer attemptCount) {
+        if (attemptCount == null || attemptCount < 1)
+            throw new IllegalStateException("Bootstrap retry attempt count is invalid");
+        long delay = Math.min(RETRY_MAX_MILLIS,
+                RETRY_BASE_MILLIS << Math.min(attemptCount - 1, 9));
+        // A valid long timestamp at the edge cannot be advanced further; fail closed
+        // rather than roll over and turn a retry into an immediate claim.
+        try { return Math.addExact(now, delay); }
+        catch (ArithmeticException overflow) { return Long.MAX_VALUE; }
     }
 
     private static boolean isExactReplay(AgentTaskBountyBootstrapOutboxEntity row,
@@ -210,6 +231,17 @@ public final class AgentTaskBountyBootstrapOutboxServiceImpl
         return new AgentTaskBountyBootstrapReconcileResultDTO(row.getBootstrapId(),
                 row.getStatus(), row.getVersion(), row.getAdmittedConversationId(),
                 row.getAdmittedRequestId());
+    }
+
+    private void requireSnapshot(AgentTaskExecutionGrantService.Scope scope,
+            AgentTaskBountyBootstrapOutboxEntity row) {
+        var snapshot = requirementSnapshots.read(scope,row.getTaskId(),row.getRequirementRevision());
+        if (snapshot == null || snapshot.revision()!=row.getRequirementRevision()
+                || !scope.tenantId().equals(snapshot.tenantId())
+                || !scope.clientId().equals(snapshot.clientId())
+                || !scope.ownerJiacn().equals(snapshot.ownerJiacn())
+                || !row.getTaskId().equals(snapshot.taskId()))
+            throw new IllegalStateException("Requirement snapshot missing or scope/revision mismatch");
     }
 
     private static void validateCommand(AgentTaskBountyBootstrapReconcileDTO command) {
