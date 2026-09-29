@@ -12,5 +12,6 @@ ALTER TABLE agent_personal_workspace_execution
       ((conversation_lease_version=0 AND conversation_lease_token IS NULL
         AND conversation_lease_runtime_id IS NULL AND conversation_lease_expires_at IS NULL)
        OR (conversation_lease_version>=1 AND conversation_lease_token IS NOT NULL
-        AND conversation_lease_runtime_id IS NOT NULL AND conversation_lease_expires_at>0)))
+        AND conversation_lease_runtime_id IS NOT NULL
+        AND conversation_lease_expires_at IS NOT NULL AND conversation_lease_expires_at>0)))
   );

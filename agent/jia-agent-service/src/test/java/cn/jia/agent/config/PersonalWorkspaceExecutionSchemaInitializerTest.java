@@ -72,5 +72,6 @@ class PersonalWorkspaceExecutionSchemaInitializerTest {
         var lease=PersonalWorkspaceExecutionSchemaInitializer.conversationLeaseMigrationStatement();
         assertTrue(lease.contains("conversation_lease_version BIGINT NOT NULL DEFAULT 0"));
         assertTrue(lease.contains("chk_pwex_conversation_lease"));
+        assertTrue(lease.contains("conversation_lease_expires_at IS NOT NULL"));
     }
 }
