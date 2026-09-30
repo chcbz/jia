@@ -304,7 +304,7 @@ class ChatControllerTest extends BaseMockTest {
         when(chatConversationService.findByConversationId("1001"))
                 .thenReturn(List.of(userMessage, agentMessage));
 
-        var assets = mock(cn.jia.chat.service.ChatBountyAssetProjector.class);
+        var assets = org.mockito.Mockito.mock(cn.jia.chat.service.ChatBountyAssetProjector.class);
         var trustedPart = new cn.jia.chat.service.ChatBountyAssetProjector.Part(
                 "part_1", "image", "ready", "ast_1", "image/png", "bird.png", "1", "a".repeat(64), 20);
         when(assets.partsFor(new cn.jia.agent.service.PersonalWorkspaceExecutionService.OwnerScope(
