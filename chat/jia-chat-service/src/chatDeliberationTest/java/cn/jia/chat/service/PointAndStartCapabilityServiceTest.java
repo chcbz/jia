@@ -6,6 +6,7 @@ import cn.jia.agent.service.NativeBountyExecutionSessionLookup;
 import cn.jia.agent.service.PersonalWorkspaceStorage;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 import java.util.List;
 
@@ -21,6 +22,19 @@ class PointAndStartCapabilityServiceTest {
     @SuppressWarnings("unchecked") private final ObjectProvider<ChatBountyBootstrapRelay> bootstraps=mock(ObjectProvider.class);
     @SuppressWarnings("unchecked") private final ObjectProvider<ChatBountyExecutionRelay> executions=mock(ObjectProvider.class);
     private final AgentTaskExecutionGrantService.Scope scope=new AgentTaskExecutionGrantService.Scope("0","client-a","owner-a");
+
+    @Test
+    void springConstructsDisabledProjectionWithoutReadingSourcesOrStartingWork() {
+        try (var context = new AnnotationConfigApplicationContext()) {
+            context.registerBean(NativeBountyExecutionSessionLookup.class, () -> sessions);
+            context.registerBean(AgentTaskPointAndStartPolicyService.class, () -> policy);
+            context.registerBean(PersonalWorkspaceStorage.class, () -> storage);
+            context.register(PointAndStartCapabilityService.class);
+            context.refresh();
+            assertNotNull(context.getBean(PointAndStartCapabilityService.class));
+            verifyNoInteractions(sessions, policy, storage, bootstrap, execution);
+        }
+    }
 
     @Test
     void positiveNativeTransportStillReportsTruthfulUnavailableCostAuthorization() {
