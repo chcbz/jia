@@ -20,6 +20,7 @@ public final class RedisVoiceRequestCoordinator implements VoiceRequestCoordinat
     private static final long IN_PROGRESS_TTL_MS = Duration.ofMinutes(10).toMillis();
 
     private static final DefaultRedisScript<List> ADMIT_SCRIPT = new DefaultRedisScript<>("""
+            redis.replicate_commands()
             local time = redis.call('TIME')
             local now = time[1] * 1000 + math.floor(time[2] / 1000)
             redis.call('ZREMRANGEBYSCORE', KEYS[3], '-inf', now)
@@ -46,6 +47,7 @@ public final class RedisVoiceRequestCoordinator implements VoiceRequestCoordinat
             """, List.class);
 
     private static final DefaultRedisScript<List> BEGIN_ADMITTED_SCRIPT = new DefaultRedisScript<>("""
+            redis.replicate_commands()
             local time = redis.call('TIME')
             local now = time[1] * 1000 + math.floor(time[2] / 1000)
             local identityExpiry = redis.call('ZSCORE', KEYS[2], ARGV[2])
@@ -91,6 +93,7 @@ public final class RedisVoiceRequestCoordinator implements VoiceRequestCoordinat
             """, List.class);
 
     private static final DefaultRedisScript<List> BEGIN_SCRIPT = new DefaultRedisScript<>("""
+            redis.replicate_commands()
             local time = redis.call('TIME')
             local now = time[1] * 1000 + math.floor(time[2] / 1000)
             local digest = redis.call('HGET', KEYS[1], 'digest')
@@ -161,6 +164,7 @@ public final class RedisVoiceRequestCoordinator implements VoiceRequestCoordinat
             """, Long.class);
 
     private static final DefaultRedisScript<Long> RENEW_SCRIPT = new DefaultRedisScript<>("""
+            redis.replicate_commands()
             local time = redis.call('TIME')
             local now = time[1] * 1000 + math.floor(time[2] / 1000)
             local identityExpiry = redis.call('ZSCORE', KEYS[2], ARGV[2])
