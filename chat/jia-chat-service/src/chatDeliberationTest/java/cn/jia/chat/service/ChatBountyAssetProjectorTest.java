@@ -83,6 +83,22 @@ class ChatBountyAssetProjectorTest {
         verifyNoInteractions(broker); // No signal before a real transaction commits.
     }
 
+    @Test void repeatProjectionReadsCurrentAssetAndDoesNotCreateAnotherMessageOrEvent() throws Exception {
+        ready();
+        String source = "0\nowner\nclient\nstep\noutput_1";
+        String suffix = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                .digest(source.getBytes(java.nio.charset.StandardCharsets.UTF_8))).substring(0, 32);
+        var existing = new ChatBountyAssetProjector.Asset("ast_" + suffix, "0", "owner", "client",
+                "42", 1, "req", "step", "exec", "run", "output_1", "100", "part_" + suffix,
+                "image", "image/png", "a".repeat(64), 20, 1);
+        when(jdbc.query(anyString(), org.mockito.ArgumentMatchers.<RowMapper<Object>>any(), any(Object[].class)))
+                .thenReturn(List.of(existing));
+        assertEquals(0, projector.project(candidate));
+        verify(jdbc).query(contains("FOR UPDATE"), org.mockito.ArgumentMatchers.<RowMapper<Object>>any(), any(Object[].class));
+        verifyNoInteractions(messages, events, broker);
+        verify(jdbc, never()).update(anyString(), any(Object[].class));
+    }
+
     @Test void publicationIsRegisteredOnlyForAfterCommit() {
         ready(); TransactionSynchronizationManager.initSynchronization();
         try {
