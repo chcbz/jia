@@ -188,6 +188,8 @@ class ChatSchemaReadinessLifecycleTest {
             when(connection.createStatement()).thenReturn(statement);
             when(connection.getAutoCommit()).thenReturn(true);
             when(connection.isClosed()).thenReturn(false);
+            when(statement.getUpdateCount()).thenReturn(-1);
+            when(statement.getMoreResults()).thenReturn(false);
             when(metadata.getDatabaseProductName()).thenReturn("MySQL");
             when(metadata.getDatabaseMajorVersion()).thenReturn(8);
             when(statement.execute(anyString())).thenAnswer(invocation -> {
