@@ -22,9 +22,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
 class VoiceLeaseGuardTest {
     private static final VoiceReservation RESERVATION = new VoiceReservation(
@@ -36,8 +36,8 @@ class VoiceLeaseGuardTest {
         ScheduledExecutorService executor = mock(ScheduledExecutorService.class);
         ScheduledFuture<?> future = mock(ScheduledFuture.class);
         ArgumentCaptor<Runnable> task = ArgumentCaptor.forClass(Runnable.class);
-        when(executor.scheduleAtFixedRate(task.capture(), anyLong(), anyLong(),
-                eq(TimeUnit.MILLISECONDS))).thenReturn(future);
+        doReturn(future).when(executor).scheduleAtFixedRate(
+                task.capture(), anyLong(), anyLong(), eq(TimeUnit.MILLISECONDS));
 
         VoiceLeaseGuard guard = new VoiceLeaseGuard(
                 coordinator, RESERVATION, executor, 5);
@@ -57,8 +57,8 @@ class VoiceLeaseGuardTest {
         ScheduledExecutorService executor = mock(ScheduledExecutorService.class);
         ScheduledFuture<?> future = mock(ScheduledFuture.class);
         ArgumentCaptor<Runnable> task = ArgumentCaptor.forClass(Runnable.class);
-        when(executor.scheduleAtFixedRate(task.capture(), anyLong(), anyLong(),
-                eq(TimeUnit.MILLISECONDS))).thenReturn(future);
+        doReturn(future).when(executor).scheduleAtFixedRate(
+                task.capture(), anyLong(), anyLong(), eq(TimeUnit.MILLISECONDS));
         VoiceLeaseGuard guard = new VoiceLeaseGuard(
                 coordinator, RESERVATION, executor, 5);
         try {
