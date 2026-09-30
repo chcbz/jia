@@ -77,6 +77,53 @@ class AgentRuntimeV2PersistenceSchemaGateTest {
     }
 
     @Test
+    void acceptsOnlyCompleteExactRegistrationExtensionAcrossBothGates() {
+        FakeCatalog extended = registrationCanonical();
+        assertDoesNotThrow(() -> new AgentRuntimeV2PersistenceSchemaGate(extended).afterPropertiesSet());
+
+        FakeCatalog partial = registrationCanonical();
+        partial.columns.put(AgentRuntimeV2PersistenceSchemaGate.REQUEST,
+                new ArrayList<>(AgentRuntimeV2PersistenceSchemaGate.expectedColumns()
+                        .get(AgentRuntimeV2PersistenceSchemaGate.REQUEST)));
+        assertDenied(partial);
+
+        FakeCatalog weakened = registrationCanonical();
+        weakened.checks.get(AgentRuntimeV2PersistenceSchemaGate.INBOX).put(
+                "chk_inbox_runtime_v2_origin_evidence", enforced("1=1"));
+        assertDenied(weakened);
+    }
+
+    @Test
+    void checkCanonicalizationPreservesBinaryLiteralCaseAndWhitespace() {
+        String baselineName = "chk_runtime_v2_binding_state";
+        String baselineClause = AgentRuntimeV2PersistenceSchemaGate.expectedCheckClauses()
+                .get(baselineName);
+        FakeCatalog baselineCaseDrift = canonical();
+        baselineCaseDrift.checks.get(AgentRuntimeV2PersistenceSchemaGate.BINDING).put(
+                baselineName, enforced(baselineClause.replace("'ACTIVE'", "'active'")));
+        assertDenied(baselineCaseDrift);
+
+        String extensionName = "chk_binding_generation_registration";
+        String extensionClause = AgentRuntimeV2RegistrationSchemaGate.expectedChecks()
+                .get(AgentRuntimeV2PersistenceSchemaGate.GENERATION_FACT).get(extensionName);
+        FakeCatalog extensionCaseDrift = registrationCanonical();
+        extensionCaseDrift.checks.get(AgentRuntimeV2PersistenceSchemaGate.GENERATION_FACT).put(
+                extensionName, enforced(extensionClause.replace(
+                        "'CURRENT_ADMISSION'", "'current_admission'")));
+        assertDenied(extensionCaseDrift);
+
+        FakeCatalog extensionWhitespaceDrift = registrationCanonical();
+        extensionWhitespaceDrift.checks.get(AgentRuntimeV2PersistenceSchemaGate.GENERATION_FACT).put(
+                extensionName, enforced(extensionClause.replace(
+                        "'CURRENT_ADMISSION'", "'CURRENT_ADMISSION '")));
+        assertDenied(extensionWhitespaceDrift);
+
+        assertNotEquals(
+                AgentRuntimeV2PersistenceSchemaGate.canonicalCheck("status='A  B'"),
+                AgentRuntimeV2PersistenceSchemaGate.canonicalCheck("status='A B'"));
+    }
+
+    @Test
     void legacyConsumerGateRejectsWeakenedRuntimeProjectionChecksWithoutRuntimeGate() {
         for (String weakened : List.of(
                 "1 = 1",
@@ -463,6 +510,20 @@ class AgentRuntimeV2PersistenceSchemaGateTest {
                 AgentCommandConsumerV2SchemaGate.ACK_EVIDENCE_CHECK, enforced(ACK));
         AgentRuntimeV2PersistenceSchemaGate.expectedCheckClauses().forEach((name, clause) ->
                 catalog.checks.get(tableForCheck(name)).put(name, enforced(clause)));
+        return catalog;
+    }
+
+    private static FakeCatalog registrationCanonical() {
+        FakeCatalog catalog = canonical();
+        catalog.columns.clear();
+        catalog.columns.putAll(copyColumns(AgentRuntimeV2PersistenceSchemaGate.registrationExtendedColumns()));
+        catalog.indexes.clear();
+        catalog.indexes.putAll(copyIndexes(AgentRuntimeV2PersistenceSchemaGate.registrationExtendedIndexes()));
+        AgentRuntimeV2RegistrationSchemaGate.expectedChecks().forEach((table, checks) -> {
+            if (AgentRuntimeV2PersistenceSchemaGate.TABLES.contains(table)) {
+                checks.forEach((name, clause) -> catalog.checks.get(table).put(name, enforced(clause)));
+            }
+        });
         return catalog;
     }
 

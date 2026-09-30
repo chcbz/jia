@@ -337,3 +337,32 @@ tasks.register('juyitingCollaboration', Test) {
     classpath = juyitingCollaborationSourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+// R2b1 registration/crypto/snapshot/schema slice. Dormant and manual-DDL only.
+def runtimeV2RegistrationSourceSet = sourceSets.create('runtimeV2Registration') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/entity/AgentRuntimeV2RegistrationContractTest.java'
+        include 'cn/jia/agent/entity/AgentRuntimeV2RegistrationAdversarialTest.java'
+        include 'cn/jia/agent/dao/AgentRuntimeV2RegistrationDaoTest.java'
+        include 'cn/jia/agent/config/AgentRuntimeV2RegistrationSchemaGateTest.java'
+        include 'cn/jia/agent/mapper/AgentRuntimeV2RegistrationMigrationTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(runtimeV2RegistrationSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(runtimeV2RegistrationSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('runtimeV2Registration', Test) {
+    group = 'verification'
+    description = 'Runs R2b1 exact registration wire, crypto, snapshot, DAO and dormant schema tests.'
+    dependsOn tasks.named(runtimeV2RegistrationSourceSet.classesTaskName)
+    testClassesDirs = runtimeV2RegistrationSourceSet.output.classesDirs
+    classpath = runtimeV2RegistrationSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}

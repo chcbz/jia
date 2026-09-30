@@ -872,7 +872,11 @@ class AgentRuntimeV2ExecutionCommitTransactionTest {
                 CREATE TABLE agent_runtime_v2_binding(
                   id BIGINT AUTO_INCREMENT PRIMARY KEY,runtime_binding_id VARCHAR_IGNORECASE(36) UNIQUE,
                   credential_kind VARCHAR(32),credential_reference VARCHAR(200),runtime_installation_id VARCHAR(100),
-                  contract_version INT,reconnect_verifier BINARY(32),data_domain_id VARCHAR_IGNORECASE(64),
+                  contract_version INT,registration_subject_sha256 BINARY(32),
+                  registration_authority_id VARCHAR_IGNORECASE(36),registration_authority_revision BIGINT,
+                  process_public_key_spki BINARY(44),process_public_key_sha256 BINARY(32),
+                  verifier_version BIGINT,verifier_key_id VARCHAR_IGNORECASE(100),
+                  reconnect_verifier BINARY(32),data_domain_id VARCHAR_IGNORECASE(64),
                   execution_pool_id VARCHAR_IGNORECASE(100),owner_jiacn VARCHAR_IGNORECASE(100),
                   agent_id VARCHAR_IGNORECASE(100),producer_deployment_id VARCHAR_IGNORECASE(100),
                   claimant_deployment_id VARCHAR_IGNORECASE(100),claimant_worker_generation BIGINT,
@@ -889,11 +893,17 @@ class AgentRuntimeV2ExecutionCommitTransactionTest {
                   id BIGINT AUTO_INCREMENT PRIMARY KEY,binding_generation_fact_id VARCHAR_IGNORECASE(36) UNIQUE,
                   fact_sequence BIGINT,previous_fact_id VARCHAR_IGNORECASE(36),runtime_binding_id VARCHAR_IGNORECASE(36),
                   binding_generation BIGINT,event_type VARCHAR(20),revoked_runtime_binding_id VARCHAR_IGNORECASE(36),
-                  runtime_instance_id VARCHAR_IGNORECASE(100),data_domain_id VARCHAR_IGNORECASE(64),
+                  runtime_instance_id VARCHAR_IGNORECASE(100),registration_subject_sha256 BINARY(32),
+                  registration_authority_id VARCHAR_IGNORECASE(36),registration_authority_revision BIGINT,
+                  runtime_credential_client_id VARCHAR_IGNORECASE(50),data_domain_id VARCHAR_IGNORECASE(64),
                   execution_pool_id VARCHAR_IGNORECASE(100),owner_jiacn VARCHAR_IGNORECASE(100),
                   agent_id VARCHAR_IGNORECASE(100),claimant_deployment_id VARCHAR_IGNORECASE(100),
                   claimant_worker_generation BIGINT,receiver_registration_revision BIGINT,admission_epoch BIGINT,
-                  module_id VARCHAR_IGNORECASE(64),migration_epoch BIGINT,session_fence VARCHAR_IGNORECASE(100),
+                  module_id VARCHAR_IGNORECASE(64),migration_epoch BIGINT,process_public_key_sha256 BINARY(32),
+                  verifier_version BIGINT,registration_receipt_id VARCHAR_IGNORECASE(36),
+                  registration_receipt_sha256 BINARY(32),connection_admission_kind VARCHAR_IGNORECASE(20),
+                  drain_control_operation_id VARCHAR_IGNORECASE(100),generation_snapshot_sha256 BINARY(32),
+                  session_fence VARCHAR_IGNORECASE(100),
                   socket_owner_instance_id VARCHAR_IGNORECASE(100),socket_owner_epoch BIGINT,
                   socket_owner_lease_until BIGINT,effective_at BIGINT,reason VARCHAR(500),
                   tenant_id VARCHAR_IGNORECASE(50),client_id VARCHAR_IGNORECASE(50),create_time BIGINT,update_time BIGINT,
@@ -931,7 +941,9 @@ class AgentRuntimeV2ExecutionCommitTransactionTest {
                   runtime_dispatch_id VARCHAR_IGNORECASE(36) UNIQUE,runtime_binding_id VARCHAR_IGNORECASE(36),
                   runtime_binding_generation BIGINT,dispatch_runtime_instance_id VARCHAR_IGNORECASE(100),
                   dispatch_runtime_credential_client_id VARCHAR_IGNORECASE(50),
-                  dispatch_receiver_registration_revision BIGINT,dispatch_prepared_at BIGINT,
+                  dispatch_receiver_registration_revision BIGINT,dispatch_generation_fact_id VARCHAR_IGNORECASE(36),
+                  dispatch_generation_snapshot_sha256 BINARY(32),execution_origin_snapshot_sha256 BINARY(32),
+                  dispatch_prepared_at BIGINT,
                   execution_started_at BIGINT,execution_lease_until BIGINT,execution_lease_revision BIGINT,
                   execution_holder_binding_id VARCHAR_IGNORECASE(36),execution_holder_binding_generation BIGINT,
                   execution_holder_runtime_instance_id VARCHAR_IGNORECASE(100),
@@ -956,6 +968,8 @@ class AgentRuntimeV2ExecutionCommitTransactionTest {
                   migration_epoch BIGINT,postcommit_delivery_version BIGINT,postcommit_inbox_version BIGINT,
                   lease_fact_id VARCHAR_IGNORECASE(36),contract_version INT,receipt_wire_bytes BLOB,
                   receipt_wire_sha256 BINARY(32),receipt_wire_contract_version INT,committed_at BIGINT,
+                  execution_origin_snapshot_sha256 BINARY(32),ack_holder_generation_fact_id VARCHAR_IGNORECASE(36),
+                  ack_holder_generation_snapshot_sha256 BINARY(32),
                   tenant_id VARCHAR_IGNORECASE(50),client_id VARCHAR_IGNORECASE(50),create_time BIGINT,update_time BIGINT,
                   UNIQUE(runtime_dispatch_id,status))
                 """);
@@ -976,7 +990,9 @@ class AgentRuntimeV2ExecutionCommitTransactionTest {
                   tenant_control_revision BIGINT,tenant_control_cutoff_at BIGINT,module_control_operation_id VARCHAR(100),
                   module_mode_revision BIGINT,module_control_cutoff_at BIGINT,deployment_control_operation_id VARCHAR(100),
                   deployment_registration_revision BIGINT,deployment_control_cutoff_at BIGINT,reason VARCHAR(500),
-                  created_at BIGINT,tenant_id VARCHAR_IGNORECASE(50),client_id VARCHAR_IGNORECASE(50),
+                  created_at BIGINT,execution_origin_snapshot_sha256 BINARY(32),
+                  holder_generation_fact_id VARCHAR_IGNORECASE(36),holder_generation_snapshot_sha256 BINARY(32),
+                  tenant_id VARCHAR_IGNORECASE(50),client_id VARCHAR_IGNORECASE(50),
                   create_time BIGINT,update_time BIGINT,UNIQUE(runtime_dispatch_id,fact_sequence),
                   UNIQUE(runtime_dispatch_id,holder_binding_generation,lease_revision,fact_type))
                 """);
@@ -995,7 +1011,9 @@ class AgentRuntimeV2ExecutionCommitTransactionTest {
                   agent_id VARCHAR_IGNORECASE(100),producer_deployment_id VARCHAR_IGNORECASE(100),
                   claimant_deployment_id VARCHAR_IGNORECASE(100),claimant_worker_generation BIGINT,
                   receiver_registration_revision BIGINT,admission_epoch BIGINT,module_id VARCHAR_IGNORECASE(64),
-                  migration_epoch BIGINT,tenant_id VARCHAR_IGNORECASE(50),client_id VARCHAR_IGNORECASE(50),
+                  migration_epoch BIGINT,execution_origin_snapshot_sha256 BINARY(32),
+                  holder_generation_fact_id VARCHAR_IGNORECASE(36),holder_generation_snapshot_sha256 BINARY(32),
+                  tenant_id VARCHAR_IGNORECASE(50),client_id VARCHAR_IGNORECASE(50),
                   create_time BIGINT,update_time BIGINT,
                   UNIQUE(runtime_dispatch_id,holder_binding_generation,lease_revision,grant_kind))
                 """);
@@ -1009,7 +1027,9 @@ class AgentRuntimeV2ExecutionCommitTransactionTest {
                   agent_id VARCHAR_IGNORECASE(100),producer_deployment_id VARCHAR_IGNORECASE(100),
                   claimant_deployment_id VARCHAR_IGNORECASE(100),claimant_worker_generation BIGINT,
                   receiver_registration_revision BIGINT,admission_epoch BIGINT,module_id VARCHAR_IGNORECASE(64),
-                  migration_epoch BIGINT,tenant_id VARCHAR_IGNORECASE(50),client_id VARCHAR_IGNORECASE(50),
+                  migration_epoch BIGINT,execution_origin_snapshot_sha256 BINARY(32),
+                  holder_generation_fact_id VARCHAR_IGNORECASE(36),holder_generation_snapshot_sha256 BINARY(32),
+                  tenant_id VARCHAR_IGNORECASE(50),client_id VARCHAR_IGNORECASE(50),
                   create_time BIGINT,update_time BIGINT,
                   UNIQUE(runtime_dispatch_id,started_receipt_id,holder_binding_generation))
                 """);
@@ -1026,7 +1046,10 @@ class AgentRuntimeV2ExecutionCommitTransactionTest {
                   agent_id VARCHAR_IGNORECASE(100),producer_deployment_id VARCHAR_IGNORECASE(100),
                   claimant_deployment_id VARCHAR_IGNORECASE(100),claimant_worker_generation BIGINT,
                   receiver_registration_revision BIGINT,admission_epoch BIGINT,module_id VARCHAR_IGNORECASE(64),
-                  migration_epoch BIGINT,tenant_id VARCHAR_IGNORECASE(50),client_id VARCHAR_IGNORECASE(50),
+                  migration_epoch BIGINT,execution_origin_snapshot_sha256 BINARY(32),
+                  requested_holder_generation_fact_id VARCHAR_IGNORECASE(36),
+                  requested_holder_generation_snapshot_sha256 BINARY(32),
+                  tenant_id VARCHAR_IGNORECASE(50),client_id VARCHAR_IGNORECASE(50),
                   create_time BIGINT,update_time BIGINT)
                 """);
         installProductionChecks();

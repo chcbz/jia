@@ -42,6 +42,15 @@ public final class AgentRuntimeV2PersistenceSchemaGate implements InitializingBe
         if (!new LinkedHashSet<>(catalog.presentTables()).equals(TABLES)) {
             throw invalid("required runtime-v2 tables are missing or ambiguous");
         }
+        List<ColumnDefinition> bindingColumns = catalog.columns(BINDING);
+        boolean registrationExtended;
+        if (expectedColumns().get(BINDING).equals(bindingColumns)) {
+            registrationExtended = false;
+        } else if (registrationExtendedColumns().get(BINDING).equals(bindingColumns)) {
+            registrationExtended = true;
+        } else {
+            throw invalid(BINDING + " column contract drift");
+        }
         for (String table : List.of(INBOX, BINDING, GENERATION_FACT, RECEIPT, LEASE_FACT,
                 GRANT, ANCHOR, REQUEST)) {
             TableDefinition definition = catalog.table(table);
@@ -49,16 +58,22 @@ public final class AgentRuntimeV2PersistenceSchemaGate implements InitializingBe
                     || !BIN.equalsIgnoreCase(definition.collation())) {
                 throw invalid(table + " must be exact InnoDB/" + BIN);
             }
-            if (!expectedColumns().get(table).equals(catalog.columns(table))) {
+            List<ColumnDefinition> actualColumns = BINDING.equals(table)
+                    ? bindingColumns : catalog.columns(table);
+            Map<String, List<ColumnDefinition>> columnContract = registrationExtended
+                    ? registrationExtendedColumns() : expectedColumns();
+            if (!columnContract.get(table).equals(actualColumns)) {
                 throw invalid(table + " column contract drift");
             }
-            if (!expectedIndexes().get(table).equals(catalog.indexes(table))) {
+            Map<String, Map<String, IndexDefinition>> indexContract = registrationExtended
+                    ? registrationExtendedIndexes() : expectedIndexes();
+            if (!indexContract.get(table).equals(catalog.indexes(table))) {
                 throw invalid(table + " index contract drift");
             }
             if (catalog.participatingForeignKeyCount(table) != 0) {
                 throw invalid(table + " must not participate in foreign keys");
             }
-            validateChecks(table, catalog.checks(table));
+            validateChecks(table, catalog.checks(table), registrationExtended);
         }
     }
 
@@ -174,7 +189,62 @@ public final class AgentRuntimeV2PersistenceSchemaGate implements InitializingBe
         return Map.copyOf(result);
     }
 
-    private static void validateChecks(String table, Map<String, CheckDefinition> checks) {
+    static Map<String, List<ColumnDefinition>> registrationExtendedColumns() {
+        Map<String, List<ColumnDefinition>> result = new LinkedHashMap<>(expectedColumns());
+        Map<String, List<AgentRuntimeV2RegistrationSchemaGate.ColumnDefinition>> additions =
+                AgentRuntimeV2RegistrationSchemaGate.expectedColumns();
+        result.put(BINDING, insertAfter(result.get(BINDING), "contract_version", additions.get(BINDING)));
+        result.put(GENERATION_FACT, insertAfter(
+                insertAfter(result.get(GENERATION_FACT), "runtime_instance_id",
+                        additions.get(GENERATION_FACT).subList(0, 4)),
+                "migration_epoch", additions.get(GENERATION_FACT).subList(4, 11)));
+        result.put(INBOX, insertAfter(result.get(INBOX), "dispatch_receiver_registration_revision", additions.get(INBOX)));
+        result.put(RECEIPT, insertAfter(result.get(RECEIPT), "committed_at", additions.get(RECEIPT)));
+        result.put(LEASE_FACT, insertAfter(result.get(LEASE_FACT), "created_at", additions.get(LEASE_FACT)));
+        result.put(GRANT, insertAfter(result.get(GRANT), "migration_epoch", additions.get(GRANT)));
+        result.put(ANCHOR, insertAfter(result.get(ANCHOR), "migration_epoch", additions.get(ANCHOR)));
+        result.put(REQUEST, insertAfter(result.get(REQUEST), "migration_epoch", additions.get(REQUEST)));
+        return Map.copyOf(result);
+    }
+
+    static Map<String, Map<String, IndexDefinition>> registrationExtendedIndexes() {
+        Map<String, Map<String, IndexDefinition>> result = new LinkedHashMap<>();
+        Map<String, Map<String, AgentRuntimeV2RegistrationSchemaGate.IndexDefinition>> additions =
+                AgentRuntimeV2RegistrationSchemaGate.expectedIndexes();
+        expectedIndexes().forEach((table, baseline) -> {
+            Map<String, IndexDefinition> combined = new TreeMap<>(baseline);
+            additions.get(table).forEach((name, index) ->
+                    combined.put(name, new IndexDefinition(index.unique(), index.columns())));
+            result.put(table, Map.copyOf(combined));
+        });
+        return Map.copyOf(result);
+    }
+
+    private static List<ColumnDefinition> insertAfter(List<ColumnDefinition> baseline, String anchor,
+            List<AgentRuntimeV2RegistrationSchemaGate.ColumnDefinition> additions) {
+        List<ColumnDefinition> result = new ArrayList<>();
+        boolean inserted = false;
+        for (ColumnDefinition column : baseline) {
+            result.add(column);
+            if (anchor.equals(column.name())) {
+                additions.forEach(value -> result.add(new ColumnDefinition(value.name(), value.dataType(),
+                        value.columnType(), value.nullable(), value.defaultValue(), value.collation(),
+                        value.extra(), value.generationExpression())));
+                inserted = true;
+            }
+        }
+        if (!inserted) throw invalid("registration extension anchor is missing: " + anchor);
+        return List.copyOf(result);
+    }
+
+    private static Map<String, String> registrationCheckClauses() {
+        Map<String, String> result = new LinkedHashMap<>(expectedCheckClauses());
+        AgentRuntimeV2RegistrationSchemaGate.expectedChecks().forEach((table, checks) -> {
+            if (TABLES.contains(table)) result.putAll(checks);
+        });
+        return Map.copyOf(result);
+    }
+    private static void validateChecks(String table, Map<String, CheckDefinition> checks, boolean registrationExtended) {
         Set<String> expected = switch (table) {
             case INBOX -> Set.of(AgentCommandConsumerV2SchemaGate.SCOPE_CHECK,
                     AgentCommandConsumerV2SchemaGate.ACK_EVIDENCE_CHECK,
@@ -189,6 +259,11 @@ public final class AgentRuntimeV2PersistenceSchemaGate implements InitializingBe
             case REQUEST -> Set.of("chk_execution_request_canonical");
             default -> throw invalid("unknown table " + table);
         };
+        if (registrationExtended) {
+            Set<String> combined = new java.util.HashSet<>(expected);
+            combined.addAll(AgentRuntimeV2RegistrationSchemaGate.expectedChecks().get(table).keySet());
+            expected = Set.copyOf(combined);
+        }
         if (!checks.keySet().equals(expected) || checks.values().stream().anyMatch(c -> !c.enforced())) {
             throw invalid(table + " CHECK set is missing, extra, or unenforced");
         }
@@ -201,7 +276,9 @@ public final class AgentRuntimeV2PersistenceSchemaGate implements InitializingBe
             }
         }
         for (Map.Entry<String, CheckDefinition> entry : checks.entrySet()) {
-            String expectedClause = expectedCheckClauses().get(entry.getKey());
+            String expectedClause = registrationExtended
+                    ? registrationCheckClauses().get(entry.getKey())
+                    : expectedCheckClauses().get(entry.getKey());
             if (expectedClause != null && !canonicalCheck(expectedClause)
                     .equals(canonicalCheck(entry.getValue().clause()))) {
                 throw invalid(table + " CHECK " + entry.getKey() + " is weakened or noncanonical");
@@ -880,7 +957,7 @@ public final class AgentRuntimeV2PersistenceSchemaGate implements InitializingBe
             return "and(" + String.join(",", conjunctions.stream()
                     .map(AgentRuntimeV2PersistenceSchemaGate::canonicalBoolean).toList()) + ")";
         }
-        return value.replaceAll("\\s+", " ").trim();
+        return value.trim();
     }
     private static List<String> splitBoolean(String expression, String operator) {
         List<String> result = new ArrayList<>();
@@ -964,8 +1041,59 @@ public final class AgentRuntimeV2PersistenceSchemaGate implements InitializingBe
     }
     private static String normalize(String value) {
         if (value == null) return "";
-        return value.toLowerCase(Locale.ROOT).replace("`", "")
-                .replaceAll("_utf8mb4\\s*", "").replaceAll("\\s+", " ").trim();
+        StringBuilder normalized = new StringBuilder(value.length());
+        boolean quoted = false;
+        boolean pendingWhitespace = false;
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            if (quoted) {
+                normalized.append(character);
+                if (character == '\'') {
+                    if (index + 1 < value.length() && value.charAt(index + 1) == '\'') {
+                        normalized.append(value.charAt(++index));
+                    } else {
+                        quoted = false;
+                    }
+                }
+                continue;
+            }
+            if (character == '\'') {
+                appendPendingWhitespace(normalized, character, pendingWhitespace);
+                pendingWhitespace = false;
+                normalized.append(character);
+                quoted = true;
+                continue;
+            }
+            if (character == '`') continue;
+            if (isUtf8mb4Introducer(value, index)) {
+                index += "_utf8mb4".length() - 1;
+                continue;
+            }
+            if (Character.isWhitespace(character)) {
+                pendingWhitespace = true;
+                continue;
+            }
+            appendPendingWhitespace(normalized, character, pendingWhitespace);
+            pendingWhitespace = false;
+            normalized.append(Character.toLowerCase(character));
+        }
+        return normalized.toString().trim();
+    }
+    private static boolean isUtf8mb4Introducer(String value, int index) {
+        String introducer = "_utf8mb4";
+        if (!value.regionMatches(true, index, introducer, 0, introducer.length())) return false;
+        int next = index + introducer.length();
+        while (next < value.length() && Character.isWhitespace(value.charAt(next))) next++;
+        return next < value.length() && value.charAt(next) == '\'';
+    }
+    private static void appendPendingWhitespace(StringBuilder target, char next,
+            boolean pendingWhitespace) {
+        if (!pendingWhitespace || target.isEmpty()) return;
+        char previous = target.charAt(target.length() - 1);
+        if (!isCheckPunctuation(previous) && !isCheckPunctuation(next)) target.append(' ');
+    }
+    private static boolean isCheckPunctuation(char value) {
+        return "=<>+(),".indexOf(value) >= 0;
     }
     private static IllegalStateException invalid(String reason) {
         return new IllegalStateException("Agent runtime v2 persistence schema unavailable: " + reason);
