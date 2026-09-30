@@ -6,6 +6,7 @@ import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.oauth.service.ApiKeyService;
 import cn.jia.user.security.AccountSecurityService;
 import cn.jia.user.security.AccountSecuritySnapshot;
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -68,19 +69,39 @@ public final class AgentRuntimeAuthenticationService {
     public AgentRuntimeAuthentication authenticate(String agent, String runtime, String token) {
         if (agent == null || runtime == null || !validToken(token)) throw denied();
         Binding binding = bindings.get(agent);
-        if (binding == null || !binding.scope.runtimeInstanceId().equals(runtime)) throw denied();
-        validate(binding, token);
+        if (binding == null || !binding.scope.runtimeInstanceId().equals(runtime)
+                || !MessageDigest.isEqual(binding.tokenDigest, digest(token))) throw denied();
+        validateCurrent(binding);
         if (bindings.get(agent) != binding || !binding.connected.getAsBoolean()) throw denied();
         return new AgentRuntimeAuthentication(binding.scope);
     }
 
+    /**
+     * Non-secret current-session check for server-side capability projection. The originally
+     * bound registration-token digest is rechecked against the current persisted token; API key,
+     * account epoch, identity and runtime state are revalidated exactly as for native HTTP auth.
+     */
+    public boolean isCurrentBinding(String sessionId, String tenantId, String clientId,
+            String ownerJiacn, String agentId, String runtimeInstanceId) {
+        Binding binding = bindings.get(agentId);
+        if (binding == null || !binding.sessionId.equals(sessionId)
+                || !binding.scope.equals(new AgentRuntimeAuthentication.Scope(
+                        tenantId, clientId, ownerJiacn, agentId, runtimeInstanceId))) return false;
+        validateCurrent(binding);
+        return bindings.get(agentId) == binding && binding.connected.getAsBoolean();
+    }
+
     private void validate(Binding binding, String token) {
+        if (!validToken(token) || !MessageDigest.isEqual(binding.tokenDigest, digest(token))) throw denied();
+        validateCurrent(binding);
+    }
+
+    private void validateCurrent(Binding binding) {
         var scope = binding.scope;
         if (!binding.connected.getAsBoolean()
                 || !SINGLE_TENANT_ID.equals(scope.tenantId())
                 || !account(scope.ownerJiacn()).matches(
-                        binding.userId, scope.ownerJiacn(), binding.authEpoch)
-                || !MessageDigest.isEqual(binding.tokenDigest, digest(token))) throw denied();
+                        binding.userId, scope.ownerJiacn(), binding.authEpoch)) throw denied();
         var key = keys.get(binding.apiKeyId);
         if (key == null || !binding.apiKeyId.equals(key.getId()) || !Integer.valueOf(1).equals(key.getStatus())
                 || !scope.tenantId().equals(key.getTenantId())
@@ -94,12 +115,19 @@ public final class AgentRuntimeAuthenticationService {
                 || !scope.ownerJiacn().equals(row.getOwnerJiacn())
                 || !scope.clientId().equals(row.getClientId()) || row.getBindingId() == null
                 || !Set.of("online", "busy").contains(row.getStatus()) || !validToken(row.getTokenHash())
-                || !MessageDigest.isEqual(row.getTokenHash().getBytes(StandardCharsets.UTF_8),
-                        token.getBytes(StandardCharsets.UTF_8))) throw denied();
-        var identity = identities.requireActiveIdentityForBinding(scope.tenantId(), scope.clientId(),
-                scope.ownerJiacn(), row.getBindingId(), scope.agentId());
-        if (identity == null || !scope.agentId().equals(identity.getCanonicalAgentId())) throw denied();
-        if (identities.requireActiveBinding(identity, null) == null) throw denied();
+                || !MessageDigest.isEqual(binding.tokenDigest, digest(row.getTokenHash()))) throw denied();
+        try {
+            var identity = identities.requireActiveIdentityForBinding(scope.tenantId(), scope.clientId(),
+                    scope.ownerJiacn(), row.getBindingId(), scope.agentId());
+            if (identity == null || !scope.agentId().equals(identity.getCanonicalAgentId())) throw denied();
+            if (identities.requireActiveBinding(identity, null) == null) throw denied();
+        } catch (DataAccessException unavailable) {
+            throw unavailable;
+        } catch (RuntimeException invalidIdentity) {
+            // Identity lifecycle/binding mismatch is an authentication denial. Persistence
+            // failures remain distinguishable above so capability reads can return 503.
+            throw denied();
+        }
     }
 
     private AccountSecuritySnapshot account(String ownerJiacn) {

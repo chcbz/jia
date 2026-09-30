@@ -24,6 +24,7 @@ import cn.jia.agent.service.AgentCommandReconnectSignal;
 import cn.jia.agent.service.AgentExecutionReportService;
 import cn.jia.agent.service.AgentRawCommandDispatcher;
 import cn.jia.agent.service.AgentService;
+import cn.jia.agent.service.NativeBountyExecutionSessionLookup;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.deliberation.InteractionRoute;
@@ -92,7 +93,8 @@ import java.util.function.Supplier;
 @Slf4j
 @Component
 public class AgentWebSocketHandler extends TextWebSocketHandler
-        implements AgentEventPublisher, AgentRawCommandDispatcher {
+        implements AgentEventPublisher, AgentRawCommandDispatcher,
+        NativeBountyExecutionSessionLookup {
     private static final String CHANNEL = "agent";
     private static final TypeReference<Map<String, Object>> MESSAGE_TYPE = new TypeReference<>() {
     };
@@ -164,6 +166,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     private final Map<String, Set<String>> successfullyRegisteredAgentIds = new ConcurrentHashMap<>();
     private final Map<String, String> sessionRuntimeInstanceIds = new ConcurrentHashMap<>();
     private final Map<String, AgentRuntimeCapabilities> sessionRuntimeCapabilities = new ConcurrentHashMap<>();
+    private final Map<String, NativeBountyExecutionDeclaration> sessionNativeBountyExecution =
+            new ConcurrentHashMap<>();
     private final Map<String, StreamState> runningStreams = new ConcurrentHashMap<>();
 
     public AgentWebSocketHandler(ChatClient chatClient, ObjectProvider<AgentService> agentServiceProvider,
@@ -272,6 +276,26 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             return;
         }
         String declaredMessageType = strictString(payload.get("messageType"));
+        String declaredLegacyType = strictString(payload.get("type"));
+        Map<?, ?> declaredBody = payload.get("payload") instanceof Map<?, ?> body
+                ? body : Map.of();
+        boolean declaredRegistration = AgentProtocolConstants.TYPE_AGENT_REGISTER.equals(declaredMessageType)
+                || AgentProtocolConstants.TYPE_AGENT_REGISTER.equals(declaredLegacyType)
+                || AgentProtocolConstants.TYPE_AGENT_REGISTER.equals(
+                        strictString(declaredBody.get("messageType")))
+                || AgentProtocolConstants.TYPE_AGENT_REGISTER.equals(
+                        strictString(declaredBody.get("type")));
+        if (declaredRegistration) {
+            try {
+                // Registration declarations are authority inputs. Preserve strict duplicate-key
+                // detection before the generic normalizer can collapse them into a Map.
+                payload = STRICT_RAW_COMMAND_JSON.readValue(message.getPayload(), MESSAGE_TYPE);
+            } catch (Exception malformed) {
+                sendProtocolError(session, Map.of(), "AGENT_REGISTRATION_INVALID",
+                        "Agent registration payload is invalid");
+                return;
+            }
+        }
         if (declaredMessageType != null && EXECUTION_REPORT_TYPES.contains(declaredMessageType)) {
             try {
                 Map<String, Object> strict = STRICT_RAW_COMMAND_JSON.readValue(
@@ -339,6 +363,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         successfullyRegisteredAgentIds.remove(session.getId());
         sessionRuntimeInstanceIds.remove(session.getId());
         sessionRuntimeCapabilities.remove(session.getId());
+        sessionNativeBountyExecution.remove(session.getId());
         runningStreams.entrySet().removeIf(entry -> {
             StreamState stream = entry.getValue();
             if (session.getId().equals(stream.sessionId())) {
@@ -718,9 +743,17 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             // above are the authority for native registration.
             stage = "runtime_disconnect";
             if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
+            // A re-registration on the same socket must first retire its old declaration. The
+            // replacement is not observable until register, auth bind and receipt delivery all
+            // succeed below.
+            successfullyRegisteredAgentIds.remove(session.getId());
+            sessionRuntimeCapabilities.remove(session.getId());
+            sessionNativeBountyExecution.remove(session.getId());
             stage = "registration_payload";
             AgentRuntimeCapabilities runtimeCapabilities = AgentRuntimeCapabilities.parse(
                     payload.get("runtimeCapabilities"));
+            NativeBountyExecutionDeclaration nativeBountyExecution =
+                    NativeBountyExecutionDeclaration.parse(payload.get("nativeBountyExecution"));
             AgentRegisterDTO request = new AgentRegisterDTO();
             request.setAgentId(agentId);
             request.setName(asString(payload.get("name")));
@@ -738,14 +771,13 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             }
             rememberSessionAgent(session.getId(), result.getAgentId());
             session.getAttributes().put("skillRegistrationHash", cn.jia.agent.skill.SkillMarketplaceService.sessionRegistrationHash(result.getAgentId(),result.getToken()));
-            rememberSuccessfulRegistration(session.getId(), result.getAgentId());
-            sessionRuntimeCapabilities.put(session.getId(), runtimeCapabilities);
             Map<String, Object> event = copyTrace(payload);
             event.put("agentId", result.getAgentId());
             putIfPresent(event, "runtimeInstanceId", sessionRuntimeInstanceId(session));
             event.put("status", result.getStatus());
             event.put("token", result.getToken());
             event.put("runtimeCapabilities", runtimeCapabilities.normalizedForReceipt());
+            event.put("nativeBountyExecution", nativeBountyExecution.normalizedForReceipt());
             // Scope comes only from the authenticated session and is rechecked against persisted
             // identity/current registration token. This receipt is sent only on this native socket.
             if (runtimeAuthentication != null && sessionRuntimeInstanceId(session) != null) {
@@ -759,8 +791,14 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
                 successfullyRegisteredAgentIds.remove(session.getId());
                 sessionRuntimeCapabilities.remove(session.getId());
+                sessionNativeBountyExecution.remove(session.getId());
                 return;
             }
+            // Activate all successful-registration evidence only after the authenticated
+            // registration receipt was actually delivered.
+            rememberSuccessfulRegistration(session.getId(), result.getAgentId());
+            sessionRuntimeCapabilities.put(session.getId(), runtimeCapabilities);
+            sessionNativeBountyExecution.put(session.getId(), nativeBountyExecution);
             signalRegisteredReconnect(session, result.getAgentId());
             sendCapabilityIndex(session, payload);
         } catch (Exception e) {
@@ -770,6 +808,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
             successfullyRegisteredAgentIds.remove(session.getId());
             sessionRuntimeCapabilities.remove(session.getId());
+            sessionNativeBountyExecution.remove(session.getId());
             sendError(session, payload, "AGENT_REGISTRATION_UNAVAILABLE", "Agent registration is unavailable");
         }
     }
@@ -915,11 +954,12 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 request.setAbilities(asStringList(payload.get("abilities")));
             }
             AgentRuntimeDTO agent = withSessionContext(session, () -> agentService.updateStatus(agentId, request));
-            if (runtimeAuthentication != null && (AgentConstants.STATUS_OFFLINE.equals(agent.getStatus())
-                    || AgentConstants.STATUS_ERROR.equals(agent.getStatus()))) {
-                runtimeAuthentication.disconnect(session.getId());
+            if (AgentConstants.STATUS_OFFLINE.equals(agent.getStatus())
+                    || AgentConstants.STATUS_ERROR.equals(agent.getStatus())) {
+                if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
                 successfullyRegisteredAgentIds.remove(session.getId());
                 sessionRuntimeCapabilities.remove(session.getId());
+                sessionNativeBountyExecution.remove(session.getId());
             }
             if (agent.getAgentId() != null) {
                 rememberSessionAgent(session.getId(), agent.getAgentId());
@@ -1974,6 +2014,57 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         return value != null && !value.isEmpty() && value.length() <= maxLength
                 && value.equals(value.strip())
                 && value.codePoints().noneMatch(Character::isISOControl);
+    }
+
+    @Override
+    public NativeBountyExecutionSessionLookup.Snapshot current(
+            NativeBountyExecutionSessionLookup.Scope scope) {
+        if (scope == null || !validExactDispatchId(scope.tenantId(), 50)
+                || !validExactDispatchId(scope.clientId(), 50)
+                || !validExactDispatchId(scope.ownerJiacn(), 50)
+                || !validExactDispatchId(scope.canonicalAgentId(), 100)) {
+            return new NativeBountyExecutionSessionLookup.Snapshot(
+                    NativeBountyExecutionSessionLookup.State.OFFLINE, null, null, List.of());
+        }
+        if (runtimeAuthentication == null) {
+            throw new NativeBountyExecutionSessionLookup.SourceUnavailable(
+                    new IllegalStateException("Agent runtime authentication is unavailable"));
+        }
+        List<NativeBountyExecutionDeclaration> current = new ArrayList<>();
+        try {
+            for (Map.Entry<String, Set<String>> entry : successfullyRegisteredAgentIds.entrySet()) {
+                String sessionId = entry.getKey();
+                if (!entry.getValue().contains(scope.canonicalAgentId())
+                        || !registeredAgentIds(sessionId).contains(scope.canonicalAgentId())) continue;
+                WebSocketSession session = sessions.get(sessionId);
+                String runtimeInstanceId = session == null ? null : sessionRuntimeInstanceId(session);
+                if (session == null || !session.isOpen()
+                        || !scope.tenantId().equals(sessionTenantId(session))
+                        || !scope.clientId().equals(sessionClientId(session))
+                        || !scope.ownerJiacn().equals(sessionJiacn(session))
+                        || !scope.canonicalAgentId().equals(sessionAgentId(session))
+                        || runtimeInstanceId == null) continue;
+                boolean bound;
+                try {
+                    bound = runtimeAuthentication.isCurrentBinding(sessionId, scope.tenantId(),
+                            scope.clientId(), scope.ownerJiacn(), scope.canonicalAgentId(),
+                            runtimeInstanceId);
+                } catch (IllegalArgumentException invalidBinding) {
+                    bound = false;
+                }
+                if (bound) current.add(sessionNativeBountyExecution.getOrDefault(sessionId,
+                        NativeBountyExecutionDeclaration.parse(null)));
+            }
+        } catch (NativeBountyExecutionSessionLookup.SourceUnavailable failure) {
+            throw failure;
+        } catch (RuntimeException unavailable) {
+            throw new NativeBountyExecutionSessionLookup.SourceUnavailable(unavailable);
+        }
+        if (current.isEmpty()) return new NativeBountyExecutionSessionLookup.Snapshot(
+                NativeBountyExecutionSessionLookup.State.OFFLINE, null, null, List.of());
+        if (current.size() != 1) return new NativeBountyExecutionSessionLookup.Snapshot(
+                NativeBountyExecutionSessionLookup.State.AMBIGUOUS, null, null, List.of());
+        return current.getFirst().snapshot();
     }
 
     /**
