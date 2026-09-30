@@ -60,14 +60,18 @@ public final class ChatConversationArchiveSchemaInitializer implements Initializ
             "chk_chat_archive_row_revision", "chk_chat_archive_saved_receipt");
 
     private final JdbcTemplate jdbc;
+    private final ChatSchemaReadiness schemaReadiness;
 
-    public ChatConversationArchiveSchemaInitializer(JdbcTemplate jdbc) {
+    public ChatConversationArchiveSchemaInitializer(
+            JdbcTemplate jdbc, ChatSchemaReadiness schemaReadiness) {
         this.jdbc = jdbc;
+        this.schemaReadiness = schemaReadiness;
     }
 
     @Override
-    public void afterPropertiesSet() {
+    public void afterPropertiesSet() throws Exception {
         requireMySql8();
+        schemaReadiness.ensureInitialized();
         validateSourceTables();
         ResourceDatabasePopulator populator = new ResourceDatabasePopulator(new ClassPathResource(RESOURCE));
         populator.setContinueOnError(false);

@@ -23,13 +23,20 @@ import java.util.Map;
 public class ChatSchemaInitializer implements ApplicationRunner {
     private final JdbcTemplate jdbcTemplate;
     private Boolean h2Database;
+    private boolean initialized;
 
     @Override
     public void run(ApplicationArguments args) {
-        StartupTiming.run("cyf.runner.chat-schema", () -> runTimed(args));
+        ensureInitialized();
     }
 
-    private void runTimed(ApplicationArguments args) {
+    public final synchronized void ensureInitialized() {
+        if (initialized) return;
+        StartupTiming.run("cyf.runner.chat-schema", this::initializeSchema);
+        initialized = true;
+    }
+
+    void initializeSchema() {
         if (isH2Database() && !tableExists("chat_conversation")) {
             log.info("Skipping chat schema initialization because H2 does not provide the optional chat_conversation table");
             return;

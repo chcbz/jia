@@ -46,11 +46,22 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
     private final JdbcTemplate jdbc;
     @Value("${cyf.chat.deliberation-schema.allow-additive-migration:false}")
     private boolean allowAdditiveMigration;
+    private boolean initialized;
 
     public ChatDeliberationSchemaInitializer(JdbcTemplate jdbc) { this.jdbc = jdbc; }
 
     @Override
     public void run(ApplicationArguments args) throws Exception {
+        ensureInitialized();
+    }
+
+    public final synchronized void ensureInitialized() throws Exception {
+        if (initialized) return;
+        initializeSchema();
+        initialized = true;
+    }
+
+    void initializeSchema() throws Exception {
         if (isH2()) return;
         DataSource source = jdbc.getDataSource();
         if (source == null) throw new IllegalStateException("Chat deliberation schema requires a DataSource");
