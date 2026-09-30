@@ -309,6 +309,48 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
         }
 
         @Test
+        void explicitHashDomainRestoresCompleteAuthorizationSetAndPersistedInitialAction() {
+            List<String> operations = List.of(
+                    "EDIT_IMAGE", "GENERATE_IMAGE", "INSPECT_INPUTS");
+            ReadFixture noChangeSource = new ReadFixture(
+                    operations, "GENERATE_IMAGE", true, 3L);
+
+            var generated = noChangeSource.service.read(scope(), "task-1", "original-key");
+
+            assertEquals(operations, generated.permittedOperations());
+            assertEquals("GENERATE_IMAGE", generated.initialOperation());
+            assertEquals(0, noChangeSource.grants.writeCalls);
+            assertEquals(0, noChangeSource.bootstraps.writeCalls);
+
+            ReadFixture versionMinusOneSource = new ReadFixture(
+                    operations, "INSPECT_INPUTS", true, 2L);
+            var inspected = versionMinusOneSource.service.read(
+                    scope(), "task-1", "original-key");
+            assertEquals(operations, inspected.permittedOperations());
+            assertEquals("INSPECT_INPUTS", inspected.initialOperation());
+        }
+
+        @Test
+        void oldHashRejectsAmbiguousSetsAndExplicitHashRejectsPersistedActionDrift() {
+            List<String> operations = List.of(
+                    "EDIT_IMAGE", "GENERATE_IMAGE", "INSPECT_INPUTS");
+            ReadFixture ambiguousOldDomain = new ReadFixture(
+                    operations, "GENERATE_IMAGE", false, 2L);
+            assertReadReason(AgentTaskDeliberationOperationReadService.ReadException.Reason.INTEGRITY_ERROR,
+                    () -> ambiguousOldDomain.service.read(scope(), "task-1", "original-key"));
+
+            ReadFixture driftedSelector = new ReadFixture(
+                    operations, "GENERATE_IMAGE", true, 2L);
+            rewriteBootstrapInitialOperation(driftedSelector.bootstraps.row, "EDIT_IMAGE");
+            assertReadReason(AgentTaskDeliberationOperationReadService.ReadException.Reason.INTEGRITY_ERROR,
+                    () -> driftedSelector.service.read(scope(), "task-1", "original-key"));
+
+            ReadFixture oldKeyAuthority = new ReadFixture();
+            assertReadReason(AgentTaskDeliberationOperationReadService.ReadException.Reason.NOT_FOUND,
+                    () -> oldKeyAuthority.service.read(scope(), "task-1", "different-key"));
+        }
+
+        @Test
         void currentAssignmentUsesDurableAssignmentEpochAndKeepsHistoryReadable() {
             ReadFixture fixture = new ReadFixture();
             fixture.grants.eventJson = "{\"resultVersion\":4}";
@@ -497,18 +539,28 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
         }
 
         private final class ReadFixture {
-            private final List<String> order = new ArrayList<>();
-            private final AgentTaskMetaEntity root = root();
-            private final ReadGrantDao grants = new ReadGrantDao(order, grant());
-            private final ReadBootstrapDao bootstraps = new ReadBootstrapDao(order,
-                    bootstrap(grants.grant));
-            private final AgentTaskRequirementSnapshotService requirements =
-                    mock(AgentTaskRequirementSnapshotService.class);
-            private final AgentTaskMutationTransaction transactions =
-                    mock(AgentTaskMutationTransaction.class);
+            private final List<String> order;
+            private final AgentTaskMetaEntity root;
+            private final ReadGrantDao grants;
+            private final ReadBootstrapDao bootstraps;
+            private final AgentTaskRequirementSnapshotService requirements;
+            private final AgentTaskMutationTransaction transactions;
             private final AgentTaskDeliberationOperationReadServiceImpl service;
 
             private ReadFixture() {
+                this(List.of("GENERATE_IMAGE"), "GENERATE_IMAGE", false, 2L);
+            }
+
+            private ReadFixture(List<String> operations, String initialOperation,
+                    boolean explicitSelector, long hashExpectedTaskVersion) {
+                order = new ArrayList<>();
+                root = root();
+                AgentTaskExecutionGrantEntity grant = grant(operations, initialOperation,
+                        explicitSelector, hashExpectedTaskVersion);
+                grants = new ReadGrantDao(order, grant);
+                bootstraps = new ReadBootstrapDao(order, bootstrap(grant, initialOperation));
+                requirements = mock(AgentTaskRequirementSnapshotService.class);
+                transactions = mock(AgentTaskMutationTransaction.class);
                 when(transactions.executeWithLockedTaskRootInOwnerScope(anyString(), anyString(),
                         anyString(), anyString(), any())).thenAnswer(call -> {
                     order.add("task-root");
@@ -540,18 +592,23 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
             return root;
         }
 
-        private AgentTaskExecutionGrantEntity grant() {
+        private AgentTaskExecutionGrantEntity grant(List<String> operations,
+                String initialOperation, boolean explicitSelector,
+                long hashExpectedTaskVersion) {
             try {
-                List<String> operations = List.of("GENERATE_IMAGE");
                 String inputJson = "[{\"fileId\":\"file-1\",\"version\":2,"
                         + "\"purpose\":\"REFERENCE\","
                         + "\"contentMimeType\":\"image/png\",\"byteLength\":123,"
                         + "\"contentHash\":\"" + "a".repeat(64) + "\"}]";
                 String requestInputs = "[{\"fileId\":\"file-1\",\"version\":2,"
                         + "\"purpose\":\"REFERENCE\"}]";
-                String requestHash = AgentTaskBountyBootstrapPayload.sha256(
-                        "ASSIGN_AND_START\ntask-1\nagent-1\n2\n1\n"
-                                + json.writeValueAsString(operations) + "\n" + requestInputs);
+                String domain = explicitSelector
+                        ? "ASSIGN_AND_START_INITIAL_OPERATION_V1" : "ASSIGN_AND_START";
+                String hashMaterial = domain + "\ntask-1\nagent-1\n"
+                        + hashExpectedTaskVersion + "\n1\n"
+                        + json.writeValueAsString(operations) + "\n" + requestInputs;
+                if (explicitSelector) hashMaterial += "\n" + initialOperation;
+                String requestHash = AgentTaskBountyBootstrapPayload.sha256(hashMaterial);
                 AgentTaskExecutionGrantEntity grant = new AgentTaskExecutionGrantEntity()
                         .setGrantId("grant-1");
                 grant.setTenantId("0");
@@ -574,7 +631,7 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
         }
 
         private AgentTaskBountyBootstrapOutboxEntity bootstrap(
-                AgentTaskExecutionGrantEntity grant) {
+                AgentTaskExecutionGrantEntity grant, String initialOperation) {
             List<AgentTaskBountyBootstrapClaimDTO.ReferenceSummary> references = List.of(
                     new AgentTaskBountyBootstrapClaimDTO.ReferenceSummary(
                             "file-1", 2, "REFERENCE", "image/png", 123, "a".repeat(64)));
@@ -582,7 +639,7 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
             String referencesHash = AgentTaskBountyBootstrapPayload.referenceHash(json, references);
             String payloadHash = AgentTaskBountyBootstrapPayload.payloadHash("0", "client", "owner",
                     "task-1", "ASSIGN_AND_START:original-key", 1, 3, "agent-1",
-                    "grant-1", 1, "GENERATE_IMAGE", referencesHash);
+                    "grant-1", 1, initialOperation, referencesHash);
             AgentTaskBountyBootstrapOutboxEntity row = new AgentTaskBountyBootstrapOutboxEntity()
                     .setBootstrapId("bootstrap-1");
             row.setTenantId("0");
@@ -593,11 +650,21 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
                     .setRequirementAnchor(AgentTaskBountyBootstrapPayload.REQUIREMENT_ANCHOR)
                     .setAssignmentRevision(3L).setTargetAgentId("agent-1")
                     .setGrantId(grant.getGrantId()).setGrantVersion(1L)
-                    .setPermittedOperation("GENERATE_IMAGE")
+                    .setPermittedOperation(initialOperation)
                     .setReferenceSummaryJson(referencesJson)
                     .setReferenceSummarySha256(referencesHash).setStatus("PENDING")
                     .setAttemptCount(0).setVersion(0L).setCreatedAt(1L);
             return row;
+        }
+
+        private void rewriteBootstrapInitialOperation(
+                AgentTaskBountyBootstrapOutboxEntity row, String initialOperation) {
+            row.setPermittedOperation(initialOperation);
+            row.setPayloadHash(AgentTaskBountyBootstrapPayload.payloadHash(
+                    row.getTenantId(), row.getClientId(), row.getOwnerJiacn(), row.getTaskId(),
+                    row.getSourceBusinessActionId(), row.getRequirementRevision(),
+                    row.getAssignmentRevision(), row.getTargetAgentId(), row.getGrantId(),
+                    row.getGrantVersion(), initialOperation, row.getReferenceSummarySha256()));
         }
 
         private static JwtAuthenticationToken jwtToken(String owner, String client) {

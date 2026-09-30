@@ -123,6 +123,8 @@ public final class AgentTaskDeliberationOperationReadServiceImpl
             throw integrity(corrupt);
         }
         requireBootstrap(bootstrap, scope, taskId, action, grant, grantFacts, references);
+        requireRequestHash(grant, grantFacts.operations(), grantFacts.inputs(),
+                bootstrap.getPermittedOperation());
         requireSnapshot(scope, taskId, grant);
 
         long assignmentEventVersion = requireAssignmentEventVersion(scope, taskId,
@@ -164,7 +166,6 @@ public final class AgentTaskDeliberationOperationReadServiceImpl
             exactPersisted(grant.getTargetAgentId(), 100);
             List<String> operations = readOperations(grant.getPermittedOperationsJson());
             List<InputSummary> inputs = readInputs(grant.getInputScopeJson());
-            requireRequestHash(grant, operations, inputs);
             return new GrantFacts(operations, inputs);
         } catch (IntegrityFailure failure) {
             throw failure;
@@ -191,8 +192,7 @@ public final class AgentTaskDeliberationOperationReadServiceImpl
                     || row.getGrantVersion() > grant.getGrantVersion()
                     || row.getVersion() == null || row.getVersion() < 0
                     || !BOOTSTRAP_STATES.contains(row.getStatus())
-                    || !Objects.equals(AgentTaskBountyBootstrapPayload.initialOperation(
-                            facts.operations()), row.getPermittedOperation())
+                    || !facts.operations().contains(row.getPermittedOperation())
                     || !sameReferences(facts.inputs(), references)) {
                 throw integrity();
             }
@@ -288,7 +288,6 @@ public final class AgentTaskDeliberationOperationReadServiceImpl
             List<String> canonical = unique.stream().sorted().toList();
             if (!canonical.equals(values) || !Objects.equals(source,
                     json.writeValueAsString(values))) throw integrity();
-            AgentTaskBountyBootstrapPayload.initialOperation(values);
             return List.copyOf(values);
         } catch (IntegrityFailure failure) {
             throw failure;
@@ -332,18 +331,31 @@ public final class AgentTaskDeliberationOperationReadServiceImpl
     }
 
     private void requireRequestHash(AgentTaskExecutionGrantEntity grant, List<String> operations,
-            List<InputSummary> inputs) {
+            List<InputSummary> inputs, String persistedInitialOperation) {
         try {
             String operationsJson = json.writeValueAsString(operations);
             List<RequestInput> requested = inputs.stream().map(input ->
                     new RequestInput(input.fileId(), input.version(), input.purpose())).toList();
             String inputsJson = json.writeValueAsString(requested);
             long assignment = grant.getAssignmentRevision();
-            boolean noChange = constantEquals(grant.getRequestHash(), assignHash(grant,
-                    assignment, operationsJson, inputsJson));
-            boolean changed = assignment > 0 && constantEquals(grant.getRequestHash(), assignHash(
-                    grant, assignment - 1, operationsJson, inputsJson));
-            if (!noChange && !changed) throw integrity();
+
+            // The old domain is valid only for the old unambiguous request shape. Never use
+            // its implicit picker to reduce a complete multi-action authorization set.
+            boolean oldDomainAllowed;
+            try {
+                oldDomainAllowed = Objects.equals(
+                        AgentTaskBountyBootstrapPayload.initialOperation(operations),
+                        persistedInitialOperation);
+            } catch (IllegalArgumentException ambiguousOldRequest) {
+                oldDomainAllowed = false;
+            }
+            boolean oldDomain = oldDomainAllowed && matchesAssignmentHash(grant, assignment,
+                    operationsJson, inputsJson, null);
+            // The new domain binds the explicit selector already persisted in the outbox.
+            // It is a read-only proof: never infer, repair, or rewrite the selector here.
+            boolean explicitDomain = matchesAssignmentHash(grant, assignment, operationsJson,
+                    inputsJson, persistedInitialOperation);
+            if (oldDomain == explicitDomain) throw integrity();
         } catch (IntegrityFailure failure) {
             throw failure;
         } catch (RuntimeException corrupt) {
@@ -351,11 +363,24 @@ public final class AgentTaskDeliberationOperationReadServiceImpl
         }
     }
 
+    private static boolean matchesAssignmentHash(AgentTaskExecutionGrantEntity grant,
+            long assignmentRevision, String operationsJson, String inputsJson,
+            String initialOperation) {
+        if (constantEquals(grant.getRequestHash(), assignHash(grant, assignmentRevision,
+                operationsJson, inputsJson, initialOperation))) return true;
+        return assignmentRevision > 0 && constantEquals(grant.getRequestHash(), assignHash(grant,
+                assignmentRevision - 1, operationsJson, inputsJson, initialOperation));
+    }
+
     private static String assignHash(AgentTaskExecutionGrantEntity grant, long expectedTaskVersion,
-            String operationsJson, String inputsJson) {
-        return sha256("ASSIGN_AND_START\n" + grant.getTaskId() + "\n"
+            String operationsJson, String inputsJson, String initialOperation) {
+        String domain = initialOperation == null ? "ASSIGN_AND_START"
+                : "ASSIGN_AND_START_INITIAL_OPERATION_V1";
+        String material = domain + "\n" + grant.getTaskId() + "\n"
                 + grant.getTargetAgentId() + "\n" + expectedTaskVersion + "\n"
-                + grant.getRequirementRevision() + "\n" + operationsJson + "\n" + inputsJson);
+                + grant.getRequirementRevision() + "\n" + operationsJson + "\n" + inputsJson;
+        if (initialOperation != null) material += "\n" + initialOperation;
+        return sha256(material);
     }
 
     private static boolean sameReferences(List<InputSummary> inputs,
