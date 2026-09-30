@@ -99,12 +99,12 @@ public final class AgentTaskSelectedOutputFinalizationController {
         try{
             JsonNode root=JSON.readTree(body);if(!exactObject(root,ROOT))throw new RequestFailure();
             long taskVersion=version(root,"expectedTaskVersion"),assignment=version(root,"expectedAssignmentRevision");
-            String conversation=text(root,"conversationId",100),summary=text(root,"summary",4000);
+            String conversation=bodyIdentifier(root,"conversationId"),summary=text(root,"summary",4000);
             JsonNode source=root.get("selectedOutputs");if(!source.isArray()||source.isEmpty()||source.size()>99)throw new RequestFailure();
             List<ChatSelectedOutputFinalizationService.Selection> selected=new ArrayList<>();Set<String> unique=new HashSet<>();
             for(JsonNode item:source){if(!exactObject(item,ITEM))throw new RequestFailure();
-                var value=new ChatSelectedOutputFinalizationService.Selection(text(item,"requestId",100),text(item,"stepId",100),
-                        text(item,"outputId",100),sha(item,"sha256"),text(item,"title",255),text(item,"purpose",255));
+                var value=new ChatSelectedOutputFinalizationService.Selection(bodyIdentifier(item,"requestId"),bodyIdentifier(item,"stepId"),
+                        bodyIdentifier(item,"outputId"),sha(item,"sha256"),text(item,"title",255),text(item,"purpose",255));
                 if(!unique.add(value.requestId()+"\0"+value.stepId()+"\0"+value.outputId()))throw new RequestFailure();selected.add(value);}
             return new ChatSelectedOutputFinalizationService.Command(taskVersion,assignment,conversation,summary,List.copyOf(selected));
         }catch(RequestFailure e){throw e;}catch(Exception e){throw new RequestFailure();}
@@ -146,6 +146,7 @@ public final class AgentTaskSelectedOutputFinalizationController {
     }
     private static boolean exactObject(JsonNode node,Set<String> fields){if(node==null||!node.isObject()||node.size()!=fields.size())return false;for(String f:fields)if(!node.has(f))return false;return true;}
     private static String text(JsonNode n,String field,int max){JsonNode v=n.get(field);if(v==null||!v.isTextual())throw new RequestFailure();String s=v.textValue();if(s==null||s.isBlank()||s.length()>max||!s.equals(s.strip())||s.indexOf('\0')>=0||s.codePoints().anyMatch(Character::isISOControl))throw new RequestFailure();return s;}
+    private static String bodyIdentifier(JsonNode n,String field){String value=text(n,field,100);identifier(value,100);return value;}
     private static String sha(JsonNode n,String field){String s=text(n,field,64);if(!s.matches("[0-9a-f]{64}"))throw new RequestFailure();return s;}
     private static long version(JsonNode n,String field){JsonNode v=n.get(field);if(v==null||!v.isIntegralNumber()||!v.canConvertToLong()||v.longValue()<0||v.longValue()>MAX_SAFE_INTEGER)throw new RequestFailure();return v.longValue();}
     private static void identifier(String value,int max){if(value==null||!value.matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,"+(max-1)+"}"))throw new RequestFailure();}

@@ -329,7 +329,7 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
                     scope.ownerJiacn(),valid.taskId(),valid.targetAgentId(),artifactId,1);
             if (existing!=null)return exactArtifact(existing,valid,workItemId,artifactId,type,title,hash,length,mime,purpose);
         } catch (AgentTaskCollaborationException absent) {
-            if (absent.getReason()!=AgentTaskCollaborationException.Reason.NOT_FOUND) throw absent;
+            if (absent.getReason()!=AgentTaskCollaborationException.Reason.NOT_FOUND) throw translate(absent);
         }
         AgentTaskArtifactPublishDTO command=new AgentTaskArtifactPublishDTO();
         command.setArtifactId(artifactId); command.setWorkItemId(workItemId);

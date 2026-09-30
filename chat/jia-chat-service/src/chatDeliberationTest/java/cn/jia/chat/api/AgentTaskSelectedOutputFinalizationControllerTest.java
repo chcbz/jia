@@ -94,6 +94,18 @@ class AgentTaskSelectedOutputFinalizationControllerTest {
         assertThrows(RuntimeException.class,()->controller.submit("task-1","12345678",request(forged),authentication));
     }
 
+    @Test
+    void everyBodyIdentifierIsValidatedBeforeServiceWhileHumanTextMayContainSlashes(){
+        for(String[] pair:List.of(new String[]{"100","conv/1"},new String[]{"req-1","req/1"},
+                new String[]{"step-1","step/1"},new String[]{"out-1","out/1"})){
+            assertThrows(RuntimeException.class,()->controller.submit("task-1","12345678",
+                    request(minimalBody("0").replace("\""+pair[0]+"\"","\""+pair[1]+"\"")),authentication));
+        }
+        verifyNoInteractions(service);
+        assertEquals(HttpStatus.ACCEPTED,controller.submit("task-1","12345678",
+                request(minimalBody("0").replace("\"title\"","\"title/a\"")),authentication).getStatusCode());
+    }
+
     private static MockHttpServletRequest request(String json){
         MockHttpServletRequest request=new MockHttpServletRequest("POST","/agent/tasks/task-1/finalizations");
         request.setContentType("application/json");request.setContent(json.getBytes(StandardCharsets.UTF_8));return request;

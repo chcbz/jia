@@ -96,15 +96,20 @@ class ChatSelectedOutputFinalizationServiceTest {
         var accepting=new ChatSelectedOutputFinalizationStore.Operation("op-1","task-1",Fixture.KEY,"b".repeat(64),
                 "100",7,7,"accept it","pending","ACCEPTING",5,"delivery-1","submitted","reviewing",9,
                 null,false,f.selections);
-        when(f.store.create(anyString(),anyString(),anyString(),anyString(),eq("task-1"),eq(Fixture.KEY),anyString(),
-                anyString(),anyLong(),anyLong(),anyString(),anyList())).thenReturn(accepting);
+        // Preserve the real deterministic operation identity/digest emitted by submit. A static
+        // op-1 here would fail validateView before exercising the intended acceptance race.
+        f.resumeAt(accepting);
         when(f.agent.reconcile(any(),eq("task-1"),anyString(),anyString())).thenAnswer(i->
                 view(i.getArgument(2),"SUBMITTED","delivery-1","changes_requested","running",10));
         var receipt=f.service.submit(f.scope,"task-1",Fixture.KEY,f.command());
         assertEquals("failed",receipt.state());assertEquals("ACCEPTING",receipt.stage());
         assertEquals("changes_requested",receipt.deliveryState());
         assertEquals("FINALIZATION_DELIVERY_CHANGES_REQUESTED",receipt.errorCode());
+        assertEquals("running",receipt.taskState());assertEquals("10",receipt.taskVersion());
         verify(f.agent,never()).accept(any(),anyString(),anyString(),anyString());
+        verifyNoInteractions(f.deliberations,f.steps,f.executions);
+        verify(f.store).advance(anyString(),anyString(),anyString(),any(),eq("pending"),eq("ACCEPTING"),
+                eq("delivery-1"),eq("changes_requested"),eq("running"),eq(10L),isNull(),eq(false));
     }
 
     @Test
@@ -126,14 +131,15 @@ class ChatSelectedOutputFinalizationServiceTest {
         var submitted=new ChatSelectedOutputFinalizationStore.Operation("op-1","task-1",Fixture.KEY,"b".repeat(64),
                 "100",7,7,"accept it","pending","SUBMITTED",4,"delivery-1","submitted","reviewing",10,
                 null,false,f.selections);
-        when(f.store.create(anyString(),anyString(),anyString(),anyString(),eq("task-1"),eq(Fixture.KEY),anyString(),
-                anyString(),anyLong(),anyLong(),anyString(),anyList())).thenReturn(submitted);
+        f.resumeAt(submitted);
         when(f.agent.reconcile(any(),eq("task-1"),anyString(),anyString())).thenAnswer(i->
                 view(i.getArgument(2),"SUBMITTED","delivery-1","submitted","running",9));
         var receipt=f.service.submit(f.scope,"task-1",Fixture.KEY,f.command());
         assertEquals("failed",receipt.state());assertEquals("SUBMITTED",receipt.stage());
         assertEquals("FINALIZATION_INTERNAL_ERROR",receipt.errorCode());assertTrue(receipt.retryable());
         verify(f.agent,never()).accept(any(),anyString(),anyString(),anyString());
+        verify(f.store,never()).advance(anyString(),anyString(),anyString(),any(),eq("pending"),anyString(),
+                nullable(String.class),nullable(String.class),anyString(),anyLong(),nullable(String.class),anyBoolean());
     }
 
     @Test
@@ -251,6 +257,15 @@ class ChatSelectedOutputFinalizationServiceTest {
                     view(i.getArgument(2),"SUBMITTED","delivery-1","submitted","reviewing",9));
             when(agent.accept(any(),eq("task-1"),anyString(),anyString())).thenAnswer(i->
                     view(i.getArgument(2),"TASK_COMPLETED","delivery-1","accepted","completed",10));
+        }
+        void resumeAt(ChatSelectedOutputFinalizationStore.Operation checkpoint){
+            when(store.create(anyString(),anyString(),anyString(),anyString(),eq("task-1"),eq(KEY),anyString(),
+                    anyString(),anyLong(),anyLong(),anyString(),anyList())).thenAnswer(i->
+                    new ChatSelectedOutputFinalizationStore.Operation(i.getArgument(3),"task-1",KEY,i.getArgument(6),
+                            i.getArgument(7),i.getArgument(8),i.getArgument(9),i.getArgument(10),checkpoint.state(),
+                            checkpoint.stage(),checkpoint.stateVersion(),checkpoint.deliveryId(),checkpoint.deliveryState(),
+                            checkpoint.taskState(),checkpoint.taskVersion(),checkpoint.errorCode(),checkpoint.retryable(),
+                            i.getArgument(11)));
         }
         void advanceByArguments(){
             when(store.advance(anyString(),anyString(),anyString(),any(),anyString(),anyString(),nullable(String.class),
