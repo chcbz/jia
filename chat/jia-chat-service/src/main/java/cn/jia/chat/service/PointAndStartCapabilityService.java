@@ -18,6 +18,8 @@ import java.util.Objects;
 @Service
 public final class PointAndStartCapabilityService {
     private static final String LANE = "ORDINARY_SINGLE_AGENT_ASSIGN_AND_START";
+    private static final String INPUT_POLICY_EMPTY_ONLY = "EMPTY_ONLY";
+    private static final String INPUT_POLICY_TASK_LINKED_REFERENCE = "TASK_LINKED_REFERENCE";
     private static final List<String> SERVER_OPERATIONS = List.of("GENERATE_IMAGE");
     private final NativeBountyExecutionSessionLookup sessions;
     private final AgentTaskPointAndStartPolicyService taskPolicy;
@@ -37,11 +39,12 @@ public final class PointAndStartCapabilityService {
             @Value("${chat.bounty-bootstrap.enabled:false}") boolean bootstrapEnabled,
             @Value("${chat.bounty-execution.enabled:false}") boolean executionEnabled,
             @Value("${agent.task-deliberation-operation.read-enabled:false}") boolean operationReadEnabled,
-            @Value("${agent.task-requirement-snapshot.read-enabled:false}") boolean requirementReadEnabled) {
+            @Value("${agent.task-requirement-snapshot.read-enabled:false}") boolean requirementReadEnabled,
+            @Value("${agent.task-reference-inputs.enabled:false}") boolean taskReferenceInputsEnabled) {
         this(sessions, taskPolicy, storage, bootstrapRelay, executionRelay,
                 new Flags(storageEnabled, conversationEnabled, websocketEnabled,
                         bootstrapEnabled, executionEnabled, operationReadEnabled,
-                        requirementReadEnabled));
+                        requirementReadEnabled, taskReferenceInputsEnabled));
     }
 
     PointAndStartCapabilityService(NativeBountyExecutionSessionLookup sessions,
@@ -81,13 +84,23 @@ public final class PointAndStartCapabilityService {
             blockers.add("NO_ELIGIBLE_OPERATION");
         }
         blockers.add("COST_AUTHORIZATION_UNAVAILABLE");
+        String inputRefsPolicy = inputRefsPolicy(lane, nativeExecution);
         return new Capability(1, taskId, targetAgentId, LANE, lane,
                 new NativeExecution(nativeExecution.state().name(), nativeExecution.transport(),
                         nativeExecution.schemaVersion(), nativeExecution.supportedOperations()),
                 new Authorization("UNAVAILABLE", false),
-                new NewStart(false, List.copyOf(blockers)), requested, initial, "EMPTY_ONLY",
+                new NewStart(false, List.copyOf(blockers)), requested, initial, inputRefsPolicy,
                 new OriginalIntentRecovery(false, "RECOVERY_REQUIRED",
                         "EXPLICIT_USER_EXACT_ORIGINAL_KEY_AND_BODY_ONLY"));
+    }
+
+    private String inputRefsPolicy(ServerLane lane,
+            NativeBountyExecutionSessionLookup.Snapshot nativeExecution) {
+        return flags.taskReferenceInputsEnabled()
+                && "READY".equals(lane.state())
+                && nativeExecution.state() == NativeBountyExecutionSessionLookup.State.READY
+                && SERVER_OPERATIONS.equals(nativeExecution.supportedOperations())
+                ? INPUT_POLICY_TASK_LINKED_REFERENCE : INPUT_POLICY_EMPTY_ONLY;
     }
 
     private ServerLane serverLane() {
@@ -160,6 +173,6 @@ public final class PointAndStartCapabilityService {
             String unknownOrNotFoundMeans, String replayPolicy) { }
     record Flags(boolean storageEnabled, boolean conversationEnabled, boolean websocketEnabled,
             boolean bootstrapEnabled, boolean executionEnabled, boolean operationReadEnabled,
-            boolean requirementReadEnabled) { }
+            boolean requirementReadEnabled, boolean taskReferenceInputsEnabled) { }
     public static final class SourceUnavailable extends RuntimeException { }
 }
