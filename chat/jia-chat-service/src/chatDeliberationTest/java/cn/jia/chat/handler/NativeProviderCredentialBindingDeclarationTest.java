@@ -28,7 +28,7 @@ class NativeProviderCredentialBindingDeclarationTest {
                 NativeProviderCredentialBindingDeclaration.parse(null).snapshot().state());
         assertEquals(NativeProviderCredentialBindingLookup.State.DISABLED,
                 NativeProviderCredentialBindingDeclaration.parse(Map.of("schemaVersion",1,"enabled",false)).snapshot().state());
-        for(Map<String,Object> malformed:List.of(changed("bindingEpoch","0"),changed("bindingEpoch","01"),
+        for(Map<String,Object> malformed:List.<Map<String,Object>>of(changed("bindingEpoch","0"),changed("bindingEpoch","01"),
                 changed("bindingEpoch",1),changed("maxInputItems",32),changed("maxOutboundRequestAttempts",2),
                 changed("providerLane","PERSONAL_WORKSPACE_CONVERSATION_HTTP_V1"),unknown("custody","OWNER"),
                 new LinkedHashMap<>(Map.of("schemaVersion",1,"enabled",false,"bindingId","fake")))) {
