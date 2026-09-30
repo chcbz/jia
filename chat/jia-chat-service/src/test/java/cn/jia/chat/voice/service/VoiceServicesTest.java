@@ -163,7 +163,7 @@ class VoiceServicesTest {
         VoiceSpeechProperties properties = properties();
         FakeCoordinator coordinator = new FakeCoordinator();
         VoiceAudioUploadFactory factory = mock(VoiceAudioUploadFactory.class);
-        when(factory.create(any(), eq(REQUEST_ID)))
+        when(factory.create(any(), eq(REQUEST_ID), eq("openai-compatible")))
                 .thenThrow(VoiceException.of(VoiceErrorCode.INVALID_AUDIO, REQUEST_ID));
         AtomicInteger calls = new AtomicInteger();
         SpeechTranscriptionService service = transcriptionService(properties,
@@ -490,7 +490,7 @@ class VoiceServicesTest {
 
     private static VoiceAudioUploadFactory factoryReturningUploads() {
         VoiceAudioUploadFactory factory = mock(VoiceAudioUploadFactory.class);
-        when(factory.create(any(), eq(REQUEST_ID))).thenAnswer(invocation -> upload());
+        when(factory.create(any(), eq(REQUEST_ID), eq("openai-compatible"))).thenAnswer(invocation -> upload());
         return factory;
     }
 

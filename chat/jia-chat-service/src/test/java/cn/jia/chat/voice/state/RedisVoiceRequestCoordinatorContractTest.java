@@ -89,10 +89,15 @@ class RedisVoiceRequestCoordinatorContractTest {
     @Test
     void terminalAndReleaseLuaAreCompareAndSetByDigestAndMatchingLeaseToken() throws Exception {
         String terminal = script("TERMINAL_SCRIPT");
+        String renew = script("RENEW_SCRIPT");
         String release = script("RELEASE_SCRIPT");
         assertTrue(terminal.contains("state') ~= 'IN_PROGRESS'"));
         assertTrue(terminal.contains("digest') ~= ARGV[1]"));
         assertTrue(terminal.contains("lease') ~= ARGV[2]"));
+        assertTrue(renew.contains("digest') ~= ARGV[1]"));
+        assertTrue(renew.contains("lease') ~= ARGV[2]"));
+        assertTrue(renew.contains("tonumber(identityExpiry) <= now"));
+        assertTrue(renew.contains("tonumber(globalExpiry) <= now"));
         assertTrue(release.contains("state') == 'IN_PROGRESS'"));
         assertTrue(release.contains("state', 'FAILED_UNKNOWN'"));
         assertTrue(release.indexOf("state', 'FAILED_UNKNOWN'")
@@ -136,6 +141,7 @@ class RedisVoiceRequestCoordinatorContractTest {
                 assertFailedKnownReplay(coordinator);
                 assertFailedUnknownReplay(coordinator);
                 assertTokenMismatchCannotTerminateOrRelease(coordinator);
+                assertRenewRequiresLiveExactOwnership(coordinator);
                 assertConcurrentBeginIsAtomic(coordinator);
                 assertRedisReplayRejectsCiphertextTupleTransplants(factory, coordinator);
                 assertPreAdmissionIsBilledAndReleased(factory);
@@ -146,6 +152,7 @@ class RedisVoiceRequestCoordinatorContractTest {
                 assertScriptLoaded(factory, "BEGIN_ADMITTED_SCRIPT");
                 assertScriptLoaded(factory, "BEGIN_SCRIPT");
                 assertScriptLoaded(factory, "TERMINAL_SCRIPT");
+                assertScriptLoaded(factory, "RENEW_SCRIPT");
                 assertScriptLoaded(factory, "RELEASE_SCRIPT");
             } finally {
                 factory.destroy();
@@ -355,6 +362,22 @@ class RedisVoiceRequestCoordinatorContractTest {
         assertEquals(VoiceBeginResult.Outcome.RESULT_UNKNOWN,
                 coordinator.begin(VoiceOperation.TRANSCRIPTION,
                         "token-scope", "token-request", "token-digest").outcome());
+    }
+
+    private static void assertRenewRequiresLiveExactOwnership(
+            RedisVoiceRequestCoordinator coordinator) {
+        VoiceBeginResult first = coordinator.begin(VoiceOperation.SYNTHESIS,
+                "renew-scope", "renew-request", "renew-digest");
+        VoiceReservation original = first.reservation();
+        coordinator.renew(original);
+        assertThrows(VoiceStateUnavailableException.class, () -> coordinator.renew(
+                new VoiceReservation(original.operation(), original.identityScope(),
+                        original.requestId(), "forged-digest", original.leaseToken())));
+        assertThrows(VoiceStateUnavailableException.class, () -> coordinator.renew(
+                new VoiceReservation(original.operation(), original.identityScope(),
+                        original.requestId(), original.digest(), "forged-lease")));
+        coordinator.release(original);
+        assertThrows(VoiceStateUnavailableException.class, () -> coordinator.renew(original));
     }
 
     @Test

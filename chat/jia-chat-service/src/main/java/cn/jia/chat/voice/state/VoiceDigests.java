@@ -50,9 +50,19 @@ public final class VoiceDigests {
     }
 
     public String transcription(String language, String mediaType, byte[] audioDigest) {
+        return transcription("openai-compatible", "whisper-1",
+                language, mediaType, audioDigest);
+    }
+
+    public String transcription(
+            String provider, String model, String language,
+            String mediaType, byte[] audioDigest) {
         MessageDigest digest = sha256();
         updateLengthPrefixed(digest, VoiceContract.versionBytes());
-        updateLengthPrefixed(digest, VoiceOperation.TRANSCRIPTION.namespace().getBytes(StandardCharsets.UTF_8));
+        updateLengthPrefixed(digest, VoiceOperation.TRANSCRIPTION.namespace()
+                .getBytes(StandardCharsets.UTF_8));
+        updateLengthPrefixed(digest, provider.getBytes(StandardCharsets.UTF_8));
+        updateLengthPrefixed(digest, model.getBytes(StandardCharsets.UTF_8));
         updateLengthPrefixed(digest, language.getBytes(StandardCharsets.UTF_8));
         updateLengthPrefixed(digest, mediaType.getBytes(StandardCharsets.UTF_8));
         updateLengthPrefixed(digest, audioDigest);
@@ -60,14 +70,28 @@ public final class VoiceDigests {
     }
 
     public String synthesis(String text, String voice, String format) {
-        if (!VoiceUnicode.isWellFormedUtf16(text)
+        return synthesis("openai-compatible", "gpt-4o-mini-tts", "alloy",
+                text, voice, format);
+    }
+
+    public String synthesis(
+            String provider, String model, String providerVoice,
+            String text, String voice, String format) {
+        if (!VoiceUnicode.isWellFormedUtf16(provider)
+                || !VoiceUnicode.isWellFormedUtf16(model)
+                || !VoiceUnicode.isWellFormedUtf16(providerVoice)
+                || !VoiceUnicode.isWellFormedUtf16(text)
                 || !VoiceUnicode.isWellFormedUtf16(voice)
                 || !VoiceUnicode.isWellFormedUtf16(format)) {
             throw VoiceException.of(VoiceErrorCode.INVALID_REQUEST, null);
         }
         MessageDigest digest = sha256();
         updateLengthPrefixed(digest, VoiceContract.versionBytes());
-        updateLengthPrefixed(digest, VoiceOperation.SYNTHESIS.namespace().getBytes(StandardCharsets.UTF_8));
+        updateLengthPrefixed(digest, VoiceOperation.SYNTHESIS.namespace()
+                .getBytes(StandardCharsets.UTF_8));
+        updateLengthPrefixed(digest, provider.getBytes(StandardCharsets.UTF_8));
+        updateLengthPrefixed(digest, model.getBytes(StandardCharsets.UTF_8));
+        updateLengthPrefixed(digest, providerVoice.getBytes(StandardCharsets.UTF_8));
         updateLengthPrefixed(digest, voice.getBytes(StandardCharsets.UTF_8));
         updateLengthPrefixed(digest, format.getBytes(StandardCharsets.UTF_8));
         updateLengthPrefixed(digest, text.getBytes(StandardCharsets.UTF_8));

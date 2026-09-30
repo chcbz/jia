@@ -8,6 +8,8 @@ import cn.jia.chat.voice.provider.DisabledSpeechSynthesisProvider;
 import cn.jia.chat.voice.provider.DisabledSpeechTranscriptionProvider;
 import cn.jia.chat.voice.provider.OpenAiCompatibleSpeechSynthesisProvider;
 import cn.jia.chat.voice.provider.OpenAiCompatibleSpeechTranscriptionProvider;
+import cn.jia.chat.voice.provider.CliproxyRealtimeSpeechSynthesisProvider;
+import cn.jia.chat.voice.provider.CliproxyRealtimeSpeechTranscriptionProvider;
 import cn.jia.chat.voice.service.SpeechSynthesisService;
 import cn.jia.chat.voice.service.SpeechTranscriptionService;
 import org.springframework.ai.model.openai.autoconfigure.OpenAiAudioSpeechProperties;
@@ -151,6 +153,34 @@ class VoiceDefaultOffApplicationContextTest {
     }
 
     @Test
+    void fullyPinnedRealtimeActivationUsesExactProviderModelAndWavProfile() {
+        runner.withPropertyValues(realtimeActivationProperties()).run(context -> {
+            assertNull(context.getStartupFailure());
+            VoiceSpeechProperties properties = context.getBean(VoiceSpeechProperties.class);
+            assertEquals("cliproxy-realtime", properties.getTranscription().getProvider());
+            assertEquals("gpt-realtime", properties.getTranscription().getModel());
+            assertEquals("cliproxy-realtime", properties.getSynthesis().getProvider());
+            assertEquals("gpt-realtime", properties.getSynthesis().getModel());
+            assertEquals(Set.of("wav"), properties.getSynthesis().getFormats());
+            assertInstanceOf(CliproxyRealtimeSpeechTranscriptionProvider.class,
+                    context.getBean(SpeechTranscriptionProvider.class));
+            assertInstanceOf(CliproxyRealtimeSpeechSynthesisProvider.class,
+                    context.getBean(SpeechSynthesisProvider.class));
+        });
+    }
+
+    @Test
+    void realtimeActivationRejectsLegacyFormatAndMixedProviderProfile() {
+        runner.withPropertyValues(concat(realtimeActivationProperties(),
+                "jia.chat.voice.synthesis.formats=mp3"))
+                .run(context -> assertNotNull(context.getStartupFailure()));
+        runner.withPropertyValues(concat(realtimeActivationProperties(),
+                "jia.chat.voice.transcription.provider=openai-compatible",
+                "jia.chat.voice.transcription.model=whisper-1"))
+                .run(context -> assertNotNull(context.getStartupFailure()));
+    }
+
+    @Test
     void gatewayValidatorRejectsAllowlistedUriConfusionShapes() {
         for (String gateway : List.of(
                 "http://voice-gateway.example/openai/v1",
@@ -291,6 +321,25 @@ class VoiceDefaultOffApplicationContextTest {
         }
         return concat(values, "jia.chat.voice.compatibility-gateway-allowlist="
                 + COMPATIBILITY_GATEWAY);
+    }
+
+    private static String[] realtimeActivationProperties() {
+        return new String[]{
+                "spring.ai.openai.base-url=" + COMPATIBILITY_GATEWAY,
+                "spring.ai.openai.api-key=" + API_KEY,
+                "jia.chat.voice.compatibility-gateway-allowlist=" + COMPATIBILITY_GATEWAY,
+                "jia.chat.voice.enabled=true",
+                "jia.chat.voice.identity-hmac-secret=" + IDENTITY_HMAC,
+                "jia.chat.voice.cache-encryption-key=" + CACHE_KEY,
+                "jia.chat.voice.transcription.enabled=true",
+                "jia.chat.voice.transcription.provider=cliproxy-realtime",
+                "jia.chat.voice.transcription.model=gpt-realtime",
+                "jia.chat.voice.synthesis.enabled=true",
+                "jia.chat.voice.synthesis.provider=cliproxy-realtime",
+                "jia.chat.voice.synthesis.model=gpt-realtime",
+                "jia.chat.voice.synthesis.provider-voice=alloy",
+                "jia.chat.voice.synthesis.formats=wav"
+        };
     }
 
     private static VoiceSpeechProperties validProperties() {

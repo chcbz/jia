@@ -27,6 +27,7 @@ import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -197,6 +198,27 @@ class VoiceControllersTest {
         assertEquals(REQUEST_ID, response.getHeaders().getFirst("X-Voice-Request-Id"));
         assertEquals(3, response.getHeaders().getContentLength());
         assertArrayEquals(new byte[]{4, 5, 6}, response.getBody());
+    }
+
+    @Test
+    void realtimeSynthesisReturnsWavWithExactNoStoreHeaders() {
+        VoiceSpeechProperties properties = properties();
+        properties.getSynthesis().setProvider("cliproxy-realtime");
+        properties.getSynthesis().setFormats(Set.of("wav"));
+        SpeechSynthesisService service = mock(SpeechSynthesisService.class);
+        when(service.synthesize(any(), any())).thenReturn(
+                new SpeechSynthesisResult(new byte[]{4, 5, 6, 7}, "audio/wav"));
+        SpeechSynthesisController controller = new SpeechSynthesisController(
+                new VoiceIdentityResolver(), new VoiceRequestValidator(), properties, service);
+
+        ResponseEntity<byte[]> response = controller.synthesize(new VoiceSynthesisRequest(
+                        REQUEST_ID, "林冲领命。", "juyiting-default", "wav"),
+                jwt("tenant", "client", "subject"));
+
+        assertEquals("audio/wav", response.getHeaders().getContentType().toString());
+        assertEquals("no-store", response.getHeaders().getCacheControl());
+        assertEquals(REQUEST_ID, response.getHeaders().getFirst("X-Voice-Request-Id"));
+        assertEquals(4, response.getHeaders().getContentLength());
     }
 
     @Test
