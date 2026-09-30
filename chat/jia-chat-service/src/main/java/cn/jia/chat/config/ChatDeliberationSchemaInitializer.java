@@ -533,7 +533,13 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
     private static ColumnDef b(boolean nullable,String d){return new ColumnDef("bigint",null,nullable,d,"",false,"BIGINT"+(nullable?" DEFAULT NULL":" NOT NULL")+(d==null?"":" DEFAULT "+d));}
     private static ColumnDef auto(){return new ColumnDef("bigint",null,false,null,"auto_increment",false,"BIGINT NOT NULL AUTO_INCREMENT");}
     private static ColumnDef i(boolean nullable,String d){return new ColumnDef("int",null,nullable,d,"",false,"INT"+(nullable?" DEFAULT NULL":" NOT NULL")+(d==null?"":" DEFAULT "+d));}
-    private static ColumnDef txt(String type,boolean nullable){return new ColumnDef(type,null,nullable,null,"",true,type.toUpperCase()+" CHARACTER SET utf8mb4 COLLATE "+COLLATION+(nullable?" DEFAULT NULL":" NOT NULL"));}
+    private static ColumnDef txt(String type,boolean nullable){
+        // Actual MySQL metadata supplies a maximum character length for TEXT families too.
+        // These are type capacities observed on the isolated MySQL 8.0.21 fixture, not payload limits.
+        long length=switch(type){case "text" -> 65535L;case "mediumtext" -> 16777215L;
+            default -> throw new IllegalArgumentException("Unsupported deliberation text type: "+type);};
+        return new ColumnDef(type,length,nullable,null,"",true,type.toUpperCase()+" CHARACTER SET utf8mb4 COLLATE "+COLLATION+(nullable?" DEFAULT NULL":" NOT NULL"));
+    }
     private static IndexDef ix(boolean unique,String... c){return new IndexDef(unique,List.of(c));}
     private static String text(Map<String,Object> row,String key){Object v=value(row,key); return v==null?"":String.valueOf(v);}
     private static String nullableText(Map<String,Object> row,String key){Object v=value(row,key); return v==null?null:String.valueOf(v);}

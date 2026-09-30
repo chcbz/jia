@@ -140,4 +140,66 @@ class ChatDeliberationSchemaContractTest {
         assertTrue(migration.contains("WHERE o.event_type='CANCEL_REQUESTED';"));
     }
 
+
+    @Test
+    void actualMysqlTextMetadataCapacitiesPassStrictColumnsAndAdditivePreflight() throws Exception {
+        var jdbc=org.mockito.Mockito.mock(org.springframework.jdbc.core.JdbcTemplate.class);
+        var rows=actualMysqlContextColumnRows();
+        org.mockito.Mockito.when(jdbc.queryForList(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.eq("chat_context_snapshot"))).thenReturn(rows);
+        var initializer=new ChatDeliberationSchemaInitializer(jdbc);
+        var validation=ChatDeliberationSchemaInitializer.class.getDeclaredMethod("validateColumns",String.class);
+        validation.setAccessible(true);
+        validation.invoke(initializer,"chat_context_snapshot");
+        var preflight=ChatDeliberationSchemaInitializer.class.getDeclaredMethod("validateExistingColumnsBeforeExpansion",String.class,java.util.Map.class);
+        preflight.setAccessible(true);
+        var byName=new java.util.LinkedHashMap<String,java.util.Map<String,Object>>();
+        rows.forEach(row->byName.put((String)row.get("column_name"),row));
+        preflight.invoke(initializer,"chat_context_snapshot",byName);
+    }
+
+    @Test
+    void nullOrWrongTextCapacityStillFailsInsteadOfSkippingTextLengthValidation() throws Exception {
+        for(String column:java.util.List.of("source_vector_json","facts_manifest_json")) {
+            for(Long bad:java.util.Arrays.asList(null,42L)) {
+                var jdbc=org.mockito.Mockito.mock(org.springframework.jdbc.core.JdbcTemplate.class);
+                var rows=actualMysqlContextColumnRows();
+                rows.stream().filter(row->column.equals(row.get("column_name"))).findFirst().orElseThrow()
+                        .put("character_maximum_length",bad);
+                org.mockito.Mockito.when(jdbc.queryForList(org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.eq("chat_context_snapshot"))).thenReturn(rows);
+                var validation=ChatDeliberationSchemaInitializer.class.getDeclaredMethod("validateColumns",String.class);
+                validation.setAccessible(true);
+                var failure=org.junit.jupiter.api.Assertions.assertThrows(java.lang.reflect.InvocationTargetException.class,
+                        ()->validation.invoke(new ChatDeliberationSchemaInitializer(jdbc),"chat_context_snapshot"));
+                org.junit.jupiter.api.Assertions.assertInstanceOf(IllegalStateException.class,failure.getCause());
+                assertTrue(failure.getCause().getMessage().contains("chat_context_snapshot."+column));
+            }
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static java.util.List<java.util.Map<String,Object>> actualMysqlContextColumnRows() throws Exception {
+        var field=ChatDeliberationSchemaInitializer.class.getDeclaredField("COLUMNS");field.setAccessible(true);
+        var definitions=(java.util.Map<String,java.util.Map<String,Object>>)field.get(null);
+        var rows=new java.util.ArrayList<java.util.Map<String,Object>>();
+        for(var entry:definitions.get("chat_context_snapshot").entrySet()) {
+            Object definition=entry.getValue();var values=new java.util.HashMap<String,Object>();
+            for(String accessor:java.util.List.of("type","length","nullable","defaultValue","extra","collated")) {
+                var method=definition.getClass().getDeclaredMethod(accessor);method.setAccessible(true);
+                values.put(accessor,method.invoke(definition));
+            }
+            var row=new java.util.LinkedHashMap<String,Object>();
+            row.put("column_name",entry.getKey());row.put("data_type",values.get("type"));
+            // Independent actual MySQL 8.0.21 observations; do not copy the descriptor's TEXT length.
+            Object length=switch((String)values.get("type")) {
+                case "text"->65535L;case "mediumtext"->16777215L;default->values.get("length");};
+            row.put("character_maximum_length",length);
+            row.put("is_nullable",Boolean.TRUE.equals(values.get("nullable"))?"YES":"NO");
+            row.put("column_default",values.get("defaultValue"));row.put("extra",values.get("extra"));
+            row.put("collation_name",Boolean.TRUE.equals(values.get("collated"))?"utf8mb4_0900_bin":null);
+            rows.add(row);
+        }
+        return rows;
+    }
 }
