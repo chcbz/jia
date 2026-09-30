@@ -83,6 +83,38 @@ class PersonalWorkspaceServiceImplTest {
     }
 
     @Test
+    void conversationAssetArchiveIsDurableScopedAndCannotReuseKeyForAnotherRevision() {
+        Fixture fixture = new Fixture();
+        byte[] bird = bytes("immutable bird image bytes");
+        var source = new PersonalWorkspaceService.ConversationArchiveCommand(
+                new PersonalWorkspaceService.Idempotency("save-bird-1"), "asset_bird", 1,
+                sha256(bird), "鸟的照片", "bird.png", "image/png", bird);
+        var saved = fixture.service.archiveConversationAsset(OWNER_A, source);
+        var replay = fixture.service.archiveConversationAsset(OWNER_A, source);
+        assertEquals(saved.operation().operationId(), replay.operation().operationId());
+        assertEquals(saved.file().fileId(), replay.file().fileId());
+        assertEquals("AGENT_DELIVERY", saved.file().originKind());
+        assertEquals("COMMITTED", fixture.service.operation(OWNER_A, saved.operation().operationId()).state());
+        assertArrayEquals(bird, fixture.service.readContent(OWNER_A, saved.file().fileId(), 1).bytes());
+        assertEquals(1, fixture.storage.storeCount, "replaying an archive cannot create a second file");
+        assertReason(PersonalWorkspaceException.Reason.NOT_FOUND,
+                () -> fixture.service.operation(OWNER_B, saved.operation().operationId()));
+        assertReason(PersonalWorkspaceException.Reason.NOT_FOUND,
+                () -> fixture.service.readContent(OWNER_A_OTHER_CLIENT, saved.file().fileId(), 1));
+        assertReason(PersonalWorkspaceException.Reason.IDEMPOTENCY_CONFLICT,
+                () -> fixture.service.archiveConversationAsset(OWNER_A,
+                        new PersonalWorkspaceService.ConversationArchiveCommand(
+                                source.idempotency(), source.assetId(), 2, source.sha256(),
+                                source.displayName(), source.filename(), source.contentMimeType(), bird)));
+        assertReason(PersonalWorkspaceException.Reason.BAD_REQUEST,
+                () -> fixture.service.archiveConversationAsset(OWNER_A,
+                        new PersonalWorkspaceService.ConversationArchiveCommand(
+                                new PersonalWorkspaceService.Idempotency("save-bird-bad"), "asset_bird", 1,
+                                "0".repeat(64), "bird", "bird.png", "image/png", bird)));
+        assertEquals(1, fixture.storage.storeCount, "invalid source cannot write into private storage");
+    }
+
+    @Test
     void multipartPreviewKeepsContentCompatibilityAndChecksAclBeforeExactPartLookup() throws Exception {
         Fixture fixture = new Fixture();
         byte[] workbook = xlsxWithTwoSheetsAndFormula();

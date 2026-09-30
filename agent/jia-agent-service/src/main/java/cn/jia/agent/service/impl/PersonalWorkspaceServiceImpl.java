@@ -88,6 +88,52 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
             writes.completeCreate(writeScope(scope),claim.operation(),file,version); return new PersonalWorkspaceViews.UploadView(operation(claim.operation()),view(file),version(version));
         } catch (RuntimeException failure) { writes.fail(writeScope(scope),claim.operation(),reason(failure)); throw failure; }
     }
+    /** Internal archive: a chat caller has already resolved the owner-scoped committed source.
+     * Keep the source identity/revision and actual digest in the idempotency fingerprint so a
+     * reused key cannot silently archive another draft. The existing private store deduplicates
+     * bytes within the owner scope; this operation creates only the requested personal file.
+     */
+    @Override public PersonalWorkspaceViews.UploadView archiveConversationAsset(Scope scope,
+            ConversationArchiveCommand command) {
+        validateScope(scope);
+        if (command == null || command.revision() < 1
+                || command.assetId() == null || !command.assetId().matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}")
+                || command.sha256() == null || !command.sha256().matches("[0-9a-f]{64}")) bad();
+        ValidUpload valid = validate(new UploadCommand(command.idempotency(), command.displayName(),
+                command.filename(), command.contentMimeType(), command.content()));
+        if (!command.sha256().equals(hash(valid.content()))) bad();
+        String requestHash = hash("ARCHIVE_ASSET", command.assetId(), Long.toString(command.revision()),
+                command.sha256(), valid.key(), valid.displayName(), valid.filename(), valid.mime());
+        PersonalWorkspaceWriteService.Claim claim = writes.claim(writeScope(scope), "ARCHIVE_ASSET",
+                valid.key(), requestHash);
+        if (!claim.claimed()) return completedUpload(scope, claim.operation());
+        String fileId = "pws_" + UUID.randomUUID().toString().replace("-", "");
+        try {
+            PersonalWorkspaceStorage.StoredObject stored = storage.store(storageScope(scope),
+                    valid.content(), valid.mime());
+            if (!command.sha256().equals(stored.sha256())
+                    || valid.content().length != stored.byteLength())
+                throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.STORAGE_CORRUPT);
+            long now = System.currentTimeMillis();
+            PersonalWorkspaceFileEntity file = new PersonalWorkspaceFileEntity().setFileId(fileId)
+                    .setOwnerJiacn(scope.ownerJiacn()).setSourceKind("UPLOAD")
+                    .setOriginKind("AGENT_DELIVERY").setDisplayName(valid.displayName())
+                    .setMediaFamily(family(valid.mime())).setState("ACTIVE")
+                    .setMetadataRevision(1L).setLatestVersion(1).setCreatedAt(now);
+            file.setTenantId(scope.tenantId()); file.setClientId(scope.clientId());
+            PersonalWorkspaceVersionEntity version = new PersonalWorkspaceVersionEntity()
+                    .setFileId(fileId).setOwnerJiacn(scope.ownerJiacn()).setVersion(1)
+                    .setOriginalFilename(valid.filename()).setContentMimeType(valid.mime())
+                    .setByteLength(stored.byteLength()).setContentHash(stored.sha256())
+                    .setStorageUri(stored.storageUri()).setCreatedAt(now);
+            version.setTenantId(scope.tenantId()); version.setClientId(scope.clientId());
+            writes.completeCreate(writeScope(scope), claim.operation(), file, version);
+            return new PersonalWorkspaceViews.UploadView(operation(claim.operation()), view(file), version(version));
+        } catch (RuntimeException failure) {
+            writes.fail(writeScope(scope), claim.operation(), reason(failure));
+            throw failure;
+        }
+    }
     @Override public PersonalWorkspaceViews.UploadView appendVersion(Scope scope,String fileId,UploadCommand command,int expectedPreviousVersion){
         PersonalWorkspaceFileEntity old=file(scope,fileId); if(!"ACTIVE".equals(old.getState())||expectedPreviousVersion<1) bad(); ValidUpload valid=validate(command); String requestHash=hash("APPEND",valid,fileId,String.valueOf(expectedPreviousVersion));
         PersonalWorkspaceWriteService.Claim claim=writes.claim(writeScope(scope),"APPEND",valid.key(),requestHash); if(!claim.claimed())return completedUpload(scope,claim.operation());
