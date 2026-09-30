@@ -12,6 +12,8 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -68,6 +70,24 @@ class AgentTaskCreationOperationMySqlTest {
         List<String> before = definitions();
         new AgentTaskCreationOperationSchemaInitializer(jdbc).afterPropertiesSet();
         assertEquals(before, definitions());
+        List<Map<String, Object>> checks = jdbc.queryForList("""
+                SELECT tc.constraint_name,tc.enforced,cc.check_clause
+                  FROM information_schema.table_constraints tc
+                  JOIN information_schema.check_constraints cc
+                    ON cc.constraint_catalog=tc.constraint_catalog
+                   AND cc.constraint_schema=tc.constraint_schema
+                   AND cc.constraint_name=tc.constraint_name
+                 WHERE tc.constraint_schema=DATABASE()
+                   AND tc.table_name='agent_task_creation_operation'
+                   AND tc.constraint_type='CHECK'
+                 ORDER BY tc.constraint_name
+                """);
+        assertEquals(Set.of("chk_atco_hash", "chk_atco_identity", "chk_atco_receipt",
+                "chk_atco_refs", "chk_atco_scope", "chk_atco_time"), checks.stream()
+                .map(row -> row.get("constraint_name").toString()).collect(
+                        java.util.stream.Collectors.toSet()));
+        assertTrue(checks.stream().allMatch(row -> "YES".equals(row.get("enforced"))
+                && row.get("check_clause") != null));
 
         insertProcessing("owner-a", "Key", "atco_1", "[]");
         assertThrows(DataAccessException.class,
