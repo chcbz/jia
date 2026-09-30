@@ -3,6 +3,7 @@ package cn.jia.chat.api;
 import cn.jia.agent.service.PersonalWorkspaceExecutionService;
 import cn.jia.chat.service.ChatDeliberationException;
 import cn.jia.chat.service.ChatDeliberationService;
+import cn.jia.chat.service.ChatBountyAssetProjector;
 import cn.jia.chat.service.DisplayNameSource;
 import cn.jia.chat.service.HumanSenderIdentityResolver;
 import cn.jia.chat.service.ServerResolvedSender;
@@ -243,4 +244,51 @@ class ChatBountyMediaControllerTest {
         assertEquals(MediaType.APPLICATION_OCTET_STREAM, result.getHeaders().getContentType());
         assertTrue(result.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION).startsWith("attachment"));
     }
+    private ChatBountyAssetProjector.Asset asset(String ownerName, String requestId,
+            long generation, String hash) {
+        return new ChatBountyAssetProjector.Asset("ast_1", "0", ownerName, "client", "10",
+                generation, requestId, "step-1", "exec-1", "run-1", "out-1", "100", "part-1",
+                "image", "image/png", hash, PHOTO.length, 1);
+    }
+    @Test void catalogExposesOnlyAlreadyPersistedExactAssetAndNeverProjectsOnRead() {
+        ready();
+        var projector = mock(ChatBountyAssetProjector.class);
+        controller.setBountyAssets(projector);
+        when(executions.listConversationOutputs(owner, "task-1", "run-1")).thenReturn(List.of(
+                new PersonalWorkspaceExecutionService.ConversationOutputInfo("exec-1", "out-1",
+                        "image/png", sha(PHOTO), PHOTO.length)));
+        assertNull(controller.outputs("request-1", "step-1", authentication)
+                .getBody().getData().getFirst().assetRef());
+        when(projector.findOutput(owner, "10", "request-1", "step-1", "exec-1", "run-1", "out-1"))
+                .thenReturn(asset("owner", "request-1", 1, sha(PHOTO)));
+        var output = controller.outputs("request-1", "step-1", authentication)
+                .getBody().getData().getFirst();
+        assertEquals(new ChatBountyMediaController.AssetRef("ast_1", "1"), output.assetRef());
+        var wire = cn.jia.core.util.JsonUtil.toJson(output);
+        assertTrue(wire.contains("\"assetRef\":{\"assetId\":\"ast_1\",\"revision\":\"1\"}"));
+        verify(projector, never()).project(any());
+        verifyNoInteractionsExceptLookup(projector);
+    }
+    private void verifyNoInteractionsExceptLookup(ChatBountyAssetProjector projector) {
+        verify(projector, times(2)).findOutput(owner, "10", "request-1", "step-1", "exec-1", "run-1", "out-1");
+        verifyNoMoreInteractions(projector);
+    }
+    @Test void catalogRejectsForeignStaleOrChangedPersistedAssets() {
+        ready();
+        var projector = mock(ChatBountyAssetProjector.class); controller.setBountyAssets(projector);
+        when(executions.listConversationOutputs(owner, "task-1", "run-1")).thenReturn(List.of(
+                new PersonalWorkspaceExecutionService.ConversationOutputInfo("exec-1", "out-1",
+                        "image/png", sha(PHOTO), PHOTO.length)));
+        for (var invalid : List.of(asset("foreign", "request-1", 1, sha(PHOTO)),
+                asset("owner", "foreign-request", 1, sha(PHOTO)),
+                asset("owner", "request-1", 2, sha(PHOTO)),
+                asset("owner", "request-1", 1, "b".repeat(64)))) {
+            when(projector.findOutput(owner, "10", "request-1", "step-1", "exec-1", "run-1", "out-1"))
+                    .thenReturn(invalid);
+            assertThrows(ChatDeliberationException.class,
+                    () -> controller.outputs("request-1", "step-1", authentication));
+        }
+        verify(projector, never()).project(any());
+    }
+
 }

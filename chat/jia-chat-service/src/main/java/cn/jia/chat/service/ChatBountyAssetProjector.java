@@ -125,9 +125,7 @@ public class ChatBountyAssetProjector {
                     || !safe(output.outputId()) || !safeMime(output.contentMimeType())
                     || output.sha256() == null || !output.sha256().matches("[0-9a-f]{64}")
                     || output.byteLength() < 0) throw new IllegalStateException("Untrusted output catalogue");
-            String sourceKey = candidate.tenantId() + "\n" + candidate.ownerJiacn() + "\n"
-                    + candidate.clientId() + "\n" + candidate.stepId() + "\n" + output.outputId();
-            String suffix = digest(sourceKey).substring(0, 32);
+            String suffix = outputSuffix(scope, candidate.stepId(), output.outputId());
             String assetId = "ast_" + suffix;
             Asset prior = findCurrent(scope, request.conversationId(), assetId, true);
             if (prior != null) {
@@ -268,6 +266,27 @@ public class ChatBountyAssetProjector {
     public Asset find(PersonalWorkspaceExecutionService.OwnerScope owner, String conversationId, String assetId) {
         if (owner == null || !safe(conversationId) || !safe(assetId)) return null;
         return findCurrent(owner, conversationId, assetId, false);
+    }
+
+    /** Owner-scoped, read-only output -> asset mapping. Absent projection stays absent. */
+    @Transactional(readOnly = true)
+    public Asset findOutput(PersonalWorkspaceExecutionService.OwnerScope owner, String conversationId,
+            String requestId, String stepId, String executionId, String runId, String outputId) {
+        if (owner == null || !safe(conversationId) || !safe(requestId) || !safe(stepId)
+                || !safe(executionId) || !safe(runId) || !safe(outputId)) return null;
+        var asset = findCurrent(owner, conversationId, "ast_" + outputSuffix(owner, stepId, outputId), false);
+        if (asset == null || !owner.tenantId().equals(asset.tenantId())
+                || !owner.ownerJiacn().equals(asset.ownerJiacn()) || !owner.clientId().equals(asset.clientId())
+                || !conversationId.equals(asset.conversationId()) || !requestId.equals(asset.requestId())
+                || !stepId.equals(asset.stepId()) || !executionId.equals(asset.executionId())
+                || !runId.equals(asset.runId()) || !outputId.equals(asset.outputId())) return null;
+        return asset;
+    }
+
+    private static String outputSuffix(PersonalWorkspaceExecutionService.OwnerScope owner,
+            String stepId, String outputId) {
+        return digest(owner.tenantId() + "\n" + owner.ownerJiacn() + "\n" + owner.clientId()
+                + "\n" + stepId + "\n" + outputId).substring(0, 32);
     }
 
     // After locking the conversation, use a current locking read rather than an

@@ -3,6 +3,8 @@ package cn.jia.chat.api;
 import cn.jia.agent.service.PersonalWorkspaceExecutionService;
 import cn.jia.chat.service.ChatDeliberationException;
 import cn.jia.chat.service.ChatDeliberationService;
+import cn.jia.chat.service.ChatBountyAssetProjector;
+import org.springframework.beans.factory.annotation.Autowired;
 import cn.jia.chat.service.HumanSenderIdentityResolver;
 import cn.jia.chat.service.ServerResolvedSender;
 import cn.jia.chat.service.TenantScopeResolver;
@@ -74,8 +76,20 @@ public class ChatBountyMediaController {
         this.tenants = Objects.requireNonNull(tenants);
     }
 
+    private ChatBountyAssetProjector bountyAssets;
+
+    @Autowired(required = false)
+    public void setBountyAssets(ChatBountyAssetProjector bountyAssets) { this.bountyAssets = bountyAssets; }
+
+    public record AssetRef(String assetId, String revision) { }
     public record OutputItem(String outputId, String contentMimeType, String sha256, long byteLength,
-            String previewUrl, String downloadUrl) { }
+            String previewUrl, String downloadUrl, AssetRef assetRef) {
+        // Existing callers retain the media-only contract when asset projection is disabled.
+        public OutputItem(String outputId, String contentMimeType, String sha256, long byteLength,
+                String previewUrl, String downloadUrl) {
+            this(outputId, contentMimeType, sha256, byteLength, previewUrl, downloadUrl, null);
+        }
+    }
     private record Authorized(PersonalWorkspaceExecutionService.OwnerScope scope,
             ChatDeliberationService.RequestView request, ChatDeliberationService.StepView step,
             PersonalWorkspaceExecutionService.ExecutionView execution) { }
@@ -98,10 +112,35 @@ public class ChatBountyMediaController {
                     + "/outputs/" + encode(item.outputId());
             body.add(new OutputItem(item.outputId(), item.contentMimeType(), item.sha256(),
                     item.byteLength(), SAFE_INLINE.containsKey(item.contentMimeType()) ? url : null,
-                    url + "?download=true"));
+                    url + "?download=true", assetRef(allowed, item)));
         }
         return ResponseEntity.ok().cacheControl(CacheControl.noStore())
                 .header("X-Content-Type-Options", "nosniff").body(JsonResult.success(List.copyOf(body)));
+    }
+
+    /** Catalogue reads only locate an already persisted asset; never run its projector. */
+    private AssetRef assetRef(Authorized allowed,
+            PersonalWorkspaceExecutionService.ConversationOutputInfo output) {
+        if (bountyAssets == null) return null;
+        var asset = bountyAssets.findOutput(allowed.scope(), allowed.request().conversationId(),
+                allowed.request().requestId(), allowed.step().stepId(),
+                allowed.execution().executionId(), allowed.execution().runId(), output.outputId());
+        if (asset == null) return null; // Output bytes can be ready before the async projection commits.
+        if (!allowed.scope().tenantId().equals(asset.tenantId())
+                || !allowed.scope().ownerJiacn().equals(asset.ownerJiacn())
+                || !allowed.scope().clientId().equals(asset.clientId())
+                || !allowed.request().conversationId().equals(asset.conversationId())
+                || !allowed.request().conversationGeneration().equals(Long.toString(asset.generation()))
+                || !allowed.request().requestId().equals(asset.requestId())
+                || !allowed.step().stepId().equals(asset.stepId())
+                || !allowed.execution().executionId().equals(asset.executionId())
+                || !allowed.execution().runId().equals(asset.runId())
+                || !output.outputId().equals(asset.outputId())
+                || !output.contentMimeType().equals(asset.mime())
+                || !output.sha256().equals(asset.sha256())
+                || output.byteLength() != asset.byteLength()
+                || !catalogId(asset.assetId()) || asset.revision() < 1) throw unavailable();
+        return new AssetRef(asset.assetId(), Long.toString(asset.revision()));
     }
 
     private static String encode(String part) { return UriUtils.encodePathSegment(part, StandardCharsets.UTF_8); }

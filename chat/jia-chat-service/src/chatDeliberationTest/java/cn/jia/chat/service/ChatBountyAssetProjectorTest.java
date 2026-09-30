@@ -138,4 +138,20 @@ class ChatBountyAssetProjectorTest {
         assertTrue(projector.partsFor(scope, "../other").isEmpty());
         verifyNoInteractions(requests, executions, messages, events, broker, jdbc);
     }
+    @Test void outputLookupRequiresExactSourceRelationAndCannotPublishOrGenerate() {
+        var asset = new ChatBountyAssetProjector.Asset("ast_1", "0", "owner", "client", "42", 1,
+                "req", "step", "exec", "run", "output_1", "100", "part_1", "image", "image/png",
+                "a".repeat(64), 20, 1);
+        when(jdbc.query(anyString(), org.mockito.ArgumentMatchers.<RowMapper<Object>>any(), any(Object[].class)))
+                .thenReturn(List.of(asset));
+        assertEquals(asset, projector.findOutput(scope, "42", "req", "step", "exec", "run", "output_1"));
+        assertNull(projector.findOutput(scope, "42", "other-request", "step", "exec", "run", "output_1"));
+        assertNull(projector.findOutput(scope, "42", "req", "step", "exec", "other-run", "output_1"));
+        assertNull(projector.findOutput(new PersonalWorkspaceExecutionService.OwnerScope("0", "client", "foreign"),
+                "42", "req", "step", "exec", "run", "output_1"));
+        assertNull(projector.findOutput(scope, "42", "req", "../step", "exec", "run", "output_1"));
+        verify(jdbc, never()).update(anyString(), any(Object[].class));
+        verifyNoInteractions(requests, executions, messages, events, broker, conversations);
+    }
+
 }
