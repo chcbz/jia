@@ -27,7 +27,7 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
     static final List<String> TABLES = List.of(
             "chat_context_snapshot", "chat_request", "chat_turn", "chat_dispatch_outbox",
             "chat_conversation_event", "chat_interaction_step", "chat_step_execution_link",
-            "chat_bounty_binding");
+            "chat_bounty_binding", "chat_conversation_asset");
     private static final String COLLATION = "utf8mb4_0900_bin";
     private static final String MIGRATION_LOCK = "cyf:chat-deliberation:v2";
     private static final Map<String, Map<String, ColumnDef>> COLUMNS = columns();
@@ -37,6 +37,9 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
                     "chat_request", List.of("tenant_id", "owner_jiacn", "client_id", "request_id", "request_revision"),
                     List.of("tenant_id", "owner_jiacn", "client_id", "request_id", "request_revision"))),
             "chat_step_execution_link", Map.of("fk_chat_exec_step_scope", new ForeignKeyDef(
+                    "chat_interaction_step", List.of("tenant_id", "owner_jiacn", "client_id", "step_id"),
+                    List.of("tenant_id", "owner_jiacn", "client_id", "step_id"))),
+            "chat_conversation_asset", Map.of("fk_chat_asset_step_scope", new ForeignKeyDef(
                     "chat_interaction_step", List.of("tenant_id", "owner_jiacn", "client_id", "step_id"),
                     List.of("tenant_id", "owner_jiacn", "client_id", "step_id"))));
 
@@ -463,6 +466,14 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
                 c("task_id",v(100,false)), c("conversation_id",b(true,null)),
                 c("assignment_revision",b(false,null)), c("created_at",b(false,null)),
                 c("updated_at",b(false,null))));
+        all.put("chat_conversation_asset", ordered(c("asset_id",v(64,false)),
+                c("tenant_id",v(50,false)), c("owner_jiacn",v(50,false)), c("client_id",v(50,false)),
+                c("conversation_id",v(100,false)), c("conversation_generation",b(false,null)),
+                c("request_id",v(100,false)), c("step_id",v(64,false)),
+                c("execution_id",v(100,false)), c("run_id",v(100,false)),
+                c("output_id",v(100,false)), c("message_id",b(false,null)), c("part_id",v(64,false)),
+                c("kind",v(10,false)), c("content_mime_type",v(127,false)), c("sha256",v(64,false)),
+                c("byte_length",b(false,null)), c("revision",b(false,null)), c("created_at",b(false,null))));
         return Map.copyOf(all);
     }
 
@@ -496,6 +507,10 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
         all.put("chat_bounty_binding", Map.of(
                 "PRIMARY",ix(true,"tenant_id","owner_jiacn","client_id","task_id"),
                 "uk_chat_bounty_binding_conversation",ix(true,"tenant_id","owner_jiacn","client_id","conversation_id")));
+        all.put("chat_conversation_asset", Map.of(
+                "PRIMARY",ix(true,"asset_id"),
+                "uk_chat_asset_step_output",ix(true,"tenant_id","owner_jiacn","client_id","step_id","output_id"),
+                "idx_chat_asset_message",ix(false,"tenant_id","owner_jiacn","client_id","conversation_id","conversation_generation","message_id")));
         return Map.copyOf(all);
     }
 

@@ -22,6 +22,8 @@ import cn.jia.chat.service.ChatConversationService;
 import cn.jia.chat.service.ChatStreamPolicy;
 import cn.jia.chat.service.ChatDeliberationException;
 import cn.jia.chat.service.ChatDeliberationService;
+import cn.jia.chat.service.ChatBountyAssetProjector;
+import cn.jia.agent.service.PersonalWorkspaceExecutionService;
 import cn.jia.chat.service.InteractionRouter;
 import cn.jia.chat.service.TenantScopeResolver;
 import cn.jia.chat.service.ChatConversationEventBroker;
@@ -102,6 +104,10 @@ public class ChatController {
     private InteractionRouter interactionRouter = new InteractionRouter();
     private ChatDeliberationService chatDeliberationService;
     private TenantScopeResolver tenantScopeResolver = TenantScopeResolver.legacySingleTenant();
+    private ChatBountyAssetProjector bountyAssets;
+
+    @Autowired(required = false)
+    public void setBountyAssets(ChatBountyAssetProjector bountyAssets) { this.bountyAssets = bountyAssets; }
 
     @Autowired
     public void setInteractionRouter(InteractionRouter interactionRouter) {
@@ -583,8 +589,15 @@ public class ChatController {
 
     @RequestMapping(value = "/conversation/content", method = RequestMethod.GET)
     public Object getConversationContent(@RequestParam(name = "id") String id) {
-        List<ConversationMessageResponse> messages = chatConversationService.findByConversationId(id).stream()
-                .map(ConversationMessageResponse::from)
+        List<ChatMessageEntity> owned = chatConversationService.findByConversationId(id);
+        var parts = owned.isEmpty() || bountyAssets == null ?
+                Map.<String, List<ChatBountyAssetProjector.Part>>of() :
+                bountyAssets.partsFor(new PersonalWorkspaceExecutionService.OwnerScope(
+                        owned.getFirst().getTenantId(), owned.getFirst().getClientId(),
+                        owned.getFirst().getJiacn()), id);
+        List<ConversationMessageResponse> messages = owned.stream()
+                .map(message -> ConversationMessageResponse.from(message,
+                        parts.getOrDefault(ExactWireIds.decimal(message.getId()), List.of())))
                 .toList();
         return JsonResult.success(messages);
     }
@@ -604,8 +617,10 @@ public class ChatController {
             Long createTime,
             Long updateTime,
             String tenantId,
-            String clientId) {
-        private static ConversationMessageResponse from(ChatMessageEntity message) {
+            String clientId,
+            List<ChatBountyAssetProjector.Part> parts) {
+        private static ConversationMessageResponse from(ChatMessageEntity message,
+                List<ChatBountyAssetProjector.Part> parts) {
             return new ConversationMessageResponse(
                     ExactWireIds.decimal(message.getId()),
                     message.getConversationId(),
@@ -620,7 +635,7 @@ public class ChatController {
                     message.getCreateTime(),
                     message.getUpdateTime(),
                     message.getTenantId(),
-                    message.getClientId());
+                    message.getClientId(), parts);
         }
     }
 

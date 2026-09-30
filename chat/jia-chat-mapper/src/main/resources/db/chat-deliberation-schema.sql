@@ -203,3 +203,34 @@ CREATE TABLE IF NOT EXISTS chat_deliberation_schema_version (
   updated_at BIGINT NOT NULL,
   PRIMARY KEY (version)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
+
+-- A verified CONVERSATION output is linked to exactly one durable message/part.
+-- Bytes remain in the existing private workspace root, not a third content store.
+-- The message may be removed when its conversation is deleted; retained assets are
+-- always gated by the live generation and never exposed solely by this relation.
+CREATE TABLE IF NOT EXISTS chat_conversation_asset (
+  asset_id VARCHAR(64) NOT NULL,
+  tenant_id VARCHAR(50) NOT NULL,
+  owner_jiacn VARCHAR(50) NOT NULL,
+  client_id VARCHAR(50) NOT NULL,
+  conversation_id VARCHAR(100) NOT NULL,
+  conversation_generation BIGINT NOT NULL,
+  request_id VARCHAR(100) NOT NULL,
+  step_id VARCHAR(64) NOT NULL,
+  execution_id VARCHAR(100) NOT NULL,
+  run_id VARCHAR(100) NOT NULL,
+  output_id VARCHAR(100) NOT NULL,
+  message_id BIGINT NOT NULL,
+  part_id VARCHAR(64) NOT NULL,
+  kind VARCHAR(10) NOT NULL,
+  content_mime_type VARCHAR(127) NOT NULL,
+  sha256 VARCHAR(64) NOT NULL,
+  byte_length BIGINT NOT NULL,
+  revision BIGINT NOT NULL,
+  created_at BIGINT NOT NULL,
+  PRIMARY KEY (asset_id),
+  UNIQUE KEY uk_chat_asset_step_output (tenant_id,owner_jiacn,client_id,step_id,output_id),
+  KEY idx_chat_asset_message (tenant_id,owner_jiacn,client_id,conversation_id,conversation_generation,message_id),
+  CONSTRAINT fk_chat_asset_step_scope FOREIGN KEY (tenant_id,owner_jiacn,client_id,step_id)
+    REFERENCES chat_interaction_step (tenant_id,owner_jiacn,client_id,step_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
