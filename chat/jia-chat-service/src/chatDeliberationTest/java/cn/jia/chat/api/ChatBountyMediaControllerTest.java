@@ -81,9 +81,45 @@ class ChatBountyMediaControllerTest {
         assertEquals("nosniff", inline.getHeaders().getFirst("X-Content-Type-Options"));
         assertTrue(inline.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION).startsWith("inline"));
         var download = read(true);
-        assertEquals(MediaType.APPLICATION_OCTET_STREAM, download.getHeaders().getContentType());
+        assertEquals(MediaType.IMAGE_PNG, download.getHeaders().getContentType());
+        assertArrayEquals(PHOTO, download.getBody());
+        assertEquals(inline.getHeaders().getETag(), download.getHeaders().getETag());
         assertTrue(download.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION).startsWith("attachment"));
         assertFalse(download.getHeaders().toString().contains("bird.png"));
+    }
+    @Test void attachmentMimeMatchesVerifiedCatalogueForSupportedFormatsIncludingRangeAndHead() {
+        ready();
+        for (String mime : List.of("image/png", "image/jpeg", "image/webp", "image/gif",
+                "audio/mpeg", "audio/wav", "audio/ogg", "audio/mp4", "audio/webm", "text/plain",
+                "application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation")) {
+            when(executions.readConversationOutput(owner, "task-1", "run-1", "out-1"))
+                    .thenReturn(new PersonalWorkspaceExecutionService.ConversationOutput("exec-1",
+                            "out-1", "source-file", mime, sha(PHOTO), PHOTO.length, PHOTO));
+            var full = read(true);
+            assertEquals(MediaType.parseMediaType(mime), full.getHeaders().getContentType(), mime);
+            assertArrayEquals(PHOTO, full.getBody());
+            assertEquals("nosniff", full.getHeaders().getFirst("X-Content-Type-Options"));
+            assertTrue(full.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION).startsWith("attachment"));
+            var range = read(true, "GET", "bytes=2-5", null);
+            assertEquals(HttpStatus.PARTIAL_CONTENT, range.getStatusCode(), mime);
+            assertEquals(full.getHeaders().getContentType(), range.getHeaders().getContentType(), mime);
+            assertArrayEquals(java.util.Arrays.copyOfRange(PHOTO, 2, 6), range.getBody());
+            var head = read(true, "HEAD", null, null);
+            assertEquals(full.getHeaders().getContentType(), head.getHeaders().getContentType(), mime);
+            assertNull(head.getBody());
+        }
+    }
+    @Test void modernAudioCatalogueProvidesAuthenticatedPreviewUrls() {
+        ready();
+        for (String mime : List.of("audio/mp4", "audio/webm")) {
+            when(executions.listConversationOutputs(owner, "task-1", "run-1")).thenReturn(List.of(
+                    new PersonalWorkspaceExecutionService.ConversationOutputInfo("exec-1", "out-1",
+                            mime, sha(PHOTO), PHOTO.length)));
+            var output = controller.outputs("request-1", "step-1", authentication).getBody().getData().getFirst();
+            assertEquals("/chat/requests/request-1/steps/step-1/outputs/out-1", output.previewUrl());
+        }
     }
     @Test void authenticatedAudioHeadAndRangeServeVerifiedBytesOnly() {
         ready();

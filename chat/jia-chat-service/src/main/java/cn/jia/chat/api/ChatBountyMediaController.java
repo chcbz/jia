@@ -41,10 +41,25 @@ import java.util.Objects;
 @RequestMapping("/chat/requests")
 @ConditionalOnProperty(prefix = "chat.bounty-media", name = "enabled", havingValue = "true")
 public class ChatBountyMediaController {
-    private static final Map<String, String> SAFE_INLINE = Map.of(
-            "image/png", "png", "image/jpeg", "jpg", "image/webp", "webp",
-            "image/gif", "gif", "audio/mpeg", "mp3", "audio/wav", "wav",
-            "audio/ogg", "ogg", "text/plain", "txt");
+    private static final Map<String, String> SAFE_INLINE = Map.ofEntries(
+            Map.entry("image/png", "png"), Map.entry("image/jpeg", "jpg"),
+            Map.entry("image/webp", "webp"), Map.entry("image/gif", "gif"),
+            Map.entry("audio/mpeg", "mp3"), Map.entry("audio/wav", "wav"),
+            Map.entry("audio/ogg", "ogg"), Map.entry("audio/mp4", "m4a"),
+            Map.entry("audio/webm", "webm"), Map.entry("text/plain", "txt"));
+    // Attachment controls disposition, not the identity of the verified representation.
+    // Known passive formats retain their actual MIME so client integrity checks can
+    // compare the download with the catalogue. Unknown/active formats remain opaque.
+    private static final Map<String, String> SAFE_ATTACHMENT = safeAttachments();
+
+    private static Map<String, String> safeAttachments() {
+        var formats = new java.util.HashMap<>(SAFE_INLINE);
+        formats.put("application/pdf", "pdf");
+        formats.put("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx");
+        formats.put("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx");
+        formats.put("application/vnd.openxmlformats-officedocument.presentationml.presentation", "pptx");
+        return Map.copyOf(formats);
+    }
     private final ChatDeliberationService requests;
     private final PersonalWorkspaceExecutionService executions;
     private final HumanSenderIdentityResolver identities;
@@ -111,7 +126,10 @@ public class ChatBountyMediaController {
         String extension = SAFE_INLINE.get(output.contentMimeType());
         // Unsupported/misleading MIME is never rendered as active content in the browser.
         boolean inline = extension != null && !download;
-        String filename = "output." + (extension == null ? "bin" : extension);
+        String attachmentExtension = SAFE_ATTACHMENT.get(output.contentMimeType());
+        String filename = "output." + (attachmentExtension == null ? "bin" : attachmentExtension);
+        MediaType responseMime = attachmentExtension == null ? MediaType.APPLICATION_OCTET_STREAM
+                : MediaType.parseMediaType(output.contentMimeType());
         byte[] bytes = output.bytes();
         boolean head = "HEAD".equals(request.getMethod());
         String etag = "\"" + output.sha256() + "\"";
@@ -121,8 +139,7 @@ public class ChatBountyMediaController {
                 .header("X-Content-Type-Options", "nosniff")
                 .header(HttpHeaders.ACCEPT_RANGES, "bytes")
                 .eTag(etag)
-                .contentType(inline ? MediaType.parseMediaType(output.contentMimeType())
-                        : MediaType.APPLICATION_OCTET_STREAM);
+                .contentType(responseMime);
         // Never interpret a Range before authenticating and verifying the committed bytes.
         // A mismatched If-Range requests the full representation, not a stale partial result.
         if (range != null && (ifRange == null || ifRange.equals(etag))) {
@@ -140,8 +157,7 @@ public class ChatBountyMediaController {
                     .header(HttpHeaders.ACCEPT_RANGES, "bytes")
                     .header(HttpHeaders.CONTENT_RANGE, "bytes " + start + "-" + wanted.end() + "/" + bytes.length)
                     .eTag(etag)
-                    .contentType(inline ? MediaType.parseMediaType(output.contentMimeType())
-                            : MediaType.APPLICATION_OCTET_STREAM)
+                    .contentType(responseMime)
                     .contentLength(endExclusive - start)
                     .body(head ? null : Arrays.copyOfRange(bytes, start, endExclusive));
         }
