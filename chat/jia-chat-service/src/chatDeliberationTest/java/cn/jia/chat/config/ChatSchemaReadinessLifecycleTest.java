@@ -151,7 +151,9 @@ class ChatSchemaReadinessLifecycleTest {
         application.setWebApplicationType(WebApplicationType.NONE);
         application.setRegisterShutdownHook(false);
         application.setLogStartupInfo(false);
-        application.setDefaultProperties(Map.<String, Object>of("spring.main.banner-mode", "off"));
+        application.setDefaultProperties(Map.<String, Object>of(
+                "spring.main.banner-mode", "off",
+                "chat.conversation-archive.enabled", "true"));
         application.addInitializers(applicationContext -> {
             GenericApplicationContext context = (GenericApplicationContext) applicationContext;
             context.registerBean(LifecycleState.class, () -> state);
