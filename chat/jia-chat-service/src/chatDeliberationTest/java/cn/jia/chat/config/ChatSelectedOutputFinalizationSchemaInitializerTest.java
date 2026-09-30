@@ -78,6 +78,68 @@ class ChatSelectedOutputFinalizationSchemaInitializerTest {
         row.put("SUB_PART",16);assertEquals(16,method.invoke(null,row,"sub_part"));
     }
 
+    @Test
+    void actualRepairedMysqlCheckDefinitionsAreAcceptedDespiteCaseInsensitiveMetadataLabels() throws Exception {
+        invokeChecks(actualCheckRows(1,null,null));
+    }
+
+    @Test
+    void actualOldSameNamedEnforcedMysqlChecksFailBeforeActivation() throws Exception {
+        var failure=assertThrows(IllegalStateException.class,()->invokeChecks(actualCheckRows(0,null,null)));
+        assertTrue(failure.getMessage().contains("check definition drift"));
+    }
+
+    @Test
+    void requiredGuardTextInsideAlwaysTrueExpressionCannotHideDefinitionDrift() throws Exception {
+        var rows=actualCheckRows(1,"chk_csof_progress",clause(1,"chk_csof_progress")+" OR 1=1");
+        assertThrows(IllegalStateException.class,()->invokeChecks(rows));
+    }
+
+    @Test
+    void nullCheckDefinitionNeverCountsAsEnforcedRequiredInvariant() throws Exception {
+        assertThrows(IllegalStateException.class,()->invokeChecks(actualCheckRows(1,"chk_csof_progress",null)));
+    }
+
+    @Test
+    void checkLiteralCaseAndWhitespaceAreNotErasedByMetadataNormalization() throws Exception {
+        String original=clause(1,"chk_csof_progress");
+        String changed=original.replace("SUBMITTED","submitted");
+        assertNotEquals(original,changed);
+        assertThrows(IllegalStateException.class,()->invokeChecks(actualCheckRows(1,"chk_csof_progress",changed)));
+        assertThrows(IllegalStateException.class,()->invokeChecks(actualCheckRows(1,"chk_csof_progress",original.replace("SUBMITTED","SUB MITTED"))));
+    }
+
+    @Test
+    void unenforcedCorrectDefinitionStillFailsClosed() throws Exception {
+        var rows=actualCheckRows(1,null,null);rows.getFirst().put("ENFORCED","NO");
+        assertThrows(IllegalStateException.class,()->invokeChecks(rows));
+    }
+
+    private static String clause(int snapshot,String check) throws Exception {
+        try(var in=new org.springframework.core.io.ClassPathResource("mmd-finalization-schema-checks-mysql8021.json").getInputStream()){
+            return new tools.jackson.databind.ObjectMapper().readTree(in).get("snapshots").get(snapshot)
+                    .get("check_clauses").get(check).textValue();
+        }
+    }
+    private static List<Map<String,Object>> actualCheckRows(int snapshot,String overrideCheck,String overrideValue) throws Exception {
+        List<Map<String,Object>> rows=new ArrayList<>();
+        for(String name:List.of("chk_csof_versions", "chk_csof_key", "chk_csof_delivery_state", "chk_csof_state", "chk_csof_stage", "chk_csof_progress", "chk_csof_outcome", "chk_csof_terminal")){
+            Map<String,Object> row=new LinkedHashMap<>();row.put("CONSTRAINT_NAME",name);row.put("ENFORCED","YES");
+            String value=name.equals("chk_csof_progress")||name.equals("chk_csof_terminal")?clause(snapshot,name):null;
+            row.put("CHECK_CLAUSE",name.equals(overrideCheck)?overrideValue:value);rows.add(row);
+        }return rows;
+    }
+    private static void invokeChecks(List<Map<String,Object>> rows) throws Exception {
+        var jdbc=mock(JdbcTemplate.class);
+        when(jdbc.queryForList(anyString(),any(Object[].class))).thenReturn(rows);
+        var method=ChatSelectedOutputFinalizationSchemaInitializer.class.getDeclaredMethod("validateChecks",JdbcTemplate.class,String.class);
+        method.setAccessible(true);
+        try{method.invoke(null,jdbc,"chat_selected_output_finalization");}catch(InvocationTargetException failure){
+            if(failure.getCause() instanceof RuntimeException cause)throw cause;
+            throw failure;
+        }
+    }
+
     private static void invokeIndexes(JdbcTemplate jdbc,String table) throws Exception {
         var method=ChatSelectedOutputFinalizationSchemaInitializer.class.getDeclaredMethod("validateIndexes",JdbcTemplate.class,String.class);
         method.setAccessible(true);

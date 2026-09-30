@@ -58,6 +58,12 @@ public final class ChatSelectedOutputFinalizationSchemaInitializer implements In
             "chat_selected_output_finalization_item",Set.of("tenant_id","owner_jiacn","client_id","operation_id",
                     "request_id","step_id","output_id","title","purpose"));
 
+    // Evidence: actual MySQL8.0.21 old/repaired finalization checks admitted/rejected NULL
+    // differently while sharing constraint names and ENFORCED=YES. Compare only these
+    // three proven-sensitive definitions; preserve boolean grouping and binary literals.
+    private static final Map<String,String> REQUIRED_CHECK_EXPRESSIONS=Map.of(
+            "chk_csof_progress", "(((stagein('PROMOTING','READY_TO_SUBMIT'))and(delivery_idisnull)and(delivery_stateisnull))or((stage='SUBMITTED')and(delivery_idisnotnull)and(delivery_stateisnotnull)and(delivery_statein('submitted','changes_requested')))or((stage='ACCEPTING')and(delivery_idisnotnull)and(delivery_stateisnotnull)and(delivery_statein('submitted','changes_requested')))or((stage='TASK_COMPLETED')and(delivery_idisnotnull)and(delivery_stateisnotnull)and(delivery_state='accepted')))",
+            "chk_csof_terminal", "(((state='completed')and(stage='TASK_COMPLETED')and(delivery_idisnotnull)and(delivery_stateisnotnull)and(delivery_state='accepted')and(task_state='completed')and(error_codeisnull)and(retryable=0))or((state<>'completed')and(stage<>'TASK_COMPLETED')))");
     private final JdbcTemplate jdbc;
     private final ChatSchemaReadiness schemaReadiness;
 
@@ -140,12 +146,35 @@ public final class ChatSelectedOutputFinalizationSchemaInitializer implements In
 
     private static void validateChecks(JdbcTemplate jdbc,String table) {
         Map<String,String> actual=new LinkedHashMap<>();
+        Map<String,String> clauses=new LinkedHashMap<>();
         for(Map<String,Object> row:jdbc.queryForList("""
-                SELECT constraint_name,enforced FROM information_schema.table_constraints
-                WHERE constraint_schema=DATABASE() AND table_name=? AND constraint_type='CHECK'
-                """,table))actual.put(text(row,"constraint_name"),text(row,"enforced"));
+                SELECT t.constraint_name,t.enforced,c.check_clause
+                FROM information_schema.table_constraints t
+                JOIN information_schema.check_constraints c
+                  ON c.constraint_schema=t.constraint_schema AND c.constraint_name=t.constraint_name
+                WHERE t.constraint_schema=DATABASE() AND t.table_name=? AND t.constraint_type='CHECK'
+                """,table)){
+            String name=text(row,"constraint_name");
+            actual.put(name,text(row,"enforced"));clauses.put(name,text(row,"check_clause"));
+        }
         for(String check:CHECKS.get(table))if(!"YES".equalsIgnoreCase(actual.get(check)))
             throw new IllegalStateException("Finalization check drift: "+check);
+        for(var required:REQUIRED_CHECK_EXPRESSIONS.entrySet())if(CHECKS.get(table).contains(required.getKey()))
+            if(!required.getValue().equals(compactCheckExpression(clauses.get(required.getKey()))))
+                throw new IllegalStateException("Finalization check definition drift: "+required.getKey());
+    }
+
+    private static String compactCheckExpression(String source){
+        if(source==null)return null;
+        String value=source.replace("\\'","'");StringBuilder result=new StringBuilder();boolean quoted=false;
+        for(int i=0;i<value.length();i++){
+            char c=value.charAt(i);
+            if(c=='\''){quoted=!quoted;result.append(c);}
+            else if(quoted)result.append(c);
+            else if(value.regionMatches(true,i,"_utf8mb4",0,8))i+=7;
+            else if(!Character.isWhitespace(c)&&c!='`')result.append(Character.toLowerCase(c));
+        }
+        return result.toString();
     }
 
     private static void validateBinary(JdbcTemplate jdbc,String table) {

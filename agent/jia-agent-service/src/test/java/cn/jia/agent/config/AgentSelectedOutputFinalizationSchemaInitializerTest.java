@@ -75,6 +75,68 @@ class AgentSelectedOutputFinalizationSchemaInitializerTest {
         row.put("SUB_PART",16);assertEquals(16,method.invoke(null,row,"sub_part"));
     }
 
+    @Test
+    void actualRepairedMysqlCheckDefinitionsAreAcceptedDespiteCaseInsensitiveMetadataLabels() throws Exception {
+        invokeChecks(actualCheckRows(1,null,null));
+    }
+
+    @Test
+    void actualOldSameNamedEnforcedMysqlChecksFailBeforeActivation() throws Exception {
+        var failure=assertThrows(IllegalStateException.class,()->invokeChecks(actualCheckRows(0,null,null)));
+        assertTrue(failure.getMessage().contains("check definition drift"));
+    }
+
+    @Test
+    void requiredGuardTextInsideAlwaysTrueExpressionCannotHideDefinitionDrift() throws Exception {
+        var rows=actualCheckRows(1,"chk_asof_lease",clause(1,"chk_asof_lease")+" OR 1=1");
+        assertThrows(IllegalStateException.class,()->invokeChecks(rows));
+    }
+
+    @Test
+    void nullCheckDefinitionNeverCountsAsEnforcedRequiredInvariant() throws Exception {
+        assertThrows(IllegalStateException.class,()->invokeChecks(actualCheckRows(1,"chk_asof_lease",null)));
+    }
+
+    @Test
+    void checkLiteralCaseAndWhitespaceAreNotErasedByMetadataNormalization() throws Exception {
+        String original=clause(1,"chk_asof_lease");
+        String changed=original.replace("LEASED","leased");
+        assertNotEquals(original,changed);
+        assertThrows(IllegalStateException.class,()->invokeChecks(actualCheckRows(1,"chk_asof_lease",changed)));
+        assertThrows(IllegalStateException.class,()->invokeChecks(actualCheckRows(1,"chk_asof_lease",original.replace("LEASED","LE ASED"))));
+    }
+
+    @Test
+    void unenforcedCorrectDefinitionStillFailsClosed() throws Exception {
+        var rows=actualCheckRows(1,null,null);rows.getFirst().put("ENFORCED","NO");
+        assertThrows(IllegalStateException.class,()->invokeChecks(rows));
+    }
+
+    private static String clause(int snapshot,String check) throws Exception {
+        try(var in=new org.springframework.core.io.ClassPathResource("mmd-finalization-schema-checks-mysql8021.json").getInputStream()){
+            return new tools.jackson.databind.ObjectMapper().readTree(in).get("snapshots").get(snapshot)
+                    .get("check_clauses").get(check).textValue();
+        }
+    }
+    private static List<Map<String,Object>> actualCheckRows(int snapshot,String overrideCheck,String overrideValue) throws Exception {
+        List<Map<String,Object>> rows=new ArrayList<>();
+        for(String name:List.of("chk_asof_versions", "chk_asof_digest", "chk_asof_phase", "chk_asof_lease")){
+            Map<String,Object> row=new LinkedHashMap<>();row.put("CONSTRAINT_NAME",name);row.put("ENFORCED","YES");
+            String value=name.equals("chk_asof_lease")?clause(snapshot,name):null;
+            row.put("CHECK_CLAUSE",name.equals(overrideCheck)?overrideValue:value);rows.add(row);
+        }return rows;
+    }
+    private static void invokeChecks(List<Map<String,Object>> rows) throws Exception {
+        var jdbc=mock(JdbcTemplate.class);
+        when(jdbc.queryForList(anyString(),any(Object[].class))).thenReturn(rows);
+        var method=AgentSelectedOutputFinalizationSchemaInitializer.class.getDeclaredMethod("validateChecks",JdbcTemplate.class);
+        method.setAccessible(true);
+        try{method.invoke(null,jdbc);}catch(InvocationTargetException failure){
+            if(failure.getCause() instanceof RuntimeException cause)throw cause;
+            throw failure;
+        }
+    }
+
     private static void invokeIndexes(JdbcTemplate jdbc) throws Exception {
         var method=AgentSelectedOutputFinalizationSchemaInitializer.class.getDeclaredMethod("validateIndexes",JdbcTemplate.class);
         method.setAccessible(true);
