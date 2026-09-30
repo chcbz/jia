@@ -620,6 +620,8 @@ dependencies {
     add(mmdU1ProviderConsentCoreSourceSet.implementationConfigurationName, libs.junit.jupiter)
     add(mmdU1ProviderConsentCoreSourceSet.implementationConfigurationName, 'org.mockito:mockito-core')
     add(mmdU1ProviderConsentCoreSourceSet.implementationConfigurationName, 'org.springframework:spring-test')
+    // MockMvc result matchers expose org.hamcrest.Matcher in their compile-time signatures.
+    add(mmdU1ProviderConsentCoreSourceSet.implementationConfigurationName, 'org.hamcrest:hamcrest')
     add(mmdU1ProviderConsentCoreSourceSet.implementationConfigurationName,
             'org.springframework.security:spring-security-oauth2-resource-server')
     add(mmdU1ProviderConsentCoreSourceSet.implementationConfigurationName,
