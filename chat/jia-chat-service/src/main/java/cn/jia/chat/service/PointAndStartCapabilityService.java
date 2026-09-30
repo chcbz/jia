@@ -6,6 +6,7 @@ import cn.jia.agent.service.NativeBountyExecutionSessionLookup;
 import cn.jia.agent.service.PersonalWorkspaceStorage;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -25,6 +26,7 @@ public final class PointAndStartCapabilityService {
     private final ObjectProvider<ChatBountyExecutionRelay> executionRelay;
     private final Flags flags;
 
+    @Autowired
     public PointAndStartCapabilityService(NativeBountyExecutionSessionLookup sessions,
             AgentTaskPointAndStartPolicyService taskPolicy, PersonalWorkspaceStorage storage,
             ObjectProvider<ChatBountyBootstrapRelay> bootstrapRelay,
