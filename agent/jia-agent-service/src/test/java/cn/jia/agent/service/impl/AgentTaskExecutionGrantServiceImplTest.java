@@ -83,10 +83,14 @@ class AgentTaskExecutionGrantServiceImplTest {
     void sameKeySamePayloadReplaysAndDifferentPayloadConflicts() {
         AgentTaskAssignDTO request=request();
         var first=service.assignAndGrant(scope(),"task-1","key-1",request);
-        var replay=service.assignAndGrant(scope(),"task-1","key-1",request);
+        AgentTaskAssignDTO reordered=request();
+        reordered.setRequestedOperations(List.of("INSPECT_INPUTS","GENERATE_IMAGE"));
+        var replay=service.assignAndGrant(scope(),"task-1","key-1",reordered);
         assertEquals(first.getGrantId(),replay.getGrantId());
         assertEquals(1L,first.getAssignmentRevision());
         assertFalse(first.getPaidExecutionAuthorized());
+        assertEquals("db82df399bed89b72c4bacb5d3e0616d4745fcf1e314bf55e4713f4c9f76e963",
+                grants.byAction.values().iterator().next().getRequestHash());
         assertEquals(1,bootstraps.byAction.size());
         AgentTaskBountyBootstrapOutboxEntity intent=bootstraps.byAction.values().iterator().next();
         assertEquals(first.getGrantId(),intent.getGrantId());
@@ -101,6 +105,101 @@ class AgentTaskExecutionGrantServiceImplTest {
         AgentTaskExecutionGrantException failure=assertThrows(AgentTaskExecutionGrantException.class,
                 () -> service.assignAndGrant(scope(),"task-1","key-1",conflict));
         assertEquals(AgentTaskExecutionGrantException.Reason.IDEMPOTENCY_CONFLICT,failure.reason());
+    }
+
+    @Test
+    void explicitInitialOperationKeepsFullGrantAndCreatesOneBootstrapIntent() {
+        AgentTaskAssignDTO request=explicitRequest("GENERATE_IMAGE");
+        var first=service.assignAndGrant(scope(),"task-1","key-explicit",request);
+
+        assertEquals(List.of("EDIT_IMAGE","GENERATE_IMAGE","INSPECT_INPUTS"),
+                first.getPermittedOperations());
+        AgentTaskExecutionGrantEntity stored=grants.byAction.values().iterator().next();
+        assertEquals("[\"EDIT_IMAGE\",\"GENERATE_IMAGE\",\"INSPECT_INPUTS\"]",
+                stored.getPermittedOperationsJson());
+        assertFalse(stored.getAllowOwnTaskDerivedAssets());
+        assertNull(stored.getCostAuthorizationRef());
+        assertEquals("7725b9e4962fab28e928a45052eeade3ee9e89a3d10f63bdb5af6077f56f221d",
+                stored.getRequestHash());
+        assertEquals(1,bootstraps.byAction.size());
+        assertEquals("GENERATE_IMAGE",
+                bootstraps.byAction.values().iterator().next().getPermittedOperation());
+
+        AgentTaskAssignDTO reordered=explicitRequest("GENERATE_IMAGE");
+        reordered.setRequestedOperations(List.of("INSPECT_INPUTS","GENERATE_IMAGE","EDIT_IMAGE"));
+        var replay=service.assignAndGrant(scope(),"task-1","key-explicit",reordered);
+        assertEquals(first.getGrantId(),replay.getGrantId());
+        assertEquals(1,bootstraps.byAction.size());
+        verify(legacy,times(1)).assignResolvedVersionedWithLockedTask(anyString(),anyString(),anyString(),
+                anyString(),anyList(),eq(false),anyLong(),any(),same(root));
+    }
+
+    @Test
+    void explicitInspectIsAValidSingleInitialActionWithinTheFullGrant() {
+        AgentTaskAssignDTO request=explicitRequest("INSPECT_INPUTS");
+        var grant=service.assignAndGrant(scope(),"task-1","key-inspect",request);
+
+        assertEquals(List.of("EDIT_IMAGE","GENERATE_IMAGE","INSPECT_INPUTS"),
+                grant.getPermittedOperations());
+        assertEquals("INSPECT_INPUTS",
+                bootstraps.byAction.values().iterator().next().getPermittedOperation());
+        assertEquals("0a999a29f38b5682654947762bc7a2d620de192e2a75591350142c07af3a3599",
+                grants.byAction.values().iterator().next().getRequestHash());
+    }
+
+    @Test
+    void selectorValueOrPresenceChangeConflictsForTheSameKey() {
+        service.assignAndGrant(scope(),"task-1","key-selector",explicitRequest("GENERATE_IMAGE"));
+
+        AgentTaskExecutionGrantException changed=assertThrows(AgentTaskExecutionGrantException.class,
+                () -> service.assignAndGrant(scope(),"task-1","key-selector",
+                        explicitRequest("EDIT_IMAGE")));
+        assertEquals(AgentTaskExecutionGrantException.Reason.IDEMPOTENCY_CONFLICT,changed.reason());
+
+        AgentTaskAssignDTO removed=explicitRequest("GENERATE_IMAGE");
+        removed.setInitialOperation(null);
+        AgentTaskExecutionGrantException missing=assertThrows(AgentTaskExecutionGrantException.class,
+                () -> service.assignAndGrant(scope(),"task-1","key-selector",removed));
+        assertEquals(AgentTaskExecutionGrantException.Reason.IDEMPOTENCY_CONFLICT,missing.reason());
+        assertEquals(1,grants.byAction.size());
+        assertEquals(1,bootstraps.byAction.size());
+    }
+
+    @Test
+    void addingSelectorToLegacySameKeyConflictsEvenWhenActionIsTheSame() {
+        service.assignAndGrant(scope(),"task-1","key-domain",request());
+        AgentTaskAssignDTO explicit=request(); explicit.setInitialOperation("GENERATE_IMAGE");
+
+        AgentTaskExecutionGrantException failure=assertThrows(AgentTaskExecutionGrantException.class,
+                () -> service.assignAndGrant(scope(),"task-1","key-domain",explicit));
+        assertEquals(AgentTaskExecutionGrantException.Reason.IDEMPOTENCY_CONFLICT,failure.reason());
+    }
+
+    @Test
+    void missingSelectorStillSupportsTheLegacyInspectOnlyRequestAndHashDomain() {
+        AgentTaskAssignDTO request=request();
+        request.setRequestedOperations(List.of("INSPECT_INPUTS"));
+        var grant=service.assignAndGrant(scope(),"task-1","key-legacy-inspect",request);
+
+        assertEquals(List.of("INSPECT_INPUTS"),grant.getPermittedOperations());
+        assertEquals("INSPECT_INPUTS",
+                bootstraps.byAction.values().iterator().next().getPermittedOperation());
+        assertEquals("37b778f9ffac39db3881ddd585c10dc6f63ba44cf8dc080c744b55c6e555a43f",
+                grants.byAction.values().iterator().next().getRequestHash());
+    }
+
+    @Test
+    void explicitSelectorIsStrictAndMustBeAnExactSetMember() {
+        for (String selected:List.of(""," ","generate_image","GENERATE_IMAGE ",
+                "EDIT_AUDIO","UNKNOWN","\t")) {
+            AgentTaskAssignDTO request=request(); request.setInitialOperation(selected);
+            AgentTaskExecutionGrantException failure=assertThrows(AgentTaskExecutionGrantException.class,
+                    () -> service.assignAndGrant(scope(),"task-1","key-invalid",request),selected);
+            assertEquals(AgentTaskExecutionGrantException.Reason.BAD_REQUEST,failure.reason(),selected);
+        }
+        verify(legacy,never()).resolveAgentId(anyString(),anyString(),anyString(),anyString());
+        assertTrue(grants.byAction.isEmpty());
+        assertTrue(bootstraps.byAction.isEmpty());
     }
 
     @Test
@@ -140,7 +239,9 @@ class AgentTaskExecutionGrantServiceImplTest {
         AgentTaskExecutionGrantException failure=assertThrows(AgentTaskExecutionGrantException.class,
                 () -> service.assignAndGrant(scope(),"task-1","key-ambiguous",request));
         assertEquals(AgentTaskExecutionGrantException.Reason.BAD_REQUEST,failure.reason());
-        verify(legacy,never()).resolveAgentId(anyString(),anyString(),anyString(),anyString());
+        verify(legacy,times(1)).resolveAgentId("0","client","owner","agent-1");
+        verify(legacy,never()).assignResolvedVersionedWithLockedTask(anyString(),anyString(),anyString(),
+                anyString(),anyList(),eq(false),anyLong(),any(),same(root));
         assertTrue(grants.byAction.isEmpty());
         assertTrue(bootstraps.byAction.isEmpty());
     }
@@ -168,6 +269,79 @@ class AgentTaskExecutionGrantServiceImplTest {
         assertEquals(AgentTaskExecutionGrantException.Reason.INVALID_PERSISTED_STATE,failure.reason());
         verify(legacy,times(1)).assignResolvedVersionedWithLockedTask(anyString(),anyString(),anyString(),
                 anyString(),anyList(),eq(false),anyLong(),any(),same(root));
+    }
+
+    @Test
+    void replayUsesPersistedInitialActionAndRejectsARehashedActionDrift() {
+        service.assignAndGrant(scope(),"task-1","key-action-drift",
+                explicitRequest("GENERATE_IMAGE"));
+        AgentTaskBountyBootstrapOutboxEntity intent=bootstraps.byAction.values().iterator().next();
+        intent.setPermittedOperation("EDIT_IMAGE");
+        intent.setPayloadHash(AgentTaskBountyBootstrapPayload.payloadHash(intent.getTenantId(),
+                intent.getClientId(),intent.getOwnerJiacn(),intent.getTaskId(),
+                intent.getSourceBusinessActionId(),intent.getRequirementRevision(),
+                intent.getAssignmentRevision(),intent.getTargetAgentId(),intent.getGrantId(),
+                intent.getGrantVersion(),intent.getPermittedOperation(),
+                intent.getReferenceSummarySha256()));
+
+        AgentTaskExecutionGrantException failure=assertThrows(AgentTaskExecutionGrantException.class,
+                () -> service.assignAndGrant(scope(),"task-1","key-action-drift",
+                        explicitRequest("GENERATE_IMAGE")));
+        assertEquals(AgentTaskExecutionGrantException.Reason.INVALID_PERSISTED_STATE,failure.reason());
+        assertEquals("EDIT_IMAGE",intent.getPermittedOperation());
+        assertEquals(1,bootstraps.byAction.size());
+    }
+
+    @Test
+    void replayRejectsMissingBootstrapInsteadOfRecreatingIt() {
+        service.assignAndGrant(scope(),"task-1","key-missing-bootstrap",
+                explicitRequest("GENERATE_IMAGE"));
+        bootstraps.byAction.clear(); bootstraps.byId.clear();
+
+        AgentTaskExecutionGrantException failure=assertThrows(AgentTaskExecutionGrantException.class,
+                () -> service.assignAndGrant(scope(),"task-1","key-missing-bootstrap",
+                        explicitRequest("GENERATE_IMAGE")));
+        assertEquals(AgentTaskExecutionGrantException.Reason.INVALID_PERSISTED_STATE,failure.reason());
+        assertTrue(bootstraps.byAction.isEmpty());
+    }
+
+    @Test
+    void replayRejectsMissingPersistedInitialAction() {
+        service.assignAndGrant(scope(),"task-1","key-missing-action",
+                explicitRequest("GENERATE_IMAGE"));
+        AgentTaskBountyBootstrapOutboxEntity intent=bootstraps.byAction.values().iterator().next();
+        intent.setPermittedOperation(null);
+
+        AgentTaskExecutionGrantException failure=assertThrows(AgentTaskExecutionGrantException.class,
+                () -> service.assignAndGrant(scope(),"task-1","key-missing-action",
+                        explicitRequest("GENERATE_IMAGE")));
+        assertEquals(AgentTaskExecutionGrantException.Reason.INVALID_PERSISTED_STATE,failure.reason());
+        assertNull(intent.getPermittedOperation());
+        assertEquals(1,bootstraps.byAction.size());
+    }
+
+    @Test
+    void bootstrapWithoutGrantFailsClosed() {
+        service.assignAndGrant(scope(),"task-1","key-half-outbox",
+                explicitRequest("GENERATE_IMAGE"));
+        AgentTaskExecutionGrantEntity grant=grants.byAction.remove("ASSIGN_AND_START:key-half-outbox");
+        grants.byId.remove(grant.getGrantId());
+        AgentTaskExecutionGrantException half=assertThrows(AgentTaskExecutionGrantException.class,
+                () -> service.assignAndGrant(scope(),"task-1","key-half-outbox",
+                        explicitRequest("GENERATE_IMAGE")));
+        assertEquals(AgentTaskExecutionGrantException.Reason.INVALID_PERSISTED_STATE,half.reason());
+    }
+
+    @Test
+    void persistedGrantSetCannotDropTheSelectedInitialOperation() {
+        service.assignAndGrant(scope(),"task-1","key-set-drift",
+                explicitRequest("GENERATE_IMAGE"));
+        AgentTaskExecutionGrantEntity stored=grants.byAction.values().iterator().next();
+        stored.setPermittedOperationsJson("[\"EDIT_IMAGE\",\"INSPECT_INPUTS\"]");
+        AgentTaskExecutionGrantException drift=assertThrows(AgentTaskExecutionGrantException.class,
+                () -> service.assignAndGrant(scope(),"task-1","key-set-drift",
+                        explicitRequest("GENERATE_IMAGE")));
+        assertEquals(AgentTaskExecutionGrantException.Reason.INVALID_PERSISTED_STATE,drift.reason());
     }
 
     @Test
@@ -282,6 +456,12 @@ class AgentTaskExecutionGrantServiceImplTest {
         request.setExpectedTaskVersion(0L); request.setRequirementRevision(1L);
         request.setRequestedOperations(List.of("GENERATE_IMAGE","INSPECT_INPUTS"));
         request.setInputRefs(List.of()); return request;
+    }
+    private static AgentTaskAssignDTO explicitRequest(String initialOperation) {
+        AgentTaskAssignDTO request=request();
+        request.setRequestedOperations(List.of("GENERATE_IMAGE","INSPECT_INPUTS","EDIT_IMAGE"));
+        request.setInitialOperation(initialOperation);
+        return request;
     }
     private static AgentTaskExecutionGrantService.Scope scope() {
         return new AgentTaskExecutionGrantService.Scope("0","client","owner");

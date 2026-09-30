@@ -46,6 +46,8 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
     static final String ACTION = "assign_and_start";
     static final String POLICY_REVISION = "MMD_U1_V1";
     static final String TOOL_POLICY = "NO_TOOLS_V1";
+    static final String ASSIGN_HASH_DOMAIN = "ASSIGN_AND_START";
+    static final String INITIAL_OPERATION_HASH_DOMAIN = "ASSIGN_AND_START_INITIAL_OPERATION_V1";
     private static final Set<String> OPERATIONS = Set.of(
             "INSPECT_INPUTS", "GENERATE_IMAGE", "EDIT_IMAGE", "GENERATE_AUDIO", "EDIT_AUDIO");
     private static final Set<String> PURPOSES = Set.of("INPUT", "REFERENCE");
@@ -124,11 +126,20 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                         scope.ownerJiacn(), actionId);
         if (replay != null) {
             AgentTaskExecutionGrantDTO result = replay(requestHash,valid.taskId(),replay);
-            ensureBootstrapIntent(scope, replay, existingBootstrap);
+            if (valid.initialOperation()==null) {
+                throw bad("assign_and_start requires exactly one initial permitted operation");
+            }
+            if (existingBootstrap == null) {
+                throw invalidState("Authorization fact is missing its bootstrap intent");
+            }
+            ensureBootstrapIntent(scope,replay,existingBootstrap,valid.initialOperation(),false);
             return result;
         }
         if (existingBootstrap != null) {
             throw invalidState("Bootstrap intent exists without its authorization fact");
+        }
+        if (valid.initialOperation()==null) {
+            throw bad("assign_and_start requires exactly one initial permitted operation");
         }
 
         AtomicReference<List<InputSnapshot>> snapshot = new AtomicReference<>();
@@ -174,18 +185,16 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         }
         // Keep this outside the grant collision handler: schema/payload failures must remain
         // attributable while the surrounding task-root transaction rolls back both mutations.
-        ensureBootstrapIntent(scope, entity, null);
+        ensureBootstrapIntent(scope,entity,null,valid.initialOperation(),true);
         return view(entity);
     }
 
     private void ensureBootstrapIntent(Scope scope, AgentTaskExecutionGrantEntity grant,
-            AgentTaskBountyBootstrapOutboxEntity existing) {
+            AgentTaskBountyBootstrapOutboxEntity existing, String requestedInitialOperation,
+            boolean create) {
         List<String> operations = readOperations(grant.getPermittedOperationsJson());
-        String initialOperation;
-        try {
-            initialOperation = AgentTaskBountyBootstrapPayload.initialOperation(operations);
-        } catch (IllegalArgumentException invalid) {
-            throw invalidState("Persisted grant has no unambiguous initial operation");
+        if (!operations.contains(requestedInitialOperation)) {
+            throw invalidState("Initial operation is outside the persisted authorization set");
         }
         List<AgentTaskBountyBootstrapClaimDTO.ReferenceSummary> references = readInputs(
                 grant.getInputScopeJson()).stream().map(input ->
@@ -196,6 +205,8 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         String referencesHash = AgentTaskBountyBootstrapPayload.referenceHash(json, references);
         long intentGrantVersion = existing == null ? grant.getGrantVersion()
                 : existing.getGrantVersion() == null ? -1L : existing.getGrantVersion();
+        String initialOperation = existing == null
+                ? requestedInitialOperation : existing.getPermittedOperation();
         String payloadHash = AgentTaskBountyBootstrapPayload.payloadHash(scope.tenantId(),
                 scope.clientId(), scope.ownerJiacn(), grant.getTaskId(),
                 grant.getSourceBusinessActionId(), grant.getRequirementRevision(),
@@ -208,11 +219,16 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                 throw invalidState("Persisted bootstrap intent is corrupt");
             }
             if (intentGrantVersion < 1 || intentGrantVersion > grant.getGrantVersion()
+                    || !operations.contains(initialOperation)
+                    || !same(requestedInitialOperation,initialOperation)
                     || !same(payloadHash, existing.getPayloadHash())
                     || !same(grant.getSourceBusinessActionId(), existing.getSourceBusinessActionId())) {
                 throw invalidState("Bootstrap intent conflicts with the authorization fact");
             }
             return;
+        }
+        if (!create) {
+            throw invalidState("Authorization fact is missing its bootstrap intent");
         }
         if (!"ACTIVE".equals(grant.getState())) {
             throw invalidState("Historical inactive grant has no bootstrap intent");
@@ -505,14 +521,30 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
             throw bad("Client authority fields are forbidden");
         }
         List<String> operations=canonicalOperations(request.getRequestedOperations());
-        try {
-            AgentTaskBountyBootstrapPayload.initialOperation(operations);
-        } catch (IllegalArgumentException invalid) {
-            throw bad(invalid.getMessage());
-        }
+        boolean initialOperationPresent=request.getInitialOperation()!=null;
+        String initialOperation=initialOperationPresent
+                ? explicitInitialOperation(request.getInitialOperation(),operations)
+                : legacyInitialOperationOrNull(operations);
         List<ValidInput> inputs=canonicalInputs(request.getInputRefs());
         return new ValidAssign(taskId,key,request.getAgentId(),request.getExpectedTaskVersion(),
-                request.getRequirementRevision(),operations,inputs);
+                request.getRequirementRevision(),operations,inputs,initialOperation,
+                initialOperationPresent);
+    }
+
+    private static String explicitInitialOperation(String selected,List<String> operations) {
+        exact(selected,"initialOperation",40);
+        if (!OPERATIONS.contains(selected) || !operations.contains(selected)) {
+            throw bad("initialOperation is outside requestedOperations");
+        }
+        return selected;
+    }
+
+    private static String legacyInitialOperationOrNull(List<String> operations) {
+        try {
+            return AgentTaskBountyBootstrapPayload.initialOperation(operations);
+        } catch (IllegalArgumentException invalid) {
+            return null;
+        }
     }
 
     private static List<String> canonicalOperations(List<String> source) {
@@ -542,9 +574,13 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
     }
 
     private String hashAssign(ValidAssign valid,String canonicalAgent) {
-        return sha256("ASSIGN_AND_START\n"+valid.taskId()+"\n"+canonicalAgent+"\n"
+        String payload=(valid.initialOperationPresent()
+                ? INITIAL_OPERATION_HASH_DOMAIN : ASSIGN_HASH_DOMAIN)+"\n"
+                +valid.taskId()+"\n"+canonicalAgent+"\n"
                 +valid.expectedTaskVersion()+"\n"+valid.requirementRevision()+"\n"
-                +write(valid.operations())+"\n"+write(valid.inputs()));
+                +write(valid.operations())+"\n"+write(valid.inputs());
+        if (valid.initialOperationPresent()) payload += "\n"+valid.initialOperation();
+        return sha256(payload);
     }
     private AgentTaskExecutionGrantDTO replay(String requestHash,String taskId,
             AgentTaskExecutionGrantEntity entity) {
@@ -570,7 +606,22 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
     private List<String> readOperations(String value) {
         try {
             List<String> result=json.readValue(value,new TypeReference<List<String>>(){});
-            if (result==null || !OPERATIONS.containsAll(result)) throw invalidState("Persisted grant operations are invalid");
+            if (result==null || result.isEmpty() || result.size()>OPERATIONS.size()) {
+                throw invalidState("Persisted grant operations are invalid");
+            }
+            LinkedHashSet<String> unique=new LinkedHashSet<>();
+            for (String operation:result) {
+                if (operation==null || operation.isBlank() || !operation.equals(operation.strip())
+                        || operation.codePointCount(0,operation.length())>40
+                        || hasUnpairedSurrogate(operation)
+                        || operation.chars().anyMatch(Character::isISOControl)
+                        || !OPERATIONS.contains(operation) || !unique.add(operation)) {
+                    throw invalidState("Persisted grant operations are invalid");
+                }
+            }
+            if (!result.equals(result.stream().sorted().toList())) {
+                throw invalidState("Persisted grant operations are not canonical");
+            }
             return List.copyOf(result);
         } catch (AgentTaskExecutionGrantException failure) { throw failure; }
         catch (Exception failure) { throw invalidState("Persisted grant operations are invalid"); }
@@ -626,7 +677,8 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
     private static AgentTaskExecutionGrantException invalidState(String message) { return new AgentTaskExecutionGrantException(Reason.INVALID_PERSISTED_STATE,message); }
 
     private record ValidAssign(String taskId,String idempotencyKey,String requestedAgentId,
-            long expectedTaskVersion,long requirementRevision,List<String> operations,List<ValidInput> inputs) { }
+            long expectedTaskVersion,long requirementRevision,List<String> operations,
+            List<ValidInput> inputs,String initialOperation,boolean initialOperationPresent) { }
     private record ValidInput(String fileId,int version,String purpose) { }
     private record InputSnapshot(String fileId,int version,String purpose,String contentMimeType,
             long byteLength,String contentHash) { }

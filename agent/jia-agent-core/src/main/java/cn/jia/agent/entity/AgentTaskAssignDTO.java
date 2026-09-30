@@ -21,6 +21,7 @@ public class AgentTaskAssignDTO implements Serializable {
     private Long expectedTaskVersion;
     private Long requirementRevision;
     private List<String> requestedOperations;
+    private String initialOperation;
     private List<AgentTaskGrantInputDTO> inputRefs;
 
     // Authority-looking client fields are represented only so the admission service can reject them.
