@@ -56,6 +56,24 @@ class AgentTaskCreationOperationSchemaInitializerTest {
     }
 
     @Test
+    void multiSlashBeforeCatalogQuoteIsRejectedAsAmbiguousLiteralData() {
+        List<Map<String, Object>> weakened = actualCatalogRows();
+        Map<String, Object> scope = row(weakened, "chk_atco_scope");
+        String clause = scope.get("CHECK_CLAUSE").toString();
+        int opening = clause.indexOf("\\'");
+        int closing = clause.indexOf("\\'", opening + 2);
+        assertTrue(opening >= 0 && closing > opening);
+        scope.put("CHECK_CLAUSE", clause.substring(0, closing) + "\\"
+                + clause.substring(closing));
+
+        assertThrows(IllegalStateException.class,
+                () -> AgentTaskCreationOperationSchemaInitializer.validateChecks(weakened));
+        assertThrows(IllegalArgumentException.class,
+                () -> AgentTaskCreationOperationSchemaInitializer.canonicalCheckExpression(
+                        scope.get("CHECK_CLAUSE").toString()));
+    }
+
+    @Test
     void weakOrTrueAndChangedConjunctionFailClosed() {
         List<Map<String, Object>> weak = actualCatalogRows();
         row(weak, "chk_atco_scope").compute("CHECK_CLAUSE",
@@ -157,6 +175,6 @@ class AgentTaskCreationOperationSchemaInitializerTest {
     }
 
     private static String escaped(String expression) {
-        return expression.replace("'", "\\\\'");
+        return expression.replace("'", "\\'");
     }
 }

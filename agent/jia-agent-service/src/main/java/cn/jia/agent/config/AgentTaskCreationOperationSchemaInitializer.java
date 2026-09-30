@@ -252,8 +252,13 @@ public final class AgentTaskCreationOperationSchemaInitializer implements Initia
             for (int prior = index - 1; prior >= 0 && source.charAt(prior) == '\\'; prior--) {
                 slashes++;
             }
-            if (slashes == 0) plain++;
-            else escaped++;
+            if (slashes == 0) {
+                plain++;
+            } else if (slashes == 1) {
+                escaped++;
+            } else {
+                throw new IllegalArgumentException("Ambiguous CHECK quote rendering");
+            }
         }
         if (plain != 0) {
             if (escaped != 0) throw new IllegalArgumentException("Mixed CHECK quote rendering");
@@ -261,18 +266,16 @@ public final class AgentTaskCreationOperationSchemaInitializer implements Initia
         }
         if (escaped == 0) return source;
         if ((escaped & 1) != 0) throw new IllegalArgumentException("Unbalanced CHECK quote rendering");
-        StringBuilder rendered = new StringBuilder(source.length());
+        StringBuilder rendered = new StringBuilder(source.length() - escaped);
         for (int index = 0; index < source.length(); index++) {
-            if (source.charAt(index) == '\\') {
-                int end = index;
-                while (end < source.length() && source.charAt(end) == '\\') end++;
-                if (end < source.length() && source.charAt(end) == '\'') {
-                    rendered.append('\'');
-                    index = end;
-                    continue;
-                }
+            char character = source.charAt(index);
+            if (character == '\\' && index + 1 < source.length()
+                    && source.charAt(index + 1) == '\'') {
+                rendered.append('\'');
+                index++;
+            } else {
+                rendered.append(character);
             }
-            rendered.append(source.charAt(index));
         }
         return rendered.toString();
     }
