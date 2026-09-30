@@ -1,22 +1,41 @@
 package cn.jia.agent.service.impl;
 
+import cn.jia.agent.api.AgentTaskDeliberationOperationController;
 import cn.jia.agent.dao.AgentTaskBountyBootstrapOutboxDao;
+import cn.jia.agent.dao.AgentTaskExecutionGrantDao;
 import cn.jia.agent.entity.AgentTaskBountyBootstrapClaimDTO;
 import cn.jia.agent.entity.AgentTaskBountyBootstrapOutboxEntity;
 import cn.jia.agent.entity.AgentTaskBountyBootstrapReconcileDTO;
+import cn.jia.agent.entity.AgentTaskExecutionGrantEntity;
+import cn.jia.agent.entity.AgentTaskMetaEntity;
+import cn.jia.agent.exception.AgentTaskCollaborationException;
+import cn.jia.agent.service.AgentTaskDeliberationOperationReadService;
 import cn.jia.agent.service.AgentTaskExecutionGrantService;
+import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.service.AgentTaskRequirementSnapshotService;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.http.HttpHeaders;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.SimpleTransactionStatus;
 import tools.jackson.databind.ObjectMapper;
 
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
@@ -24,6 +43,10 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 class AgentTaskBountyBootstrapOutboxServiceImplTest {
     private final ObjectMapper json = new ObjectMapper();
@@ -250,6 +273,423 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
         } finally {
             concurrent.continueClaim.countDown();
             executor.shutdownNow();
+        }
+    }
+
+
+    /**
+     * Selector compromise: HTTP/read-projection coverage stays in this already isolated
+     * mmdU1BootstrapOutbox class so this source slice does not modify shared build files.
+     * It is source-only and does not replace security-chain or MySQL lock verification.
+     */
+    @Nested
+    class AssignmentOperationReadContract {
+        @Test
+        void readsOnlyPersistedFactsInRootGrantBootstrapOrderWithoutSideEffects() {
+            ReadFixture fixture = new ReadFixture();
+            fixture.root.setTaskVersion(Long.MAX_VALUE);
+
+            AgentTaskDeliberationOperationReadService.Operation result = fixture.service.read(
+                    scope(), "task-1", "original-key");
+
+            assertEquals(List.of("task-root", "grant-action", "bootstrap-action"),
+                    fixture.order.subList(0, 3));
+            assertEquals(Long.MAX_VALUE, result.taskVersion());
+            assertEquals(3L, result.assignmentRevision());
+            assertEquals("ACTIVE", result.grantState());
+            assertEquals("PENDING", result.bootstrapState());
+            assertNull(result.conversationId());
+            assertNull(result.initialRequestId());
+            assertTrue(result.currentAssignment(),
+                    "ordinary taskVersion advancement must not manufacture a new assignment epoch");
+            assertEquals(0, fixture.grants.writeCalls);
+            assertEquals(0, fixture.bootstraps.writeCalls);
+            verify(fixture.requirements).read(scope(), "task-1", 1L);
+            verifyNoMoreInteractions(fixture.requirements);
+        }
+
+        @Test
+        void currentAssignmentUsesDurableAssignmentEpochAndKeepsHistoryReadable() {
+            ReadFixture fixture = new ReadFixture();
+            fixture.grants.eventJson = "{\"resultVersion\":4}";
+            assertFalse(fixture.service.read(scope(), "task-1", "original-key")
+                    .currentAssignment(), "later same-Agent assignment event is not the original assignment");
+
+            fixture.grants.eventJson = "{\"resultVersion\":2}";
+            fixture.grants.grant.setState("SUPERSEDED");
+            fixture.grants.active = null;
+            var historical = fixture.service.read(scope(), "task-1", "original-key");
+            assertEquals("SUPERSEDED", historical.grantState());
+            assertFalse(historical.currentAssignment());
+
+            fixture.grants.grant.setState("ACTIVE");
+            fixture.grants.active = fixture.grants.grant;
+            fixture.grants.eventJson = null;
+            assertReadReason(AgentTaskDeliberationOperationReadService.ReadException.Reason.INTEGRITY_ERROR,
+                    () -> fixture.service.read(scope(), "task-1", "original-key"));
+            fixture.grants.eventJson = "{\"resultVersion\":9223372036854775807}";
+            assertReadReason(AgentTaskDeliberationOperationReadService.ReadException.Reason.INTEGRITY_ERROR,
+                    () -> fixture.service.read(scope(), "task-1", "original-key"));
+            fixture.grants.eventJson = "{\"resultVersion\":\"3\"}";
+            assertReadReason(AgentTaskDeliberationOperationReadService.ReadException.Reason.INTEGRITY_ERROR,
+                    () -> fixture.service.read(scope(), "task-1", "original-key"));
+        }
+
+        @Test
+        void missingHalfAndCorruptFactsHaveNonLeakingFailureBoundaries() {
+            ReadFixture exactScope = new ReadFixture();
+            assertReadReason(AgentTaskDeliberationOperationReadService.ReadException.Reason.NOT_FOUND,
+                    () -> exactScope.service.read(
+                            new AgentTaskExecutionGrantService.Scope("0", "Client", "owner"),
+                            "task-1", "original-key"));
+            assertThrows(IllegalArgumentException.class, () -> exactScope.service.read(
+                    new AgentTaskExecutionGrantService.Scope("0", "client ", "owner"),
+                    "task-1", "original-key"));
+
+            ReadFixture absent = new ReadFixture();
+            absent.grants.grant = null;
+            absent.grants.active = null;
+            absent.bootstraps.row = null;
+            assertReadReason(AgentTaskDeliberationOperationReadService.ReadException.Reason.NOT_FOUND,
+                    () -> absent.service.read(scope(), "task-1", "original-key"));
+
+            ReadFixture sameKeyOtherTask = new ReadFixture();
+            sameKeyOtherTask.grants.grant.setTaskId("task-other");
+            sameKeyOtherTask.bootstraps.row.setTaskId("task-other");
+            assertReadReason(AgentTaskDeliberationOperationReadService.ReadException.Reason.NOT_FOUND,
+                    () -> sameKeyOtherTask.service.read(scope(), "task-1", "original-key"));
+
+            ReadFixture grantOnly = new ReadFixture();
+            grantOnly.bootstraps.row = null;
+            assertReadReason(AgentTaskDeliberationOperationReadService.ReadException.Reason.INTEGRITY_ERROR,
+                    () -> grantOnly.service.read(scope(), "task-1", "original-key"));
+
+            ReadFixture badRequestHash = new ReadFixture();
+            badRequestHash.grants.grant.setRequestHash("0".repeat(64));
+            assertReadReason(AgentTaskDeliberationOperationReadService.ReadException.Reason.INTEGRITY_ERROR,
+                    () -> badRequestHash.service.read(scope(), "task-1", "original-key"));
+
+            ReadFixture badReferenceHash = new ReadFixture();
+            badReferenceHash.bootstraps.row.setReferenceSummarySha256("0".repeat(64));
+            assertReadReason(AgentTaskDeliberationOperationReadService.ReadException.Reason.INTEGRITY_ERROR,
+                    () -> badReferenceHash.service.read(scope(), "task-1", "original-key"));
+
+            ReadFixture unavailable = new ReadFixture();
+            unavailable.grants.failRead = true;
+            assertReadReason(AgentTaskDeliberationOperationReadService.ReadException.Reason.SOURCE_UNAVAILABLE,
+                    () -> unavailable.service.read(scope(), "task-1", "original-key"));
+        }
+
+        @Test
+        void admittedAndNonAdmittedIdentifierRulesAreExact() {
+            ReadFixture fixture = new ReadFixture();
+            fixture.bootstraps.row.setStatus("ADMITTED")
+                    .setAdmittedConversationId("9223372036854775807")
+                    .setAdmittedRequestId("initial-request-1").setVersion(Long.MAX_VALUE);
+            var admitted = fixture.service.read(scope(), "task-1", "original-key");
+            assertEquals("9223372036854775807", admitted.conversationId());
+            assertEquals(Long.MAX_VALUE, admitted.stateVersion());
+
+            fixture.bootstraps.row.setStatus("RETRY");
+            ReadFixture staleReceipt = fixture;
+            assertReadReason(AgentTaskDeliberationOperationReadService.ReadException.Reason.INTEGRITY_ERROR,
+                    () -> staleReceipt.service.read(scope(), "task-1", "original-key"));
+        }
+
+        @Test
+        void controllerUsesJwtOnlyReturnsStringFencesNoStoreAndDefaultOff() throws Exception {
+            AgentTaskDeliberationOperationReadService reads =
+                    mock(AgentTaskDeliberationOperationReadService.class);
+            var operation = new AgentTaskDeliberationOperationReadService.Operation(
+                    "task-1", "agent-1", Long.MAX_VALUE, Long.MAX_VALUE, Long.MAX_VALUE,
+                    "grant-1", Long.MAX_VALUE, "ACTIVE", List.of("GENERATE_IMAGE"),
+                    List.of(new AgentTaskDeliberationOperationReadService.InputSummary(
+                            "file-1", 2, "REFERENCE", "image/png", Long.MAX_VALUE,
+                            "a".repeat(64))), "bootstrap-1", "ADMITTED", Long.MAX_VALUE,
+                    "GENERATE_IMAGE", "77", "initial-request-1", true);
+            when(reads.read(scope(), "task-1", "original-key")).thenReturn(operation);
+            MockMvc mvc = MockMvcBuilders.standaloneSetup(
+                    new AgentTaskDeliberationOperationController(reads)).build();
+
+            mvc.perform(get("/agent/tasks/task-1/assignment-operation")
+                            .principal(jwtToken("owner", "client"))
+                            .header("Idempotency-Key", "original-key")
+                            .header("X-Owner-Jiacn", "foreign")
+                            .header("X-Client-Id", "foreign")
+                            .header("X-Tenant-Id", "foreign"))
+                    .andExpect(status().isOk())
+                    .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
+                    .andExpect(jsonPath("$.data.schemaVersion").value(1))
+                    .andExpect(jsonPath("$.data.requirementRevision")
+                            .value("9223372036854775807"))
+                    .andExpect(jsonPath("$.data.assignmentRevision")
+                            .value("9223372036854775807"))
+                    .andExpect(jsonPath("$.data.taskVersion")
+                            .value("9223372036854775807"))
+                    .andExpect(jsonPath("$.data.grantVersion")
+                            .value("9223372036854775807"))
+                    .andExpect(jsonPath("$.data.stateVersion")
+                            .value("9223372036854775807"))
+                    .andExpect(jsonPath("$.data.inputs[0].byteLength")
+                            .value("9223372036854775807"))
+                    .andExpect(jsonPath("$.data.currentAssignment").value(true));
+            verify(reads).read(scope(), "task-1", "original-key");
+            verifyNoMoreInteractions(reads);
+
+            ConditionalOnProperty gate = AgentTaskDeliberationOperationController.class
+                    .getAnnotation(ConditionalOnProperty.class);
+            assertNotNull(gate);
+            assertEquals("agent.task-deliberation-operation", gate.prefix());
+            assertTrue(Arrays.asList(gate.name()).contains("read-enabled"));
+            assertEquals("true", gate.havingValue());
+            assertFalse(gate.matchIfMissing());
+        }
+
+        @Test
+        void controllerRejectsAuthQueryAndExactIdentityViolationsAndSanitizesFailures()
+                throws Exception {
+            AgentTaskDeliberationOperationReadService reads =
+                    mock(AgentTaskDeliberationOperationReadService.class);
+            MockMvc mvc = MockMvcBuilders.standaloneSetup(
+                    new AgentTaskDeliberationOperationController(reads)).build();
+            mvc.perform(get("/agent/tasks/task-1/assignment-operation")
+                            .header("Idempotency-Key", "original-key"))
+                    .andExpect(status().isUnauthorized())
+                    .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
+                    .andExpect(jsonPath("$.code")
+                            .value("ASSIGNMENT_OPERATION_UNAUTHENTICATED"));
+            mvc.perform(get("/agent/tasks/task-1/assignment-operation?owner=foreign")
+                            .principal(jwtToken("owner", "client"))
+                            .header("Idempotency-Key", "original-key"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
+                    .andExpect(jsonPath("$.code").value("ASSIGNMENT_OPERATION_BAD_REQUEST"));
+            mvc.perform(get("/agent/tasks/task-1/assignment-operation")
+                            .principal(jwtToken("owner", "client")))
+                    .andExpect(status().isBadRequest());
+
+            AgentTaskDeliberationOperationController direct =
+                    new AgentTaskDeliberationOperationController(reads);
+            assertThrows(RuntimeException.class, () -> direct.read("task-1 ", "original-key",
+                    new MockHttpServletRequest(), jwtToken("owner", "client")));
+            assertThrows(RuntimeException.class, () -> direct.read("task-1", " key",
+                    new MockHttpServletRequest(), jwtToken("owner", "client")));
+            assertThrows(RuntimeException.class, () -> direct.read("task-1", "original-key",
+                    new MockHttpServletRequest(), jwtToken("Owner ", "client")));
+            verifyNoInteractions(reads);
+
+            when(reads.read(scope(), "task-1", "original-key")).thenThrow(
+                    new AgentTaskDeliberationOperationReadService.ReadException(
+                            AgentTaskDeliberationOperationReadService.ReadException.Reason.SOURCE_UNAVAILABLE,
+                            new DataAccessResourceFailureException(
+                                    "secret SQL /private/path owner task-1")));
+            String body = mvc.perform(get("/agent/tasks/task-1/assignment-operation")
+                            .principal(jwtToken("owner", "client"))
+                            .header("Idempotency-Key", "original-key"))
+                    .andExpect(status().isServiceUnavailable())
+                    .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
+                    .andExpect(jsonPath("$.code")
+                            .value("ASSIGNMENT_OPERATION_SOURCE_UNAVAILABLE"))
+                    .andReturn().getResponse().getContentAsString();
+            assertFalse(body.contains("secret SQL"));
+            assertFalse(body.contains("/private/path"));
+            assertFalse(body.contains("task-1"));
+        }
+
+        private final class ReadFixture {
+            private final List<String> order = new ArrayList<>();
+            private final AgentTaskMetaEntity root = root();
+            private final ReadGrantDao grants = new ReadGrantDao(order, grant());
+            private final ReadBootstrapDao bootstraps = new ReadBootstrapDao(order,
+                    bootstrap(grants.grant));
+            private final AgentTaskRequirementSnapshotService requirements =
+                    mock(AgentTaskRequirementSnapshotService.class);
+            private final AgentTaskMutationTransaction transactions =
+                    mock(AgentTaskMutationTransaction.class);
+            private final AgentTaskDeliberationOperationReadServiceImpl service;
+
+            private ReadFixture() {
+                when(transactions.executeWithLockedTaskRootInOwnerScope(anyString(), anyString(),
+                        anyString(), anyString(), any())).thenAnswer(call -> {
+                    order.add("task-root");
+                    if (!Objects.equals("0", call.getArgument(0))
+                            || !Objects.equals("client", call.getArgument(1))
+                            || !Objects.equals("owner", call.getArgument(2))
+                            || !Objects.equals("task-1", call.getArgument(3))) {
+                        throw new AgentTaskCollaborationException(
+                                AgentTaskCollaborationException.Reason.NOT_FOUND, "not found");
+                    }
+                    return ((AgentTaskMutationTransaction.LockedTaskMutation<?>)call.getArgument(4))
+                            .apply(root);
+                });
+                when(requirements.read(scope(), "task-1", 1L)).thenReturn(
+                        new AgentTaskRequirementSnapshotService.Snapshot("0", "client", "owner",
+                                "task-1", 1L, "Title", "Full immutable requirement",
+                                "b".repeat(64), "CREATE"));
+                service = new AgentTaskDeliberationOperationReadServiceImpl(grants, bootstraps,
+                        requirements, transactions, json);
+            }
+        }
+
+        private AgentTaskMetaEntity root() {
+            AgentTaskMetaEntity root = new AgentTaskMetaEntity();
+            root.setTenantId("0");
+            root.setClientId("client");
+            root.setOwnerJiacn("owner").setTaskId("task-1").setTaskVersion(8L)
+                    .setCurrentEventVersion(8L).setAssignedAgentId("agent-1");
+            return root;
+        }
+
+        private AgentTaskExecutionGrantEntity grant() {
+            try {
+                List<String> operations = List.of("GENERATE_IMAGE");
+                String inputJson = "[{\"fileId\":\"file-1\",\"version\":2,"
+                        + "\"purpose\":\"REFERENCE\","
+                        + "\"contentMimeType\":\"image/png\",\"byteLength\":123,"
+                        + "\"contentHash\":\"" + "a".repeat(64) + "\"}]";
+                String requestInputs = "[{\"fileId\":\"file-1\",\"version\":2,"
+                        + "\"purpose\":\"REFERENCE\"}]";
+                String requestHash = AgentTaskBountyBootstrapPayload.sha256(
+                        "ASSIGN_AND_START\ntask-1\nagent-1\n2\n1\n"
+                                + json.writeValueAsString(operations) + "\n" + requestInputs);
+                AgentTaskExecutionGrantEntity grant = new AgentTaskExecutionGrantEntity()
+                        .setGrantId("grant-1");
+                grant.setTenantId("0");
+                grant.setClientId("client");
+                grant.setOwnerJiacn("owner").setTaskId("task-1")
+                        .setRequirementRevision(1L).setAssignmentRevision(3L)
+                        .setTargetAgentId("agent-1")
+                        .setPermittedOperationsJson(json.writeValueAsString(operations))
+                        .setPermittedToolPolicyRef("NO_TOOLS_V1")
+                        .setInputScopeJson(inputJson)
+                        .setAllowOwnTaskDerivedAssets(false).setCostAuthorizationRef(null)
+                        .setSourceBusinessActionId("ASSIGN_AND_START:original-key")
+                        .setIdempotencyKey("original-key").setRequestHash(requestHash)
+                        .setPolicyRevision("MMD_U1_V1").setGrantVersion(1L)
+                        .setState("ACTIVE").setIssuedBy("owner").setCreatedAt(1L);
+                return grant;
+            } catch (Exception failure) {
+                throw new AssertionError(failure);
+            }
+        }
+
+        private AgentTaskBountyBootstrapOutboxEntity bootstrap(
+                AgentTaskExecutionGrantEntity grant) {
+            List<AgentTaskBountyBootstrapClaimDTO.ReferenceSummary> references = List.of(
+                    new AgentTaskBountyBootstrapClaimDTO.ReferenceSummary(
+                            "file-1", 2, "REFERENCE", "image/png", 123, "a".repeat(64)));
+            String referencesJson = AgentTaskBountyBootstrapPayload.referencesJson(json, references);
+            String referencesHash = AgentTaskBountyBootstrapPayload.referenceHash(json, references);
+            String payloadHash = AgentTaskBountyBootstrapPayload.payloadHash("0", "client", "owner",
+                    "task-1", "ASSIGN_AND_START:original-key", 1, 3, "agent-1",
+                    "grant-1", 1, "GENERATE_IMAGE", referencesHash);
+            AgentTaskBountyBootstrapOutboxEntity row = new AgentTaskBountyBootstrapOutboxEntity()
+                    .setBootstrapId("bootstrap-1");
+            row.setTenantId("0");
+            row.setClientId("client");
+            row.setOwnerJiacn("owner").setTaskId("task-1")
+                    .setSourceBusinessActionId("ASSIGN_AND_START:original-key")
+                    .setPayloadHash(payloadHash).setRequirementRevision(1L)
+                    .setRequirementAnchor(AgentTaskBountyBootstrapPayload.REQUIREMENT_ANCHOR)
+                    .setAssignmentRevision(3L).setTargetAgentId("agent-1")
+                    .setGrantId(grant.getGrantId()).setGrantVersion(1L)
+                    .setPermittedOperation("GENERATE_IMAGE")
+                    .setReferenceSummaryJson(referencesJson)
+                    .setReferenceSummarySha256(referencesHash).setStatus("PENDING")
+                    .setAttemptCount(0).setVersion(0L).setCreatedAt(1L);
+            return row;
+        }
+
+        private static JwtAuthenticationToken jwtToken(String owner, String client) {
+            Jwt token = Jwt.withTokenValue("token").header("alg", "none")
+                    .claim("jiacn", owner).claim("client_id", client).build();
+            JwtAuthenticationToken authentication = new JwtAuthenticationToken(token);
+            authentication.setAuthenticated(true);
+            return authentication;
+        }
+
+        private static void assertReadReason(
+                AgentTaskDeliberationOperationReadService.ReadException.Reason reason,
+                org.junit.jupiter.api.function.Executable action) {
+            assertEquals(reason, assertThrows(
+                    AgentTaskDeliberationOperationReadService.ReadException.class, action).reason());
+        }
+    }
+
+    private static final class ReadGrantDao implements AgentTaskExecutionGrantDao {
+        private final List<String> order;
+        private AgentTaskExecutionGrantEntity grant;
+        private AgentTaskExecutionGrantEntity active;
+        private String eventJson = "{\"resultVersion\":3}";
+        private boolean failRead;
+        private int writeCalls;
+
+        private ReadGrantDao(List<String> order, AgentTaskExecutionGrantEntity grant) {
+            this.order = order;
+            this.grant = grant;
+            this.active = grant;
+        }
+        @Override public AgentTaskExecutionGrantEntity findByActionForUpdate(
+                String t, String c, String o, String action) {
+            order.add("grant-action");
+            if (failRead) throw new DataAccessResourceFailureException("db unavailable");
+            return grant != null && t.equals(grant.getTenantId()) && c.equals(grant.getClientId())
+                    && o.equals(grant.getOwnerJiacn())
+                    && action.equals(grant.getSourceBusinessActionId()) ? grant : null;
+        }
+        @Override public AgentTaskExecutionGrantEntity findByGrantForUpdate(
+                String t, String c, String o, String task, String id) { throw new AssertionError(); }
+        @Override public AgentTaskExecutionGrantEntity findActiveByTask(
+                String t, String c, String o, String task) { return active; }
+        @Override public AgentTaskExecutionGrantEntity findByGrant(
+                String t, String c, String o, String task, String id) { throw new AssertionError(); }
+        @Override public String latestAssignmentEventJson(
+                String t, String c, String o, String task) { return eventJson; }
+        @Override public void insert(AgentTaskExecutionGrantEntity value) {
+            writeCalls++; throw new AssertionError("read must not insert grant");
+        }
+        @Override public int supersedeActiveForTask(
+                String t, String c, String o, String task, long at) {
+            writeCalls++; throw new AssertionError("read must not supersede grant");
+        }
+        @Override public boolean revoke(String t, String c, String o, String task,
+                String id, long version, String key, String hash, long at) {
+            writeCalls++; throw new AssertionError("read must not revoke grant");
+        }
+    }
+
+    private static final class ReadBootstrapDao implements AgentTaskBountyBootstrapOutboxDao {
+        private final List<String> order;
+        private AgentTaskBountyBootstrapOutboxEntity row;
+        private int writeCalls;
+        private ReadBootstrapDao(List<String> order, AgentTaskBountyBootstrapOutboxEntity row) {
+            this.order = order;
+            this.row = row;
+        }
+        @Override public AgentTaskBountyBootstrapOutboxEntity findByActionForUpdate(
+                String t, String c, String o, String action) {
+            order.add("bootstrap-action");
+            return row != null && t.equals(row.getTenantId()) && c.equals(row.getClientId())
+                    && o.equals(row.getOwnerJiacn())
+                    && action.equals(row.getSourceBusinessActionId()) ? row : null;
+        }
+        @Override public AgentTaskBountyBootstrapOutboxEntity findClaimableForUpdate(
+                String t, String c, String o, long now) { throw new AssertionError("read must not claim"); }
+        @Override public AgentTaskBountyBootstrapOutboxEntity findClaimableAvailableForUpdate(
+                long now) { throw new AssertionError("read must not discover"); }
+        @Override public AgentTaskBountyBootstrapOutboxEntity findByBootstrapForUpdate(
+                String t, String c, String o, String id) { throw new AssertionError(); }
+        @Override public void insert(AgentTaskBountyBootstrapOutboxEntity value) {
+            writeCalls++; throw new AssertionError("read must not insert bootstrap");
+        }
+        @Override public boolean claim(AgentTaskBountyBootstrapOutboxEntity value,
+                String owner, long until, long now) {
+            writeCalls++; throw new AssertionError("read must not claim bootstrap");
+        }
+        @Override public boolean reconcile(AgentTaskBountyBootstrapOutboxEntity value,
+                String status, Long next, String conversation, String request, String error,
+                Long reconciled, long now) {
+            writeCalls++; throw new AssertionError("read must not reconcile bootstrap");
         }
     }
 
