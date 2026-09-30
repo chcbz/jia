@@ -198,8 +198,9 @@ configurations.named(mmdU1ProviderCredentialBindingSourceSet.runtimeOnlyConfigur
 }
 tasks.register('mmdU1ProviderCredentialBinding', Test) {
     maxParallelForks = 1
-    maxHeapSize = '384m'
-    jvmArgs '-XX:MaxMetaspaceSize=192m', '-Xss256k'
+    maxHeapSize = '256m'
+    jvmArgs '-XX:+UseSerialGC', '-XX:ActiveProcessorCount=2',
+            '-XX:MaxMetaspaceSize=192m', '-Xss256k'
     group = 'verification'
     description = 'Runs exact controlled-provider declaration and current authenticated-session lookup regressions.'
     dependsOn tasks.named(mmdU1ProviderCredentialBindingSourceSet.classesTaskName)

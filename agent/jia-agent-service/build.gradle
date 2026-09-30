@@ -613,8 +613,9 @@ configurations.named(mmdU1ProviderConsentCoreSourceSet.runtimeOnlyConfigurationN
 }
 tasks.register('mmdU1ProviderConsentCore', Test) {
     maxParallelForks = 1
-    maxHeapSize = '384m'
-    jvmArgs '-XX:MaxMetaspaceSize=192m', '-Xss256k'
+    maxHeapSize = '256m'
+    jvmArgs '-XX:+UseSerialGC', '-XX:ActiveProcessorCount=2',
+            '-XX:MaxMetaspaceSize=192m', '-Xss256k'
     group = 'verification'
     description = 'Runs controlled provider binding policy, consent lifecycle, owner HTTP and additive DDL tests.'
     dependsOn tasks.named(mmdU1ProviderConsentCoreSourceSet.classesTaskName)
