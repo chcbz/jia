@@ -530,3 +530,30 @@ tasks.register('mmdU2ConversationOutput', Test) {
     classpath = mmdU2ConversationOutputSourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+// MMD-U3 selected-output finalization: no Provider, real lease/artifact/formal-decision chain.
+def mmdU3FinalizationSourceSet = sourceSets.create('mmdU3Finalization') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/service/impl/AgentSelectedOutputFinalizationServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/AgentTaskExecutionGrantServiceImplTest.java'
+        include 'cn/jia/agent/config/AgentSelectedOutputFinalizationSchemaInitializerTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(mmdU3FinalizationSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(mmdU3FinalizationSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('mmdU3Finalization', Test) {
+    group = 'verification'
+    description = 'Runs MMD U3 server-owned lease promotion, formal acceptance and private schema tests.'
+    dependsOn tasks.named(mmdU3FinalizationSourceSet.classesTaskName)
+    testClassesDirs = mmdU3FinalizationSourceSet.output.classesDirs
+    classpath = mmdU3FinalizationSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}

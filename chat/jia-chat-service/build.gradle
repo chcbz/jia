@@ -147,3 +147,30 @@ tasks.register('chatDeliberation', Test) {
     classpath = chatDeliberationSourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+// MMD-U3 finalization HTTP/orchestration slice; owner reads remain side-effect free.
+def mmdU3FinalizationSourceSet = sourceSets.create('mmdU3Finalization') {
+    java {
+        srcDir 'src/chatDeliberationTest/java'
+        include 'cn/jia/chat/service/ChatSelectedOutputFinalizationServiceTest.java'
+        include 'cn/jia/chat/api/AgentTaskSelectedOutputFinalizationControllerTest.java'
+        include 'cn/jia/chat/config/ChatSelectedOutputFinalizationSchemaInitializerTest.java'
+    }
+    resources.srcDir 'src/chatDeliberationTest/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(mmdU3FinalizationSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(mmdU3FinalizationSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('mmdU3Finalization', Test) {
+    group = 'verification'
+    description = 'Runs MMD U3 exact selection, recovery, owner scope, read-only lookup and schema tests.'
+    dependsOn tasks.named(mmdU3FinalizationSourceSet.classesTaskName)
+    testClassesDirs = mmdU3FinalizationSourceSet.output.classesDirs
+    classpath = mmdU3FinalizationSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}

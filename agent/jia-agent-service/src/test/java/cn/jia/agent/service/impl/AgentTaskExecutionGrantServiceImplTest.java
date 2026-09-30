@@ -196,6 +196,20 @@ class AgentTaskExecutionGrantServiceImplTest {
         assertEquals(AgentTaskExecutionGrantException.Reason.PAID_EXECUTION_NOT_AUTHORIZED,paid.reason());
     }
 
+
+    @Test
+    void selectedOutputPromotionUsesCurrentUnpaidGrantAndFailsAfterRevocation() {
+        var grant=service.assignAndGrant(scope(),"task-1","key-finalize",request());
+        root.setTaskVersion(grant.getAssignmentRevision());root.setAssignedAgentId("agent-1");
+        var admitted=service.admitSelectedOutputPromotion(scope(),"task-1",grant.getGrantId(),
+                grant.getGrantVersion(),grant.getAssignmentRevision(),"agent-1");
+        assertEquals("FINALIZE_SELECTED_OUTPUTS",admitted.operation());assertFalse(admitted.paidExecutionAuthorized());
+        service.revoke(scope(),"task-1",grant.getGrantId(),"key-finalize-revoke",grant.getGrantVersion());
+        var denied=assertThrows(AgentTaskExecutionGrantException.class,()->service.admitSelectedOutputPromotion(
+                scope(),"task-1",grant.getGrantId(),grant.getGrantVersion(),grant.getAssignmentRevision(),"agent-1"));
+        assertEquals(AgentTaskExecutionGrantException.Reason.CONFLICT,denied.reason());
+    }
+
     @Test
     void ownerReconfirmationInvalidatesPreviouslyIssuedGrantForBothAdmissionPaths() {
         var grant=service.assignAndGrant(scope(),"task-1","key-reconfirmed",request());

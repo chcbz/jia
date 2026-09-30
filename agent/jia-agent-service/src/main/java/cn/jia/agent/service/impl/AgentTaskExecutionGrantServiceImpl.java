@@ -50,6 +50,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
             "INSPECT_INPUTS", "GENERATE_IMAGE", "EDIT_IMAGE", "GENERATE_AUDIO", "EDIT_AUDIO");
     private static final Set<String> PURPOSES = Set.of("INPUT", "REFERENCE");
     private static final int MAX_INPUTS = 32;
+    private static final long MAX_SAFE_INTEGER = 9_007_199_254_740_991L;
 
     private final AgentTaskExecutionGrantDao grants;
     private final AgentTaskBountyBootstrapOutboxDao bootstrapOutbox;
@@ -272,6 +273,60 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         grant.setState("REVOKED").setGrantVersion(expectedVersion+1).setRevokedAt(now)
                 .setRevokeIdempotencyKey(idempotencyKey).setRevokeRequestHash(requestHash);
         return view(grant);
+    }
+
+    @Override
+    public Admission admitSelectedOutputPromotion(Scope scope, String taskId, String grantId,
+            long expectedGrantVersion, long expectedAssignmentRevision, String targetAgentId) {
+        validateScope(scope); exact(taskId,"taskId",100); exact(grantId,"grantId",100);
+        exact(targetAgentId,"targetAgentId",100);
+        if (expectedGrantVersion < 1 || expectedGrantVersion > MAX_SAFE_INTEGER
+                || expectedAssignmentRevision < 0 || expectedAssignmentRevision > MAX_SAFE_INTEGER)
+            throw bad("Expected version is invalid");
+        try {
+            return transactions.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),
+                    scope.ownerJiacn(),taskId,root -> {
+                        AgentTaskExecutionGrantEntity observed=grants.findByGrant(scope.tenantId(),
+                                scope.clientId(),scope.ownerJiacn(),taskId,grantId);
+                        if (observed==null) throw notFound();
+                        lockTargetAndPersistedInputs(scope,taskId,targetAgentId,observed);
+                        AgentTaskExecutionGrantEntity grant=grants.findByGrantForUpdate(scope.tenantId(),
+                                scope.clientId(),scope.ownerJiacn(),taskId,grantId);
+                        if (grant==null || !same(observed.getRequestHash(),grant.getRequestHash()))
+                            throw conflict("Grant changed during promotion admission");
+                        return verifyPromotionAdmission(scope,root,grant,expectedGrantVersion,
+                                expectedAssignmentRevision,targetAgentId);
+                    });
+        } catch (AgentTaskCollaborationException failure) { throw translate(failure); }
+    }
+
+    private Admission verifyPromotionAdmission(Scope scope, AgentTaskMetaEntity root,
+            AgentTaskExecutionGrantEntity grant, long grantVersion, long assignmentRevision,
+            String targetAgentId) {
+        if (!"ACTIVE".equals(grant.getState()) || !Objects.equals(grantVersion,grant.getGrantVersion())
+                || !Objects.equals(assignmentRevision,grant.getAssignmentRevision())
+                || root.getTaskVersion()==null || root.getTaskVersion()<assignmentRevision
+                || !same(targetAgentId,grant.getTargetAgentId())
+                || !same(targetAgentId,root.getAssignedAgentId()))
+            throw conflict("Grant, assignment, or target is stale");
+        requireAssignmentEpoch(scope,grant.getTaskId(),assignmentRevision,root);
+        AgentTaskExecutionGrantEntity active=grants.findActiveByTask(scope.tenantId(),scope.clientId(),
+                scope.ownerJiacn(),grant.getTaskId());
+        if (active==null || !same(active.getGrantId(),grant.getGrantId())
+                || !Objects.equals(active.getGrantVersion(),grantVersion))
+            throw conflict("Grant is not the current assignment authorization");
+        try {
+            var current=requirementSnapshots.requireCurrent(scope,grant.getTaskId(),grant.getRequirementRevision());
+            if (current==null || current.revision()!=grant.getRequirementRevision())
+                throw new IllegalStateException("Requirement revision drift");
+        } catch (IllegalArgumentException | IllegalStateException absent) {
+            throw invalidState("Current requirement revision is missing or stale");
+        }
+        var inputs=readInputs(grant.getInputScopeJson()).stream()
+                .map(input -> new AuthorizedInput(input.fileId(),input.version(),input.purpose(),
+                        input.contentMimeType(),input.byteLength(),input.contentHash())).toList();
+        return new Admission(grant.getGrantId(),grantVersion,assignmentRevision,targetAgentId,
+                "FINALIZE_SELECTED_OUTPUTS",false,inputs);
     }
 
     @Override
