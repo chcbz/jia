@@ -175,7 +175,7 @@ public final class ChatConversationArchiveSchemaInitializer implements Initializ
     }
     private static Object value(Map<String, Object> row, String key) {
         return row.entrySet().stream().filter(entry -> entry.getKey().equalsIgnoreCase(key))
-                .map(Map.Entry::getValue).findFirst().orElse(null);
+                .findFirst().map(Map.Entry::getValue).orElse(null);
     }
     private static String text(Map<String, Object> row, String key) {
         Object value = value(row, key);
