@@ -144,8 +144,9 @@ class AgentWebSocketNativeBountyExecutionTest {
         when(auth.isCurrentBinding(anyString(),anyString(),anyString(),anyString(),anyString(),anyString()))
                 .thenThrow(new IllegalArgumentException("revoked"));
         assertEquals(NativeBountyExecutionSessionLookup.State.OFFLINE,handler.current(scope()).state());
-        when(auth.isCurrentBinding(anyString(),anyString(),anyString(),anyString(),anyString(),anyString()))
-                .thenThrow(new IllegalStateException("database unavailable"));
+        // Replace the throwing revocation stub without invoking it here.
+        org.mockito.Mockito.doThrow(new IllegalStateException("database unavailable"))
+                .when(auth).isCurrentBinding(anyString(),anyString(),anyString(),anyString(),anyString(),anyString());
         assertThrows(NativeBountyExecutionSessionLookup.SourceUnavailable.class,()->handler.current(scope()));
     }
 

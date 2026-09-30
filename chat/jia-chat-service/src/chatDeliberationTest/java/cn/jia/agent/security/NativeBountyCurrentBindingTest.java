@@ -52,8 +52,10 @@ class NativeBountyCurrentBindingTest {
                 .thenThrow(new RuntimeException("identity revoked"));
         assertThrows(IllegalArgumentException.class,()->service.isCurrentBinding(
                 "session-a","0","client-a","owner-a",agent,"runtime-a"));
-        when(identities.requireActiveIdentityForBinding("0","client-a","owner-a",7L,agent))
-                .thenThrow(new DataAccessResourceFailureException("identity store down"));
+        // when(...) invokes an existing throwing stub during replacement. Use
+        // doThrow so the storage outage occurs only in the asserted lookup.
+        doThrow(new DataAccessResourceFailureException("identity store down"))
+                .when(identities).requireActiveIdentityForBinding("0","client-a","owner-a",7L,agent);
         assertThrows(DataAccessResourceFailureException.class,()->service.isCurrentBinding(
                 "session-a","0","client-a","owner-a",agent,"runtime-a"));
     }
