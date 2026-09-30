@@ -44,6 +44,16 @@ class AgentTaskProviderCostConsentMySqlTest {
         assertThrows(DataAccessException.class,()->insertIssued("bad-epoch","consent-f","owner-a",0,1));
         assertThrows(DataAccessException.class,()->jdbc.update("UPDATE agent_task_provider_cost_consent SET state='CONSUMED' WHERE consent_id='consent-a'"));}
 
+    @Test void actualMySqlCheckNormalizationAcceptsPristineAndRejectsSameNamedWeakCheck(){
+        assertDoesNotThrow(()->new AgentTaskProviderCostConsentSchemaInitializer(jdbc).afterPropertiesSet());
+        jdbc.execute("ALTER TABLE agent_task_provider_cost_consent "
+                +"DROP CHECK chk_atpcc_provider, "
+                +"ADD CONSTRAINT chk_atpcc_provider CHECK (1)");
+        IllegalStateException failure=assertThrows(IllegalStateException.class,
+                ()->new AgentTaskProviderCostConsentSchemaInitializer(jdbc).afterPropertiesSet());
+        assertTrue(failure.getMessage().contains("CHECK definition drift"),failure.getMessage());
+    }
+
     @Test void concurrentCasAllowsExactlyOneIssuedToBoundTransition()throws Exception{insertIssued("race","consent-race","owner-a",7,1);
         TransactionTemplate first=new TransactionTemplate(new DataSourceTransactionManager(source));
         TransactionTemplate second=new TransactionTemplate(new DataSourceTransactionManager(source));CountDownLatch start=new CountDownLatch(1);

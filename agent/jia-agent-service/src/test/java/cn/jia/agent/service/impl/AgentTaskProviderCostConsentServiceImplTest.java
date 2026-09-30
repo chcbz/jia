@@ -13,12 +13,23 @@ import cn.jia.agent.service.AgentTaskProviderCostConsentService;
 import cn.jia.agent.service.NativeProviderCredentialBindingLookup;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.EnableTransactionManagement;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -132,6 +143,27 @@ class AgentTaskProviderCostConsentServiceImplTest {
         assertEquals("REVOKED",service.get(scope(),"task-1",issued.consentId()).state());
     }
 
+    @Test void springCreatesClassProxyAndBothGetsUseActualReadOnlyTransactions() {
+        try (AnnotationConfigApplicationContext context =
+                     new AnnotationConfigApplicationContext(ReadOnlyProxyConfiguration.class)) {
+            AgentTaskProviderCostConsentServiceImpl proxied =
+                    context.getBean(AgentTaskProviderCostConsentServiceImpl.class);
+            assertTrue(AopUtils.isCglibProxy(proxied),
+                    "@Transactional service must be a Spring class proxy");
+
+            AgentTaskProviderCostConsentService.Failure byId = assertThrows(
+                    AgentTaskProviderCostConsentService.Failure.class,
+                    () -> proxied.get(scope(), "task-1", "consent-a"));
+            assertEquals(AgentTaskProviderCostConsentService.Reason.NOT_FOUND, byId.reason());
+            AgentTaskProviderCostConsentService.Failure byKey = assertThrows(
+                    AgentTaskProviderCostConsentService.Failure.class,
+                    () -> proxied.getByIdempotencyKey(scope(), "task-1", "request-a"));
+            assertEquals(AgentTaskProviderCostConsentService.Reason.NOT_FOUND, byKey.reason());
+            assertEquals(2, context.getBean(AtomicInteger.class).get(),
+                    "both DAO reads must observe an actual read-only Spring transaction");
+        }
+    }
+
     private static AgentTaskProviderCostConsentService.Scope scope(){return new AgentTaskProviderCostConsentService.Scope("0","client-a","owner-a");}
     private static AgentTaskProviderCostConsentIssueDTO request(String binding) {
         AgentTaskAssignDTO assignment=new AgentTaskAssignDTO();assignment.setWorkflowVersion(2);
@@ -168,5 +200,46 @@ class AgentTaskProviderCostConsentServiceImplTest {
         @Override public boolean reserve(AgentTaskProviderCostConsentEntity row,long version){return true;}
         @Override public boolean consume(AgentTaskProviderCostConsentEntity row,long version){return true;}
         @Override public boolean revoke(AgentTaskProviderCostConsentEntity row,long version){return true;}
+    }
+
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableTransactionManagement(proxyTargetClass = true)
+    @Import(AgentTaskProviderCostConsentServiceImpl.class)
+    static class ReadOnlyProxyConfiguration {
+        @Bean
+        AtomicInteger transactionObservations() { return new AtomicInteger(); }
+
+        @Bean
+        AgentTaskProviderCostConsentDao consentDao(AtomicInteger observations) {
+            AgentTaskProviderCostConsentDao dao=mock(AgentTaskProviderCostConsentDao.class);
+            when(dao.findByConsent(anyString(),anyString(),anyString(),anyString(),anyString()))
+                    .thenAnswer(invocation->{observeReadOnly(observations);return null;});
+            when(dao.findByIdempotencyKey(anyString(),anyString(),anyString(),anyString(),anyString()))
+                    .thenAnswer(invocation->{observeReadOnly(observations);return null;});
+            return dao;
+        }
+
+        @Bean AgentTaskExecutionGrantService grants() { return mock(AgentTaskExecutionGrantService.class); }
+        @Bean AgentTaskMutationTransaction transactions() { return mock(AgentTaskMutationTransaction.class); }
+        @Bean ControlledImageProviderOperatorPolicy policies() {
+            return mock(ControlledImageProviderOperatorPolicy.class);
+        }
+        @Bean ObjectMapper objectMapper() { return new ObjectMapper(); }
+        @Bean DriverManagerDataSource dataSource() {
+            return new DriverManagerDataSource(
+                    "jdbc:h2:mem:provider_consent_proxy;MODE=MYSQL;DB_CLOSE_DELAY=-1", "sa", "");
+        }
+        @Bean PlatformTransactionManager transactionManager(DriverManagerDataSource source) {
+            return new DataSourceTransactionManager(source);
+        }
+
+        private static void observeReadOnly(AtomicInteger observations) {
+            assertTrue(TransactionSynchronizationManager.isActualTransactionActive(),
+                    "DAO read must run in an actual Spring transaction");
+            assertTrue(TransactionSynchronizationManager.isCurrentTransactionReadOnly(),
+                    "DAO read transaction must be read-only");
+            observations.incrementAndGet();
+        }
     }
 }

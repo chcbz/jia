@@ -33,7 +33,7 @@ import static cn.jia.agent.service.AgentTaskProviderCostConsentService.Reason;
 
 /** No-Provider consent core. Production paid admission remains intentionally disconnected. */
 @Named
-public final class AgentTaskProviderCostConsentServiceImpl
+public class AgentTaskProviderCostConsentServiceImpl
         implements AgentTaskProviderCostConsentService {
     static final String ACKNOWLEDGEMENT =
             "UNPRICED_EXTERNAL_ACCOUNT_ONE_IMAGE_REQUEST_ATTEMPT";

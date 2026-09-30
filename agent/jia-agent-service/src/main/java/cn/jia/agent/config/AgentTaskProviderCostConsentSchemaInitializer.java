@@ -10,15 +10,87 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 
 /** Additive-only initializer that rejects provider-consent catalog drift. */
 public final class AgentTaskProviderCostConsentSchemaInitializer implements InitializingBean {
     static final String TABLE="agent_task_provider_cost_consent";
-    private static final Set<String> CHECKS=Set.of("chk_atpcc_scope","chk_atpcc_identity",
-            "chk_atpcc_hashes","chk_atpcc_provider","chk_atpcc_versions","chk_atpcc_inputs",
-            "chk_atpcc_state","chk_atpcc_bound","chk_atpcc_reserved","chk_atpcc_consumed",
-            "chk_atpcc_revoked","chk_atpcc_issued","chk_atpcc_time");
+    private static final Map<String,String> CHECK_EXPRESSIONS=Map.ofEntries(
+            Map.entry("chk_atpcc_scope", "tenant_id='0' AND owner_jiacn<>'0'"),
+            Map.entry("chk_atpcc_identity", """
+                    CHAR_LENGTH(client_id) BETWEEN 1 AND 50
+                    AND CHAR_LENGTH(owner_jiacn) BETWEEN 1 AND 50
+                    AND CHAR_LENGTH(consent_id) BETWEEN 1 AND 100
+                    AND CHAR_LENGTH(task_id) BETWEEN 1 AND 100
+                    AND CHAR_LENGTH(target_agent_id) BETWEEN 1 AND 100
+                    AND CHAR_LENGTH(idempotency_key) BETWEEN 1 AND 100
+                    AND CHAR_LENGTH(assignment_idempotency_key) BETWEEN 1 AND 100
+                    AND CHAR_LENGTH(binding_id) BETWEEN 1 AND 100
+                    AND CHAR_LENGTH(model_id) BETWEEN 1 AND 100
+                    AND CHAR_LENGTH(operator_issuer) BETWEEN 1 AND 100
+                    AND CHAR_LENGTH(operator_policy_revision) BETWEEN 1 AND 100
+                    """),
+            Map.entry("chk_atpcc_hashes", """
+                    request_digest REGEXP BINARY '^[0-9a-f]{64}$'
+                    AND assignment_base_hash REGEXP BINARY '^[0-9a-f]{64}$'
+                    AND requirement_sha256 REGEXP BINARY '^[0-9a-f]{64}$'
+                    AND input_snapshot_digest REGEXP BINARY '^[0-9a-f]{64}$'
+                    AND (revoke_request_digest IS NULL
+                      OR revoke_request_digest REGEXP BINARY '^[0-9a-f]{64}$')
+                    """),
+            Map.entry("chk_atpcc_provider", """
+                    provider_lane='CONTROLLED_IMAGE_HTTP_V1'
+                    AND pricing_mode='UNPRICED_EXTERNAL_ACCOUNT'
+                    AND max_outbound_request_attempts=1
+                    AND binding_epoch>0 AND expires_at>0
+                    """),
+            Map.entry("chk_atpcc_versions", """
+                    task_version>=0 AND requirement_revision>0 AND version>0
+                    AND (bound_grant_version IS NULL OR bound_grant_version>0)
+                    AND (bound_assignment_revision IS NULL OR bound_assignment_revision>=0)
+                    """),
+            Map.entry("chk_atpcc_inputs", """
+                    JSON_TYPE(input_snapshot_json)='ARRAY'
+                    AND JSON_LENGTH(input_snapshot_json) BETWEEN 0 AND 16
+                    """),
+            Map.entry("chk_atpcc_state",
+                    "state IN ('ISSUED','BOUND','RESERVED','CONSUMED','REVOKED')"),
+            Map.entry("chk_atpcc_bound", """
+                    (bound_grant_id IS NULL AND bound_grant_version IS NULL
+                      AND bound_assignment_revision IS NULL)
+                    OR
+                    (bound_grant_id IS NOT NULL AND bound_grant_version IS NOT NULL
+                      AND bound_assignment_revision IS NOT NULL
+                      AND state IN ('BOUND','RESERVED','CONSUMED','REVOKED'))
+                    """),
+            Map.entry("chk_atpcc_reserved", """
+                    (reserved_execution_id IS NULL AND reserved_run_id IS NULL)
+                    OR
+                    (reserved_execution_id IS NOT NULL AND reserved_run_id IS NOT NULL
+                      AND bound_grant_id IS NOT NULL
+                      AND state IN ('RESERVED','CONSUMED','REVOKED'))
+                    """),
+            Map.entry("chk_atpcc_consumed", """
+                    (state='CONSUMED' AND consumed_lease_id IS NOT NULL AND consumed_at IS NOT NULL
+                      AND reserved_execution_id IS NOT NULL)
+                    OR
+                    (state<>'CONSUMED' AND consumed_lease_id IS NULL AND consumed_at IS NULL)
+                    """),
+            Map.entry("chk_atpcc_revoked", """
+                    (state='REVOKED' AND revoke_idempotency_key IS NOT NULL
+                      AND revoke_request_digest IS NOT NULL AND revoked_at IS NOT NULL)
+                    OR
+                    (state<>'REVOKED' AND revoke_idempotency_key IS NULL
+                      AND revoke_request_digest IS NULL AND revoked_at IS NULL)
+                    """),
+            Map.entry("chk_atpcc_issued", """
+                    state<>'ISSUED' OR (bound_grant_id IS NULL AND reserved_execution_id IS NULL
+                      AND consumed_lease_id IS NULL AND revoke_idempotency_key IS NULL)
+                    """),
+            Map.entry("chk_atpcc_time", """
+                    created_at>0
+                    AND (consumed_at IS NULL OR consumed_at>=created_at)
+                    AND (revoked_at IS NULL OR revoked_at>=created_at)
+                    """));
     private final JdbcTemplate jdbc;
     public AgentTaskProviderCostConsentSchemaInitializer(JdbcTemplate jdbc) {
         this.jdbc=Objects.requireNonNull(jdbc,"jdbc");
@@ -82,18 +154,36 @@ public final class AgentTaskProviderCostConsentSchemaInitializer implements Init
                 +"AND cc.constraint_schema=tc.constraint_schema AND cc.constraint_name=tc.constraint_name "
                 +"WHERE tc.constraint_schema=DATABASE() AND tc.table_name=? "
                 +"AND tc.constraint_type='CHECK'",TABLE);
-        Map<String,String> actual=new LinkedHashMap<>();
-        for (Map<String,Object> row:checks) {
+        validateChecks(checks);
+    }
+    static void validateChecks(List<Map<String,Object>> rows) {
+        record Check(String enforced,String clause) { }
+        Map<String,Check> actual=new LinkedHashMap<>();
+        for (Map<String,Object> row:rows) {
             String name=Objects.toString(row.get("constraint_name"),"");
-            if (actual.put(name,Objects.toString(row.get("enforced"),""))!=null) {
+            Check found=new Check(Objects.toString(row.get("enforced"),""),
+                    Objects.toString(row.get("check_clause"),""));
+            if (name.isBlank() || actual.put(name,found)!=null) {
                 throw new IllegalStateException("Provider-consent ambiguous CHECK catalog");
             }
-            String clause=Objects.toString(row.get("check_clause"),"");
-            if (clause.isBlank()) throw new IllegalStateException("Provider-consent empty CHECK: "+name);
         }
-        if (!actual.keySet().equals(CHECKS) || actual.values().stream().anyMatch(value->!"YES".equalsIgnoreCase(value))) {
-            throw new IllegalStateException("Provider-consent CHECK drift");
+        if (!actual.keySet().equals(CHECK_EXPRESSIONS.keySet())) {
+            throw new IllegalStateException("Provider-consent CHECK set drift");
         }
+        for (Map.Entry<String,String> expected:CHECK_EXPRESSIONS.entrySet()) {
+            Check found=actual.get(expected.getKey());
+            if (found==null || !"YES".equalsIgnoreCase(found.enforced())) {
+                throw new IllegalStateException("Provider-consent CHECK enforcement drift: "+expected.getKey());
+            }
+            String wanted=AgentTaskFundingSchemaInitializer.normalizeCheck(expected.getValue());
+            String clause=AgentTaskFundingSchemaInitializer.normalizeCheck(found.clause());
+            if (!wanted.equals(clause)) {
+                throw new IllegalStateException("Provider-consent CHECK definition drift: "+expected.getKey());
+            }
+        }
+    }
+    static Map<String,String> checkExpressions() {
+        return CHECK_EXPRESSIONS;
     }
     private void requireMySql8() {
         try (var connection=Objects.requireNonNull(jdbc.getDataSource()).getConnection()) {
