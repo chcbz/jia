@@ -4,7 +4,17 @@ import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.DependsOn;
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import java.lang.reflect.InvocationTargetException;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class AgentSelectedOutputFinalizationSchemaInitializerTest {
     @Test
@@ -23,5 +33,62 @@ class AgentSelectedOutputFinalizationSchemaInitializerTest {
                 "agentSelectedOutputFinalizationSchemaInitializer",JdbcTemplate.class);
         DependsOn order=method.getAnnotation(DependsOn.class);
         assertNotNull(order);assertArrayEquals(new String[]{"agentTaskFormalDeliverySchemaInitializer"},order.value());
+    }
+
+    @Test
+    void nullableMysqlIndexMetadataUsesFullColumnsAndCaseInsensitiveLabels() throws Exception {
+        var jdbc=mock(JdbcTemplate.class);
+        when(jdbc.queryForList(anyString(),any(Object[].class))).thenReturn(indexRows(null,false));
+        invokeIndexes(jdbc);
+    }
+
+    @Test
+    void actualPrefixIndexStillFailsClosedInsteadOfTreatingItAsMissing() {
+        var jdbc=mock(JdbcTemplate.class);
+        when(jdbc.queryForList(anyString(),any(Object[].class))).thenReturn(indexRows(16,false));
+        var failure=assertThrows(IllegalStateException.class,()->invokeIndexes(jdbc));
+        assertTrue(failure.getMessage().contains("prefix index drift"));
+    }
+
+    @Test
+    void fullColumnOrderDriftStillFailsClosed() {
+        var jdbc=mock(JdbcTemplate.class);
+        when(jdbc.queryForList(anyString(),any(Object[].class))).thenReturn(indexRows(null,true));
+        var failure=assertThrows(IllegalStateException.class,()->invokeIndexes(jdbc));
+        assertTrue(failure.getMessage().contains("index drift"));
+    }
+
+    @Test
+    void nullableMetadataHelperReturnsNullButPreservesNonNullPrefixLength() throws Exception {
+        var method=AgentSelectedOutputFinalizationSchemaInitializer.class.getDeclaredMethod("value",Map.class,String.class);
+        method.setAccessible(true);
+        Map<String,Object> row=new LinkedHashMap<>();row.put("SUB_PART",null);
+        assertNull(method.invoke(null,row,"sub_part"));assertNull(method.invoke(null,row,"absent"));
+        row.put("SUB_PART",16);assertEquals(16,method.invoke(null,row,"sub_part"));
+    }
+
+    private static void invokeIndexes(JdbcTemplate jdbc) throws Exception {
+        var method=AgentSelectedOutputFinalizationSchemaInitializer.class.getDeclaredMethod("validateIndexes",JdbcTemplate.class);
+        method.setAccessible(true);
+        try{method.invoke(null,jdbc);}catch(InvocationTargetException failure){
+            if(failure.getCause() instanceof RuntimeException cause)throw cause;
+            throw failure;
+        }
+    }
+
+    private static List<Map<String,Object>> indexRows(Integer prefix,boolean drift) {
+        Map<String,List<String>> indexes=new LinkedHashMap<>();
+        indexes.put("PRIMARY",List.of("tenant_id","client_id","owner_jiacn","operation_id"));
+        indexes.put("uk_asof_delivery",List.of("tenant_id","client_id","owner_jiacn","delivery_id"));
+        indexes.put("idx_asof_task",List.of("tenant_id","client_id","owner_jiacn","task_id","phase"));
+        List<Map<String,Object>> rows=new ArrayList<>();
+        indexes.forEach((name,columns)->{
+            for(int i=0;i<columns.size();i++){
+                Map<String,Object> row=new LinkedHashMap<>();row.put("INDEX_NAME",name);
+                row.put("NON_UNIQUE",name.startsWith("idx_")?1:0);row.put("SEQ_IN_INDEX",i+1);
+                row.put("COLUMN_NAME",drift&&name.equals("PRIMARY")&&i==0?"foreign_column":columns.get(i));
+                row.put("SUB_PART",prefix);rows.add(row);
+            }
+        });return rows;
     }
 }

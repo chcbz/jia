@@ -43,7 +43,7 @@ public final class AgentSelectedOutputFinalizationSchemaInitializer implements I
                     ||connection.getMetaData().getDatabaseMajorVersion()<8)
                 throw new IllegalStateException("Selected-output finalization schema requires MySQL 8");
             JdbcTemplate locked=new JdbcTemplate(new SingleConnectionDataSource(connection,true));
-            Integer acquired=locked.queryForObject("SELECT GET_LOCK('cyf:agent:selected-output-finalization:v1',10)",Integer.class);
+            Integer acquired=locked.queryForObject("SELECT GET_LOCK('cyf:agent:selected-output-finalization:v1',-1)",Integer.class);
             if(!Integer.valueOf(1).equals(acquired))throw new IllegalStateException("Selected-output finalization schema lock unavailable");
             try{locked.execute(ddl());validate(locked);}
             finally{
@@ -136,7 +136,7 @@ public final class AgentSelectedOutputFinalizationSchemaInitializer implements I
         var missing=new java.util.LinkedHashSet<>(expected);missing.removeAll(actual);return Set.copyOf(missing);
     }
     private static Object value(Map<String,Object> row,String key){return row.entrySet().stream()
-            .filter(entry->entry.getKey().equalsIgnoreCase(key)).map(Map.Entry::getValue).findFirst().orElse(null);}
+            .filter(entry->entry.getKey().equalsIgnoreCase(key)).findFirst().map(Map.Entry::getValue).orElse(null);}
     private static String text(Map<String,Object> row,String key){Object value=value(row,key);return value==null?null:String.valueOf(value);}
     private static String lower(Map<String,Object> row,String key){String value=text(row,key);return value==null?null:value.toLowerCase(Locale.ROOT);}
     private static long number(Map<String,Object> row,String key){Object value=value(row,key);return value instanceof Number n?n.longValue():Long.parseLong(String.valueOf(value));}

@@ -75,7 +75,7 @@ public final class ChatSelectedOutputFinalizationSchemaInitializer implements In
                     ||connection.getMetaData().getDatabaseMajorVersion()<8)
                 throw new IllegalStateException("Finalization schema requires MySQL 8");
             JdbcTemplate locked=new JdbcTemplate(new SingleConnectionDataSource(connection,true));
-            Integer acquired=locked.queryForObject("SELECT GET_LOCK('cyf:chat:selected-output-finalization:v1',10)",Integer.class);
+            Integer acquired=locked.queryForObject("SELECT GET_LOCK('cyf:chat:selected-output-finalization:v1',-1)",Integer.class);
             if(!Integer.valueOf(1).equals(acquired))throw new IllegalStateException("Finalization schema lock unavailable");
             try {for(String statement:ddl())locked.execute(statement);validate(locked);}
             finally {
@@ -182,7 +182,7 @@ public final class ChatSelectedOutputFinalizationSchemaInitializer implements In
     }
     private static Object value(Map<String,Object> row,String key) {
         return row.entrySet().stream().filter(entry->entry.getKey().equalsIgnoreCase(key))
-                .map(Map.Entry::getValue).findFirst().orElse(null);
+                .findFirst().map(Map.Entry::getValue).orElse(null);
     }
     private static String text(Map<String,Object> row,String key) {
         Object value=value(row,key);return value==null?null:String.valueOf(value);
