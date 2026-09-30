@@ -14,82 +14,80 @@ import java.util.Objects;
 /** Additive-only initializer that rejects provider-consent catalog drift. */
 public final class AgentTaskProviderCostConsentSchemaInitializer implements InitializingBean {
     static final String TABLE="agent_task_provider_cost_consent";
+    /** Exact MySQL 8 CHECK_CLAUSE rendering for the additive DDL below. Keeping this
+     * provider-specific avoids weakening the shared funded-task normalizer around BETWEEN's
+     * syntactic AND or MySQL's REGEXP BINARY -> regexp_like/cast catalog rewrite. */
     private static final Map<String,String> CHECK_EXPRESSIONS=Map.ofEntries(
-            Map.entry("chk_atpcc_scope", "tenant_id='0' AND owner_jiacn<>'0'"),
-            Map.entry("chk_atpcc_identity", """
-                    CHAR_LENGTH(client_id) BETWEEN 1 AND 50
-                    AND CHAR_LENGTH(owner_jiacn) BETWEEN 1 AND 50
-                    AND CHAR_LENGTH(consent_id) BETWEEN 1 AND 100
-                    AND CHAR_LENGTH(task_id) BETWEEN 1 AND 100
-                    AND CHAR_LENGTH(target_agent_id) BETWEEN 1 AND 100
-                    AND CHAR_LENGTH(idempotency_key) BETWEEN 1 AND 100
-                    AND CHAR_LENGTH(assignment_idempotency_key) BETWEEN 1 AND 100
-                    AND CHAR_LENGTH(binding_id) BETWEEN 1 AND 100
-                    AND CHAR_LENGTH(model_id) BETWEEN 1 AND 100
-                    AND CHAR_LENGTH(operator_issuer) BETWEEN 1 AND 100
-                    AND CHAR_LENGTH(operator_policy_revision) BETWEEN 1 AND 100
-                    """),
-            Map.entry("chk_atpcc_hashes", """
-                    request_digest REGEXP BINARY '^[0-9a-f]{64}$'
-                    AND assignment_base_hash REGEXP BINARY '^[0-9a-f]{64}$'
-                    AND requirement_sha256 REGEXP BINARY '^[0-9a-f]{64}$'
-                    AND input_snapshot_digest REGEXP BINARY '^[0-9a-f]{64}$'
-                    AND (revoke_request_digest IS NULL
-                      OR revoke_request_digest REGEXP BINARY '^[0-9a-f]{64}$')
-                    """),
-            Map.entry("chk_atpcc_provider", """
-                    provider_lane='CONTROLLED_IMAGE_HTTP_V1'
-                    AND pricing_mode='UNPRICED_EXTERNAL_ACCOUNT'
-                    AND max_outbound_request_attempts=1
-                    AND binding_epoch>0 AND expires_at>0
-                    """),
-            Map.entry("chk_atpcc_versions", """
-                    task_version>=0 AND requirement_revision>0 AND version>0
-                    AND (bound_grant_version IS NULL OR bound_grant_version>0)
-                    AND (bound_assignment_revision IS NULL OR bound_assignment_revision>=0)
-                    """),
-            Map.entry("chk_atpcc_inputs", """
-                    JSON_TYPE(input_snapshot_json)='ARRAY'
-                    AND JSON_LENGTH(input_snapshot_json) BETWEEN 0 AND 16
-                    """),
-            Map.entry("chk_atpcc_state",
-                    "state IN ('ISSUED','BOUND','RESERVED','CONSUMED','REVOKED')"),
             Map.entry("chk_atpcc_bound", """
-                    (bound_grant_id IS NULL AND bound_grant_version IS NULL
-                      AND bound_assignment_revision IS NULL)
-                    OR
-                    (bound_grant_id IS NOT NULL AND bound_grant_version IS NOT NULL
-                      AND bound_assignment_revision IS NOT NULL
-                      AND state IN ('BOUND','RESERVED','CONSUMED','REVOKED'))
-                    """),
-            Map.entry("chk_atpcc_reserved", """
-                    (reserved_execution_id IS NULL AND reserved_run_id IS NULL)
-                    OR
-                    (reserved_execution_id IS NOT NULL AND reserved_run_id IS NOT NULL
-                      AND bound_grant_id IS NOT NULL
-                      AND state IN ('RESERVED','CONSUMED','REVOKED'))
+                    (((bound_grant_id IS NULL) AND (bound_grant_version IS NULL)
+                      AND (bound_assignment_revision IS NULL)) OR
+                    ((bound_grant_id IS NOT NULL) AND (bound_grant_version IS NOT NULL)
+                      AND (bound_assignment_revision IS NOT NULL)
+                      AND (state IN ('BOUND','RESERVED','CONSUMED','REVOKED'))))
                     """),
             Map.entry("chk_atpcc_consumed", """
-                    (state='CONSUMED' AND consumed_lease_id IS NOT NULL AND consumed_at IS NOT NULL
-                      AND reserved_execution_id IS NOT NULL)
-                    OR
-                    (state<>'CONSUMED' AND consumed_lease_id IS NULL AND consumed_at IS NULL)
+                    (((state='CONSUMED') AND (consumed_lease_id IS NOT NULL)
+                      AND (consumed_at IS NOT NULL) AND (reserved_execution_id IS NOT NULL)) OR
+                    ((state<>'CONSUMED') AND (consumed_lease_id IS NULL) AND (consumed_at IS NULL)))
                     """),
-            Map.entry("chk_atpcc_revoked", """
-                    (state='REVOKED' AND revoke_idempotency_key IS NOT NULL
-                      AND revoke_request_digest IS NOT NULL AND revoked_at IS NOT NULL)
-                    OR
-                    (state<>'REVOKED' AND revoke_idempotency_key IS NULL
-                      AND revoke_request_digest IS NULL AND revoked_at IS NULL)
+            Map.entry("chk_atpcc_hashes", """
+                    (regexp_like(request_digest,cast('^[0-9a-f]{64}$' as char charset binary))
+                      AND regexp_like(assignment_base_hash,cast('^[0-9a-f]{64}$' as char charset binary))
+                      AND regexp_like(requirement_sha256,cast('^[0-9a-f]{64}$' as char charset binary))
+                      AND regexp_like(input_snapshot_digest,cast('^[0-9a-f]{64}$' as char charset binary))
+                      AND ((revoke_request_digest IS NULL) OR
+                        regexp_like(revoke_request_digest,cast('^[0-9a-f]{64}$' as char charset binary))))
+                    """),
+            Map.entry("chk_atpcc_identity", """
+                    ((char_length(client_id) BETWEEN 1 AND 50)
+                      AND (char_length(owner_jiacn) BETWEEN 1 AND 50)
+                      AND (char_length(consent_id) BETWEEN 1 AND 100)
+                      AND (char_length(task_id) BETWEEN 1 AND 100)
+                      AND (char_length(target_agent_id) BETWEEN 1 AND 100)
+                      AND (char_length(idempotency_key) BETWEEN 1 AND 100)
+                      AND (char_length(assignment_idempotency_key) BETWEEN 1 AND 100)
+                      AND (char_length(binding_id) BETWEEN 1 AND 100)
+                      AND (char_length(model_id) BETWEEN 1 AND 100)
+                      AND (char_length(operator_issuer) BETWEEN 1 AND 100)
+                      AND (char_length(operator_policy_revision) BETWEEN 1 AND 100))
+                    """),
+            Map.entry("chk_atpcc_inputs", """
+                    ((json_type(input_snapshot_json)='ARRAY')
+                      AND (json_length(input_snapshot_json) BETWEEN 0 AND 16))
                     """),
             Map.entry("chk_atpcc_issued", """
-                    state<>'ISSUED' OR (bound_grant_id IS NULL AND reserved_execution_id IS NULL
-                      AND consumed_lease_id IS NULL AND revoke_idempotency_key IS NULL)
+                    ((state<>'ISSUED') OR ((bound_grant_id IS NULL)
+                      AND (reserved_execution_id IS NULL) AND (consumed_lease_id IS NULL)
+                      AND (revoke_idempotency_key IS NULL)))
                     """),
+            Map.entry("chk_atpcc_provider", """
+                    ((provider_lane='CONTROLLED_IMAGE_HTTP_V1')
+                      AND (pricing_mode='UNPRICED_EXTERNAL_ACCOUNT')
+                      AND (max_outbound_request_attempts=1) AND (binding_epoch>0) AND (expires_at>0))
+                    """),
+            Map.entry("chk_atpcc_reserved", """
+                    (((reserved_execution_id IS NULL) AND (reserved_run_id IS NULL)) OR
+                    ((reserved_execution_id IS NOT NULL) AND (reserved_run_id IS NOT NULL)
+                      AND (bound_grant_id IS NOT NULL)
+                      AND (state IN ('RESERVED','CONSUMED','REVOKED'))))
+                    """),
+            Map.entry("chk_atpcc_revoked", """
+                    (((state='REVOKED') AND (revoke_idempotency_key IS NOT NULL)
+                      AND (revoke_request_digest IS NOT NULL) AND (revoked_at IS NOT NULL)) OR
+                    ((state<>'REVOKED') AND (revoke_idempotency_key IS NULL)
+                      AND (revoke_request_digest IS NULL) AND (revoked_at IS NULL)))
+                    """),
+            Map.entry("chk_atpcc_scope", "((tenant_id='0') AND (owner_jiacn<>'0'))"),
+            Map.entry("chk_atpcc_state",
+                    "(state IN ('ISSUED','BOUND','RESERVED','CONSUMED','REVOKED'))"),
             Map.entry("chk_atpcc_time", """
-                    created_at>0
-                    AND (consumed_at IS NULL OR consumed_at>=created_at)
-                    AND (revoked_at IS NULL OR revoked_at>=created_at)
+                    ((created_at>0) AND ((consumed_at IS NULL) OR (consumed_at>=created_at))
+                      AND ((revoked_at IS NULL) OR (revoked_at>=created_at)))
+                    """),
+            Map.entry("chk_atpcc_versions", """
+                    ((task_version>=0) AND (requirement_revision>0) AND (version>0)
+                      AND ((bound_grant_version IS NULL) OR (bound_grant_version>0))
+                      AND ((bound_assignment_revision IS NULL) OR (bound_assignment_revision>=0)))
                     """));
     private final JdbcTemplate jdbc;
     public AgentTaskProviderCostConsentSchemaInitializer(JdbcTemplate jdbc) {
@@ -175,8 +173,17 @@ public final class AgentTaskProviderCostConsentSchemaInitializer implements Init
             if (found==null || !"YES".equalsIgnoreCase(found.enforced())) {
                 throw new IllegalStateException("Provider-consent CHECK enforcement drift: "+expected.getKey());
             }
-            String wanted=AgentTaskFundingSchemaInitializer.normalizeCheck(expected.getValue());
-            String clause=AgentTaskFundingSchemaInitializer.normalizeCheck(found.clause());
+            String wanted;
+            String clause;
+            try {
+                wanted=AgentTaskCreationOperationSchemaInitializer.canonicalCheckExpression(
+                        expected.getValue());
+                clause=AgentTaskCreationOperationSchemaInitializer.canonicalCheckExpression(
+                        found.clause());
+            } catch (IllegalArgumentException malformed) {
+                throw new IllegalStateException(
+                        "Provider-consent malformed CHECK catalog: "+expected.getKey(),malformed);
+            }
             if (!wanted.equals(clause)) {
                 throw new IllegalStateException("Provider-consent CHECK definition drift: "+expected.getKey());
             }

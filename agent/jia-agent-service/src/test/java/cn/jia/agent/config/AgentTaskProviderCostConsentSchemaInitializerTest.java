@@ -25,13 +25,45 @@ class AgentTaskProviderCostConsentSchemaInitializerTest {
             assertTrue(normalized.contains(required),required);
     }
 
+    @Test void mysql821CatalogRenderingPreservesBetweenAndBinaryRegexpSemantics() {
+        List<Map<String,Object>> rendered=checkRows();
+        clause(rendered,"chk_atpcc_identity","""
+                ((char_length(`client_id`) between 1 and 50)
+                  and (char_length(`owner_jiacn`) between 1 and 50)
+                  and (char_length(`consent_id`) between 1 and 100)
+                  and (char_length(`task_id`) between 1 and 100)
+                  and (char_length(`target_agent_id`) between 1 and 100)
+                  and (char_length(`idempotency_key`) between 1 and 100)
+                  and (char_length(`assignment_idempotency_key`) between 1 and 100)
+                  and (char_length(`binding_id`) between 1 and 100)
+                  and (char_length(`model_id`) between 1 and 100)
+                  and (char_length(`operator_issuer`) between 1 and 100)
+                  and (char_length(`operator_policy_revision`) between 1 and 100))
+                """);
+        clause(rendered,"chk_atpcc_inputs","""
+                ((json_type(`input_snapshot_json`) = _utf8mb4\\'ARRAY\\')
+                  and (json_length(`input_snapshot_json`) between 0 and 16))
+                """);
+        clause(rendered,"chk_atpcc_hashes","""
+                (regexp_like(`request_digest`,cast(_utf8mb4\\'^[0-9a-f]{64}$\\' as char charset binary))
+                  and regexp_like(`assignment_base_hash`,cast(_utf8mb4\\'^[0-9a-f]{64}$\\' as char charset binary))
+                  and regexp_like(`requirement_sha256`,cast(_utf8mb4\\'^[0-9a-f]{64}$\\' as char charset binary))
+                  and regexp_like(`input_snapshot_digest`,cast(_utf8mb4\\'^[0-9a-f]{64}$\\' as char charset binary))
+                  and ((`revoke_request_digest` is null) or
+                    regexp_like(`revoke_request_digest`,cast(_utf8mb4\\'^[0-9a-f]{64}$\\' as char charset binary))))
+                """);
+        assertDoesNotThrow(()->AgentTaskProviderCostConsentSchemaInitializer.validateChecks(rendered));
+    }
+
     @Test void exactCheckCatalogRejectsSameNamedWeakAndAlwaysTrueDefinitions() {
         List<Map<String,Object>> pristine=checkRows();
         assertDoesNotThrow(()->AgentTaskProviderCostConsentSchemaInitializer.validateChecks(pristine));
 
         for (String weakClause:List.of("1",
                 AgentTaskProviderCostConsentSchemaInitializer.checkExpressions()
-                        .get("chk_atpcc_provider")+" OR 1=1")) {
+                        .get("chk_atpcc_provider")+" OR 1=1",
+                AgentTaskProviderCostConsentSchemaInitializer.checkExpressions()
+                        .get("chk_atpcc_provider").replace("(binding_epoch>0)","(binding_epoch>=0)"))) {
             List<Map<String,Object>> weakened=checkRows();
             weakened.stream()
                     .filter(row->"chk_atpcc_provider".equals(row.get("constraint_name")))
@@ -45,6 +77,11 @@ class AgentTaskProviderCostConsentSchemaInitializerTest {
         unenforced.getFirst().put("enforced","NO");
         assertThrows(IllegalStateException.class,
                 ()->AgentTaskProviderCostConsentSchemaInitializer.validateChecks(unenforced));
+    }
+
+    private static void clause(List<Map<String,Object>> rows,String name,String clause) {
+        rows.stream().filter(row->name.equals(row.get("constraint_name")))
+                .findFirst().orElseThrow().put("check_clause",clause);
     }
 
     private static List<Map<String,Object>> checkRows() {
