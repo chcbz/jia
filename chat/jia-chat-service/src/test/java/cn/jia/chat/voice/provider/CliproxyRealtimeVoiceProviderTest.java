@@ -207,6 +207,28 @@ class CliproxyRealtimeVoiceProviderTest {
     }
 
     @Test
+    void synthesisTranscriptComparisonPreservesNumericPunctuationSemantics() {
+        Map<Scenario, String> cases = Map.of(
+                Scenario.TRANSCRIPT_NEGATIVE_SIGN_LOSS, "-1",
+                Scenario.TRANSCRIPT_DECIMAL_POINT_LOSS, "1.2");
+        for (Map.Entry<Scenario, String> entry : cases.entrySet()) {
+            VoiceSpeechProperties properties = realtimeProperties();
+            FakeTransport transport = new FakeTransport(mapper, entry.getKey());
+            CliproxyRealtimeSessionClient client = new CliproxyRealtimeSessionClient(
+                    properties, mapper, transport);
+
+            SpeechProviderException error = assertThrows(SpeechProviderException.class,
+                    () -> client.synthesize(facade().synthesis(), "gpt-realtime",
+                            "alloy", entry.getValue()), entry.getKey().name());
+
+            assertEquals(SpeechProviderException.FailureKind.KNOWN,
+                    error.failureKind(), entry.getKey().name());
+            assertEquals(1, transport.connection.responseCreateCount, entry.getKey().name());
+            assertTrue(transport.connection.aborted, entry.getKey().name());
+        }
+    }
+
+    @Test
     void synthesisTranscriptMustBeCorrelatedBoundedTerminalAndExact() {
         for (Scenario scenario : List.of(
                 Scenario.WRONG_TRANSCRIPT_CORRELATION,
@@ -380,6 +402,8 @@ class CliproxyRealtimeVoiceProviderTest {
         TRANSCRIPT_TOO_LARGE,
         MISSING_TRANSCRIPT_TERMINAL,
         TRANSCRIPT_TERMINAL_MISMATCH,
+        TRANSCRIPT_NEGATIVE_SIGN_LOSS,
+        TRANSCRIPT_DECIMAL_POINT_LOSS,
         WRONG_CORRELATION,
         BAD_BASE64,
         ODD_AUDIO,
@@ -520,7 +544,8 @@ class CliproxyRealtimeVoiceProviderTest {
             emit("{\"type\":\"response.output_item.added\",\"response_id\":\"resp-1\","
                     + "\"output_index\":0,\"item\":{\"id\":\"item-1\","
                     + "\"type\":\"message\",\"role\":\"assistant\"}}");
-            if (scenario == Scenario.TEXT_SUCCESS) {
+            if (scenario == Scenario.TEXT_SUCCESS
+                    || scenario == Scenario.DELAYED_INPUT_ACK) {
                 emit(contentPart("response.content_part.added"));
                 emitFragmented(correlated("response.output_text.delta", "\"delta\":\"林冲\""));
                 emit(correlated("response.output_text.delta", "\"delta\":\"领命\""));
@@ -552,6 +577,8 @@ class CliproxyRealtimeVoiceProviderTest {
                         "好的，我明白了。接下来您需要我帮您进行什么样的协助呢？";
                 case TRANSCRIPT_TOO_LARGE -> "x".repeat(
                         CliproxyRealtimeSessionClient.MAX_TEXT_CHARS + 1);
+                case TRANSCRIPT_NEGATIVE_SIGN_LOSS -> "1";
+                case TRANSCRIPT_DECIMAL_POINT_LOSS -> "12";
                 default -> pendingInputText;
             };
             emit("{\"type\":\"response.output_audio_transcript.delta\","
