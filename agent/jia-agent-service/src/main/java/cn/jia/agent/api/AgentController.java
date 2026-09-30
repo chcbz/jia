@@ -563,6 +563,7 @@ public class AgentController {
                 || request.getExpectedTaskVersion() != null
                 || request.getRequirementRevision() != null
                 || request.getRequestedOperations() != null
+                || request.getInitialOperation() != null
                 || request.getInputRefs() != null
                 || request.getExistingCostAuthorizationRef() != null
                 || request.getCostAuthorizationRef() != null
