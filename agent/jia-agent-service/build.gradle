@@ -605,11 +605,28 @@ def mmdU1ProviderConsentCoreSourceSet = sourceSets.create('mmdU1ProviderConsentC
     compileClasspath += sourceSets.main.output
     runtimeClasspath += output + compileClasspath
 }
+// The five bounded fixtures import only production code plus JUnit/Mockito/Spring test HTTP.
+// Do not inherit testImplementation: it pulls common:jia-common-test and its Testable annotation
+// processor into this source-only graph even though none of these fixtures imports that helper.
 configurations.named(mmdU1ProviderConsentCoreSourceSet.implementationConfigurationName) {
-    extendsFrom configurations.testImplementation
+    extendsFrom configurations.implementation
 }
 configurations.named(mmdU1ProviderConsentCoreSourceSet.runtimeOnlyConfigurationName) {
-    extendsFrom configurations.testRuntimeOnly
+    extendsFrom configurations.runtimeOnly
+}
+dependencies {
+    add(mmdU1ProviderConsentCoreSourceSet.implementationConfigurationName,
+            platform("org.springframework.boot:spring-boot-dependencies:${libs.versions.spring.boot.asProvider().get()}"))
+    add(mmdU1ProviderConsentCoreSourceSet.implementationConfigurationName, libs.junit.jupiter)
+    add(mmdU1ProviderConsentCoreSourceSet.implementationConfigurationName, 'org.mockito:mockito-core')
+    add(mmdU1ProviderConsentCoreSourceSet.implementationConfigurationName, 'org.springframework:spring-test')
+    add(mmdU1ProviderConsentCoreSourceSet.implementationConfigurationName,
+            'org.springframework.security:spring-security-oauth2-resource-server')
+    add(mmdU1ProviderConsentCoreSourceSet.implementationConfigurationName,
+            'org.springframework.security:spring-security-oauth2-jose')
+    add(mmdU1ProviderConsentCoreSourceSet.runtimeOnlyConfigurationName,
+            'org.junit.platform:junit-platform-launcher:6.0.1')
+    add(mmdU1ProviderConsentCoreSourceSet.runtimeOnlyConfigurationName, libs.mysql)
 }
 tasks.register('mmdU1ProviderConsentCore', Test) {
     maxParallelForks = 1

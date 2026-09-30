@@ -190,11 +190,26 @@ def mmdU1ProviderCredentialBindingSourceSet = sourceSets.create('mmdU1ProviderCr
     compileClasspath += sourceSets.main.output
     runtimeClasspath += output + compileClasspath
 }
+// These six fixtures use production WebSocket/runtime identity classes plus JUnit/Mockito.
+// They do not import common:jia-common-test, BaseTest or Testable, so keep that annotation
+// processor and unrelated service-test graph outside this bounded source set.
 configurations.named(mmdU1ProviderCredentialBindingSourceSet.implementationConfigurationName) {
-    extendsFrom configurations.testImplementation
+    extendsFrom configurations.implementation
 }
 configurations.named(mmdU1ProviderCredentialBindingSourceSet.runtimeOnlyConfigurationName) {
-    extendsFrom configurations.testRuntimeOnly
+    extendsFrom configurations.runtimeOnly
+}
+dependencies {
+    add(mmdU1ProviderCredentialBindingSourceSet.implementationConfigurationName,
+            platform("org.springframework.boot:spring-boot-dependencies:${libs.versions.spring.boot.asProvider().get()}"))
+    add(mmdU1ProviderCredentialBindingSourceSet.implementationConfigurationName, libs.junit.jupiter)
+    add(mmdU1ProviderCredentialBindingSourceSet.implementationConfigurationName, 'org.mockito:mockito-core')
+    add(mmdU1ProviderCredentialBindingSourceSet.implementationConfigurationName,
+            libs.spring.boot.starter.websocket)
+    add(mmdU1ProviderCredentialBindingSourceSet.implementationConfigurationName,
+            project(':oauth:jia-oauth-api'))
+    add(mmdU1ProviderCredentialBindingSourceSet.runtimeOnlyConfigurationName,
+            'org.junit.platform:junit-platform-launcher:6.0.1')
 }
 tasks.register('mmdU1ProviderCredentialBinding', Test) {
     maxParallelForks = 1
