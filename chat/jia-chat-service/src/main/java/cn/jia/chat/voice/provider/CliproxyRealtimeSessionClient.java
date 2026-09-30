@@ -18,6 +18,7 @@ import java.util.Base64;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -222,6 +223,7 @@ final class CliproxyRealtimeSessionClient {
         private final AtomicLong activity = new AtomicLong();
         private final StringBuilder eventBuffer = new StringBuilder();
         private final StringBuilder text = new StringBuilder();
+        private final StringBuilder audioTranscript = new StringBuilder();
         private final ByteArrayOutputStream audio = new ByteArrayOutputStream();
         private RealtimeWebSocketTransport.Connection socket;
         private int eventFragments;
@@ -229,9 +231,13 @@ final class CliproxyRealtimeSessionClient {
         private boolean sessionCreated;
         private boolean sessionUpdated;
         private boolean requestDispatched;
+        private String inputItemId;
+        private JsonNode acknowledgedInputItem;
+        private boolean responseCreateSent;
         private String responseId;
         private String itemId;
         private boolean modalityDone;
+        private boolean audioTranscriptDone;
         private boolean itemDone;
         private boolean responseDone;
 
@@ -358,6 +364,9 @@ final class CliproxyRealtimeSessionClient {
             switch (type) {
                 case "session.created" -> sessionCreated(event);
                 case "session.updated" -> sessionUpdated();
+                case "input_audio_buffer.committed" -> inputAudioCommitted(event);
+                case "conversation.item.created", "conversation.item.added",
+                        "conversation.item.done" -> conversationItemAcknowledged(event);
                 case "response.created" -> responseCreated(event);
                 case "response.output_item.added" -> outputItemAdded(event);
                 case "response.output_item.done" -> outputItemDone(event);
@@ -365,8 +374,8 @@ final class CliproxyRealtimeSessionClient {
                 case "response.output_text.done" -> textDone(event);
                 case "response.output_audio.delta" -> audioDelta(event);
                 case "response.output_audio.done" -> audioDone(event);
-                case "response.output_audio_transcript.delta",
-                        "response.output_audio_transcript.done" -> requireContent(event);
+                case "response.output_audio_transcript.delta" -> audioTranscriptDelta(event);
+                case "response.output_audio_transcript.done" -> audioTranscriptDone(event);
                 case "response.content_part.added", "response.content_part.done" ->
                         requireContent(event);
                 case "response.done" -> responseDone(event);
@@ -421,21 +430,77 @@ final class CliproxyRealtimeSessionClient {
                 }
                 send(Map.of("type", "input_audio_buffer.commit"), false);
             } else {
+                inputItemId = "item_cyf_" + UUID.randomUUID().toString().replace("-", "");
                 send(Map.of("type", "conversation.item.create", "item", Map.of(
-                        "type", "message", "role", "user", "content", java.util.List.of(
-                                Map.of("type", "input_text", "text", operation.text)))), false);
+                        "id", inputItemId, "type", "message", "role", "user",
+                        "content", java.util.List.of(Map.of(
+                                "type", "input_text", "text", operation.text)))), false);
             }
+        }
+
+        private void inputAudioCommitted(JsonNode event) throws SessionFailure {
+            if (operation.mode != Mode.TRANSCRIPTION || !sessionUpdated
+                    || inputItemId != null || responseCreateSent) {
+                throw protocol("realtime input commit acknowledgement rejected");
+            }
+            inputItemId = text(event, "item_id");
+            if (inputItemId == null) {
+                throw protocol("realtime input commit acknowledgement rejected");
+            }
+        }
+
+        private void conversationItemAcknowledged(JsonNode event) throws SessionFailure {
+            JsonNode item = event.path("item");
+            String id = text(item, "id");
+            String role = text(item, "role");
+            if ("assistant".equals(role) && requestDispatched) {
+                return;
+            }
+            if (!sessionUpdated || inputItemId == null || id == null
+                    || !inputItemId.equals(id)
+                    || !"message".equals(text(item, "type"))
+                    || !"user".equals(role)
+                    || !validInputContent(item.path("content"))) {
+                throw protocol("realtime input item acknowledgement rejected");
+            }
+            if (acknowledgedInputItem != null) {
+                return;
+            }
+            acknowledgedInputItem = item.deepCopy();
+            createResponse();
+        }
+
+        private boolean validInputContent(JsonNode content) {
+            if (!content.isArray() || content.size() != 1) {
+                return false;
+            }
+            JsonNode part = content.get(0);
+            if (operation.mode == Mode.TRANSCRIPTION) {
+                return "input_audio".equals(optionalText(part, "type"));
+            }
+            return "input_text".equals(optionalText(part, "type"))
+                    && operation.text.equals(optionalText(part, "text"));
+        }
+
+        private void createResponse() throws SessionFailure {
+            if (responseCreateSent || acknowledgedInputItem == null) {
+                throw protocol("realtime duplicate response request");
+            }
+            Map<String, Object> response = new java.util.LinkedHashMap<>();
+            response.put("conversation", "none");
+            response.put("input", java.util.List.of(acknowledgedInputItem));
+            response.put("output_modalities", operation.mode == Mode.TRANSCRIPTION
+                    ? java.util.List.of("text") : java.util.List.of("audio"));
+            response.put("instructions", operation.mode == Mode.TRANSCRIPTION
+                    ? TRANSCRIPTION_INSTRUCTION : SYNTHESIS_INSTRUCTION);
+            responseCreateSent = true;
             requestDispatched = true;
-            send(Map.of("type", "response.create", "response", Map.of(
-                    "output_modalities", operation.mode == Mode.TRANSCRIPTION
-                            ? java.util.List.of("text") : java.util.List.of("audio"),
-                    "instructions", operation.mode == Mode.TRANSCRIPTION
-                            ? TRANSCRIPTION_INSTRUCTION : SYNTHESIS_INSTRUCTION)), true);
+            send(Map.of("type", "response.create", "response", response), true);
         }
 
         private void responseCreated(JsonNode event) throws SessionFailure {
             String id = text(event.path("response"), "id");
-            if (!requestDispatched || responseId != null || id == null) {
+            if (!responseCreateSent || !requestDispatched || responseId != null || id == null) {
                 throw protocol("realtime response correlation rejected");
             }
             responseId = id;
@@ -526,6 +591,36 @@ final class CliproxyRealtimeSessionClient {
             modalityDone = true;
         }
 
+        private void audioTranscriptDelta(JsonNode event) throws SessionFailure {
+            if (operation.mode != Mode.SYNTHESIS || audioTranscriptDone) {
+                throw protocol("realtime unexpected audio transcript");
+            }
+            requireContent(event);
+            String delta = text(event, "delta");
+            if (delta == null || audioTranscript.length() + delta.length() > MAX_TEXT_CHARS) {
+                throw protocol("realtime audio transcript exceeded bound");
+            }
+            audioTranscript.append(delta);
+        }
+
+        private void audioTranscriptDone(JsonNode event) throws SessionFailure {
+            if (operation.mode != Mode.SYNTHESIS || audioTranscriptDone) {
+                throw protocol("realtime audio transcript terminal rejected");
+            }
+            requireContent(event);
+            String completed = text(event, "transcript");
+            if (completed == null || completed.length() > MAX_TEXT_CHARS
+                    || (audioTranscript.length() > 0
+                    && !completed.contentEquals(audioTranscript))
+                    || !completed.equals(operation.text)) {
+                throw protocol("realtime synthesis transcript mismatch");
+            }
+            if (audioTranscript.length() == 0) {
+                audioTranscript.append(completed);
+            }
+            audioTranscriptDone = true;
+        }
+
         private void responseDone(JsonNode event) throws SessionFailure {
             if (responseDone) {
                 throw protocol("realtime duplicate terminal response");
@@ -534,6 +629,7 @@ final class CliproxyRealtimeSessionClient {
             if (!Objects.equals(responseId, text(response, "id"))
                     || !"completed".equals(text(response, "status"))
                     || !modalityDone || !itemDone || itemId == null
+                    || (operation.mode == Mode.SYNTHESIS && !audioTranscriptDone)
                     || !completedOutput(response.path("output"))) {
                 throw protocol("realtime response did not complete");
             }
