@@ -55,6 +55,8 @@ public final class ChatConversationArchiveController {
             @RequestHeader("Idempotency-Key") String idempotencyKey,
             @RequestBody Map<String, Object> body, Authentication authentication) {
         Parsed parsed = parse(body);
+        if (idempotencyKey == null || !idempotencyKey.matches("[A-Za-z0-9._~:/+\\-]{8,160}"))
+            throw invalid();
         var receipt = archives.archive(scope(authentication),
                 new ChatConversationArchiveService.Command(conversationId, idempotencyKey,
                         parsed.assetId(), parsed.revision()));
