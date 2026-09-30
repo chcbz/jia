@@ -44,10 +44,11 @@ class ChatBountyAssetProjectorTest {
         when(executions.listConversationOutputs(scope, "task", "run")).thenReturn(List.of(
                 new PersonalWorkspaceExecutionService.ConversationOutputInfo("exec", "output_1",
                         "image/png", "a".repeat(64), 20)));
-        when(conversations.lockScopedById("owner", "client", "42"))
-                .thenReturn(new ChatConversationEntity().setId(42L).setTenantId("0").setClientId("client")
-                        .setJiacn("owner").setLifecycleGeneration(1L).setTaskId("task")
-                        .setConversationScopeType("bounty").setConversationScopeKey("task:task"));
+        var live = new ChatConversationEntity().setId(42L).setJiacn("owner")
+                .setLifecycleGeneration(1L).setTaskId("task")
+                .setConversationScopeType("bounty").setConversationScopeKey("task:task");
+        live.setTenantId("0"); live.setClientId("client");
+        when(conversations.lockScopedById("owner", "client", "42")).thenReturn(live);
         when(jdbc.query(anyString(), org.mockito.ArgumentMatchers.<RowMapper<Object>>any(), any(Object[].class)))
                 .thenReturn(List.of());
         when(jdbc.update(anyString(), any(Object[].class))).thenReturn(1);
@@ -115,8 +116,8 @@ class ChatBountyAssetProjectorTest {
     }
 
     @Test void readsAndInvalidScanDoNotDispatchGenerateOrCreateMessages() {
-        assertThrows(IllegalArgumentException.class, () -> projector.pending(0));
-        assertThrows(IllegalArgumentException.class, () -> projector.pending(129));
+        assertThrows(IllegalArgumentException.class, () -> projector.pending(null, 0));
+        assertThrows(IllegalArgumentException.class, () -> projector.pending(null, 129));
         assertNull(projector.find(scope, "../other", "asset"));
         assertTrue(projector.partsFor(scope, "../other").isEmpty());
         verifyNoInteractions(requests, executions, messages, events, broker, jdbc);
