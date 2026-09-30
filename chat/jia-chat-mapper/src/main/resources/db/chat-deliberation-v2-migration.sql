@@ -36,37 +36,37 @@ ON DUPLICATE KEY UPDATE stage=VALUES(stage),updated_at=VALUES(updated_at);
 SET @present := (SELECT COUNT(*) FROM information_schema.columns
   WHERE table_schema=DATABASE() AND table_name='chat_dispatch_outbox' AND column_name='available_at');
 SET @ddl := IF(@present=0,
-  'ALTER TABLE chat_dispatch_outbox ALGORITHM=INPLACE, LOCK=NONE ADD COLUMN available_at BIGINT DEFAULT NULL',
+  'ALTER TABLE chat_dispatch_outbox ALGORITHM=INPLACE, LOCK=NONE, ADD COLUMN available_at BIGINT DEFAULT NULL',
   'SELECT 1'); PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
 SET @present := (SELECT COUNT(*) FROM information_schema.columns
   WHERE table_schema=DATABASE() AND table_name='chat_dispatch_outbox' AND column_name='lease_owner');
 SET @ddl := IF(@present=0,
-  'ALTER TABLE chat_dispatch_outbox ALGORITHM=INPLACE, LOCK=NONE ADD COLUMN lease_owner VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin DEFAULT NULL',
+  'ALTER TABLE chat_dispatch_outbox ALGORITHM=INPLACE, LOCK=NONE, ADD COLUMN lease_owner VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin DEFAULT NULL',
   'SELECT 1'); PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
 SET @present := (SELECT COUNT(*) FROM information_schema.columns
   WHERE table_schema=DATABASE() AND table_name='chat_dispatch_outbox' AND column_name='lease_until');
 SET @ddl := IF(@present=0,
-  'ALTER TABLE chat_dispatch_outbox ALGORITHM=INPLACE, LOCK=NONE ADD COLUMN lease_until BIGINT DEFAULT NULL',
+  'ALTER TABLE chat_dispatch_outbox ALGORITHM=INPLACE, LOCK=NONE, ADD COLUMN lease_until BIGINT DEFAULT NULL',
   'SELECT 1'); PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
 SET @present := (SELECT COUNT(*) FROM information_schema.columns
   WHERE table_schema=DATABASE() AND table_name='chat_dispatch_outbox' AND column_name='attempt_count');
 SET @ddl := IF(@present=0,
-  'ALTER TABLE chat_dispatch_outbox ALGORITHM=INPLACE, LOCK=NONE ADD COLUMN attempt_count INT DEFAULT NULL',
+  'ALTER TABLE chat_dispatch_outbox ALGORITHM=INPLACE, LOCK=NONE, ADD COLUMN attempt_count INT DEFAULT NULL',
   'SELECT 1'); PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
 SET @present := (SELECT COUNT(*) FROM information_schema.columns
   WHERE table_schema=DATABASE() AND table_name='chat_dispatch_outbox' AND column_name='fencing_token');
 SET @ddl := IF(@present=0,
-  'ALTER TABLE chat_dispatch_outbox ALGORITHM=INPLACE, LOCK=NONE ADD COLUMN fencing_token BIGINT DEFAULT NULL',
+  'ALTER TABLE chat_dispatch_outbox ALGORITHM=INPLACE, LOCK=NONE, ADD COLUMN fencing_token BIGINT DEFAULT NULL',
   'SELECT 1'); PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
 SET @present := (SELECT COUNT(*) FROM information_schema.columns
   WHERE table_schema=DATABASE() AND table_name='chat_dispatch_outbox' AND column_name='last_error');
 SET @ddl := IF(@present=0,
-  'ALTER TABLE chat_dispatch_outbox ALGORITHM=INPLACE, LOCK=NONE ADD COLUMN last_error VARCHAR(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin DEFAULT NULL',
+  'ALTER TABLE chat_dispatch_outbox ALGORITHM=INPLACE, LOCK=NONE, ADD COLUMN last_error VARCHAR(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin DEFAULT NULL',
   'SELECT 1'); PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
 SET @present := (SELECT COUNT(*) FROM information_schema.columns
   WHERE table_schema=DATABASE() AND table_name='chat_dispatch_outbox' AND column_name='sent_at');
 SET @ddl := IF(@present=0,
-  'ALTER TABLE chat_dispatch_outbox ALGORITHM=INPLACE, LOCK=NONE ADD COLUMN sent_at BIGINT DEFAULT NULL',
+  'ALTER TABLE chat_dispatch_outbox ALGORITHM=INPLACE, LOCK=NONE, ADD COLUMN sent_at BIGINT DEFAULT NULL',
   'SELECT 1'); PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
 
 INSERT INTO chat_deliberation_schema_version(version,stage,updated_at)
@@ -74,16 +74,17 @@ VALUES(2,'EXPANDED',UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3))*1000)
 ON DUPLICATE KEY UPDATE stage=VALUES(stage),updated_at=VALUES(updated_at);
 
 UPDATE chat_dispatch_outbox
-SET available_at=COALESCE(available_at,created_at),
+SET available_at=CASE WHEN status IN ('SENT','DEAD') THEN available_at ELSE COALESCE(available_at,created_at) END,
     attempt_count=COALESCE(attempt_count,0),
     fencing_token=COALESCE(fencing_token,0)
-WHERE available_at IS NULL OR attempt_count IS NULL OR fencing_token IS NULL;
+WHERE (status NOT IN ('SENT','DEAD') AND available_at IS NULL)
+   OR attempt_count IS NULL OR fencing_token IS NULL;
 INSERT INTO chat_deliberation_schema_version(version,stage,updated_at)
 VALUES(2,'BACKFILLED',UNIX_TIMESTAMP(CURRENT_TIMESTAMP(3))*1000)
 ON DUPLICATE KEY UPDATE stage=VALUES(stage),updated_at=VALUES(updated_at);
 
 ALTER TABLE chat_dispatch_outbox ALGORITHM=INPLACE, LOCK=NONE,
-  MODIFY available_at BIGINT NOT NULL,
+  MODIFY available_at BIGINT DEFAULT NULL,
   MODIFY attempt_count INT NOT NULL DEFAULT 0,
   MODIFY fencing_token BIGINT NOT NULL DEFAULT 0;
 INSERT INTO chat_deliberation_schema_version(version,stage,updated_at)
@@ -106,17 +107,17 @@ SET @legacy_ready := (SELECT COUNT(*) FROM information_schema.statistics
  WHERE table_schema=DATABASE() AND table_name='chat_dispatch_outbox'
    AND index_name='idx_chat_outbox_ready' AND column_name='tenant_id' AND seq_in_index=1);
 SET @ddl := IF(@legacy_ready>0,
- 'ALTER TABLE chat_dispatch_outbox ALGORITHM=INPLACE, LOCK=NONE DROP INDEX idx_chat_outbox_ready, ADD INDEX idx_chat_outbox_ready(status,available_at,event_id)',
+ 'ALTER TABLE chat_dispatch_outbox ALGORITHM=INPLACE, LOCK=NONE, DROP INDEX idx_chat_outbox_ready, ADD INDEX idx_chat_outbox_ready(status,available_at,event_id)',
  'SELECT 1'); PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
 SET @ready_present := (SELECT COUNT(*) FROM information_schema.statistics
  WHERE table_schema=DATABASE() AND table_name='chat_dispatch_outbox' AND index_name='idx_chat_outbox_ready');
 SET @ddl := IF(@ready_present=0,
- 'ALTER TABLE chat_dispatch_outbox ALGORITHM=INPLACE, LOCK=NONE ADD INDEX idx_chat_outbox_ready(status,available_at,event_id)',
+ 'ALTER TABLE chat_dispatch_outbox ALGORITHM=INPLACE, LOCK=NONE, ADD INDEX idx_chat_outbox_ready(status,available_at,event_id)',
  'SELECT 1'); PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
 SET @scope_present := (SELECT COUNT(*) FROM information_schema.statistics
  WHERE table_schema=DATABASE() AND table_name='chat_dispatch_outbox' AND index_name='idx_chat_outbox_scope');
 SET @ddl := IF(@scope_present=0,
- 'ALTER TABLE chat_dispatch_outbox ALGORITHM=INPLACE, LOCK=NONE ADD INDEX idx_chat_outbox_scope(tenant_id,owner_jiacn,client_id,turn_id,event_type)',
+ 'ALTER TABLE chat_dispatch_outbox ALGORITHM=INPLACE, LOCK=NONE, ADD INDEX idx_chat_outbox_scope(tenant_id,owner_jiacn,client_id,turn_id,event_type)',
  'SELECT 1'); PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
 
 -- Rebuild legacy dispatch payloads only from authoritative durable rows.
@@ -230,7 +231,7 @@ ON DUPLICATE KEY UPDATE stage=VALUES(stage),updated_at=VALUES(updated_at);
 -- Fail closed before APPLIED: validate exact relay column definitions and required index order.
 SELECT COUNT(*) INTO v_invariant_count FROM information_schema.columns
 WHERE table_schema=DATABASE() AND table_name='chat_dispatch_outbox' AND (
- (column_name='available_at' AND data_type='bigint' AND is_nullable='NO') OR
+ (column_name='available_at' AND data_type='bigint' AND is_nullable='YES') OR
  (column_name='attempt_count' AND data_type='int' AND is_nullable='NO' AND column_default='0') OR
  (column_name='fencing_token' AND data_type='bigint' AND is_nullable='NO' AND column_default='0') OR
  (column_name='lease_owner' AND data_type='varchar' AND character_maximum_length=100 AND is_nullable='YES' AND collation_name='utf8mb4_0900_bin') OR
@@ -283,7 +284,8 @@ IF v_invariant_count <> 2 THEN
 END IF;
 
 SELECT COUNT(*) INTO v_invariant_count FROM chat_dispatch_outbox
-WHERE available_at IS NULL OR attempt_count IS NULL OR fencing_token IS NULL;
+WHERE (status NOT IN ('SENT','DEAD') AND available_at IS NULL)
+   OR attempt_count IS NULL OR fencing_token IS NULL;
 IF v_invariant_count <> 0 THEN
   SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='chat outbox relay backfill incomplete';
 END IF;

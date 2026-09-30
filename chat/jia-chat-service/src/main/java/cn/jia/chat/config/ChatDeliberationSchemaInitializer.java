@@ -120,12 +120,14 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
         }
         if ("chat_dispatch_outbox".equals(table)) {
             recordMigrationStage("EXPANDED");
-            jdbc.update("UPDATE chat_dispatch_outbox SET available_at=COALESCE(available_at,created_at), "
+            jdbc.update("UPDATE chat_dispatch_outbox SET available_at=CASE WHEN status IN ('SENT','DEAD') "
+                    + "THEN available_at ELSE COALESCE(available_at,created_at) END, "
                     + "attempt_count=COALESCE(attempt_count,0), fencing_token=COALESCE(fencing_token,0) "
-                    + "WHERE available_at IS NULL OR attempt_count IS NULL OR fencing_token IS NULL");
+                    + "WHERE (status NOT IN ('SENT','DEAD') AND available_at IS NULL) "
+                    + "OR attempt_count IS NULL OR fencing_token IS NULL");
             recordMigrationStage("BACKFILLED");
             jdbc.execute("ALTER TABLE chat_dispatch_outbox ALGORITHM=INPLACE, LOCK=NONE, "
-                    + "MODIFY available_at BIGINT NOT NULL, MODIFY attempt_count INT NOT NULL DEFAULT 0, "
+                    + "MODIFY available_at BIGINT DEFAULT NULL, MODIFY attempt_count INT NOT NULL DEFAULT 0, "
                     + "MODIFY fencing_token BIGINT NOT NULL DEFAULT 0");
             recordMigrationStage("TIGHTENED");
         }
@@ -434,7 +436,7 @@ public class ChatDeliberationSchemaInitializer implements ApplicationRunner {
                 c("owner_jiacn",v(50,false)), c("client_id",v(50,false)), c("turn_id",v(64,false)),
                 c("dispatch_id",v(64,false)), c("event_type",v(30,false)), c("status",v(30,false)),
                 c("payload_json",txt("mediumtext",false)), c("version",b(false,"0")),
-                c("available_at",b(false,null)), c("lease_owner",v(100,true)), c("lease_until",b(true,null)),
+                c("available_at",b(true,null)), c("lease_owner",v(100,true)), c("lease_until",b(true,null)),
                 c("attempt_count",i(false,"0")), c("fencing_token",b(false,"0")), c("last_error",v(500,true)),
                 c("sent_at",b(true,null)), c("created_at",b(false,null)), c("updated_at",b(false,null))));
         all.put("chat_conversation_event", ordered(c("event_sequence",auto()), c("event_id",v(64,false)),

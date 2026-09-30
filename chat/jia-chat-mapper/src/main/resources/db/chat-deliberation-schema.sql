@@ -86,7 +86,7 @@ CREATE TABLE IF NOT EXISTS chat_dispatch_outbox (
   status VARCHAR(30) NOT NULL,
   payload_json MEDIUMTEXT NOT NULL,
   version BIGINT NOT NULL DEFAULT 0,
-  available_at BIGINT NOT NULL,
+  available_at BIGINT DEFAULT NULL,
   lease_owner VARCHAR(100) DEFAULT NULL,
   lease_until BIGINT DEFAULT NULL,
   attempt_count INT NOT NULL DEFAULT 0,

@@ -33,6 +33,7 @@ class ChatDeliberationSchemaContractTest {
             assertTrue(compact.contains("uk_chat_exec_execution (execution_id)"));
             assertTrue(sql.contains("create table if not exists chat_deliberation_schema_version"));
             assertTrue(compact.contains("idx_chat_outbox_ready (status, available_at, event_id)"));
+            assertTrue(sql.contains("available_at bigint default null"));
             assertTrue(sql.contains("lease_owner"));
             assertTrue(sql.contains("lease_until"));
             assertTrue(sql.contains("attempt_count"));
@@ -77,6 +78,15 @@ class ChatDeliberationSchemaContractTest {
         assertTrue(source.contains("DROP INDEX idx_chat_outbox_ready"));
         String migration = java.nio.file.Files.readString(java.nio.file.Path.of(
                 "../jia-chat-mapper/src/main/resources/db/chat-deliberation-v2-migration.sql"));
+        // Real MySQL 8 legacy migration failed at the first dynamic ALTER when the
+        // LOCK option was not separated from the ADD/DROP action by a comma.
+        assertFalse(migration.matches("(?s).*LOCK=NONE\\s+(?:ADD|DROP)\\b.*"));
+        assertTrue(migration.contains("LOCK=NONE, ADD COLUMN available_at"));
+        // SENT/DEAD explicitly clear scheduling; a NOT NULL column made real legacy
+        // dead-letter updates and the normal mapper settle path fail at runtime.
+        assertTrue(migration.contains("MODIFY available_at BIGINT DEFAULT NULL"));
+        assertTrue(migration.contains("status NOT IN ('SENT','DEAD') AND available_at IS NULL"));
+        assertTrue(source.contains("c(\"available_at\",b(true,null))"));
         assertTrue(migration.contains("CREATE PROCEDURE cyf_migrate_chat_deliberation_v2()"));
         assertTrue(migration.contains("DECLARE EXIT HANDLER FOR SQLEXCEPTION"));
         assertTrue(migration.contains("IF v_lock_acquired THEN"));
