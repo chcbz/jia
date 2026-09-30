@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS agent_selected_output_finalization (
   CONSTRAINT chk_asof_digest CHECK (CHAR_LENGTH(immutable_digest)=64 AND CHAR_LENGTH(source_facts_digest)=64),
   CONSTRAINT chk_asof_phase CHECK (phase IN ('CLAIMING','LEASED','READY','SUBMITTED','ACCEPTED')),
   CONSTRAINT chk_asof_lease CHECK ((phase='CLAIMING' AND lease_token IS NULL AND lease_work_item_version IS NULL)
-    OR (phase IN ('LEASED','READY') AND lease_token IS NOT NULL AND lease_work_item_version>=0)
+    OR (phase IN ('LEASED','READY') AND lease_token IS NOT NULL
+      AND lease_work_item_version IS NOT NULL AND lease_work_item_version>=0)
     OR (phase IN ('SUBMITTED','ACCEPTED') AND lease_token IS NULL AND lease_work_item_version IS NOT NULL))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin
  COMMENT='Server-private authority for selected committed-output promotion and recovery';

@@ -28,6 +28,15 @@ class ChatSelectedOutputFinalizationSchemaInitializerTest {
     }
 
     @Test
+    void submittedAcceptingAndCompletedRejectUnknownNullDeliveryState(){
+        String sql=String.join(" ",ChatSelectedOutputFinalizationSchemaInitializer.ddl()).toLowerCase()
+                .replaceAll("\\s+"," ");
+        for(String stage:List.of("submitted","accepting","task_completed"))
+            assertTrue(sql.contains("stage='"+stage+"' and delivery_id is not null and delivery_state is not null"));
+        assertTrue(sql.contains("and delivery_state is not null and delivery_state='accepted' and task_state='completed'"));
+    }
+
+    @Test
     void initializerRequiresExplicitCoreThenDeliberationReadinessBoundary() throws Exception {
         assertNotNull(ChatSelectedOutputFinalizationSchemaInitializer.class.getConstructor(
                 JdbcTemplate.class,ChatSchemaReadiness.class));

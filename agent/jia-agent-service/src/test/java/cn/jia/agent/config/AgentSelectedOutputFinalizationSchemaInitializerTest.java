@@ -28,6 +28,14 @@ class AgentSelectedOutputFinalizationSchemaInitializerTest {
     }
 
     @Test
+    void leasedAndReadyAuthorityCannotPassMysqlCheckWithNullLeaseVersion(){
+        String sql=AgentSelectedOutputFinalizationSchemaInitializer.ddl().toLowerCase()
+                .replaceAll("\\s+"," ");
+        assertTrue(sql.contains("phase in ('leased','ready') and lease_token is not null"
+                +" and lease_work_item_version is not null and lease_work_item_version>=0"));
+    }
+
+    @Test
     void initializingBeanRunsOnlyAfterExistingFormalDeliveryInitializingBean() throws Exception {
         var method=AgentSelectedOutputFinalizationConfiguration.class.getDeclaredMethod(
                 "agentSelectedOutputFinalizationSchemaInitializer",JdbcTemplate.class);

@@ -35,15 +35,18 @@ CREATE TABLE IF NOT EXISTS chat_selected_output_finalization (
   CONSTRAINT chk_csof_stage CHECK (stage IN ('PROMOTING','READY_TO_SUBMIT','SUBMITTED','ACCEPTING','TASK_COMPLETED')),
   CONSTRAINT chk_csof_progress CHECK ((stage IN ('PROMOTING','READY_TO_SUBMIT')
       AND delivery_id IS NULL AND delivery_state IS NULL)
-    OR (stage='SUBMITTED' AND delivery_id IS NOT NULL
+    OR (stage='SUBMITTED' AND delivery_id IS NOT NULL AND delivery_state IS NOT NULL
       AND delivery_state IN ('submitted','changes_requested'))
-    OR (stage='ACCEPTING' AND delivery_id IS NOT NULL AND delivery_state IN ('submitted','changes_requested'))
-    OR (stage='TASK_COMPLETED' AND delivery_id IS NOT NULL AND delivery_state='accepted')),
+    OR (stage='ACCEPTING' AND delivery_id IS NOT NULL AND delivery_state IS NOT NULL
+      AND delivery_state IN ('submitted','changes_requested'))
+    OR (stage='TASK_COMPLETED' AND delivery_id IS NOT NULL AND delivery_state IS NOT NULL
+      AND delivery_state='accepted')),
   CONSTRAINT chk_csof_outcome CHECK ((state='pending' AND error_code IS NULL AND retryable=0)
     OR (state='failed' AND error_code IS NOT NULL)
     OR (state='completed' AND error_code IS NULL AND retryable=0)),
   CONSTRAINT chk_csof_terminal CHECK ((state='completed' AND stage='TASK_COMPLETED' AND delivery_id IS NOT NULL
-    AND delivery_state='accepted' AND task_state='completed' AND error_code IS NULL AND retryable=0)
+    AND delivery_state IS NOT NULL AND delivery_state='accepted'
+    AND task_state='completed' AND error_code IS NULL AND retryable=0)
     OR (state<>'completed' AND stage<>'TASK_COMPLETED'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 

@@ -103,7 +103,7 @@ class AgentTaskSelectedOutputFinalizationControllerTest {
         }
         verifyNoInteractions(service);
         assertEquals(HttpStatus.ACCEPTED,controller.submit("task-1","12345678",
-                request(minimalBody("0").replace("\"title\"","\"title/a\"")),authentication).getStatusCode());
+                request(minimalBody("0").replace("\"title\":\"title\"","\"title\":\"title/a\"")),authentication).getStatusCode());
     }
 
     private static MockHttpServletRequest request(String json){
