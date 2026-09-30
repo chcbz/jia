@@ -115,6 +115,48 @@ class PersonalWorkspaceServiceImplTest {
     }
 
     @Test
+    void ownerCanArchiveAndPreviewConfiguredAudioAndRasterConversationAssets() {
+        Fixture fixture = new Fixture();
+        Map<String, String> formats = Map.of(
+                "audio/mpeg", "mp3", "audio/ogg", "ogg", "audio/wav", "wav",
+                "audio/mp4", "m4a", "audio/webm", "webm", "image/webp", "webp",
+                "image/gif", "gif");
+        int index = 0;
+        for (var format : formats.entrySet()) {
+            String assetId = "asset_media_" + (++index);
+            byte[] content = bytes("isolated preview fixture " + format.getKey());
+            String filename = "deliverable." + format.getValue();
+            var command = new PersonalWorkspaceService.ConversationArchiveCommand(
+                    new PersonalWorkspaceService.Idempotency("save-media-" + index), assetId, 1,
+                    sha256(content), "deliverable", filename, format.getKey(), content);
+            var saved = fixture.service.archiveConversationAsset(OWNER_A, command);
+            assertEquals("AGENT_DELIVERY", saved.file().originKind());
+            assertEquals(format.getKey().startsWith("audio/") ? "AUDIO" : "IMAGE", saved.file().mediaFamily());
+            assertEquals("AVAILABLE", saved.file().capabilities().preview());
+            assertEquals("READY", saved.version().previewState());
+            var preview = fixture.service.preview(OWNER_A, saved.file().fileId(), 1);
+            assertEquals("READY", preview.state());
+            assertEquals(format.getKey(), preview.parts().getFirst().contentMimeType());
+            assertArrayEquals(content, fixture.service.readPreviewPart(OWNER_A, saved.file().fileId(), 1,
+                    PersonalWorkspacePreviewRenderer.CONTENT_PART_ID).bytes());
+            assertArrayEquals(content, fixture.service.readContent(OWNER_A, saved.file().fileId(), 1).bytes());
+            assertReason(PersonalWorkspaceException.Reason.NOT_FOUND,
+                    () -> fixture.service.readPreviewPart(OWNER_B, saved.file().fileId(), 1,
+                            PersonalWorkspacePreviewRenderer.CONTENT_PART_ID));
+            assertEquals(saved.file().fileId(), fixture.service.archiveConversationAsset(OWNER_A, command).file().fileId());
+        }
+        assertEquals(7, fixture.storage.storeCount, "archive replay must not allocate another file");
+        assertEquals(5, fixture.service.list(OWNER_A,
+                new PersonalWorkspaceService.ListQuery(null, "AUDIO", null, null)).items().size());
+        assertReason(PersonalWorkspaceException.Reason.UNSUPPORTED,
+                () -> fixture.service.archiveConversationAsset(OWNER_A,
+                        new PersonalWorkspaceService.ConversationArchiveCommand(
+                                new PersonalWorkspaceService.Idempotency("save-media-mismatch"), "asset_bad", 1,
+                                sha256(bytes("unsafe")), "unsafe", "unsafe.html", "audio/mpeg", bytes("unsafe"))));
+        assertEquals(7, fixture.storage.storeCount, "mismatched extension must not reach storage");
+    }
+
+    @Test
     void multipartPreviewKeepsContentCompatibilityAndChecksAclBeforeExactPartLookup() throws Exception {
         Fixture fixture = new Fixture();
         byte[] workbook = xlsxWithTwoSheetsAndFormula();

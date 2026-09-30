@@ -63,7 +63,7 @@ public final class PersonalWorkspacePreviewRenderer {
     static final int PPT_PREVIEW_MAX_WIDTH = 1_600;
     static final int PPT_PREVIEW_MAX_HEIGHT = 1_200;
 
-    private static final Set<String> IMAGE_MIME_TYPES = Set.of("image/png", "image/jpeg");
+    private static final Set<String> IMAGE_MIME_TYPES = Set.of("image/png", "image/jpeg", "image/webp", "image/gif");
     private static final String DOCX =
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
     private static final String XLSX =
@@ -74,7 +74,9 @@ public final class PersonalWorkspacePreviewRenderer {
 
     public RenderedPreview render(String contentMimeType, byte[] source) {
         if (source == null) return failed();
-        if (IMAGE_MIME_TYPES.contains(contentMimeType)) {
+        // Browser decodes the original raster/audio bytes; no server-side codec or active document parser.
+        if (IMAGE_MIME_TYPES.contains(contentMimeType) || (contentMimeType != null
+                && Set.of("audio/mpeg", "audio/ogg", "audio/wav", "audio/mp4", "audio/webm").contains(contentMimeType))) {
             return ready(List.of(fixedPart(CONTENT_PART_ID, contentMimeType, source)), false);
         }
         if (TEXT_MIME_TYPE.equals(contentMimeType)) {
