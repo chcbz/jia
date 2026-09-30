@@ -304,7 +304,15 @@ class ChatControllerTest extends BaseMockTest {
         when(chatConversationService.findByConversationId("1001"))
                 .thenReturn(List.of(userMessage, agentMessage));
 
-        Object controllerBody = newController().getConversationContent("1001");
+        var assets = mock(cn.jia.chat.service.ChatBountyAssetProjector.class);
+        var trustedPart = new cn.jia.chat.service.ChatBountyAssetProjector.Part(
+                "part_1", "image", "ready", "ast_1", "image/png", "bird.png", "1", "a".repeat(64), 20);
+        when(assets.partsFor(new cn.jia.agent.service.PersonalWorkspaceExecutionService.OwnerScope(
+                "0", "web-client", "tester"), "1001"))
+                .thenReturn(Map.of(Long.toString(agentMessageId), List.of(trustedPart)));
+        ChatController controller = newController();
+        controller.setBountyAssets(assets);
+        Object controllerBody = controller.getConversationContent("1001");
         SensitiveResponseBodyAdvice advice =
                 new SensitiveResponseBodyAdvice(new SensitiveResponseProperties());
         Method method = ChatController.class.getDeclaredMethod("getConversationContent", String.class);
@@ -322,6 +330,13 @@ class ChatControllerTest extends BaseMockTest {
         assertEquals(agentMetadata, messages.get(1).get("metadata"));
         assertEquals("user", messages.get(0).get("senderType"));
         assertEquals("agent", messages.get(1).get("senderType"));
+        assertTrue(((List<?>) messages.get(0).get("parts")).isEmpty());
+        var projected = (List<Map<String, Object>>) messages.get(1).get("parts");
+        assertEquals("ast_1", projected.getFirst().get("assetId"));
+        assertEquals("ready", projected.getFirst().get("state"));
+        assertEquals("image/png", projected.getFirst().get("mime"));
+        verify(assets).partsFor(new cn.jia.agent.service.PersonalWorkspaceExecutionService.OwnerScope(
+                "0", "web-client", "tester"), "1001");
         assertTrue(String.valueOf(messages.get(0).get("content")).contains("password=******"));
         assertTrue(!json.contains("hunter2"));
         verify(chatConversationService).findByConversationId("1001");
