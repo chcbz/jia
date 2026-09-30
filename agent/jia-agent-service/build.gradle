@@ -557,3 +557,36 @@ tasks.register('mmdU3Finalization', Test) {
     classpath = mmdU3FinalizationSourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+// MMD-U1-API-REFERENCE-INTAKE isolated raw-HTTP, ACL, transaction and additive-schema slice.
+def mmdU1ReferenceIntakeSourceSet = sourceSets.create('mmdU1ReferenceIntake') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/api/AgentTaskCreationOperationControllerTest.java'
+        include 'cn/jia/agent/service/impl/AgentTaskCreationOperationServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/AgentTaskCreationOperationRealTransactionTest.java'
+        include 'cn/jia/agent/service/impl/AgentTaskCreationOperationMySqlTest.java'
+        include 'cn/jia/agent/config/AgentTaskCreationOperationSchemaInitializerTest.java'
+        include 'cn/jia/agent/mapper/AgentTaskCreationOperationMapperContractTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(mmdU1ReferenceIntakeSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(mmdU1ReferenceIntakeSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('mmdU1ReferenceIntake', Test) {
+    maxParallelForks = 1
+    maxHeapSize = '384m'
+    jvmArgs '-XX:MaxMetaspaceSize=192m', '-Xss256k'
+    group = 'verification'
+    description = 'Runs MMD U1 atomic ordinary-task reference intake HTTP, ACL, rollback and schema tests.'
+    dependsOn tasks.named(mmdU1ReferenceIntakeSourceSet.classesTaskName)
+    testClassesDirs = mmdU1ReferenceIntakeSourceSet.output.classesDirs
+    classpath = mmdU1ReferenceIntakeSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
