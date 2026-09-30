@@ -45,13 +45,17 @@ class ChatConversationArchiveServiceTest {
     }
 
     private void ready(String asset) {
+        ready(asset, "image/png");
+    }
+
+    private void ready(String asset, String mime) {
         String hash = sha(BYTES);
-        store.sources.put(asset, source(asset, "image/png", hash, BYTES.length));
+        store.sources.put(asset, source(asset, mime, hash, BYTES.length));
         when(executions.readConversationOutput(any(), eq("task-1"), eq("run-1"), eq("output-1")))
                 .thenReturn(new PersonalWorkspaceExecutionService.ConversationOutput("execution-1",
-                        "output-1", "/untrusted/runtime/path.png", "image/png", hash,
+                        "output-1", "/untrusted/runtime/path", mime, hash,
                         BYTES.length, BYTES));
-        when(workspace.archiveConversationAsset(any(), any())).thenReturn(upload(hash));
+        when(workspace.archiveConversationAsset(any(), any())).thenReturn(upload(hash, mime));
     }
 
     @Test
@@ -124,15 +128,35 @@ class ChatConversationArchiveServiceTest {
     @Test
     void unsupportedPersistedMimeFailsClosedBeforeWorkspaceWrite() {
         String hash = sha(BYTES);
-        store.sources.put("asset_1", source("asset_1", "audio/mpeg", hash, BYTES.length));
+        store.sources.put("asset_1", source("asset_1", "text/html", hash, BYTES.length));
         when(executions.readConversationOutput(any(), any(), any(), any()))
                 .thenReturn(new PersonalWorkspaceExecutionService.ConversationOutput("execution-1",
-                        "output-1", "bird.mp3", "audio/mpeg", hash, BYTES.length, BYTES));
+                        "output-1", "untrusted.html", "text/html", hash, BYTES.length, BYTES));
         var failure = assertThrows(ChatConversationArchiveException.class,
                 () -> service.archive(OWNER, command("archive-key-0001", "asset_1")));
         assertEquals(Reason.UNSUPPORTED, failure.reason());
         verifyNoInteractions(workspace);
         assertEquals("UNSUPPORTED_MEDIA", store.only().errorCode());
+    }
+
+    @Test
+    void archivesEachSupportedAudioAndRasterFormatWithItsExactWorkspaceExtension() {
+        Map<String, String> formats = Map.of("image/webp", "webp", "image/gif", "gif",
+                "audio/mpeg", "mp3", "audio/ogg", "ogg", "audio/wav", "wav",
+                "audio/mp4", "m4a", "audio/webm", "webm");
+        int index = 0;
+        for (var format : formats.entrySet()) {
+            String assetId = "asset_media_" + (++index);
+            ready(assetId, format.getKey());
+            var receipt = service.archive(OWNER, command("archive-key-media-" + index, assetId));
+            assertEquals("saved", receipt.state());
+            assertEquals(assetId, receipt.items().getFirst().assetId());
+            verify(workspace).archiveConversationAsset(any(), argThat(command ->
+                    assetId.equals(command.assetId()) && format.getKey().equals(command.contentMimeType())
+                            && ("conversation-asset-" + assetId + "." + format.getValue()).equals(command.filename())
+                            && java.util.Arrays.equals(command.content(), BYTES)));
+        }
+        verify(workspace, times(formats.size())).archiveConversationAsset(any(), any());
     }
 
     @Test
@@ -181,13 +205,17 @@ class ChatConversationArchiveServiceTest {
     }
 
     private PersonalWorkspaceViews.UploadView upload(String hash) {
+        return upload(hash, "image/png");
+    }
+
+    private PersonalWorkspaceViews.UploadView upload(String hash, String mime) {
         return new PersonalWorkspaceViews.UploadView(
                 new PersonalWorkspaceViews.OperationView("workspace-op-1", "COMMITTED", "pws_file_1", 1, null),
                 new PersonalWorkspaceViews.FileView("pws_file_1", "UPLOAD", "AGENT_DELIVERY",
-                        "conversation asset", "IMAGE", "ACTIVE", 1, 1, 1,
+                        "conversation asset", mime.startsWith("audio/") ? "AUDIO" : "IMAGE", "ACTIVE", 1, 1, 1,
                         new PersonalWorkspaceViews.Capabilities("AVAILABLE", "AVAILABLE", "UNVERIFIED",
                                 "AVAILABLE", "AVAILABLE")),
-                new PersonalWorkspaceViews.VersionView("pws_file_1", 1, "asset.png", "image/png",
+                new PersonalWorkspaceViews.VersionView("pws_file_1", 1, "asset", mime,
                         BYTES.length, hash, 1, "READY"));
     }
 

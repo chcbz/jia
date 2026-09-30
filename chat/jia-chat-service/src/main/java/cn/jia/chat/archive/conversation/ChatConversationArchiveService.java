@@ -29,12 +29,17 @@ import static cn.jia.chat.archive.conversation.ChatConversationArchiveException.
 @Service
 @ConditionalOnProperty(prefix = "chat.conversation-archive", name = "enabled", havingValue = "true")
 public final class ChatConversationArchiveService {
-    private static final Map<String, String> EXTENSIONS = Map.of(
-            "image/png", "png", "image/jpeg", "jpg", "text/plain", "txt",
-            "application/pdf", "pdf",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx",
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation", "pptx");
+    // Keep in sync with PersonalWorkspaceServiceImpl's exact MIME + filename whitelist.
+    private static final Map<String, String> EXTENSIONS = Map.ofEntries(
+            Map.entry("image/png", "png"), Map.entry("image/jpeg", "jpg"),
+            Map.entry("image/webp", "webp"), Map.entry("image/gif", "gif"),
+            Map.entry("audio/mpeg", "mp3"), Map.entry("audio/ogg", "ogg"),
+            Map.entry("audio/wav", "wav"), Map.entry("audio/mp4", "m4a"),
+            Map.entry("audio/webm", "webm"), Map.entry("text/plain", "txt"),
+            Map.entry("application/pdf", "pdf"),
+            Map.entry("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx"),
+            Map.entry("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"),
+            Map.entry("application/vnd.openxmlformats-officedocument.presentationml.presentation", "pptx"));
     private static final String SAFE_FAILURE_MESSAGE = "Conversation asset was not saved";
 
     private final ChatConversationArchiveStore store;
