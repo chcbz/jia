@@ -629,6 +629,8 @@ dependencies {
     add(mmdU1ProviderConsentCoreSourceSet.runtimeOnlyConfigurationName,
             'org.junit.platform:junit-platform-launcher:6.0.1')
     add(mmdU1ProviderConsentCoreSourceSet.runtimeOnlyConfigurationName, libs.mysql)
+    add(mmdU1ProviderConsentCoreSourceSet.runtimeOnlyConfigurationName, 'com.jayway.jsonpath:json-path')
+    add(mmdU1ProviderConsentCoreSourceSet.runtimeOnlyConfigurationName, 'com.h2database:h2')
 }
 tasks.register('mmdU1ProviderConsentCore', Test) {
     maxParallelForks = 1
