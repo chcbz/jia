@@ -16,6 +16,18 @@ public interface AgentTaskExecutionGrantService {
             long expectedAssignmentRevision, String targetAgentId, String operation,
             boolean paidExecution);
 
+    /**
+     * Read-only validation under an already-held owner-scoped task-root lock. It performs no
+     * assignment, grant, bootstrap, message or Provider write.
+     */
+    AssignmentPreview previewAssignmentWithinLockedTask(Scope scope, String taskId,
+            long lockedTaskVersion, String assignmentIdempotencyKey, AgentTaskAssignDTO request);
+
+    /** Internal consent lifecycle verification; it still starts no execution. */
+    Admission admitProviderConsentBinding(Scope scope, String taskId, String grantId,
+            long expectedGrantVersion, long expectedAssignmentRevision, String targetAgentId,
+            String expectedAssignmentBaseHash, String expectedInputSnapshotDigest);
+
     /** Server-side lookup for Chat/application orchestration; browser grant identifiers are not trusted. */
     Admission resolveAndAdmit(Scope scope, String taskId, long expectedAssignmentRevision,
             String targetAgentId, String operation, boolean paidExecution);
@@ -28,6 +40,11 @@ public interface AgentTaskExecutionGrantService {
     /** Byte-free, fixed-version inputs verified under the same live root/grant admission. */
     record AuthorizedInput(String fileId, int version, String purpose, String contentMimeType,
             long byteLength, String contentHash) { }
+    record AssignmentPreview(String targetAgentId, long taskVersion,
+            long requirementRevision, String requirementSha256, String assignmentBaseHash,
+            String inputSnapshotDigest, List<AuthorizedInput> inputs) {
+        public AssignmentPreview { inputs = List.copyOf(inputs); }
+    }
     record Admission(String grantId, long grantVersion, long assignmentRevision,
             String targetAgentId, String operation, boolean paidExecutionAuthorized,
             List<AuthorizedInput> inputs) {

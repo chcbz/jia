@@ -174,3 +174,36 @@ tasks.register('mmdU3Finalization', Test) {
     classpath = mmdU3FinalizationSourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+// MMD-U1 controlled-provider registration sibling; independent of immutable fast-v1/native-v1.
+def mmdU1ProviderCredentialBindingSourceSet = sourceSets.create('mmdU1ProviderCredentialBinding') {
+    java {
+        srcDir 'src/chatDeliberationTest/java'
+        include 'cn/jia/chat/handler/NativeProviderCredentialBindingDeclarationTest.java'
+        include 'cn/jia/chat/handler/AgentWebSocketNativeProviderCredentialBindingTest.java'
+        include 'cn/jia/chat/handler/NativeBountyExecutionDeclarationTest.java'
+        include 'cn/jia/chat/handler/AgentWebSocketNativeBountyExecutionTest.java'
+        include 'cn/jia/agent/security/NativeBountyCurrentBindingTest.java'
+        include 'cn/jia/chat/handler/AgentRuntimeCapabilitiesTest.java'
+    }
+    resources.srcDir 'src/chatDeliberationTest/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(mmdU1ProviderCredentialBindingSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(mmdU1ProviderCredentialBindingSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('mmdU1ProviderCredentialBinding', Test) {
+    maxParallelForks = 1
+    maxHeapSize = '384m'
+    jvmArgs '-XX:MaxMetaspaceSize=192m', '-Xss256k'
+    group = 'verification'
+    description = 'Runs exact controlled-provider declaration and current authenticated-session lookup regressions.'
+    dependsOn tasks.named(mmdU1ProviderCredentialBindingSourceSet.classesTaskName)
+    testClassesDirs = mmdU1ProviderCredentialBindingSourceSet.output.classesDirs
+    classpath = mmdU1ProviderCredentialBindingSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}

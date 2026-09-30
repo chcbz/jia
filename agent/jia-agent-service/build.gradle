@@ -590,3 +590,35 @@ tasks.register('mmdU1ReferenceIntake', Test) {
     classpath = mmdU1ReferenceIntakeSourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+// MMD-U1 controlled provider consent core; no grant paid wiring or Provider calls.
+def mmdU1ProviderConsentCoreSourceSet = sourceSets.create('mmdU1ProviderConsentCore') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/service/impl/AgentTaskProviderCostConsentServiceImplTest.java'
+        include 'cn/jia/agent/api/AgentTaskProviderCostConsentControllerTest.java'
+        include 'cn/jia/agent/config/AgentTaskProviderCostConsentSchemaInitializerTest.java'
+        include 'cn/jia/agent/service/impl/AgentTaskProviderCostConsentMySqlTest.java'
+        include 'cn/jia/agent/service/impl/AgentTaskExecutionGrantServiceImplTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(mmdU1ProviderConsentCoreSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(mmdU1ProviderConsentCoreSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('mmdU1ProviderConsentCore', Test) {
+    maxParallelForks = 1
+    maxHeapSize = '384m'
+    jvmArgs '-XX:MaxMetaspaceSize=192m', '-Xss256k'
+    group = 'verification'
+    description = 'Runs controlled provider binding policy, consent lifecycle, owner HTTP and additive DDL tests.'
+    dependsOn tasks.named(mmdU1ProviderConsentCoreSourceSet.classesTaskName)
+    testClassesDirs = mmdU1ProviderConsentCoreSourceSet.output.classesDirs
+    classpath = mmdU1ProviderConsentCoreSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}

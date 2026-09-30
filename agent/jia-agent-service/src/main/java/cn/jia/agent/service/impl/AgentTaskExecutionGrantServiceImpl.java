@@ -255,6 +255,42 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
     }
 
     @Override
+    public AssignmentPreview previewAssignmentWithinLockedTask(Scope scope, String taskId,
+            long lockedTaskVersion, String assignmentIdempotencyKey, AgentTaskAssignDTO request) {
+        ValidAssign valid = validateAssign(scope, taskId, assignmentIdempotencyKey, request);
+        if (valid.expectedTaskVersion() != lockedTaskVersion) {
+            throw conflict("Task changed before consent preview");
+        }
+        if (!List.of("GENERATE_IMAGE").equals(valid.operations())
+                || !"GENERATE_IMAGE".equals(valid.initialOperation())) {
+            throw bad("Provider consent preview supports only GENERATE_IMAGE");
+        }
+        String canonicalAgent = legacyAssignments.resolveAgentId(scope.tenantId(), scope.clientId(),
+                scope.ownerJiacn(), valid.requestedAgentId());
+        var confirmed = requirementSnapshots.requireCurrent(scope, valid.taskId(),
+                valid.requirementRevision());
+        if (confirmed == null || confirmed.revision() != valid.requirementRevision()
+                || !scope.tenantId().equals(confirmed.tenantId())
+                || !scope.clientId().equals(confirmed.clientId())
+                || !scope.ownerJiacn().equals(confirmed.ownerJiacn())
+                || !valid.taskId().equals(confirmed.taskId())
+                || confirmed.sha256() == null
+                || !confirmed.sha256().matches("[0-9a-f]{64}")) {
+            throw invalidState("Current owner-confirmed requirement is missing or stale");
+        }
+        List<String> locked = identities.lockActiveCanonicalAgentIdsInScope(scope.tenantId(),
+                scope.clientId(), scope.ownerJiacn(), List.of(canonicalAgent));
+        if (!List.of(canonicalAgent).equals(locked)) throw notFound();
+        List<InputSnapshot> snapshots = validateAndSnapshotInputs(scope, taskId, valid.inputs());
+        List<AuthorizedInput> authorized = snapshots.stream().map(input -> new AuthorizedInput(
+                input.fileId(), input.version(), input.purpose(), input.contentMimeType(),
+                input.byteLength(), input.contentHash())).toList();
+        return new AssignmentPreview(canonicalAgent, lockedTaskVersion,
+                confirmed.revision(), confirmed.sha256(), hashAssign(valid, canonicalAgent),
+                sha256("TASK_LINKED_INPUT_SNAPSHOT_V1\n" + write(snapshots)), authorized);
+    }
+
+    @Override
     public AgentTaskExecutionGrantDTO revoke(Scope scope, String taskId, String grantId,
             String idempotencyKey, long expectedGrantVersion) {
         validateScope(scope); exact(taskId,"taskId",100); exact(grantId,"grantId",100);
@@ -343,6 +379,46 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                         input.contentMimeType(),input.byteLength(),input.contentHash())).toList();
         return new Admission(grant.getGrantId(),grantVersion,assignmentRevision,targetAgentId,
                 "FINALIZE_SELECTED_OUTPUTS",false,inputs);
+    }
+
+    @Override
+    public Admission admitProviderConsentBinding(Scope scope, String taskId, String grantId,
+            long expectedGrantVersion, long expectedAssignmentRevision, String targetAgentId,
+            String expectedAssignmentBaseHash, String expectedInputSnapshotDigest) {
+        validateScope(scope); exact(taskId,"taskId",100); exact(grantId,"grantId",100);
+        exact(targetAgentId,"targetAgentId",100);
+        if (expectedGrantVersion < 1 || expectedGrantVersion > MAX_SAFE_INTEGER
+                || expectedAssignmentRevision < 0
+                || expectedAssignmentRevision > MAX_SAFE_INTEGER
+                || expectedAssignmentBaseHash == null
+                || !expectedAssignmentBaseHash.matches("[0-9a-f]{64}")
+                || expectedInputSnapshotDigest == null
+                || !expectedInputSnapshotDigest.matches("[0-9a-f]{64}")) {
+            throw bad("Provider consent binding identity is invalid");
+        }
+        try {
+            return transactions.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),
+                    scope.clientId(), scope.ownerJiacn(), taskId, root -> {
+                        AgentTaskExecutionGrantEntity observed = grants.findByGrant(
+                                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId,
+                                grantId);
+                        if (observed == null) throw notFound();
+                        lockTargetAndPersistedInputs(scope, taskId, targetAgentId, observed);
+                        AgentTaskExecutionGrantEntity locked = grants.findByGrantForUpdate(
+                                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId,
+                                grantId);
+                        String persistedInputDigest = locked == null ? null : sha256(
+                                "TASK_LINKED_INPUT_SNAPSHOT_V1\n"
+                                        + write(readInputs(locked.getInputScopeJson())));
+                        if (locked == null || !same(observed.getRequestHash(), locked.getRequestHash())
+                                || !same(expectedAssignmentBaseHash, locked.getRequestHash())
+                                || !same(expectedInputSnapshotDigest, persistedInputDigest)) {
+                            throw conflict("Grant does not match the consent preview");
+                        }
+                        return verifyAdmission(scope, root, locked, expectedGrantVersion,
+                                expectedAssignmentRevision, targetAgentId, "GENERATE_IMAGE", false);
+                    });
+        } catch (AgentTaskCollaborationException failure) { throw translate(failure); }
     }
 
     @Override
