@@ -43,6 +43,42 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
                     + "(`permitted_operation` = _utf8mb4'GENERATE_IMAGE') and "
                     + "(`output_content_mime_type` = _utf8mb4'image/png')))";
 
+    /** Exact MySQL 8.0.21 CHECK_CLAUSE renderings captured from the owned Stage 5 catalog. */
+    private static final String PURPOSE_UNION_CATALOG_CHECK =
+            "((`consent_purpose` in (_utf8mb4\\'INITIAL_ASSIGN_AND_START\\',_utf8mb4\\'FOLLOWUP_EXECUTE\\')) and (((`consent_purp" +
+            "ose` = _utf8mb4\\'INITIAL_ASSIGN_AND_START\\') and (`operation_grant_id` is null) and (`execution_intent_id` is nu" +
+            "ll) and (`conversation_id` is null) and (`conversation_generation` is null) and (`operation` is null) and (`inst" +
+            "ruction_sha256` is null) and (`source_snapshot_sha256` is null) and (`owner_payload_sha256` is null) and (`runti" +
+            "me_input_snapshot_sha256` is null)) or ((`consent_purpose` = _utf8mb4\\'FOLLOWUP_EXECUTE\\') and regexp_like(`oper" +
+            "ation_grant_id`,cast(_utf8mb4\\'^opgrant_[0-9a-f]{32}$\\' as char charset binary)) and (char_length(`execution_int" +
+            "ent_id`) between 1 and 100) and (char_length(`conversation_id`) between 1 and 100) and (`conversation_generation" +
+            "` > 0) and (`operation` in (_utf8mb4\\'GENERATE_IMAGE\\',_utf8mb4\\'EDIT_IMAGE\\')) and regexp_like(`instruction_sha" +
+            "256`,cast(_utf8mb4\\'^[0-9a-f]{64}$\\' as char charset binary)) and regexp_like(`source_snapshot_sha256`,cast(_utf" +
+            "8mb4\\'^[0-9a-f]{64}$\\' as char charset binary)) and regexp_like(`owner_payload_sha256`,cast(_utf8mb4\\'^[0-9a-f]{" +
+            "64}$\\' as char charset binary)) and (((`reserved_execution_id` is null) and (`runtime_input_snapshot_sha256` is " +
+            "null)) or ((`reserved_execution_id` is not null) and regexp_like(`runtime_input_snapshot_sha256`,cast(_utf8mb4\\'" +
+            "^[0-9a-f]{64}$\\' as char charset binary)))))))";
+
+    private static final String CONTROLLED_CONSENT_V3_CATALOG_CHECK =
+            "((`controlled_consent_id` is null) or ((`execution_mode` = _utf8mb4\\'CONVERSATION\\') and regexp_like(`controlled" +
+            "_consent_id`,cast(_utf8mb4\\'^consent_[0-9a-f]{32}$\\' as char charset binary)) and (((`execution_protocol_version" +
+            "` = 2) and (`permitted_operation` = _utf8mb4\\'GENERATE_IMAGE\\') and (`operation_grant_id` is null) and (`runtime" +
+            "_input_snapshot_digest` is null)) or ((`execution_protocol_version` = 3) and (`permitted_operation` in (_utf8mb4" +
+            "\\'GENERATE_IMAGE\\',_utf8mb4\\'EDIT_IMAGE\\')) and regexp_like(`operation_grant_id`,cast(_utf8mb4\\'^opgrant_[0-9a-f" +
+            "]{32}$\\' as char charset binary)) and regexp_like(`runtime_input_snapshot_digest`,cast(_utf8mb4\\'^[0-9a-f]{64}$\\" +
+            "' as char charset binary)))) and (`output_content_mime_type` = _utf8mb4\\'image/png\\')))";
+
+    private static final String EXECUTION_PROTOCOL_CATALOG_CHECK =
+            "(((`execution_protocol_version` = 1) and (`controlled_consent_id` is null) and (`operation_grant_id` is null) an" +
+            "d (`runtime_input_snapshot_digest` is null)) or ((`execution_protocol_version` = 2) and regexp_like(`controlled_" +
+            "consent_id`,cast(_utf8mb4\\'^consent_[0-9a-f]{32}$\\' as char charset binary)) and (`operation_grant_id` is null) " +
+            "and (`runtime_input_snapshot_digest` is null)) or ((`execution_protocol_version` = 3) and (`execution_mode` = _u" +
+            "tf8mb4\\'CONVERSATION\\') and regexp_like(`controlled_consent_id`,cast(_utf8mb4\\'^consent_[0-9a-f]{32}$\\' as char " +
+            "charset binary)) and regexp_like(`operation_grant_id`,cast(_utf8mb4\\'^opgrant_[0-9a-f]{32}$\\' as char charset bi" +
+            "nary)) and regexp_like(`runtime_input_snapshot_digest`,cast(_utf8mb4\\'^[0-9a-f]{64}$\\' as char charset binary)) " +
+            "and (`permitted_operation` in (_utf8mb4\\'GENERATE_IMAGE\\',_utf8mb4\\'EDIT_IMAGE\\')) and (`output_content_mime_typ" +
+            "e` = _utf8mb4\\'image/png\\')))";
+
     private final JdbcTemplate jdbc;
 
     public ControlledImageFollowupV3SchemaInitializer(JdbcTemplate jdbc) {
@@ -118,7 +154,7 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
             throw new IllegalStateException("Controlled execution CHECK unavailable");
         }
         String actual=canonicalCheck(text(rows.getFirst(),"check_clause"));
-        String extended=canonicalCheck(controlledConsentCheckDdl());
+        String extended=canonicalCheck(CONTROLLED_CONSENT_V3_CATALOG_CHECK);
         if (actual.equals(extended)) return;
         if (!actual.equals(canonicalCheck(LEGACY_CONTROLLED_CONSENT_CATALOG_CHECK))) {
             throw new IllegalStateException("Controlled execution CHECK definition drift");
@@ -488,9 +524,9 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
 
     private static Map<String, String> additiveChecks() {
         Map<String, String> checks = new LinkedHashMap<>();
-        checks.put("chk_atpcc_purpose_union", consentPurposeCheckExpression());
-        checks.put("chk_pwex_controlled_consent", controlledConsentCheckDdl());
-        checks.put("chk_pwex_execution_protocol", executionProtocolCheckDdl());
+        checks.put("chk_atpcc_purpose_union", PURPOSE_UNION_CATALOG_CHECK);
+        checks.put("chk_pwex_controlled_consent", CONTROLLED_CONSENT_V3_CATALOG_CHECK);
+        checks.put("chk_pwex_execution_protocol", EXECUTION_PROTOCOL_CATALOG_CHECK);
         return java.util.Collections.unmodifiableMap(checks);
     }
 
@@ -522,8 +558,8 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
 
     private static Map<String, String> executionRestartV3Checks() {
         Map<String, String> checks = new LinkedHashMap<>();
-        checks.put("chk_pwex_controlled_consent", controlledConsentCheckDdl());
-        checks.put("chk_pwex_execution_protocol", executionProtocolCheckDdl());
+        checks.put("chk_pwex_controlled_consent", CONTROLLED_CONSENT_V3_CATALOG_CHECK);
+        checks.put("chk_pwex_execution_protocol", EXECUTION_PROTOCOL_CATALOG_CHECK);
         return java.util.Collections.unmodifiableMap(checks);
     }
 

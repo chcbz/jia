@@ -51,6 +51,20 @@ class ControlledImageFollowupV3SchemaInitializerTest {
                         ControlledImageFollowupV3SchemaInitializer.sourceCheckExpressions()));
     }
 
+
+    @Test void observedMysql8021OwnedChecksAcceptExactLiteralsAndRejectEveryDriftShape() {
+        Map<String,String> additive=ControlledImageFollowupV3SchemaInitializer.additiveCheckExpressions();
+        assertStrictObservedCatalog("operation",observedOperationCatalogChecks(),
+                ControlledImageFollowupV3SchemaInitializer.operationGrantCheckExpressions());
+        assertStrictObservedCatalog("source",observedSourceCatalogChecks(),
+                ControlledImageFollowupV3SchemaInitializer.sourceCheckExpressions());
+        assertStrictObservedCatalog("consent",observedConsentCatalogChecks(),Map.of(
+                "chk_atpcc_purpose_union",additive.get("chk_atpcc_purpose_union")));
+        assertStrictObservedCatalog("execution",observedExecutionCatalogChecks(),Map.of(
+                "chk_pwex_controlled_consent",additive.get("chk_pwex_controlled_consent"),
+                "chk_pwex_execution_protocol",additive.get("chk_pwex_execution_protocol")));
+    }
+
     @Test void strictPurposeAndExecutionProtocolUnionsRetainLegacyAndV3MutualExclusion() {
         String purpose=ControlledImageFollowupV3SchemaInitializer.consentPurposeCheckExpression();
         for(String required:List.of("INITIAL_ASSIGN_AND_START","FOLLOWUP_EXECUTE",
@@ -149,6 +163,146 @@ class ControlledImageFollowupV3SchemaInitializerTest {
         var extra=new ArrayList<>(pristine);extra.add(column("unexpected","bigint","YES",null,null));
         assertThrows(IllegalStateException.class,()->ControlledImageFollowupV3SchemaInitializer
                 .validateExactColumns("operation",extra,expected));
+    }
+
+
+    private static void assertStrictObservedCatalog(String table,Map<String,String> observed,
+            Map<String,String> expected) {
+        assertEquals(expected.keySet(),observed.keySet());
+        assertDoesNotThrow(()->ControlledImageFollowupV3SchemaInitializer.validateExactChecks(
+                table,rows(observed),expected));
+
+        var weak=rows(observed);
+        weak.getFirst().put("check_clause","("+weak.getFirst().get("check_clause")+") OR 1=1");
+        assertThrows(IllegalStateException.class,()->ControlledImageFollowupV3SchemaInitializer
+                .validateExactChecks(table,weak,expected));
+
+        var alwaysTrue=rows(observed);
+        alwaysTrue.getFirst().put("check_clause","1=1");
+        assertThrows(IllegalStateException.class,()->ControlledImageFollowupV3SchemaInitializer
+                .validateExactChecks(table,alwaysTrue,expected));
+
+        var extra=rows(observed);
+        extra.add(check("chk_unexpected_extra","YES","1=1"));
+        assertThrows(IllegalStateException.class,()->ControlledImageFollowupV3SchemaInitializer
+                .validateExactChecks(table,extra,expected));
+
+        var missing=rows(observed);
+        missing.removeFirst();
+        assertThrows(IllegalStateException.class,()->ControlledImageFollowupV3SchemaInitializer
+                .validateExactChecks(table,missing,expected));
+
+        var unenforced=rows(observed);
+        unenforced.getFirst().put("enforced","NO");
+        assertThrows(IllegalStateException.class,()->ControlledImageFollowupV3SchemaInitializer
+                .validateExactChecks(table,unenforced,expected));
+    }
+
+    private static Map<String,String> observedOperationCatalogChecks() {
+        Map<String,String> checks=new LinkedHashMap<>();
+        checks.put("chk_aciiog_hashes",
+                "(regexp_like(`requirement_sha256`,cast(_utf8mb4\\'^[0-9a-f]{64}$\\' as char charset binary)) and regexp_like(`" +
+                "instruction_sha256`,cast(_utf8mb4\\'^[0-9a-f]{64}$\\' as char charset binary)) and regexp_like(`source_snapsho" +
+                "t_sha256`,cast(_utf8mb4\\'^[0-9a-f]{64}$\\' as char charset binary)) and regexp_like(`owner_payload_sha256`,ca" +
+                "st(_utf8mb4\\'^[0-9a-f]{64}$\\' as char charset binary)) and regexp_like(`issue_request_digest`,cast(_utf8mb4\\" +
+                "'^[0-9a-f]{64}$\\' as char charset binary)) and ((`revoke_request_digest` is null) or regexp_like(`revoke_req" +
+                "uest_digest`,cast(_utf8mb4\\'^[0-9a-f]{64}$\\' as char charset binary))))");
+        checks.put("chk_aciiog_ids",
+                "(regexp_like(`operation_grant_id`,cast(_utf8mb4\\'^opgrant_[0-9a-f]{32}$\\' as char charset binary)) and regex" +
+                "p_like(`consent_id`,cast(_utf8mb4\\'^consent_[0-9a-f]{32}$\\' as char charset binary)))");
+        checks.put("chk_aciiog_lifecycle",
+                "(((`state` = _utf8mb4\\'AUTHORIZED\\') and (`reserved_execution_id` is null) and (`reserved_run_id` is null) a" +
+                "nd (`consumed_lease_id` is null) and (`revoke_idempotency_key` is null) and (`revoke_request_digest` is null" +
+                ") and (`revoked_at` is null)) or ((`state` = _utf8mb4\\'RESERVED\\') and (`reserved_execution_id` is not null)" +
+                " and (`reserved_run_id` is not null) and (`consumed_lease_id` is null) and (`revoke_idempotency_key` is null" +
+                ") and (`revoke_request_digest` is null) and (`revoked_at` is null)) or ((`state` = _utf8mb4\\'CONSUMED\\') and" +
+                " (`reserved_execution_id` is not null) and (`reserved_run_id` is not null) and (`consumed_lease_id` is not n" +
+                "ull) and (`revoke_idempotency_key` is null) and (`revoke_request_digest` is null) and (`revoked_at` is null)" +
+                ") or ((`state` = _utf8mb4\\'REVOKED\\') and (((`reserved_execution_id` is null) and (`reserved_run_id` is null" +
+                ")) or ((`reserved_execution_id` is not null) and (`reserved_run_id` is not null))) and (`consumed_lease_id` " +
+                "is null) and (`revoke_idempotency_key` is not null) and (`revoke_request_digest` is not null) and (`revoked_" +
+                "at` is not null)))");
+        checks.put("chk_aciiog_operation",
+                "(`operation` in (_utf8mb4\\'GENERATE_IMAGE\\',_utf8mb4\\'EDIT_IMAGE\\'))");
+        checks.put("chk_aciiog_scope",
+                "((`tenant_id` = _utf8mb4\\'0\\') and (`owner_jiacn` <> _utf8mb4\\'0\\'))");
+        checks.put("chk_aciiog_sources",
+                "((json_type(`source_snapshot_json`) = _utf8mb4\\'ARRAY\\') and (((`operation` = _utf8mb4\\'GENERATE_IMAGE\\') an" +
+                "d (json_length(`source_snapshot_json`) between 0 and 16) and (json_search(`source_snapshot_json`,_utf8mb4\\'o" +
+                "ne\\',_utf8mb4\\'CURRENT_CONVERSATION_ASSET\\',NULL,_utf8mb4\\'$[*].kind\\') is null)) or ((`operation` = _utf8mb" +
+                "4\\'EDIT_IMAGE\\') and (json_length(`source_snapshot_json`) = 1) and (json_unquote(json_extract(`source_snapsh" +
+                "ot_json`,_utf8mb4\\'$[0].kind\\')) = _utf8mb4\\'CURRENT_CONVERSATION_ASSET\\'))))");
+        checks.put("chk_aciiog_state",
+                "(`state` in (_utf8mb4\\'AUTHORIZED\\',_utf8mb4\\'RESERVED\\',_utf8mb4\\'CONSUMED\\',_utf8mb4\\'REVOKED\\'))");
+        checks.put("chk_aciiog_versions",
+                "((`conversation_generation` > 0) and (`baseline_grant_version` > 0) and (`task_version` >= 0) and (`assignme" +
+                "nt_revision` >= 0) and (`requirement_revision` > 0) and (`version` > 0))");
+        return checks;
+    }
+
+    private static Map<String,String> observedSourceCatalogChecks() {
+        Map<String,String> checks=new LinkedHashMap<>();
+        checks.put("chk_acies_common",
+                "((`input_ordinal` between 1 and 16) and (`content_mime_type` in (_utf8mb4\\'image/jpeg\\',_utf8mb4\\'image/png\\" +
+                "')) and (`byte_length` > 0) and regexp_like(`content_sha256`,cast(_utf8mb4\\'^[0-9a-f]{64}$\\' as char charset" +
+                " binary)))");
+        checks.put("chk_acies_scope",
+                "((`tenant_id` = _utf8mb4\\'0\\') and (`owner_jiacn` <> _utf8mb4\\'0\\'))");
+        checks.put("chk_acies_union",
+                "(((`source_kind` = _utf8mb4\\'TASK_LINKED_WORKSPACE_VERSION\\') and (`file_id` is not null) and (`file_version" +
+                "` > 0) and (`purpose` = _utf8mb4\\'REFERENCE\\') and (`conversation_id` is null) and (`conversation_generation" +
+                "` is null) and (`asset_id` is null) and (`asset_revision` is null) and (`producer_request_id` is null) and (" +
+                "`producer_request_revision` is null) and (`producer_step_id` is null) and (`producer_execution_id` is null) " +
+                "and (`producer_run_id` is null) and (`producer_output_id` is null)) or ((`source_kind` = _utf8mb4\\'CURRENT_C" +
+                "ONVERSATION_ASSET\\') and (`file_id` is null) and (`file_version` is null) and (`purpose` is null) and (`conv" +
+                "ersation_id` is not null) and (`conversation_generation` > 0) and (`asset_id` is not null) and (`asset_revis" +
+                "ion` > 0) and (`producer_request_id` is not null) and (`producer_request_revision` > 0) and (`producer_step_" +
+                "id` is not null) and (`producer_execution_id` is not null) and (`producer_run_id` is not null) and (`produce" +
+                "r_output_id` is not null)))");
+        return checks;
+    }
+
+    private static Map<String,String> observedConsentCatalogChecks() {
+        Map<String,String> checks=new LinkedHashMap<>();
+        checks.put("chk_atpcc_purpose_union",
+                "((`consent_purpose` in (_utf8mb4\\'INITIAL_ASSIGN_AND_START\\',_utf8mb4\\'FOLLOWUP_EXECUTE\\')) and (((`consent_" +
+                "purpose` = _utf8mb4\\'INITIAL_ASSIGN_AND_START\\') and (`operation_grant_id` is null) and (`execution_intent_i" +
+                "d` is null) and (`conversation_id` is null) and (`conversation_generation` is null) and (`operation` is null" +
+                ") and (`instruction_sha256` is null) and (`source_snapshot_sha256` is null) and (`owner_payload_sha256` is n" +
+                "ull) and (`runtime_input_snapshot_sha256` is null)) or ((`consent_purpose` = _utf8mb4\\'FOLLOWUP_EXECUTE\\') a" +
+                "nd regexp_like(`operation_grant_id`,cast(_utf8mb4\\'^opgrant_[0-9a-f]{32}$\\' as char charset binary)) and (ch" +
+                "ar_length(`execution_intent_id`) between 1 and 100) and (char_length(`conversation_id`) between 1 and 100) a" +
+                "nd (`conversation_generation` > 0) and (`operation` in (_utf8mb4\\'GENERATE_IMAGE\\',_utf8mb4\\'EDIT_IMAGE\\')) " +
+                "and regexp_like(`instruction_sha256`,cast(_utf8mb4\\'^[0-9a-f]{64}$\\' as char charset binary)) and regexp_lik" +
+                "e(`source_snapshot_sha256`,cast(_utf8mb4\\'^[0-9a-f]{64}$\\' as char charset binary)) and regexp_like(`owner_p" +
+                "ayload_sha256`,cast(_utf8mb4\\'^[0-9a-f]{64}$\\' as char charset binary)) and (((`reserved_execution_id` is nu" +
+                "ll) and (`runtime_input_snapshot_sha256` is null)) or ((`reserved_execution_id` is not null) and regexp_like" +
+                "(`runtime_input_snapshot_sha256`,cast(_utf8mb4\\'^[0-9a-f]{64}$\\' as char charset binary)))))))");
+        return checks;
+    }
+
+    private static Map<String,String> observedExecutionCatalogChecks() {
+        Map<String,String> checks=new LinkedHashMap<>();
+        checks.put("chk_pwex_controlled_consent",
+                "((`controlled_consent_id` is null) or ((`execution_mode` = _utf8mb4\\'CONVERSATION\\') and regexp_like(`contro" +
+                "lled_consent_id`,cast(_utf8mb4\\'^consent_[0-9a-f]{32}$\\' as char charset binary)) and (((`execution_protocol" +
+                "_version` = 2) and (`permitted_operation` = _utf8mb4\\'GENERATE_IMAGE\\') and (`operation_grant_id` is null) a" +
+                "nd (`runtime_input_snapshot_digest` is null)) or ((`execution_protocol_version` = 3) and (`permitted_operati" +
+                "on` in (_utf8mb4\\'GENERATE_IMAGE\\',_utf8mb4\\'EDIT_IMAGE\\')) and regexp_like(`operation_grant_id`,cast(_utf8m" +
+                "b4\\'^opgrant_[0-9a-f]{32}$\\' as char charset binary)) and regexp_like(`runtime_input_snapshot_digest`,cast(_" +
+                "utf8mb4\\'^[0-9a-f]{64}$\\' as char charset binary)))) and (`output_content_mime_type` = _utf8mb4\\'image/png\\'" +
+                ")))");
+        checks.put("chk_pwex_execution_protocol",
+                "(((`execution_protocol_version` = 1) and (`controlled_consent_id` is null) and (`operation_grant_id` is null" +
+                ") and (`runtime_input_snapshot_digest` is null)) or ((`execution_protocol_version` = 2) and regexp_like(`con" +
+                "trolled_consent_id`,cast(_utf8mb4\\'^consent_[0-9a-f]{32}$\\' as char charset binary)) and (`operation_grant_i" +
+                "d` is null) and (`runtime_input_snapshot_digest` is null)) or ((`execution_protocol_version` = 3) and (`exec" +
+                "ution_mode` = _utf8mb4\\'CONVERSATION\\') and regexp_like(`controlled_consent_id`,cast(_utf8mb4\\'^consent_[0-9" +
+                "a-f]{32}$\\' as char charset binary)) and regexp_like(`operation_grant_id`,cast(_utf8mb4\\'^opgrant_[0-9a-f]{3" +
+                "2}$\\' as char charset binary)) and regexp_like(`runtime_input_snapshot_digest`,cast(_utf8mb4\\'^[0-9a-f]{64}$" +
+                "\\' as char charset binary)) and (`permitted_operation` in (_utf8mb4\\'GENERATE_IMAGE\\',_utf8mb4\\'EDIT_IMAGE\\'" +
+                ")) and (`output_content_mime_type` = _utf8mb4\\'image/png\\')))");
+        return checks;
     }
 
     private static List<Map<String,Object>> executionColumns(boolean v3) {
