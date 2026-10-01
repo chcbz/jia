@@ -81,6 +81,7 @@ class ChatTypedDeliberationSpringTransactionTest {
             ChatTypedDeliberationContextService contexts=mock(ChatTypedDeliberationContextService.class);
             ChatTypedDeliberationService typed=mock(ChatTypedDeliberationService.class);
             ChatTypedDeliberationStore store=mock(ChatTypedDeliberationStore.class);
+            ChatInteractionStepStore interactionSteps=mock(ChatInteractionStepStore.class);
             var storeScope=new ChatTypedDeliberationStore.Scope("0","owner","client","42",1);
             when(typed.store()).thenReturn(store);
             when(mutations.executeWithLockedTaskRootInOwnerScope(eq("0"),eq("client"),eq("owner"),eq("task"),any()))
@@ -134,7 +135,7 @@ class ChatTypedDeliberationSpringTransactionTest {
                 context.registerBean(ChatBountyBindingStore.class,()->bindings);context.registerBean(ChatConversationDao.class,()->conversations);
                 context.registerBean(JuyitingConversationScopeService.class,()->scopes);context.registerBean(ChatDeliberationService.class,()->deliberation);
                 context.registerBean(ChatDeliberationDao.class,()->events);context.registerBean(ChatTypedDeliberationContextService.class,()->contexts);
-                context.registerBean(ChatTypedDeliberationService.class,()->typed);context.registerBean(ChatTypedDiscussionAdmissionService.class,
+                context.registerBean(ChatInteractionStepStore.class,()->interactionSteps);context.registerBean(ChatTypedDeliberationService.class,()->typed);context.registerBean(ChatTypedDiscussionAdmissionService.class,
                         ()->new ChatTypedDiscussionAdmissionService(mutations,bindings,conversations,scopes,deliberation,events,contexts,typed));
                 context.refresh();var service=context.getBean(ChatTypedDiscussionAdmissionService.class);
                 assertTrue(org.springframework.aop.support.AopUtils.isCglibProxy(service));
@@ -171,6 +172,7 @@ class ChatTypedDeliberationSpringTransactionTest {
         ChatMessageDao messages=mock(ChatMessageDao.class);
         AgentService agents=mock(AgentService.class);
         ChatTypedDeliberationStore typedStore=mock(ChatTypedDeliberationStore.class);
+        ChatInteractionStepStore interactionSteps=mock(ChatInteractionStepStore.class);
 
         ChatConversationEntity conversation=new ChatConversationEntity().setId(42L)
                 .setConversationType("juyiting").setLifecycleGeneration(1L);
@@ -231,6 +233,7 @@ class ChatTypedDeliberationSpringTransactionTest {
         context.register(TransactionConfig.class);
         context.registerBean(DataSource.class,()->source);
         context.registerBean(DataSourceTransactionManager.class,()->new DataSourceTransactionManager(source));
+        context.registerBean(ChatInteractionStepStore.class,()->interactionSteps);
         context.registerBean(ChatTypedDeliberationStore.class,()->typedStore);
         context.registerBean(ChatTypedDeliberationService.class,()->new ChatTypedDeliberationService(typedStore));
         context.registerBean(ChatDeliberationService.class,()->{

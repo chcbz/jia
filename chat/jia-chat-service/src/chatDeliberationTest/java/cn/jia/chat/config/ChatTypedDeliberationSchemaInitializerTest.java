@@ -34,6 +34,19 @@ class ChatTypedDeliberationSchemaInitializerTest {
         assertTrue(all.contains("idx_chat_typed_admission_request_fk"));
     }
 
+    @Test void parserAcceptsOnlyTheApprovedForeignKeyActionAndFourTableCatalog() {
+        List<String> approved=ChatTypedDeliberationSchemaInitializer.ddl();
+        String outcome=approved.getFirst();
+        assertTrue(ChatTypedDeliberationSchemaInitializer.approvedDdlStatement(outcome,"chat_typed_outcome"));
+        assertFalse(ChatTypedDeliberationSchemaInitializer.approvedDdlStatement(
+                outcome.replace("ON DELETE RESTRICT","ON DELETE CASCADE"),"chat_typed_outcome"));
+        assertFalse(ChatTypedDeliberationSchemaInitializer.approvedDdlStatement(
+                outcome+" DELETE FROM chat_typed_outcome","chat_typed_outcome"));
+        assertFalse(ChatTypedDeliberationSchemaInitializer.approvedDdlStatement(outcome,"foreign_table"));
+        assertThrows(IllegalStateException.class,()->ChatTypedDeliberationSchemaInitializer.parseDdl(
+                String.join(";\n",approved)+";\nCREATE TABLE IF NOT EXISTS foreign_table (id BIGINT)"));
+    }
+
     @Test void catalogQuoteNormalizationAcceptsOnlyPlainOrOneRawEscapeAndPreservesLiteralData() {
         String plain="kind IN ('ANSWER','CLARIFY')";
         assertEquals(ChatTypedDeliberationSchemaInitializer.canonicalCheck(plain),

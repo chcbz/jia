@@ -84,7 +84,7 @@ class ChatDeliberationServiceTest {
     }
 
     @Test
-    void trustedTypedFactsAreSnapshottedAndParticipateInTheExistingRequestDigest() {
+    void trustedTypedFactsPreserveIntentionalNullFactsAndParticipateInTheExistingRequestDigest() {
         Map<String,Object> none=Map.of("schemaVersion",1,"referenceMode","NONE",
                 "supportedOperations",List.of("GENERATE_IMAGE","EDIT_IMAGE"),"availableSources",List.of());
         Map<String,Object> admission=new LinkedHashMap<>();admission.put("schemaVersion",1);
@@ -95,8 +95,13 @@ class ChatDeliberationServiceTest {
         var first=service.admit("0",humanSender(),"42",3L,scope(),InteractionRoute.CHAT,input,
                 Map.of(),none,admission);
         assertFalse(first.replay());
-        assertEquals(none,first.dispatches().getFirst().factsManifest().get("typedDeliberation"));
-        assertEquals(admission,first.dispatches().getFirst().factsManifest().get("typedDeliberationAdmission"));
+        Map<String,Object> facts=first.dispatches().getFirst().factsManifest();
+        assertTrue(facts.containsKey("task"));assertEquals(null,facts.get("task"));
+        assertEquals(none,facts.get("typedDeliberation"));
+        assertEquals(admission,facts.get("typedDeliberationAdmission"));
+        String canonical=CanonicalContextJson.write(facts);
+        assertTrue(canonical.contains("\"task\":null"));
+        assertEquals(canonical,dao.snapshots.get(first.dispatches().getFirst().contextSnapshotId()).getFactsManifestJson());
         assertTrue(service.admit("0",humanSender(),"42",3L,scope(),InteractionRoute.CHAT,
                 request("req-typed-facts","natural follow-up"),Map.of(),none,admission).replay());
         Map<String,Object> changed=Map.of("schemaVersion",1,"referenceMode","NONE",

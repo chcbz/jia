@@ -6,6 +6,7 @@ import cn.jia.agent.entity.AgentRegisterResultDTO;
 import cn.jia.agent.security.AgentRuntimeAuthenticationService;
 import cn.jia.agent.service.AgentService;
 import cn.jia.chat.dao.ChatMessageDao;
+import cn.jia.chat.deliberation.ChatTurnEntity;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.service.ChatConversationEventBroker;
 import cn.jia.chat.service.ChatConversationService;
@@ -73,12 +74,19 @@ class AgentWebSocketTypedDeliberationTest {
                 .setTargetAgentIds("[\"agent-a\"]").setLifecycleGeneration(1L);conversation.setTenantId("0");conversation.setClientId("client");conversation.setJiacn("owner");
         when(conversations.getOwned("owner","client","42")).thenReturn(conversation);
         when(deliberation.persistFinal(anyString(),anyString(),anyString(),anyString(),anyLong(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),any(),any(),any()))
-                .thenReturn(new ChatDeliberationService.FinalResult(ChatDeliberationService.FinalStatus.PERSISTED,9L,"8","evt",null,null));
+                .thenReturn(new ChatDeliberationService.FinalResult(ChatDeliberationService.FinalStatus.PERSISTED,9L,"8","evt",turn(),null));
         String outcome="{\"schemaVersion\":1.0,\"kind\":\"ANSWER\",\"text\":\"你好🌏\",\"clarification\":null,\"proposal\":null}";
         handler.handleTextMessage(session,new TextMessage(finalWire(outcome)));
         ArgumentCaptor<String> raw=ArgumentCaptor.forClass(String.class);
         verify(deliberation).persistFinal(eq("0"),eq("owner"),eq("client"),eq("42"),eq(1L),eq("agent-a"),eq("request"),eq("turn"),eq("dispatch"),eq("snapshot"),eq("sha256:"+"a".repeat(64)),eq("你好🌏"),eq(1),raw.capture(),any());
         assertEquals(outcome,raw.getValue());
+        ArgumentCaptor<TextMessage> receipt=ArgumentCaptor.forClass(TextMessage.class);
+        verify(session).sendMessage(receipt.capture());
+        assertTrue(receipt.getValue().getPayload().contains("\"type\":\"agent_message_saved\""));
+        assertTrue(receipt.getValue().getPayload().contains("\"turnId\":\"turn\""));
+        assertTrue(receipt.getValue().getPayload().contains("\"messageId\":\"9\""));
+        assertTrue(receipt.getValue().getPayload().contains("\"eventId\":\"evt\""));
+        assertTrue(receipt.getValue().getPayload().contains("\"duplicate\":false"));
         clearInvocations(deliberation);
         handler.handleTextMessage(session,new TextMessage(finalWire(outcome.replace("\"kind\":\"ANSWER\"","\"kind\":\"ANSWER\",\"kind\":\"CLARIFY\""))));
         verifyNoInteractions(deliberation);
@@ -107,11 +115,19 @@ class AgentWebSocketTypedDeliberationTest {
                 .setTargetAgentIds("[\"agent-a\"]").setLifecycleGeneration(1L);conversation.setTenantId("0");conversation.setClientId("client");conversation.setJiacn("owner");
         when(conversations.getOwned("owner","client","42")).thenReturn(conversation);
         when(deliberation.persistFinal(anyString(),anyString(),anyString(),anyString(),anyLong(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),isNull(),isNull(),any()))
-                .thenReturn(new ChatDeliberationService.FinalResult(ChatDeliberationService.FinalStatus.DUPLICATE,9L,"8","evt",null,null));
+                .thenReturn(new ChatDeliberationService.FinalResult(ChatDeliberationService.FinalStatus.DUPLICATE,9L,"8","evt",turn(),null));
         handler.handleTextMessage(session,new TextMessage(baseWire()+"}"));
         verify(deliberation).persistFinal(anyString(),anyString(),anyString(),anyString(),anyLong(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),eq("plain"),isNull(),isNull(),any());
+        ArgumentCaptor<TextMessage> receipt=ArgumentCaptor.forClass(TextMessage.class);
+        verify(session).sendMessage(receipt.capture());
+        assertTrue(receipt.getValue().getPayload().contains("\"type\":\"agent_message_saved\""));
+        assertTrue(receipt.getValue().getPayload().contains("\"turnId\":\"turn\""));
+        assertTrue(receipt.getValue().getPayload().contains("\"messageId\":\"9\""));
+        assertTrue(receipt.getValue().getPayload().contains("\"duplicate\":true"));
+        assertFalse(receipt.getValue().getPayload().contains("interactionOutcome"));
     }
 
+    private static ChatTurnEntity turn(){return new ChatTurnEntity().setTurnId("turn");}
     private static String finalWire(String outcome){return baseWire().replace("\"content\":\"plain\"","\"content\":\"你好🌏\"")+",\"outcomeContractVersion\":1,\"interactionOutcome\":"+outcome+"}";}
     private static String baseWire(){return "{\"schemaVersion\":1,\"messageType\":\"chat.message\",\"messageId\":\"m1\",\"agentId\":\"agent-a\",\"sourceAgentId\":\"agent-a\",\"runtimeInstanceId\":\"runtime\",\"conversationId\":\"42\",\"conversationGeneration\":\"1\",\"requestId\":\"request\",\"turnId\":\"turn\",\"dispatchId\":\"dispatch\",\"contextSnapshotId\":\"snapshot\",\"contextHash\":\"sha256:"+"a".repeat(64)+"\",\"content\":\"plain\"";}
     private static AgentWebSocketHandler handler(ObjectProvider<AgentService> provider){return new AgentWebSocketHandler(mock(ChatClient.class),provider,mock(ChatMessageDao.class),new ChatConversationEventBroker());}

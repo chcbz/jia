@@ -205,7 +205,7 @@ public class ChatDeliberationService {
                         java.util.Collections.unmodifiableMap(new LinkedHashMap<>(trustedTypedFacts)));
                 if (trustedTypedAdmission != null) typedFacts.put("typedDeliberationAdmission",
                         java.util.Collections.unmodifiableMap(new LinkedHashMap<>(trustedTypedAdmission)));
-                facts = Map.copyOf(typedFacts);
+                facts = java.util.Collections.unmodifiableMap(new LinkedHashMap<>(typedFacts));
             }
             String sourceJson = CanonicalContextJson.write(sourceVector);
             String factsJson = CanonicalContextJson.write(facts);

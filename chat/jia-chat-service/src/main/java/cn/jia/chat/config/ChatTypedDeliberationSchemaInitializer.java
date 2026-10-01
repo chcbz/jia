@@ -82,23 +82,40 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
 
     static List<String> ddl() {
         try {
-            String source = new ClassPathResource(RESOURCE).getContentAsString(StandardCharsets.UTF_8);
-            String clean = source.lines().filter(line -> !line.stripLeading().startsWith("--"))
-                    .reduce("", (left, right) -> left + right + '\n');
-            List<String> statements = new ArrayList<>();
-            for (String part : clean.split(";")) if (!part.isBlank()) statements.add(part.strip());
-            if (statements.size() != TABLES.size()) throw new IllegalStateException("Typed deliberation DDL statement count");
-            for (int i = 0; i < statements.size(); i++) {
-                String normalized = statements.get(i).toLowerCase(Locale.ROOT);
-                if (!normalized.startsWith("create table if not exists " + TABLES.get(i) + " ")
-                        || normalized.matches("(?s).*\\b(alter|drop|delete|insert|replace|trigger)\\b.*")) {
-                    throw new IllegalStateException("Unsafe typed deliberation DDL");
-                }
-            }
-            return List.copyOf(statements);
+            return parseDdl(new ClassPathResource(RESOURCE).getContentAsString(StandardCharsets.UTF_8));
         } catch (Exception failure) {
             throw new IllegalStateException("Typed deliberation DDL unavailable", failure);
         }
+    }
+
+    static List<String> parseDdl(String source) {
+        String clean = source.lines().filter(line -> !line.stripLeading().startsWith("--"))
+                .reduce("", (left, right) -> left + right + '\n');
+        List<String> statements = new ArrayList<>();
+        for (String part : clean.split(";")) if (!part.isBlank()) statements.add(part.strip());
+        if (statements.size() != TABLES.size()) throw new IllegalStateException("Typed deliberation DDL statement count");
+        for (int i = 0; i < statements.size(); i++) {
+            if (!approvedDdlStatement(statements.get(i), TABLES.get(i))) {
+                throw new IllegalStateException("Unsafe typed deliberation DDL");
+            }
+        }
+        return List.copyOf(statements);
+    }
+
+    static boolean approvedDdlStatement(String statement, String table) {
+        if (statement == null || table == null) return false;
+        String normalized = statement.toLowerCase(Locale.ROOT);
+        String exactForeignKeyAction = "on update restrict on delete restrict";
+        if (!normalized.startsWith("create table if not exists " + table + " ")
+                || occurrences(normalized, exactForeignKeyAction) != 1) return false;
+        String withoutApprovedForeignKeyAction = normalized.replace(exactForeignKeyAction, "");
+        return !withoutApprovedForeignKeyAction.matches("(?s).*\\b(alter|drop|delete|insert|replace|trigger)\\b.*");
+    }
+
+    private static int occurrences(String source, String token) {
+        int count = 0;
+        for (int index = source.indexOf(token); index >= 0; index = source.indexOf(token, index + token.length())) count++;
+        return count;
     }
 
     private static int countTables(JdbcTemplate locked) {

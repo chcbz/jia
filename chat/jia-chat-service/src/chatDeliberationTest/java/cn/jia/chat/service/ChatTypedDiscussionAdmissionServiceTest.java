@@ -9,8 +9,10 @@ import cn.jia.chat.deliberation.ChatDeliberationDao;
 import cn.jia.chat.deliberation.ChatTurnEntity;
 import cn.jia.chat.deliberation.ChatTypedDeliberationStore;
 import cn.jia.chat.entity.ChatConversationEntity;
+import cn.jia.chat.handler.dto.ChatMessageDTO;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import java.util.List;
 import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
@@ -40,14 +42,19 @@ class ChatTypedDiscussionAdmissionServiceTest {
 
     @Test void freshDiscussionCreatesOneOrdinaryChatAndTypedAdmissionWithoutAuthority() {
         when(contexts.resolve(any(),eq("task"),eq("agent"),eq(List.of()))).thenReturn(context());
-        when(deliberation.admit(eq("0"),eq(sender),eq("42"),eq(1L),any(),eq(cn.jia.chat.deliberation.InteractionRoute.CHAT),any(),isNull(),any(),any())).thenReturn(admitted("request-new"));
-        var currentRequest=status("request-new","RUNNING","0");
-        when(deliberation.getRequest("0","owner","client","request-new")).thenReturn(currentRequest);
+        when(deliberation.admit(eq("0"),eq(sender),eq("42"),eq(1L),any(),eq(cn.jia.chat.deliberation.InteractionRoute.CHAT),any(),isNull(),any(),any()))
+                .thenAnswer(invocation->admitted(((ChatMessageDTO)invocation.getArgument(6)).getRequestId()));
         when(events.eventHighWatermark("0","owner","client","42",1)).thenReturn(7L);when(store.insertAdmission(any())).thenReturn(1);
         var receipt=service.admit("0",sender,"42","key",discussion());
-        assertFalse(receipt.replay());assertEquals(List.of("turn"),receipt.turnIds());assertEquals("/chat/requests/request-new",receipt.statusUrl());
+        assertFalse(receipt.replay());assertEquals(List.of("turn"),receipt.turnIds());
+        String serverRequestId="mmd-typed-request_fe970992dab47bc9b196cac7254114ffb8a50809";
+        assertEquals(serverRequestId,receipt.requestId());
+        assertEquals("/chat/requests/"+serverRequestId,receipt.statusUrl());
         assertEquals("ADMITTED",receipt.state());assertEquals("0",receipt.stateVersion());assertEquals("7",receipt.eventCursor());
-        verify(store).insertAdmission(argThat(row->row.requestRevision()==1
+        ArgumentCaptor<ChatMessageDTO> serverInput=ArgumentCaptor.forClass(ChatMessageDTO.class);
+        verify(deliberation).admit(eq("0"),eq(sender),eq("42"),eq(1L),any(),eq(cn.jia.chat.deliberation.InteractionRoute.CHAT),serverInput.capture(),isNull(),any(),any());
+        assertEquals(receipt.requestId(),serverInput.getValue().getRequestId());
+        verify(store).insertAdmission(argThat(row->receipt.requestId().equals(row.requestId())&&row.requestRevision()==1
                 &&row.requestDigest().matches("sha256:[0-9a-f]{64}")
                 &&row.bodyDigest().matches("sha256:[0-9a-f]{64}")
                 &&!row.requestDigest().equals(row.bodyDigest())
@@ -58,7 +65,6 @@ class ChatTypedDiscussionAdmissionServiceTest {
                         &&metadata.get("parentOutcomeId")==null
                         &&metadata.get("pendingQuestionId")==null));
         verify(deliberation,never()).getRequest(anyString(),anyString(),anyString(),anyString());
-        assertEquals("RUNNING",currentRequest.state());assertEquals("0",currentRequest.stateVersion());
         verifyNoMoreInteractions(contexts);verify(deliberation,never()).persistTypedQuestionAnswered(any(),anyString(),anyLong(),anyString(),anyString(),anyLong());
     }
 
@@ -138,11 +144,17 @@ class ChatTypedDiscussionAdmissionServiceTest {
         var outcome=new ChatTypedDeliberationStore.Outcome("out",storeScope,"parent",1,"parent-turn","task",3,5,"sha256:"+"d".repeat(64),"CLARIFY","请选择","{}","{}","{}","[]",1);
         var pending=new ChatTypedDeliberationStore.PendingQuestion("pending","out",storeScope,"OPEN",0,"哪张？","[\"SOURCE_SELECTION\"]",null,null,null,1,1);
         when(typed.requireParent(storeScope,"out")).thenReturn(outcome);when(typed.requirePending(storeScope,"pending")).thenReturn(pending);
-        when(contexts.resolve(any(),eq("task"),eq("agent"),eq(List.of()))).thenReturn(context());when(deliberation.admit(anyString(),eq(sender),eq("42"),eq(1L),any(),any(),any(),isNull(),any(),any())).thenReturn(admitted("reply"));
-        when(store.answerPending(same(pending),eq(0L),eq("reply"),eq("key"),anyString(),anyLong())).thenReturn(1);
+        when(contexts.resolve(any(),eq("task"),eq("agent"),eq(List.of()))).thenReturn(context());when(deliberation.admit(anyString(),eq(sender),eq("42"),eq(1L),any(),any(),any(),isNull(),any(),any()))
+                .thenAnswer(invocation->admitted(((ChatMessageDTO)invocation.getArgument(6)).getRequestId()));
+        when(store.answerPending(same(pending),eq(0L),anyString(),eq("key"),anyString(),anyLong())).thenReturn(1);
         when(events.findTurn("0","owner","client","turn")).thenReturn(new ChatTurnEntity().setTurnId("turn"));when(store.insertAdmission(any())).thenReturn(1);
         var receipt=service.admit("0",sender,"42","key",command);assertEquals("pending",receipt.pendingQuestionId());assertEquals("ADMITTED",receipt.state());assertEquals("0",receipt.stateVersion());
-        verify(deliberation).persistTypedQuestionAnswered(any(),eq("pending"),eq(1L),eq("reply"),eq("out"),anyLong());
+        ArgumentCaptor<ChatMessageDTO> serverInput=ArgumentCaptor.forClass(ChatMessageDTO.class);
+        verify(deliberation).admit(anyString(),eq(sender),eq("42"),eq(1L),any(),any(),serverInput.capture(),isNull(),any(),any());
+        assertEquals(receipt.requestId(),serverInput.getValue().getRequestId());
+        assertEquals("/chat/requests/"+receipt.requestId(),receipt.statusUrl());
+        verify(store).answerPending(same(pending),eq(0L),eq(receipt.requestId()),eq("key"),anyString(),anyLong());
+        verify(deliberation).persistTypedQuestionAnswered(any(),eq("pending"),eq(1L),eq(receipt.requestId()),eq("out"),anyLong());
         verify(deliberation,never()).getRequest(anyString(),anyString(),anyString(),anyString());
     }
 
@@ -150,7 +162,8 @@ class ChatTypedDiscussionAdmissionServiceTest {
         var command=new ChatTypedDeliberationWire.DiscussionCommand("CLARIFICATION_REPLY","task",3,"答复","out",0L,"pending",0L,List.of());
         var outcome=new ChatTypedDeliberationStore.Outcome("out",storeScope,"parent",1,"parent-turn","task",3,5,"sha256:"+"d".repeat(64),"CLARIFY","请选择","{}","{}","{}","[]",1);
         var pending=new ChatTypedDeliberationStore.PendingQuestion("pending","out",storeScope,"OPEN",0,"哪张？","[]",null,null,null,1,1);
-        when(typed.requireParent(storeScope,"out")).thenReturn(outcome);when(typed.requirePending(storeScope,"pending")).thenReturn(pending);when(contexts.resolve(any(),anyString(),anyString(),anyList())).thenReturn(context());when(deliberation.admit(anyString(),any(),anyString(),anyLong(),any(),any(),any(),isNull(),any(),any())).thenReturn(admitted("reply"));when(store.answerPending(any(),anyLong(),anyString(),anyString(),anyString(),anyLong())).thenReturn(0);
+        when(typed.requireParent(storeScope,"out")).thenReturn(outcome);when(typed.requirePending(storeScope,"pending")).thenReturn(pending);when(contexts.resolve(any(),anyString(),anyString(),anyList())).thenReturn(context());when(deliberation.admit(anyString(),any(),anyString(),anyLong(),any(),any(),any(),isNull(),any(),any()))
+                .thenAnswer(invocation->admitted(((ChatMessageDTO)invocation.getArgument(6)).getRequestId()));when(store.answerPending(any(),anyLong(),anyString(),anyString(),anyString(),anyLong())).thenReturn(0);
         assertEquals(ChatDeliberationException.Reason.CONFLICT,assertThrows(ChatDeliberationException.class,()->service.admit("0",sender,"42","key",command)).reason());verify(store,never()).insertAdmission(any());
     }
 
@@ -161,7 +174,8 @@ class ChatTypedDiscussionAdmissionServiceTest {
                 .getAnnotation(org.springframework.transaction.annotation.Transactional.class);
         assertNotNull(transaction);assertArrayEquals(new Class<?>[]{Exception.class},transaction.rollbackFor());
         when(contexts.resolve(any(),eq("task"),eq("agent"),eq(List.of()))).thenReturn(context());
-        when(deliberation.admit(anyString(),eq(sender),eq("42"),eq(1L),any(),any(),any(),isNull(),any(),any())).thenReturn(admitted("request-new"));
+        when(deliberation.admit(anyString(),eq(sender),eq("42"),eq(1L),any(),any(),any(),isNull(),any(),any()))
+                .thenAnswer(invocation->admitted(((ChatMessageDTO)invocation.getArgument(6)).getRequestId()));
         when(events.eventHighWatermark("0","owner","client","42",1)).thenReturn(7L);when(store.insertAdmission(any())).thenReturn(0);
         assertEquals(ChatDeliberationException.Reason.PERSISTENCE_ERROR,
                 assertThrows(ChatDeliberationException.class,
