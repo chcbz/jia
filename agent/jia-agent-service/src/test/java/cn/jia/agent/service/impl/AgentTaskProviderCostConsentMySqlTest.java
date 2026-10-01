@@ -48,7 +48,7 @@ class AgentTaskProviderCostConsentMySqlTest {
         assertDoesNotThrow(()->new AgentTaskProviderCostConsentSchemaInitializer(jdbc).afterPropertiesSet());
         jdbc.execute("ALTER TABLE agent_task_provider_cost_consent "
                 +"DROP CHECK chk_atpcc_provider, "
-                +"ADD CONSTRAINT chk_atpcc_provider CHECK (1)");
+                +"ADD CONSTRAINT chk_atpcc_provider CHECK (1=1)");
         IllegalStateException failure=assertThrows(IllegalStateException.class,
                 ()->new AgentTaskProviderCostConsentSchemaInitializer(jdbc).afterPropertiesSet());
         assertTrue(failure.getMessage().contains("CHECK definition drift"),failure.getMessage());
