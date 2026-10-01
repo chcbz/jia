@@ -16,6 +16,10 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 
 public final class VoiceDigests {
+    private static final String CLIPROXY_REALTIME_PROVIDER = "cliproxy-realtime";
+    private static final byte[] CLIPROXY_REALTIME_SEMANTIC_VERSION =
+            "cyf-cliproxy-realtime-semantics-v2".getBytes(StandardCharsets.UTF_8);
+
     private final byte[] identityHmacSecret;
 
     public VoiceDigests(VoiceSpeechProperties properties) {
@@ -61,7 +65,7 @@ public final class VoiceDigests {
         updateLengthPrefixed(digest, VoiceContract.versionBytes());
         updateLengthPrefixed(digest, VoiceOperation.TRANSCRIPTION.namespace()
                 .getBytes(StandardCharsets.UTF_8));
-        updateLengthPrefixed(digest, provider.getBytes(StandardCharsets.UTF_8));
+        updateProviderDomain(digest, provider);
         updateLengthPrefixed(digest, model.getBytes(StandardCharsets.UTF_8));
         updateLengthPrefixed(digest, language.getBytes(StandardCharsets.UTF_8));
         updateLengthPrefixed(digest, mediaType.getBytes(StandardCharsets.UTF_8));
@@ -89,13 +93,20 @@ public final class VoiceDigests {
         updateLengthPrefixed(digest, VoiceContract.versionBytes());
         updateLengthPrefixed(digest, VoiceOperation.SYNTHESIS.namespace()
                 .getBytes(StandardCharsets.UTF_8));
-        updateLengthPrefixed(digest, provider.getBytes(StandardCharsets.UTF_8));
+        updateProviderDomain(digest, provider);
         updateLengthPrefixed(digest, model.getBytes(StandardCharsets.UTF_8));
         updateLengthPrefixed(digest, providerVoice.getBytes(StandardCharsets.UTF_8));
         updateLengthPrefixed(digest, voice.getBytes(StandardCharsets.UTF_8));
         updateLengthPrefixed(digest, format.getBytes(StandardCharsets.UTF_8));
         updateLengthPrefixed(digest, text.getBytes(StandardCharsets.UTF_8));
         return HexFormat.of().formatHex(digest.digest());
+    }
+
+    private static void updateProviderDomain(MessageDigest digest, String provider) {
+        updateLengthPrefixed(digest, provider.getBytes(StandardCharsets.UTF_8));
+        if (CLIPROXY_REALTIME_PROVIDER.equals(provider)) {
+            updateLengthPrefixed(digest, CLIPROXY_REALTIME_SEMANTIC_VERSION);
+        }
     }
 
     private static MessageDigest sha256() {

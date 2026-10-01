@@ -436,6 +436,50 @@ class VoiceServicesTest {
     }
 
     @Test
+    void realtimeOldCachedDigestConflictsAndCurrentDigestReplaysWithoutProviderCall() {
+        VoiceSpeechProperties properties = properties();
+        properties.getSynthesis().setProvider("cliproxy-realtime");
+        properties.getSynthesis().setModel("gpt-realtime");
+        properties.getSynthesis().setProviderVoice("alloy");
+        properties.getSynthesis().setFormats(
+                new java.util.LinkedHashSet<>(java.util.Set.of("wav")));
+        VoiceSynthesisRequest request = new VoiceSynthesisRequest(
+                REQUEST_ID, "语音验收成功。", "juyiting-default", "wav");
+        VoiceDigests digests = new VoiceDigests(properties);
+        String currentDigest = digests.synthesis(
+                "cliproxy-realtime", "gpt-realtime", "alloy",
+                request.text(), request.voice(), request.format());
+        String frozenB298Digest =
+                "880c4f8af4ab8e15b6f1ffc6b55455cfc95d12c9097f903aa44fef2a4847230d";
+        AtomicInteger providerCalls = new AtomicInteger();
+        SpeechSynthesisProvider provider = synthesisProvider(
+                "cliproxy-realtime", providerCalls, new byte[]{9, 9}, "audio/wav");
+
+        FakeCoordinator legacy = new FakeCoordinator();
+        legacy.existingLegacyDigest = frozenB298Digest;
+        legacy.existingLegacyReplay = new VoiceCachedResult(
+                new byte[]{1, 2, 3, 4}, "audio/wav");
+        VoiceException conflict = assertThrows(VoiceException.class,
+                () -> synthesisService(properties, provider, legacy)
+                        .synthesize(IDENTITY, request));
+
+        assertEquals(VoiceErrorCode.IDEMPOTENCY_CONFLICT, conflict.error());
+        assertEquals(currentDigest, legacy.lastLegacyDigest);
+        assertEquals(0, providerCalls.get());
+
+        FakeCoordinator current = new FakeCoordinator();
+        current.existingLegacyDigest = currentDigest;
+        current.existingLegacyReplay = new VoiceCachedResult(
+                new byte[]{4, 3, 2, 1}, "audio/wav");
+        SpeechSynthesisResult replay = synthesisService(properties, provider, current)
+                .synthesize(IDENTITY, request);
+
+        assertArrayEquals(new byte[]{4, 3, 2, 1}, replay.audio());
+        assertEquals(currentDigest, current.lastLegacyDigest);
+        assertEquals(0, providerCalls.get());
+    }
+
+    @Test
     void synthesisReturnsAndReplaysBoundedAudioButRejectsOversizeBody() {
         VoiceSpeechProperties properties = properties();
         FakeCoordinator coordinator = new FakeCoordinator();
@@ -520,11 +564,16 @@ class VoiceServicesTest {
     }
 
     private static SpeechSynthesisProvider synthesisProvider(AtomicInteger calls, byte[] audio) {
+        return synthesisProvider("openai-compatible", calls, audio, "audio/mpeg");
+    }
+
+    private static SpeechSynthesisProvider synthesisProvider(
+            String alias, AtomicInteger calls, byte[] audio, String mediaType) {
         return new SpeechSynthesisProvider() {
-            @Override public String alias() { return "openai-compatible"; }
+            @Override public String alias() { return alias; }
             @Override public SpeechSynthesisResult synthesize(cn.jia.chat.voice.SpeechSynthesisRequest request) {
                 calls.incrementAndGet();
-                return new SpeechSynthesisResult(audio, "audio/mpeg");
+                return new SpeechSynthesisResult(audio, mediaType);
             }
         };
     }
@@ -546,6 +595,9 @@ class VoiceServicesTest {
         private boolean failAdmittedBegin;
         private boolean returnMismatchedReservation;
         private boolean returnNullLegacy;
+        private String existingLegacyDigest;
+        private VoiceCachedResult existingLegacyReplay;
+        private String lastLegacyDigest;
 
         @Override
         public VoiceAdmissionResult admit(
@@ -580,8 +632,15 @@ class VoiceServicesTest {
         public VoiceBeginResult begin(
                 VoiceOperation operation, String scope, String requestId, String digest) {
             legacyBeginCalls++;
+            lastLegacyDigest = digest;
             if (returnNullLegacy) {
                 return null;
+            }
+            if (existingLegacyDigest != null) {
+                return existingLegacyDigest.equals(digest)
+                        ? VoiceBeginResult.replay(existingLegacyReplay)
+                        : VoiceBeginResult.outcome(
+                                VoiceBeginResult.Outcome.IDEMPOTENCY_CONFLICT);
             }
             if (nextLegacy != null) {
                 return nextLegacy;
