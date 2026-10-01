@@ -70,6 +70,9 @@ class ChatBountyExecutionCoordinatorTest {
                 .thenReturn(new ChatInteractionStepStore.Step("step","0","owner","client",
                         "req",1,1,"42",1,"task",2,"grant",1,"agent","EXECUTE","ADMITTED",
                         0,digest,1,1));
+        when(steps.findLink("0","owner","client","step"))
+                .thenReturn(new ChatInteractionStepStore.ExecutionLink("intent","0","owner",
+                        "client","step",null,"WAITING_ADMISSION",0,1,1));
         when(requests.findRequest("0","owner","client","req"))
                 .thenReturn(new ChatRequestEntity().setTenantId("0").setOwnerJiacn("owner")
                         .setClientId("client").setRequestId("req").setRequestRevision(1L)
@@ -89,11 +92,12 @@ class ChatBountyExecutionCoordinatorTest {
 
     @Test void legacyIntentCannotSilentlyDropGrantedImageReference() throws Exception {
         persistedImageRequest();
-        when(grants.admit(any(),eq("task"),eq("grant"),eq(1L),eq(2L),eq("agent"),
-                eq("GENERATE_IMAGE"),eq(true)))
+        when(grants.admitControlled(any(),eq("task"),eq("grant"),eq(1L),eq(2L),eq("agent"),
+                eq("GENERATE_IMAGE"),eq("NEW_EXECUTION"),isNull(),isNull(),isNull()))
                 .thenReturn(new AgentTaskExecutionGrantService.Admission("grant",1,2,
                         "agent","GENERATE_IMAGE",true,List.of(new AgentTaskExecutionGrantService.AuthorizedInput(
-                                "file",1,"REFERENCE","image/png",4,"a".repeat(64)))));
+                                "file",1,"REFERENCE","image/png",4,"a".repeat(64))),
+                        "mmd-ci-v1:consent_1234567890abcdef1234567890abcdef",2L));
         assertThrows(IllegalStateException.class,()->coordinator.coordinate(candidate));
         verifyNoInteractions(executions,conversations);
     }
@@ -131,11 +135,12 @@ class ChatBountyExecutionCoordinatorTest {
                     +"\"byteLength\":4,\"contentHash\":\""+hash+"\"}]}");
             return List.of(mapper.mapRow(row,0));
         });
-        when(grants.admit(any(),eq("task"),eq("grant"),eq(1L),eq(2L),eq("agent"),
-                eq("GENERATE_IMAGE"),eq(true)))
+        when(grants.admitControlled(any(),eq("task"),eq("grant"),eq(1L),eq(2L),eq("agent"),
+                eq("GENERATE_IMAGE"),eq("NEW_EXECUTION"),isNull(),isNull(),isNull()))
                 .thenReturn(new AgentTaskExecutionGrantService.Admission("grant",1,2,
                         "agent","GENERATE_IMAGE",true,List.of(new AgentTaskExecutionGrantService.AuthorizedInput(
-                                "file",1,"REFERENCE","image/png",4,hash))));
+                                "file",1,"REFERENCE","image/png",4,hash)),
+                        "mmd-ci-v1:consent_1234567890abcdef1234567890abcdef",2L));
         when(conversations.lockScopedById("owner","client","42"))
                 .thenReturn(new ChatConversationEntity().setId(42L).setTaskId("task")
                         .setConversationScopeType("bounty").setConversationScopeKey("task:task")
@@ -158,8 +163,8 @@ class ChatBountyExecutionCoordinatorTest {
 
     @Test void missingPaidAuthorizationIsPersistedAsWaitingWithoutCreatingExecution() throws Exception {
         persistedImageRequest();
-        when(grants.admit(any(),eq("task"),eq("grant"),eq(1L),eq(2L),eq("agent"),
-                eq("GENERATE_IMAGE"),eq(true)))
+        when(grants.admitControlled(any(),eq("task"),eq("grant"),eq(1L),eq(2L),eq("agent"),
+                eq("GENERATE_IMAGE"),eq("NEW_EXECUTION"),isNull(),isNull(),isNull()))
                 .thenThrow(new AgentTaskExecutionGrantException(
                         AgentTaskExecutionGrantException.Reason.PAID_EXECUTION_NOT_AUTHORIZED,"no cost authorization"));
         when(steps.updateStepState(any(),eq("WAITING_AUTHORIZATION"),anyLong())).thenReturn(1);
@@ -170,10 +175,11 @@ class ChatBountyExecutionCoordinatorTest {
 
     @Test void authorizedExactImageIntentBindsOneExecutionAndTransitionsRequest() throws Exception {
         persistedImageRequest();
-        when(grants.admit(any(),eq("task"),eq("grant"),eq(1L),eq(2L),eq("agent"),
-                eq("GENERATE_IMAGE"),eq(true)))
+        when(grants.admitControlled(any(),eq("task"),eq("grant"),eq(1L),eq(2L),eq("agent"),
+                eq("GENERATE_IMAGE"),eq("NEW_EXECUTION"),isNull(),isNull(),isNull()))
                 .thenReturn(new AgentTaskExecutionGrantService.Admission("grant",1,2,
-                        "agent","GENERATE_IMAGE",true));
+                        "agent","GENERATE_IMAGE",true,List.of(),
+                        "mmd-ci-v1:consent_1234567890abcdef1234567890abcdef",2L));
         var discussion=new ChatConversationEntity().setId(42L).setTaskId("task")
                 .setConversationScopeType("bounty").setConversationScopeKey("task:task")
                 .setLifecycleGeneration(1L);
@@ -190,7 +196,7 @@ class ChatBountyExecutionCoordinatorTest {
         assertEquals("RUNNING",coordinator.coordinate(candidate));
         verify(executions,times(1)).createConversation(any(),argThat(command ->
                 command.intentId().equals("intent") && command.instruction().equals("画一只鸟")
-                        && command.permittedOperation().equals("GENERATE_IMAGE")));
+                        && command.permittedOperation().equals("GENERATE_IMAGE") && command.controlledImage())));
     }
 
 }

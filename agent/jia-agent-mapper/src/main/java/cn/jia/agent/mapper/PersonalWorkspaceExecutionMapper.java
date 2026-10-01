@@ -4,6 +4,7 @@ import cn.jia.agent.entity.PersonalWorkspaceExecutionEntity;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 
 public interface PersonalWorkspaceExecutionMapper extends BaseMapper<PersonalWorkspaceExecutionEntity> {
 
@@ -197,6 +198,39 @@ public interface PersonalWorkspaceExecutionMapper extends BaseMapper<PersonalWor
     PersonalWorkspaceExecutionEntity lockByTaskRun(@Param("tenantId") String tenantId,
             @Param("clientId") String clientId, @Param("ownerJiacn") String ownerJiacn,
             @Param("taskId") String taskId, @Param("runId") String runId);
+
+    @Update("""
+            UPDATE agent_personal_workspace_execution
+               SET conversation_provider_started_at=#{startedAt},
+                   conversation_provider_lease_version=#{leaseVersion},update_time=#{startedAt}
+             WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
+               AND task_id=#{taskId} AND run_id=#{runId} AND execution_id=#{executionId}
+               AND controlled_consent_id=#{consentId}
+               AND execution_mode='CONVERSATION' AND execution_state='QUEUED'
+               AND permitted_operation='GENERATE_IMAGE' AND output_content_mime_type='image/png'
+               AND conversation_lease_version=#{leaseVersion}
+               AND conversation_provider_started_at IS NULL
+               AND conversation_provider_lease_version IS NULL
+               AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
+               AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
+               AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
+               AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
+               AND CAST(owner_jiacn AS BINARY)=CAST(#{ownerJiacn} AS BINARY)
+               AND OCTET_LENGTH(owner_jiacn)=OCTET_LENGTH(#{ownerJiacn})
+               AND CAST(task_id AS BINARY)=CAST(#{taskId} AS BINARY)
+               AND OCTET_LENGTH(task_id)=OCTET_LENGTH(#{taskId})
+               AND CAST(run_id AS BINARY)=CAST(#{runId} AS BINARY)
+               AND OCTET_LENGTH(run_id)=OCTET_LENGTH(#{runId})
+               AND CAST(execution_id AS BINARY)=CAST(#{executionId} AS BINARY)
+               AND OCTET_LENGTH(execution_id)=OCTET_LENGTH(#{executionId})
+               AND CAST(controlled_consent_id AS BINARY)=CAST(#{consentId} AS BINARY)
+               AND OCTET_LENGTH(controlled_consent_id)=OCTET_LENGTH(#{consentId})
+            """)
+    int markControlledProviderStarted(@Param("tenantId")String tenantId,
+            @Param("clientId")String clientId,@Param("ownerJiacn")String ownerJiacn,
+            @Param("taskId")String taskId,@Param("runId")String runId,
+            @Param("executionId")String executionId,@Param("consentId")String consentId,
+            @Param("leaseVersion")long leaseVersion,@Param("startedAt")long startedAt);
 
     @Select("""
             SELECT * FROM agent_personal_workspace_execution

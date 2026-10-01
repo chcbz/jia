@@ -33,6 +33,8 @@ public interface PersonalWorkspaceExecutionDao {
             Long afterCreatedAt, String afterExecutionId, int limit);
     void insert(PersonalWorkspaceExecutionEntity execution);
     void update(PersonalWorkspaceExecutionEntity execution);
+    boolean markControlledProviderStarted(String tenantId,String clientId,String ownerJiacn,
+            String taskId,String runId,String executionId,String consentId,long leaseVersion,long startedAt);
     void insertInput(PersonalWorkspaceExecutionInputEntity input);
     List<PersonalWorkspaceExecutionInputEntity> listInputs(String tenantId, String clientId,
             String ownerJiacn, String executionId);

@@ -26,6 +26,7 @@ import cn.jia.agent.service.AgentRawCommandDispatcher;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.NativeBountyExecutionSessionLookup;
 import cn.jia.agent.service.NativeProviderCredentialBindingLookup;
+import cn.jia.agent.service.ControlledImageExecutionSessionLookup;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.deliberation.InteractionRoute;
@@ -95,7 +96,7 @@ import java.util.function.Supplier;
 @Component
 public class AgentWebSocketHandler extends TextWebSocketHandler
         implements AgentEventPublisher, AgentRawCommandDispatcher,
-        NativeBountyExecutionSessionLookup, NativeProviderCredentialBindingLookup {
+        NativeBountyExecutionSessionLookup, NativeProviderCredentialBindingLookup, ControlledImageExecutionSessionLookup {
     private static final String CHANNEL = "agent";
     private static final TypeReference<Map<String, Object>> MESSAGE_TYPE = new TypeReference<>() {
     };
@@ -171,6 +172,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             new ConcurrentHashMap<>();
     private final Map<String, NativeProviderCredentialBindingDeclaration>
             sessionNativeProviderCredentialBinding = new ConcurrentHashMap<>();
+    private final Map<String, ControlledImageBountyExecutionDeclaration>
+            sessionControlledImageBountyExecution = new ConcurrentHashMap<>();
     private final Map<String, StreamState> runningStreams = new ConcurrentHashMap<>();
 
     public AgentWebSocketHandler(ChatClient chatClient, ObjectProvider<AgentService> agentServiceProvider,
@@ -368,6 +371,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         sessionRuntimeCapabilities.remove(session.getId());
         sessionNativeBountyExecution.remove(session.getId());
         sessionNativeProviderCredentialBinding.remove(session.getId());
+        sessionControlledImageBountyExecution.remove(session.getId());
         runningStreams.entrySet().removeIf(entry -> {
             StreamState stream = entry.getValue();
             if (session.getId().equals(stream.sessionId())) {
@@ -754,6 +758,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             sessionRuntimeCapabilities.remove(session.getId());
             sessionNativeBountyExecution.remove(session.getId());
             sessionNativeProviderCredentialBinding.remove(session.getId());
+            sessionControlledImageBountyExecution.remove(session.getId());
             stage = "registration_payload";
             AgentRuntimeCapabilities runtimeCapabilities = AgentRuntimeCapabilities.parse(
                     payload.get("runtimeCapabilities"));
@@ -762,6 +767,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             NativeProviderCredentialBindingDeclaration nativeProviderCredentialBinding =
                     NativeProviderCredentialBindingDeclaration.parse(
                             payload.get("nativeProviderCredentialBinding"));
+            ControlledImageBountyExecutionDeclaration controlledImageBountyExecution =
+                    ControlledImageBountyExecutionDeclaration.parse(
+                            payload.get("controlledImageBountyExecution"));
             AgentRegisterDTO request = new AgentRegisterDTO();
             request.setAgentId(agentId);
             request.setName(asString(payload.get("name")));
@@ -788,6 +796,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             event.put("nativeBountyExecution", nativeBountyExecution.normalizedForReceipt());
             event.put("nativeProviderCredentialBinding",
                     nativeProviderCredentialBinding.normalizedForReceipt());
+            event.put("controlledImageBountyExecution",
+                    controlledImageBountyExecution.normalizedForReceipt());
             // Scope comes only from the authenticated session and is rechecked against persisted
             // identity/current registration token. This receipt is sent only on this native socket.
             if (runtimeAuthentication != null && sessionRuntimeInstanceId(session) != null) {
@@ -803,6 +813,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 sessionRuntimeCapabilities.remove(session.getId());
                 sessionNativeBountyExecution.remove(session.getId());
                 sessionNativeProviderCredentialBinding.remove(session.getId());
+                sessionControlledImageBountyExecution.remove(session.getId());
                 return;
             }
             // Activate all successful-registration evidence only after the authenticated
@@ -811,6 +822,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             sessionRuntimeCapabilities.put(session.getId(), runtimeCapabilities);
             sessionNativeBountyExecution.put(session.getId(), nativeBountyExecution);
             sessionNativeProviderCredentialBinding.put(session.getId(), nativeProviderCredentialBinding);
+            sessionControlledImageBountyExecution.put(session.getId(), controlledImageBountyExecution);
             signalRegisteredReconnect(session, result.getAgentId());
             sendCapabilityIndex(session, payload);
         } catch (Exception e) {
@@ -822,6 +834,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             sessionRuntimeCapabilities.remove(session.getId());
             sessionNativeBountyExecution.remove(session.getId());
             sessionNativeProviderCredentialBinding.remove(session.getId());
+            sessionControlledImageBountyExecution.remove(session.getId());
             sendError(session, payload, "AGENT_REGISTRATION_UNAVAILABLE", "Agent registration is unavailable");
         }
     }
@@ -974,6 +987,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 sessionRuntimeCapabilities.remove(session.getId());
                 sessionNativeBountyExecution.remove(session.getId());
                 sessionNativeProviderCredentialBinding.remove(session.getId());
+                sessionControlledImageBountyExecution.remove(session.getId());
             }
             if (agent.getAgentId() != null) {
                 rememberSessionAgent(session.getId(), agent.getAgentId());
@@ -2127,6 +2141,70 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         if (current.size()!=1) return emptyProviderBinding(
                 NativeProviderCredentialBindingLookup.State.AMBIGUOUS);
         return current.getFirst().snapshot();
+    }
+
+    @Override
+    public ControlledImageExecutionSessionLookup.Snapshot current(
+            ControlledImageExecutionSessionLookup.Scope scope) {
+        if (scope == null || !validExactDispatchId(scope.tenantId(),50)
+                || !validExactDispatchId(scope.clientId(),50)
+                || !validExactDispatchId(scope.ownerJiacn(),50)
+                || !validExactDispatchId(scope.canonicalAgentId(),100)) {
+            return emptyControlled(ControlledImageExecutionSessionLookup.State.OFFLINE);
+        }
+        if (runtimeAuthentication == null) throw new ControlledImageExecutionSessionLookup.SourceUnavailable(
+                new IllegalStateException("Agent runtime authentication is unavailable"));
+        List<ControlledImageExecutionSessionLookup.Snapshot> current=new ArrayList<>();
+        try {
+            for (Map.Entry<String,Set<String>> entry:successfullyRegisteredAgentIds.entrySet()) {
+                String sessionId=entry.getKey();
+                if (!entry.getValue().contains(scope.canonicalAgentId())
+                        || !registeredAgentIds(sessionId).contains(scope.canonicalAgentId())) continue;
+                WebSocketSession session=sessions.get(sessionId);
+                String runtimeId=session==null?null:sessionRuntimeInstanceId(session);
+                if (session==null || !session.isOpen() || runtimeId==null
+                        || !scope.tenantId().equals(sessionTenantId(session))
+                        || !scope.clientId().equals(sessionClientId(session))
+                        || !scope.ownerJiacn().equals(sessionJiacn(session))
+                        || !scope.canonicalAgentId().equals(sessionAgentId(session))) continue;
+                boolean bound;
+                try { bound=runtimeAuthentication.isCurrentBinding(sessionId,scope.tenantId(),
+                        scope.clientId(),scope.ownerJiacn(),scope.canonicalAgentId(),runtimeId); }
+                catch (IllegalArgumentException invalid) { bound=false; }
+                if (!bound) continue;
+                var execution=sessionControlledImageBountyExecution.getOrDefault(sessionId,
+                        ControlledImageBountyExecutionDeclaration.parse(null));
+                var binding=sessionNativeProviderCredentialBinding.getOrDefault(sessionId,
+                        NativeProviderCredentialBindingDeclaration.parse(null)).snapshot();
+                ControlledImageExecutionSessionLookup.State state=execution.state();
+                if (state==ControlledImageExecutionSessionLookup.State.READY) {
+                    state=switch(binding.state()) {
+                        case READY -> ControlledImageExecutionSessionLookup.State.READY;
+                        case OFFLINE -> ControlledImageExecutionSessionLookup.State.OFFLINE;
+                        case UNDECLARED -> ControlledImageExecutionSessionLookup.State.UNDECLARED;
+                        case DISABLED -> ControlledImageExecutionSessionLookup.State.DISABLED;
+                        case UNSUPPORTED -> ControlledImageExecutionSessionLookup.State.UNSUPPORTED;
+                        case AMBIGUOUS -> ControlledImageExecutionSessionLookup.State.AMBIGUOUS;
+                    };
+                }
+                current.add(state==ControlledImageExecutionSessionLookup.State.READY
+                        ? new ControlledImageExecutionSessionLookup.Snapshot(state,runtimeId,1,
+                            ControlledImageBountyExecutionDeclaration.TRANSPORT,List.of("GENERATE_IMAGE"),
+                            binding.providerLane(),binding.bindingId(),binding.bindingEpoch(),binding.modelId(),
+                            binding.maxInputItems(),binding.maxOutboundRequestAttempts(),binding.precallFenceVersion())
+                        : emptyControlled(state));
+            }
+        } catch (ControlledImageExecutionSessionLookup.SourceUnavailable failure) { throw failure; }
+        catch (RuntimeException unavailable) { throw new ControlledImageExecutionSessionLookup.SourceUnavailable(unavailable); }
+        if (current.isEmpty()) return emptyControlled(ControlledImageExecutionSessionLookup.State.OFFLINE);
+        if (current.size()!=1) return emptyControlled(ControlledImageExecutionSessionLookup.State.AMBIGUOUS);
+        return current.getFirst();
+    }
+
+    private static ControlledImageExecutionSessionLookup.Snapshot emptyControlled(
+            ControlledImageExecutionSessionLookup.State state) {
+        return new ControlledImageExecutionSessionLookup.Snapshot(state,null,null,null,List.of(),
+                null,null,null,null,null,null,null);
     }
 
     private static NativeProviderCredentialBindingLookup.Snapshot emptyProviderBinding(

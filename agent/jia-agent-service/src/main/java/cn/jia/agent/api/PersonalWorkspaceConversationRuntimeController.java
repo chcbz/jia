@@ -17,20 +17,37 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+import tools.jackson.core.StreamReadFeature;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 /** Native runtime only. A lease token never passes through browser, ordinary workspace or WS routes. */
 @RestController
 @RequestMapping("/internal/agent/tasks")
 public final class PersonalWorkspaceConversationRuntimeController {
     private static final String CACHE_CONTROL = "private, no-store";
+    private static final long MAX_SAFE_INTEGER=9_007_199_254_740_991L;
+    private static final Set<String> CONTROLLED_START_FIELDS=Set.of("schemaVersion","commandId",
+            "messageId","executionId","providerExecution","fence");
+    private static final Set<String> PROVIDER_EXECUTION_FIELDS=Set.of("providerLane","consentId",
+            "bindingId","bindingEpoch","modelId","maxInputItems","maxOutboundRequestAttempts",
+            "precallFenceVersion");
+    private static final Set<String> FENCE_FIELDS=Set.of("version","token");
+    private static final ObjectMapper STRICT_JSON=JsonMapper.builder()
+            .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
     public record ProviderStartReceipt(boolean started) { }
     private final PersonalWorkspaceExecutionService executions;
 
@@ -41,7 +58,7 @@ public final class PersonalWorkspaceConversationRuntimeController {
     @GetMapping(value="/conversation-executions/commands",produces=MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<ConversationQueue> commands(HttpServletRequest request,Authentication authentication) {
         noQuery(request);
-        return ok(new ConversationQueue(executions.runtimeConversationCommands(scope(authentication),16)));
+        return ok(new ConversationQueue(executions.runtimeConversationCommandViews(scope(authentication),16)));
     }
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/lease",consumes=MediaType.APPLICATION_JSON_VALUE,
@@ -72,6 +89,21 @@ public final class PersonalWorkspaceConversationRuntimeController {
         noQuery(servletRequest);
         executions.beginConversationProviderStart(scope(authentication),taskId,runId,fence(request));
         return ok(new ProviderStartReceipt(true));
+    }
+
+    @PostMapping(value="/{taskId}/runs/{runId}/conversation/provider-start-controlled-image",
+            consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<PersonalWorkspaceExecutionService.ControlledProviderStartReceipt>
+            controlledProviderStart(@PathVariable String taskId,@PathVariable String runId,
+            @RequestBody(required=false) String rawBody,HttpServletRequest request,
+            Authentication authentication) {
+        noQuery(request);
+        try {
+            return ok(executions.beginControlledConversationProviderStart(
+                    scope(authentication),taskId,runId,controlledStart(rawBody)));
+        } catch (PersonalWorkspaceExecutionService.Failure failure) {
+            throw new ControlledStartFailure(failure);
+        }
     }
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/inputs",consumes=MediaType.APPLICATION_JSON_VALUE,
@@ -143,6 +175,19 @@ public final class PersonalWorkspaceConversationRuntimeController {
         return ok(executions.failConversation(scope(authentication),taskId,runId,fence(body.fence()),body.code()));
     }
 
+    @ExceptionHandler(ControlledStartFailure.class)
+    public ResponseEntity<ErrorBody> controlledUnavailable(ControlledStartFailure wrapped) {
+        return switch (wrapped.failure.getReason()) {
+            case BAD_REQUEST -> error(HttpStatus.BAD_REQUEST,"BAD_REQUEST");
+            case NOT_FOUND -> error(HttpStatus.NOT_FOUND,"CONVERSATION_EXECUTION_UNAVAILABLE");
+            case TASK_CONFLICT, IDEMPOTENCY_CONFLICT, GRANT_CHANGED, GRANT_REVOKED,
+                    OUTPUT_CONFLICT, OUTPUT_MISSING -> error(HttpStatus.CONFLICT,
+                            "CONVERSATION_EXECUTION_CONFLICT");
+            case CAPABILITY_UNAVAILABLE, STORAGE_UNAVAILABLE -> error(HttpStatus.SERVICE_UNAVAILABLE,
+                            "CONVERSATION_EXECUTION_UNAVAILABLE");
+        };
+    }
+    /** Preserve the pre-v2 runtime error contract for every existing endpoint. */
     @ExceptionHandler(PersonalWorkspaceExecutionService.Failure.class)
     public ResponseEntity<ErrorBody> unavailable(PersonalWorkspaceExecutionService.Failure ignored) {
         return error(HttpStatus.NOT_FOUND,"CONVERSATION_EXECUTION_UNAVAILABLE");
@@ -152,6 +197,67 @@ public final class PersonalWorkspaceConversationRuntimeController {
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorBody> unexpected(Exception ignored) {
         return error(HttpStatus.SERVICE_UNAVAILABLE,"CONVERSATION_EXECUTION_UNAVAILABLE");
+    }
+
+    private static PersonalWorkspaceExecutionService.ControlledProviderStart controlledStart(String raw) {
+        if (raw==null || raw.isBlank()) throw new BadRequest();
+        try {
+            JsonNode root=STRICT_JSON.readTree(raw);
+            if (root==null || !root.isObject() || !fields(root).equals(CONTROLLED_START_FIELDS)
+                    || !integral(root.get("schemaVersion"),2)
+                    || !text(root.get("commandId")) || !text(root.get("messageId"))
+                    || !text(root.get("executionId"))) throw new BadRequest();
+            JsonNode provider=root.get("providerExecution");
+            if (provider==null || !provider.isObject()
+                    || !fields(provider).equals(PROVIDER_EXECUTION_FIELDS)
+                    || !safeTextId(provider.get("providerLane"),50)
+                    || !text(provider.get("consentId"))
+                    || !provider.get("consentId").textValue().matches("consent_[0-9a-f]{32}")
+                    || !safeTextId(provider.get("bindingId"),100)
+                    || !text(provider.get("bindingEpoch"))
+                    || !safeTextId(provider.get("modelId"),100)
+                    || !integral(provider.get("maxInputItems"),16)
+                    || !integral(provider.get("maxOutboundRequestAttempts"),1)
+                    || !integral(provider.get("precallFenceVersion"),1)) throw new BadRequest();
+            String epoch=provider.get("bindingEpoch").textValue();
+            if (!epoch.matches("[1-9][0-9]*")) throw new BadRequest();
+            long epochNumber=Long.parseLong(epoch);
+            if (epochNumber>MAX_SAFE_INTEGER || !Long.toString(epochNumber).equals(epoch))
+                throw new BadRequest();
+            JsonNode fence=root.get("fence");
+            if (fence==null || !fence.isObject() || !fields(fence).equals(FENCE_FIELDS)
+                    || !safeIntegral(fence.get("version"),1) || !text(fence.get("token")))
+                throw new BadRequest();
+            String token=fence.get("token").textValue();
+            if (!token.matches("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"))
+                throw new BadRequest();
+            var descriptor=new PersonalWorkspaceExecutionService.ProviderExecution(
+                    provider.get("providerLane").textValue(),provider.get("consentId").textValue(),
+                    provider.get("bindingId").textValue(),epoch,provider.get("modelId").textValue(),
+                    16,1,1);
+            var exactFence=new PersonalWorkspaceExecutionService.ConversationFence(
+                    fence.get("version").longValue(),token);
+            return new PersonalWorkspaceExecutionService.ControlledProviderStart(2,
+                    root.get("commandId").textValue(),root.get("messageId").textValue(),
+                    root.get("executionId").textValue(),descriptor,exactFence);
+        } catch (BadRequest failure) { throw failure; }
+        catch (Exception invalid) { throw new BadRequest(); }
+    }
+    private static boolean integral(JsonNode value,int expected) {
+        return value!=null && value.isIntegralNumber() && value.canConvertToInt()
+                && value.intValue()==expected;
+    }
+    private static boolean safeIntegral(JsonNode value,long min) {
+        return value!=null && value.isIntegralNumber() && value.canConvertToLong()
+                && value.longValue()>=min && value.longValue()<=MAX_SAFE_INTEGER;
+    }
+    private static boolean text(JsonNode value) { return value!=null && value.isTextual(); }
+    private static boolean safeTextId(JsonNode value,int max) {
+        return text(value) && value.textValue().matches(
+                "[A-Za-z0-9][A-Za-z0-9._:-]{0,"+(max-1)+"}");
+    }
+    private static Set<String> fields(JsonNode value) {
+        Set<String> result=new HashSet<>();value.propertyNames().forEach(result::add);return result;
     }
 
     private static PersonalWorkspaceExecutionService.RuntimeScope scope(Authentication authentication) {
@@ -192,7 +298,7 @@ public final class PersonalWorkspaceConversationRuntimeController {
                 .contentType(new MediaType(MediaType.APPLICATION_JSON,StandardCharsets.UTF_8))
                 .body(new ErrorBody(code,"Native conversation execution unavailable"));
     }
-    public record ConversationQueue(List<PersonalWorkspaceExecutionService.ConversationRuntimeCommand> items) { }
+    public record ConversationQueue(List<? extends PersonalWorkspaceExecutionService.ConversationCommandView> items) { }
     public record ClaimRequest(String commandId,String messageId) { }
     public record FenceRequest(long version,String token) { }
     public record CommitItem(String outputId,String sha256,Long length) { }
@@ -200,4 +306,10 @@ public final class PersonalWorkspaceConversationRuntimeController {
     public record FailRequest(FenceRequest fence,String code) { }
     public record ErrorBody(String code,String message) { }
     private static final class BadRequest extends RuntimeException { }
+    private static final class ControlledStartFailure extends RuntimeException {
+        private final PersonalWorkspaceExecutionService.Failure failure;
+        private ControlledStartFailure(PersonalWorkspaceExecutionService.Failure failure) {
+            super(failure);this.failure=failure;
+        }
+    }
 }

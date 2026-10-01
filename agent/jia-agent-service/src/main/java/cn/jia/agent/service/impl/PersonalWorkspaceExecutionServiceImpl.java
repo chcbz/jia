@@ -71,6 +71,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     private static final long TASK_LEASE_DURATION_MILLIS = 900_000L;
     /** Security fence lease, renewable by the same authenticated runtime, not a performance timeout. */
     private static final long CONVERSATION_LEASE_MILLIS = 900_000L;
+    private static final long MAX_SAFE_INTEGER = 9_007_199_254_740_991L;
     @Value("${jia.agent.conversation-execution.enabled:false}")
     private boolean conversationExecutionEnabled;
     /** Source materials are a fixed bridge contract and never inherit the output allow-list. */
@@ -107,6 +108,12 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     private AgentTaskFormalDeliveryService formalDeliveries;
     private AgentTaskMutationTransaction taskMutations;
     private AgentTaskExecutionGrantService conversationGrants;
+    private AgentTaskProviderCostConsentServiceImpl controlledConsents;
+
+    @Autowired(required = false)
+    public void setControlledConsentLifecycle(AgentTaskProviderCostConsentServiceImpl consents) {
+        this.controlledConsents=consents;
+    }
 
     @Autowired(required = false)
     public void setConversationAdmission(AgentTaskExecutionGrantService grants,
@@ -269,9 +276,10 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             throw failure(Reason.BAD_REQUEST);
         ValidCreate valid=validCreate(new CreateCommand(command.conversationId(), command.targetAgentId(),
                 command.taskId(), command.instruction(), command.outputContentMimeType(), List.of()));
-        if (valid.taskId() == null || !Set.of("image/png", "image/jpeg").contains(valid.outputContentMimeType()))
+        if (valid.taskId() == null || !Set.of("image/png", "image/jpeg").contains(valid.outputContentMimeType())
+                || command.controlledImage() && !"image/png".equals(valid.outputContentMimeType()))
             throw failure(Reason.CAPABILITY_UNAVAILABLE);
-        if (command.references().size()>32) throw failure(Reason.BAD_REQUEST);
+        if (command.references().size()>(command.controlledImage()?16:32)) throw failure(Reason.BAD_REQUEST);
         for (var ref:command.references()) {
             id(ref.fileId(),"fileId",100);
             if (ref.version()<1 || !Set.of("INPUT","REFERENCE").contains(ref.purpose())
@@ -284,6 +292,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 valid.targetAgentId(),command.intentId(),command.grantId(),
                 Long.toString(command.grantVersion()),Long.toString(command.assignmentRevision()),
                 command.permittedOperation(),valid.instruction(),valid.outputContentMimeType(),
+                command.controlledImage()?"CONTROLLED_IMAGE_HTTP_V2":"NATIVE_CONVERSATION_HTTP_V1",
                 referenceWire(command.references()));
         return taskMutations.executeWithLockedTaskRootInOwnerScope(scope.tenantId(), scope.clientId(),
                 scope.ownerJiacn(),valid.taskId(),root -> {
@@ -292,7 +301,11 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                     if (prior!=null) {
                         if (!same(prior.getRequestHash(),requestHash)
                                 || !"CONVERSATION".equals(prior.getExecutionMode())) throw failure(Reason.IDEMPOTENCY_CONFLICT);
-                        requireConversationGrant(scope,prior);
+                        // Exact controlled create replay is reconciliation only. The persisted
+                        // consent-to-execution uniqueness is authoritative; an offline runtime must
+                        // not turn a committed ACK-loss recovery into a second execution attempt.
+                        if(prior.getControlledConsentId()==null)
+                            requireConversationGrant(scope,prior,"NEW_EXECUTION",null);
                         return view(scope,prior);
                     }
                     requireOwnedTarget(scope,valid.targetAgentId());
@@ -307,6 +320,18 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                                 || !conversation.targetAgentIds().contains(valid.targetAgentId()))
                             throw failure(Reason.NOT_FOUND);
                     } catch (RuntimeException denied) { throw failure(Reason.NOT_FOUND); }
+                    AgentTaskExecutionGrantService.Admission controlledAdmission=null;
+                    if (command.controlledImage()) {
+                        if (controlledConsents==null) throw failure(Reason.CAPABILITY_UNAVAILABLE);
+                        controlledAdmission=conversationGrants.admitControlled(new AgentTaskExecutionGrantService.Scope(
+                                scope.tenantId(),scope.clientId(),scope.ownerJiacn()),valid.taskId(),command.grantId(),
+                                command.grantVersion(),command.assignmentRevision(),valid.targetAgentId(),
+                                command.permittedOperation(),"NEW_EXECUTION",null,null,null);
+                        if (controlledAdmission==null || controlledAdmission.costAuthorizationRef()==null
+                                || !controlledAdmission.costAuthorizationRef().matches("mmd-ci-v1:consent_[0-9a-f]{32}")
+                                || controlledAdmission.costAuthorizationVersion()==null)
+                            throw failure(Reason.GRANT_REVOKED);
+                    }
                     PersonalWorkspaceExecutionEntity row=new PersonalWorkspaceExecutionEntity()
                             .setExecutionId(identifier("pwe_")).setOwnerJiacn(scope.ownerJiacn())
                             .setTaskId(valid.taskId()).setRunId(identifier("pwe_run_"))
@@ -317,14 +342,22 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                             .setTaskGrantId(command.grantId()).setTaskGrantVersion(command.grantVersion())
                             .setAssignmentRevision(command.assignmentRevision())
                             .setPermittedOperation(command.permittedOperation())
+                            .setControlledConsentId(controlledAdmission==null?null:
+                                    controlledAdmission.costAuthorizationRef().substring("mmd-ci-v1:".length()))
                             .setIdempotencyKey(key).setRequestHash(requestHash).setCreatedAt(System.currentTimeMillis());
                     scoped(row,scope);
-                    var authorized=requireConversationGrant(scope,row);
+                    var authorized=controlledAdmission==null?requireConversationGrant(scope,row,"NEW_EXECUTION",null)
+                            :controlledAdmission;
                     if (!sameReferences(command.references(),authorized.inputs())) throw failure(Reason.GRANT_REVOKED);
-                    executions.insert(row);
+                    try { executions.insert(row); }
+                    catch (DuplicateKeyException collision) { throw failure(Reason.TASK_CONFLICT); }
                     int index=0;
                     for (var ref:command.references()) {
-                        var file=workspace.lockFile(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),ref.fileId());
+                        // admitControlled already locked canonical files in deterministic order.
+                        // Legacy native create keeps its historical file-lock path.
+                        var file=command.controlledImage()
+                                ? workspace.findFile(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),ref.fileId())
+                                : workspace.lockFile(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),ref.fileId());
                         var version=workspace.findVersion(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
                                 ref.fileId(),ref.version());
                         if (file==null || !"ACTIVE".equals(file.getState()) || version==null
@@ -342,6 +375,14 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                                 .setGrantState("ACTIVE").setCreatedAt(now).setRevokedAt(null);
                         scoped(input,scope);executions.insertInput(input);
                     }
+                    if (controlledAdmission!=null) {
+                        String consentId=row.getControlledConsentId();
+                        var consentScope=new cn.jia.agent.service.AgentTaskProviderCostConsentService.Scope(
+                                scope.tenantId(),scope.clientId(),scope.ownerJiacn());
+                        var consent=controlledConsents.lockForBridge(consentScope,valid.taskId(),consentId);
+                        controlledConsents.reserveWithinLockedRoot(consentScope,valid.taskId(),consent,
+                                controlledAdmission.costAuthorizationVersion(),row.getExecutionId(),row.getRunId());
+                    }
                     return view(scope,row);
                 });
     }
@@ -357,7 +398,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                     if (row==null || !"CONVERSATION".equals(row.getExecutionMode())
                             || !"OUTPUT_COMMITTED".equals(row.getExecutionState())) throw failure(Reason.NOT_FOUND);
                     requireConversationRoot(root,scope,taskId,row.getTargetAgentId(),row.getAssignmentRevision());
-                    requireConversationGrant(scope,row);
+                    requireConversationGrant(scope,row,"EXISTING_RUN",null);
+                    requireCurrentControlledConversationAccess(scope,row);
                     var locked=executions.lockByTaskRun(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,runId);
                     if (locked==null || !same(row.getExecutionId(),locked.getExecutionId())
                             || !"OUTPUT_COMMITTED".equals(locked.getExecutionState())) throw failure(Reason.NOT_FOUND);
@@ -388,7 +430,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                     if (row==null || !"CONVERSATION".equals(row.getExecutionMode())
                             || !"OUTPUT_COMMITTED".equals(row.getExecutionState())) throw failure(Reason.NOT_FOUND);
                     requireConversationRoot(root,scope,taskId,row.getTargetAgentId(),row.getAssignmentRevision());
-                    requireConversationGrant(scope,row);
+                    requireConversationGrant(scope,row,"EXISTING_RUN",null);
+                    requireCurrentControlledConversationAccess(scope,row);
                     var locked=executions.lockByTaskRun(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,runId);
                     if (locked==null || !same(row.getExecutionId(),locked.getExecutionId())
                             || !"OUTPUT_COMMITTED".equals(locked.getExecutionState())) throw failure(Reason.NOT_FOUND);
@@ -430,17 +473,22 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     }
 
     private AgentTaskExecutionGrantService.Admission requireConversationGrant(
-            OwnerScope scope,PersonalWorkspaceExecutionEntity execution) {
+            OwnerScope scope,PersonalWorkspaceExecutionEntity execution,String purpose,String runtimeInstanceId) {
         if (conversationGrants==null || !"CONVERSATION".equals(execution.getExecutionMode())
                 || !same(scope.tenantId(),execution.getTenantId()) || !same(scope.clientId(),execution.getClientId())
                 || !same(scope.ownerJiacn(),execution.getOwnerJiacn()) || execution.getTaskGrantId()==null
                 || execution.getTaskGrantVersion()==null || execution.getAssignmentRevision()==null
                 || execution.getPermittedOperation()==null) throw failure(Reason.NOT_FOUND);
         try {
-            var admission=conversationGrants.admit(new AgentTaskExecutionGrantService.Scope(scope.tenantId(),
-                    scope.clientId(),scope.ownerJiacn()),execution.getTaskId(),execution.getTaskGrantId(),
-                    execution.getTaskGrantVersion(),execution.getAssignmentRevision(),
-                    execution.getTargetAgentId(),execution.getPermittedOperation(),true);
+            var grantScope=new AgentTaskExecutionGrantService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());
+            var admission=execution.getControlledConsentId()==null
+                    ? conversationGrants.admit(grantScope,execution.getTaskId(),execution.getTaskGrantId(),
+                        execution.getTaskGrantVersion(),execution.getAssignmentRevision(),
+                        execution.getTargetAgentId(),execution.getPermittedOperation(),true)
+                    : conversationGrants.admitControlled(grantScope,execution.getTaskId(),execution.getTaskGrantId(),
+                        execution.getTaskGrantVersion(),execution.getAssignmentRevision(),
+                        execution.getTargetAgentId(),execution.getPermittedOperation(),purpose,
+                        execution.getExecutionId(),execution.getRunId(),runtimeInstanceId);
             if (admission==null || !same(execution.getTaskGrantId(),admission.grantId())
                     || execution.getTaskGrantVersion()!=admission.grantVersion()
                     || execution.getAssignmentRevision()!=admission.assignmentRevision()
@@ -450,6 +498,33 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 throw failure(Reason.GRANT_REVOKED);
             return admission;
         } catch (RuntimeException denied) { throw failure(Reason.GRANT_REVOKED); }
+    }
+
+    private static String conversationAuthorityPurpose(PersonalWorkspaceExecutionEntity execution) {
+        if (execution.getControlledConsentId()==null) return "NEW_EXECUTION";
+        return execution.getConversationProviderStartedAt()==null ? "PROVIDER_START" : "EXISTING_RUN";
+    }
+
+    /** Current Chat ACL is independent from consumed cost authority and is checked without a Chat row lock. */
+    private void requireCurrentControlledConversationAccess(OwnerScope scope,
+            PersonalWorkspaceExecutionEntity execution) {
+        if (execution.getControlledConsentId()==null) return;
+        if (conversationAccess==null || execution.getConversationId()==null)
+            throw failure(Reason.CAPABILITY_UNAVAILABLE);
+        try {
+            var conversation=conversationAccess.requireAccessible(
+                    new WorkspaceConversationAccessService.Scope(
+                            scope.tenantId(),scope.clientId(),scope.ownerJiacn()),
+                    execution.getConversationId());
+            if (conversation==null || !same(execution.getConversationId(),conversation.conversationId())
+                    || !same("bounty",conversation.scopeType())
+                    || !same(execution.getTaskId(),conversation.taskId())
+                    || !same("task:"+execution.getTaskId(),conversation.scopeKey())
+                    || conversation.targetAgentIds()==null
+                    || !conversation.targetAgentIds().contains(execution.getTargetAgentId()))
+                throw failure(Reason.NOT_FOUND);
+        } catch (Failure denied) { throw denied; }
+        catch (RuntimeException denied) { throw failure(Reason.NOT_FOUND); }
     }
 
     private static boolean sameReferences(List<ReferenceSelection> expected,
@@ -670,6 +745,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 afterExecutionId=candidate.getExecutionId();
                 if (result.size()>=limit) continue;
                 if (!"CONVERSATION".equals(candidate.getExecutionMode())
+                        || candidate.getControlledConsentId()!=null
                         || candidate.getConversationProviderStartedAt()!=null
                         || !"QUEUED".equals(candidate.getExecutionState())
                         || !same(candidate.getTenantId(),scope.tenantId())
@@ -697,6 +773,100 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         return List.copyOf(result);
     }
 
+    @Override
+    public List<? extends ConversationCommandView> runtimeConversationCommandViews(RuntimeScope scope,int limit) {
+        requireConversationExecutionEnabled();validateRuntimeScope(scope);
+        if (limit<1 || limit>16) throw failure(Reason.BAD_REQUEST);
+        List<ConversationCommandView> result=new ArrayList<>();
+        Long afterCreatedAt=null;
+        String afterExecutionId=null;
+        while (result.size()<limit) {
+            var rows=executions.listQueuedConversationsByTarget(scope.tenantId(),scope.clientId(),
+                    scope.ownerJiacn(),scope.agentId(),afterCreatedAt,afterExecutionId,16);
+            if (rows==null) throw failure(Reason.NOT_FOUND);
+            if (rows.isEmpty()) break;
+            if (rows.size()>16) throw failure(Reason.TASK_CONFLICT);
+            for (var candidate:rows) {
+                if (candidate==null || candidate.getCreatedAt()==null || candidate.getCreatedAt()<0
+                        || !safeId(candidate.getExecutionId(),100)
+                        || (afterCreatedAt!=null && (candidate.getCreatedAt()<afterCreatedAt
+                            || (candidate.getCreatedAt().equals(afterCreatedAt)
+                                && compareUtf8(candidate.getExecutionId(),afterExecutionId)<=0))))
+                    throw failure(Reason.TASK_CONFLICT);
+                afterCreatedAt=candidate.getCreatedAt();
+                afterExecutionId=candidate.getExecutionId();
+                if (result.size()>=limit || !"CONVERSATION".equals(candidate.getExecutionMode())
+                        || candidate.getConversationProviderStartedAt()!=null
+                        || !"QUEUED".equals(candidate.getExecutionState())
+                        || !same(candidate.getTenantId(),scope.tenantId())
+                        || !same(candidate.getClientId(),scope.clientId())
+                        || !same(candidate.getOwnerJiacn(),scope.ownerJiacn())
+                        || !same(candidate.getTargetAgentId(),scope.agentId())) continue;
+                try {
+                    result.add(withConversationRoot(scope,candidate.getTaskId(),candidate.getRunId(),false,
+                            execution -> commandView(scope,candidate,execution)));
+                } catch (Failure stale) {
+                    if (stale.getReason()!=Reason.NOT_FOUND && stale.getReason()!=Reason.GRANT_REVOKED
+                            && stale.getReason()!=Reason.TASK_CONFLICT) throw stale;
+                }
+            }
+            if (rows.size()<16) break;
+        }
+        return List.copyOf(result);
+    }
+
+    private ConversationCommandView commandView(RuntimeScope scope,
+            PersonalWorkspaceExecutionEntity candidate,PersonalWorkspaceExecutionEntity execution) {
+        if (!same(candidate.getExecutionId(),execution.getExecutionId())
+                || !same(candidate.getTaskId(),execution.getTaskId())
+                || !same(candidate.getRunId(),execution.getRunId())
+                || !same(candidate.getControlledConsentId(),execution.getControlledConsentId()))
+            throw failure(Reason.TASK_CONFLICT);
+        String seed=execution.getExecutionId();
+        String commandId="pwe_cmd_"+plainSha("command\n"+seed);
+        String messageId="pwe_msg_"+plainSha("message\n"+seed);
+        if (execution.getControlledConsentId()==null) {
+            return new ConversationRuntimeCommand(1,execution.getTaskId(),execution.getRunId(),
+                    execution.getConversationId(),commandId,messageId,execution.getInstruction(),
+                    execution.getOutputContentMimeType(),"output_1");
+        }
+        OwnerScope owner=new OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());
+        requireCurrentControlledConversationAccess(owner,execution);
+        var admission=requireConversationGrant(owner,execution,"PROVIDER_START",scope.runtimeInstanceId());
+        ProviderExecution provider=providerExecution(admission,owner,execution.getTaskId(),
+                execution.getControlledConsentId());
+        if (!"image/png".equals(execution.getOutputContentMimeType()))
+            throw failure(Reason.GRANT_REVOKED);
+        return new ControlledConversationRuntimeCommand(2,execution.getTaskId(),execution.getRunId(),
+                execution.getConversationId(),commandId,messageId,execution.getInstruction(),
+                "image/png","output_1",provider);
+    }
+
+    private static long parseControlledConsentVersion(String value) {
+        if(value==null||!value.matches("[1-9][0-9]*"))throw failure(Reason.GRANT_REVOKED);
+        try {
+            long parsed=Long.parseLong(value);
+            if(parsed>MAX_SAFE_INTEGER)throw failure(Reason.GRANT_REVOKED);
+            return parsed;
+        } catch(NumberFormatException invalid) { throw failure(Reason.GRANT_REVOKED); }
+    }
+
+    private ProviderExecution providerExecution(AgentTaskExecutionGrantService.Admission admission,
+            OwnerScope scope,String taskId,String consentId){
+        if(admission==null||admission.costAuthorizationRef()==null||controlledConsents==null
+                ||!admission.costAuthorizationRef().equals("mmd-ci-v1:"+consentId))throw failure(Reason.GRANT_REVOKED);
+        var consent=controlledConsents.get(new cn.jia.agent.service.AgentTaskProviderCostConsentService.Scope(
+                scope.tenantId(),scope.clientId(),scope.ownerJiacn()),taskId,consentId);
+        if(consent==null||!"RESERVED".equals(consent.state())||consent.providerBinding()==null
+                ||consent.maxOutboundRequestAttempts()!=1
+                ||admission.costAuthorizationVersion()==null
+                ||parseControlledConsentVersion(consent.version())!=admission.costAuthorizationVersion())
+            throw failure(Reason.GRANT_REVOKED);
+        return new ProviderExecution("CONTROLLED_IMAGE_HTTP_V1",consentId,
+                consent.providerBinding().bindingId(),consent.providerBinding().bindingEpoch(),
+                consent.modelId(),16,1,1);
+    }
+
     /** Root -> grant -> execution FOR UPDATE; one native claim per unexpired lease. No provider calls. */
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -721,6 +891,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             long next;
             try { next=Math.addExact(Objects.requireNonNullElse(execution.getConversationLeaseVersion(),0L),1L); }
             catch (ArithmeticException overflow) { throw failure(Reason.TASK_CONFLICT); }
+            if(next>MAX_SAFE_INTEGER)throw failure(Reason.TASK_CONFLICT);
             execution.setConversationLeaseVersion(next).setConversationLeaseToken(UUID.randomUUID().toString())
                     .setConversationLeaseRuntimeId(scope.runtimeInstanceId())
                     .setConversationLeaseExpiresAt(Math.addExact(now,CONVERSATION_LEASE_MILLIS));
@@ -751,6 +922,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         requireConversationExecutionEnabled();
         withConversationRoot(scope,taskId,runId,true,execution -> {
             requireConversationFence(scope,execution,fence,false);
+            if (execution.getControlledConsentId()!=null) throw failure(Reason.CAPABILITY_UNAVAILABLE);
             verifiedConversationInputs(scope,execution);
             if (execution.getConversationProviderStartedAt()!=null ||
                     execution.getConversationProviderLeaseVersion()!=null)
@@ -762,14 +934,145 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         });
     }
 
+    @Override
+    public ControlledProviderStartReceipt beginControlledConversationProviderStart(RuntimeScope scope,
+            String taskId,String runId,ControlledProviderStart command) {
+        requireConversationExecutionEnabled();validateRuntimeScope(scope);id(taskId,"taskId",100);id(runId,"runId",100);
+        if(command==null||command.schemaVersion()!=2||command.providerExecution()==null||command.fence()==null
+                ||!safeId(command.executionId(),100)||!safeId(command.commandId(),100)||!safeId(command.messageId(),100))
+            throw failure(Reason.BAD_REQUEST);
+        var candidate=runtimeExecution(scope,taskId,runId,false);
+        if(candidate.getControlledConsentId()==null||!same(candidate.getExecutionId(),command.executionId()))
+            throw failure(Reason.NOT_FOUND);
+        requireStartCommand(candidate,command.commandId(),command.messageId());
+        if(taskMutations==null||conversationGrants==null||controlledConsents==null)throw failure(Reason.CAPABILITY_UNAVAILABLE);
+        return taskMutations.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,root->{
+            var grantScope=new AgentTaskExecutionGrantService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());
+            var admission=conversationGrants.admitControlled(grantScope,taskId,candidate.getTaskGrantId(),
+                    candidate.getTaskGrantVersion(),candidate.getAssignmentRevision(),candidate.getTargetAgentId(),
+                    candidate.getPermittedOperation(),"PROVIDER_START",candidate.getExecutionId(),candidate.getRunId(),
+                    scope.runtimeInstanceId());
+            ProviderExecution expected=providerExecution(admission,new OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),
+                    taskId,candidate.getControlledConsentId());
+            if(!expected.equals(command.providerExecution()))throw failure(Reason.TASK_CONFLICT);
+            var consentScope=new cn.jia.agent.service.AgentTaskProviderCostConsentService.Scope(
+                    scope.tenantId(),scope.clientId(),scope.ownerJiacn());
+            var consent=controlledConsents.lockForBridge(consentScope,taskId,candidate.getControlledConsentId());
+            var execution=runtimeExecution(scope,taskId,runId,true);
+            if(!same(candidate.getExecutionId(),execution.getExecutionId())
+                    ||!same(candidate.getTaskGrantId(),execution.getTaskGrantId())
+                    ||!Objects.equals(candidate.getTaskGrantVersion(),execution.getTaskGrantVersion())
+                    ||!Objects.equals(candidate.getAssignmentRevision(),execution.getAssignmentRevision())
+                    ||!same(candidate.getControlledConsentId(),execution.getControlledConsentId()))
+                throw failure(Reason.TASK_CONFLICT);
+            requireConversationRoot(root,new OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),taskId,
+                    execution.getTargetAgentId(),execution.getAssignmentRevision());
+            requireStartCommand(execution,command.commandId(),command.messageId());
+            requireConversationFence(scope,execution,command.fence(),false);
+            requireCurrentControlledConversationAccess(
+                    new OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),execution);
+            if(execution.getConversationProviderStartedAt()!=null||execution.getConversationProviderLeaseVersion()!=null)
+                throw failure(Reason.TASK_CONFLICT);
+            verifiedConversationInputsAgainst(scope,execution,admission.inputs());
+            long leaseVersion=command.fence().version();
+            controlledConsents.consumeWithinLockedRoot(consentScope,taskId,consent,
+                    Objects.requireNonNull(admission.costAuthorizationVersion()),execution.getExecutionId(),
+                    execution.getRunId(),"pwe_lease_"+plainSha("controlled-provider-start\n"
+                            +execution.getExecutionId()+"\n"+scope.runtimeInstanceId()+"\n"+leaseVersion));
+            long startedAt=System.currentTimeMillis();
+            if(!executions.markControlledProviderStarted(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                    taskId,runId,execution.getExecutionId(),execution.getControlledConsentId(),
+                    leaseVersion,startedAt))throw failure(Reason.TASK_CONFLICT);
+            execution.setConversationProviderStartedAt(startedAt)
+                    .setConversationProviderLeaseVersion(leaseVersion);
+            return new ControlledProviderStartReceipt(2,true,taskId,runId,execution.getExecutionId(),
+                    command.commandId(),command.messageId(),expected,leaseVersion);
+        });
+    }
+
+    private List<RuntimeInput> verifiedConversationInputsAgainst(RuntimeScope scope,
+            PersonalWorkspaceExecutionEntity execution,
+            List<AgentTaskExecutionGrantService.AuthorizedInput> authorized) {
+        OwnerScope owner=new OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());
+        var rows=executions.listInputs(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                execution.getExecutionId());
+        if (rows==null || authorized==null || rows.size()!=authorized.size() || rows.size()>16)
+            throw failure(Reason.GRANT_REVOKED);
+        var indexed=new LinkedHashMap<String,PersonalWorkspaceExecutionInputEntity>();
+        for (var input:rows) {
+            if (input==null || input.getInputRef()==null
+                    || indexed.putIfAbsent(input.getInputRef(),input)!=null)
+                throw failure(Reason.GRANT_REVOKED);
+        }
+        var result=new ArrayList<RuntimeInput>();
+        for (int index=0;index<authorized.size();index++) {
+            String inputRef="input_"+(index+1);
+            var input=indexed.get(inputRef);
+            var expected=authorized.get(index);
+            if (!exactControlledInput(owner,execution.getExecutionId(),inputRef,input,expected))
+                throw failure(Reason.GRANT_REVOKED);
+            // The grant admission immediately above already holds the canonical file locks in
+            // deterministic order. These owner-scoped reads verify the same current rows without
+            // acquiring a file lock after the consent/execution locks.
+            var file=workspace.findFile(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                    input.getFileId());
+            var version=workspace.findVersion(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                    input.getFileId(),input.getFileVersion());
+            if (file==null || !"ACTIVE".equals(file.getState()) || version==null
+                    || !same(version.getFileId(),input.getFileId())
+                    || !Objects.equals(version.getVersion(),input.getFileVersion())
+                    || !same(version.getOriginalFilename(),input.getOriginalFilename())
+                    || !same(version.getContentMimeType(),input.getContentMimeType())
+                    || !Objects.equals(version.getByteLength(),input.getByteLength())
+                    || !same(version.getContentHash(),input.getContentHash())
+                    || !same(version.getStorageUri(),input.getStorageUri()))
+                throw failure(Reason.GRANT_REVOKED);
+            PersonalWorkspaceStorage.StoredContent stored;
+            try {
+                stored=storage.read(storageScope(scope),input.getStorageUri(),input.getContentHash(),
+                        input.getByteLength(),input.getContentMimeType());
+            } catch (RuntimeException unavailable) {
+                throw failure(Reason.STORAGE_UNAVAILABLE);
+            }
+            byte[] bytes=stored==null?null:stored.content();
+            if (stored==null || bytes==null || bytes.length!=input.getByteLength()
+                    || stored.byteLength()!=input.getByteLength()
+                    || !same(stored.mimeType(),input.getContentMimeType())
+                    || !same(stored.sha256(),input.getContentHash())
+                    || !same(plainSha(bytes),input.getContentHash()))
+                throw failure(Reason.STORAGE_UNAVAILABLE);
+            result.add(runtimeInput(input));
+        }
+        return List.copyOf(result);
+    }
+
+    private static boolean exactControlledInput(OwnerScope scope,String executionId,String inputRef,
+            PersonalWorkspaceExecutionInputEntity input,
+            AgentTaskExecutionGrantService.AuthorizedInput expected) {
+        return expected!=null && isExactInput(scope,executionId,input)
+                && same(inputRef,input.getInputRef()) && "ACTIVE".equals(input.getGrantState())
+                && same(input.getFileId(),expected.fileId())
+                && input.getFileVersion()!=null && input.getFileVersion()==expected.version()
+                && Set.of("INPUT","REFERENCE").contains(expected.purpose())
+                && same(input.getContentMimeType(),expected.contentMimeType())
+                && Set.of("image/png","image/jpeg").contains(input.getContentMimeType())
+                && input.getByteLength()!=null && input.getByteLength()==expected.byteLength()
+                && same(input.getContentHash(),expected.contentHash())
+                && input.getContentHash()!=null && input.getContentHash().matches("[0-9a-f]{64}")
+                && input.getStorageUri()!=null && !input.getStorageUri().isBlank()
+                && input.getOriginalFilename()!=null && !input.getOriginalFilename().isBlank();
+    }
+
     /** Only persisted ACTIVE rows exactly matching the still-valid grant can leave this boundary. */
     private List<RuntimeInput> verifiedConversationInputs(RuntimeScope scope,
             PersonalWorkspaceExecutionEntity execution) {
+        String purpose=conversationAuthorityPurpose(execution);
         var authorized=requireConversationGrant(new OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),
-                execution).inputs();
+                execution,purpose,"EXISTING_RUN".equals(purpose)?null:scope.runtimeInstanceId()).inputs();
         var rows=executions.listInputs(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
                 execution.getExecutionId());
-        if (rows==null || rows.size()!=authorized.size() || rows.size()>32)
+        int max=execution.getControlledConsentId()==null?32:16;
+        if (rows==null || rows.size()!=authorized.size() || rows.size()>max)
             throw failure(Reason.CAPABILITY_UNAVAILABLE);
         var indexed=new LinkedHashMap<String,PersonalWorkspaceExecutionInputEntity>();
         for (var input:rows) {
@@ -874,7 +1177,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     private static void requireConversationFence(RuntimeScope scope,PersonalWorkspaceExecutionEntity execution,
             ConversationFence fence, boolean terminalReplay) {
         Long expiry=execution.getConversationLeaseExpiresAt();
-        if (fence==null || fence.version()<1 || fence.token()==null || fence.token().isBlank()
+        if (fence==null || fence.version()<1 || fence.version()>MAX_SAFE_INTEGER || fence.token()==null || fence.token().isBlank()
                 || execution.getConversationLeaseVersion()==null || execution.getConversationLeaseVersion()!=fence.version()
                 || !same(fence.token(),execution.getConversationLeaseToken())
                 || !same(scope.runtimeInstanceId(),execution.getConversationLeaseRuntimeId())
@@ -1039,13 +1342,34 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             java.util.function.Function<PersonalWorkspaceExecutionEntity,T> action) {
         validateRuntimeScope(scope);id(taskId,"taskId",100);id(runId,"runId",100);
         if (taskMutations==null || conversationGrants==null) throw failure(Reason.CAPABILITY_UNAVAILABLE);
+        // The unlocked candidate chooses the lane only. Controlled execution always re-verifies
+        // every persisted identity under root -> grant -> consent before taking the execution lock.
+        var candidate=runtimeExecution(scope,taskId,runId,false,allowCommitted,allowFailed);
         return taskMutations.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),
                 scope.ownerJiacn(),taskId,root -> {
-                    var execution=runtimeExecution(scope,taskId,runId,lock,allowCommitted,allowFailed);
-                    if (!"CONVERSATION".equals(execution.getExecutionMode())) throw failure(Reason.NOT_FOUND);
                     var owner=new OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());
-                    requireConversationRoot(root,owner,taskId,execution.getTargetAgentId(),execution.getAssignmentRevision());
-                    requireConversationGrant(owner,execution);
+                    if (!"CONVERSATION".equals(candidate.getExecutionMode())) throw failure(Reason.NOT_FOUND);
+                    requireConversationRoot(root,owner,taskId,candidate.getTargetAgentId(),
+                            candidate.getAssignmentRevision());
+                    boolean controlled=candidate.getControlledConsentId()!=null;
+                    String purpose=controlled
+                            ? candidate.getConversationProviderStartedAt()==null
+                                ? "PROVIDER_START" : "EXISTING_RUN"
+                            : "NEW_EXECUTION";
+                    if (controlled) requireConversationGrant(owner,candidate,purpose,
+                            scope.runtimeInstanceId());
+                    var execution=runtimeExecution(scope,taskId,runId,lock,allowCommitted,allowFailed);
+                    if (!same(candidate.getExecutionId(),execution.getExecutionId())
+                            || !same(candidate.getTaskGrantId(),execution.getTaskGrantId())
+                            || !Objects.equals(candidate.getTaskGrantVersion(),execution.getTaskGrantVersion())
+                            || !Objects.equals(candidate.getAssignmentRevision(),execution.getAssignmentRevision())
+                            || !Objects.equals(candidate.getControlledConsentId(),execution.getControlledConsentId()))
+                        throw failure(Reason.TASK_CONFLICT);
+                    requireConversationRoot(root,owner,taskId,execution.getTargetAgentId(),
+                            execution.getAssignmentRevision());
+                    if (!controlled) requireConversationGrant(owner,execution,purpose,
+                            scope.runtimeInstanceId());
+                    else requireCurrentControlledConversationAccess(owner,execution);
                     return action.apply(execution);
                 });
     }
@@ -1499,8 +1823,14 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     private boolean runtimeDispatchAllowed(RuntimeScope scope, PersonalWorkspaceExecutionEntity execution) {
         if ("PRIVATE".equals(execution.getExecutionMode()) || execution.getExecutionMode()==null) return true;
         try {
-            if ("CONVERSATION".equals(execution.getExecutionMode()))
-                requireConversationGrant(new OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),execution);
+            if ("CONVERSATION".equals(execution.getExecutionMode())) {
+                OwnerScope owner=new OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());
+                String purpose=conversationAuthorityPurpose(execution);
+                requireConversationGrant(owner,execution,purpose,
+                        "EXISTING_RUN".equals(purpose)?null:scope.runtimeInstanceId());
+                if (execution.getControlledConsentId()!=null)
+                    requireCurrentControlledConversationAccess(owner,execution);
+            }
             else if ("TASK".equals(execution.getExecutionMode())) requireLiveTaskLease(scope, execution);
             else return false;
             return true;

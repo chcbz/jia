@@ -99,6 +99,22 @@ public interface AgentTaskExecutionGrantMapper extends BaseMapper<AgentTaskExecu
 
     @Update("""
             UPDATE agent_task_execution_grant
+               SET cost_authorization_ref=#{locator}
+             WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
+               AND task_id=#{taskId} AND grant_id=#{grantId}
+               AND state='ACTIVE' AND grant_version=#{expectedVersion}
+               AND cost_authorization_ref IS NULL
+            """ + EXACT_SCOPE + EXACT_TASK + """
+               AND CAST(grant_id AS BINARY)=CAST(#{grantId} AS BINARY)
+               AND OCTET_LENGTH(grant_id)=OCTET_LENGTH(#{grantId})
+            """)
+    int setCostAuthorizationRef(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("ownerJiacn") String ownerJiacn,
+            @Param("taskId") String taskId, @Param("grantId") String grantId,
+            @Param("expectedVersion") long expectedVersion, @Param("locator") String locator);
+
+    @Update("""
+            UPDATE agent_task_execution_grant
                SET state='REVOKED', grant_version=grant_version+1, revoked_at=#{revokedAt},
                    revoke_idempotency_key=#{idempotencyKey}, revoke_request_hash=#{requestHash},
                    update_time=#{revokedAt}

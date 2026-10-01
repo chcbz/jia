@@ -28,6 +28,11 @@ public interface AgentTaskExecutionGrantService {
             long expectedGrantVersion, long expectedAssignmentRevision, String targetAgentId,
             String expectedAssignmentBaseHash, String expectedInputSnapshotDigest);
 
+    /** Purpose-aware controlled-image authority. Non-empty locators are never accepted by shape alone. */
+    Admission admitControlled(Scope scope,String taskId,String grantId,long expectedGrantVersion,
+            long expectedAssignmentRevision,String targetAgentId,String operation,String purpose,
+            String executionId,String runId,String runtimeInstanceId);
+
     /** Server-side lookup for Chat/application orchestration; browser grant identifiers are not trusted. */
     Admission resolveAndAdmit(Scope scope, String taskId, long expectedAssignmentRevision,
             String targetAgentId, String operation, boolean paidExecution);
@@ -47,12 +52,18 @@ public interface AgentTaskExecutionGrantService {
     }
     record Admission(String grantId, long grantVersion, long assignmentRevision,
             String targetAgentId, String operation, boolean paidExecutionAuthorized,
-            List<AuthorizedInput> inputs) {
+            List<AuthorizedInput> inputs, String costAuthorizationRef,
+            Long costAuthorizationVersion) {
         public Admission { inputs = List.copyOf(inputs); }
+        public Admission(String grantId,long grantVersion,long assignmentRevision,String targetAgentId,
+                String operation,boolean paidExecutionAuthorized,List<AuthorizedInput> inputs) {
+            this(grantId,grantVersion,assignmentRevision,targetAgentId,operation,
+                    paidExecutionAuthorized,inputs,null,null);
+        }
         public Admission(String grantId, long grantVersion, long assignmentRevision,
                 String targetAgentId, String operation, boolean paidExecutionAuthorized) {
             this(grantId, grantVersion, assignmentRevision, targetAgentId, operation,
-                    paidExecutionAuthorized, List.of());
+                    paidExecutionAuthorized, List.of(),null,null);
         }
     }
 }

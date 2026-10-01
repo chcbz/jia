@@ -644,3 +644,62 @@ tasks.register('mmdU1ProviderConsentCore', Test) {
     classpath = mmdU1ProviderConsentCoreSourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+// MMD-BRIDGE-A controlled assignment/reserve/START-v2; no Provider or production database.
+def mmdControlledImageBridgeSourceSet = sourceSets.create('mmdControlledImageBridge') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/service/impl/ControlledImageGrantAuthorityTest.java'
+        include 'cn/jia/agent/service/impl/ControlledImagePointAndStartServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/ControlledImageConversationStartTest.java'
+        include 'cn/jia/agent/service/impl/ControlledImageBridgeAtomicitySpringTest.java'
+        include 'cn/jia/agent/service/impl/ControlledImageBridgeMySqlTest.java'
+        include 'cn/jia/agent/api/ControlledImagePointAndStartControllerTest.java'
+        include 'cn/jia/agent/config/ControlledImageBridgeSchemaInitializerTest.java'
+        include 'cn/jia/agent/security/AgentRuntimeSecurityIntegrationTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(mmdControlledImageBridgeSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.implementation
+}
+configurations.named(mmdControlledImageBridgeSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.runtimeOnly
+}
+dependencies {
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName,
+            platform("org.springframework.boot:spring-boot-dependencies:${libs.versions.spring.boot.asProvider().get()}"))
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName, libs.junit.jupiter)
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName, 'org.mockito:mockito-core')
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName, 'org.springframework:spring-test')
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName, 'org.hamcrest:hamcrest')
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName,
+            'org.springframework.security:spring-security-config')
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName,
+            'org.springframework.security:spring-security-web')
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName,
+            'org.springframework.security:spring-security-oauth2-resource-server')
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName,
+            'org.springframework.security:spring-security-oauth2-jose')
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName,
+            project(':oauth:jia-oauth-api'))
+    add(mmdControlledImageBridgeSourceSet.runtimeOnlyConfigurationName,
+            'org.junit.platform:junit-platform-launcher:6.0.1')
+    add(mmdControlledImageBridgeSourceSet.runtimeOnlyConfigurationName, libs.mysql)
+    add(mmdControlledImageBridgeSourceSet.runtimeOnlyConfigurationName, 'com.h2database:h2')
+    add(mmdControlledImageBridgeSourceSet.runtimeOnlyConfigurationName, 'com.jayway.jsonpath:json-path')
+}
+tasks.register('mmdControlledImageBridge', Test) {
+    maxParallelForks = 1
+    maxHeapSize = '256m'
+    jvmArgs '-XX:+UseSerialGC', '-XX:ActiveProcessorCount=2',
+            '-XX:MaxMetaspaceSize=192m', '-Xss256k'
+    group = 'verification'
+    description = 'Runs controlled image assignment, authority, reserve, START-v2, schema and isolated MySQL races.'
+    dependsOn tasks.named(mmdControlledImageBridgeSourceSet.classesTaskName)
+    testClassesDirs = mmdControlledImageBridgeSourceSet.output.classesDirs
+    classpath = mmdControlledImageBridgeSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}

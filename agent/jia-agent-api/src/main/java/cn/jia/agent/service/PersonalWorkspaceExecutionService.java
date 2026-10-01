@@ -15,15 +15,30 @@ public interface PersonalWorkspaceExecutionService {
             String sha256, long byteLength) { }
     /** Native runtime inbox; intentionally separate from legacy unfenced commands. */
     List<ConversationRuntimeCommand> runtimeConversationCommands(RuntimeScope scope, int limit);
+    List<? extends ConversationCommandView> runtimeConversationCommandViews(RuntimeScope scope,int limit);
+    sealed interface ConversationCommandView permits ConversationRuntimeCommand,ControlledConversationRuntimeCommand { }
     record ConversationRuntimeCommand(int schemaVersion, String taskId, String runId,
             String conversationId, String commandId, String messageId, String instruction,
-            String outputContentMimeType, String outputId) { }
+            String outputContentMimeType, String outputId) implements ConversationCommandView { }
+    record ProviderExecution(String providerLane,String consentId,String bindingId,String bindingEpoch,
+            String modelId,int maxInputItems,int maxOutboundRequestAttempts,int precallFenceVersion) { }
+    record ControlledConversationRuntimeCommand(int schemaVersion,String taskId,String runId,
+            String conversationId,String commandId,String messageId,String instruction,
+            String outputContentMimeType,String outputId,ProviderExecution providerExecution)
+            implements ConversationCommandView { }
+    record ControlledProviderStart(int schemaVersion,String commandId,String messageId,String executionId,
+            ProviderExecution providerExecution,ConversationFence fence) { }
+    record ControlledProviderStartReceipt(int schemaVersion,boolean started,String taskId,String runId,
+            String executionId,String commandId,String messageId,ProviderExecution providerExecution,
+            long leaseVersion) { }
     /** Trusted native runtime only; lease token is never sent to browsers or legacy inbox. */
     ConversationLease claimConversationStart(RuntimeScope scope, String taskId, String runId,
             String commandId, String messageId);
     ConversationLease renewConversationLease(RuntimeScope scope, String taskId, String runId, ConversationFence fence);
     /** Irreversible one-shot Provider admission; an uncertain result must be reconciled, not re-generated. */
     void beginConversationProviderStart(RuntimeScope scope, String taskId, String runId, ConversationFence fence);
+    ControlledProviderStartReceipt beginControlledConversationProviderStart(RuntimeScope scope,
+            String taskId,String runId,ControlledProviderStart command);
     /** Server-verified source manifest under live task/grant and exact lease. No legacy /inputs fallback. */
     ConversationInputSnapshot conversationInputs(RuntimeScope scope, String taskId, String runId, ConversationFence fence);
     /** Runtime byte read; exact input ref must belong to this fenced execution and grant. */
@@ -50,13 +65,19 @@ public interface PersonalWorkspaceExecutionService {
     record ConversationCreate(String conversationId, String taskId, String targetAgentId,
             String intentId, String grantId, long grantVersion, long assignmentRevision,
             String permittedOperation, String instruction, String outputContentMimeType,
-            List<ReferenceSelection> references) {
+            List<ReferenceSelection> references, boolean controlledImage) {
         public ConversationCreate { references = List.copyOf(references); }
+        public ConversationCreate(String conversationId,String taskId,String targetAgentId,String intentId,
+                String grantId,long grantVersion,long assignmentRevision,String permittedOperation,
+                String instruction,String outputContentMimeType,List<ReferenceSelection> references) {
+            this(conversationId,taskId,targetAgentId,intentId,grantId,grantVersion,assignmentRevision,
+                    permittedOperation,instruction,outputContentMimeType,references,false);
+        }
         public ConversationCreate(String conversationId, String taskId, String targetAgentId,
                 String intentId, String grantId, long grantVersion, long assignmentRevision,
                 String permittedOperation, String instruction, String outputContentMimeType) {
             this(conversationId, taskId, targetAgentId, intentId, grantId, grantVersion,
-                    assignmentRevision, permittedOperation, instruction, outputContentMimeType, List.of());
+                    assignmentRevision, permittedOperation, instruction, outputContentMimeType, List.of(),false);
         }
     }
     record ConversationOutput(String executionId, String outputId, String originalFilename,

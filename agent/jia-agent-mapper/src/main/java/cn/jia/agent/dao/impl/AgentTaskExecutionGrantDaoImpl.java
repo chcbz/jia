@@ -49,6 +49,13 @@ public final class AgentTaskExecutionGrantDaoImpl implements AgentTaskExecutionG
         if (supersededAt < 0) throw new IllegalArgumentException("supersededAt");
         return mapper.supersedeActiveForTask(tenantId,clientId,ownerJiacn,taskId,supersededAt);
     }
+    @Override public boolean setCostAuthorizationRef(String tenantId,String clientId,String ownerJiacn,
+            String taskId,String grantId,long expectedVersion,String locator) {
+        scope(tenantId,clientId,ownerJiacn);id(taskId,"taskId",100);id(grantId,"grantId",100);
+        id(locator,"locator",100);if(expectedVersion<1)throw new IllegalArgumentException("expectedVersion");
+        return mapper.setCostAuthorizationRef(tenantId,clientId,ownerJiacn,taskId,grantId,
+                expectedVersion,locator)==1;
+    }
     @Override public boolean revoke(String tenantId, String clientId, String ownerJiacn,
             String taskId, String grantId, long expectedVersion, String idempotencyKey,
             String requestHash, long revokedAt) {

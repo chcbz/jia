@@ -94,6 +94,15 @@ public class PersonalWorkspaceExecutionDaoImpl implements PersonalWorkspaceExecu
     }
     @Override public void insert(PersonalWorkspaceExecutionEntity execution) { init(execution); executions.insert(execution); }
     @Override public void update(PersonalWorkspaceExecutionEntity execution) { execution.setUpdateTime(DateUtil.nowTime()); executions.updateById(execution); }
+    @Override public boolean markControlledProviderStarted(String tenantId,String clientId,String ownerJiacn,
+            String taskId,String runId,String executionId,String consentId,long leaseVersion,long startedAt) {
+        scope(tenantId,clientId,ownerJiacn);id(taskId,"taskId");id(runId,"runId");
+        id(executionId,"executionId");id(consentId,"consentId");
+        if(leaseVersion<1||leaseVersion>9_007_199_254_740_991L||startedAt<1)
+            throw new IllegalArgumentException("controlled provider start");
+        return executions.markControlledProviderStarted(tenantId,clientId,ownerJiacn,taskId,runId,
+                executionId,consentId,leaseVersion,startedAt)==1;
+    }
     @Override public void insertInput(PersonalWorkspaceExecutionInputEntity input) { init(input); inputs.insert(input); }
     @Override public List<PersonalWorkspaceExecutionInputEntity> listInputs(String tenantId,
             String clientId, String ownerJiacn, String executionId) {

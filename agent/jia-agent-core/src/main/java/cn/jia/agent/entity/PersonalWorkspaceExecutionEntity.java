@@ -30,6 +30,8 @@ public class PersonalWorkspaceExecutionEntity extends BaseEntity {
     private Long taskGrantVersion;
     private Long assignmentRevision;
     private String permittedOperation;
+    /** Controlled-image authority identity; null preserves native-v1 conversation semantics. */
+    private String controlledConsentId;
     /** CONVERSATION-only native claim. Token and runtime instance stay server-side. */
     private String conversationLeaseToken;
     private String conversationLeaseRuntimeId;

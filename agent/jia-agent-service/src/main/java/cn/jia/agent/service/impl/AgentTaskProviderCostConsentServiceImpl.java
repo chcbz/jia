@@ -3,6 +3,7 @@ package cn.jia.agent.service.impl;
 import cn.jia.agent.dao.AgentTaskProviderCostConsentDao;
 import cn.jia.agent.entity.AgentTaskAssignDTO;
 import cn.jia.agent.entity.AgentTaskGrantInputDTO;
+import cn.jia.agent.entity.AgentTaskExecutionGrantEntity;
 import cn.jia.agent.entity.AgentTaskProviderCostConsentDTO;
 import cn.jia.agent.entity.AgentTaskProviderCostConsentEntity;
 import cn.jia.agent.entity.AgentTaskProviderCostConsentIssueDTO;
@@ -265,6 +266,50 @@ public class AgentTaskProviderCostConsentServiceImpl
         } catch (RuntimeException failure) { throw failure(Reason.SOURCE_UNAVAILABLE,failure); }
     }
 
+    AgentTaskProviderCostConsentEntity lockForBridge(Scope scope,String taskId,String consentId) {
+        validateScope(scope);exact(taskId,"taskId",100);exact(consentId,"consentId",100);
+        return locked(scope,taskId,consentId);
+    }
+
+    AgentTaskProviderCostConsentDTO bindWithinLockedRoot(Scope scope,String taskId,
+            AgentTaskProviderCostConsentEntity row,long expectedVersion,
+            AgentTaskExecutionGrantEntity grant,ControlledImageGrantAuthority authority) {
+        if (row==null || grant==null || authority==null || !"ISSUED".equals(row.getState())
+                || !Objects.equals(expectedVersion,row.getVersion())
+                || !Objects.equals(row.getAssignmentBaseHash(),grant.getRequestHash())
+                || !Objects.equals(row.getTargetAgentId(),grant.getTargetAgentId()))
+            throw failure(Reason.CONFLICT);
+        long now=System.currentTimeMillis();
+        authority.requireBindable(grantScope(scope),grant,row);
+        row.setBoundGrantId(grant.getGrantId()).setBoundGrantVersion(grant.getGrantVersion())
+                .setBoundAssignmentRevision(grant.getAssignmentRevision()).setUpdateTime(now);
+        if (!consents.bind(row,expectedVersion)) throw failure(Reason.CONFLICT);
+        row.setState("BOUND").setVersion(expectedVersion+1);
+        authority.bindLocator(grantScope(scope),grant,row);
+        return view(row,now);
+    }
+
+    AgentTaskProviderCostConsentDTO reserveWithinLockedRoot(Scope scope,String taskId,
+            AgentTaskProviderCostConsentEntity row,long expectedVersion,String executionId,String runId) {
+        if (row==null || !"BOUND".equals(row.getState()) || !Objects.equals(expectedVersion,row.getVersion()))
+            throw failure(Reason.CONFLICT);
+        exact(executionId,"executionId",100);exact(runId,"runId",100);
+        long now=System.currentTimeMillis();row.setReservedExecutionId(executionId).setReservedRunId(runId).setUpdateTime(now);
+        if (!consents.reserve(row,expectedVersion)) throw failure(Reason.CONFLICT);
+        row.setState("RESERVED").setVersion(expectedVersion+1);return view(row,now);
+    }
+
+    AgentTaskProviderCostConsentDTO consumeWithinLockedRoot(Scope scope,String taskId,
+            AgentTaskProviderCostConsentEntity row,long expectedVersion,String executionId,String runId,String leaseId) {
+        if (row==null || !"RESERVED".equals(row.getState()) || !Objects.equals(expectedVersion,row.getVersion())
+                || !Objects.equals(executionId,row.getReservedExecutionId())
+                || !Objects.equals(runId,row.getReservedRunId())) throw failure(Reason.CONFLICT);
+        exact(leaseId,"leaseId",100);long now=System.currentTimeMillis();
+        row.setConsumedLeaseId(leaseId).setConsumedAt(now).setUpdateTime(now);
+        if (!consents.consume(row,expectedVersion)) throw failure(Reason.CONFLICT);
+        row.setState("CONSUMED").setVersion(expectedVersion+1);return view(row,now);
+    }
+
     private AgentTaskProviderCostConsentEntity locked(Scope scope,String taskId,String consentId) {
         AgentTaskProviderCostConsentEntity row=consents.findByConsentForUpdate(scope.tenantId(),
                 scope.clientId(),scope.ownerJiacn(),taskId,consentId);
@@ -296,7 +341,7 @@ public class AgentTaskProviderCostConsentServiceImpl
         return row;
     }
 
-    private AgentTaskProviderCostConsentDTO view(AgentTaskProviderCostConsentEntity row,long now) {
+    AgentTaskProviderCostConsentDTO view(AgentTaskProviderCostConsentEntity row,long now) {
         validatePersisted(row);
         String state = now >= row.getExpiresAt() && !"CONSUMED".equals(row.getState())
                 && !"REVOKED".equals(row.getState()) ? "EXPIRED" : row.getState();

@@ -225,3 +225,61 @@ tasks.register('mmdU1ProviderCredentialBinding', Test) {
     classpath = mmdU1ProviderCredentialBindingSourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+// MMD-BRIDGE-A same-session declaration, capability and Agent-before-Chat transaction slice.
+def mmdControlledImageBridgeSourceSet = sourceSets.create('mmdControlledImageBridge') {
+    java {
+        srcDir 'src/chatDeliberationTest/java'
+        include 'cn/jia/chat/handler/ControlledImageBountyExecutionDeclarationTest.java'
+        include 'cn/jia/chat/handler/AgentWebSocketControlledImageExecutionTest.java'
+        include 'cn/jia/chat/handler/NativeProviderCredentialBindingDeclarationTest.java'
+        include 'cn/jia/chat/handler/NativeBountyExecutionDeclarationTest.java'
+        include 'cn/jia/chat/handler/AgentRuntimeCapabilitiesTest.java'
+        include 'cn/jia/chat/service/ControlledImagePointAndStartCapabilityServiceTest.java'
+        include 'cn/jia/chat/api/AgentTaskControlledImageCapabilityControllerTest.java'
+        include 'cn/jia/chat/service/ChatBountyExecutionCoordinatorTest.java'
+        include 'cn/jia/chat/service/ChatBountyExecutionCoordinatorSpringTransactionTest.java'
+    }
+    resources.srcDir 'src/chatDeliberationTest/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(mmdControlledImageBridgeSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.implementation
+}
+configurations.named(mmdControlledImageBridgeSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.runtimeOnly
+}
+dependencies {
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName,
+            platform("org.springframework.boot:spring-boot-dependencies:${libs.versions.spring.boot.asProvider().get()}"))
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName, libs.junit.jupiter)
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName, 'org.mockito:mockito-core')
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName, 'org.springframework:spring-test')
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName, 'org.hamcrest:hamcrest')
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName,
+            libs.spring.boot.starter.websocket)
+    // Chat transaction fixture imports the production owner-scoped task-root DAO directly.
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName,
+            project(':agent:jia-agent-mapper'))
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName,
+            'org.springframework.security:spring-security-oauth2-resource-server')
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName,
+            'org.springframework.security:spring-security-oauth2-jose')
+    add(mmdControlledImageBridgeSourceSet.runtimeOnlyConfigurationName,
+            'org.junit.platform:junit-platform-launcher:6.0.1')
+    add(mmdControlledImageBridgeSourceSet.runtimeOnlyConfigurationName, 'com.h2database:h2')
+    add(mmdControlledImageBridgeSourceSet.runtimeOnlyConfigurationName, 'com.jayway.jsonpath:json-path')
+}
+tasks.register('mmdControlledImageBridge', Test) {
+    maxParallelForks = 1
+    maxHeapSize = '256m'
+    jvmArgs '-XX:+UseSerialGC', '-XX:ActiveProcessorCount=2',
+            '-XX:MaxMetaspaceSize=192m', '-Xss256k'
+    group = 'verification'
+    description = 'Runs controlled image declaration, capability, owner HTTP and cross-module transaction regressions.'
+    dependsOn tasks.named(mmdControlledImageBridgeSourceSet.classesTaskName)
+    testClassesDirs = mmdControlledImageBridgeSourceSet.output.classesDirs
+    classpath = mmdControlledImageBridgeSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}

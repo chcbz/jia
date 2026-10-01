@@ -24,6 +24,7 @@ import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 
 import java.nio.charset.StandardCharsets;
@@ -63,6 +64,12 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
     private final AgentIdentityService identities;
     private final AgentTaskMutationTransaction transactions;
     private final ObjectMapper json;
+    private ControlledImageGrantAuthority controlledAuthority;
+
+    @Autowired(required = false)
+    public void setControlledAuthority(ControlledImageGrantAuthority authority) {
+        this.controlledAuthority=authority;
+    }
 
     @Inject
     public AgentTaskExecutionGrantServiceImpl(AgentTaskExecutionGrantDao grants,
@@ -97,6 +104,25 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         } catch (AgentTaskCollaborationException failure) {
             throw translate(failure);
         }
+    }
+
+    AgentTaskExecutionGrantDTO assignControlledWithinLockedTask(Scope scope,String taskId,
+            String idempotencyKey,AgentTaskAssignDTO request,AgentTaskMetaEntity root) {
+        ValidAssign valid=validateAssign(scope,taskId,idempotencyKey,request);
+        if (!valid.initialOperationPresent()
+                || !List.of("GENERATE_IMAGE").equals(valid.operations())
+                || !"GENERATE_IMAGE".equals(valid.initialOperation())
+                || valid.inputs().size()>16
+                || valid.expectedTaskVersion()>MAX_SAFE_INTEGER
+                || valid.requirementRevision()>MAX_SAFE_INTEGER)
+            throw bad("Controlled image assignment is outside the frozen lane");
+        if (root==null || !Objects.equals(root.getTaskId(),taskId)
+                || !Objects.equals(root.getTaskVersion(),valid.expectedTaskVersion()))
+            throw conflict("Task changed before controlled assignment");
+        String canonicalAgent=legacyAssignments.resolveAgentId(scope.tenantId(),scope.clientId(),
+                scope.ownerJiacn(),valid.requestedAgentId());
+        return assignLocked(scope,valid,canonicalAgent,hashAssign(valid,canonicalAgent),
+                "ASSIGN_AND_START:"+valid.idempotencyKey(),root);
     }
 
     private AgentTaskExecutionGrantDTO assignLocked(Scope scope, ValidAssign valid,
@@ -483,15 +509,18 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         List<String> allowed=readOperations(grant.getPermittedOperationsJson());
         if (!allowed.contains(operation)) throw new AgentTaskExecutionGrantException(
                 Reason.FORBIDDEN_OPERATION,"Operation is outside the persisted grant/capability policy");
-        if (paid && (grant.getCostAuthorizationRef()==null || grant.getCostAuthorizationRef().isBlank())) {
-            throw new AgentTaskExecutionGrantException(Reason.PAID_EXECUTION_NOT_AUTHORIZED,
-                    "Paid execution has no persisted cost authorization");
+        ControlledImageGrantAuthority.Authority controlled=null;
+        if (paid) {
+            if (controlledAuthority==null) throw new AgentTaskExecutionGrantException(
+                    Reason.PAID_EXECUTION_NOT_AUTHORIZED,"Controlled image authority is unavailable");
+            controlled=controlledAuthority.verify(scope,root,grant,"NEW_EXECUTION",null,null,null);
         }
         var authorizedInputs=readInputs(grant.getInputScopeJson()).stream()
                 .map(input -> new AuthorizedInput(input.fileId(),input.version(),input.purpose(),
                         input.contentMimeType(),input.byteLength(),input.contentHash())).toList();
         return new Admission(grant.getGrantId(),grantVersion,assignmentRevision,targetAgentId,operation,
-                paid && grant.getCostAuthorizationRef()!=null,authorizedInputs);
+                paid,authorizedInputs,controlled==null?null:grant.getCostAuthorizationRef(),
+                controlled==null?null:controlled.consent().getVersion());
     }
 
     private void requireAssignmentEpoch(Scope scope,String taskId,long assignmentRevision,
@@ -514,6 +543,54 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         } catch (RuntimeException badEvent) {
             throw conflict("Current assignment epoch cannot be proven");
         }
+    }
+
+    void requireControlledBindingSnapshot(AgentTaskExecutionGrantEntity grant,
+            Long expectedRequirementRevision,String expectedInputSnapshotDigest) {
+        if (grant==null || expectedRequirementRevision==null
+                || !Objects.equals(grant.getRequirementRevision(),expectedRequirementRevision)
+                || expectedInputSnapshotDigest==null
+                || !expectedInputSnapshotDigest.matches("[0-9a-f]{64}"))
+            throw new AgentTaskExecutionGrantException(Reason.PAID_EXECUTION_NOT_AUTHORIZED,
+                    "Controlled consent snapshot is unavailable or stale");
+        String digest=sha256("TASK_LINKED_INPUT_SNAPSHOT_V1\n"+write(readInputs(grant.getInputScopeJson())));
+        if (!same(digest,expectedInputSnapshotDigest))
+            throw new AgentTaskExecutionGrantException(Reason.PAID_EXECUTION_NOT_AUTHORIZED,
+                    "Controlled consent input snapshot no longer matches the grant");
+    }
+
+    @Override
+    public Admission admitControlled(Scope scope,String taskId,String grantId,long expectedGrantVersion,
+            long expectedAssignmentRevision,String targetAgentId,String operation,String purpose,
+            String executionId,String runId,String runtimeInstanceId) {
+        validateScope(scope);exact(taskId,"taskId",100);exact(grantId,"grantId",100);
+        exact(targetAgentId,"targetAgentId",100);exact(operation,"operation",40);
+        if(controlledAuthority==null)throw new AgentTaskExecutionGrantException(
+                Reason.PAID_EXECUTION_NOT_AUTHORIZED,"Controlled image authority is unavailable");
+        if(expectedGrantVersion<1 || expectedGrantVersion>MAX_SAFE_INTEGER
+                || expectedAssignmentRevision<0 || expectedAssignmentRevision>MAX_SAFE_INTEGER)
+            throw bad("Expected controlled authority version is invalid");
+        try{return transactions.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),
+                scope.ownerJiacn(),taskId,root->{
+            AgentTaskExecutionGrantEntity observed=grants.findByGrant(scope.tenantId(),
+                    scope.clientId(),scope.ownerJiacn(),taskId,grantId);
+            if(observed==null)throw notFound();
+            lockTargetAndPersistedInputs(scope,taskId,targetAgentId,observed);
+            AgentTaskExecutionGrantEntity grant=controlledAuthority.lockGrant(scope,taskId,grantId);
+            if(!same(observed.getRequestHash(),grant.getRequestHash()))
+                throw conflict("Controlled grant changed during admission");
+            Admission base=verifyAdmission(scope,root,grant,expectedGrantVersion,
+                    expectedAssignmentRevision,targetAgentId,operation,false);
+            var verified=controlledAuthority.verify(scope,root,grant,purpose,executionId,runId,runtimeInstanceId);
+            String inputDigest=sha256("TASK_LINKED_INPUT_SNAPSHOT_V1\n"+write(readInputs(grant.getInputScopeJson())));
+            if(!same(inputDigest,verified.consent().getInputSnapshotDigest())
+                    || !Objects.equals(grant.getRequirementRevision(),verified.consent().getRequirementRevision()))
+                throw new AgentTaskExecutionGrantException(Reason.PAID_EXECUTION_NOT_AUTHORIZED,
+                        "Controlled consent tuple no longer matches the grant");
+            return new Admission(base.grantId(),base.grantVersion(),base.assignmentRevision(),
+                    base.targetAgentId(),base.operation(),true,base.inputs(),grant.getCostAuthorizationRef(),
+                    verified.consent().getVersion());
+        });}catch(AgentTaskCollaborationException failure){throw translate(failure);}
     }
 
     @Override
@@ -666,14 +743,16 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         }
         return view(entity);
     }
-    private AgentTaskExecutionGrantDTO view(AgentTaskExecutionGrantEntity entity) {
+    AgentTaskExecutionGrantDTO view(AgentTaskExecutionGrantEntity entity) {
         List<InputSnapshot> inputs=readInputs(entity.getInputScopeJson());
         return new AgentTaskExecutionGrantDTO().setGrantId(entity.getGrantId()).setTaskId(entity.getTaskId())
                 .setRequirementRevision(entity.getRequirementRevision()).setAssignmentRevision(entity.getAssignmentRevision())
                 .setTargetAgentId(entity.getTargetAgentId()).setPermittedOperations(readOperations(entity.getPermittedOperationsJson()))
                 .setInputs(inputs.stream().map(i -> new AgentTaskExecutionGrantDTO.InputSummary(i.fileId(),i.version(),i.purpose(),i.contentMimeType(),i.byteLength(),i.contentHash())).toList())
                 .setState(entity.getState()).setGrantVersion(entity.getGrantVersion())
-                .setPaidExecutionAuthorized(false).setCreatedAt(entity.getCreatedAt()).setRevokedAt(entity.getRevokedAt());
+                .setPaidExecutionAuthorized(controlledAuthority!=null
+                        && controlledAuthority.isPersistedAuthorized(entity))
+                .setCreatedAt(entity.getCreatedAt()).setRevokedAt(entity.getRevokedAt());
     }
     private String write(Object value) {
         try { return json.writeValueAsString(value); }

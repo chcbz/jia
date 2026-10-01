@@ -16,6 +16,8 @@ public interface AgentTaskExecutionGrantDao {
     void insert(AgentTaskExecutionGrantEntity grant);
     int supersedeActiveForTask(String tenantId, String clientId, String ownerJiacn,
             String taskId, long supersededAt);
+    boolean setCostAuthorizationRef(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String grantId, long expectedVersion, String locator);
     boolean revoke(String tenantId, String clientId, String ownerJiacn, String taskId,
             String grantId, long expectedVersion, String idempotencyKey,
             String requestHash, long revokedAt);

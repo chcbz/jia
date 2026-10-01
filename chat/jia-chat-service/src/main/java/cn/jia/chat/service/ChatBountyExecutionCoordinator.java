@@ -137,13 +137,20 @@ public class ChatBountyExecutionCoordinator {
         }
         if (!Objects.equals(inputDigest,step.inputSnapshotDigest()))
             throw new IllegalStateException("Bounty input digest changed");
-        // Grant admission locks task root before any Chat row lock or execution create. Nothing
-        // paid is created when the current owner has not authorized Provider cost.
+        var observedLink=steps.findLink(step.tenantId(),step.ownerJiacn(),step.clientId(),step.stepId());
+        if (observedLink==null || !Objects.equals(observedLink.stepId(),step.stepId()))
+            throw new IllegalStateException("Bounty execution link is missing");
+        if (observedLink.executionId()!=null) return "ALREADY_BOUND";
+        if (!"WAITING_ADMISSION".equals(observedLink.state())) return "NOT_PENDING";
+        // Root -> target/files -> grant -> consent is established before any Chat row lock.
         AgentTaskExecutionGrantService.Admission admitted;
         try {
-            admitted=grants.admit(scope,step.taskId(),step.grantId(),step.grantVersion(),
-                    step.assignmentRevision(),step.targetAgentId(),operation,true);
-            if (admitted==null || !admitted.paidExecutionAuthorized()) return waitFor(step,request,"WAITING_AUTHORIZATION");
+            admitted=grants.admitControlled(scope,step.taskId(),step.grantId(),step.grantVersion(),
+                    step.assignmentRevision(),step.targetAgentId(),operation,"NEW_EXECUTION",
+                    null,null,null);
+            if (admitted==null || !admitted.paidExecutionAuthorized()
+                    || admitted.costAuthorizationRef()==null)
+                return waitFor(step,request,"WAITING_AUTHORIZATION");
         } catch (AgentTaskExecutionGrantException denied) {
             if (denied.reason()==AgentTaskExecutionGrantException.Reason.PAID_EXECUTION_NOT_AUTHORIZED)
                 return waitFor(step,request,"WAITING_AUTHORIZATION");
@@ -152,6 +159,19 @@ public class ChatBountyExecutionCoordinator {
         List<PersonalWorkspaceExecutionService.ReferenceSelection> references =
                 authorizedReferences(metadata, admitted.inputs());
         if (references == null) return waitFor(step,request,"WAITING_INPUT_RESOLVER");
+        // Agent creation and RESERVED happen first in this REQUIRED transaction. A later Chat
+        // validation/write failure rolls them back; there is no callback into Agent after Chat locks.
+        var execution=executions.createConversation(new PersonalWorkspaceExecutionService.OwnerScope(
+                step.tenantId(),step.clientId(),step.ownerJiacn()),
+                new PersonalWorkspaceExecutionService.ConversationCreate(step.conversationId(),
+                step.taskId(),step.targetAgentId(),observedLink.executionIntentId(),step.grantId(),
+                step.grantVersion(),step.assignmentRevision(),operation,inputs.getFirst().content(),
+                "image/png",references,true));
+        if (execution==null || !"CONVERSATION".equals(execution.executionMode())
+                || !Objects.equals(execution.taskId(),step.taskId())
+                || !Objects.equals(execution.conversationId(),step.conversationId())
+                || !Objects.equals(execution.targetAgentId(),step.targetAgentId()))
+            throw new IllegalStateException("Controlled bounty execution identity is invalid");
         ChatConversationEntity discussion=conversations.lockScopedById(step.ownerJiacn(),
                 step.clientId(),step.conversationId());
         if (discussion == null || discussion.getDeletedAt()!=null
@@ -163,19 +183,14 @@ public class ChatBountyExecutionCoordinator {
         var link=steps.findLink(step.tenantId(),step.ownerJiacn(),step.clientId(),step.stepId());
         if (link==null || !Objects.equals(link.stepId(),step.stepId()))
             throw new IllegalStateException("Bounty execution link is missing");
-        if (link.executionId()!=null) return "ALREADY_BOUND";
-        if (!"WAITING_ADMISSION".equals(link.state())) return "NOT_PENDING";
-        var execution=executions.createConversation(new PersonalWorkspaceExecutionService.OwnerScope(
-                step.tenantId(),step.clientId(),step.ownerJiacn()),
-                new PersonalWorkspaceExecutionService.ConversationCreate(step.conversationId(),
-                step.taskId(),step.targetAgentId(),link.executionIntentId(),step.grantId(),
-                step.grantVersion(),step.assignmentRevision(),operation,inputs.getFirst().content(),
-                "image/png",references));
-        if (execution==null || !"CONVERSATION".equals(execution.executionMode())
-                || !Objects.equals(execution.taskId(),step.taskId())
-                || !Objects.equals(execution.conversationId(),step.conversationId())
-                || !Objects.equals(execution.targetAgentId(),step.targetAgentId())
-                || steps.bindExecution(link,execution.executionId(),System.currentTimeMillis())!=1
+        if (link.executionId()!=null) {
+            if (!Objects.equals(link.executionId(),execution.executionId()))
+                throw new IllegalStateException("Bounty execution link changed");
+            return "ALREADY_BOUND";
+        }
+        if (!"WAITING_ADMISSION".equals(link.state()))
+            throw new IllegalStateException("Bounty execution link changed");
+        if (steps.bindExecution(link,execution.executionId(),System.currentTimeMillis())!=1
                 || steps.updateStepState(step,"RUNNING",System.currentTimeMillis())!=1
                 || requests.updateRequestState(request,"RUNNING",System.currentTimeMillis())!=1)
             throw new IllegalStateException("Bounty execution link was not durably bound");
@@ -192,7 +207,7 @@ public class ChatBountyExecutionCoordinator {
     /** Null means an unsupported material format; inconsistent snapshots fail closed. */
     private static List<PersonalWorkspaceExecutionService.ReferenceSelection> authorizedReferences(
             JsonNode metadata, List<AgentTaskExecutionGrantService.AuthorizedInput> granted) {
-        if (granted == null || granted.size() > 32)
+        if (granted == null || granted.size() > 16)
             throw new IllegalStateException("Bounty grant input list is unavailable");
         JsonNode catalogue = metadata.get("referenceSummaries");
         if (catalogue == null && !metadata.has("sourceBusinessActionId")) {

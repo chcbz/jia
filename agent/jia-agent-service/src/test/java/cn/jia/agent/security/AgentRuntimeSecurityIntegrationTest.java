@@ -324,7 +324,7 @@ class AgentRuntimeSecurityIntegrationTest {
                 "01234567-89ab-cdef-0123-456789abcdef",System.currentTimeMillis()+60_000L);
         var command=new PersonalWorkspaceExecutionService.ConversationRuntimeCommand(1,"task-a","run-a",
                 "42","cmd-a","msg-a","render","image/png","output_1");
-        when(workspaceExecutions.runtimeConversationCommands(scope,16)).thenReturn(List.of(command));
+        when(workspaceExecutions.runtimeConversationCommandViews(scope,16)).thenReturn(List.of(command));
         when(workspaceExecutions.claimConversationStart(scope,"task-a","run-a","cmd-a","msg-a"))
                 .thenReturn(lease);
         when(workspaceExecutions.renewConversationLease(scope,"task-a","run-a",lease.fence()))
@@ -362,7 +362,7 @@ class AgentRuntimeSecurityIntegrationTest {
         conversationMvc.perform(headers(post(claim),A,"runtime-a",TOKEN_A)
                 .queryParam("token",lease.token()).contentType("application/json").content(body))
                 .andExpect(status().isBadRequest());
-        verify(workspaceExecutions).runtimeConversationCommands(scope,16);
+        verify(workspaceExecutions).runtimeConversationCommandViews(scope,16);
         verify(workspaceExecutions,times(1)).claimConversationStart(scope,"task-a","run-a","cmd-a","msg-a");
         verifyNoMoreInteractions(workspaceExecutions);
     }
@@ -444,6 +444,57 @@ class AgentRuntimeSecurityIntegrationTest {
                 .andExpect(status().isForbidden());
         conversationMvc.perform(headers(post(path+"/extra"),A,"runtime-a",TOKEN_A)
                 .contentType("application/json").content(body)).andExpect(status().isForbidden());
+        verifyNoMoreInteractions(workspaceExecutions);
+    }
+
+
+    @Test
+    void controlledProviderStartUsesOnlyTheV2SiblingAndExactRuntimeScope() throws Exception {
+        var scope=new PersonalWorkspaceExecutionService.RuntimeScope(TENANT,CLIENT_A,OWNER_A,A,"runtime-a");
+        var descriptor=new PersonalWorkspaceExecutionService.ProviderExecution("CONTROLLED_IMAGE_HTTP_V1",
+                "consent_1234567890abcdef1234567890abcdef","binding-a","1","model-a",16,1,1);
+        var fence=new PersonalWorkspaceExecutionService.ConversationFence(1,
+                "01234567-89ab-cdef-0123-456789abcdef");
+        var request=new PersonalWorkspaceExecutionService.ControlledProviderStart(2,"cmd-a","msg-a",
+                "exec-a",descriptor,fence);
+        var receipt=new PersonalWorkspaceExecutionService.ControlledProviderStartReceipt(2,true,"task-a",
+                "run-a","exec-a","cmd-a","msg-a",descriptor,1);
+        when(workspaceExecutions.beginControlledConversationProviderStart(scope,"task-a","run-a",request))
+                .thenReturn(receipt);
+        String path="/internal/agent/tasks/task-a/runs/run-a/conversation/provider-start-controlled-image";
+        String body="""
+                {"schemaVersion":2,"commandId":"cmd-a","messageId":"msg-a","executionId":"exec-a",
+                 "providerExecution":{"providerLane":"CONTROLLED_IMAGE_HTTP_V1",
+                 "consentId":"consent_1234567890abcdef1234567890abcdef","bindingId":"binding-a",
+                 "bindingEpoch":"1","modelId":"model-a","maxInputItems":16,
+                 "maxOutboundRequestAttempts":1,"precallFenceVersion":1},
+                 "fence":{"version":1,"token":"01234567-89ab-cdef-0123-456789abcdef"}}
+                """;
+        conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A)
+                .contentType("application/json").content(body))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.schemaVersion").value(2))
+                .andExpect(jsonPath("$.started").value(true))
+                .andExpect(jsonPath("$.leaseVersion").value(1))
+                .andExpect(jsonPath("$.token").doesNotExist());
+        for (String invalid:List.of(
+                body.replace("{\"schemaVersion\":2","{\"schemaVersion\":2,\"schemaVersion\":2"),
+                body.replace("\"providerExecution\":{","\"authority\":true,\"providerExecution\":{"),
+                body.replace("\"bindingEpoch\":\"1\"","\"bindingEpoch\":\"9007199254740992\""),
+                body.replace("\"consentId\":\"consent_1234567890abcdef1234567890abcdef\"",
+                        "\"consentId\":\"forged\""),
+                body.replace("\"bindingId\":\"binding-a\"","\"bindingId\":\" \""),
+                body.replace("\"precallFenceVersion\":1","\"precallFenceVersion\":1,\"token\":\"secret\""),
+                body.replace("\"version\":1","\"version\":9007199254740992"),
+                body+" {}")) {
+            conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A)
+                            .contentType("application/json").content(invalid))
+                    .andExpect(status().isBadRequest());
+        }
+        conversationMvc.perform(headers(post(path),A,"runtime-b",TOKEN_A)
+                .contentType("application/json").content(body)).andExpect(status().isUnauthorized());
+        conversationMvc.perform(headers(post(path+"/extra"),A,"runtime-a",TOKEN_A)
+                .contentType("application/json").content(body)).andExpect(status().isForbidden());
+        verify(workspaceExecutions).beginControlledConversationProviderStart(scope,"task-a","run-a",request);
         verifyNoMoreInteractions(workspaceExecutions);
     }
 
