@@ -268,6 +268,8 @@ dependencies {
             'org.springframework.security:spring-security-oauth2-jose')
     add(mmdControlledImageBridgeSourceSet.runtimeOnlyConfigurationName,
             'org.junit.platform:junit-platform-launcher:6.0.1')
+    add(mmdControlledImageBridgeSourceSet.runtimeOnlyConfigurationName,
+            project(':oauth:jia-oauth-api'))
     add(mmdControlledImageBridgeSourceSet.runtimeOnlyConfigurationName, 'com.h2database:h2')
     add(mmdControlledImageBridgeSourceSet.runtimeOnlyConfigurationName, 'com.jayway.jsonpath:json-path')
 }
