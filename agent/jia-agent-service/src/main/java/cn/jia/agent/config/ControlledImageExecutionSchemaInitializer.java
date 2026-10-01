@@ -8,7 +8,8 @@ import java.util.Locale;
 import java.util.Objects;
 /** Additive controlled authority identity on existing conversation executions. */
 public final class ControlledImageExecutionSchemaInitializer implements InitializingBean {
-    private static final String EXPECTED_CHECK="controlled_consent_id is null or (execution_mode='CONVERSATION' and controlled_consent_id regexp binary '^consent_[0-9a-f]{32}$' and permitted_operation='GENERATE_IMAGE' and output_content_mime_type='image/png')";
+    /** Exact MySQL 8.0.21 CHECK_CLAUSE rendering captured from the additive v1_17 DDL. */
+    private static final String EXPECTED_CHECK="((`controlled_consent_id` is null) or ((`execution_mode` = _utf8mb4\\'CONVERSATION\\') and regexp_like(`controlled_consent_id`,cast(_utf8mb4\\'^consent_[0-9a-f]{32}$\\' as char charset binary)) and (`permitted_operation` = _utf8mb4\\'GENERATE_IMAGE\\') and (`output_content_mime_type` = _utf8mb4\\'image/png\\')))";
     private final JdbcTemplate jdbc;
     public ControlledImageExecutionSchemaInitializer(JdbcTemplate jdbc){this.jdbc=Objects.requireNonNull(jdbc);}
     @Override public void afterPropertiesSet(){
@@ -29,7 +30,6 @@ public final class ControlledImageExecutionSchemaInitializer implements Initiali
                 ||row.get("sub_part")!=null)throw new IllegalStateException("Controlled execution unique index drift");}
         validateCheck(jdbc.queryForList("SELECT tc.enforced,cc.check_clause FROM information_schema.table_constraints tc JOIN information_schema.check_constraints cc ON cc.constraint_catalog=tc.constraint_catalog AND cc.constraint_schema=tc.constraint_schema AND cc.constraint_name=tc.constraint_name WHERE tc.constraint_schema=DATABASE() AND tc.table_name='agent_personal_workspace_execution' AND tc.constraint_name='chk_pwex_controlled_consent' AND tc.constraint_type='CHECK'"));
     }
-    static String checkExpression(){return EXPECTED_CHECK;}
     static void validateCheck(List<java.util.Map<String,Object>> rows){
         if(rows.size()!=1||!"YES".equalsIgnoreCase(Objects.toString(rows.getFirst().get("enforced"),""))
                 ||!canonicalCheck(EXPECTED_CHECK).equals(canonicalCheck(Objects.toString(

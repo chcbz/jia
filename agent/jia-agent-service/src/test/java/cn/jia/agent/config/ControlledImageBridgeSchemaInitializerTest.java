@@ -69,21 +69,41 @@ class ControlledImageBridgeSchemaInitializerTest {
                 ()->ControlledImageBridgeSchemaInitializer.validateChecks(appended));
     }
 
-    @Test void executionAlterAndExactCheckRejectWeakSameName() {
+    @Test void executionAlterAndExactMySqlCatalogRejectPredicateDriftAndUnenforcedCheck() {
         String ddl=ControlledImageExecutionSchemaInitializer.ddl();
         String normalized=ddl.replaceAll("\\s+"," ").trim().toLowerCase(Locale.ROOT);
         assertTrue(normalized.startsWith("alter table agent_personal_workspace_execution "));
-        assertTrue(normalized.contains("add unique key uk_pwex_controlled_consent"));
-        assertTrue(normalized.contains("add constraint chk_pwex_controlled_consent check"));
+        for(String required:List.of("add unique key uk_pwex_controlled_consent",
+                "add constraint chk_pwex_controlled_consent check",
+                "controlled_consent_id is null","execution_mode='conversation'",
+                "controlled_consent_id regexp binary '^consent_[0-9a-f]{32}$'",
+                "permitted_operation='generate_image'","output_content_mime_type='image/png'"))
+            assertTrue(normalized.contains(required),required);
         assertFalse(normalized.contains(";"));
-        Map<String,Object> exact=new LinkedHashMap<>();exact.put("enforced","YES");
-        exact.put("check_clause",ControlledImageExecutionSchemaInitializer.checkExpression());
-        assertDoesNotThrow(()->ControlledImageExecutionSchemaInitializer.validateCheck(List.of(exact)));
-        for(String weak:List.of("1",ControlledImageExecutionSchemaInitializer.checkExpression()+" OR 1=1")) {
-            Map<String,Object> row=new LinkedHashMap<>();row.put("enforced","YES");row.put("check_clause",weak);
+
+        String catalog=executionCatalogCheck();
+        assertDoesNotThrow(()->ControlledImageExecutionSchemaInitializer.validateCheck(
+                List.of(executionCheck("YES",catalog))));
+        for(String weak:List.of("1=1",catalog+" OR 1=1",
+                catalog.replace("_utf8mb4\\'GENERATE_IMAGE\\'",
+                        "_utf8mb4\\'EDIT_IMAGE\\'"))) {
             assertThrows(IllegalStateException.class,
-                    ()->ControlledImageExecutionSchemaInitializer.validateCheck(List.of(row)));
+                    ()->ControlledImageExecutionSchemaInitializer.validateCheck(
+                            List.of(executionCheck("YES",weak))));
         }
+        assertThrows(IllegalStateException.class,
+                ()->ControlledImageExecutionSchemaInitializer.validateCheck(
+                        List.of(executionCheck("NO",catalog))));
+    }
+
+    private static Map<String,Object> executionCheck(String enforced,String clause) {
+        Map<String,Object> row=new LinkedHashMap<>();row.put("enforced",enforced);
+        row.put("check_clause",clause);return row;
+    }
+
+    /** Literal catalog fixture captured from MySQL 8.0.21, independent of initializer constants. */
+    private static String executionCatalogCheck() {
+        return "((`controlled_consent_id` is null) or ((`execution_mode` = _utf8mb4\\'CONVERSATION\\') and regexp_like(`controlled_consent_id`,cast(_utf8mb4\\'^consent_[0-9a-f]{32}$\\' as char charset binary)) and (`permitted_operation` = _utf8mb4\\'GENERATE_IMAGE\\') and (`output_content_mime_type` = _utf8mb4\\'image/png\\')))";
     }
 
     private static List<Map<String,Object>> bridgeColumns() {
