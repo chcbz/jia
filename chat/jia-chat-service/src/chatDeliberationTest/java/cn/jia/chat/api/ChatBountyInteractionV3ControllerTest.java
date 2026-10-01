@@ -69,6 +69,20 @@ class ChatBountyInteractionV3ControllerTest {
                 generateBody(false)+" {}",false));
     }
 
+    @Test void allWireReadEntrypointsMapMalformedDuplicateAndTrailingJsonToInvalidRequest() {
+        assertInvalidJsonAcrossWireEntrypoints("{");
+        assertInvalidJsonAcrossWireEntrypoints("duplicate");
+        assertInvalidJsonAcrossWireEntrypoints("trailing");
+    }
+
+    @Test void allWireReadEntrypointsAcceptValidStrictJson() {
+        assertEquals(3,ChatBountyInteractionV3Wire.schemaVersion(generateBody(false)));
+        assertEquals("GENERATE_IMAGE",ChatBountyInteractionV3Wire.parseIntent(generateBody(false),false).operation());
+        assertEquals("interaction-key",ChatBountyInteractionV3Wire.parseIssue(issueBody()).interactionIdempotencyKey());
+        assertEquals("opgrant_1234567890abcdef1234567890abcdef",
+                ChatBountyInteractionV3Wire.parseRevoke(revokeBody()).operationGrantId());
+    }
+
     @Test void strictSchemaDispatchRejectsDuplicateOrTrailingMarkersBeforeLegacyFallback() {
         var admissions=mock(ChatBountyInteractionAdmissionService.class);
         var discussion=mock(ChatBountyDiscussionAdmissionService.class);
@@ -163,6 +177,46 @@ class ChatBountyInteractionV3ControllerTest {
         assertEquals(ChatDeliberationException.Reason.INVALID_REQUEST,queryFailure.reason());
         assertEquals(ChatDeliberationException.Reason.INVALID_REQUEST,bodyFailure.reason());
         verifyNoInteractions(previews,identities,tenants);
+    }
+
+    private static void assertInvalidJsonAcrossWireEntrypoints(String kind) {
+        String schema=invalidJson("{\"schemaVersion\":3}",kind);
+        String intent=invalidJson(generateBody(false),kind);
+        String issue=invalidJson(issueBody(),kind);
+        String revoke=invalidJson(revokeBody(),kind);
+        assertInvalidRequest(() -> ChatBountyInteractionV3Wire.schemaVersion(schema));
+        assertInvalidRequest(() -> ChatBountyInteractionV3Wire.parseIntent(intent,false));
+        assertInvalidRequest(() -> ChatBountyInteractionV3Wire.parseIssue(issue));
+        assertInvalidRequest(() -> ChatBountyInteractionV3Wire.parseRevoke(revoke));
+    }
+
+    private static String invalidJson(String valid,String kind) {
+        return switch(kind) {
+            case "{" -> "{";
+            case "duplicate" -> valid.replace("{", "{\"schemaVersion\":2,");
+            case "trailing" -> valid+" {}";
+            default -> throw new IllegalArgumentException(kind);
+        };
+    }
+
+    private static void assertInvalidRequest(org.junit.jupiter.api.function.Executable executable) {
+        var failure=assertThrows(IllegalArgumentException.class,executable);
+        assertEquals("BOUNTY_FOLLOWUP_V3_INVALID_REQUEST",failure.getMessage());
+    }
+
+    private static String issueBody() {
+        String hash="a".repeat(64);
+        return "{"+
+                "\"schemaVersion\":2,\"interactionIdempotencyKey\":\"interaction-key\",\"intent\":"+
+                generateBody(false)+",\"providerBinding\":{\"bindingId\":\"binding\",\"bindingEpoch\":\"1\"},"+
+                "\"expectedPreview\":{\"ownerPayloadSha256\":\""+hash+"\",\"instructionSha256\":\""+hash+
+                "\",\"sourceSnapshotSha256\":\""+hash+"\",\"modelId\":\"model\",\"custody\":\"custody\","+
+                "\"operatorPolicyRevision\":\"policy\"},\"acknowledgement\":\"ack\"}";
+    }
+
+    private static String revokeBody() {
+        return "{\"schemaVersion\":2,\"operationGrantId\":\"opgrant_1234567890abcdef1234567890abcdef\","+
+                "\"expectedConsentVersion\":\"1\",\"expectedOperationGrantVersion\":\"1\"}";
     }
 
     private static String generateBody(boolean authority) {
