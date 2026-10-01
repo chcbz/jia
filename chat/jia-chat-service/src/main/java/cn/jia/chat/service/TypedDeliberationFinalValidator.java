@@ -182,11 +182,10 @@ public final class TypedDeliberationFinalValidator {
         if (node == null || node.isNull()) return null;
         if (node.isObject()) {
             Map<String, Object> value = new LinkedHashMap<>();
-            var names = node.fieldNames();
-            while (names.hasNext()) {
-                String name = names.next();
+            for (Map.Entry<String, JsonNode> property : node.properties()) {
+                String name = property.getKey();
                 if (!validScalar(name)) fail(Reason.INVALID_JSON);
-                value.put(name, fromJson(node.get(name)));
+                value.put(name, fromJson(property.getValue()));
             }
             return value;
         }
