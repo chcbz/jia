@@ -12,8 +12,9 @@ import cn.jia.chat.dao.ChatConversationDao;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.deliberation.ChatBountyBindingStore;
 import cn.jia.chat.deliberation.ChatContextSnapshotEntity;
-import cn.jia.chat.deliberation.ChatDeliberationStates;
 import cn.jia.chat.deliberation.ChatDeliberationDao;
+import cn.jia.chat.deliberation.ChatDeliberationStates;
+import cn.jia.chat.deliberation.ChatInteractionStepStore;
 import cn.jia.chat.deliberation.ChatRequestEntity;
 import cn.jia.chat.deliberation.ChatTurnEntity;
 import cn.jia.chat.deliberation.ChatTypedDeliberationStore;
@@ -221,6 +222,8 @@ class ChatTypedInspectionSpringTransactionTest {
         });
 
         try (AnnotationConfigApplicationContext context = context(source)) {
+            context.registerBean(ChatInteractionStepStore.class,
+                    () -> mock(ChatInteractionStepStore.class));
             context.registerBean(ChatDeliberationService.class, () -> {
                 ChatDeliberationService service = new ChatDeliberationService(
                         dao, conversations, messages, agents);
