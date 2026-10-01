@@ -233,23 +233,26 @@ class AgentTaskProviderCostConsentServiceImplTest {
             AgentTaskProviderCostConsentEntity stored=followupForCas(row,version,"ISSUED");
             if(stored==null)return false;
             stored.setBoundGrantId(row.getBoundGrantId()).setBoundGrantVersion(row.getBoundGrantVersion())
-                    .setBoundAssignmentRevision(row.getBoundAssignmentRevision())
-                    .setUpdateTime(row.getUpdateTime()).setState("BOUND").setVersion(version+1);
+                    .setBoundAssignmentRevision(row.getBoundAssignmentRevision());
+            stored.setUpdateTime(row.getUpdateTime());
+            stored.setState("BOUND").setVersion(version+1);
             return true;
         }
         @Override public boolean reserveFollowup(AgentTaskProviderCostConsentEntity row,long version) {
             AgentTaskProviderCostConsentEntity stored=followupForCas(row,version,"BOUND");
             if(stored==null)return false;
             stored.setReservedExecutionId(row.getReservedExecutionId()).setReservedRunId(row.getReservedRunId())
-                    .setRuntimeInputSnapshotSha256(row.getRuntimeInputSnapshotSha256())
-                    .setUpdateTime(row.getUpdateTime()).setState("RESERVED").setVersion(version+1);
+                    .setRuntimeInputSnapshotSha256(row.getRuntimeInputSnapshotSha256());
+            stored.setUpdateTime(row.getUpdateTime());
+            stored.setState("RESERVED").setVersion(version+1);
             return true;
         }
         @Override public boolean consumeFollowup(AgentTaskProviderCostConsentEntity row,long version) {
             AgentTaskProviderCostConsentEntity stored=followupForCas(row,version,"RESERVED");
             if(stored==null)return false;
-            stored.setConsumedLeaseId(row.getConsumedLeaseId()).setConsumedAt(row.getConsumedAt())
-                    .setUpdateTime(row.getUpdateTime()).setState("CONSUMED").setVersion(version+1);
+            stored.setConsumedLeaseId(row.getConsumedLeaseId()).setConsumedAt(row.getConsumedAt());
+            stored.setUpdateTime(row.getUpdateTime());
+            stored.setState("CONSUMED").setVersion(version+1);
             return true;
         }
         @Override public boolean revokeFollowup(AgentTaskProviderCostConsentEntity row,long version) {
@@ -257,8 +260,9 @@ class AgentTaskProviderCostConsentServiceImplTest {
                     "ISSUED","BOUND","RESERVED");
             if(stored==null)return false;
             stored.setRevokeIdempotencyKey(row.getRevokeIdempotencyKey())
-                    .setRevokeRequestDigest(row.getRevokeRequestDigest()).setRevokedAt(row.getRevokedAt())
-                    .setUpdateTime(row.getUpdateTime()).setState("REVOKED").setVersion(version+1);
+                    .setRevokeRequestDigest(row.getRevokeRequestDigest()).setRevokedAt(row.getRevokedAt());
+            stored.setUpdateTime(row.getUpdateTime());
+            stored.setState("REVOKED").setVersion(version+1);
             return true;
         }
         private AgentTaskProviderCostConsentEntity followup(String tenant,String client,String owner,
