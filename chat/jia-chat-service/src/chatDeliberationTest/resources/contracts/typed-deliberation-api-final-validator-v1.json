@@ -1,0 +1,207 @@
+{
+  "schemaVersion": 1,
+  "feature": "juyiting-multimedia-deliberation",
+  "contract": "typed-deliberation-api-final-validator-v1",
+  "sourceBaseline": "97989512351b6a409ac629e4546ce9fe698670e0",
+  "golden": {
+    "binding": {
+      "tenantId": "0",
+      "ownerJiacn": "owner_1",
+      "clientId": "client_1",
+      "conversationId": "42",
+      "conversationGeneration": "7",
+      "requestId": "request_1",
+      "requestRevision": "1",
+      "turnId": "turn_1",
+      "dispatchId": "dispatch_1",
+      "snapshotId": "snapshot_1",
+      "contextDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "targetAgentId": "agent_1",
+      "route": "CHAT",
+      "taskId": "task_1"
+    },
+    "dispatchFacts": {
+      "schemaVersion": 1,
+      "referenceMode": "AVAILABLE",
+      "supportedOperations": [
+        "GENERATE_IMAGE",
+        "EDIT_IMAGE"
+      ],
+      "availableSources": [
+        {
+          "sourceRefId": "source_1",
+          "kind": "CURRENT_CONVERSATION_ASSET",
+          "mediaType": "image"
+        }
+      ]
+    },
+    "content": "请说明鸟的羽毛颜色。",
+    "interactionOutcome": {
+      "schemaVersion": 1,
+      "kind": "CLARIFY",
+      "text": "请说明鸟的羽毛颜色。",
+      "clarification": {
+        "question": "你希望鸟的羽毛是什么颜色？",
+        "requiredFacts": [
+          "REQUIREMENT_DETAILS"
+        ]
+      },
+      "proposal": null
+    },
+    "canonicalDigestInput": "{\"binding\":{\"clientId\":\"client_1\",\"contextDigest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"conversationGeneration\":\"7\",\"conversationId\":\"42\",\"dispatchId\":\"dispatch_1\",\"ownerJiacn\":\"owner_1\",\"requestId\":\"request_1\",\"requestRevision\":\"1\",\"route\":\"CHAT\",\"snapshotId\":\"snapshot_1\",\"targetAgentId\":\"agent_1\",\"taskId\":\"task_1\",\"tenantId\":\"0\",\"turnId\":\"turn_1\"},\"content\":\"请说明鸟的羽毛颜色。\",\"digestSchemaVersion\":1,\"domain\":\"juyiting.typed-final\",\"interactionOutcome\":{\"clarification\":{\"question\":\"你希望鸟的羽毛是什么颜色？\",\"requiredFacts\":[\"REQUIREMENT_DETAILS\"]},\"kind\":\"CLARIFY\",\"proposal\":null,\"schemaVersion\":1,\"text\":\"请说明鸟的羽毛颜色。\"},\"outcomeContractVersion\":1}",
+    "finalDigest": "sha256:d106fe97735702d5dd795d4ff045d3e75d797555c34018c026d90818991f39bd"
+  },
+  "runtimeExpectations": [
+    {
+      "id": "TV01",
+      "case": "ANSWER_exact_content_and_null_union",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "TV02",
+      "case": "CLARIFY_nonempty_unique_facts",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "TV03",
+      "case": "GENERATE_IMAGE_no_source",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "TV04",
+      "case": "EDIT_IMAGE_exact_current_source",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "TV05",
+      "case": "raw_key_order_does_not_change_digest",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "TV06",
+      "case": "schema_number_1_1point0_1e0_normalizes_to_integer1",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "TV07",
+      "case": "same_text_changed_kind_changes_digest",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "TV08",
+      "case": "same_text_changed_question_changes_digest",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "TV09",
+      "case": "same_text_changed_source_changes_digest",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "TV10",
+      "case": "changed_dispatch_or_context_changes_digest",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "TV11",
+      "case": "missing_trusted_facts_rejects",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "TV12",
+      "case": "numeric_or_missing_binding_rejects",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "TV13",
+      "case": "unknown_union_key_rejects",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "TV14",
+      "case": "duplicate_JSON_key_rejects",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "TV15",
+      "case": "trailing_JSON_or_Markdown_rejects",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "TV16",
+      "case": "lone_high_and_low_surrogate_rejects",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "TV17",
+      "case": "nested_text_does_not_replace_top_text",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "TV18",
+      "case": "content_text_mismatch_rejects",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "TV19",
+      "case": "blank_text_question_rejects",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "TV20",
+      "case": "duplicate_or_unknown_requiredFacts_rejects",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "TV21",
+      "case": "unsupported_operation_rejects",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "TV22",
+      "case": "unlisted_or_nonimage_source_rejects",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "TV23",
+      "case": "EDIT_zero_multi_or_task_source_rejects",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "TV24",
+      "case": "instruction_4000_unicode_scalars_accepts_4001_rejects",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "TV25",
+      "case": "instruction_ISOControl_rejects_LF_NEL",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "TV26",
+      "case": "valid_supplementary_source_ID_scalar_accepts",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "TV27",
+      "case": "NONE_with_sources_rejects",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "TV28",
+      "case": "reference_catalog_original16_bound_preserved",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "TV29",
+      "case": "proposal_cannot_contain_grant_consent_parent_producer",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "TV30",
+      "case": "deep_immutable_copy_does_not_mutate_input",
+      "status": "NOT_RUN"
+    }
+  ],
+  "scope": "offline golden values only; not Java/Client/callback/persistence proof"
+}
