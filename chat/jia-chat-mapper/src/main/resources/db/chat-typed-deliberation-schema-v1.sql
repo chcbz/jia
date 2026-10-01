@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS chat_typed_pending_question (
       AND reply_idempotency_key IS NULL AND reply_body_digest IS NULL)
      OR (state='ANSWERED' AND state_version=1 AND reply_request_id IS NOT NULL
       AND reply_idempotency_key IS NOT NULL
-      AND reply_body_digest REGEXP BINARY '^sha256:[0-9a-f]{64}$'))),
+      AND reply_body_digest REGEXP BINARY '^sha256:[0-9a-f]{64}$')),
   CONSTRAINT chk_chat_typed_pending_required CHECK (JSON_VALID(required_facts_json))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 

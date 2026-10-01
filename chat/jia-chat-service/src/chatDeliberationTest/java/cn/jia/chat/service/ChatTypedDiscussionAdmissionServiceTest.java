@@ -65,6 +65,7 @@ class ChatTypedDiscussionAdmissionServiceTest {
                         &&metadata.get("parentOutcomeId")==null
                         &&metadata.get("pendingQuestionId")==null));
         verify(deliberation,never()).getRequest(anyString(),anyString(),anyString(),anyString());
+        verify(contexts).resolve(new ChatTypedDeliberationContextService.Scope("0","owner","client","42",1),"task","agent",List.of());
         verifyNoMoreInteractions(contexts);verify(deliberation,never()).persistTypedQuestionAnswered(any(),anyString(),anyLong(),anyString(),anyString(),anyLong());
     }
 

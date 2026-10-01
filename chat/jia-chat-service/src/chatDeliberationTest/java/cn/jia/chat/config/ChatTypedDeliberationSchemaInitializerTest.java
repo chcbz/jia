@@ -32,6 +32,13 @@ class ChatTypedDeliberationSchemaInitializerTest {
         assertEquals(4,count(all,"on update restrict on delete restrict"));
         assertTrue(all.contains("idx_chat_typed_outcome_turn_fk"));
         assertTrue(all.contains("idx_chat_typed_admission_request_fk"));
+        String pendingPredicate="((state='OPEN' AND state_version=0 AND reply_request_id IS NULL\n"
+                +"      AND reply_idempotency_key IS NULL AND reply_body_digest IS NULL)\n"
+                +"     OR (state='ANSWERED' AND state_version=1 AND reply_request_id IS NOT NULL\n"
+                +"      AND reply_idempotency_key IS NOT NULL\n"
+                +"      AND reply_body_digest REGEXP BINARY '^sha256:[0-9a-f]{64}$')),";
+        assertTrue(ddl.get(1).contains(pendingPredicate));
+        assertFalse(ddl.get(1).contains("reply_body_digest REGEXP BINARY '^sha256:[0-9a-f]{64}$'))),"));
     }
 
     @Test void parserAcceptsOnlyTheApprovedForeignKeyActionAndFourTableCatalog() {
