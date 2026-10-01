@@ -285,3 +285,59 @@ tasks.register('mmdControlledImageBridge', Test) {
     classpath = mmdControlledImageBridgeSourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+// MMD-U2 schema-3 owner preview/issue/admit and runtime declaration slice.
+def mmdControlledImageFollowupV3SourceSet = sourceSets.create('mmdControlledImageFollowupV3') {
+    java {
+        srcDir 'src/chatDeliberationTest/java'
+        include 'cn/jia/chat/api/ChatBountyInteractionV3ControllerTest.java'
+        include 'cn/jia/chat/service/ChatBountyInteractionV3PreviewServiceTest.java'
+        include 'cn/jia/chat/service/ChatBountyInteractionV3AuthorityServiceTest.java'
+        include 'cn/jia/chat/service/ChatBountyInteractionV3AdmissionServiceTest.java'
+        include 'cn/jia/chat/service/ChatConversationAssetSourceResolverTest.java'
+        include 'cn/jia/chat/service/ChatBountyExecutionCoordinatorV3Test.java'
+        include 'cn/jia/chat/service/ChatBountyExecutionCoordinatorV3SpringTransactionTest.java'
+        include 'cn/jia/chat/handler/AgentWebSocketControlledImageV3ExecutionTest.java'
+        include 'cn/jia/chat/handler/ControlledImageBountyExecutionV3DeclarationTest.java'
+    }
+    resources.srcDir 'src/chatDeliberationTest/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName) {
+    extendsFrom configurations.implementation
+}
+configurations.named(mmdControlledImageFollowupV3SourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.runtimeOnly
+}
+dependencies {
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName,
+            platform("org.springframework.boot:spring-boot-dependencies:${libs.versions.spring.boot.asProvider().get()}"))
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName, libs.junit.jupiter)
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName, 'org.mockito:mockito-core')
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName, 'org.springframework:spring-test')
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName, 'org.hamcrest:hamcrest')
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName, libs.spring.boot.starter.websocket)
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName, project(':agent:jia-agent-mapper'))
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName,
+            'org.springframework.security:spring-security-oauth2-resource-server')
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName,
+            'org.springframework.security:spring-security-oauth2-jose')
+    add(mmdControlledImageFollowupV3SourceSet.runtimeOnlyConfigurationName,
+            'org.junit.platform:junit-platform-launcher:6.0.1')
+    add(mmdControlledImageFollowupV3SourceSet.runtimeOnlyConfigurationName, project(':oauth:jia-oauth-api'))
+    add(mmdControlledImageFollowupV3SourceSet.runtimeOnlyConfigurationName, 'com.h2database:h2')
+    add(mmdControlledImageFollowupV3SourceSet.runtimeOnlyConfigurationName, 'com.jayway.jsonpath:json-path')
+}
+tasks.register('mmdControlledImageFollowupV3', Test) {
+    maxParallelForks = 1
+    maxHeapSize = '256m'
+    jvmArgs '-XX:+UseSerialGC', '-XX:ActiveProcessorCount=2',
+            '-XX:MaxMetaspaceSize=192m', '-Xss256k'
+    group = 'verification'
+    description = 'Runs schema-3 owner context, preview, issue, admit, asset lineage and live-session declaration regressions.'
+    dependsOn tasks.named(mmdControlledImageFollowupV3SourceSet.classesTaskName)
+    testClassesDirs = mmdControlledImageFollowupV3SourceSet.output.classesDirs
+    classpath = mmdControlledImageFollowupV3SourceSet.runtimeClasspath
+    useJUnitPlatform()
+}

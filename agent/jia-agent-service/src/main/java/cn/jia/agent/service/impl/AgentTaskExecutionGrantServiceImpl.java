@@ -354,6 +354,107 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
     }
 
     @Override
+    public FollowupContext currentFollowupContext(Scope scope,String taskId,String targetAgentId) {
+        validateScope(scope);exact(taskId,"taskId",100);exact(targetAgentId,"targetAgentId",100);
+        try{return transactions.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),
+                scope.ownerJiacn(),taskId,root->{
+            if(root==null||root.getTaskVersion()==null||root.getTaskVersion()<0
+                    ||!("assigned".equals(root.getRewardStatus()) || "running".equals(root.getRewardStatus()))
+                    ||!same(targetAgentId,root.getAssignedAgentId()))throw conflict("Task is not current for follow-up");
+            AgentTaskExecutionGrantEntity active=grants.findActiveByTask(scope.tenantId(),scope.clientId(),
+                    scope.ownerJiacn(),taskId);
+            if(active==null||!"ACTIVE".equals(active.getState())||active.getGrantVersion()==null
+                    ||active.getGrantVersion()<1||active.getAssignmentRevision()==null
+                    ||active.getAssignmentRevision()<0||active.getRequirementRevision()==null
+                    ||active.getRequirementRevision()<1||!same(targetAgentId,active.getTargetAgentId()))throw notFound();
+            AgentTaskExecutionGrantEntity locked=grants.findByGrantForUpdate(scope.tenantId(),scope.clientId(),
+                    scope.ownerJiacn(),taskId,active.getGrantId());
+            if(locked==null||!same(active.getRequestHash(),locked.getRequestHash())
+                    ||!Objects.equals(active.getGrantVersion(),locked.getGrantVersion())
+                    ||!Objects.equals(active.getAssignmentRevision(),locked.getAssignmentRevision())
+                    ||!Objects.equals(active.getRequirementRevision(),locked.getRequirementRevision()))
+                throw conflict("Baseline grant changed");
+            requireAssignmentEpoch(scope,taskId,locked.getAssignmentRevision(),root);
+            if(!List.of(targetAgentId).equals(identities.lockActiveCanonicalAgentIdsInScope(
+                    scope.tenantId(),scope.clientId(),scope.ownerJiacn(),List.of(targetAgentId))))throw notFound();
+            var requirement=requirementSnapshots.requireCurrent(scope,taskId,locked.getRequirementRevision());
+            if(requirement==null||requirement.revision()!=locked.getRequirementRevision())
+                throw conflict("Current requirement changed");
+            return new FollowupContext(taskId,targetAgentId,root.getTaskVersion(),
+                    locked.getAssignmentRevision(),locked.getGrantVersion(),locked.getRequirementRevision());
+        });}catch(AgentTaskCollaborationException failure){throw translate(failure);}
+    }
+
+    @Override
+    public Admission resolveFollowupBaseline(Scope scope,String taskId,long expectedGrantVersion,
+            long expectedTaskVersion,long expectedAssignmentRevision,long expectedRequirementRevision,
+            String targetAgentId) {
+        validateScope(scope);exact(taskId,"taskId",100);exact(targetAgentId,"targetAgentId",100);
+        AgentTaskExecutionGrantEntity active=grants.findActiveByTask(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId);
+        if(active==null)throw notFound();
+        return admitFollowupBaseline(scope,taskId,active.getGrantId(),expectedGrantVersion,expectedTaskVersion,
+                expectedAssignmentRevision,expectedRequirementRevision,targetAgentId);
+    }
+
+    @Override
+    public Admission admitFollowupBaseline(Scope scope,String taskId,String grantId,
+            long expectedGrantVersion,long expectedTaskVersion,long expectedAssignmentRevision,
+            long expectedRequirementRevision,String targetAgentId) {
+        validateScope(scope); exact(taskId,"taskId",100); exact(grantId,"grantId",100);
+        exact(targetAgentId,"targetAgentId",100);
+        if(expectedGrantVersion<1 || expectedGrantVersion>MAX_SAFE_INTEGER
+                || expectedTaskVersion<0 || expectedTaskVersion>MAX_SAFE_INTEGER
+                || expectedAssignmentRevision<0 || expectedAssignmentRevision>MAX_SAFE_INTEGER
+                || expectedRequirementRevision<1 || expectedRequirementRevision>MAX_SAFE_INTEGER)
+            throw bad("Expected follow-up baseline version is invalid");
+        try {
+            return transactions.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),
+                    scope.ownerJiacn(),taskId,root->{
+                AgentTaskExecutionGrantEntity observed=grants.findByGrant(scope.tenantId(),scope.clientId(),
+                        scope.ownerJiacn(),taskId,grantId);
+                if(observed==null) throw notFound();
+                lockTargetAndPersistedInputs(scope,taskId,targetAgentId,observed);
+                AgentTaskExecutionGrantEntity locked=grants.findByGrantForUpdate(scope.tenantId(),scope.clientId(),
+                        scope.ownerJiacn(),taskId,grantId);
+                if(locked==null || !same(observed.getRequestHash(),locked.getRequestHash())
+                        || root.getTaskVersion()==null || root.getTaskVersion()!=expectedTaskVersion
+                        || !Objects.equals(locked.getRequirementRevision(),expectedRequirementRevision))
+                    throw conflict("Follow-up baseline changed");
+                Admission ordinary=verifyBaselineCurrent(scope,root,locked,expectedGrantVersion,
+                        expectedAssignmentRevision,targetAgentId);
+                var current=requirementSnapshots.requireCurrent(scope,taskId,expectedRequirementRevision);
+                if(current==null || current.sha256()==null || !current.sha256().matches("[0-9a-f]{64}"))
+                    throw invalidState("Current requirement is unavailable");
+                return new Admission(ordinary.grantId(),ordinary.grantVersion(),ordinary.assignmentRevision(),
+                        ordinary.targetAgentId(),null,false,ordinary.inputs(),null,null,expectedTaskVersion,
+                        expectedRequirementRevision,current.sha256(),locked.getIdempotencyKey(),locked.getRequestHash());
+            });
+        } catch(AgentTaskCollaborationException failure) { throw translate(failure); }
+    }
+
+    private Admission verifyBaselineCurrent(Scope scope,AgentTaskMetaEntity root,
+            AgentTaskExecutionGrantEntity grant,long grantVersion,long assignmentRevision,String targetAgentId) {
+        if(!"ACTIVE".equals(grant.getState()) || !Objects.equals(grantVersion,grant.getGrantVersion())
+                || !Objects.equals(assignmentRevision,grant.getAssignmentRevision())
+                || root.getTaskVersion()==null || root.getTaskVersion()<assignmentRevision
+                || !same(targetAgentId,grant.getTargetAgentId()) || !same(targetAgentId,root.getAssignedAgentId()))
+            throw conflict("Grant, assignment, or target is stale");
+        requireAssignmentEpoch(scope,grant.getTaskId(),assignmentRevision,root);
+        AgentTaskExecutionGrantEntity active=grants.findActiveByTask(scope.tenantId(),scope.clientId(),
+                scope.ownerJiacn(),grant.getTaskId());
+        if(active==null || !same(active.getGrantId(),grant.getGrantId())
+                || !Objects.equals(active.getGrantVersion(),grantVersion))
+            throw conflict("Grant is not current");
+        var current=requirementSnapshots.requireCurrent(scope,grant.getTaskId(),grant.getRequirementRevision());
+        if(current==null || current.revision()!=grant.getRequirementRevision())
+            throw invalidState("Current requirement is stale");
+        var inputs=readInputs(grant.getInputScopeJson()).stream().map(input->new AuthorizedInput(
+                input.fileId(),input.version(),input.purpose(),input.contentMimeType(),input.byteLength(),
+                input.contentHash())).toList();
+        return new Admission(grant.getGrantId(),grantVersion,assignmentRevision,targetAgentId,null,false,inputs);
+    }
+
+    @Override
     public Admission admitSelectedOutputPromotion(Scope scope, String taskId, String grantId,
             long expectedGrantVersion, long expectedAssignmentRevision, String targetAgentId) {
         validateScope(scope); exact(taskId,"taskId",100); exact(grantId,"grantId",100);

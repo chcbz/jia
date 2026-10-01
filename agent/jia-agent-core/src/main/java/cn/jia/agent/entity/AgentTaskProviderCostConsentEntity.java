@@ -19,6 +19,16 @@ public class AgentTaskProviderCostConsentEntity extends BaseEntity {
     @Serial private static final long serialVersionUID = 1L;
     @TableId(value = "id", type = IdType.AUTO) private Long id;
     private String consentId;
+    private String consentPurpose;
+    private String operationGrantId;
+    private String executionIntentId;
+    private String conversationId;
+    private Long conversationGeneration;
+    private String operation;
+    private String instructionSha256;
+    private String sourceSnapshotSha256;
+    private String ownerPayloadSha256;
+    private String runtimeInputSnapshotSha256;
     private String ownerJiacn;
     private String taskId;
     private String targetAgentId;

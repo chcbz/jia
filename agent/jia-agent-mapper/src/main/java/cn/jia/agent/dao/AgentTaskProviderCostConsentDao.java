@@ -16,4 +16,12 @@ public interface AgentTaskProviderCostConsentDao {
     boolean reserve(AgentTaskProviderCostConsentEntity consent, long expectedVersion);
     boolean consume(AgentTaskProviderCostConsentEntity consent, long expectedVersion);
     boolean revoke(AgentTaskProviderCostConsentEntity consent, long expectedVersion);
+    AgentTaskProviderCostConsentEntity findFollowupByConsent(String tenantId, String clientId,
+            String ownerJiacn, String taskId, String consentId);
+    AgentTaskProviderCostConsentEntity findFollowupByConsentForUpdate(String tenantId, String clientId,
+            String ownerJiacn, String taskId, String consentId);
+    boolean bindFollowup(AgentTaskProviderCostConsentEntity consent,long expectedVersion);
+    boolean reserveFollowup(AgentTaskProviderCostConsentEntity consent,long expectedVersion);
+    boolean consumeFollowup(AgentTaskProviderCostConsentEntity consent,long expectedVersion);
+    boolean revokeFollowup(AgentTaskProviderCostConsentEntity consent,long expectedVersion);
 }

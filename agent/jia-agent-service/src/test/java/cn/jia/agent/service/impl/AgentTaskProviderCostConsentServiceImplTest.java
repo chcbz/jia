@@ -132,6 +132,26 @@ class AgentTaskProviderCostConsentServiceImplTest {
                 anyLong(),anyString(),anyString(),anyString());
     }
 
+    @Test void legacyReadsAndRevokeRejectFollowupPurposeWithoutMutation() {
+        var issued=service.issue(scope(),"task-1","followup-purpose-key",request("binding-a")).receipt();
+        AgentTaskProviderCostConsentEntity row=rows.byConsent.get(issued.consentId());
+        row.setConsentPurpose("FOLLOWUP_EXECUTE").setOperationGrantId("opgrant-a");
+
+        var byId=assertThrows(AgentTaskProviderCostConsentService.Failure.class,
+                ()->service.get(scope(),"task-1",issued.consentId()));
+        assertEquals(AgentTaskProviderCostConsentService.Reason.NOT_FOUND,byId.reason());
+        var byKey=assertThrows(AgentTaskProviderCostConsentService.Failure.class,
+                ()->service.getByIdempotencyKey(scope(),"task-1","followup-purpose-key"));
+        assertEquals(AgentTaskProviderCostConsentService.Reason.NOT_FOUND,byKey.reason());
+        var revoke=assertThrows(AgentTaskProviderCostConsentService.Failure.class,
+                ()->service.revoke(scope(),"task-1",issued.consentId(),"legacy-revoke",1));
+        assertEquals(AgentTaskProviderCostConsentService.Reason.NOT_FOUND,revoke.reason());
+        assertEquals(0,rows.revokes,"legacy revoke must not mutate follow-up authority");
+        assertEquals("ISSUED",row.getState());
+        assertEquals(1L,row.getVersion());
+        assertNull(row.getRevokeIdempotencyKey());
+    }
+
     @Test void revokeIsIndependentIdempotentAndExpiryIsReadOnlyProjection() {
         var issued=service.issue(scope(),"task-1","revoke-key",request("binding-a")).receipt();
         AgentTaskProviderCostConsentEntity row=rows.byConsent.get(issued.consentId());
@@ -189,7 +209,8 @@ class AgentTaskProviderCostConsentServiceImplTest {
     }
     private static final class MemoryDao implements AgentTaskProviderCostConsentDao {
         final Map<String,AgentTaskProviderCostConsentEntity> byConsent=new LinkedHashMap<>();
-        final Map<String,AgentTaskProviderCostConsentEntity> byKey=new LinkedHashMap<>();int inserts;int lockReads;
+        final Map<String,AgentTaskProviderCostConsentEntity> byKey=new LinkedHashMap<>();
+        int inserts;int lockReads;int revokes;
         private String key(String task,String id){return task+"\0"+id;}
         @Override public AgentTaskProviderCostConsentEntity findByIdempotencyKey(String t,String c,String o,String task,String id){return byKey.get(key(task,id));}
         @Override public AgentTaskProviderCostConsentEntity findByIdempotencyKeyForUpdate(String t,String c,String o,String task,String id){lockReads++;return byKey.get(key(task,id));}
@@ -199,7 +220,7 @@ class AgentTaskProviderCostConsentServiceImplTest {
         @Override public boolean bind(AgentTaskProviderCostConsentEntity row,long version){return true;}
         @Override public boolean reserve(AgentTaskProviderCostConsentEntity row,long version){return true;}
         @Override public boolean consume(AgentTaskProviderCostConsentEntity row,long version){return true;}
-        @Override public boolean revoke(AgentTaskProviderCostConsentEntity row,long version){return true;}
+        @Override public boolean revoke(AgentTaskProviderCostConsentEntity row,long version){revokes++;return true;}
     }
 
 

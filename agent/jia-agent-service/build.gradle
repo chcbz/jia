@@ -704,3 +704,58 @@ tasks.register('mmdControlledImageBridge', Test) {
     classpath = mmdControlledImageBridgeSourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+// MMD-U2 schema-3 per-intent controlled-image follow-up source slice.
+def mmdControlledImageFollowupV3SourceSet = sourceSets.create('mmdControlledImageFollowupV3') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/service/impl/ControlledImageIntentOperationGrantServiceTest.java'
+        include 'cn/jia/agent/service/impl/ControlledImageIntentOperationGrantSpringTransactionTest.java'
+        include 'cn/jia/agent/service/impl/ControlledImageIntentOperationGrantMySqlTest.java'
+        include 'cn/jia/agent/service/impl/PersonalWorkspaceControlledImageV3ExecutionTest.java'
+        include 'cn/jia/agent/service/impl/PersonalWorkspaceControlledImageV3StartTest.java'
+        include 'cn/jia/agent/config/ControlledImageFollowupV3SchemaInitializerTest.java'
+        include 'cn/jia/agent/config/AgentTaskProviderCostConsentSchemaInitializerTest.java'
+        include 'cn/jia/agent/security/AgentRuntimeControlledImageV3SecurityIntegrationTest.java'
+        include 'cn/jia/agent/service/impl/AgentTaskProviderCostConsentServiceImplTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName) {
+    extendsFrom configurations.implementation
+}
+configurations.named(mmdControlledImageFollowupV3SourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.runtimeOnly
+}
+dependencies {
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName,
+            platform("org.springframework.boot:spring-boot-dependencies:${libs.versions.spring.boot.asProvider().get()}"))
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName, libs.junit.jupiter)
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName, 'org.mockito:mockito-core')
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName, 'org.springframework:spring-test')
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName, 'org.hamcrest:hamcrest')
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName,
+            'org.springframework.security:spring-security-oauth2-resource-server')
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName,
+            'org.springframework.security:spring-security-oauth2-jose')
+    add(mmdControlledImageFollowupV3SourceSet.runtimeOnlyConfigurationName,
+            'org.junit.platform:junit-platform-launcher:6.0.1')
+    add(mmdControlledImageFollowupV3SourceSet.runtimeOnlyConfigurationName, libs.mysql)
+    add(mmdControlledImageFollowupV3SourceSet.runtimeOnlyConfigurationName, 'com.h2database:h2')
+    add(mmdControlledImageFollowupV3SourceSet.runtimeOnlyConfigurationName, 'com.jayway.jsonpath:json-path')
+    add(mmdControlledImageFollowupV3SourceSet.runtimeOnlyConfigurationName, 'org.skyscreamer:jsonassert')
+}
+tasks.register('mmdControlledImageFollowupV3', Test) {
+    maxParallelForks = 1
+    maxHeapSize = '256m'
+    jvmArgs '-XX:+UseSerialGC', '-XX:ActiveProcessorCount=2',
+            '-XX:MaxMetaspaceSize=192m', '-Xss256k'
+    group = 'verification'
+    description = 'Runs schema-3 per-intent grant, source, runtime START, security and exact MySQL catalog regressions.'
+    dependsOn tasks.named(mmdControlledImageFollowupV3SourceSet.classesTaskName)
+    testClassesDirs = mmdControlledImageFollowupV3SourceSet.output.classesDirs
+    classpath = mmdControlledImageFollowupV3SourceSet.runtimeClasspath
+    useJUnitPlatform()
+}

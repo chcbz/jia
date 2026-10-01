@@ -23,6 +23,18 @@ public interface ChatConversationArchiveStore {
     Operation findByOperationId(Scope scope, String conversationId, String operationId);
 
     Source findAuthorizedSource(Scope scope, String conversationId, String assetId, long assetRevision);
+    default Source findAuthorizedSourceForUpdate(Scope scope, String conversationId, String assetId,
+            long assetRevision) {
+        return findAuthorizedSource(scope, conversationId, assetId, assetRevision);
+    }
+    /** Follow-up execution requires the current conversation's exact singleton target. Legacy archive
+     * readers do not gain this authority; implementations must opt in explicitly. */
+    default Source findAuthorizedSource(Scope scope,String conversationId,String assetId,
+            long assetRevision,String targetAgentId) { return null; }
+    default Source findAuthorizedSourceForUpdate(Scope scope,String conversationId,String assetId,
+            long assetRevision,String targetAgentId) {
+        return findAuthorizedSource(scope,conversationId,assetId,assetRevision,targetAgentId);
+    }
 
     int markSaving(Scope scope, String operationId, long expectedRowRevision,
             long conversationGeneration, long now);

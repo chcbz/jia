@@ -436,7 +436,10 @@ public class AgentTaskProviderCostConsentServiceImpl
         if (!Objects.equals(scope.tenantId(),row.getTenantId())
                 || !Objects.equals(scope.clientId(),row.getClientId())
                 || !Objects.equals(scope.ownerJiacn(),row.getOwnerJiacn())
-                || !Objects.equals(taskId,row.getTaskId())) throw failure(Reason.NOT_FOUND);
+                || !Objects.equals(taskId,row.getTaskId())
+                || (row.getConsentPurpose()!=null
+                    && !"INITIAL_ASSIGN_AND_START".equals(row.getConsentPurpose())))
+            throw failure(Reason.NOT_FOUND);
     }
     private void validatePersisted(AgentTaskProviderCostConsentEntity row) {
         if (row==null || !valid(row.getConsentId(),100) || !valid(row.getTaskId(),100)
