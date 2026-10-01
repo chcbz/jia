@@ -298,6 +298,8 @@ def mmdControlledImageFollowupV3SourceSet = sourceSets.create('mmdControlledImag
         include 'cn/jia/chat/service/ChatBountyExecutionCoordinatorV3Test.java'
         include 'cn/jia/chat/service/ChatBountyExecutionCoordinatorV3SpringTransactionTest.java'
         include 'cn/jia/chat/handler/AgentWebSocketControlledImageV3ExecutionTest.java'
+        include 'cn/jia/chat/handler/NativeProviderCredentialBindingDeclarationTest.java'
+        include 'cn/jia/chat/handler/AgentRuntimeCapabilitiesTest.java'
         include 'cn/jia/chat/handler/ControlledImageBountyExecutionV3DeclarationTest.java'
     }
     resources.srcDir 'src/chatDeliberationTest/resources'
