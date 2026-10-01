@@ -1,0 +1,110 @@
+package cn.jia.chat.service;
+
+import cn.jia.agent.entity.AgentTaskMetaEntity;
+import cn.jia.agent.service.AgentTaskMutationTransaction;
+import cn.jia.chat.api.ChatTypedDeliberationWire;
+import cn.jia.chat.dao.ChatConversationDao;
+import cn.jia.chat.deliberation.ChatBountyBindingStore;
+import cn.jia.chat.deliberation.ChatDeliberationDao;
+import cn.jia.chat.deliberation.ChatTurnEntity;
+import cn.jia.chat.deliberation.ChatTypedDeliberationStore;
+import cn.jia.chat.entity.ChatConversationEntity;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import java.util.List;
+import java.util.Map;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+class ChatTypedDiscussionAdmissionServiceTest {
+    private final AgentTaskMutationTransaction tasks=mock(AgentTaskMutationTransaction.class);
+    private final ChatBountyBindingStore bindings=mock(ChatBountyBindingStore.class);
+    private final ChatConversationDao conversations=mock(ChatConversationDao.class);
+    private final JuyitingConversationScopeService scopes=mock(JuyitingConversationScopeService.class);
+    private final ChatDeliberationService deliberation=mock(ChatDeliberationService.class);
+    private final ChatDeliberationDao events=mock(ChatDeliberationDao.class);
+    private final ChatTypedDeliberationContextService contexts=mock(ChatTypedDeliberationContextService.class);
+    private final ChatTypedDeliberationService typed=mock(ChatTypedDeliberationService.class);
+    private final ChatTypedDeliberationStore store=mock(ChatTypedDeliberationStore.class);
+    private final ChatTypedDiscussionAdmissionService service=new ChatTypedDiscussionAdmissionService(tasks,bindings,conversations,scopes,deliberation,events,contexts,typed);
+    private final ServerResolvedSender sender=new ServerResolvedSender("user","Human","owner","client",DisplayNameSource.JIACN);
+    private final ChatTypedDeliberationStore.Scope storeScope=new ChatTypedDeliberationStore.Scope("0","owner","client","42",1);
+
+    @BeforeEach void ready(){
+        when(tasks.executeWithLockedTaskRootInOwnerScope(eq("0"),eq("client"),eq("owner"),eq("task"),any())).thenAnswer(inv->{AgentTaskMutationTransaction.LockedTaskMutation<?> callback=inv.getArgument(4);return callback.apply(new AgentTaskMetaEntity().setTaskVersion(4L).setAssignedAgentId("agent"));});
+        when(bindings.lock(new ChatBountyBindingStore.Scope("0","owner","client"),"task")).thenReturn(new ChatBountyBindingStore.Binding(3,42L));
+        ChatConversationEntity conversation=new ChatConversationEntity().setId(42L).setJiacn("owner").setConversationType("juyiting").setConversationScopeType("bounty").setConversationScopeKey("task:task").setTaskId("task").setTargetAgentIds("[\"agent\"]").setLifecycleGeneration(1L);conversation.setTenantId("0");conversation.setClientId("client");
+        when(conversations.lockScopedById("owner","client","42")).thenReturn(conversation);when(scopes.parsePersistedTargetAgentIds("[\"agent\"]")).thenReturn(List.of("agent"));when(typed.store()).thenReturn(store);
+    }
+
+    @Test void freshDiscussionCreatesOneOrdinaryChatAndTypedAdmissionWithoutAuthority() {
+        when(contexts.resolve(any(),eq("task"),eq("agent"),eq(List.of()))).thenReturn(context());
+        when(deliberation.admit(eq("0"),eq(sender),eq("42"),eq(1L),any(),eq(cn.jia.chat.deliberation.InteractionRoute.CHAT),any(),isNull(),any(),any())).thenReturn(admitted("request-new"));
+        when(deliberation.getRequest("0","owner","client","request-new")).thenReturn(status("request-new"));when(events.eventHighWatermark("0","owner","client","42",1)).thenReturn(7L);when(store.insertAdmission(any())).thenReturn(1);
+        var receipt=service.admit("0",sender,"42","key",discussion());
+        assertFalse(receipt.replay());assertEquals(List.of("turn"),receipt.turnIds());assertEquals("/chat/requests/request-new",receipt.statusUrl());
+        verify(store).insertAdmission(argThat(row->row.requestRevision()==1
+                &&row.requestDigest().matches("sha256:[0-9a-f]{64}")
+                &&row.bodyDigest().matches("sha256:[0-9a-f]{64}")
+                &&!row.requestDigest().equals(row.bodyDigest())));
+        verify(deliberation).admit(eq("0"),eq(sender),eq("42"),eq(1L),any(),
+                eq(cn.jia.chat.deliberation.InteractionRoute.CHAT),any(),isNull(),any(),
+                argThat(metadata->"DISCUSSION".equals(metadata.get("intent"))
+                        &&metadata.get("parentOutcomeId")==null
+                        &&metadata.get("pendingQuestionId")==null));
+        verifyNoMoreInteractions(contexts);verify(deliberation,never()).persistTypedQuestionAnswered(any(),anyString(),anyLong(),anyString(),anyString(),anyLong());
+    }
+
+    @Test void durableSameKeyReplayDoesNotRequireLiveRuntimeAndChangedBodyConflicts() {
+        var command=discussion();String digest=bodyDigest(command);
+        var prior=new ChatTypedDeliberationStore.Admission("a",storeScope,"key","sha256:"+"c".repeat(64),digest,"DISCUSSION","task",3,null,null,"request-old",1,8,"[\"turn-old\"]","[]","RUNNING",0,9,1);
+        when(store.findAdmissionByKey(storeScope,"key",true)).thenReturn(prior);
+        var replay=service.admit("0",sender,"42","key",command);assertTrue(replay.replay());assertEquals("request-old",replay.requestId());verifyNoInteractions(contexts,deliberation);
+        var changed=new ChatTypedDeliberationWire.DiscussionCommand("DISCUSSION","task",3,"changed",null,null,null,null,List.of());
+        assertEquals(ChatDeliberationException.Reason.CONFLICT,assertThrows(ChatDeliberationException.class,()->service.admit("0",sender,"42","key",changed)).reason());
+        var changedRefs=new ChatTypedDeliberationWire.DiscussionCommand("DISCUSSION","task",3,"继续讨论",null,null,null,null,
+                List.of(new ChatTypedDeliberationWire.SourceSelector(
+                        "TASK_LINKED_WORKSPACE_VERSION","file","1","REFERENCE",null,null)));
+        assertEquals(ChatDeliberationException.Reason.CONFLICT,assertThrows(ChatDeliberationException.class,
+                ()->service.admit("0",sender,"42","key",changedRefs)).reason());
+    }
+
+    @Test void replayRejectsStoredReceiptWithAnythingOtherThanOneTurn() {
+        var command=discussion();
+        var prior=new ChatTypedDeliberationStore.Admission("a",storeScope,"key","sha256:"+"c".repeat(64),
+                bodyDigest(command),"DISCUSSION","task",3,null,null,"request-old",1,8,
+                "[\"turn-a\",\"turn-b\"]","[]","RUNNING",0,9,1);
+        when(store.findAdmissionByKey(storeScope,"key",true)).thenReturn(prior);
+        assertEquals(ChatDeliberationException.Reason.PERSISTENCE_ERROR,
+                assertThrows(ChatDeliberationException.class,
+                        ()->service.admit("0",sender,"42","key",command)).reason());
+        verifyNoInteractions(contexts,deliberation);
+    }
+
+    @Test void clarificationReplyUsesPendingCasAndPersistsAnsweredEventAtomically() {
+        var command=new ChatTypedDeliberationWire.DiscussionCommand("CLARIFICATION_REPLY","task",3,"用上一张", "out",0L,"pending",0L,List.of());
+        var outcome=new ChatTypedDeliberationStore.Outcome("out",storeScope,"parent",1,"parent-turn","task",3,5,"sha256:"+"d".repeat(64),"CLARIFY","请选择","{}","{}","{}","[]",1);
+        var pending=new ChatTypedDeliberationStore.PendingQuestion("pending","out",storeScope,"OPEN",0,"哪张？","[\"SOURCE_SELECTION\"]",null,null,null,1,1);
+        when(typed.requireParent(storeScope,"out")).thenReturn(outcome);when(typed.requirePending(storeScope,"pending")).thenReturn(pending);
+        when(contexts.resolve(any(),eq("task"),eq("agent"),eq(List.of()))).thenReturn(context());when(deliberation.admit(anyString(),eq(sender),eq("42"),eq(1L),any(),any(),any(),isNull(),any(),any())).thenReturn(admitted("reply"));
+        when(store.answerPending(same(pending),eq(0L),eq("reply"),eq("key"),anyString(),anyLong())).thenReturn(1);
+        when(events.findTurn("0","owner","client","turn")).thenReturn(new ChatTurnEntity().setTurnId("turn"));when(deliberation.getRequest("0","owner","client","reply")).thenReturn(status("reply"));when(store.insertAdmission(any())).thenReturn(1);
+        var receipt=service.admit("0",sender,"42","key",command);assertEquals("pending",receipt.pendingQuestionId());
+        verify(deliberation).persistTypedQuestionAnswered(any(),eq("pending"),eq(1L),eq("reply"),eq("out"),anyLong());
+    }
+
+    @Test void pendingCasLossRollsBackByThrowingConflictBeforeReceipt() {
+        var command=new ChatTypedDeliberationWire.DiscussionCommand("CLARIFICATION_REPLY","task",3,"答复","out",0L,"pending",0L,List.of());
+        var outcome=new ChatTypedDeliberationStore.Outcome("out",storeScope,"parent",1,"parent-turn","task",3,5,"sha256:"+"d".repeat(64),"CLARIFY","请选择","{}","{}","{}","[]",1);
+        var pending=new ChatTypedDeliberationStore.PendingQuestion("pending","out",storeScope,"OPEN",0,"哪张？","[]",null,null,null,1,1);
+        when(typed.requireParent(storeScope,"out")).thenReturn(outcome);when(typed.requirePending(storeScope,"pending")).thenReturn(pending);when(contexts.resolve(any(),anyString(),anyString(),anyList())).thenReturn(context());when(deliberation.admit(anyString(),any(),anyString(),anyLong(),any(),any(),any(),isNull(),any(),any())).thenReturn(admitted("reply"));when(store.answerPending(any(),anyLong(),anyString(),anyString(),anyString(),anyLong())).thenReturn(0);
+        assertEquals(ChatDeliberationException.Reason.CONFLICT,assertThrows(ChatDeliberationException.class,()->service.admit("0",sender,"42","key",command)).reason());verify(store,never()).insertAdmission(any());
+    }
+
+    private static ChatTypedDeliberationWire.DiscussionCommand discussion(){return new ChatTypedDeliberationWire.DiscussionCommand("DISCUSSION","task",3,"继续讨论",null,null,null,null,List.of());}
+    private static String bodyDigest(ChatTypedDeliberationWire.DiscussionCommand c){Map<String,Object> m=new java.util.LinkedHashMap<>();m.put("schemaVersion",1);m.put("intent",c.intent());m.put("taskId",c.taskId());m.put("expectedAssignmentRevision","3");m.put("content",c.content());m.put("parentOutcomeId",null);m.put("expectedParentStateVersion",null);m.put("pendingQuestionId",null);m.put("expectedPendingQuestionStateVersion",null);m.put("sourceSelectors",List.of());return ChatDeliberationService.digest(m);}
+    private static ChatTypedDeliberationContextService.Context context(){return new ChatTypedDeliberationContextService.Context(Map.of("schemaVersion",1,"referenceMode","NONE","supportedOperations",List.of("GENERATE_IMAGE","EDIT_IMAGE"),"availableSources",List.of()),"[]",List.of(),Map.of("schemaVersion",1,"state","READY"));}
+    private static ChatDeliberationService.Admission admitted(String request){return new ChatDeliberationService.Admission(request,1,"8","42",1,cn.jia.chat.deliberation.InteractionRoute.CHAT,List.of(new ChatDeliberationService.Dispatch(request,"turn","dispatch","event","agent","CHAT","RECEIVED","snapshot","sha256:"+"a".repeat(64),Map.of(),Map.of())),false);}
+    private static ChatDeliberationService.RequestView status(String request){return new ChatDeliberationService.RequestView(request,"1","42","1","8","RUNNING","0",List.of(),List.of());}
+}
