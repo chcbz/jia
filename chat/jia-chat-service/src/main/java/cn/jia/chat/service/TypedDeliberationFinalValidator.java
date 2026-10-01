@@ -415,10 +415,10 @@ public final class TypedDeliberationFinalValidator {
         if (raw.size() != keys.size()) fail(reason);
         Map<String, Object> result = new LinkedHashMap<>();
         for (Map.Entry<?, ?> entry : raw.entrySet()) {
-            if (!(entry.getKey() instanceof String key) || !keys.contains(key)
-                    || result.containsKey(key)) {
-                fail(reason);
-            }
+            Object rawKey = entry.getKey();
+            if (!(rawKey instanceof String)) fail(reason);
+            String key = (String) rawKey;
+            if (!keys.contains(key) || result.containsKey(key)) fail(reason);
             result.put(key, entry.getValue());
         }
         if (!result.keySet().equals(keys)) fail(reason);
@@ -432,7 +432,9 @@ public final class TypedDeliberationFinalValidator {
     }
 
     private static String string(Object value, Reason reason) {
-        if (!(value instanceof String text) || !validScalar(text)) fail(reason);
+        if (!(value instanceof String)) fail(reason);
+        String text = (String) value;
+        if (!validScalar(text)) fail(reason);
         return text;
     }
 
