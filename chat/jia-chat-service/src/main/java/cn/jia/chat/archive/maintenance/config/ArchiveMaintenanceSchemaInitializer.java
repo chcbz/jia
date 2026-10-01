@@ -31,7 +31,7 @@ public class ArchiveMaintenanceSchemaInitializer {
     private final JdbcTemplate jdbc;
     private final ArchiveMaintenanceStore store;
     private static final Set<String> MANAGER_PERMISSIONS = Set.of("appoint", "source.prepare",
-            "job.create", "job.manage", "draft.write", "validate", "publish");
+            "job.create", "job.manage", "draft.write", "validate", "publish", "edition.withdraw");
     private final ArchiveMaintenanceProperties properties;
     private final ArchiveTransactions transactions;
 

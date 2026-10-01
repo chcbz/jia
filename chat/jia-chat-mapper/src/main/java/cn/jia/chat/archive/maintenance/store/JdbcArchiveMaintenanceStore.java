@@ -83,6 +83,25 @@ public class JdbcArchiveMaintenanceStore implements ArchiveMaintenanceStore {
                     rs.getLong("draft_revision"), rs.getString("manifest_sha256"),
                     rs.getString("source_sha256"), rs.getString("state"), rs.getString("actor_type"),
                     rs.getString("actor_id"), rs.getLong("authorization_revision"));
+    private static final RowMapper<ArchiveWithdrawalRecord> WITHDRAWAL = (rs, n) ->
+            new ArchiveWithdrawalRecord(rs.getString("withdrawal_id"), rs.getString("publication_id"),
+                    rs.getString("collection_id"), rs.getString("work_id"), rs.getString("edition_id"),
+                    rs.getString("reason"), rs.getString("tenant_id"), rs.getString("client_id"),
+                    rs.getString("owner_jiacn"), rs.getString("withdraw_actor_type"),
+                    rs.getString("withdraw_actor_id"), rs.getLong("withdraw_authorization_revision"),
+                    rs.getString("requested_replacement_active_edition_id"),
+                    rs.getString("resulting_active_edition_id"), rs.getLong("resulting_work_revision"),
+                    rs.getString("operation_key"), instant(rs.getTimestamp("withdrawn_at")),
+                    rs.getString("outbox_state"));
+    private static final RowMapper<ArchiveEditionVersionRecord> VERSION = (rs, n) -> {
+        ArchiveWithdrawalRecord withdrawal = rs.getString("withdrawal_id") == null ? null : WITHDRAWAL.mapRow(rs, n);
+        return new ArchiveEditionVersionRecord(rs.getString("publication_id"), rs.getString("job_id"),
+                rs.getString("collection_id"), rs.getString("work_id"), rs.getString("edition_id"),
+                rs.getLong("draft_revision"), rs.getString("manifest_sha256"),
+                rs.getString("source_sha256"), rs.getString("state"), rs.getString("actor_type"),
+                rs.getString("actor_id"), rs.getLong("authorization_revision"),
+                instant(rs.getTimestamp("published_at")), withdrawal);
+    };
 
     @Override
     public ArchiveManagerGrantRecord findManagerGrant(ArchiveActorScope actor, String collectionId, boolean lock) {
@@ -414,6 +433,9 @@ public class JdbcArchiveMaintenanceStore implements ArchiveMaintenanceStore {
     @Override public ArchiveDraftRecord findDraftByJob(String jobId,boolean lock) {
         return first(jdbc.query("SELECT * FROM archive_draft WHERE job_id=?"+(lock?" FOR UPDATE":""),DRAFT,jobId));
     }
+    @Override public ArchiveDraftRecord findDraft(String draftId,boolean lock) {
+        return first(jdbc.query("SELECT * FROM archive_draft WHERE draft_id=?"+(lock?" FOR UPDATE":""),DRAFT,draftId));
+    }
     @Override public void insertDraft(ArchiveDraftRecord d) {
         jdbc.update("INSERT INTO archive_draft(draft_id,job_id,revision,state,content_json,content_sha256,validated_revision,validation_id) VALUES (?,?,?,?,?,?,?,?)",
                 d.draftId(),d.jobId(),d.revision(),d.state(),d.contentJson(),d.contentSha256(),d.validatedRevision(),d.validationId());
@@ -430,7 +452,10 @@ public class JdbcArchiveMaintenanceStore implements ArchiveMaintenanceStore {
         return first(jdbc.query("SELECT * FROM archive_validation WHERE validation_id=?",VALIDATION,id));
     }
     @Override public ArchiveValidationRecord findCurrentValidation(String draftId,long revision) {
-        return first(jdbc.query("SELECT * FROM archive_validation WHERE draft_id=? AND draft_revision=? AND outcome='PASSED' ORDER BY created_at DESC LIMIT 1",VALIDATION,draftId,revision));
+        return first(jdbc.query("SELECT * FROM archive_validation WHERE draft_id=? AND draft_revision=? AND outcome='PASSED' ORDER BY created_at DESC,validation_id DESC LIMIT 1",VALIDATION,draftId,revision));
+    }
+    @Override public ArchiveValidationRecord findLatestValidation(String draftId,long revision) {
+        return first(jdbc.query("SELECT * FROM archive_validation WHERE draft_id=? AND draft_revision=? ORDER BY created_at DESC,validation_id DESC LIMIT 1",VALIDATION,draftId,revision));
     }
 
     @Override public CollectionWork lockCollectionWork(String collectionId,String workId) {
@@ -457,6 +482,47 @@ public class JdbcArchiveMaintenanceStore implements ArchiveMaintenanceStore {
     }
     @Override public ArchivePublicationRecord findPublicationByJob(String jobId) {
         return first(jdbc.query("SELECT * FROM archive_publication WHERE job_id=?",PUBLICATION,jobId));
+    }
+    @Override public ArchiveEditionVersionRecord findPublication(String workId,String editionId,boolean lock) {
+        return first(jdbc.query(versionSelect() + " WHERE p.work_id=? AND p.edition_id=?" + (lock ? " FOR UPDATE" : ""),
+                VERSION, workId, editionId));
+    }
+    @Override public List<ArchiveEditionVersionRecord> listPublications(String workId,boolean lock) {
+        return jdbc.query(versionSelect() + " WHERE p.work_id=? ORDER BY p.published_at,p.publication_id" + (lock ? " FOR UPDATE" : ""),
+                VERSION, workId);
+    }
+    @Override public int withdrawPublication(String publicationId) {
+        return jdbc.update("UPDATE archive_publication SET state='WITHDRAWN' WHERE publication_id=? AND state='PUBLISHED'", publicationId);
+    }
+    @Override public void insertWithdrawal(ArchiveWithdrawalRecord w) {
+        jdbc.update("""
+                INSERT INTO archive_edition_withdrawal(withdrawal_id,publication_id,collection_id,work_id,edition_id,
+                reason,tenant_id,client_id,owner_jiacn,actor_type,actor_id,authorization_revision,
+                requested_replacement_active_edition_id,resulting_active_edition_id,resulting_work_revision,
+                operation_key,withdrawn_at,outbox_state) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """, w.withdrawalId(), w.publicationId(), w.collectionId(), w.workId(), w.editionId(),
+                w.reason(), w.tenantId(), w.clientId(), w.ownerJiacn(), w.actorType(), w.actorId(),
+                w.authorizationRevision(), w.requestedReplacementActiveEditionId(), w.resultingActiveEditionId(),
+                w.resultingWorkRevision(), w.operationKey(), Timestamp.from(w.withdrawnAt()), w.outboxState());
+    }
+    @Override public ArchiveWithdrawalRecord findWithdrawal(String withdrawalId) {
+        return first(jdbc.query("""
+                SELECT w.*, w.actor_type AS withdraw_actor_type, w.actor_id AS withdraw_actor_id,
+                       w.authorization_revision AS withdraw_authorization_revision
+                FROM archive_edition_withdrawal w WHERE w.withdrawal_id=?
+                """, WITHDRAWAL, withdrawalId));
+    }
+
+    private static String versionSelect() {
+        return """
+                SELECT p.*, w.withdrawal_id,w.reason,w.tenant_id,w.client_id,w.owner_jiacn,
+                       w.actor_type AS withdraw_actor_type,w.actor_id AS withdraw_actor_id,
+                       w.authorization_revision AS withdraw_authorization_revision,
+                       w.requested_replacement_active_edition_id,w.resulting_active_edition_id,
+                       w.resulting_work_revision,w.operation_key,w.withdrawn_at,w.outbox_state
+                FROM archive_publication p
+                LEFT JOIN archive_edition_withdrawal w ON w.publication_id=p.publication_id
+                """;
     }
 
     @Override public void appendJobEvent(String jobId, long jobRevision, String eventType, String dataJson) {

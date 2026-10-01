@@ -113,6 +113,12 @@ public class JdbcArchiveContentStore implements ArchiveContentStore {
     }
 
     @Override
+    public String publicationState(String editionId) {
+        return first(jdbc.query("SELECT state FROM archive_publication WHERE edition_id=?",
+                (rs,n)->rs.getString(1), editionId));
+    }
+
+    @Override
     public boolean isPublished(String editionId) {
         Integer found=first(jdbc.query("SELECT 1 FROM archive_publication WHERE edition_id=? AND state='PUBLISHED'",
                 (rs,n)->rs.getInt(1),editionId));
@@ -275,6 +281,16 @@ public class JdbcArchiveContentStore implements ArchiveContentStore {
                 WHERE work_id = ? AND CAST(work_id AS BINARY) = CAST(? AS BINARY)
                   AND OCTET_LENGTH(work_id) = OCTET_LENGTH(?)
                 """, editionId, workId, workId, workId);
+    }
+
+    @Override
+    public int switchActiveEdition(String workId, String expectedEditionId, String replacementEditionId) {
+        return jdbc.update("""
+                UPDATE archive_work SET active_edition_id = ?
+                WHERE work_id = ? AND active_edition_id <=> ?
+                  AND CAST(work_id AS BINARY) = CAST(? AS BINARY)
+                  AND OCTET_LENGTH(work_id) = OCTET_LENGTH(?)
+                """, replacementEditionId, workId, expectedEditionId, workId, workId);
     }
 
     @Override

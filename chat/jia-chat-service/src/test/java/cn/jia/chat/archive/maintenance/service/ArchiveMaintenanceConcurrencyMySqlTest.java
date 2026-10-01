@@ -7,6 +7,7 @@ import cn.jia.agent.service.AgentTaskArtifactStorage;
 import cn.jia.agent.service.ArchiveAgentExecutionPort;
 import cn.jia.agent.service.InstalledSkillResolver;
 import cn.jia.chat.archive.config.ArchiveSchemaInitializer;
+import cn.jia.chat.archive.config.ArchiveReaderDataSchemaInitializer;
 import cn.jia.chat.archive.maintenance.config.ArchiveMaintenanceProperties;
 import cn.jia.chat.archive.maintenance.config.ArchiveMaintenanceSchemaInitializer;
 import cn.jia.chat.archive.maintenance.dto.*;
@@ -15,8 +16,10 @@ import cn.jia.chat.archive.maintenance.model.ArchiveConfirmedPolicyRef;
 import cn.jia.chat.archive.maintenance.model.ArchiveRequestContext;
 import cn.jia.chat.archive.maintenance.model.ArchiveExecutionGrantRecord;
 import cn.jia.chat.archive.maintenance.model.ArchiveRuntimeScope;
+import cn.jia.chat.archive.maintenance.store.ArchiveMaintenanceStore;
 import cn.jia.chat.archive.maintenance.store.JdbcArchiveMaintenanceStore;
 import cn.jia.chat.archive.service.ArchiveMySqlTestGuard;
+import cn.jia.chat.archive.service.ArchiveReaderServiceImpl;
 import cn.jia.chat.archive.service.ArchiveTransactions;
 import cn.jia.chat.archive.service.SpringArchiveTransactions;
 import cn.jia.chat.archive.store.ArchiveContentStore;
@@ -26,6 +29,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.ConnectionCallback;
+import org.springframework.core.io.ByteArrayResource;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
@@ -46,6 +52,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -648,6 +655,235 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                 Integer.class, JOB, type);
     }
 
+    @Test
+    void completePreviousMaintenanceSchemaUpgradesAdditivelyAndMalformedBreakpointFailsClosed() throws Exception {
+        clean();
+        new ArchiveSchemaInitializer(jdbc).initialize();
+        String ddl;
+        try (var input = new ClassPathResource("db/archive-maintenance-schema.sql").getInputStream()) {
+            ddl = new String(input.readAllBytes(), StandardCharsets.UTF_8);
+        }
+        String previous = ddl.replaceFirst("(?s)CREATE TABLE IF NOT EXISTS archive_edition_withdrawal \\(.*?\\) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;\\s*", "");
+        new ResourceDatabasePopulator(new ByteArrayResource(previous.getBytes(StandardCharsets.UTF_8)))
+                .execute(dataSource);
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='archive_edition_withdrawal'", Integer.class));
+        new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
+                new ArchiveMaintenanceProperties()).initialize();
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='archive_edition_withdrawal'", Integer.class));
+
+        jdbc.execute("DROP TABLE archive_edition_withdrawal");
+        jdbc.execute("CREATE TABLE archive_edition_withdrawal(withdrawal_id VARCHAR(64) NOT NULL PRIMARY KEY) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin");
+        assertThrows(IllegalStateException.class, () -> new ArchiveMaintenanceSchemaInitializer(jdbc,
+                new JdbcArchiveMaintenanceStore(jdbc), new ArchiveMaintenanceProperties()).initialize());
+    }
+
+    @Test
+    void withdrawalCasReplacementReplayAndPrivateFactsRemainImmutable() {
+        seedPublishedVersions();
+        new ArchiveReaderDataSchemaInitializer(jdbc).initialize();
+        jdbc.update("INSERT INTO archive_reader_progress(tenant_id,client_id,owner_jiacn,edition_id,state,edition_manifest_sha256,block_type,block_id,paragraph_id,byte_offset,paragraph_sha256,version) VALUES ('0','reader-client','reader-owner','edition-a','IN_PROGRESS',?,'CHAPTER','edition-a-c001','edition-a-c001-p0001',0,?,1)", SHA, "b".repeat(64));
+        jdbc.update("INSERT INTO archive_bookmark(tenant_id,client_id,owner_jiacn,bookmark_id,edition_id,state,edition_manifest_sha256,block_type,block_id,paragraph_id,byte_offset,paragraph_sha256,version) VALUES ('0','reader-client','reader-owner','123e4567-e89b-42d3-a456-426614174000','edition-a','ACTIVE',?,'CHAPTER','edition-a-c001','edition-a-c001-p0001',0,?,1)", SHA, "b".repeat(64));
+        jdbc.update("INSERT INTO archive_note(tenant_id,client_id,owner_jiacn,note_id,edition_id,state,text,block_id,anchor_json,version) VALUES ('0','reader-client','reader-owner','223e4567-e89b-82d3-a456-426614174000','edition-a','ACTIVE','private note','edition-a-c001','{}',1)");
+        String before = jdbc.queryForObject("SELECT SHA2(CONCAT((SELECT text FROM archive_paragraph WHERE paragraph_id='edition-a-c001-p0001'),':',(SELECT text FROM archive_note WHERE note_id='223e4567-e89b-82d3-a456-426614174000'),':',(SELECT COUNT(*) FROM archive_reader_progress),':',(SELECT COUNT(*) FROM archive_bookmark)),256)", String.class);
+        ArchiveMaintenanceServiceImpl service = service(new JdbcArchiveMaintenanceStore(jdbc),
+                new RootLockingPort(jdbc), new JdbcArchiveContentStore(jdbc));
+
+        ArchiveWithdrawalDTO first = service.withdraw(ACTOR, "work-withdraw", "edition-a", "withdraw-a", 1,
+                new ArchiveWithdrawRequest("rights correction", "edition-b"));
+        ArchiveWithdrawalDTO replay = service.withdraw(ACTOR, "work-withdraw", "edition-a", "withdraw-a", 1,
+                new ArchiveWithdrawRequest("rights correction", "edition-b"));
+        assertEquals(first, replay);
+        assertEquals("edition-b", first.resultingActiveEditionId());
+        assertEquals("2", first.resultingWorkRevision());
+        assertEquals("edition-b:2:WITHDRAWN", jdbc.queryForObject(
+                "SELECT CONCAT(w.active_edition_id,':',cw.revision,':',p.state) FROM archive_work w JOIN archive_collection_work cw ON cw.work_id=w.work_id JOIN archive_publication p ON p.edition_id='edition-a' WHERE w.work_id='work-withdraw'", String.class));
+        assertEquals("rights correction:owner-a:5:withdraw-a:PENDING", jdbc.queryForObject(
+                "SELECT CONCAT(reason,':',actor_id,':',authorization_revision,':',operation_key,':',outbox_state) FROM archive_edition_withdrawal WHERE publication_id='pub-edition-a'", String.class));
+        ArchiveEditionHistoryDTO history = service.editionHistory(ACTOR, "work-withdraw");
+        ArchiveEditionVersionDTO withdrawn = history.editions().stream()
+                .filter(value -> "edition-a".equals(value.editionId())).findFirst().orElseThrow();
+        assertEquals(SHA, withdrawn.manifestSha256());
+        assertEquals("a".repeat(64), withdrawn.sourceSha256());
+        assertEquals("HUMAN", withdrawn.actorType());
+        assertEquals("WITHDRAWN", withdrawn.state());
+        assertEquals("rights correction", withdrawn.withdrawal().reason());
+        assertEquals("edition-b", withdrawn.withdrawal().resultingActiveEditionId());
+
+        ArchiveWithdrawalDTO nonActive = service.withdraw(ACTOR, "work-withdraw", "edition-c", "withdraw-c", 2,
+                new ArchiveWithdrawRequest("obsolete", null));
+        assertEquals("edition-b", nonActive.resultingActiveEditionId());
+        ArchiveWithdrawalDTO cleared = service.withdraw(ACTOR, "work-withdraw", "edition-b", "withdraw-b", 3,
+                new ArchiveWithdrawRequest("withdraw current", null));
+        assertNull(cleared.resultingActiveEditionId());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM archive_work WHERE work_id='work-withdraw' AND active_edition_id IS NOT NULL", Integer.class));
+        String after = jdbc.queryForObject("SELECT SHA2(CONCAT((SELECT text FROM archive_paragraph WHERE paragraph_id='edition-a-c001-p0001'),':',(SELECT text FROM archive_note WHERE note_id='223e4567-e89b-82d3-a456-426614174000'),':',(SELECT COUNT(*) FROM archive_reader_progress),':',(SELECT COUNT(*) FROM archive_bookmark)),256)", String.class);
+        assertEquals(before, after);
+        assertEquals("IDEMPOTENCY_CONFLICT", assertThrows(ArchiveMaintenanceException.class,
+                () -> service.withdraw(ACTOR, "work-withdraw", "edition-a", "withdraw-a", 1,
+                        new ArchiveWithdrawRequest("changed", "edition-b"))).code());
+        ArchiveReaderServiceImpl reader = new ArchiveReaderServiceImpl(new JdbcArchiveContentStore(jdbc));
+        assertThrows(cn.jia.chat.archive.service.ArchiveResourceGoneException.class,
+                () -> reader.editionCatalog("edition-a"));
+        assertThrows(cn.jia.chat.archive.service.ArchiveResourceNotFoundException.class,
+                () -> reader.workCatalog("work-withdraw"));
+    }
+
+    @Test
+    void editionHistoryReauthorizesAndReturnsOnlyAtomicPostWithdrawalSnapshot() throws Exception {
+        seedPublishedVersions();
+        CountDownLatch preflightRead = new CountDownLatch(1);
+        CountDownLatch withdrawalCommitted = new CountDownLatch(1);
+        AtomicInteger unlockedReads = new AtomicInteger();
+        JdbcArchiveMaintenanceStore historyStore = new JdbcArchiveMaintenanceStore(jdbc) {
+            @Override
+            public List<cn.jia.chat.archive.maintenance.model.ArchiveEditionVersionRecord> listPublications(
+                    String workId, boolean lock) {
+                List<cn.jia.chat.archive.maintenance.model.ArchiveEditionVersionRecord> result =
+                        super.listPublications(workId, lock);
+                if (!lock && "work-withdraw".equals(workId)
+                        && unlockedReads.incrementAndGet() == 1) {
+                    preflightRead.countDown();
+                    await(withdrawalCommitted);
+                }
+                return result;
+            }
+        };
+        ArchiveMaintenanceServiceImpl historyService = service(historyStore,
+                new RootLockingPort(jdbc), new JdbcArchiveContentStore(jdbc));
+        ArchiveMaintenanceServiceImpl withdrawalService = service(new JdbcArchiveMaintenanceStore(jdbc),
+                new RootLockingPort(jdbc), new JdbcArchiveContentStore(jdbc));
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<ArchiveEditionHistoryDTO> history = pool.submit(
+                    () -> historyService.editionHistory(ACTOR, "work-withdraw"));
+            assertTrue(preflightRead.await(5, TimeUnit.SECONDS));
+            ArchiveWithdrawalDTO withdrawal = withdrawalService.withdraw(ACTOR, "work-withdraw",
+                    "edition-a", "withdraw-during-history", 1,
+                    new ArchiveWithdrawRequest("atomic history", "edition-b"));
+            assertEquals("2", withdrawal.resultingWorkRevision());
+            withdrawalCommitted.countDown();
+
+            ArchiveEditionHistoryDTO result = history.get(10, TimeUnit.SECONDS);
+            assertEquals("2", result.workRevision());
+            assertEquals("edition-b", result.activeEditionId());
+            assertEquals("WITHDRAWN", result.editions().stream()
+                    .filter(value -> "edition-a".equals(value.editionId()))
+                    .findFirst().orElseThrow().state());
+            assertEquals("PUBLISHED", result.editions().stream()
+                    .filter(value -> "edition-b".equals(value.editionId()))
+                    .findFirst().orElseThrow().state());
+        } finally {
+            withdrawalCommitted.countDown();
+            pool.shutdownNow();
+            pool.awaitTermination(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void validationRecoveryReadsOnlyCurrentRevisionAndExactActorScope() {
+        seedExecutionCandidate();
+        jdbc.update("UPDATE archive_draft SET revision=2,state='CHANGES_REQUIRED' WHERE draft_id='draft-a'");
+        jdbc.update("INSERT INTO archive_validation(validation_id,draft_id,draft_revision,outcome,validation_digest,findings_json) VALUES ('validation-old','draft-a',1,'PASSED',?, '[]')", "b".repeat(64));
+        jdbc.update("INSERT INTO archive_validation(validation_id,draft_id,draft_revision,outcome,validation_digest,findings_json) VALUES ('validation-current','draft-a',2,'FAILED',?, '[\"current finding\"]')", "c".repeat(64));
+        ArchiveMaintenanceServiceImpl service = service(new JdbcArchiveMaintenanceStore(jdbc),
+                new RootLockingPort(jdbc), new JdbcArchiveContentStore(jdbc));
+
+        ArchiveValidationDTO current = service.validation(ACTOR, "draft-a");
+
+        assertEquals("validation-current", current.validationId());
+        assertEquals("2", current.draftRevision());
+        assertEquals("FAILED", current.outcome());
+        assertEquals(List.of("current finding"), current.findings());
+        ArchiveActorScope foreign = new ArchiveActorScope("0", "client-a", "owner-b");
+        assertEquals("ARCHIVE_RESOURCE_NOT_FOUND", assertThrows(ArchiveMaintenanceException.class,
+                () -> service.validation(foreign, "draft-a")).code());
+    }
+
+    @Test
+    void repeatableReadRealPublishWinsBeforeWithdrawalAndStaleWorkCasLeavesEditionPublished() throws Exception {
+        seedExecutionCandidate();
+        seedPublishedContent();
+        jdbc.update("UPDATE archive_collection_manager SET permissions=? WHERE collection_id=?",
+                "appoint,job.manage,draft.write,validate,publish,edition.withdraw", COLLECTION);
+        jdbc.update("UPDATE archive_maintenance_job SET state='AWAITING_PUBLISH',wait_reason=NULL,"
+                + "operation_code='REVISE_WORK',work_id='work-withdraw',canonical_key='withdraw-key' "
+                + "WHERE job_id=?", JOB);
+        String draftJson = new ObjectMapper().writeValueAsString(validDraft());
+        jdbc.update("UPDATE archive_draft SET revision=1,state='VALIDATED',content_json=?,content_sha256=?,"
+                + "validated_revision=1,validation_id='validation-race' WHERE draft_id='draft-a'",
+                draftJson, "c".repeat(64));
+        jdbc.update("INSERT INTO archive_validation(validation_id,draft_id,draft_revision,outcome,"
+                + "validation_digest,findings_json) VALUES ('validation-race','draft-a',1,'PASSED',?,'[]')",
+                "e".repeat(64));
+        CountDownLatch publishLocked = new CountDownLatch(1);
+        CountDownLatch releasePublish = new CountDownLatch(1);
+        AtomicInteger workLocks = new AtomicInteger();
+        JdbcArchiveMaintenanceStore publishingStore = new JdbcArchiveMaintenanceStore(jdbc) {
+            @Override
+            public ArchiveMaintenanceStore.CollectionWork lockCollectionWork(String collectionId, String workId) {
+                ArchiveMaintenanceStore.CollectionWork value = super.lockCollectionWork(collectionId, workId);
+                if ("work-withdraw".equals(workId) && workLocks.incrementAndGet() == 1) {
+                    publishLocked.countDown();
+                    await(releasePublish);
+                }
+                return value;
+            }
+        };
+        ArchiveMaintenanceServiceImpl publishingService = service(publishingStore,
+                new RootLockingPort(jdbc), new JdbcArchiveContentStore(jdbc));
+        ArchiveMaintenanceServiceImpl withdrawalService = service(new JdbcArchiveMaintenanceStore(jdbc),
+                new RootLockingPort(jdbc), new JdbcArchiveContentStore(jdbc));
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<ArchivePublicationDTO> publish = pool.submit(() -> publishingService.publish(
+                    ACTOR, JOB, "publish-race", 1,
+                    new ArchivePublishRequest("validation-race", "edition-a", "1")));
+            assertTrue(publishLocked.await(5, TimeUnit.SECONDS));
+            Future<String> withdrawal = pool.submit(() -> {
+                try {
+                    withdrawalService.withdraw(ACTOR, "work-withdraw", "edition-a",
+                            "withdraw-race", 1, new ArchiveWithdrawRequest("race", null));
+                    return "unexpected";
+                } catch (ArchiveMaintenanceException failure) {
+                    return failure.code();
+                }
+            });
+            releasePublish.countDown();
+            ArchivePublicationDTO publication = publish.get(10, TimeUnit.SECONDS);
+            assertEquals("ARCHIVE_REVISION_CONFLICT", withdrawal.get(10, TimeUnit.SECONDS));
+            assertEquals(publication.editionId(), jdbc.queryForObject(
+                    "SELECT active_edition_id FROM archive_work WHERE work_id='work-withdraw'", String.class));
+        } finally {
+            releasePublish.countDown();
+            pool.shutdownNow();
+            pool.awaitTermination(5, TimeUnit.SECONDS);
+        }
+        assertEquals("PUBLISHED", jdbc.queryForObject(
+                "SELECT state FROM archive_publication WHERE edition_id='edition-a'", String.class));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM archive_edition_withdrawal", Integer.class));
+        assertEquals(2L, jdbc.queryForObject(
+                "SELECT revision FROM archive_collection_work WHERE collection_id=? AND work_id='work-withdraw'",
+                Long.class, COLLECTION));
+    }
+
+    private void seedPublishedVersions() {
+        jdbc.update("INSERT INTO archive_collection_manager(collection_id,tenant_id,client_id,owner_jiacn,permissions,state,revision) VALUES (?,'0','client-a','owner-a','edition.withdraw,publish','ACTIVE',5)", COLLECTION);
+        seedPublishedContent();
+    }
+
+    private void seedPublishedContent() {
+        jdbc.update("INSERT INTO archive_work(work_id,title,active_edition_id) VALUES ('work-withdraw','title',NULL)");
+        jdbc.update("INSERT INTO archive_collection_work(collection_id,work_id,canonical_key,revision) VALUES (?,'work-withdraw','withdraw-key',1)", COLLECTION);
+        for (String edition : List.of("edition-a", "edition-b", "edition-c")) {
+            jdbc.update("INSERT INTO archive_edition(edition_id,work_id,import_state,source_sha256,manifest_sha256,manifest_file_sha256,source_utf8_byte_length,chapter_count,preface_paragraph_count,chapter_paragraph_count,reader_paragraph_count,preface_utf8_byte_length,chapter_utf8_byte_length,reader_utf8_byte_length) VALUES (?,'work-withdraw','READY',?,?,?,1,1,0,1,1,0,1,1)", edition, "a".repeat(64), SHA, "c".repeat(64));
+            jdbc.update("INSERT INTO archive_chapter(edition_id,block_id,block_type,reader_ordinal,chapter_number,title,paragraph_count,utf8_byte_length,block_content_sha256) VALUES (?,?,'CHAPTER',1,1,'chapter',1,1,?)", edition, edition + "-c001", "d".repeat(64));
+            jdbc.update("INSERT INTO archive_paragraph(edition_id,block_id,paragraph_id,ordinal,text,utf8_byte_length,sha256) VALUES (?,?,?,1,'x',1,?)", edition, edition + "-c001", edition + "-c001-p0001", "b".repeat(64));
+            jdbc.update("INSERT INTO archive_publication(publication_id,job_id,collection_id,work_id,edition_id,draft_revision,manifest_sha256,source_sha256,state,actor_type,actor_id,authorization_revision) VALUES (?,NULL,?,'work-withdraw',?,1,?,?,'PUBLISHED','HUMAN','owner-a',5)", "pub-" + edition, COLLECTION, edition, SHA, "a".repeat(64));
+        }
+        assertEquals(1, jdbc.update("UPDATE archive_work SET active_edition_id='edition-a' "
+                + "WHERE work_id='work-withdraw' AND active_edition_id IS NULL"));
+    }
+
     private ArchiveRuntimeScope runtime() {
         ArchiveExecutionGrantRecord grant = new JdbcArchiveMaintenanceStore(jdbc)
                 .findExecutionGrant(RUN, false);
@@ -747,7 +983,9 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                 statement.execute("SET FOREIGN_KEY_CHECKS=0");
                 try {
                     statement.execute("DROP TABLE IF EXISTS aam_test_agent_root");
-                    for (String table : new String[]{"archive_operation", "archive_event", "archive_publication",
+                    for (String table : new String[]{"archive_idempotency", "archive_note", "archive_bookmark",
+                            "archive_reader_progress", "archive_operation", "archive_event",
+                            "archive_edition_withdrawal", "archive_publication",
                             "archive_validation", "archive_draft", "archive_execution_grant", "archive_job_run",
                             "archive_maintenance_job", "archive_confirmed_request", "archive_source_snapshot", "archive_appointment",
                             "archive_appointment_slot", "archive_collection_work", "archive_collection_manager",

@@ -38,8 +38,8 @@ public class ArchiveReaderServiceImpl implements ArchiveReaderService {
 
     @Override @Transactional(readOnly=true)
     public ArchiveRepresentation<ArchiveCatalogDTO> editionCatalog(String editionId){
-        ArchiveContentStore.ActiveContent published=store.findPublishedContent(editionId);
-        if(published==null||published.work()==null||published.edition()==null) notFound();
+        ArchiveContentStore.ActiveContent published=requirePublished(editionId);
+        if(published.work()==null||published.edition()==null) notFound();
         return catalogRepresentation(published.work(),published.edition());
     }
 
@@ -84,6 +84,9 @@ public class ArchiveReaderServiceImpl implements ArchiveReaderService {
     }
 
     private ArchiveContentStore.ActiveContent requirePublished(String editionId){
+        String state=store.publicationState(editionId);
+        if("WITHDRAWN".equals(state)) throw new ArchiveResourceGoneException();
+        if(!"PUBLISHED".equals(state)) notFound();
         ArchiveContentStore.ActiveContent value=store.findPublishedContent(editionId);
         if(value==null||value.edition()==null||!"READY".equals(value.edition().importState())) notFound();
         return value;

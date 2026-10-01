@@ -16,6 +16,7 @@ class ArchiveReaderGenericEditionTest {
         ArchiveWorkRecord work = new ArchiveWorkRecord("work-small", "小型典籍", "edition-new");
         ArchiveEditionRecord old = new ArchiveEditionRecord("edition-old", "work-small", "READY",
                 "a".repeat(64), "b".repeat(64), "c".repeat(64), 12, 2, 0, 2, 2, 0, 12, 12);
+        when(store.publicationState("edition-old")).thenReturn("PUBLISHED");
         when(store.findPublishedContent("edition-old")).thenReturn(new ArchiveContentStore.ActiveContent(work, old));
         when(store.listBlocks("edition-old")).thenReturn(List.of(
                 new ArchiveBlockRecord("edition-old", "edition-old-c001", "CHAPTER", 1, 1,
@@ -29,6 +30,24 @@ class ArchiveReaderGenericEditionTest {
         assertNull(catalog.activeEdition().preface());
         assertEquals(2, catalog.activeEdition().chapters().size());
         assertThrows(ArchiveResourceNotFoundException.class, () -> reader.preface("edition-old"));
+    }
+
+    @Test
+    void exactWithdrawnEditionIsGoneWhileUnknownRemainsNotFound() {
+        ArchiveContentStore store = mock(ArchiveContentStore.class);
+        when(store.publicationState("edition-withdrawn")).thenReturn("WITHDRAWN");
+        when(store.publicationState("edition-never-published")).thenReturn(null);
+        ArchiveReaderServiceImpl reader = new ArchiveReaderServiceImpl(store);
+
+        assertThrows(ArchiveResourceGoneException.class,
+                () -> reader.editionCatalog("edition-withdrawn"));
+        assertThrows(ArchiveResourceGoneException.class,
+                () -> reader.preface("edition-withdrawn"));
+        assertThrows(ArchiveResourceGoneException.class,
+                () -> reader.chapter("edition-withdrawn", "chapter-a"));
+        assertThrows(ArchiveResourceNotFoundException.class,
+                () -> reader.editionCatalog("edition-never-published"));
+        verify(store, never()).listBlocks("edition-withdrawn");
     }
 
     @Test

@@ -21,6 +21,17 @@ class ArchiveMaintenanceSchemaCatalogTest {
         assertEquals("0:job_id", draft.indexes().get("uk_archive_draft_job"));
         assertEquals("job_id>archive_maintenance_job.job_id", draft.foreignKeys().get("fk_archive_draft_job"));
         assertTrue(draft.checks().get("chk_archive_draft_state").startsWith("YES:"));
+        var withdrawal = expected.tables().get("archive_edition_withdrawal");
+        assertEquals(new ArchiveMaintenanceSchemaCatalog.Column("varchar(1000)", false,
+                "utf8mb4_0900_bin"), withdrawal.columns().get("reason"));
+        assertEquals("0:publication_id", withdrawal.indexes().get("uk_archive_withdrawal_publication"));
+        assertEquals("publication_id>archive_publication.publication_id",
+                withdrawal.foreignKeys().get("fk_archive_withdrawal_publication"));
+        assertTrue(withdrawal.checks().get("chk_archive_withdrawal_outbox").contains("PENDING"));
+        assertEquals("YES:actor_type='HUMAN'",
+                withdrawal.checks().get("chk_archive_withdrawal_actor"));
+        assertEquals(ArchiveMaintenanceSchemaCatalog.normalizeCheck("(actor_type = 'HUMAN')"),
+                ArchiveMaintenanceSchemaCatalog.normalizeCheck("(actor_type = _utf8mb4\\'HUMAN\\')"));
         var event = expected.tables().get("archive_event");
         assertEquals("0:job_id,sequence", event.indexes().get("PRIMARY"));
         assertEquals("job_id>archive_maintenance_job.job_id", event.foreignKeys().get("fk_archive_event_job"));

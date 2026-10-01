@@ -14,6 +14,9 @@ public interface ArchiveMaintenanceService {
     ArchiveCapabilitiesDTO capabilities(ArchiveActorScope actor,String collectionId);
     ArchiveSlotDTO slot(ArchiveActorScope actor,String collectionId);
     ArchiveWorkStateDTO workState(ArchiveActorScope actor,String collectionId,String workId);
+    ArchiveEditionHistoryDTO editionHistory(ArchiveActorScope actor,String workId);
+    ArchiveEditionVersionDTO edition(ArchiveActorScope actor,String workId,String editionId);
+    ArchiveWithdrawalDTO withdraw(ArchiveActorScope actor,String workId,String editionId,String operationKey,long expectedWorkRevision,ArchiveWithdrawRequest request);
     List<ArchiveAppointmentDTO> appointments(ArchiveActorScope actor,String collectionId);
     ArchiveAppointmentDTO createAppointment(ArchiveActorScope actor,String collectionId,String operationKey,long expectedSlotRevision,ArchiveAppointmentCreateRequest request);
     ArchiveAppointmentDTO revokeAppointment(ArchiveActorScope actor,String appointmentId,String operationKey,long expectedRevision,ArchiveAppointmentRevokeRequest request);
@@ -35,6 +38,7 @@ public interface ArchiveMaintenanceService {
     ArchiveDraftDTO getDraft(ArchiveActorScope actor,String jobId);
     ArchiveDraftDTO updateDraft(ArchiveActorScope actor,String jobId,String operationKey,long expectedRevision,ArchiveDraftUpdateRequest request);
     ArchiveValidationDTO validate(ArchiveActorScope actor,String jobId,String operationKey,long expectedDraftRevision);
+    ArchiveValidationDTO validation(ArchiveActorScope actor,String draftId);
     ArchiveOperationDTO operationByKey(ArchiveActorScope actor,String operationKey);
     ArchiveJobDTO cancel(ArchiveActorScope actor,String jobId,String operationKey,long expectedJobRevision,ArchiveCancelRequest request);
     ArchivePublicationDTO publish(ArchiveActorScope actor,String jobId,String operationKey,long expectedDraftRevision,ArchivePublishRequest request);
@@ -50,4 +54,3 @@ public interface ArchiveMaintenanceService {
     ArchiveValidationDTO runtimeValidation(ArchiveRuntimeScope runtime,String jobId,String runId);
     ArchivePublicationDTO runtimePublish(ArchiveRuntimeScope runtime,String jobId,String runId,String operationKey,long expectedDraftRevision,ArchivePublishRequest request);
 }
-

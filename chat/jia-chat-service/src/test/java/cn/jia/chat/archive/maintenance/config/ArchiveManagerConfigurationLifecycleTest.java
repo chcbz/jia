@@ -36,6 +36,18 @@ class ArchiveManagerConfigurationLifecycleTest {
     }
 
     @Test
+    void independentWithdrawPermissionIsAcceptedOnlyWhenExplicitlyConfigured() {
+        ArchiveMaintenanceStore store = storeWithAudit();
+        when(store.lockManagerGrants()).thenReturn(List.of());
+        initializer(store, properties(2, "edition.withdraw")).reconcileConfiguredManagers();
+        var grant = org.mockito.ArgumentCaptor.forClass(ArchiveManagerGrantRecord.class);
+        verify(store).insertManagerGrant(grant.capture());
+        assertEquals("edition.withdraw", grant.getValue().permissions());
+        assertEquals("appoint,source.prepare,job.create,job.manage,draft.write,validate,publish",
+                new ArchiveMaintenanceProperties.ManagerGrant().getPermissions());
+    }
+
+    @Test
     void removalRevokesAtHigherRevisionAndFencesEveryLockedRun() {
         ArchiveMaintenanceStore store = storeWithAudit();
         when(store.lockManagerGrants()).thenReturn(List.of(current(4, "ACTIVE", "appoint,job.manage")));

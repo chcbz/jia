@@ -293,6 +293,39 @@ CREATE TABLE IF NOT EXISTS archive_publication (
     CONSTRAINT chk_archive_publication_state CHECK (state IN ('PUBLISHED','WITHDRAWN'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
+CREATE TABLE IF NOT EXISTS archive_edition_withdrawal (
+    withdrawal_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    publication_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    collection_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    work_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    edition_id VARCHAR(96) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    reason VARCHAR(1000) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    tenant_id VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    client_id VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    owner_jiacn VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    actor_type VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    actor_id VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    authorization_revision BIGINT NOT NULL,
+    requested_replacement_active_edition_id VARCHAR(96) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
+    resulting_active_edition_id VARCHAR(96) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
+    resulting_work_revision BIGINT NOT NULL,
+    operation_key VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    withdrawn_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    outbox_state VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    PRIMARY KEY (withdrawal_id),
+    UNIQUE KEY uk_archive_withdrawal_publication (publication_id),
+    UNIQUE KEY uk_archive_withdrawal_operation (tenant_id, client_id, owner_jiacn, operation_key),
+    KEY idx_archive_withdrawal_work (work_id, withdrawn_at),
+    KEY fk_archive_withdrawal_collection (collection_id),
+    KEY fk_archive_withdrawal_edition (edition_id),
+    CONSTRAINT fk_archive_withdrawal_publication FOREIGN KEY (publication_id) REFERENCES archive_publication(publication_id),
+    CONSTRAINT fk_archive_withdrawal_collection FOREIGN KEY (collection_id) REFERENCES archive_collection(collection_id),
+    CONSTRAINT fk_archive_withdrawal_work FOREIGN KEY (work_id) REFERENCES archive_work(work_id),
+    CONSTRAINT fk_archive_withdrawal_edition FOREIGN KEY (edition_id) REFERENCES archive_edition(edition_id),
+    CONSTRAINT chk_archive_withdrawal_revision CHECK ((authorization_revision >= 1) AND (resulting_work_revision >= 1)),
+    CONSTRAINT chk_archive_withdrawal_actor CHECK (actor_type = 'HUMAN'),
+    CONSTRAINT chk_archive_withdrawal_outbox CHECK (outbox_state IN ('PENDING','DELIVERED'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 CREATE TABLE IF NOT EXISTS archive_event (
     job_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
     sequence BIGINT NOT NULL,

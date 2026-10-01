@@ -1468,6 +1468,143 @@ class ArchiveMaintenanceServiceImplTest {
                 base.requestSha256());
     }
 
+    @Test
+    void withdrawalUsesIndependentPermissionWorkCasExplicitPointerAndExactReplay() {
+        allowManager("edition.withdraw");
+        String workId = "work-a";
+        String editionId = "edition-a";
+        ArchiveEditionVersionRecord version = new ArchiveEditionVersionRecord("pub-a", null,
+                COLLECTION, workId, editionId, 4, SHA, "b".repeat(64), "PUBLISHED",
+                "HUMAN", "owner-a", 3, Instant.parse("2026-09-27T00:00:00Z"), null);
+        when(store.findPublication(workId, editionId, false)).thenReturn(version);
+        when(store.lockCollectionWork(COLLECTION, workId)).thenReturn(
+                new ArchiveMaintenanceStore.CollectionWork(COLLECTION, workId, "key-a", 7));
+        when(content.lockWork(workId)).thenReturn(new ArchiveWorkRecord(workId, "title", editionId));
+        when(store.listPublications(workId, true)).thenReturn(List.of(version));
+        when(content.lockEdition(editionId)).thenReturn(new ArchiveEditionRecord(editionId, workId,
+                "READY", "b".repeat(64), SHA, "c".repeat(64), 1, 0, 0, 0, 0, 0, 0, 0));
+        when(store.withdrawPublication("pub-a")).thenReturn(1);
+        when(content.switchActiveEdition(workId, editionId, null)).thenReturn(1);
+        when(store.bumpCollectionWork(COLLECTION, workId, 7)).thenReturn(1);
+        var saved = new java.util.concurrent.atomic.AtomicReference<ArchiveWithdrawalRecord>();
+        var requestDigest = new java.util.concurrent.atomic.AtomicReference<String>();
+        when(store.beginOperation(eq(MANAGER), eq("withdraw-key"), eq("POST"), anyString(),
+                anyString(), eq("EDITION_WITHDRAWAL"), anyString())).thenAnswer(call -> {
+            if (saved.get() == null) {
+                requestDigest.set(call.getArgument(4));
+                return new ArchiveMaintenanceStore.Operation(true, "POST", call.getArgument(3),
+                        requestDigest.get(), "EDITION_WITHDRAWAL", call.getArgument(6), "PENDING");
+            }
+            return new ArchiveMaintenanceStore.Operation(false, "POST", call.getArgument(3),
+                    requestDigest.get(), "EDITION_WITHDRAWAL", saved.get().withdrawalId(), "COMMITTED");
+        });
+        doAnswer(call -> { saved.set(call.getArgument(0)); return null; })
+                .when(store).insertWithdrawal(any());
+        when(store.findWithdrawal(anyString())).thenAnswer(call -> saved.get());
+
+        ArchiveWithdrawalDTO first = service.withdraw(MANAGER, workId, editionId, "withdraw-key", 7,
+                new ArchiveWithdrawRequest("rights correction", null));
+        ArchiveWithdrawalDTO replay = service.withdraw(MANAGER, workId, editionId, "withdraw-key", 7,
+                new ArchiveWithdrawRequest("rights correction", null));
+
+        assertEquals(first, replay);
+        assertNull(first.resultingActiveEditionId());
+        assertEquals("8", first.resultingWorkRevision());
+        assertEquals("PENDING", first.outboxState());
+        verify(content, times(1)).switchActiveEdition(workId, editionId, null);
+        verify(store, times(1)).withdrawPublication("pub-a");
+        assertEquals("IDEMPOTENCY_CONFLICT", assertThrows(ArchiveMaintenanceException.class,
+                () -> service.withdraw(MANAGER, workId, editionId, "withdraw-key", 7,
+                        new ArchiveWithdrawRequest("changed reason", null))).code());
+    }
+
+    @Test
+    void withdrawalHidesForeignScopeAndDoesNotFollowPublishOrAgentAuthority() {
+        String workId = "work-a";
+        String editionId = "edition-a";
+        when(store.findPublication(workId, editionId, false)).thenReturn(
+                new ArchiveEditionVersionRecord("pub-a", null, COLLECTION, workId, editionId,
+                        1, SHA, SHA, "PUBLISHED", "AGENT", AGENT, 3,
+                        Instant.parse("2026-09-27T00:00:00Z"), null));
+        assertEquals("ARCHIVE_RESOURCE_NOT_FOUND", assertThrows(ArchiveMaintenanceException.class,
+                () -> service.withdraw(MANAGER, workId, editionId, "k", 1,
+                        new ArchiveWithdrawRequest("reason", null))).code());
+        ArchiveActorScope appointedAgent = new ArchiveActorScope("0", "client-a", AGENT);
+        assertEquals("ARCHIVE_RESOURCE_NOT_FOUND", assertThrows(ArchiveMaintenanceException.class,
+                () -> service.withdraw(appointedAgent, workId, editionId, "agent-k", 1,
+                        new ArchiveWithdrawRequest("reason", null))).code());
+        allowManager("publish");
+        ArchiveMaintenanceException denied = assertThrows(ArchiveMaintenanceException.class,
+                () -> service.withdraw(MANAGER, workId, editionId, "k", 1,
+                        new ArchiveWithdrawRequest("reason", null)));
+        assertEquals(403, denied.status());
+        verify(store, never()).withdrawPublication(anyString());
+    }
+
+    @Test
+    void editionHistoryExposesImmutablePublishAndWithdrawalFactsOnlyToActiveAuthorizedManager() {
+        allowManager("edition.withdraw");
+        ArchiveWithdrawalRecord withdrawal = new ArchiveWithdrawalRecord("awd-a", "pub-a",
+                COLLECTION, "work-a", "edition-a", "rights correction", "0", "client-a",
+                "owner-a", "HUMAN", "owner-a", 5, null, null, 8, "withdraw-key",
+                Instant.parse("2026-10-01T00:00:00Z"), "PENDING");
+        ArchiveEditionVersionRecord version = new ArchiveEditionVersionRecord("pub-a", "job-a",
+                COLLECTION, "work-a", "edition-a", 4, SHA, "b".repeat(64), "WITHDRAWN",
+                "HUMAN", "owner-a", 3, Instant.parse("2026-09-30T00:00:00Z"), withdrawal);
+        when(store.listPublications("work-a", false)).thenReturn(List.of(version));
+        when(store.listPublications("work-a", true)).thenReturn(List.of(version));
+        when(store.findPublication("work-a", "edition-a", false)).thenReturn(version);
+        when(store.lockCollectionWork(COLLECTION, "work-a")).thenReturn(
+                new ArchiveMaintenanceStore.CollectionWork(COLLECTION, "work-a", "key-a", 8));
+        when(content.lockWork("work-a")).thenReturn(new ArchiveWorkRecord("work-a", "title", null));
+
+        ArchiveEditionHistoryDTO history = service.editionHistory(MANAGER, "work-a");
+        ArchiveEditionVersionDTO detail = service.edition(MANAGER, "work-a", "edition-a");
+
+        assertEquals("8", history.workRevision());
+        assertNull(history.activeEditionId());
+        assertEquals(detail, history.editions().getFirst());
+        assertEquals(SHA, detail.manifestSha256());
+        assertEquals("b".repeat(64), detail.sourceSha256());
+        assertEquals("HUMAN", detail.actorType());
+        assertEquals("2026-09-30T00:00:00Z", detail.publishedAt());
+        assertEquals("WITHDRAWN", detail.state());
+        assertEquals("rights correction", detail.withdrawal().reason());
+        assertEquals("5", detail.withdrawal().authorizationRevision());
+        assertEquals("withdraw-key", detail.withdrawal().operationKey());
+
+        when(store.findManagerGrant(eq(MANAGER), eq(COLLECTION), anyBoolean()))
+                .thenReturn(new ArchiveManagerGrantRecord(COLLECTION, "0", "client-a", "owner-a",
+                        "edition.withdraw", 6, "REVOKED"));
+        assertEquals("ARCHIVE_RESOURCE_NOT_FOUND", assertThrows(ArchiveMaintenanceException.class,
+                () -> service.edition(MANAGER, "work-a", "edition-a")).code());
+    }
+
+    @Test
+    void validationReadReturnsOnlyExactCurrentRevisionForOwningActor() {
+        allowManager("job.manage");
+        ArchiveMaintenanceJobRecord job = job("DRAFT_ONLY");
+        ArchiveDraftRecord draft = new ArchiveDraftRecord(DRAFT, JOB, 4, "CHANGES_REQUIRED",
+                "{\"blocks\":[],\"excludedSourceRanges\":[]}", SHA, null, null);
+        when(store.findDraft(DRAFT, false)).thenReturn(draft);
+        when(store.findJob(JOB, false)).thenReturn(job);
+        when(store.findLatestValidation(DRAFT, 4)).thenReturn(new ArchiveValidationRecord(
+                "val-current", DRAFT, 4, "FAILED", "b".repeat(64), "[\"missing chapter\"]"));
+
+        ArchiveValidationDTO result = service.validation(MANAGER, DRAFT);
+
+        assertEquals("4", result.draftRevision());
+        assertEquals("FAILED", result.outcome());
+        assertEquals(List.of("missing chapter"), result.findings());
+        verify(store).findLatestValidation(DRAFT, 4);
+        verify(store, never()).findCurrentValidation(anyString(), anyLong());
+
+        ArchiveMaintenanceJobRecord foreign = jobScope(job, "0", "client-a", "owner-b");
+        when(store.findJob(JOB, false)).thenReturn(foreign);
+        assertEquals("ARCHIVE_RESOURCE_NOT_FOUND", assertThrows(ArchiveMaintenanceException.class,
+                () -> service.validation(MANAGER, DRAFT)).code());
+    }
+
     private ArchiveAgentExecutionPort.LockedIdentityRoot root(
             ArchiveAgentExecutionPort.TargetRequest target) {
         return new ArchiveAgentExecutionPort.LockedIdentityRoot(target.tenant(), target.client(),

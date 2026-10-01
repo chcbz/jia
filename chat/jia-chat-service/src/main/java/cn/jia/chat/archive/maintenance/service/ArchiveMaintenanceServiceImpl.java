@@ -209,12 +209,130 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
 
     @Override
     public ArchiveWorkStateDTO workState(ArchiveActorScope actor, String collectionId, String workId) {
-        requireManager(actor, collectionId, "publish", false);
+        requireWorkVersionReader(actor, collectionId);
         exactId(workId);
         ArchiveMaintenanceStore.CollectionWork cw = store.findCollectionWork(collectionId, workId);
         ArchiveWorkRecord work = content.findWork(workId);
         if (cw == null || work == null) notFound();
         return new ArchiveWorkStateDTO(workId, Long.toString(cw.revision()), work.activeEditionId());
+    }
+
+    @Override
+    public ArchiveEditionHistoryDTO editionHistory(ArchiveActorScope actor, String workId) {
+        exactId(workId);
+        List<ArchiveEditionVersionRecord> observed = store.listPublications(workId, false);
+        if (observed.isEmpty()) notFound();
+        String collectionId = exactVersionCollection(observed, workId);
+        requireVersionReader(actor, collectionId, false);
+        return transactions.required(() -> {
+            requireVersionReader(actor, collectionId, true);
+            ArchiveMaintenanceStore.CollectionWork collectionWork = store.lockCollectionWork(
+                    collectionId, workId);
+            ArchiveWorkRecord work = content.lockWork(workId);
+            List<ArchiveEditionVersionRecord> versions = store.listPublications(workId, true);
+            if (collectionWork == null || work == null || versions.isEmpty()) notFound();
+            if (!same(collectionId, exactVersionCollection(versions, workId))) notFound();
+            return new ArchiveEditionHistoryDTO(workId, Long.toString(collectionWork.revision()),
+                    work.activeEditionId(), versions.stream().map(this::versionDto).toList());
+        });
+    }
+
+    @Override
+    public ArchiveEditionVersionDTO edition(ArchiveActorScope actor, String workId, String editionId) {
+        exactId(workId);
+        exactId(editionId);
+        ArchiveEditionVersionRecord version = store.findPublication(workId, editionId, false);
+        if (version == null || !same(workId, version.workId())) notFound();
+        requireVersionReader(actor, version.collectionId());
+        return versionDto(version);
+    }
+
+    @Override
+    public ArchiveWithdrawalDTO withdraw(ArchiveActorScope actor, String workId, String editionId,
+            String key, long expectedWorkRevision, ArchiveWithdrawRequest request) {
+        requireScope(actor);
+        exactId(workId);
+        exactId(editionId);
+        requireKey(key);
+        if (request == null || !exact(request.reason(), 1000)) {
+            invalid("Withdrawal reason is required");
+        }
+        String replacement = request.replacementActiveEditionId();
+        if (replacement != null) {
+            exactId(replacement);
+            if (same(replacement, editionId)) invalid("Replacement edition must differ from the withdrawn edition");
+        }
+        ArchiveEditionVersionRecord observed = store.findPublication(workId, editionId, false);
+        if (observed == null || !same(workId, observed.workId())) notFound();
+        requireWithdrawManager(actor, observed.collectionId(), false);
+        String path = "/archive/admin/v1/works/" + workId + "/editions/" + editionId + "/withdraw";
+        String requestSha = digest(expectedWorkRevision + "\0" + request.reason() + "\0"
+                + String.valueOf(replacement));
+        return transactions.required(() -> {
+            ArchiveManagerGrantRecord manager = requireWithdrawManager(actor, observed.collectionId(), true);
+            ArchiveMaintenanceStore.Operation op = operation(actor, key, "POST", path, requestSha,
+                    "EDITION_WITHDRAWAL", newId("awd"));
+            if (!op.created()) {
+                ArchiveWithdrawalRecord replay = store.findWithdrawal(op.targetId());
+                if (replay == null || !same(replay.workId(), workId)
+                        || !same(replay.editionId(), editionId)) {
+                    conflict("ARCHIVE_WITHDRAWAL_CONFLICT", "Withdrawal receipt is unavailable");
+                }
+                return withdrawalDto(replay);
+            }
+            ArchiveMaintenanceStore.CollectionWork collectionWork = store.lockCollectionWork(
+                    observed.collectionId(), workId);
+            ArchiveWorkRecord work = content.lockWork(workId);
+            if (collectionWork == null || work == null) notFound();
+            if (collectionWork.revision() != expectedWorkRevision) {
+                revisionConflict(collectionWork.revision());
+            }
+            List<ArchiveEditionVersionRecord> locked = store.listPublications(workId, true);
+            ArchiveEditionVersionRecord target = locked.stream()
+                    .filter(value -> same(value.editionId(), editionId)).findFirst().orElse(null);
+            if (target == null || !same(target.collectionId(), observed.collectionId())) notFound();
+            if (!"PUBLISHED".equals(target.state()) || target.withdrawal() != null) {
+                conflict("ARCHIVE_EDITION_NOT_PUBLISHED", "Archive edition is not published");
+            }
+            ArchiveEditionVersionRecord replacementPublication = null;
+            if (replacement != null) {
+                String replacementId = replacement;
+                replacementPublication = locked.stream()
+                        .filter(value -> same(value.editionId(), replacementId)).findFirst().orElse(null);
+                if (replacementPublication == null || !same(replacementPublication.collectionId(), target.collectionId())
+                        || !"PUBLISHED".equals(replacementPublication.state())) {
+                    conflict("ARCHIVE_REPLACEMENT_NOT_PUBLISHED", "Replacement edition is not published for this work");
+                }
+            }
+            List<String> editionLocks = new ArrayList<>();
+            editionLocks.add(editionId);
+            if (replacement != null) editionLocks.add(replacement);
+            editionLocks.stream().distinct().sorted().forEach(id -> {
+                ArchiveEditionRecord edition = content.lockEdition(id);
+                if (edition == null || !same(edition.workId(), workId) || !"READY".equals(edition.importState())) {
+                    conflict("ARCHIVE_EDITION_CHANGED", "Archive edition changed during withdrawal");
+                }
+            });
+            boolean active = same(work.activeEditionId(), editionId);
+            String resultingActive = active ? replacement : work.activeEditionId();
+            if (store.withdrawPublication(target.publicationId()) != 1) {
+                conflict("ARCHIVE_EDITION_CHANGED", "Archive edition changed during withdrawal");
+            }
+            if (active && content.switchActiveEdition(workId, editionId, replacement) != 1) {
+                conflict("ACTIVE_EDITION_CHANGED", "Active archive edition changed");
+            }
+            if (store.bumpCollectionWork(target.collectionId(), workId, collectionWork.revision()) != 1) {
+                conflict("ACTIVE_EDITION_CHANGED", "Archive work revision changed");
+            }
+            ArchiveWithdrawalRecord withdrawal = new ArchiveWithdrawalRecord(op.targetId(),
+                    target.publicationId(), target.collectionId(), workId, editionId, request.reason(),
+                    actor.tenantId(), actor.clientId(), actor.ownerJiacn(), "HUMAN", actor.ownerJiacn(),
+                    manager.revision(), replacement, resultingActive, collectionWork.revision() + 1,
+                    key, clock.instant(), "PENDING");
+            store.insertWithdrawal(withdrawal);
+            store.commitOperation(actor, key, withdrawal.withdrawalId());
+            return withdrawalDto(withdrawal);
+        });
     }
 
     @Override
@@ -901,6 +1019,20 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
     }
 
     @Override
+    public ArchiveValidationDTO validation(ArchiveActorScope actor, String draftId) {
+        requireScope(actor);
+        exactId(draftId);
+        ArchiveDraftRecord draft = store.findDraft(draftId, false);
+        if (draft == null) notFound();
+        ArchiveMaintenanceJobRecord job = requireJobForActor(actor, draft.jobId(), false);
+        requireValidationReader(actor, job.collectionId());
+        if (!same(job.draftId(), draft.draftId())) notFound();
+        ArchiveValidationRecord validation = store.findLatestValidation(draft.draftId(), draft.revision());
+        if (validation == null) notFound();
+        return validationDto(validation);
+    }
+
+    @Override
     public ArchiveOperationDTO operationByKey(ArchiveActorScope actor, String key) {
         requireScope(actor);
         requireKey(key);
@@ -943,6 +1075,16 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             };
             requireManager(actor, target.collectionId(), permission, false);
         } else {
+            java.util.regex.Matcher withdrawal = Pattern.compile(
+                    "^/archive/admin/v1/works/([A-Za-z0-9._:-]{1,100})/editions/([A-Za-z0-9._:-]{1,100})/withdraw$")
+                    .matcher(path);
+            if (withdrawal.matches() && "EDITION_WITHDRAWAL".equals(op.targetType())) {
+                ArchiveEditionVersionRecord target = store.findPublication(
+                        withdrawal.group(1), withdrawal.group(2), false);
+                if (target == null) notFound();
+                requireWithdrawManager(actor, target.collectionId(), false);
+                return new ArchiveOperationDTO(key, op.state(), op.targetType(), op.targetId());
+            }
             // Native operations and unknown paths cannot be inspected through a user JWT.
             notFound();
         }
@@ -1707,6 +1849,56 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
                 appointment.agentId());
     }
 
+    private ArchiveManagerGrantRecord requireWithdrawManager(ArchiveActorScope actor,
+            String collectionId, boolean lock) {
+        requireScope(actor);
+        ArchiveManagerGrantRecord grant = store.findManagerGrant(actor, collectionId, lock);
+        if (grant == null || !"ACTIVE".equals(grant.state())) notFound();
+        if (!grant.allows("edition.withdraw")) {
+            forbidden("ARCHIVE_FORBIDDEN", "Archive edition withdrawal permission is required");
+        }
+        return grant;
+    }
+
+    private ArchiveManagerGrantRecord requireWorkVersionReader(ArchiveActorScope actor,
+            String collectionId) {
+        requireScope(actor);
+        ArchiveManagerGrantRecord grant = store.findManagerGrant(actor, collectionId, false);
+        if (grant == null || !"ACTIVE".equals(grant.state())) notFound();
+        if (!(grant.allows("publish") || grant.allows("edition.withdraw"))) {
+            forbidden("ARCHIVE_FORBIDDEN", "Archive work version permission is required");
+        }
+        return grant;
+    }
+
+    private ArchiveManagerGrantRecord requireVersionReader(ArchiveActorScope actor,
+            String collectionId) {
+        return requireVersionReader(actor, collectionId, false);
+    }
+
+    private ArchiveManagerGrantRecord requireVersionReader(ArchiveActorScope actor,
+            String collectionId, boolean lock) {
+        requireScope(actor);
+        ArchiveManagerGrantRecord grant = store.findManagerGrant(actor, collectionId, lock);
+        if (grant == null || !"ACTIVE".equals(grant.state())) notFound();
+        if (!(grant.allows("publish") || grant.allows("edition.withdraw"))) {
+            forbidden("ARCHIVE_FORBIDDEN", "Archive edition history permission is required");
+        }
+        return grant;
+    }
+
+    private ArchiveManagerGrantRecord requireValidationReader(ArchiveActorScope actor,
+            String collectionId) {
+        requireScope(actor);
+        ArchiveManagerGrantRecord grant = store.findManagerGrant(actor, collectionId, false);
+        if (grant == null || !"ACTIVE".equals(grant.state())) notFound();
+        if (!(grant.allows("draft.write") || grant.allows("validate")
+                || grant.allows("publish") || grant.allows("job.manage"))) {
+            forbidden("ARCHIVE_FORBIDDEN", "Archive validation read permission is required");
+        }
+        return grant;
+    }
+
     private ArchiveManagerGrantRecord requireManager(ArchiveActorScope actor, String collectionId,
             String permission, boolean lock) {
         requireScope(actor);
@@ -2281,6 +2473,31 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
                 value.state(), parseDraft(value.contentJson()), value.contentSha256(),
                 value.validatedRevision() == null ? null : Long.toString(value.validatedRevision()),
                 value.validationId());
+    }
+
+    private String exactVersionCollection(List<ArchiveEditionVersionRecord> versions, String workId) {
+        String collectionId = versions.getFirst().collectionId();
+        if (versions.stream().anyMatch(value -> !same(workId, value.workId())
+                || !same(collectionId, value.collectionId()))) {
+            throw new IllegalStateException("Persisted archive edition history scope is invalid");
+        }
+        return collectionId;
+    }
+
+    private ArchiveWithdrawalDTO withdrawalDto(ArchiveWithdrawalRecord value) {
+        return new ArchiveWithdrawalDTO(value.withdrawalId(), value.editionId(), value.reason(),
+                value.actorType(), value.actorId(), Long.toString(value.authorizationRevision()),
+                value.withdrawnAt().toString(), value.requestedReplacementActiveEditionId(),
+                value.resultingActiveEditionId(), Long.toString(value.resultingWorkRevision()),
+                value.operationKey(), value.outboxState());
+    }
+
+    private ArchiveEditionVersionDTO versionDto(ArchiveEditionVersionRecord value) {
+        return new ArchiveEditionVersionDTO(value.publicationId(), value.collectionId(),
+                value.workId(), value.editionId(), Long.toString(value.draftRevision()),
+                value.manifestSha256(), value.sourceSha256(), value.state(), value.actorType(),
+                value.actorId(), Long.toString(value.authorizationRevision()),
+                value.publishedAt().toString(), value.withdrawal() == null ? null : withdrawalDto(value.withdrawal()));
     }
 
     private ArchiveValidationDTO validationDto(ArchiveValidationRecord value) {

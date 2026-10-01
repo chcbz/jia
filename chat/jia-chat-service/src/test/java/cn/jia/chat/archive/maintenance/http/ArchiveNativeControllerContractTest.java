@@ -104,6 +104,67 @@ class ArchiveNativeControllerContractTest {
     }
 
     @Test
+    void withdrawAndValidationRoutesUseWorkCasStrictBodyAndSanitizedReceipts() {
+        ArchiveMaintenanceService service = mock(ArchiveMaintenanceService.class);
+        ArchiveAdminController controller = new ArchiveAdminController(service, new ObjectMapper());
+        var receipt = new cn.jia.chat.archive.maintenance.dto.ArchiveWithdrawalDTO(
+                "withdrawal-a", "edition-a", "rights correction", "HUMAN", "owner-a", "5",
+                "2026-10-01T00:00:00Z", null, null, "8", "withdraw-key", "PENDING");
+        when(service.withdraw(any(), eq("work-a"), eq("edition-a"), eq("withdraw-key"), eq(7L), any()))
+                .thenReturn(receipt);
+
+        var response = controller.withdraw("work-a", "edition-a", "withdraw-key", "\"v7\"",
+                "{\"reason\":\"rights correction\",\"replacementActiveEditionId\":null}"
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8), authenticatedJwt());
+
+        assertEquals("\"v8\"", response.getHeaders().getETag());
+        assertEquals("private, no-store", response.getHeaders().getCacheControl());
+        var withdrawalJson = new ObjectMapper().valueToTree(response.getBody().getData());
+        assertEquals(Set.of("withdrawalId", "editionId", "reason", "actorType", "actorId",
+                "authorizationRevision", "withdrawnAt", "requestedReplacementActiveEditionId",
+                "resultingActiveEditionId", "resultingWorkRevision", "operationKey", "outboxState"),
+                names(withdrawalJson));
+        assertFalse(withdrawalJson.toString().contains("tenantId"));
+        assertFalse(withdrawalJson.toString().contains("clientId"));
+        assertFalse(withdrawalJson.toString().contains("ownerJiacn"));
+        ArgumentCaptor<cn.jia.chat.archive.maintenance.dto.ArchiveWithdrawRequest> body =
+                ArgumentCaptor.forClass(cn.jia.chat.archive.maintenance.dto.ArchiveWithdrawRequest.class);
+        verify(service).withdraw(any(), eq("work-a"), eq("edition-a"), eq("withdraw-key"), eq(7L), body.capture());
+        assertEquals("rights correction", body.getValue().reason());
+        assertNull(body.getValue().replacementActiveEditionId());
+        ArchiveMaintenanceException injected = assertThrows(ArchiveMaintenanceException.class,
+                () -> controller.withdraw("work-a", "edition-a", "other", "\"v7\"",
+                        "{\"reason\":\"x\",\"ownerJiacn\":\"forged\"}"
+                                .getBytes(java.nio.charset.StandardCharsets.UTF_8), authenticatedJwt()));
+        assertEquals("INVALID_REQUEST", injected.code());
+
+        var validation = new cn.jia.chat.archive.maintenance.dto.ArchiveValidationDTO(
+                "validation-a", "draft-a", "4", "FAILED", "a".repeat(64), List.of("finding"));
+        when(service.validation(any(), eq("draft-a"))).thenReturn(validation);
+        var validationResponse = controller.validation("draft-a", authenticatedJwt());
+        assertEquals("\"v4\"", validationResponse.getHeaders().getETag());
+        assertEquals("FAILED", validationResponse.getBody().getData().outcome());
+
+        var version = new cn.jia.chat.archive.maintenance.dto.ArchiveEditionVersionDTO(
+                "publication-a", "platform-classics", "work-a", "edition-a", "4",
+                "a".repeat(64), "b".repeat(64), "WITHDRAWN", "HUMAN", "owner-a",
+                "5", "2026-09-30T00:00:00Z", receipt);
+        var history = new cn.jia.chat.archive.maintenance.dto.ArchiveEditionHistoryDTO(
+                "work-a", "8", null, List.of(version));
+        when(service.editionHistory(any(), eq("work-a"))).thenReturn(history);
+        when(service.edition(any(), eq("work-a"), eq("edition-a"))).thenReturn(version);
+        var historyResponse = controller.editionHistory("work-a", authenticatedJwt());
+        var detailResponse = controller.edition("work-a", "edition-a", authenticatedJwt());
+        assertEquals("\"v8\"", historyResponse.getHeaders().getETag());
+        assertEquals(Set.of("workId", "workRevision", "activeEditionId", "editions"),
+                names(new ObjectMapper().valueToTree(historyResponse.getBody().getData())));
+        assertEquals(Set.of("publicationId", "collectionId", "workId", "editionId",
+                "draftRevision", "manifestSha256", "sourceSha256", "state", "actorType",
+                "actorId", "authorizationRevision", "publishedAt", "withdrawal"),
+                names(new ObjectMapper().valueToTree(detailResponse.getBody().getData())));
+    }
+
+    @Test
     void nativeContextRequiresSingletonExactGrantCommandAttemptAndEpochHeaders() {
         ArchiveMaintenanceService service = mock(ArchiveMaintenanceService.class);
         ArchiveNativeController controller = new ArchiveNativeController(service, new ObjectMapper());

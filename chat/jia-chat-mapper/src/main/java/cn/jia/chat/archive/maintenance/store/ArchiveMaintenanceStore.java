@@ -58,12 +58,14 @@ public interface ArchiveMaintenanceStore {
                           String state, String waitReason);
 
     ArchiveDraftRecord findDraftByJob(String jobId, boolean lock);
+    ArchiveDraftRecord findDraft(String draftId, boolean lock);
     void insertDraft(ArchiveDraftRecord draft);
     int updateDraft(String draftId, long expectedRevision, long newRevision, String state,
                     String contentJson, String contentSha256, Long validatedRevision, String validationId);
     void insertValidation(ArchiveValidationRecord validation);
     ArchiveValidationRecord findValidation(String validationId);
     ArchiveValidationRecord findCurrentValidation(String draftId, long draftRevision);
+    ArchiveValidationRecord findLatestValidation(String draftId, long draftRevision);
 
     CollectionWork lockCollectionWork(String collectionId, String workId);
     CollectionWork findCollectionWork(String collectionId, String workId);
@@ -71,6 +73,11 @@ public interface ArchiveMaintenanceStore {
     int bumpCollectionWork(String collectionId, String workId, long expectedRevision);
     void insertPublication(ArchivePublicationRecord publication);
     ArchivePublicationRecord findPublicationByJob(String jobId);
+    ArchiveEditionVersionRecord findPublication(String workId, String editionId, boolean lock);
+    List<ArchiveEditionVersionRecord> listPublications(String workId, boolean lock);
+    int withdrawPublication(String publicationId);
+    void insertWithdrawal(ArchiveWithdrawalRecord withdrawal);
+    ArchiveWithdrawalRecord findWithdrawal(String withdrawalId);
 
     void appendJobEvent(String jobId, long jobRevision, String eventType, String dataJson);
     List<ArchiveJobEventRecord> listJobEvents(String jobId, long afterSequence, int limit);

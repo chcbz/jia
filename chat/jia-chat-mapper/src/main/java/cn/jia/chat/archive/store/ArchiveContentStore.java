@@ -14,6 +14,7 @@ public interface ArchiveContentStore {
     default ActiveContent findPublishedContent(String editionId) { return null; }
     default List<ArchiveWorkRecord> listActiveWorks(int limit) { return List.of(); }
     default boolean isPublished(String editionId) { return true; }
+    default String publicationState(String editionId) { return isPublished(editionId) ? "PUBLISHED" : null; }
     default void ensureLegacyPublication(String collectionId, String canonicalKey,
                                          ArchiveWorkRecord work, ArchiveEditionRecord edition) { }
     void insertEdition(ArchiveEditionRecord edition);
@@ -31,6 +32,9 @@ public interface ArchiveContentStore {
     ArchiveWorkRecord lockWork(String workId);
     ArchiveEditionRecord lockEdition(String editionId);
     int switchActiveEdition(String workId, String editionId);
+    default int switchActiveEdition(String workId, String expectedEditionId, String replacementEditionId) {
+        throw new UnsupportedOperationException("active-edition CAS is not supported by this store");
+    }
     int markActivated(String editionId);
 
     record ActiveContent(ArchiveWorkRecord work, ArchiveEditionRecord edition) { }

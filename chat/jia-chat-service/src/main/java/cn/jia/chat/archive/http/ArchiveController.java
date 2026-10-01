@@ -4,6 +4,7 @@ import cn.jia.chat.archive.config.ArchiveReaderAccessPolicy;
 import cn.jia.chat.archive.service.ArchiveReaderService;
 import cn.jia.chat.archive.service.ArchiveRepresentation;
 import cn.jia.chat.archive.service.ArchiveResourceNotFoundException;
+import cn.jia.chat.archive.service.ArchiveResourceGoneException;
 import cn.jia.core.entity.JsonResult;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -85,6 +86,8 @@ public class ArchiveController {
         if (!accessPolicy.allows(authorization.tenantId(), authorization.clientId())) return notFound();
         try {
             return render(ifNoneMatch, work ? readerService.workCatalog(id) : readerService.editionCatalog(id));
+        } catch (ArchiveResourceGoneException withdrawn) {
+            return gone();
         } catch (ArchiveResourceNotFoundException unavailable) {
             return notFound();
         }
@@ -103,6 +106,8 @@ public class ArchiveController {
         if (!accessPolicy.allows(authorization.tenantId(), authorization.clientId())) return notFound();
         try {
             return render(ifNoneMatch, readerService.preface(editionId));
+        } catch (ArchiveResourceGoneException withdrawn) {
+            return gone();
         } catch (ArchiveResourceNotFoundException unavailable) {
             return notFound();
         }
@@ -122,6 +127,8 @@ public class ArchiveController {
         if (!accessPolicy.allows(authorization.tenantId(), authorization.clientId())) return notFound();
         try {
             return render(ifNoneMatch, readerService.chapter(editionId, chapterId));
+        } catch (ArchiveResourceGoneException withdrawn) {
+            return gone();
         } catch (ArchiveResourceNotFoundException unavailable) {
             return notFound();
         }
@@ -180,6 +187,11 @@ public class ArchiveController {
     private ResponseEntity<JsonResult<?>> authIncomplete() {
         return error(HttpStatus.UNAUTHORIZED, "AUTH_CONTEXT_INCOMPLETE",
                 "Archive authentication context is incomplete");
+    }
+
+    private ResponseEntity<JsonResult<?>> gone() {
+        return error(HttpStatus.GONE, "ARCHIVE_EDITION_WITHDRAWN",
+                "Archive edition was withdrawn");
     }
 
     private ResponseEntity<JsonResult<?>> notFound() {

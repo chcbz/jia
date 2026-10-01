@@ -21,6 +21,10 @@ import cn.jia.chat.archive.maintenance.dto.ArchiveRecoveryContextDTO;
 import cn.jia.chat.archive.maintenance.dto.ArchivePublicationDTO;
 import cn.jia.chat.archive.maintenance.dto.ArchivePublishRequest;
 import cn.jia.chat.archive.maintenance.dto.ArchiveValidationDTO;
+import cn.jia.chat.archive.maintenance.dto.ArchiveEditionHistoryDTO;
+import cn.jia.chat.archive.maintenance.dto.ArchiveEditionVersionDTO;
+import cn.jia.chat.archive.maintenance.dto.ArchiveWithdrawalDTO;
+import cn.jia.chat.archive.maintenance.dto.ArchiveWithdrawRequest;
 import cn.jia.chat.archive.maintenance.model.ArchiveActorScope;
 import cn.jia.chat.archive.maintenance.service.ArchiveMaintenanceException;
 import cn.jia.chat.archive.maintenance.service.ArchiveMaintenanceService;
@@ -72,6 +76,39 @@ public class ArchiveAdminController {
     public JsonResult<cn.jia.chat.archive.maintenance.dto.ArchiveWorkStateDTO> workState(
             @PathVariable String collectionId, @PathVariable String workId, Authentication authentication) {
         return JsonResult.success(service.workState(actor(authentication), collectionId, workId));
+    }
+
+    @GetMapping("/works/{workId}/editions")
+    public ResponseEntity<JsonResult<ArchiveEditionHistoryDTO>> editionHistory(
+            @PathVariable String workId, Authentication authentication) {
+        ArchiveEditionHistoryDTO result = service.editionHistory(actor(authentication), workId);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.ETAG, ArchiveHttpPreconditions.etag(result.workRevision()))
+                .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                .body(JsonResult.success(result));
+    }
+
+    @GetMapping("/works/{workId}/editions/{editionId}")
+    public ResponseEntity<JsonResult<ArchiveEditionVersionDTO>> edition(
+            @PathVariable String workId, @PathVariable String editionId,
+            Authentication authentication) {
+        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                .body(JsonResult.success(service.edition(actor(authentication), workId, editionId)));
+    }
+
+    @PostMapping("/works/{workId}/editions/{editionId}/withdraw")
+    public ResponseEntity<JsonResult<ArchiveWithdrawalDTO>> withdraw(
+            @PathVariable String workId, @PathVariable String editionId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String key,
+            @RequestHeader(value = HttpHeaders.IF_MATCH, required = false) String ifMatch,
+            @RequestBody byte[] body, Authentication authentication) {
+        ArchiveWithdrawalDTO result = service.withdraw(actor(authentication), workId, editionId,
+                key, ArchiveHttpPreconditions.revision(ifMatch),
+                ArchiveStrictRequest.read(mapper, body, ArchiveWithdrawRequest.class));
+        return ResponseEntity.ok()
+                .header(HttpHeaders.ETAG, ArchiveHttpPreconditions.etag(result.resultingWorkRevision()))
+                .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                .body(JsonResult.success(result));
     }
 
     @GetMapping("/collections/{collectionId}/appointments")
@@ -265,6 +302,16 @@ public class ArchiveAdminController {
             Authentication authentication) {
         return JsonResult.success(service.validate(actor(authentication), jobId, key,
                 ArchiveHttpPreconditions.revision(ifMatch)));
+    }
+
+    @GetMapping("/drafts/{draftId}/validation")
+    public ResponseEntity<JsonResult<ArchiveValidationDTO>> validation(
+            @PathVariable String draftId, Authentication authentication) {
+        ArchiveValidationDTO result = service.validation(actor(authentication), draftId);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.ETAG, ArchiveHttpPreconditions.etag(result.draftRevision()))
+                .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                .body(JsonResult.success(result));
     }
 
     @GetMapping("/operations/by-key")

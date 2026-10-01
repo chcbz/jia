@@ -5,6 +5,7 @@ import cn.jia.chat.archive.config.ArchiveReaderProperties;
 import cn.jia.chat.archive.dto.ArchiveCatalogDTO;
 import cn.jia.chat.archive.service.ArchiveReaderService;
 import cn.jia.chat.archive.service.ArchiveRepresentation;
+import cn.jia.chat.archive.service.ArchiveResourceGoneException;
 import cn.jia.core.entity.JsonResult;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -88,6 +89,19 @@ class ArchiveControllerTest {
         assertEquals(HttpStatus.NOT_MODIFIED, notModified.getStatusCode());
         assertEquals(etag, notModified.getHeaders().getETag());
         assertNull(notModified.getBody());
+    }
+
+    @Test
+    void exactWithdrawnEditionReturnsGoneWithoutFallingBackToNotFound() {
+        ArchiveReaderService service = mock(ArchiveReaderService.class);
+        when(service.editionCatalog("edition-withdrawn")).thenThrow(new ArchiveResourceGoneException());
+        ArchiveController controller = new ArchiveController(service, enabledPolicy());
+        JwtAuthenticationToken authentication = jwt(Map.of("jiacn", "tenant-a", "client_id", "client-a"));
+
+        var response = controller.editionCatalog("edition-withdrawn", null, authentication);
+
+        assertEquals(HttpStatus.GONE, response.getStatusCode());
+        assertEquals("ARCHIVE_EDITION_WITHDRAWN", response.getBody().getCode());
     }
 
     @Test
