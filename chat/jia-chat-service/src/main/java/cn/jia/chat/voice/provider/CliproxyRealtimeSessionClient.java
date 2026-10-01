@@ -36,6 +36,9 @@ final class CliproxyRealtimeSessionClient {
     static final int MAX_TEXT_CHARS = 256 * 1024;
     static final int MAX_BASE64_DELTA_CHARS = 1536 * 1024;
     static final int MAX_INPUT_PCM_CHUNK_BYTES = 256 * 1024;
+    static final int MAX_CLIENT_ITEM_ID_CHARS = 32;
+
+    private static final String CLIENT_ITEM_ID_PREFIX = "item_cyf_";
 
     private static final String TRANSCRIPTION_INSTRUCTION =
             "Transcribe only the spoken words in the supplied audio. Return a faithful transcript "
@@ -430,7 +433,9 @@ final class CliproxyRealtimeSessionClient {
                 }
                 send(Map.of("type", "input_audio_buffer.commit"), false);
             } else {
-                inputItemId = "item_cyf_" + UUID.randomUUID().toString().replace("-", "");
+                String entropy = UUID.randomUUID().toString().replace("-", "");
+                inputItemId = CLIENT_ITEM_ID_PREFIX + entropy.substring(0,
+                        MAX_CLIENT_ITEM_ID_CHARS - CLIENT_ITEM_ID_PREFIX.length());
                 send(Map.of("type", "conversation.item.create", "item", Map.of(
                         "id", inputItemId, "type", "message", "role", "user",
                         "content", java.util.List.of(Map.of(

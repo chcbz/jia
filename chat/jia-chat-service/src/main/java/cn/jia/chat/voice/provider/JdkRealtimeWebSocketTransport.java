@@ -3,13 +3,13 @@ package cn.jia.chat.voice.provider;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
+import java.net.http.HttpTimeoutException;
 import java.net.http.WebSocket;
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -27,10 +27,16 @@ final class JdkRealtimeWebSocketTransport implements RealtimeWebSocketTransport 
                 .connectTimeout(connectTimeout)
                 .header("Authorization", authorization)
                 .buildAsync(uri, adapter);
+        WebSocket socket = awaitOpening(opening, adapter);
+        return adapter.connection(socket);
+    }
+
+    static WebSocket awaitOpening(
+            CompletableFuture<WebSocket> opening, AdapterListener adapter)
+            throws IOException, InterruptedException, TimeoutException {
         try {
-            WebSocket socket = opening.get(connectTimeout.toMillis(), TimeUnit.MILLISECONDS);
-            return adapter.connection(socket);
-        } catch (TimeoutException | InterruptedException exception) {
+            return opening.get();
+        } catch (InterruptedException exception) {
             adapter.cancel();
             opening.cancel(true);
             throw exception;
@@ -38,6 +44,12 @@ final class JdkRealtimeWebSocketTransport implements RealtimeWebSocketTransport 
             adapter.cancel();
             opening.cancel(true);
             Throwable cause = exception.getCause();
+            if (cause instanceof HttpTimeoutException timeoutCause) {
+                TimeoutException timeout = new TimeoutException(
+                        "realtime websocket opening handshake timed out");
+                timeout.initCause(timeoutCause);
+                throw timeout;
+            }
             if (cause instanceof IOException ioException) {
                 throw ioException;
             }

@@ -15,6 +15,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 import java.net.URI;
+import java.net.http.HttpTimeoutException;
 import java.net.http.WebSocket;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -31,6 +32,7 @@ import java.util.concurrent.TimeoutException;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
@@ -96,6 +98,9 @@ class CliproxyRealtimeVoiceProviderTest {
                 transport.connection.types);
         JsonNode item = transport.connection.messages.get(1).path("item");
         assertTrue(item.path("id").textValue().startsWith("item_cyf_"));
+        assertEquals(CliproxyRealtimeSessionClient.MAX_CLIENT_ITEM_ID_CHARS,
+                item.path("id").textValue().length());
+        assertFalse(transport.connection.overlongInputItemRejected);
         assertEquals("user", item.path("role").textValue());
         assertEquals("Agent reply exactly.", item.path("content").get(0)
                 .path("text").textValue());
@@ -355,6 +360,44 @@ class CliproxyRealtimeVoiceProviderTest {
     }
 
     @Test
+    void websocketOpeningReliesOnJdkHandshakeTimeoutWithoutSecondTimedWait() throws Exception {
+        RealtimeWebSocketTransport.Listener delegate =
+                mock(RealtimeWebSocketTransport.Listener.class);
+        WebSocket socket = mock(WebSocket.class);
+        TrackingOpening opening = new TrackingOpening();
+        opening.complete(socket);
+
+        WebSocket actual = JdkRealtimeWebSocketTransport.awaitOpening(
+                opening, new JdkRealtimeWebSocketTransport.AdapterListener(delegate));
+
+        assertSame(socket, actual);
+        assertTrue(opening.untimedGetCalled);
+        assertFalse(opening.timedGetCalled);
+    }
+
+    @Test
+    void jdkHandshakeTimeoutMapsToTransportTimeoutAndCancelsLateOpen() {
+        RealtimeWebSocketTransport.Listener delegate =
+                mock(RealtimeWebSocketTransport.Listener.class);
+        WebSocket socket = mock(WebSocket.class);
+        TrackingOpening opening = new TrackingOpening();
+        HttpTimeoutException cause = new HttpTimeoutException("opening handshake timed out");
+        opening.completeExceptionally(cause);
+        JdkRealtimeWebSocketTransport.AdapterListener listener =
+                new JdkRealtimeWebSocketTransport.AdapterListener(delegate);
+
+        TimeoutException error = assertThrows(TimeoutException.class,
+                () -> JdkRealtimeWebSocketTransport.awaitOpening(opening, listener));
+
+        assertSame(cause, error.getCause());
+        assertTrue(opening.cancelCalled);
+        listener.onOpen(socket);
+        verify(socket).abort();
+        verify(socket, never()).request(1);
+        verifyNoInteractions(delegate);
+    }
+
+    @Test
     void cancelledHandshakeAbortsLateSocketAndDropsAllCallbacks() {
         RealtimeWebSocketTransport.Listener delegate =
                 mock(RealtimeWebSocketTransport.Listener.class);
@@ -404,6 +447,32 @@ class CliproxyRealtimeVoiceProviderTest {
                 new OpenAiAudioTranscriptionProperties(),
                 new OpenAiAudioSpeechProperties(),
                 new MockEnvironment().withProperty("spring.ai.openai.base-url", BASE_URL));
+    }
+
+    private static final class TrackingOpening extends CompletableFuture<WebSocket> {
+        private boolean untimedGetCalled;
+        private boolean timedGetCalled;
+        private boolean cancelCalled;
+
+        @Override
+        public WebSocket get() throws InterruptedException, java.util.concurrent.ExecutionException {
+            untimedGetCalled = true;
+            return super.get();
+        }
+
+        @Override
+        public WebSocket get(long timeout, TimeUnit unit)
+                throws InterruptedException, java.util.concurrent.ExecutionException,
+                TimeoutException {
+            timedGetCalled = true;
+            return super.get(timeout, unit);
+        }
+
+        @Override
+        public boolean cancel(boolean mayInterruptIfRunning) {
+            cancelCalled = true;
+            return super.cancel(mayInterruptIfRunning);
+        }
     }
 
     private enum Scenario {
@@ -472,6 +541,7 @@ class CliproxyRealtimeVoiceProviderTest {
         private String pendingInputId;
         private String pendingInputText;
         private boolean pendingInputAudio;
+        private boolean overlongInputItemRejected;
         private JsonNode acknowledgedInput;
         private int responseCreateCount;
         private boolean closed;
@@ -508,7 +578,17 @@ class CliproxyRealtimeVoiceProviderTest {
                 pendingInputText = item.path("content").get(0).path("text").textValue();
                 pendingInputAudio = false;
                 inputSubmitted.countDown();
-                acknowledgeInputUnlessDelayed();
+                if (pendingInputId == null || pendingInputId.length()
+                        > CliproxyRealtimeSessionClient.MAX_CLIENT_ITEM_ID_CHARS) {
+                    overlongInputItemRejected = true;
+                    emit("{\"type\":\"error\",\"error\":{"
+                            + "\"type\":\"invalid_request_error\","
+                            + "\"code\":\"string_above_max_length\","
+                            + "\"param\":\"item.id\","
+                            + "\"message\":\"item id exceeds maximum length 32; actual 41\"}}");
+                } else {
+                    acknowledgeInputUnlessDelayed();
+                }
             } else if ("response.create".equals(type)) {
                 responseCreateCount++;
                 respond();
