@@ -16,7 +16,7 @@ public interface PersonalWorkspaceExecutionService {
     /** Native runtime inbox; intentionally separate from legacy unfenced commands. */
     List<ConversationRuntimeCommand> runtimeConversationCommands(RuntimeScope scope, int limit);
     List<? extends ConversationCommandView> runtimeConversationCommandViews(RuntimeScope scope,int limit);
-    sealed interface ConversationCommandView permits ConversationRuntimeCommand,ControlledConversationRuntimeCommand { }
+    sealed interface ConversationCommandView permits ConversationRuntimeCommand,ControlledConversationRuntimeCommand,ControlledConversationRuntimeCommandV3 { }
     record ConversationRuntimeCommand(int schemaVersion, String taskId, String runId,
             String conversationId, String commandId, String messageId, String instruction,
             String outputContentMimeType, String outputId) implements ConversationCommandView { }
@@ -26,11 +26,21 @@ public interface PersonalWorkspaceExecutionService {
             String conversationId,String commandId,String messageId,String instruction,
             String outputContentMimeType,String outputId,ProviderExecution providerExecution)
             implements ConversationCommandView { }
+    record ControlledConversationRuntimeCommandV3(int schemaVersion,String executionId,String taskId,
+            String runId,String conversationId,String commandId,String messageId,String operation,
+            String instruction,String inputSnapshotDigest,String outputContentMimeType,String outputId,
+            ProviderExecution providerExecution) implements ConversationCommandView { }
     record ControlledProviderStart(int schemaVersion,String commandId,String messageId,String executionId,
             ProviderExecution providerExecution,ConversationFence fence) { }
     record ControlledProviderStartReceipt(int schemaVersion,boolean started,String taskId,String runId,
             String executionId,String commandId,String messageId,ProviderExecution providerExecution,
             long leaseVersion) { }
+    record ControlledProviderStartV3(int schemaVersion,String commandId,String messageId,
+            String executionId,String operation,String inputSnapshotDigest,
+            ProviderExecution providerExecution,ConversationFence fence) { }
+    record ControlledProviderStartReceiptV3(int schemaVersion,boolean started,String taskId,String runId,
+            String conversationId,String executionId,String commandId,String messageId,String operation,
+            String inputSnapshotDigest,ProviderExecution providerExecution,long leaseVersion) { }
     /** Trusted native runtime only; lease token is never sent to browsers or legacy inbox. */
     ConversationLease claimConversationStart(RuntimeScope scope, String taskId, String runId,
             String commandId, String messageId);
@@ -39,6 +49,9 @@ public interface PersonalWorkspaceExecutionService {
     void beginConversationProviderStart(RuntimeScope scope, String taskId, String runId, ConversationFence fence);
     ControlledProviderStartReceipt beginControlledConversationProviderStart(RuntimeScope scope,
             String taskId,String runId,ControlledProviderStart command);
+    List<ControlledConversationRuntimeCommandV3> runtimeControlledImageV3Commands(RuntimeScope scope,int limit);
+    ControlledProviderStartReceiptV3 beginControlledConversationProviderStartV3(RuntimeScope scope,
+            String taskId,String runId,ControlledProviderStartV3 command);
     /** Server-verified source manifest under live task/grant and exact lease. No legacy /inputs fallback. */
     ConversationInputSnapshot conversationInputs(RuntimeScope scope, String taskId, String runId, ConversationFence fence);
     /** Runtime byte read; exact input ref must belong to this fenced execution and grant. */
@@ -48,6 +61,15 @@ public interface PersonalWorkspaceExecutionService {
             List<RuntimeInput> inputs) {
         public ConversationInputSnapshot { inputs = List.copyOf(inputs); }
     }
+    record ConversationInputSnapshotV3(int schemaVersion,String executionId,long leaseVersion,
+            String operation,String inputSnapshotDigest,boolean noReferencedMaterials,
+            List<RuntimeInputV3> inputs) { public ConversationInputSnapshotV3 { inputs=List.copyOf(inputs); } }
+    record RuntimeInputV3(String inputRef,RuntimeSource source,String contentMimeType,
+            String byteLength,String sha256) { }
+    record RuntimeSource(String kind,String fileId,String version,String purpose,String conversationId,
+            String conversationGeneration,String assetId,String assetRevision,String producerRequestId,
+            String producerStepId,String producerExecutionId,String producerRunId,String producerOutputId) { }
+    ConversationInputSnapshotV3 conversationInputsV3(RuntimeScope scope,String taskId,String runId,ConversationFence fence);
     StagedOutput stageConversationOutput(RuntimeScope scope, String taskId, String runId, ConversationFence fence,
             String outputId, String filename, String contentMimeType, byte[] content);
     CommitView commitConversationOutput(RuntimeScope scope, String taskId, String runId, ConversationFence fence,

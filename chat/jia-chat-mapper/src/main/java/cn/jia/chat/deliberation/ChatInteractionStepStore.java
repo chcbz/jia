@@ -54,6 +54,16 @@ public class ChatInteractionStepStore {
         return rows.isEmpty() ? null : rows.getFirst();
     }
 
+    public Step findStepForUpdate(String tenantId,String ownerJiacn,String clientId,
+            String requestId,long requestRevision,long stepNumber) {
+        List<Step> rows=jdbc.query("""
+                SELECT * FROM chat_interaction_step WHERE tenant_id=? AND owner_jiacn=? AND client_id=?
+                  AND request_id=? AND request_revision=? AND step_number=? FOR UPDATE
+                """,ChatInteractionStepStore::step,tenantId,ownerJiacn,clientId,requestId,
+                requestRevision,stepNumber);
+        return rows.isEmpty()?null:rows.getFirst();
+    }
+
     public List<Step> findSteps(String tenantId, String ownerJiacn, String clientId,
             String requestId, long requestRevision) {
         return jdbc.query("""

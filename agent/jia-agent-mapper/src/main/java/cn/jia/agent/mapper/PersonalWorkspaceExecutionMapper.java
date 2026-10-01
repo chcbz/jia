@@ -9,6 +9,15 @@ import org.apache.ibatis.annotations.Update;
 public interface PersonalWorkspaceExecutionMapper extends BaseMapper<PersonalWorkspaceExecutionEntity> {
 
     @Select("""
+            SELECT COUNT(*)
+              FROM information_schema.columns
+             WHERE table_schema=DATABASE()
+               AND table_name='agent_personal_workspace_execution'
+               AND column_name='execution_protocol_version'
+            """)
+    int countExecutionProtocolVersionColumn();
+
+    @Select("""
             <script>
             SELECT tenant_id, client_id, owner_jiacn, execution_id, target_agent_id,
                    execution_state, output_content_mime_type, created_at
@@ -230,6 +239,33 @@ public interface PersonalWorkspaceExecutionMapper extends BaseMapper<PersonalWor
             @Param("clientId")String clientId,@Param("ownerJiacn")String ownerJiacn,
             @Param("taskId")String taskId,@Param("runId")String runId,
             @Param("executionId")String executionId,@Param("consentId")String consentId,
+            @Param("leaseVersion")long leaseVersion,@Param("startedAt")long startedAt);
+
+    @Update("""
+            UPDATE agent_personal_workspace_execution
+               SET conversation_provider_started_at=#{startedAt},
+                   conversation_provider_lease_version=#{leaseVersion},update_time=#{startedAt}
+             WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
+               AND task_id=#{taskId} AND run_id=#{runId} AND execution_id=#{executionId}
+               AND controlled_consent_id=#{consentId} AND operation_grant_id=#{operationGrantId}
+               AND execution_mode='CONVERSATION' AND execution_protocol_version=3
+               AND permitted_operation IN ('GENERATE_IMAGE','EDIT_IMAGE')
+               AND output_content_mime_type='image/png' AND runtime_input_snapshot_digest IS NOT NULL
+               AND conversation_lease_version=#{leaseVersion}
+               AND conversation_provider_started_at IS NULL
+               AND conversation_provider_lease_version IS NULL
+               AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
+               AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
+               AND CAST(owner_jiacn AS BINARY)=CAST(#{ownerJiacn} AS BINARY)
+               AND CAST(execution_id AS BINARY)=CAST(#{executionId} AS BINARY)
+               AND CAST(controlled_consent_id AS BINARY)=CAST(#{consentId} AS BINARY)
+               AND CAST(operation_grant_id AS BINARY)=CAST(#{operationGrantId} AS BINARY)
+            """)
+    int markControlledProviderStartedV3(@Param("tenantId")String tenantId,
+            @Param("clientId")String clientId,@Param("ownerJiacn")String ownerJiacn,
+            @Param("taskId")String taskId,@Param("runId")String runId,
+            @Param("executionId")String executionId,@Param("consentId")String consentId,
+            @Param("operationGrantId")String operationGrantId,
             @Param("leaseVersion")long leaseVersion,@Param("startedAt")long startedAt);
 
     @Select("""

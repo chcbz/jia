@@ -41,6 +41,8 @@ public final class PersonalWorkspaceConversationRuntimeController {
     private static final long MAX_SAFE_INTEGER=9_007_199_254_740_991L;
     private static final Set<String> CONTROLLED_START_FIELDS=Set.of("schemaVersion","commandId",
             "messageId","executionId","providerExecution","fence");
+    private static final Set<String> CONTROLLED_START_V3_FIELDS=Set.of("schemaVersion","commandId",
+            "messageId","executionId","operation","inputSnapshotDigest","providerExecution","fence");
     private static final Set<String> PROVIDER_EXECUTION_FIELDS=Set.of("providerLane","consentId",
             "bindingId","bindingEpoch","modelId","maxInputItems","maxOutboundRequestAttempts",
             "precallFenceVersion");
@@ -59,6 +61,11 @@ public final class PersonalWorkspaceConversationRuntimeController {
     public ResponseEntity<ConversationQueue> commands(HttpServletRequest request,Authentication authentication) {
         noQuery(request);
         return ok(new ConversationQueue(executions.runtimeConversationCommandViews(scope(authentication),16)));
+    }
+
+    @GetMapping(value="/conversation-executions/controlled-image-v3-commands",produces=MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<ConversationQueueV3> controlledV3Commands(HttpServletRequest request,Authentication authentication) {
+        noQuery(request);return ok(new ConversationQueueV3(executions.runtimeControlledImageV3Commands(scope(authentication),16)));
     }
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/lease",consumes=MediaType.APPLICATION_JSON_VALUE,
@@ -104,6 +111,23 @@ public final class PersonalWorkspaceConversationRuntimeController {
         } catch (PersonalWorkspaceExecutionService.Failure failure) {
             throw new ControlledStartFailure(failure);
         }
+    }
+
+    @PostMapping(value="/{taskId}/runs/{runId}/conversation/provider-start-controlled-image-v3",
+            consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<PersonalWorkspaceExecutionService.ControlledProviderStartReceiptV3>
+            controlledProviderStartV3(@PathVariable String taskId,@PathVariable String runId,
+            @RequestBody(required=false) String rawBody,HttpServletRequest request,Authentication authentication) {
+        noQuery(request);try{return ok(executions.beginControlledConversationProviderStartV3(scope(authentication),taskId,runId,controlledStartV3(rawBody)));}
+        catch(PersonalWorkspaceExecutionService.Failure failure){throw new ControlledStartFailure(failure);}
+    }
+
+    @PostMapping(value="/{taskId}/runs/{runId}/conversation/inputs-v3",consumes=MediaType.APPLICATION_JSON_VALUE,
+            produces=MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<PersonalWorkspaceExecutionService.ConversationInputSnapshotV3> inputsV3(
+            @PathVariable String taskId,@PathVariable String runId,@RequestBody FenceRequest fence,
+            HttpServletRequest request,Authentication authentication) {
+        noQuery(request);return ok(executions.conversationInputsV3(scope(authentication),taskId,runId,fence(fence)));
     }
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/inputs",consumes=MediaType.APPLICATION_JSON_VALUE,
@@ -243,6 +267,14 @@ public final class PersonalWorkspaceConversationRuntimeController {
         } catch (BadRequest failure) { throw failure; }
         catch (Exception invalid) { throw new BadRequest(); }
     }
+    private static PersonalWorkspaceExecutionService.ControlledProviderStartV3 controlledStartV3(String raw) {
+        if(raw==null||raw.isBlank())throw new BadRequest();try{JsonNode root=STRICT_JSON.readTree(raw);
+            if(root==null||!root.isObject()||!fields(root).equals(CONTROLLED_START_V3_FIELDS)||!integral(root.get("schemaVersion"),3)||!safeTextId(root.get("commandId"),100)||!safeTextId(root.get("messageId"),100)||!safeTextId(root.get("executionId"),100)||!text(root.get("operation"))||!Set.of("GENERATE_IMAGE","EDIT_IMAGE").contains(root.get("operation").textValue())||!text(root.get("inputSnapshotDigest"))||!root.get("inputSnapshotDigest").textValue().matches("[0-9a-f]{64}"))throw new BadRequest();
+            JsonNode provider=root.get("providerExecution");if(provider==null||!provider.isObject()||!fields(provider).equals(PROVIDER_EXECUTION_FIELDS)||!safeTextId(provider.get("providerLane"),50)||!text(provider.get("consentId"))||!provider.get("consentId").textValue().matches("consent_[0-9a-f]{32}")||!safeTextId(provider.get("bindingId"),100)||!text(provider.get("bindingEpoch"))||!provider.get("bindingEpoch").textValue().matches("[1-9][0-9]*")||!safeTextId(provider.get("modelId"),100)||!integral(provider.get("maxInputItems"),16)||!integral(provider.get("maxOutboundRequestAttempts"),1)||!integral(provider.get("precallFenceVersion"),1))throw new BadRequest();long epoch=Long.parseLong(provider.get("bindingEpoch").textValue());if(epoch>MAX_SAFE_INTEGER||!Long.toString(epoch).equals(provider.get("bindingEpoch").textValue()))throw new BadRequest();
+            JsonNode f=root.get("fence");if(f==null||!f.isObject()||!fields(f).equals(FENCE_FIELDS)||!safeIntegral(f.get("version"),1)||!text(f.get("token")))throw new BadRequest();String token=f.get("token").textValue();if(!token.matches("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"))throw new BadRequest();
+            return new PersonalWorkspaceExecutionService.ControlledProviderStartV3(3,root.get("commandId").textValue(),root.get("messageId").textValue(),root.get("executionId").textValue(),root.get("operation").textValue(),root.get("inputSnapshotDigest").textValue(),new PersonalWorkspaceExecutionService.ProviderExecution(provider.get("providerLane").textValue(),provider.get("consentId").textValue(),provider.get("bindingId").textValue(),Long.toString(epoch),provider.get("modelId").textValue(),16,1,1),new PersonalWorkspaceExecutionService.ConversationFence(f.get("version").longValue(),token));
+        }catch(BadRequest e){throw e;}catch(Exception e){throw new BadRequest();}}
+
     private static boolean integral(JsonNode value,int expected) {
         return value!=null && value.isIntegralNumber() && value.canConvertToInt()
                 && value.intValue()==expected;
@@ -299,6 +331,7 @@ public final class PersonalWorkspaceConversationRuntimeController {
                 .body(new ErrorBody(code,"Native conversation execution unavailable"));
     }
     public record ConversationQueue(List<? extends PersonalWorkspaceExecutionService.ConversationCommandView> items) { }
+    public record ConversationQueueV3(List<PersonalWorkspaceExecutionService.ControlledConversationRuntimeCommandV3> items) { }
     public record ClaimRequest(String commandId,String messageId) { }
     public record FenceRequest(long version,String token) { }
     public record CommitItem(String outputId,String sha256,Long length) { }

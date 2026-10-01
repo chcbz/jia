@@ -31,9 +31,10 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
         String path = request.getRequestURI().substring(request.getContextPath().length());
         // No matrix parameters, encoded separators, dot-segments or alternate dispatch paths.
         String id = "[A-Za-z0-9][A-Za-z0-9._:-]{0,99}";
-        return "GET".equals(request.getMethod()) && path.equals("/internal/agent/tasks/conversation-executions/commands")
+        return "GET".equals(request.getMethod()) && (path.equals("/internal/agent/tasks/conversation-executions/commands")
+                || path.equals("/internal/agent/tasks/conversation-executions/controlled-image-v3-commands"))
                 || "POST".equals(request.getMethod()) && path.matches("/internal/agent/tasks/" + id
-                + "/runs/" + id + "/conversation/(?:inputs(?:/" + id + "/content)?|lease(?:/renew)?|provider-start(?:-controlled-image)?|failure|output-commits/" + id
+                + "/runs/" + id + "/conversation/(?:inputs(?:-v3|/" + id + "/content)?|lease(?:/renew)?|provider-start(?:-controlled-image(?:-v3)?)?|failure|output-commits/" + id
                 + "|outputs/" + id + "/content)")
                 || "GET".equals(request.getMethod()) && path.equals("/internal/agent/tasks/workspace-executions/commands")
                 || "GET".equals(request.getMethod()) && path.matches("/agent/tasks/" + id + "/context-pack")

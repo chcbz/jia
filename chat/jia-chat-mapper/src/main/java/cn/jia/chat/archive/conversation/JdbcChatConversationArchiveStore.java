@@ -101,7 +101,29 @@ public final class JdbcChatConversationArchiveStore implements ChatConversationA
 
     @Override
     public Source findAuthorizedSource(Scope scope, String conversationId, String assetId, long revision) {
-        List<Source> rows = jdbc.query("""
+        return authorizedSource(scope,conversationId,assetId,revision,null,false);
+    }
+
+    @Override
+    public Source findAuthorizedSourceForUpdate(Scope scope,String conversationId,String assetId,long revision) {
+        return authorizedSource(scope,conversationId,assetId,revision,null,true);
+    }
+
+    @Override
+    public Source findAuthorizedSource(Scope scope,String conversationId,String assetId,long revision,
+            String targetAgentId) {
+        return authorizedSource(scope,conversationId,assetId,revision,targetAgentId,false);
+    }
+
+    @Override
+    public Source findAuthorizedSourceForUpdate(Scope scope,String conversationId,String assetId,long revision,
+            String targetAgentId) {
+        return authorizedSource(scope,conversationId,assetId,revision,targetAgentId,true);
+    }
+
+    private Source authorizedSource(Scope scope,String conversationId,String assetId,long revision,
+            String targetAgentId,boolean lock) {
+        String sql="""
                 SELECT a.asset_id,a.revision,a.conversation_id,a.conversation_generation,
                        a.request_id,s.request_revision,a.step_id,s.task_id,a.execution_id,
                        a.run_id,a.output_id,a.content_mime_type,a.sha256,a.byte_length
@@ -149,12 +171,22 @@ public final class JdbcChatConversationArchiveStore implements ChatConversationA
                   AND c.conversation_type='juyiting' AND c.conversation_scope_type='bounty'
                   AND BINARY c.task_id=BINARY s.task_id
                   AND BINARY c.conversation_scope_key=BINARY CONCAT('task:',s.task_id)
-                """, (rs, ignored) -> new Source(rs.getString(1), rs.getLong(2), rs.getString(3),
+                """+(targetAgentId==null?"":" AND JSON_VALID(c.target_agent_ids)"
+                        +" AND JSON_LENGTH(c.target_agent_ids)=1"
+                        +" AND BINARY JSON_UNQUOTE(JSON_EXTRACT(c.target_agent_ids,'$[0]'))=BINARY ?"
+                        +" AND OCTET_LENGTH(JSON_UNQUOTE(JSON_EXTRACT(c.target_agent_ids,'$[0]')))="
+                        +"OCTET_LENGTH(?)")+(lock?" FOR UPDATE":"");
+        Object[] args=targetAgentId==null
+                ? new Object[]{scope.tenantId(),scope.tenantId(),scope.ownerJiacn(),scope.ownerJiacn(),
+                    scope.clientId(),scope.clientId(),conversationId,conversationId,conversationId,
+                    assetId,assetId,assetId,revision}
+                : new Object[]{scope.tenantId(),scope.tenantId(),scope.ownerJiacn(),scope.ownerJiacn(),
+                    scope.clientId(),scope.clientId(),conversationId,conversationId,conversationId,
+                    assetId,assetId,assetId,revision,targetAgentId,targetAgentId};
+        List<Source> rows=jdbc.query(sql,(rs, ignored) -> new Source(rs.getString(1), rs.getLong(2), rs.getString(3),
                 rs.getLong(4), rs.getString(5), rs.getLong(6), rs.getString(7), rs.getString(8),
                 rs.getString(9), rs.getString(10), rs.getString(11), rs.getString(12),
-                rs.getString(13), rs.getLong(14)), scope.tenantId(), scope.tenantId(),
-                scope.ownerJiacn(), scope.ownerJiacn(), scope.clientId(), scope.clientId(),
-                conversationId, conversationId, conversationId, assetId, assetId, assetId, revision);
+                rs.getString(13), rs.getLong(14)),args);
         return rows.size() == 1 ? rows.getFirst() : null;
     }
 

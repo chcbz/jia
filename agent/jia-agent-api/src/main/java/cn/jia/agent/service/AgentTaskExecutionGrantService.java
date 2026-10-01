@@ -37,6 +37,19 @@ public interface AgentTaskExecutionGrantService {
     Admission resolveAndAdmit(Scope scope, String taskId, long expectedAssignmentRevision,
             String targetAgentId, String operation, boolean paidExecution);
 
+    /** Current owner-scoped metadata tuple for constructing a follow-up preview. Grants no operation. */
+    FollowupContext currentFollowupContext(Scope scope,String taskId,String targetAgentId);
+    record FollowupContext(String taskId,String targetAgentId,long taskVersion,
+            long assignmentRevision,long baselineGrantVersion,long requirementRevision) { }
+
+    /** Current baseline tuple for a follow-up intent. Operation membership is deliberately not inferred here. */
+    Admission admitFollowupBaseline(Scope scope, String taskId, String grantId,
+            long expectedGrantVersion, long expectedTaskVersion, long expectedAssignmentRevision,
+            long expectedRequirementRevision, String targetAgentId);
+    Admission resolveFollowupBaseline(Scope scope,String taskId,long expectedGrantVersion,
+            long expectedTaskVersion,long expectedAssignmentRevision,long expectedRequirementRevision,
+            String targetAgentId);
+
     /** Current active assignment/grant admission for byte-backed promotion; starts no execution. */
     Admission admitSelectedOutputPromotion(Scope scope, String taskId, String grantId,
             long expectedGrantVersion, long expectedAssignmentRevision, String targetAgentId);
@@ -53,17 +66,24 @@ public interface AgentTaskExecutionGrantService {
     record Admission(String grantId, long grantVersion, long assignmentRevision,
             String targetAgentId, String operation, boolean paidExecutionAuthorized,
             List<AuthorizedInput> inputs, String costAuthorizationRef,
-            Long costAuthorizationVersion) {
+            Long costAuthorizationVersion, Long taskVersion, Long requirementRevision,
+            String requirementSha256, String assignmentIdempotencyKey, String assignmentBaseHash) {
         public Admission { inputs = List.copyOf(inputs); }
+        public Admission(String grantId,long grantVersion,long assignmentRevision,String targetAgentId,
+                String operation,boolean paidExecutionAuthorized,List<AuthorizedInput> inputs,
+                String costAuthorizationRef,Long costAuthorizationVersion) {
+            this(grantId,grantVersion,assignmentRevision,targetAgentId,operation,
+                    paidExecutionAuthorized,inputs,costAuthorizationRef,costAuthorizationVersion,null,null,null,null,null);
+        }
         public Admission(String grantId,long grantVersion,long assignmentRevision,String targetAgentId,
                 String operation,boolean paidExecutionAuthorized,List<AuthorizedInput> inputs) {
             this(grantId,grantVersion,assignmentRevision,targetAgentId,operation,
-                    paidExecutionAuthorized,inputs,null,null);
+                    paidExecutionAuthorized,inputs,null,null,null,null,null,null,null);
         }
         public Admission(String grantId, long grantVersion, long assignmentRevision,
                 String targetAgentId, String operation, boolean paidExecutionAuthorized) {
             this(grantId, grantVersion, assignmentRevision, targetAgentId, operation,
-                    paidExecutionAuthorized, List.of(),null,null);
+                    paidExecutionAuthorized, List.of(),null,null,null,null,null,null,null);
         }
     }
 }
