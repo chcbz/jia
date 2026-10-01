@@ -95,7 +95,7 @@ class ChatTypedDeliberationSchemaInitializerTest {
         for(String corrected:List.of("chk_chat_typed_admission_digest","chk_chat_typed_admission_reply",
                 "chk_chat_typed_admission_turns","chk_chat_typed_outcome_json","chk_chat_typed_pending_version",
                 "chk_chat_typed_proposal_parent","chk_chat_typed_proposal_sources")) {
-            List<Map<String,Object>> weakened=actual.stream().map(LinkedHashMap::new).toList();
+            List<Map<String,Object>> weakened=actual.stream().<Map<String,Object>>map(LinkedHashMap::new).toList();
             Map<String,Object> row=weakened.stream().filter(value->corrected.equals(value.get("constraint_name"))).findFirst().orElseThrow();
             String clause=(String)row.get("check_clause");String changed=clause.replaceFirst("(?i) and "," or ");
             assertNotEquals(clause,changed,corrected);row.put("check_clause",changed);
