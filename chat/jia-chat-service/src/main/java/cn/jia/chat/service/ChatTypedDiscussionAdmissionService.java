@@ -27,6 +27,9 @@ import java.util.Objects;
 /** Task-root-first admission for natural typed discussion and durable clarification replies. */
 @Service
 public class ChatTypedDiscussionAdmissionService {
+    private static final String ADMISSION_STATE = "ADMITTED";
+    private static final long ADMISSION_STATE_VERSION = 0L;
+
     private final AgentTaskMutationTransaction taskMutations;
     private final ChatBountyBindingStore bindings;
     private final ChatConversationDao conversations;
@@ -100,13 +103,12 @@ public class ChatTypedDiscussionAdmissionService {
                 ChatTurnEntity turn=events.findTurn(tenantId,owner,client,turnIds.getFirst());if(turn==null)throw unavailable();
                 deliberation.persistTypedQuestionAnswered(turn,parent.pending().pendingQuestionId(),parent.pending().stateVersion()+1,requestId,parent.outcome().outcomeId(),now);
             }
-            var status=deliberation.getRequest(tenantId,owner,client,requestId);
             long cursor=events.eventHighWatermark(tenantId,owner,client,conversationId,generation);
             String admissionId=stable("mmd-typed-admission",tenantId,client,owner,conversationId,idempotencyKey);
             var row=new ChatTypedDeliberationStore.Admission(admissionId,storeScope,idempotencyKey,requestDigest,bodyDigest,command.intent(),
                     command.taskId(),command.expectedAssignmentRevision(),command.parentOutcomeId(),command.pendingQuestionId(),
                     requestId,1,Long.parseLong(admitted.userMessageId()),CanonicalContextJson.write(turnIds),context.sourceCatalogJson(),
-                    status.state(),Long.parseLong(status.stateVersion()),cursor,now);
+                    ADMISSION_STATE,ADMISSION_STATE_VERSION,cursor,now);
             if(typed.store().insertAdmission(row)!=1)throw persistence("Unable to persist typed admission");
             return receipt(row,false);
         });
@@ -130,7 +132,8 @@ public class ChatTypedDiscussionAdmissionService {
 
     private ChatTypedDeliberationWire.Accepted receipt(ChatTypedDeliberationStore.Admission row,boolean replay){
         List<String> turns=parseStrings(row.turnIdsJson());
-        if(turns.size()!=1)throw persistence("Stored typed receipt is invalid");
+        if(turns.size()!=1||!ADMISSION_STATE.equals(row.state())||row.stateVersion()!=ADMISSION_STATE_VERSION)
+            throw persistence("Stored typed receipt is invalid");
         return new ChatTypedDeliberationWire.Accepted(1,row.intent(),row.requestId(),
                 Long.toString(row.userMessageId()),turns,row.state(),Long.toString(row.stateVersion()),Long.toString(row.eventCursor()),
                 "/chat/requests/"+row.requestId(),"/chat/conversations/"+row.scope().conversationId()+"/requests/"+row.requestId()+"/typed-outcome",replay,row.pendingQuestionId());

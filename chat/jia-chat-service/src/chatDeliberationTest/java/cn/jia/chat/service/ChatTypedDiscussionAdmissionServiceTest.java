@@ -41,26 +41,45 @@ class ChatTypedDiscussionAdmissionServiceTest {
     @Test void freshDiscussionCreatesOneOrdinaryChatAndTypedAdmissionWithoutAuthority() {
         when(contexts.resolve(any(),eq("task"),eq("agent"),eq(List.of()))).thenReturn(context());
         when(deliberation.admit(eq("0"),eq(sender),eq("42"),eq(1L),any(),eq(cn.jia.chat.deliberation.InteractionRoute.CHAT),any(),isNull(),any(),any())).thenReturn(admitted("request-new"));
-        when(deliberation.getRequest("0","owner","client","request-new")).thenReturn(status("request-new"));when(events.eventHighWatermark("0","owner","client","42",1)).thenReturn(7L);when(store.insertAdmission(any())).thenReturn(1);
+        var currentRequest=status("request-new","RUNNING","0");
+        when(deliberation.getRequest("0","owner","client","request-new")).thenReturn(currentRequest);
+        when(events.eventHighWatermark("0","owner","client","42",1)).thenReturn(7L);when(store.insertAdmission(any())).thenReturn(1);
         var receipt=service.admit("0",sender,"42","key",discussion());
         assertFalse(receipt.replay());assertEquals(List.of("turn"),receipt.turnIds());assertEquals("/chat/requests/request-new",receipt.statusUrl());
+        assertEquals("ADMITTED",receipt.state());assertEquals("0",receipt.stateVersion());assertEquals("7",receipt.eventCursor());
         verify(store).insertAdmission(argThat(row->row.requestRevision()==1
                 &&row.requestDigest().matches("sha256:[0-9a-f]{64}")
                 &&row.bodyDigest().matches("sha256:[0-9a-f]{64}")
-                &&!row.requestDigest().equals(row.bodyDigest())));
+                &&!row.requestDigest().equals(row.bodyDigest())
+                &&"ADMITTED".equals(row.state())&&row.stateVersion()==0));
         verify(deliberation).admit(eq("0"),eq(sender),eq("42"),eq(1L),any(),
                 eq(cn.jia.chat.deliberation.InteractionRoute.CHAT),any(),isNull(),any(),
                 argThat(metadata->"DISCUSSION".equals(metadata.get("intent"))
                         &&metadata.get("parentOutcomeId")==null
                         &&metadata.get("pendingQuestionId")==null));
+        verify(deliberation,never()).getRequest(anyString(),anyString(),anyString(),anyString());
+        assertEquals("RUNNING",currentRequest.state());assertEquals("0",currentRequest.stateVersion());
         verifyNoMoreInteractions(contexts);verify(deliberation,never()).persistTypedQuestionAnswered(any(),anyString(),anyLong(),anyString(),anyString(),anyLong());
     }
 
-    @Test void durableSameKeyReplayDoesNotRequireLiveRuntimeAndChangedBodyConflicts() {
+    @Test void durableSameKeyReplayAfterFinalReturnsOriginalReceiptWithoutCurrentRequestRead() {
         var command=discussion();String digest=bodyDigest(command);
-        var prior=new ChatTypedDeliberationStore.Admission("a",storeScope,"key","sha256:"+"c".repeat(64),digest,"DISCUSSION","task",3,null,null,"request-old",1,8,"[\"turn-old\"]","[]","RUNNING",0,9,1);
+        var prior=new ChatTypedDeliberationStore.Admission("a",storeScope,"key","sha256:"+"c".repeat(64),digest,"DISCUSSION","task",3,null,null,"request-old",1,8,"[\"turn-old\"]","[]","ADMITTED",0,9,1);
         when(store.findAdmissionByKey(storeScope,"key",true)).thenReturn(prior);
-        var replay=service.admit("0",sender,"42","key",command);assertTrue(replay.replay());assertEquals("request-old",replay.requestId());verifyNoInteractions(contexts,deliberation);
+        var currentRequest=status("request-old","COMPLETED","4");
+        when(deliberation.getRequest("0","owner","client","request-old")).thenReturn(currentRequest);
+        var replay=service.admit("0",sender,"42","key",command);
+        assertTrue(replay.replay());assertEquals("request-old",replay.requestId());assertEquals("8",replay.userMessageId());
+        assertEquals(List.of("turn-old"),replay.turnIds());assertEquals("ADMITTED",replay.state());assertEquals("0",replay.stateVersion());assertEquals("9",replay.eventCursor());
+        verifyNoInteractions(contexts);verify(deliberation,never()).getRequest(anyString(),anyString(),anyString(),anyString());
+        verify(deliberation,never()).admit(anyString(),any(),anyString(),anyLong(),any(),any(),any(),any(),any(),any());
+        assertEquals("COMPLETED",currentRequest.state());assertEquals("4",currentRequest.stateVersion());
+    }
+
+    @Test void sameKeyChangedBodyOrSourcesConflictsWithoutRuntime() {
+        var command=discussion();String digest=bodyDigest(command);
+        var prior=new ChatTypedDeliberationStore.Admission("a",storeScope,"key","sha256:"+"c".repeat(64),digest,"DISCUSSION","task",3,null,null,"request-old",1,8,"[\"turn-old\"]","[]","ADMITTED",0,9,1);
+        when(store.findAdmissionByKey(storeScope,"key",true)).thenReturn(prior);
         var changed=new ChatTypedDeliberationWire.DiscussionCommand("DISCUSSION","task",3,"changed",null,null,null,null,List.of());
         assertEquals(ChatDeliberationException.Reason.CONFLICT,assertThrows(ChatDeliberationException.class,()->service.admit("0",sender,"42","key",changed)).reason());
         var changedRefs=new ChatTypedDeliberationWire.DiscussionCommand("DISCUSSION","task",3,"继续讨论",null,null,null,null,
@@ -74,12 +93,44 @@ class ChatTypedDiscussionAdmissionServiceTest {
         var command=discussion();
         var prior=new ChatTypedDeliberationStore.Admission("a",storeScope,"key","sha256:"+"c".repeat(64),
                 bodyDigest(command),"DISCUSSION","task",3,null,null,"request-old",1,8,
-                "[\"turn-a\",\"turn-b\"]","[]","RUNNING",0,9,1);
+                "[\"turn-a\",\"turn-b\"]","[]","ADMITTED",0,9,1);
         when(store.findAdmissionByKey(storeScope,"key",true)).thenReturn(prior);
         assertEquals(ChatDeliberationException.Reason.PERSISTENCE_ERROR,
                 assertThrows(ChatDeliberationException.class,
                         ()->service.admit("0",sender,"42","key",command)).reason());
         verifyNoInteractions(contexts,deliberation);
+    }
+
+    @Test void replayRejectsStoredReceiptOutsideImmutableAdmissionDomain() {
+        var command=discussion();
+        var wrongState=new ChatTypedDeliberationStore.Admission("a",storeScope,"key","sha256:"+"c".repeat(64),
+                bodyDigest(command),"DISCUSSION","task",3,null,null,"request-old",1,8,
+                "[\"turn-old\"]","[]","COMPLETED",0,9,1);
+        var wrongVersion=new ChatTypedDeliberationStore.Admission("a",storeScope,"key","sha256:"+"c".repeat(64),
+                bodyDigest(command),"DISCUSSION","task",3,null,null,"request-old",1,8,
+                "[\"turn-old\"]","[]","ADMITTED",1,9,1);
+        when(store.findAdmissionByKey(storeScope,"key",true)).thenReturn(wrongState,wrongVersion);
+        assertEquals(ChatDeliberationException.Reason.PERSISTENCE_ERROR,
+                assertThrows(ChatDeliberationException.class,
+                        ()->service.admit("0",sender,"42","key",command)).reason());
+        assertEquals(ChatDeliberationException.Reason.PERSISTENCE_ERROR,
+                assertThrows(ChatDeliberationException.class,
+                        ()->service.admit("0",sender,"42","key",command)).reason());
+        verifyNoInteractions(contexts,deliberation);
+    }
+
+    @Test void foreignConversationIdentityFailsClosedBeforeReceiptOrAdmissionWork() {
+        ChatConversationEntity foreign=new ChatConversationEntity().setId(42L).setJiacn("foreign")
+                .setConversationType("juyiting").setConversationScopeType("bounty")
+                .setConversationScopeKey("task:task").setTaskId("task")
+                .setTargetAgentIds("[\"agent\"]").setLifecycleGeneration(1L);
+        foreign.setTenantId("0");foreign.setClientId("client");
+        when(conversations.lockScopedById("owner","client","42")).thenReturn(foreign);
+        assertEquals(ChatDeliberationException.Reason.NOT_FOUND_OR_FORBIDDEN,
+                assertThrows(ChatDeliberationException.class,
+                        ()->service.admit("0",sender,"42","key",discussion())).reason());
+        verify(store,never()).findAdmissionByKey(any(),anyString(),anyBoolean());
+        verifyNoInteractions(contexts,deliberation,events);
     }
 
     @Test void clarificationReplyUsesPendingCasAndPersistsAnsweredEventAtomically() {
@@ -89,9 +140,10 @@ class ChatTypedDiscussionAdmissionServiceTest {
         when(typed.requireParent(storeScope,"out")).thenReturn(outcome);when(typed.requirePending(storeScope,"pending")).thenReturn(pending);
         when(contexts.resolve(any(),eq("task"),eq("agent"),eq(List.of()))).thenReturn(context());when(deliberation.admit(anyString(),eq(sender),eq("42"),eq(1L),any(),any(),any(),isNull(),any(),any())).thenReturn(admitted("reply"));
         when(store.answerPending(same(pending),eq(0L),eq("reply"),eq("key"),anyString(),anyLong())).thenReturn(1);
-        when(events.findTurn("0","owner","client","turn")).thenReturn(new ChatTurnEntity().setTurnId("turn"));when(deliberation.getRequest("0","owner","client","reply")).thenReturn(status("reply"));when(store.insertAdmission(any())).thenReturn(1);
-        var receipt=service.admit("0",sender,"42","key",command);assertEquals("pending",receipt.pendingQuestionId());
+        when(events.findTurn("0","owner","client","turn")).thenReturn(new ChatTurnEntity().setTurnId("turn"));when(store.insertAdmission(any())).thenReturn(1);
+        var receipt=service.admit("0",sender,"42","key",command);assertEquals("pending",receipt.pendingQuestionId());assertEquals("ADMITTED",receipt.state());assertEquals("0",receipt.stateVersion());
         verify(deliberation).persistTypedQuestionAnswered(any(),eq("pending"),eq(1L),eq("reply"),eq("out"),anyLong());
+        verify(deliberation,never()).getRequest(anyString(),anyString(),anyString(),anyString());
     }
 
     @Test void pendingCasLossRollsBackByThrowingConflictBeforeReceipt() {
@@ -102,9 +154,25 @@ class ChatTypedDiscussionAdmissionServiceTest {
         assertEquals(ChatDeliberationException.Reason.CONFLICT,assertThrows(ChatDeliberationException.class,()->service.admit("0",sender,"42","key",command)).reason());verify(store,never()).insertAdmission(any());
     }
 
+    @Test void persistenceFailureRemainsInsideRollbackForExceptionBoundary() throws Exception {
+        var transaction=ChatTypedDiscussionAdmissionService.class
+                .getMethod("admit",String.class,ServerResolvedSender.class,String.class,String.class,
+                        ChatTypedDeliberationWire.DiscussionCommand.class)
+                .getAnnotation(org.springframework.transaction.annotation.Transactional.class);
+        assertNotNull(transaction);assertArrayEquals(new Class<?>[]{Exception.class},transaction.rollbackFor());
+        when(contexts.resolve(any(),eq("task"),eq("agent"),eq(List.of()))).thenReturn(context());
+        when(deliberation.admit(anyString(),eq(sender),eq("42"),eq(1L),any(),any(),any(),isNull(),any(),any())).thenReturn(admitted("request-new"));
+        when(events.eventHighWatermark("0","owner","client","42",1)).thenReturn(7L);when(store.insertAdmission(any())).thenReturn(0);
+        assertEquals(ChatDeliberationException.Reason.PERSISTENCE_ERROR,
+                assertThrows(ChatDeliberationException.class,
+                        ()->service.admit("0",sender,"42","key",discussion())).reason());
+        verify(store).insertAdmission(argThat(row->"ADMITTED".equals(row.state())&&row.stateVersion()==0));
+        verify(deliberation,never()).getRequest(anyString(),anyString(),anyString(),anyString());
+    }
+
     private static ChatTypedDeliberationWire.DiscussionCommand discussion(){return new ChatTypedDeliberationWire.DiscussionCommand("DISCUSSION","task",3,"继续讨论",null,null,null,null,List.of());}
     private static String bodyDigest(ChatTypedDeliberationWire.DiscussionCommand c){Map<String,Object> m=new java.util.LinkedHashMap<>();m.put("schemaVersion",1);m.put("intent",c.intent());m.put("taskId",c.taskId());m.put("expectedAssignmentRevision","3");m.put("content",c.content());m.put("parentOutcomeId",null);m.put("expectedParentStateVersion",null);m.put("pendingQuestionId",null);m.put("expectedPendingQuestionStateVersion",null);m.put("sourceSelectors",List.of());return ChatDeliberationService.digest(m);}
     private static ChatTypedDeliberationContextService.Context context(){return new ChatTypedDeliberationContextService.Context(Map.of("schemaVersion",1,"referenceMode","NONE","supportedOperations",List.of("GENERATE_IMAGE","EDIT_IMAGE"),"availableSources",List.of()),"[]",List.of(),Map.of("schemaVersion",1,"state","READY"));}
     private static ChatDeliberationService.Admission admitted(String request){return new ChatDeliberationService.Admission(request,1,"8","42",1,cn.jia.chat.deliberation.InteractionRoute.CHAT,List.of(new ChatDeliberationService.Dispatch(request,"turn","dispatch","event","agent","CHAT","RECEIVED","snapshot","sha256:"+"a".repeat(64),Map.of(),Map.of())),false);}
-    private static ChatDeliberationService.RequestView status(String request){return new ChatDeliberationService.RequestView(request,"1","42","1","8","RUNNING","0",List.of(),List.of());}
+    private static ChatDeliberationService.RequestView status(String request,String state,String version){return new ChatDeliberationService.RequestView(request,"1","42","1","8",state,version,List.of(),List.of());}
 }
