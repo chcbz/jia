@@ -249,7 +249,13 @@ class ArchiveMaintenanceServiceImplTest {
         when(store.updateJobState(JOB, 1, "NEEDS_CHANGES", null, null)).thenReturn(1);
         ArchiveValidationDTO result = service.validate(MANAGER, JOB, "validate-source", 1);
         assertEquals("FAILED", result.outcome());
-        verify(store).appendJobEvent(eq(JOB), eq(2L), eq("VALIDATION_FINISHED"), anyString());
+        ArgumentCaptor<String> eventPayload = ArgumentCaptor.forClass(String.class);
+        verify(store).appendJobEvent(eq(JOB), eq(2L), eq("VALIDATION_FINISHED"), eventPayload.capture());
+        var audit = new ObjectMapper().readTree(eventPayload.getValue());
+        assertEquals("HUMAN", audit.path("actorType").asText());
+        assertEquals("owner-a", audit.path("actorId").asText());
+        assertEquals("3", audit.path("authorizationRevision").asText());
+        assertEquals("FAILED", audit.path("outcome").asText());
         assertTrue(result.findings().stream().anyMatch(f -> f.contains("source")));
         verify(content, never()).insertEdition(any());
     }
@@ -567,6 +573,14 @@ class ArchiveMaintenanceServiceImplTest {
         assertEquals("5", result.revision());
         assertNull(result.validatedRevision());
         assertNull(result.validationId());
+        ArgumentCaptor<String> eventPayload = ArgumentCaptor.forClass(String.class);
+        verify(store).appendJobEvent(eq(JOB), eq(1L), eq("DRAFT_UPDATED"), eventPayload.capture());
+        var audit = new ObjectMapper().readTree(eventPayload.getValue());
+        assertEquals("HUMAN", audit.path("actorType").asText());
+        assertEquals("owner-a", audit.path("actorId").asText());
+        assertEquals("3", audit.path("authorizationRevision").asText());
+        assertEquals(DRAFT, audit.path("draftId").asText());
+        assertEquals("5", audit.path("draftRevision").asText());
     }
 
     @Test
@@ -1182,6 +1196,99 @@ class ArchiveMaintenanceServiceImplTest {
                         List.of(new ArchiveDraftParagraphInput(1, second,
                                 List.of(new ArchiveSourceRangeInput(title1 + text1 + title2,
                                         title1 + text1 + title2 + text2)))))), List.of());
+    }
+
+    @Test
+    void exactBlockAndPatchPersistImmutableNullableSnapshotsAndHumanTakeoverNeedsNoAppointment() throws Exception {
+        allowManager("draft.write");
+        ArchiveMaintenanceJobRecord job = job("DRAFT_ONLY");
+        ArchiveDraftUpdateRequest initial = body("甲", "乙");
+        String initialJson = new ObjectMapper().writeValueAsString(initial);
+        ArchiveDraftRecord revision4 = new ArchiveDraftRecord(DRAFT, JOB, 4, "CHANGES_REQUIRED",
+                initialJson, "b".repeat(64), null, null);
+        when(store.findDraft(DRAFT, false)).thenReturn(revision4);
+        when(store.findJob(JOB, false)).thenReturn(job);
+        when(store.findJob(JOB, true)).thenReturn(job);
+        when(store.findDraftByJob(JOB, true)).thenReturn(revision4);
+        ArchiveDraftBlockInput replacement = new ArchiveDraftBlockInput("CHAPTER", "one", 1,
+                "第一回", initial.blocks().getFirst().titleSourceRanges(),
+                initial.blocks().getFirst().paragraphs());
+        String blockPath = "/archive/admin/v1/drafts/" + DRAFT + "/blocks/one";
+        when(store.beginOperation(eq(MANAGER), eq("block-key"), eq("PUT"), eq(blockPath),
+                anyString(), eq("DRAFT"), eq(DRAFT))).thenAnswer(call ->
+                new ArchiveMaintenanceStore.Operation(true, "PUT", blockPath,
+                        call.getArgument(4), "DRAFT", DRAFT, "PENDING"));
+        when(store.findAdminOperationByKey(MANAGER, "block-key", true)).thenReturn(null);
+        when(store.updateDraft(eq(DRAFT), eq(4L), eq(5L), eq("EDITABLE"), anyString(),
+                anyString(), isNull(), isNull())).thenReturn(1);
+        ArchiveDraftRecord revision5 = new ArchiveDraftRecord(DRAFT, JOB, 5, "EDITABLE",
+                initialJson, "c".repeat(64), null, null);
+        when(store.findDraftByJob(JOB, false)).thenReturn(revision5);
+        when(store.commitAdminOperation(anyString(), anyString())).thenReturn(1);
+        ArgumentCaptor<ArchiveAdminOperationRecord> receipts =
+                ArgumentCaptor.forClass(ArchiveAdminOperationRecord.class);
+        ArgumentCaptor<String> snapshots = ArgumentCaptor.forClass(String.class);
+
+        ArchiveDraftBlockDTO block = service.putDraftBlock(MANAGER, DRAFT, "one",
+                "block-key", 4, replacement);
+
+        assertEquals("5", block.revision());
+        verify(store).insertAdminOperation(receipts.capture());
+        verify(store).commitAdminOperation(eq(receipts.getValue().operationId()), snapshots.capture());
+        ArchiveDraftBlockDTO storedBlock = new ObjectMapper().readValue(
+                snapshots.getValue(), ArchiveDraftBlockDTO.class);
+        assertEquals(block, storedBlock);
+
+        reset(store);
+        allowManager("draft.write");
+        when(store.findDraft(DRAFT, false)).thenReturn(revision5);
+        when(store.findJob(JOB, false)).thenReturn(job);
+        when(store.findJob(JOB, true)).thenReturn(job);
+        when(store.findDraftByJob(JOB, true)).thenReturn(revision5);
+        String patchPath = "/archive/admin/v1/drafts/" + DRAFT;
+        when(store.beginOperation(eq(MANAGER), eq("patch-key"), eq("PATCH"), eq(patchPath),
+                anyString(), eq("DRAFT"), eq(DRAFT))).thenAnswer(call ->
+                new ArchiveMaintenanceStore.Operation(true, "PATCH", patchPath,
+                        call.getArgument(4), "DRAFT", DRAFT, "PENDING"));
+        when(store.findAdminOperationByKey(MANAGER, "patch-key", true)).thenReturn(null);
+        when(store.updateDraft(eq(DRAFT), eq(5L), eq(6L), eq("EDITABLE"), anyString(),
+                anyString(), isNull(), isNull())).thenReturn(1);
+        ArchiveDraftRecord revision6 = new ArchiveDraftRecord(DRAFT, JOB, 6, "EDITABLE",
+                initialJson, "d".repeat(64), null, null);
+        when(store.findDraftByJob(JOB, false)).thenReturn(revision6);
+        when(store.commitAdminOperation(anyString(), anyString())).thenReturn(1);
+        ArchiveDraftPatchRequest patch = new ArchiveDraftPatchRequest(List.of(
+                new ArchiveDraftBlockMetadataPatch("one", 1, "第一回",
+                        replacement.titleSourceRanges())), null);
+
+        ArchiveDraftDTO patched = service.patchDraft(MANAGER, DRAFT, "patch-key", 5, patch);
+
+        ArgumentCaptor<ArchiveAdminOperationRecord> patchReceipt =
+                ArgumentCaptor.forClass(ArchiveAdminOperationRecord.class);
+        ArgumentCaptor<String> patchSnapshot = ArgumentCaptor.forClass(String.class);
+        verify(store).insertAdminOperation(patchReceipt.capture());
+        verify(store).commitAdminOperation(eq(patchReceipt.getValue().operationId()),
+                patchSnapshot.capture());
+        ArchiveDraftDTO storedPatch = new ObjectMapper().readValue(
+                patchSnapshot.getValue(), ArchiveDraftDTO.class);
+        assertEquals(patched, storedPatch);
+        assertNull(storedPatch.validatedRevision());
+        assertNull(storedPatch.validationId());
+
+        ArchiveAdminOperationRecord committed = new ArchiveAdminOperationRecord(
+                patchReceipt.getValue().operationId(), "0", "client-a", "owner-a", "patch-key",
+                COLLECTION, JOB, DRAFT, "DRAFT_PATCH", 3, "COMMITTED", patchSnapshot.getValue());
+        when(store.findAdminOperationById(committed.operationId(), false)).thenReturn(committed);
+        when(store.findJob(JOB, false)).thenReturn(job);
+        when(store.findOperation(MANAGER, "patch-key")).thenReturn(
+                new ArchiveMaintenanceStore.Operation(false, "PATCH", patchPath, "e".repeat(64),
+                        "DRAFT", DRAFT, "COMMITTED"));
+        ArchiveAdminOperationDTO status = service.operation(MANAGER, committed.operationId());
+        assertTrue(status.result().containsKey("validatedRevision"));
+        assertNull(status.result().get("validatedRevision"));
+        assertNull(status.result().get("validationId"));
+        verify(store, never()).findCurrentAppointment(anyString(), anyBoolean());
+        verify(store, never()).findAppointment(anyString(), anyBoolean());
     }
 
     @Test

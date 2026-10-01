@@ -1,31 +1,6 @@
 package cn.jia.chat.archive.maintenance.http;
 
-import cn.jia.chat.archive.maintenance.dto.ArchiveAppointmentCreateRequest;
-import cn.jia.chat.archive.maintenance.dto.ArchiveAppointmentDTO;
-import cn.jia.chat.archive.maintenance.dto.ArchiveAppointmentRevokeRequest;
-import cn.jia.chat.archive.maintenance.dto.ArchiveCapabilitiesDTO;
-import cn.jia.chat.archive.maintenance.dto.ArchiveCancelRequest;
-import cn.jia.chat.archive.maintenance.dto.ArchiveManagerRevokeRequest;
-import cn.jia.chat.archive.maintenance.dto.ArchiveMaintenanceRequest;
-import cn.jia.chat.archive.maintenance.dto.ArchiveMaintenanceRequestResultDTO;
-import cn.jia.chat.archive.maintenance.dto.ArchiveOperationDTO;
-import cn.jia.chat.archive.maintenance.dto.ArchiveDraftDTO;
-import cn.jia.chat.archive.maintenance.dto.ArchiveExecutionDTO;
-import cn.jia.chat.archive.maintenance.dto.ArchiveExecutionRecoveryDTO;
-import cn.jia.chat.archive.maintenance.dto.ArchiveResumeRequest;
-import cn.jia.chat.archive.maintenance.dto.ArchiveReassignRequest;
-import cn.jia.chat.archive.maintenance.dto.ArchiveDraftUpdateRequest;
-import cn.jia.chat.archive.maintenance.dto.ArchiveJobCreateRequest;
-import cn.jia.chat.archive.maintenance.dto.ArchiveJobDTO;
-import cn.jia.chat.archive.maintenance.dto.ArchiveRecoveryContextDTO;
-import cn.jia.chat.archive.maintenance.dto.ArchiveResolveInputRequest;
-import cn.jia.chat.archive.maintenance.dto.ArchivePublicationDTO;
-import cn.jia.chat.archive.maintenance.dto.ArchivePublishRequest;
-import cn.jia.chat.archive.maintenance.dto.ArchiveValidationDTO;
-import cn.jia.chat.archive.maintenance.dto.ArchiveEditionHistoryDTO;
-import cn.jia.chat.archive.maintenance.dto.ArchiveEditionVersionDTO;
-import cn.jia.chat.archive.maintenance.dto.ArchiveWithdrawalDTO;
-import cn.jia.chat.archive.maintenance.dto.ArchiveWithdrawRequest;
+import cn.jia.chat.archive.maintenance.dto.*;
 import cn.jia.chat.archive.maintenance.model.ArchiveActorScope;
 import cn.jia.chat.archive.maintenance.service.ArchiveMaintenanceException;
 import cn.jia.chat.archive.maintenance.service.ArchiveMaintenanceService;
@@ -38,6 +13,7 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -291,6 +267,86 @@ public class ArchiveAdminController {
         return JsonResult.success(service.listJobs(actor(authentication), collectionId, limit));
     }
 
+    @GetMapping("/collections/{collectionId}/works")
+    public ResponseEntity<JsonResult<ArchiveWorksDTO>> works(
+            @PathVariable String collectionId,
+            @RequestParam(defaultValue = "100") int limit,
+            Authentication authentication) {
+        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                .body(JsonResult.success(service.listWorks(actor(authentication), collectionId, limit)));
+    }
+
+    @GetMapping("/drafts/{draftId}/blocks/{blockId}")
+    public ResponseEntity<JsonResult<ArchiveDraftBlockDTO>> draftBlock(
+            @PathVariable String draftId, @PathVariable String blockId,
+            Authentication authentication) {
+        ArchiveDraftBlockDTO result = service.getDraftBlock(actor(authentication), draftId, blockId);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.ETAG, ArchiveHttpPreconditions.etag(result.revision()))
+                .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                .body(JsonResult.success(result));
+    }
+
+    @PutMapping("/drafts/{draftId}/blocks/{blockId}")
+    public ResponseEntity<JsonResult<ArchiveDraftBlockDTO>> putDraftBlock(
+            @PathVariable String draftId, @PathVariable String blockId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String key,
+            @RequestHeader(value = HttpHeaders.IF_MATCH, required = false) String ifMatch,
+            @RequestBody byte[] body, Authentication authentication) {
+        ArchiveDraftBlockDTO result = service.putDraftBlock(actor(authentication), draftId, blockId,
+                key, ArchiveHttpPreconditions.revision(ifMatch),
+                ArchiveStrictRequest.read(mapper, body, ArchiveDraftBlockInput.class));
+        return ResponseEntity.ok()
+                .header(HttpHeaders.ETAG, ArchiveHttpPreconditions.etag(result.revision()))
+                .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                .body(JsonResult.success(result));
+    }
+
+    @PatchMapping("/drafts/{draftId}")
+    public ResponseEntity<JsonResult<ArchiveDraftDTO>> patchDraft(
+            @PathVariable String draftId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String key,
+            @RequestHeader(value = HttpHeaders.IF_MATCH, required = false) String ifMatch,
+            @RequestBody byte[] body, Authentication authentication) {
+        ArchiveDraftDTO result = service.patchDraft(actor(authentication), draftId, key,
+                ArchiveHttpPreconditions.revision(ifMatch),
+                ArchiveStrictRequest.read(mapper, body, ArchiveDraftPatchRequest.class));
+        return ResponseEntity.ok()
+                .header(HttpHeaders.ETAG, ArchiveHttpPreconditions.etag(result.revision()))
+                .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                .body(JsonResult.success(result));
+    }
+
+    @PostMapping("/drafts/{draftId}/validate")
+    public ResponseEntity<JsonResult<ArchiveOperationAcceptedDTO>> validateDraft(
+            @PathVariable String draftId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String key,
+            @RequestHeader(value = HttpHeaders.IF_MATCH, required = false) String ifMatch,
+            Authentication authentication) {
+        ArchiveOperationAcceptedDTO result = service.validateDraft(actor(authentication), draftId,
+                key, ArchiveHttpPreconditions.revision(ifMatch));
+        return acceptedOperation(result);
+    }
+
+    @PostMapping("/drafts/{draftId}/publish")
+    public ResponseEntity<JsonResult<ArchiveOperationAcceptedDTO>> publishDraft(
+            @PathVariable String draftId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String key,
+            @RequestHeader(value = HttpHeaders.IF_MATCH, required = false) String ifMatch,
+            @RequestBody byte[] body, Authentication authentication) {
+        ArchiveOperationAcceptedDTO result = service.publishDraft(actor(authentication), draftId,
+                key, ArchiveHttpPreconditions.revision(ifMatch),
+                ArchiveStrictRequest.read(mapper, body, ArchivePublishRequest.class));
+        return acceptedOperation(result);
+    }
+
+    @GetMapping("/operations/{operationId}")
+    public ResponseEntity<JsonResult<ArchiveAdminOperationDTO>> operation(
+            @PathVariable String operationId, Authentication authentication) {
+        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                .body(JsonResult.success(service.operation(actor(authentication), operationId)));
+    }
+
     @GetMapping("/jobs/{jobId}/draft")
     public ResponseEntity<JsonResult<ArchiveDraftDTO>> draft(@PathVariable String jobId,
                                                                Authentication authentication) {
@@ -356,6 +412,14 @@ public class ArchiveAdminController {
             @RequestBody byte[] body, Authentication authentication) {
         return JsonResult.success(service.publish(actor(authentication), jobId, key,
                 ArchiveHttpPreconditions.revision(ifMatch), ArchiveStrictRequest.read(mapper, body, ArchivePublishRequest.class)));
+    }
+
+    private ResponseEntity<JsonResult<ArchiveOperationAcceptedDTO>> acceptedOperation(
+            ArchiveOperationAcceptedDTO result) {
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .header(HttpHeaders.LOCATION, "/archive/admin/v1/operations/" + result.operationId())
+                .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                .body(JsonResult.success(result));
     }
 
     static ArchiveActorScope actor(Authentication authentication) {

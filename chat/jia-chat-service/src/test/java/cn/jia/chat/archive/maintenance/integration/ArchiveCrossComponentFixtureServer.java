@@ -209,7 +209,7 @@ public final class ArchiveCrossComponentFixtureServer {
             try (Statement statement = connection.createStatement()) {
                 statement.execute("SET FOREIGN_KEY_CHECKS=0");
                 try {
-                    for (String table : new String[]{"archive_operation", "archive_event", "archive_publication",
+                    for (String table : new String[]{"archive_admin_operation_receipt", "archive_operation", "archive_event", "archive_publication",
                             "archive_validation", "archive_draft", "archive_execution_grant", "archive_job_run",
                             "archive_maintenance_job", "archive_confirmed_request", "archive_source_snapshot",
                             "archive_appointment", "archive_appointment_slot", "archive_collection_work",

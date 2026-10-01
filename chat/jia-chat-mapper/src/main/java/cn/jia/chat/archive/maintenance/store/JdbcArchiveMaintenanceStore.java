@@ -316,6 +316,38 @@ public class JdbcArchiveMaintenanceStore implements ArchiveMaintenanceStore {
         return jdbc.query("SELECT * FROM archive_maintenance_job WHERE collection_id=? AND tenant_id=? AND client_id=? AND owner_jiacn=? ORDER BY updated_at DESC,job_id DESC LIMIT ?",
                 JOB, collectionId, actor.tenantId(), actor.clientId(), actor.ownerJiacn(), limit);
     }
+    @Override public List<ManagedWork> listManagedWorks(ArchiveActorScope actor,String collectionId,int limit) {
+        // FAILED remains an explicit recovery candidate for admin resume/reassign; published and
+        // cancelled jobs are terminal and must never be projected as pending work.
+        return jdbc.query("""
+                SELECT x.work_id,x.title,x.active_edition_id,x.work_revision,x.has_history,x.pending_job_id
+                FROM (
+                  SELECT cw.work_id,w.title,w.active_edition_id,cw.revision AS work_revision,
+                         EXISTS(SELECT 1 FROM archive_publication p WHERE p.work_id=cw.work_id) AS has_history,
+                         (SELECT j.job_id FROM archive_maintenance_job j
+                          WHERE j.collection_id=cw.collection_id AND j.work_id=cw.work_id
+                            AND j.tenant_id=? AND j.client_id=? AND j.owner_jiacn=?
+                            AND j.state IN ('WAITING_INPUT','WAITING_ASSIGNEE','WAITING_SKILL','EXECUTION_REQUESTED','RUNNING','NEEDS_CHANGES','AWAITING_PUBLISH','PUBLISHING','SUSPENDED_AUTH','FAILED') ORDER BY j.updated_at DESC,j.job_id DESC LIMIT 1) AS pending_job_id
+                  FROM archive_collection_work cw JOIN archive_work w ON w.work_id=cw.work_id
+                  WHERE cw.collection_id=?
+                  UNION ALL
+                  SELECT j.work_id,j.title,NULL,NULL,0,j.job_id
+                  FROM archive_maintenance_job j
+                  WHERE j.collection_id=? AND j.tenant_id=? AND j.client_id=? AND j.owner_jiacn=?
+                    AND j.work_id IS NOT NULL AND j.state IN ('WAITING_INPUT','WAITING_ASSIGNEE','WAITING_SKILL','EXECUTION_REQUESTED','RUNNING','NEEDS_CHANGES','AWAITING_PUBLISH','PUBLISHING','SUSPENDED_AUTH','FAILED')
+                    AND j.job_id=(SELECT j2.job_id FROM archive_maintenance_job j2
+                                  WHERE j2.collection_id=j.collection_id AND j2.work_id=j.work_id
+                                    AND j2.tenant_id=j.tenant_id AND j2.client_id=j.client_id
+                                    AND j2.owner_jiacn=j.owner_jiacn AND j2.state IN ('WAITING_INPUT','WAITING_ASSIGNEE','WAITING_SKILL','EXECUTION_REQUESTED','RUNNING','NEEDS_CHANGES','AWAITING_PUBLISH','PUBLISHING','SUSPENDED_AUTH','FAILED')
+                                  ORDER BY j2.updated_at DESC,j2.job_id DESC LIMIT 1)
+                    AND NOT EXISTS(SELECT 1 FROM archive_collection_work cw
+                                   WHERE cw.collection_id=j.collection_id AND cw.work_id=j.work_id)
+                ) x ORDER BY x.work_id,x.pending_job_id LIMIT ?
+                """, (rs,n)->new ManagedWork(rs.getString(1),rs.getString(2),rs.getString(3),
+                        (Long)rs.getObject(4),rs.getBoolean(5),rs.getString(6)),
+                actor.tenantId(),actor.clientId(),actor.ownerJiacn(),collectionId,
+                collectionId,actor.tenantId(),actor.clientId(),actor.ownerJiacn(),limit);
+    }
     @Override public void insertJob(ArchiveMaintenanceJobRecord j) {
         jdbc.update("""
                 INSERT INTO archive_maintenance_job
@@ -595,6 +627,37 @@ public class JdbcArchiveMaintenanceStore implements ArchiveMaintenanceStore {
                 targetId,actor.tenantId(),actor.clientId(),actor.ownerJiacn(),key)!=1) throw new IllegalStateException("Archive operation commit failed");
     }
 
+    @Override public ArchiveAdminOperationRecord findAdminOperationByKey(
+            ArchiveActorScope actor,String key,boolean lock) {
+        return first(jdbc.query("SELECT * FROM archive_admin_operation_receipt WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND operation_key=?"+(lock?" FOR UPDATE":""),
+                (rs,n)->new ArchiveAdminOperationRecord(rs.getString("operation_id"),rs.getString("tenant_id"),
+                        rs.getString("client_id"),rs.getString("owner_jiacn"),rs.getString("operation_key"),
+                        rs.getString("collection_id"),rs.getString("job_id"),rs.getString("draft_id"),
+                        rs.getString("action"),rs.getLong("authorization_revision"),rs.getString("state"),
+                        rs.getString("result_json")),actor.tenantId(),actor.clientId(),actor.ownerJiacn(),key));
+    }
+    @Override public ArchiveAdminOperationRecord findAdminOperationById(String id,boolean lock) {
+        return first(jdbc.query("SELECT * FROM archive_admin_operation_receipt WHERE operation_id=?"+(lock?" FOR UPDATE":""),
+                (rs,n)->new ArchiveAdminOperationRecord(rs.getString("operation_id"),rs.getString("tenant_id"),
+                        rs.getString("client_id"),rs.getString("owner_jiacn"),rs.getString("operation_key"),
+                        rs.getString("collection_id"),rs.getString("job_id"),rs.getString("draft_id"),
+                        rs.getString("action"),rs.getLong("authorization_revision"),rs.getString("state"),
+                        rs.getString("result_json")),id));
+    }
+    @Override public void insertAdminOperation(ArchiveAdminOperationRecord op) {
+        if(jdbc.update("""
+                INSERT INTO archive_admin_operation_receipt(operation_id,tenant_id,client_id,owner_jiacn,
+                operation_key,collection_id,job_id,draft_id,action,authorization_revision,state)
+                VALUES (?,?,?,?,?,?,?,?,?,?,'PENDING')
+                """,op.operationId(),op.tenantId(),op.clientId(),op.ownerJiacn(),op.operationKey(),
+                op.collectionId(),op.jobId(),op.draftId(),op.action(),op.authorizationRevision())!=1) {
+            throw new IllegalStateException("Archive admin operation receipt insert failed");
+        }
+    }
+    @Override public int commitAdminOperation(String id,String resultJson) {
+        return jdbc.update("UPDATE archive_admin_operation_receipt SET state='COMMITTED',result_json=?,committed_at=CURRENT_TIMESTAMP(6) WHERE operation_id=? AND state='PENDING' AND result_json IS NULL",
+                resultJson,id);
+    }
     private static Instant instant(Timestamp value) { return value == null ? null : value.toInstant(); }
     private static <T> T first(List<T> values) { return values.isEmpty() ? null : values.getFirst(); }
 }

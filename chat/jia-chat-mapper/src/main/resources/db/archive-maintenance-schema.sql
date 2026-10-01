@@ -364,5 +364,33 @@ CREATE TABLE IF NOT EXISTS archive_operation (
     CONSTRAINT chk_archive_operation_state CHECK (state IN ('PENDING','COMMITTED'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
+CREATE TABLE IF NOT EXISTS archive_admin_operation_receipt (
+    operation_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    tenant_id VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    client_id VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    owner_jiacn VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    operation_key VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    collection_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    job_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    draft_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    action VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    authorization_revision BIGINT NOT NULL,
+    state VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    result_json LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
+    created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    committed_at TIMESTAMP(6) NULL,
+    PRIMARY KEY (operation_id),
+    UNIQUE KEY uk_archive_admin_operation_key (tenant_id,client_id,owner_jiacn,operation_key),
+    KEY fk_archive_admin_operation_collection (collection_id),
+    KEY fk_archive_admin_operation_job (job_id),
+    KEY fk_archive_admin_operation_draft (draft_id),
+    CONSTRAINT fk_archive_admin_operation_key FOREIGN KEY (tenant_id,client_id,owner_jiacn,operation_key) REFERENCES archive_operation(tenant_id,client_id,owner_jiacn,operation_key),
+    CONSTRAINT fk_archive_admin_operation_collection FOREIGN KEY (collection_id) REFERENCES archive_collection(collection_id),
+    CONSTRAINT fk_archive_admin_operation_job FOREIGN KEY (job_id) REFERENCES archive_maintenance_job(job_id),
+    CONSTRAINT fk_archive_admin_operation_draft FOREIGN KEY (draft_id) REFERENCES archive_draft(draft_id),
+    CONSTRAINT chk_archive_admin_operation_revision CHECK (authorization_revision >= 1),
+    CONSTRAINT chk_archive_admin_operation_action CHECK (action IN ('BLOCK_PUT','DRAFT_PATCH','DRAFT_VALIDATE','DRAFT_PUBLISH')),
+    CONSTRAINT chk_archive_admin_operation_state CHECK (((state='PENDING') AND (result_json IS NULL) AND (committed_at IS NULL)) OR ((state='COMMITTED') AND (result_json IS NOT NULL) AND (committed_at IS NOT NULL)))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 INSERT IGNORE INTO archive_collection(collection_id, code, revision)
 VALUES ('platform-classics', 'platform-classics', 1);

@@ -1094,6 +1094,275 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
     }
 
     @Override
+    public ArchiveWorksDTO listWorks(ArchiveActorScope actor, String collectionId, int limit) {
+        int bounded = Math.max(1, Math.min(limit, 100));
+        return transactions.required(() -> {
+            requireJobReadManager(actor, collectionId, true);
+            List<ArchiveWorkSummaryDTO> items = store.listManagedWorks(actor, collectionId, bounded).stream()
+                    .map(value -> new ArchiveWorkSummaryDTO(value.workId(), value.title(),
+                            value.activeEditionId(), value.workRevision() == null ? null
+                                    : Long.toString(value.workRevision()),
+                            value.hasEditionHistory(), value.pendingJobId()))
+                    .toList();
+            return new ArchiveWorksDTO(items, null);
+        });
+    }
+
+    @Override
+    public ArchiveDraftBlockDTO getDraftBlock(ArchiveActorScope actor, String draftId, String blockId) {
+        exactId(draftId);
+        exactId(blockId);
+        ArchiveDraftRecord observedDraft = store.findDraft(draftId, false);
+        if (observedDraft == null) notFound();
+        ArchiveMaintenanceJobRecord observed = requireJobForActor(actor, observedDraft.jobId(), false);
+        return transactions.required(() -> {
+            requireManager(actor, observed.collectionId(), "draft.write", true);
+            ArchiveMaintenanceJobRecord job = requireJobForActor(actor, observed.jobId(), true);
+            ArchiveDraftRecord draft = requireDraft(job.jobId(), true);
+            if (!same(job.draftId(), draftId) || !same(draft.draftId(), draftId)) notFound();
+            ArchiveDraftBlockInput block = parseDraft(draft.contentJson()).blocks().stream()
+                    .filter(value -> blockId.equals(value.blockKey())).findFirst().orElse(null);
+            if (block == null) notFound();
+            return new ArchiveDraftBlockDTO(draftId, job.jobId(), Long.toString(draft.revision()),
+                    draft.state(), block);
+        });
+    }
+
+    @Override
+    public ArchiveDraftBlockDTO putDraftBlock(ArchiveActorScope actor, String draftId, String blockId,
+            String key, long expectedRevision, ArchiveDraftBlockInput request) {
+        exactId(draftId);
+        exactId(blockId);
+        requireKey(key);
+        if (request == null || !same(blockId, request.blockKey())) {
+            invalid("Draft block path and body must identify the same block");
+        }
+        ArchiveDraftRecord observedDraft = store.findDraft(draftId, false);
+        if (observedDraft == null) notFound();
+        ArchiveMaintenanceJobRecord observed = requireJobForActor(actor, observedDraft.jobId(), false);
+        requireManager(actor, observed.collectionId(), "draft.write", false);
+        String path = "/archive/admin/v1/drafts/" + draftId + "/blocks/" + blockId;
+        String requestSha = digest(expectedRevision + "\0" + sha(request));
+        return transactions.required(() -> {
+            ArchiveManagerGrantRecord manager = requireManager(actor, observed.collectionId(), "draft.write", true);
+            ArchiveMaintenanceJobRecord job = requireJobForActor(actor, observed.jobId(), true);
+            ArchiveDraftRecord draft = requireDraft(job.jobId(), true);
+            if (!same(draft.draftId(), draftId)) notFound();
+            ArchiveMaintenanceStore.Operation op = operation(actor, key, "PUT", path, requestSha,
+                    "DRAFT", draftId);
+            ArchiveAdminOperationRecord receipt = ensureAdminReceipt(actor, op, key,
+                    job, draft, "BLOCK_PUT", manager.revision());
+            if (!op.created()) return blockSnapshot(receipt, ArchiveDraftBlockDTO.class);
+            requireDraftMutable(job, draft);
+            if (draft.revision() != expectedRevision) revisionConflict(draft.revision());
+            ArchiveDraftUpdateRequest current = parseDraft(draft.contentJson());
+            ArrayList<ArchiveDraftBlockInput> blocks = new ArrayList<>(current.blocks());
+            blocks.removeIf(block -> blockId.equals(block.blockKey()));
+            blocks.add(request);
+            blocks.sort(Comparator.comparingInt(block -> block.ordinal() == null
+                    ? Integer.MAX_VALUE : block.ordinal()));
+            ArchiveDraftUpdateRequest updated = new ArchiveDraftUpdateRequest(
+                    blocks, current.excludedSourceRanges());
+            ArchiveDraftDTO changed = persistHumanDraftUpdate(actor, manager, job, draft, updated,
+                    "BLOCK_PUT");
+            ArchiveDraftBlockDTO result = new ArchiveDraftBlockDTO(draftId, job.jobId(),
+                    changed.revision(), changed.state(), request);
+            commitAdminReceipt(actor, key, op.targetId(), receipt, result);
+            return result;
+        });
+    }
+
+    @Override
+    public ArchiveDraftDTO patchDraft(ArchiveActorScope actor, String draftId, String key,
+            long expectedRevision, ArchiveDraftPatchRequest request) {
+        exactId(draftId);
+        requireKey(key);
+        if (request == null || request.blocks() == null && request.excludedSourceRanges() == null) {
+            invalid("Draft patch must contain catalog metadata or excluded source ranges");
+        }
+        ArchiveDraftRecord observedDraft = store.findDraft(draftId, false);
+        if (observedDraft == null) notFound();
+        ArchiveMaintenanceJobRecord observed = requireJobForActor(actor, observedDraft.jobId(), false);
+        requireManager(actor, observed.collectionId(), "draft.write", false);
+        String path = "/archive/admin/v1/drafts/" + draftId;
+        String requestSha = digest(expectedRevision + "\0" + sha(request));
+        return transactions.required(() -> {
+            ArchiveManagerGrantRecord manager = requireManager(actor, observed.collectionId(), "draft.write", true);
+            ArchiveMaintenanceJobRecord job = requireJobForActor(actor, observed.jobId(), true);
+            ArchiveDraftRecord draft = requireDraft(job.jobId(), true);
+            if (!same(draft.draftId(), draftId)) notFound();
+            ArchiveMaintenanceStore.Operation op = operation(actor, key, "PATCH", path,
+                    requestSha, "DRAFT", draftId);
+            ArchiveAdminOperationRecord receipt = ensureAdminReceipt(actor, op, key,
+                    job, draft, "DRAFT_PATCH", manager.revision());
+            if (!op.created()) return blockSnapshot(receipt, ArchiveDraftDTO.class);
+            requireDraftMutable(job, draft);
+            if (draft.revision() != expectedRevision) revisionConflict(draft.revision());
+            ArchiveDraftUpdateRequest current = parseDraft(draft.contentJson());
+            Map<String, ArchiveDraftBlockMetadataPatch> patches = new LinkedHashMap<>();
+            if (request.blocks() != null) {
+                for (ArchiveDraftBlockMetadataPatch patch : request.blocks()) {
+                    if (patch == null || !exact(patch.blockKey(), 100) || patch.ordinal() == null
+                            || patch.ordinal() < 0 || !exact(patch.title(), 255)
+                            || patch.titleSourceRanges() == null
+                            || patches.putIfAbsent(patch.blockKey(), patch) != null) {
+                        invalid("Draft catalog patch is invalid");
+                    }
+                }
+            }
+            ArrayList<ArchiveDraftBlockInput> blocks = new ArrayList<>();
+            for (ArchiveDraftBlockInput block : current.blocks()) {
+                ArchiveDraftBlockMetadataPatch patch = patches.remove(block.blockKey());
+                blocks.add(patch == null ? block : new ArchiveDraftBlockInput(block.blockType(),
+                        block.blockKey(), patch.ordinal(), patch.title(), patch.titleSourceRanges(),
+                        block.paragraphs()));
+            }
+            if (!patches.isEmpty()) notFound();
+            blocks.sort(Comparator.comparingInt(block -> block.ordinal() == null
+                    ? Integer.MAX_VALUE : block.ordinal()));
+            ArchiveDraftUpdateRequest updated = new ArchiveDraftUpdateRequest(blocks,
+                    request.excludedSourceRanges() == null ? current.excludedSourceRanges()
+                            : request.excludedSourceRanges());
+            ArchiveDraftDTO result = persistHumanDraftUpdate(actor, manager, job, draft, updated,
+                    "DRAFT_PATCH");
+            commitAdminReceipt(actor, key, op.targetId(), receipt, result);
+            return result;
+        });
+    }
+
+    @Override
+    public ArchiveOperationAcceptedDTO validateDraft(ArchiveActorScope actor, String draftId,
+            String key, long expectedRevision) {
+        exactId(draftId);
+        requireKey(key);
+        ArchiveDraftRecord observedDraft = store.findDraft(draftId, false);
+        if (observedDraft == null) notFound();
+        ArchiveMaintenanceJobRecord observed = requireJobForActor(actor, observedDraft.jobId(), false);
+        requireManager(actor, observed.collectionId(), "validate", false);
+        String path = "/archive/admin/v1/drafts/" + draftId + "/validate";
+        String requestSha = digest("POST\0" + path + "\0" + draftId + "\0" + expectedRevision);
+        ArchiveAdminOperationRecord replay = store.findAdminOperationByKey(actor, key, false);
+        if (replay != null) {
+            assertAdminReceipt(replay, observed, draftId, "DRAFT_VALIDATE");
+            ArchiveMaintenanceStore.Operation op = store.findOperation(actor, key);
+            if (op == null) throw new IllegalStateException("Persisted archive operation receipt is orphaned");
+            assertOperationMatches(op, "POST", path, requestSha, "VALIDATION");
+            if (!"COMMITTED".equals(replay.state()) || replay.resultJson() == null) {
+                conflict("ARCHIVE_OPERATION_IN_PROGRESS", "Archive operation is not committed");
+            }
+            return accepted(replay);
+        }
+        byte[] sourceBytes = requireSource(observed);
+        return transactions.required(() -> {
+            ArchiveManagerGrantRecord manager = requireManager(actor, observed.collectionId(), "validate", true);
+            ArchiveMaintenanceJobRecord job = requireJobForActor(actor, observed.jobId(), true);
+            ArchiveDraftRecord draft = requireDraft(job.jobId(), true);
+            if (!same(draft.draftId(), draftId)) notFound();
+            ArchiveMaintenanceStore.Operation op = operation(actor, key, "POST", path, requestSha,
+                    "VALIDATION", newId("val"));
+            ArchiveAdminOperationRecord receipt = ensureAdminReceipt(actor, op, key,
+                    job, draft, "DRAFT_VALIDATE", manager.revision());
+            if (!op.created()) return accepted(receipt);
+            requireDraftMutable(job, draft);
+            if (draft.revision() != expectedRevision) revisionConflict(draft.revision());
+            ArchiveDraftUpdateRequest body = parseDraft(draft.contentJson());
+            List<String> findings = new ArrayList<>(validateContent(body));
+            findings.addAll(ArchiveSourceMappingValidator.validate(sourceBytes, body));
+            String outcome = findings.isEmpty() ? "PASSED" : "FAILED";
+            String findingsJson = json(findings);
+            ArchiveValidationRecord validation = new ArchiveValidationRecord(op.targetId(),
+                    draftId, draft.revision(), outcome,
+                    digest(draft.contentSha256() + ":" + findingsJson), findingsJson);
+            store.insertValidation(validation);
+            String state = findings.isEmpty() ? "VALIDATED" : "CHANGES_REQUIRED";
+            if (store.updateDraft(draftId, draft.revision(), draft.revision(), state,
+                    draft.contentJson(), draft.contentSha256(),
+                    findings.isEmpty() ? draft.revision() : null,
+                    findings.isEmpty() ? validation.validationId() : null) != 1) {
+                revisionConflict(draft.revision());
+            }
+            if (store.updateJobState(job.jobId(), job.revision(),
+                    findings.isEmpty() ? "AWAITING_PUBLISH" : "NEEDS_CHANGES", null, null) != 1) {
+                conflict("ARCHIVE_JOB_CHANGED", "Archive job changed during validation");
+            }
+            store.appendJobEvent(job.jobId(), job.revision() + 1, "VALIDATION_FINISHED",
+                    humanAudit(actor, manager, Map.of("validationId", validation.validationId(),
+                            "draftRevision", Long.toString(draft.revision()), "outcome", outcome)));
+            ArchiveValidationDTO result = validationDto(validation);
+            commitAdminReceipt(actor, key, validation.validationId(), receipt, result);
+            return accepted(receipt);
+        });
+    }
+
+    @Override
+    public ArchiveOperationAcceptedDTO publishDraft(ArchiveActorScope actor, String draftId,
+            String key, long expectedDraftRevision, ArchivePublishRequest request) {
+        exactId(draftId);
+        requireKey(key);
+        Objects.requireNonNull(request, "request");
+        ArchiveDraftRecord observedDraft = store.findDraft(draftId, false);
+        if (observedDraft == null) notFound();
+        ArchiveMaintenanceJobRecord observed = requireJobForActor(actor, observedDraft.jobId(), false);
+        requireManager(actor, observed.collectionId(), "publish", false);
+        String path = "/archive/admin/v1/drafts/" + draftId + "/publish";
+        String requestSha = publicationRequestSha(expectedDraftRevision, request);
+        ArchiveAdminOperationRecord replay = store.findAdminOperationByKey(actor, key, false);
+        if (replay != null) {
+            assertAdminReceipt(replay, observed, draftId, "DRAFT_PUBLISH");
+            ArchiveMaintenanceStore.Operation op = store.findOperation(actor, key);
+            if (op == null) throw new IllegalStateException("Persisted archive operation receipt is orphaned");
+            assertOperationMatches(op, "POST", path, requestSha, "PUBLICATION");
+            if (!"COMMITTED".equals(replay.state())) conflict("ARCHIVE_OPERATION_IN_PROGRESS",
+                    "Archive operation is not committed");
+            return accepted(replay);
+        }
+        PublicationCandidate candidate = preparePublicationCandidate(observed,
+                expectedDraftRevision, request);
+        return transactions.required(() -> {
+            ArchiveManagerGrantRecord manager = requireManager(actor, observed.collectionId(), "publish", true);
+            ArchiveMaintenanceJobRecord job = requireJobForActor(actor, observed.jobId(), true);
+            ArchiveDraftRecord draft = requireDraft(job.jobId(), true);
+            if (!same(draft.draftId(), draftId)) notFound();
+            ArchivePublicationDTO result = publishLocked(actor, job, manager, null, key,
+                    expectedDraftRevision, request, path, null, candidate,
+                    new AdminOperationSpec(draft, "DRAFT_PUBLISH"));
+            ArchiveAdminOperationRecord receipt = store.findAdminOperationByKey(actor, key, false);
+            if (receipt == null || !"COMMITTED".equals(receipt.state())) {
+                throw new IllegalStateException("Archive publication receipt was not committed");
+            }
+            return accepted(receipt);
+        });
+    }
+
+    @Override
+    public ArchiveAdminOperationDTO operation(ArchiveActorScope actor, String operationId) {
+        requireScope(actor);
+        exactId(operationId);
+        ArchiveAdminOperationRecord receipt = store.findAdminOperationById(operationId, false);
+        if (receipt == null || !same(actor.tenantId(), receipt.tenantId())
+                || !same(actor.clientId(), receipt.clientId())
+                || !same(actor.ownerJiacn(), receipt.ownerJiacn())) notFound();
+        ArchiveMaintenanceJobRecord job = requireJobForActor(actor, receipt.jobId(), false);
+        String permission = switch (receipt.action()) {
+            case "BLOCK_PUT", "DRAFT_PATCH" -> "draft.write";
+            case "DRAFT_VALIDATE" -> "validate";
+            case "DRAFT_PUBLISH" -> "publish";
+            default -> throw new IllegalStateException("Persisted archive admin operation action is invalid");
+        };
+        requireManager(actor, job.collectionId(), permission, false);
+        ArchiveMaintenanceStore.Operation op = store.findOperation(actor, receipt.operationKey());
+        if (op == null) throw new IllegalStateException("Persisted archive operation receipt is orphaned");
+        if (!same(op.state(), receipt.state())) {
+            throw new IllegalStateException("Persisted archive operation receipt state is inconsistent");
+        }
+        Map<String, Object> result = receipt.resultJson() == null ? null : parseResult(receipt.resultJson());
+        return new ArchiveAdminOperationDTO(receipt.operationId(), receipt.operationKey(),
+                receipt.state(), op.httpMethod(), op.canonicalPath(), receipt.collectionId(),
+                receipt.jobId(), receipt.draftId(), receipt.action(),
+                Long.toString(receipt.authorizationRevision()), result);
+    }
+
+    @Override
     public ArchiveDraftDTO getDraft(ArchiveActorScope actor, String jobId) {
         ArchiveMaintenanceJobRecord job = requireJobForActor(actor, jobId, false);
         requireManager(actor, job.collectionId(), "draft.write", false);
@@ -1133,7 +1402,13 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         requireScope(actor);
         requireKey(key);
         ArchiveMaintenanceStore.Operation op = store.findOperation(actor, key);
-        if (op == null || !"POST".equals(op.httpMethod()) && !"PUT".equals(op.httpMethod())) notFound();
+        if (op == null) notFound();
+        ArchiveAdminOperationRecord admin = store.findAdminOperationByKey(actor, key, false);
+        if (admin != null) {
+            operation(actor, admin.operationId());
+            return new ArchiveOperationDTO(key, op.state(), op.targetType(), op.targetId());
+        }
+        if (!"POST".equals(op.httpMethod()) && !"PUT".equals(op.httpMethod())) notFound();
         String path = op.canonicalPath();
         java.util.regex.Matcher collection = Pattern.compile(
                 "^/archive/admin/v1/collections/([A-Za-z0-9._:-]{1,100})/(source-snapshots|appointments|jobs)$")
@@ -1244,7 +1519,6 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         ArchivePublicationDTO replay = transactions.required(() -> {
             ArchiveMaintenanceJobRecord observed = requireJobForActor(actor, jobId, false);
             requireManager(actor, observed.collectionId(), "publish", true);
-            requireCurrentAppointmentForJob(observed, true);
             ArchiveMaintenanceJobRecord job = requireJobForActor(actor, jobId, true);
             return committedPublicationReplay(actor, key, path, requestSha, job.jobId());
         });
@@ -1252,16 +1526,14 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
 
         ArchiveMaintenanceJobRecord candidateJob = requireJobForActor(actor, jobId, false);
         requireManager(actor, candidateJob.collectionId(), "publish", false);
-        requireCurrentAppointmentForJob(candidateJob, false);
         PublicationCandidate candidate = preparePublicationCandidate(
                 candidateJob, expectedDraftRevision, request);
         return transactions.required(() -> {
             ArchiveManagerGrantRecord manager = requireManager(actor, candidateJob.collectionId(),
                     "publish", true);
-            ArchiveAppointmentRecord appointment = requireCurrentAppointmentForJob(candidateJob, true);
             ArchiveMaintenanceJobRecord job = requireJobForActor(actor, jobId, true);
-            return publishLocked(actor, job, manager, appointment, key, expectedDraftRevision,
-                    request, path, null, candidate);
+            return publishLocked(actor, job, manager, null, key, expectedDraftRevision,
+                    request, path, null, candidate, null);
         });
     }
 
@@ -1269,11 +1541,17 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             ArchiveMaintenanceJobRecord job, ArchiveManagerGrantRecord manager,
             ArchiveAppointmentRecord appointment, String key, long expectedDraftRevision,
             ArchivePublishRequest request, String path, RuntimeAuthorization runtimeAuthorization,
-            PublicationCandidate candidate) {
+            PublicationCandidate candidate, AdminOperationSpec adminOperation) {
         ArchiveMaintenanceStore.Operation op = operation(actor, key, "POST", path,
                 publicationRequestSha(expectedDraftRevision, request),
                 "PUBLICATION", newId("pub"));
-        if (!op.created()) return publicationForOperation(op, job.jobId());
+        ArchiveAdminOperationRecord adminReceipt = adminOperation == null ? null
+                : ensureAdminReceipt(actor, op, key, job, adminOperation.draft(),
+                        adminOperation.action(), manager.revision());
+        if (!op.created()) {
+            if (adminReceipt != null) return blockSnapshot(adminReceipt, ArchivePublicationDTO.class);
+            return publicationForOperation(op, job.jobId());
+        }
         if ("PUBLISHED".equals(job.state()) || "CANCELLED".equals(job.state())
                 || job.publicationId() != null) {
             throw error(422, "ARCHIVE_JOB_NOT_MUTABLE",
@@ -1292,7 +1570,7 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
                         "Archive execution is not eligible for native publication");
             }
         }
-        requireCurrentBinding(appointment);
+        if (runtimeAuthorization != null) requireCurrentBinding(appointment);
         requirePublicationCandidate(job, expectedDraftRevision, request, candidate);
         ArchiveDraftRecord draft = candidate.draft();
         ArchiveMaintenanceStore.CollectionWork cw = store.lockCollectionWork(
@@ -1357,8 +1635,14 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
                     json(Map.of("runId", job.runId(), "publicationId", publicationId,
                             "stage", "PUBLISHED")));
         }
+        ArchivePublicationDTO result = publicationDto(publication);
         store.commitOperation(actor, key, publicationId);
-        return publicationDto(publication);
+        if (adminReceipt != null) {
+            if (store.commitAdminOperation(adminReceipt.operationId(), json(result)) != 1) {
+                throw new IllegalStateException("Archive admin publication receipt commit failed");
+            }
+        }
+        return result;
     }
 
     private PublicationCandidate preparePublicationCandidate(ArchiveMaintenanceJobRecord job,
@@ -1693,7 +1977,7 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             RuntimeAuthorization authorization = authorizeRuntimeLocked(
                     runtime, job, appointment, lockedTarget, true);
             return publishLocked(actor(runtime), job, manager, appointment, key,
-                    expectedDraftRevision, request, path, authorization, candidate);
+                    expectedDraftRevision, request, path, authorization, candidate, null);
         });
     }
 
@@ -1708,7 +1992,8 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
                     ? lockControlledTarget(target(observed)) : null;
             ArchiveManagerGrantRecord manager = requireManager(actor, observed.collectionId(), "draft.write", true);
             if (runtime) requireManagerRevision(manager, observed);
-            ArchiveAppointmentRecord appointment = requireCurrentAppointmentForJob(observed, true);
+            ArchiveAppointmentRecord appointment = runtime
+                    ? requireCurrentAppointmentForJob(observed, true) : null;
             ArchiveMaintenanceJobRecord job = requireJobForActor(actor, observed.jobId(), true);
             if (runtime) {
                 requireManagerRevision(manager, job);
@@ -1732,8 +2017,11 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
                     json, digest(json), null, null) != 1) {
                 revisionConflict(draft.revision());
             }
-            store.appendJobEvent(job.jobId(), job.revision(), "DRAFT_UPDATED",
-                    json(Map.of("draftId", draft.draftId(), "draftRevision", Long.toString(next))));
+            Map<String, String> updateFacts = Map.of("draftId", draft.draftId(),
+                    "draftRevision", Long.toString(next));
+            store.appendJobEvent(job.jobId(), job.revision(),
+                    "DRAFT_UPDATED",
+                    runtime ? json(updateFacts) : humanAudit(actor, manager, updateFacts));
             store.commitOperation(actor, key, draft.draftId());
             return draftDto(requireDraft(job.jobId(), false));
         });
@@ -1757,7 +2045,8 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
                     ? lockControlledTarget(target(observed)) : null;
             ArchiveManagerGrantRecord manager = requireManager(actor, observed.collectionId(), "validate", true);
             if (runtime) requireManagerRevision(manager, observed);
-            ArchiveAppointmentRecord appointment = requireCurrentAppointmentForJob(observed, true);
+            ArchiveAppointmentRecord appointment = runtime
+                    ? requireCurrentAppointmentForJob(observed, true) : null;
             ArchiveMaintenanceJobRecord job = requireJobForActor(actor, observed.jobId(), true);
             RuntimeAuthorization authorization = null;
             if (runtime) {
@@ -1820,9 +2109,11 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
                             "Archive execution changed during draft completion");
                 }
             }
-            store.appendJobEvent(job.jobId(), job.revision() + 1, "VALIDATION_FINISHED",
-                    json(Map.of("validationId", validation.validationId(),
-                            "draftRevision", Long.toString(draft.revision()), "outcome", outcome)));
+            Map<String, String> validationFacts = Map.of("validationId", validation.validationId(),
+                    "draftRevision", Long.toString(draft.revision()), "outcome", outcome);
+            store.appendJobEvent(job.jobId(), job.revision() + 1,
+                    "VALIDATION_FINISHED",
+                    runtime ? json(validationFacts) : humanAudit(actor, manager, validationFacts));
             if (producerComplete) {
                 store.appendJobEvent(job.jobId(), job.revision() + 1, "EXECUTION_COMPLETED",
                         json(Map.of("runId", job.runId(), "validationId", validation.validationId(),
@@ -2605,6 +2896,91 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         }
     }
 
+    private ArchiveDraftDTO persistHumanDraftUpdate(ArchiveActorScope actor,
+            ArchiveManagerGrantRecord manager, ArchiveMaintenanceJobRecord job,
+            ArchiveDraftRecord draft, ArchiveDraftUpdateRequest request, String action) {
+        String body = json(request);
+        long next = draft.revision() + 1;
+        if (store.updateDraft(draft.draftId(), draft.revision(), next, "EDITABLE",
+                body, digest(body), null, null) != 1) {
+            revisionConflict(draft.revision());
+        }
+        store.appendJobEvent(job.jobId(), job.revision(), "HUMAN_DRAFT_UPDATED",
+                humanAudit(actor, manager, Map.of("draftId", draft.draftId(),
+                        "draftRevision", Long.toString(next), "action", action)));
+        return draftDto(requireDraft(job.jobId(), false));
+    }
+
+    private ArchiveAdminOperationRecord ensureAdminReceipt(ArchiveActorScope actor,
+            ArchiveMaintenanceStore.Operation operation, String key, ArchiveMaintenanceJobRecord job,
+            ArchiveDraftRecord draft, String action, long authorizationRevision) {
+        ArchiveAdminOperationRecord receipt = store.findAdminOperationByKey(actor, key, true);
+        if (operation.created()) {
+            if (receipt != null) conflict("IDEMPOTENCY_CONFLICT",
+                    "Admin operation receipt already exists");
+            receipt = new ArchiveAdminOperationRecord(newId("aop"), actor.tenantId(),
+                    actor.clientId(), actor.ownerJiacn(), key, job.collectionId(), job.jobId(),
+                    draft.draftId(), action, authorizationRevision, "PENDING", null);
+            store.insertAdminOperation(receipt);
+            return receipt;
+        }
+        if (receipt == null) conflict("ARCHIVE_OPERATION_IN_PROGRESS",
+                "Admin operation receipt is unavailable");
+        assertAdminReceipt(receipt, job, draft.draftId(), action);
+        if (!"COMMITTED".equals(receipt.state()) || receipt.resultJson() == null) {
+            conflict("ARCHIVE_OPERATION_IN_PROGRESS", "Archive operation is not committed");
+        }
+        return receipt;
+    }
+
+    private void assertAdminReceipt(ArchiveAdminOperationRecord receipt,
+            ArchiveMaintenanceJobRecord job, String draftId, String action) {
+        if (!same(receipt.collectionId(), job.collectionId())
+                || !same(receipt.jobId(), job.jobId()) || !same(receipt.draftId(), draftId)
+                || !same(receipt.action(), action)) {
+            conflict("IDEMPOTENCY_CONFLICT", "Admin operation receipt scope changed");
+        }
+    }
+
+    private void commitAdminReceipt(ArchiveActorScope actor, String key, String targetId,
+            ArchiveAdminOperationRecord receipt, Object result) {
+        store.commitOperation(actor, key, targetId);
+        if (store.commitAdminOperation(receipt.operationId(), json(result)) != 1) {
+            throw new IllegalStateException("Archive admin operation receipt commit failed");
+        }
+    }
+
+    private ArchiveOperationAcceptedDTO accepted(ArchiveAdminOperationRecord receipt) {
+        return new ArchiveOperationAcceptedDTO(receipt.operationId(), receipt.jobId(), "COMMITTED");
+    }
+
+    private <T> T blockSnapshot(ArchiveAdminOperationRecord receipt, Class<T> type) {
+        try {
+            return mapper.readValue(receipt.resultJson(), type);
+        } catch (Exception failure) {
+            throw new IllegalStateException("Persisted archive admin operation result is invalid", failure);
+        }
+    }
+
+    private Map<String, Object> parseResult(String json) {
+        try {
+            Map<String, Object> parsed = mapper.readValue(json, mapper.getTypeFactory()
+                    .constructMapType(LinkedHashMap.class, String.class, Object.class));
+            return Collections.unmodifiableMap(new LinkedHashMap<>(parsed));
+        } catch (Exception failure) {
+            throw new IllegalStateException("Persisted archive admin operation result is invalid", failure);
+        }
+    }
+
+    private String humanAudit(ArchiveActorScope actor, ArchiveManagerGrantRecord manager,
+            Map<String, String> facts) {
+        LinkedHashMap<String, String> audit = new LinkedHashMap<>(facts);
+        audit.put("actorType", "HUMAN");
+        audit.put("actorId", actor.ownerJiacn());
+        audit.put("authorizationRevision", Long.toString(manager.revision()));
+        return json(audit);
+    }
+
     private ArchiveMaintenanceStore.Operation operation(ArchiveActorScope actor, String key,
             String method, String path, String requestSha, String type, String target) {
         ArchiveMaintenanceStore.Operation operation = store.beginOperation(actor, key, method,
@@ -3052,6 +3428,8 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
 
     private record PublicationMaterial(ArchiveEditionRecord edition,
             List<ArchiveBlockRecord> blocks, List<ArchiveParagraphRecord> paragraphs) { }
+    private record AdminOperationSpec(ArchiveDraftRecord draft, String action) { }
+
     private record PublicationCandidate(ArchiveMaintenanceJobRecord job,
             ArchiveSourceSnapshotRecord source, ArchiveDraftRecord draft,
             ArchiveValidationRecord validation, PublicationMaterial material) { }

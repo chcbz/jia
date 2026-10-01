@@ -1072,6 +1072,183 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
     }
 
     @Test
+    void exactA1SchemaUpgradesAddReceiptWithoutChangingPrivateDraftAndPartialReceiptFailsClosed() {
+        seedExecutionCandidate();
+        String before = jdbc.queryForObject("SELECT CONCAT(content_sha256,':',revision,':',state) "
+                + "FROM archive_draft WHERE draft_id='draft-a'", String.class);
+        jdbc.execute("DROP TABLE archive_admin_operation_receipt");
+
+        new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
+                new ArchiveMaintenanceProperties()).initialize();
+
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables "
+                + "WHERE table_schema=DATABASE() AND table_name='archive_admin_operation_receipt'",
+                Integer.class));
+        assertEquals(before, jdbc.queryForObject("SELECT CONCAT(content_sha256,':',revision,':',state) "
+                + "FROM archive_draft WHERE draft_id='draft-a'", String.class));
+        jdbc.execute("DROP TABLE archive_admin_operation_receipt");
+        jdbc.execute("CREATE TABLE archive_admin_operation_receipt (operation_id VARCHAR(64) "
+                + "CHARACTER SET ascii COLLATE ascii_bin NOT NULL, PRIMARY KEY(operation_id)) "
+                + "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin");
+        IllegalStateException drift = assertThrows(IllegalStateException.class, () ->
+                new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
+                        new ArchiveMaintenanceProperties()).initialize());
+        assertTrue(drift.getMessage().contains("archive_admin_operation_receipt.columns"),
+                drift.getMessage());
+    }
+
+    @Test
+    void exactAdminBlockPatchSnapshotsSurviveRevokedAppointmentAndManagedWorksKeepNullActiveHistory() throws Exception {
+        seedExecutionCandidate();
+        seedPublishedContent();
+        jdbc.update("UPDATE archive_appointment SET status='REVOKED',revision=2,revoked_at=CURRENT_TIMESTAMP(6) "
+                + "WHERE appointment_id=?", APPOINTMENT);
+        jdbc.update("UPDATE archive_appointment_slot SET current_appointment_id=NULL,revision=2 "
+                + "WHERE collection_id=? AND role_code='ARCHIVE_EDITOR'", COLLECTION);
+        jdbc.update("UPDATE archive_publication SET state='WITHDRAWN' WHERE work_id='work-withdraw'");
+        jdbc.update("UPDATE archive_work SET active_edition_id=NULL WHERE work_id='work-withdraw'");
+        JdbcArchiveMaintenanceStore store = new JdbcArchiveMaintenanceStore(jdbc);
+        ArchiveMaintenanceServiceImpl service = service(store, new RootLockingPort(jdbc),
+                new JdbcArchiveContentStore(jdbc));
+        ArchiveDraftBlockInput first = validDraft().blocks().getFirst();
+
+        ArchiveDraftBlockDTO block = service.putDraftBlock(ACTOR, "draft-a", "one",
+                "exact-block", 0, first);
+        ArchiveDraftDTO patched = service.patchDraft(ACTOR, "draft-a", "exact-patch", 1,
+                new ArchiveDraftPatchRequest(List.of(new ArchiveDraftBlockMetadataPatch(
+                        "one", 1, "第一回", first.titleSourceRanges())), null));
+
+        assertEquals("1", block.revision());
+        assertEquals("2", patched.revision());
+        assertNull(patched.validatedRevision());
+        assertNull(patched.validationId());
+        String operationId = jdbc.queryForObject("SELECT operation_id FROM archive_admin_operation_receipt "
+                + "WHERE operation_key='exact-patch'", String.class);
+        ArchiveAdminOperationDTO status = service.operation(ACTOR, operationId);
+        assertEquals("COMMITTED", status.state());
+        assertNull(status.result().get("validatedRevision"));
+        assertNull(status.result().get("validationId"));
+        assertEquals("COMMITTED:COMMITTED", jdbc.queryForObject(
+                "SELECT CONCAT(o.state,':',r.state) FROM archive_operation o "
+                        + "JOIN archive_admin_operation_receipt r ON r.tenant_id=o.tenant_id "
+                        + "AND r.client_id=o.client_id AND r.owner_jiacn=o.owner_jiacn "
+                        + "AND r.operation_key=o.operation_key WHERE o.operation_key='exact-patch'",
+                String.class));
+        assertTrue(jdbc.queryForObject("SELECT result_json IS NOT NULL FROM "
+                + "archive_admin_operation_receipt WHERE operation_id=?", Boolean.class, operationId));
+        ArchiveWorksDTO works = service.listWorks(ACTOR, COLLECTION, 20);
+        assertTrue(works.items().stream().anyMatch(work -> "work-withdraw".equals(work.workId())
+                && work.activeEditionId() == null && work.hasEditionHistory()));
+        assertTrue(works.items().stream().anyMatch(work -> "work-a".equals(work.workId())
+                && JOB.equals(work.pendingJobId())));
+        assertEquals(1L, jdbc.queryForObject("SELECT COUNT(*) FROM archive_job_run WHERE job_id=?",
+                Long.class, JOB));
+        assertEquals(0L, jdbc.queryForObject("SELECT COUNT(*) FROM archive_execution_grant g "
+                + "JOIN archive_job_run r ON r.run_id=g.run_id WHERE r.job_id=?", Long.class, JOB));
+        ArchiveRuntimeScope oldRuntime = new ArchiveRuntimeScope("0", "client-a", "owner-a",
+                AGENT, "runtime-old", "grant-old", "execution-old", "command-old", 1, 1);
+        assertEquals("ARCHIVE_ASSIGNMENT_CHANGED", assertThrows(ArchiveMaintenanceException.class,
+                () -> service.runtimeDraft(oldRuntime, JOB, RUN)).code());
+    }
+
+    @Test
+    void exactValidateReplaySurvivesLaterEditButRejectsChangedRequestAndCurrentRevocation()
+            throws Exception {
+        seedExecutionCandidate();
+        String draftJson = new ObjectMapper().writeValueAsString(validDraft());
+        jdbc.update("UPDATE archive_draft SET content_json=?,content_sha256=? WHERE draft_id='draft-a'",
+                draftJson, "c".repeat(64));
+        JdbcArchiveMaintenanceStore store = new JdbcArchiveMaintenanceStore(jdbc);
+        ArchiveMaintenanceServiceImpl service = service(store, new RootLockingPort(jdbc));
+
+        ArchiveOperationAcceptedDTO first = service.validateDraft(ACTOR, "draft-a",
+                "exact-validate", 0);
+        ArchiveAdminOperationDTO firstStatus = service.operation(ACTOR, first.operationId());
+        String firstResult = jdbc.queryForObject("SELECT result_json FROM "
+                + "archive_admin_operation_receipt WHERE operation_id=?",
+                String.class, first.operationId());
+        String validationEvent = jdbc.queryForObject("SELECT data_json FROM archive_event "
+                + "WHERE job_id=? AND event_type='VALIDATION_FINISHED'", String.class, JOB);
+        var event = new ObjectMapper().readTree(validationEvent);
+        assertEquals("HUMAN", event.path("actorType").asText());
+        assertEquals("owner-a", event.path("actorId").asText());
+        assertEquals("3", event.path("authorizationRevision").asText());
+        assertEquals("PASSED", event.path("outcome").asText());
+
+        ArchiveDraftBlockInput firstBlock = validDraft().blocks().getFirst();
+        ArchiveDraftDTO edited = service.patchDraft(ACTOR, "draft-a", "edit-after-validate", 0,
+                new ArchiveDraftPatchRequest(List.of(new ArchiveDraftBlockMetadataPatch(
+                        "one", 1, "第一回", firstBlock.titleSourceRanges())), null));
+        assertEquals("1", edited.revision());
+
+        ArchiveOperationAcceptedDTO replay = service.validateDraft(ACTOR, "draft-a",
+                "exact-validate", 0);
+        ArchiveAdminOperationDTO replayStatus = service.operation(ACTOR, replay.operationId());
+        assertEquals(first.operationId(), replay.operationId());
+        assertEquals(firstStatus.result(), replayStatus.result());
+        assertEquals(firstResult, jdbc.queryForObject("SELECT result_json FROM "
+                + "archive_admin_operation_receipt WHERE operation_id=?",
+                String.class, replay.operationId()));
+        assertEquals(1L, jdbc.queryForObject("SELECT COUNT(*) FROM archive_validation "
+                + "WHERE draft_id='draft-a'", Long.class));
+
+        ArchiveMaintenanceException changedRevision = assertThrows(ArchiveMaintenanceException.class,
+                () -> service.validateDraft(ACTOR, "draft-a", "exact-validate", 1));
+        assertEquals("IDEMPOTENCY_CONFLICT", changedRevision.code());
+        ArchiveMaintenanceException changedPathAndBody = assertThrows(ArchiveMaintenanceException.class,
+                () -> service.patchDraft(ACTOR, "draft-a", "exact-validate", 1,
+                        new ArchiveDraftPatchRequest(List.of(new ArchiveDraftBlockMetadataPatch(
+                                "one", 1, "changed", firstBlock.titleSourceRanges())), null)));
+        assertEquals("IDEMPOTENCY_CONFLICT", changedPathAndBody.code());
+        ArchiveMaintenanceException differentKeyCannotReplayStaleRevision =
+                assertThrows(ArchiveMaintenanceException.class,
+                        () -> service.validateDraft(ACTOR, "draft-a", "validate-new-key", 0));
+        assertEquals("ARCHIVE_REVISION_CONFLICT", differentKeyCannotReplayStaleRevision.code());
+        assertEquals(0L, jdbc.queryForObject("SELECT COUNT(*) FROM archive_operation "
+                + "WHERE operation_key='validate-new-key'", Long.class),
+                "the stale new-key validation reservation must roll back");
+
+        assertEquals(1, jdbc.update("UPDATE archive_collection_manager "
+                + "SET state='REVOKED',revision=revision+1 WHERE collection_id=? "
+                + "AND tenant_id='0' AND client_id='client-a' AND owner_jiacn='owner-a'",
+                COLLECTION));
+        ArchiveMaintenanceException revoked = assertThrows(ArchiveMaintenanceException.class,
+                () -> service.validateDraft(ACTOR, "draft-a", "exact-validate", 0));
+        assertEquals(403, revoked.status());
+        assertEquals("ARCHIVE_FORBIDDEN", revoked.code());
+    }
+
+    @Test
+    void managedWorksExcludeCancelledJobsButKeepFailedJobsAsExplicitRecoveryCandidates() {
+        seedExecutionCandidate();
+        JdbcArchiveMaintenanceStore store = new JdbcArchiveMaintenanceStore(jdbc);
+        ArchiveMaintenanceServiceImpl service = service(store, new RootLockingPort(jdbc));
+
+        assertEquals(1, jdbc.update("UPDATE archive_maintenance_job "
+                + "SET state='CANCELLED',wait_reason='USER_CANCELLED' WHERE job_id=?", JOB));
+        ArchiveWorksDTO cancelled = service.listWorks(ACTOR, COLLECTION, 20);
+        assertFalse(cancelled.items().stream().anyMatch(work -> "work-a".equals(work.workId())),
+                "a cancelled-only job without catalog history must not be enumerated");
+
+        jdbc.update("INSERT INTO archive_work(work_id,title,active_edition_id) "
+                + "VALUES ('work-a','title',NULL)");
+        jdbc.update("INSERT INTO archive_collection_work(collection_id,work_id,canonical_key,revision) "
+                + "VALUES (?,'work-a','key-a',1)", COLLECTION);
+        ArchiveWorksDTO cancelledCatalogWork = service.listWorks(ACTOR, COLLECTION, 20);
+        ArchiveWorkSummaryDTO cancelledWork = cancelledCatalogWork.items().stream()
+                .filter(work -> "work-a".equals(work.workId())).findFirst().orElseThrow();
+        assertNull(cancelledWork.pendingJobId(),
+                "a cancelled job must not populate pendingJobId for an existing catalog work");
+
+        assertEquals(1, jdbc.update("UPDATE archive_maintenance_job "
+                + "SET state='FAILED',wait_reason='EXECUTION_FAILED' WHERE job_id=?", JOB));
+        ArchiveWorksDTO failed = service.listWorks(ACTOR, COLLECTION, 20);
+        assertTrue(failed.items().stream().anyMatch(work -> "work-a".equals(work.workId())
+                && JOB.equals(work.pendingJobId())),
+                "FAILED remains visible because explicit resume/reassign can recover it");
+    }
+
+    @Test
     void repeatableReadRealPublishWinsBeforeWithdrawalAndStaleWorkCasLeavesEditionPublished() throws Exception {
         seedExecutionCandidate();
         seedPublishedContent();
@@ -1404,7 +1581,7 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                 try {
                     statement.execute("DROP TABLE IF EXISTS aam_test_agent_root");
                     for (String table : new String[]{"archive_idempotency", "archive_note", "archive_bookmark",
-                            "archive_reader_progress", "archive_operation", "archive_event",
+                            "archive_reader_progress", "archive_admin_operation_receipt", "archive_operation", "archive_event",
                             "archive_edition_withdrawal", "archive_publication",
                             "archive_validation", "archive_draft", "archive_execution_grant", "archive_job_run",
                             "archive_maintenance_job", "archive_confirmed_request", "archive_source_snapshot", "archive_appointment",

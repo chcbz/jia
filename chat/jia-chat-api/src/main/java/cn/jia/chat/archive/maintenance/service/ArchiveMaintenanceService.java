@@ -36,7 +36,14 @@ public interface ArchiveMaintenanceService {
     ArchiveExecutionRecoveryDTO reassign(ArchiveActorScope actor,String jobId,String operationKey,long expectedJobRevision,ArchiveReassignRequest request);
     List<ArchiveJobEventDTO> jobEvents(ArchiveActorScope actor,String jobId,long afterSequence,int limit);
     List<ArchiveJobDTO> listJobs(ArchiveActorScope actor,String collectionId,int limit);
+    ArchiveWorksDTO listWorks(ArchiveActorScope actor,String collectionId,int limit);
     ArchiveDraftDTO getDraft(ArchiveActorScope actor,String jobId);
+    ArchiveDraftBlockDTO getDraftBlock(ArchiveActorScope actor,String draftId,String blockId);
+    ArchiveDraftBlockDTO putDraftBlock(ArchiveActorScope actor,String draftId,String blockId,String operationKey,long expectedRevision,ArchiveDraftBlockInput request);
+    ArchiveDraftDTO patchDraft(ArchiveActorScope actor,String draftId,String operationKey,long expectedRevision,ArchiveDraftPatchRequest request);
+    ArchiveOperationAcceptedDTO validateDraft(ArchiveActorScope actor,String draftId,String operationKey,long expectedDraftRevision);
+    ArchiveOperationAcceptedDTO publishDraft(ArchiveActorScope actor,String draftId,String operationKey,long expectedDraftRevision,ArchivePublishRequest request);
+    ArchiveAdminOperationDTO operation(ArchiveActorScope actor,String operationId);
     ArchiveDraftDTO updateDraft(ArchiveActorScope actor,String jobId,String operationKey,long expectedRevision,ArchiveDraftUpdateRequest request);
     ArchiveValidationDTO validate(ArchiveActorScope actor,String jobId,String operationKey,long expectedDraftRevision);
     ArchiveValidationDTO validation(ArchiveActorScope actor,String draftId);

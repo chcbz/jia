@@ -32,6 +32,16 @@ class ArchiveMaintenanceSchemaCatalogTest {
                 withdrawal.checks().get("chk_archive_withdrawal_actor"));
         assertEquals(ArchiveMaintenanceSchemaCatalog.normalizeCheck("(actor_type = 'HUMAN')"),
                 ArchiveMaintenanceSchemaCatalog.normalizeCheck("(actor_type = _utf8mb4\\'HUMAN\\')"));
+        var adminOperation = expected.tables().get("archive_admin_operation_receipt");
+        assertEquals(new ArchiveMaintenanceSchemaCatalog.Column("longtext", true,
+                "utf8mb4_0900_bin"), adminOperation.columns().get("result_json"));
+        assertEquals("0:tenant_id,client_id,owner_jiacn,operation_key",
+                adminOperation.indexes().get("uk_archive_admin_operation_key"));
+        assertEquals("tenant_id>archive_operation.tenant_id,client_id>archive_operation.client_id,"
+                + "owner_jiacn>archive_operation.owner_jiacn,operation_key>archive_operation.operation_key",
+                adminOperation.foreignKeys().get("fk_archive_admin_operation_key"));
+        assertTrue(adminOperation.checks().get("chk_archive_admin_operation_state")
+                .contains("result_jsonisnotnull"));
         var event = expected.tables().get("archive_event");
         assertEquals("0:job_id,sequence", event.indexes().get("PRIMARY"));
         assertEquals("job_id>archive_maintenance_job.job_id", event.foreignKeys().get("fk_archive_event_job"));

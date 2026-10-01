@@ -66,6 +66,64 @@ class ArchiveNativeControllerContractTest {
                 fields(cn.jia.chat.archive.maintenance.dto.ArchiveResolveInputRequest.class));
     }
     @Test
+    void exactAdminDraftRoutesUseStrictBodiesDraftEtagsAndQueryable202Locations() throws Exception {
+        ArchiveMaintenanceService service = mock(ArchiveMaintenanceService.class);
+        ArchiveAdminController controller = new ArchiveAdminController(service, new ObjectMapper());
+        var paragraph = new cn.jia.chat.archive.maintenance.dto.ArchiveDraftParagraphInput(
+                1, "正文", List.of(new cn.jia.chat.archive.maintenance.dto.ArchiveSourceRangeInput(0, 6)));
+        var block = new ArchiveDraftBlockInput("CHAPTER", "chapter-1", 1, "第一回",
+                List.of(new cn.jia.chat.archive.maintenance.dto.ArchiveSourceRangeInput(0, 9)),
+                List.of(paragraph));
+        var blockResult = new cn.jia.chat.archive.maintenance.dto.ArchiveDraftBlockDTO(
+                "draft-a", "job-a", "8", "EDITABLE", block);
+        when(service.putDraftBlock(any(), eq("draft-a"), eq("chapter-1"), eq("block-key"),
+                eq(7L), any())).thenReturn(blockResult);
+        byte[] blockBody = new ObjectMapper().writeValueAsBytes(block);
+
+        var put = controller.putDraftBlock("draft-a", "chapter-1", "block-key", "\"v7\"",
+                blockBody, authenticatedJwt());
+
+        assertEquals("\"v8\"", put.getHeaders().getETag());
+        assertEquals("private, no-store", put.getHeaders().getCacheControl());
+        assertEquals("chapter-1", put.getBody().getData().block().blockKey());
+        byte[] injected = (new String(blockBody, java.nio.charset.StandardCharsets.UTF_8)
+                .replaceFirst("\\{", "{\"ownerJiacn\":\"forged\","))
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        assertEquals("INVALID_REQUEST", assertThrows(ArchiveMaintenanceException.class,
+                () -> controller.putDraftBlock("draft-a", "chapter-1", "other", "\"v7\"",
+                        injected, authenticatedJwt())).code());
+
+        var patched = new cn.jia.chat.archive.maintenance.dto.ArchiveDraftDTO(
+                "draft-a", "job-a", "9", "EDITABLE",
+                new ArchiveDraftUpdateRequest(List.of(block), List.of()), "a".repeat(64), null, null);
+        when(service.patchDraft(any(), eq("draft-a"), eq("patch-key"), eq(8L), any()))
+                .thenReturn(patched);
+        byte[] patchBody = ("{\"blocks\":[{\"blockKey\":\"chapter-1\",\"ordinal\":1,"
+                + "\"title\":\"第一回\",\"titleSourceRanges\":[{\"startByte\":0,\"endByte\":9}]}],"
+                + "\"excludedSourceRanges\":null}")
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        var patch = controller.patchDraft("draft-a", "patch-key", "\"v8\"",
+                patchBody, authenticatedJwt());
+        assertEquals("\"v9\"", patch.getHeaders().getETag());
+
+        var accepted = new cn.jia.chat.archive.maintenance.dto.ArchiveOperationAcceptedDTO(
+                "aop-1", "job-a", "COMMITTED");
+        when(service.validateDraft(any(), eq("draft-a"), eq("validate-key"), eq(9L)))
+                .thenReturn(accepted);
+        var response = controller.validateDraft("draft-a", "validate-key", "\"v9\"",
+                authenticatedJwt());
+        assertEquals(202, response.getStatusCode().value());
+        assertEquals("/archive/admin/v1/operations/aop-1",
+                response.getHeaders().getFirst(org.springframework.http.HttpHeaders.LOCATION));
+        assertEquals("job-a", response.getBody().getData().jobId());
+
+        Set<String> methods = Arrays.stream(ArchiveAdminController.class.getDeclaredMethods())
+                .map(java.lang.reflect.Method::getName).collect(Collectors.toSet());
+        assertTrue(methods.containsAll(Set.of("works", "draftBlock", "putDraftBlock",
+                "patchDraft", "validateDraft", "publishDraft", "operation")));
+    }
+
+    @Test
     void recoveryContextRouteReturnsExactSanitizedShapeAndJobRevisionEtag() {
         ArchiveMaintenanceService service = mock(ArchiveMaintenanceService.class);
         ArchiveAdminController controller = new ArchiveAdminController(service, new ObjectMapper());

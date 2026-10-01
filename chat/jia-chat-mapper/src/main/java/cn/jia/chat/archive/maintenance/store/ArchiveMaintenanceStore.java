@@ -36,6 +36,7 @@ public interface ArchiveMaintenanceStore {
     ArchiveMaintenanceJobRecord findJob(String jobId, boolean lock);
     ArchiveMaintenanceJobRecord findJobByIntent(ArchiveActorScope actor, String requestIntentId, boolean lock);
     List<ArchiveMaintenanceJobRecord> listJobs(ArchiveActorScope actor, String collectionId, int limit);
+    List<ManagedWork> listManagedWorks(ArchiveActorScope actor, String collectionId, int limit);
     void insertJob(ArchiveMaintenanceJobRecord job);
     int bindWaitingJobTarget(String jobId, long expectedRevision, String targetAgentId);
     int resolveWaitingJob(ArchiveMaintenanceJobRecord job, long expectedRevision);
@@ -88,10 +89,16 @@ public interface ArchiveMaintenanceStore {
     Operation beginOperation(ArchiveActorScope actor, String key, String method, String path,
                              String requestSha256, String targetType, String targetId);
     void commitOperation(ArchiveActorScope actor, String key, String targetId);
+    ArchiveAdminOperationRecord findAdminOperationByKey(ArchiveActorScope actor, String key, boolean lock);
+    ArchiveAdminOperationRecord findAdminOperationById(String operationId, boolean lock);
+    void insertAdminOperation(ArchiveAdminOperationRecord operation);
+    int commitAdminOperation(String operationId, String resultJson);
 
     record Slot(String collectionId, String roleCode, String currentAppointmentId, long revision) { }
     record CollectionWork(String collectionId, String workId, String canonicalKey, long revision) { }
     record ManagerRunTarget(String runId, String agentId, String bindingVersion) { }
+    record ManagedWork(String workId, String title, String activeEditionId, Long workRevision,
+                       boolean hasEditionHistory, String pendingJobId) { }
     record Operation(boolean created, String httpMethod, String canonicalPath, String requestSha256,
                      String targetType, String targetId, String state) { }
 }
