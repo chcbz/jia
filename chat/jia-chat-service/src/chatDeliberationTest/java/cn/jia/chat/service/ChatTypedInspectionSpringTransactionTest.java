@@ -44,6 +44,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.same;
 import static org.mockito.Mockito.when;
 
 /** Actual class proxies prove INSPECT transactions are not bypassed by final classes or direct calls. */
@@ -208,7 +209,7 @@ class ChatTypedInspectionSpringTransactionTest {
             evidence.update("INSERT INTO tx_evidence VALUES ('outcome')");
             return 1;
         });
-        when(dao.persistFinal(turn, anyString(), eq(9L), anyLong())).thenAnswer(invocation -> {
+        when(dao.persistFinal(same(turn), anyString(), eq(9L), anyLong())).thenAnswer(invocation -> {
             active(false);
             evidence.update("INSERT INTO tx_evidence VALUES ('turn')");
             return 0;
