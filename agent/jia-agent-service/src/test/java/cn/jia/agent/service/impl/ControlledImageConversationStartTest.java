@@ -343,7 +343,8 @@ class ControlledImageConversationStartTest {
         AgentRuntimeEntity target=new AgentRuntimeEntity().setAgentId("agent").setOwnerJiacn("owner");
         target.setClientId("client");target.setTenantId("0");
         when(runtimes.findCandidateRosterByOwner("client","owner")).thenReturn(List.of(target));
-        when(executions.findByIdempotency("0","client","owner",anyString())).thenReturn(null);
+        when(executions.findByIdempotency(eq("0"),eq("client"),eq("owner"),anyString()))
+                .thenReturn(null);
         when(workspace.findFile("0","client","owner","file-1")).thenReturn(file("file-1"));
         when(workspace.findVersion("0","client","owner","file-1",1))
                 .thenReturn(version("file-1",bytes.length,hash));

@@ -690,6 +690,7 @@ dependencies {
     add(mmdControlledImageBridgeSourceSet.runtimeOnlyConfigurationName, libs.mysql)
     add(mmdControlledImageBridgeSourceSet.runtimeOnlyConfigurationName, 'com.h2database:h2')
     add(mmdControlledImageBridgeSourceSet.runtimeOnlyConfigurationName, 'com.jayway.jsonpath:json-path')
+    add(mmdControlledImageBridgeSourceSet.runtimeOnlyConfigurationName, 'org.skyscreamer:jsonassert')
 }
 tasks.register('mmdControlledImageBridge', Test) {
     maxParallelForks = 1

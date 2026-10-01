@@ -88,12 +88,15 @@ public final class ControlledImageBridgeSchemaInitializer implements Initializin
     private static Column b(String type,String nullable){return new Column(type,nullable,"utf8mb4_0900_bin");}
     private static Column a(String type,String nullable){return new Column(type,nullable,"ascii_bin");}
     private record Column(String type,String nullable,String collation) { }
+    /** Exact MySQL 8 CHECK_CLAUSE rendering for the additive DDL. This deliberately mirrors
+     * the provider-consent catalog validation instead of weakening predicates through a generic
+     * parenthesis or REGEXP normalizer. */
     private static Map<String,String> checks(){Map<String,String> c=new LinkedHashMap<>();
-        c.put("chk_acibo_scope","tenant_id='0' and owner_jiacn<>'0'");
-        c.put("chk_acibo_hash","wrapper_digest regexp binary '^[0-9a-f]{64}$'");
-        c.put("chk_acibo_consent","consent_id regexp binary '^consent_[0-9a-f]{32}$'");
-        c.put("chk_acibo_locator","authority_locator=concat('mmd-ci-v1:',consent_id)");
-        c.put("chk_acibo_versions","expected_consent_version>0 and grant_version>0 and assignment_revision>=0");
-        c.put("chk_acibo_time","created_at>0");return Map.copyOf(c);}
+        c.put("chk_acibo_scope","((tenant_id='0') and (owner_jiacn<>'0'))");
+        c.put("chk_acibo_hash","regexp_like(wrapper_digest,cast('^[0-9a-f]{64}$' as char charset binary))");
+        c.put("chk_acibo_consent","regexp_like(consent_id,cast('^consent_[0-9a-f]{32}$' as char charset binary))");
+        c.put("chk_acibo_locator","(authority_locator=concat('mmd-ci-v1:',consent_id))");
+        c.put("chk_acibo_versions","((expected_consent_version>0) and (grant_version>0) and (assignment_revision>=0))");
+        c.put("chk_acibo_time","(created_at>0)");return Map.copyOf(c);}
     static String ddl(){try{String source=new ClassPathResource("db/agent-controlled-image-bridge-v1.sql").getContentAsString(StandardCharsets.UTF_8).trim();String normalized=source.toLowerCase(Locale.ROOT).replaceAll("\\s+"," ");if(!normalized.startsWith("create table if not exists "+TABLE+" ")||normalized.substring(0,normalized.length()-1).contains(";")||normalized.contains(" alter table ")||normalized.contains(" drop ")||normalized.contains(" insert ")||normalized.contains(" update ")||normalized.contains(" delete "))throw new IllegalStateException("Unsafe bridge DDL");return source.endsWith(";")?source.substring(0,source.length()-1):source;}catch(Exception e){throw new IllegalStateException("Invalid bridge DDL",e);}}
 }

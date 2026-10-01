@@ -98,9 +98,14 @@ public final class ControlledImageGrantAuthority {
             AgentTaskExecutionGrantService.Scope scope,AgentTaskExecutionGrantEntity grant,
             AgentTaskProviderCostConsentEntity consent,String expectedRuntimeInstanceId) {
         var consentScope=new AgentTaskProviderCostConsentService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());
-        var policy=policies.requireCurrent(consentScope,grant.getTargetAgentId(),consent.getBindingId(),
-                consent.getBindingEpoch(),System.currentTimeMillis());
-        if (!Objects.equals(policy.providerLane(),consent.getProviderLane())
+        final ControlledImageProviderOperatorPolicy.Policy policy;
+        try {
+            policy=policies.requireCurrent(consentScope,grant.getTargetAgentId(),consent.getBindingId(),
+                    consent.getBindingEpoch(),System.currentTimeMillis());
+        } catch (ControlledImageProviderOperatorPolicy.PolicyFailure unavailable) {
+            throw denied(Reason.PAID_EXECUTION_NOT_AUTHORIZED);
+        }
+        if (policy==null || !Objects.equals(policy.providerLane(),consent.getProviderLane())
                 || !Objects.equals(policy.modelId(),consent.getModelId())
                 || !Objects.equals(policy.custody(),consent.getCustody())
                 || !Objects.equals(policy.issuer(),consent.getOperatorIssuer())

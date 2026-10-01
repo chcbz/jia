@@ -7,6 +7,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -41,17 +42,31 @@ class ControlledImageBridgeSchemaInitializerTest {
                 ()->ControlledImageBridgeSchemaInitializer.validateColumns(reordered));
     }
 
-    @Test void bridgeExactChecksRejectSameNamedWeakOrAlwaysTrueDefinitions() {
-        List<Map<String,Object>> pristine=bridgeChecks();
+    @Test void bridgeExactChecksRejectSameNamedWeakOrUnenforcedDefinitions() {
+        Set<String> names=Set.of("chk_acibo_scope","chk_acibo_hash","chk_acibo_consent",
+                "chk_acibo_locator","chk_acibo_versions","chk_acibo_time");
+        assertEquals(names,ControlledImageBridgeSchemaInitializer.checkExpressions().keySet());
+        List<Map<String,Object>> pristine=bridgeCatalogChecks();
         assertDoesNotThrow(()->ControlledImageBridgeSchemaInitializer.validateChecks(pristine));
-        for(String weak:List.of("1",ControlledImageBridgeSchemaInitializer.checkExpressions()
-                .get("chk_acibo_locator")+" OR 1=1")) {
-            List<Map<String,Object>> rows=bridgeChecks();
-            rows.stream().filter(row->"chk_acibo_locator".equals(row.get("constraint_name")))
-                    .findFirst().orElseThrow().put("check_clause",weak);
+        for(String name:names) {
+            List<Map<String,Object>> weak=bridgeCatalogChecks();
+            weak.stream().filter(row->name.equals(row.get("constraint_name")))
+                    .findFirst().orElseThrow().put("check_clause","1=1");
             assertThrows(IllegalStateException.class,
-                    ()->ControlledImageBridgeSchemaInitializer.validateChecks(rows));
+                    ()->ControlledImageBridgeSchemaInitializer.validateChecks(weak),name+" weak");
+            List<Map<String,Object>> unenforced=bridgeCatalogChecks();
+            unenforced.stream().filter(row->name.equals(row.get("constraint_name")))
+                    .findFirst().orElseThrow().put("enforced","NO");
+            assertThrows(IllegalStateException.class,
+                    ()->ControlledImageBridgeSchemaInitializer.validateChecks(unenforced),name+" unenforced");
         }
+        List<Map<String,Object>> appended=bridgeCatalogChecks();
+        appended.stream().filter(row->"chk_acibo_locator".equals(row.get("constraint_name")))
+                .findFirst().orElseThrow().put("check_clause",
+                        ControlledImageBridgeSchemaInitializer.checkExpressions()
+                                .get("chk_acibo_locator")+" OR 1=1");
+        assertThrows(IllegalStateException.class,
+                ()->ControlledImageBridgeSchemaInitializer.validateChecks(appended));
     }
 
     @Test void executionAlterAndExactCheckRejectWeakSameName() {
@@ -96,11 +111,18 @@ class ControlledImageBridgeSchemaInitializerTest {
         row.put("is_nullable",nullable);row.put("collation_name",collation);rows.add(row);
     }
 
-    private static List<Map<String,Object>> bridgeChecks() {
+    private static List<Map<String,Object>> bridgeCatalogChecks() {
+        Map<String,String> catalog=Map.of(
+                "chk_acibo_scope","((`tenant_id` = _utf8mb4'0') and (`owner_jiacn` <> _utf8mb4'0'))",
+                "chk_acibo_hash","regexp_like(`wrapper_digest`,cast(_utf8mb4'^[0-9a-f]{64}$' as char charset binary))",
+                "chk_acibo_consent","regexp_like(`consent_id`,cast(_utf8mb4'^consent_[0-9a-f]{32}$' as char charset binary))",
+                "chk_acibo_locator","(`authority_locator` = concat(_utf8mb4'mmd-ci-v1:',`consent_id`))",
+                "chk_acibo_versions","((`expected_consent_version` > 0) and (`grant_version` > 0) and (`assignment_revision` >= 0))",
+                "chk_acibo_time","(`created_at` > 0)");
         List<Map<String,Object>> rows=new ArrayList<>();
-        ControlledImageBridgeSchemaInitializer.checkExpressions().forEach((name,clause)->{
+        ControlledImageBridgeSchemaInitializer.checkExpressions().keySet().forEach(name->{
             Map<String,Object> row=new LinkedHashMap<>();row.put("constraint_name",name);
-            row.put("enforced","YES");row.put("check_clause",clause);rows.add(row);
+            row.put("enforced","YES");row.put("check_clause",catalog.get(name));rows.add(row);
         });
         return rows;
     }

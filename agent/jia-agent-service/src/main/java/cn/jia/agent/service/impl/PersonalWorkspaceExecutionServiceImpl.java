@@ -820,7 +820,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         if (!same(candidate.getExecutionId(),execution.getExecutionId())
                 || !same(candidate.getTaskId(),execution.getTaskId())
                 || !same(candidate.getRunId(),execution.getRunId())
-                || !same(candidate.getControlledConsentId(),execution.getControlledConsentId()))
+                || !Objects.equals(candidate.getControlledConsentId(),execution.getControlledConsentId()))
             throw failure(Reason.TASK_CONFLICT);
         String seed=execution.getExecutionId();
         String commandId="pwe_cmd_"+plainSha("command\n"+seed);
@@ -1357,7 +1357,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                                 ? "PROVIDER_START" : "EXISTING_RUN"
                             : "NEW_EXECUTION";
                     if (controlled) requireConversationGrant(owner,candidate,purpose,
-                            scope.runtimeInstanceId());
+                            "EXISTING_RUN".equals(purpose)?null:scope.runtimeInstanceId());
                     var execution=runtimeExecution(scope,taskId,runId,lock,allowCommitted,allowFailed);
                     if (!same(candidate.getExecutionId(),execution.getExecutionId())
                             || !same(candidate.getTaskGrantId(),execution.getTaskGrantId())
