@@ -436,7 +436,7 @@ class VoiceServicesTest {
     }
 
     @Test
-    void realtimeOldCachedDigestConflictsAndCurrentDigestReplaysWithoutProviderCall() {
+    void realtimeOldCachedDigestsConflictAndCurrentDigestReplaysWithoutProviderCall() {
         VoiceSpeechProperties properties = properties();
         properties.getSynthesis().setProvider("cliproxy-realtime");
         properties.getSynthesis().setModel("gpt-realtime");
@@ -451,21 +451,27 @@ class VoiceServicesTest {
                 request.text(), request.voice(), request.format());
         String frozenB298Digest =
                 "880c4f8af4ab8e15b6f1ffc6b55455cfc95d12c9097f903aa44fef2a4847230d";
+        String semanticsV2Digest =
+                "54d48e1598f9f970387ac3eb5e717d83186ff8d1f1e2981104435d5f2759ad31";
         AtomicInteger providerCalls = new AtomicInteger();
         SpeechSynthesisProvider provider = synthesisProvider(
                 "cliproxy-realtime", providerCalls, new byte[]{9, 9}, "audio/wav");
 
-        FakeCoordinator legacy = new FakeCoordinator();
-        legacy.existingLegacyDigest = frozenB298Digest;
-        legacy.existingLegacyReplay = new VoiceCachedResult(
-                new byte[]{1, 2, 3, 4}, "audio/wav");
-        VoiceException conflict = assertThrows(VoiceException.class,
-                () -> synthesisService(properties, provider, legacy)
-                        .synthesize(IDENTITY, request));
+        for (String staleDigest : java.util.List.of(
+                frozenB298Digest, semanticsV2Digest)) {
+            FakeCoordinator stale = new FakeCoordinator();
+            stale.existingLegacyDigest = staleDigest;
+            stale.existingLegacyReplay = new VoiceCachedResult(
+                    new byte[]{1, 2, 3, 4}, "audio/wav");
+            VoiceException conflict = assertThrows(VoiceException.class,
+                    () -> synthesisService(properties, provider, stale)
+                            .synthesize(IDENTITY, request), staleDigest);
 
-        assertEquals(VoiceErrorCode.IDEMPOTENCY_CONFLICT, conflict.error());
-        assertEquals(currentDigest, legacy.lastLegacyDigest);
-        assertEquals(0, providerCalls.get());
+            assertEquals(VoiceErrorCode.IDEMPOTENCY_CONFLICT,
+                    conflict.error(), staleDigest);
+            assertEquals(currentDigest, stale.lastLegacyDigest, staleDigest);
+            assertEquals(0, providerCalls.get(), staleDigest);
+        }
 
         FakeCoordinator current = new FakeCoordinator();
         current.existingLegacyDigest = currentDigest;

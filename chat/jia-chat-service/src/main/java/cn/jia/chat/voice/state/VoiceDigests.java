@@ -17,8 +17,10 @@ import java.util.HexFormat;
 
 public final class VoiceDigests {
     private static final String CLIPROXY_REALTIME_PROVIDER = "cliproxy-realtime";
-    private static final byte[] CLIPROXY_REALTIME_SEMANTIC_VERSION =
+    private static final byte[] CLIPROXY_REALTIME_TRANSCRIPTION_SEMANTIC_VERSION =
             "cyf-cliproxy-realtime-semantics-v2".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] CLIPROXY_REALTIME_SYNTHESIS_SEMANTIC_VERSION =
+            "cyf-cliproxy-realtime-semantics-v3".getBytes(StandardCharsets.UTF_8);
     private static final byte[] CLIPROXY_REALTIME_NATIVE_TRANSCRIPTION_VERSION =
             "cyf-cliproxy-realtime-native-transcription-v1"
                     .getBytes(StandardCharsets.UTF_8);
@@ -68,7 +70,8 @@ public final class VoiceDigests {
         updateLengthPrefixed(digest, VoiceContract.versionBytes());
         updateLengthPrefixed(digest, VoiceOperation.TRANSCRIPTION.namespace()
                 .getBytes(StandardCharsets.UTF_8));
-        updateProviderDomain(digest, provider);
+        updateProviderDomain(digest, provider,
+                CLIPROXY_REALTIME_TRANSCRIPTION_SEMANTIC_VERSION);
         if (CLIPROXY_REALTIME_PROVIDER.equals(provider)) {
             updateLengthPrefixed(digest, CLIPROXY_REALTIME_NATIVE_TRANSCRIPTION_VERSION);
         }
@@ -99,7 +102,8 @@ public final class VoiceDigests {
         updateLengthPrefixed(digest, VoiceContract.versionBytes());
         updateLengthPrefixed(digest, VoiceOperation.SYNTHESIS.namespace()
                 .getBytes(StandardCharsets.UTF_8));
-        updateProviderDomain(digest, provider);
+        updateProviderDomain(digest, provider,
+                CLIPROXY_REALTIME_SYNTHESIS_SEMANTIC_VERSION);
         updateLengthPrefixed(digest, model.getBytes(StandardCharsets.UTF_8));
         updateLengthPrefixed(digest, providerVoice.getBytes(StandardCharsets.UTF_8));
         updateLengthPrefixed(digest, voice.getBytes(StandardCharsets.UTF_8));
@@ -108,10 +112,11 @@ public final class VoiceDigests {
         return HexFormat.of().formatHex(digest.digest());
     }
 
-    private static void updateProviderDomain(MessageDigest digest, String provider) {
+    private static void updateProviderDomain(
+            MessageDigest digest, String provider, byte[] cliproxySemanticVersion) {
         updateLengthPrefixed(digest, provider.getBytes(StandardCharsets.UTF_8));
         if (CLIPROXY_REALTIME_PROVIDER.equals(provider)) {
-            updateLengthPrefixed(digest, CLIPROXY_REALTIME_SEMANTIC_VERSION);
+            updateLengthPrefixed(digest, cliproxySemanticVersion);
         }
     }
 

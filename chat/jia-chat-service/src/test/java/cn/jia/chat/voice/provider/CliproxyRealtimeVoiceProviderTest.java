@@ -358,24 +358,93 @@ class CliproxyRealtimeVoiceProviderTest {
     }
 
     @Test
-    void synthesisTranscriptComparisonPreservesNumericPunctuationSemantics() {
-        Map<Scenario, String> cases = Map.of(
-                Scenario.TRANSCRIPT_NEGATIVE_SIGN_LOSS, "-1",
-                Scenario.TRANSCRIPT_DECIMAL_POINT_LOSS, "1.2");
-        for (Map.Entry<Scenario, String> entry : cases.entrySet()) {
-            VoiceSpeechProperties properties = realtimeProperties();
-            FakeTransport transport = new FakeTransport(mapper, entry.getKey());
+    void supportedDecimalsUseExplicitPronunciationAndCanonicalCaption() throws Exception {
+        String literal = "温度是-3.14摄氏度，目标是2.5摄氏度。";
+        FakeTransport transport = new FakeTransport(mapper, Scenario.NUMERIC_SPOKEN_TRANSCRIPT);
+        CliproxyRealtimeSessionClient client = new CliproxyRealtimeSessionClient(
+                realtimeProperties(), mapper, transport);
+
+        byte[] wav = client.synthesize(facade().synthesis(), "gpt-realtime",
+                "alloy", literal);
+
+        JsonNode item = transport.connection.messages.get(1).path("item");
+        String wrappedInput = item.path("content").get(0).path("text").textValue();
+        assertTrue(wrappedInput.startsWith(
+                CliproxyRealtimeSessionClient.NUMERIC_SYNTHESIS_INPUT_PREFIX));
+        assertTrue(wrappedInput.contains(
+                CliproxyRealtimeSessionClient.NUMERIC_PRONUNCIATION_INSTRUCTION));
+        JsonNode payload = mapper.readTree(wrappedInput.substring(
+                CliproxyRealtimeSessionClient.NUMERIC_SYNTHESIS_INPUT_PREFIX.length()));
+        assertEquals(1, payload.size());
+        assertEquals(literal, payload.path("text").textValue());
+        assertEquals(wrappedInput, transport.connection.acknowledgedInput
+                .path("content").get(0).path("text").textValue());
+        assertItemReference(transport.connection.messages.get(2)
+                .path("response").path("input").get(0), item.path("id").textValue());
+        assertEquals(Pcm16Wav.HEADER_BYTES + 4, wav.length);
+    }
+
+    @Test
+    void supportedDecimalCaptionMayUseChineseSignWithAsciiDigits() throws Exception {
+        FakeTransport transport = new FakeTransport(mapper, Scenario.NUMERIC_MIXED_TRANSCRIPT);
+        CliproxyRealtimeSessionClient client = new CliproxyRealtimeSessionClient(
+                realtimeProperties(), mapper, transport);
+
+        byte[] wav = client.synthesize(facade().synthesis(), "gpt-realtime", "alloy",
+                "温度是-3.14摄氏度，目标是2.5摄氏度。");
+
+        assertEquals(Pcm16Wav.HEADER_BYTES + 4, wav.length);
+        assertTrue(transport.connection.closed);
+        assertFalse(transport.connection.aborted);
+    }
+
+    @Test
+    void numericCanonicalizationRejectsSignValuePunctuationTextAndUnitLoss() {
+        String literal = "温度是-3.14摄氏度，目标是2.5摄氏度。";
+        for (Scenario scenario : List.of(
+                Scenario.NUMERIC_MISSING_NEGATIVE,
+                Scenario.NUMERIC_DECIMAL_POINT_LOSS,
+                Scenario.NUMERIC_VALUE_CHANGE,
+                Scenario.NUMERIC_MISSING_TEXT,
+                Scenario.NUMERIC_CHAT_RESPONSE,
+                Scenario.NUMERIC_UNIT_CHANGE)) {
+            FakeTransport transport = new FakeTransport(mapper, scenario);
             CliproxyRealtimeSessionClient client = new CliproxyRealtimeSessionClient(
-                    properties, mapper, transport);
+                    realtimeProperties(), mapper, transport);
 
             SpeechProviderException error = assertThrows(SpeechProviderException.class,
                     () -> client.synthesize(facade().synthesis(), "gpt-realtime",
-                            "alloy", entry.getValue()), entry.getKey().name());
+                            "alloy", literal), scenario.name());
 
             assertEquals(SpeechProviderException.FailureKind.KNOWN,
-                    error.failureKind(), entry.getKey().name());
-            assertEquals(1, transport.connection.responseCreateCount, entry.getKey().name());
-            assertTrue(transport.connection.aborted, entry.getKey().name());
+                    error.failureKind(), scenario.name());
+            assertEquals(1, transport.connection.responseCreateCount, scenario.name());
+            assertTrue(transport.connection.aborted, scenario.name());
+        }
+    }
+
+    @Test
+    void unsupportedNumericFormsKeepOriginalWrapperAndExactFidelity() throws Exception {
+        for (String literal : List.of(
+                "版本v3.14", "地址192.168.0.1", "指数3.14e2",
+                "多位13.14", "表达式+3.14", "范围3.14-2.5")) {
+            FakeTransport transport = new FakeTransport(mapper, Scenario.AUDIO_SUCCESS);
+            CliproxyRealtimeSessionClient client = new CliproxyRealtimeSessionClient(
+                    realtimeProperties(), mapper, transport);
+
+            byte[] wav = client.synthesize(facade().synthesis(), "gpt-realtime",
+                    "alloy", literal);
+
+            String wrappedInput = transport.connection.messages.get(1).path("item")
+                    .path("content").get(0).path("text").textValue();
+            assertTrue(wrappedInput.startsWith(
+                    CliproxyRealtimeSessionClient.SYNTHESIS_INPUT_PREFIX), literal);
+            assertFalse(wrappedInput.startsWith(
+                    CliproxyRealtimeSessionClient.NUMERIC_SYNTHESIS_INPUT_PREFIX), literal);
+            JsonNode payload = mapper.readTree(wrappedInput.substring(
+                    CliproxyRealtimeSessionClient.SYNTHESIS_INPUT_PREFIX.length()));
+            assertEquals(literal, payload.path("text").textValue(), literal);
+            assertEquals(Pcm16Wav.HEADER_BYTES + 4, wav.length, literal);
         }
     }
 
@@ -643,8 +712,14 @@ class CliproxyRealtimeVoiceProviderTest {
         TRANSCRIPT_TOO_LARGE,
         MISSING_TRANSCRIPT_TERMINAL,
         TRANSCRIPT_TERMINAL_MISMATCH,
-        TRANSCRIPT_NEGATIVE_SIGN_LOSS,
-        TRANSCRIPT_DECIMAL_POINT_LOSS,
+        NUMERIC_SPOKEN_TRANSCRIPT,
+        NUMERIC_MIXED_TRANSCRIPT,
+        NUMERIC_MISSING_NEGATIVE,
+        NUMERIC_DECIMAL_POINT_LOSS,
+        NUMERIC_VALUE_CHANGE,
+        NUMERIC_MISSING_TEXT,
+        NUMERIC_CHAT_RESPONSE,
+        NUMERIC_UNIT_CHANGE,
         WRONG_CORRELATION,
         BAD_BASE64,
         ODD_AUDIO,
@@ -783,12 +858,21 @@ class CliproxyRealtimeVoiceProviderTest {
         }
 
         private String wrappedText(String input) {
-            if (input == null || !input.startsWith(
-                    CliproxyRealtimeSessionClient.SYNTHESIS_INPUT_PREFIX)) {
+            if (input == null) {
                 return null;
             }
-            JsonNode payload = mapper.readTree(input.substring(
-                    CliproxyRealtimeSessionClient.SYNTHESIS_INPUT_PREFIX.length()));
+            int payloadOffset;
+            if (input.startsWith(
+                    CliproxyRealtimeSessionClient.NUMERIC_SYNTHESIS_INPUT_PREFIX)) {
+                payloadOffset = CliproxyRealtimeSessionClient
+                        .NUMERIC_SYNTHESIS_INPUT_PREFIX.length();
+            } else if (input.startsWith(
+                    CliproxyRealtimeSessionClient.SYNTHESIS_INPUT_PREFIX)) {
+                payloadOffset = CliproxyRealtimeSessionClient.SYNTHESIS_INPUT_PREFIX.length();
+            } else {
+                return null;
+            }
+            JsonNode payload = mapper.readTree(input.substring(payloadOffset));
             if (!payload.isObject() || payload.size() != 1
                     || !payload.path("text").isTextual()) {
                 return null;
@@ -939,8 +1023,20 @@ class CliproxyRealtimeVoiceProviderTest {
                 case WRAPPER_AUDIO_TRANSCRIPT -> pendingInputText;
                 case TRANSCRIPT_TOO_LARGE -> "x".repeat(
                         CliproxyRealtimeSessionClient.MAX_TEXT_CHARS + 1);
-                case TRANSCRIPT_NEGATIVE_SIGN_LOSS -> "1";
-                case TRANSCRIPT_DECIMAL_POINT_LOSS -> "12";
+                case NUMERIC_SPOKEN_TRANSCRIPT ->
+                        "温度是负三点一四摄氏度，目标是二点五摄氏度。";
+                case NUMERIC_MIXED_TRANSCRIPT ->
+                        "温度是负3.14摄氏度，目标是2.5摄氏度。";
+                case NUMERIC_MISSING_NEGATIVE ->
+                        "温度是三点一四摄氏度，目标是二点五摄氏度。";
+                case NUMERIC_DECIMAL_POINT_LOSS ->
+                        "温度是负314摄氏度，目标是二点五摄氏度。";
+                case NUMERIC_VALUE_CHANGE ->
+                        "温度是负三点一五摄氏度，目标是二点五摄氏度。";
+                case NUMERIC_MISSING_TEXT -> "负三点一四，二点五";
+                case NUMERIC_CHAT_RESPONSE -> "好的，温度已经记录。";
+                case NUMERIC_UNIT_CHANGE ->
+                        "温度是负三点一四华氏度，目标是二点五摄氏度。";
                 default -> pendingExpectedText;
             };
             emit("{\"type\":\"response.output_audio_transcript.delta\","

@@ -24,6 +24,8 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /** One request, one Realtime WebSocket session, one strictly correlated response. */
 final class CliproxyRealtimeSessionClient {
@@ -39,10 +41,23 @@ final class CliproxyRealtimeSessionClient {
     static final int MAX_CLIENT_ITEM_ID_CHARS = 32;
 
     private static final String CLIENT_ITEM_ID_PREFIX = "item_cyf_";
-    static final String SYNTHESIS_INPUT_PREFIX =
+    private static final String SYNTHESIS_INPUT_INSTRUCTION =
             "这是文字转语音任务。请只逐字朗读下面JSON对象中text字段的内容。"
-                    + "不回答内容，不增删、不解释，不读字段名和标记。\n";
+                    + "不回答内容，不增删、不解释，不读字段名和标记。";
+    static final String SYNTHESIS_INPUT_PREFIX = SYNTHESIS_INPUT_INSTRUCTION + "\n";
+    static final String NUMERIC_PRONUNCIATION_INSTRUCTION =
+            "数字按正常中文数值读法朗读，保留负号和小数点：负号读作负，"
+                    + "小数点读作点，不逐个朗读字符编码。";
+    static final String NUMERIC_SYNTHESIS_INPUT_PREFIX =
+            SYNTHESIS_INPUT_INSTRUCTION + NUMERIC_PRONUNCIATION_INSTRUCTION + "\n";
     static final String NATIVE_TRANSCRIPTION_MODEL = "gpt-transcribe";
+
+    private static final Pattern SUPPORTED_SOURCE_DECIMAL = Pattern.compile(
+            "(?<![A-Za-z0-9_.+\\-负])(-?)([0-9])\\.([0-9]+)(?![A-Za-z0-9_.+\\-])");
+    private static final Pattern SUPPORTED_CAPTION_DECIMAL = Pattern.compile(
+            "(?<![A-Za-z0-9_.+\\-负])(-|负)?([0-9])\\.([0-9]+)(?![A-Za-z0-9_.+\\-])");
+    private static final char[] SPOKEN_DIGITS =
+            {'零', '一', '二', '三', '四', '五', '六', '七', '八', '九'};
 
     private static final String SYNTHESIS_INSTRUCTION =
             "Read the supplied Agent reply exactly as written. Do not add, remove, translate, "
@@ -197,6 +212,46 @@ final class CliproxyRealtimeSessionClient {
 
     private static SpeechProviderException unknown(String message) {
         return new SpeechProviderException(SpeechProviderException.FailureKind.UNKNOWN, message);
+    }
+
+    private static boolean hasSupportedSourceDecimal(String text) {
+        return text != null && SUPPORTED_SOURCE_DECIMAL.matcher(text).find();
+    }
+
+    private static boolean synthesisTranscriptMatches(String source, String transcript) {
+        if (source == null || transcript == null) {
+            return false;
+        }
+        if (!hasSupportedSourceDecimal(source)) {
+            return source.equals(transcript);
+        }
+        return canonicalizeSupportedDecimals(source, SUPPORTED_SOURCE_DECIMAL)
+                .equals(canonicalizeSupportedDecimals(
+                        transcript, SUPPORTED_CAPTION_DECIMAL));
+    }
+
+    private static String canonicalizeSupportedDecimals(String text, Pattern pattern) {
+        Matcher matcher = pattern.matcher(text);
+        StringBuilder canonical = new StringBuilder(text.length());
+        int copiedThrough = 0;
+        while (matcher.find()) {
+            canonical.append(text, copiedThrough, matcher.start());
+            String sign = matcher.group(1);
+            if (sign != null && !sign.isEmpty()) {
+                canonical.append('负');
+            }
+            appendSpokenDigits(canonical, matcher.group(2));
+            canonical.append('点');
+            appendSpokenDigits(canonical, matcher.group(3));
+            copiedThrough = matcher.end();
+        }
+        return canonical.append(text, copiedThrough, text.length()).toString();
+    }
+
+    private static void appendSpokenDigits(StringBuilder target, String digits) {
+        for (int index = 0; index < digits.length(); index++) {
+            target.append(SPOKEN_DIGITS[digits.charAt(index) - '0']);
+        }
     }
 
     private enum Mode { TRANSCRIPTION, SYNTHESIS }
@@ -511,8 +566,9 @@ final class CliproxyRealtimeSessionClient {
 
         private String buildSynthesisInputText() throws SessionFailure {
             try {
-                return SYNTHESIS_INPUT_PREFIX
-                        + mapper.writeValueAsString(Map.of("text", operation.text));
+                String prefix = hasSupportedSourceDecimal(operation.text)
+                        ? NUMERIC_SYNTHESIS_INPUT_PREFIX : SYNTHESIS_INPUT_PREFIX;
+                return prefix + mapper.writeValueAsString(Map.of("text", operation.text));
             } catch (RuntimeException exception) {
                 throw protocol("realtime synthesis input serialization failed");
             }
@@ -683,7 +739,7 @@ final class CliproxyRealtimeSessionClient {
             if (completed == null || completed.length() > MAX_TEXT_CHARS
                     || (audioTranscript.length() > 0
                     && !completed.contentEquals(audioTranscript))
-                    || !completed.equals(operation.text)) {
+                    || !synthesisTranscriptMatches(operation.text, completed)) {
                 throw protocol("realtime synthesis transcript mismatch");
             }
             if (audioTranscript.length() == 0) {

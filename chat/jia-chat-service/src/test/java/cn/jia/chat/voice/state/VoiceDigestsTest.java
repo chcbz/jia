@@ -21,6 +21,8 @@ class VoiceDigestsTest {
             "a64674a1de4b77db34f2307b23e8643d44b9d9574f860b8e4da83f05b4b2d2e9";
     private static final String REALTIME_TTS_SEMANTICS_V2 =
             "54d48e1598f9f970387ac3eb5e717d83186ff8d1f1e2981104435d5f2759ad31";
+    private static final String REALTIME_TTS_SEMANTICS_V3 =
+            "0c3a9bfdccfdfcceca6c64f33d1c869364b2ca41490b79993f2b18a205ed76ee";
 
     private final VoiceDigests digests = new VoiceDigests(properties());
 
@@ -50,7 +52,8 @@ class VoiceDigestsTest {
         assertNotEquals(REALTIME_STT_MODEL_ASSISTED_V2, transcription);
         assertEquals(REALTIME_STT_NATIVE_V1, transcription);
         assertNotEquals(REALTIME_TTS_B298, synthesis);
-        assertEquals(REALTIME_TTS_SEMANTICS_V2, synthesis);
+        assertNotEquals(REALTIME_TTS_SEMANTICS_V2, synthesis);
+        assertEquals(REALTIME_TTS_SEMANTICS_V3, synthesis);
         assertEquals(transcription, digests.transcription(
                 "cliproxy-realtime", "gpt-realtime", "zh-CN",
                 "audio/wav", audioDigest));
