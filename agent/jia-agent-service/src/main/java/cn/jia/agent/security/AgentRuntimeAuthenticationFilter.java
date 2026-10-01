@@ -42,6 +42,8 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
                 + "/work-items/" + id + "/reassignments/" + id + "/lease(?:/start|/heartbeat)?")
                 || "GET".equals(request.getMethod()) && path.matches("/internal/agent/tasks/" + id
                 + "/runs/" + id + "/inputs(?:/" + id + "/content)?")
+                || "GET".equals(request.getMethod()) && path.matches("/internal/agent/chat/requests/" + id
+                + "/turns/" + id + "/inspection/inputs/" + id + "/content")
                 || "POST".equals(request.getMethod()) && path.matches("/internal/agent/tasks/" + id
                 + "/runs/" + id + "/outputs/" + id + "/content")
                 || "POST".equals(request.getMethod()) && path.matches("/internal/agent/tasks/" + id

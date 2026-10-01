@@ -33,6 +33,8 @@ public class ChatTypedDeliberationService {
             Integer outcomeContractVersion, String rawOutcomeJson) {
         Map<String,Object> facts=parseMap(snapshot.getFactsManifestJson());
         boolean marker=facts.containsKey("typedDeliberation");
+        boolean inspection=facts.containsKey("typedInspection");
+        if(marker&&inspection)throw persistence("Snapshot has conflicting typed contracts");
         if(!marker){if(outcomeContractVersion!=null||rawOutcomeJson!=null)throw invalid("Typed sidecar is forbidden for a plain turn");return null;}
         if(outcomeContractVersion==null||outcomeContractVersion!=1||rawOutcomeJson==null)throw invalid("Typed final sidecar is required");
         Object typedFacts=facts.get("typedDeliberation");
@@ -100,6 +102,7 @@ public class ChatTypedDeliberationService {
     public ChatTypedDeliberationWire.TypedProjection read(ChatTypedDeliberationStore.Scope scope,String requestId,
             String expectedTurnId,long requestRevision){
         var admission=store.findAdmissionByRequest(scope,requestId);if(admission==null)throw unavailable();
+        if(admission.sourceCatalogJson()!=null&&admission.sourceCatalogJson().stripLeading().startsWith("{"))throw unavailable();
         verifyAdmission(admission,requestId,requestRevision,expectedTurnId);
         var outcome=store.findOutcomeByRequest(scope,requestId);
         if(outcome==null)return new ChatTypedDeliberationWire.TypedProjection(1,scope.conversationId(),

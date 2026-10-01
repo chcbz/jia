@@ -59,6 +59,8 @@ public class ChatDeliberationService {
     private final AgentService agentService;
     private ChatInteractionStepStore interactionSteps;
     private ChatTypedDeliberationService typedDeliberation;
+    private ChatTypedInspectionService typedInspection;
+    private ChatInspectionAuthorityService inspectionAuthority;
 
     // Retain the existing constructor for legacy tests and integrations. In production the
     // scoped store is injected, so durable v2 requests can be read from the same GET endpoint.
@@ -70,6 +72,16 @@ public class ChatDeliberationService {
     @Autowired(required = false)
     public void setTypedDeliberation(ChatTypedDeliberationService typedDeliberation) {
         this.typedDeliberation = typedDeliberation;
+    }
+
+    @Autowired(required = false)
+    public void setTypedInspection(ChatTypedInspectionService typedInspection) {
+        this.typedInspection = typedInspection;
+    }
+
+    @Autowired(required = false)
+    public void setInspectionAuthority(ChatInspectionAuthorityService inspectionAuthority) {
+        this.inspectionAuthority = inspectionAuthority;
     }
 
     public ChatDeliberationService(ChatDeliberationDao dao, ChatConversationDao conversationDao,
@@ -102,6 +114,34 @@ public class ChatDeliberationService {
             long expectedGeneration, JuyitingConversationScope scope,
             InteractionRoute route, ChatMessageDTO input, Map<String, Object> taskMaterials,
             Map<String, Object> trustedTypedFacts, Map<String, Object> trustedTypedAdmission) {
+        return admitTrusted(tenantId, sender, conversationId, expectedGeneration, scope, route, input,
+                taskMaterials, trustedTypedFacts, trustedTypedAdmission, null);
+    }
+
+    /** Sibling-only authority path. Generic INSPECT callers retain the legacy inputRef guard. */
+    @Transactional(rollbackFor = Exception.class)
+    public Admission admitInspection(String tenantId, ServerResolvedSender sender, String conversationId,
+            long expectedGeneration, JuyitingConversationScope scope, ChatMessageDTO input,
+            Map<String, Object> taskMaterials, Map<String, Object> trustedTypedInspection,
+            Map<String, Object> trustedTypedAdmission) {
+        if (trustedTypedInspection == null) throw invalid("Trusted inspection context is required");
+        Map<String, Object> normalizedInspection;
+        try {
+            normalizedInspection = ChatTypedInspectionContextService
+                    .validateTypedInspection(trustedTypedInspection);
+        } catch (RuntimeException invalid) {
+            throw invalid("Trusted inspection context is invalid");
+        }
+        return admitTrusted(tenantId, sender, conversationId, expectedGeneration, scope,
+                InteractionRoute.INSPECT, input, taskMaterials, null, trustedTypedAdmission,
+                normalizedInspection);
+    }
+
+    private Admission admitTrusted(String tenantId, ServerResolvedSender sender, String conversationId,
+            long expectedGeneration, JuyitingConversationScope scope,
+            InteractionRoute route, ChatMessageDTO input, Map<String, Object> taskMaterials,
+            Map<String, Object> trustedTypedFacts, Map<String, Object> trustedTypedAdmission,
+            Map<String, Object> trustedTypedInspection) {
         requireIdentity(tenantId, 50);
         ServerResolvedSender trustedSender = requireHumanSender(sender);
         String ownerJiacn = trustedSender.jiacn();
@@ -128,7 +168,8 @@ public class ChatDeliberationService {
                 ownerJiacn, clientId, conversationId, HISTORY_QUERY_LIMIT);
         if (existingMessages == null) throw unavailable();
         List<Map<String, Object>> inputRefs = authorizeInputRefs(
-                input.getInputRefs(), route, conversation, scope, existingMessages);
+                input.getInputRefs(), route, conversation, scope, existingMessages,
+                trustedTypedInspection != null);
         AgentTaskDTO task = taskFacts(scope, tenantId, clientId);
         Map<String, Object> requestDigestInput = new LinkedHashMap<>();
         requestDigestInput.put("schemaVersion", "1");
@@ -142,6 +183,7 @@ public class ChatDeliberationService {
         requestDigestInput.put("targets", scope.targetAgentIds());
         requestDigestInput.put("inputRefs", inputRefs);
         if (trustedTypedFacts != null) requestDigestInput.put("typedDeliberation", trustedTypedFacts);
+        if (trustedTypedInspection != null) requestDigestInput.put("typedInspection", trustedTypedInspection);
         if (trustedTypedAdmission != null) requestDigestInput.put("typedDeliberationAdmission", trustedTypedAdmission);
         String requestDigest = digest(requestDigestInput);
 
@@ -199,10 +241,12 @@ public class ChatDeliberationService {
                     expectedGeneration, userMessage.getId(), task, authorizedContext);
             Map<String, Object> facts = factsManifest(
                     conversation, scope, targetAgentId, task, taskMaterials, authorizedContext);
-            if (trustedTypedFacts != null || trustedTypedAdmission != null) {
+            if (trustedTypedFacts != null || trustedTypedAdmission != null || trustedTypedInspection != null) {
                 Map<String, Object> typedFacts = new LinkedHashMap<>(facts);
                 if (trustedTypedFacts != null) typedFacts.put("typedDeliberation",
                         java.util.Collections.unmodifiableMap(new LinkedHashMap<>(trustedTypedFacts)));
+                if (trustedTypedInspection != null) typedFacts.put("typedInspection",
+                        java.util.Collections.unmodifiableMap(new LinkedHashMap<>(trustedTypedInspection)));
                 if (trustedTypedAdmission != null) typedFacts.put("typedDeliberationAdmission",
                         java.util.Collections.unmodifiableMap(new LinkedHashMap<>(trustedTypedAdmission)));
                 facts = java.util.Collections.unmodifiableMap(new LinkedHashMap<>(typedFacts));
@@ -338,8 +382,37 @@ public class ChatDeliberationService {
             long conversationGeneration, String agentId, String requestId, String turnId, String dispatchId,
             String snapshotId, String contextDigest, String content, Integer outcomeContractVersion,
             String rawInteractionOutcomeJson, ServerResolvedAgentSender sender) {
+        return persistFinal(tenantId, ownerJiacn, clientId, conversationId, conversationGeneration, agentId,
+                requestId, turnId, dispatchId, snapshotId, contextDigest, content, outcomeContractVersion,
+                rawInteractionOutcomeJson, null, sender);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public FinalResult persistFinal(String tenantId, String ownerJiacn, String clientId, String conversationId,
+            long conversationGeneration, String agentId, String requestId, String turnId, String dispatchId,
+            String snapshotId, String contextDigest, String content, Integer outcomeContractVersion,
+            String rawInteractionOutcomeJson, String rawInspectionInputReceiptJson,
+            ServerResolvedAgentSender sender) {
         String safeContent = requireContent(content);
         ChatTurnEntity visible = requireVisibleTurn(tenantId, ownerJiacn, clientId, turnId);
+        if (InteractionRoute.INSPECT.name().equals(visible.getRoute())) {
+            if (inspectionAuthority == null) throw persistence("Inspection authority service is unavailable");
+            return inspectionAuthority.withFinalAuthority(visible, () -> persistFinalLocked(tenantId, ownerJiacn,
+                    clientId, conversationId, conversationGeneration, agentId, requestId, turnId, dispatchId,
+                    snapshotId, contextDigest, safeContent, outcomeContractVersion, rawInteractionOutcomeJson,
+                    rawInspectionInputReceiptJson, sender, visible));
+        }
+        if (rawInspectionInputReceiptJson != null) throw invalid("Inspection receipt is forbidden for CHAT");
+        return persistFinalLocked(tenantId, ownerJiacn, clientId, conversationId, conversationGeneration, agentId,
+                requestId, turnId, dispatchId, snapshotId, contextDigest, safeContent, outcomeContractVersion,
+                rawInteractionOutcomeJson, null, sender, visible);
+    }
+
+    private FinalResult persistFinalLocked(String tenantId, String ownerJiacn, String clientId, String conversationId,
+            long conversationGeneration, String agentId, String requestId, String turnId, String dispatchId,
+            String snapshotId, String contextDigest, String safeContent, Integer outcomeContractVersion,
+            String rawInteractionOutcomeJson, String rawInspectionInputReceiptJson,
+            ServerResolvedAgentSender sender, ChatTurnEntity visible) {
         ChatConversationEntity conversation = requireLockedConversation(tenantId, ownerJiacn, clientId,
                 visible.getConversationId(), visible.getConversationGeneration());
         ChatTurnEntity turn = requireLockedTurn(tenantId, ownerJiacn, clientId, turnId);
@@ -348,16 +421,24 @@ public class ChatDeliberationService {
         ServerResolvedAgentSender trustedSender = requireAgentSender(sender, agentId, ownerJiacn, clientId);
         ChatContextSnapshotEntity finalSnapshot = dao.findSnapshot(tenantId, ownerJiacn, clientId, snapshotId);
         if (finalSnapshot == null) throw unavailable();
+        Map<String, Object> finalFacts = parseJsonMap(finalSnapshot.getFactsManifestJson());
+        boolean inspectionMarker = finalFacts.containsKey("typedInspection");
+        boolean deliberationMarker = finalFacts.containsKey("typedDeliberation");
+        if (inspectionMarker && deliberationMarker) throw persistence("Snapshot has conflicting typed contracts");
         ChatTypedDeliberationService.Prepared typedPrepared = null;
-        if (typedDeliberation != null) {
+        ChatTypedInspectionService.Prepared inspectionPrepared = null;
+        if (inspectionMarker) {
+            if (typedInspection == null) throw persistence("Typed inspection service is unavailable");
+            inspectionPrepared = typedInspection.prepare(turn, finalSnapshot, safeContent, outcomeContractVersion,
+                    rawInteractionOutcomeJson, rawInspectionInputReceiptJson);
+        } else if (typedDeliberation != null) {
             typedPrepared = typedDeliberation.prepare(turn, finalSnapshot, safeContent,
                     outcomeContractVersion, rawInteractionOutcomeJson);
-        } else if (outcomeContractVersion != null || rawInteractionOutcomeJson != null
-                || parseJsonMap(finalSnapshot.getFactsManifestJson()).containsKey("typedDeliberation")) {
+        } else if (outcomeContractVersion != null || rawInteractionOutcomeJson != null || deliberationMarker) {
             throw persistence("Typed deliberation service is unavailable");
         }
-        String finalDigest = typedPrepared == null
-                ? "sha256:" + sha256(safeContent) : typedPrepared.validated().finalDigest();
+        String finalDigest = inspectionPrepared != null ? inspectionPrepared.validated().finalDigest()
+                : typedPrepared == null ? "sha256:" + sha256(safeContent) : typedPrepared.validated().finalDigest();
         if ((ChatDeliberationStates.FINAL_PERSISTED.equals(turn.getState())
                 || ChatDeliberationStates.PUBLISHED.equals(turn.getState()))
                 && turn.getFinalDigest() == null) {
@@ -395,6 +476,7 @@ public class ChatDeliberationService {
         metadata.put("targetAgentId", turn.getTargetAgentId());
         metadata.put("finalDigest", finalDigest);
         if (typedPrepared != null) metadata.put("outcomeId", typedDeliberation.outcomeId(typedPrepared));
+        if (inspectionPrepared != null) metadata.put("outcomeId", typedInspection.outcomeId(inspectionPrepared));
         ChatMessageEntity message = new ChatMessageEntity()
                 .setConversationId(turn.getConversationId()).setMessageType("ASSISTANT")
                 .setContent(safeContent).setMetadata(JsonUtil.toJson(metadata)).setJiacn(ownerJiacn)
@@ -408,6 +490,8 @@ public class ChatDeliberationService {
         }
         ChatTypedDeliberationService.Persisted typedPersisted = typedPrepared == null
                 ? null : typedDeliberation.persist(typedPrepared, message.getId(), now);
+        ChatTypedInspectionService.Persisted inspectionPersisted = inspectionPrepared == null
+                ? null : typedInspection.persist(inspectionPrepared, message.getId(), now);
         if (dao.persistFinal(turn, finalDigest, message.getId(), now) != 1) {
             throw conflict("Concurrent final state change");
         }
@@ -419,6 +503,7 @@ public class ChatDeliberationService {
         finalPayload.put("senderType", trustedSender.type());
         finalPayload.put("senderName", trustedSender.displayName());
         if (typedPersisted != null) finalPayload.put("typedOutcome", typedPersisted.eventView());
+        if (inspectionPersisted != null) finalPayload.put("typedOutcome", inspectionPersisted.eventView());
         ChatConversationEventEntity finalEvent = persistEvent(turn, finalEventId, "agent_message",
                 finalPayload, now);
         Map<String, Object> outboxPayload = new LinkedHashMap<>();
@@ -433,6 +518,7 @@ public class ChatDeliberationService {
         outboxPayload.put("eventVersion", Long.toString(finalEvent.getEventVersion()));
         outboxPayload.put("finalDigest", finalDigest);
         if (typedPersisted != null) outboxPayload.put("typedOutcome", typedPersisted.eventView());
+        if (inspectionPersisted != null) outboxPayload.put("typedOutcome", inspectionPersisted.eventView());
         ChatDispatchOutboxEntity outbox = new ChatDispatchOutboxEntity()
                 .setEventId(finalEventId)
                 .setTenantId(tenantId).setOwnerJiacn(ownerJiacn).setClientId(clientId)
@@ -823,9 +909,9 @@ public class ChatDeliberationService {
 
     private List<Map<String, Object>> authorizeInputRefs(List<Map<String, Object>> candidates,
             InteractionRoute route, ChatConversationEntity conversation, JuyitingConversationScope scope,
-            List<ChatMessageEntity> messages) {
+            List<ChatMessageEntity> messages, boolean trustedInspection) {
         if (candidates == null || candidates.isEmpty()) {
-            if (route == InteractionRoute.INSPECT) throw invalid("INSPECT requires authorized inputRefs");
+            if (route == InteractionRoute.INSPECT && !trustedInspection) throw invalid("INSPECT requires authorized inputRefs");
             return List.of();
         }
         Set<String> messageIds = new LinkedHashSet<>();
@@ -848,7 +934,8 @@ public class ChatDeliberationService {
             if (!allowed) throw unavailable();
             if (seen.add(type + "\0" + id)) result.add(Map.of("type", type, "id", id));
         }
-        if (route == InteractionRoute.INSPECT && result.isEmpty()) throw invalid("INSPECT requires authorized inputRefs");
+        if (route == InteractionRoute.INSPECT && result.isEmpty() && !trustedInspection)
+            throw invalid("INSPECT requires authorized inputRefs");
         return List.copyOf(result);
     }
 

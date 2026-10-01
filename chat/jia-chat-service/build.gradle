@@ -343,3 +343,64 @@ tasks.register('mmdControlledImageFollowupV3', Test) {
     classpath = mmdControlledImageFollowupV3SourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+// MMD-U2 IA typed INSPECT authority slice; preserves CHAT v1 and compiles only affected tests.
+def mmdU2TypedInspectionSourceSet = sourceSets.create('mmdU2TypedInspection') {
+    java {
+        srcDir 'src/chatDeliberationTest/java'
+        include 'cn/jia/agent/security/AgentRuntimeInspectionRouteTest.java'
+        include 'cn/jia/chat/api/ChatTypedInspectionWireTest.java'
+        include 'cn/jia/chat/api/AgentInspectionInputControllerTest.java'
+        include 'cn/jia/chat/handler/TypedInspectionDeclarationTest.java'
+        include 'cn/jia/chat/handler/TypedInspectionSessionRegistryTest.java'
+        include 'cn/jia/chat/service/TypedInspectionFinalValidatorTest.java'
+        include 'cn/jia/chat/service/ChatTypedInspectionContextContractTest.java'
+        include 'cn/jia/chat/service/ChatInspectionAuthorityServiceTest.java'
+        include 'cn/jia/chat/service/ChatTypedInspectionAdmissionServiceTest.java'
+        include 'cn/jia/chat/service/ChatTypedInspectionSpringTransactionTest.java'
+        include 'cn/jia/chat/service/TypedDeliberationFinalValidatorTest.java'
+        include 'cn/jia/chat/handler/TypedDeliberationDeclarationTest.java'
+        include 'cn/jia/chat/handler/TypedDeliberationSessionRegistryTest.java'
+        include 'cn/jia/chat/service/ChatTypedDeliberationServiceTest.java'
+        include 'cn/jia/chat/handler/AgentWebSocketTypedDeliberationTest.java'
+    }
+    resources.srcDir 'src/chatDeliberationTest/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(mmdU2TypedInspectionSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.implementation
+}
+configurations.named(mmdU2TypedInspectionSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.runtimeOnly
+}
+dependencies {
+    add(mmdU2TypedInspectionSourceSet.implementationConfigurationName,
+            platform("org.springframework.boot:spring-boot-dependencies:${libs.versions.spring.boot.asProvider().get()}"))
+    add(mmdU2TypedInspectionSourceSet.implementationConfigurationName, libs.junit.jupiter)
+    add(mmdU2TypedInspectionSourceSet.implementationConfigurationName, 'org.mockito:mockito-core')
+    add(mmdU2TypedInspectionSourceSet.implementationConfigurationName, 'org.springframework:spring-test')
+    add(mmdU2TypedInspectionSourceSet.implementationConfigurationName, 'org.hamcrest:hamcrest')
+    add(mmdU2TypedInspectionSourceSet.implementationConfigurationName, libs.spring.boot.starter.websocket)
+    add(mmdU2TypedInspectionSourceSet.implementationConfigurationName, project(':agent:jia-agent-mapper'))
+    add(mmdU2TypedInspectionSourceSet.implementationConfigurationName,
+            'org.springframework.security:spring-security-oauth2-resource-server')
+    add(mmdU2TypedInspectionSourceSet.implementationConfigurationName,
+            'org.springframework.security:spring-security-oauth2-jose')
+    add(mmdU2TypedInspectionSourceSet.runtimeOnlyConfigurationName,
+            'org.junit.platform:junit-platform-launcher:6.0.1')
+    add(mmdU2TypedInspectionSourceSet.runtimeOnlyConfigurationName, project(':oauth:jia-oauth-api'))
+    add(mmdU2TypedInspectionSourceSet.runtimeOnlyConfigurationName, 'com.h2database:h2')
+}
+tasks.register('mmdU2TypedInspection', Test) {
+    maxParallelForks = 1
+    maxHeapSize = '256m'
+    jvmArgs '-XX:+UseSerialGC', '-XX:ActiveProcessorCount=2',
+            '-XX:MaxMetaspaceSize=192m', '-Xss256k'
+    group = 'verification'
+    description = 'Runs typed INSPECT admission, authority, digest, v2 final and CHAT v1 compatibility regressions.'
+    dependsOn tasks.named(mmdU2TypedInspectionSourceSet.classesTaskName)
+    testClassesDirs = mmdU2TypedInspectionSourceSet.output.classesDirs
+    classpath = mmdU2TypedInspectionSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}

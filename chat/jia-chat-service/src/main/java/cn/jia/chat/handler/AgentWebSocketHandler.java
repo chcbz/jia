@@ -154,6 +154,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     }
     private ChatDeliberationOutboxService chatDeliberationOutboxService;
     private TypedDeliberationSessionRegistry typedDeliberationSessions;
+    private TypedInspectionSessionRegistry typedInspectionSessions;
     @Autowired(required = false)
     public void setChatDeliberationOutboxService(ChatDeliberationOutboxService service) {
         this.chatDeliberationOutboxService = service;
@@ -161,6 +162,10 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     @Autowired(required = false)
     public void setTypedDeliberationSessions(TypedDeliberationSessionRegistry sessions) {
         this.typedDeliberationSessions = sessions;
+    }
+    @Autowired(required = false)
+    public void setTypedInspectionSessions(TypedInspectionSessionRegistry sessions) {
+        this.typedInspectionSessions = sessions;
     }
     private final ChatClient chatClient;
     private final ObjectProvider<AgentService> agentServiceProvider;
@@ -397,6 +402,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         sessionControlledImageBountyExecution.remove(session.getId());
         sessionControlledImageV3.remove(session.getId());
         removeTypedDeliberationSession(session.getId());
+        removeTypedInspectionSession(session.getId());
         runningStreams.entrySet().removeIf(entry -> {
             StreamState stream = entry.getValue();
             if (session.getId().equals(stream.sessionId())) {
@@ -786,6 +792,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             sessionControlledImageBountyExecution.remove(session.getId());
             sessionControlledImageV3.remove(session.getId());
             removeTypedDeliberationSession(session.getId());
+            removeTypedInspectionSession(session.getId());
             stage = "registration_payload";
             AgentRuntimeCapabilities runtimeCapabilities = AgentRuntimeCapabilities.parse(
                     payload.get("runtimeCapabilities"));
@@ -801,6 +808,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                     ControlledImageV3Declaration.parse(payload.get("controlledImageBountyExecutionV3"));
             TypedDeliberationDeclaration typedDeliberation =
                     TypedDeliberationDeclaration.parse(payload.get("typedDeliberation"));
+            TypedInspectionDeclaration typedInspection =
+                    TypedInspectionDeclaration.parse(payload.get("typedInspection"));
             AgentRegisterDTO request = new AgentRegisterDTO();
             request.setAgentId(agentId);
             request.setName(asString(payload.get("name")));
@@ -833,6 +842,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             if (payload.containsKey("typedDeliberation")) {
                 event.put("typedDeliberation", typedDeliberation.frozenReceipt());
             }
+            if (payload.containsKey("typedInspection")) {
+                event.put("typedInspection", typedInspection.frozenReceipt());
+            }
             // Scope comes only from the authenticated session and is rechecked against persisted
             // identity/current registration token. This receipt is sent only on this native socket.
             if (runtimeAuthentication != null && sessionRuntimeInstanceId(session) != null) {
@@ -851,6 +863,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 sessionControlledImageBountyExecution.remove(session.getId());
                 sessionControlledImageV3.remove(session.getId());
                 removeTypedDeliberationSession(session.getId());
+                removeTypedInspectionSession(session.getId());
                 return;
             }
             // Activate all successful-registration evidence only after the authenticated
@@ -867,6 +880,12 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                         payload.get("typedDeliberation"),
                         () -> typedDeliberationSessionCurrent(session, result.getAgentId()));
             }
+            if (typedInspectionSessions != null) {
+                typedInspectionSessions.register(session.getId(), sessionTenantId(session),
+                        sessionJiacn(session), sessionClientId(session), result.getAgentId(),
+                        payload.get("typedInspection"),
+                        () -> typedDeliberationSessionCurrent(session, result.getAgentId()));
+            }
             signalRegisteredReconnect(session, result.getAgentId());
             sendCapabilityIndex(session, payload);
         } catch (Exception e) {
@@ -881,6 +900,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             sessionControlledImageBountyExecution.remove(session.getId());
             sessionControlledImageV3.remove(session.getId());
             removeTypedDeliberationSession(session.getId());
+            removeTypedInspectionSession(session.getId());
             sendError(session, payload, "AGENT_REGISTRATION_UNAVAILABLE", "Agent registration is unavailable");
         }
     }
@@ -1036,6 +1056,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 sessionControlledImageBountyExecution.remove(session.getId());
                 sessionControlledImageV3.remove(session.getId());
                 removeTypedDeliberationSession(session.getId());
+                removeTypedInspectionSession(session.getId());
             }
             if (agent.getAgentId() != null) {
                 rememberSessionAgent(session.getId(), agent.getAgentId());
@@ -1243,7 +1264,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                         asString(payload.get("dispatchId")), contextValue(payload, "contextSnapshotId"),
                         contextValue(payload, "contextHash"), content,
                         typedOutcomeContractVersion(payload),
-                        strictString(payload.get("__typedRawInteractionOutcomeJson")), sender);
+                        strictString(payload.get("__typedRawInteractionOutcomeJson")),
+                        strictString(payload.get("__typedRawInspectionInputReceiptJson")), sender);
             } catch (RuntimeException rejected) {
                 sendError(session, payload, "CHAT_TURN_FINAL_REJECTED", "Durable chat final was rejected");
                 return;
@@ -1404,38 +1426,67 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         JsonNode root = STRICT_RAW_COMMAND_JSON.readTree(wire);
         if (root == null || !root.isObject()) throw new IllegalArgumentException("object required");
         Map<String, Object> strict = STRICT_RAW_COMMAND_JSON.readValue(wire, MESSAGE_TYPE);
-        if (strict.containsKey("__typedRawInteractionOutcomeJson")) throw new IllegalArgumentException("reserved field");
+        if (strict.containsKey("__typedRawInteractionOutcomeJson")
+                || strict.containsKey("__typedRawInspectionInputReceiptJson")) {
+            throw new IllegalArgumentException("reserved field");
+        }
         JsonNode nested = root.get("payload");
         if (nested != null && nested.isObject()
-                && nested.has("__typedRawInteractionOutcomeJson")) throw new IllegalArgumentException("reserved field");
-        JsonNode outcome = root.get("interactionOutcome");
-        JsonNode version = root.get("outcomeContractVersion");
-        if ((outcome == null) != (version == null)) throw new IllegalArgumentException("incomplete typed sidecar");
-        if (nested != null && nested.isObject()
-                && (nested.has("interactionOutcome") || nested.has("outcomeContractVersion"))) {
+                && (nested.has("__typedRawInteractionOutcomeJson")
+                        || nested.has("__typedRawInspectionInputReceiptJson")
+                        || nested.has("interactionOutcome")
+                        || nested.has("outcomeContractVersion")
+                        || nested.has("inspectionInputReceipt"))) {
             throw new IllegalArgumentException("typed sidecar must be top-level");
         }
-        if (outcome != null) {
-            if (!outcome.isObject() || !semanticOne(version)) throw new IllegalArgumentException("invalid typed sidecar");
-            strict.put("outcomeContractVersion", 1);
-            strict.put("__typedRawInteractionOutcomeJson", outcome.toString());
+        JsonNode outcome = root.get("interactionOutcome");
+        JsonNode version = root.get("outcomeContractVersion");
+        JsonNode receipt = root.get("inspectionInputReceipt");
+        if (outcome == null && version == null && receipt == null) return strict;
+        if (outcome == null || version == null || !outcome.isObject()) {
+            throw new IllegalArgumentException("incomplete typed sidecar");
         }
+        if (semanticInteger(version, 1)) {
+            if (receipt != null) throw new IllegalArgumentException("inspection receipt is forbidden for v1");
+            strict.put("outcomeContractVersion", 1);
+        } else if (semanticInteger(version, 2)) {
+            if (receipt == null || !receipt.isObject()) {
+                throw new IllegalArgumentException("inspection receipt is required for v2");
+            }
+            strict.put("outcomeContractVersion", 2);
+            strict.put("__typedRawInspectionInputReceiptJson", receipt.toString());
+        } else {
+            throw new IllegalArgumentException("invalid typed sidecar version");
+        }
+        strict.put("__typedRawInteractionOutcomeJson", outcome.toString());
         return strict;
     }
 
     private Integer typedOutcomeContractVersion(Map<String, Object> payload) {
-        if (!payload.containsKey("outcomeContractVersion")) return null;
-        return Integer.valueOf(1);
+        Object value = payload.get("outcomeContractVersion");
+        if (value instanceof Byte || value instanceof Short
+                || value instanceof Integer || value instanceof Long) {
+            int version = ((Number) value).intValue();
+            return version == 1 || version == 2 ? version : null;
+        }
+        return null;
     }
 
-    private boolean semanticOne(JsonNode value) {
+    private boolean semanticInteger(JsonNode value, int expected) {
         if (value == null || !value.isNumber()) return false;
-        try { return value.decimalValue().compareTo(java.math.BigDecimal.ONE) == 0; }
-        catch (RuntimeException invalid) { return false; }
+        try {
+            return value.decimalValue().compareTo(java.math.BigDecimal.valueOf(expected)) == 0;
+        } catch (RuntimeException invalid) {
+            return false;
+        }
     }
 
     private void removeTypedDeliberationSession(String sessionId) {
         if (typedDeliberationSessions != null) typedDeliberationSessions.remove(sessionId);
+    }
+
+    private void removeTypedInspectionSession(String sessionId) {
+        if (typedInspectionSessions != null) typedInspectionSessions.remove(sessionId);
     }
 
     private boolean typedDeliberationSessionCurrent(WebSocketSession session, String agentId) {

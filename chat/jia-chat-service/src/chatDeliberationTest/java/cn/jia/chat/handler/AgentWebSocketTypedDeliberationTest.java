@@ -45,6 +45,27 @@ class AgentWebSocketTypedDeliberationTest {
         assertThrows(IllegalStateException.class,()->registry.requireSingleReady(new TypedDeliberationSessionRegistry.Scope("0","owner","client"),"agent-a"));
     }
 
+    @Test void independentInspectionDeclarationActivatesOnlyAfterRegistrationAndClosesWithSocket() throws Exception {
+        AgentService agents=mock(AgentService.class);@SuppressWarnings("unchecked") ObjectProvider<AgentService> provider=mock(ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(agents);when(agents.register(any(AgentRegisterDTO.class)))
+                .thenReturn(new AgentRegisterResultDTO("agent-a","1".repeat(32),AgentConstants.STATUS_ONLINE));
+        AgentRuntimeAuthenticationService auth=mock(AgentRuntimeAuthenticationService.class);
+        when(auth.bind(anyString(),anyString(),anyString(),anyString(),anyString(),any(),anyString(),any()))
+                .thenReturn(new AgentRuntimeAuthenticationService.Receipt("native-runtime-v1","0","client","owner","agent-a","runtime",true));
+        when(auth.isCurrentBinding(anyString(),anyString(),anyString(),anyString(),anyString(),anyString())).thenReturn(true);
+        TypedInspectionSessionRegistry registry=new TypedInspectionSessionRegistry();
+        AgentWebSocketHandler handler=handler(provider);handler.setRuntimeAuthentication(auth);handler.setTypedInspectionSessions(registry);
+        WebSocketSession session=session("inspection-registration");handler.afterConnectionEstablished(session);
+        String declaration=new tools.jackson.databind.ObjectMapper().writeValueAsString(
+                TypedInspectionDeclarationTest.declaration(true));
+        handler.handleTextMessage(session,new TextMessage("{\"schemaVersion\":1,\"messageType\":\"agent.register\",\"messageId\":\"r1\",\"agentId\":\"agent-a\",\"runtimeInstanceId\":\"runtime\",\"typedInspection\":"+declaration+"}"));
+        assertEquals("inspection-registration",registry.requireSingleReady(
+                new TypedInspectionSessionRegistry.Scope("0","owner","client"),"agent-a").sessionId());
+        handler.afterConnectionClosed(session,CloseStatus.NORMAL);
+        assertThrows(IllegalStateException.class,()->registry.requireSingleReady(
+                new TypedInspectionSessionRegistry.Scope("0","owner","client"),"agent-a"));
+    }
+
     @Test void malformedDeclarationCanRegisterTheAgentButNeverAdvertisesTypedReadiness() throws Exception {
         AgentService agents=mock(AgentService.class);@SuppressWarnings("unchecked") ObjectProvider<AgentService> provider=mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(agents);when(agents.register(any(AgentRegisterDTO.class)))
@@ -73,12 +94,12 @@ class AgentWebSocketTypedDeliberationTest {
         ChatConversationEntity conversation=new ChatConversationEntity().setId(42L).setConversationType("juyiting")
                 .setTargetAgentIds("[\"agent-a\"]").setLifecycleGeneration(1L);conversation.setTenantId("0");conversation.setClientId("client");conversation.setJiacn("owner");
         when(conversations.getOwned("owner","client","42")).thenReturn(conversation);
-        when(deliberation.persistFinal(anyString(),anyString(),anyString(),anyString(),anyLong(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),any(),any(),any()))
+        when(deliberation.persistFinal(anyString(),anyString(),anyString(),anyString(),anyLong(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),any(),any(),any(),any()))
                 .thenReturn(new ChatDeliberationService.FinalResult(ChatDeliberationService.FinalStatus.PERSISTED,9L,"8","evt",turn(),null));
         String outcome="{\"schemaVersion\":1.0,\"kind\":\"ANSWER\",\"text\":\"你好🌏\",\"clarification\":null,\"proposal\":null}";
         handler.handleTextMessage(session,new TextMessage(finalWire(outcome)));
         ArgumentCaptor<String> raw=ArgumentCaptor.forClass(String.class);
-        verify(deliberation).persistFinal(eq("0"),eq("owner"),eq("client"),eq("42"),eq(1L),eq("agent-a"),eq("request"),eq("turn"),eq("dispatch"),eq("snapshot"),eq("sha256:"+"a".repeat(64)),eq("你好🌏"),eq(1),raw.capture(),any());
+        verify(deliberation).persistFinal(eq("0"),eq("owner"),eq("client"),eq("42"),eq(1L),eq("agent-a"),eq("request"),eq("turn"),eq("dispatch"),eq("snapshot"),eq("sha256:"+"a".repeat(64)),eq("你好🌏"),eq(1),raw.capture(),isNull(),any());
         assertEquals(outcome,raw.getValue());
         ArgumentCaptor<TextMessage> receipt=ArgumentCaptor.forClass(TextMessage.class);
         verify(session).sendMessage(receipt.capture());
@@ -90,6 +111,30 @@ class AgentWebSocketTypedDeliberationTest {
         clearInvocations(deliberation);
         handler.handleTextMessage(session,new TextMessage(finalWire(outcome.replace("\"kind\":\"ANSWER\"","\"kind\":\"ANSWER\",\"kind\":\"CLARIFY\""))));
         verifyNoInteractions(deliberation);
+    }
+
+    @Test void v2FinalForwardsExactReceiptWithoutChangingV1Wire() throws Exception {
+        @SuppressWarnings("unchecked") ObjectProvider<AgentService> provider=mock(ObjectProvider.class);
+        AgentWebSocketHandler handler=handler(provider);ChatConversationService conversations=mock(ChatConversationService.class);
+        ChatDeliberationService deliberation=mock(ChatDeliberationService.class);handler.setChatConversationService(conversations);handler.setChatDeliberationService(deliberation);
+        WebSocketSession session=session("inspection-final");bind(handler,session);
+        ChatConversationEntity conversation=new ChatConversationEntity().setId(42L).setConversationType("juyiting")
+                .setTargetAgentIds("[\"agent-a\"]").setLifecycleGeneration(1L);conversation.setTenantId("0");conversation.setClientId("client");conversation.setJiacn("owner");
+        when(conversations.getOwned("owner","client","42")).thenReturn(conversation);
+        when(deliberation.persistFinal(anyString(),anyString(),anyString(),anyString(),anyLong(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),any(),any(),any(),any()))
+                .thenReturn(new ChatDeliberationService.FinalResult(ChatDeliberationService.FinalStatus.PERSISTED,9L,"8","evt",turn(),null));
+        String outcome="{\"schemaVersion\":2,\"kind\":\"ANSWER\",\"text\":\"你好🌏\",\"clarification\":null,\"proposal\":null}";
+        String receipt="{\"schemaVersion\":1,\"authorizationId\":\"inspection-a\",\"manifestDigest\":\"sha256:"+"a".repeat(64)+"\",\"inputDigest\":\"sha256:"+"b".repeat(64)+"\",\"engineThreadId\":\"thread\",\"engineTurnId\":\"turn\",\"sources\":[]}";
+        String wire=baseWire().replace("\"content\":\"plain\"","\"content\":\"你好🌏\"")
+                +",\"outcomeContractVersion\":2,\"interactionOutcome\":"+outcome
+                +",\"inspectionInputReceipt\":"+receipt+"}";
+        handler.handleTextMessage(session,new TextMessage(wire));
+        ArgumentCaptor<String> rawOutcome=ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> rawReceipt=ArgumentCaptor.forClass(String.class);
+        verify(deliberation).persistFinal(eq("0"),eq("owner"),eq("client"),eq("42"),eq(1L),eq("agent-a"),
+                eq("request"),eq("turn"),eq("dispatch"),eq("snapshot"),eq("sha256:"+"a".repeat(64)),
+                eq("你好🌏"),eq(2),rawOutcome.capture(),rawReceipt.capture(),any());
+        assertEquals(outcome,rawOutcome.getValue());assertEquals(receipt,rawReceipt.getValue());
     }
 
     @Test void incompleteOrNestedTypedSidecarsNeverReachTheFinalService() throws Exception {
@@ -114,10 +159,10 @@ class AgentWebSocketTypedDeliberationTest {
         ChatConversationEntity conversation=new ChatConversationEntity().setId(42L).setConversationType("juyiting")
                 .setTargetAgentIds("[\"agent-a\"]").setLifecycleGeneration(1L);conversation.setTenantId("0");conversation.setClientId("client");conversation.setJiacn("owner");
         when(conversations.getOwned("owner","client","42")).thenReturn(conversation);
-        when(deliberation.persistFinal(anyString(),anyString(),anyString(),anyString(),anyLong(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),isNull(),isNull(),any()))
+        when(deliberation.persistFinal(anyString(),anyString(),anyString(),anyString(),anyLong(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),isNull(),isNull(),isNull(),any()))
                 .thenReturn(new ChatDeliberationService.FinalResult(ChatDeliberationService.FinalStatus.DUPLICATE,9L,"8","evt",turn(),null));
         handler.handleTextMessage(session,new TextMessage(baseWire()+"}"));
-        verify(deliberation).persistFinal(anyString(),anyString(),anyString(),anyString(),anyLong(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),eq("plain"),isNull(),isNull(),any());
+        verify(deliberation).persistFinal(anyString(),anyString(),anyString(),anyString(),anyLong(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),eq("plain"),isNull(),isNull(),isNull(),any());
         ArgumentCaptor<TextMessage> receipt=ArgumentCaptor.forClass(TextMessage.class);
         verify(session).sendMessage(receipt.capture());
         assertTrue(receipt.getValue().getPayload().contains("\"type\":\"agent_message_saved\""));
