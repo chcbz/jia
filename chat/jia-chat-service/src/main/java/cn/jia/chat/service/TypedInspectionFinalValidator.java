@@ -296,7 +296,8 @@ public final class TypedInspectionFinalValidator {
     }
 
     private static InspectionAuthority authority(Object value, DispatchFacts facts) {
-        if (!(value instanceof Map<?, ?> raw)) fail(Reason.INVALID_RECEIPT);
+        if (!(value instanceof Map<?, ?>)) fail(Reason.INVALID_RECEIPT);
+        Map<?, ?> raw = (Map<?, ?>) value;
         Object authorization = raw.get("authorizationId"), manifestDigest = raw.get("manifestDigest"), sourcesValue = raw.get("sources");
         String authorizationId = string(authorization, Reason.INVALID_RECEIPT);
         String digest = string(manifestDigest, Reason.INVALID_RECEIPT);
@@ -306,7 +307,8 @@ public final class TypedInspectionFinalValidator {
         List<ManifestSource> normalized = new ArrayList<>();
         String prior = null;
         for (Object item : sources) {
-            if (!(item instanceof Map<?, ?> source)) fail(Reason.INVALID_RECEIPT);
+            if (!(item instanceof Map<?, ?>)) fail(Reason.INVALID_RECEIPT);
+            Map<?, ?> source = (Map<?, ?>) item;
             String id = string(source.get("sourceRefId"), Reason.INVALID_RECEIPT);
             String sha = string(source.get("sha256"), Reason.INVALID_RECEIPT);
             String bytes = string(source.get("byteLength"), Reason.INVALID_RECEIPT);
