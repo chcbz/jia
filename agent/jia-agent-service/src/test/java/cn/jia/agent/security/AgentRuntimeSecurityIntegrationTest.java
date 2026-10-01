@@ -324,7 +324,7 @@ class AgentRuntimeSecurityIntegrationTest {
                 "01234567-89ab-cdef-0123-456789abcdef",System.currentTimeMillis()+60_000L);
         var command=new PersonalWorkspaceExecutionService.ConversationRuntimeCommand(1,"task-a","run-a",
                 "42","cmd-a","msg-a","render","image/png","output_1");
-        when(workspaceExecutions.runtimeConversationCommandViews(scope,16)).thenReturn(List.of(command));
+        doReturn(List.of(command)).when(workspaceExecutions).runtimeConversationCommandViews(scope,16);
         when(workspaceExecutions.claimConversationStart(scope,"task-a","run-a","cmd-a","msg-a"))
                 .thenReturn(lease);
         when(workspaceExecutions.renewConversationLease(scope,"task-a","run-a",lease.fence()))
