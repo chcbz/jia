@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.function.Supplier;
 
 public interface ArchiveMaintenanceService {
-    ArchiveSourceSnapshotDTO prepareSource(ArchiveActorScope actor,String collectionId,String operationKey,ArchiveSourcePrepareRequest request);
+    ArchiveOperationAcceptedDTO prepareSource(ArchiveActorScope actor,String collectionId,String operationKey,ArchiveSourcePrepareRequest request);
     ArchiveSourceSnapshotDTO source(ArchiveActorScope actor,String sourceId);
     byte[] runtimeSourceContent(ArchiveRuntimeScope runtime,String jobId,String runId,String sourceId);
     ArchiveCapabilitiesDTO capabilities(ArchiveActorScope actor,String collectionId);

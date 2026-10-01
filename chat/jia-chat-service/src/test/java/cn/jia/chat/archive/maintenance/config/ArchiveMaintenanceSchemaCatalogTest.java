@@ -53,6 +53,16 @@ class ArchiveMaintenanceSchemaCatalogTest {
                 .get("fk_archive_job_source"));
         assertEquals("1:collection_id", expected.tables().get("archive_publication").indexes()
                 .get("fk_archive_publication_collection"));
+        var readback = expected.tables().get("archive_publication_readback");
+        assertEquals(new ArchiveMaintenanceSchemaCatalog.Column("char(64)", true, "ascii_bin"),
+                readback.columns().get("verification_digest"));
+        assertEquals(new ArchiveMaintenanceSchemaCatalog.Column("timestamp(6)", true, null),
+                readback.columns().get("checked_at"));
+        assertEquals("publication_id>archive_publication.publication_id",
+                readback.foreignKeys().get("fk_archive_readback_publication"));
+        assertTrue(readback.checks().get("chk_archive_readback_state").contains("PENDING"));
+        assertTrue(readback.checks().get("chk_archive_readback_state").contains("PASSED"));
+        assertTrue(readback.checks().get("chk_archive_readback_state").contains("FAILED"));
         assertEquals(new ArchiveMaintenanceSchemaCatalog.Column("bigint", false, null),
                 expected.tables().get("archive_maintenance_job").columns()
                         .get("manager_authorization_revision"));

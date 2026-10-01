@@ -144,15 +144,17 @@ class ArchiveMaintenanceServiceImplTest {
         operation("POST", "/archive/admin/v1/collections/" + COLLECTION + "/source-snapshots", "SOURCE", "src_operation");
         ArchiveSourcePrepareRequest request = new ArchiveSourcePrepareRequest("实验底本", "v1",
                 "明确许可公开", hash, java.util.Base64.getEncoder().encodeToString(bytes));
-        ArchiveSourceSnapshotDTO created = service.prepareSource(MANAGER, COLLECTION, "key-source", request);
-        assertEquals(hash, created.rawSha256());
-        assertEquals(Integer.toString(bytes.length), created.rawByteLength());
-        assertTrue(created.sourceId().startsWith("src_"));
+        ArchiveOperationAcceptedDTO accepted = service.prepareSource(MANAGER, COLLECTION, "key-source", request);
+        assertEquals("COMMITTED", accepted.state());
+        assertNull(accepted.jobId());
+        assertTrue(accepted.operationId().startsWith("src_"));
         ArgumentCaptor<ArchiveSourceSnapshotRecord> saved = ArgumentCaptor.forClass(ArchiveSourceSnapshotRecord.class);
         verify(store).insertSource(saved.capture());
-        assertEquals(created.sourceId(), saved.getValue().sourceId());
+        assertEquals(accepted.operationId(), saved.getValue().sourceId());
+        assertEquals(hash, saved.getValue().rawSha256());
+        assertEquals(bytes.length, saved.getValue().rawByteLength());
         assertEquals("cyf-artifact://stored", saved.getValue().storageUri());
-        verify(sourceStorage).store(eq(new AgentTaskArtifactStorage.Scope("0", "client-a", "owner-a", created.sourceId())),
+        verify(sourceStorage).store(eq(new AgentTaskArtifactStorage.Scope("0", "client-a", "owner-a", accepted.operationId())),
                 eq(bytes), eq("text/plain"));
         assertEquals("ARCHIVE_RESOURCE_NOT_FOUND", assertThrows(ArchiveMaintenanceException.class,
                 () -> service.source(new ArchiveActorScope("0", "client-a", "owner-b"), "src_1")).code());
@@ -191,10 +193,10 @@ class ArchiveMaintenanceServiceImplTest {
         when(store.findSource(anyString())).thenAnswer(invocation ->
                 saved.get() != null && saved.get().sourceId().equals(invocation.getArgument(0))
                         ? saved.get() : null);
-        ArchiveSourceSnapshotDTO first = service.prepareSource(MANAGER, COLLECTION, "same-key", request);
-        ArchiveSourceSnapshotDTO replay = service.prepareSource(MANAGER, COLLECTION, "same-key", request);
+        ArchiveOperationAcceptedDTO first = service.prepareSource(MANAGER, COLLECTION, "same-key", request);
+        ArchiveOperationAcceptedDTO replay = service.prepareSource(MANAGER, COLLECTION, "same-key", request);
         assertEquals(first, replay);
-        assertEquals(id.get(), first.sourceId());
+        assertEquals(id.get(), first.operationId());
         verify(sourceStorage, times(1)).store(any(), eq(bytes), eq("text/plain"));
         verify(store, times(1)).insertSource(any());
         ArchiveSourcePrepareRequest changed = new ArchiveSourcePrepareRequest("不同来源", "v1",
@@ -202,6 +204,41 @@ class ArchiveMaintenanceServiceImplTest {
         assertEquals("IDEMPOTENCY_CONFLICT", assertThrows(ArchiveMaintenanceException.class,
                 () -> service.prepareSource(MANAGER, COLLECTION, "same-key", changed)).code());
         verify(sourceStorage, times(1)).store(any(), eq(bytes), eq("text/plain"));
+    }
+
+    @Test
+    void source202OperationUsesDurableSourceIdentityAndRechecksCurrentPrepareAuthority() {
+        allowManager("source.prepare");
+        String path = "/archive/admin/v1/collections/" + COLLECTION + "/source-snapshots";
+        when(store.findOperationByTarget(MANAGER, "SOURCE", "src_1"))
+                .thenReturn(new ArchiveMaintenanceStore.TargetOperation("source-key", "POST", path,
+                        "b".repeat(64), "SOURCE", "src_1", "COMMITTED"));
+
+        ArchiveAdminOperationDTO committed = service.operation(MANAGER, "src_1");
+
+        assertEquals("src_1", committed.operationId());
+        assertEquals("source-key", committed.key());
+        assertEquals("SOURCE_PREPARE", committed.action());
+        assertNull(committed.jobId());
+        assertNull(committed.draftId());
+        assertEquals("src_1", committed.result().get("sourceId"));
+        assertFalse(committed.result().containsKey("storageUri"));
+
+        when(store.findOperationByTarget(MANAGER, "SOURCE", "src_pending"))
+                .thenReturn(new ArchiveMaintenanceStore.TargetOperation("pending-key", "POST", path,
+                        "c".repeat(64), "SOURCE", "src_pending", "PENDING"));
+        ArchiveAdminOperationDTO pending = service.operation(MANAGER, "src_pending");
+        assertEquals("PENDING", pending.state());
+        assertNull(pending.result());
+
+        when(store.findManagerGrant(eq(MANAGER), eq(COLLECTION), anyBoolean()))
+                .thenReturn(new ArchiveManagerGrantRecord(COLLECTION, "0", "client-a", "owner-a",
+                        "source.prepare", 4, "REVOKED"));
+        assertEquals(403, assertThrows(ArchiveMaintenanceException.class,
+                () -> service.operation(MANAGER, "src_1")).status());
+        ArchiveActorScope foreign = new ArchiveActorScope("0", "client-a", "owner-b");
+        assertEquals(404, assertThrows(ArchiveMaintenanceException.class,
+                () -> service.operation(foreign, "src_1")).status());
     }
 
     @Test
@@ -647,6 +684,16 @@ class ArchiveMaintenanceServiceImplTest {
         when(store.bumpCollectionWork(COLLECTION, "wrk_new", 1)).thenReturn(1);
         when(store.updateDraft(DRAFT, 2, 2, "SEALED", json, "b".repeat(64), 2L, "val_2")).thenReturn(1);
         when(store.updateJobState(JOB, 1, "PUBLISHED", null, "pub_1")).thenReturn(1);
+        java.util.concurrent.atomic.AtomicReference<ArchivePublicationReadbackRecord> readback =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        doAnswer(call -> {
+            readback.set(call.getArgument(0));
+            return null;
+        }).when(store).insertPublicationReadback(any());
+        when(store.findPublicationReadback(anyString())).thenAnswer(call -> {
+            ArchivePublicationReadbackRecord value = readback.get();
+            return value != null && value.publicationId().equals(call.getArgument(0)) ? value : null;
+        });
 
         ArchivePublicationDTO publication = service.publish(MANAGER, JOB, "publish-key", 2,
                 new ArchivePublishRequest("val_2", null, "0"));
@@ -679,6 +726,8 @@ class ArchiveMaintenanceServiceImplTest {
         ArchivePublicationRecord original = new ArchivePublicationRecord("pub_1", JOB, COLLECTION,
                 "wrk_new", "aed_1", 2, SHA, SHA, "PUBLISHED", "HUMAN", "owner-a", 3);
         when(store.findPublicationByJob(JOB)).thenReturn(original);
+        when(store.findPublicationReadback("pub_1")).thenReturn(
+                new ArchivePublicationReadbackRecord("pub_1", "PENDING", 1, null, "[]", null));
         ArchivePublishRequest body = new ArchivePublishRequest("val_2", null, "0");
         when(store.findOperation(MANAGER, "same-key")).thenReturn(new ArchiveMaintenanceStore.Operation(
                 false, "POST", "/archive/admin/v1/jobs/" + JOB + "/publish",
@@ -1279,7 +1328,9 @@ class ArchiveMaintenanceServiceImplTest {
                 patchReceipt.getValue().operationId(), "0", "client-a", "owner-a", "patch-key",
                 COLLECTION, JOB, DRAFT, "DRAFT_PATCH", 3, "COMMITTED", patchSnapshot.getValue());
         when(store.findAdminOperationById(committed.operationId(), false)).thenReturn(committed);
+        when(store.findAdminOperationById(committed.operationId(), true)).thenReturn(committed);
         when(store.findJob(JOB, false)).thenReturn(job);
+        when(store.findJob(JOB, true)).thenReturn(job);
         when(store.findOperation(MANAGER, "patch-key")).thenReturn(
                 new ArchiveMaintenanceStore.Operation(false, "PATCH", patchPath, "e".repeat(64),
                         "DRAFT", DRAFT, "COMMITTED"));
@@ -1984,6 +2035,13 @@ class ArchiveMaintenanceServiceImplTest {
         when(store.listPublications("work-a", false)).thenReturn(List.of(version));
         when(store.listPublications("work-a", true)).thenReturn(List.of(version));
         when(store.findPublication("work-a", "edition-a", false)).thenReturn(version);
+        when(store.findPublication("work-a", "edition-a", true)).thenReturn(version);
+        when(store.findPublicationById("pub-a")).thenReturn(new ArchivePublicationRecord(
+                "pub-a", "job-a", COLLECTION, "work-a", "edition-a", 4, SHA,
+                "b".repeat(64), "WITHDRAWN", "HUMAN", "owner-a", 3));
+        when(store.findPublicationReadback("pub-a")).thenReturn(
+                new ArchivePublicationReadbackRecord("pub-a", "PASSED", 2, SHA, "[]",
+                        Instant.parse("2026-09-30T00:01:00Z")));
         when(store.lockCollectionWork(COLLECTION, "work-a")).thenReturn(
                 new ArchiveMaintenanceStore.CollectionWork(COLLECTION, "work-a", "key-a", 8));
         when(content.lockWork("work-a")).thenReturn(new ArchiveWorkRecord("work-a", "title", null));
@@ -2002,6 +2060,11 @@ class ArchiveMaintenanceServiceImplTest {
         assertEquals("rights correction", detail.withdrawal().reason());
         assertEquals("5", detail.withdrawal().authorizationRevision());
         assertEquals("withdraw-key", detail.withdrawal().operationKey());
+
+        when(store.findPublicationReadback("pub-a")).thenReturn(null);
+        assertThrows(IllegalStateException.class,
+                () -> service.edition(MANAGER, "work-a", "edition-a"),
+                "a committed publication without durable readback must never synthesize PENDING");
 
         when(store.findManagerGrant(eq(MANAGER), eq(COLLECTION), anyBoolean()))
                 .thenReturn(new ArchiveManagerGrantRecord(COLLECTION, "0", "client-a", "owner-a",

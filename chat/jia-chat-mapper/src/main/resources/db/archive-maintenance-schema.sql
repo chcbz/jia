@@ -300,6 +300,21 @@ CREATE TABLE IF NOT EXISTS archive_publication (
     CONSTRAINT chk_archive_publication_state CHECK (state IN ('PUBLISHED','WITHDRAWN'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
+CREATE TABLE IF NOT EXISTS archive_publication_readback (
+    publication_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    state VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    revision BIGINT NOT NULL,
+    verification_digest CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    findings_json TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    checked_at TIMESTAMP(6) NULL,
+    created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (publication_id),
+    CONSTRAINT fk_archive_readback_publication FOREIGN KEY (publication_id) REFERENCES archive_publication(publication_id),
+    CONSTRAINT chk_archive_readback_revision CHECK (revision >= 1),
+    CONSTRAINT chk_archive_readback_state CHECK (((state='PENDING') AND (verification_digest IS NULL) AND (checked_at IS NULL)) OR ((state IN ('PASSED','FAILED')) AND (verification_digest IS NOT NULL) AND (checked_at IS NOT NULL)))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
+
 CREATE TABLE IF NOT EXISTS archive_edition_withdrawal (
     withdrawal_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
     publication_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,

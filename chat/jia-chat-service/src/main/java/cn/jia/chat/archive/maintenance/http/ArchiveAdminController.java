@@ -136,14 +136,13 @@ public class ArchiveAdminController {
     }
 
     @PostMapping("/collections/{collectionId}/source-snapshots")
-    public ResponseEntity<JsonResult<cn.jia.chat.archive.maintenance.dto.ArchiveSourceSnapshotDTO>> prepareSource(
+    public ResponseEntity<JsonResult<ArchiveOperationAcceptedDTO>> prepareSource(
             @PathVariable String collectionId,
             @RequestHeader(value = "Idempotency-Key", required = false) String key,
             @RequestBody byte[] body, Authentication authentication) {
-        var created = service.prepareSource(actor(authentication), collectionId, key,
+        ArchiveOperationAcceptedDTO accepted = service.prepareSource(actor(authentication), collectionId, key,
                 ArchiveStrictRequest.read(mapper, body, cn.jia.chat.archive.maintenance.dto.ArchiveSourcePrepareRequest.class));
-        return ResponseEntity.status(HttpStatus.CREATED).header(HttpHeaders.CACHE_CONTROL, "private, no-store")
-                .body(JsonResult.success(created));
+        return acceptedOperation(accepted);
     }
 
     @GetMapping("/source-snapshots/{sourceId}")

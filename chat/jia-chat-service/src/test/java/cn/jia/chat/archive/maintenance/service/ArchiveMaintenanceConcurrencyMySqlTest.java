@@ -49,6 +49,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -379,10 +380,221 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                 String.class, RUN));
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM archive_publication WHERE job_id=?",
                 Integer.class, JOB));
+        assertEquals("PASSED:2:1:1", jdbc.queryForObject(
+                "SELECT CONCAT(state,':',revision,':',verification_digest IS NOT NULL,':',checked_at IS NOT NULL) "
+                        + "FROM archive_publication_readback WHERE publication_id=?",
+                String.class, first.publicationId()));
+        assertEquals("PASSED", first.verification().state());
+        assertEquals(first.verification(), replay.verification());
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM archive_publication_readback",
+                Integer.class));
         assertEquals(1, eventCount("PUBLICATION_COMMITTED"));
         assertEquals("EXECUTION_FENCED", assertThrows(ArchiveMaintenanceException.class,
                 () -> service.runtimeUpdateDraft(scope, JOB, RUN, "write-after-publish", 1,
                         validDraft())).code());
+    }
+
+    @Test
+    void exactAdminPublishKeepsImmutablePendingSnapshotAndExposesCurrentPassedReadback() throws Exception {
+        seedExecutionCandidate();
+        jdbc.update("UPDATE archive_collection_manager SET permissions=? WHERE collection_id=?",
+                "job.manage,draft.write,validate,publish", COLLECTION);
+        seedValidatedDraft("validation-human");
+        JdbcArchiveMaintenanceStore store = new JdbcArchiveMaintenanceStore(jdbc);
+        ArchiveMaintenanceServiceImpl service = service(store, new RootLockingPort(jdbc),
+                new JdbcArchiveContentStore(jdbc));
+        ArchivePublishRequest request = new ArchivePublishRequest("validation-human", null, "0");
+
+        ArchiveOperationAcceptedDTO accepted = service.publishDraft(ACTOR, "draft-a",
+                "exact-human-publish", 1, request);
+        String frozenResult = jdbc.queryForObject("SELECT result_json FROM "
+                + "archive_admin_operation_receipt WHERE operation_id=?", String.class,
+                accepted.operationId());
+        ArchiveAdminOperationDTO status = service.operation(ACTOR, accepted.operationId());
+        ArchiveOperationAcceptedDTO replay = service.publishDraft(ACTOR, "draft-a",
+                "exact-human-publish", 1, request);
+
+        assertEquals(accepted.operationId(), replay.operationId());
+        assertEquals("COMMITTED", status.state());
+        assertEquals("PENDING", status.result().get("readbackState"));
+        assertEquals("PENDING", ((java.util.Map<?, ?>) status.result().get("verification")).get("state"));
+        assertEquals("PASSED", status.verification().state());
+        assertEquals(frozenResult, jdbc.queryForObject("SELECT result_json FROM "
+                + "archive_admin_operation_receipt WHERE operation_id=?", String.class,
+                accepted.operationId()));
+        String publicationId = status.result().get("publicationId").toString();
+        assertEquals("PASSED:2", jdbc.queryForObject(
+                "SELECT CONCAT(state,':',revision) FROM archive_publication_readback "
+                        + "WHERE publication_id=?", String.class, publicationId));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM archive_publication",
+                Integer.class));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM archive_publication_readback",
+                Integer.class));
+        ArchiveEditionHistoryDTO history = service.editionHistory(ACTOR, "work-a");
+        assertEquals("PASSED", history.editions().getFirst().verification().state());
+    }
+
+    @Test
+    void legacyManualPublishRecordsFailureWithoutUndoAndAuthorizedEditionReadRetriesPassed()
+            throws Exception {
+        seedExecutionCandidate();
+        jdbc.update("UPDATE archive_collection_manager SET permissions=? WHERE collection_id=?",
+                "job.manage,draft.write,validate,publish", COLLECTION);
+        seedValidatedDraft("validation-corrupt");
+        JdbcArchiveMaintenanceStore store = new JdbcArchiveMaintenanceStore(jdbc);
+        ToggleFailingReadbackContentStore contentStore =
+                new ToggleFailingReadbackContentStore(jdbc);
+        ArchiveMaintenanceServiceImpl service = service(store, new RootLockingPort(jdbc),
+                contentStore);
+        ArchivePublishRequest request = new ArchivePublishRequest("validation-corrupt", null, "0");
+
+        ArchivePublicationDTO first = service.publish(ACTOR, JOB, "manual-corrupt-publish", 1, request);
+        ArchivePublicationDTO replay = service.publish(ACTOR, JOB, "manual-corrupt-publish", 1, request);
+
+        assertEquals(first.publicationId(), replay.publicationId());
+        assertEquals("PUBLISHED", first.state());
+        assertEquals("FAILED", first.verification().state());
+        assertTrue(first.verification().findings().contains("READER_READ_FAILED"));
+        assertEquals("PUBLISHED", jdbc.queryForObject(
+                "SELECT state FROM archive_publication WHERE publication_id=?",
+                String.class, first.publicationId()));
+        assertEquals(first.editionId(), jdbc.queryForObject(
+                "SELECT active_edition_id FROM archive_work WHERE work_id='work-a'", String.class));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM archive_publication",
+                Integer.class));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM archive_publication_readback",
+                Integer.class));
+        assertEquals(1, eventCount("PUBLICATION_COMMITTED"));
+
+        contentStore.fail = false;
+        ArchiveEditionVersionDTO recovered = service.edition(ACTOR, "work-a", first.editionId());
+        assertEquals("PASSED", recovered.verification().state());
+        assertEquals(first.editionId(), jdbc.queryForObject(
+                "SELECT active_edition_id FROM archive_work WHERE work_id='work-a'", String.class));
+        assertEquals("PUBLISHED", jdbc.queryForObject(
+                "SELECT state FROM archive_publication WHERE publication_id=?",
+                String.class, first.publicationId()));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM archive_publication",
+                Integer.class));
+    }
+
+    @Test
+    void legacyBootstrapPersistsPendingThenPassesAndCategoryCountDriftFails() {
+        jdbc.update("INSERT INTO archive_collection_manager(collection_id,tenant_id,client_id,owner_jiacn,"
+                + "permissions,state,revision) VALUES (?,'0','client-a','owner-a','publish','ACTIVE',3)",
+                COLLECTION);
+        String workId = "legacy-work";
+        String editionId = "legacy-edition";
+        String manifestSha = "d".repeat(64);
+        String sourceSha = "e".repeat(64);
+        String prefaceSha = cn.jia.chat.archive.content.ArchiveEtags.sha256(
+                "序".getBytes(StandardCharsets.UTF_8));
+        String chapterOneSha = cn.jia.chat.archive.content.ArchiveEtags.sha256(
+                "甲".getBytes(StandardCharsets.UTF_8));
+        String chapterTwoSha = cn.jia.chat.archive.content.ArchiveEtags.sha256(
+                "乙".getBytes(StandardCharsets.UTF_8));
+        String prefaceBlock = cn.jia.chat.archive.content.ArchiveEtags.sha256(
+                (manifestSha + ":" + editionId + "-preface:[" + prefaceSha + "]")
+                        .getBytes(StandardCharsets.UTF_8));
+        String chapterBlock = cn.jia.chat.archive.content.ArchiveEtags.sha256(
+                (manifestSha + ":" + editionId + "-c001:[" + chapterOneSha + ", "
+                        + chapterTwoSha + "]").getBytes(StandardCharsets.UTF_8));
+        JdbcArchiveContentStore contentStore = new JdbcArchiveContentStore(jdbc);
+        contentStore.insertWork(new cn.jia.chat.archive.model.ArchiveWorkRecord(workId, "legacy", null));
+        contentStore.insertEdition(new cn.jia.chat.archive.model.ArchiveEditionRecord(editionId, workId,
+                "READY", sourceSha, manifestSha, manifestSha, 9, 1, 1, 2, 3, 3, 6, 9));
+        contentStore.insertBlock(new cn.jia.chat.archive.model.ArchiveBlockRecord(editionId,
+                editionId + "-preface", "PREFACE", 0, null, "序", 1, 3, prefaceBlock));
+        contentStore.insertParagraph(new cn.jia.chat.archive.model.ArchiveParagraphRecord(editionId,
+                editionId + "-preface", editionId + "-preface-p0001", 1, "序", 3, prefaceSha));
+        contentStore.insertBlock(new cn.jia.chat.archive.model.ArchiveBlockRecord(editionId,
+                editionId + "-c001", "CHAPTER", 1, 1, "章", 2, 6, chapterBlock));
+        contentStore.insertParagraph(new cn.jia.chat.archive.model.ArchiveParagraphRecord(editionId,
+                editionId + "-c001", editionId + "-c001-p0001", 1, "甲", 3, chapterOneSha));
+        contentStore.insertParagraph(new cn.jia.chat.archive.model.ArchiveParagraphRecord(editionId,
+                editionId + "-c001", editionId + "-c001-p0002", 2, "乙", 3, chapterTwoSha));
+        transactions.required(() -> {
+            cn.jia.chat.archive.model.ArchiveWorkRecord work = contentStore.lockWork(workId);
+            cn.jia.chat.archive.model.ArchiveEditionRecord edition = contentStore.lockEdition(editionId);
+            contentStore.ensureLegacyPublication(COLLECTION, "legacy-key", work, edition);
+            assertEquals(1, contentStore.switchActiveEdition(workId, editionId));
+            assertEquals(1, contentStore.markActivated(editionId));
+            return null;
+        });
+        assertEquals("PENDING:1", jdbc.queryForObject(
+                "SELECT CONCAT(state,':',revision) FROM archive_publication_readback "
+                        + "WHERE publication_id='legacy-legacy-edition'", String.class));
+
+        ArchiveMaintenanceServiceImpl service = service(new JdbcArchiveMaintenanceStore(jdbc),
+                new RootLockingPort(jdbc), contentStore);
+        ArchiveEditionVersionDTO passed = service.edition(ACTOR, workId, editionId);
+        assertEquals("PASSED", passed.verification().state());
+
+        jdbc.update("UPDATE archive_publication_readback SET state='PENDING',revision=revision+1,"
+                + "verification_digest=NULL,findings_json='[]',checked_at=NULL "
+                + "WHERE publication_id='legacy-legacy-edition'");
+        assertEquals(1, jdbc.update("UPDATE archive_edition SET preface_paragraph_count=2,"
+                + "chapter_paragraph_count=1 WHERE edition_id=?", editionId));
+        ArchiveEditionVersionDTO failed = service.edition(ACTOR, workId, editionId);
+        assertEquals("FAILED", failed.verification().state());
+        assertTrue(failed.verification().findings().contains("PREFACE_PARAGRAPH_COUNT_MISMATCH"));
+        assertTrue(failed.verification().findings().contains("CHAPTER_PARAGRAPH_COUNT_MISMATCH"));
+        assertEquals(editionId, jdbc.queryForObject(
+                "SELECT active_edition_id FROM archive_work WHERE work_id=?", String.class, workId));
+        assertEquals("PUBLISHED", jdbc.queryForObject(
+                "SELECT state FROM archive_publication WHERE publication_id='legacy-legacy-edition'",
+                String.class));
+    }
+
+    @Test
+    void sourcePrepareReturnsDurable202IdentityAndOperationLookupReauthorizesWithoutFakeJob() {
+        jdbc.update("INSERT INTO archive_collection_manager(collection_id,tenant_id,client_id,owner_jiacn,"
+                + "permissions,state,revision) VALUES (?,'0','client-a','owner-a',"
+                + "'source.prepare','ACTIVE',3)", COLLECTION);
+        ArchiveMaintenanceServiceImpl service = service(new JdbcArchiveMaintenanceStore(jdbc),
+                new RootLockingPort(jdbc), new JdbcArchiveContentStore(jdbc));
+        String sourceSha = cn.jia.chat.archive.content.ArchiveEtags.sha256(SOURCE);
+        ArchiveSourcePrepareRequest request = new ArchiveSourcePrepareRequest("source", "v1",
+                "authorized", sourceSha, java.util.Base64.getEncoder().encodeToString(SOURCE));
+
+        ArchiveOperationAcceptedDTO first = service.prepareSource(ACTOR, COLLECTION,
+                "source-202", request);
+        ArchiveOperationAcceptedDTO replay = service.prepareSource(ACTOR, COLLECTION,
+                "source-202", request);
+        ArchiveAdminOperationDTO committed = service.operation(ACTOR, first.operationId());
+        ArchiveOperationDTO byKey = service.operationByKey(ACTOR, "source-202");
+
+        assertEquals(first, replay);
+        assertEquals(first.operationId(), byKey.targetId());
+        assertEquals("SOURCE", byKey.targetType());
+        assertEquals("COMMITTED", committed.state());
+        assertEquals("SOURCE_PREPARE", committed.action());
+        assertEquals(first.operationId(), committed.result().get("sourceId"));
+        assertFalse(committed.result().containsKey("storageUri"));
+        assertEquals("1:1:0:0:0", jdbc.queryForObject(
+                "SELECT CONCAT((SELECT COUNT(*) FROM archive_source_snapshot),':',"
+                        + "(SELECT COUNT(*) FROM archive_operation),':',"
+                        + "(SELECT COUNT(*) FROM archive_admin_operation_receipt),':',"
+                        + "(SELECT COUNT(*) FROM archive_maintenance_job),':',"
+                        + "(SELECT COUNT(*) FROM archive_draft))", String.class));
+
+        jdbc.update("INSERT INTO archive_operation(tenant_id,client_id,owner_jiacn,operation_key,"
+                + "http_method,canonical_path,request_sha256,target_type,target_id,state) VALUES "
+                + "('0','client-a','owner-a','source-pending','POST',?,?,'SOURCE','src_pending','PENDING')",
+                "/archive/admin/v1/collections/" + COLLECTION + "/source-snapshots", "c".repeat(64));
+        ArchiveAdminOperationDTO pending = service.operation(ACTOR, "src_pending");
+        assertEquals("PENDING", pending.state());
+        assertNull(pending.result());
+
+        jdbc.update("UPDATE archive_collection_manager SET state='REVOKED',revision=4 "
+                + "WHERE collection_id=?", COLLECTION);
+        assertEquals(403, assertThrows(ArchiveMaintenanceException.class,
+                () -> service.operation(ACTOR, first.operationId())).status());
+        assertEquals(403, assertThrows(ArchiveMaintenanceException.class,
+                () -> service.operationByKey(ACTOR, "source-202")).status());
+        ArchiveActorScope foreign = new ArchiveActorScope("0", "client-a", "owner-b");
+        assertEquals(404, assertThrows(ArchiveMaintenanceException.class,
+                () -> service.operation(foreign, first.operationId())).status());
     }
 
     @Test
@@ -892,6 +1104,12 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         assertEquals(1, jdbc.queryForObject(
                 "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() "
                         + "AND table_name='archive_edition_withdrawal'", Integer.class));
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() "
+                        + "AND table_name='archive_publication_readback'", Integer.class));
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() "
+                        + "AND table_name='archive_admin_operation_receipt'", Integer.class));
         assertEquals("YES", jdbc.queryForObject(
                 "SELECT is_nullable FROM information_schema.columns WHERE table_schema=DATABASE() "
                         + "AND table_name='archive_maintenance_job' AND column_name='run_id'",
@@ -918,6 +1136,12 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                 "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() "
                         + "AND table_name='archive_maintenance_job' AND column_name='target_agent_id'",
                 Integer.class));
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() "
+                        + "AND table_name='archive_publication_readback'", Integer.class));
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() "
+                        + "AND table_name='archive_admin_operation_receipt'", Integer.class));
 
         clean();
         new ArchiveSchemaInitializer(jdbc).initialize();
@@ -1052,6 +1276,145 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
     }
 
     @Test
+    void editionFinalReauthorizationRejectsPermissionRevokedDuringReaderIo() throws Exception {
+        seedPublishedVersions();
+        LatchingReadbackContentStore contentStore = new LatchingReadbackContentStore(jdbc);
+        ArchiveMaintenanceServiceImpl service = service(new JdbcArchiveMaintenanceStore(jdbc),
+                new RootLockingPort(jdbc), contentStore);
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<String> edition = pool.submit(() -> {
+                try {
+                    service.edition(ACTOR, "work-withdraw", "edition-a");
+                    return "unexpected";
+                } catch (ArchiveMaintenanceException failure) {
+                    return failure.status() + ":" + failure.code();
+                }
+            });
+            assertTrue(contentStore.readerEntered.await(5, TimeUnit.SECONDS),
+                    "edition readback did not reach the Reader paragraph boundary");
+            assertEquals(1, jdbc.update("UPDATE archive_collection_manager "
+                    + "SET permissions='job.manage',revision=revision+1 "
+                    + "WHERE collection_id=? AND tenant_id='0' AND client_id='client-a' "
+                    + "AND owner_jiacn='owner-a' AND state='ACTIVE'", COLLECTION));
+            contentStore.allowReaderReturn.countDown();
+
+            assertEquals("403:ARCHIVE_FORBIDDEN", edition.get(10, TimeUnit.SECONDS));
+        } finally {
+            contentStore.allowReaderReturn.countDown();
+            pool.shutdownNow();
+            pool.awaitTermination(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void editionHistoryFinalSnapshotMatchesWithdrawalCommittedDuringReaderIo() throws Exception {
+        seedPublishedVersions();
+        LatchingReadbackContentStore contentStore = new LatchingReadbackContentStore(jdbc);
+        ArchiveMaintenanceServiceImpl historyService = service(new JdbcArchiveMaintenanceStore(jdbc),
+                new RootLockingPort(jdbc), contentStore);
+        ArchiveMaintenanceServiceImpl withdrawalService = service(new JdbcArchiveMaintenanceStore(jdbc),
+                new RootLockingPort(jdbc), new JdbcArchiveContentStore(jdbc));
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<ArchiveEditionHistoryDTO> history = pool.submit(
+                    () -> historyService.editionHistory(ACTOR, "work-withdraw"));
+            assertTrue(contentStore.readerEntered.await(5, TimeUnit.SECONDS),
+                    "history readback did not reach the Reader paragraph boundary");
+            ArchiveWithdrawalDTO withdrawal = withdrawalService.withdraw(ACTOR, "work-withdraw",
+                    "edition-a", "withdraw-during-reader", 1,
+                    new ArchiveWithdrawRequest("atomic final history", "edition-b"));
+            assertEquals("2", withdrawal.resultingWorkRevision());
+            contentStore.allowReaderReturn.countDown();
+
+            ArchiveEditionHistoryDTO result = history.get(10, TimeUnit.SECONDS);
+            assertEquals("2", result.workRevision());
+            assertEquals("edition-b", result.activeEditionId());
+            ArchiveEditionVersionDTO withdrawn = result.editions().stream()
+                    .filter(value -> "edition-a".equals(value.editionId()))
+                    .findFirst().orElseThrow();
+            assertEquals("WITHDRAWN", withdrawn.state());
+            assertEquals("edition-b", withdrawn.withdrawal().resultingActiveEditionId());
+            assertEquals("2:edition-b:WITHDRAWN", jdbc.queryForObject(
+                    "SELECT CONCAT(cw.revision,':',w.active_edition_id,':',p.state) "
+                            + "FROM archive_collection_work cw JOIN archive_work w ON w.work_id=cw.work_id "
+                            + "JOIN archive_publication p ON p.work_id=w.work_id "
+                            + "WHERE cw.collection_id=? AND cw.work_id='work-withdraw' "
+                            + "AND p.edition_id='edition-a'", String.class, COLLECTION));
+            assertEquals(jdbc.queryForObject("SELECT state FROM archive_publication_readback "
+                            + "WHERE publication_id='pub-edition-a'", String.class),
+                    withdrawn.verification().state());
+            assertEquals(Long.toString(jdbc.queryForObject(
+                            "SELECT revision FROM archive_publication_readback "
+                                    + "WHERE publication_id='pub-edition-a'", Long.class)),
+                    withdrawn.verification().revision());
+            assertEquals(jdbc.queryForObject("SELECT verification_digest "
+                            + "FROM archive_publication_readback "
+                            + "WHERE publication_id='pub-edition-a'", String.class),
+                    withdrawn.verification().verificationDigest());
+            assertEquals(jdbc.queryForObject("SELECT findings_json "
+                            + "FROM archive_publication_readback "
+                            + "WHERE publication_id='pub-edition-a'", String.class),
+                    new ObjectMapper().writeValueAsString(withdrawn.verification().findings()));
+            assertEquals(jdbc.queryForObject("SELECT checked_at IS NOT NULL "
+                            + "FROM archive_publication_readback "
+                            + "WHERE publication_id='pub-edition-a'", Boolean.class),
+                    withdrawn.verification().checkedAt() != null);
+        } finally {
+            contentStore.allowReaderReturn.countDown();
+            pool.shutdownNow();
+            pool.awaitTermination(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void adminOperationFinalReauthorizationRejectsPublishPermissionRevokedDuringReaderIo()
+            throws Exception {
+        seedExecutionCandidate();
+        jdbc.update("UPDATE archive_collection_manager SET permissions=? WHERE collection_id=?",
+                "job.manage,draft.write,validate,publish", COLLECTION);
+        seedValidatedDraft("validation-operation-readback");
+        ArchiveMaintenanceServiceImpl publishingService = service(
+                new JdbcArchiveMaintenanceStore(jdbc), new RootLockingPort(jdbc),
+                new JdbcArchiveContentStore(jdbc));
+        ArchiveOperationAcceptedDTO accepted = publishingService.publishDraft(ACTOR, "draft-a",
+                "operation-readback", 1,
+                new ArchivePublishRequest("validation-operation-readback", null, "0"));
+        assertEquals(1, jdbc.update("UPDATE archive_publication_readback SET state='PENDING',"
+                + "revision=revision+1,verification_digest=NULL,findings_json='[]',checked_at=NULL "
+                + "WHERE publication_id=(SELECT target_id FROM archive_operation "
+                + "WHERE operation_key='operation-readback' AND tenant_id='0' "
+                + "AND client_id='client-a' AND owner_jiacn='owner-a')"));
+        LatchingReadbackContentStore contentStore = new LatchingReadbackContentStore(jdbc);
+        ArchiveMaintenanceServiceImpl operationService = service(
+                new JdbcArchiveMaintenanceStore(jdbc), new RootLockingPort(jdbc), contentStore);
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<String> operation = pool.submit(() -> {
+                try {
+                    operationService.operation(ACTOR, accepted.operationId());
+                    return "unexpected";
+                } catch (ArchiveMaintenanceException failure) {
+                    return failure.status() + ":" + failure.code();
+                }
+            });
+            assertTrue(contentStore.readerEntered.await(5, TimeUnit.SECONDS),
+                    "operation readback did not reach the Reader paragraph boundary");
+            assertEquals(1, jdbc.update("UPDATE archive_collection_manager "
+                    + "SET permissions='job.manage',revision=revision+1 "
+                    + "WHERE collection_id=? AND tenant_id='0' AND client_id='client-a' "
+                    + "AND owner_jiacn='owner-a' AND state='ACTIVE'", COLLECTION));
+            contentStore.allowReaderReturn.countDown();
+
+            assertEquals("403:ARCHIVE_FORBIDDEN", operation.get(10, TimeUnit.SECONDS));
+        } finally {
+            contentStore.allowReaderReturn.countDown();
+            pool.shutdownNow();
+            pool.awaitTermination(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
     void validationRecoveryReadsOnlyCurrentRevisionAndExactActorScope() {
         seedExecutionCandidate();
         jdbc.update("UPDATE archive_draft SET revision=2,state='CHANGES_REQUIRED' WHERE draft_id='draft-a'");
@@ -1072,24 +1435,50 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
     }
 
     @Test
-    void exactA1SchemaUpgradesAddReceiptWithoutChangingPrivateDraftAndPartialReceiptFailsClosed() {
+    void exactEb31260SchemaAddsReadbackWithoutChangingPrivateOrOperationFactsAndDriftFailsClosed() {
         seedExecutionCandidate();
-        String before = jdbc.queryForObject("SELECT CONCAT(content_sha256,':',revision,':',state) "
-                + "FROM archive_draft WHERE draft_id='draft-a'", String.class);
-        jdbc.execute("DROP TABLE archive_admin_operation_receipt");
+        seedPublishedContent();
+        new ArchiveReaderDataSchemaInitializer(jdbc).initialize();
+        jdbc.update("INSERT INTO archive_note(tenant_id,client_id,owner_jiacn,note_id,edition_id,state,"
+                + "text,block_id,anchor_json,version) VALUES ('0','private-client','private-owner',"
+                + "'423e4567-e89b-82d3-a456-426614174000','edition-a','ACTIVE',"
+                + "'private readback upgrade fact',NULL,NULL,1)");
+        jdbc.update("INSERT INTO archive_operation(tenant_id,client_id,owner_jiacn,operation_key,"
+                + "http_method,canonical_path,request_sha256,target_type,target_id,state) VALUES "
+                + "('0','client-a','owner-a','upgrade-snapshot','PATCH',"
+                + "'/archive/admin/v1/drafts/draft-a',?,'DRAFT','draft-a','COMMITTED')",
+                "f".repeat(64));
+        jdbc.update("INSERT INTO archive_admin_operation_receipt(operation_id,tenant_id,client_id,"
+                + "owner_jiacn,operation_key,collection_id,job_id,draft_id,action,"
+                + "authorization_revision,state,result_json,committed_at) VALUES "
+                + "('admin-upgrade','0','client-a','owner-a','upgrade-snapshot',?,?,'draft-a',"
+                + "'DRAFT_PATCH',3,'COMMITTED','{\"draftId\":\"draft-a\","
+                + "\"validatedRevision\":null}',CURRENT_TIMESTAMP(6))", COLLECTION, JOB);
+        String before = jdbc.queryForObject(
+                "SELECT SHA2(CONCAT((SELECT content_sha256 FROM archive_draft WHERE draft_id='draft-a'),':',"
+                        + "(SELECT text FROM archive_note WHERE note_id='423e4567-e89b-82d3-a456-426614174000'),':',"
+                        + "(SELECT result_json FROM archive_admin_operation_receipt WHERE operation_id='admin-upgrade')),256)",
+                String.class);
+        jdbc.execute("DROP TABLE archive_publication_readback");
 
         new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
                 new ArchiveMaintenanceProperties()).initialize();
 
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables "
-                + "WHERE table_schema=DATABASE() AND table_name='archive_admin_operation_receipt'",
+                + "WHERE table_schema=DATABASE() AND table_name='archive_publication_readback'",
                 Integer.class));
-        assertEquals(before, jdbc.queryForObject("SELECT CONCAT(content_sha256,':',revision,':',state) "
-                + "FROM archive_draft WHERE draft_id='draft-a'", String.class));
-        jdbc.execute("DROP TABLE archive_admin_operation_receipt");
-        jdbc.execute("CREATE TABLE archive_admin_operation_receipt (operation_id VARCHAR(64) "
-                + "CHARACTER SET ascii COLLATE ascii_bin NOT NULL, PRIMARY KEY(operation_id)) "
-                + "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin");
+        assertEquals("3:3", jdbc.queryForObject(
+                "SELECT CONCAT(COUNT(*),':',SUM(state='PENDING')) FROM archive_publication_readback",
+                String.class));
+        assertEquals(before, jdbc.queryForObject(
+                "SELECT SHA2(CONCAT((SELECT content_sha256 FROM archive_draft WHERE draft_id='draft-a'),':',"
+                        + "(SELECT text FROM archive_note WHERE note_id='423e4567-e89b-82d3-a456-426614174000'),':',"
+                        + "(SELECT result_json FROM archive_admin_operation_receipt WHERE operation_id='admin-upgrade')),256)",
+                String.class));
+
+        jdbc.execute("DROP TABLE archive_publication_readback");
+        jdbc.execute("ALTER TABLE archive_admin_operation_receipt MODIFY COLUMN result_json "
+                + "TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL");
         IllegalStateException drift = assertThrows(IllegalStateException.class, () ->
                 new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
                         new ArchiveMaintenanceProperties()).initialize());
@@ -1395,18 +1784,30 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         String current = "    CONSTRAINT chk_archive_job_waiting_shape CHECK (((state='WAITING_INPUT') AND (run_id IS NULL) AND (draft_id IS NULL) AND (appointment_id IS NULL) AND (publication_id IS NULL) AND ((source_id IS NULL) OR (work_id IS NULL))) OR ((state='WAITING_ASSIGNEE') AND (run_id IS NULL) AND (draft_id IS NULL) AND (appointment_id IS NULL) AND (source_id IS NOT NULL) AND (work_id IS NOT NULL) AND (publication_id IS NULL)) OR ((state='CANCELLED') AND (publication_id IS NULL) AND (((run_id IS NULL) AND (draft_id IS NULL) AND (appointment_id IS NULL)) OR ((run_id IS NOT NULL) AND (draft_id IS NOT NULL) AND (appointment_id IS NOT NULL) AND (source_id IS NOT NULL) AND (work_id IS NOT NULL)))) OR ((state NOT IN ('WAITING_INPUT','WAITING_ASSIGNEE','CANCELLED')) AND (run_id IS NOT NULL) AND (draft_id IS NOT NULL) AND (appointment_id IS NOT NULL) AND (source_id IS NOT NULL) AND (work_id IS NOT NULL)))";
         String previous = "    CONSTRAINT chk_archive_job_waiting_shape CHECK (((state='WAITING_INPUT') AND (run_id IS NULL) AND (draft_id IS NULL) AND (appointment_id IS NULL) AND (publication_id IS NULL)) OR ((state='WAITING_ASSIGNEE') AND (run_id IS NULL) AND (draft_id IS NULL) AND (appointment_id IS NULL) AND (source_id IS NOT NULL) AND (work_id IS NOT NULL) AND (publication_id IS NULL)) OR (state='CANCELLED') OR ((state NOT IN ('WAITING_INPUT','WAITING_ASSIGNEE','CANCELLED')) AND (run_id IS NOT NULL) AND (draft_id IS NOT NULL) AND (appointment_id IS NOT NULL) AND (source_id IS NOT NULL) AND (work_id IS NOT NULL)))";
         if (!ddl.contains(current)) throw new IllegalStateException("Current waiting CHECK unavailable");
-        return ddl.replace(current, previous);
+        return withoutPublicationReadback(ddl).replace(current, previous);
     }
 
     private static String legacyWaitingSchema(String ddl, boolean includeWithdrawal) {
-        String result = ddl.replaceFirst(
+        String result = withoutPublicationReadback(ddl).replaceFirst(
                 "(?s)CREATE TABLE IF NOT EXISTS archive_maintenance_job \\(.*?\\) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;",
                 java.util.regex.Matcher.quoteReplacement(legacyWaitingJobDdl()));
+        result = result.replaceFirst(
+                "(?s)CREATE TABLE IF NOT EXISTS archive_admin_operation_receipt \\(.*?\\) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;\\s*", "");
         if (!includeWithdrawal) {
             result = result.replaceFirst(
                     "(?s)CREATE TABLE IF NOT EXISTS archive_edition_withdrawal \\(.*?\\) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;\\s*", "");
         }
         return result;
+    }
+
+    private static String withoutPublicationReadback(String ddl) {
+        String predecessor = ddl.replaceFirst(
+                "(?s)CREATE TABLE IF NOT EXISTS archive_publication_readback \\(.*?\\) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;\\s*", "");
+        assertEquals("c398de55270b8a7dd0467e796ae7a8dd0444458c51f0b437e7ac90f11a9c4118",
+                cn.jia.chat.archive.content.ArchiveEtags.sha256(
+                        predecessor.replace("\r\n", "\n").getBytes(StandardCharsets.UTF_8)),
+                "the additive predecessor must remain byte-bound to eb31260f after LF normalization");
+        return predecessor;
     }
 
     private static String legacyWaitingJobDdl() {
@@ -1470,6 +1871,9 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
             jdbc.update("INSERT INTO archive_chapter(edition_id,block_id,block_type,reader_ordinal,chapter_number,title,paragraph_count,utf8_byte_length,block_content_sha256) VALUES (?,?,'CHAPTER',1,1,'chapter',1,1,?)", edition, edition + "-c001", "d".repeat(64));
             jdbc.update("INSERT INTO archive_paragraph(edition_id,block_id,paragraph_id,ordinal,text,utf8_byte_length,sha256) VALUES (?,?,?,1,'x',1,?)", edition, edition + "-c001", edition + "-c001-p0001", "b".repeat(64));
             jdbc.update("INSERT INTO archive_publication(publication_id,job_id,collection_id,work_id,edition_id,draft_revision,manifest_sha256,source_sha256,state,actor_type,actor_id,authorization_revision) VALUES (?,NULL,?,'work-withdraw',?,1,?,?,'PUBLISHED','HUMAN','owner-a',5)", "pub-" + edition, COLLECTION, edition, SHA, "a".repeat(64));
+            jdbc.update("INSERT INTO archive_publication_readback(publication_id,state,revision,"
+                    + "verification_digest,findings_json,checked_at) VALUES (?,'PENDING',1,NULL,'[]',NULL)",
+                    "pub-" + edition);
         }
         assertEquals(1, jdbc.update("UPDATE archive_work SET active_edition_id='edition-a' "
                 + "WHERE work_id='work-withdraw' AND active_edition_id IS NULL"));
@@ -1481,6 +1885,18 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         return new ArchiveRuntimeScope(grant.tenantId(), grant.clientId(), grant.ownerJiacn(),
                 grant.agentId(), grant.runtimeInstanceId(), grant.grantRef(), grant.executionRef(),
                 grant.commandId(), grant.activeAttempt(), grant.executionEpoch());
+    }
+
+    private void seedValidatedDraft(String validationId) throws Exception {
+        String contentJson = new ObjectMapper().writeValueAsString(validDraft());
+        String contentSha = cn.jia.chat.archive.content.ArchiveEtags.sha256(
+                contentJson.getBytes(StandardCharsets.UTF_8));
+        assertEquals(1, jdbc.update("UPDATE archive_draft SET revision=1,state='VALIDATED',"
+                + "content_json=?,content_sha256=?,validated_revision=1,validation_id=? "
+                + "WHERE draft_id='draft-a'", contentJson, contentSha, validationId));
+        jdbc.update("INSERT INTO archive_validation(validation_id,draft_id,draft_revision,outcome,"
+                + "validation_digest,findings_json) VALUES (?,'draft-a',1,'PASSED',?,'[]')",
+                validationId, "e".repeat(64));
     }
 
     private ArchiveDraftUpdateRequest validDraft() {
@@ -1513,6 +1929,16 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                 anyLong(), anyString())).thenAnswer(call -> new AgentIdentityRegistryEntity()
                         .setCanonicalAgentId(call.getArgument(4)));
         AgentTaskArtifactStorage sourceStorage = mock(AgentTaskArtifactStorage.class);
+        when(sourceStorage.store(any(), any(byte[].class), eq("text/plain")))
+                .thenAnswer(call -> {
+                    AgentTaskArtifactStorage.Scope scope = call.getArgument(0);
+                    byte[] bytes = call.getArgument(1);
+                    return new AgentTaskArtifactStorage.StoredObject(
+                            "cyf-artifact://" + scope.taskId(),
+                            cn.jia.chat.archive.content.ArchiveEtags.sha256(bytes),
+                            bytes.length, "text/plain", true);
+                });
+        when(sourceStorage.matches(any(), anyString(), anyString())).thenReturn(true);
         when(sourceStorage.read(any(), anyString(), anyString(), anyLong(), anyString()))
                 .thenAnswer(call -> {
                     assertFalse(TransactionSynchronizationManager.isActualTransactionActive(),
@@ -1582,7 +2008,7 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                     statement.execute("DROP TABLE IF EXISTS aam_test_agent_root");
                     for (String table : new String[]{"archive_idempotency", "archive_note", "archive_bookmark",
                             "archive_reader_progress", "archive_admin_operation_receipt", "archive_operation", "archive_event",
-                            "archive_edition_withdrawal", "archive_publication",
+                            "archive_edition_withdrawal", "archive_publication_readback", "archive_publication",
                             "archive_validation", "archive_draft", "archive_execution_grant", "archive_job_run",
                             "archive_maintenance_job", "archive_confirmed_request", "archive_source_snapshot", "archive_appointment",
                             "archive_appointment_slot", "archive_collection_work", "archive_collection_manager",
@@ -1604,6 +2030,39 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("concurrency latch interrupted", interrupted);
+        }
+    }
+
+    private static final class LatchingReadbackContentStore extends JdbcArchiveContentStore {
+        final CountDownLatch readerEntered = new CountDownLatch(1);
+        final CountDownLatch allowReaderReturn = new CountDownLatch(1);
+        private final AtomicBoolean firstParagraphRead = new AtomicBoolean();
+
+        LatchingReadbackContentStore(JdbcTemplate jdbc) { super(jdbc); }
+
+        @Override
+        public List<cn.jia.chat.archive.model.ArchiveParagraphRecord> listParagraphs(
+                String editionId, String blockId) {
+            if (firstParagraphRead.compareAndSet(false, true)) {
+                readerEntered.countDown();
+                await(allowReaderReturn);
+            }
+            return super.listParagraphs(editionId, blockId);
+        }
+    }
+
+    private static final class ToggleFailingReadbackContentStore extends JdbcArchiveContentStore {
+        private boolean fail = true;
+
+        ToggleFailingReadbackContentStore(JdbcTemplate jdbc) { super(jdbc); }
+
+        @Override
+        public List<cn.jia.chat.archive.model.ArchiveParagraphRecord> listParagraphs(
+                String editionId, String blockId) {
+            if (fail) {
+                throw new IllegalStateException("injected Reader dependency failure");
+            }
+            return super.listParagraphs(editionId, blockId);
         }
     }
 

@@ -87,6 +87,10 @@ public class JdbcArchiveMaintenanceStore implements ArchiveMaintenanceStore {
                     rs.getLong("draft_revision"), rs.getString("manifest_sha256"),
                     rs.getString("source_sha256"), rs.getString("state"), rs.getString("actor_type"),
                     rs.getString("actor_id"), rs.getLong("authorization_revision"));
+    private static final RowMapper<ArchivePublicationReadbackRecord> READBACK = (rs, n) ->
+            new ArchivePublicationReadbackRecord(rs.getString("publication_id"), rs.getString("state"),
+                    rs.getLong("revision"), rs.getString("verification_digest"),
+                    rs.getString("findings_json"), instant(rs.getTimestamp("checked_at")));
     private static final RowMapper<ArchiveWithdrawalRecord> WITHDRAWAL = (rs, n) ->
             new ArchiveWithdrawalRecord(rs.getString("withdrawal_id"), rs.getString("publication_id"),
                     rs.getString("collection_id"), rs.getString("work_id"), rs.getString("edition_id"),
@@ -543,6 +547,27 @@ public class JdbcArchiveMaintenanceStore implements ArchiveMaintenanceStore {
     @Override public ArchivePublicationRecord findPublicationByJob(String jobId) {
         return first(jdbc.query("SELECT * FROM archive_publication WHERE job_id=?",PUBLICATION,jobId));
     }
+    @Override public ArchivePublicationRecord findPublicationById(String publicationId) {
+        return first(jdbc.query("SELECT * FROM archive_publication WHERE publication_id=?", PUBLICATION,
+                publicationId));
+    }
+    @Override public void insertPublicationReadback(ArchivePublicationReadbackRecord readback) {
+        if (jdbc.update("INSERT INTO archive_publication_readback(publication_id,state,revision,verification_digest,findings_json,checked_at) VALUES (?,?,?,?,?,?)",
+                readback.publicationId(), readback.state(), readback.revision(),
+                readback.verificationDigest(), readback.findingsJson(),
+                readback.checkedAt() == null ? null : Timestamp.from(readback.checkedAt())) != 1) {
+            throw new IllegalStateException("Archive publication readback insert failed");
+        }
+    }
+    @Override public ArchivePublicationReadbackRecord findPublicationReadback(String publicationId) {
+        return first(jdbc.query("SELECT * FROM archive_publication_readback WHERE publication_id=?",
+                READBACK, publicationId));
+    }
+    @Override public int completePublicationReadback(String publicationId, long expectedRevision,
+            String state, String verificationDigest, String findingsJson) {
+        return jdbc.update("UPDATE archive_publication_readback SET state=?,revision=revision+1,verification_digest=?,findings_json=?,checked_at=CURRENT_TIMESTAMP(6) WHERE publication_id=? AND revision=?",
+                state, verificationDigest, findingsJson, publicationId, expectedRevision);
+    }
     @Override public ArchiveEditionVersionRecord findPublication(String workId,String editionId,boolean lock) {
         return first(jdbc.query(versionSelect() + " WHERE p.work_id=? AND p.edition_id=?" + (lock ? " FOR UPDATE" : ""),
                 VERSION, workId, editionId));
@@ -610,6 +635,17 @@ public class JdbcArchiveMaintenanceStore implements ArchiveMaintenanceStore {
                 (rs,n) -> new Operation(false, rs.getString(1), rs.getString(2), rs.getString(3),
                         rs.getString(4), rs.getString(5), rs.getString(6)),
                 actor.tenantId(), actor.clientId(), actor.ownerJiacn(), key));
+    }
+    @Override public TargetOperation findOperationByTarget(ArchiveActorScope actor, String targetType,
+            String targetId) {
+        List<TargetOperation> found = jdbc.query("SELECT operation_key,http_method,canonical_path,request_sha256,target_type,target_id,state "
+                + "FROM archive_operation WHERE tenant_id=? AND client_id=? AND owner_jiacn=? "
+                + "AND target_type=? AND target_id=? ORDER BY created_at,operation_key LIMIT 2",
+                (rs,n) -> new TargetOperation(rs.getString(1), rs.getString(2), rs.getString(3),
+                        rs.getString(4), rs.getString(5), rs.getString(6), rs.getString(7)),
+                actor.tenantId(), actor.clientId(), actor.ownerJiacn(), targetType, targetId);
+        if (found.size() > 1) throw new IllegalStateException("Archive operation target is not unique");
+        return first(found);
     }
     @Override public Operation beginOperation(ArchiveActorScope actor,String key,String method,String path,String sha,String type,String targetId) {
         boolean created=true;

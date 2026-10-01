@@ -136,6 +136,26 @@ public class JdbcArchiveContentStore implements ArchiveContentStore {
                 VALUES (CONCAT('legacy-',?),NULL,?,?,?,?,?,?,'PUBLISHED','SYSTEM','archive-bootstrap',1)
                 """,edition.editionId(),collectionId,work.workId(),edition.editionId(),0,
                 edition.manifestSha256(),edition.sourceSha256());
+        jdbc.update("""
+                INSERT IGNORE INTO archive_publication_readback(
+                    publication_id,state,revision,verification_digest,findings_json,checked_at)
+                SELECT p.publication_id,'PENDING',1,NULL,'[]',NULL
+                FROM archive_publication p
+                WHERE p.publication_id=CONCAT('legacy-',?)
+                """, edition.editionId());
+        Integer exact = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM archive_publication p
+                JOIN archive_publication_readback r ON r.publication_id=p.publication_id
+                WHERE p.publication_id=CONCAT('legacy-',?) AND p.job_id IS NULL
+                  AND p.collection_id=? AND p.work_id=? AND p.edition_id=? AND p.draft_revision=0
+                  AND p.manifest_sha256=? AND p.source_sha256=? AND p.state='PUBLISHED'
+                  AND p.actor_type='SYSTEM' AND p.actor_id='archive-bootstrap'
+                  AND p.authorization_revision=1
+                """, Integer.class, edition.editionId(), collectionId, work.workId(),
+                edition.editionId(), edition.manifestSha256(), edition.sourceSha256());
+        if (exact == null || exact != 1) {
+            throw new IllegalStateException("Legacy archive publication/readback identity drift");
+        }
     }
 
     @Override

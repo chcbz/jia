@@ -115,8 +115,13 @@ public final class ArchiveCrossComponentFixtureServer {
                     "rightsBasis", "authorized fixture text", "declaredSha256", sha256(SOURCE),
                     "contentBase64", Base64.getEncoder().encodeToString(SOURCE));
             assertWrongBearerRejected(sourcePath, sourceRequest);
-            JsonNode source = postAdmin(sourcePath, "fixture-source", null, sourceRequest);
-            String sourceId = text(source, "sourceId");
+            JsonNode sourceAccepted = postAdmin(sourcePath, "fixture-source", null, sourceRequest);
+            String sourceOperationId = text(sourceAccepted, "operationId");
+            JsonNode sourceOperation = request("GET", "/archive/admin/v1/operations/"
+                    + sourceOperationId, null, Map.of(), true);
+            require("COMMITTED".equals(sourceOperation.path("state").asText()),
+                    "Source operation was not committed");
+            String sourceId = text(sourceOperation.path("result"), "sourceId");
 
             JsonNode appointment = postAdmin("/archive/admin/v1/collections/" + COLLECTION + "/appointments",
                     "fixture-appointment", "\"v0\"", Map.of(
@@ -209,7 +214,7 @@ public final class ArchiveCrossComponentFixtureServer {
             try (Statement statement = connection.createStatement()) {
                 statement.execute("SET FOREIGN_KEY_CHECKS=0");
                 try {
-                    for (String table : new String[]{"archive_admin_operation_receipt", "archive_operation", "archive_event", "archive_publication",
+                    for (String table : new String[]{"archive_admin_operation_receipt", "archive_operation", "archive_event", "archive_edition_withdrawal", "archive_publication_readback", "archive_publication",
                             "archive_validation", "archive_draft", "archive_execution_grant", "archive_job_run",
                             "archive_maintenance_job", "archive_confirmed_request", "archive_source_snapshot",
                             "archive_appointment", "archive_appointment_slot", "archive_collection_work",

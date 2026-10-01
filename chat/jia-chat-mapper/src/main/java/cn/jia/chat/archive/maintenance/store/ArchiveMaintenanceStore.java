@@ -76,6 +76,11 @@ public interface ArchiveMaintenanceStore {
     int bumpCollectionWork(String collectionId, String workId, long expectedRevision);
     void insertPublication(ArchivePublicationRecord publication);
     ArchivePublicationRecord findPublicationByJob(String jobId);
+    ArchivePublicationRecord findPublicationById(String publicationId);
+    void insertPublicationReadback(ArchivePublicationReadbackRecord readback);
+    ArchivePublicationReadbackRecord findPublicationReadback(String publicationId);
+    int completePublicationReadback(String publicationId, long expectedRevision, String state,
+                                    String verificationDigest, String findingsJson);
     ArchiveEditionVersionRecord findPublication(String workId, String editionId, boolean lock);
     List<ArchiveEditionVersionRecord> listPublications(String workId, boolean lock);
     int withdrawPublication(String publicationId);
@@ -86,6 +91,7 @@ public interface ArchiveMaintenanceStore {
     List<ArchiveJobEventRecord> listJobEvents(String jobId, long afterSequence, int limit);
 
     Operation findOperation(ArchiveActorScope actor, String key);
+    TargetOperation findOperationByTarget(ArchiveActorScope actor, String targetType, String targetId);
     Operation beginOperation(ArchiveActorScope actor, String key, String method, String path,
                              String requestSha256, String targetType, String targetId);
     void commitOperation(ArchiveActorScope actor, String key, String targetId);
@@ -101,4 +107,6 @@ public interface ArchiveMaintenanceStore {
                        boolean hasEditionHistory, String pendingJobId) { }
     record Operation(boolean created, String httpMethod, String canonicalPath, String requestSha256,
                      String targetType, String targetId, String state) { }
+    record TargetOperation(String operationKey, String httpMethod, String canonicalPath,
+                           String requestSha256, String targetType, String targetId, String state) { }
 }

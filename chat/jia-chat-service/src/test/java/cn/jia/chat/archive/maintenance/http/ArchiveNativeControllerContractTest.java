@@ -117,6 +117,20 @@ class ArchiveNativeControllerContractTest {
                 response.getHeaders().getFirst(org.springframework.http.HttpHeaders.LOCATION));
         assertEquals("job-a", response.getBody().getData().jobId());
 
+        byte[] sourceBody = ("{\"sourceName\":\"source\",\"sourceVersion\":\"v1\","
+                + "\"rightsBasis\":\"authorized\",\"declaredSha256\":\"" + "a".repeat(64)
+                + "\",\"contentBase64\":\"eA==\"}")
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        when(service.prepareSource(any(), eq("platform-classics"), eq("source-key"), any()))
+                .thenReturn(new cn.jia.chat.archive.maintenance.dto.ArchiveOperationAcceptedDTO(
+                        "src-operation", null, "COMMITTED"));
+        var sourceAccepted = controller.prepareSource("platform-classics", "source-key",
+                sourceBody, authenticatedJwt());
+        assertEquals(202, sourceAccepted.getStatusCode().value());
+        assertEquals("/archive/admin/v1/operations/src-operation",
+                sourceAccepted.getHeaders().getFirst(org.springframework.http.HttpHeaders.LOCATION));
+        assertNull(sourceAccepted.getBody().getData().jobId());
+
         Set<String> methods = Arrays.stream(ArchiveAdminController.class.getDeclaredMethods())
                 .map(java.lang.reflect.Method::getName).collect(Collectors.toSet());
         assertTrue(methods.containsAll(Set.of("works", "draftBlock", "putDraftBlock",
@@ -221,7 +235,7 @@ class ArchiveNativeControllerContractTest {
                 names(new ObjectMapper().valueToTree(historyResponse.getBody().getData())));
         assertEquals(Set.of("publicationId", "collectionId", "workId", "editionId",
                 "draftRevision", "manifestSha256", "sourceSha256", "state", "actorType",
-                "actorId", "authorizationRevision", "publishedAt", "withdrawal"),
+                "actorId", "authorizationRevision", "publishedAt", "withdrawal", "verification"),
                 names(new ObjectMapper().valueToTree(detailResponse.getBody().getData())));
     }
 

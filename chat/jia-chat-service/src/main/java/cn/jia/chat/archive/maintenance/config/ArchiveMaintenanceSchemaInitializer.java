@@ -59,10 +59,24 @@ public class ArchiveMaintenanceSchemaInitializer {
                 SELECT table_name FROM information_schema.tables
                 WHERE table_schema=DATABASE() AND table_name IN (%s)
                 """.formatted(placeholders(expected.tables().size())), String.class, expected.tables().keySet().toArray()));
-        // MySQL commits every CREATE TABLE independently. Check existing tables first, then
-        // accept only either exact predecessor: the first waiting-job shape for a CHECK-only
-        // replacement, or the pre-waiting job shape for the additive atomic ALTER bridge.
-        // Any partial or unrelated drift still fails before DDL is issued.
+        // The only additive predecessor accepted here is the exact eb31260f schema: every
+        // existing maintenance table except archive_publication_readback. The two older exact
+        // predecessors additionally omit the exact-admin receipt and, for 62223001, withdrawal.
+        // Arbitrary partial table sets are never treated as upgrade candidates. Legacy waiting-job
+        // CHECK shapes remain accepted only when attached to one of those complete predecessor sets.
+        Set<String> currentTables = expected.tables().keySet();
+        Set<String> predecessorTables = new LinkedHashSet<>(currentTables);
+        predecessorTables.remove("archive_publication_readback");
+        Set<String> exactAdminPredecessorTables = new LinkedHashSet<>(predecessorTables);
+        exactAdminPredecessorTables.remove("archive_admin_operation_receipt");
+        Set<String> legacyPredecessorTables = new LinkedHashSet<>(exactAdminPredecessorTables);
+        legacyPredecessorTables.remove("archive_edition_withdrawal");
+        if (!existing.isEmpty() && !existing.equals(currentTables)
+                && !existing.equals(predecessorTables)
+                && !existing.equals(exactAdminPredecessorTables)
+                && !existing.equals(legacyPredecessorTables)) {
+            throw new IllegalStateException("Archive maintenance schema is partial or not an exact supported predecessor");
+        }
         if (!existing.isEmpty()) {
             try {
                 validate(existing, expected);
@@ -80,12 +94,35 @@ public class ArchiveMaintenanceSchemaInitializer {
                 validate(existing, expected);
             }
         }
-        if (existing.size() != expected.tables().size()) {
+        if (!existing.equals(currentTables)) {
             DataSource ds = Objects.requireNonNull(jdbc.getDataSource(), "archive dataSource");
             new ResourceDatabasePopulator(new ClassPathResource("db/archive-maintenance-schema.sql")).execute(ds);
         }
         validate(expected.tables().keySet(), expected);
+        backfillPublicationReadbacks();
         reconcileConfiguredManagers();
+    }
+
+    private void backfillPublicationReadbacks() {
+        transactions.required(() -> {
+            jdbc.update("""
+                    INSERT IGNORE INTO archive_publication_readback(
+                        publication_id,state,revision,verification_digest,findings_json,checked_at)
+                    SELECT p.publication_id,'PENDING',1,NULL,'[]',NULL
+                    FROM archive_publication p
+                    LEFT JOIN archive_publication_readback r ON r.publication_id=p.publication_id
+                    WHERE r.publication_id IS NULL
+                    """);
+            Integer missing = jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM archive_publication p
+                    LEFT JOIN archive_publication_readback r ON r.publication_id=p.publication_id
+                    WHERE r.publication_id IS NULL
+                    """, Integer.class);
+            if (missing == null || missing != 0) {
+                throw new IllegalStateException("Archive publication readback backfill is incomplete");
+            }
+            return null;
+        });
     }
 
     void validate(Set<String> tables, ArchiveMaintenanceSchemaCatalog.Definition expected) {

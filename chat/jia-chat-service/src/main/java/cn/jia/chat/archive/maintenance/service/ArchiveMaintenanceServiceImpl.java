@@ -7,11 +7,15 @@ import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.ArchiveAgentExecutionPort;
 import cn.jia.agent.service.InstalledSkillResolver;
 import cn.jia.chat.archive.content.ArchiveEtags;
+import cn.jia.chat.archive.dto.*;
 import cn.jia.chat.archive.maintenance.dto.*;
 import cn.jia.chat.archive.maintenance.config.ArchiveMaintenanceProperties;
 import cn.jia.chat.archive.maintenance.model.*;
 import cn.jia.chat.archive.maintenance.store.ArchiveMaintenanceStore;
 import cn.jia.chat.archive.model.*;
+import cn.jia.chat.archive.service.ArchiveReaderService;
+import cn.jia.chat.archive.service.ArchiveReaderServiceImpl;
+import cn.jia.chat.archive.service.ArchiveRepresentation;
 import cn.jia.chat.archive.service.ArchiveTransactions;
 import cn.jia.chat.archive.store.ArchiveContentStore;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -39,6 +43,7 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
     private final AgentTaskArtifactStorage sourceStorage;
     private final ArchiveMaintenanceStore store;
     private final ArchiveContentStore content;
+    private final ArchiveReaderService reader;
     private final ArchiveTransactions transactions;
     private final AgentIdentityService identities;
     private final ObjectMapper mapper;
@@ -60,6 +65,7 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         this.sourceStorage = Objects.requireNonNull(sourceStorage);
         this.store = Objects.requireNonNull(store);
         this.content = Objects.requireNonNull(content);
+        this.reader = new ArchiveReaderServiceImpl(content);
         this.transactions = Objects.requireNonNull(transactions);
         this.identities = Objects.requireNonNull(identities);
         this.mapper = Objects.requireNonNull(mapper);
@@ -82,7 +88,7 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
     }
 
     @Override
-    public ArchiveSourceSnapshotDTO prepareSource(ArchiveActorScope actor, String collectionId,
+    public ArchiveOperationAcceptedDTO prepareSource(ArchiveActorScope actor, String collectionId,
             String key, ArchiveSourcePrepareRequest request) {
         requireManager(actor, collectionId, "source.prepare", false);
         requireKey(key);
@@ -119,7 +125,8 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             return op;
         });
         if ("COMMITTED".equals(reserved.state())) {
-            return sourceDto(requireSourceSnapshot(reserved.targetId(), actor, collectionId));
+            requireSourceSnapshot(reserved.targetId(), actor, collectionId);
+            return new ArchiveOperationAcceptedDTO(reserved.targetId(), null, "COMMITTED");
         }
         String sourceId = reserved.targetId();
         AgentTaskArtifactStorage.Scope storageScope = new AgentTaskArtifactStorage.Scope(
@@ -144,14 +151,15 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
                     requestSha, "SOURCE", sourceId);
             assertOperationMatches(op, "POST", path, requestSha, "SOURCE");
             if ("COMMITTED".equals(op.state())) {
-                return sourceDto(requireSourceSnapshot(op.targetId(), actor, collectionId));
+                requireSourceSnapshot(op.targetId(), actor, collectionId);
+                return new ArchiveOperationAcceptedDTO(op.targetId(), null, "COMMITTED");
             }
             if (!sourceId.equals(op.targetId())) {
                 conflict("IDEMPOTENCY_CONFLICT", "Source reservation changed");
             }
             store.insertSource(prepared);
             store.commitOperation(actor, key, sourceId);
-            return sourceDto(prepared);
+            return new ArchiveOperationAcceptedDTO(sourceId, null, "COMMITTED");
         });
     }
 
@@ -224,16 +232,15 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         if (observed.isEmpty()) notFound();
         String collectionId = exactVersionCollection(observed, workId);
         requireVersionReader(actor, collectionId, false);
+        EditionHistorySnapshot snapshot = transactions.required(() ->
+                lockedEditionHistorySnapshot(actor, collectionId, workId));
+        for (ArchiveEditionVersionRecord version : snapshot.versions()) {
+            verifyPublication(version.publicationId());
+        }
         return transactions.required(() -> {
-            requireVersionReader(actor, collectionId, true);
-            ArchiveMaintenanceStore.CollectionWork collectionWork = store.lockCollectionWork(
-                    collectionId, workId);
-            ArchiveWorkRecord work = content.lockWork(workId);
-            List<ArchiveEditionVersionRecord> versions = store.listPublications(workId, true);
-            if (collectionWork == null || work == null || versions.isEmpty()) notFound();
-            if (!same(collectionId, exactVersionCollection(versions, workId))) notFound();
-            return new ArchiveEditionHistoryDTO(workId, Long.toString(collectionWork.revision()),
-                    work.activeEditionId(), versions.stream().map(this::versionDto).toList());
+            EditionHistorySnapshot current = lockedEditionHistorySnapshot(actor, collectionId, workId);
+            return new ArchiveEditionHistoryDTO(workId, Long.toString(current.workRevision()),
+                    current.activeEditionId(), current.versions().stream().map(this::versionDto).toList());
         });
     }
 
@@ -243,8 +250,34 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         exactId(editionId);
         ArchiveEditionVersionRecord version = store.findPublication(workId, editionId, false);
         if (version == null || !same(workId, version.workId())) notFound();
-        requireVersionReader(actor, version.collectionId());
-        return versionDto(version);
+        String collectionId = version.collectionId();
+        requireVersionReader(actor, collectionId);
+        verifyPublication(version.publicationId());
+        return transactions.required(() -> {
+            requireVersionReader(actor, collectionId, true);
+            ArchiveMaintenanceStore.CollectionWork collectionWork = store.lockCollectionWork(
+                    collectionId, workId);
+            ArchiveWorkRecord work = content.lockWork(workId);
+            ArchiveEditionVersionRecord current = store.findPublication(workId, editionId, true);
+            if (collectionWork == null || work == null || current == null
+                    || !same(workId, current.workId()) || !same(collectionId, current.collectionId())) {
+                notFound();
+            }
+            return versionDto(current);
+        });
+    }
+
+    private EditionHistorySnapshot lockedEditionHistorySnapshot(ArchiveActorScope actor,
+            String collectionId, String workId) {
+        requireVersionReader(actor, collectionId, true);
+        ArchiveMaintenanceStore.CollectionWork collectionWork = store.lockCollectionWork(
+                collectionId, workId);
+        ArchiveWorkRecord work = content.lockWork(workId);
+        List<ArchiveEditionVersionRecord> versions = store.listPublications(workId, true);
+        if (collectionWork == null || work == null || versions.isEmpty()) notFound();
+        if (!same(collectionId, exactVersionCollection(versions, workId))) notFound();
+        return new EditionHistorySnapshot(collectionWork.revision(), work.activeEditionId(),
+                List.copyOf(versions));
     }
 
     @Override
@@ -1314,11 +1347,12 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             assertOperationMatches(op, "POST", path, requestSha, "PUBLICATION");
             if (!"COMMITTED".equals(replay.state())) conflict("ARCHIVE_OPERATION_IN_PROGRESS",
                     "Archive operation is not committed");
+            verifyPublicationForOperation(actor, key);
             return accepted(replay);
         }
         PublicationCandidate candidate = preparePublicationCandidate(observed,
                 expectedDraftRevision, request);
-        return transactions.required(() -> {
+        ArchiveOperationAcceptedDTO accepted = transactions.required(() -> {
             ArchiveManagerGrantRecord manager = requireManager(actor, observed.collectionId(), "publish", true);
             ArchiveMaintenanceJobRecord job = requireJobForActor(actor, observed.jobId(), true);
             ArchiveDraftRecord draft = requireDraft(job.jobId(), true);
@@ -1332,6 +1366,8 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             }
             return accepted(receipt);
         });
+        verifyPublicationForOperation(actor, key);
+        return accepted;
     }
 
     @Override
@@ -1339,7 +1375,8 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         requireScope(actor);
         exactId(operationId);
         ArchiveAdminOperationRecord receipt = store.findAdminOperationById(operationId, false);
-        if (receipt == null || !same(actor.tenantId(), receipt.tenantId())
+        if (receipt == null) return sourceOperation(actor, operationId);
+        if (!same(actor.tenantId(), receipt.tenantId())
                 || !same(actor.clientId(), receipt.clientId())
                 || !same(actor.ownerJiacn(), receipt.ownerJiacn())) notFound();
         ArchiveMaintenanceJobRecord job = requireJobForActor(actor, receipt.jobId(), false);
@@ -1356,10 +1393,72 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             throw new IllegalStateException("Persisted archive operation receipt state is inconsistent");
         }
         Map<String, Object> result = receipt.resultJson() == null ? null : parseResult(receipt.resultJson());
+        if ("DRAFT_PUBLISH".equals(receipt.action()) && result != null
+                && result.get("publicationId") instanceof String publicationId) {
+            try { verifyPublication(publicationId); }
+            catch (RuntimeException ignored) { /* committed result remains authoritative */ }
+        }
+        return transactions.required(() -> adminOperationSnapshot(actor, receipt, permission));
+    }
+
+    private ArchiveAdminOperationDTO adminOperationSnapshot(ArchiveActorScope actor,
+            ArchiveAdminOperationRecord observed, String permission) {
+        requireManager(actor, observed.collectionId(), permission, true);
+        requireJobForActor(actor, observed.jobId(), true);
+        ArchiveAdminOperationRecord receipt = store.findAdminOperationById(
+                observed.operationId(), true);
+        if (receipt == null || !same(actor.tenantId(), receipt.tenantId())
+                || !same(actor.clientId(), receipt.clientId())
+                || !same(actor.ownerJiacn(), receipt.ownerJiacn())) {
+            notFound();
+        }
+        if (!same(observed.operationKey(), receipt.operationKey())
+                || !same(observed.collectionId(), receipt.collectionId())
+                || !same(observed.jobId(), receipt.jobId())
+                || !same(observed.draftId(), receipt.draftId())
+                || !same(observed.action(), receipt.action())
+                || observed.authorizationRevision() != receipt.authorizationRevision()) {
+            throw new IllegalStateException("Persisted archive admin operation identity changed");
+        }
+        ArchiveMaintenanceStore.Operation op = store.findOperation(actor, receipt.operationKey());
+        if (op == null) throw new IllegalStateException("Persisted archive operation receipt is orphaned");
+        if (!same(op.state(), receipt.state())) {
+            throw new IllegalStateException("Persisted archive operation receipt state is inconsistent");
+        }
+        Map<String, Object> result = receipt.resultJson() == null ? null : parseResult(receipt.resultJson());
+        ArchivePublicationVerificationDTO verification = null;
+        if ("DRAFT_PUBLISH".equals(receipt.action()) && result != null
+                && result.get("publicationId") instanceof String publicationId) {
+            verification = verificationDto(requirePublicationReadback(publicationId));
+        }
         return new ArchiveAdminOperationDTO(receipt.operationId(), receipt.operationKey(),
                 receipt.state(), op.httpMethod(), op.canonicalPath(), receipt.collectionId(),
                 receipt.jobId(), receipt.draftId(), receipt.action(),
-                Long.toString(receipt.authorizationRevision()), result);
+                Long.toString(receipt.authorizationRevision()), result, verification);
+    }
+
+    private ArchiveAdminOperationDTO sourceOperation(ArchiveActorScope actor, String operationId) {
+        ArchiveMaintenanceStore.TargetOperation op = store.findOperationByTarget(
+                actor, "SOURCE", operationId);
+        if (op == null || !"POST".equals(op.httpMethod()) || !same(op.targetId(), operationId)) {
+            notFound();
+        }
+        java.util.regex.Matcher path = Pattern.compile(
+                "^/archive/admin/v1/collections/([A-Za-z0-9._:-]{1,100})/source-snapshots$")
+                .matcher(op.canonicalPath());
+        if (!path.matches()) notFound();
+        String collectionId = path.group(1);
+        ArchiveManagerGrantRecord manager = requireManager(actor, collectionId,
+                "source.prepare", false);
+        Map<String, Object> result = null;
+        if ("COMMITTED".equals(op.state())) {
+            result = resultMap(sourceDto(requireSourceSnapshot(operationId, actor, collectionId)));
+        } else if (!"PENDING".equals(op.state())) {
+            throw new IllegalStateException("Persisted source operation state is invalid");
+        }
+        return new ArchiveAdminOperationDTO(operationId, op.operationKey(), op.state(),
+                op.httpMethod(), op.canonicalPath(), collectionId, null, null,
+                "SOURCE_PREPARE", Long.toString(manager.revision()), result, null);
     }
 
     @Override
@@ -1431,7 +1530,12 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             // The actor-scoped committed receipt remains readable after that exact grant was revoked.
         } else if (collection.matches()) {
             String permission = switch (collection.group(2)) {
-                case "source-snapshots" -> "source.prepare";
+                case "source-snapshots" -> {
+                    if (!"SOURCE".equals(op.targetType()) || !ID.matcher(op.targetId()).matches()) {
+                        notFound();
+                    }
+                    yield "source.prepare";
+                }
                 case "appointments" -> "appoint";
                 default -> "job.create";
             };
@@ -1522,19 +1626,20 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             ArchiveMaintenanceJobRecord job = requireJobForActor(actor, jobId, true);
             return committedPublicationReplay(actor, key, path, requestSha, job.jobId());
         });
-        if (replay != null) return replay;
+        if (replay != null) return verifyPublicationSafely(replay);
 
         ArchiveMaintenanceJobRecord candidateJob = requireJobForActor(actor, jobId, false);
         requireManager(actor, candidateJob.collectionId(), "publish", false);
         PublicationCandidate candidate = preparePublicationCandidate(
                 candidateJob, expectedDraftRevision, request);
-        return transactions.required(() -> {
+        ArchivePublicationDTO committed = transactions.required(() -> {
             ArchiveManagerGrantRecord manager = requireManager(actor, candidateJob.collectionId(),
                     "publish", true);
             ArchiveMaintenanceJobRecord job = requireJobForActor(actor, jobId, true);
             return publishLocked(actor, job, manager, null, key, expectedDraftRevision,
                     request, path, null, candidate, null);
         });
+        return verifyPublicationSafely(committed);
     }
 
     private ArchivePublicationDTO publishLocked(ArchiveActorScope actor,
@@ -1607,6 +1712,8 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
                 runtimeAuthorization == null ? "HUMAN" : "AGENT",
                 runtimeAuthorization == null ? actor.ownerJiacn() : job.agentId(), manager.revision());
         store.insertPublication(publication);
+        store.insertPublicationReadback(new ArchivePublicationReadbackRecord(publicationId,
+                "PENDING", 1, null, "[]", null));
         if (content.switchActiveEdition(job.workId(), editionId) != 1
                 || content.markActivated(editionId) != 1
                 || store.bumpCollectionWork(job.collectionId(), job.workId(), cw.revision()) != 1) {
@@ -1717,6 +1824,172 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             conflict("ARCHIVE_OPERATION_IN_PROGRESS", "Publication state is not yet committed");
         }
         return publicationDto(existing);
+    }
+
+    private void verifyPublicationForOperation(ArchiveActorScope actor, String key) {
+        ArchiveMaintenanceStore.Operation operation = store.findOperation(actor, key);
+        if (operation != null && "COMMITTED".equals(operation.state())
+                && "PUBLICATION".equals(operation.targetType())) {
+            try { verifyPublication(operation.targetId()); }
+            catch (RuntimeException ignored) { /* publication commit must not be reclassified */ }
+        }
+    }
+
+    private ArchivePublicationDTO verifyPublicationSafely(ArchivePublicationDTO committed) {
+        try { return verifyPublication(committed.publicationId()); }
+        catch (RuntimeException ignored) { return committed; }
+    }
+
+    private ArchivePublicationDTO verifyPublication(String publicationId) {
+        ArchivePublicationRecord publication = store.findPublicationById(publicationId);
+        if (publication == null) {
+            throw new IllegalStateException("Committed archive publication is unavailable");
+        }
+        ArchivePublicationReadbackRecord observed = store.findPublicationReadback(publicationId);
+        if (observed == null) {
+            throw new IllegalStateException("Committed archive publication readback is unavailable");
+        }
+        if ("PASSED".equals(observed.state())) return publicationDto(publication);
+        ReadbackOutcome outcome = inspectPublishedRepresentation(publication);
+        transactions.required(() -> {
+            ArchivePublicationRecord currentPublication = store.findPublicationById(publicationId);
+            ArchivePublicationReadbackRecord current = store.findPublicationReadback(publicationId);
+            if (currentPublication == null || current == null
+                    || !samePublicationReadbackIdentity(currentPublication, publication)) {
+                throw new IllegalStateException("Archive publication identity changed during readback verification");
+            }
+            if (!"PASSED".equals(current.state())) {
+                store.completePublicationReadback(publicationId, current.revision(), outcome.state(),
+                        outcome.digest(), json(outcome.findings()));
+            }
+            return null;
+        });
+        return publicationDto(publication);
+    }
+
+    private boolean samePublicationReadbackIdentity(ArchivePublicationRecord current,
+            ArchivePublicationRecord observed) {
+        return same(current.publicationId(), observed.publicationId())
+                && same(current.jobId(), observed.jobId())
+                && same(current.collectionId(), observed.collectionId())
+                && same(current.workId(), observed.workId())
+                && same(current.editionId(), observed.editionId())
+                && current.draftRevision() == observed.draftRevision()
+                && same(current.manifestSha256(), observed.manifestSha256())
+                && same(current.sourceSha256(), observed.sourceSha256())
+                && same(current.actorType(), observed.actorType())
+                && same(current.actorId(), observed.actorId())
+                && current.authorizationRevision() == observed.authorizationRevision();
+    }
+
+    private ReadbackOutcome inspectPublishedRepresentation(ArchivePublicationRecord publication) {
+        List<String> findings = new ArrayList<>();
+        LinkedHashMap<String, Object> material = new LinkedHashMap<>();
+        material.put("publicationId", publication.publicationId());
+        material.put("workId", publication.workId());
+        material.put("editionId", publication.editionId());
+        try {
+            ArchiveRepresentation<ArchiveCatalogDTO> catalogRepresentation =
+                    reader.editionCatalog(publication.editionId());
+            ArchiveCatalogDTO catalog = catalogRepresentation.data();
+            ArchiveActiveEditionDTO active = catalog.activeEdition();
+            if (!same(catalog.workId(), publication.workId())) findings.add("WORK_ID_MISMATCH");
+            if (!same(catalogRepresentation.etag(),
+                    ArchiveEtags.catalog(publication.manifestSha256()))) {
+                findings.add("CATALOG_DIGEST_MISMATCH");
+            }
+            if (active == null || !same(active.editionId(), publication.editionId())) {
+                findings.add("EDITION_ID_MISMATCH");
+            } else {
+                if (!same(active.manifestSha256(), publication.manifestSha256())) {
+                    findings.add("MANIFEST_SHA256_MISMATCH");
+                }
+                if (!same(active.sourceSha256(), publication.sourceSha256())) {
+                    findings.add("SOURCE_SHA256_MISMATCH");
+                }
+                material.put("catalog", catalog);
+                material.put("catalogEtag", catalogRepresentation.etag());
+                ArrayList<Object> blocks = new ArrayList<>();
+                long prefaceParagraphs = 0;
+                long chapterParagraphs = 0;
+                long bytes = 0;
+                if (active.preface() != null) {
+                    ArchiveRepresentation<ArchiveBlockDTO> block = reader.preface(publication.editionId());
+                    prefaceParagraphs += verifyReadbackBlock(publication.editionId(), active.manifestSha256(), active.preface(), block, findings, blocks);
+                    bytes += block.data().utf8ByteLength();
+                }
+                for (ArchiveBlockSummaryDTO summary : active.chapters()) {
+                    ArchiveRepresentation<ArchiveBlockDTO> block = reader.chapter(
+                            publication.editionId(), summary.blockId());
+                    chapterParagraphs += verifyReadbackBlock(publication.editionId(), active.manifestSha256(), summary, block, findings, blocks);
+                    bytes += block.data().utf8ByteLength();
+                }
+                if (prefaceParagraphs != active.prefaceParagraphCount()) {
+                    findings.add("PREFACE_PARAGRAPH_COUNT_MISMATCH");
+                }
+                if (chapterParagraphs != active.chapterParagraphCount()) {
+                    findings.add("CHAPTER_PARAGRAPH_COUNT_MISMATCH");
+                }
+                if (prefaceParagraphs + chapterParagraphs != active.readerParagraphCount()) {
+                    findings.add("READER_PARAGRAPH_COUNT_MISMATCH");
+                }
+                if (bytes != active.readerUtf8ByteLength()) {
+                    findings.add("READER_UTF8_LENGTH_MISMATCH");
+                }
+                material.put("blocks", blocks);
+            }
+        } catch (RuntimeException failure) {
+            findings.add("READER_READ_FAILED");
+            material.put("readerFailure", failure.getClass().getSimpleName());
+        }
+        String verificationDigest = digest(json(material));
+        return new ReadbackOutcome(findings.isEmpty() ? "PASSED" : "FAILED",
+                verificationDigest, List.copyOf(findings));
+    }
+
+    private long verifyReadbackBlock(String editionId, String manifestSha256,
+            ArchiveBlockSummaryDTO summary, ArchiveRepresentation<ArchiveBlockDTO> representation,
+            List<String> findings, List<Object> material) {
+        ArchiveBlockDTO block = representation.data();
+        if (!same(block.editionId(), editionId)) {
+            findings.add("BLOCK_EDITION_MISMATCH");
+        }
+        if (!same(block.manifestSha256(), manifestSha256)) {
+            findings.add("BLOCK_MANIFEST_MISMATCH");
+        }
+        if (!same(summary.blockId(), block.blockId())
+                || !same(summary.blockType(), block.blockType())
+                || !Objects.equals(summary.number(), block.number())
+                || !Objects.equals(summary.title(), block.title())) {
+            findings.add("BLOCK_IDENTITY_MISMATCH");
+        }
+        if (summary.paragraphCount() != block.paragraphCount()
+                || summary.utf8ByteLength() != block.utf8ByteLength()) {
+            findings.add("BLOCK_COUNT_MISMATCH");
+        }
+        if (!same(summary.etag(), representation.etag())) findings.add("BLOCK_DIGEST_MISMATCH");
+        long utf8Bytes = 0;
+        List<String> paragraphDigests = new ArrayList<>();
+        for (int i = 0; i < block.paragraphs().size(); i++) {
+            ArchiveParagraphDTO paragraph = block.paragraphs().get(i);
+            byte[] bytes = paragraph.text().getBytes(StandardCharsets.UTF_8);
+            utf8Bytes += bytes.length;
+            String actualDigest = digestBytes(bytes);
+            paragraphDigests.add(actualDigest);
+            if (paragraph.ordinal() != i + 1 || paragraph.utf8ByteLength() != bytes.length
+                    || !same(paragraph.sha256(), actualDigest)) {
+                findings.add("PARAGRAPH_DIGEST_MISMATCH");
+            }
+        }
+        String actualBlockEtag = ArchiveEtags.blockFromDigest(digest(
+                manifestSha256 + ":" + block.blockId() + ":" + paragraphDigests));
+        if (!same(summary.etag(), actualBlockEtag)) findings.add("BLOCK_DIGEST_MISMATCH");
+        if (block.paragraphs().size() != block.paragraphCount()
+                || utf8Bytes != block.utf8ByteLength()) {
+            findings.add("BLOCK_CONTENT_LENGTH_MISMATCH");
+        }
+        material.add(Map.of("summary", summary, "etag", representation.etag(), "block", block));
+        return block.paragraphs().size();
     }
 
     private String publicationRequestSha(long expectedDraftRevision, ArchivePublishRequest request) {
@@ -1958,7 +2231,7 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             authorizeRuntimeLocked(runtime, job, appointment, lockedTarget, true);
             return committedPublicationReplay(actor(runtime), key, path, requestSha, job.jobId());
         });
-        if (replay != null) return replay;
+        if (replay != null) return verifyPublicationSafely(replay);
 
         ArchiveMaintenanceJobRecord candidateJob = requireJob(jobId, false);
         requireExecutionCandidate(candidateJob);
@@ -1966,7 +2239,7 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         requireRuntimeJobScope(runtime, candidateJob);
         PublicationCandidate candidate = preparePublicationCandidate(
                 candidateJob, expectedDraftRevision, request);
-        return transactions.required(() -> {
+        ArchivePublicationDTO committed = transactions.required(() -> {
             ArchiveAgentExecutionPort.LockedTarget lockedTarget = lockControlledTarget(target(candidateJob));
             ArchiveManagerGrantRecord manager = requireManager(actor(runtime), candidateJob.collectionId(),
                     "publish", true);
@@ -1979,6 +2252,7 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             return publishLocked(actor(runtime), job, manager, appointment, key,
                     expectedDraftRevision, request, path, authorization, candidate, null);
         });
+        return verifyPublicationSafely(committed);
     }
 
     private ArchiveDraftDTO updateDraftAuthorized(ArchiveActorScope actor,
@@ -2962,6 +3236,12 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         }
     }
 
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> resultMap(Object value) {
+        return Collections.unmodifiableMap(new LinkedHashMap<>(
+                mapper.convertValue(value, LinkedHashMap.class)));
+    }
+
     private Map<String, Object> parseResult(String json) {
         try {
             Map<String, Object> parsed = mapper.readValue(json, mapper.getTypeFactory()
@@ -3209,7 +3489,8 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
                 value.workId(), value.editionId(), Long.toString(value.draftRevision()),
                 value.manifestSha256(), value.sourceSha256(), value.state(), value.actorType(),
                 value.actorId(), Long.toString(value.authorizationRevision()),
-                value.publishedAt().toString(), value.withdrawal() == null ? null : withdrawalDto(value.withdrawal()));
+                value.publishedAt().toString(), value.withdrawal() == null ? null : withdrawalDto(value.withdrawal()),
+                verificationDto(requirePublicationReadback(value.publicationId())));
     }
 
     private ArchiveValidationDTO validationDto(ArchiveValidationRecord value) {
@@ -3225,9 +3506,34 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
     }
 
     private ArchivePublicationDTO publicationDto(ArchivePublicationRecord value) {
+        ArchivePublicationVerificationDTO verification = verificationDto(
+                requirePublicationReadback(value.publicationId()));
         return new ArchivePublicationDTO(value.publicationId(), value.jobId(), value.workId(),
                 value.editionId(), Long.toString(value.draftRevision()), value.manifestSha256(),
-                value.sourceSha256(), value.state(), "PENDING");
+                value.sourceSha256(), value.state(),
+                verification.state(), verification);
+    }
+
+    private ArchivePublicationReadbackRecord requirePublicationReadback(String publicationId) {
+        ArchivePublicationReadbackRecord value = store.findPublicationReadback(publicationId);
+        if (value == null) {
+            throw new IllegalStateException("Committed archive publication readback is unavailable");
+        }
+        return value;
+    }
+
+    private ArchivePublicationVerificationDTO verificationDto(
+            ArchivePublicationReadbackRecord value) {
+        if (value == null) return null;
+        try {
+            List<String> findings = mapper.readValue(value.findingsJson(), mapper.getTypeFactory()
+                    .constructCollectionType(List.class, String.class));
+            return new ArchivePublicationVerificationDTO(value.state(),
+                    Long.toString(value.revision()), value.verificationDigest(), findings,
+                    value.checkedAt() == null ? null : value.checkedAt().toString());
+        } catch (Exception failure) {
+            throw new IllegalStateException("Persisted archive publication verification is invalid", failure);
+        }
     }
 
     private ArchiveDraftUpdateRequest parseDraft(String json) {
@@ -3429,6 +3735,11 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
     private record PublicationMaterial(ArchiveEditionRecord edition,
             List<ArchiveBlockRecord> blocks, List<ArchiveParagraphRecord> paragraphs) { }
     private record AdminOperationSpec(ArchiveDraftRecord draft, String action) { }
+
+    private record EditionHistorySnapshot(long workRevision, String activeEditionId,
+            List<ArchiveEditionVersionRecord> versions) { }
+
+    private record ReadbackOutcome(String state, String digest, List<String> findings) { }
 
     private record PublicationCandidate(ArchiveMaintenanceJobRecord job,
             ArchiveSourceSnapshotRecord source, ArchiveDraftRecord draft,
