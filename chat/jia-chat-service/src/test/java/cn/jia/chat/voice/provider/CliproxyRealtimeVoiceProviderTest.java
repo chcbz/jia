@@ -45,7 +45,7 @@ class CliproxyRealtimeVoiceProviderTest {
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Test
-    void textSessionUsesAcknowledgedInputAsOutOfBandResponseContext() throws Exception {
+    void textSessionUsesAcknowledgedInputReferenceAsOutOfBandResponseContext() throws Exception {
         VoiceSpeechProperties properties = realtimeProperties();
         FakeTransport transport = new FakeTransport(mapper, Scenario.TEXT_SUCCESS);
         CliproxyRealtimeSessionClient client = new CliproxyRealtimeSessionClient(
@@ -66,9 +66,12 @@ class CliproxyRealtimeVoiceProviderTest {
         JsonNode response = transport.connection.messages.get(3).path("response");
         assertEquals("none", response.path("conversation").textValue());
         assertEquals(1, response.path("input").size());
-        assertEquals("input-audio-1", response.path("input").get(0).path("id").textValue());
-        assertEquals("input_audio", response.path("input").get(0)
-                .path("content").get(0).path("type").textValue());
+        assertItemReference(response.path("input").get(0), "input-audio-1");
+        JsonNode acknowledgement = transport.connection.acknowledgedInput;
+        assertEquals("completed", acknowledgement.path("status").textValue());
+        assertEquals("input_audio", acknowledgement.path("content").get(0)
+                .path("type").textValue());
+        assertTrue(acknowledgement.path("content").get(0).path("audio").isMissingNode());
         JsonNode session = transport.connection.messages.get(0).path("session");
         assertEquals("text", session.path("output_modalities").get(0).textValue());
         assertEquals("audio/pcm", session.path("audio").path("input")
@@ -98,9 +101,8 @@ class CliproxyRealtimeVoiceProviderTest {
                 .path("text").textValue());
         JsonNode response = transport.connection.messages.get(2).path("response");
         assertEquals("none", response.path("conversation").textValue());
-        assertEquals(item.path("id").textValue(), response.path("input").get(0)
-                .path("id").textValue());
-        assertEquals("Agent reply exactly.", response.path("input").get(0)
+        assertItemReference(response.path("input").get(0), item.path("id").textValue());
+        assertEquals("Agent reply exactly.", transport.connection.acknowledgedInput
                 .path("content").get(0).path("text").textValue());
         assertEquals("audio", response
                 .path("output_modalities").get(0).textValue());
@@ -202,7 +204,9 @@ class CliproxyRealtimeVoiceProviderTest {
         JsonNode responseInput = transport.connection.messages.get(2)
                 .path("response").path("input").get(0);
         assertEquals(literal, created.path("content").get(0).path("text").textValue());
-        assertEquals(literal, responseInput.path("content").get(0).path("text").textValue());
+        assertEquals(literal, transport.connection.acknowledgedInput
+                .path("content").get(0).path("text").textValue());
+        assertItemReference(responseInput, created.path("id").textValue());
         assertEquals(Pcm16Wav.HEADER_BYTES + 4, wav.length);
     }
 
@@ -368,6 +372,16 @@ class CliproxyRealtimeVoiceProviderTest {
         verifyNoInteractions(delegate);
     }
 
+    private static void assertItemReference(JsonNode reference, String expectedId) {
+        assertEquals(2, reference.size());
+        assertEquals("item_reference", reference.path("type").textValue());
+        assertEquals(expectedId, reference.path("id").textValue());
+        assertTrue(reference.path("content").isMissingNode());
+        assertTrue(reference.path("object").isMissingNode());
+        assertTrue(reference.path("role").isMissingNode());
+        assertTrue(reference.path("status").isMissingNode());
+    }
+
     private static VoiceSpeechProperties realtimeProperties() {
         VoiceSpeechProperties properties = new VoiceSpeechProperties();
         properties.getCompatibilityGatewayAllowlist().clear();
@@ -458,6 +472,7 @@ class CliproxyRealtimeVoiceProviderTest {
         private String pendingInputId;
         private String pendingInputText;
         private boolean pendingInputAudio;
+        private JsonNode acknowledgedInput;
         private int responseCreateCount;
         private boolean closed;
         private boolean aborted;
@@ -513,15 +528,16 @@ class CliproxyRealtimeVoiceProviderTest {
             Map<String, Object> content = pendingInputAudio
                     ? Map.of("type", "input_audio")
                     : Map.of("type", "input_text", "text", pendingInputText);
+            acknowledgedInput = mapper.valueToTree(Map.of(
+                    "id", id,
+                    "object", "realtime.item",
+                    "type", "message",
+                    "role", "user",
+                    "status", "completed",
+                    "content", List.of(content)));
             emit(mapper.writeValueAsString(Map.of(
                     "type", "conversation.item.added",
-                    "item", Map.of(
-                            "id", id,
-                            "object", "realtime.item",
-                            "type", "message",
-                            "role", "user",
-                            "status", "completed",
-                            "content", List.of(content)))));
+                    "item", acknowledgedInput)));
         }
 
         private void respond() {

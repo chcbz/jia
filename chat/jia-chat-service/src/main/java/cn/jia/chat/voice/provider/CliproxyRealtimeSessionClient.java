@@ -232,7 +232,7 @@ final class CliproxyRealtimeSessionClient {
         private boolean sessionUpdated;
         private boolean requestDispatched;
         private String inputItemId;
-        private JsonNode acknowledgedInputItem;
+        private boolean inputItemAcknowledged;
         private boolean responseCreateSent;
         private String responseId;
         private String itemId;
@@ -463,10 +463,10 @@ final class CliproxyRealtimeSessionClient {
                     || !validInputContent(item.path("content"))) {
                 throw protocol("realtime input item acknowledgement rejected");
             }
-            if (acknowledgedInputItem != null) {
+            if (inputItemAcknowledged) {
                 return;
             }
-            acknowledgedInputItem = item.deepCopy();
+            inputItemAcknowledged = true;
             createResponse();
         }
 
@@ -483,12 +483,13 @@ final class CliproxyRealtimeSessionClient {
         }
 
         private void createResponse() throws SessionFailure {
-            if (responseCreateSent || acknowledgedInputItem == null) {
+            if (responseCreateSent || !inputItemAcknowledged || inputItemId == null) {
                 throw protocol("realtime duplicate response request");
             }
             Map<String, Object> response = new java.util.LinkedHashMap<>();
             response.put("conversation", "none");
-            response.put("input", java.util.List.of(acknowledgedInputItem));
+            response.put("input", java.util.List.of(Map.of(
+                    "type", "item_reference", "id", inputItemId)));
             response.put("output_modalities", operation.mode == Mode.TRANSCRIPTION
                     ? java.util.List.of("text") : java.util.List.of("audio"));
             response.put("instructions", operation.mode == Mode.TRANSCRIPTION
