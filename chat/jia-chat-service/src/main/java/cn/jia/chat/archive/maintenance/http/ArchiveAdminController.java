@@ -18,6 +18,7 @@ import cn.jia.chat.archive.maintenance.dto.ArchiveDraftUpdateRequest;
 import cn.jia.chat.archive.maintenance.dto.ArchiveJobCreateRequest;
 import cn.jia.chat.archive.maintenance.dto.ArchiveJobDTO;
 import cn.jia.chat.archive.maintenance.dto.ArchiveRecoveryContextDTO;
+import cn.jia.chat.archive.maintenance.dto.ArchiveResolveInputRequest;
 import cn.jia.chat.archive.maintenance.dto.ArchivePublicationDTO;
 import cn.jia.chat.archive.maintenance.dto.ArchivePublishRequest;
 import cn.jia.chat.archive.maintenance.dto.ArchiveValidationDTO;
@@ -197,6 +198,20 @@ public class ArchiveAdminController {
         ArchiveJobDTO result = service.createJob(actor(authentication), collectionId, key, ArchiveStrictRequest.read(mapper, body, ArchiveJobCreateRequest.class));
         return ResponseEntity.status(HttpStatus.CREATED)
                 .header(HttpHeaders.ETAG, ArchiveHttpPreconditions.etag(result.revision()))
+                .body(JsonResult.success(result));
+    }
+
+    @PostMapping("/jobs/{jobId}/resolve-input")
+    public ResponseEntity<JsonResult<ArchiveJobDTO>> resolveInput(@PathVariable String jobId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String key,
+            @RequestHeader(value = HttpHeaders.IF_MATCH, required = false) String ifMatch,
+            @RequestBody byte[] body, Authentication authentication) {
+        ArchiveJobDTO result = service.resolveInput(actor(authentication), jobId, key,
+                ArchiveHttpPreconditions.revision(ifMatch),
+                ArchiveStrictRequest.read(mapper, body, ArchiveResolveInputRequest.class));
+        return ResponseEntity.ok()
+                .header(HttpHeaders.ETAG, ArchiveHttpPreconditions.etag(result.revision()))
+                .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
                 .body(JsonResult.success(result));
     }
 

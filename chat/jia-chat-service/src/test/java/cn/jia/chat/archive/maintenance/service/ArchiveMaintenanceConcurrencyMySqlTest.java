@@ -29,6 +29,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.ConnectionCallback;
+import org.springframework.dao.DataAccessException;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
@@ -656,6 +657,197 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
     }
 
     @Test
+    void waitingJobPersistsWithoutExecutionAndResolvesThroughExactCurrentAppointment() {
+        jdbc.update("INSERT INTO archive_collection_manager(collection_id,tenant_id,client_id,owner_jiacn,"
+                + "permissions,state,revision) VALUES (?,'0','client-a','owner-a',"
+                + "'job.create,job.manage','ACTIVE',3)", COLLECTION);
+        jdbc.update("INSERT INTO archive_source_snapshot(source_id,collection_id,tenant_id,client_id,owner_jiacn,"
+                + "storage_uri,raw_sha256,raw_byte_length,source_name,source_version,rights_basis,"
+                + "normalization_rule,state) VALUES ('source-wait',?,'0','client-a','owner-a',"
+                + "'cyf-artifact://wait',?,?,'source','v1','authorized','UTF8_EXACT_V1','READY')",
+                COLLECTION, SHA, SOURCE.length);
+        RootLockingPort port = new RootLockingPort(jdbc);
+        ArchiveMaintenanceServiceImpl service = service(new JdbcArchiveMaintenanceStore(jdbc), port);
+        ArchiveJobDTO initial = service.createJob(ACTOR, COLLECTION, "waiting-create",
+                new ArchiveJobCreateRequest("ADD_WORK",
+                        new ArchiveNewWorkRequest("waiting-key", "Waiting Work", null),
+                        null, null, "MANUAL", "waiting-intent"));
+        assertEquals("WAITING_INPUT", initial.state());
+        assertEquals("SOURCE_AND_ASSIGNEE_REQUIRED", initial.waitReason());
+        assertNull(initial.runId());
+        assertNull(initial.draftId());
+        assertEquals("0:0:0", jdbc.queryForObject(
+                "SELECT CONCAT((SELECT COUNT(*) FROM archive_job_run WHERE job_id=?),':',"
+                        + "(SELECT COUNT(*) FROM archive_draft WHERE job_id=?),':',"
+                        + "(SELECT COUNT(*) FROM archive_execution_grant g JOIN archive_job_run r "
+                        + "ON r.run_id=g.run_id WHERE r.job_id=?))", String.class,
+                initial.jobId(), initial.jobId(), initial.jobId()));
+        assertEquals(0, port.rootAttempts.get());
+
+        ArchiveJobDTO cancellable = service.createJob(ACTOR, COLLECTION, "waiting-cancel-create",
+                new ArchiveJobCreateRequest("ADD_WORK", null, null, null,
+                        "MANUAL", "waiting-cancel-intent"));
+        ArchiveJobDTO cancelled = service.cancel(ACTOR, cancellable.jobId(),
+                "waiting-cancel", 1, new ArchiveCancelRequest("input unavailable"));
+        assertEquals("CANCELLED", cancelled.state());
+        assertNull(cancelled.runId());
+        assertEquals(0, port.rootAttempts.get(),
+                "cancelling a waiting job must not invent an execution target");
+
+        ArchiveJobDTO awaitingAssignee = service.resolveInput(ACTOR, initial.jobId(),
+                "waiting-source", 1, new ArchiveResolveInputRequest("source-wait", null,
+                        null, null, null, null));
+        assertEquals("WAITING_ASSIGNEE", awaitingAssignee.state());
+        assertEquals("ASSIGNEE_REQUIRED", awaitingAssignee.waitReason());
+        assertEquals("source-wait", awaitingAssignee.sourceId());
+        assertEquals("0:0", jdbc.queryForObject(
+                "SELECT CONCAT((SELECT COUNT(*) FROM archive_job_run WHERE job_id=?),':',"
+                        + "(SELECT COUNT(*) FROM archive_draft WHERE job_id=?))", String.class,
+                initial.jobId(), initial.jobId()));
+
+        jdbc.update("INSERT INTO aam_test_agent_root(agent_id) VALUES (?)", AGENT);
+        jdbc.update("INSERT INTO archive_appointment_slot(collection_id,role_code,current_appointment_id,revision) "
+                + "VALUES (?,'ARCHIVE_EDITOR',NULL,0)", COLLECTION);
+        jdbc.update("INSERT INTO archive_appointment(appointment_id,collection_id,role_code,tenant_id,client_id,"
+                + "owner_jiacn,agent_id,binding_version,work_scope_mode,work_ids,permission_profile,"
+                + "required_skill_key,required_skill_version,required_skill_sha256,status,revision) "
+                + "VALUES (?,?,'ARCHIVE_EDITOR','0','client-a','owner-a',?,'7','COLLECTION','',"
+                + "'DRAFT_ONLY','archive-maintainer','1.0.0',?,'ACTIVE',1)",
+                APPOINTMENT, COLLECTION, AGENT, SHA);
+        assertEquals(1, jdbc.update("UPDATE archive_appointment_slot SET current_appointment_id=?,revision=1 "
+                + "WHERE collection_id=? AND role_code='ARCHIVE_EDITOR' "
+                + "AND current_appointment_id IS NULL AND revision=0", APPOINTMENT, COLLECTION));
+        ArchiveSkillRef skill = new ArchiveSkillRef("archive-maintainer", "1.0.0", SHA);
+        ArchiveResolveInputRequest bind = new ArchiveResolveInputRequest(null, null, null,
+                APPOINTMENT, "1", skill);
+        ArchiveJobDTO ready = service.resolveInput(ACTOR, initial.jobId(), "waiting-bind", 2, bind);
+        assertEquals("WAITING_SKILL", ready.state());
+        assertEquals("CLIENT_UPDATE_REQUIRED", ready.waitReason());
+        assertEquals(APPOINTMENT, ready.appointmentId());
+        assertEquals("1:1:0", jdbc.queryForObject(
+                "SELECT CONCAT((SELECT COUNT(*) FROM archive_job_run WHERE job_id=?),':',"
+                        + "(SELECT COUNT(*) FROM archive_draft WHERE job_id=?),':',"
+                        + "(SELECT COUNT(*) FROM archive_execution_grant g JOIN archive_job_run r "
+                        + "ON r.run_id=g.run_id WHERE r.job_id=?))", String.class,
+                initial.jobId(), initial.jobId(), initial.jobId()));
+        assertEquals(0, port.rootAttempts.get(), "input resolution must not dispatch or claim a lease");
+
+        ArchiveJobDTO replay = service.resolveInput(ACTOR, initial.jobId(), "waiting-bind", 2, bind);
+        assertEquals(ready, replay);
+        assertEquals("IDEMPOTENCY_CONFLICT", assertThrows(ArchiveMaintenanceException.class,
+                () -> service.resolveInput(ACTOR, initial.jobId(), "waiting-bind", 2,
+                        new ArchiveResolveInputRequest(null, null, null,
+                                APPOINTMENT, "1", new ArchiveSkillRef(
+                                        "archive-maintainer", "1.0.0", "b".repeat(64))))).code());
+
+        ArchiveActorScope foreign = new ArchiveActorScope("0", "client-a", "owner-b");
+        assertEquals("ARCHIVE_RESOURCE_NOT_FOUND", assertThrows(ArchiveMaintenanceException.class,
+                () -> service.resolveInput(foreign, initial.jobId(), "foreign", 3, bind)).code());
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM archive_maintenance_job WHERE job_id=? AND revision=3 "
+                        + "AND state='WAITING_SKILL'", Integer.class, initial.jobId()));
+    }
+
+    @Test
+    void managerRevocationCommittedBeforeResolvePreventsCandidateCreation() throws Exception {
+        seedWaitingResolutionCandidate();
+        CountDownLatch resolvePreflightComplete = new CountDownLatch(1);
+        CountDownLatch allowResolveTransaction = new CountDownLatch(1);
+        ArchiveTransactions delayedResolveTransactions = new ArchiveTransactions() {
+            @Override
+            public <T> T required(java.util.function.Supplier<T> action) {
+                resolvePreflightComplete.countDown();
+                await(allowResolveTransaction);
+                return transactions.required(action);
+            }
+        };
+        ArchiveMaintenanceServiceImpl resolveService = service(
+                new JdbcArchiveMaintenanceStore(jdbc), new RootLockingPort(jdbc),
+                mock(ArchiveContentStore.class), delayedResolveTransactions);
+        ArchiveMaintenanceServiceImpl revokeService = service(new JdbcArchiveMaintenanceStore(jdbc),
+                new RootLockingPort(jdbc));
+        ArchiveSkillRef skill = new ArchiveSkillRef("archive-maintainer", "1.0.0", SHA);
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<String> resolve = pool.submit(() -> {
+                try {
+                    resolveService.resolveInput(ACTOR, JOB, "resolve-after-manager-revoke", 1,
+                            new ArchiveResolveInputRequest(null, null, null,
+                                    APPOINTMENT, "1", skill));
+                    return "unexpected";
+                } catch (ArchiveMaintenanceException failure) {
+                    return failure.code();
+                }
+            });
+            assertTrue(resolvePreflightComplete.await(5, TimeUnit.SECONDS));
+            revokeService.revokeManagerAuthorization(ACTOR, COLLECTION, "revoke-before-resolve", 3,
+                    new ArchiveManagerRevokeRequest("authorization removed"));
+            allowResolveTransaction.countDown();
+            assertEquals("ARCHIVE_FORBIDDEN", resolve.get(10, TimeUnit.SECONDS));
+        } finally {
+            allowResolveTransaction.countDown();
+            pool.shutdownNow();
+            pool.awaitTermination(5, TimeUnit.SECONDS);
+        }
+        assertEquals("WAITING_ASSIGNEE:1", jdbc.queryForObject(
+                "SELECT CONCAT(state,':',revision) FROM archive_maintenance_job WHERE job_id=?",
+                String.class, JOB));
+        assertEquals("0:0:0", candidateRowCounts(JOB));
+    }
+
+    @Test
+    void resolveCommittedBeforeAppointmentRevocationCreatesWholeCandidateThenFencesIt() throws Exception {
+        seedWaitingResolutionCandidate();
+        CountDownLatch candidateUpdated = new CountDownLatch(1);
+        CountDownLatch allowResolveCommit = new CountDownLatch(1);
+        BlockingResolveStore resolveStore = new BlockingResolveStore(jdbc, candidateUpdated,
+                allowResolveCommit);
+        RootLockingPort revokePort = new RootLockingPort(jdbc);
+        ArchiveMaintenanceServiceImpl resolveService = service(resolveStore,
+                new RootLockingPort(jdbc));
+        ArchiveMaintenanceServiceImpl revokeService = service(new JdbcArchiveMaintenanceStore(jdbc),
+                revokePort);
+        ArchiveSkillRef skill = new ArchiveSkillRef("archive-maintainer", "1.0.0", SHA);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<ArchiveJobDTO> resolve = pool.submit(() -> resolveService.resolveInput(
+                    ACTOR, JOB, "resolve-before-appointment-revoke", 1,
+                    new ArchiveResolveInputRequest(null, null, null,
+                            APPOINTMENT, "1", skill)));
+            assertTrue(candidateUpdated.await(5, TimeUnit.SECONDS));
+            Future<ArchiveAppointmentDTO> revoke = pool.submit(() -> revokeService.revokeAppointment(
+                    ACTOR, APPOINTMENT, "revoke-after-resolve", 1,
+                    new ArchiveAppointmentRevokeRequest("assignment removed")));
+            assertTrue(revokePort.firstRootAttempted.await(5, TimeUnit.SECONDS));
+            allowResolveCommit.countDown();
+            ArchiveJobDTO ready = resolve.get(10, TimeUnit.SECONDS);
+            assertEquals("WAITING_SKILL", ready.state());
+            assertEquals("REVOKED", revoke.get(10, TimeUnit.SECONDS).status());
+        } finally {
+            allowResolveCommit.countDown();
+            pool.shutdownNow();
+            pool.awaitTermination(5, TimeUnit.SECONDS);
+        }
+        assertEquals("WAITING_SKILL:2:1:1:1", jdbc.queryForObject(
+                "SELECT CONCAT(j.state,':',j.revision,':',j.run_id IS NOT NULL,':',"
+                        + "j.draft_id IS NOT NULL,':',j.appointment_id IS NOT NULL) "
+                        + "FROM archive_maintenance_job j WHERE j.job_id=?", String.class, JOB));
+        assertEquals("FENCED", jdbc.queryForObject(
+                "SELECT state FROM archive_job_run WHERE job_id=?", String.class, JOB));
+        assertEquals("REVOKED", jdbc.queryForObject(
+                "SELECT status FROM archive_appointment WHERE appointment_id=?",
+                String.class, APPOINTMENT));
+        assertNull(jdbc.queryForObject(
+                "SELECT current_appointment_id FROM archive_appointment_slot "
+                        + "WHERE collection_id=? AND role_code='ARCHIVE_EDITOR'",
+                String.class, COLLECTION));
+        assertEquals(0, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM archive_execution_grant g JOIN archive_job_run r "
+                        + "ON r.run_id=g.run_id WHERE r.job_id=? AND g.state='ACTIVE'",
+                Integer.class, JOB));
+    }
+
+    @Test
     void completePreviousMaintenanceSchemaUpgradesAdditivelyAndMalformedBreakpointFailsClosed() throws Exception {
         clean();
         new ArchiveSchemaInitializer(jdbc).initialize();
@@ -663,18 +855,98 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         try (var input = new ClassPathResource("db/archive-maintenance-schema.sql").getInputStream()) {
             ddl = new String(input.readAllBytes(), StandardCharsets.UTF_8);
         }
-        String previous = ddl.replaceFirst("(?s)CREATE TABLE IF NOT EXISTS archive_edition_withdrawal \\(.*?\\) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;\\s*", "");
-        new ResourceDatabasePopulator(new ByteArrayResource(previous.getBytes(StandardCharsets.UTF_8)))
+        new ResourceDatabasePopulator(new ByteArrayResource(
+                legacyWaitingSchema(ddl, false).getBytes(StandardCharsets.UTF_8)))
                 .execute(dataSource);
-        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='archive_edition_withdrawal'", Integer.class));
+        assertEquals(0, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() "
+                        + "AND table_name='archive_maintenance_job' AND column_name='target_agent_id'",
+                Integer.class));
+        assertEquals("NO", jdbc.queryForObject(
+                "SELECT is_nullable FROM information_schema.columns WHERE table_schema=DATABASE() "
+                        + "AND table_name='archive_maintenance_job' AND column_name='run_id'",
+                String.class));
+        new ArchiveReaderDataSchemaInitializer(jdbc).initialize();
+        jdbc.update("INSERT INTO archive_work(work_id,title,active_edition_id) VALUES ('upgrade-work','title',NULL)");
+        jdbc.update("INSERT INTO archive_edition(edition_id,work_id,import_state,source_sha256,manifest_sha256,"
+                + "manifest_file_sha256,source_utf8_byte_length,chapter_count,preface_paragraph_count,"
+                + "chapter_paragraph_count,reader_paragraph_count,preface_utf8_byte_length,"
+                + "chapter_utf8_byte_length,reader_utf8_byte_length) VALUES ('upgrade-edition',"
+                + "'upgrade-work','READY',?,?,?,1,1,0,1,1,0,1,1)", SHA, SHA, SHA);
+        jdbc.update("INSERT INTO archive_chapter(edition_id,block_id,block_type,reader_ordinal,"
+                + "chapter_number,title,paragraph_count,utf8_byte_length,block_content_sha256) "
+                + "VALUES ('upgrade-edition','upgrade-edition-c001','CHAPTER',1,1,'chapter',1,1,?)", SHA);
+        jdbc.update("INSERT INTO archive_paragraph(edition_id,block_id,paragraph_id,ordinal,text,"
+                + "utf8_byte_length,sha256) VALUES ('upgrade-edition','upgrade-edition-c001',"
+                + "'upgrade-edition-c001-p0001',1,'x',1,?)", SHA);
+        jdbc.update("INSERT INTO archive_note(tenant_id,client_id,owner_jiacn,note_id,edition_id,state,"
+                + "text,block_id,anchor_json,version) VALUES ('0','private-client','private-owner',"
+                + "'323e4567-e89b-82d3-a456-426614174000','upgrade-edition','ACTIVE',"
+                + "'private upgrade fact',NULL,NULL,1)");
+        String privateDigest = jdbc.queryForObject(
+                "SELECT SHA2(CONCAT(owner_jiacn,':',text,':',version),256) FROM archive_note "
+                        + "WHERE note_id='323e4567-e89b-82d3-a456-426614174000'", String.class);
+
         new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
                 new ArchiveMaintenanceProperties()).initialize();
-        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='archive_edition_withdrawal'", Integer.class));
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() "
+                        + "AND table_name='archive_edition_withdrawal'", Integer.class));
+        assertEquals("YES", jdbc.queryForObject(
+                "SELECT is_nullable FROM information_schema.columns WHERE table_schema=DATABASE() "
+                        + "AND table_name='archive_maintenance_job' AND column_name='run_id'",
+                String.class));
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() "
+                        + "AND table_name='archive_maintenance_job' AND column_name='target_agent_id'",
+                Integer.class));
+        assertEquals(privateDigest, jdbc.queryForObject(
+                "SELECT SHA2(CONCAT(owner_jiacn,':',text,':',version),256) FROM archive_note "
+                        + "WHERE note_id='323e4567-e89b-82d3-a456-426614174000'", String.class));
 
-        jdbc.execute("DROP TABLE archive_edition_withdrawal");
-        jdbc.execute("CREATE TABLE archive_edition_withdrawal(withdrawal_id VARCHAR(64) NOT NULL PRIMARY KEY) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin");
+        clean();
+        new ArchiveSchemaInitializer(jdbc).initialize();
+        new ResourceDatabasePopulator(new ByteArrayResource(
+                legacyWaitingSchema(ddl, true).getBytes(StandardCharsets.UTF_8)))
+                .execute(dataSource);
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() "
+                        + "AND table_name='archive_edition_withdrawal'", Integer.class));
+        new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
+                new ArchiveMaintenanceProperties()).initialize();
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() "
+                        + "AND table_name='archive_maintenance_job' AND column_name='target_agent_id'",
+                Integer.class));
+
+        clean();
+        new ArchiveSchemaInitializer(jdbc).initialize();
+        new ResourceDatabasePopulator(new ByteArrayResource(
+                legacyWaitingSchema(ddl, false).getBytes(StandardCharsets.UTF_8)))
+                .execute(dataSource);
+        jdbc.execute("ALTER TABLE archive_maintenance_job ADD COLUMN target_agent_id "
+                + "VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL AFTER owner_jiacn");
         assertThrows(IllegalStateException.class, () -> new ArchiveMaintenanceSchemaInitializer(jdbc,
                 new JdbcArchiveMaintenanceStore(jdbc), new ArchiveMaintenanceProperties()).initialize());
+    }
+
+    @Test
+    void strictWaitingAndCancelledShapesRejectImpossibleRowsOnFreshAndUpgradedSchema() throws Exception {
+        assertStrictWaitingShapesRejectImpossibleRows();
+
+        clean();
+        new ArchiveSchemaInitializer(jdbc).initialize();
+        String ddl;
+        try (var input = new ClassPathResource("db/archive-maintenance-schema.sql").getInputStream()) {
+            ddl = new String(input.readAllBytes(), StandardCharsets.UTF_8);
+        }
+        new ResourceDatabasePopulator(new ByteArrayResource(
+                previousWaitingShapeSchema(ddl).getBytes(StandardCharsets.UTF_8)))
+                .execute(dataSource);
+        new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
+                new ArchiveMaintenanceProperties()).initialize();
+
+        assertStrictWaitingShapesRejectImpossibleRows();
     }
 
     @Test
@@ -866,6 +1138,148 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                 Long.class, COLLECTION));
     }
 
+    private void seedWaitingResolutionCandidate() {
+        jdbc.update("INSERT INTO aam_test_agent_root(agent_id) VALUES (?)", AGENT);
+        jdbc.update("INSERT INTO archive_collection_manager(collection_id,tenant_id,client_id,owner_jiacn,"
+                + "permissions,state,revision) VALUES (?,'0','client-a','owner-a',"
+                + "'appoint,job.manage','ACTIVE',3)", COLLECTION);
+        jdbc.update("INSERT INTO archive_source_snapshot(source_id,collection_id,tenant_id,client_id,owner_jiacn,"
+                + "storage_uri,raw_sha256,raw_byte_length,source_name,source_version,rights_basis,"
+                + "normalization_rule,state) VALUES ('source-wait',?,'0','client-a','owner-a',"
+                + "'cyf-artifact://wait',?,?,'source','v1','authorized','UTF8_EXACT_V1','READY')",
+                COLLECTION, SHA, SOURCE.length);
+        jdbc.update("INSERT INTO archive_appointment_slot(collection_id,role_code,current_appointment_id,revision) "
+                + "VALUES (?,'ARCHIVE_EDITOR',NULL,0)", COLLECTION);
+        jdbc.update("INSERT INTO archive_appointment(appointment_id,collection_id,role_code,tenant_id,client_id,"
+                + "owner_jiacn,agent_id,binding_version,work_scope_mode,work_ids,permission_profile,"
+                + "required_skill_key,required_skill_version,required_skill_sha256,status,revision) "
+                + "VALUES (?,?,'ARCHIVE_EDITOR','0','client-a','owner-a',?,'7','COLLECTION','',"
+                + "'DRAFT_ONLY','archive-maintainer','1.0.0',?,'ACTIVE',1)",
+                APPOINTMENT, COLLECTION, AGENT, SHA);
+        assertEquals(1, jdbc.update("UPDATE archive_appointment_slot SET current_appointment_id=?,revision=1 "
+                + "WHERE collection_id=? AND role_code='ARCHIVE_EDITOR' "
+                + "AND current_appointment_id IS NULL AND revision=0", APPOINTMENT, COLLECTION));
+        jdbc.update("INSERT INTO archive_maintenance_job(job_id,collection_id,tenant_id,client_id,owner_jiacn,"
+                + "target_agent_id,manager_authorization_revision,publication_mode,operation_code,"
+                + "work_id,canonical_key,title,source_id,source_sha256,source_summary,rights_basis,"
+                + "state,wait_reason,revision,request_intent_id,request_sha256) "
+                + "VALUES (?,?,'0','client-a','owner-a',?,3,'MANUAL','ADD_WORK','work-wait',"
+                + "'waiting-key','Waiting Work','source-wait',?,'source / v1','authorized',"
+                + "'WAITING_ASSIGNEE','ASSIGNEE_REQUIRED',1,'waiting-race',?)",
+                JOB, COLLECTION, AGENT, SHA, "b".repeat(64));
+    }
+
+    private String candidateRowCounts(String jobId) {
+        return jdbc.queryForObject(
+                "SELECT CONCAT((SELECT COUNT(*) FROM archive_job_run WHERE job_id=?),':',"
+                        + "(SELECT COUNT(*) FROM archive_draft WHERE job_id=?),':',"
+                        + "(SELECT COUNT(*) FROM archive_execution_grant g JOIN archive_job_run r "
+                        + "ON r.run_id=g.run_id WHERE r.job_id=?))",
+                String.class, jobId, jobId, jobId);
+    }
+
+    private void assertStrictWaitingShapesRejectImpossibleRows() {
+        jdbc.update("INSERT INTO archive_source_snapshot(source_id,collection_id,tenant_id,client_id,owner_jiacn,"
+                + "storage_uri,raw_sha256,raw_byte_length,source_name,source_version,rights_basis,"
+                + "normalization_rule,state) VALUES ('shape-source',?,'0','client-a','owner-a',"
+                + "'cyf-artifact://shape',?,1,'shape','v1','authorized','UTF8_EXACT_V1','READY')",
+                COLLECTION, SHA);
+        jdbc.update("INSERT INTO archive_appointment_slot(collection_id,role_code,current_appointment_id,revision) "
+                + "VALUES (?,'ARCHIVE_EDITOR',NULL,0)", COLLECTION);
+        jdbc.update("INSERT INTO archive_appointment(appointment_id,collection_id,role_code,tenant_id,client_id,"
+                + "owner_jiacn,agent_id,binding_version,work_scope_mode,work_ids,permission_profile,"
+                + "required_skill_key,required_skill_version,required_skill_sha256,status,revision) "
+                + "VALUES ('shape-appointment',?,'ARCHIVE_EDITOR','0','client-a','owner-a','shape-agent',"
+                + "'1','COLLECTION','','DRAFT_ONLY','archive-maintainer','1.0.0',?,'REVOKED',1)",
+                COLLECTION, SHA);
+        DataAccessException waitingShape = assertThrows(DataAccessException.class, () -> jdbc.update(
+                "INSERT INTO archive_maintenance_job(job_id,collection_id,tenant_id,client_id,owner_jiacn,"
+                        + "manager_authorization_revision,publication_mode,operation_code,work_id,canonical_key,title,"
+                        + "source_id,source_sha256,source_summary,rights_basis,state,wait_reason,revision,"
+                        + "request_intent_id,request_sha256) VALUES ('shape-waiting',?,'0','client-a','owner-a',"
+                        + "1,'MANUAL','ADD_WORK','shape-work','shape-key','shape-title','shape-source',?,"
+                        + "'shape / v1','authorized','WAITING_INPUT','SOURCE_REQUIRED',1,'shape-waiting',?)",
+                COLLECTION, SHA, "b".repeat(64)));
+        assertTrue(waitingShape.getMostSpecificCause().getMessage()
+                .contains("chk_archive_job_waiting_shape"), waitingShape.getMessage());
+        DataAccessException cancelledShape = assertThrows(DataAccessException.class, () -> jdbc.update(
+                "INSERT INTO archive_maintenance_job(job_id,collection_id,tenant_id,client_id,owner_jiacn,"
+                        + "appointment_id,appointment_revision,agent_id,binding_version,permission_profile,"
+                        + "manager_authorization_revision,publication_mode,operation_code,state,wait_reason,revision,"
+                        + "request_intent_id,request_sha256) VALUES ('shape-cancelled',?,'0','client-a','owner-a',"
+                        + "'shape-appointment',1,'shape-agent','1','DRAFT_ONLY',1,'MANUAL','ADD_WORK',"
+                        + "'CANCELLED','USER_CANCELLED',1,'shape-cancelled',?)",
+                COLLECTION, "c".repeat(64)));
+        assertTrue(cancelledShape.getMostSpecificCause().getMessage()
+                .contains("chk_archive_job_waiting_shape"), cancelledShape.getMessage());
+    }
+
+    private static String previousWaitingShapeSchema(String ddl) {
+        String current = "    CONSTRAINT chk_archive_job_waiting_shape CHECK (((state='WAITING_INPUT') AND (run_id IS NULL) AND (draft_id IS NULL) AND (appointment_id IS NULL) AND (publication_id IS NULL) AND ((source_id IS NULL) OR (work_id IS NULL))) OR ((state='WAITING_ASSIGNEE') AND (run_id IS NULL) AND (draft_id IS NULL) AND (appointment_id IS NULL) AND (source_id IS NOT NULL) AND (work_id IS NOT NULL) AND (publication_id IS NULL)) OR ((state='CANCELLED') AND (publication_id IS NULL) AND (((run_id IS NULL) AND (draft_id IS NULL) AND (appointment_id IS NULL)) OR ((run_id IS NOT NULL) AND (draft_id IS NOT NULL) AND (appointment_id IS NOT NULL) AND (source_id IS NOT NULL) AND (work_id IS NOT NULL)))) OR ((state NOT IN ('WAITING_INPUT','WAITING_ASSIGNEE','CANCELLED')) AND (run_id IS NOT NULL) AND (draft_id IS NOT NULL) AND (appointment_id IS NOT NULL) AND (source_id IS NOT NULL) AND (work_id IS NOT NULL)))";
+        String previous = "    CONSTRAINT chk_archive_job_waiting_shape CHECK (((state='WAITING_INPUT') AND (run_id IS NULL) AND (draft_id IS NULL) AND (appointment_id IS NULL) AND (publication_id IS NULL)) OR ((state='WAITING_ASSIGNEE') AND (run_id IS NULL) AND (draft_id IS NULL) AND (appointment_id IS NULL) AND (source_id IS NOT NULL) AND (work_id IS NOT NULL) AND (publication_id IS NULL)) OR (state='CANCELLED') OR ((state NOT IN ('WAITING_INPUT','WAITING_ASSIGNEE','CANCELLED')) AND (run_id IS NOT NULL) AND (draft_id IS NOT NULL) AND (appointment_id IS NOT NULL) AND (source_id IS NOT NULL) AND (work_id IS NOT NULL)))";
+        if (!ddl.contains(current)) throw new IllegalStateException("Current waiting CHECK unavailable");
+        return ddl.replace(current, previous);
+    }
+
+    private static String legacyWaitingSchema(String ddl, boolean includeWithdrawal) {
+        String result = ddl.replaceFirst(
+                "(?s)CREATE TABLE IF NOT EXISTS archive_maintenance_job \\(.*?\\) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;",
+                java.util.regex.Matcher.quoteReplacement(legacyWaitingJobDdl()));
+        if (!includeWithdrawal) {
+            result = result.replaceFirst(
+                    "(?s)CREATE TABLE IF NOT EXISTS archive_edition_withdrawal \\(.*?\\) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;\\s*", "");
+        }
+        return result;
+    }
+
+    private static String legacyWaitingJobDdl() {
+        return """
+                CREATE TABLE IF NOT EXISTS archive_maintenance_job (
+                    job_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+                    run_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+                    collection_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+                    tenant_id VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+                    client_id VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+                    owner_jiacn VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+                    appointment_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+                    appointment_revision BIGINT NOT NULL,
+                    agent_id VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+                    binding_version VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+                    permission_profile VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+                    manager_authorization_revision BIGINT NOT NULL,
+                    publication_mode VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+                    operation_code VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+                    work_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+                    canonical_key VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+                    title VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+                    source_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+                    source_sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+                    source_summary VARCHAR(1000) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+                    rights_basis VARCHAR(1000) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+                    state VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+                    wait_reason VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+                    revision BIGINT NOT NULL,
+                    draft_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+                    publication_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+                    request_intent_id VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+                    request_sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+                    created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                    updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+                    PRIMARY KEY (job_id),
+                    UNIQUE KEY uk_archive_job_run (run_id),
+                    UNIQUE KEY uk_archive_job_intent (tenant_id, client_id, owner_jiacn, request_intent_id),
+                    KEY idx_archive_job_collection (collection_id, updated_at, job_id),
+                    KEY fk_archive_job_appointment (appointment_id),
+                    KEY fk_archive_job_source (source_id),
+                    CONSTRAINT fk_archive_job_collection FOREIGN KEY (collection_id) REFERENCES archive_collection(collection_id),
+                    CONSTRAINT fk_archive_job_appointment FOREIGN KEY (appointment_id) REFERENCES archive_appointment(appointment_id),
+                    CONSTRAINT fk_archive_job_source FOREIGN KEY (source_id) REFERENCES archive_source_snapshot(source_id),
+                    CONSTRAINT chk_archive_job_mode CHECK (publication_mode IN ('MANUAL','AUTO')),
+                    CONSTRAINT chk_archive_job_revision CHECK (revision >= 1)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
+                """;
+    }
+
     private void seedPublishedVersions() {
         jdbc.update("INSERT INTO archive_collection_manager(collection_id,tenant_id,client_id,owner_jiacn,permissions,state,revision) VALUES (?,'0','client-a','owner-a','edition.withdraw,publish','ACTIVE',5)", COLLECTION);
         seedPublishedContent();
@@ -911,6 +1325,12 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
 
     private ArchiveMaintenanceServiceImpl service(JdbcArchiveMaintenanceStore store,
             ArchiveAgentExecutionPort port, ArchiveContentStore contentStore) {
+        return service(store, port, contentStore, transactions);
+    }
+
+    private ArchiveMaintenanceServiceImpl service(JdbcArchiveMaintenanceStore store,
+            ArchiveAgentExecutionPort port, ArchiveContentStore contentStore,
+            ArchiveTransactions archiveTransactions) {
         AgentIdentityService identities = mock(AgentIdentityService.class);
         when(identities.requireActiveIdentityForBinding(eq("0"), eq("client-a"), eq("owner-a"),
                 anyLong(), anyString())).thenAnswer(call -> new AgentIdentityRegistryEntity()
@@ -924,7 +1344,7 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                             SOURCE, SHA, SOURCE.length, "text/plain");
                 });
         ArchiveMaintenanceServiceImpl service = new ArchiveMaintenanceServiceImpl(store,
-                contentStore, transactions, identities, new ObjectMapper(),
+                contentStore, archiveTransactions, identities, new ObjectMapper(),
                 sourceStorage, Clock.fixed(Instant.parse("2026-09-30T00:00:00Z"), ZoneOffset.UTC));
         ArchiveMaintenanceProperties properties = new ArchiveMaintenanceProperties();
         properties.setExecutionEnabled(true);
@@ -1077,6 +1497,28 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                 String publicationId) {
             if ("FAILED".equals(state)) return 0;
             return super.updateJobState(id, expected, state, wait, publicationId);
+        }
+    }
+
+    private static final class BlockingResolveStore extends JdbcArchiveMaintenanceStore {
+        private final CountDownLatch updated;
+        private final CountDownLatch release;
+
+        BlockingResolveStore(JdbcTemplate jdbc, CountDownLatch updated, CountDownLatch release) {
+            super(jdbc);
+            this.updated = updated;
+            this.release = release;
+        }
+
+        @Override
+        public int resolveWaitingJob(cn.jia.chat.archive.maintenance.model.ArchiveMaintenanceJobRecord job,
+                long expectedRevision) {
+            int rows = super.resolveWaitingJob(job, expectedRevision);
+            if (rows == 1) {
+                updated.countDown();
+                await(release);
+            }
+            return rows;
         }
     }
 

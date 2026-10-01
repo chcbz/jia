@@ -32,18 +32,22 @@ public class JdbcArchiveMaintenanceStore implements ArchiveMaintenanceStore {
                     rs.getString("required_skill_version"), rs.getString("required_skill_sha256"),
                     rs.getString("status"), rs.getLong("revision"), instant(rs.getTimestamp("created_at")),
                     instant(rs.getTimestamp("revoked_at")));
-    private static final RowMapper<ArchiveMaintenanceJobRecord> JOB = (rs, n) ->
-            new ArchiveMaintenanceJobRecord(rs.getString("job_id"), rs.getString("run_id"),
-                    rs.getString("collection_id"), rs.getString("tenant_id"), rs.getString("client_id"),
-                    rs.getString("owner_jiacn"), rs.getString("appointment_id"),
-                    rs.getLong("appointment_revision"), rs.getString("agent_id"),
-                    rs.getString("binding_version"), rs.getString("permission_profile"),
-                    rs.getLong("manager_authorization_revision"), rs.getString("publication_mode"), rs.getString("operation_code"),
-                    rs.getString("work_id"), rs.getString("canonical_key"), rs.getString("title"),
-                    rs.getString("source_id"), rs.getString("source_sha256"), rs.getString("source_summary"),
-                    rs.getString("rights_basis"), rs.getString("state"), rs.getString("wait_reason"),
-                    rs.getLong("revision"), rs.getString("draft_id"), rs.getString("publication_id"),
-                    rs.getString("request_intent_id"), rs.getString("request_sha256"));
+    private static final RowMapper<ArchiveMaintenanceJobRecord> JOB = (rs, n) -> {
+        long appointmentRevision = rs.getLong("appointment_revision");
+        Long nullableAppointmentRevision = rs.wasNull() ? null : appointmentRevision;
+        return new ArchiveMaintenanceJobRecord(rs.getString("job_id"), rs.getString("run_id"),
+                rs.getString("collection_id"), rs.getString("tenant_id"), rs.getString("client_id"),
+                rs.getString("owner_jiacn"), rs.getString("appointment_id"),
+                nullableAppointmentRevision, rs.getString("agent_id"),
+                rs.getString("binding_version"), rs.getString("permission_profile"),
+                rs.getLong("manager_authorization_revision"), rs.getString("publication_mode"), rs.getString("operation_code"),
+                rs.getString("work_id"), rs.getString("canonical_key"), rs.getString("title"),
+                rs.getString("source_id"), rs.getString("source_sha256"), rs.getString("source_summary"),
+                rs.getString("rights_basis"), rs.getString("state"), rs.getString("wait_reason"),
+                rs.getLong("revision"), rs.getString("draft_id"), rs.getString("publication_id"),
+                rs.getString("request_intent_id"), rs.getString("request_sha256"),
+                rs.getString("target_agent_id"));
+    };
     private static final RowMapper<ArchiveJobRunRecord> RUN = (rs, n) -> {
         long retryable = rs.getLong("failure_retryable");
         Boolean nullableRetryable = rs.wasNull() ? null : retryable == 1;
@@ -318,12 +322,36 @@ public class JdbcArchiveMaintenanceStore implements ArchiveMaintenanceStore {
                 (job_id,run_id,collection_id,tenant_id,client_id,owner_jiacn,appointment_id,appointment_revision,
                  agent_id,binding_version,permission_profile,manager_authorization_revision,publication_mode,operation_code,work_id,canonical_key,title,
                  source_id,source_sha256,source_summary,rights_basis,state,wait_reason,revision,draft_id,publication_id,
-                 request_intent_id,request_sha256)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 request_intent_id,request_sha256,target_agent_id)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,j.jobId(),j.runId(),j.collectionId(),j.tenantId(),j.clientId(),j.ownerJiacn(),j.appointmentId(),
                 j.appointmentRevision(),j.agentId(),j.bindingVersion(),j.permissionProfile(),j.managerAuthorizationRevision(),j.publicationMode(),j.operation(),
                 j.workId(),j.canonicalKey(),j.title(),j.sourceId(),j.sourceSha256(),j.sourceSummary(),j.rightsBasis(),j.state(),j.waitReason(),
-                j.revision(),j.draftId(),j.publicationId(),j.requestIntentId(),j.requestSha256());
+                j.revision(),j.draftId(),j.publicationId(),j.requestIntentId(),j.requestSha256(),j.targetAgentId());
+    }
+    @Override public int bindWaitingJobTarget(String jobId,long expectedRevision,String targetAgentId) {
+        return jdbc.update("""
+                UPDATE archive_maintenance_job
+                SET target_agent_id=?,revision=revision+1
+                WHERE job_id=? AND revision=? AND target_agent_id IS NULL
+                  AND state IN ('WAITING_INPUT','WAITING_ASSIGNEE')
+                  AND run_id IS NULL AND draft_id IS NULL AND appointment_id IS NULL
+                  AND publication_id IS NULL
+                """,targetAgentId,jobId,expectedRevision);
+    }
+    @Override public int resolveWaitingJob(ArchiveMaintenanceJobRecord j,long expectedRevision) {
+        return jdbc.update("""
+                UPDATE archive_maintenance_job
+                SET run_id=?,appointment_id=?,appointment_revision=?,agent_id=?,binding_version=?,
+                    permission_profile=?,manager_authorization_revision=?,work_id=?,canonical_key=?,title=?,
+                    source_id=?,source_sha256=?,source_summary=?,rights_basis=?,state=?,wait_reason=?,
+                    draft_id=?,revision=revision+1
+                WHERE job_id=? AND revision=? AND state IN ('WAITING_INPUT','WAITING_ASSIGNEE')
+                  AND run_id IS NULL AND draft_id IS NULL AND publication_id IS NULL
+                """, j.runId(),j.appointmentId(),j.appointmentRevision(),j.agentId(),j.bindingVersion(),
+                j.permissionProfile(),j.managerAuthorizationRevision(),j.workId(),j.canonicalKey(),j.title(),
+                j.sourceId(),j.sourceSha256(),j.sourceSummary(),j.rightsBasis(),j.state(),j.waitReason(),
+                j.draftId(),j.jobId(),expectedRevision);
     }
     @Override public void insertRun(String runId,String jobId,long executionEpoch,long grantRevision) {
         if (jdbc.update("INSERT INTO archive_job_run(run_id,job_id,execution_epoch,grant_revision,state,revision) VALUES (?,?,?,?,'WAITING',1)",

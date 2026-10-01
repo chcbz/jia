@@ -37,6 +37,8 @@ public interface ArchiveMaintenanceStore {
     ArchiveMaintenanceJobRecord findJobByIntent(ArchiveActorScope actor, String requestIntentId, boolean lock);
     List<ArchiveMaintenanceJobRecord> listJobs(ArchiveActorScope actor, String collectionId, int limit);
     void insertJob(ArchiveMaintenanceJobRecord job);
+    int bindWaitingJobTarget(String jobId, long expectedRevision, String targetAgentId);
+    int resolveWaitingJob(ArchiveMaintenanceJobRecord job, long expectedRevision);
     void insertRun(String runId, String jobId, long executionEpoch, long grantRevision);
     ArchiveJobRunRecord findRun(String runId, boolean lock);
     int activateRun(String runId, long expectedRevision, String runtimeInstanceId);

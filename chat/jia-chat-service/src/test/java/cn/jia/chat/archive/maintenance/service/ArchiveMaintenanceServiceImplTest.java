@@ -324,6 +324,60 @@ class ArchiveMaintenanceServiceImplTest {
     }
 
     @Test
+    void resolveInputOperationLookupRequiresExactJobTargetOwnerAndCurrentManageGrant() {
+        ArchiveMaintenanceJobRecord own = new ArchiveMaintenanceJobRecord(
+                JOB, null, COLLECTION, "0", "client-a", "owner-a", null, null,
+                null, null, null, 3, "MANUAL", "ADD_WORK", "work-new", "key-new",
+                "New Work", null, null, null, null, "WAITING_INPUT", "SOURCE_REQUIRED",
+                1, null, null, "intent", "d".repeat(64), null);
+        ArchiveMaintenanceStore.Operation pending = new ArchiveMaintenanceStore.Operation(false,
+                "POST", "/archive/admin/v1/jobs/" + JOB + "/resolve-input", SHA,
+                "JOB_INPUT", JOB, "PENDING");
+        when(store.findJob(JOB, false)).thenReturn(own);
+        when(store.findOperation(MANAGER, "resolve-pending")).thenReturn(pending);
+        allowManager("job.manage");
+
+        ArchiveOperationDTO pendingResult = service.operationByKey(MANAGER, "resolve-pending");
+        assertEquals("PENDING", pendingResult.state());
+        assertEquals("JOB_INPUT", pendingResult.targetType());
+        assertEquals(JOB, pendingResult.targetId());
+
+        when(store.findOperation(MANAGER, "resolve-committed")).thenReturn(
+                new ArchiveMaintenanceStore.Operation(false, "POST", pending.canonicalPath(), SHA,
+                        "JOB_INPUT", JOB, "COMMITTED"));
+        assertEquals("COMMITTED", service.operationByKey(MANAGER, "resolve-committed").state());
+
+        when(store.findOperation(MANAGER, "resolve-wrong-target")).thenReturn(
+                new ArchiveMaintenanceStore.Operation(false, "POST", pending.canonicalPath(), SHA,
+                        "JOB_INPUT", "job-other", "COMMITTED"));
+        assertEquals("ARCHIVE_RESOURCE_NOT_FOUND", assertThrows(ArchiveMaintenanceException.class,
+                () -> service.operationByKey(MANAGER, "resolve-wrong-target")).code());
+
+        when(store.findOperation(MANAGER, "resolve-wrong-type")).thenReturn(
+                new ArchiveMaintenanceStore.Operation(false, "POST", pending.canonicalPath(), SHA,
+                        "JOB", JOB, "COMMITTED"));
+        assertEquals("ARCHIVE_RESOURCE_NOT_FOUND", assertThrows(ArchiveMaintenanceException.class,
+                () -> service.operationByKey(MANAGER, "resolve-wrong-type")).code());
+
+        ArchiveMaintenanceJobRecord foreign = jobScope(own, "0", "client-a", "owner-b");
+        when(store.findOperation(MANAGER, "resolve-foreign")).thenReturn(
+                new ArchiveMaintenanceStore.Operation(false, "POST", pending.canonicalPath(), SHA,
+                        "JOB_INPUT", JOB, "COMMITTED"));
+        when(store.findJob(JOB, false)).thenReturn(foreign);
+        assertEquals("ARCHIVE_RESOURCE_NOT_FOUND", assertThrows(ArchiveMaintenanceException.class,
+                () -> service.operationByKey(MANAGER, "resolve-foreign")).code());
+
+        when(store.findJob(JOB, false)).thenReturn(own);
+        when(store.findOperation(MANAGER, "resolve-revoked")).thenReturn(
+                new ArchiveMaintenanceStore.Operation(false, "POST", pending.canonicalPath(), SHA,
+                        "JOB_INPUT", JOB, "COMMITTED"));
+        when(store.findManagerGrant(eq(MANAGER), eq(COLLECTION), anyBoolean())).thenReturn(
+                new ArchiveManagerGrantRecord(COLLECTION, "0", "client-a", "owner-a",
+                        "job.manage", 4, "REVOKED"));
+        assertEquals("ARCHIVE_FORBIDDEN", assertThrows(ArchiveMaintenanceException.class,
+                () -> service.operationByKey(MANAGER, "resolve-revoked")).code());
+    }
+    @Test
     void operationLookupChecksJobOwnerEvenWithCollectionGrant() {
         allowManager("publish");
         when(store.findOperation(MANAGER, "publish-key")).thenReturn(new ArchiveMaintenanceStore.Operation(
@@ -1183,9 +1237,9 @@ class ArchiveMaintenanceServiceImplTest {
         ArchiveAppointmentRecord active = appointment("ACTIVE", 1);
         activeAppointment(active);
         allowCurrentBinding();
-        when(store.findCollectionWork(COLLECTION, "work-1")).thenReturn(
+        when(store.lockCollectionWork(COLLECTION, "work-1")).thenReturn(
                 new ArchiveMaintenanceStore.CollectionWork(COLLECTION, "work-1", "tiny-book", 1));
-        when(content.findWork("work-1")).thenReturn(new ArchiveWorkRecord("work-1", "小书", null));
+        when(content.lockWork("work-1")).thenReturn(new ArchiveWorkRecord("work-1", "小书", null));
         ArchiveMaintenanceRequest business = new ArchiveMaintenanceRequest(COLLECTION,
                 "REVISE_WORK", null, "work-1", "src_1", "MANUAL");
         java.util.concurrent.atomic.AtomicReference<String> confirmationSha =
@@ -1363,9 +1417,9 @@ class ArchiveMaintenanceServiceImplTest {
         ArchiveAppointmentRecord active = appointment("ACTIVE", 1);
         activeAppointment(active);
         allowCurrentBinding();
-        when(store.findCollectionWork(COLLECTION, "work-1")).thenReturn(
+        when(store.lockCollectionWork(COLLECTION, "work-1")).thenReturn(
                 new ArchiveMaintenanceStore.CollectionWork(COLLECTION, "work-1", "tiny-book", 1));
-        when(content.findWork("work-1")).thenReturn(new ArchiveWorkRecord("work-1", "小书", null));
+        when(content.lockWork("work-1")).thenReturn(new ArchiveWorkRecord("work-1", "小书", null));
         java.util.concurrent.atomic.AtomicReference<ArchiveMaintenanceJobRecord> saved =
                 new java.util.concurrent.atomic.AtomicReference<>();
         when(store.findJobByIntent(eq(MANAGER), eq("confirmed-shared"), eq(true)))
@@ -1401,21 +1455,278 @@ class ArchiveMaintenanceServiceImplTest {
     }
 
     @Test
-    void directRequestRequiresExactCurrentAppointedAgent() {
+    void missingSourceAndAssigneeCreateDurableWaitingJobThenResolveExactCandidateWithoutDispatch() {
+        allowManager("job.create,job.manage");
+        operation("POST", "/archive/admin/v1/collections/" + COLLECTION + "/jobs", "JOB", "aj_waiting");
+        ArgumentCaptor<ArchiveMaintenanceJobRecord> inserted =
+                ArgumentCaptor.forClass(ArchiveMaintenanceJobRecord.class);
+        ArchiveJobDTO waiting = service.createJob(MANAGER, COLLECTION, "create-waiting",
+                new ArchiveJobCreateRequest("ADD_WORK",
+                        new ArchiveNewWorkRequest("waiting-book", "待补底本", null),
+                        null, null, "MANUAL", "intent-waiting"));
+        verify(store).insertJob(inserted.capture());
+        ArchiveMaintenanceJobRecord persisted = inserted.getValue();
+        assertEquals("WAITING_INPUT", waiting.state());
+        assertEquals("SOURCE_AND_ASSIGNEE_REQUIRED", waiting.waitReason());
+        assertNull(waiting.runId());
+        assertNull(waiting.draftId());
+        assertNull(waiting.appointmentId());
+        assertNull(persisted.appointmentRevision());
+        verify(store, never()).insertRun(anyString(), anyString(), anyLong(), anyLong());
+        verify(store, never()).insertDraft(any());
+
+        ArchiveAppointmentRecord active = appointment("ACTIVE", 1);
+        activeAppointment(active);
+        allowCurrentBinding();
+        when(store.findJob(persisted.jobId(), false)).thenReturn(persisted);
+        when(store.findJob(persisted.jobId(), true)).thenReturn(persisted);
+        when(store.resolveWaitingJob(any(), eq(1L))).thenReturn(1);
+        when(store.beginOperation(eq(MANAGER), eq("resolve-waiting"), eq("POST"),
+                eq("/archive/admin/v1/jobs/" + persisted.jobId() + "/resolve-input"),
+                anyString(), eq("JOB_INPUT"), eq(persisted.jobId())))
+                .thenAnswer(call -> new ArchiveMaintenanceStore.Operation(true, "POST",
+                        call.getArgument(3), call.getArgument(4), "JOB_INPUT",
+                        persisted.jobId(), "PENDING"));
+        ArchiveSkillRef skill = new ArchiveSkillRef("archive-maintainer", "1.0.0", SHA);
+        ArchiveJobDTO ready = service.resolveInput(MANAGER, persisted.jobId(), "resolve-waiting", 1,
+                new ArchiveResolveInputRequest("src_1", null, null,
+                        APPOINTMENT, "1", skill));
+
+        assertEquals("WAITING_SKILL", ready.state());
+        assertEquals("CLIENT_UPDATE_REQUIRED", ready.waitReason());
+        assertEquals(APPOINTMENT, ready.appointmentId());
+        assertNotNull(ready.runId());
+        assertNotNull(ready.draftId());
+        ArgumentCaptor<ArchiveMaintenanceJobRecord> resolved =
+                ArgumentCaptor.forClass(ArchiveMaintenanceJobRecord.class);
+        verify(store).resolveWaitingJob(resolved.capture(), eq(1L));
+        assertEquals(AGENT, resolved.getValue().agentId());
+        assertEquals("src_1", resolved.getValue().sourceId());
+        verify(store).insertRun(eq(ready.runId()), eq(persisted.jobId()), eq(1L), eq(1L));
+        verify(store).insertDraft(argThat(draft -> draft.jobId().equals(persisted.jobId())
+                && draft.revision() == 0 && "EDITABLE".equals(draft.state())));
+    }
+
+    @Test
+    void waitingInputsAreFrozenScopedAndNativeExecutionRemainsFailClosed() {
+        allowManager("job.manage");
+        ArchiveMaintenanceJobRecord waiting = new ArchiveMaintenanceJobRecord(
+                JOB, null, COLLECTION, "0", "client-a", "owner-a", null, null,
+                null, null, null, 3, "MANUAL", "REVISE_WORK", "work-1", "tiny-book",
+                "小书", null, null, null, null, "WAITING_INPUT", "SOURCE_REQUIRED",
+                2, null, null, "intent-waiting", "d".repeat(64), AGENT);
+        when(store.findJob(JOB, false)).thenReturn(waiting);
+        when(store.findJob(JOB, true)).thenReturn(waiting);
+        when(store.lockSlot(COLLECTION, "ARCHIVE_EDITOR")).thenReturn(
+                new ArchiveMaintenanceStore.Slot(COLLECTION, "ARCHIVE_EDITOR", null, 2));
+        when(store.beginOperation(eq(MANAGER), eq("resolve-frozen"), eq("POST"), anyString(),
+                anyString(), eq("JOB_INPUT"), eq(JOB)))
+                .thenAnswer(call -> new ArchiveMaintenanceStore.Operation(true, "POST",
+                        call.getArgument(3), call.getArgument(4), "JOB_INPUT", JOB, "PENDING"));
+
+        ArchiveMaintenanceException frozen = assertThrows(ArchiveMaintenanceException.class,
+                () -> service.resolveInput(MANAGER, JOB, "resolve-frozen", 2,
+                        new ArchiveResolveInputRequest("src_1", null, "work-other",
+                                null, null, null)));
+        assertEquals("ARCHIVE_INPUT_FROZEN", frozen.code());
+        verify(store, never()).resolveWaitingJob(any(), anyLong());
+
+        ArchiveAgentExecutionPort port = enableRuntime();
+        ArchiveMaintenanceException nativeDenied = assertThrows(ArchiveMaintenanceException.class,
+                () -> service.runtimeStart(runtime(), JOB, "run-forged",
+                        new ArchiveRuntimeStartRequest("command-a", "message-a", "1", "1")));
+        assertEquals("ARCHIVE_RESOURCE_NOT_FOUND", nativeDenied.code());
+        assertEquals(404, nativeDenied.status(),
+                "native authority must not reveal a management-only waiting job without a run/grant");
+        verifyNoInteractions(port);
+    }
+
+    @Test
+    void waitingJobCanBeCancelledWithoutInventingOrFencingARun() {
+        allowManager("job.manage");
+        ArchiveMaintenanceJobRecord waiting = new ArchiveMaintenanceJobRecord(
+                JOB, null, COLLECTION, "0", "client-a", "owner-a", null, null,
+                null, null, null, 3, "MANUAL", "ADD_WORK", null, null, null,
+                null, null, null, null, "WAITING_INPUT",
+                "SOURCE_AND_WORK_INPUT_AND_ASSIGNEE_REQUIRED", 1, null, null,
+                "intent-cancel", "d".repeat(64), null);
+        ArchiveMaintenanceJobRecord cancelledRecord = new ArchiveMaintenanceJobRecord(
+                waiting.jobId(), null, waiting.collectionId(), waiting.tenantId(),
+                waiting.clientId(), waiting.ownerJiacn(), null, null, null, null, null,
+                waiting.managerAuthorizationRevision(), waiting.publicationMode(),
+                waiting.operation(), null, null, null, null, null, null, null,
+                "CANCELLED", "USER_CANCELLED", 2, null, null,
+                waiting.requestIntentId(), waiting.requestSha256(), null);
+        when(store.findJob(JOB, false)).thenReturn(waiting, cancelledRecord);
+        when(store.findJob(JOB, true)).thenReturn(waiting);
+        when(store.updateJobState(JOB, 1, "CANCELLED", "USER_CANCELLED", null)).thenReturn(1);
+        when(store.beginOperation(eq(MANAGER), eq("cancel-waiting"), eq("POST"),
+                eq("/archive/admin/v1/jobs/" + JOB + "/cancel"), anyString(),
+                eq("JOB"), eq(JOB)))
+                .thenAnswer(call -> new ArchiveMaintenanceStore.Operation(true, "POST",
+                        call.getArgument(3), call.getArgument(4), "JOB", JOB, "PENDING"));
+
+        ArchiveAgentExecutionPort port = enableRuntime();
+        ArchiveJobDTO cancelled = service.cancel(MANAGER, JOB, "cancel-waiting", 1,
+                new ArchiveCancelRequest("not enough source facts"));
+
+        assertEquals("CANCELLED", cancelled.state());
+        assertNull(cancelled.runId());
+        verify(store, never()).fenceRun(anyString());
+        verifyNoInteractions(port);
+        verify(store).updateJobState(JOB, 1, "CANCELLED", "USER_CANCELLED", null);
+    }
+
+    @Test
+    void waitingIntentBindsFirstDirectTargetAndRejectsRetargetOrDifferentCurrentAppointment() {
+        allowManager("job.create,job.manage");
+        java.util.concurrent.atomic.AtomicReference<ArchiveMaintenanceJobRecord> saved =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        when(store.findJobByIntent(eq(MANAGER), eq("waiting-shared"), eq(true)))
+                .thenAnswer(call -> saved.get());
+        when(store.findJob(anyString(), eq(true))).thenAnswer(call -> {
+            ArchiveMaintenanceJobRecord current = saved.get();
+            return current != null && current.jobId().equals(call.getArgument(0)) ? current : null;
+        });
+        when(store.findJob(anyString(), eq(false))).thenAnswer(call -> {
+            ArchiveMaintenanceJobRecord current = saved.get();
+            return current != null && current.jobId().equals(call.getArgument(0)) ? current : null;
+        });
+        doAnswer(call -> { saved.set(call.getArgument(0)); return null; })
+                .when(store).insertJob(any());
+        when(store.bindWaitingJobTarget(anyString(), eq(1L), eq(AGENT))).thenAnswer(call -> {
+            ArchiveMaintenanceJobRecord current = saved.get();
+            saved.set(jobTarget(current, AGENT, 2));
+            return 1;
+        });
+        operation("POST", "/archive/admin/v1/collections/" + COLLECTION + "/jobs",
+                "JOB", "aj_waiting_shared");
+        ArchiveMaintenanceRequest business = new ArchiveMaintenanceRequest(COLLECTION,
+                "ADD_WORK", null, null, null, "MANUAL");
+        ArchiveConfirmedPolicyRef policy = new ArchiveConfirmedPolicyRef(
+                "confirmed:waiting-shared", COLLECTION, "ADD_WORK", null, null, null, "MANUAL");
+        ArchiveJobDTO manager = service.request(new ArchiveRequestContext(MANAGER,
+                "waiting-shared", "MANAGER_UI", null, null, policy), business).job();
+        ArchiveJobDTO songjiang = service.request(new ArchiveRequestContext(MANAGER,
+                "waiting-shared", "SONGJIANG", "conversation-s:1", null, policy), business).job();
+        ArchiveRequestContext directA = new ArchiveRequestContext(MANAGER,
+                "waiting-shared", "DIRECT_PRIVATE", "conversation-d:1", AGENT, policy);
+        ArchiveJobDTO direct = service.request(directA, business).job();
+        ArchiveJobDTO directReplay = service.request(directA, business).job();
+
+        assertEquals(manager.jobId(), songjiang.jobId());
+        assertEquals(manager.jobId(), direct.jobId());
+        assertEquals(direct, directReplay);
+        assertEquals("WAITING_INPUT", manager.state());
+        assertEquals("SOURCE_AND_WORK_INPUT_AND_ASSIGNEE_REQUIRED", manager.waitReason());
+        assertEquals(AGENT, saved.get().targetAgentId());
+        assertEquals("2", direct.revision());
+        ArchiveMaintenanceException retargeted = assertThrows(ArchiveMaintenanceException.class,
+                () -> service.request(new ArchiveRequestContext(MANAGER, "waiting-shared",
+                        "DIRECT_PRIVATE", "conversation-d:2", "agent-c", policy), business));
+        assertEquals("ARCHIVE_INTENT_TARGET_CONFLICT", retargeted.code());
+
+        ArchiveAppointmentRecord appointmentB = new ArchiveAppointmentRecord(APPOINTMENT, COLLECTION,
+                "ARCHIVE_EDITOR", "0", "client-a", "owner-a", "agent-b", "8", "COLLECTION", "",
+                "DRAFT_ONLY", "archive-maintainer", "1.0.0", SHA, "ACTIVE", 1,
+                Instant.parse("2026-09-28T00:00:00Z"), null);
+        activeAppointment(appointmentB);
+        when(identities.requireActiveIdentityForBinding("0", "client-a", "owner-a", 8, "agent-b"))
+                .thenReturn(new AgentIdentityRegistryEntity().setCanonicalAgentId("agent-b"));
+        when(store.beginOperation(eq(MANAGER), eq("resolve-target-b"), eq("POST"),
+                eq("/archive/admin/v1/jobs/" + manager.jobId() + "/resolve-input"), anyString(),
+                eq("JOB_INPUT"), eq(manager.jobId())))
+                .thenAnswer(call -> new ArchiveMaintenanceStore.Operation(true, "POST",
+                        call.getArgument(3), call.getArgument(4), "JOB_INPUT",
+                        manager.jobId(), "PENDING"));
+        ArchiveMaintenanceException changedTarget = assertThrows(ArchiveMaintenanceException.class,
+                () -> service.resolveInput(MANAGER, manager.jobId(), "resolve-target-b", 2,
+                        new ArchiveResolveInputRequest("src_1",
+                                new ArchiveNewWorkRequest("waiting-key", "Waiting Work", null), null,
+                                APPOINTMENT, "1", new ArchiveSkillRef(
+                                        "archive-maintainer", "1.0.0", SHA))));
+        assertEquals("ARCHIVE_TARGET_NOT_APPOINTED", changedTarget.code());
+        verify(store, times(1)).insertJob(any());
+        verify(store, times(1)).bindWaitingJobTarget(manager.jobId(), 1, AGENT);
+        verify(store, never()).resolveWaitingJob(any(), anyLong());
+        verify(store, never()).insertRun(anyString(), anyString(), anyLong(), anyLong());
+        verify(store, never()).insertDraft(any());
+    }
+
+    @Test
+    void resolveInputRejectsRevokedManagerChangedAppointmentAndForeignSource() {
+        ArchiveMaintenanceJobRecord waiting = new ArchiveMaintenanceJobRecord(
+                JOB, null, COLLECTION, "0", "client-a", "owner-a", null, null,
+                null, null, null, 3, "MANUAL", "ADD_WORK", "work-new", "key-new",
+                "New Work", null, null, null, null, "WAITING_INPUT", "SOURCE_REQUIRED",
+                1, null, null, "intent", "d".repeat(64), null);
+        when(store.findJob(JOB, false)).thenReturn(waiting);
+        when(store.findJob(JOB, true)).thenReturn(waiting);
+        when(store.findManagerGrant(eq(MANAGER), eq(COLLECTION), anyBoolean()))
+                .thenReturn(new ArchiveManagerGrantRecord(COLLECTION, "0", "client-a", "owner-a",
+                        "job.manage", 4, "REVOKED"));
+        ArchiveMaintenanceException revoked = assertThrows(ArchiveMaintenanceException.class,
+                () -> service.resolveInput(MANAGER, JOB, "revoked", 1,
+                        new ArchiveResolveInputRequest("src_1", null, null,
+                                null, null, null)));
+        assertEquals(403, revoked.status());
+        verify(store, never()).resolveWaitingJob(any(), anyLong());
+
+        allowManager("job.manage");
+        ArchiveAppointmentRecord changed = appointment("ACTIVE", 2);
+        activeAppointment(changed);
+        allowCurrentBinding();
+        when(store.beginOperation(eq(MANAGER), eq("changed-appointment"), eq("POST"),
+                anyString(), anyString(), eq("JOB_INPUT"), eq(JOB)))
+                .thenAnswer(call -> new ArchiveMaintenanceStore.Operation(true, "POST",
+                        call.getArgument(3), call.getArgument(4), "JOB_INPUT", JOB, "PENDING"));
+        ArchiveMaintenanceException assignment = assertThrows(ArchiveMaintenanceException.class,
+                () -> service.resolveInput(MANAGER, JOB, "changed-appointment", 1,
+                        new ArchiveResolveInputRequest("src_1", null, null,
+                                APPOINTMENT, "1", new ArchiveSkillRef(
+                                        "archive-maintainer", "1.0.0", SHA))));
+        assertEquals("ARCHIVE_ASSIGNMENT_CHANGED", assignment.code());
+
+        ArchiveSourceSnapshotRecord foreign = new ArchiveSourceSnapshotRecord(
+                "src_foreign", COLLECTION, "0", "client-a", "owner-b", "cyf-artifact://foreign",
+                SHA, 1, "foreign", "v1", "authorized", "UTF8_EXACT_V1", "READY");
+        when(store.findSource("src_foreign")).thenReturn(foreign);
+        when(store.beginOperation(eq(MANAGER), eq("foreign-source"), eq("POST"),
+                eq("/archive/admin/v1/jobs/" + JOB + "/resolve-input"), anyString(),
+                eq("JOB_INPUT"), eq(JOB)))
+                .thenAnswer(call -> new ArchiveMaintenanceStore.Operation(true, "POST",
+                        call.getArgument(3), call.getArgument(4), "JOB_INPUT", JOB, "PENDING"));
+        ArchiveMaintenanceException hidden = assertThrows(ArchiveMaintenanceException.class,
+                () -> service.resolveInput(MANAGER, JOB, "foreign-source", 1,
+                        new ArchiveResolveInputRequest("src_foreign", null, null,
+                                null, null, null)));
+        assertEquals("ARCHIVE_RESOURCE_NOT_FOUND", hidden.code());
+    }
+
+    @Test
+    void directRequestRequiresExactCurrentAppointedAgentBeforeIncompleteInputCanWait() {
         allowManager("job.create");
         ArchiveAppointmentRecord active = appointment("ACTIVE", 1);
         activeAppointment(active);
         allowCurrentBinding();
+        when(store.beginOperation(eq(MANAGER), anyString(), eq("POST"),
+                eq("/archive/admin/v1/collections/" + COLLECTION + "/jobs"), anyString(),
+                eq("JOB"), anyString()))
+                .thenAnswer(call -> new ArchiveMaintenanceStore.Operation(true, "POST",
+                        call.getArgument(3), call.getArgument(4), "JOB",
+                        call.getArgument(6), "PENDING"));
         ArchiveRequestContext context = new ArchiveRequestContext(MANAGER, "intent-direct",
                 "DIRECT_PRIVATE", "conversation-1:turn-2", "agent-other",
-                new ArchiveConfirmedPolicyRef("policy-direct", COLLECTION, "REVISE_WORK",
-                        null, "work-1", "src_1", "MANUAL"));
+                new ArchiveConfirmedPolicyRef("policy-direct", COLLECTION, "ADD_WORK",
+                        null, null, null, "MANUAL"));
         ArchiveMaintenanceException denied = assertThrows(ArchiveMaintenanceException.class,
                 () -> service.request(context, new ArchiveMaintenanceRequest(COLLECTION,
-                        "REVISE_WORK", null, "work-1", "src_1", "MANUAL")));
+                        "ADD_WORK", null, null, null, "MANUAL")));
         assertEquals("ARCHIVE_TARGET_NOT_APPOINTED", denied.code());
+        verify(store, never()).findJobByIntent(any(), anyString(), anyBoolean());
         verify(store, never()).insertJob(any());
         verify(store, never()).insertRun(anyString(), anyString(), anyLong(), anyLong());
+        verify(store, never()).insertDraft(any());
     }
 
     private ArchiveAgentExecutionPort enableRuntime() {
@@ -1444,6 +1755,18 @@ class ArchiveMaintenanceServiceImplTest {
                 "{\"blocks\":[],\"excludedSourceRanges\":[]}", SHA, null, null);
     }
 
+    private ArchiveMaintenanceJobRecord jobTarget(ArchiveMaintenanceJobRecord base,
+            String targetAgentId, long revision) {
+        return new ArchiveMaintenanceJobRecord(base.jobId(), base.runId(), base.collectionId(),
+                base.tenantId(), base.clientId(), base.ownerJiacn(), base.appointmentId(),
+                base.appointmentRevision(), base.agentId(), base.bindingVersion(),
+                base.permissionProfile(), base.managerAuthorizationRevision(), base.publicationMode(),
+                base.operation(), base.workId(), base.canonicalKey(), base.title(), base.sourceId(),
+                base.sourceSha256(), base.sourceSummary(), base.rightsBasis(), base.state(),
+                base.waitReason(), revision, base.draftId(), base.publicationId(),
+                base.requestIntentId(), base.requestSha256(), targetAgentId);
+    }
+
     private ArchiveMaintenanceJobRecord jobScope(ArchiveMaintenanceJobRecord base,
             String tenantId, String clientId, String ownerJiacn) {
         return new ArchiveMaintenanceJobRecord(base.jobId(), base.runId(), base.collectionId(),
@@ -1453,7 +1776,7 @@ class ArchiveMaintenanceServiceImplTest {
                 base.workId(), base.canonicalKey(), base.title(), base.sourceId(),
                 base.sourceSha256(), base.sourceSummary(), base.rightsBasis(), base.state(),
                 base.waitReason(), base.revision(), base.draftId(), base.publicationId(),
-                base.requestIntentId(), base.requestSha256());
+                base.requestIntentId(), base.requestSha256(), base.targetAgentId());
     }
 
     private ArchiveMaintenanceJobRecord jobState(String state, String waitReason, long revision) {

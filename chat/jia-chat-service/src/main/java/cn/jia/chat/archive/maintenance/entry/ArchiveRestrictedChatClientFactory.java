@@ -156,9 +156,10 @@ public class ArchiveRestrictedChatClientFactory {
                 @ToolParam(description = "Title for ADD_WORK", required = false) String title,
                 @ToolParam(description = "Language for ADD_WORK", required = false) String language,
                 @ToolParam(description = "Existing work ID for REVISE_WORK", required = false) String workId,
-                @ToolParam(description = "Confirmed private source snapshot ID") String sourceId,
+                @ToolParam(description = "Confirmed private source snapshot ID", required = false) String sourceId,
                 @ToolParam(description = "MANUAL or AUTO, within the confirmed ceiling") String requestedPublicationMode) {
-            ArchiveNewWorkRequest newWork = "ADD_WORK".equals(operation)
+            boolean omittedNewWork = canonicalKey == null && title == null && language == null;
+            ArchiveNewWorkRequest newWork = "ADD_WORK".equals(operation) && !omittedNewWork
                     ? new ArchiveNewWorkRequest(canonicalKey, title, language) : null;
             ArchiveMaintenanceRequestResultDTO result = service.request(context,
                     new ArchiveMaintenanceRequest(collectionId, operation, newWork, workId,

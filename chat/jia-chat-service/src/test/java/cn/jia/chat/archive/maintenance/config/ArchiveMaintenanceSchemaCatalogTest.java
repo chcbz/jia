@@ -46,6 +46,37 @@ class ArchiveMaintenanceSchemaCatalogTest {
         assertEquals(new ArchiveMaintenanceSchemaCatalog.Column("bigint", false, null),
                 expected.tables().get("archive_maintenance_job").columns()
                         .get("manager_authorization_revision"));
+        var job = expected.tables().get("archive_maintenance_job");
+        assertEquals(new ArchiveMaintenanceSchemaCatalog.Column("varchar(100)", true,
+                "utf8mb4_0900_bin"), job.columns().get("target_agent_id"));
+        for (String nullable : java.util.List.of("run_id", "appointment_id",
+                "appointment_revision", "agent_id", "binding_version", "permission_profile",
+                "work_id", "canonical_key", "title", "source_id", "source_sha256",
+                "source_summary", "rights_basis", "draft_id")) {
+            assertTrue(job.columns().get(nullable).nullable(), nullable);
+        }
+        assertTrue(job.checks().get("chk_archive_job_state").contains("WAITING_INPUT"));
+        String waitingShape = job.checks().get("chk_archive_job_waiting_shape");
+        assertTrue(waitingShape.contains("WAITING_ASSIGNEE"));
+        assertTrue(waitingShape.contains("(source_idisnull)or(work_idisnull)"), waitingShape);
+        assertTrue(waitingShape.contains("((run_idisnull)and(draft_idisnull)and(appointment_idisnull))or"
+                + "((run_idisnotnull)and(draft_idisnotnull)and(appointment_idisnotnull)"), waitingShape);
+        var previousWaiting = ArchiveMaintenanceSchemaCatalog.previousWaitingShapeJobTable(expected);
+        assertEquals(job.columns(), previousWaiting.columns());
+        assertEquals(job.indexes(), previousWaiting.indexes());
+        assertEquals(job.foreignKeys(), previousWaiting.foreignKeys());
+        assertTrue(!previousWaiting.checks().get("chk_archive_job_waiting_shape")
+                .contains("(source_idisnull)or(work_idisnull)"));
+        assertTrue(!previousWaiting.checks().get("chk_archive_job_waiting_shape")
+                .contains("((run_idisnull)and(draft_idisnull)and(appointment_idisnull))or"));
+        var legacyJob = ArchiveMaintenanceSchemaCatalog.legacyWaitingJobTable(expected);
+        assertTrue(!legacyJob.columns().containsKey("target_agent_id"));
+        assertTrue(!legacyJob.columns().get("run_id").nullable());
+        assertEquals(Map.of(
+                "chk_archive_job_mode", "YES:" + ArchiveMaintenanceSchemaCatalog.normalizeCheck(
+                        "publication_mode IN ('MANUAL','AUTO')"),
+                "chk_archive_job_revision", "YES:" + ArchiveMaintenanceSchemaCatalog.normalizeCheck(
+                        "revision >= 1")), legacyJob.checks());
         var confirmation = expected.tables().get("archive_confirmed_request");
         assertEquals(new ArchiveMaintenanceSchemaCatalog.Column("longtext", false,
                 "utf8mb4_0900_bin"), confirmation.columns().get("request_json"));

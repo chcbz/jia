@@ -60,7 +60,10 @@ class ArchiveNativeControllerContractTest {
                 fields(ArchiveReassignRequest.class));
         Set<String> adminMethods = Arrays.stream(ArchiveAdminController.class.getDeclaredMethods())
                 .map(java.lang.reflect.Method::getName).collect(Collectors.toSet());
-        assertTrue(adminMethods.containsAll(Set.of("resume", "reassign")));
+        assertTrue(adminMethods.containsAll(Set.of("resolveInput", "resume", "reassign")));
+        assertEquals(Set.of("sourceId", "newWork", "workId", "expectedAppointmentId",
+                        "expectedAppointmentRevision", "expectedSkill"),
+                fields(cn.jia.chat.archive.maintenance.dto.ArchiveResolveInputRequest.class));
     }
     @Test
     void recoveryContextRouteReturnsExactSanitizedShapeAndJobRevisionEtag() {
@@ -162,6 +165,56 @@ class ArchiveNativeControllerContractTest {
                 "draftRevision", "manifestSha256", "sourceSha256", "state", "actorType",
                 "actorId", "authorizationRevision", "publishedAt", "withdrawal"),
                 names(new ObjectMapper().valueToTree(detailResponse.getBody().getData())));
+    }
+
+    @Test
+    void resolveInputUsesJobCasStrictBodyAndReturnsJobEtagWithoutIdentityFields() {
+        ArchiveMaintenanceService service = mock(ArchiveMaintenanceService.class);
+        ArchiveAdminController controller = new ArchiveAdminController(service, new ObjectMapper());
+        var job = new cn.jia.chat.archive.maintenance.dto.ArchiveJobDTO(
+                "job-a", "run-a", "platform-classics", "WAITING_SKILL",
+                "CLIENT_UPDATE_REQUIRED", "8", "appointment-a", "agent-a", "DRAFT_ONLY",
+                "MANUAL", "ADD_WORK", "work-a", "work-key", "Work", "source-a",
+                "draft-a", null);
+        when(service.resolveInput(any(), eq("job-a"), eq("resolve-key"), eq(7L), any()))
+                .thenReturn(job);
+        byte[] body = ("{\"sourceId\":\"source-a\",\"newWork\":{" +
+                "\"canonicalKey\":\"work-key\",\"title\":\"Work\",\"language\":null}," +
+                "\"workId\":null,\"expectedAppointmentId\":\"appointment-a\"," +
+                "\"expectedAppointmentRevision\":\"3\",\"expectedSkill\":{" +
+                "\"key\":\"archive-maintainer\",\"version\":\"1.0.0\"," +
+                "\"packageSha256\":\"" + "a".repeat(64) + "\"}}")
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+        var response = controller.resolveInput("job-a", "resolve-key", "\"v7\"",
+                body, authenticatedJwt());
+
+        assertEquals("\"v8\"", response.getHeaders().getETag());
+        assertEquals("private, no-store", response.getHeaders().getCacheControl());
+        ArgumentCaptor<cn.jia.chat.archive.maintenance.dto.ArchiveResolveInputRequest> request =
+                ArgumentCaptor.forClass(cn.jia.chat.archive.maintenance.dto.ArchiveResolveInputRequest.class);
+        verify(service).resolveInput(any(), eq("job-a"), eq("resolve-key"), eq(7L), request.capture());
+        assertEquals("source-a", request.getValue().sourceId());
+        assertEquals("appointment-a", request.getValue().expectedAppointmentId());
+        assertEquals("3", request.getValue().expectedAppointmentRevision());
+        assertEquals("archive-maintainer", request.getValue().expectedSkill().key());
+        var json = new ObjectMapper().valueToTree(response.getBody().getData());
+        assertEquals(Set.of("jobId", "runId", "collectionId", "state", "waitReason", "revision",
+                "appointmentId", "assignedAgentId", "permissionProfile", "publicationMode",
+                "operation", "workId", "canonicalKey", "title", "sourceId", "draftId",
+                "publicationId"), names(json));
+        assertFalse(json.toString().contains("ownerJiacn"));
+        assertFalse(json.toString().contains("tenantId"));
+
+        byte[] injected = "{\"sourceId\":\"source-a\",\"ownerJiacn\":\"forged\"}"
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        assertEquals("INVALID_REQUEST", assertThrows(ArchiveMaintenanceException.class,
+                () -> controller.resolveInput("job-a", "other", "\"v7\"",
+                        injected, authenticatedJwt())).code());
+        assertEquals("INVALID_CONDITIONAL_HEADER", assertThrows(ArchiveMaintenanceException.class,
+                () -> controller.resolveInput("job-a", "other", "\"7\"",
+                        "{}".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                        authenticatedJwt())).code());
     }
 
     @Test

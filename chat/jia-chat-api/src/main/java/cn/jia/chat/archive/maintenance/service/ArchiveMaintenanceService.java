@@ -29,6 +29,7 @@ public interface ArchiveMaintenanceService {
             String entryPoint, String targetAgentId, Supplier<String> canonicalMessageIdWriter);
     ArchiveMaintenanceRequestResultDTO request(ArchiveRequestContext context, ArchiveMaintenanceRequest request);
     ArchiveJobDTO getJob(ArchiveActorScope actor,String jobId);
+    ArchiveJobDTO resolveInput(ArchiveActorScope actor,String jobId,String operationKey,long expectedJobRevision,ArchiveResolveInputRequest request);
     ArchiveRecoveryContextDTO recoveryContext(ArchiveActorScope actor,String jobId);
     ArchiveExecutionDTO ensureExecution(ArchiveActorScope actor,String jobId,String operationKey,long expectedJobRevision);
     ArchiveExecutionRecoveryDTO resume(ArchiveActorScope actor,String jobId,String operationKey,long expectedJobRevision,ArchiveResumeRequest request);

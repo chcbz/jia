@@ -396,7 +396,9 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         String requestSha = sha(request == null ? new ArchiveAppointmentRevokeRequest(null) : request);
         ArchiveAppointmentRecord observed = requireAppointmentForActor(actor, appointmentId, false);
         return transactions.required(() -> {
-            if (executionEnabled) requireExecutionPort().lockIdentityRoot(target(observed));
+            if (executionEnabled) {
+                requireExecutionPort().lockIdentityRoot(target(observed));
+            }
             requireManager(actor, observed.collectionId(), "appoint", true);
             ArchiveMaintenanceStore.Operation operation = operation(actor, key, "POST",
                     "/archive/admin/v1/appointments/" + appointmentId + "/revoke",
@@ -494,60 +496,66 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         String requestSha = sha(request);
         return transactions.required(() -> {
             ArchiveManagerGrantRecord manager = requireManager(actor, collectionId, "job.create", true);
-            ArchiveAppointmentRecord appointment = requireCurrentAppointment(collectionId, true);
-            requireSameOwner(actor, appointment);
-            requireCurrentBinding(appointment);
-            if (expectedTargetAgentId != null && !expectedTargetAgentId.equals(appointment.agentId())) {
-                forbidden("ARCHIVE_TARGET_NOT_APPOINTED",
-                        "Direct archive target is not the current appointment");
+            // Every entry takes manager -> slot/appointment -> intent-job in the same order.
+            ArchiveAppointmentRecord appointment = currentAppointment(collectionId, true);
+            if (appointment != null && expectedTargetAgentId != null) {
+                requireSameOwner(actor, appointment);
+                requireCurrentBinding(appointment);
+                requireTargetAppointment(expectedTargetAgentId, appointment);
             }
             ArchiveMaintenanceJobRecord prior = store.findJobByIntent(actor, request.requestIntentId(), true);
             if (prior != null) {
                 if (!prior.requestSha256().equals(requestSha)) {
                     conflict("IDEMPOTENCY_CONFLICT", "Request intent was already used with different content");
                 }
-                return jobDto(prior);
+                return jobDto(bindOrVerifyDirectTarget(actor, prior, expectedTargetAgentId));
             }
             String jobId = newId("aj");
-            String runId = newId("ar");
-            String draftId = newId("ad");
             ArchiveMaintenanceStore.Operation operation = operation(actor, key, "POST",
                     "/archive/admin/v1/collections/" + collectionId + "/jobs",
                     requestSha, "JOB", jobId);
             if (!operation.created()) return jobDto(requireJobForActor(actor, operation.targetId(), false));
-            String workId = request.workId();
-            String canonical;
-            String title;
-            if ("ADD_WORK".equals(request.operation())) {
-                workId = newId("wrk");
-                canonical = request.newWork().canonicalKey();
-                title = request.newWork().title();
-            } else {
-                ArchiveMaintenanceStore.CollectionWork cw = store.findCollectionWork(collectionId, workId);
-                if (cw == null) notFound();
-                canonical = cw.canonicalKey();
-                ArchiveWorkRecord work = content.findWork(workId);
-                if (work == null) notFound();
-                title = work.title();
+
+            ResolvedWork work = resolveRequestedWork(collectionId, request.operation(),
+                    request.newWork(), request.workId());
+            ArchiveSourceSnapshotRecord source = request.sourceId() == null ? null
+                    : requireSourceSnapshot(request.sourceId(), actor, collectionId);
+            boolean inputsComplete = work != null && source != null;
+            if (inputsComplete && appointment != null) {
+                if (expectedTargetAgentId == null) {
+                    requireSameOwner(actor, appointment);
+                    requireCurrentBinding(appointment);
+                }
+                authorizeWorkScope(appointment, work.workId(), "ADD_WORK".equals(request.operation()));
             }
-            authorizeWorkScope(appointment, workId, "ADD_WORK".equals(request.operation()));
-            ArchiveSourceSnapshotRecord source = requireSourceSnapshot(request.sourceId(), actor, collectionId);
+
+            String state = inputsComplete
+                    ? (appointment == null ? "WAITING_ASSIGNEE" : "WAITING_SKILL")
+                    : "WAITING_INPUT";
+            String waitReason = waitReason(work == null, source == null,
+                    appointment == null);
+            boolean ready = "WAITING_SKILL".equals(state);
+            String runId = ready ? newId("ar") : null;
+            String draftId = ready ? newId("ad") : null;
             ArchiveMaintenanceJobRecord job = new ArchiveMaintenanceJobRecord(jobId, runId,
                     collectionId, actor.tenantId(), actor.clientId(), actor.ownerJiacn(),
-                    appointment.appointmentId(), appointment.revision(), appointment.agentId(),
-                    appointment.bindingVersion(), appointment.permissionProfile(), manager.revision(),
-                    request.publicationMode(), request.operation(), workId, canonical, title,
-                    source.sourceId(), source.rawSha256(), source.sourceName() + " / " + source.sourceVersion(),
-                    source.rightsBasis(),
-                    "WAITING_SKILL", "CLIENT_UPDATE_REQUIRED", 1, draftId, null,
-                    request.requestIntentId(), requestSha);
+                    ready ? appointment.appointmentId() : null,
+                    ready ? appointment.revision() : null,
+                    ready ? appointment.agentId() : null,
+                    ready ? appointment.bindingVersion() : null,
+                    ready ? appointment.permissionProfile() : null,
+                    manager.revision(), request.publicationMode(), request.operation(),
+                    work == null ? null : work.workId(),
+                    work == null ? null : work.canonicalKey(),
+                    work == null ? null : work.title(),
+                    source == null ? null : source.sourceId(),
+                    source == null ? null : source.rawSha256(),
+                    source == null ? null : source.sourceName() + " / " + source.sourceVersion(),
+                    source == null ? null : source.rightsBasis(), state, waitReason, 1,
+                    draftId, null, request.requestIntentId(), requestSha, expectedTargetAgentId);
             store.insertJob(job);
-            store.insertRun(runId, jobId, 1, appointment.revision());
-            ArchiveDraftUpdateRequest empty = new ArchiveDraftUpdateRequest(List.of(), List.of());
-            String json = json(empty);
-            store.insertDraft(new ArchiveDraftRecord(draftId, jobId, 0, "EDITABLE",
-                    json, digest(json), null, null));
-            store.appendJobEvent(jobId, 1, "JOB_CREATED", json(Map.of("state", job.state())));
+            if (ready) createInitialCandidate(job);
+            store.appendJobEvent(jobId, 1, "JOB_CREATED", jobStateEvent(job));
             store.commitOperation(actor, key, jobId);
             return jobDto(job);
         });
@@ -647,8 +655,13 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         ArchiveJobDTO job = createJobAuthorized(actor, request.collectionId(), requestKey,
                 create, context.targetAgentId());
         if (!"WAITING_SKILL".equals(job.state())) {
+            String nextAction = switch (job.state()) {
+                case "WAITING_INPUT" -> "RESOLVE_INPUT";
+                case "WAITING_ASSIGNEE" -> "APPOINT_EDITOR";
+                default -> "GET_JOB";
+            };
             return new ArchiveMaintenanceRequestResultDTO(job, null,
-                    job.waitReason(), "GET_JOB");
+                    job.waitReason(), nextAction);
         }
         try {
             ArchiveExecutionDTO execution = ensureExecution(actor, job.jobId(),
@@ -721,6 +734,7 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         }
         String path = "/archive/admin/v1/jobs/" + jobId + "/execute";
         ArchiveMaintenanceJobRecord observed = requireJobForActor(actor, jobId, false);
+        requireExecutionCandidate(observed);
         ExecutionAdmission admission = transactions.required(() -> {
             ArchiveAgentExecutionPort.TargetRequest target = target(observed);
             ArchiveAgentExecutionPort.LockedIdentityRoot root = executionPort.lockIdentityRoot(target);
@@ -833,6 +847,7 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         requireKey(key);
         ArchiveMaintenanceJobRecord observed = requireJobForActor(actor, jobId, false);
         requireManager(actor, observed.collectionId(), "job.manage", false);
+        requireExecutionCandidate(observed);
         ArchiveAppointmentRecord desiredObserved = reassign == null
                 ? requireAppointmentForActor(actor, observed.appointmentId(), false)
                 : requireAppointmentForActor(actor, reassign.newAppointmentId(), false);
@@ -946,11 +961,92 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
     }
 
     @Override
+    public ArchiveJobDTO resolveInput(ArchiveActorScope actor, String jobId, String key,
+            long expectedJobRevision, ArchiveResolveInputRequest request) {
+        requireScope(actor);
+        exactId(jobId);
+        requireKey(key);
+        validateResolveInputRequest(request);
+        ArchiveMaintenanceJobRecord observed = requireJobForActor(actor, jobId, false);
+        requireManager(actor, observed.collectionId(), "job.manage", false);
+        String path = "/archive/admin/v1/jobs/" + jobId + "/resolve-input";
+        String requestSha = digest(expectedJobRevision + ":" + sha(request));
+        return transactions.required(() -> {
+            ArchiveManagerGrantRecord manager = requireManager(actor, observed.collectionId(),
+                    "job.manage", true);
+            ArchiveAppointmentRecord appointment = currentAppointment(observed.collectionId(), true);
+            ArchiveMaintenanceJobRecord job = requireJobForActor(actor, jobId, true);
+            ArchiveMaintenanceStore.Operation operation = operation(actor, key, "POST", path,
+                    requestSha, "JOB_INPUT", jobId);
+            if (!operation.created()) return jobDto(job);
+            if (job.revision() != expectedJobRevision) revisionConflict(job.revision());
+            if (!Set.of("WAITING_INPUT", "WAITING_ASSIGNEE").contains(job.state())
+                    || job.runId() != null || job.draftId() != null || job.publicationId() != null) {
+                conflict("ARCHIVE_JOB_NOT_WAITING_INPUT",
+                        "Archive job inputs cannot be replaced after a candidate exists");
+            }
+
+            ResolvedWork work = resolvePersistedWork(job, request);
+            ArchiveSourceSnapshotRecord source = resolvePersistedSource(actor, job, request);
+            boolean inputsComplete = work != null && source != null;
+            if (inputsComplete && appointment != null) {
+                requireSameOwner(actor, appointment);
+                requireCurrentBinding(appointment);
+                requireTargetAppointment(job.targetAgentId(), appointment);
+                requireResolveAppointmentSnapshot(request, appointment);
+                authorizeWorkScope(appointment, work.workId(), "ADD_WORK".equals(job.operation()));
+            } else if (inputsComplete && hasAppointmentSnapshot(request)) {
+                conflict("ARCHIVE_ASSIGNMENT_CHANGED",
+                        "The requested archive appointment is not currently assigned");
+            }
+
+            String state = inputsComplete
+                    ? (appointment == null ? "WAITING_ASSIGNEE" : "WAITING_SKILL")
+                    : "WAITING_INPUT";
+            String waitReason = waitReason(work == null, source == null,
+                    appointment == null);
+            boolean ready = "WAITING_SKILL".equals(state);
+            String runId = ready ? newId("ar") : null;
+            String draftId = ready ? newId("ad") : null;
+            ArchiveMaintenanceJobRecord resolved = new ArchiveMaintenanceJobRecord(
+                    job.jobId(), runId, job.collectionId(), job.tenantId(), job.clientId(),
+                    job.ownerJiacn(), ready ? appointment.appointmentId() : null,
+                    ready ? appointment.revision() : null,
+                    ready ? appointment.agentId() : null,
+                    ready ? appointment.bindingVersion() : null,
+                    ready ? appointment.permissionProfile() : null,
+                    manager.revision(), job.publicationMode(), job.operation(),
+                    work == null ? null : work.workId(),
+                    work == null ? null : work.canonicalKey(),
+                    work == null ? null : work.title(),
+                    source == null ? null : source.sourceId(),
+                    source == null ? null : source.rawSha256(),
+                    source == null ? null : source.sourceName() + " / " + source.sourceVersion(),
+                    source == null ? null : source.rightsBasis(), state, waitReason,
+                    job.revision() + 1, draftId, null, job.requestIntentId(),
+                    job.requestSha256(), job.targetAgentId());
+            if (!ready && sameWaitingFacts(job, resolved)) {
+                conflict("ARCHIVE_INPUT_INCOMPLETE",
+                        "Archive input or an exact current appointment is still required");
+            }
+            if (store.resolveWaitingJob(resolved, job.revision()) != 1) {
+                conflict("ARCHIVE_JOB_CHANGED", "Archive job changed during input resolution");
+            }
+            if (ready) createInitialCandidate(resolved);
+            store.appendJobEvent(job.jobId(), resolved.revision(), "JOB_INPUT_RESOLVED",
+                    jobStateEvent(resolved));
+            store.commitOperation(actor, key, jobId);
+            return jobDto(resolved);
+        });
+    }
+
+    @Override
     public ArchiveRecoveryContextDTO recoveryContext(ArchiveActorScope actor, String jobId) {
         requireScope(actor);
         exactId(jobId);
         ArchiveMaintenanceJobRecord job = requireJobForActor(actor, jobId, false);
         requireManager(actor, job.collectionId(), "job.manage", false);
+        requireExecutionCandidate(job);
         ArchiveAppointmentRecord previous = requireAppointmentForActor(
                 actor, job.appointmentId(), false);
         if (!same(job.collectionId(), previous.collectionId())) notFound();
@@ -1048,6 +1144,9 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         java.util.regex.Matcher appointment = Pattern.compile(
                 "^/archive/admin/v1/appointments/([A-Za-z0-9._:-]{1,100})/revoke$")
                 .matcher(path);
+        java.util.regex.Matcher jobInput = Pattern.compile(
+                "^/archive/admin/v1/jobs/([A-Za-z0-9._:-]{1,100})/resolve-input$")
+                .matcher(path);
         java.util.regex.Matcher job = Pattern.compile(
                 "^/archive/admin/v1/jobs/([A-Za-z0-9._:-]{1,100})/(draft|validate|publish|cancel|execute|resume|reassign)$")
                 .matcher(path);
@@ -1065,6 +1164,12 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         } else if (appointment.matches()) {
             ArchiveAppointmentRecord target = requireAppointmentForActor(actor, appointment.group(1), false);
             requireManager(actor, target.collectionId(), "appoint", false);
+        } else if (jobInput.matches()) {
+            if (!"JOB_INPUT".equals(op.targetType()) || !jobInput.group(1).equals(op.targetId())) {
+                notFound();
+            }
+            ArchiveMaintenanceJobRecord target = requireJobForActor(actor, jobInput.group(1), false);
+            requireManager(actor, target.collectionId(), "job.manage", false);
         } else if (job.matches()) {
             ArchiveMaintenanceJobRecord target = requireJobForActor(actor, job.group(1), false);
             String permission = switch (job.group(2)) {
@@ -1101,7 +1206,9 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         }
         ArchiveMaintenanceJobRecord observed = requireJobForActor(actor, jobId, false);
         return transactions.required(() -> {
-            if (executionEnabled) requireExecutionPort().lockIdentityRoot(target(observed));
+            if (executionEnabled && observed.runId() != null) {
+                requireExecutionPort().lockIdentityRoot(target(observed));
+            }
             requireManager(actor, observed.collectionId(), "job.manage", true);
             // Agent root was acquired first when an active execution exists; archive order is manager -> slot -> job -> run -> grant.
             store.lockSlot(observed.collectionId(), ROLE);
@@ -1115,7 +1222,7 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
                     || "CANCELLED".equals(job.state())) {
                 conflict("ARCHIVE_JOB_NOT_MUTABLE", "Published or cancelled jobs cannot be cancelled");
             }
-            if (store.fenceRun(job.runId()) != 1
+            if ((job.runId() != null && store.fenceRun(job.runId()) != 1)
                     || store.updateJobState(jobId, job.revision(), "CANCELLED", "USER_CANCELLED", null) != 1) {
                 conflict("ARCHIVE_JOB_CHANGED", "Archive execution changed during cancellation");
             }
@@ -1340,7 +1447,7 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         exactId(runId);
         validateStart(runtime, request);
         ArchiveMaintenanceJobRecord observed = requireJob(jobId, false);
-        if (!observed.runId().equals(runId)) notFound();
+        if (observed.runId() == null || !same(observed.runId(), runId)) notFound();
         requireRuntimeJobScope(runtime, observed);
         return transactions.required(() -> {
             ArchiveAgentExecutionPort.LockedTarget lockedTarget = lockControlledTarget(target(observed));
@@ -1386,7 +1493,8 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         exactId(runId);
         validateFailure(request);
         ArchiveMaintenanceJobRecord observed = requireJob(jobId, false);
-        if (!observed.runId().equals(runId)) notFound();
+        requireExecutionCandidate(observed);
+        if (!same(observed.runId(), runId)) notFound();
         requireRuntimeJobScope(runtime, observed);
         return transactions.required(() -> {
             ArchiveAgentExecutionPort.LockedTarget lockedTarget = lockControlledTarget(target(observed));
@@ -1428,7 +1536,8 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         exactId(jobId);
         exactId(runId);
         ArchiveMaintenanceJobRecord observed = requireJob(jobId, false);
-        if (!observed.runId().equals(runId)) notFound();
+        requireExecutionCandidate(observed);
+        if (!same(observed.runId(), runId)) notFound();
         requireRuntimeJobScope(runtime, observed);
         return transactions.required(() -> {
             ArchiveAgentExecutionPort.LockedTarget lockedTarget = lockControlledTarget(target(observed));
@@ -1448,7 +1557,8 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         exactId(jobId);
         exactId(runId);
         ArchiveMaintenanceJobRecord observed = requireJob(jobId, false);
-        if (!observed.runId().equals(runId)) notFound();
+        requireExecutionCandidate(observed);
+        if (!same(observed.runId(), runId)) notFound();
         requireRuntimeJobScope(runtime, observed);
         return transactions.required(() -> {
             ArchiveAgentExecutionPort.LockedTarget lockedTarget = lockControlledTarget(target(observed));
@@ -1551,7 +1661,8 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         String requestSha = publicationRequestSha(expectedDraftRevision, request);
         ArchivePublicationDTO replay = transactions.required(() -> {
             ArchiveMaintenanceJobRecord observed = requireJob(jobId, false);
-            if (!observed.runId().equals(runId)) notFound();
+            requireExecutionCandidate(observed);
+            if (!same(observed.runId(), runId)) notFound();
             requireRuntimeJobScope(runtime, observed);
             ArchiveAgentExecutionPort.LockedTarget lockedTarget = lockControlledTarget(target(observed));
             ArchiveManagerGrantRecord manager = requireManager(actor(runtime), observed.collectionId(),
@@ -1566,7 +1677,8 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         if (replay != null) return replay;
 
         ArchiveMaintenanceJobRecord candidateJob = requireJob(jobId, false);
-        if (!candidateJob.runId().equals(runId)) notFound();
+        requireExecutionCandidate(candidateJob);
+        if (!same(candidateJob.runId(), runId)) notFound();
         requireRuntimeJobScope(runtime, candidateJob);
         PublicationCandidate candidate = preparePublicationCandidate(
                 candidateJob, expectedDraftRevision, request);
@@ -1725,7 +1837,8 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             String jobId, String runId) {
         requireRuntime(runtime);
         ArchiveMaintenanceJobRecord observed = requireJob(jobId, false);
-        if (!observed.runId().equals(runId)) notFound();
+        requireExecutionCandidate(observed);
+        if (!same(observed.runId(), runId)) notFound();
         requireRuntimeJobScope(runtime, observed);
         return transactions.required(() -> {
             ArchiveAgentExecutionPort.LockedTarget lockedTarget = lockControlledTarget(target(observed));
@@ -1792,6 +1905,14 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
     }
 
     private ArchiveAppointmentRecord requireCurrentAppointment(String collectionId, boolean lock) {
+        ArchiveAppointmentRecord current = currentAppointment(collectionId, lock);
+        if (current == null) {
+            forbidden("ARCHIVE_APPOINTMENT_REQUIRED", "An active archive editor appointment is required");
+        }
+        return current;
+    }
+
+    private ArchiveAppointmentRecord currentAppointment(String collectionId, boolean lock) {
         ArchiveAppointmentRecord current;
         if (lock) {
             ArchiveMaintenanceStore.Slot slot = store.lockSlot(collectionId, ROLE);
@@ -1800,10 +1921,7 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         } else {
             current = store.findCurrentAppointment(collectionId, false);
         }
-        if (current == null || !"ACTIVE".equals(current.status())) {
-            forbidden("ARCHIVE_APPOINTMENT_REQUIRED", "An active archive editor appointment is required");
-        }
-        return current;
+        return current != null && "ACTIVE".equals(current.status()) ? current : null;
     }
 
     private ArchiveAppointmentRecord requireCurrentAppointmentForJob(
@@ -2264,18 +2382,218 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         if (request == null
                 || !("ADD_WORK".equals(request.operation()) || "REVISE_WORK".equals(request.operation()))
                 || !("MANUAL".equals(request.publicationMode()) || "AUTO".equals(request.publicationMode()))
-                || !ID.matcher(String.valueOf(request.sourceId())).matches()
                 || !exact(request.requestIntentId(), 100)) {
             invalid("Invalid archive maintenance job request");
         }
+        if (request.sourceId() != null) exactId(request.sourceId());
         if ("ADD_WORK".equals(request.operation())) {
-            if (request.newWork() == null || !exact(request.newWork().canonicalKey(), 128)
-                    || !exact(request.newWork().title(), 255)) {
-                invalid("New work metadata is required");
-            }
+            if (request.workId() != null) invalid("ADD_WORK cannot identify an existing work");
+            if (request.newWork() != null) validateNewWork(request.newWork());
         } else {
-            exactId(request.workId());
+            if (request.newWork() != null) invalid("REVISE_WORK cannot define a new work");
+            if (request.workId() != null) exactId(request.workId());
         }
+    }
+
+    private void validateResolveInputRequest(ArchiveResolveInputRequest request) {
+        if (request == null) invalid("Archive input resolution body is required");
+        if (request.sourceId() != null) exactId(request.sourceId());
+        if (request.workId() != null) exactId(request.workId());
+        if (request.newWork() != null) validateNewWork(request.newWork());
+        boolean anyAppointment = request.expectedAppointmentId() != null
+                || request.expectedAppointmentRevision() != null || request.expectedSkill() != null;
+        if (anyAppointment) {
+            if (!ID.matcher(String.valueOf(request.expectedAppointmentId())).matches()
+                    || request.expectedAppointmentRevision() == null
+                    || request.expectedSkill() == null) {
+                invalid("Exact current appointment and skill snapshot are required");
+            }
+            parsePositive(request.expectedAppointmentRevision(), "expectedAppointmentRevision");
+            validateSkillRef(request.expectedSkill());
+        }
+    }
+
+    private void validateNewWork(ArchiveNewWorkRequest work) {
+        if (work == null || !exact(work.canonicalKey(), 128) || !exact(work.title(), 255)
+                || (work.language() != null && !exact(work.language(), 40))) {
+            invalid("New work metadata is required");
+        }
+    }
+
+    private ResolvedWork resolveRequestedWork(String collectionId, String operation,
+            ArchiveNewWorkRequest newWork, String workId) {
+        if ("ADD_WORK".equals(operation)) {
+            return newWork == null ? null
+                    : new ResolvedWork(newId("wrk"), newWork.canonicalKey(), newWork.title());
+        }
+        if (workId == null) return null;
+        ArchiveMaintenanceStore.CollectionWork collectionWork =
+                store.lockCollectionWork(collectionId, workId);
+        ArchiveWorkRecord work = content.lockWork(workId);
+        if (collectionWork == null || work == null) notFound();
+        return new ResolvedWork(workId, collectionWork.canonicalKey(), work.title());
+    }
+
+    private ResolvedWork resolvePersistedWork(ArchiveMaintenanceJobRecord job,
+            ArchiveResolveInputRequest request) {
+        if (job.workId() != null) {
+            if ("ADD_WORK".equals(job.operation())) {
+                if (request.workId() != null
+                        || (request.newWork() != null
+                        && (!same(job.canonicalKey(), request.newWork().canonicalKey())
+                        || !same(job.title(), request.newWork().title())))) {
+                    conflict("ARCHIVE_INPUT_FROZEN", "Archive work input is already frozen");
+                }
+                return new ResolvedWork(job.workId(), job.canonicalKey(), job.title());
+            }
+            if (request.newWork() != null
+                    || (request.workId() != null && !same(job.workId(), request.workId()))) {
+                conflict("ARCHIVE_INPUT_FROZEN", "Archive work input is already frozen");
+            }
+            ArchiveMaintenanceStore.CollectionWork collectionWork =
+                    store.lockCollectionWork(job.collectionId(), job.workId());
+            ArchiveWorkRecord work = content.lockWork(job.workId());
+            if (collectionWork == null || work == null
+                    || !same(job.canonicalKey(), collectionWork.canonicalKey())
+                    || !same(job.title(), work.title())) {
+                conflict("ARCHIVE_WORK_CHANGED", "Archive work input no longer matches the job");
+            }
+            return new ResolvedWork(job.workId(), job.canonicalKey(), job.title());
+        }
+        if ("ADD_WORK".equals(job.operation())) {
+            if (request.workId() != null) invalid("ADD_WORK cannot identify an existing work");
+            return request.newWork() == null ? null
+                    : new ResolvedWork(newId("wrk"), request.newWork().canonicalKey(),
+                            request.newWork().title());
+        }
+        if (request.newWork() != null) invalid("REVISE_WORK cannot define a new work");
+        return request.workId() == null ? null : resolveRequestedWork(job.collectionId(),
+                job.operation(), null, request.workId());
+    }
+
+    private ArchiveSourceSnapshotRecord resolvePersistedSource(ArchiveActorScope actor,
+            ArchiveMaintenanceJobRecord job, ArchiveResolveInputRequest request) {
+        if (job.sourceId() == null) {
+            return request.sourceId() == null ? null
+                    : requireSourceSnapshot(request.sourceId(), actor, job.collectionId());
+        }
+        if (request.sourceId() != null && !same(job.sourceId(), request.sourceId())) {
+            conflict("ARCHIVE_INPUT_FROZEN", "Archive source snapshot is already frozen");
+        }
+        ArchiveSourceSnapshotRecord source = requireSourceSnapshot(job.sourceId(), actor,
+                job.collectionId());
+        if (!same(job.sourceSha256(), source.rawSha256())
+                || !same(job.sourceSummary(), source.sourceName() + " / " + source.sourceVersion())
+                || !same(job.rightsBasis(), source.rightsBasis())) {
+            conflict("ARCHIVE_SOURCE_CHANGED", "Archive source snapshot no longer matches the job");
+        }
+        return source;
+    }
+
+    private void createInitialCandidate(ArchiveMaintenanceJobRecord job) {
+        if (job.runId() == null || job.draftId() == null || job.appointmentRevision() == null) {
+            throw new IllegalStateException("Ready archive job is missing its candidate identity");
+        }
+        store.insertRun(job.runId(), job.jobId(), 1, job.appointmentRevision());
+        ArchiveDraftUpdateRequest empty = new ArchiveDraftUpdateRequest(List.of(), List.of());
+        String json = json(empty);
+        store.insertDraft(new ArchiveDraftRecord(job.draftId(), job.jobId(), 0, "EDITABLE",
+                json, digest(json), null, null));
+    }
+
+    private ArchiveMaintenanceJobRecord bindOrVerifyDirectTarget(ArchiveActorScope actor,
+            ArchiveMaintenanceJobRecord prior, String expectedTargetAgentId) {
+        if (expectedTargetAgentId == null) return prior;
+        if (prior.targetAgentId() != null) {
+            if (!same(prior.targetAgentId(), expectedTargetAgentId)) {
+                conflict("ARCHIVE_INTENT_TARGET_CONFLICT",
+                        "Request intent is already bound to a different direct target");
+            }
+            return prior;
+        }
+        if (prior.runId() != null || prior.draftId() != null || prior.appointmentId() != null) {
+            if (!same(prior.agentId(), expectedTargetAgentId)) {
+                conflict("ARCHIVE_INTENT_TARGET_CONFLICT",
+                        "Existing archive candidate does not match the direct target");
+            }
+            return prior;
+        }
+        if (!Set.of("WAITING_INPUT", "WAITING_ASSIGNEE").contains(prior.state())
+                || store.bindWaitingJobTarget(prior.jobId(), prior.revision(), expectedTargetAgentId) != 1) {
+            conflict("ARCHIVE_INTENT_TARGET_CONFLICT",
+                    "Waiting archive intent could not be bound to the direct target");
+        }
+        long revision = prior.revision() + 1;
+        store.appendJobEvent(prior.jobId(), revision, "DIRECT_TARGET_BOUND",
+                json(Map.of("targetAgentId", expectedTargetAgentId)));
+        ArchiveMaintenanceJobRecord bound = requireJobForActor(actor, prior.jobId(), true);
+        if (bound.revision() != revision || !same(bound.targetAgentId(), expectedTargetAgentId)
+                || bound.runId() != null || bound.draftId() != null || bound.appointmentId() != null) {
+            conflict("ARCHIVE_INTENT_TARGET_CONFLICT",
+                    "Waiting archive intent target changed during binding");
+        }
+        return bound;
+    }
+    private void requireTargetAppointment(String expectedTargetAgentId,
+            ArchiveAppointmentRecord appointment) {
+        if (expectedTargetAgentId != null
+                && !expectedTargetAgentId.equals(appointment.agentId())) {
+            forbidden("ARCHIVE_TARGET_NOT_APPOINTED",
+                    "Direct archive target is not the current appointment");
+        }
+    }
+
+    private boolean hasAppointmentSnapshot(ArchiveResolveInputRequest request) {
+        return request.expectedAppointmentId() != null
+                || request.expectedAppointmentRevision() != null || request.expectedSkill() != null;
+    }
+
+    private void requireResolveAppointmentSnapshot(ArchiveResolveInputRequest request,
+            ArchiveAppointmentRecord appointment) {
+        if (!hasAppointmentSnapshot(request)) {
+            throw error(428, "PRECONDITION_REQUIRED",
+                    "Exact current appointment and skill snapshot are required");
+        }
+        if (!same(appointment.appointmentId(), request.expectedAppointmentId())
+                || appointment.revision() != parsePositive(request.expectedAppointmentRevision(),
+                        "expectedAppointmentRevision")) {
+            conflict("ARCHIVE_ASSIGNMENT_CHANGED",
+                    "Expected archive appointment snapshot is no longer current");
+        }
+        requireRequestedSkill(appointment, request.expectedSkill());
+    }
+
+    private String waitReason(boolean missingWork, boolean missingSource,
+            boolean missingAssignee) {
+        List<String> missing = new ArrayList<>();
+        if (missingSource) missing.add("SOURCE");
+        if (missingWork) missing.add("WORK_INPUT");
+        if (missingAssignee) missing.add("ASSIGNEE");
+        return missing.isEmpty() ? "CLIENT_UPDATE_REQUIRED"
+                : String.join("_AND_", missing) + "_REQUIRED";
+    }
+
+    private String jobStateEvent(ArchiveMaintenanceJobRecord job) {
+        Map<String, String> data = new LinkedHashMap<>();
+        data.put("state", job.state());
+        if (job.waitReason() != null) data.put("waitReason", job.waitReason());
+        if (job.sourceId() != null) data.put("sourceId", job.sourceId());
+        if (job.workId() != null) data.put("workId", job.workId());
+        if (job.appointmentId() != null) data.put("appointmentId", job.appointmentId());
+        return json(data);
+    }
+
+    private boolean sameWaitingFacts(ArchiveMaintenanceJobRecord before,
+            ArchiveMaintenanceJobRecord after) {
+        return same(before.workId(), after.workId())
+                && same(before.canonicalKey(), after.canonicalKey())
+                && same(before.title(), after.title())
+                && same(before.sourceId(), after.sourceId())
+                && same(before.sourceSha256(), after.sourceSha256())
+                && same(before.sourceSummary(), after.sourceSummary())
+                && same(before.rightsBasis(), after.rightsBasis())
+                && same(before.state(), after.state())
+                && same(before.waitReason(), after.waitReason());
     }
 
     private void authorizeWorkScope(ArchiveAppointmentRecord appointment,
@@ -2304,6 +2622,24 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
                 || !operation.requestSha256().equals(requestSha)
                 || !operation.targetType().equals(type)) {
             conflict("IDEMPOTENCY_CONFLICT", "Idempotency key was used with different content");
+        }
+    }
+
+    private void requireExecutionCandidate(ArchiveMaintenanceJobRecord job) {
+        if ("WAITING_INPUT".equals(job.state())) {
+            conflict("ARCHIVE_JOB_WAITING_INPUT",
+                    "Archive job requires explicit input resolution before execution");
+        }
+        if ("WAITING_ASSIGNEE".equals(job.state())) {
+            conflict("ARCHIVE_JOB_WAITING_ASSIGNEE",
+                    "Archive job requires an exact current appointment before execution");
+        }
+        if (job.runId() == null || job.draftId() == null || job.appointmentId() == null
+                || job.appointmentRevision() == null || job.agentId() == null
+                || job.bindingVersion() == null || job.permissionProfile() == null
+                || job.sourceId() == null || job.workId() == null) {
+            conflict("ARCHIVE_JOB_CANDIDATE_CORRUPT",
+                    "Archive job execution candidate is incomplete");
         }
     }
 
@@ -2649,7 +2985,7 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
                 job.operation(), job.workId(), job.canonicalKey(), job.title(), job.sourceId(),
                 job.sourceSha256(), job.sourceSummary(), job.rightsBasis(), state, waitReason,
                 revision, job.draftId(), job.publicationId(), job.requestIntentId(),
-                job.requestSha256());
+                job.requestSha256(), job.targetAgentId());
     }
 
     private ArchiveJobRunRecord runState(ArchiveJobRunRecord run, String state, long revision,
@@ -2712,6 +3048,8 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
     }
     private record RuntimeAuthorization(ArchiveJobRunRecord run,
             ArchiveExecutionGrantRecord grant, ArchiveAgentExecutionPort.Inspection inspection) { }
+    private record ResolvedWork(String workId, String canonicalKey, String title) { }
+
     private record PublicationMaterial(ArchiveEditionRecord edition,
             List<ArchiveBlockRecord> blocks, List<ArchiveParagraphRecord> paragraphs) { }
     private record PublicationCandidate(ArchiveMaintenanceJobRecord job,

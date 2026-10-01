@@ -60,8 +60,26 @@ public class ArchiveMaintenanceSchemaInitializer {
                 WHERE table_schema=DATABASE() AND table_name IN (%s)
                 """.formatted(placeholders(expected.tables().size())), String.class, expected.tables().keySet().toArray()));
         // MySQL commits every CREATE TABLE independently. Check existing tables first, then
-        // safely replay the IF NOT EXISTS DDL after a crash, and verify the entire result.
-        if (!existing.isEmpty()) validate(existing, expected);
+        // accept only either exact predecessor: the first waiting-job shape for a CHECK-only
+        // replacement, or the pre-waiting job shape for the additive atomic ALTER bridge.
+        // Any partial or unrelated drift still fails before DDL is issued.
+        if (!existing.isEmpty()) {
+            try {
+                validate(existing, expected);
+            } catch (IllegalStateException currentDrift) {
+                if (!existing.contains("archive_maintenance_job")) throw currentDrift;
+                try {
+                    validate(existing, expected, Map.of("archive_maintenance_job",
+                            ArchiveMaintenanceSchemaCatalog.previousWaitingShapeJobTable(expected)));
+                    upgradePreviousWaitingShape();
+                } catch (IllegalStateException previousWaitingDrift) {
+                    validate(existing, expected, Map.of("archive_maintenance_job",
+                            ArchiveMaintenanceSchemaCatalog.legacyWaitingJobTable(expected)));
+                    upgradeLegacyWaitingJob();
+                }
+                validate(existing, expected);
+            }
+        }
         if (existing.size() != expected.tables().size()) {
             DataSource ds = Objects.requireNonNull(jdbc.getDataSource(), "archive dataSource");
             new ResourceDatabasePopulator(new ClassPathResource("db/archive-maintenance-schema.sql")).execute(ds);
@@ -71,6 +89,11 @@ public class ArchiveMaintenanceSchemaInitializer {
     }
 
     void validate(Set<String> tables, ArchiveMaintenanceSchemaCatalog.Definition expected) {
+        validate(tables, expected, Map.of());
+    }
+
+    private void validate(Set<String> tables, ArchiveMaintenanceSchemaCatalog.Definition expected,
+                          Map<String, ArchiveMaintenanceSchemaCatalog.Table> overrides) {
         if (tables.isEmpty()) return;
         Object[] args = tables.toArray();
         String in = placeholders(args.length);
@@ -135,11 +158,48 @@ public class ArchiveMaintenanceSchemaInitializer {
                             + ArchiveMaintenanceSchemaCatalog.normalizeCheck(text(row, "check_clause")));
         }
         for (String table : tables) {
-            ArchiveMaintenanceSchemaCatalog.verify(table, expected.tables().get(table),
+            ArchiveMaintenanceSchemaCatalog.verify(table,
+                    overrides.getOrDefault(table, expected.tables().get(table)),
                     new ArchiveMaintenanceSchemaCatalog.Table(columns.getOrDefault(table, Map.of()),
                             indexes.getOrDefault(table, Map.of()), foreignKeys.getOrDefault(table, Map.of()),
                             checks.getOrDefault(table, Map.of())), engines.get(table));
         }
+    }
+
+    private void upgradePreviousWaitingShape() {
+        jdbc.execute("""
+                ALTER TABLE archive_maintenance_job
+                  DROP CHECK chk_archive_job_waiting_shape,
+                  ADD CONSTRAINT chk_archive_job_waiting_shape CHECK (((state='WAITING_INPUT') AND (run_id IS NULL) AND (draft_id IS NULL) AND (appointment_id IS NULL) AND (publication_id IS NULL) AND ((source_id IS NULL) OR (work_id IS NULL))) OR ((state='WAITING_ASSIGNEE') AND (run_id IS NULL) AND (draft_id IS NULL) AND (appointment_id IS NULL) AND (source_id IS NOT NULL) AND (work_id IS NOT NULL) AND (publication_id IS NULL)) OR ((state='CANCELLED') AND (publication_id IS NULL) AND (((run_id IS NULL) AND (draft_id IS NULL) AND (appointment_id IS NULL)) OR ((run_id IS NOT NULL) AND (draft_id IS NOT NULL) AND (appointment_id IS NOT NULL) AND (source_id IS NOT NULL) AND (work_id IS NOT NULL)))) OR ((state NOT IN ('WAITING_INPUT','WAITING_ASSIGNEE','CANCELLED')) AND (run_id IS NOT NULL) AND (draft_id IS NOT NULL) AND (appointment_id IS NOT NULL) AND (source_id IS NOT NULL) AND (work_id IS NOT NULL)))
+                """);
+    }
+    private void upgradeLegacyWaitingJob() {
+        jdbc.execute("""
+                ALTER TABLE archive_maintenance_job
+                  DROP CHECK chk_archive_job_revision,
+                  ADD COLUMN target_agent_id VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL AFTER owner_jiacn,
+                  MODIFY COLUMN run_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+                  MODIFY COLUMN appointment_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+                  MODIFY COLUMN appointment_revision BIGINT NULL,
+                  MODIFY COLUMN agent_id VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
+                  MODIFY COLUMN binding_version VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NULL,
+                  MODIFY COLUMN permission_profile VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NULL,
+                  MODIFY COLUMN work_id VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
+                  MODIFY COLUMN canonical_key VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
+                  MODIFY COLUMN title VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
+                  MODIFY COLUMN source_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+                  MODIFY COLUMN source_sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+                  MODIFY COLUMN source_summary VARCHAR(1000) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
+                  MODIFY COLUMN rights_basis VARCHAR(1000) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
+                  MODIFY COLUMN draft_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+                  ADD CONSTRAINT chk_archive_job_state CHECK (state IN ('WAITING_INPUT','WAITING_ASSIGNEE','WAITING_SKILL','EXECUTION_REQUESTED','RUNNING','NEEDS_CHANGES','AWAITING_PUBLISH','PUBLISHING','PUBLISHED','SUSPENDED_AUTH','FAILED','CANCELLED')),
+                  ADD CONSTRAINT chk_archive_job_revision CHECK ((revision >= 1) AND (manager_authorization_revision >= 1)),
+                  ADD CONSTRAINT chk_archive_job_assignment CHECK (((appointment_id IS NULL) AND (appointment_revision IS NULL) AND (agent_id IS NULL) AND (binding_version IS NULL) AND (permission_profile IS NULL)) OR ((appointment_id IS NOT NULL) AND (appointment_revision >= 1) AND (agent_id IS NOT NULL) AND (binding_version IS NOT NULL) AND (permission_profile IN ('DRAFT_ONLY','PUBLISH_VALIDATED')))),
+                  ADD CONSTRAINT chk_archive_job_source_shape CHECK (((source_id IS NULL) AND (source_sha256 IS NULL) AND (source_summary IS NULL) AND (rights_basis IS NULL)) OR ((source_id IS NOT NULL) AND (source_sha256 IS NOT NULL) AND (source_summary IS NOT NULL) AND (rights_basis IS NOT NULL))),
+                  ADD CONSTRAINT chk_archive_job_work_shape CHECK (((work_id IS NULL) AND (canonical_key IS NULL) AND (title IS NULL)) OR ((work_id IS NOT NULL) AND (canonical_key IS NOT NULL) AND (title IS NOT NULL))),
+                  ADD CONSTRAINT chk_archive_job_candidate_shape CHECK (((run_id IS NULL) AND (draft_id IS NULL)) OR ((run_id IS NOT NULL) AND (draft_id IS NOT NULL))),
+                  ADD CONSTRAINT chk_archive_job_waiting_shape CHECK (((state='WAITING_INPUT') AND (run_id IS NULL) AND (draft_id IS NULL) AND (appointment_id IS NULL) AND (publication_id IS NULL) AND ((source_id IS NULL) OR (work_id IS NULL))) OR ((state='WAITING_ASSIGNEE') AND (run_id IS NULL) AND (draft_id IS NULL) AND (appointment_id IS NULL) AND (source_id IS NOT NULL) AND (work_id IS NOT NULL) AND (publication_id IS NULL)) OR ((state='CANCELLED') AND (publication_id IS NULL) AND (((run_id IS NULL) AND (draft_id IS NULL) AND (appointment_id IS NULL)) OR ((run_id IS NOT NULL) AND (draft_id IS NOT NULL) AND (appointment_id IS NOT NULL) AND (source_id IS NOT NULL) AND (work_id IS NOT NULL)))) OR ((state NOT IN ('WAITING_INPUT','WAITING_ASSIGNEE','CANCELLED')) AND (run_id IS NOT NULL) AND (draft_id IS NOT NULL) AND (appointment_id IS NOT NULL) AND (source_id IS NOT NULL) AND (work_id IS NOT NULL)))
+                """);
     }
 
     private static String placeholders(int count) { return String.join(",", java.util.Collections.nCopies(count, "?")); }

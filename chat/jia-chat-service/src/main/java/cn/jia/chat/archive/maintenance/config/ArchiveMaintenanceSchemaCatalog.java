@@ -34,6 +34,17 @@ public final class ArchiveMaintenanceSchemaCatalog {
                         Map<String, String> foreignKeys, Map<String, String> checks) { }
     public record Definition(Map<String, Table> tables) { }
 
+    private static final String LEGACY_WAITING_SHAPE =
+            "((state='WAITING_INPUT') AND (run_id IS NULL) AND (draft_id IS NULL) "
+                    + "AND (appointment_id IS NULL) AND (publication_id IS NULL)) OR "
+                    + "((state='WAITING_ASSIGNEE') AND (run_id IS NULL) AND (draft_id IS NULL) "
+                    + "AND (appointment_id IS NULL) AND (source_id IS NOT NULL) "
+                    + "AND (work_id IS NOT NULL) AND (publication_id IS NULL)) OR "
+                    + "(state='CANCELLED') OR ((state NOT IN "
+                    + "('WAITING_INPUT','WAITING_ASSIGNEE','CANCELLED')) AND (run_id IS NOT NULL) "
+                    + "AND (draft_id IS NOT NULL) AND (appointment_id IS NOT NULL) "
+                    + "AND (source_id IS NOT NULL) AND (work_id IS NOT NULL))";
+
     private ArchiveMaintenanceSchemaCatalog() { }
 
     static String normalizeCheck(String value) { return ArchiveSchemaCatalog.normalizeCheck(value); }
@@ -94,6 +105,29 @@ public final class ArchiveMaintenanceSchemaCatalog {
             throw new IllegalStateException("Archive maintenance DDL table list drift");
         }
         return new Definition(Map.copyOf(tables));
+    }
+
+    static Table previousWaitingShapeJobTable(Definition current) {
+        Table job = current.tables().get("archive_maintenance_job");
+        Map<String, String> checks = new LinkedHashMap<>(job.checks());
+        checks.put("chk_archive_job_waiting_shape", "YES:" + normalizeCheck(LEGACY_WAITING_SHAPE));
+        return new Table(job.columns(), job.indexes(), job.foreignKeys(), Map.copyOf(checks));
+    }
+    static Table legacyWaitingJobTable(Definition current) {
+        Table job = current.tables().get("archive_maintenance_job");
+        Map<String, Column> columns = new LinkedHashMap<>(job.columns());
+        columns.remove("target_agent_id");
+        for (String name : List.of("run_id", "appointment_id", "appointment_revision", "agent_id",
+                "binding_version", "permission_profile", "work_id", "canonical_key", "title",
+                "source_id", "source_sha256", "source_summary", "rights_basis", "draft_id")) {
+            Column column = columns.get(name);
+            if (column == null) throw new IllegalStateException("Archive legacy job column unavailable: " + name);
+            columns.put(name, new Column(column.type(), false, column.collation()));
+        }
+        Map<String, String> checks = new LinkedHashMap<>();
+        checks.put("chk_archive_job_mode", "YES:" + normalizeCheck("publication_mode IN ('MANUAL','AUTO')"));
+        checks.put("chk_archive_job_revision", "YES:" + normalizeCheck("revision >= 1"));
+        return new Table(Map.copyOf(columns), job.indexes(), job.foreignKeys(), Map.copyOf(checks));
     }
 
     static void verify(String name, Table expected, Table actual, String engineAndCollation) {

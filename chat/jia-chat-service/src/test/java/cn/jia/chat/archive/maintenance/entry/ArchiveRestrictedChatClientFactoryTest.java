@@ -160,6 +160,34 @@ class ArchiveRestrictedChatClientFactoryTest {
     }
 
     @Test
+    void restrictedToolCanCreateOnlyTheServerConfirmedWaitingIntentWhenInputsAreMissing() {
+        ArchiveMaintenanceService service = mock(ArchiveMaintenanceService.class);
+        ArchiveRequestContext waitingContext = new ArchiveRequestContext(ACTOR, "intent-wait",
+                "SONGJIANG", "conversation-1:turn-2", null,
+                new ArchiveConfirmedPolicyRef("policy-wait", "platform-classics", "ADD_WORK",
+                        null, null, null, "MANUAL"));
+        ArchiveJobDTO waiting = new ArchiveJobDTO("job-wait", null, "platform-classics",
+                "WAITING_INPUT", "SOURCE_AND_WORK_INPUT_AND_ASSIGNEE_REQUIRED", "1",
+                null, null, null, "MANUAL", "ADD_WORK", null, null, null,
+                null, null, null);
+        when(service.request(eq(waitingContext), any())).thenReturn(
+                new ArchiveMaintenanceRequestResultDTO(waiting, null, waiting.waitReason(),
+                        "RESOLVE_INPUT"));
+        var tools = new ArchiveRestrictedChatClientFactory((ChatModel) prompt -> null, service)
+                .create(waitingContext).tools();
+
+        tools.requestArchiveMaintenance("platform-classics", "ADD_WORK", null, null,
+                null, null, null, "MANUAL");
+
+        var request = org.mockito.ArgumentCaptor.forClass(ArchiveMaintenanceRequest.class);
+        verify(service).request(eq(waitingContext), request.capture());
+        assertNull(request.getValue().newWork());
+        assertNull(request.getValue().sourceId());
+        assertEquals("WAITING_INPUT", tools.authoritativeReceipt().state());
+        assertFalse(tools.authoritativeReceipt().terminal());
+    }
+
+    @Test
     void contextToolCannotInspectAnotherCollection() {
         ArchiveMaintenanceService service = mock(ArchiveMaintenanceService.class);
         var tools = new ArchiveRestrictedChatClientFactory((ChatModel) prompt -> null, service)

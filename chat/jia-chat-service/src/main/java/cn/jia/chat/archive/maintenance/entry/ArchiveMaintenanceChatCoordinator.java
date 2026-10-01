@@ -117,15 +117,15 @@ public class ArchiveMaintenanceChatCoordinator {
             ChatConversationEntity conversation, ServerResolvedSender sender,
             ArchiveRequestContext context) {
         ArchiveRestrictedChatClientFactory.Session session = clientFactory.create(context);
-        String authorizedRequest = JsonUtil.toSafeJson(Map.of(
-                "collectionId", context.confirmedPolicyRef().collectionId(),
-                "operation", context.confirmedPolicyRef().operation(),
-                "newWork", context.confirmedPolicyRef().newWork() == null
-                        ? Map.of() : context.confirmedPolicyRef().newWork(),
-                "workId", context.confirmedPolicyRef().workId() == null
-                        ? "" : context.confirmedPolicyRef().workId(),
-                "sourceId", context.confirmedPolicyRef().sourceId(),
-                "publicationModeCeiling", context.confirmedPolicyRef().publicationModeCeiling()));
+        Map<String, Object> authorized = new java.util.LinkedHashMap<>();
+        authorized.put("collectionId", context.confirmedPolicyRef().collectionId());
+        authorized.put("operation", context.confirmedPolicyRef().operation());
+        authorized.put("newWork", context.confirmedPolicyRef().newWork());
+        authorized.put("workId", context.confirmedPolicyRef().workId());
+        authorized.put("sourceId", context.confirmedPolicyRef().sourceId());
+        authorized.put("publicationModeCeiling",
+                context.confirmedPolicyRef().publicationModeCeiling());
+        String authorizedRequest = JsonUtil.toSafeJson(authorized);
         Prompt prompt = Prompt.builder().messages(
                 SystemMessage.builder().text("""
                         You coordinate one server-confirmed archive maintenance request. Use only the
