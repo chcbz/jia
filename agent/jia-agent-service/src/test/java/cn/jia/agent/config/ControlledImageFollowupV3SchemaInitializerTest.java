@@ -71,6 +71,25 @@ class ControlledImageFollowupV3SchemaInitializerTest {
         assertDoesNotThrow(() -> ControlledImageFollowupV3SchemaInitializer
                 .validateExecutionRestartCatalog(executionColumns(false), executionIndexes(false),
                         executionChecks(false)));
+
+        var legacyWeak = executionChecks(false);
+        legacyWeak.getFirst().put("check_clause", "1=1");
+        assertThrows(IllegalStateException.class, () -> ControlledImageFollowupV3SchemaInitializer
+                .validateExecutionRestartCatalog(executionColumns(false), executionIndexes(false),
+                        legacyWeak));
+
+        var legacyPredicateDrift = executionChecks(false);
+        legacyPredicateDrift.getFirst().put("check_clause", legacyExecutionCatalogCheck()
+                .replace("_utf8mb4'GENERATE_IMAGE'", "_utf8mb4'EDIT_IMAGE'"));
+        assertThrows(IllegalStateException.class, () -> ControlledImageFollowupV3SchemaInitializer
+                .validateExecutionRestartCatalog(executionColumns(false), executionIndexes(false),
+                        legacyPredicateDrift));
+
+        var legacyUnenforced = executionChecks(false);
+        legacyUnenforced.getFirst().put("enforced", "NO");
+        assertThrows(IllegalStateException.class, () -> ControlledImageFollowupV3SchemaInitializer
+                .validateExecutionRestartCatalog(executionColumns(false), executionIndexes(false),
+                        legacyUnenforced));
         assertDoesNotThrow(() -> ControlledImageFollowupV3SchemaInitializer
                 .validateExecutionRestartCatalog(executionColumns(true), executionIndexes(true),
                         executionChecks(true)));
@@ -165,13 +184,23 @@ class ControlledImageFollowupV3SchemaInitializerTest {
 
     private static List<Map<String,Object>> executionChecks(boolean v3) {
         if(!v3)return new ArrayList<>(List.of(check("chk_pwex_controlled_consent","YES",
-                ControlledImageFollowupV3SchemaInitializer.legacyControlledConsentCheckExpression())));
+                legacyExecutionCatalogCheck())));
         Map<String,String> expected=ControlledImageFollowupV3SchemaInitializer.additiveCheckExpressions();
         return new ArrayList<>(List.of(
                 check("chk_pwex_controlled_consent","YES",
                         expected.get("chk_pwex_controlled_consent")),
                 check("chk_pwex_execution_protocol","YES",
                         expected.get("chk_pwex_execution_protocol"))));
+    }
+
+
+    /** Literal CHECK_CLAUSE captured from MySQL 8.0.21; independent of production helpers. */
+    private static String legacyExecutionCatalogCheck() {
+        return "((`controlled_consent_id` is null) or ((`execution_mode` = "
+                + "_utf8mb4'CONVERSATION') and regexp_like(`controlled_consent_id`,"
+                + "cast(_utf8mb4'^consent_[0-9a-f]{32}$' as char charset binary)) and "
+                + "(`permitted_operation` = _utf8mb4'GENERATE_IMAGE') and "
+                + "(`output_content_mime_type` = _utf8mb4'image/png')))";
     }
 
     private static Map<String,Object> check(String name,String enforced,String clause) {

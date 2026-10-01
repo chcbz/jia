@@ -35,6 +35,13 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
     private static final Map<String, String> OPERATION_GRANT_CHECKS = operationGrantChecks();
     private static final Map<String, String> SOURCE_CHECKS = sourceChecks();
     private static final Map<String, String> ADDITIVE_CHECKS = additiveChecks();
+    /** Exact MySQL 8.0.21 CHECK_CLAUSE rendering produced by the legacy v1_17 DDL. */
+    private static final String LEGACY_CONTROLLED_CONSENT_CATALOG_CHECK =
+            "((`controlled_consent_id` is null) or ((`execution_mode` = "
+                    + "_utf8mb4'CONVERSATION') and regexp_like(`controlled_consent_id`,"
+                    + "cast(_utf8mb4'^consent_[0-9a-f]{32}$' as char charset binary)) and "
+                    + "(`permitted_operation` = _utf8mb4'GENERATE_IMAGE') and "
+                    + "(`output_content_mime_type` = _utf8mb4'image/png')))";
 
     private final JdbcTemplate jdbc;
 
@@ -113,7 +120,7 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
         String actual=canonicalCheck(text(rows.getFirst(),"check_clause"));
         String extended=canonicalCheck(controlledConsentCheckDdl());
         if (actual.equals(extended)) return;
-        if (!actual.equals(canonicalCheck(legacyControlledConsentCheckDdl()))) {
+        if (!actual.equals(canonicalCheck(LEGACY_CONTROLLED_CONSENT_CATALOG_CHECK))) {
             throw new IllegalStateException("Controlled execution CHECK definition drift");
         }
         jdbc.execute("ALTER TABLE " + EXECUTION_TABLE
@@ -364,7 +371,7 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
         Map<String, Column> legacyColumns = executionRestartLegacyColumns();
         Map<String, Index> legacyIndexes = executionRestartLegacyIndexes();
         Map<String, String> legacyChecks = Map.of(
-                "chk_pwex_controlled_consent", legacyControlledConsentCheckDdl());
+                "chk_pwex_controlled_consent", LEGACY_CONTROLLED_CONSENT_CATALOG_CHECK);
         if (names(columns, "column_name").equals(legacyColumns.keySet())
                 && distinctNames(indexes, "index_name").equals(legacyIndexes.keySet())
                 && names(checks, "constraint_name").equals(legacyChecks.keySet())) {
