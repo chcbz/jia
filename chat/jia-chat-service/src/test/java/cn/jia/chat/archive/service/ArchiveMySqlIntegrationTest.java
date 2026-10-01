@@ -3,6 +3,9 @@ package cn.jia.chat.archive.service;
 import cn.jia.chat.archive.config.ArchiveSchemaInitializer;
 import cn.jia.chat.archive.content.ArchiveManifestBundle;
 import cn.jia.chat.archive.content.ArchiveManifestLoader;
+import cn.jia.chat.archive.maintenance.config.ArchiveMaintenanceProperties;
+import cn.jia.chat.archive.maintenance.config.ArchiveMaintenanceSchemaInitializer;
+import cn.jia.chat.archive.maintenance.store.JdbcArchiveMaintenanceStore;
 import cn.jia.chat.archive.store.JdbcArchiveContentStore;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -62,6 +65,8 @@ class ArchiveMySqlIntegrationTest {
         clean();
         schemaInitializer = new ArchiveSchemaInitializer(jdbc);
         schemaInitializer.initialize();
+        new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
+                new ArchiveMaintenanceProperties()).initialize();
         JdbcArchiveContentStore store = new JdbcArchiveContentStore(jdbc);
         importer = new ArchiveContentImporter(store,
                 new SpringArchiveTransactions(new DataSourceTransactionManager(dataSource)), 100);
@@ -168,11 +173,22 @@ class ArchiveMySqlIntegrationTest {
         return jdbc.queryForObject("SELECT COUNT(*) FROM " + table + " WHERE " + predicate, Integer.class);
     }
 
+    private static String[] maintenanceTablesInDropOrder() {
+        return new String[]{"archive_operation", "archive_event", "archive_publication",
+                "archive_validation", "archive_draft", "archive_execution_grant", "archive_job_run",
+                "archive_maintenance_job", "archive_source_snapshot", "archive_appointment",
+                "archive_appointment_slot", "archive_collection_work", "archive_collection_manager",
+                "archive_collection"};
+    }
+
     private void clean() {
         jdbc.execute((ConnectionCallback<Void>) connection -> {
             try (Statement statement = connection.createStatement()) {
                 statement.execute("SET FOREIGN_KEY_CHECKS=0");
                 try {
+                    for (String table : maintenanceTablesInDropOrder()) {
+                        statement.execute("DROP TABLE IF EXISTS " + table);
+                    }
                     statement.execute("DROP TABLE IF EXISTS archive_paragraph");
                     statement.execute("DROP TABLE IF EXISTS archive_chapter");
                     statement.execute("DROP TABLE IF EXISTS archive_edition");

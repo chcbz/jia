@@ -1,0 +1,28 @@
+{
+  "key": "archive-maintainer",
+  "version": "1.0.0",
+  "protocol": "archive-maintainer/utf8-exact-v1",
+  "adapter": "plain-text-v1",
+  "contentSchema": "schemas/content.json",
+  "packageDigestBinding": "external-installation-receipt-sha256",
+  "entries": [
+    "SKILL.md",
+    "schemas/content.json",
+    "scripts/parse-text.mjs",
+    "scripts/check-content.mjs",
+    "fixtures/ordinary-crlf-bom-emoji.txt",
+    "fixtures/ordinary-crlf-bom-emoji.expected.json",
+    "fixtures/no-preface-multichapter.txt",
+    "fixtures/no-preface-multichapter.expected.json",
+    "fixtures/malicious-instructions.txt",
+    "fixtures/malicious-instructions.expected.json",
+    "fixtures/invalid-leading-body.txt",
+    "fixtures/invalid-empty-chapter.txt",
+    "fixtures/invalid-number-gap.txt",
+    "fixtures/invalid-ambiguous-numeral.txt",
+    "fixtures/invalid-heading-edge-formatting.txt",
+    "fixtures/invalid-tampered-schema.json",
+    "fixtures/invalid-tampered-range.json",
+    "fixtures/parse-text.test.mjs"
+  ]
+}

@@ -11,6 +11,11 @@ public interface ArchiveContentStore {
     void insertWork(ArchiveWorkRecord work);
     ArchiveWorkRecord findWork(String workId);
     ActiveContent findActiveContent(String workId);
+    default ActiveContent findPublishedContent(String editionId) { return null; }
+    default List<ArchiveWorkRecord> listActiveWorks(int limit) { return List.of(); }
+    default boolean isPublished(String editionId) { return true; }
+    default void ensureLegacyPublication(String collectionId, String canonicalKey,
+                                         ArchiveWorkRecord work, ArchiveEditionRecord edition) { }
     void insertEdition(ArchiveEditionRecord edition);
     ArchiveEditionRecord findEdition(String editionId);
     void insertBlock(ArchiveBlockRecord block);

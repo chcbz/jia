@@ -56,11 +56,10 @@ public class JdbcArchivePersonalDataStore implements ArchivePersonalDataStore {
     public ActiveEdition lockActiveEdition(String editionId) {
         return first(jdbc.query("""
                 SELECT e.edition_id, e.manifest_sha256
-                FROM archive_work w JOIN archive_edition e
-                  ON e.work_id=w.work_id AND e.edition_id=w.active_edition_id
-                WHERE w.work_id='shuihuzhuan' AND w.active_edition_id=?
-                  AND CAST(w.active_edition_id AS BINARY)=CAST(? AS BINARY)
-                  AND OCTET_LENGTH(w.active_edition_id)=OCTET_LENGTH(?)
+                FROM archive_publication pub JOIN archive_edition e ON e.edition_id=pub.edition_id
+                WHERE pub.edition_id=? AND pub.state='PUBLISHED'
+                  AND CAST(pub.edition_id AS BINARY)=CAST(? AS BINARY)
+                  AND OCTET_LENGTH(pub.edition_id)=OCTET_LENGTH(?)
                   AND e.import_state='READY'
                 FOR UPDATE
                 """, (rs, ignored) -> new ActiveEdition(rs.getString(1), rs.getString(2)),
@@ -85,6 +84,18 @@ public class JdbcArchivePersonalDataStore implements ArchivePersonalDataStore {
                 FOR UPDATE
                 """, pointMapper(), editionId, blockId, paragraphId,
                 editionId, blockId, paragraphId, editionId, blockId, paragraphId));
+    }
+
+    @Override
+    public ContentPoint lockLastContentPoint(String editionId) {
+        return first(jdbc.query("""
+                SELECT p.edition_id,e.manifest_sha256,c.block_type,p.block_id,c.reader_ordinal,
+                       p.paragraph_id,p.ordinal,p.text,p.utf8_byte_length,p.sha256
+                FROM archive_paragraph p JOIN archive_chapter c ON c.edition_id=p.edition_id AND c.block_id=p.block_id
+                JOIN archive_edition e ON e.edition_id=p.edition_id
+                JOIN archive_publication pub ON pub.edition_id=e.edition_id AND pub.state='PUBLISHED'
+                WHERE p.edition_id=? ORDER BY c.reader_ordinal DESC,p.ordinal DESC LIMIT 1 FOR UPDATE
+                """, pointMapper(), editionId));
     }
 
     @Override

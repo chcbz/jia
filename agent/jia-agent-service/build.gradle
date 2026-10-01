@@ -444,3 +444,62 @@ tasks.register('managedHostingRegression', Test) {
     classpath = managedHostingRegressionSourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+
+// AAM native route allowlist security slice.
+def archiveMaintenanceSecuritySourceSet = sourceSets.create('archiveMaintenanceSecurity') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/security/ArchiveMaintenanceRuntimeAllowlistTest.java'
+        include 'cn/jia/agent/security/AgentControlledRuntimeProtocolTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(archiveMaintenanceSecuritySourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(archiveMaintenanceSecuritySourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('archiveMaintenanceSecurity', Test) {
+    group = 'verification'
+    description = 'Runs exact archive native runtime lane allowlist tests.'
+    dependsOn tasks.named(archiveMaintenanceSecuritySourceSet.classesTaskName)
+    testClassesDirs = archiveMaintenanceSecuritySourceSet.output.classesDirs
+    classpath = archiveMaintenanceSecuritySourceSet.runtimeClasspath
+    maxParallelForks = 1
+    maxHeapSize = '256m'
+    useJUnitPlatform()
+}
+
+// AAM platform protocol slice: preserve frozen golden bytes while adding new domain lanes.
+def archivePlatformContractsSourceSet = sourceSets.create('archivePlatformContracts') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/service/impl/AgentControlledCommandCodecTest.java'
+        include 'cn/jia/agent/service/impl/AgentControlledRabbitDecoderTest.java'
+        include 'cn/jia/agent/platform/*.java'
+        include 'cn/jia/agent/archive/*.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(archivePlatformContractsSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(archivePlatformContractsSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('archivePlatformContracts', Test) {
+    group = 'verification'
+    description = 'Runs controlled platform/archive protocols and frozen command golden bytes.'
+    dependsOn tasks.named(archivePlatformContractsSourceSet.classesTaskName)
+    testClassesDirs = archivePlatformContractsSourceSet.output.classesDirs
+    classpath = archivePlatformContractsSourceSet.runtimeClasspath
+    maxParallelForks = 1
+    maxHeapSize = '256m'
+    useJUnitPlatform()
+}

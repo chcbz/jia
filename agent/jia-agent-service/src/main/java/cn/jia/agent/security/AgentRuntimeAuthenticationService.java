@@ -33,6 +33,7 @@ public final class AgentRuntimeAuthenticationService {
     private final AccountSecurityService accounts;
     private final AgentTaskEventsGate gate;
     private final Map<String, Binding> bindings = new ConcurrentHashMap<>();
+    private final Map<String, ProtocolBinding> commandProtocols = new ConcurrentHashMap<>();
 
     public AgentRuntimeAuthenticationService(AgentRuntimeDao runtimes, AgentIdentityService identities,
             ApiKeyService keys, AccountSecurityService accounts, AgentTaskEventsGate gate) {
@@ -56,14 +57,53 @@ public final class AgentRuntimeAuthenticationService {
         Binding binding = new Binding(sessionId, scope, apiKeyId, digest(key.getApiKey()),
                 digest(token), account.userId(), account.authEpoch(), connected);
         validate(binding, token);
+        commandProtocols.remove(agent);
         bindings.put(agent, binding); // exact canonical identity: newer registration supersedes older
         return new Receipt("native-runtime-v1", SINGLE_TENANT_ID, client, ownerJiacn, agent, runtime,
                 gate.allows(SINGLE_TENANT_ID, client));
     }
 
     public void disconnect(String sessionId) {
+        commandProtocols.entrySet().removeIf(entry -> entry.getValue().binding.sessionId.equals(sessionId));
         bindings.entrySet().removeIf(entry -> entry.getValue().sessionId.equals(sessionId));
     }
+
+    /** Called only by the authenticated registration handler after bind, never by an HTTP body. */
+    public void registerCommandProtocols(String sessionId, String agentId, Object advertised) {
+        Binding binding = bindings.get(agentId);
+        if (binding == null || !binding.sessionId.equals(sessionId)) throw denied();
+        if (advertised == null) return; // legacy client has no new protocol capability
+        if (!(advertised instanceof java.util.List<?> list) || list.size()>16) throw denied();
+        var protocols = new java.util.HashSet<String>();
+        for (Object value : list) {
+            if (!(value instanceof String text) || text.length()>100 || !text.matches("[A-Z_]+/v[1-9][0-9]*")
+                    || !protocols.add(text)) throw denied();
+        }
+        if (bindings.get(agentId) != binding || !binding.connected.getAsBoolean()) throw denied();
+        commandProtocols.put(agentId, new ProtocolBinding(binding, Set.copyOf(protocols)));
+    }
+
+    /** Revalidates current key/account/registration, then returns server-only exact-session evidence. */
+    public ControlledTarget requireControlledTarget(String tenant, String client, String owner,
+            String agentId, long bindingId, String requiredProtocol) {
+        Binding binding=bindings.get(agentId);
+        var capabilities=commandProtocols.get(agentId);
+        if (binding==null || capabilities==null || capabilities.binding!=binding
+                || !capabilities.protocols.contains(requiredProtocol)
+                || !tenant.equals(binding.scope.tenantId()) || !client.equals(binding.scope.clientId())
+                || !owner.equals(binding.scope.ownerJiacn())) throw denied();
+        var row=runtimes.findByAgentId(agentId);
+        if (row==null || !Long.valueOf(bindingId).equals(row.getBindingId())) throw denied();
+        validate(binding, row.getTokenHash());
+        if (bindings.get(agentId)!=binding || commandProtocols.get(agentId)!=capabilities) throw denied();
+        return new ControlledTarget(binding.scope.runtimeInstanceId(), binding.apiKeyId,
+                cn.jia.agent.skill.SkillMarketplaceService.sessionRegistrationHash(agentId,row.getTokenHash()));
+    }
+    public record ControlledTarget(String runtimeInstanceId, String apiKeyId, byte[] registrationHash) {
+        public ControlledTarget { registrationHash=registrationHash.clone(); }
+        @Override public byte[] registrationHash() { return registrationHash.clone(); }
+    }
+    private record ProtocolBinding(Binding binding, Set<String> protocols) { }
 
     public AgentRuntimeAuthentication authenticate(String agent, String runtime, String token) {
         if (agent == null || runtime == null || !validToken(token)) throw denied();

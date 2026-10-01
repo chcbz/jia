@@ -3,6 +3,7 @@ package cn.jia.chat.api;
 import cn.jia.chat.serialization.ExactWireIds;
 
 import cn.jia.chat.advisor.DatabaseChatMemoryAdvisor;
+import cn.jia.chat.archive.maintenance.entry.ArchiveMaintenanceChatCoordinator;
 import cn.jia.chat.entity.AgentTaskThreadConstants;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
@@ -32,6 +33,7 @@ import com.github.pagehelper.PageInfo;
 import io.micrometer.core.instrument.util.StringEscapeUtils;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.ai.chat.client.advisor.vectorstore.QuestionAnswerAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -86,6 +88,7 @@ public class ChatController {
     private final MemoryRepository memoryRepository;
     private final AgentTaskThreadMemoryGuard taskThreadMemoryGuard;
     private final HumanSenderIdentityResolver humanSenderIdentityResolver;
+    private ArchiveMaintenanceChatCoordinator archiveMaintenanceChatCoordinator;
     public ChatController(@Lazy ChatClient chatClient, ChatConversationService chatConversationService,
             RedisService redisService, ChatClient.Builder chatClientBuilder,
             ChatConversationEventBroker chatConversationEventBroker, BuiltinHallAgentSupport builtinHallAgentSupport,
@@ -104,6 +107,12 @@ public class ChatController {
         this.memoryRepository = memoryRepository;
         this.taskThreadMemoryGuard = taskThreadMemoryGuard;
         this.humanSenderIdentityResolver = humanSenderIdentityResolver;
+    }
+
+    @Autowired(required = false)
+    void setArchiveMaintenanceChatCoordinator(
+            ArchiveMaintenanceChatCoordinator archiveMaintenanceChatCoordinator) {
+        this.archiveMaintenanceChatCoordinator = archiveMaintenanceChatCoordinator;
     }
 
     private static final PromptTemplate SUMMARY_PROMPT_TEMPLATE = new PromptTemplate("""
@@ -138,14 +147,18 @@ public class ChatController {
         long generation = lifecycleGeneration(conversation);
 
         Flux<String> cancelSignal = redisService.subscribeToChannel(conversationId);
-        JuyitingAgentRelayResult agentDelivery = juyitingAgentRelayService.relay(
-                chatMessage,
-                conversationId,
-                sender,
-                taskMaterials -> createBuiltinSongJiangStream(
-                        chatMessage, conversationId, sender, taskMaterials,
-                        generation, needSummary, summary)
-        );
+        JuyitingAgentRelayResult agentDelivery = archiveMaintenanceChatCoordinator != null
+                && archiveMaintenanceChatCoordinator.supports(chatMessage)
+                ? archiveMaintenanceChatCoordinator.relay(
+                        chatMessage, conversationId, conversation, sender)
+                : juyitingAgentRelayService.relay(
+                        chatMessage,
+                        conversationId,
+                        sender,
+                        taskMaterials -> createBuiltinSongJiangStream(
+                                chatMessage, conversationId, sender, taskMaterials,
+                                generation, needSummary, summary)
+                );
         boolean skipAdvisorUserPersistence = agentDelivery.attempted();
         Flux<String> aiStream = agentDelivery.delivered().flatMapMany(delivered -> delivered
                 ? Flux.empty()

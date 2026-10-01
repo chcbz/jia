@@ -123,16 +123,16 @@ class ArchiveContentImporterTest {
     }
 
     @Test
-    void activationRollbackPreservesPreviousPointerAndConcurrentRunsExposeOnlyReadyEdition() throws Exception {
+    void activationRollbackPreservesEmptyPointerAndConcurrentRunsExposeOnlyReadyEdition() throws Exception {
         ArchiveManifest manifest = new ArchiveManifestLoader().load().manifest();
         MemoryStore store = new MemoryStore();
-        store.work = new ArchiveWorkRecord(manifest.workId(), manifest.title(), "previous-edition");
+        store.work = new ArchiveWorkRecord(manifest.workId(), manifest.title(), null);
         store.failActivationAfterPointerWrite = true;
         ArchiveContentImporter importer = new ArchiveContentImporter(store, store, 100);
 
         assertThrows(ArchiveImportException.class,
                 () -> importer.importAndActivate(manifest, ArchiveManifestLoader.EXPECTED_MANIFEST_FILE_SHA256));
-        assertEquals("previous-edition", store.work.activeEditionId());
+        assertEquals(null, store.work.activeEditionId());
         assertEquals("READY", store.edition.importState());
 
         store.failActivationAfterPointerWrite = false;
@@ -156,6 +156,27 @@ class ArchiveContentImporterTest {
         assertEquals(0, store.activeTransactions);
         assertEquals("READY", store.edition.importState());
         assertEquals(manifest.editionId(), store.work.activeEditionId());
+    }
+
+    @Test
+    void seedRestartNeverReclaimsAnotherActiveEdition() {
+        ArchiveManifest manifest = new ArchiveManifestLoader().load().manifest();
+        MemoryStore store = new MemoryStore();
+        store.work = new ArchiveWorkRecord(manifest.workId(), manifest.title(), "published-correction");
+        // Any attempted pointer write would fail this test, including after READY restart.
+        store.failActivationAfterPointerWrite = true;
+        ArchiveContentImporter importer = new ArchiveContentImporter(store, store, 100);
+        org.junit.jupiter.api.Assertions.assertDoesNotThrow(() -> importer.importAndActivate(
+                manifest, ArchiveManifestLoader.EXPECTED_MANIFEST_FILE_SHA256));
+        assertEquals("published-correction", store.work.activeEditionId());
+        assertEquals("READY", store.edition.importState());
+        assertEquals(0, store.activationMutations);
+        store.resetDiagnostics();
+        org.junit.jupiter.api.Assertions.assertDoesNotThrow(() -> importer.importAndActivate(
+                manifest, ArchiveManifestLoader.EXPECTED_MANIFEST_FILE_SHA256));
+        assertEquals("published-correction", store.work.activeEditionId());
+        assertEquals(0, store.activationMutations);
+        assertEquals(0, store.insertAttempts);
     }
 
     private static final class MemoryStore implements ArchiveContentStore, ArchiveTransactions {

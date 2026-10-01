@@ -23,6 +23,7 @@ import java.util.Set;
 /** Strict D03 AMQP provenance decoder. No decoded representation is used for WebSocket output. */
 final class AgentCommandRabbitMessageDecoder {
     private static final Set<String> COMMAND_TYPES = Set.of("SKILL_INSTALL",
+            "PLATFORM_SKILL_INSTALL", "ARCHIVE_MAINTENANCE_EXECUTE",
             AgentProtocolConstants.COMMAND_TASK_INVITE,
             AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE,
             AgentProtocolConstants.COMMAND_WORK_ITEM_RESUME,
@@ -155,10 +156,32 @@ final class AgentCommandRabbitMessageDecoder {
         rejectNestedConflict(root.get("payload"), "messageId", messageId);
         rejectNestedConflict(root.get("payload"), "commandId", commandId);
 
+        // Reject deterministic business-reference drift before claiming any durable inbox lease.
+        String resource = AgentCommandCanonicalCodec.isControlledCommandType(commandType)
+                ? controlledResourceId(raw, commandType, taskId) : null;
         return new DecodedAgentCommandMessage(
                 messageId, eventId, deliveryId, commandId, tenantId, clientId, ownerJiacn,
                 taskId, targetAgentId, commandType, activeAttempt, expiresAt,
-                topologyHash, sourceRetry, raw, actualHash);
+                topologyHash, sourceRetry, raw, actualHash, resource);
+    }
+
+    static String controlledResourceId(byte[] wire,String type,String taskId) {
+        try {
+            JsonNode root=STRICT_JSON.readTree(wire); JsonNode p=root.get("payload");
+            if(!type.equals(text(root,"commandType")) || !taskId.equals(text(root,"taskId")) || p==null || !p.isObject())
+                throw invalid("CONTROLLED_RESOURCE_MISMATCH");
+            String resource;
+            if("PLATFORM_SKILL_INSTALL".equals(type)) {
+                resource=text(p,"installationId");
+                if(!taskId.equals(resource)) throw invalid("CONTROLLED_RESOURCE_MISMATCH");
+            } else if("ARCHIVE_MAINTENANCE_EXECUTE".equals(type)) {
+                resource=text(p,"runId");
+                if(!taskId.equals(text(p,"jobId")) || !resource.equals(text(root,"causationId")))
+                    throw invalid("CONTROLLED_RESOURCE_MISMATCH");
+            } else throw invalid("COMMAND_TYPE_NOT_ALLOWED");
+            AgentControlledCommandContract.requireId(resource);return resource;
+        } catch(AgentCommandRabbitDecodeException invalid) { throw invalid; }
+        catch(Exception invalid) { throw invalid("CONTROLLED_RESOURCE_MISMATCH"); }
     }
 
     private void validateTransport(MessageProperties properties) {

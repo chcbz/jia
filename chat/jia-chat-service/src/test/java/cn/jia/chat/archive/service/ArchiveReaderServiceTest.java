@@ -66,7 +66,7 @@ class ArchiveReaderServiceTest {
     }
 
     @Test
-    void catalogChecksActiveEditionEveryRequestButCachesOnlyBoundedBlockMetadata() {
+    void catalogChecksActivePublicationEveryRequestWithoutUnscopedMetadataCache() {
         ArchiveManifest manifest = new ArchiveManifestLoader().load().manifest();
         FixtureStore store = new FixtureStore(manifest);
         ArchiveReaderServiceImpl service = new ArchiveReaderServiceImpl(store);
@@ -75,12 +75,12 @@ class ArchiveReaderServiceTest {
         service.catalog();
 
         assertEquals(2, store.activeReads);
-        assertEquals(1, store.blockReads);
+        assertEquals(2, store.blockReads);
 
         store.active = false;
         assertThrows(ArchiveResourceNotFoundException.class, service::catalog);
         assertEquals(3, store.activeReads);
-        assertEquals(1, store.blockReads);
+        assertEquals(2, store.blockReads);
     }
 
     @Test
@@ -132,6 +132,10 @@ class ArchiveReaderServiceTest {
             activeReads++;
             return active && work.workId().equals(workId) ? new ActiveContent(work, edition) : null;
         }
+        @Override public ActiveContent findPublishedContent(String editionId) {
+            return edition.editionId().equals(editionId) ? new ActiveContent(work, edition) : null;
+        }
+        @Override public boolean isPublished(String editionId) { return edition.editionId().equals(editionId); }
         @Override public ArchiveEditionRecord findEdition(String editionId) { return edition.editionId().equals(editionId) ? edition : null; }
         @Override public ArchiveBlockRecord findBlock(String editionId, String blockId) { return blocks.stream().filter(b -> b.blockId().equals(blockId)).findFirst().orElse(null); }
         @Override public List<ArchiveBlockRecord> listBlocks(String editionId) {

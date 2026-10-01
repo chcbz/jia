@@ -8,6 +8,8 @@ import org.springframework.stereotype.Component;
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -19,6 +21,7 @@ import java.util.Set;
 @Component
 public class ArchiveSchemaInitializer {
     private static final String SCHEMA_RESOURCE = "db/archive-schema.sql";
+    private static final String V2_MIGRATION_RESOURCE = "db/archive-schema-v2-migration.sql";
     private final JdbcTemplate jdbc;
 
     public ArchiveSchemaInitializer(JdbcTemplate jdbc) {
@@ -30,14 +33,75 @@ public class ArchiveSchemaInitializer {
         Set<String> existing = existingArchiveTables();
         requireAllOrNoneTables(existing);
         if (existing.isEmpty()) {
-            DataSource dataSource = requireDataSource();
-            ResourceDatabasePopulator populator = new ResourceDatabasePopulator(
-                    new ClassPathResource(SCHEMA_RESOURCE));
-            populator.setContinueOnError(false);
-            populator.setIgnoreFailedDrops(false);
-            populator.execute(dataSource);
+            populate(SCHEMA_RESOURCE);
+        } else {
+            migrateLegacyChecks();
         }
         ArchiveSchemaCatalog.validate(inspect());
+    }
+
+
+    private void populate(String resource) {
+        ResourceDatabasePopulator populator = new ResourceDatabasePopulator(new ClassPathResource(resource));
+        populator.setContinueOnError(false);
+        populator.setIgnoreFailedDrops(false);
+        populator.execute(requireDataSource());
+    }
+
+    // MySQL DDL commits independently. Migrate one table at a time, so a crash after
+    // the first ALTER can resume without attempting to drop its already replaced CHECK.
+    private void migrateLegacyChecks() {
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+                SELECT constraint_name, check_clause FROM information_schema.check_constraints
+                WHERE constraint_schema = DATABASE()
+                  AND constraint_name IN ('chk_archive_edition_counts','chk_archive_chapter_shape')
+                """);
+        Map<String, String> clauses = new LinkedHashMap<>();
+        for (Map<String, Object> row : rows) {
+            String name = string(row, "constraint_name");
+            if (clauses.put(name, ArchiveSchemaCatalog.normalizeCheck(string(row, "check_clause"))) != null) {
+                throw new IllegalStateException("Duplicate archive CHECK " + name);
+            }
+        }
+        List<Integer> remaining = remainingLegacyChecks(clauses);
+        String sql;
+        try (var input = new ClassPathResource(V2_MIGRATION_RESOURCE).getInputStream()) {
+            sql = new String(input.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new IllegalStateException("Archive schema migration resource unavailable", e);
+        }
+        List<String> statements = migrationStatements(sql);
+        for (int index : remaining) jdbc.execute(statements.get(index));
+    }
+
+    static List<String> migrationStatements(String sql) {
+        if (sql == null) throw new IllegalStateException("Archive schema migration is unavailable");
+        List<String> statements = java.util.Arrays.stream(sql.split(";", -1))
+                .map(String::strip).filter(statement -> !statement.isEmpty()).toList();
+        if (statements.size() != 2
+                || !isExactCheckMigration(statements.get(0), "archive_edition", "chk_archive_edition_counts")
+                || !isExactCheckMigration(statements.get(1), "archive_chapter", "chk_archive_chapter_shape")) {
+            throw new IllegalStateException("Archive schema migration must have one exact ALTER per table");
+        }
+        return statements;
+    }
+
+    private static boolean isExactCheckMigration(String statement, String table, String constraint) {
+        String normalized = statement.replaceAll("\\s+", " ").strip().toLowerCase(java.util.Locale.ROOT);
+        return normalized.startsWith("alter table " + table + " drop check " + constraint + ", add constraint "
+                + constraint + " check (") && !normalized.contains(";")
+                && normalized.indexOf("alter table ") == normalized.lastIndexOf("alter table ");
+    }
+
+    static List<Integer> remainingLegacyChecks(Map<String, String> clauses) {
+        if (clauses.size() != 2 || !clauses.containsKey("chk_archive_edition_counts")
+                || !clauses.containsKey("chk_archive_chapter_shape")) {
+            throw new IllegalStateException("Archive schema migration cannot identify both legacy checks");
+        }
+        List<Integer> remaining = new ArrayList<>();
+        if (clauses.get("chk_archive_edition_counts").contains("chapter_count=120")) remaining.add(0);
+        if (clauses.get("chk_archive_chapter_shape").contains("reader_ordinalbetween1and120")) remaining.add(1);
+        return remaining;
     }
 
     public static void requireAllOrNoneTables(Set<String> existing) {

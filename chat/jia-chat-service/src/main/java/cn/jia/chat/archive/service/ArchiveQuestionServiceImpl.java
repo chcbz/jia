@@ -66,8 +66,17 @@ public class ArchiveQuestionServiceImpl implements ArchiveQuestionService {
     @Override
     public ArchiveMutationResult create(ArchiveOwnerScope owner, String questionId, String path,
                                         String key, byte[] body) {
+        return create(owner, cn.jia.chat.archive.content.ArchiveManifestLoader.EDITION_ID,
+                questionId, path, key, body);
+    }
+
+    @Override
+    public ArchiveMutationResult create(ArchiveOwnerScope owner, String editionId, String questionId,
+                                        String path, String key, byte[] body) {
         requireQuestionId(questionId);
-        requireMutationSyntax(path, key, "/archive/v1/me/questions/" + questionId);
+        String legacyPath = "/archive/v1/me/questions/" + questionId;
+        String editionPath = "/archive/v1/editions/" + editionId + "/questions/" + questionId;
+        requireMutationSyntax(path, key, path.equals(legacyPath) ? legacyPath : editionPath);
         ArchiveWriteJson.Parsed parsed = json.parseQuestion(body, ArchiveQuestionPutRequest.class);
         ArchiveQuestionPutRequest request = parsed.value(ArchiveQuestionPutRequest.class);
         require(request.question() != null && request.anchor() != null,
@@ -82,7 +91,7 @@ public class ArchiveQuestionServiceImpl implements ArchiveQuestionService {
             require(store.countRecentQuestions(owner, clock.instant().minus(Duration.ofMinutes(1)))
                             < RATE_LIMIT_PER_MINUTE,
                     429, "QUESTION_RATE_LIMITED", "Archive question rate limit exceeded");
-            ArchiveTextSelectionValidator.Selection selection = selectionValidator.reconstruct(request.anchor());
+            ArchiveTextSelectionValidator.Selection selection = selectionValidator.reconstruct(editionId, request.anchor());
             Instant now = clock.instant();
             String anchorJson = json.canonicalValue(request.anchor());
             QuestionRecord proposed = new QuestionRecord(0, questionId, selection.editionId(),

@@ -1,0 +1,78 @@
+{
+  "sourceSha256": "c7487497b2c8a56ac5cb8367cd260c67d6e142f2a569a63c6a6a585a685e38ed",
+  "canonicalJsonSha256": "5bb02d7fbfdc9bd3538b7f3b70f6d3e41465af9835d4a75beb6276de54ffcae6",
+  "draft": {
+    "blocks": [
+      {
+        "blockType": "CHAPTER",
+        "blockKey": "chapter-1",
+        "ordinal": 1,
+        "title": "第一回　甲",
+        "titleSourceRanges": [
+          {
+            "startByte": 0,
+            "endByte": 15
+          }
+        ],
+        "paragraphs": [
+          {
+            "ordinal": 1,
+            "text": "甲",
+            "sourceRanges": [
+              {
+                "startByte": 16,
+                "endByte": 19
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "blockType": "CHAPTER",
+        "blockKey": "chapter-2",
+        "ordinal": 2,
+        "title": "第二回 乙",
+        "titleSourceRanges": [
+          {
+            "startByte": 20,
+            "endByte": 33
+          }
+        ],
+        "paragraphs": [
+          {
+            "ordinal": 1,
+            "text": "乙",
+            "sourceRanges": [
+              {
+                "startByte": 34,
+                "endByte": 37
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "excludedSourceRanges": [
+      {
+        "startByte": 15,
+        "endByte": 16,
+        "reason": "LINE_BREAK"
+      },
+      {
+        "startByte": 19,
+        "endByte": 20,
+        "reason": "LINE_BREAK"
+      },
+      {
+        "startByte": 33,
+        "endByte": 34,
+        "reason": "LINE_BREAK"
+      },
+      {
+        "startByte": 37,
+        "endByte": 38,
+        "reason": "LINE_BREAK"
+      }
+    ]
+  }
+}

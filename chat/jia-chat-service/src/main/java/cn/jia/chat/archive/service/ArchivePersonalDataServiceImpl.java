@@ -23,8 +23,6 @@ import java.util.function.Supplier;
 public class ArchivePersonalDataServiceImpl implements ArchivePersonalDataService {
     private static final String JSON = "application/json;charset=UTF-8";
     private static final Duration IDEMPOTENCY_RETENTION = Duration.ofDays(7);
-    private static final String FINAL_BLOCK = "shuihuzhuan-zh-120-v1-c120";
-    private static final String FINAL_PARAGRAPH = "shuihuzhuan-zh-120-v1-c120-p0034";
 
     private final ArchivePersonalDataStore store;
     private final ArchiveTransactions transactions;
@@ -355,10 +353,11 @@ public class ArchivePersonalDataServiceImpl implements ArchivePersonalDataServic
     }
 
     private void requireFinal(ContentPoint point, ArchivePointLocationDTO location) {
-        require("CHAPTER".equals(point.blockType()) && FINAL_BLOCK.equals(point.blockId())
-                        && FINAL_PARAGRAPH.equals(point.paragraphId())
+        ContentPoint last = store.lockLastContentPoint(point.editionId());
+        require(last != null && last.blockId().equals(point.blockId())
+                        && last.paragraphId().equals(point.paragraphId())
                         && location.byteOffset() == point.utf8ByteLength(),
-                422, "INVALID_TEXT_ANCHOR", "Completion requires the final byte of chapter 120");
+                422, "INVALID_TEXT_ANCHOR", "Completion requires the final byte of the edition");
     }
 
     private boolean boundary(byte[] bytes, long offset) {

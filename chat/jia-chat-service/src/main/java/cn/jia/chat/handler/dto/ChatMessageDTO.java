@@ -1,5 +1,6 @@
 package cn.jia.chat.handler.dto;
 
+import cn.jia.chat.archive.maintenance.dto.ArchiveMaintenanceChatIntent;
 import lombok.Data;
 
 import java.util.List;
@@ -24,4 +25,6 @@ public class ChatMessageDTO {
     private List<String> targetAgentIds;
     private Boolean forceNewConversation;
     private Map<String, Object> metadata;
+    /** Explicit structured archive intent; identity and authority are resolved server-side. */
+    private ArchiveMaintenanceChatIntent archiveMaintenanceIntent;
 }

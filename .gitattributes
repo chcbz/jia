@@ -1,0 +1,3 @@
+# Published archive fixtures are byte-addressed; never apply checkout EOL conversion.
+chat/jia-chat-service/src/main/resources/archive/** -text
+agent/jia-agent-service/src/main/resources/platform-skills/archive-maintainer/** -text

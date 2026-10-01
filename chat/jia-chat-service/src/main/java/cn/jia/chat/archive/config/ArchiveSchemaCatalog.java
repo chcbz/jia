@@ -57,7 +57,7 @@ public final class ArchiveSchemaCatalog {
                         "archive_work", List.of("work_id"))),
                 checks(
                         "chk_archive_edition_state", "import_state in ('STAGING','READY')",
-                        "chk_archive_edition_counts", "(chapter_count=120) and (preface_paragraph_count>=1) and (chapter_paragraph_count>=1) and (reader_paragraph_count=(preface_paragraph_count+chapter_paragraph_count)) and (source_utf8_byte_length>0) and (preface_utf8_byte_length>0) and (chapter_utf8_byte_length>0) and (reader_utf8_byte_length=(preface_utf8_byte_length+chapter_utf8_byte_length))")));
+                        "chk_archive_edition_counts", "(chapter_count>=1) and (preface_paragraph_count>=0) and (chapter_paragraph_count>=1) and (reader_paragraph_count=(preface_paragraph_count+chapter_paragraph_count)) and (source_utf8_byte_length>0) and (preface_utf8_byte_length>=0) and (chapter_utf8_byte_length>0) and (((preface_paragraph_count=0) and (preface_utf8_byte_length=0)) or ((preface_paragraph_count>0) and (preface_utf8_byte_length>0))) and (reader_utf8_byte_length=(preface_utf8_byte_length+chapter_utf8_byte_length))")));
         tables.put("archive_chapter", table(
                 columns(
                         col("edition_id", "varchar", "varchar(96)", false, "utf8mb4_0900_bin"),
@@ -77,7 +77,7 @@ public final class ArchiveSchemaCatalog {
                 foreignKeys(fk("fk_archive_chapter_edition", List.of("edition_id"),
                         "archive_edition", List.of("edition_id"))),
                 checks(
-                        "chk_archive_chapter_shape", "(((block_type='PREFACE') and (reader_ordinal=0) and (chapter_number is null)) or ((block_type='CHAPTER') and (reader_ordinal between 1 and 120) and (chapter_number=reader_ordinal)))",
+                        "chk_archive_chapter_shape", "(((block_type='PREFACE') and (reader_ordinal=0) and (chapter_number is null)) or ((block_type='CHAPTER') and (reader_ordinal>=1) and (chapter_number=reader_ordinal)))",
                         "chk_archive_chapter_metrics", "(paragraph_count>0) and (utf8_byte_length>0)")));
         tables.put("archive_paragraph", table(
                 columns(
@@ -122,7 +122,7 @@ public final class ArchiveSchemaCatalog {
         }
     }
 
-    static String normalizeCheck(String value) {
+    public static String normalizeCheck(String value) {
         if (value == null) return null;
         StringBuilder normalized = new StringBuilder(value.length());
         boolean quoted = false;

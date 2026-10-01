@@ -86,6 +86,53 @@ public class JdbcArchiveContentStore implements ArchiveContentStore {
     }
 
     @Override
+    public ActiveContent findPublishedContent(String editionId) {
+        return first(jdbc.query("""
+                SELECT w.work_id AS active_work_id,w.title,w.active_edition_id,
+                       e.edition_id,e.work_id,e.import_state,e.source_sha256,e.manifest_sha256,
+                       e.manifest_file_sha256,e.source_utf8_byte_length,e.chapter_count,
+                       e.preface_paragraph_count,e.chapter_paragraph_count,e.reader_paragraph_count,
+                       e.preface_utf8_byte_length,e.chapter_utf8_byte_length,e.reader_utf8_byte_length
+                FROM archive_publication p JOIN archive_edition e ON e.edition_id=p.edition_id
+                JOIN archive_work w ON w.work_id=e.work_id
+                WHERE p.edition_id=? AND p.state='PUBLISHED' AND e.import_state='READY'
+                  AND CAST(p.edition_id AS BINARY)=CAST(? AS BINARY)
+                  AND OCTET_LENGTH(p.edition_id)=OCTET_LENGTH(?)
+                """, (rs,n)->new ActiveContent(new ArchiveWorkRecord(rs.getString("active_work_id"),
+                        rs.getString("title"),rs.getString("active_edition_id")),EDITION_MAPPER.mapRow(rs,n)),
+                editionId,editionId,editionId));
+    }
+
+    @Override
+    public List<ArchiveWorkRecord> listActiveWorks(int limit) {
+        return jdbc.query("""
+                SELECT DISTINCT w.work_id,w.title,w.active_edition_id FROM archive_work w
+                JOIN archive_publication p ON p.edition_id=w.active_edition_id AND p.work_id=w.work_id
+                WHERE p.state='PUBLISHED' ORDER BY w.work_id LIMIT ?
+                """, WORK_MAPPER, limit);
+    }
+
+    @Override
+    public boolean isPublished(String editionId) {
+        Integer found=first(jdbc.query("SELECT 1 FROM archive_publication WHERE edition_id=? AND state='PUBLISHED'",
+                (rs,n)->rs.getInt(1),editionId));
+        return found!=null;
+    }
+
+    @Override
+    public void ensureLegacyPublication(String collectionId,String canonicalKey,
+                                        ArchiveWorkRecord work,ArchiveEditionRecord edition) {
+        jdbc.update("INSERT IGNORE INTO archive_collection_work(collection_id,work_id,canonical_key,revision) VALUES (?,?,?,1)",
+                collectionId,work.workId(),canonicalKey);
+        jdbc.update("""
+                INSERT IGNORE INTO archive_publication(publication_id,job_id,collection_id,work_id,edition_id,
+                draft_revision,manifest_sha256,source_sha256,state,actor_type,actor_id,authorization_revision)
+                VALUES (CONCAT('legacy-',?),NULL,?,?,?,?,?,?,'PUBLISHED','SYSTEM','archive-bootstrap',1)
+                """,edition.editionId(),collectionId,work.workId(),edition.editionId(),0,
+                edition.manifestSha256(),edition.sourceSha256());
+    }
+
+    @Override
     public void insertEdition(ArchiveEditionRecord edition) {
         jdbc.update("""
                 INSERT INTO archive_edition (

@@ -8,6 +8,7 @@ import java.util.List;
 public interface ArchivePersonalDataStore {
     ActiveEdition lockActiveEdition(String editionId);
     ContentPoint lockContentPoint(String editionId, String blockId, String paragraphId);
+    ContentPoint lockLastContentPoint(String editionId);
     List<ContentPoint> lockBlockParagraphs(String editionId, String blockId, List<String> paragraphIds);
 
     IdempotencyRecord insertOrLockIdempotency(ArchiveOwnerScope owner, String method, String canonicalPath,

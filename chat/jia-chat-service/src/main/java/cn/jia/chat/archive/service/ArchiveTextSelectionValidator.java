@@ -23,17 +23,16 @@ final class ArchiveTextSelectionValidator {
     }
 
     Selection reconstruct(ArchiveTextAnchorDTO anchor) {
+        return reconstruct(ArchiveManifestLoader.EDITION_ID, anchor);
+    }
+
+    Selection reconstruct(String editionId, ArchiveTextAnchorDTO anchor) {
         requireShape(anchor);
-        String editionId = ArchiveManifestLoader.EDITION_ID;
         ActiveEdition active = content.lockActiveEdition(editionId);
         require(active != null, 404, "ARCHIVE_RESOURCE_NOT_FOUND", "Archive resource is not available");
         require(active.manifestSha256().equals(anchor.editionManifestSha256()),
                 422, "CONTENT_HASH_MISMATCH", "Edition manifest hash mismatch");
-        String expectedBlock = "PREFACE".equals(anchor.blockType())
-                ? editionId + "-preface" : anchor.blockId();
-        require(expectedBlock.equals(anchor.blockId())
-                        && ("PREFACE".equals(anchor.blockType())
-                        || anchor.blockId().matches(java.util.regex.Pattern.quote(editionId) + "-c(?:00[1-9]|0[1-9][0-9]|1[01][0-9]|120)")),
+        require("PREFACE".equals(anchor.blockType()) || "CHAPTER".equals(anchor.blockType()),
                 422, "INVALID_TEXT_ANCHOR", "Text anchor block is invalid");
 
         List<ContentPoint> rows = content.lockBlockParagraphs(editionId, anchor.blockId(),

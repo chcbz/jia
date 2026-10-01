@@ -1,0 +1,122 @@
+{
+  "sourceSha256": "1feae8ad12ef5f9da6a32b6420b0cb3f990dd7d53a030bfbc4571d733628f9a2",
+  "canonicalJsonSha256": "eef9ebdd6612921d0b1ebdf51ebd1588f71e53fbcc55c03b7575016485ba2dc4",
+  "draft": {
+    "blocks": [
+      {
+        "blockType": "PREFACE",
+        "blockKey": "preface",
+        "ordinal": 0,
+        "title": "前言",
+        "titleSourceRanges": [
+          {
+            "startByte": 3,
+            "endByte": 9
+          }
+        ],
+        "paragraphs": [
+          {
+            "ordinal": 1,
+            "text": "开篇🙂",
+            "sourceRanges": [
+              {
+                "startByte": 11,
+                "endByte": 21
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "blockType": "CHAPTER",
+        "blockKey": "chapter-1",
+        "ordinal": 1,
+        "title": "第一回 初章",
+        "titleSourceRanges": [
+          {
+            "startByte": 25,
+            "endByte": 41
+          }
+        ],
+        "paragraphs": [
+          {
+            "ordinal": 1,
+            "text": "甲",
+            "sourceRanges": [
+              {
+                "startByte": 43,
+                "endByte": 45
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "blockType": "CHAPTER",
+        "blockKey": "chapter-2",
+        "ordinal": 2,
+        "title": "第二章 次章",
+        "titleSourceRanges": [
+          {
+            "startByte": 48,
+            "endByte": 64
+          }
+        ],
+        "paragraphs": [
+          {
+            "ordinal": 1,
+            "text": "乙🙂",
+            "sourceRanges": [
+              {
+                "startByte": 66,
+                "endByte": 73
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "excludedSourceRanges": [
+      {
+        "startByte": 0,
+        "endByte": 3,
+        "reason": "UTF8_BOM"
+      },
+      {
+        "startByte": 9,
+        "endByte": 11,
+        "reason": "LINE_BREAK"
+      },
+      {
+        "startByte": 21,
+        "endByte": 23,
+        "reason": "LINE_BREAK"
+      },
+      {
+        "startByte": 23,
+        "endByte": 25,
+        "reason": "BLANK_FORMATTING"
+      },
+      {
+        "startByte": 41,
+        "endByte": 43,
+        "reason": "LINE_BREAK"
+      },
+      {
+        "startByte": 46,
+        "endByte": 48,
+        "reason": "LINE_BREAK"
+      },
+      {
+        "startByte": 64,
+        "endByte": 66,
+        "reason": "LINE_BREAK"
+      },
+      {
+        "startByte": 73,
+        "endByte": 75,
+        "reason": "LINE_BREAK"
+      }
+    ]
+  }
+}

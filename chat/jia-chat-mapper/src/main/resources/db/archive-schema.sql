@@ -31,10 +31,12 @@ CREATE TABLE archive_edition (
     KEY idx_archive_edition_state (work_id, import_state, edition_id),
     CONSTRAINT chk_archive_edition_state CHECK (import_state IN ('STAGING', 'READY')),
     CONSTRAINT chk_archive_edition_counts CHECK (
-        chapter_count = 120 AND preface_paragraph_count >= 1 AND chapter_paragraph_count >= 1
+        chapter_count >= 1 AND preface_paragraph_count >= 0 AND chapter_paragraph_count >= 1
         AND reader_paragraph_count = preface_paragraph_count + chapter_paragraph_count
-        AND source_utf8_byte_length > 0 AND preface_utf8_byte_length > 0
+        AND source_utf8_byte_length > 0 AND preface_utf8_byte_length >= 0
         AND chapter_utf8_byte_length > 0
+        AND ((preface_paragraph_count = 0 AND preface_utf8_byte_length = 0)
+             OR (preface_paragraph_count > 0 AND preface_utf8_byte_length > 0))
         AND reader_utf8_byte_length = preface_utf8_byte_length + chapter_utf8_byte_length
     ),
     CONSTRAINT fk_archive_edition_work FOREIGN KEY (work_id) REFERENCES archive_work (work_id)
@@ -55,7 +57,7 @@ CREATE TABLE archive_chapter (
     PRIMARY KEY (edition_id, block_id),
     UNIQUE KEY uk_archive_chapter_ordinal (edition_id, reader_ordinal),
     UNIQUE KEY uk_archive_chapter_number (edition_id, block_type, chapter_number),
-    CONSTRAINT chk_archive_chapter_shape CHECK ((block_type = 'PREFACE' AND reader_ordinal = 0 AND chapter_number IS NULL) OR (block_type = 'CHAPTER' AND reader_ordinal BETWEEN 1 AND 120 AND chapter_number = reader_ordinal)),
+    CONSTRAINT chk_archive_chapter_shape CHECK ((block_type = 'PREFACE' AND reader_ordinal = 0 AND chapter_number IS NULL) OR (block_type = 'CHAPTER' AND reader_ordinal >= 1 AND chapter_number = reader_ordinal)),
     CONSTRAINT chk_archive_chapter_metrics CHECK (paragraph_count > 0 AND utf8_byte_length > 0),
     CONSTRAINT fk_archive_chapter_edition FOREIGN KEY (edition_id) REFERENCES archive_edition (edition_id)
         ON UPDATE RESTRICT ON DELETE RESTRICT

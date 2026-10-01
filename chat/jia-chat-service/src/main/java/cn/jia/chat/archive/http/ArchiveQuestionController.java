@@ -33,7 +33,7 @@ import java.util.UUID;
 
 @ConditionalOnProperty(prefix = "archive.question", name = "enabled", havingValue = "true")
 @RestController
-@RequestMapping("/archive/v1/me/questions")
+@RequestMapping("/archive/v1")
 public class ArchiveQuestionController {
     private static final String CACHE_CONTROL = "private, no-store";
     private final ArchiveQuestionService service;
@@ -47,7 +47,7 @@ public class ArchiveQuestionController {
         this.accessPolicy = Objects.requireNonNull(accessPolicy, "accessPolicy");
     }
 
-    @PutMapping("/{questionId}")
+    @PutMapping("/me/questions/{questionId}")
     public ResponseEntity<?> create(@PathVariable String questionId,
                                     @RequestHeader(value = "Idempotency-Key", required = false) String key,
                                     @RequestBody(required = false) byte[] body,
@@ -61,7 +61,22 @@ public class ArchiveQuestionController {
                 "/archive/v1/me/questions/" + questionId, key, body));
     }
 
-    @GetMapping("/{questionId}")
+    @PutMapping("/editions/{editionId}/questions/{questionId}")
+    public ResponseEntity<?> createForEdition(@PathVariable String editionId,
+            @PathVariable String questionId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String key,
+            @RequestBody(required = false) byte[] body,
+            HttpServletRequest request, Authentication authentication) {
+        Authorization authorization = authorize(authentication);
+        if (authorization.error() != null) return authorization.error();
+        ResponseEntity<JsonResult<?>> syntax = mutationSyntax(questionId, key, request);
+        if (syntax != null) return syntax;
+        if (!editionId.matches("[A-Za-z0-9_-]{1,96}") || !allowed(authorization.owner())) return notFound();
+        return mutate(() -> service.create(authorization.owner(), editionId, questionId,
+                "/archive/v1/editions/" + editionId + "/questions/" + questionId, key, body));
+    }
+
+    @GetMapping("/me/questions/{questionId}")
     public ResponseEntity<JsonResult<?>> get(@PathVariable String questionId, Authentication authentication) {
         Authorization authorization = authorize(authentication);
         if (authorization.error() != null) return authorization.error();
@@ -75,7 +90,7 @@ public class ArchiveQuestionController {
         }
     }
 
-    @GetMapping(value = "/{questionId}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @GetMapping(value = "/me/questions/{questionId}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public ResponseEntity<?> events(@PathVariable String questionId,
                                     @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId,
                                     Authentication authentication) {
@@ -94,7 +109,7 @@ public class ArchiveQuestionController {
         }
     }
 
-    @PostMapping("/{questionId}/retry")
+    @PostMapping("/me/questions/{questionId}/retry")
     public ResponseEntity<?> retry(@PathVariable String questionId,
                                    @RequestHeader(value = "Idempotency-Key", required = false) String key,
                                    @RequestBody(required = false) byte[] body,

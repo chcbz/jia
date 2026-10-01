@@ -141,7 +141,8 @@ public class ArchiveContentImporter {
         if (!"READY".equals(candidate.importState())) {
             throw mismatch("activation candidate state");
         }
-        if (manifest.editionId().equals(work.activeEditionId())) {
+        store.ensureLegacyPublication("platform-classics", manifest.workId(), work, candidate);
+        if (manifest.editionId().equals(work.activeEditionId()) || work.activeEditionId() != null) {
             return;
         }
         if (store.switchActiveEdition(manifest.workId(), manifest.editionId()) != 1) {
@@ -224,7 +225,7 @@ public class ArchiveContentImporter {
             }
             persistedParagraphs += actualParagraphs.size();
         }
-        if (persistedParagraphs != 3_677 || persistedParagraphs != manifest.readerParagraphCount()) {
+        if (persistedParagraphs != manifest.readerParagraphCount()) {
             throw mismatch("persisted reader paragraph count");
         }
     }

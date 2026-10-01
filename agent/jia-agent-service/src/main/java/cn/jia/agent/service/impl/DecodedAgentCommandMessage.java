@@ -19,7 +19,8 @@ record DecodedAgentCommandMessage(
         String topologySha256,
         int sourceSettlementRetry,
         byte[] rawWireBytes,
-        byte[] wireSha256) {
+        byte[] wireSha256,
+        String controlledResourceId) {
 
     DecodedAgentCommandMessage {
         rawWireBytes = Arrays.copyOf(rawWireBytes, rawWireBytes.length);

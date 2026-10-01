@@ -6,13 +6,13 @@ import java.util.Map;
 import java.util.Objects;
 
 /** Fail-closed parser for the destructive H02 isolated-MySQL test target. */
-final class ArchiveMySqlTestGuard {
+public final class ArchiveMySqlTestGuard {
     private static final String JDBC_PREFIX = "jdbc:mysql://";
 
     private ArchiveMySqlTestGuard() {
     }
 
-    static Target requireDisposable(Map<String, String> environment) {
+    public static Target requireDisposable(Map<String, String> environment) {
         Objects.requireNonNull(environment, "environment");
         require("true".equals(environment.get("CYF_H02_MYSQL_ISOLATED")),
                 "CYF_H02_MYSQL_ISOLATED must be exactly true");
@@ -63,6 +63,6 @@ final class ArchiveMySqlTestGuard {
                 : new IllegalStateException(prefix + message, cause);
     }
 
-    record Target(String url, String databaseName) {
+    public record Target(String url, String databaseName) {
     }
 }

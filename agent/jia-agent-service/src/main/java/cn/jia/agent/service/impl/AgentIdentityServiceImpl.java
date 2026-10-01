@@ -285,6 +285,32 @@ public class AgentIdentityServiceImpl implements AgentIdentityService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
+    public AgentIdentityRegistryEntity lockPersistedIdentityForBinding(
+            String tenantId, String clientId, String ownerJiacn, long bindingId,
+            String expectedCanonicalAgentId) {
+        requireScope(tenantId, clientId, ownerJiacn);
+        requireAgentId(expectedCanonicalAgentId);
+        if (bindingId <= 0) throw forbidden("Agent binding is invalid");
+        AgentIdentityRegistryEntity observed = registryDao.findExactByBindingInScope(
+                tenantId, clientId, ownerJiacn, bindingId);
+        if (observed == null) throw forbidden("Persisted Agent identity is missing for binding");
+        validateRegistry(observed, tenantId, clientId, ownerJiacn, expectedCanonicalAgentId, true);
+        requirePersistedRegistry(observed);
+        AgentPersonaBindingEntity binding = bindingDao.findByIdForUpdate(bindingId);
+        AgentIdentityRegistryEntity locked = registryDao.findExactByBindingInScopeForUpdate(
+                tenantId, clientId, ownerJiacn, bindingId);
+        if (locked == null || !Objects.equals(observed.getId(), locked.getId())
+                || !Objects.equals(observed.getBindingId(), locked.getBindingId())) {
+            throw forbidden("Persisted Agent identity changed while acquiring root lock");
+        }
+        validateRegistry(locked, tenantId, clientId, ownerJiacn, expectedCanonicalAgentId, true);
+        requirePersistedRegistry(locked);
+        requirePersistedBinding(locked, binding);
+        return locked;
+    }
+
+    @Override
     public String resolveLegacyAgentIdInScope(
             String tenantId, String clientId, String ownerJiacn, String legacyAgentId) {
         requireScope(tenantId, clientId, ownerJiacn);

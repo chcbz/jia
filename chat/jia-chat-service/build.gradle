@@ -127,3 +127,87 @@ tasks.register('managedHostingHandshake', Test) {
     classpath = managedHostingHandshakeSourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+
+// AAM-M1-M4 focused source slice; avoids unrelated historical chat test compilation debt.
+def archiveMaintenanceMvpSourceSet = sourceSets.create('archiveMaintenanceMvp') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/chat/archive/maintenance/service/ArchiveMaintenanceServiceImplTest.java'
+        include 'cn/jia/chat/archive/maintenance/entry/ArchiveRestrictedChatClientFactoryTest.java'
+        include 'cn/jia/chat/archive/maintenance/entry/ArchiveMaintenanceChatCoordinatorTest.java'
+        include 'cn/jia/chat/archive/maintenance/service/ArchiveMaintenanceServiceWiringContextTest.java'
+        include 'cn/jia/chat/archive/maintenance/service/ArchiveExecutionCommandDispatcherTest.java'
+        include 'cn/jia/chat/archive/maintenance/service/ArchivePlatformSkillProvisioningPolicyTest.java'
+        include 'cn/jia/chat/archive/maintenance/service/ArchiveSourceMappingValidatorTest.java'
+        include 'cn/jia/chat/archive/maintenance/service/ArchiveSourceMappingGoldenVectorTest.java'
+        include 'cn/jia/chat/archive/maintenance/http/ArchiveNativeControllerContractTest.java'
+        include 'cn/jia/chat/archive/maintenance/http/ArchiveStrictRequestTest.java'
+        include 'cn/jia/chat/archive/maintenance/config/ArchiveMaintenanceSchemaCatalogTest.java'
+        include 'cn/jia/chat/archive/maintenance/config/ArchiveManagerConfigurationLifecycleTest.java'
+        include 'cn/jia/chat/archive/maintenance/service/ArchiveMaintenanceConcurrencyMySqlTest.java'
+        include 'cn/jia/chat/archive/service/ArchiveMySqlTestGuard.java'
+        include 'cn/jia/chat/archive/service/ArchiveReaderGenericEditionTest.java'
+        include 'cn/jia/chat/archive/maintenance/integration/ArchiveCrossComponentFixtureServer.java'
+        include 'cn/jia/chat/archive/maintenance/integration/ArchiveCrossComponentFixtureConfiguration.java'
+        include 'cn/jia/chat/archive/maintenance/integration/FixtureArchiveExecutionPort.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(archiveMaintenanceMvpSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(archiveMaintenanceMvpSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('archiveMaintenanceMvp', Test) {
+    group = 'verification'
+    description = 'Runs focused archive maintenance ACL, CAS, publication and generic reader tests.'
+    dependsOn tasks.named(archiveMaintenanceMvpSourceSet.classesTaskName)
+    testClassesDirs = archiveMaintenanceMvpSourceSet.output.classesDirs
+    classpath = archiveMaintenanceMvpSourceSet.runtimeClasspath
+    maxParallelForks = 1
+    maxHeapSize = '256m'
+    useJUnitPlatform()
+}
+
+// Full archive-domain regression without compiling unrelated historical chat tests.
+// Includes existing failures; never excludes them to manufacture a green result.
+def archiveRegressionSourceSet = sourceSets.create('archiveRegression') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/chat/archive/**/*.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(archiveRegressionSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(archiveRegressionSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('archiveRegression', Test) {
+    group = 'verification'
+    description = 'Runs the entire archive domain, including legacy reader, private data and question regressions.'
+    dependsOn tasks.named(archiveRegressionSourceSet.classesTaskName)
+    testClassesDirs = archiveRegressionSourceSet.output.classesDirs
+    classpath = sourceSets.main.output + archiveRegressionSourceSet.runtimeClasspath
+    maxParallelForks = 1
+    maxHeapSize = '256m'
+    useJUnitPlatform()
+}
+
+// Bounded disposable cross-component fixture. Main owns execution under the global Gradle lock.
+tasks.register('archiveCrossComponentFixtureServer', JavaExec) {
+    group = 'verification'
+    description = 'Runs the bounded real Archive HTTP/JDBC/Client fixture server.'
+    dependsOn tasks.named(archiveMaintenanceMvpSourceSet.classesTaskName)
+    classpath = archiveMaintenanceMvpSourceSet.runtimeClasspath
+    mainClass = 'cn.jia.chat.archive.maintenance.integration.ArchiveCrossComponentFixtureServer'
+    maxHeapSize = '256m'
+    jvmArgs '-XX:MaxMetaspaceSize=160m', '-Xss256k'
+}

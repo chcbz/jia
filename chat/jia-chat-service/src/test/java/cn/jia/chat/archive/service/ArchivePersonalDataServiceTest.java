@@ -350,6 +350,11 @@ class ArchivePersonalDataServiceTest {
             ContentPoint point = points.get(paragraphId);
             return point != null && point.editionId().equals(editionId) && point.blockId().equals(blockId) ? point : null;
         }
+        @Override public ContentPoint lockLastContentPoint(String editionId) {
+            return points.values().stream().filter(p -> p.editionId().equals(editionId))
+                    .max(java.util.Comparator.comparingInt(ContentPoint::blockOrdinal)
+                            .thenComparingInt(ContentPoint::paragraphOrdinal)).orElse(null);
+        }
         @Override public List<ContentPoint> lockBlockParagraphs(String editionId, String blockId, List<String> ids) {
             return points.values().stream().filter(p -> p.editionId().equals(editionId) && p.blockId().equals(blockId))
                     .sorted(java.util.Comparator.comparingInt(ContentPoint::paragraphOrdinal)).toList();

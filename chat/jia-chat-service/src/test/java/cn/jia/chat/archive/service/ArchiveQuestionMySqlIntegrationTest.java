@@ -7,6 +7,9 @@ import cn.jia.chat.archive.content.ArchiveEtags;
 import cn.jia.chat.archive.content.ArchiveManifest;
 import cn.jia.chat.archive.content.ArchiveManifestBundle;
 import cn.jia.chat.archive.content.ArchiveManifestLoader;
+import cn.jia.chat.archive.maintenance.config.ArchiveMaintenanceProperties;
+import cn.jia.chat.archive.maintenance.config.ArchiveMaintenanceSchemaInitializer;
+import cn.jia.chat.archive.maintenance.store.JdbcArchiveMaintenanceStore;
 import cn.jia.chat.archive.model.ArchiveOwnerScope;
 import cn.jia.chat.archive.store.JdbcArchiveContentStore;
 import cn.jia.chat.archive.store.JdbcArchivePersonalDataStore;
@@ -39,7 +42,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /** Destructive H05A evidence; guarded for an explicit disposable loopback MySQL 8.0.21 fixture only. */
 class ArchiveQuestionMySqlIntegrationTest {
-    private static final Instant NOW = Instant.parse("2026-08-22T12:00:00Z");
+    private Instant now;
     private JdbcTemplate jdbc;
     private ArchiveQuestionSchemaInitializer questionSchema;
     private JdbcArchiveQuestionStore store;
@@ -60,8 +63,12 @@ class ArchiveQuestionMySqlIntegrationTest {
         dataSource.setUsername(System.getenv().getOrDefault("CYF_H05A_MYSQL_USER", "root"));
         dataSource.setPassword(System.getenv().getOrDefault("CYF_H05A_MYSQL_PASSWORD", ""));
         jdbc = new JdbcTemplate(dataSource);
+        // Use the fixture DB clock so mutation expiry is never earlier than DB-created rows.
+        now = jdbc.queryForObject("SELECT CURRENT_TIMESTAMP(6)", java.sql.Timestamp.class).toInstant();
         clean();
         new ArchiveSchemaInitializer(jdbc).initialize();
+        new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
+                new ArchiveMaintenanceProperties()).initialize();
         new ArchiveReaderDataSchemaInitializer(jdbc).initialize();
         questionSchema = new ArchiveQuestionSchemaInitializer(jdbc);
         questionSchema.initialize();
@@ -75,7 +82,7 @@ class ArchiveQuestionMySqlIntegrationTest {
         store = new JdbcArchiveQuestionStore(jdbc);
         delivery = new ArchiveQuestionEventDelivery(store, new ArchiveQuestionEventBroker(), transactions);
         service = new ArchiveQuestionServiceImpl(store, new JdbcArchivePersonalDataStore(jdbc), transactions,
-                new ArchiveClerkFallbackProvider(), delivery, Clock.fixed(NOW, ZoneOffset.UTC));
+                new ArchiveClerkFallbackProvider(), delivery, Clock.fixed(now, ZoneOffset.UTC));
     }
 
     @AfterEach void tearDown() {
@@ -87,10 +94,10 @@ class ArchiveQuestionMySqlIntegrationTest {
     void realMysqlFourScopesReplayConcurrencyFencingExhaustionZeroWriteAndDriftFailClosed() throws Exception {
         String id = "123e4567-e89b-42d3-a456-426614174000";
         List<ArchiveOwnerScope> owners = List.of(
-                new ArchiveOwnerScope("owner-a", "client-a", "owner-a"),
-                new ArchiveOwnerScope("owner-a", "client-b", "owner-a"),
-                new ArchiveOwnerScope("owner-b", "client-a", "owner-b"),
-                new ArchiveOwnerScope("owner-b", "client-b", "owner-b"));
+                new ArchiveOwnerScope("0", "client-a", "owner-a"),
+                new ArchiveOwnerScope("0", "client-b", "owner-a"),
+                new ArchiveOwnerScope("0", "client-a", "owner-b"),
+                new ArchiveOwnerScope("0", "client-b", "owner-b"));
         for (ArchiveOwnerScope owner : owners) {
             ArchiveMutationResult first = service.create(owner, id, path(id), "same-key", body);
             ArchiveMutationResult replay = service.create(owner, id, path(id), "same-key", body);
@@ -105,7 +112,7 @@ class ArchiveQuestionMySqlIntegrationTest {
         assertEquals("E6A188E58DB7E4B9A6E5908F",
                 jdbc.queryForObject("SELECT HEX(responder_name) FROM archive_question LIMIT 1", String.class));
         assertEquals(404, assertThrows(ArchivePersonalDataException.class,
-                () -> service.get(new ArchiveOwnerScope("owner-a", "client-c", "owner-a"), id)).status());
+                () -> service.get(new ArchiveOwnerScope("0", "client-c", "owner-a"), id)).status());
 
         String responseLossId = "173e4567-e89b-42d3-a456-426614174000";
         ArchiveTransactions responseLoss = new ArchiveTransactions() {
@@ -122,14 +129,14 @@ class ArchiveQuestionMySqlIntegrationTest {
         };
         ArchiveQuestionServiceImpl responseLossService = new ArchiveQuestionServiceImpl(store,
                 new JdbcArchivePersonalDataStore(jdbc), responseLoss, new ArchiveClerkFallbackProvider(),
-                delivery, Clock.fixed(NOW, ZoneOffset.UTC));
+                delivery, Clock.fixed(now, ZoneOffset.UTC));
         assertThrows(IllegalStateException.class, () -> responseLossService.create(owners.getFirst(),
                 responseLossId, path(responseLossId), "response-loss", body));
         ArchiveMutationResult recoveredResponse = responseLossService.create(owners.getFirst(),
                 responseLossId, path(responseLossId), "response-loss", body);
         assertTrue(recoveredResponse.replayed());
-        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM archive_question_event WHERE tenant_id='owner-a' AND client_id='client-a' AND question_id=?", Integer.class, responseLossId));
-        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM archive_outbox WHERE tenant_id='owner-a' AND client_id='client-a' AND question_id=?", Integer.class, responseLossId));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM archive_question_event WHERE tenant_id='0' AND owner_jiacn='owner-a' AND client_id='client-a' AND question_id=?", Integer.class, responseLossId));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM archive_outbox WHERE tenant_id='0' AND owner_jiacn='owner-a' AND client_id='client-a' AND question_id=?", Integer.class, responseLossId));
 
         int beforeRouting = count("archive_question_mutation");
         byte[] routed = new String(body, StandardCharsets.UTF_8).replaceFirst("\\}$", ",\"targetAgentId\":\"wuyong\"}")
@@ -152,7 +159,7 @@ class ArchiveQuestionMySqlIntegrationTest {
                 """, owners.getFirst().tenantId(), owners.getFirst().clientId(), owners.getFirst().ownerJiacn(),
                 pendingId, "PUT", path(pendingId), "pending-key",
                 writeJson.sha256("PUT", path(pendingId), pendingParsed.canonicalJson()),
-                java.sql.Timestamp.from(NOW.plusSeconds(604800)));
+                java.sql.Timestamp.from(now.plusSeconds(604800)));
         int beforePendingQuestions = count("archive_question");
         ArchivePersonalDataException pending = assertThrows(ArchivePersonalDataException.class,
                 () -> service.create(owners.getFirst(), pendingId, path(pendingId), "pending-key", body));
@@ -174,9 +181,9 @@ class ArchiveQuestionMySqlIntegrationTest {
         assertTrue(pool.awaitTermination(60, TimeUnit.SECONDS));
         assertEquals(2, outcomes.stream().filter(ArchiveMutationResult.class::isInstance).count());
         assertEquals(1, outcomes.stream().filter(value -> value instanceof ArchiveMutationResult result && result.replayed()).count());
-        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM archive_question WHERE tenant_id='owner-a' AND client_id='client-a' AND question_id=?", Integer.class, raceId));
-        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM archive_question_event WHERE tenant_id='owner-a' AND client_id='client-a' AND question_id=?", Integer.class, raceId));
-        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM archive_outbox WHERE tenant_id='owner-a' AND client_id='client-a' AND question_id=?", Integer.class, raceId));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM archive_question WHERE tenant_id='0' AND owner_jiacn='owner-a' AND client_id='client-a' AND question_id=?", Integer.class, raceId));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM archive_question_event WHERE tenant_id='0' AND owner_jiacn='owner-a' AND client_id='client-a' AND question_id=?", Integer.class, raceId));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM archive_outbox WHERE tenant_id='0' AND owner_jiacn='owner-a' AND client_id='client-a' AND question_id=?", Integer.class, raceId));
 
         String conflictRaceId = "373e4567-e89b-42d3-a456-426614174000";
         CountDownLatch conflictStart = new CountDownLatch(1);
@@ -198,12 +205,12 @@ class ArchiveQuestionMySqlIntegrationTest {
         assertEquals(1, conflictOutcomes.stream().filter(ArchiveMutationResult.class::isInstance).count());
         assertEquals(1, conflictOutcomes.stream().filter(value -> value instanceof ArchivePersonalDataException failure
                 && failure.status() == 409).count());
-        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM archive_question WHERE tenant_id='owner-a' AND client_id='client-a' AND question_id=?", Integer.class, conflictRaceId));
-        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM archive_question_event WHERE tenant_id='owner-a' AND client_id='client-a' AND question_id=?", Integer.class, conflictRaceId));
-        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM archive_outbox WHERE tenant_id='owner-a' AND client_id='client-a' AND question_id=?", Integer.class, conflictRaceId));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM archive_question WHERE tenant_id='0' AND owner_jiacn='owner-a' AND client_id='client-a' AND question_id=?", Integer.class, conflictRaceId));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM archive_question_event WHERE tenant_id='0' AND owner_jiacn='owner-a' AND client_id='client-a' AND question_id=?", Integer.class, conflictRaceId));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM archive_outbox WHERE tenant_id='0' AND owner_jiacn='owner-a' AND client_id='client-a' AND question_id=?", Integer.class, conflictRaceId));
 
         ArchiveQuestionWorker worker = new ArchiveQuestionWorker(store, transactions,
-                new ArchiveClerkFallbackProvider(), delivery, enabledPolicy(), Clock.fixed(NOW, ZoneOffset.UTC));
+                new ArchiveClerkFallbackProvider(), delivery, enabledPolicy(), Clock.fixed(now, ZoneOffset.UTC));
         for (int index = 0; index < 10 && worker.runOnce(); index++) { }
         for (ArchiveOwnerScope owner : owners) assertEquals("SUCCEEDED", service.get(owner, id).status());
         assertEquals("SUCCEEDED", service.get(owners.getFirst(), raceId).status());
@@ -216,9 +223,9 @@ class ArchiveQuestionMySqlIntegrationTest {
                 owners.getFirst().tenantId(), owners.getFirst().clientId(), owners.getFirst().ownerJiacn(), staleId);
         jdbc.update("INSERT INTO archive_question_event (tenant_id,client_id,owner_jiacn,question_id,sequence,event_type,payload_json,occurred_at) VALUES (?,?,?,?,2,'QUESTION_RUNNING','{}',?)",
                 owners.getFirst().tenantId(), owners.getFirst().clientId(), owners.getFirst().ownerJiacn(), staleId,
-                java.sql.Timestamp.from(NOW));
+                java.sql.Timestamp.from(now));
         jdbc.update("UPDATE archive_outbox SET state='LEASED',attempt_count=1,fencing_token=2,lease_until=?,published_sequence=1 WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND question_id=?",
-                java.sql.Timestamp.from(NOW.plusSeconds(30)), owners.getFirst().tenantId(), owners.getFirst().clientId(),
+                java.sql.Timestamp.from(now.plusSeconds(30)), owners.getFirst().tenantId(), owners.getFirst().clientId(),
                 owners.getFirst().ownerJiacn(), staleId);
         var staleQuestion = store.findQuestion(owners.getFirst(), staleId, false);
         assertFalse(worker.persistAnswerAndComplete(new ArchiveQuestionWorker.Claimed(owners.getFirst(), staleId, 1, 1,
@@ -266,7 +273,7 @@ class ArchiveQuestionMySqlIntegrationTest {
             @Override public Answer answer(Request request) { throw new AssertionError(); }
         };
         ArchiveQuestionServiceImpl unavailableService = new ArchiveQuestionServiceImpl(store,
-                new JdbcArchivePersonalDataStore(jdbc), transactions, unavailable, delivery, Clock.fixed(NOW, ZoneOffset.UTC));
+                new JdbcArchivePersonalDataStore(jdbc), transactions, unavailable, delivery, Clock.fixed(now, ZoneOffset.UTC));
         String unavailableId = "623e4567-e89b-42d3-a456-426614174000";
         assertEquals(503, assertThrows(ArchivePersonalDataException.class,
                 () -> unavailableService.create(owners.getFirst(), unavailableId, path(unavailableId),
@@ -312,15 +319,37 @@ class ArchiveQuestionMySqlIntegrationTest {
     }
     private String path(String id) { return "/archive/v1/me/questions/" + id; }
     private int count(String table) { return jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Integer.class); }
+
+    private static String[] maintenanceTablesInDropOrder() {
+        return new String[]{"archive_operation", "archive_event", "archive_publication",
+                "archive_validation", "archive_draft", "archive_execution_grant", "archive_job_run",
+                "archive_maintenance_job", "archive_source_snapshot", "archive_appointment",
+                "archive_appointment_slot", "archive_collection_work", "archive_collection_manager",
+                "archive_collection"};
+    }
+
+    private static String[] concat(String[]... groups) {
+        int size = java.util.Arrays.stream(groups).mapToInt(group -> group.length).sum();
+        String[] result = new String[size];
+        int offset = 0;
+        for (String[] group : groups) {
+            System.arraycopy(group, 0, result, offset, group.length);
+            offset += group.length;
+        }
+        return result;
+    }
     private void clean() {
         jdbc.execute((ConnectionCallback<Void>) connection -> {
             try (Statement statement = connection.createStatement()) {
                 statement.execute("SET FOREIGN_KEY_CHECKS=0");
                 try {
-                    for (String table : new String[]{"archive_outbox", "archive_question_event",
-                            "archive_question_mutation", "archive_question", "archive_idempotency", "archive_note",
+                    for (String table : concat(new String[]{"archive_outbox", "archive_question_event",
+                            "archive_question_mutation", "archive_question"},
+                            maintenanceTablesInDropOrder(), new String[]{"archive_idempotency", "archive_note",
                             "archive_bookmark", "archive_reader_progress", "archive_paragraph", "archive_chapter",
-                            "archive_edition", "archive_work"}) statement.execute("DROP TABLE IF EXISTS " + table);
+                            "archive_edition", "archive_work"})) {
+                        statement.execute("DROP TABLE IF EXISTS " + table);
+                    }
                 } finally { statement.execute("SET FOREIGN_KEY_CHECKS=1"); }
             }
             return null;

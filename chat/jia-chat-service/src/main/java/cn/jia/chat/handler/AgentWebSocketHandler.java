@@ -731,6 +731,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 event.put("runtimeAuth", runtimeAuthentication.bind(session.getId(), sessionClientId(session),
                         sessionJiacn(session), result.getAgentId(), sessionRuntimeInstanceId(session),
                         sessionAttribute(session, "managedApiKeyId"), result.getToken(), session::isOpen));
+                runtimeAuthentication.registerCommandProtocols(session.getId(), result.getAgentId(), payload.get("commandProtocols"));
             }
             stage = "registration_receipt";
             if (!sendEvent(session, "agent_registered", event)) {

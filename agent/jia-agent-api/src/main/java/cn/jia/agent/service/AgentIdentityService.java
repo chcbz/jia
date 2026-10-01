@@ -40,6 +40,11 @@ public interface AgentIdentityService {
     String requirePersistedCanonicalAgentIdInScope(
             String tenantId, String clientId, String ownerJiacn, String canonicalAgentId);
 
+    /** Locks an exact historically valid identity/binding root without requiring current active state. */
+    AgentIdentityRegistryEntity lockPersistedIdentityForBinding(
+            String tenantId, String clientId, String ownerJiacn, long bindingId,
+            String expectedCanonicalAgentId);
+
     String resolveLegacyAgentIdInScope(
             String tenantId, String clientId, String ownerJiacn, String legacyAgentId);
 

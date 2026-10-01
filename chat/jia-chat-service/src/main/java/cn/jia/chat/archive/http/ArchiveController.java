@@ -47,6 +47,49 @@ public class ArchiveController {
         }
     }
 
+    @GetMapping("/works")
+    public ResponseEntity<JsonResult<?>> works(
+            @RequestHeader(value = HttpHeaders.IF_NONE_MATCH, required = false) String ifNoneMatch,
+            Authentication authentication) {
+        Authorization authorization = authorize(authentication);
+        if (authorization.error() != null) return authorization.error();
+        ResponseEntity<JsonResult<?>> conditionalError = validateConditional(ifNoneMatch);
+        if (conditionalError != null) return conditionalError;
+        if (!accessPolicy.allows(authorization.tenantId(), authorization.clientId())) return notFound();
+        return render(ifNoneMatch, readerService.works(100));
+    }
+
+    @GetMapping("/works/{workId}/catalog")
+    public ResponseEntity<JsonResult<?>> workCatalog(
+            @PathVariable String workId,
+            @RequestHeader(value = HttpHeaders.IF_NONE_MATCH, required = false) String ifNoneMatch,
+            Authentication authentication) {
+        return catalogById(workId, ifNoneMatch, authentication, true);
+    }
+
+    @GetMapping("/editions/{editionId}/catalog")
+    public ResponseEntity<JsonResult<?>> editionCatalog(
+            @PathVariable String editionId,
+            @RequestHeader(value = HttpHeaders.IF_NONE_MATCH, required = false) String ifNoneMatch,
+            Authentication authentication) {
+        return catalogById(editionId, ifNoneMatch, authentication, false);
+    }
+
+    private ResponseEntity<JsonResult<?>> catalogById(String id, String ifNoneMatch,
+                                                       Authentication authentication, boolean work) {
+        Authorization authorization = authorize(authentication);
+        if (authorization.error() != null) return authorization.error();
+        ResponseEntity<JsonResult<?>> conditionalError = validateConditional(ifNoneMatch);
+        if (conditionalError != null) return conditionalError;
+        if (!validIdentifier(id, work ? 64 : 96)) return notFound();
+        if (!accessPolicy.allows(authorization.tenantId(), authorization.clientId())) return notFound();
+        try {
+            return render(ifNoneMatch, work ? readerService.workCatalog(id) : readerService.editionCatalog(id));
+        } catch (ArchiveResourceNotFoundException unavailable) {
+            return notFound();
+        }
+    }
+
     @GetMapping("/editions/{editionId}/preface")
     public ResponseEntity<JsonResult<?>> preface(
             @PathVariable String editionId,

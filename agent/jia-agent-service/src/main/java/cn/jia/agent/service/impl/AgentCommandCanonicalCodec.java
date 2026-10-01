@@ -4,6 +4,8 @@ import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.entity.AgentCommandDraft;
 import cn.jia.agent.entity.AgentCommandPayload;
 import cn.jia.agent.entity.AgentSkillInstallPayload;
+import cn.jia.agent.entity.AgentPlatformSkillInstallPayload;
+import cn.jia.agent.entity.AgentArchiveMaintenancePayload;
 import cn.jia.agent.entity.AgentHallCommandContext;
 import cn.jia.agent.entity.AgentHallCommandPayload;
 import cn.jia.agent.entity.AgentTaskInvitePayload;
@@ -121,7 +123,24 @@ public final class AgentCommandCanonicalCodec {
     }
 
     public static boolean isSupportedCommandType(String commandType) {
-        return "SKILL_INSTALL".equals(commandType) || HALL_COMMAND_TYPES.contains(commandType);
+        return "SKILL_INSTALL".equals(commandType) || isControlledCommandType(commandType)
+                || HALL_COMMAND_TYPES.contains(commandType);
+    }
+
+    public static boolean isControlledCommandType(String type) {
+        return "PLATFORM_SKILL_INSTALL".equals(type) || "ARCHIVE_MAINTENANCE_EXECUTE".equals(type);
+    }
+
+    /** Resource ids occupy transport correlation slots, never a marketplace order. */
+    public static String controlledCommandId(String tenant, String client, String owner,
+            String resourceId, String targetAgentId, String type) {
+        requireSingleTenant(tenant);
+        requireExact(client, "clientId", 50); requireExact(owner, "ownerJiacn", 50);
+        AgentControlledCommandContract.requireId(resourceId);
+        requireExact(targetAgentId, "targetAgentId", 100);
+        if (!isControlledCommandType(type)) throw invalid("controlled command type is invalid");
+        return "cmd_controlled_" + hex(sha256((tenant + '\0' + client + '\0' + owner
+                + '\0' + resourceId + '\0' + targetAgentId + '\0' + type).getBytes(StandardCharsets.UTF_8)));
     }
 
     public static boolean isHallIntentCommand(AgentCommandDraft draft) {
@@ -200,6 +219,10 @@ public final class AgentCommandCanonicalCodec {
             string(json,"fencingToken","1"); string(json,"deliveryEpoch","1");
             skillFields(json,p);
         }
+        if (isControlledCommandType(draft.commandType())) {
+            string(json,"fencingToken","1"); string(json,"deliveryEpoch","1");
+            string(json,"executionEpoch",draft.payload() instanceof AgentArchiveMaintenancePayload p ? p.executionEpoch() : "1");
+        }
         payload(json, draft.payload());
         json.append('}');
         return bounded(json);
@@ -217,7 +240,9 @@ public final class AgentCommandCanonicalCodec {
             if (root.size() != (hall ? 15 : 14)) {
                 throw invalid("business envelope contains unknown fields");
             }
-            AgentCommandPayload decodedPayload = "SKILL_INSTALL".equals(commandType) ? decodeSkill(root.get("payload")) : hall
+            AgentCommandPayload decodedPayload = isControlledCommandType(commandType)
+                    ? decodeControlled(commandType, root.get("payload"))
+                    : "SKILL_INSTALL".equals(commandType) ? decodeSkill(root.get("payload")) : hall
                     ? decodeHallPayload(root.get("payload"))
                     : decodeTaskInvitePayload(root.get("payload"));
             AgentCommandDraft draft = new AgentCommandDraft(
@@ -318,6 +343,11 @@ public final class AgentCommandCanonicalCodec {
                     || !p.downloadPath().equals("/internal/agent/skill-installations/"+p.installationId()+"/package"))
                 throw invalid("SKILL_INSTALL package mismatch");
             requireFixedExpiry(draft,TASK_INVITE_TTL_MILLIS,"SKILL_INSTALL");
+            return;
+        }
+        if (isControlledCommandType(draft.commandType())) {
+            AgentControlledCommandContract.validate(draft);
+            requireFixedExpiry(draft, TASK_INVITE_TTL_MILLIS, "controlled command delivery");
             return;
         }
         if (AgentProtocolConstants.COMMAND_TASK_INVITE.equals(draft.commandType())
@@ -507,6 +537,20 @@ public final class AgentCommandCanonicalCodec {
                 nullableText(node, "autonomyLevel"), requiresApproval, decodedContext);
     }
 
+    private static AgentCommandPayload decodeControlled(String type, JsonNode p) {
+        if ("PLATFORM_SKILL_INSTALL".equals(type)) {
+            requireObjectSize(p, 8, "PLATFORM_SKILL_INSTALL payload");
+            return new AgentPlatformSkillInstallPayload(integer(p,"schemaVersion"), text(p,"installationId"),
+                    text(p,"bindingVersion"), text(p,"skillKey"), text(p,"skillVersion"),
+                    text(p,"packageSha256"), text(p,"challengeId"), text(p,"packageRef"));
+        }
+        requireObjectSize(p, 14, "ARCHIVE_MAINTENANCE_EXECUTE payload");
+        return new AgentArchiveMaintenancePayload(integer(p,"schemaVersion"), text(p,"jobId"), text(p,"runId"),
+                text(p,"executionEpoch"), text(p,"appointmentId"), text(p,"appointmentRevision"),
+                text(p,"managerAuthorizationRevision"), text(p,"bindingVersion"), text(p,"grantRef"), text(p,"executionRef"), text(p,"dispatchKey"),
+                text(p,"skillInstallationId"), text(p,"skillPackageSha256"), text(p,"contextRef"));
+    }
+
     private static AgentSkillInstallPayload decodeSkill(JsonNode n) {
         requireObjectSize(n,8,"SKILL_INSTALL payload");
         return new AgentSkillInstallPayload(text(n,"orderId"),text(n,"installationId"),text(n,"productVersionId"),
@@ -526,6 +570,25 @@ public final class AgentCommandCanonicalCodec {
             hallPayload(json, hall);
         } else if (payload instanceof AgentSkillInstallPayload p) {
             json.append(",\"payload\":{"); skillFields(json,p); json.append('}');
+        } else if (payload instanceof AgentPlatformSkillInstallPayload p) {
+            json.append(",\"payload\":{");
+            number(json,"schemaVersion",p.schemaVersion());
+            string(json,"installationId",p.installationId()); string(json,"bindingVersion",p.bindingVersion());
+            string(json,"skillKey",p.skillKey()); string(json,"skillVersion",p.skillVersion());
+            string(json,"packageSha256",p.packageSha256()); string(json,"challengeId",p.challengeId());
+            string(json,"packageRef",p.packageRef()); json.append('}');
+        } else if (payload instanceof AgentArchiveMaintenancePayload p) {
+            json.append(",\"payload\":{");
+            number(json,"schemaVersion",p.schemaVersion());
+            string(json,"jobId",p.jobId()); string(json,"runId",p.runId());
+            string(json,"executionEpoch",p.executionEpoch()); string(json,"appointmentId",p.appointmentId());
+            string(json,"appointmentRevision",p.appointmentRevision());
+            string(json,"managerAuthorizationRevision",p.managerAuthorizationRevision());
+            string(json,"bindingVersion",p.bindingVersion());
+            string(json,"grantRef",p.grantRef()); string(json,"executionRef",p.executionRef());
+            string(json,"dispatchKey",p.dispatchKey()); string(json,"skillInstallationId",p.skillInstallationId());
+            string(json,"skillPackageSha256",p.skillPackageSha256()); string(json,"contextRef",p.contextRef());
+            json.append('}');
         } else {
             throw invalid("payload type is outside the frozen allowlist");
         }

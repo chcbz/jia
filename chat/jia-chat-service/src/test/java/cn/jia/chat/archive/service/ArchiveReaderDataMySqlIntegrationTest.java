@@ -5,6 +5,9 @@ import cn.jia.chat.archive.config.ArchiveSchemaInitializer;
 import cn.jia.chat.archive.content.ArchiveManifest;
 import cn.jia.chat.archive.content.ArchiveManifestBundle;
 import cn.jia.chat.archive.content.ArchiveManifestLoader;
+import cn.jia.chat.archive.maintenance.config.ArchiveMaintenanceProperties;
+import cn.jia.chat.archive.maintenance.config.ArchiveMaintenanceSchemaInitializer;
+import cn.jia.chat.archive.maintenance.store.JdbcArchiveMaintenanceStore;
 import cn.jia.chat.archive.model.ArchiveOwnerScope;
 import cn.jia.chat.archive.store.JdbcArchiveContentStore;
 import cn.jia.chat.archive.store.JdbcArchivePersonalDataStore;
@@ -55,6 +58,8 @@ class ArchiveReaderDataMySqlIntegrationTest {
         jdbc = new JdbcTemplate(dataSource);
         clean();
         new ArchiveSchemaInitializer(jdbc).initialize();
+        new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
+                new ArchiveMaintenanceProperties()).initialize();
         readerDataSchema = new ArchiveReaderDataSchemaInitializer(jdbc);
         readerDataSchema.initialize();
         readerDataSchema.initialize();
@@ -78,10 +83,10 @@ class ArchiveReaderDataMySqlIntegrationTest {
         String bookmarkId = "123e4567-e89b-42d3-a456-426614174000";
         String noteId = "223e4567-e89b-82d3-a456-426614174000";
         List<ArchiveOwnerScope> owners = List.of(
-                new ArchiveOwnerScope("owner-a", "client-a", "owner-a"),
-                new ArchiveOwnerScope("owner-a", "client-b", "owner-a"),
-                new ArchiveOwnerScope("owner-b", "client-a", "owner-b"),
-                new ArchiveOwnerScope("owner-b", "client-b", "owner-b"));
+                new ArchiveOwnerScope("0", "client-a", "owner-a"),
+                new ArchiveOwnerScope("0", "client-b", "owner-a"),
+                new ArchiveOwnerScope("0", "client-a", "owner-b"),
+                new ArchiveOwnerScope("0", "client-b", "owner-b"));
         byte[] bookmarkBody = bookmarkBody(firstBlock, firstParagraph, "0");
         byte[] progressBody = progressBody(firstBlock, firstParagraph, "0", false, 0);
         byte[] noteBody = noteBody("0", "private-水滸");
@@ -129,9 +134,9 @@ class ArchiveReaderDataMySqlIntegrationTest {
         assertTrue(deleteReplay.replayed());
         assertEquals("IDEMPOTENCY_KEY_REUSED", assertThrows(ArchivePersonalDataException.class,
                 () -> service.deleteBookmark(owners.getFirst(), bookmarkId, "2", bookmarkPath, "delete-key")).code());
-        assertEquals("DELETED", jdbc.queryForObject("SELECT state FROM archive_bookmark WHERE tenant_id='owner-a' "
+        assertEquals("DELETED", jdbc.queryForObject("SELECT state FROM archive_bookmark WHERE tenant_id='0' AND owner_jiacn='owner-a' "
                 + "AND client_id='client-a' AND bookmark_id=?", String.class, bookmarkId));
-        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM archive_bookmark WHERE tenant_id='owner-a' "
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM archive_bookmark WHERE tenant_id='0' AND owner_jiacn='owner-a' "
                 + "AND client_id='client-a' AND (paragraph_id IS NOT NULL OR paragraph_sha256 IS NOT NULL)", Integer.class));
         assertEquals(404, assertThrows(ArchivePersonalDataException.class,
                 () -> service.putBookmark(owners.getFirst(), bookmarkId, bookmarkPath, "resurrect-key",
@@ -143,7 +148,7 @@ class ArchiveReaderDataMySqlIntegrationTest {
                 owners.get(1), noteId, "1", notePath, "note-delete").body());
         assertEquals("IDEMPOTENCY_KEY_REUSED", assertThrows(ArchivePersonalDataException.class,
                 () -> service.deleteNote(owners.get(1), noteId, "2", notePath, "note-delete")).code());
-        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM archive_note WHERE tenant_id='owner-a' "
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM archive_note WHERE tenant_id='0' AND owner_jiacn='owner-a' "
                 + "AND client_id='client-b' AND (text IS NOT NULL OR anchor_json IS NOT NULL)", Integer.class));
 
         byte[] completion = progressBody(finalBlock, finalParagraph, "1", true,
@@ -151,12 +156,12 @@ class ArchiveReaderDataMySqlIntegrationTest {
         service.putProgress(owners.get(3), manifest.editionId(),
                 "/archive/v1/me/progress/" + manifest.editionId(), "complete-key", completion);
         assertEquals("COMPLETED", jdbc.queryForObject("SELECT state FROM archive_reader_progress "
-                + "WHERE tenant_id='owner-b' AND client_id='client-b'", String.class));
+                + "WHERE tenant_id='0' AND owner_jiacn='owner-b' AND client_id='client-b'", String.class));
         assertEquals(finalParagraph.utf8ByteLength(), jdbc.queryForObject(
-                "SELECT byte_offset FROM archive_reader_progress WHERE tenant_id='owner-b' AND client_id='client-b'",
+                "SELECT byte_offset FROM archive_reader_progress WHERE tenant_id='0' AND owner_jiacn='owner-b' AND client_id='client-b'",
                 Long.class));
         assertEquals(finalParagraph.paragraphId(), jdbc.queryForObject(
-                "SELECT paragraph_id FROM archive_reader_progress WHERE tenant_id='owner-b' AND client_id='client-b'",
+                "SELECT paragraph_id FROM archive_reader_progress WHERE tenant_id='0' AND owner_jiacn='owner-b' AND client_id='client-b'",
                 String.class));
 
         int beforeZeroWrite = count("archive_idempotency");
@@ -229,14 +234,34 @@ class ArchiveReaderDataMySqlIntegrationTest {
         return jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Integer.class);
     }
 
+
+    private static String[] maintenanceTablesInDropOrder() {
+        return new String[]{"archive_operation", "archive_event", "archive_publication",
+                "archive_validation", "archive_draft", "archive_execution_grant", "archive_job_run",
+                "archive_maintenance_job", "archive_source_snapshot", "archive_appointment",
+                "archive_appointment_slot", "archive_collection_work", "archive_collection_manager",
+                "archive_collection"};
+    }
+
+    private static String[] concat(String[]... groups) {
+        int size = java.util.Arrays.stream(groups).mapToInt(group -> group.length).sum();
+        String[] result = new String[size];
+        int offset = 0;
+        for (String[] group : groups) {
+            System.arraycopy(group, 0, result, offset, group.length);
+            offset += group.length;
+        }
+        return result;
+    }
     private void clean() {
         jdbc.execute((ConnectionCallback<Void>) connection -> {
             try (Statement statement = connection.createStatement()) {
                 statement.execute("SET FOREIGN_KEY_CHECKS=0");
                 try {
-                    for (String table : new String[]{"archive_idempotency", "archive_note", "archive_bookmark",
+                    for (String table : concat(maintenanceTablesInDropOrder(), new String[]{
+                            "archive_idempotency", "archive_note", "archive_bookmark",
                             "archive_reader_progress", "archive_paragraph", "archive_chapter",
-                            "archive_edition", "archive_work"}) {
+                            "archive_edition", "archive_work"})) {
                         statement.execute("DROP TABLE IF EXISTS " + table);
                     }
                 } finally { statement.execute("SET FOREIGN_KEY_CHECKS=1"); }

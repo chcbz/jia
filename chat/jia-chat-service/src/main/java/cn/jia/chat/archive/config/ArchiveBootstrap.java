@@ -2,6 +2,7 @@ package cn.jia.chat.archive.config;
 
 import cn.jia.core.diagnostics.StartupTiming;
 import cn.jia.chat.archive.content.ArchiveManifestBundle;
+import cn.jia.chat.archive.maintenance.config.ArchiveMaintenanceSchemaInitializer;
 import cn.jia.chat.archive.content.ArchiveManifestLoader;
 import cn.jia.chat.archive.service.ArchiveContentImporter;
 import org.springframework.boot.ApplicationArguments;
@@ -16,16 +17,19 @@ public class ArchiveBootstrap implements ApplicationRunner {
     private final ArchiveReaderAccessPolicy accessPolicy;
     private final ArchiveSchemaInitializer schemaInitializer;
     private final ArchiveReaderDataSchemaInitializer readerDataSchemaInitializer;
+    private final ArchiveMaintenanceSchemaInitializer maintenanceSchemaInitializer;
     private final ArchiveManifestLoader manifestLoader;
     private final ArchiveContentImporter importer;
 
     public ArchiveBootstrap(ArchiveReaderAccessPolicy accessPolicy,
                             ArchiveSchemaInitializer schemaInitializer,
                             ArchiveReaderDataSchemaInitializer readerDataSchemaInitializer,
+                            ArchiveMaintenanceSchemaInitializer maintenanceSchemaInitializer,
                             ArchiveContentImporter importer) {
         this.accessPolicy = accessPolicy;
         this.schemaInitializer = schemaInitializer;
         this.readerDataSchemaInitializer = readerDataSchemaInitializer;
+        this.maintenanceSchemaInitializer = maintenanceSchemaInitializer;
         this.manifestLoader = new ArchiveManifestLoader();
         this.importer = importer;
     }
@@ -40,6 +44,7 @@ public class ArchiveBootstrap implements ApplicationRunner {
             return;
         }
         StartupTiming.run("cyf.archive.schema", schemaInitializer::initialize);
+        StartupTiming.run("cyf.archive.maintenance-schema", maintenanceSchemaInitializer::initialize);
         StartupTiming.run("cyf.archive.reader-schema", readerDataSchemaInitializer::initialize);
         ArchiveManifestBundle bundle = StartupTiming.call("cyf.archive.manifest-load", manifestLoader::load);
         StartupTiming.run("cyf.archive.import-activate",

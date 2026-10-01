@@ -68,6 +68,18 @@ public final class AgentCommandRabbitConsumer {
     @Autowired(required=false)
     public void setSkillDispatch(cn.jia.agent.skill.SkillInstallDispatchService skills) { this.skillDispatch=skills; }
 
+    private java.util.Map<String, cn.jia.agent.service.AgentControlledCommandDispatcher> controlledDispatch = java.util.Map.of();
+    @Autowired(required=false)
+    public void setControlledDispatchers(java.util.List<cn.jia.agent.service.AgentControlledCommandDispatcher> adapters) {
+        var routes = new java.util.HashMap<String, cn.jia.agent.service.AgentControlledCommandDispatcher>();
+        for (var adapter : adapters) {
+            if (!AgentCommandCanonicalCodec.isControlledCommandType(adapter.commandType())
+                    || routes.putIfAbsent(adapter.commandType(), adapter) != null)
+                throw new IllegalArgumentException("Duplicate or invalid controlled command adapter");
+        }
+        controlledDispatch = java.util.Map.copyOf(routes);
+    }
+
     @Autowired
     public AgentCommandRabbitConsumer(
             AgentCommandInboxService inboxService,
@@ -191,6 +203,26 @@ public final class AgentCommandRabbitConsumer {
                 case OFFLINE -> completeWaitingAgent(message,token);
                 case SEND_FAILED -> parkClaimedTransient(message,token,WS_SEND_FAILED,WS_RETRY_EXHAUSTED);
                 case REJECTED -> completeDead(message,token,WS_DISPATCH_REJECTED);
+            };
+        }
+        if (AgentCommandCanonicalCodec.isControlledCommandType(message.commandType())) {
+            var adapter = controlledDispatch.get(message.commandType());
+            if (adapter == null) return completeDead(message, token, WS_DISPATCH_REJECTED);
+            AgentRawCommandDispatchResult sent;
+            try {
+                assertNoDatabaseTransaction("Controlled command WebSocket dispatch");
+                sent = adapter.dispatch(message.tenantId(), message.clientId(), message.ownerJiacn(),
+                        message.controlledResourceId(),
+                        message.targetAgentId(), message.commandId(), message.rawWireBytes());
+            } catch (RuntimeException unavailable) {
+                return parkClaimedTransient(message, token, WS_SEND_FAILED, WS_RETRY_EXHAUSTED);
+            }
+            if (sent == null) return completeDead(message, token, WS_DISPATCH_REJECTED);
+            return switch (sent.status()) {
+                case SENT -> completeSent(message, token);
+                case OFFLINE -> completeWaitingAgent(message, token);
+                case SEND_FAILED -> parkClaimedTransient(message, token, WS_SEND_FAILED, WS_RETRY_EXHAUSTED);
+                case REJECTED -> completeDead(message, token, WS_DISPATCH_REJECTED);
             };
         }
         AgentTaskAccessLevel access;

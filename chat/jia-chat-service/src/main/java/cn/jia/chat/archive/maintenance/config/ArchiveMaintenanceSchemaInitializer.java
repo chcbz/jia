@@ -1,0 +1,322 @@
+package cn.jia.chat.archive.maintenance.config;
+
+import cn.jia.chat.archive.maintenance.model.ArchiveManagerGrantRecord;
+import cn.jia.chat.archive.maintenance.store.ArchiveMaintenanceStore;
+import cn.jia.chat.archive.maintenance.model.ArchiveActorScope;
+import cn.jia.chat.archive.service.ArchiveTransactions;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
+import org.springframework.stereotype.Component;
+
+import javax.sql.DataSource;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.Locale;
+import java.util.Map;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+import java.util.TreeMap;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+
+@Component
+public class ArchiveMaintenanceSchemaInitializer {
+    private final JdbcTemplate jdbc;
+    private final ArchiveMaintenanceStore store;
+    private static final Set<String> MANAGER_PERMISSIONS = Set.of("appoint", "source.prepare",
+            "job.create", "job.manage", "draft.write", "validate", "publish");
+    private final ArchiveMaintenanceProperties properties;
+    private final ArchiveTransactions transactions;
+
+    @Autowired
+    public ArchiveMaintenanceSchemaInitializer(JdbcTemplate jdbc, ArchiveMaintenanceStore store,
+                                               ArchiveMaintenanceProperties properties,
+                                               ArchiveTransactions transactions) {
+        this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
+        this.store = Objects.requireNonNull(store, "store");
+        this.properties = Objects.requireNonNull(properties, "properties");
+        this.transactions = Objects.requireNonNull(transactions, "transactions");
+    }
+
+    /** Direct seam for schema-only tests; production always selects the annotated transactional constructor. */
+    public ArchiveMaintenanceSchemaInitializer(JdbcTemplate jdbc, ArchiveMaintenanceStore store,
+                                               ArchiveMaintenanceProperties properties) {
+        this(jdbc, store, properties, new ArchiveTransactions() {
+            @Override public <T> T required(java.util.function.Supplier<T> action) { return action.get(); }
+        });
+    }
+
+    public void initialize() {
+        ArchiveMaintenanceSchemaCatalog.Definition expected = ArchiveMaintenanceSchemaCatalog.expected();
+        Set<String> existing = new LinkedHashSet<>(jdbc.queryForList("""
+                SELECT table_name FROM information_schema.tables
+                WHERE table_schema=DATABASE() AND table_name IN (%s)
+                """.formatted(placeholders(expected.tables().size())), String.class, expected.tables().keySet().toArray()));
+        // MySQL commits every CREATE TABLE independently. Check existing tables first, then
+        // safely replay the IF NOT EXISTS DDL after a crash, and verify the entire result.
+        if (!existing.isEmpty()) validate(existing, expected);
+        if (existing.size() != expected.tables().size()) {
+            DataSource ds = Objects.requireNonNull(jdbc.getDataSource(), "archive dataSource");
+            new ResourceDatabasePopulator(new ClassPathResource("db/archive-maintenance-schema.sql")).execute(ds);
+        }
+        validate(expected.tables().keySet(), expected);
+        reconcileConfiguredManagers();
+    }
+
+    void validate(Set<String> tables, ArchiveMaintenanceSchemaCatalog.Definition expected) {
+        if (tables.isEmpty()) return;
+        Object[] args = tables.toArray();
+        String in = placeholders(args.length);
+        Map<String, Map<String, ArchiveMaintenanceSchemaCatalog.Column>> columns = new HashMap<>();
+        for (Map<String, Object> row : jdbc.queryForList("""
+                SELECT table_name,column_name,column_type,is_nullable,collation_name
+                FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name IN (%s)
+                ORDER BY table_name,ordinal_position
+                """.formatted(in), args)) {
+            columns.computeIfAbsent(text(row, "table_name"), ignored -> new LinkedHashMap<>())
+                    .put(text(row, "column_name"), new ArchiveMaintenanceSchemaCatalog.Column(
+                            text(row, "column_type").toLowerCase(Locale.ROOT),
+                            "YES".equalsIgnoreCase(text(row, "is_nullable")),
+                            nullable(row, "collation_name")));
+        }
+        Map<String, String> engines = new HashMap<>();
+        for (Map<String, Object> row : jdbc.queryForList("""
+                SELECT table_name,engine,table_collation FROM information_schema.tables
+                WHERE table_schema=DATABASE() AND table_name IN (%s)
+                """.formatted(in), args)) {
+            String name = text(row, "table_name");
+            engines.put(name, text(row, "engine") + ":" + text(row, "table_collation"));
+        }
+        Map<String, Map<String, String>> indexes = new HashMap<>();
+        for (Map<String, Object> row : jdbc.queryForList("""
+                SELECT table_name,index_name,non_unique,seq_in_index,column_name
+                FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name IN (%s)
+                ORDER BY table_name,index_name,seq_in_index
+                """.formatted(in), args)) {
+            String table = text(row, "table_name");
+            String name = text(row, "index_name");
+            Map<String, String> found = indexes.computeIfAbsent(table, ignored -> new LinkedHashMap<>());
+            String value = found.get(name);
+            String marker = String.valueOf(row.get("non_unique"));
+            found.put(name, value == null ? marker + ":" + text(row, "column_name")
+                    : value + "," + text(row, "column_name"));
+        }
+        Map<String, Map<String, String>> foreignKeys = new HashMap<>();
+        for (Map<String, Object> row : jdbc.queryForList("""
+                SELECT table_name,constraint_name,column_name,referenced_table_name,referenced_column_name
+                FROM information_schema.key_column_usage
+                WHERE table_schema=DATABASE() AND table_name IN (%s) AND referenced_table_name IS NOT NULL
+                ORDER BY table_name,constraint_name,ordinal_position
+                """.formatted(in), args)) {
+            String table = text(row, "table_name");
+            String name = text(row, "constraint_name");
+            Map<String, String> found = foreignKeys.computeIfAbsent(table, ignored -> new LinkedHashMap<>());
+            String part = text(row, "column_name") + ">" + text(row, "referenced_table_name")
+                    + "." + text(row, "referenced_column_name");
+            found.merge(name, part, (left, right) -> left + "," + right);
+        }
+        Map<String, Map<String, String>> checks = new HashMap<>();
+        for (Map<String, Object> row : jdbc.queryForList("""
+                SELECT t.table_name,t.constraint_name,t.enforced,c.check_clause
+                FROM information_schema.table_constraints t
+                JOIN information_schema.check_constraints c
+                  ON c.constraint_schema=t.constraint_schema AND c.constraint_name=t.constraint_name
+                WHERE t.table_schema=DATABASE() AND t.table_name IN (%s) AND t.constraint_type='CHECK'
+                """.formatted(in), args)) {
+            checks.computeIfAbsent(text(row, "table_name"), ignored -> new LinkedHashMap<>())
+                    .put(text(row, "constraint_name"), text(row, "enforced") + ":"
+                            + ArchiveMaintenanceSchemaCatalog.normalizeCheck(text(row, "check_clause")));
+        }
+        for (String table : tables) {
+            ArchiveMaintenanceSchemaCatalog.verify(table, expected.tables().get(table),
+                    new ArchiveMaintenanceSchemaCatalog.Table(columns.getOrDefault(table, Map.of()),
+                            indexes.getOrDefault(table, Map.of()), foreignKeys.getOrDefault(table, Map.of()),
+                            checks.getOrDefault(table, Map.of())), engines.get(table));
+        }
+    }
+
+    private static String placeholders(int count) { return String.join(",", java.util.Collections.nCopies(count, "?")); }
+    private static String text(Map<String, Object> row, String key) {
+        Object value = row.get(key);
+        if (value == null) value = row.get(key.toUpperCase(Locale.ROOT));
+        return value == null ? null : value.toString();
+    }
+    private static String nullable(Map<String, Object> row, String key) { return text(row, key); }
+
+    /**
+     * V1 contract: every archive_collection_manager row is configuration-owned. Reconciliation
+     * deliberately does not call the Agent port: manager -> run -> execution-grant remains the
+     * complete lock order for this startup path, so it can never invert an Agent-root transaction.
+     */
+    void reconcileConfiguredManagers() {
+        TreeMap<ManagerKey, ArchiveManagerGrantRecord> desired = configuredManagers();
+        transactions.required(() -> {
+            TreeMap<ManagerKey, ArchiveManagerGrantRecord> current = new TreeMap<>();
+            for (ArchiveManagerGrantRecord grant : store.lockManagerGrants()) {
+                ManagerKey key = ManagerKey.of(grant);
+                if (current.putIfAbsent(key, grant) != null) {
+                    throw new IllegalStateException("Duplicate persisted archive manager authorization");
+                }
+                normalizedPermissions(grant.permissions());
+                if (grant.revision() < 1 || !("ACTIVE".equals(grant.state()) || "REVOKED".equals(grant.state()))) {
+                    throw new IllegalStateException("Invalid persisted archive manager authorization");
+                }
+            }
+            TreeMap<ManagerKey, Boolean> keys = new TreeMap<>();
+            current.keySet().forEach(key -> keys.put(key, Boolean.TRUE));
+            desired.keySet().forEach(key -> keys.put(key, Boolean.TRUE));
+            for (ManagerKey key : keys.keySet()) {
+                reconcileManager(key, current.get(key), desired.get(key));
+            }
+            return null;
+        });
+    }
+
+    private void reconcileManager(ManagerKey key, ArchiveManagerGrantRecord current,
+                                  ArchiveManagerGrantRecord desired) {
+        ArchiveActorScope actor = key.actor();
+        if (current == null) {
+            auditConfigurationChange(actor, key.collectionId(), "PUT", desired.revision(),
+                    desired.permissions(), "ACTIVE", () -> store.insertManagerGrant(desired));
+            return;
+        }
+        if (desired == null) {
+            if (!"ACTIVE".equals(current.state())) return;
+            long revokedRevision = Math.addExact(current.revision(), 1);
+            auditConfigurationChange(actor, key.collectionId(), "DELETE", revokedRevision,
+                    current.permissions(), "REVOKED", () -> {
+                        fenceManagerRuns(actor, key.collectionId());
+                        if (store.revokeManagerGrant(actor, key.collectionId(), current.revision()) != 1) {
+                            throw new IllegalStateException("Archive manager configuration removal raced");
+                        }
+                    });
+            return;
+        }
+        String currentPermissions = normalizedPermissions(current.permissions());
+        String desiredPermissions = normalizedPermissions(desired.permissions());
+        if (desired.revision() < current.revision()) return;
+        if (desired.revision() == current.revision()) {
+            if (!currentPermissions.equals(desiredPermissions)) {
+                throw new IllegalStateException("Archive manager permission change requires a higher authorizationRevision");
+            }
+            // A stale/same revision can observe a prior API/config revocation but can never revive it.
+            return;
+        }
+        ArchiveManagerGrantRecord activated = new ArchiveManagerGrantRecord(key.collectionId(),
+                key.tenantId(), key.clientId(), key.ownerJiacn(), desiredPermissions,
+                desired.revision(), "ACTIVE");
+        auditConfigurationChange(actor, key.collectionId(), "PUT", desired.revision(),
+                desiredPermissions, "ACTIVE", () -> {
+                    fenceManagerRuns(actor, key.collectionId());
+                    if (store.activateConfiguredManagerGrant(activated, current.revision()) != 1) {
+                        throw new IllegalStateException("Archive manager configuration revision raced");
+                    }
+                });
+    }
+
+    private void fenceManagerRuns(ArchiveActorScope actor, String collectionId) {
+        for (String runId : store.lockRunIdsForManager(actor, collectionId)) {
+            if (store.fenceRun(runId) != 1) {
+                throw new IllegalStateException("Archive manager run changed during configuration reconciliation");
+            }
+        }
+    }
+
+    private void auditConfigurationChange(ArchiveActorScope actor, String collectionId,
+                                          String method, long revision, String permissions,
+                                          String state, Runnable mutation) {
+        String material = collectionId + "\0" + actor.tenantId() + "\0" + actor.clientId()
+                + "\0" + actor.ownerJiacn() + "\0" + revision + "\0" + state + "\0"
+                + normalizedPermissions(permissions);
+        String requestSha = sha256(material);
+        String key = "cfg-manager-" + requestSha;
+        String path = "/internal/archive/config/v1/manager-grants/" + requestSha.substring(0, 32);
+        ArchiveMaintenanceStore.Operation operation = store.beginOperation(actor, key, method, path,
+                requestSha, "MANAGER_CONFIG", collectionId);
+        if (!operation.httpMethod().equals(method) || !operation.canonicalPath().equals(path)
+                || !operation.requestSha256().equals(requestSha)
+                || !operation.targetType().equals("MANAGER_CONFIG")
+                || !operation.targetId().equals(collectionId)) {
+            throw new IllegalStateException("Archive manager configuration audit conflict");
+        }
+        if (!operation.created()) {
+            throw new IllegalStateException("Archive manager configuration audit already committed without matching state");
+        }
+        mutation.run();
+        store.commitOperation(actor, key, collectionId);
+    }
+
+    private TreeMap<ManagerKey, ArchiveManagerGrantRecord> configuredManagers() {
+        TreeMap<ManagerKey, ArchiveManagerGrantRecord> result = new TreeMap<>();
+        for (var grant : properties.getManagerGrants()) {
+            if (grant == null || !exact(grant.getCollectionId(), 64) || !"0".equals(grant.getTenantId())
+                    || !exact(grant.getClientId(), 50) || !exact(grant.getOwnerJiacn(), 50)
+                    || "0".equals(grant.getClientId()) || "0".equals(grant.getOwnerJiacn())
+                    || grant.getAuthorizationRevision() < 1) {
+                throw new IllegalStateException("Invalid configured archive manager grant");
+            }
+            String permissions = normalizedPermissions(grant.getPermissions());
+            ManagerKey key = new ManagerKey(grant.getCollectionId(), grant.getTenantId(),
+                    grant.getClientId(), grant.getOwnerJiacn());
+            ArchiveManagerGrantRecord value = new ArchiveManagerGrantRecord(key.collectionId(),
+                    key.tenantId(), key.clientId(), key.ownerJiacn(), permissions,
+                    grant.getAuthorizationRevision(), "ACTIVE");
+            if (result.putIfAbsent(key, value) != null) {
+                throw new IllegalStateException("Duplicate configured archive manager grant");
+            }
+        }
+        return result;
+    }
+
+    private static String normalizedPermissions(String value) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalStateException("Invalid archive manager permissions");
+        }
+        Set<String> unique = new LinkedHashSet<>();
+        for (String token : value.split(",", -1)) {
+            String permission = token.strip();
+            if (!MANAGER_PERMISSIONS.contains(permission) || !unique.add(permission)) {
+                throw new IllegalStateException("Invalid archive manager permissions");
+            }
+        }
+        List<String> ordered = new ArrayList<>(unique);
+        ordered.sort(Comparator.naturalOrder());
+        return String.join(",", ordered);
+    }
+
+    private static String sha256(String value) {
+        try {
+            return java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException(impossible);
+        }
+    }
+
+    private record ManagerKey(String collectionId, String tenantId, String clientId,
+                              String ownerJiacn) implements Comparable<ManagerKey> {
+        static ManagerKey of(ArchiveManagerGrantRecord value) {
+            return new ManagerKey(value.collectionId(), value.tenantId(), value.clientId(), value.ownerJiacn());
+        }
+        ArchiveActorScope actor() { return new ArchiveActorScope(tenantId, clientId, ownerJiacn); }
+        @Override public int compareTo(ManagerKey other) {
+            int result = collectionId.compareTo(other.collectionId);
+            if (result == 0) result = tenantId.compareTo(other.tenantId);
+            if (result == 0) result = clientId.compareTo(other.clientId);
+            if (result == 0) result = ownerJiacn.compareTo(other.ownerJiacn);
+            return result;
+        }
+    }
+
+    private boolean exact(String v, int max) {
+        return v != null && !v.isBlank() && v.equals(v.strip()) && v.length() <= max
+                && v.codePoints().noneMatch(Character::isISOControl);
+    }
+}
