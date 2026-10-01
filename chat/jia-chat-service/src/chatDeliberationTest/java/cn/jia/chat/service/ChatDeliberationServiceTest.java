@@ -84,6 +84,29 @@ class ChatDeliberationServiceTest {
     }
 
     @Test
+    void trustedTypedFactsAreSnapshottedAndParticipateInTheExistingRequestDigest() {
+        Map<String,Object> none=Map.of("schemaVersion",1,"referenceMode","NONE",
+                "supportedOperations",List.of("GENERATE_IMAGE","EDIT_IMAGE"),"availableSources",List.of());
+        Map<String,Object> admission=new LinkedHashMap<>();admission.put("schemaVersion",1);
+        admission.put("intent","CLARIFICATION_REPLY");admission.put("parentOutcomeId","outcome");
+        admission.put("expectedParentStateVersion","0");admission.put("pendingQuestionId","pending");
+        admission.put("expectedPendingQuestionStateVersion","0");
+        ChatMessageDTO input=request("req-typed-facts","natural follow-up");
+        var first=service.admit("0",humanSender(),"42",3L,scope(),InteractionRoute.CHAT,input,
+                Map.of(),none,admission);
+        assertFalse(first.replay());
+        assertEquals(none,first.dispatches().getFirst().factsManifest().get("typedDeliberation"));
+        assertEquals(admission,first.dispatches().getFirst().factsManifest().get("typedDeliberationAdmission"));
+        assertTrue(service.admit("0",humanSender(),"42",3L,scope(),InteractionRoute.CHAT,
+                request("req-typed-facts","natural follow-up"),Map.of(),none,admission).replay());
+        Map<String,Object> changed=Map.of("schemaVersion",1,"referenceMode","NONE",
+                "supportedOperations",List.of("GENERATE_IMAGE"),"availableSources",List.of());
+        assertEquals(ChatDeliberationException.Reason.CONFLICT,assertThrows(ChatDeliberationException.class,
+                ()->service.admit("0",humanSender(),"42",3L,scope(),InteractionRoute.CHAT,
+                        request("req-typed-facts","natural follow-up"),Map.of(),changed,admission)).reason());
+    }
+
+    @Test
     void sameIdempotencyBodyReplaysButConflictingBodyFailsClosed() {
         ChatDeliberationService.Admission first = admit("req-idem", "same");
         ChatDeliberationService.Admission replay = admit("req-idem", "same");

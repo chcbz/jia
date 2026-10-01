@@ -153,9 +153,14 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         this.chatDeliberationService = service;
     }
     private ChatDeliberationOutboxService chatDeliberationOutboxService;
+    private TypedDeliberationSessionRegistry typedDeliberationSessions;
     @Autowired(required = false)
     public void setChatDeliberationOutboxService(ChatDeliberationOutboxService service) {
         this.chatDeliberationOutboxService = service;
+    }
+    @Autowired(required = false)
+    public void setTypedDeliberationSessions(TypedDeliberationSessionRegistry sessions) {
+        this.typedDeliberationSessions = sessions;
     }
     private final ChatClient chatClient;
     private final ObjectProvider<AgentService> agentServiceProvider;
@@ -306,6 +311,20 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 return;
             }
         }
+        boolean declaredDurableFinal = (AgentProtocolConstants.TYPE_CHAT_MESSAGE.equals(declaredMessageType)
+                || AgentProtocolConstants.TYPE_CHAT_MESSAGE.equals(declaredLegacyType)
+                || AgentProtocolConstants.TYPE_CHAT_MESSAGE.equals(strictString(declaredBody.get("messageType")))
+                || AgentProtocolConstants.TYPE_CHAT_MESSAGE.equals(strictString(declaredBody.get("type"))))
+                && (hasDurableTurnBinding(payload) || hasDurableTurnBinding(declaredBody));
+        if (declaredDurableFinal) {
+            try {
+                payload = strictDurableFinalPayload(message.getPayload());
+            } catch (Exception malformed) {
+                sendProtocolError(session, Map.of(), "CHAT_TURN_FINAL_REJECTED",
+                        "Durable chat final was rejected");
+                return;
+            }
+        }
         if (declaredMessageType != null && EXECUTION_REPORT_TYPES.contains(declaredMessageType)) {
             try {
                 Map<String, Object> strict = STRICT_RAW_COMMAND_JSON.readValue(
@@ -376,7 +395,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         sessionNativeBountyExecution.remove(session.getId());
         sessionNativeProviderCredentialBinding.remove(session.getId());
         sessionControlledImageBountyExecution.remove(session.getId());
-            sessionControlledImageV3.remove(session.getId());
+        sessionControlledImageV3.remove(session.getId());
+        removeTypedDeliberationSession(session.getId());
         runningStreams.entrySet().removeIf(entry -> {
             StreamState stream = entry.getValue();
             if (session.getId().equals(stream.sessionId())) {
@@ -765,6 +785,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             sessionNativeProviderCredentialBinding.remove(session.getId());
             sessionControlledImageBountyExecution.remove(session.getId());
             sessionControlledImageV3.remove(session.getId());
+            removeTypedDeliberationSession(session.getId());
             stage = "registration_payload";
             AgentRuntimeCapabilities runtimeCapabilities = AgentRuntimeCapabilities.parse(
                     payload.get("runtimeCapabilities"));
@@ -778,6 +799,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                             payload.get("controlledImageBountyExecution"));
             ControlledImageV3Declaration controlledImageV3 =
                     ControlledImageV3Declaration.parse(payload.get("controlledImageBountyExecutionV3"));
+            TypedDeliberationDeclaration typedDeliberation =
+                    TypedDeliberationDeclaration.parse(payload.get("typedDeliberation"));
             AgentRegisterDTO request = new AgentRegisterDTO();
             request.setAgentId(agentId);
             request.setName(asString(payload.get("name")));
@@ -807,6 +830,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             event.put("controlledImageBountyExecution",
                     controlledImageBountyExecution.normalizedForReceipt());
             event.put("controlledImageBountyExecutionV3",controlledImageV3.normalizedForReceipt());
+            if (payload.containsKey("typedDeliberation")) {
+                event.put("typedDeliberation", typedDeliberation.frozenReceipt());
+            }
             // Scope comes only from the authenticated session and is rechecked against persisted
             // identity/current registration token. This receipt is sent only on this native socket.
             if (runtimeAuthentication != null && sessionRuntimeInstanceId(session) != null) {
@@ -823,7 +849,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 sessionNativeBountyExecution.remove(session.getId());
                 sessionNativeProviderCredentialBinding.remove(session.getId());
                 sessionControlledImageBountyExecution.remove(session.getId());
-            sessionControlledImageV3.remove(session.getId());
+                sessionControlledImageV3.remove(session.getId());
+                removeTypedDeliberationSession(session.getId());
                 return;
             }
             // Activate all successful-registration evidence only after the authenticated
@@ -834,6 +861,12 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             sessionNativeProviderCredentialBinding.put(session.getId(), nativeProviderCredentialBinding);
             sessionControlledImageBountyExecution.put(session.getId(), controlledImageBountyExecution);
             sessionControlledImageV3.put(session.getId(),controlledImageV3);
+            if (typedDeliberationSessions != null) {
+                typedDeliberationSessions.register(session.getId(), sessionTenantId(session),
+                        sessionJiacn(session), sessionClientId(session), result.getAgentId(),
+                        payload.get("typedDeliberation"),
+                        () -> typedDeliberationSessionCurrent(session, result.getAgentId()));
+            }
             signalRegisteredReconnect(session, result.getAgentId());
             sendCapabilityIndex(session, payload);
         } catch (Exception e) {
@@ -847,6 +880,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             sessionNativeProviderCredentialBinding.remove(session.getId());
             sessionControlledImageBountyExecution.remove(session.getId());
             sessionControlledImageV3.remove(session.getId());
+            removeTypedDeliberationSession(session.getId());
             sendError(session, payload, "AGENT_REGISTRATION_UNAVAILABLE", "Agent registration is unavailable");
         }
     }
@@ -1000,7 +1034,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 sessionNativeBountyExecution.remove(session.getId());
                 sessionNativeProviderCredentialBinding.remove(session.getId());
                 sessionControlledImageBountyExecution.remove(session.getId());
-            sessionControlledImageV3.remove(session.getId());
+                sessionControlledImageV3.remove(session.getId());
+                removeTypedDeliberationSession(session.getId());
             }
             if (agent.getAgentId() != null) {
                 rememberSessionAgent(session.getId(), agent.getAgentId());
@@ -1206,7 +1241,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                         sessionTenantId(session), jiacn, clientId, conversationId, generation, agentId,
                         asString(payload.get("requestId")), asString(payload.get("turnId")),
                         asString(payload.get("dispatchId")), contextValue(payload, "contextSnapshotId"),
-                        contextValue(payload, "contextHash"), content, sender);
+                        contextValue(payload, "contextHash"), content,
+                        typedOutcomeContractVersion(payload),
+                        strictString(payload.get("__typedRawInteractionOutcomeJson")), sender);
             } catch (RuntimeException rejected) {
                 sendError(session, payload, "CHAT_TURN_FINAL_REJECTED", "Durable chat final was rejected");
                 return;
@@ -1363,7 +1400,56 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 event);
     }
 
-    private boolean hasDurableTurnBinding(Map<String, Object> payload) {
+    private Map<String, Object> strictDurableFinalPayload(String wire) throws Exception {
+        JsonNode root = STRICT_RAW_COMMAND_JSON.readTree(wire);
+        if (root == null || !root.isObject()) throw new IllegalArgumentException("object required");
+        Map<String, Object> strict = STRICT_RAW_COMMAND_JSON.readValue(wire, MESSAGE_TYPE);
+        if (strict.containsKey("__typedRawInteractionOutcomeJson")) throw new IllegalArgumentException("reserved field");
+        JsonNode nested = root.get("payload");
+        if (nested != null && nested.isObject()
+                && nested.has("__typedRawInteractionOutcomeJson")) throw new IllegalArgumentException("reserved field");
+        JsonNode outcome = root.get("interactionOutcome");
+        JsonNode version = root.get("outcomeContractVersion");
+        if ((outcome == null) != (version == null)) throw new IllegalArgumentException("incomplete typed sidecar");
+        if (nested != null && nested.isObject()
+                && (nested.has("interactionOutcome") || nested.has("outcomeContractVersion"))) {
+            throw new IllegalArgumentException("typed sidecar must be top-level");
+        }
+        if (outcome != null) {
+            if (!outcome.isObject() || !semanticOne(version)) throw new IllegalArgumentException("invalid typed sidecar");
+            strict.put("outcomeContractVersion", 1);
+            strict.put("__typedRawInteractionOutcomeJson", outcome.toString());
+        }
+        return strict;
+    }
+
+    private Integer typedOutcomeContractVersion(Map<String, Object> payload) {
+        if (!payload.containsKey("outcomeContractVersion")) return null;
+        return Integer.valueOf(1);
+    }
+
+    private boolean semanticOne(JsonNode value) {
+        if (value == null || !value.isNumber()) return false;
+        try { return value.decimalValue().compareTo(java.math.BigDecimal.ONE) == 0; }
+        catch (RuntimeException invalid) { return false; }
+    }
+
+    private void removeTypedDeliberationSession(String sessionId) {
+        if (typedDeliberationSessions != null) typedDeliberationSessions.remove(sessionId);
+    }
+
+    private boolean typedDeliberationSessionCurrent(WebSocketSession session, String agentId) {
+        if (runtimeAuthentication == null || session == null || !session.isOpen()
+                || !successfullyRegisteredAgentIds(session.getId()).contains(agentId)) return false;
+        String runtime = sessionRuntimeInstanceId(session);
+        if (runtime == null) return false;
+        try {
+            return runtimeAuthentication.isCurrentBinding(session.getId(), sessionTenantId(session),
+                    sessionClientId(session), sessionJiacn(session), agentId, runtime);
+        } catch (RuntimeException unavailable) { return false; }
+    }
+
+    private boolean hasDurableTurnBinding(Map<?, ?> payload) {
         return payload != null && (payload.containsKey("turnId")
                 || payload.containsKey("dispatchId") || payload.containsKey("contextSnapshotId")
                 || payload.containsKey("contextHash") || payload.containsKey("deltaSeq"));

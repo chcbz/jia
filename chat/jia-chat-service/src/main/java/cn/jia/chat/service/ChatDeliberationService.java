@@ -58,12 +58,18 @@ public class ChatDeliberationService {
     private final ChatMessageDao messageDao;
     private final AgentService agentService;
     private ChatInteractionStepStore interactionSteps;
+    private ChatTypedDeliberationService typedDeliberation;
 
     // Retain the existing constructor for legacy tests and integrations. In production the
     // scoped store is injected, so durable v2 requests can be read from the same GET endpoint.
     @Autowired
     public void setInteractionSteps(ChatInteractionStepStore interactionSteps) {
         this.interactionSteps = interactionSteps;
+    }
+
+    @Autowired(required = false)
+    public void setTypedDeliberation(ChatTypedDeliberationService typedDeliberation) {
+        this.typedDeliberation = typedDeliberation;
     }
 
     public ChatDeliberationService(ChatDeliberationDao dao, ChatConversationDao conversationDao,
@@ -78,6 +84,24 @@ public class ChatDeliberationService {
     public Admission admit(String tenantId, ServerResolvedSender sender, String conversationId,
             long expectedGeneration, JuyitingConversationScope scope,
             InteractionRoute route, ChatMessageDTO input, Map<String, Object> taskMaterials) {
+        return admit(tenantId, sender, conversationId, expectedGeneration, scope, route, input,
+                taskMaterials, null);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public Admission admit(String tenantId, ServerResolvedSender sender, String conversationId,
+            long expectedGeneration, JuyitingConversationScope scope,
+            InteractionRoute route, ChatMessageDTO input, Map<String, Object> taskMaterials,
+            Map<String, Object> trustedTypedFacts) {
+        return admit(tenantId, sender, conversationId, expectedGeneration, scope, route, input,
+                taskMaterials, trustedTypedFacts, null);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public Admission admit(String tenantId, ServerResolvedSender sender, String conversationId,
+            long expectedGeneration, JuyitingConversationScope scope,
+            InteractionRoute route, ChatMessageDTO input, Map<String, Object> taskMaterials,
+            Map<String, Object> trustedTypedFacts, Map<String, Object> trustedTypedAdmission) {
         requireIdentity(tenantId, 50);
         ServerResolvedSender trustedSender = requireHumanSender(sender);
         String ownerJiacn = trustedSender.jiacn();
@@ -106,17 +130,20 @@ public class ChatDeliberationService {
         List<Map<String, Object>> inputRefs = authorizeInputRefs(
                 input.getInputRefs(), route, conversation, scope, existingMessages);
         AgentTaskDTO task = taskFacts(scope, tenantId, clientId);
-        String requestDigest = digest(Map.of(
-                "schemaVersion", "1",
-                "conversationId", conversationId,
-                "conversationGeneration", expectedGeneration,
-                "requestRevision", revision,
-                "content", content,
-                "route", route.name(),
-                "scopeType", scope.scopeType(),
-                "scopeKey", scope.scopeKey(),
-                "targets", scope.targetAgentIds(),
-                "inputRefs", inputRefs));
+        Map<String, Object> requestDigestInput = new LinkedHashMap<>();
+        requestDigestInput.put("schemaVersion", "1");
+        requestDigestInput.put("conversationId", conversationId);
+        requestDigestInput.put("conversationGeneration", expectedGeneration);
+        requestDigestInput.put("requestRevision", revision);
+        requestDigestInput.put("content", content);
+        requestDigestInput.put("route", route.name());
+        requestDigestInput.put("scopeType", scope.scopeType());
+        requestDigestInput.put("scopeKey", scope.scopeKey());
+        requestDigestInput.put("targets", scope.targetAgentIds());
+        requestDigestInput.put("inputRefs", inputRefs);
+        if (trustedTypedFacts != null) requestDigestInput.put("typedDeliberation", trustedTypedFacts);
+        if (trustedTypedAdmission != null) requestDigestInput.put("typedDeliberationAdmission", trustedTypedAdmission);
+        String requestDigest = digest(requestDigestInput);
 
         ChatRequestEntity existing = dao.lockRequest(tenantId, ownerJiacn, clientId, requestId, revision);
         if (existing != null) {
@@ -172,6 +199,14 @@ public class ChatDeliberationService {
                     expectedGeneration, userMessage.getId(), task, authorizedContext);
             Map<String, Object> facts = factsManifest(
                     conversation, scope, targetAgentId, task, taskMaterials, authorizedContext);
+            if (trustedTypedFacts != null || trustedTypedAdmission != null) {
+                Map<String, Object> typedFacts = new LinkedHashMap<>(facts);
+                if (trustedTypedFacts != null) typedFacts.put("typedDeliberation",
+                        java.util.Collections.unmodifiableMap(new LinkedHashMap<>(trustedTypedFacts)));
+                if (trustedTypedAdmission != null) typedFacts.put("typedDeliberationAdmission",
+                        java.util.Collections.unmodifiableMap(new LinkedHashMap<>(trustedTypedAdmission)));
+                facts = Map.copyOf(typedFacts);
+            }
             String sourceJson = CanonicalContextJson.write(sourceVector);
             String factsJson = CanonicalContextJson.write(facts);
             String contextDigest = contextDigest(sourceVector, facts);
@@ -293,6 +328,16 @@ public class ChatDeliberationService {
             long conversationGeneration, String agentId, String requestId, String turnId, String dispatchId,
             String snapshotId, String contextDigest, String content,
             ServerResolvedAgentSender sender) {
+        return persistFinal(tenantId, ownerJiacn, clientId, conversationId, conversationGeneration,
+                agentId, requestId, turnId, dispatchId, snapshotId, contextDigest, content,
+                null, null, sender);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public FinalResult persistFinal(String tenantId, String ownerJiacn, String clientId, String conversationId,
+            long conversationGeneration, String agentId, String requestId, String turnId, String dispatchId,
+            String snapshotId, String contextDigest, String content, Integer outcomeContractVersion,
+            String rawInteractionOutcomeJson, ServerResolvedAgentSender sender) {
         String safeContent = requireContent(content);
         ChatTurnEntity visible = requireVisibleTurn(tenantId, ownerJiacn, clientId, turnId);
         ChatConversationEntity conversation = requireLockedConversation(tenantId, ownerJiacn, clientId,
@@ -301,7 +346,18 @@ public class ChatDeliberationService {
         requireCallbackBinding(turn, tenantId, ownerJiacn, clientId, conversationId, conversationGeneration,
                 agentId, requestId, dispatchId, snapshotId, contextDigest);
         ServerResolvedAgentSender trustedSender = requireAgentSender(sender, agentId, ownerJiacn, clientId);
-        String finalDigest = "sha256:" + sha256(safeContent);
+        ChatContextSnapshotEntity finalSnapshot = dao.findSnapshot(tenantId, ownerJiacn, clientId, snapshotId);
+        if (finalSnapshot == null) throw unavailable();
+        ChatTypedDeliberationService.Prepared typedPrepared = null;
+        if (typedDeliberation != null) {
+            typedPrepared = typedDeliberation.prepare(turn, finalSnapshot, safeContent,
+                    outcomeContractVersion, rawInteractionOutcomeJson);
+        } else if (outcomeContractVersion != null || rawInteractionOutcomeJson != null
+                || parseJsonMap(finalSnapshot.getFactsManifestJson()).containsKey("typedDeliberation")) {
+            throw persistence("Typed deliberation service is unavailable");
+        }
+        String finalDigest = typedPrepared == null
+                ? "sha256:" + sha256(safeContent) : typedPrepared.validated().finalDigest();
         if ((ChatDeliberationStates.FINAL_PERSISTED.equals(turn.getState())
                 || ChatDeliberationStates.PUBLISHED.equals(turn.getState()))
                 && turn.getFinalDigest() == null) {
@@ -337,6 +393,8 @@ public class ChatDeliberationService {
         metadata.put("route", turn.getRoute());
         metadata.put("replyToMessageId", Long.toString(request.getUserMessageId()));
         metadata.put("targetAgentId", turn.getTargetAgentId());
+        metadata.put("finalDigest", finalDigest);
+        if (typedPrepared != null) metadata.put("outcomeId", typedDeliberation.outcomeId(typedPrepared));
         ChatMessageEntity message = new ChatMessageEntity()
                 .setConversationId(turn.getConversationId()).setMessageType("ASSISTANT")
                 .setContent(safeContent).setMetadata(JsonUtil.toJson(metadata)).setJiacn(ownerJiacn)
@@ -348,30 +406,38 @@ public class ChatDeliberationService {
         if (messageDao.insertScoped(tenantId, clientId, message) != 1 || message.getId() == null) {
             throw persistence("Unable to persist final message");
         }
+        ChatTypedDeliberationService.Persisted typedPersisted = typedPrepared == null
+                ? null : typedDeliberation.persist(typedPrepared, message.getId(), now);
         if (dao.persistFinal(turn, finalDigest, message.getId(), now) != 1) {
             throw conflict("Concurrent final state change");
         }
         String finalEventId = stableId("evt", dispatchId, "FINAL_PERSISTED");
+        Map<String, Object> finalPayload = new LinkedHashMap<>();
+        finalPayload.put("content", safeContent);
+        finalPayload.put("messageId", Long.toString(message.getId()));
+        finalPayload.put("agentId", trustedSender.agentId());
+        finalPayload.put("senderType", trustedSender.type());
+        finalPayload.put("senderName", trustedSender.displayName());
+        if (typedPersisted != null) finalPayload.put("typedOutcome", typedPersisted.eventView());
         ChatConversationEventEntity finalEvent = persistEvent(turn, finalEventId, "agent_message",
-                Map.ofEntries(Map.entry("content", safeContent), Map.entry("messageId", Long.toString(message.getId())),
-                        Map.entry("agentId", trustedSender.agentId()),
-                        Map.entry("senderType", trustedSender.type()),
-                        Map.entry("senderName", trustedSender.displayName())), now);
+                finalPayload, now);
+        Map<String, Object> outboxPayload = new LinkedHashMap<>();
+        outboxPayload.put("requestId", requestId); outboxPayload.put("turnId", turnId);
+        outboxPayload.put("dispatchId", dispatchId); outboxPayload.put("targetAgentId", turn.getTargetAgentId());
+        outboxPayload.put("contextSnapshotId", snapshotId); outboxPayload.put("messageId", Long.toString(message.getId()));
+        outboxPayload.put("conversationId", conversationId);
+        outboxPayload.put("conversationGeneration", Long.toString(conversationGeneration));
+        outboxPayload.put("content", safeContent); outboxPayload.put("senderType", trustedSender.type());
+        outboxPayload.put("senderName", trustedSender.displayName());
+        outboxPayload.put("eventSequence", Long.toString(finalEvent.getEventSequence()));
+        outboxPayload.put("eventVersion", Long.toString(finalEvent.getEventVersion()));
+        outboxPayload.put("finalDigest", finalDigest);
+        if (typedPersisted != null) outboxPayload.put("typedOutcome", typedPersisted.eventView());
         ChatDispatchOutboxEntity outbox = new ChatDispatchOutboxEntity()
                 .setEventId(finalEventId)
                 .setTenantId(tenantId).setOwnerJiacn(ownerJiacn).setClientId(clientId)
                 .setTurnId(turnId).setDispatchId(dispatchId).setEventType("FINAL_PERSISTED")
-                .setStatus("READY").setPayloadJson(CanonicalContextJson.write(Map.ofEntries(
-                        Map.entry("requestId", requestId), Map.entry("turnId", turnId),
-                        Map.entry("dispatchId", dispatchId), Map.entry("targetAgentId", turn.getTargetAgentId()),
-                        Map.entry("contextSnapshotId", snapshotId), Map.entry("messageId", Long.toString(message.getId())),
-                        Map.entry("conversationId", conversationId), Map.entry("conversationGeneration", Long.toString(conversationGeneration)),
-                        Map.entry("content", safeContent),
-                        Map.entry("senderType", trustedSender.type()),
-                        Map.entry("senderName", trustedSender.displayName()),
-                        Map.entry("eventSequence", Long.toString(finalEvent.getEventSequence())),
-                        Map.entry("eventVersion", Long.toString(finalEvent.getEventVersion())),
-                        Map.entry("finalDigest", finalDigest)))).setVersion(0L).setAvailableAt(now)
+                .setStatus("READY").setPayloadJson(CanonicalContextJson.write(outboxPayload)).setVersion(0L).setAvailableAt(now)
                 .setAttemptCount(0).setFencingToken(0L).setCreatedAt(now).setUpdatedAt(now);
         if (dao.insertOutbox(outbox) != 1) throw persistence("Unable to persist final event");
         turn.setState(ChatDeliberationStates.FINAL_PERSISTED).setFinalDigest(finalDigest)
@@ -578,6 +644,19 @@ public class ChatDeliberationService {
         }
         event.setEventVersion(event.getEventSequence());
         return event;
+    }
+
+    public ChatConversationEventEntity persistTypedQuestionAnswered(ChatTurnEntity turn,
+            String pendingQuestionId, long stateVersion, String replyRequestId,
+            String parentOutcomeId, long now) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("pendingQuestionId", pendingQuestionId);
+        payload.put("state", "ANSWERED");
+        payload.put("stateVersion", Long.toString(stateVersion));
+        payload.put("replyRequestId", replyRequestId);
+        payload.put("parentOutcomeId", parentOutcomeId);
+        return persistEvent(turn, stableId("evt", pendingQuestionId, "ANSWERED"),
+                "typed_question_answered", payload, now);
     }
 
     @Transactional(readOnly = true)
