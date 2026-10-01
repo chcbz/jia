@@ -20,6 +20,10 @@ public interface VoiceRequestCoordinator {
 
     void failUnknown(VoiceReservation reservation);
 
+    default void renew(VoiceReservation reservation) {
+        throw new VoiceStateUnavailableException();
+    }
+
     void release(VoiceAdmission admission);
 
     void release(VoiceReservation reservation);

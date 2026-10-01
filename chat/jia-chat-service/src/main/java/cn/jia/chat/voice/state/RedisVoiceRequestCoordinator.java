@@ -20,6 +20,7 @@ public final class RedisVoiceRequestCoordinator implements VoiceRequestCoordinat
     private static final long IN_PROGRESS_TTL_MS = Duration.ofMinutes(10).toMillis();
 
     private static final DefaultRedisScript<List> ADMIT_SCRIPT = new DefaultRedisScript<>("""
+            redis.replicate_commands()
             local time = redis.call('TIME')
             local now = time[1] * 1000 + math.floor(time[2] / 1000)
             redis.call('ZREMRANGEBYSCORE', KEYS[3], '-inf', now)
@@ -46,6 +47,7 @@ public final class RedisVoiceRequestCoordinator implements VoiceRequestCoordinat
             """, List.class);
 
     private static final DefaultRedisScript<List> BEGIN_ADMITTED_SCRIPT = new DefaultRedisScript<>("""
+            redis.replicate_commands()
             local time = redis.call('TIME')
             local now = time[1] * 1000 + math.floor(time[2] / 1000)
             local identityExpiry = redis.call('ZSCORE', KEYS[2], ARGV[2])
@@ -91,6 +93,7 @@ public final class RedisVoiceRequestCoordinator implements VoiceRequestCoordinat
             """, List.class);
 
     private static final DefaultRedisScript<List> BEGIN_SCRIPT = new DefaultRedisScript<>("""
+            redis.replicate_commands()
             local time = redis.call('TIME')
             local now = time[1] * 1000 + math.floor(time[2] / 1000)
             local digest = redis.call('HGET', KEYS[1], 'digest')
@@ -157,6 +160,28 @@ public final class RedisVoiceRequestCoordinator implements VoiceRequestCoordinat
             redis.call('HSET', KEYS[1], 'state', ARGV[3], 'payload', ARGV[4],
                        'contentType', ARGV[5])
             redis.call('PEXPIRE', KEYS[1], ARGV[6])
+            return 1
+            """, Long.class);
+
+    private static final DefaultRedisScript<Long> RENEW_SCRIPT = new DefaultRedisScript<>("""
+            redis.replicate_commands()
+            local time = redis.call('TIME')
+            local now = time[1] * 1000 + math.floor(time[2] / 1000)
+            local identityExpiry = redis.call('ZSCORE', KEYS[2], ARGV[2])
+            local globalExpiry = redis.call('ZSCORE', KEYS[3], ARGV[2])
+            if redis.call('HGET', KEYS[1], 'state') ~= 'IN_PROGRESS'
+                or redis.call('HGET', KEYS[1], 'digest') ~= ARGV[1]
+                or redis.call('HGET', KEYS[1], 'lease') ~= ARGV[2]
+                or not identityExpiry or tonumber(identityExpiry) <= now
+                or not globalExpiry or tonumber(globalExpiry) <= now then
+              return 0
+            end
+            local leaseExpiry = now + tonumber(ARGV[3])
+            redis.call('ZADD', KEYS[2], leaseExpiry, ARGV[2])
+            redis.call('PEXPIRE', KEYS[2], ARGV[3])
+            redis.call('ZADD', KEYS[3], leaseExpiry, ARGV[2])
+            redis.call('PEXPIRE', KEYS[3], ARGV[3])
+            redis.call('PEXPIRE', KEYS[1], ARGV[4])
             return 1
             """, Long.class);
 
@@ -325,7 +350,7 @@ public final class RedisVoiceRequestCoordinator implements VoiceRequestCoordinat
     @Override
     public void succeed(VoiceReservation reservation, VoiceCachedResult result) {
         if (reservation == null || result == null
-                || !expectedContentType(reservation.operation()).equals(result.contentType())) {
+                || !allowedContentType(reservation.operation(), result.contentType())) {
             throw new VoiceStateUnavailableException();
         }
         transition(reservation, "SUCCEEDED", cipher.encrypt(
@@ -342,6 +367,31 @@ public final class RedisVoiceRequestCoordinator implements VoiceRequestCoordinat
     @Override
     public void failUnknown(VoiceReservation reservation) {
         transition(reservation, "FAILED_UNKNOWN", "", "", FAILED_UNKNOWN_TTL_MS);
+    }
+
+    @Override
+    public void renew(VoiceReservation reservation) {
+        if (reservation == null || reservation.operation() == null
+                || reservation.identityScope() == null || reservation.identityScope().isBlank()
+                || reservation.requestId() == null || reservation.requestId().isBlank()
+                || reservation.digest() == null || reservation.digest().isBlank()
+                || reservation.leaseToken() == null || reservation.leaseToken().isBlank()) {
+            throw new VoiceStateUnavailableException();
+        }
+        Keys keys = keys(reservation.operation(), reservation.identityScope(), reservation.requestId());
+        try {
+            Long renewed = redis.execute(RENEW_SCRIPT,
+                    List.of(keys.stateKey(), keys.identityLeases(), keys.globalLeases()),
+                    reservation.digest(), reservation.leaseToken(), Long.toString(leaseTtl()),
+                    Long.toString(IN_PROGRESS_TTL_MS));
+            if (renewed == null || renewed != 1L) {
+                throw new VoiceStateUnavailableException();
+            }
+        } catch (VoiceStateUnavailableException exception) {
+            throw exception;
+        } catch (RuntimeException exception) {
+            throw new VoiceStateUnavailableException();
+        }
     }
 
     @Override
@@ -411,7 +461,7 @@ public final class RedisVoiceRequestCoordinator implements VoiceRequestCoordinat
             String digest,
             String encryptedPayload,
             String contentType) {
-        if (!expectedContentType(operation).equals(contentType)) {
+        if (!allowedContentType(operation, contentType)) {
             throw new VoiceStateUnavailableException();
         }
         return VoiceBeginResult.replay(new VoiceCachedResult(
@@ -419,13 +469,15 @@ public final class RedisVoiceRequestCoordinator implements VoiceRequestCoordinat
                 contentType));
     }
 
-    private static String expectedContentType(VoiceOperation operation) {
-        if (operation == null) {
-            throw new VoiceStateUnavailableException();
+    private static boolean allowedContentType(
+            VoiceOperation operation, String contentType) {
+        if (operation == null || contentType == null) {
+            return false;
         }
         return switch (operation) {
-            case TRANSCRIPTION -> "application/json";
-            case SYNTHESIS -> "audio/mpeg";
+            case TRANSCRIPTION -> "application/json".equals(contentType);
+            case SYNTHESIS -> "audio/mpeg".equals(contentType)
+                    || "audio/wav".equals(contentType);
         };
     }
 
