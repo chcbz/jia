@@ -19,6 +19,9 @@ public final class VoiceDigests {
     private static final String CLIPROXY_REALTIME_PROVIDER = "cliproxy-realtime";
     private static final byte[] CLIPROXY_REALTIME_SEMANTIC_VERSION =
             "cyf-cliproxy-realtime-semantics-v2".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] CLIPROXY_REALTIME_NATIVE_TRANSCRIPTION_VERSION =
+            "cyf-cliproxy-realtime-native-transcription-v1"
+                    .getBytes(StandardCharsets.UTF_8);
 
     private final byte[] identityHmacSecret;
 
@@ -66,6 +69,9 @@ public final class VoiceDigests {
         updateLengthPrefixed(digest, VoiceOperation.TRANSCRIPTION.namespace()
                 .getBytes(StandardCharsets.UTF_8));
         updateProviderDomain(digest, provider);
+        if (CLIPROXY_REALTIME_PROVIDER.equals(provider)) {
+            updateLengthPrefixed(digest, CLIPROXY_REALTIME_NATIVE_TRANSCRIPTION_VERSION);
+        }
         updateLengthPrefixed(digest, model.getBytes(StandardCharsets.UTF_8));
         updateLengthPrefixed(digest, language.getBytes(StandardCharsets.UTF_8));
         updateLengthPrefixed(digest, mediaType.getBytes(StandardCharsets.UTF_8));
