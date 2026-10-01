@@ -221,6 +221,68 @@ class AgentTaskProviderCostConsentServiceImplTest {
         @Override public boolean reserve(AgentTaskProviderCostConsentEntity row,long version){return true;}
         @Override public boolean consume(AgentTaskProviderCostConsentEntity row,long version){return true;}
         @Override public boolean revoke(AgentTaskProviderCostConsentEntity row,long version){revokes++;return true;}
+        @Override public AgentTaskProviderCostConsentEntity findFollowupByConsent(
+                String tenant,String client,String owner,String task,String id) {
+            return followup(tenant,client,owner,task,id,false);
+        }
+        @Override public AgentTaskProviderCostConsentEntity findFollowupByConsentForUpdate(
+                String tenant,String client,String owner,String task,String id) {
+            return followup(tenant,client,owner,task,id,true);
+        }
+        @Override public boolean bindFollowup(AgentTaskProviderCostConsentEntity row,long version) {
+            AgentTaskProviderCostConsentEntity stored=followupForCas(row,version,"ISSUED");
+            if(stored==null)return false;
+            stored.setBoundGrantId(row.getBoundGrantId()).setBoundGrantVersion(row.getBoundGrantVersion())
+                    .setBoundAssignmentRevision(row.getBoundAssignmentRevision())
+                    .setUpdateTime(row.getUpdateTime()).setState("BOUND").setVersion(version+1);
+            return true;
+        }
+        @Override public boolean reserveFollowup(AgentTaskProviderCostConsentEntity row,long version) {
+            AgentTaskProviderCostConsentEntity stored=followupForCas(row,version,"BOUND");
+            if(stored==null)return false;
+            stored.setReservedExecutionId(row.getReservedExecutionId()).setReservedRunId(row.getReservedRunId())
+                    .setRuntimeInputSnapshotSha256(row.getRuntimeInputSnapshotSha256())
+                    .setUpdateTime(row.getUpdateTime()).setState("RESERVED").setVersion(version+1);
+            return true;
+        }
+        @Override public boolean consumeFollowup(AgentTaskProviderCostConsentEntity row,long version) {
+            AgentTaskProviderCostConsentEntity stored=followupForCas(row,version,"RESERVED");
+            if(stored==null)return false;
+            stored.setConsumedLeaseId(row.getConsumedLeaseId()).setConsumedAt(row.getConsumedAt())
+                    .setUpdateTime(row.getUpdateTime()).setState("CONSUMED").setVersion(version+1);
+            return true;
+        }
+        @Override public boolean revokeFollowup(AgentTaskProviderCostConsentEntity row,long version) {
+            AgentTaskProviderCostConsentEntity stored=followupForCas(row,version,
+                    "ISSUED","BOUND","RESERVED");
+            if(stored==null)return false;
+            stored.setRevokeIdempotencyKey(row.getRevokeIdempotencyKey())
+                    .setRevokeRequestDigest(row.getRevokeRequestDigest()).setRevokedAt(row.getRevokedAt())
+                    .setUpdateTime(row.getUpdateTime()).setState("REVOKED").setVersion(version+1);
+            return true;
+        }
+        private AgentTaskProviderCostConsentEntity followup(String tenant,String client,String owner,
+                String task,String id,boolean lock) {
+            if(lock)lockReads++;
+            AgentTaskProviderCostConsentEntity row=byConsent.get(id);
+            return row!=null && tenant.equals(row.getTenantId()) && client.equals(row.getClientId())
+                    && owner.equals(row.getOwnerJiacn()) && task.equals(row.getTaskId())
+                    && "FOLLOWUP_EXECUTE".equals(row.getConsentPurpose()) ? row : null;
+        }
+        private AgentTaskProviderCostConsentEntity followupForCas(
+                AgentTaskProviderCostConsentEntity row,long version,String... states) {
+            if(row==null || !"FOLLOWUP_EXECUTE".equals(row.getConsentPurpose())
+                    || row.getOperationGrantId()==null)throw new IllegalArgumentException("followup consent");
+            AgentTaskProviderCostConsentEntity stored=byConsent.get(row.getConsentId());
+            if(stored==null || !row.getTenantId().equals(stored.getTenantId())
+                    || !row.getClientId().equals(stored.getClientId())
+                    || !row.getOwnerJiacn().equals(stored.getOwnerJiacn())
+                    || !row.getTaskId().equals(stored.getTaskId())
+                    || !row.getOperationGrantId().equals(stored.getOperationGrantId())
+                    || !Long.valueOf(version).equals(stored.getVersion()))return null;
+            for(String state:states)if(state.equals(stored.getState()))return stored;
+            return null;
+        }
     }
 
 
