@@ -52,6 +52,7 @@ public class AgentCommandV2ExecutionLeaseFactEntity extends BaseEntity {
     private Long deploymentControlCutoffAt;
     private String reason;
     private Long createdAt;
+    private String evidenceProvenance;
     private byte[] executionOriginSnapshotSha256;
     private String holderGenerationFactId;
     private byte[] holderGenerationSnapshotSha256;

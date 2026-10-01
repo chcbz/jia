@@ -19,6 +19,7 @@ public class AgentRuntimeV2BindingEntity extends BaseEntity {
     private String credentialReference;
     private String runtimeInstallationId;
     private Integer contractVersion;
+    private String evidenceProvenance;
     private byte[] registrationSubjectSha256;
     private String liveRegistrationSubjectSha256;
     private String liveBusinessSubject;

@@ -196,8 +196,8 @@ public final class AgentRuntimeV2PersistenceSchemaGate implements InitializingBe
         result.put(BINDING, insertAfter(result.get(BINDING), "contract_version", additions.get(BINDING)));
         result.put(GENERATION_FACT, insertAfter(
                 insertAfter(result.get(GENERATION_FACT), "runtime_instance_id",
-                        additions.get(GENERATION_FACT).subList(0, 4)),
-                "migration_epoch", additions.get(GENERATION_FACT).subList(4, 11)));
+                        additions.get(GENERATION_FACT).subList(0, 5)),
+                "migration_epoch", additions.get(GENERATION_FACT).subList(5, 12)));
         result.put(INBOX, insertAfter(result.get(INBOX), "dispatch_receiver_registration_revision", additions.get(INBOX)));
         result.put(RECEIPT, insertAfter(result.get(RECEIPT), "committed_at", additions.get(RECEIPT)));
         result.put(LEASE_FACT, insertAfter(result.get(LEASE_FACT), "created_at", additions.get(LEASE_FACT)));

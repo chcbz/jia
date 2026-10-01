@@ -41,6 +41,7 @@ public class AgentRuntimeV2BindingGenerationFactDaoImpl
                 || b.getSocketOwnerLeaseUntil() == null || b.getSocketOwnerLeaseUntil() <= effectiveAt) {
             throw new IllegalArgumentException("initial version-2 binding is not canonical");
         }
+        requireUnsetProvenance(b.getEvidenceProvenance());
         exact(b.getCredentialKind(), 32, "credentialKind");
         exact(b.getCredentialReference(), 200, "credentialReference");
         if ("RUNTIME_V1_INSTALLATION".equals(b.getCredentialKind()) || b.getRuntimeInstallationId() != null) {
@@ -157,9 +158,46 @@ public class AgentRuntimeV2BindingGenerationFactDaoImpl
             throw new IllegalStateException("active transaction required");
         }
         uuid(bindingId, "runtimeBindingId");
-        return facts.lockLatest(t(s), d(s), s.executionPoolId(), s.clientId(), s.ownerJiacn(), s.agentId(),
+        AgentRuntimeV2BindingGenerationFactEntity row = facts.lockLatest(t(s), d(s), s.executionPoolId(), s.clientId(), s.ownerJiacn(), s.agentId(),
                 s.claimantDeploymentId(), s.claimantWorkerGeneration(), s.receiverRegistrationRevision(),
                 s.admissionEpoch(), s.moduleId(), s.migrationEpoch(), bindingId);
+        if (row != null) requireEnforcedProvenance(row.getEvidenceProvenance());
+        return row;
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY, readOnly = true)
+    public AgentRuntimeV2BindingGenerationFactEntity findHistoricalByFactId(
+            RuntimeReceiverScope s, String bindingId, String factId) {
+        readOnlyTransaction();
+        uuid(bindingId, "runtimeBindingId");
+        uuid(factId, "bindingGenerationFactId");
+        AgentRuntimeV2BindingGenerationFactEntity row = facts.findHistoricalByFactId(
+                t(s), d(s), s.executionPoolId(), s.runtimeCredentialClientId(),
+                s.ownerJiacn(), s.agentId(), bindingId, factId);
+        validateHistoricalIdentity(s, bindingId, row);
+        if (row != null && !factId.equals(row.getBindingGenerationFactId())) {
+            throw new IllegalStateException("generation history fact ID mismatch");
+        }
+        return row;
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY, readOnly = true)
+    public AgentRuntimeV2BindingGenerationFactEntity findHistoricalConnectedGeneration(
+            RuntimeReceiverScope s, String bindingId, long generation) {
+        readOnlyTransaction();
+        uuid(bindingId, "runtimeBindingId");
+        if (generation < 0) throw new IllegalArgumentException("bindingGeneration must be non-negative");
+        AgentRuntimeV2BindingGenerationFactEntity row = facts.findHistoricalConnectedGeneration(
+                t(s), d(s), s.executionPoolId(), s.runtimeCredentialClientId(),
+                s.ownerJiacn(), s.agentId(), bindingId, generation);
+        validateHistoricalIdentity(s, bindingId, row);
+        if (row != null && (!Long.valueOf(generation).equals(row.getBindingGeneration())
+                || !"CONNECTED".equals(row.getEventType()))) {
+            throw new IllegalStateException("generation history key mismatch");
+        }
+        return row;
     }
 
     private int insert(RuntimeReceiverScope s, AgentRuntimeV2BindingGenerationFactEntity f) {
@@ -188,6 +226,25 @@ public class AgentRuntimeV2BindingGenerationFactDaoImpl
         if (!TransactionSynchronizationManager.isActualTransactionActive()
                 || TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
             throw new IllegalStateException("active writable transaction required");
+        }
+    }
+    private static void readOnlyTransaction() {
+        if (!TransactionSynchronizationManager.isActualTransactionActive()
+                || !TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
+            throw new IllegalStateException("historical runtime-v2 reads require an active read-only transaction");
+        }
+    }
+    private static void validateHistoricalIdentity(RuntimeReceiverScope s, String bindingId,
+            AgentRuntimeV2BindingGenerationFactEntity row) {
+        if (row == null) return;
+        if (!Objects.equals(t(s), row.getTenantId())
+                || !Objects.equals(d(s), row.getDataDomainId())
+                || !Objects.equals(s.executionPoolId(), row.getExecutionPoolId())
+                || !Objects.equals(s.runtimeCredentialClientId(), row.getClientId())
+                || !Objects.equals(s.ownerJiacn(), row.getOwnerJiacn())
+                || !Objects.equals(s.agentId(), row.getAgentId())
+                || !Objects.equals(bindingId, row.getRuntimeBindingId())) {
+            throw new IllegalStateException("generation history immutable identity mismatch");
         }
     }
     private static String t(RuntimeReceiverScope s) { return s.tenantId().value(); }

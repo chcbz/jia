@@ -43,6 +43,7 @@ public interface AgentCommandV2ExecutionGrantMapper {
             @Param("e") AgentCommandV2ExecutionGrantEntity entity);
 
     @Select("SELECT * FROM agent_command_v2_execution_grant WHERE " + AgentRuntimeV2MapperScope.SPLIT_EXACT
+            + " AND evidence_provenance='R2B1_ENFORCED'"
             + " AND execution_grant_id=#{executionGrantId}"
             + " AND CAST(execution_grant_id AS BINARY)=CAST(#{executionGrantId} AS BINARY)"
             + " AND OCTET_LENGTH(execution_grant_id)=OCTET_LENGTH(#{executionGrantId}) LIMIT 1 FOR UPDATE")
@@ -59,6 +60,7 @@ public interface AgentCommandV2ExecutionGrantMapper {
             @Param("migrationEpoch") long migrationEpoch, @Param("executionGrantId") String executionGrantId);
 
     @Select("SELECT * FROM agent_command_v2_execution_grant WHERE " + AgentRuntimeV2MapperScope.SPLIT_EXACT
+            + " AND evidence_provenance='R2B1_ENFORCED'"
             + " AND runtime_dispatch_id=#{runtimeDispatchId} AND current_lease_fact_id=#{currentLeaseFactId}"
             + " AND CAST(runtime_dispatch_id AS BINARY)=CAST(#{runtimeDispatchId} AS BINARY)"
             + " AND OCTET_LENGTH(runtime_dispatch_id)=OCTET_LENGTH(#{runtimeDispatchId})"
@@ -78,4 +80,18 @@ public interface AgentCommandV2ExecutionGrantMapper {
             @Param("migrationEpoch") long migrationEpoch,
             @Param("runtimeDispatchId") String runtimeDispatchId,
             @Param("currentLeaseFactId") String currentLeaseFactId);
+
+    @Select("SELECT * FROM agent_command_v2_execution_grant WHERE "
+            + AgentRuntimeV2MapperScope.HISTORICAL_EXECUTION_IDENTITY
+            + " AND execution_grant_id=#{executionGrantId}"
+            + " AND CAST(execution_grant_id AS BINARY)=CAST(#{executionGrantId} AS BINARY)"
+            + " AND OCTET_LENGTH(execution_grant_id)=OCTET_LENGTH(#{executionGrantId}) LIMIT 1")
+    AgentCommandV2ExecutionGrantEntity findHistoricalById(
+            @Param("tenantId") String tenantId, @Param("dataDomainId") String dataDomainId,
+            @Param("executionPoolId") String executionPoolId,
+            @Param("commandCallerClientId") String commandCallerClientId,
+            @Param("runtimeCredentialClientId") String runtimeCredentialClientId,
+            @Param("ownerJiacn") String ownerJiacn, @Param("agentId") String agentId,
+            @Param("runtimeBindingId") String runtimeBindingId,
+            @Param("executionGrantId") String executionGrantId);
 }

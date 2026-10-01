@@ -42,6 +42,7 @@ public interface AgentRuntimeV2BindingGenerationFactMapper {
 
     @Select("SELECT * FROM agent_runtime_v2_binding_generation_fact WHERE "
             + AgentRuntimeV2MapperScope.RECEIVER_EXACT
+            + " AND evidence_provenance='R2B1_ENFORCED'"
             + " AND runtime_binding_id=#{runtimeBindingId}"
             + " AND CAST(runtime_binding_id AS BINARY)=CAST(#{runtimeBindingId} AS BINARY)"
             + " AND OCTET_LENGTH(runtime_binding_id)=OCTET_LENGTH(#{runtimeBindingId})"
@@ -54,5 +55,29 @@ public interface AgentRuntimeV2BindingGenerationFactMapper {
             @Param("receiverRegistrationRevision") long receiverRegistrationRevision,
             @Param("admissionEpoch") long admissionEpoch, @Param("moduleId") String moduleId,
             @Param("migrationEpoch") long migrationEpoch, @Param("runtimeBindingId") String runtimeBindingId);
+
+    @Select("SELECT * FROM agent_runtime_v2_binding_generation_fact WHERE "
+            + AgentRuntimeV2MapperScope.HISTORICAL_RECEIVER_IDENTITY
+            + " AND binding_generation_fact_id=#{bindingGenerationFactId}"
+            + " AND CAST(binding_generation_fact_id AS BINARY)=CAST(#{bindingGenerationFactId} AS BINARY)"
+            + " AND OCTET_LENGTH(binding_generation_fact_id)=OCTET_LENGTH(#{bindingGenerationFactId}) LIMIT 1")
+    AgentRuntimeV2BindingGenerationFactEntity findHistoricalByFactId(
+            @Param("tenantId") String tenantId, @Param("dataDomainId") String dataDomainId,
+            @Param("executionPoolId") String executionPoolId,
+            @Param("runtimeCredentialClientId") String runtimeCredentialClientId,
+            @Param("ownerJiacn") String ownerJiacn, @Param("agentId") String agentId,
+            @Param("runtimeBindingId") String runtimeBindingId,
+            @Param("bindingGenerationFactId") String bindingGenerationFactId);
+
+    @Select("SELECT * FROM agent_runtime_v2_binding_generation_fact WHERE "
+            + AgentRuntimeV2MapperScope.HISTORICAL_RECEIVER_IDENTITY
+            + " AND binding_generation=#{bindingGeneration} AND event_type='CONNECTED' LIMIT 1")
+    AgentRuntimeV2BindingGenerationFactEntity findHistoricalConnectedGeneration(
+            @Param("tenantId") String tenantId, @Param("dataDomainId") String dataDomainId,
+            @Param("executionPoolId") String executionPoolId,
+            @Param("runtimeCredentialClientId") String runtimeCredentialClientId,
+            @Param("ownerJiacn") String ownerJiacn, @Param("agentId") String agentId,
+            @Param("runtimeBindingId") String runtimeBindingId,
+            @Param("bindingGeneration") long bindingGeneration);
 
 }

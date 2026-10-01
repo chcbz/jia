@@ -43,6 +43,7 @@ public interface AgentCommandV2AckReceiptMapper {
             @Param("migrationEpoch") long migrationEpoch, @Param("e") AgentCommandV2AckReceiptEntity entity);
 
     @Select("SELECT * FROM agent_command_v2_ack_receipt WHERE " + AgentRuntimeV2MapperScope.SPLIT_EXACT
+            + " AND evidence_provenance='R2B1_ENFORCED'"
             + " AND ack_message_id=#{ackMessageId}"
             + " AND CAST(ack_message_id AS BINARY)=CAST(#{ackMessageId} AS BINARY)"
             + " AND OCTET_LENGTH(ack_message_id)=OCTET_LENGTH(#{ackMessageId}) LIMIT 1")
@@ -59,6 +60,7 @@ public interface AgentCommandV2AckReceiptMapper {
             @Param("migrationEpoch") long migrationEpoch, @Param("ackMessageId") String ackMessageId);
 
     @Select("SELECT * FROM agent_command_v2_ack_receipt WHERE " + AgentRuntimeV2MapperScope.SPLIT_EXACT
+            + " AND evidence_provenance='R2B1_ENFORCED'"
             + " AND runtime_dispatch_id=#{runtimeDispatchId} AND status=#{status}"
             + " AND runtime_binding_id=#{runtimeBindingId}"
             + " AND CAST(runtime_dispatch_id AS BINARY)=CAST(#{runtimeDispatchId} AS BINARY)"

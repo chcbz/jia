@@ -1,11 +1,20 @@
 -- R2b1 runtime-v2 registration and immutable execution evidence (2026-09-30).
 -- REVIEW/RUN MANUALLY ONLY. No DML, backfill, seed, secret, key, or authority synthesis.
--- PHASE 1 ONLY: nullable columns, indexes, and new append-only tables. Existing-table activation CHECKs are deliberately deferred.
+-- PHASE 1 ONLY: provenance discriminators, nullable evidence columns, indexes, and new append-only tables.
+-- Existing rows receive LEGACY_PRE_R2B1; the default is then changed to R2B1_ENFORCED for every later insert.
+-- WRITER QUIESCENCE IS MANDATORY: stop every writer to all eight altered tables before the first
+-- ADD COLUMN and keep them stopped through every ALTER COLUMN ... SET DEFAULT below plus catalog
+-- verification. Any insert during that interval is an unclassifiable legacy-window write: STOP,
+-- restore/quarantine it using audited operational recovery, and restart the whole proof. Do not
+-- guess, backfill, or relabel old evidence as R2B1_ENFORCED.
+-- Existing-table activation CHECKs are deliberately deferred.
 -- Preconditions: agent-runtime-v2-persistence-manual-20260930.sql is already reviewed/applied.
 -- Next: deploy exact writers/readers with fail-closed gates; only then review the separate activation CHECK file.
 
 ALTER TABLE agent_runtime_v2_binding
-    ADD COLUMN registration_subject_sha256 BINARY(32) NULL AFTER contract_version,
+    ADD COLUMN evidence_provenance VARCHAR(24) COLLATE utf8mb4_0900_bin NOT NULL
+      DEFAULT 'LEGACY_PRE_R2B1' AFTER contract_version,
+    ADD COLUMN registration_subject_sha256 BINARY(32) NULL AFTER evidence_provenance,
     ADD COLUMN live_registration_subject_sha256 CHAR(64) COLLATE utf8mb4_0900_bin
       GENERATED ALWAYS AS (CASE WHEN status <> 'REVOKED' AND registration_subject_sha256 IS NOT NULL
         THEN LOWER(HEX(registration_subject_sha256)) ELSE NULL END) STORED AFTER registration_subject_sha256,
@@ -29,7 +38,9 @@ ALTER TABLE agent_runtime_v2_binding
     ADD UNIQUE KEY uk_runtime_v2_binding_live_business (live_business_subject);
 
 ALTER TABLE agent_runtime_v2_binding_generation_fact
-    ADD COLUMN registration_subject_sha256 BINARY(32) NULL AFTER runtime_instance_id,
+    ADD COLUMN evidence_provenance VARCHAR(24) COLLATE utf8mb4_0900_bin NOT NULL
+      DEFAULT 'LEGACY_PRE_R2B1' AFTER runtime_instance_id,
+    ADD COLUMN registration_subject_sha256 BINARY(32) NULL AFTER evidence_provenance,
     ADD COLUMN registration_authority_id VARCHAR(36) COLLATE utf8mb4_0900_bin NULL AFTER registration_subject_sha256,
     ADD COLUMN registration_authority_revision BIGINT NULL AFTER registration_authority_id,
     ADD COLUMN runtime_credential_client_id VARCHAR(50) COLLATE utf8mb4_0900_bin NULL AFTER registration_authority_revision,
@@ -306,34 +317,65 @@ CREATE TABLE agent_runtime_v2_reconnect_challenge (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
 ALTER TABLE agent_consumer_inbox
-    ADD COLUMN dispatch_generation_fact_id VARCHAR(36) COLLATE utf8mb4_0900_bin NULL AFTER dispatch_receiver_registration_revision,
+    ADD COLUMN evidence_provenance VARCHAR(24) COLLATE utf8mb4_0900_bin NOT NULL
+      DEFAULT 'LEGACY_PRE_R2B1' AFTER dispatch_receiver_registration_revision,
+    ADD COLUMN dispatch_generation_fact_id VARCHAR(36) COLLATE utf8mb4_0900_bin NULL AFTER evidence_provenance,
     ADD COLUMN dispatch_generation_snapshot_sha256 BINARY(32) NULL AFTER dispatch_generation_fact_id,
     ADD COLUMN execution_origin_snapshot_sha256 BINARY(32) NULL AFTER dispatch_generation_snapshot_sha256;
 
 ALTER TABLE agent_command_v2_ack_receipt
-    ADD COLUMN execution_origin_snapshot_sha256 BINARY(32) NULL AFTER committed_at,
+    ADD COLUMN evidence_provenance VARCHAR(24) COLLATE utf8mb4_0900_bin NOT NULL
+      DEFAULT 'LEGACY_PRE_R2B1' AFTER committed_at,
+    ADD COLUMN execution_origin_snapshot_sha256 BINARY(32) NULL AFTER evidence_provenance,
     ADD COLUMN ack_holder_generation_fact_id VARCHAR(36) COLLATE utf8mb4_0900_bin NULL AFTER execution_origin_snapshot_sha256,
     ADD COLUMN ack_holder_generation_snapshot_sha256 BINARY(32) NULL AFTER ack_holder_generation_fact_id;
 
 ALTER TABLE agent_command_v2_execution_lease_fact
-    ADD COLUMN execution_origin_snapshot_sha256 BINARY(32) NULL AFTER created_at,
+    ADD COLUMN evidence_provenance VARCHAR(24) COLLATE utf8mb4_0900_bin NOT NULL
+      DEFAULT 'LEGACY_PRE_R2B1' AFTER created_at,
+    ADD COLUMN execution_origin_snapshot_sha256 BINARY(32) NULL AFTER evidence_provenance,
     ADD COLUMN holder_generation_fact_id VARCHAR(36) COLLATE utf8mb4_0900_bin NULL AFTER execution_origin_snapshot_sha256,
     ADD COLUMN holder_generation_snapshot_sha256 BINARY(32) NULL AFTER holder_generation_fact_id;
 
 ALTER TABLE agent_command_v2_execution_grant
-    ADD COLUMN execution_origin_snapshot_sha256 BINARY(32) NULL AFTER migration_epoch,
+    ADD COLUMN evidence_provenance VARCHAR(24) COLLATE utf8mb4_0900_bin NOT NULL
+      DEFAULT 'LEGACY_PRE_R2B1' AFTER migration_epoch,
+    ADD COLUMN execution_origin_snapshot_sha256 BINARY(32) NULL AFTER evidence_provenance,
     ADD COLUMN holder_generation_fact_id VARCHAR(36) COLLATE utf8mb4_0900_bin NULL AFTER execution_origin_snapshot_sha256,
     ADD COLUMN holder_generation_snapshot_sha256 BINARY(32) NULL AFTER holder_generation_fact_id;
 
 ALTER TABLE agent_command_v2_execution_continuation_anchor
-    ADD COLUMN execution_origin_snapshot_sha256 BINARY(32) NULL AFTER migration_epoch,
+    ADD COLUMN evidence_provenance VARCHAR(24) COLLATE utf8mb4_0900_bin NOT NULL
+      DEFAULT 'LEGACY_PRE_R2B1' AFTER migration_epoch,
+    ADD COLUMN execution_origin_snapshot_sha256 BINARY(32) NULL AFTER evidence_provenance,
     ADD COLUMN holder_generation_fact_id VARCHAR(36) COLLATE utf8mb4_0900_bin NULL AFTER execution_origin_snapshot_sha256,
     ADD COLUMN holder_generation_snapshot_sha256 BINARY(32) NULL AFTER holder_generation_fact_id;
 
 ALTER TABLE agent_command_v2_execution_request
-    ADD COLUMN execution_origin_snapshot_sha256 BINARY(32) NULL AFTER migration_epoch,
+    ADD COLUMN evidence_provenance VARCHAR(24) COLLATE utf8mb4_0900_bin NOT NULL
+      DEFAULT 'LEGACY_PRE_R2B1' AFTER migration_epoch,
+    ADD COLUMN execution_origin_snapshot_sha256 BINARY(32) NULL AFTER evidence_provenance,
     ADD COLUMN requested_holder_generation_fact_id VARCHAR(36) COLLATE utf8mb4_0900_bin NULL AFTER execution_origin_snapshot_sha256,
     ADD COLUMN requested_holder_generation_snapshot_sha256 BINARY(32) NULL AFTER requested_holder_generation_fact_id;
+
+-- Freeze the legacy classification assigned by the ADD COLUMN statements above. Application
+-- INSERTs intentionally omit evidence_provenance, so all rows created after this point are enforced.
+ALTER TABLE agent_runtime_v2_binding
+    ALTER COLUMN evidence_provenance SET DEFAULT 'R2B1_ENFORCED';
+ALTER TABLE agent_runtime_v2_binding_generation_fact
+    ALTER COLUMN evidence_provenance SET DEFAULT 'R2B1_ENFORCED';
+ALTER TABLE agent_consumer_inbox
+    ALTER COLUMN evidence_provenance SET DEFAULT 'R2B1_ENFORCED';
+ALTER TABLE agent_command_v2_ack_receipt
+    ALTER COLUMN evidence_provenance SET DEFAULT 'R2B1_ENFORCED';
+ALTER TABLE agent_command_v2_execution_lease_fact
+    ALTER COLUMN evidence_provenance SET DEFAULT 'R2B1_ENFORCED';
+ALTER TABLE agent_command_v2_execution_grant
+    ALTER COLUMN evidence_provenance SET DEFAULT 'R2B1_ENFORCED';
+ALTER TABLE agent_command_v2_execution_continuation_anchor
+    ALTER COLUMN evidence_provenance SET DEFAULT 'R2B1_ENFORCED';
+ALTER TABLE agent_command_v2_execution_request
+    ALTER COLUMN evidence_provenance SET DEFAULT 'R2B1_ENFORCED';
 
 -- Post-check only: SHOW CREATE TABLE for all twelve altered/created tables.
 -- This script intentionally defines zero FOREIGN KEY constraints.

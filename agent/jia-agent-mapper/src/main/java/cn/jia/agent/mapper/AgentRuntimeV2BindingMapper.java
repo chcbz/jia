@@ -11,7 +11,9 @@ public interface AgentRuntimeV2BindingMapper {
             runtime_binding_id,credential_kind,credential_reference,runtime_installation_id,
             contract_version,registration_subject_sha256,
             registration_authority_id,registration_authority_revision,process_public_key_spki,
-            process_public_key_sha256,verifier_version,verifier_key_id,reconnect_verifier,data_domain_id,execution_pool_id,owner_jiacn,agent_id,
+            process_public_key_sha256,verifier_version,verifier_key_id,reconnect_verifier,
+            current_registration_receipt_id,current_registration_receipt_sha256,
+            data_domain_id,execution_pool_id,owner_jiacn,agent_id,
             producer_deployment_id,claimant_deployment_id,claimant_worker_generation,
             receiver_registration_revision,admission_epoch,module_id,migration_epoch,
             runtime_instance_id,binding_generation,status,connected_at,disconnected_at,revoked_at,
@@ -23,7 +25,8 @@ public interface AgentRuntimeV2BindingMapper {
             #{e.contractVersion},#{e.registrationSubjectSha256},
             #{e.registrationAuthorityId},#{e.registrationAuthorityRevision},
             #{e.processPublicKeySpki},#{e.processPublicKeySha256},#{e.verifierVersion},#{e.verifierKeyId},
-            #{e.reconnectVerifier},#{dataDomainId},#{executionPoolId},#{ownerJiacn},#{agentId},
+            #{e.reconnectVerifier},#{e.currentRegistrationReceiptId},#{e.currentRegistrationReceiptSha256},
+            #{dataDomainId},#{executionPoolId},#{ownerJiacn},#{agentId},
             NULL,#{claimantDeploymentId},#{claimantWorkerGeneration},#{receiverRegistrationRevision},
             #{admissionEpoch},#{moduleId},#{migrationEpoch},#{e.runtimeInstanceId},#{e.bindingGeneration},
             #{e.status},#{e.connectedAt},#{e.disconnectedAt},#{e.revokedAt},#{e.revokeReason},
@@ -67,6 +70,7 @@ public interface AgentRuntimeV2BindingMapper {
 
     @Select("SELECT * FROM agent_runtime_v2_binding WHERE " + AgentRuntimeV2MapperScope.RECEIVER_EXACT
             + " AND runtime_binding_id=#{runtimeBindingId}"
+            + " AND (contract_version<>2 OR evidence_provenance='R2B1_ENFORCED')"
             + " AND CAST(runtime_binding_id AS BINARY)=CAST(#{runtimeBindingId} AS BINARY)"
             + " AND OCTET_LENGTH(runtime_binding_id)=OCTET_LENGTH(#{runtimeBindingId}) LIMIT 1")
     AgentRuntimeV2BindingEntity findExact(@Param("tenantId") String tenantId,
@@ -80,6 +84,7 @@ public interface AgentRuntimeV2BindingMapper {
 
     @Select("SELECT * FROM agent_runtime_v2_binding WHERE " + AgentRuntimeV2MapperScope.RECEIVER_EXACT
             + " AND runtime_binding_id=#{runtimeBindingId}"
+            + " AND (contract_version<>2 OR evidence_provenance='R2B1_ENFORCED')"
             + " AND CAST(runtime_binding_id AS BINARY)=CAST(#{runtimeBindingId} AS BINARY)"
             + " AND OCTET_LENGTH(runtime_binding_id)=OCTET_LENGTH(#{runtimeBindingId}) LIMIT 1 FOR UPDATE")
     AgentRuntimeV2BindingEntity lockExact(@Param("tenantId") String tenantId,
@@ -180,6 +185,7 @@ public interface AgentRuntimeV2BindingMapper {
               socket_owner_lease_until=#{newSocketOwnerLeaseUntil},version=version+1,update_time=#{effectiveAt}
             WHERE """ + AgentRuntimeV2MapperScope.RECEIVER_EXACT + """
               AND runtime_binding_id=#{runtimeBindingId} AND contract_version=2 AND version=#{expectedVersion}
+              AND evidence_provenance='R2B1_ENFORCED'
               AND CAST(runtime_binding_id AS BINARY)=CAST(#{runtimeBindingId} AS BINARY)
               AND OCTET_LENGTH(runtime_binding_id)=OCTET_LENGTH(#{runtimeBindingId})
               AND binding_generation=#{expectedGeneration} AND status=#{expectedStatus}

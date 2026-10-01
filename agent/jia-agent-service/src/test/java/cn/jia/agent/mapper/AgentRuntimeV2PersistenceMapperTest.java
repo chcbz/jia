@@ -20,6 +20,7 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import java.util.UUID;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -223,6 +224,50 @@ class AgentRuntimeV2PersistenceMapperTest {
         assertEquals("replica-new", winner.getSocketOwnerInstanceId());
         assertEquals(9L, winner.getSocketOwnerEpoch());
         assertEquals(1L, winner.getVersion());
+    }
+
+    @Test
+    void version2BindingRoundTripKeepsCurrentReceiptAndDatabaseOwnsProvenanceAndGeneratedColumns() {
+        RuntimeReceiverScope scope = receiver(scope("1", "owner-a"));
+        String bindingId = "00000000-0000-4000-8000-000000000071";
+        String receiptId = "00000000-0000-4000-8000-000000000072";
+        byte[] receiptSha = hash(72);
+        AgentRuntimeV2BindingEntity entity = new AgentRuntimeV2BindingEntity()
+                .setRuntimeBindingId(bindingId).setCredentialKind("API_KEY")
+                .setCredentialReference("api-key-roundtrip").setContractVersion(2)
+                .setEvidenceProvenance("LEGACY_PRE_R2B1")
+                .setLiveRegistrationSubjectSha256("caller-forged-generated")
+                .setLiveBusinessSubject("caller-forged-generated")
+                .setRegistrationSubjectSha256(hash(1))
+                .setRegistrationAuthorityId("00000000-0000-4000-8000-000000000073")
+                .setRegistrationAuthorityRevision(12L).setProcessPublicKeySpki(new byte[44])
+                .setProcessPublicKeySha256(hash(2)).setVerifierVersion(4L)
+                .setVerifierKeyId("verifier-key").setReconnectVerifier(hash(3))
+                .setCurrentRegistrationReceiptId(receiptId)
+                .setCurrentRegistrationReceiptSha256(receiptSha)
+                .setRuntimeInstanceId("runtime-roundtrip").setBindingGeneration(3L)
+                .setStatus("ACTIVE").setConnectedAt(NOW).setCurrentSessionFence("fence-roundtrip")
+                .setSocketOwnerInstanceId("replica-roundtrip").setSocketOwnerEpoch(1L)
+                .setSocketOwnerLeaseUntil(NOW + 60_000).setVersion(0L);
+        entity.setCreateTime(NOW); entity.setUpdateTime(NOW);
+
+        assertEquals(1, bindingMapper.insert(scope.tenantId().value(), scope.dataDomainId().value(),
+                scope.executionPoolId(), scope.runtimeCredentialClientId(), scope.ownerJiacn(),
+                scope.agentId(), scope.claimantDeploymentId(), scope.claimantWorkerGeneration(),
+                scope.receiverRegistrationRevision(), scope.admissionEpoch(), scope.moduleId(),
+                scope.migrationEpoch(), entity));
+
+        AgentRuntimeV2BindingEntity stored = bindingMapper.findExact(scope.tenantId().value(),
+                scope.dataDomainId().value(), scope.executionPoolId(), scope.runtimeCredentialClientId(),
+                scope.ownerJiacn(), scope.agentId(), scope.claimantDeploymentId(),
+                scope.claimantWorkerGeneration(), scope.receiverRegistrationRevision(),
+                scope.admissionEpoch(), scope.moduleId(), scope.migrationEpoch(), bindingId);
+        assertNotNull(stored);
+        assertEquals("R2B1_ENFORCED", stored.getEvidenceProvenance());
+        assertEquals("generated", stored.getLiveRegistrationSubjectSha256());
+        assertEquals("generated", stored.getLiveBusinessSubject());
+        assertEquals(receiptId, stored.getCurrentRegistrationReceiptId());
+        assertArrayEquals(receiptSha, stored.getCurrentRegistrationReceiptSha256());
     }
 
     /* R2a2 dispatch/receipt/lease tests live in AgentRuntimeV2WirePersistenceTest; the
@@ -461,7 +506,12 @@ class AgentRuntimeV2PersistenceMapperTest {
                   credential_reference VARCHAR_IGNORECASE(200) NOT NULL,
                   runtime_installation_id VARCHAR_IGNORECASE(100),
                   contract_version INT NOT NULL,
+                  evidence_provenance VARCHAR_IGNORECASE(24) NOT NULL DEFAULT 'R2B1_ENFORCED',
                   registration_subject_sha256 BINARY(32),
+                  live_registration_subject_sha256 VARCHAR_IGNORECASE(64)
+                    GENERATED ALWAYS AS ('generated'),
+                  live_business_subject VARCHAR_IGNORECASE(64)
+                    GENERATED ALWAYS AS ('generated'),
                   registration_authority_id VARCHAR_IGNORECASE(36),
                   registration_authority_revision BIGINT,
                   process_public_key_spki BINARY(44),
@@ -469,6 +519,8 @@ class AgentRuntimeV2PersistenceMapperTest {
                   verifier_version BIGINT,
                   verifier_key_id VARCHAR_IGNORECASE(100),
                   reconnect_verifier BINARY(32),
+                  current_registration_receipt_id VARCHAR_IGNORECASE(36),
+                  current_registration_receipt_sha256 BINARY(32),
                   data_domain_id VARCHAR_IGNORECASE(64) NOT NULL,
                   execution_pool_id VARCHAR_IGNORECASE(100) NOT NULL,
                   owner_jiacn VARCHAR_IGNORECASE(100) NOT NULL,

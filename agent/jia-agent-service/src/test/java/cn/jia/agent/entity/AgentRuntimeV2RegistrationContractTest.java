@@ -63,6 +63,80 @@ class AgentRuntimeV2RegistrationContractTest {
     }
 
     @Test
+    void outerReceiptDeliveryAndRejectedVectorsAreByteExactAndStrict() {
+        assertDelivery(JSON[1], "ADVANCED", "CURRENT", 2267,
+                "95642e592820acc9b1aff58e50b246315c2c93d0a7fe973c1e1e4ad1cf5ef294");
+        assertDelivery(JSON[1], "PRIOR", "RECONNECT_REQUIRED", 2275,
+                "6b3dc9ded12b116a63873f5e30966c886ca470fbe36870e5cd303e0819cdf48d");
+        assertDelivery(JSON[5], "ADVANCED", "CURRENT", 2402,
+                "eb980ff9927aee56828ef1c9a03181916dc1a73cd56f8825edf218a6daff9e75");
+        assertDelivery(JSON[5], "PRIOR", "RECONNECT_REQUIRED", 2410,
+                "9b71fdf6a655ee50e71d02b2c4493d1b5330c16995cf83fafccc568824621b69");
+
+        assertRejected(new AgentRuntimeV2RegistrationCodec.Rejected("CREATE",
+                        "11111111-1111-4111-8111-111111111111", null, "NOT_AUTHORIZED"),
+                201, "c6ae083bc11a09fff48c7247cfe0ecd6b4d120c4c32113c04574627b31048315");
+        assertRejected(new AgentRuntimeV2RegistrationCodec.Rejected("CHALLENGE",
+                        "77777777-7777-4777-8777-777777777777", BINDING, "REQUEST_CONFLICT"),
+                240, "778d2ca84f1225512f0c95e678c90822ebd257fd4247e264ad8f087ab33eb17e");
+        assertRejected(new AgentRuntimeV2RegistrationCodec.Rejected("RECONNECT",
+                        "99999999-9999-4999-8999-999999999999", BINDING, "UNAVAILABLE"),
+                235, "19802525f1590e9af21584ca4c2fb701a5cb31e5cb18df61318200fb71f8adcf");
+        assertRejected(new AgentRuntimeV2RegistrationCodec.Rejected("CREATE",
+                        "11111111-1111-4111-8111-111111111111", BINDING,
+                        "RECONCILIATION_REQUIRED"),
+                244, "da7ef194a0cea2c7e14c42dfaebc14e8f387492bace6d4cda508b23b8b26a85f");
+        assertRejected(new AgentRuntimeV2RegistrationCodec.Rejected("CHALLENGE",
+                        "77777777-7777-4777-8777-777777777777", null, "NOT_AUTHORIZED"),
+                204, "7732eeb6708be19ab22f37ea78947aea993e5e746c3a33f01a305e6a0558b688");
+        assertRejected(new AgentRuntimeV2RegistrationCodec.Rejected("RECONNECT",
+                        "99999999-9999-4999-8999-999999999999", null, "UNAVAILABLE"),
+                201, "0c1d816a214a90e059aa0e1c7debb67c3a853814a8e6780a4fa6905c7bd43b5b");
+
+        byte[] valid = AgentRuntimeV2RegistrationCodec.encodeReceiptDelivery(
+                delivery(JSON[1], "ADVANCED", "CURRENT"));
+        for (byte[] malformed : List.of(
+                (" " + new String(valid, StandardCharsets.UTF_8)).getBytes(StandardCharsets.UTF_8),
+                (new String(valid, StandardCharsets.UTF_8) + "\n").getBytes(StandardCharsets.UTF_8),
+                new String(valid, StandardCharsets.UTF_8).replace("\"schemaVersion\":2", "\"schemaVersion\":\"2\"")
+                        .getBytes(StandardCharsets.UTF_8),
+                new String(valid, StandardCharsets.UTF_8).replace("\"receiptEncoding\":\"base64\"", "\"receiptEncoding\":\"BASE64\"")
+                        .getBytes(StandardCharsets.UTF_8),
+                new String(valid, StandardCharsets.UTF_8).replace("\"receiptSha256\":", "\"unknown\":1,\"receiptSha256\":")
+                        .getBytes(StandardCharsets.UTF_8))) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> AgentRuntimeV2RegistrationCodec.decodeReceiptDelivery(malformed));
+        }
+        String validText = new String(valid, StandardCharsets.UTF_8);
+        assertThrows(IllegalArgumentException.class, () -> AgentRuntimeV2RegistrationCodec.decodeReceiptDelivery(
+                validText.replaceFirst("(\\\"receiptBytesBase64\\\":\\\"[^\\\"]*)=(\\\",\\\"receiptSha256\\\")", "$1$2")
+                        .getBytes(StandardCharsets.UTF_8)));
+        assertThrows(IllegalArgumentException.class, () -> AgentRuntimeV2RegistrationCodec.decodeReceiptDelivery(
+                validText.replace("\"correlationType\":\"CREATE\"", "\"correlationType\":\"RECONNECT\"")
+                        .getBytes(StandardCharsets.UTF_8)));
+
+        byte[] rejected = AgentRuntimeV2RegistrationCodec.encodeRejected(
+                new AgentRuntimeV2RegistrationCodec.Rejected("CREATE",
+                        "11111111-1111-4111-8111-111111111111", null, "NOT_AUTHORIZED"));
+        assertThrows(IllegalArgumentException.class, () -> AgentRuntimeV2RegistrationCodec.decodeRejected(
+                (new String(rejected, StandardCharsets.UTF_8) + " ").getBytes(StandardCharsets.UTF_8)));
+        assertThrows(IllegalArgumentException.class, () -> AgentRuntimeV2RegistrationCodec.decodeRejected(
+                new String(rejected, StandardCharsets.UTF_8).replace("\"reasonCode\":", "\"reasonCodeAlias\":")
+                        .getBytes(StandardCharsets.UTF_8)));
+        for (String correlationType : List.of("CREATE", "CHALLENGE", "RECONNECT")) {
+            String correlationId = switch (correlationType) {
+                case "CREATE" -> "11111111-1111-4111-8111-111111111111";
+                case "CHALLENGE" -> "77777777-7777-4777-8777-777777777777";
+                default -> "99999999-9999-4999-8999-999999999999";
+            };
+            var nullableBinding = new AgentRuntimeV2RegistrationCodec.Rejected(
+                    correlationType, correlationId, null, "NOT_AUTHORIZED");
+            byte[] nullableWire = AgentRuntimeV2RegistrationCodec.encodeRejected(nullableBinding);
+            assertNull(AgentRuntimeV2RegistrationCodec.decodeRejected(nullableWire).runtimeBindingId());
+        }
+    }
+
+    @Test
     void fingerprintsHmacAndThreeCryptoVectorsMatchGolden() throws Exception {
         var subject = new AgentRuntimeV2RegistrationFingerprints.Subject(
                 "API_KEY", "api-key-1", "1", "runtime-client", "owner-a", "agent-a");
@@ -263,4 +337,32 @@ class AgentRuntimeV2RegistrationContractTest {
 
     private static byte[] key(String prefix, String seed) { return HEX.parseHex(prefix + seed); }
     private static byte[] bytes(String value) { return value.getBytes(StandardCharsets.UTF_8); }
+    private static AgentRuntimeV2RegistrationCodec.ReceiptDelivery delivery(
+            String receiptJson, String result, String disposition) {
+        byte[] receiptBytes = bytes(receiptJson);
+        AgentRuntimeV2RegistrationCodec.Receipt receipt =
+                AgentRuntimeV2RegistrationCodec.decodeReceipt(receiptBytes);
+        return new AgentRuntimeV2RegistrationCodec.ReceiptDelivery(result, receipt.receiptKind(),
+                receipt.registrationRequestId(), disposition, receiptBytes,
+                AgentRuntimeV2RegistrationFingerprints.sha256(receiptBytes));
+    }
+    private static void assertDelivery(String receiptJson, String result, String disposition,
+            int expectedLength, String expectedSha256) {
+        byte[] wire = AgentRuntimeV2RegistrationCodec.encodeReceiptDelivery(
+                delivery(receiptJson, result, disposition));
+        assertEquals(expectedLength, wire.length);
+        assertEquals(expectedSha256,
+                HEX.formatHex(AgentRuntimeV2RegistrationFingerprints.sha256(wire)));
+        assertArrayEquals(wire, AgentRuntimeV2RegistrationCodec.encodeReceiptDelivery(
+                AgentRuntimeV2RegistrationCodec.decodeReceiptDelivery(wire)));
+    }
+    private static void assertRejected(AgentRuntimeV2RegistrationCodec.Rejected value,
+            int expectedLength, String expectedSha256) {
+        byte[] wire = AgentRuntimeV2RegistrationCodec.encodeRejected(value);
+        assertEquals(expectedLength, wire.length);
+        assertEquals(expectedSha256,
+                HEX.formatHex(AgentRuntimeV2RegistrationFingerprints.sha256(wire)));
+        assertArrayEquals(wire, AgentRuntimeV2RegistrationCodec.encodeRejected(
+                AgentRuntimeV2RegistrationCodec.decodeRejected(wire)));
+    }
 }

@@ -202,6 +202,37 @@ class AgentRuntimeV2BindingGenerationFactTest {
     }
 
     @Test
+    void stableGenerationHistorySurvivesRevisionDriftAndRequiresReadOnlyTransaction() {
+        RuntimeReceiverScope original = scope();
+        AuthenticatedRuntimeSession session = session(
+                BINDING, 0, "runtime-history", "fence-history", "replica-history", 3);
+        AgentRuntimeV2BindingGenerationFactEntity connected = tx(() ->
+                persistence.generations.createVersion2(original, draft(NOW + 100), session,
+                        VERIFIER, NOW));
+        RuntimeReceiverScope revised = new RuntimeReceiverScope(original.tenantId(),
+                original.dataDomainId(), original.executionPoolId(), original.runtimeCredentialClientId(),
+                original.ownerJiacn(), original.agentId(), original.claimantDeploymentId(),
+                original.claimantWorkerGeneration() + 1, original.receiverRegistrationRevision() + 1,
+                original.admissionEpoch(), original.moduleId(), original.migrationEpoch());
+
+        assertThrows(IllegalStateException.class, () -> persistence.generations.findHistoricalByFactId(
+                revised, BINDING, connected.getBindingGenerationFactId()));
+        assertThrows(IllegalStateException.class, () -> tx(() ->
+                persistence.generations.findHistoricalConnectedGeneration(revised, BINDING, 0)));
+
+        TransactionTemplate readOnly = transaction();
+        readOnly.setReadOnly(true);
+        readOnly.executeWithoutResult(status -> {
+            assertEquals(connected.getBindingGenerationFactId(),
+                    persistence.generations.findHistoricalByFactId(revised, BINDING,
+                            connected.getBindingGenerationFactId()).getBindingGenerationFactId());
+            assertEquals(connected.getBindingGenerationFactId(),
+                    persistence.generations.findHistoricalConnectedGeneration(
+                            revised, BINDING, 0).getBindingGenerationFactId());
+        });
+    }
+
+    @Test
     void reconnectClearsProjectionThenSecondDisconnectAndRevokePreserveHistory() {
         RuntimeReceiverScope scope = scope();
         AuthenticatedRuntimeSession generation0 = session(
@@ -752,16 +783,20 @@ class AgentRuntimeV2BindingGenerationFactTest {
             statement.execute(h2CreateTable(sql, "agent_runtime_v2_binding"));
             statement.execute(h2CreateTable(sql, "agent_runtime_v2_binding_generation_fact"));
             for (String definition : new String[]{
+                    "evidence_provenance VARCHAR(24) DEFAULT 'R2B1_ENFORCED' NOT NULL",
                     "registration_subject_sha256 BINARY(32)",
                     "registration_authority_id VARCHAR(36)",
                     "registration_authority_revision BIGINT",
                     "process_public_key_spki BINARY(44)",
                     "process_public_key_sha256 BINARY(32)",
                     "verifier_version BIGINT",
-                    "verifier_key_id VARCHAR(100)"}) {
+                    "verifier_key_id VARCHAR(100)",
+                    "current_registration_receipt_id VARCHAR(36)",
+                    "current_registration_receipt_sha256 BINARY(32)"}) {
                 statement.execute("ALTER TABLE agent_runtime_v2_binding ADD COLUMN " + definition);
             }
             for (String definition : new String[]{
+                    "evidence_provenance VARCHAR(24) DEFAULT 'R2B1_ENFORCED' NOT NULL",
                     "registration_subject_sha256 BINARY(32)",
                     "registration_authority_id VARCHAR(36)",
                     "registration_authority_revision BIGINT",

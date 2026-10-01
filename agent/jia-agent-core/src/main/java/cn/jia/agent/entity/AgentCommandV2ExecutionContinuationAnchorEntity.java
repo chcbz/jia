@@ -32,6 +32,7 @@ public class AgentCommandV2ExecutionContinuationAnchorEntity extends BaseEntity 
     private Long admissionEpoch;
     private String moduleId;
     private Long migrationEpoch;
+    private String evidenceProvenance;
     private byte[] executionOriginSnapshotSha256;
     private String holderGenerationFactId;
     private byte[] holderGenerationSnapshotSha256;

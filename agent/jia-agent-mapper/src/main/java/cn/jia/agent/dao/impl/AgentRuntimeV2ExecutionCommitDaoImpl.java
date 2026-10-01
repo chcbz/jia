@@ -37,6 +37,10 @@ public class AgentRuntimeV2ExecutionCommitDaoImpl implements AgentRuntimeV2Execu
         require(receipt != null && fact != null && grant != null && anchor != null
                         && receipt.getAckAt() != null,
                 "START persistence input is incomplete");
+        requireUnsetProvenance(receipt.getEvidenceProvenance());
+        requireUnsetProvenance(fact.getEvidenceProvenance());
+        requireUnsetProvenance(grant.getEvidenceProvenance());
+        requireUnsetProvenance(anchor.getEvidenceProvenance());
         AgentRuntimeV2BindingEntity binding = lockCurrentSession(r, session, DateUtil.nowTime());
         AgentCommandDeliveryEntity delivery = lockDelivery(p, r, session.runtimeBindingId(), dispatchId);
         require(delivery != null, "delivery is not in exact persisted scope");
@@ -129,6 +133,10 @@ public class AgentRuntimeV2ExecutionCommitDaoImpl implements AgentRuntimeV2Execu
             AgentCommandV2ExecutionGrantEntity grant,
             AgentCommandV2ExecutionContinuationAnchorEntity anchor) {
         writable(); scopes(p, r); requestShape(request, "CONTINUATION");
+        requireUnsetProvenance(request.getEvidenceProvenance());
+        requireUnsetProvenance(transfer.getEvidenceProvenance());
+        requireUnsetProvenance(grant.getEvidenceProvenance());
+        requireUnsetProvenance(anchor.getEvidenceProvenance());
         AgentRuntimeV2BindingEntity binding = lockCurrentSession(r, session, DateUtil.nowTime());
         AgentConsumerInboxEntity inbox = lockDispatch(p, r, session.runtimeBindingId(), request.getRuntimeDispatchId());
         require(inbox != null, "dispatch is not in exact persisted scope");
@@ -214,6 +222,9 @@ public class AgentRuntimeV2ExecutionCommitDaoImpl implements AgentRuntimeV2Execu
             AgentCommandV2ExecutionLeaseFactEntity renewal,
             AgentCommandV2ExecutionGrantEntity grant) {
         writable(); scopes(p, r); requestShape(request, "RENEWAL");
+        requireUnsetProvenance(request.getEvidenceProvenance());
+        requireUnsetProvenance(renewal.getEvidenceProvenance());
+        requireUnsetProvenance(grant.getEvidenceProvenance());
         AgentRuntimeV2BindingEntity binding = lockCurrentSession(r, session, DateUtil.nowTime());
         AgentConsumerInboxEntity inbox = lockDispatch(p, r, session.runtimeBindingId(), request.getRuntimeDispatchId());
         require(inbox != null && Objects.equals(inbox.getExecutionHolderBindingGeneration(), session.bindingGeneration())
@@ -407,6 +418,7 @@ public class AgentRuntimeV2ExecutionCommitDaoImpl implements AgentRuntimeV2Execu
                 r.executionPoolId(), r.runtimeCredentialClientId(), r.ownerJiacn(), r.agentId(),
                 r.claimantDeploymentId(), r.claimantWorkerGeneration(), r.receiverRegistrationRevision(),
                 r.admissionEpoch(), r.moduleId(), r.migrationEpoch(), session.runtimeBindingId());
+        if (binding != null) requireEnforcedProvenance(binding.getEvidenceProvenance());
         require(binding != null && Integer.valueOf(2).equals(binding.getContractVersion())
                         && "ACTIVE".equals(binding.getStatus())
                         && Objects.equals(binding.getBindingGeneration(), session.bindingGeneration())
@@ -422,6 +434,7 @@ public class AgentRuntimeV2ExecutionCommitDaoImpl implements AgentRuntimeV2Execu
                 r.runtimeCredentialClientId(), r.ownerJiacn(), r.agentId(), r.claimantDeploymentId(),
                 r.claimantWorkerGeneration(), r.receiverRegistrationRevision(), r.admissionEpoch(),
                 r.moduleId(), r.migrationEpoch(), session.runtimeBindingId());
+        if (latest != null) requireEnforcedProvenance(latest.getEvidenceProvenance());
         require(latest != null && "CONNECTED".equals(latest.getEventType())
                         && Objects.equals(latest.getBindingGeneration(), session.bindingGeneration())
                         && Objects.equals(latest.getRuntimeInstanceId(), session.runtimeInstanceId())
@@ -475,10 +488,13 @@ public class AgentRuntimeV2ExecutionCommitDaoImpl implements AgentRuntimeV2Execu
     }
 
     private AgentConsumerInboxEntity lockDispatch(CommandProducerScope p, RuntimeReceiverScope r, String binding, String dispatch) {
-        return dispatches.lock(p.tenantId().value(), p.dataDomainId().value(), p.executionPoolId(), p.commandCallerClientId(),
+        AgentConsumerInboxEntity row = dispatches.lock(
+                p.tenantId().value(), p.dataDomainId().value(), p.executionPoolId(), p.commandCallerClientId(),
                 r.runtimeCredentialClientId(), p.ownerJiacn(), p.targetAgentId(), p.producerDeploymentId(),
                 r.claimantDeploymentId(), r.claimantWorkerGeneration(), r.receiverRegistrationRevision(),
                 p.admissionEpoch(), p.moduleId(), p.migrationEpoch(), binding, dispatch);
+        if (row != null) requireEnforcedProvenance(row.getEvidenceProvenance());
+        return row;
     }
     private AgentCommandV2AckReceiptEntity lockReceipt(CommandProducerScope p,
             RuntimeReceiverScope r, String binding, String dispatch, String status) {
@@ -489,6 +505,7 @@ public class AgentRuntimeV2ExecutionCommitDaoImpl implements AgentRuntimeV2Execu
                 r.claimantWorkerGeneration(), r.receiverRegistrationRevision(),
                 p.admissionEpoch(), p.moduleId(), p.migrationEpoch(), binding, dispatch, status);
         if (row != null) AgentRuntimeV2WireCodec.verifyReceiptRow(row);
+        if (row != null) requireEnforcedProvenance(row.getEvidenceProvenance());
         return row;
     }
     private AgentCommandV2AckReceiptEntity lockStarted(CommandProducerScope p,
@@ -497,47 +514,65 @@ public class AgentRuntimeV2ExecutionCommitDaoImpl implements AgentRuntimeV2Execu
     }
     private AgentCommandV2ExecutionLeaseFactEntity lockLatest(CommandProducerScope p,
             RuntimeReceiverScope r, String binding, String dispatch) {
-        return facts.lockLatest(p.tenantId().value(), p.dataDomainId().value(),
+        AgentCommandV2ExecutionLeaseFactEntity row = facts.lockLatest(
+                p.tenantId().value(), p.dataDomainId().value(),
                 p.executionPoolId(), p.commandCallerClientId(), r.runtimeCredentialClientId(),
                 p.ownerJiacn(), p.targetAgentId(), p.producerDeploymentId(),
                 r.claimantDeploymentId(), r.claimantWorkerGeneration(),
                 r.receiverRegistrationRevision(), p.admissionEpoch(), p.moduleId(),
                 p.migrationEpoch(), binding, dispatch);
+        if (row != null) requireEnforcedProvenance(row.getEvidenceProvenance());
+        return row;
     }
     private AgentCommandV2ExecutionContinuationAnchorEntity lockAnchor(CommandProducerScope p, RuntimeReceiverScope r,
             String dispatch, String receipt, long generation) {
-        return anchors.lockAnchor(p.tenantId().value(), p.dataDomainId().value(), p.executionPoolId(),
+        AgentCommandV2ExecutionContinuationAnchorEntity row = anchors.lockAnchor(
+                p.tenantId().value(), p.dataDomainId().value(), p.executionPoolId(),
                 p.commandCallerClientId(), r.runtimeCredentialClientId(), p.ownerJiacn(), p.targetAgentId(),
                 p.producerDeploymentId(), r.claimantDeploymentId(), r.claimantWorkerGeneration(),
                 r.receiverRegistrationRevision(), p.admissionEpoch(), p.moduleId(), p.migrationEpoch(), dispatch, receipt, generation);
+        if (row != null) requireEnforcedProvenance(row.getEvidenceProvenance());
+        return row;
     }
     private AgentCommandV2ExecutionRequestEntity lockRequest(CommandProducerScope p, RuntimeReceiverScope r, String request) {
-        return requests.lockByRequestId(p.tenantId().value(), p.dataDomainId().value(), p.executionPoolId(),
+        AgentCommandV2ExecutionRequestEntity row = requests.lockByRequestId(
+                p.tenantId().value(), p.dataDomainId().value(), p.executionPoolId(),
                 p.commandCallerClientId(), r.runtimeCredentialClientId(), p.ownerJiacn(), p.targetAgentId(),
                 p.producerDeploymentId(), r.claimantDeploymentId(), r.claimantWorkerGeneration(),
                 r.receiverRegistrationRevision(), p.admissionEpoch(), p.moduleId(), p.migrationEpoch(), request);
+        if (row != null) requireEnforcedProvenance(row.getEvidenceProvenance());
+        return row;
     }
     private AgentCommandV2ExecutionGrantEntity lockGrant(CommandProducerScope p, RuntimeReceiverScope r, String grant) {
-        return grants.lockById(p.tenantId().value(), p.dataDomainId().value(), p.executionPoolId(),
+        AgentCommandV2ExecutionGrantEntity row = grants.lockById(
+                p.tenantId().value(), p.dataDomainId().value(), p.executionPoolId(),
                 p.commandCallerClientId(), r.runtimeCredentialClientId(), p.ownerJiacn(), p.targetAgentId(),
                 p.producerDeploymentId(), r.claimantDeploymentId(), r.claimantWorkerGeneration(),
                 r.receiverRegistrationRevision(), p.admissionEpoch(), p.moduleId(), p.migrationEpoch(), grant);
+        if (row != null) requireEnforcedProvenance(row.getEvidenceProvenance());
+        return row;
     }
     private AgentCommandV2ExecutionGrantEntity lockCurrentGrant(CommandProducerScope p, RuntimeReceiverScope r,
             AgentCommandV2ExecutionLeaseFactEntity fact) {
-        return grants.lockCurrentByFact(p.tenantId().value(), p.dataDomainId().value(), p.executionPoolId(),
+        AgentCommandV2ExecutionGrantEntity row = grants.lockCurrentByFact(
+                p.tenantId().value(), p.dataDomainId().value(), p.executionPoolId(),
                 p.commandCallerClientId(), r.runtimeCredentialClientId(), p.ownerJiacn(), p.targetAgentId(),
                 p.producerDeploymentId(), r.claimantDeploymentId(), r.claimantWorkerGeneration(),
                 r.receiverRegistrationRevision(), p.admissionEpoch(), p.moduleId(), p.migrationEpoch(),
                 fact.getRuntimeDispatchId(), fact.getLeaseFactId());
+        if (row != null) requireEnforcedProvenance(row.getEvidenceProvenance());
+        return row;
     }
     private AgentCommandV2ExecutionLeaseFactEntity lockFact(CommandProducerScope p, RuntimeReceiverScope r,
             String factId) {
         uuid(factId, "leaseFactId");
-        return facts.lockById(p.tenantId().value(), p.dataDomainId().value(), p.executionPoolId(),
+        AgentCommandV2ExecutionLeaseFactEntity row = facts.lockById(
+                p.tenantId().value(), p.dataDomainId().value(), p.executionPoolId(),
                 p.commandCallerClientId(), r.runtimeCredentialClientId(), p.ownerJiacn(), p.targetAgentId(),
                 p.producerDeploymentId(), r.claimantDeploymentId(), r.claimantWorkerGeneration(),
                 r.receiverRegistrationRevision(), p.admissionEpoch(), p.moduleId(), p.migrationEpoch(), factId);
+        if (row != null) requireEnforcedProvenance(row.getEvidenceProvenance());
+        return row;
     }
 
     private static void fillReceipt(CommandProducerScope p, RuntimeReceiverScope r, AgentConsumerInboxEntity inbox,

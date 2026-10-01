@@ -37,6 +37,7 @@ public interface AgentCommandV2ExecutionContinuationAnchorMapper {
 
     @Select("SELECT * FROM agent_command_v2_execution_continuation_anchor WHERE "
             + AgentRuntimeV2MapperScope.SPLIT_EXACT
+            + " AND evidence_provenance='R2B1_ENFORCED'"
             + " AND runtime_dispatch_id=#{runtimeDispatchId} AND started_receipt_id=#{startedReceiptId}"
             + " AND CAST(runtime_dispatch_id AS BINARY)=CAST(#{runtimeDispatchId} AS BINARY)"
             + " AND OCTET_LENGTH(runtime_dispatch_id)=OCTET_LENGTH(#{runtimeDispatchId})"
@@ -54,6 +55,29 @@ public interface AgentCommandV2ExecutionContinuationAnchorMapper {
             @Param("receiverRegistrationRevision") long receiverRegistrationRevision,
             @Param("admissionEpoch") long admissionEpoch, @Param("moduleId") String moduleId,
             @Param("migrationEpoch") long migrationEpoch, @Param("runtimeDispatchId") String runtimeDispatchId,
+            @Param("startedReceiptId") String startedReceiptId,
+            @Param("holderBindingGeneration") long holderBindingGeneration);
+
+    @Select("SELECT a.* FROM agent_command_v2_execution_continuation_anchor a"
+            + " WHERE a.runtime_dispatch_id=#{runtimeDispatchId} AND a.started_receipt_id=#{startedReceiptId}"
+            + " AND a.holder_binding_generation=#{holderBindingGeneration}"
+            + " AND CAST(a.runtime_dispatch_id AS BINARY)=CAST(#{runtimeDispatchId} AS BINARY)"
+            + " AND OCTET_LENGTH(a.runtime_dispatch_id)=OCTET_LENGTH(#{runtimeDispatchId})"
+            + " AND CAST(a.started_receipt_id AS BINARY)=CAST(#{startedReceiptId} AS BINARY)"
+            + " AND OCTET_LENGTH(a.started_receipt_id)=OCTET_LENGTH(#{startedReceiptId})"
+            + " AND EXISTS (SELECT 1 FROM agent_command_v2_execution_grant WHERE "
+            + AgentRuntimeV2MapperScope.HISTORICAL_EXECUTION_IDENTITY
+            + " AND execution_grant_id=a.execution_grant_id"
+            + " AND CAST(execution_grant_id AS BINARY)=CAST(a.execution_grant_id AS BINARY)"
+            + " AND OCTET_LENGTH(execution_grant_id)=OCTET_LENGTH(a.execution_grant_id)) LIMIT 1")
+    AgentCommandV2ExecutionContinuationAnchorEntity findHistorical(
+            @Param("tenantId") String tenantId, @Param("dataDomainId") String dataDomainId,
+            @Param("executionPoolId") String executionPoolId,
+            @Param("commandCallerClientId") String commandCallerClientId,
+            @Param("runtimeCredentialClientId") String runtimeCredentialClientId,
+            @Param("ownerJiacn") String ownerJiacn, @Param("agentId") String agentId,
+            @Param("runtimeBindingId") String runtimeBindingId,
+            @Param("runtimeDispatchId") String runtimeDispatchId,
             @Param("startedReceiptId") String startedReceiptId,
             @Param("holderBindingGeneration") long holderBindingGeneration);
 }

@@ -48,6 +48,7 @@ public class AgentCommandV2AckReceiptEntity extends BaseEntity {
     @ToString.Exclude private byte[] receiptWireSha256;
     private Integer receiptWireContractVersion;
     private Long committedAt;
+    private String evidenceProvenance;
     @ToString.Exclude private byte[] executionOriginSnapshotSha256;
     private String ackHolderGenerationFactId;
     @ToString.Exclude private byte[] ackHolderGenerationSnapshotSha256;

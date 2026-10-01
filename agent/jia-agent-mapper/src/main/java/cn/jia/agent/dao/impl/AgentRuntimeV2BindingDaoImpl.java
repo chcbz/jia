@@ -21,6 +21,7 @@ public class AgentRuntimeV2BindingDaoImpl implements AgentRuntimeV2BindingDao {
                 || e.getLiveBusinessSubject() != null) {
             throw new IllegalArgumentException("binding identity and live subjects are server generated");
         }
+        requireUnsetProvenance(e.getEvidenceProvenance());
         exact(e.getCredentialKind(), 32, "credentialKind");
         exact(e.getCredentialReference(), 200, "credentialReference");
         exact(e.getRuntimeInstanceId(), 100, "runtimeInstanceId");
@@ -123,12 +124,16 @@ public class AgentRuntimeV2BindingDaoImpl implements AgentRuntimeV2BindingDao {
                 s.receiverRegistrationRevision(), s.admissionEpoch(), s.moduleId(), s.migrationEpoch(), e);
     }
     private AgentRuntimeV2BindingEntity find(RuntimeReceiverScope s, String id, boolean lock) {
-        return lock ? mapper.lockExact(t(s), d(s), s.executionPoolId(), s.clientId(), s.ownerJiacn(),
+        AgentRuntimeV2BindingEntity row = lock ? mapper.lockExact(t(s), d(s), s.executionPoolId(), s.clientId(), s.ownerJiacn(),
                     s.agentId(), s.claimantDeploymentId(), s.claimantWorkerGeneration(),
                     s.receiverRegistrationRevision(), s.admissionEpoch(), s.moduleId(), s.migrationEpoch(), id)
                 : mapper.findExact(t(s), d(s), s.executionPoolId(), s.clientId(), s.ownerJiacn(),
                     s.agentId(), s.claimantDeploymentId(), s.claimantWorkerGeneration(),
                     s.receiverRegistrationRevision(), s.admissionEpoch(), s.moduleId(), s.migrationEpoch(), id);
+        if (row != null && Integer.valueOf(2).equals(row.getContractVersion())) {
+            requireEnforcedProvenance(row.getEvidenceProvenance());
+        }
+        return row;
     }
     private static String t(RuntimeReceiverScope s) { return s.tenantId().value(); }
     private static String d(RuntimeReceiverScope s) { return s.dataDomainId().value(); }

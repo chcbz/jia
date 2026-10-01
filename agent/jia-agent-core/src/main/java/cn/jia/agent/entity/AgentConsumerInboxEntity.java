@@ -65,6 +65,7 @@ public class AgentConsumerInboxEntity extends BaseEntity {
     private String dispatchRuntimeInstanceId;
     private String dispatchRuntimeCredentialClientId;
     private Long dispatchReceiverRegistrationRevision;
+    private String evidenceProvenance;
     private String dispatchGenerationFactId;
     private byte[] dispatchGenerationSnapshotSha256;
     private byte[] executionOriginSnapshotSha256;

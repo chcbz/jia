@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -14,6 +15,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -56,6 +58,18 @@ class AgentRuntimeV2RegistrationSchemaGateTest {
                 "challenge_digest", column -> new AgentRuntimeV2RegistrationSchemaGate.ColumnDefinition(
                         column.name(), column.dataType(), column.columnType(), true, column.defaultValue(),
                         column.collation(), column.extra(), column.generationExpression())); assertDenied(wrongNullability);
+        Fake wrongProvenanceDefault = canonical(); replaceColumn(wrongProvenanceDefault,
+                "agent_command_v2_execution_grant", "evidence_provenance",
+                column -> new AgentRuntimeV2RegistrationSchemaGate.ColumnDefinition(
+                        column.name(), column.dataType(), column.columnType(), column.nullable(),
+                        "LEGACY_PRE_R2B1", column.collation(), column.extra(),
+                        column.generationExpression())); assertDenied(wrongProvenanceDefault);
+        Fake wrongProvenanceCollation = canonical(); replaceColumn(wrongProvenanceCollation,
+                "agent_consumer_inbox", "evidence_provenance",
+                column -> new AgentRuntimeV2RegistrationSchemaGate.ColumnDefinition(
+                        column.name(), column.dataType(), column.columnType(), column.nullable(),
+                        column.defaultValue(), "utf8mb4_general_ci", column.extra(),
+                        column.generationExpression())); assertDenied(wrongProvenanceCollation);
         Fake generated = canonical(); replaceColumn(generated, AgentRuntimeV2RegistrationSchemaGate.AUTHORITY,
                 "active_business_subject", column -> new AgentRuntimeV2RegistrationSchemaGate.ColumnDefinition(
                         column.name(), column.dataType(), column.columnType(), column.nullable(), column.defaultValue(),
@@ -102,6 +116,75 @@ class AgentRuntimeV2RegistrationSchemaGateTest {
                 new AgentRuntimeV2RegistrationSchemaGate.CheckDefinition(clause, false)); assertDenied(unenforced);
         Fake weakened = canonical(); weakened.checks.get(AgentRuntimeV2RegistrationSchemaGate.REQUEST).put(name,
                 new AgentRuntimeV2RegistrationSchemaGate.CheckDefinition("(" + clause + ") OR 1=1", true)); assertDenied(weakened);
+    }
+
+    @Test void rejectsAnyLegacyOrCrossTableActivationReadinessViolation() {
+        Fake legacyReachable = canonical(); legacyReachable.readinessViolations = 1; assertDenied(legacyReachable);
+        Fake brokenEvidenceGraph = canonical(); brokenEvidenceGraph.readinessViolations = 7; assertDenied(brokenEvidenceGraph);
+    }
+
+    @Test void jdbcReadinessQueryPreservesLegacyHistoryAndRejectsEveryBrokenEnforcedLink() {
+        JdbcTemplate jdbc = readinessJdbc();
+        byte[] hash = new byte[32]; hash[0] = 7;
+        String legacyBinding = "10000000-0000-4000-8000-000000000001";
+        String legacyFact = "10000000-0000-4000-8000-000000000002";
+        seedLegacyEvidenceHistory(jdbc, legacyBinding, legacyFact);
+        assertEquals(0, readinessViolations(jdbc), "revoked legacy evidence is history, not authority");
+
+        String binding = "20000000-0000-4000-8000-000000000001";
+        String fact = "20000000-0000-4000-8000-000000000002";
+        String receipt = "20000000-0000-4000-8000-000000000003";
+        String runtime = "20000000-0000-4000-8000-000000000004";
+        String dispatch = "20000000-0000-4000-8000-000000000005";
+        String lease = "20000000-0000-4000-8000-000000000006";
+        String grant = "20000000-0000-4000-8000-000000000007";
+        seedCompleteEnforcedEvidenceGraph(jdbc, binding, fact, receipt, runtime,
+                dispatch, lease, grant, hash);
+        assertEquals(0, readinessViolations(jdbc));
+
+        String liveLegacy = "30000000-0000-4000-8000-000000000001";
+        jdbc.update("INSERT INTO agent_runtime_v2_binding VALUES(2,'LEGACY_PRE_R2B1','ACTIVE',?,0,?,NULL,NULL)",
+                liveLegacy, runtime);
+        assertTrue(readinessViolations(jdbc) > 0, "live legacy binding must block activation");
+        jdbc.update("DELETE FROM agent_runtime_v2_binding WHERE runtime_binding_id=?", liveLegacy);
+
+        jdbc.update("UPDATE agent_runtime_v2_binding_generation_fact SET evidence_provenance='LEGACY_PRE_R2B1' WHERE binding_generation_fact_id=?", fact);
+        assertTrue(readinessViolations(jdbc) > 0, "enforced binding cannot depend on legacy generation");
+        jdbc.update("UPDATE agent_runtime_v2_binding_generation_fact SET evidence_provenance='R2B1_ENFORCED' WHERE binding_generation_fact_id=?", fact);
+
+        jdbc.update("DELETE FROM agent_runtime_v2_registration_receipt WHERE registration_receipt_id=?", receipt);
+        assertTrue(readinessViolations(jdbc) > 0, "missing immutable registration receipt must block activation");
+        jdbc.update("INSERT INTO agent_runtime_v2_registration_receipt VALUES(?,?,?,?,?)",
+                receipt, hash, fact, binding, 0L);
+
+        String legacyDispatch = "30000000-0000-4000-8000-000000000002";
+        jdbc.update("""
+                INSERT INTO agent_consumer_inbox VALUES(
+                  'R2B1_ENFORCED',2,?,?,?,?,0,?,NULL,NULL,NULL,NULL,?)
+                """, legacyDispatch, legacyBinding, legacyFact, hash, runtime, hash);
+        assertTrue(readinessViolations(jdbc) > 0, "enforced inbox cannot depend on legacy binding/generation");
+        jdbc.update("DELETE FROM agent_consumer_inbox WHERE runtime_dispatch_id=?", legacyDispatch);
+
+        assertBrokenAndRestore(jdbc,
+                "UPDATE agent_command_v2_execution_lease_fact SET evidence_provenance=? WHERE lease_fact_id=?",
+                "LEGACY_PRE_R2B1", lease, "R2B1_ENFORCED", lease,
+                "current inbox projection cannot depend on a legacy lease");
+        assertBrokenAndRestore(jdbc,
+                "UPDATE agent_command_v2_ack_receipt SET execution_origin_snapshot_sha256=? WHERE runtime_dispatch_id=?",
+                new byte[32], dispatch, hash, dispatch, "ACK origin must match its enforced inbox");
+        assertBrokenAndRestore(jdbc,
+                "UPDATE agent_command_v2_execution_lease_fact SET holder_generation_fact_id=? WHERE lease_fact_id=?",
+                UUID.randomUUID().toString(), lease, fact, lease, "lease holder link must resolve");
+        assertBrokenAndRestore(jdbc,
+                "UPDATE agent_command_v2_execution_grant SET holder_generation_fact_id=? WHERE execution_grant_id=?",
+                UUID.randomUUID().toString(), grant, fact, grant, "grant holder link must resolve");
+        assertBrokenAndRestore(jdbc,
+                "UPDATE agent_command_v2_execution_request SET requested_holder_generation_fact_id=? WHERE runtime_dispatch_id=?",
+                UUID.randomUUID().toString(), dispatch, fact, dispatch, "request holder link must resolve");
+        assertBrokenAndRestore(jdbc,
+                "UPDATE agent_command_v2_execution_continuation_anchor SET execution_grant_id=? WHERE runtime_dispatch_id=?",
+                UUID.randomUUID().toString(), dispatch, grant, dispatch, "anchor grant link must resolve");
+        assertEquals(0, readinessViolations(jdbc));
     }
 
     @Test void acceptsMysqlCheckMetadataFormattingButRejectsCaseAndWhitespaceLiteralDrift() {
@@ -161,6 +244,7 @@ class AgentRuntimeV2RegistrationSchemaGateTest {
         Pattern add = Pattern.compile(
                 "ADD COLUMN\\s+([a-z0-9_]+)\\s+([a-z]+\\(\\d+\\))"
                         + "(?:\\s+COLLATE\\s+([a-z0-9_]+))?\\s+(NOT NULL|NULL)"
+                        + "(?:\\s+DEFAULT\\s+'([^']+)')?"
                         + "\\s+AFTER\\s+[a-z0-9_]+",
                 Pattern.CASE_INSENSITIVE);
         Map<String, List<AgentRuntimeV2RegistrationSchemaGate.ColumnDefinition>> result =
@@ -179,13 +263,163 @@ class AgentRuntimeV2RegistrationSchemaGateTest {
                 columns.add(new AgentRuntimeV2RegistrationSchemaGate.ColumnDefinition(
                         additions.group(1).toLowerCase(Locale.ROOT),
                         columnType.substring(0, columnType.indexOf('(')), columnType,
-                        "NULL".equalsIgnoreCase(additions.group(4)), null, collation, "", ""));
+                        "NULL".equalsIgnoreCase(additions.group(4)), additions.group(5), collation, "", ""));
             }
-            assertFalse(columns.isEmpty(), table);
-            assertNull(result.put(table, List.copyOf(columns)), table);
+            if (!columns.isEmpty()) {
+                assertNull(result.put(table, List.copyOf(columns)), table);
+            }
         }
         assertEquals(targets, result.keySet());
+        Pattern enforcedDefault = Pattern.compile(
+                "ALTER TABLE\\s+([a-z0-9_]+)\\s+ALTER COLUMN\\s+evidence_provenance"
+                        + "\\s+SET DEFAULT\\s+'R2B1_ENFORCED'",
+                Pattern.CASE_INSENSITIVE);
+        Matcher defaults = enforcedDefault.matcher(sql);
+        while (defaults.find()) {
+            String table = defaults.group(1).toLowerCase(Locale.ROOT);
+            if (!targets.contains(table)) continue;
+            List<AgentRuntimeV2RegistrationSchemaGate.ColumnDefinition> columns =
+                    new ArrayList<>(result.get(table));
+            replaceColumn(columns, "evidence_provenance", column ->
+                    new AgentRuntimeV2RegistrationSchemaGate.ColumnDefinition(
+                            column.name(), column.dataType(), column.columnType(), column.nullable(),
+                            "R2B1_ENFORCED", column.collation(), column.extra(),
+                            column.generationExpression()));
+            result.put(table, List.copyOf(columns));
+        }
         return Map.copyOf(result);
+    }
+
+    private static void replaceColumn(
+            List<AgentRuntimeV2RegistrationSchemaGate.ColumnDefinition> columns, String name,
+            java.util.function.Function<AgentRuntimeV2RegistrationSchemaGate.ColumnDefinition,
+                    AgentRuntimeV2RegistrationSchemaGate.ColumnDefinition> replacement) {
+        for (int index = 0; index < columns.size(); index++) {
+            if (name.equals(columns.get(index).name())) {
+                columns.set(index, replacement.apply(columns.get(index)));
+                return;
+            }
+        }
+        fail("fixture column not found: " + name);
+    }
+
+    private static JdbcTemplate readinessJdbc() {
+        JdbcTemplate jdbc = new JdbcTemplate(new SingleConnectionDataSource(
+                "jdbc:h2:mem:r2b1_readiness_" + UUID.randomUUID()
+                        + ";MODE=MYSQL;CASE_INSENSITIVE_IDENTIFIERS=TRUE;DB_CLOSE_DELAY=-1",
+                "sa", "", true));
+        jdbc.execute("""
+                CREATE TABLE agent_runtime_v2_binding(
+                  contract_version SMALLINT,evidence_provenance VARCHAR(24),status VARCHAR(20),
+                  runtime_binding_id VARCHAR(36),binding_generation BIGINT,runtime_instance_id VARCHAR(36),
+                  current_registration_receipt_id VARCHAR(36),current_registration_receipt_sha256 VARBINARY(32))
+                """);
+        jdbc.execute("""
+                CREATE TABLE agent_runtime_v2_binding_generation_fact(
+                  evidence_provenance VARCHAR(24),binding_generation_fact_id VARCHAR(36),
+                  runtime_binding_id VARCHAR(36),binding_generation BIGINT,runtime_instance_id VARCHAR(36),
+                  event_type VARCHAR(20),registration_receipt_id VARCHAR(36),
+                  registration_receipt_sha256 VARBINARY(32),generation_snapshot_sha256 VARBINARY(32))
+                """);
+        jdbc.execute("""
+                CREATE TABLE agent_runtime_v2_registration_receipt(
+                  registration_receipt_id VARCHAR(36),receipt_wire_sha256 VARBINARY(32),
+                  binding_generation_fact_id VARCHAR(36),runtime_binding_id VARCHAR(36),binding_generation BIGINT)
+                """);
+        jdbc.execute("""
+                CREATE TABLE agent_consumer_inbox(
+                  evidence_provenance VARCHAR(24),protocol_version SMALLINT,runtime_dispatch_id VARCHAR(36),
+                  runtime_binding_id VARCHAR(36),dispatch_generation_fact_id VARCHAR(36),
+                  dispatch_generation_snapshot_sha256 VARBINARY(32),runtime_binding_generation BIGINT,
+                  dispatch_runtime_instance_id VARCHAR(36),execution_current_lease_fact_id VARCHAR(36),
+                  execution_holder_binding_id VARCHAR(36),execution_holder_binding_generation BIGINT,
+                  execution_holder_runtime_instance_id VARCHAR(36),execution_origin_snapshot_sha256 VARBINARY(32))
+                """);
+        jdbc.execute("""
+                CREATE TABLE agent_command_v2_ack_receipt(
+                  evidence_provenance VARCHAR(24),contract_version SMALLINT,runtime_dispatch_id VARCHAR(36),
+                  execution_origin_snapshot_sha256 VARBINARY(32),ack_holder_generation_fact_id VARCHAR(36),
+                  ack_holder_generation_snapshot_sha256 VARBINARY(32),runtime_binding_id VARCHAR(36),
+                  ack_holder_binding_generation BIGINT,runtime_instance_id VARCHAR(36))
+                """);
+        jdbc.execute("""
+                CREATE TABLE agent_command_v2_execution_lease_fact(
+                  evidence_provenance VARCHAR(24),lease_fact_id VARCHAR(36),runtime_dispatch_id VARCHAR(36),
+                  runtime_binding_id VARCHAR(36),holder_binding_generation BIGINT,runtime_instance_id VARCHAR(36),
+                  execution_origin_snapshot_sha256 VARBINARY(32),holder_generation_fact_id VARCHAR(36),
+                  holder_generation_snapshot_sha256 VARBINARY(32))
+                """);
+        jdbc.execute("""
+                CREATE TABLE agent_command_v2_execution_grant(
+                  evidence_provenance VARCHAR(24),execution_grant_id VARCHAR(36),runtime_dispatch_id VARCHAR(36),
+                  runtime_binding_id VARCHAR(36),holder_binding_generation BIGINT,runtime_instance_id VARCHAR(36),
+                  execution_origin_snapshot_sha256 VARBINARY(32),holder_generation_fact_id VARCHAR(36),
+                  holder_generation_snapshot_sha256 VARBINARY(32))
+                """);
+        jdbc.execute("""
+                CREATE TABLE agent_command_v2_execution_request(
+                  evidence_provenance VARCHAR(24),runtime_dispatch_id VARCHAR(36),runtime_binding_id VARCHAR(36),
+                  requested_holder_binding_generation BIGINT,runtime_instance_id VARCHAR(36),
+                  execution_origin_snapshot_sha256 VARBINARY(32),requested_holder_generation_fact_id VARCHAR(36),
+                  requested_holder_generation_snapshot_sha256 VARBINARY(32))
+                """);
+        jdbc.execute("""
+                CREATE TABLE agent_command_v2_execution_continuation_anchor(
+                  evidence_provenance VARCHAR(24),runtime_dispatch_id VARCHAR(36),execution_grant_id VARCHAR(36),
+                  execution_origin_snapshot_sha256 VARBINARY(32),holder_generation_fact_id VARCHAR(36),
+                  holder_generation_snapshot_sha256 VARBINARY(32),holder_binding_generation BIGINT)
+                """);
+        return jdbc;
+    }
+
+    private static void seedLegacyEvidenceHistory(JdbcTemplate jdbc, String binding, String fact) {
+        jdbc.update("INSERT INTO agent_runtime_v2_binding VALUES(2,'LEGACY_PRE_R2B1','REVOKED',?,0,?,NULL,NULL)",
+                binding, UUID.randomUUID().toString());
+        jdbc.update("INSERT INTO agent_runtime_v2_binding_generation_fact VALUES('LEGACY_PRE_R2B1',?,?,0,?,'CONNECTED',NULL,NULL,NULL)",
+                fact, binding, UUID.randomUUID().toString());
+        jdbc.update("INSERT INTO agent_consumer_inbox(evidence_provenance) VALUES('LEGACY_PRE_R2B1')");
+        jdbc.update("INSERT INTO agent_command_v2_ack_receipt(evidence_provenance) VALUES('LEGACY_PRE_R2B1')");
+        jdbc.update("INSERT INTO agent_command_v2_execution_lease_fact(evidence_provenance) VALUES('LEGACY_PRE_R2B1')");
+        jdbc.update("INSERT INTO agent_command_v2_execution_grant(evidence_provenance) VALUES('LEGACY_PRE_R2B1')");
+        jdbc.update("INSERT INTO agent_command_v2_execution_request(evidence_provenance) VALUES('LEGACY_PRE_R2B1')");
+        jdbc.update("INSERT INTO agent_command_v2_execution_continuation_anchor(evidence_provenance) VALUES('LEGACY_PRE_R2B1')");
+    }
+
+    private static void seedCompleteEnforcedEvidenceGraph(JdbcTemplate jdbc, String binding,
+            String fact, String receipt, String runtime, String dispatch, String lease,
+            String grant, byte[] hash) {
+        jdbc.update("INSERT INTO agent_runtime_v2_binding VALUES(2,'R2B1_ENFORCED','ACTIVE',?,0,?,?,?)",
+                binding, runtime, receipt, hash);
+        jdbc.update("INSERT INTO agent_runtime_v2_binding_generation_fact VALUES('R2B1_ENFORCED',?,?,0,?,'CONNECTED',?,?,?)",
+                fact, binding, runtime, receipt, hash, hash);
+        jdbc.update("INSERT INTO agent_runtime_v2_registration_receipt VALUES(?,?,?,?,?)",
+                receipt, hash, fact, binding, 0L);
+        jdbc.update("INSERT INTO agent_consumer_inbox VALUES('R2B1_ENFORCED',2,?,?,?,?,0,?,?,?,?,?,?)",
+                dispatch, binding, fact, hash, runtime, lease, binding, 0L, runtime, hash);
+        jdbc.update("INSERT INTO agent_command_v2_ack_receipt VALUES('R2B1_ENFORCED',2,?,?,?,?,?,?,?)",
+                dispatch, hash, fact, hash, binding, 0L, runtime);
+        jdbc.update("INSERT INTO agent_command_v2_execution_lease_fact VALUES('R2B1_ENFORCED',?,?,?,?,?,?,?,?)",
+                lease, dispatch, binding, 0L, runtime, hash, fact, hash);
+        jdbc.update("INSERT INTO agent_command_v2_execution_grant VALUES('R2B1_ENFORCED',?,?,?,?,?,?,?,?)",
+                grant, dispatch, binding, 0L, runtime, hash, fact, hash);
+        jdbc.update("INSERT INTO agent_command_v2_execution_request VALUES('R2B1_ENFORCED',?,?,?,?,?,?,?)",
+                dispatch, binding, 0L, runtime, hash, fact, hash);
+        jdbc.update("INSERT INTO agent_command_v2_execution_continuation_anchor VALUES('R2B1_ENFORCED',?,?,?,?,?,?)",
+                dispatch, grant, hash, fact, hash, 0L);
+    }
+
+    private static void assertBrokenAndRestore(JdbcTemplate jdbc, String sql,
+            Object brokenValue, String brokenKey, Object restoredValue, String restoredKey,
+            String message) {
+        assertEquals(1, jdbc.update(sql, brokenValue, brokenKey));
+        assertTrue(readinessViolations(jdbc) > 0, message);
+        assertEquals(1, jdbc.update(sql, restoredValue, restoredKey));
+        assertEquals(0, readinessViolations(jdbc), "fixture failed to restore after: " + message);
+    }
+
+    private static long readinessViolations(JdbcTemplate jdbc) {
+        return new AgentRuntimeV2RegistrationSchemaGate.JdbcCatalog(jdbc)
+                .activationReadinessViolationCount();
     }
 
     private static void replaceColumn(Fake fake, String table, String name,
@@ -222,7 +456,7 @@ class AgentRuntimeV2RegistrationSchemaGateTest {
     }
 
     private static final class Fake implements AgentRuntimeV2RegistrationSchemaGate.Catalog {
-        String product = "MySQL 8.4"; int reads;
+        String product = "MySQL 8.4"; int reads; long readinessViolations;
         final List<String> tables = new ArrayList<>();
         final Map<String, AgentRuntimeV2RegistrationSchemaGate.TableDefinition> tablesByName = new HashMap<>();
         final Map<String, List<AgentRuntimeV2RegistrationSchemaGate.ColumnDefinition>> columns = new HashMap<>();
@@ -236,5 +470,6 @@ class AgentRuntimeV2RegistrationSchemaGateTest {
         public Map<String, AgentRuntimeV2RegistrationSchemaGate.IndexDefinition> indexes(String table) { reads++; return Map.copyOf(indexes.get(table)); }
         public int participatingForeignKeyCount(String table) { reads++; return foreignKeys.getOrDefault(table, -1); }
         public Map<String, AgentRuntimeV2RegistrationSchemaGate.CheckDefinition> checks(String table) { reads++; return Map.copyOf(checks.get(table)); }
+        public long activationReadinessViolationCount() { reads++; return readinessViolations; }
     }
 }

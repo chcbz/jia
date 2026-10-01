@@ -47,6 +47,7 @@ public interface AgentCommandV2ExecutionLeaseFactMapper {
 
     @Select("SELECT * FROM agent_command_v2_execution_lease_fact WHERE "
             + AgentRuntimeV2MapperScope.SPLIT_EXACT
+            + " AND evidence_provenance='R2B1_ENFORCED'"
             + " AND runtime_dispatch_id=#{runtimeDispatchId} AND runtime_binding_id=#{runtimeBindingId}"
             + " AND CAST(runtime_dispatch_id AS BINARY)=CAST(#{runtimeDispatchId} AS BINARY)"
             + " AND OCTET_LENGTH(runtime_dispatch_id)=OCTET_LENGTH(#{runtimeDispatchId})"
@@ -69,6 +70,7 @@ public interface AgentCommandV2ExecutionLeaseFactMapper {
 
     @Select("SELECT * FROM agent_command_v2_execution_lease_fact WHERE "
             + AgentRuntimeV2MapperScope.SPLIT_EXACT
+            + " AND evidence_provenance='R2B1_ENFORCED'"
             + " AND lease_fact_id=#{leaseFactId}"
             + " AND CAST(lease_fact_id AS BINARY)=CAST(#{leaseFactId} AS BINARY)"
             + " AND OCTET_LENGTH(lease_fact_id)=OCTET_LENGTH(#{leaseFactId}) LIMIT 1 FOR UPDATE")
@@ -83,4 +85,18 @@ public interface AgentCommandV2ExecutionLeaseFactMapper {
             @Param("receiverRegistrationRevision") long receiverRegistrationRevision,
             @Param("admissionEpoch") long admissionEpoch, @Param("moduleId") String moduleId,
             @Param("migrationEpoch") long migrationEpoch, @Param("leaseFactId") String leaseFactId);
+
+    @Select("SELECT * FROM agent_command_v2_execution_lease_fact WHERE "
+            + AgentRuntimeV2MapperScope.HISTORICAL_EXECUTION_IDENTITY
+            + " AND lease_fact_id=#{leaseFactId}"
+            + " AND CAST(lease_fact_id AS BINARY)=CAST(#{leaseFactId} AS BINARY)"
+            + " AND OCTET_LENGTH(lease_fact_id)=OCTET_LENGTH(#{leaseFactId}) LIMIT 1")
+    AgentCommandV2ExecutionLeaseFactEntity findHistoricalById(
+            @Param("tenantId") String tenantId, @Param("dataDomainId") String dataDomainId,
+            @Param("executionPoolId") String executionPoolId,
+            @Param("commandCallerClientId") String commandCallerClientId,
+            @Param("runtimeCredentialClientId") String runtimeCredentialClientId,
+            @Param("ownerJiacn") String ownerJiacn, @Param("agentId") String agentId,
+            @Param("runtimeBindingId") String runtimeBindingId,
+            @Param("leaseFactId") String leaseFactId);
 }

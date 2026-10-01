@@ -61,6 +61,10 @@ public final class AgentRuntimeV2RegistrationSchemaGate implements InitializingB
             validateIndexes(table, catalog.indexes(table));
             validateChecks(table, catalog.checks(table));
         }
+        long readinessViolations = catalog.activationReadinessViolationCount();
+        if (readinessViolations != 0) {
+            throw invalid("activation evidence graph has " + readinessViolations + " unreachable or legacy-authority rows");
+        }
     }
 
     private static void validateColumns(String table, List<ColumnDefinition> actual) {
@@ -112,6 +116,7 @@ public final class AgentRuntimeV2RegistrationSchemaGate implements InitializingB
     static Map<String, List<ColumnDefinition>> expectedColumns() {
         Map<String, List<ColumnDefinition>> result = new LinkedHashMap<>();
         result.put("agent_runtime_v2_binding", columns("""
+                evidence_provenance|varchar|varchar(24)|N|B|R2B1_ENFORCED|-|-
                 registration_subject_sha256|binary|binary(32)|Y|-|NULL|-|-
                 live_registration_subject_sha256|char|char(64)|Y|B|NULL|STORED GENERATED|case when ((`status` <> _utf8mb4'REVOKED') and (`registration_subject_sha256` is not null)) then lower(hex(`registration_subject_sha256`)) else NULL end
                 live_business_subject|char|char(64)|Y|B|NULL|STORED GENERATED|case when ((`status` <> _utf8mb4'REVOKED') and (`contract_version` = 2) and (`registration_subject_sha256` is not null)) then sha2(concat(lpad(octet_length(`tenant_id`),3,_utf8mb4'0'),_utf8mb4':',`tenant_id`,lpad(octet_length(`client_id`),3,_utf8mb4'0'),_utf8mb4':',`client_id`,lpad(octet_length(`owner_jiacn`),3,_utf8mb4'0'),_utf8mb4':',`owner_jiacn`,lpad(octet_length(`agent_id`),3,_utf8mb4'0'),_utf8mb4':',`agent_id`),256) else NULL end
@@ -125,6 +130,7 @@ public final class AgentRuntimeV2RegistrationSchemaGate implements InitializingB
                 current_registration_receipt_sha256|binary|binary(32)|Y|-|NULL|-|-
                 """));
         result.put("agent_runtime_v2_binding_generation_fact", columns("""
+                evidence_provenance|varchar|varchar(24)|N|B|R2B1_ENFORCED|-|-
                 registration_subject_sha256|binary|binary(32)|Y|-|NULL|-|-
                 registration_authority_id|varchar|varchar(36)|Y|B|NULL|-|-
                 registration_authority_revision|bigint|bigint|Y|-|NULL|-|-
@@ -279,14 +285,15 @@ public final class AgentRuntimeV2RegistrationSchemaGate implements InitializingB
                 update_time|bigint|bigint|N|-|NULL|-|-
                 """));
         result.put("agent_consumer_inbox", List.of(
+                provenance(),
                 column("dispatch_generation_fact_id", "varchar", "varchar(36)", true, BIN),
                 column("dispatch_generation_snapshot_sha256", "binary", "binary(32)", true, null),
                 column("execution_origin_snapshot_sha256", "binary", "binary(32)", true, null)));
-        result.put("agent_command_v2_ack_receipt", nullableTriplet("execution_origin_snapshot_sha256", "ack_holder_generation_fact_id", "ack_holder_generation_snapshot_sha256"));
-        result.put("agent_command_v2_execution_lease_fact", nullableTriplet("execution_origin_snapshot_sha256", "holder_generation_fact_id", "holder_generation_snapshot_sha256"));
-        result.put("agent_command_v2_execution_grant", nullableTriplet("execution_origin_snapshot_sha256", "holder_generation_fact_id", "holder_generation_snapshot_sha256"));
-        result.put("agent_command_v2_execution_continuation_anchor", nullableTriplet("execution_origin_snapshot_sha256", "holder_generation_fact_id", "holder_generation_snapshot_sha256"));
-        result.put("agent_command_v2_execution_request", nullableTriplet("execution_origin_snapshot_sha256", "requested_holder_generation_fact_id", "requested_holder_generation_snapshot_sha256"));
+        result.put("agent_command_v2_ack_receipt", evidenceColumns("execution_origin_snapshot_sha256", "ack_holder_generation_fact_id", "ack_holder_generation_snapshot_sha256"));
+        result.put("agent_command_v2_execution_lease_fact", evidenceColumns("execution_origin_snapshot_sha256", "holder_generation_fact_id", "holder_generation_snapshot_sha256"));
+        result.put("agent_command_v2_execution_grant", evidenceColumns("execution_origin_snapshot_sha256", "holder_generation_fact_id", "holder_generation_snapshot_sha256"));
+        result.put("agent_command_v2_execution_continuation_anchor", evidenceColumns("execution_origin_snapshot_sha256", "holder_generation_fact_id", "holder_generation_snapshot_sha256"));
+        result.put("agent_command_v2_execution_request", evidenceColumns("execution_origin_snapshot_sha256", "requested_holder_generation_fact_id", "requested_holder_generation_snapshot_sha256"));
         return Map.copyOf(result);
     }
 
@@ -304,15 +311,15 @@ public final class AgentRuntimeV2RegistrationSchemaGate implements InitializingB
 
     static Map<String, Map<String, String>> expectedChecks() {
         Map<String, Map<String, String>> result = new LinkedHashMap<>();
-        result.put("agent_runtime_v2_binding", one("chk_runtime_v2_binding_registration", "contract_version <> 2 OR (registration_subject_sha256 IS NOT NULL AND OCTET_LENGTH(registration_subject_sha256)=32 AND registration_authority_id IS NOT NULL AND registration_authority_id REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' AND registration_authority_revision IS NOT NULL AND registration_authority_revision >= 0 AND process_public_key_spki IS NOT NULL AND OCTET_LENGTH(process_public_key_spki)=44 AND process_public_key_sha256 IS NOT NULL AND OCTET_LENGTH(process_public_key_sha256)=32 AND verifier_version IS NOT NULL AND verifier_version = binding_generation + 1 AND verifier_key_id IS NOT NULL AND OCTET_LENGTH(verifier_key_id) BETWEEN 1 AND 100 AND reconnect_verifier IS NOT NULL AND OCTET_LENGTH(reconnect_verifier)=32 AND current_registration_receipt_id IS NOT NULL AND current_registration_receipt_id REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' AND current_registration_receipt_sha256 IS NOT NULL AND OCTET_LENGTH(current_registration_receipt_sha256)=32)"));
-        result.put("agent_runtime_v2_binding_generation_fact", one("chk_binding_generation_registration", "event_type <> 'CONNECTED' OR (registration_subject_sha256 IS NOT NULL AND OCTET_LENGTH(registration_subject_sha256)=32 AND registration_authority_id IS NOT NULL AND registration_authority_id REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' AND registration_authority_revision IS NOT NULL AND registration_authority_revision >= 0 AND runtime_credential_client_id IS NOT NULL AND OCTET_LENGTH(runtime_credential_client_id) BETWEEN 1 AND 50 AND process_public_key_sha256 IS NOT NULL AND OCTET_LENGTH(process_public_key_sha256)=32 AND verifier_version IS NOT NULL AND verifier_version = binding_generation + 1 AND registration_receipt_id IS NOT NULL AND registration_receipt_id REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' AND registration_receipt_sha256 IS NOT NULL AND OCTET_LENGTH(registration_receipt_sha256)=32 AND connection_admission_kind IS NOT NULL AND connection_admission_kind IN ('CURRENT_ADMISSION','FROZEN_DRAIN') AND ((connection_admission_kind='CURRENT_ADMISSION' AND drain_control_operation_id IS NULL) OR (connection_admission_kind='FROZEN_DRAIN' AND drain_control_operation_id IS NOT NULL AND OCTET_LENGTH(drain_control_operation_id) BETWEEN 1 AND 100)) AND generation_snapshot_sha256 IS NOT NULL AND OCTET_LENGTH(generation_snapshot_sha256)=32)"));
+        result.put("agent_runtime_v2_binding", one("chk_runtime_v2_binding_registration", "contract_version <> 2 OR (evidence_provenance='LEGACY_PRE_R2B1' AND status='REVOKED' AND registration_subject_sha256 IS NULL AND registration_authority_id IS NULL AND registration_authority_revision IS NULL AND process_public_key_spki IS NULL AND process_public_key_sha256 IS NULL AND verifier_version IS NULL AND verifier_key_id IS NULL AND current_registration_receipt_id IS NULL AND current_registration_receipt_sha256 IS NULL) OR (evidence_provenance='R2B1_ENFORCED' AND registration_subject_sha256 IS NOT NULL AND OCTET_LENGTH(registration_subject_sha256)=32 AND registration_authority_id IS NOT NULL AND registration_authority_id REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' AND registration_authority_revision IS NOT NULL AND registration_authority_revision >= 0 AND process_public_key_spki IS NOT NULL AND OCTET_LENGTH(process_public_key_spki)=44 AND process_public_key_sha256 IS NOT NULL AND OCTET_LENGTH(process_public_key_sha256)=32 AND verifier_version IS NOT NULL AND verifier_version = binding_generation + 1 AND verifier_key_id IS NOT NULL AND OCTET_LENGTH(verifier_key_id) BETWEEN 1 AND 100 AND reconnect_verifier IS NOT NULL AND OCTET_LENGTH(reconnect_verifier)=32 AND current_registration_receipt_id IS NOT NULL AND current_registration_receipt_id REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' AND current_registration_receipt_sha256 IS NOT NULL AND OCTET_LENGTH(current_registration_receipt_sha256)=32)"));
+        result.put("agent_runtime_v2_binding_generation_fact", one("chk_binding_generation_registration", "(evidence_provenance='LEGACY_PRE_R2B1' AND registration_subject_sha256 IS NULL AND registration_authority_id IS NULL AND registration_authority_revision IS NULL AND runtime_credential_client_id IS NULL AND process_public_key_sha256 IS NULL AND verifier_version IS NULL AND registration_receipt_id IS NULL AND registration_receipt_sha256 IS NULL AND connection_admission_kind IS NULL AND drain_control_operation_id IS NULL AND generation_snapshot_sha256 IS NULL) OR (evidence_provenance='R2B1_ENFORCED' AND event_type <> 'CONNECTED' AND registration_subject_sha256 IS NULL AND registration_authority_id IS NULL AND registration_authority_revision IS NULL AND runtime_credential_client_id IS NULL AND process_public_key_sha256 IS NULL AND verifier_version IS NULL AND registration_receipt_id IS NULL AND registration_receipt_sha256 IS NULL AND connection_admission_kind IS NULL AND drain_control_operation_id IS NULL AND generation_snapshot_sha256 IS NULL) OR (evidence_provenance='R2B1_ENFORCED' AND event_type='CONNECTED' AND registration_subject_sha256 IS NOT NULL AND OCTET_LENGTH(registration_subject_sha256)=32 AND registration_authority_id IS NOT NULL AND registration_authority_id REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' AND registration_authority_revision IS NOT NULL AND registration_authority_revision >= 0 AND runtime_credential_client_id IS NOT NULL AND OCTET_LENGTH(runtime_credential_client_id) BETWEEN 1 AND 50 AND process_public_key_sha256 IS NOT NULL AND OCTET_LENGTH(process_public_key_sha256)=32 AND verifier_version IS NOT NULL AND verifier_version = binding_generation + 1 AND registration_receipt_id IS NOT NULL AND registration_receipt_id REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' AND registration_receipt_sha256 IS NOT NULL AND OCTET_LENGTH(registration_receipt_sha256)=32 AND connection_admission_kind IS NOT NULL AND connection_admission_kind IN ('CURRENT_ADMISSION','FROZEN_DRAIN') AND ((connection_admission_kind='CURRENT_ADMISSION' AND drain_control_operation_id IS NULL) OR (connection_admission_kind='FROZEN_DRAIN' AND drain_control_operation_id IS NOT NULL AND OCTET_LENGTH(drain_control_operation_id) BETWEEN 1 AND 100)) AND generation_snapshot_sha256 IS NOT NULL AND OCTET_LENGTH(generation_snapshot_sha256)=32)"));
         result.put(AUTHORITY, one("chk_registration_authority_canonical", "registration_authority_id IS NOT NULL AND registration_authority_id REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' AND credential_kind IS NOT NULL AND credential_kind='API_KEY' AND credential_reference IS NOT NULL AND OCTET_LENGTH(credential_reference) BETWEEN 1 AND 200 AND credential_digest IS NOT NULL AND OCTET_LENGTH(credential_digest)=32 AND credential_key_id IS NOT NULL AND OCTET_LENGTH(credential_key_id) BETWEEN 1 AND 100 AND tenant_id IS NOT NULL AND tenant_id REGEXP '^(0|[1-9][0-9]{0,49})$' AND authority_revision IS NOT NULL AND authority_revision >= 0 AND status IS NOT NULL AND status IN ('ACTIVE','REVOKED') AND ((status='ACTIVE' AND revoked_at IS NULL AND revoke_reason IS NULL) OR (status='REVOKED' AND revoked_at IS NOT NULL AND revoked_at > 0 AND revoke_reason IS NOT NULL AND OCTET_LENGTH(revoke_reason) BETWEEN 1 AND 500)) AND version IS NOT NULL AND version >= 0"));
         result.put(RECEIPT, one("chk_registration_receipt_canonical", "contract_version IS NOT NULL AND contract_version=2 AND receipt_kind IS NOT NULL AND receipt_kind IN ('CREATE','RECONNECT') AND registration_receipt_id IS NOT NULL AND registration_receipt_id REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' AND registration_request_id IS NOT NULL AND registration_request_id REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' AND ((receipt_kind='CREATE' AND previous_registration_receipt_id IS NULL AND previous_registration_receipt_sha256 IS NULL AND binding_generation=0) OR (receipt_kind='RECONNECT' AND previous_registration_receipt_id IS NOT NULL AND previous_registration_receipt_sha256 IS NOT NULL AND OCTET_LENGTH(previous_registration_receipt_sha256)=32 AND binding_generation>0)) AND binding_generation IS NOT NULL AND binding_generation >= 0 AND verifier_version IS NOT NULL AND verifier_version=binding_generation+1 AND process_public_key_sha256 IS NOT NULL AND OCTET_LENGTH(process_public_key_sha256)=32 AND verifier_sha256 IS NOT NULL AND OCTET_LENGTH(verifier_sha256)=32 AND verifier_cipher_suite IS NOT NULL AND verifier_cipher_suite='X25519-HKDF-SHA256-AES-256-GCM' AND server_ephemeral_public_key_spki IS NOT NULL AND OCTET_LENGTH(server_ephemeral_public_key_spki)=44 AND nonce IS NOT NULL AND OCTET_LENGTH(nonce)=12 AND sealed_verifier IS NOT NULL AND OCTET_LENGTH(sealed_verifier)=48 AND tenant_id IS NOT NULL AND tenant_id REGEXP '^(0|[1-9][0-9]{0,49})$' AND receipt_wire_bytes IS NOT NULL AND OCTET_LENGTH(receipt_wire_bytes) BETWEEN 1 AND 4096 AND receipt_wire_sha256 IS NOT NULL AND OCTET_LENGTH(receipt_wire_sha256)=32 AND connected_at IS NOT NULL AND connected_at>0"));
         result.put(REQUEST, one("chk_registration_request_canonical", "contract_version IS NOT NULL AND contract_version=2 AND request_kind IS NOT NULL AND request_kind IN ('CREATE','RECONNECT') AND request_wire_sha256 IS NOT NULL AND OCTET_LENGTH(request_wire_sha256)=32 AND semantic_sha256 IS NOT NULL AND OCTET_LENGTH(semantic_sha256)=32 AND registration_subject_sha256 IS NOT NULL AND OCTET_LENGTH(registration_subject_sha256)=32 AND registration_authority_sha256 IS NOT NULL AND OCTET_LENGTH(registration_authority_sha256)=32 AND tenant_id IS NOT NULL AND tenant_id REGEXP '^(0|[1-9][0-9]{0,49})$' AND decision IS NOT NULL AND decision IN ('GRANTED','DENIED') AND ((decision='GRANTED' AND registration_receipt_id IS NOT NULL AND registration_receipt_sha256 IS NOT NULL AND OCTET_LENGTH(registration_receipt_sha256)=32 AND denial_code IS NULL) OR (decision='DENIED' AND registration_receipt_id IS NULL AND registration_receipt_sha256 IS NULL AND denial_code IS NOT NULL AND OCTET_LENGTH(denial_code) BETWEEN 1 AND 40)) AND decided_at IS NOT NULL AND decided_at>0"));
         result.put(CHALLENGE, one("chk_reconnect_challenge_canonical", "contract_version IS NOT NULL AND contract_version=2 AND challenge_request_id IS NOT NULL AND challenge_request_id REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' AND challenge_id IS NOT NULL AND challenge_id REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' AND request_wire_sha256 IS NOT NULL AND OCTET_LENGTH(request_wire_sha256)=32 AND semantic_sha256 IS NOT NULL AND OCTET_LENGTH(semantic_sha256)=32 AND registration_subject_sha256 IS NOT NULL AND OCTET_LENGTH(registration_subject_sha256)=32 AND registration_authority_sha256 IS NOT NULL AND OCTET_LENGTH(registration_authority_sha256)=32 AND binding_generation IS NOT NULL AND binding_generation>=0 AND prior_registration_receipt_sha256 IS NOT NULL AND OCTET_LENGTH(prior_registration_receipt_sha256)=32 AND process_public_key_sha256 IS NOT NULL AND OCTET_LENGTH(process_public_key_sha256)=32 AND challenge_digest IS NOT NULL AND OCTET_LENGTH(challenge_digest)=32 AND challenge_digest_key_id IS NOT NULL AND OCTET_LENGTH(challenge_digest_key_id) BETWEEN 1 AND 100 AND challenge_cipher_suite IS NOT NULL AND challenge_cipher_suite='X25519-HKDF-SHA256-AES-256-GCM' AND server_ephemeral_public_key_spki IS NOT NULL AND OCTET_LENGTH(server_ephemeral_public_key_spki)=44 AND nonce IS NOT NULL AND OCTET_LENGTH(nonce)=12 AND sealed_challenge IS NOT NULL AND OCTET_LENGTH(sealed_challenge)=48 AND challenge_sha256 IS NOT NULL AND OCTET_LENGTH(challenge_sha256)=32 AND challenge_wire_bytes IS NOT NULL AND OCTET_LENGTH(challenge_wire_bytes) BETWEEN 1 AND 2048 AND challenge_wire_sha256 IS NOT NULL AND OCTET_LENGTH(challenge_wire_sha256)=32 AND issuer_socket_owner_epoch IS NOT NULL AND issuer_socket_owner_epoch>=0 AND issued_at IS NOT NULL AND issued_at>0 AND expires_at IS NOT NULL AND expires_at>issued_at AND tenant_id IS NOT NULL AND tenant_id REGEXP '^(0|[1-9][0-9]{0,49})$' AND status IS NOT NULL AND status IN ('ISSUED','CONSUMED','DENIED') AND ((status='ISSUED' AND consumed_reconnect_request_id IS NULL AND consumed_at IS NULL AND denial_code IS NULL) OR (status='CONSUMED' AND consumed_reconnect_request_id IS NOT NULL AND consumed_at IS NOT NULL AND consumed_at>=issued_at AND denial_code IS NULL) OR (status='DENIED' AND consumed_reconnect_request_id IS NULL AND consumed_at IS NULL AND denial_code IS NOT NULL AND OCTET_LENGTH(denial_code) BETWEEN 1 AND 40))"));
-        result.put("agent_consumer_inbox", one("chk_inbox_runtime_v2_origin_evidence", "protocol_version IS NULL OR protocol_version<>2 OR runtime_dispatch_id IS NULL OR (dispatch_generation_fact_id IS NOT NULL AND dispatch_generation_fact_id REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' AND dispatch_generation_snapshot_sha256 IS NOT NULL AND OCTET_LENGTH(dispatch_generation_snapshot_sha256)=32 AND execution_origin_snapshot_sha256 IS NOT NULL AND OCTET_LENGTH(execution_origin_snapshot_sha256)=32)"));
-        result.put("agent_command_v2_ack_receipt", one("chk_ack_receipt_snapshot_links", "contract_version<>2 OR (execution_origin_snapshot_sha256 IS NOT NULL AND OCTET_LENGTH(execution_origin_snapshot_sha256)=32 AND ack_holder_generation_fact_id IS NOT NULL AND ack_holder_generation_fact_id REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' AND ack_holder_generation_snapshot_sha256 IS NOT NULL AND OCTET_LENGTH(ack_holder_generation_snapshot_sha256)=32)"));
-        String holder = "(execution_origin_snapshot_sha256 IS NULL AND %1$s IS NULL AND %2$s IS NULL) OR (execution_origin_snapshot_sha256 IS NOT NULL AND OCTET_LENGTH(execution_origin_snapshot_sha256)=32 AND %1$s IS NOT NULL AND %1$s REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' AND %2$s IS NOT NULL AND OCTET_LENGTH(%2$s)=32)";
+        result.put("agent_consumer_inbox", one("chk_inbox_runtime_v2_origin_evidence", "(evidence_provenance='LEGACY_PRE_R2B1' AND dispatch_generation_fact_id IS NULL AND dispatch_generation_snapshot_sha256 IS NULL AND execution_origin_snapshot_sha256 IS NULL) OR (evidence_provenance='R2B1_ENFORCED' AND (protocol_version IS NULL OR protocol_version<>2 OR runtime_dispatch_id IS NULL) AND dispatch_generation_fact_id IS NULL AND dispatch_generation_snapshot_sha256 IS NULL AND execution_origin_snapshot_sha256 IS NULL) OR (evidence_provenance='R2B1_ENFORCED' AND protocol_version=2 AND runtime_dispatch_id IS NOT NULL AND dispatch_generation_fact_id IS NOT NULL AND dispatch_generation_fact_id REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' AND dispatch_generation_snapshot_sha256 IS NOT NULL AND OCTET_LENGTH(dispatch_generation_snapshot_sha256)=32 AND execution_origin_snapshot_sha256 IS NOT NULL AND OCTET_LENGTH(execution_origin_snapshot_sha256)=32)"));
+        result.put("agent_command_v2_ack_receipt", one("chk_ack_receipt_snapshot_links", "(evidence_provenance='LEGACY_PRE_R2B1' AND execution_origin_snapshot_sha256 IS NULL AND ack_holder_generation_fact_id IS NULL AND ack_holder_generation_snapshot_sha256 IS NULL) OR (evidence_provenance='R2B1_ENFORCED' AND contract_version<>2 AND execution_origin_snapshot_sha256 IS NULL AND ack_holder_generation_fact_id IS NULL AND ack_holder_generation_snapshot_sha256 IS NULL) OR (evidence_provenance='R2B1_ENFORCED' AND contract_version=2 AND execution_origin_snapshot_sha256 IS NOT NULL AND OCTET_LENGTH(execution_origin_snapshot_sha256)=32 AND ack_holder_generation_fact_id IS NOT NULL AND ack_holder_generation_fact_id REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' AND ack_holder_generation_snapshot_sha256 IS NOT NULL AND OCTET_LENGTH(ack_holder_generation_snapshot_sha256)=32)"));
+        String holder = "(evidence_provenance='LEGACY_PRE_R2B1' AND execution_origin_snapshot_sha256 IS NULL AND %1$s IS NULL AND %2$s IS NULL) OR (evidence_provenance='R2B1_ENFORCED' AND execution_origin_snapshot_sha256 IS NOT NULL AND OCTET_LENGTH(execution_origin_snapshot_sha256)=32 AND %1$s IS NOT NULL AND %1$s REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' AND %2$s IS NOT NULL AND OCTET_LENGTH(%2$s)=32)";
         result.put("agent_command_v2_execution_lease_fact", one("chk_execution_lease_snapshot_links", holder.formatted("holder_generation_fact_id","holder_generation_snapshot_sha256")));
         result.put("agent_command_v2_execution_grant", one("chk_execution_grant_snapshot_links", holder.formatted("holder_generation_fact_id","holder_generation_snapshot_sha256")));
         result.put("agent_command_v2_execution_continuation_anchor", one("chk_execution_anchor_snapshot_links", holder.formatted("holder_generation_fact_id","holder_generation_snapshot_sha256")));
@@ -320,10 +327,14 @@ public final class AgentRuntimeV2RegistrationSchemaGate implements InitializingB
         return Map.copyOf(result);
     }
 
-    private static List<ColumnDefinition> nullableTriplet(String first, String second, String third) {
-        return List.of(column(first, "binary", "binary(32)", true, null),
+    private static List<ColumnDefinition> evidenceColumns(String first, String second, String third) {
+        return List.of(provenance(), column(first, "binary", "binary(32)", true, null),
                 column(second, "varchar", "varchar(36)", true, BIN),
                 column(third, "binary", "binary(32)", true, null));
+    }
+    private static ColumnDefinition provenance() {
+        return new ColumnDefinition("evidence_provenance", "varchar", "varchar(24)", false,
+                "R2B1_ENFORCED", BIN, "", "");
     }
     private static ColumnDefinition column(String name, String dataType, String columnType,
             boolean nullable, String collation) {
@@ -364,6 +375,7 @@ public final class AgentRuntimeV2RegistrationSchemaGate implements InitializingB
         String databaseProduct(); List<String> presentTables(); TableDefinition table(String table);
         List<ColumnDefinition> columns(String table); Map<String, IndexDefinition> indexes(String table);
         int participatingForeignKeyCount(String table); Map<String, CheckDefinition> checks(String table);
+        long activationReadinessViolationCount();
     }
     record TableDefinition(String engine, String collation) {}
     record ColumnDefinition(String name, String dataType, String columnType, boolean nullable,
@@ -374,9 +386,9 @@ public final class AgentRuntimeV2RegistrationSchemaGate implements InitializingB
     private record IndexColumn(String name, boolean nonUnique, int sequence, String column,
                                Integer prefix, String type, String visible) {}
 
-    private static final class JdbcCatalog implements Catalog {
+    static final class JdbcCatalog implements Catalog {
         private final JdbcTemplate jdbc;
-        private JdbcCatalog(JdbcTemplate jdbc) { this.jdbc = jdbc; }
+        JdbcCatalog(JdbcTemplate jdbc) { this.jdbc = jdbc; }
         public String databaseProduct() {
             return jdbc.execute((ConnectionCallback<String>) connection -> connection.getMetaData().getDatabaseProductName());
         }
@@ -421,6 +433,130 @@ public final class AgentRuntimeV2RegistrationSchemaGate implements InitializingB
                 if (name == null || previous != null) throw invalid(table + " ambiguous CHECK metadata");
             }
             return Map.copyOf(result);
+        }
+        public long activationReadinessViolationCount() {
+            Long value = jdbc.queryForObject("""
+                    SELECT
+                      (SELECT COUNT(*) FROM agent_runtime_v2_binding b
+                        WHERE b.contract_version=2 AND b.evidence_provenance='LEGACY_PRE_R2B1'
+                          AND b.status<>'REVOKED')
+                    + (SELECT COUNT(*) FROM agent_runtime_v2_binding b
+                        WHERE b.contract_version=2 AND b.evidence_provenance='R2B1_ENFORCED'
+                          AND b.status='ACTIVE' AND NOT EXISTS (
+                            SELECT 1 FROM agent_runtime_v2_binding_generation_fact g
+                             WHERE g.evidence_provenance='R2B1_ENFORCED'
+                               AND g.binding_generation_fact_id IS NOT NULL
+                               AND g.runtime_binding_id=b.runtime_binding_id
+                               AND g.binding_generation=b.binding_generation
+                               AND g.runtime_instance_id=b.runtime_instance_id
+                               AND g.event_type='CONNECTED'
+                               AND g.registration_receipt_id=b.current_registration_receipt_id
+                               AND g.registration_receipt_sha256=b.current_registration_receipt_sha256
+                               AND EXISTS (SELECT 1 FROM agent_runtime_v2_registration_receipt rr
+                                    WHERE rr.registration_receipt_id=g.registration_receipt_id
+                                      AND rr.receipt_wire_sha256=g.registration_receipt_sha256
+                                      AND rr.binding_generation_fact_id=g.binding_generation_fact_id
+                                      AND rr.runtime_binding_id=g.runtime_binding_id
+                                      AND rr.binding_generation=g.binding_generation)))
+                    + (SELECT COUNT(*) FROM agent_consumer_inbox i
+                        WHERE i.evidence_provenance='R2B1_ENFORCED' AND i.protocol_version=2
+                          AND i.runtime_dispatch_id IS NOT NULL AND (
+                            NOT EXISTS (SELECT 1 FROM agent_runtime_v2_binding b
+                              WHERE b.evidence_provenance='R2B1_ENFORCED'
+                                AND b.runtime_binding_id=i.runtime_binding_id)
+                            OR NOT EXISTS (SELECT 1 FROM agent_runtime_v2_binding_generation_fact g
+                              WHERE g.evidence_provenance='R2B1_ENFORCED'
+                                AND g.binding_generation_fact_id=i.dispatch_generation_fact_id
+                                AND g.generation_snapshot_sha256=i.dispatch_generation_snapshot_sha256
+                                AND g.runtime_binding_id=i.runtime_binding_id
+                                AND g.binding_generation=i.runtime_binding_generation
+                                AND g.runtime_instance_id=i.dispatch_runtime_instance_id
+                                AND g.event_type='CONNECTED')
+                            OR (i.execution_current_lease_fact_id IS NOT NULL AND NOT EXISTS (
+                              SELECT 1 FROM agent_command_v2_execution_lease_fact f
+                               WHERE f.evidence_provenance='R2B1_ENFORCED'
+                                 AND f.lease_fact_id=i.execution_current_lease_fact_id
+                                 AND f.runtime_dispatch_id=i.runtime_dispatch_id
+                                 AND f.runtime_binding_id=i.execution_holder_binding_id
+                                 AND f.holder_binding_generation=i.execution_holder_binding_generation
+                                 AND f.runtime_instance_id=i.execution_holder_runtime_instance_id))))
+                    + (SELECT COUNT(*) FROM agent_command_v2_ack_receipt e
+                        WHERE e.evidence_provenance='R2B1_ENFORCED' AND e.contract_version=2
+                          AND (NOT EXISTS (SELECT 1 FROM agent_consumer_inbox i
+                                WHERE i.evidence_provenance='R2B1_ENFORCED'
+                                  AND i.runtime_dispatch_id=e.runtime_dispatch_id
+                                  AND i.execution_origin_snapshot_sha256=e.execution_origin_snapshot_sha256)
+                            OR NOT EXISTS (SELECT 1 FROM agent_runtime_v2_binding_generation_fact g
+                                WHERE g.evidence_provenance='R2B1_ENFORCED'
+                                  AND g.binding_generation_fact_id=e.ack_holder_generation_fact_id
+                                  AND g.generation_snapshot_sha256=e.ack_holder_generation_snapshot_sha256
+                                  AND g.runtime_binding_id=e.runtime_binding_id
+                                  AND g.binding_generation=e.ack_holder_binding_generation
+                                  AND g.runtime_instance_id=e.runtime_instance_id
+                                  AND g.event_type='CONNECTED')))
+                    + (SELECT COUNT(*) FROM agent_command_v2_execution_lease_fact e
+                        WHERE e.evidence_provenance='R2B1_ENFORCED' AND (
+                          NOT EXISTS (SELECT 1 FROM agent_consumer_inbox i
+                            WHERE i.evidence_provenance='R2B1_ENFORCED'
+                              AND i.runtime_dispatch_id=e.runtime_dispatch_id
+                              AND i.execution_origin_snapshot_sha256=e.execution_origin_snapshot_sha256)
+                          OR NOT EXISTS (SELECT 1 FROM agent_runtime_v2_binding_generation_fact g
+                            WHERE g.evidence_provenance='R2B1_ENFORCED'
+                              AND g.binding_generation_fact_id=e.holder_generation_fact_id
+                              AND g.generation_snapshot_sha256=e.holder_generation_snapshot_sha256
+                              AND g.runtime_binding_id=e.runtime_binding_id
+                              AND g.binding_generation=e.holder_binding_generation
+                              AND g.runtime_instance_id=e.runtime_instance_id
+                              AND g.event_type='CONNECTED')))
+                    + (SELECT COUNT(*) FROM agent_command_v2_execution_grant e
+                        WHERE e.evidence_provenance='R2B1_ENFORCED' AND (
+                          NOT EXISTS (SELECT 1 FROM agent_consumer_inbox i
+                            WHERE i.evidence_provenance='R2B1_ENFORCED'
+                              AND i.runtime_dispatch_id=e.runtime_dispatch_id
+                              AND i.execution_origin_snapshot_sha256=e.execution_origin_snapshot_sha256)
+                          OR NOT EXISTS (SELECT 1 FROM agent_runtime_v2_binding_generation_fact g
+                            WHERE g.evidence_provenance='R2B1_ENFORCED'
+                              AND g.binding_generation_fact_id=e.holder_generation_fact_id
+                              AND g.generation_snapshot_sha256=e.holder_generation_snapshot_sha256
+                              AND g.runtime_binding_id=e.runtime_binding_id
+                              AND g.binding_generation=e.holder_binding_generation
+                              AND g.runtime_instance_id=e.runtime_instance_id
+                              AND g.event_type='CONNECTED')))
+                    + (SELECT COUNT(*) FROM agent_command_v2_execution_request e
+                        WHERE e.evidence_provenance='R2B1_ENFORCED' AND (
+                          NOT EXISTS (SELECT 1 FROM agent_consumer_inbox i
+                            WHERE i.evidence_provenance='R2B1_ENFORCED'
+                              AND i.runtime_dispatch_id=e.runtime_dispatch_id
+                              AND i.execution_origin_snapshot_sha256=e.execution_origin_snapshot_sha256)
+                          OR NOT EXISTS (SELECT 1 FROM agent_runtime_v2_binding_generation_fact g
+                            WHERE g.evidence_provenance='R2B1_ENFORCED'
+                              AND g.binding_generation_fact_id=e.requested_holder_generation_fact_id
+                              AND g.generation_snapshot_sha256=e.requested_holder_generation_snapshot_sha256
+                              AND g.runtime_binding_id=e.runtime_binding_id
+                              AND g.binding_generation=e.requested_holder_binding_generation
+                              AND g.runtime_instance_id=e.runtime_instance_id
+                              AND g.event_type='CONNECTED')))
+                    + (SELECT COUNT(*) FROM agent_command_v2_execution_continuation_anchor e
+                        WHERE e.evidence_provenance='R2B1_ENFORCED' AND (
+                          NOT EXISTS (SELECT 1 FROM agent_command_v2_execution_grant x
+                            JOIN agent_consumer_inbox i ON i.runtime_dispatch_id=x.runtime_dispatch_id
+                              AND i.evidence_provenance='R2B1_ENFORCED'
+                              AND i.execution_origin_snapshot_sha256=e.execution_origin_snapshot_sha256
+                           WHERE x.evidence_provenance='R2B1_ENFORCED'
+                             AND x.execution_grant_id=e.execution_grant_id
+                             AND x.runtime_dispatch_id=e.runtime_dispatch_id)
+                          OR NOT EXISTS (SELECT 1 FROM agent_runtime_v2_binding_generation_fact g
+                            JOIN agent_command_v2_execution_grant x
+                              ON x.execution_grant_id=e.execution_grant_id
+                           WHERE g.evidence_provenance='R2B1_ENFORCED'
+                             AND x.evidence_provenance='R2B1_ENFORCED'
+                             AND g.binding_generation_fact_id=e.holder_generation_fact_id
+                             AND g.generation_snapshot_sha256=e.holder_generation_snapshot_sha256
+                             AND g.runtime_binding_id=x.runtime_binding_id
+                             AND g.binding_generation=e.holder_binding_generation
+                             AND g.event_type='CONNECTED')))
+                    """, Long.class);
+            return value == null ? -1 : value;
         }
     }
 }

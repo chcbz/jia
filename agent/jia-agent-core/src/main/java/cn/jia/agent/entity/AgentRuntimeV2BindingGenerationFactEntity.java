@@ -22,6 +22,7 @@ public class AgentRuntimeV2BindingGenerationFactEntity extends BaseEntity {
     private String eventType;
     private String revokedRuntimeBindingId;
     private String runtimeInstanceId;
+    private String evidenceProvenance;
     private byte[] registrationSubjectSha256;
     private String registrationAuthorityId;
     private Long registrationAuthorityRevision;

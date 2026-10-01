@@ -40,6 +40,7 @@ public interface AgentCommandV2ExecutionRequestMapper {
             @Param("e") AgentCommandV2ExecutionRequestEntity entity);
 
     @Select("SELECT * FROM agent_command_v2_execution_request WHERE " + AgentRuntimeV2MapperScope.SPLIT_EXACT
+            + " AND evidence_provenance='R2B1_ENFORCED'"
             + " AND execution_request_id=#{executionRequestId}"
             + " AND CAST(execution_request_id AS BINARY)=CAST(#{executionRequestId} AS BINARY)"
             + " AND OCTET_LENGTH(execution_request_id)=OCTET_LENGTH(#{executionRequestId}) LIMIT 1 FOR UPDATE")
@@ -54,4 +55,18 @@ public interface AgentCommandV2ExecutionRequestMapper {
             @Param("receiverRegistrationRevision") long receiverRegistrationRevision,
             @Param("admissionEpoch") long admissionEpoch, @Param("moduleId") String moduleId,
             @Param("migrationEpoch") long migrationEpoch, @Param("executionRequestId") String executionRequestId);
+
+    @Select("SELECT * FROM agent_command_v2_execution_request WHERE "
+            + AgentRuntimeV2MapperScope.HISTORICAL_EXECUTION_IDENTITY
+            + " AND execution_request_id=#{executionRequestId}"
+            + " AND CAST(execution_request_id AS BINARY)=CAST(#{executionRequestId} AS BINARY)"
+            + " AND OCTET_LENGTH(execution_request_id)=OCTET_LENGTH(#{executionRequestId}) LIMIT 1")
+    AgentCommandV2ExecutionRequestEntity findHistoricalById(
+            @Param("tenantId") String tenantId, @Param("dataDomainId") String dataDomainId,
+            @Param("executionPoolId") String executionPoolId,
+            @Param("commandCallerClientId") String commandCallerClientId,
+            @Param("runtimeCredentialClientId") String runtimeCredentialClientId,
+            @Param("ownerJiacn") String ownerJiacn, @Param("agentId") String agentId,
+            @Param("runtimeBindingId") String runtimeBindingId,
+            @Param("executionRequestId") String executionRequestId);
 }

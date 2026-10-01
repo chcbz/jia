@@ -45,6 +45,7 @@ public class AgentCommandV2ExecutionGrantEntity extends BaseEntity {
     private Long admissionEpoch;
     private String moduleId;
     private Long migrationEpoch;
+    private String evidenceProvenance;
     @ToString.Exclude private byte[] executionOriginSnapshotSha256;
     private String holderGenerationFactId;
     @ToString.Exclude private byte[] holderGenerationSnapshotSha256;

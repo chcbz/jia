@@ -91,6 +91,18 @@ class AgentRuntimeV2PersistenceSchemaGateTest {
         weakened.checks.get(AgentRuntimeV2PersistenceSchemaGate.INBOX).put(
                 "chk_inbox_runtime_v2_origin_evidence", enforced("1=1"));
         assertDenied(weakened);
+
+        for (String table : List.of(AgentRuntimeV2PersistenceSchemaGate.BINDING,
+                AgentRuntimeV2PersistenceSchemaGate.GENERATION_FACT,
+                AgentRuntimeV2PersistenceSchemaGate.RECEIPT)) {
+            FakeCatalog defaultDrift = registrationCanonical();
+            replaceColumn(defaultDrift.columns.get(table), "evidence_provenance", column ->
+                    new AgentRuntimeV2PersistenceSchemaGate.ColumnDefinition(
+                            column.name(), column.dataType(), column.columnType(), column.nullable(),
+                            "LEGACY_PRE_R2B1", column.collation(), column.extra(),
+                            column.generationExpression()));
+            assertDenied(defaultDrift);
+        }
     }
 
     @Test
@@ -549,6 +561,18 @@ class AgentRuntimeV2PersistenceSchemaGateTest {
             Map<String,List<AgentRuntimeV2PersistenceSchemaGate.ColumnDefinition>> source) {
         Map<String,List<AgentRuntimeV2PersistenceSchemaGate.ColumnDefinition>> copy=new LinkedHashMap<>();
         source.forEach((k,v)->copy.put(k,new ArrayList<>(v))); return copy;
+    }
+    private static void replaceColumn(
+            List<AgentRuntimeV2PersistenceSchemaGate.ColumnDefinition> columns, String name,
+            java.util.function.Function<AgentRuntimeV2PersistenceSchemaGate.ColumnDefinition,
+                    AgentRuntimeV2PersistenceSchemaGate.ColumnDefinition> replacement) {
+        for (int index = 0; index < columns.size(); index++) {
+            if (name.equals(columns.get(index).name())) {
+                columns.set(index, replacement.apply(columns.get(index)));
+                return;
+            }
+        }
+        throw new AssertionError("column not found: " + name);
     }
     private static Map<String,Map<String,AgentRuntimeV2PersistenceSchemaGate.IndexDefinition>> copyIndexes(
             Map<String,Map<String,AgentRuntimeV2PersistenceSchemaGate.IndexDefinition>> source) {

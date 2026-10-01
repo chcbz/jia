@@ -3,6 +3,7 @@ package cn.jia.agent.mapper;
 
 import cn.jia.agent.config.AgentRuntimeV2PersistenceSchemaGate;
 import cn.jia.agent.dao.impl.AgentRuntimeV2ExecutionCommitDaoImpl;
+import cn.jia.agent.dao.impl.AgentRuntimeV2ExecutionHistoryDaoImpl;
 import cn.jia.agent.entity.*;
 import cn.jia.core.tenant.DataDomainId;
 import cn.jia.core.tenant.TenantId;
@@ -29,6 +30,8 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class AgentRuntimeV2ExecutionCommitTransactionTest {
     private static final String BINDING = "00000000-0000-4000-8000-000000000001";
@@ -52,6 +55,7 @@ class AgentRuntimeV2ExecutionCommitTransactionTest {
     private TransactionTemplate transaction;
     private TransactionTemplate readOnly;
     private AgentRuntimeV2ExecutionCommitDaoImpl commits;
+    private AgentRuntimeV2ExecutionHistoryDaoImpl history;
     private AgentCommandV2AckReceiptMapper receiptMapper;
     private AgentRuntimeV2DispatchMapper dispatchMapper;
     private AgentCommandV2ExecutionLeaseFactMapper factMapper;
@@ -91,14 +95,17 @@ class AgentRuntimeV2ExecutionCommitTransactionTest {
         dispatchMapper = sessions.getMapper(AgentRuntimeV2DispatchMapper.class);
 
         factMapper = sessions.getMapper(AgentCommandV2ExecutionLeaseFactMapper.class);
+        AgentCommandV2ExecutionGrantMapper grantMapper = sessions.getMapper(AgentCommandV2ExecutionGrantMapper.class);
+        AgentCommandV2ExecutionContinuationAnchorMapper anchorMapper = sessions.getMapper(AgentCommandV2ExecutionContinuationAnchorMapper.class);
+        AgentCommandV2ExecutionRequestMapper requestMapper = sessions.getMapper(AgentCommandV2ExecutionRequestMapper.class);
         commits = new AgentRuntimeV2ExecutionCommitDaoImpl(
                 sessions.getMapper(AgentRuntimeV2BindingMapper.class),
                 sessions.getMapper(AgentRuntimeV2BindingGenerationFactMapper.class),
                 sessions.getMapper(AgentRuntimeV2DispatchMapper.class), receiptMapper,
                 sessions.getMapper(AgentCommandV2ExecutionLeaseFactMapper.class),
-                sessions.getMapper(AgentCommandV2ExecutionGrantMapper.class),
-                sessions.getMapper(AgentCommandV2ExecutionContinuationAnchorMapper.class),
-                sessions.getMapper(AgentCommandV2ExecutionRequestMapper.class));
+                grantMapper, anchorMapper, requestMapper);
+        history = new AgentRuntimeV2ExecutionHistoryDaoImpl(factMapper, grantMapper,
+                requestMapper, anchorMapper);
         DataSourceTransactionManager manager = new DataSourceTransactionManager(source);
         transaction = new TransactionTemplate(manager);
         readOnly = new TransactionTemplate(manager);
@@ -362,6 +369,76 @@ class AgentRuntimeV2ExecutionCommitTransactionTest {
         assertEquals(3, count("agent_command_v2_execution_lease_fact"));
         assertEquals(3, count("agent_command_v2_execution_grant"));
         assertEquals(3, count("agent_command_v2_execution_request"));
+    }
+
+    @Test
+    void stableHistorySurvivesReceiverRevisionDriftButRequiresReadOnlyTransaction() {
+        AgentCommandV2ExecutionGrantEntity start = transaction.execute(
+                status -> appendStart(session(3), STARTED_ACK));
+        String startedReceipt = jdbc.queryForObject(
+                "SELECT receipt_id FROM agent_command_v2_ack_receipt WHERE status='STARTED'", String.class);
+        String startFact = start.getCurrentLeaseFactId();
+        long firstExpiry = start.getLeaseUntil();
+        reconnect(4, "session-fence-b");
+        AgentCommandV2ExecutionRequestEntity request = continuationRequest(startedReceipt,
+                "00000000-0000-4000-8000-000000000082");
+        AgentCommandV2ExecutionGrantEntity continuation = transaction.execute(status -> commits.continueExecution(
+                producer, receiver, session(4, "session-fence-b"), request,
+                fact(1, 0, "HOLDER_TRANSFERRED", startFact, firstExpiry),
+                new AgentCommandV2ExecutionGrantEntity().setGrantKind("CONTINUATION"),
+                new AgentCommandV2ExecutionContinuationAnchorEntity()));
+
+        RuntimeReceiverScope revised = new RuntimeReceiverScope(receiver.tenantId(),
+                receiver.dataDomainId(), receiver.executionPoolId(),
+                receiver.runtimeCredentialClientId(), receiver.ownerJiacn(), receiver.agentId(),
+                receiver.claimantDeploymentId(), receiver.claimantWorkerGeneration() + 1,
+                receiver.receiverRegistrationRevision() + 1, receiver.admissionEpoch(),
+                receiver.moduleId(), receiver.migrationEpoch());
+
+        assertThrows(IllegalStateException.class, () -> history.findLeaseFact(
+                producer, revised, BINDING, startFact));
+        assertThrows(IllegalStateException.class, () -> transaction.execute(status ->
+                history.findLeaseFact(producer, revised, BINDING, startFact)));
+
+        readOnly.executeWithoutResult(status -> {
+            assertEquals(startFact, history.findLeaseFact(
+                    producer, revised, BINDING, startFact).getLeaseFactId());
+            assertEquals(start.getExecutionGrantId(), history.findGrant(
+                    producer, revised, BINDING, start.getExecutionGrantId()).getExecutionGrantId());
+            assertEquals(request.getExecutionRequestId(), history.findRequest(
+                    producer, revised, BINDING, request.getExecutionRequestId()).getExecutionRequestId());
+            AgentCommandV2ExecutionContinuationAnchorEntity anchor = history.findContinuationAnchor(
+                    producer, revised, BINDING, DISPATCH, startedReceipt, 4);
+            assertNotNull(anchor);
+            assertEquals(continuation.getExecutionGrantId(), anchor.getExecutionGrantId());
+        });
+    }
+
+    @Test
+    void historyRejectsForeignImmutableIdentityReturnedByMapper() {
+        String factId = "00000000-0000-4000-8000-000000000083";
+        AgentCommandV2ExecutionLeaseFactMapper maliciousFacts =
+                mock(AgentCommandV2ExecutionLeaseFactMapper.class);
+        AgentCommandV2ExecutionLeaseFactEntity foreign =
+                new AgentCommandV2ExecutionLeaseFactEntity()
+                        .setLeaseFactId(factId).setRuntimeBindingId(BINDING)
+                        .setDataDomainId("cyf").setExecutionPoolId("pool-a")
+                        .setRuntimeCredentialClientId("runtime-client")
+                        .setOwnerJiacn("owner-a").setAgentId("agent-a");
+        foreign.setTenantId("2");
+        foreign.setClientId("caller-client");
+        when(maliciousFacts.findHistoricalById("1", "cyf", "pool-a", "caller-client",
+                "runtime-client", "owner-a", "agent-a", BINDING, factId)).thenReturn(foreign);
+        AgentRuntimeV2ExecutionHistoryDaoImpl guarded = new AgentRuntimeV2ExecutionHistoryDaoImpl(
+                maliciousFacts, mock(AgentCommandV2ExecutionGrantMapper.class),
+                mock(AgentCommandV2ExecutionRequestMapper.class),
+                mock(AgentCommandV2ExecutionContinuationAnchorMapper.class));
+
+        readOnly.executeWithoutResult(status -> {
+            IllegalStateException failure = assertThrows(IllegalStateException.class,
+                    () -> guarded.findLeaseFact(producer, receiver, BINDING, factId));
+            assertEquals("execution history immutable identity mismatch", failure.getMessage());
+        });
     }
 
     @Test
@@ -872,11 +949,13 @@ class AgentRuntimeV2ExecutionCommitTransactionTest {
                 CREATE TABLE agent_runtime_v2_binding(
                   id BIGINT AUTO_INCREMENT PRIMARY KEY,runtime_binding_id VARCHAR_IGNORECASE(36) UNIQUE,
                   credential_kind VARCHAR(32),credential_reference VARCHAR(200),runtime_installation_id VARCHAR(100),
-                  contract_version INT,registration_subject_sha256 BINARY(32),
+                  contract_version INT,evidence_provenance VARCHAR_IGNORECASE(24) DEFAULT 'R2B1_ENFORCED',
+                  registration_subject_sha256 BINARY(32),
                   registration_authority_id VARCHAR_IGNORECASE(36),registration_authority_revision BIGINT,
                   process_public_key_spki BINARY(44),process_public_key_sha256 BINARY(32),
                   verifier_version BIGINT,verifier_key_id VARCHAR_IGNORECASE(100),
-                  reconnect_verifier BINARY(32),data_domain_id VARCHAR_IGNORECASE(64),
+                  reconnect_verifier BINARY(32),current_registration_receipt_id VARCHAR_IGNORECASE(36),
+                  current_registration_receipt_sha256 BINARY(32),data_domain_id VARCHAR_IGNORECASE(64),
                   execution_pool_id VARCHAR_IGNORECASE(100),owner_jiacn VARCHAR_IGNORECASE(100),
                   agent_id VARCHAR_IGNORECASE(100),producer_deployment_id VARCHAR_IGNORECASE(100),
                   claimant_deployment_id VARCHAR_IGNORECASE(100),claimant_worker_generation BIGINT,
@@ -893,7 +972,9 @@ class AgentRuntimeV2ExecutionCommitTransactionTest {
                   id BIGINT AUTO_INCREMENT PRIMARY KEY,binding_generation_fact_id VARCHAR_IGNORECASE(36) UNIQUE,
                   fact_sequence BIGINT,previous_fact_id VARCHAR_IGNORECASE(36),runtime_binding_id VARCHAR_IGNORECASE(36),
                   binding_generation BIGINT,event_type VARCHAR(20),revoked_runtime_binding_id VARCHAR_IGNORECASE(36),
-                  runtime_instance_id VARCHAR_IGNORECASE(100),registration_subject_sha256 BINARY(32),
+                  runtime_instance_id VARCHAR_IGNORECASE(100),
+                  evidence_provenance VARCHAR_IGNORECASE(24) DEFAULT 'R2B1_ENFORCED',
+                  registration_subject_sha256 BINARY(32),
                   registration_authority_id VARCHAR_IGNORECASE(36),registration_authority_revision BIGINT,
                   runtime_credential_client_id VARCHAR_IGNORECASE(50),data_domain_id VARCHAR_IGNORECASE(64),
                   execution_pool_id VARCHAR_IGNORECASE(100),owner_jiacn VARCHAR_IGNORECASE(100),
@@ -943,6 +1024,7 @@ class AgentRuntimeV2ExecutionCommitTransactionTest {
                   dispatch_runtime_credential_client_id VARCHAR_IGNORECASE(50),
                   dispatch_receiver_registration_revision BIGINT,dispatch_generation_fact_id VARCHAR_IGNORECASE(36),
                   dispatch_generation_snapshot_sha256 BINARY(32),execution_origin_snapshot_sha256 BINARY(32),
+                  evidence_provenance VARCHAR_IGNORECASE(24) DEFAULT 'R2B1_ENFORCED',
                   dispatch_prepared_at BIGINT,
                   execution_started_at BIGINT,execution_lease_until BIGINT,execution_lease_revision BIGINT,
                   execution_holder_binding_id VARCHAR_IGNORECASE(36),execution_holder_binding_generation BIGINT,
@@ -968,6 +1050,7 @@ class AgentRuntimeV2ExecutionCommitTransactionTest {
                   migration_epoch BIGINT,postcommit_delivery_version BIGINT,postcommit_inbox_version BIGINT,
                   lease_fact_id VARCHAR_IGNORECASE(36),contract_version INT,receipt_wire_bytes BLOB,
                   receipt_wire_sha256 BINARY(32),receipt_wire_contract_version INT,committed_at BIGINT,
+                  evidence_provenance VARCHAR_IGNORECASE(24) DEFAULT 'R2B1_ENFORCED',
                   execution_origin_snapshot_sha256 BINARY(32),ack_holder_generation_fact_id VARCHAR_IGNORECASE(36),
                   ack_holder_generation_snapshot_sha256 BINARY(32),
                   tenant_id VARCHAR_IGNORECASE(50),client_id VARCHAR_IGNORECASE(50),create_time BIGINT,update_time BIGINT,
@@ -990,7 +1073,8 @@ class AgentRuntimeV2ExecutionCommitTransactionTest {
                   tenant_control_revision BIGINT,tenant_control_cutoff_at BIGINT,module_control_operation_id VARCHAR(100),
                   module_mode_revision BIGINT,module_control_cutoff_at BIGINT,deployment_control_operation_id VARCHAR(100),
                   deployment_registration_revision BIGINT,deployment_control_cutoff_at BIGINT,reason VARCHAR(500),
-                  created_at BIGINT,execution_origin_snapshot_sha256 BINARY(32),
+                  created_at BIGINT,evidence_provenance VARCHAR_IGNORECASE(24) DEFAULT 'R2B1_ENFORCED',
+                  execution_origin_snapshot_sha256 BINARY(32),
                   holder_generation_fact_id VARCHAR_IGNORECASE(36),holder_generation_snapshot_sha256 BINARY(32),
                   tenant_id VARCHAR_IGNORECASE(50),client_id VARCHAR_IGNORECASE(50),
                   create_time BIGINT,update_time BIGINT,UNIQUE(runtime_dispatch_id,fact_sequence),
@@ -1011,7 +1095,8 @@ class AgentRuntimeV2ExecutionCommitTransactionTest {
                   agent_id VARCHAR_IGNORECASE(100),producer_deployment_id VARCHAR_IGNORECASE(100),
                   claimant_deployment_id VARCHAR_IGNORECASE(100),claimant_worker_generation BIGINT,
                   receiver_registration_revision BIGINT,admission_epoch BIGINT,module_id VARCHAR_IGNORECASE(64),
-                  migration_epoch BIGINT,execution_origin_snapshot_sha256 BINARY(32),
+                  migration_epoch BIGINT,evidence_provenance VARCHAR_IGNORECASE(24) DEFAULT 'R2B1_ENFORCED',
+                  execution_origin_snapshot_sha256 BINARY(32),
                   holder_generation_fact_id VARCHAR_IGNORECASE(36),holder_generation_snapshot_sha256 BINARY(32),
                   tenant_id VARCHAR_IGNORECASE(50),client_id VARCHAR_IGNORECASE(50),
                   create_time BIGINT,update_time BIGINT,
@@ -1027,7 +1112,8 @@ class AgentRuntimeV2ExecutionCommitTransactionTest {
                   agent_id VARCHAR_IGNORECASE(100),producer_deployment_id VARCHAR_IGNORECASE(100),
                   claimant_deployment_id VARCHAR_IGNORECASE(100),claimant_worker_generation BIGINT,
                   receiver_registration_revision BIGINT,admission_epoch BIGINT,module_id VARCHAR_IGNORECASE(64),
-                  migration_epoch BIGINT,execution_origin_snapshot_sha256 BINARY(32),
+                  migration_epoch BIGINT,evidence_provenance VARCHAR_IGNORECASE(24) DEFAULT 'R2B1_ENFORCED',
+                  execution_origin_snapshot_sha256 BINARY(32),
                   holder_generation_fact_id VARCHAR_IGNORECASE(36),holder_generation_snapshot_sha256 BINARY(32),
                   tenant_id VARCHAR_IGNORECASE(50),client_id VARCHAR_IGNORECASE(50),
                   create_time BIGINT,update_time BIGINT,
@@ -1046,7 +1132,8 @@ class AgentRuntimeV2ExecutionCommitTransactionTest {
                   agent_id VARCHAR_IGNORECASE(100),producer_deployment_id VARCHAR_IGNORECASE(100),
                   claimant_deployment_id VARCHAR_IGNORECASE(100),claimant_worker_generation BIGINT,
                   receiver_registration_revision BIGINT,admission_epoch BIGINT,module_id VARCHAR_IGNORECASE(64),
-                  migration_epoch BIGINT,execution_origin_snapshot_sha256 BINARY(32),
+                  migration_epoch BIGINT,evidence_provenance VARCHAR_IGNORECASE(24) DEFAULT 'R2B1_ENFORCED',
+                  execution_origin_snapshot_sha256 BINARY(32),
                   requested_holder_generation_fact_id VARCHAR_IGNORECASE(36),
                   requested_holder_generation_snapshot_sha256 BINARY(32),
                   tenant_id VARCHAR_IGNORECASE(50),client_id VARCHAR_IGNORECASE(50),
