@@ -196,7 +196,7 @@ class ChatBountyExecutionCoordinatorTest {
         assertEquals("RUNNING",coordinator.coordinate(candidate));
         verify(executions,times(1)).createConversation(any(),argThat(command ->
                 command.intentId().equals("intent") && command.instruction().equals("画一只鸟")
-                        && command.permittedOperation().equals("GENERATE_IMAGE") && command.controlledImage())));
+                        && command.permittedOperation().equals("GENERATE_IMAGE") && command.controlledImage()));
     }
 
 }
