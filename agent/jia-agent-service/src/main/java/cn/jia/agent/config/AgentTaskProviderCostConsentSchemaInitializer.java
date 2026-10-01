@@ -150,7 +150,7 @@ public final class AgentTaskProviderCostConsentSchemaInitializer implements Init
             expected=extendedColumns();expectedIndexes=indexes(true);
             expectedChecks=new LinkedHashMap<>(CHECK_EXPRESSIONS);
             expectedChecks.put("chk_atpcc_purpose_union",
-                    ControlledImageFollowupV3SchemaInitializer.consentPurposeCheckExpression());
+                    ControlledImageFollowupV3SchemaInitializer.consentPurposeCatalogCheckExpression());
         } else {
             throw new IllegalStateException("Provider-consent columns drift");
         }
@@ -243,7 +243,7 @@ public final class AgentTaskProviderCostConsentSchemaInitializer implements Init
     static Map<String,String> v3CheckExpressions() {
         Map<String,String> checks=new LinkedHashMap<>(CHECK_EXPRESSIONS);
         checks.put("chk_atpcc_purpose_union",
-                ControlledImageFollowupV3SchemaInitializer.consentPurposeCheckExpression());
+                ControlledImageFollowupV3SchemaInitializer.consentPurposeCatalogCheckExpression());
         return java.util.Collections.unmodifiableMap(checks);
     }
     private static Map<String,Column> columns() {

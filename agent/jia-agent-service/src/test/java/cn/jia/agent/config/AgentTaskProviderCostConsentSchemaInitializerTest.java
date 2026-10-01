@@ -144,6 +144,57 @@ class AgentTaskProviderCostConsentSchemaInitializerTest {
                         columnRows(true),indexRows(true),unenforced));
     }
 
+    @Test void legacyRestartAcceptsObservedMysql821PurposeUnionAndRejectsEveryDriftShape() {
+        String observed=observedMysql821PurposeUnionCatalogCheck();
+        assertEquals(observed,ControlledImageFollowupV3SchemaInitializer
+                .consentPurposeCatalogCheckExpression());
+        assertNotEquals(observed,ControlledImageFollowupV3SchemaInitializer
+                .consentPurposeCheckExpression());
+
+        List<Map<String,Object>> exact=checkRows(true);
+        clause(exact,"chk_atpcc_purpose_union",observed);
+        assertDoesNotThrow(() -> AgentTaskProviderCostConsentSchemaInitializer.validateCatalog(
+                columnRows(true),indexRows(true),exact));
+
+        List<Map<String,Object>> wrong=checkRows(true);
+        clause(wrong,"chk_atpcc_purpose_union",observed.replace(
+                "(`conversation_generation` > 0)","(`conversation_generation` >= 0)"));
+        assertThrows(IllegalStateException.class, () ->
+                AgentTaskProviderCostConsentSchemaInitializer.validateCatalog(
+                        columnRows(true),indexRows(true),wrong));
+
+        List<Map<String,Object>> alwaysTrue=checkRows(true);
+        clause(alwaysTrue,"chk_atpcc_purpose_union","TRUE");
+        assertThrows(IllegalStateException.class, () ->
+                AgentTaskProviderCostConsentSchemaInitializer.validateCatalog(
+                        columnRows(true),indexRows(true),alwaysTrue));
+
+        List<Map<String,Object>> orWeakened=checkRows(true);
+        clause(orWeakened,"chk_atpcc_purpose_union","("+observed+") OR 1=1");
+        assertThrows(IllegalStateException.class, () ->
+                AgentTaskProviderCostConsentSchemaInitializer.validateCatalog(
+                        columnRows(true),indexRows(true),orWeakened));
+
+        List<Map<String,Object>> unenforced=checkRows(true);
+        unenforced.stream().filter(row -> "chk_atpcc_purpose_union".equals(
+                row.get("constraint_name"))).findFirst().orElseThrow().put("enforced","NO");
+        assertThrows(IllegalStateException.class, () ->
+                AgentTaskProviderCostConsentSchemaInitializer.validateCatalog(
+                        columnRows(true),indexRows(true),unenforced));
+
+        List<Map<String,Object>> missing=checkRows(true);
+        missing.removeIf(row -> "chk_atpcc_purpose_union".equals(row.get("constraint_name")));
+        assertThrows(IllegalStateException.class, () ->
+                AgentTaskProviderCostConsentSchemaInitializer.validateCatalog(
+                        columnRows(true),indexRows(true),missing));
+
+        List<Map<String,Object>> extra=checkRows(true);
+        extra.add(check("chk_atpcc_unexpected","YES","1=1"));
+        assertThrows(IllegalStateException.class, () ->
+                AgentTaskProviderCostConsentSchemaInitializer.validateCatalog(
+                        columnRows(true),indexRows(true),extra));
+    }
+
     @Test void completeV3CatalogRejectsPurposeDefaultDrift() {
         List<Map<String,Object>> rows=columnRows(true);
         rows.stream().filter(row -> "consent_purpose".equals(row.get("column_name")))
@@ -151,6 +202,22 @@ class AgentTaskProviderCostConsentSchemaInitializerTest {
         assertThrows(IllegalStateException.class, () ->
                 AgentTaskProviderCostConsentSchemaInitializer.validateCatalog(
                         rows,indexRows(true),checkRows(true)));
+    }
+
+    private static String observedMysql821PurposeUnionCatalogCheck() {
+        return "((`consent_purpose` in (_utf8mb4\\'INITIAL_ASSIGN_AND_START\\',_utf8mb4\\'FOLLOWUP_EXECUTE\\')) and (((`consent_purp" +
+                "ose` = _utf8mb4\\'INITIAL_ASSIGN_AND_START\\') and (`operation_grant_id` is null) and (`execution_intent_id` is nu" +
+                "ll) and (`conversation_id` is null) and (`conversation_generation` is null) and (`operation` is null) and (`inst" +
+                "ruction_sha256` is null) and (`source_snapshot_sha256` is null) and (`owner_payload_sha256` is null) and (`runti" +
+                "me_input_snapshot_sha256` is null)) or ((`consent_purpose` = _utf8mb4\\'FOLLOWUP_EXECUTE\\') and regexp_like(`oper" +
+                "ation_grant_id`,cast(_utf8mb4\\'^opgrant_[0-9a-f]{32}$\\' as char charset binary)) and (char_length(`execution_int" +
+                "ent_id`) between 1 and 100) and (char_length(`conversation_id`) between 1 and 100) and (`conversation_generation" +
+                "` > 0) and (`operation` in (_utf8mb4\\'GENERATE_IMAGE\\',_utf8mb4\\'EDIT_IMAGE\\')) and regexp_like(`instruction_sha" +
+                "256`,cast(_utf8mb4\\'^[0-9a-f]{64}$\\' as char charset binary)) and regexp_like(`source_snapshot_sha256`,cast(_utf" +
+                "8mb4\\'^[0-9a-f]{64}$\\' as char charset binary)) and regexp_like(`owner_payload_sha256`,cast(_utf8mb4\\'^[0-9a-f]{" +
+                "64}$\\' as char charset binary)) and (((`reserved_execution_id` is null) and (`runtime_input_snapshot_sha256` is " +
+                "null)) or ((`reserved_execution_id` is not null) and regexp_like(`runtime_input_snapshot_sha256`,cast(_utf8mb4\\'" +
+                "^[0-9a-f]{64}$\\' as char charset binary)))))))";
     }
 
     private static void clause(List<Map<String,Object>> rows,String name,String clause) {

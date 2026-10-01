@@ -446,6 +446,11 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
                 || name.startsWith("chk_pwex_execution_protocol");
     }
 
+    /** Exact observed MySQL catalog rendering; never use this value to generate DDL. */
+    static String consentPurposeCatalogCheckExpression() {
+        return PURPOSE_UNION_CATALOG_CHECK;
+    }
+
     static String consentPurposeCheckExpression() {
         String hash=" REGEXP BINARY '^[0-9a-f]{64}$'";
         return "consent_purpose IN ('INITIAL_ASSIGN_AND_START','FOLLOWUP_EXECUTE') AND ("
