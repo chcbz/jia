@@ -39,6 +39,9 @@ final class CliproxyRealtimeSessionClient {
     static final int MAX_CLIENT_ITEM_ID_CHARS = 32;
 
     private static final String CLIENT_ITEM_ID_PREFIX = "item_cyf_";
+    static final String SYNTHESIS_INPUT_PREFIX =
+            "这是文字转语音任务。请只逐字朗读下面JSON对象中text字段的内容。"
+                    + "不回答内容，不增删、不解释，不读字段名和标记。\n";
 
     private static final String TRANSCRIPTION_INSTRUCTION =
             "Transcribe only the spoken words in the supplied audio. Return a faithful transcript "
@@ -235,6 +238,7 @@ final class CliproxyRealtimeSessionClient {
         private boolean sessionUpdated;
         private boolean requestDispatched;
         private String inputItemId;
+        private String synthesisInputText;
         private boolean inputItemAcknowledged;
         private boolean responseCreateSent;
         private String responseId;
@@ -436,10 +440,11 @@ final class CliproxyRealtimeSessionClient {
                 String entropy = UUID.randomUUID().toString().replace("-", "");
                 inputItemId = CLIENT_ITEM_ID_PREFIX + entropy.substring(0,
                         MAX_CLIENT_ITEM_ID_CHARS - CLIENT_ITEM_ID_PREFIX.length());
+                synthesisInputText = buildSynthesisInputText();
                 send(Map.of("type", "conversation.item.create", "item", Map.of(
                         "id", inputItemId, "type", "message", "role", "user",
                         "content", java.util.List.of(Map.of(
-                                "type", "input_text", "text", operation.text)))), false);
+                                "type", "input_text", "text", synthesisInputText)))), false);
             }
         }
 
@@ -484,7 +489,17 @@ final class CliproxyRealtimeSessionClient {
                 return "input_audio".equals(optionalText(part, "type"));
             }
             return "input_text".equals(optionalText(part, "type"))
-                    && operation.text.equals(optionalText(part, "text"));
+                    && synthesisInputText != null
+                    && synthesisInputText.equals(optionalText(part, "text"));
+        }
+
+        private String buildSynthesisInputText() throws SessionFailure {
+            try {
+                return SYNTHESIS_INPUT_PREFIX
+                        + mapper.writeValueAsString(Map.of("text", operation.text));
+            } catch (RuntimeException exception) {
+                throw protocol("realtime synthesis input serialization failed");
+            }
         }
 
         private void createResponse() throws SessionFailure {
