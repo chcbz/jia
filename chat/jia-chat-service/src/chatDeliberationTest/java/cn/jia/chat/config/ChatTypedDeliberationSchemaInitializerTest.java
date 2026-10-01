@@ -84,6 +84,27 @@ class ChatTypedDeliberationSchemaInitializerTest {
         assertThrows(IllegalStateException.class,()->ChatTypedDeliberationSchemaInitializer.validateChecks(unenforced));
     }
 
+    @Test void capturedMysql8021CheckCatalogAcceptsAllRowsAndRejectsEachCorrectedConjunctionWeakened() throws Exception {
+        Map<String,Object> fixture=capturedCheckCatalog();
+        assertEquals("98af3d88d5a1212e52764e308b2361e99dbffbb7595d1196123465a0481a41a4",fixture.get("sourceSqlSha256"));
+        List<Map<String,Object>> actual=capturedCheckRows(fixture);
+        assertEquals(18,actual.size());
+        JdbcTemplate accepted=mock(JdbcTemplate.class);
+        when(accepted.queryForList(anyString(),any(Object[].class))).thenReturn(actual);
+        ChatTypedDeliberationSchemaInitializer.validateChecks(accepted);
+        for(String corrected:List.of("chk_chat_typed_admission_digest","chk_chat_typed_admission_reply",
+                "chk_chat_typed_admission_turns","chk_chat_typed_outcome_json","chk_chat_typed_pending_version",
+                "chk_chat_typed_proposal_parent","chk_chat_typed_proposal_sources")) {
+            List<Map<String,Object>> weakened=actual.stream().map(LinkedHashMap::new).toList();
+            Map<String,Object> row=weakened.stream().filter(value->corrected.equals(value.get("constraint_name"))).findFirst().orElseThrow();
+            String clause=(String)row.get("check_clause");String changed=clause.replaceFirst("(?i) and "," or ");
+            assertNotEquals(clause,changed,corrected);row.put("check_clause",changed);
+            JdbcTemplate rejected=mock(JdbcTemplate.class);
+            when(rejected.queryForList(anyString(),any(Object[].class))).thenReturn(weakened);
+            assertThrows(IllegalStateException.class,()->ChatTypedDeliberationSchemaInitializer.validateChecks(rejected),corrected);
+        }
+    }
+
     @Test void indexOrderPrefixExpressionAndUnexpectedIndexesFailClosed() {
         JdbcTemplate jdbc=mock(JdbcTemplate.class);
         List<Map<String,Object>> rows=indexRows();
@@ -101,6 +122,21 @@ class ChatTypedDeliberationSchemaInitializerTest {
         JdbcTemplate jdbc=mock(JdbcTemplate.class);
         when(jdbc.queryForList(anyString(),any(Object[].class))).thenReturn(List.of());
         assertThrows(IllegalStateException.class,()->ChatTypedDeliberationSchemaInitializer.validateForeignKeys(jdbc));
+    }
+
+
+    @SuppressWarnings("unchecked") private static Map<String,Object> capturedCheckCatalog() throws Exception {
+        try(var stream=ChatTypedDeliberationSchemaInitializerTest.class.getResourceAsStream(
+                "/contracts/typed-check-catalog-mysql8021.json")) {
+            assertNotNull(stream);
+            return new tools.jackson.databind.ObjectMapper().readValue(stream,Map.class);
+        }
+    }
+    @SuppressWarnings("unchecked") private static List<Map<String,Object>> capturedCheckRows(Map<String,Object> fixture) {
+        List<String> rows=(List<String>)fixture.get("capturedRawRows");
+        assertEquals(18,rows.size());assertEquals(18,fixture.get("rowCount"));
+        return rows.stream().map(value->{String[] fields=value.split("\\t",3);assertEquals(3,fields.length);
+            return row("constraint_name",fields[0],"enforced",fields[1],"check_clause",fields[2]);}).toList();
     }
 
     private static List<Map<String,Object>> indexRows() {

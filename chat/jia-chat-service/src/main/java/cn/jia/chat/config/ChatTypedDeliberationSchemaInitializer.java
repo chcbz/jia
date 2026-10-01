@@ -463,20 +463,20 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
                 Map.entry("chk_chat_typed_outcome_revision","((request_revision=1) AND (assignment_revision>=0))"),
                 Map.entry("chk_chat_typed_outcome_digest","REGEXP_LIKE(final_digest,CAST('^sha256:[0-9a-f]{64}$' AS CHAR CHARSET binary))"),
                 Map.entry("chk_chat_typed_outcome_kind","kind IN ('ANSWER','CLARIFY','EXECUTION_PROPOSAL')"),
-                Map.entry("chk_chat_typed_outcome_json","((JSON_VALID(binding_json)) AND (JSON_VALID(facts_json)) AND (JSON_VALID(outcome_json)) AND (JSON_VALID(source_catalog_json)))"),
+                Map.entry("chk_chat_typed_outcome_json","(json_valid(binding_json) and json_valid(facts_json) and json_valid(outcome_json) and json_valid(source_catalog_json))"),
                 Map.entry("chk_chat_typed_pending_state","state IN ('OPEN','ANSWERED')"),
-                Map.entry("chk_chat_typed_pending_version","(state='OPEN' AND state_version=0 AND reply_request_id IS NULL AND reply_idempotency_key IS NULL AND reply_body_digest IS NULL) OR (state='ANSWERED' AND state_version=1 AND reply_request_id IS NOT NULL AND reply_idempotency_key IS NOT NULL AND REGEXP_LIKE(reply_body_digest,CAST('^sha256:[0-9a-f]{64}$' AS CHAR CHARSET binary)))"),
+                Map.entry("chk_chat_typed_pending_version","(((state = 'OPEN') and (state_version = 0) and (reply_request_id is null) and (reply_idempotency_key is null) and (reply_body_digest is null)) or ((state = 'ANSWERED') and (state_version = 1) and (reply_request_id is not null) and (reply_idempotency_key is not null) and regexp_like(reply_body_digest,cast('^sha256:[0-9a-f]{64}$' as char charset binary))))"),
                 Map.entry("chk_chat_typed_pending_required","JSON_VALID(required_facts_json)"),
                 Map.entry("chk_chat_typed_proposal_state","((state='PROPOSED') AND (state_version=0))"),
                 Map.entry("chk_chat_typed_proposal_operation","operation IN ('GENERATE_IMAGE','EDIT_IMAGE')"),
-                Map.entry("chk_chat_typed_proposal_sources","((JSON_VALID(source_ref_ids_json)) AND (JSON_VALID(source_selectors_json)))"),
-                Map.entry("chk_chat_typed_proposal_parent","(parent_request_id IS NULL AND parent_step_id IS NULL) OR (parent_request_id IS NOT NULL AND parent_step_id IS NOT NULL)"),
+                Map.entry("chk_chat_typed_proposal_sources","(json_valid(source_ref_ids_json) and json_valid(source_selectors_json))"),
+                Map.entry("chk_chat_typed_proposal_parent","(((parent_request_id is null) and (parent_step_id is null)) or ((parent_request_id is not null) and (parent_step_id is not null)))"),
                 Map.entry("chk_chat_typed_admission_generation","conversation_generation>=1"),
-                Map.entry("chk_chat_typed_admission_digest","((REGEXP_LIKE(request_digest,CAST('^sha256:[0-9a-f]{64}$' AS CHAR CHARSET binary))) AND (REGEXP_LIKE(body_digest,CAST('^sha256:[0-9a-f]{64}$' AS CHAR CHARSET binary))))"),
+                Map.entry("chk_chat_typed_admission_digest","(regexp_like(request_digest,cast('^sha256:[0-9a-f]{64}$' as char charset binary)) and regexp_like(body_digest,cast('^sha256:[0-9a-f]{64}$' as char charset binary)))"),
                 Map.entry("chk_chat_typed_admission_intent","intent IN ('DISCUSSION','CLARIFICATION_REPLY')"),
                 Map.entry("chk_chat_typed_admission_revision","((request_revision=1) AND (assignment_revision>=0) AND (state_version>=0) AND (event_cursor>=0))"),
-                Map.entry("chk_chat_typed_admission_turns","((JSON_VALID(turn_ids_json)) AND (JSON_VALID(source_catalog_json)))"),
-                Map.entry("chk_chat_typed_admission_reply","(intent='DISCUSSION' AND pending_question_id IS NULL) OR (intent='CLARIFICATION_REPLY' AND parent_outcome_id IS NOT NULL AND pending_question_id IS NOT NULL)"));
+                Map.entry("chk_chat_typed_admission_turns","(json_valid(turn_ids_json) and json_valid(source_catalog_json))"),
+                Map.entry("chk_chat_typed_admission_reply","(((intent = 'DISCUSSION') and (pending_question_id is null)) or ((intent = 'CLARIFICATION_REPLY') and (parent_outcome_id is not null) and (pending_question_id is not null)))"));
     }
 
     private static Column col(String name, String type, boolean nullable, String defaultValue) {
