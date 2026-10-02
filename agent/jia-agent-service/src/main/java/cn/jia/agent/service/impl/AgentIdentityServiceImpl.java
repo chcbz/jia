@@ -311,6 +311,39 @@ public class AgentIdentityServiceImpl implements AgentIdentityService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
+    public BindingAuthority lockBindingAuthority(
+            String tenantId, String clientId, String ownerJiacn, long bindingId,
+            String expectedCanonicalAgentId) {
+        requireScope(tenantId, clientId, ownerJiacn);
+        requireAgentId(expectedCanonicalAgentId);
+        if (bindingId <= 0) return BindingAuthority.HISTORICAL;
+        try {
+            // The globally stable binding row is the identity aggregate root. Lock it before the
+            // scoped registry row so a concurrent suspend/unbind or owner migration linearizes
+            // before any Archive manager/appointment/job locks are acquired.
+            AgentPersonaBindingEntity binding = bindingDao.findByIdForUpdate(bindingId);
+            if (binding == null) return BindingAuthority.HISTORICAL;
+            AgentIdentityRegistryEntity identity = registryDao.findExactByBindingInScopeForUpdate(
+                    tenantId, clientId, ownerJiacn, bindingId);
+            if (identity == null) return BindingAuthority.HISTORICAL;
+            validateRegistry(identity, tenantId, clientId, ownerJiacn,
+                    expectedCanonicalAgentId, true);
+            requirePersistedRegistry(identity);
+            requirePersistedBinding(identity, binding);
+            return AgentConstants.IDENTITY_STATUS_ACTIVE.equals(identity.getLifecycleStatus())
+                    && binding.getStatus() == AgentConstants.BINDING_STATUS_ACTIVE
+                            ? BindingAuthority.CURRENT : BindingAuthority.HISTORICAL;
+        } catch (AgentServiceImpl.AgentBizException denied) {
+            // Known identity-domain mismatch is historical authority, not an exceptional rollback.
+            // The catch remains inside this proxied transaction boundary; database/infrastructure
+            // exceptions and non-forbidden business failures are deliberately not normalized.
+            if (!AgentErrorConstants.AGENT_FORBIDDEN.equals(denied.getCode())) throw denied;
+            return BindingAuthority.HISTORICAL;
+        }
+    }
+
+    @Override
     public String resolveLegacyAgentIdInScope(
             String tenantId, String clientId, String ownerJiacn, String legacyAgentId) {
         requireScope(tenantId, clientId, ownerJiacn);

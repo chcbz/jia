@@ -7,6 +7,7 @@ import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.ArchiveAgentExecutionPort;
 import cn.jia.agent.service.InstalledSkillResolver;
 import cn.jia.chat.archive.content.ArchiveEtags;
+import cn.jia.chat.archive.config.ArchiveReaderAccessPolicy;
 import cn.jia.chat.archive.dto.*;
 import cn.jia.chat.archive.maintenance.dto.*;
 import cn.jia.chat.archive.maintenance.config.ArchiveMaintenanceProperties;
@@ -50,6 +51,7 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
     private final Clock clock;
     private InstalledSkillResolver installedSkillResolver;
     private ArchiveAgentExecutionPort executionPort;
+    private ArchiveReaderAccessPolicy readerAccessPolicy;
     private boolean executionEnabled;
 
     @Autowired
@@ -85,6 +87,11 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
     @Autowired(required = false)
     void setArchiveMaintenanceProperties(ArchiveMaintenanceProperties properties) {
         this.executionEnabled = Objects.requireNonNull(properties).isExecutionEnabled();
+    }
+
+    @Autowired(required = false)
+    void setArchiveReaderAccessPolicy(ArchiveReaderAccessPolicy readerAccessPolicy) {
+        this.readerAccessPolicy = Objects.requireNonNull(readerAccessPolicy);
     }
 
     @Override
@@ -1014,9 +1021,23 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
 
     @Override
     public ArchiveJobDTO getJob(ArchiveActorScope actor, String jobId) {
-        ArchiveMaintenanceJobRecord job = requireJobForActor(actor, jobId, false);
-        requireJobReadManager(actor, job.collectionId(), false);
-        return jobDto(job);
+        ArchiveMaintenanceJobRecord observed = requireJobForActor(actor, jobId, false);
+        return transactions.required(() -> {
+            // The canonical identity/binding aggregate root precedes every Archive lock. This
+            // linearizes a hosted binding suspension against the current-assignment projection.
+            LockedJobIdentity lockedIdentity = lockJobIdentityRoot(observed);
+            requireJobReadManager(actor, observed.collectionId(), true);
+            LockedJobAssignment lockedAssignment = lockJobAssignment(observed);
+            ArchiveMaintenanceJobRecord job = requireJobForActor(actor, jobId, true);
+            if (!same(job.collectionId(), observed.collectionId())) notFound();
+            if (!same(job.appointmentId(), observed.appointmentId())
+                    || !same(job.appointmentRevision(), observed.appointmentRevision())) {
+                conflict("ARCHIVE_JOB_CHANGED", "Archive job assignment changed during read");
+            }
+            CurrentJobAssignment assignment = currentJobAssignment(
+                    actor, job, lockedAssignment, lockedIdentity);
+            return jobDto(job, handlingFacts(actor, job, assignment));
+        });
     }
 
     @Override
@@ -3506,10 +3527,228 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
     }
 
     private ArchiveJobDTO jobDto(ArchiveMaintenanceJobRecord value) {
+        return jobDto(value, null);
+    }
+
+    private ArchiveJobDTO jobDto(ArchiveMaintenanceJobRecord value, ArchiveJobHandlingFactsDTO handling) {
         return new ArchiveJobDTO(value.jobId(), value.runId(), value.collectionId(), value.state(),
                 value.waitReason(), Long.toString(value.revision()), value.appointmentId(),
                 value.agentId(), value.permissionProfile(), value.publicationMode(), value.operation(),
-                value.workId(), value.canonicalKey(), value.title(), value.sourceId(), value.draftId(), value.publicationId());
+                value.workId(), value.canonicalKey(), value.title(), value.sourceId(), value.draftId(),
+                value.publicationId(), handling);
+    }
+
+    private LockedJobIdentity lockJobIdentityRoot(ArchiveMaintenanceJobRecord observed) {
+        if (observed.appointmentId() == null) return new LockedJobIdentity(false);
+        if (observed.agentId() == null || observed.bindingVersion() == null) {
+            return new LockedJobIdentity(false);
+        }
+        long binding;
+        try {
+            binding = Long.parseLong(observed.bindingVersion());
+        } catch (NumberFormatException invalid) {
+            return new LockedJobIdentity(false);
+        }
+        if (binding <= 0) return new LockedJobIdentity(false);
+        AgentIdentityService.BindingAuthority authority = identities.lockBindingAuthority(
+                observed.tenantId(), observed.clientId(), observed.ownerJiacn(), binding,
+                observed.agentId());
+        // Historical is a normal identity-domain projection returned from inside the proxied
+        // transaction boundary; infrastructure/database failures still propagate.
+        return new LockedJobIdentity(
+                AgentIdentityService.BindingAuthority.CURRENT.equals(authority));
+    }
+
+    private LockedJobAssignment lockJobAssignment(ArchiveMaintenanceJobRecord observed) {
+        if (observed.appointmentId() == null) return new LockedJobAssignment(null, null);
+        ArchiveMaintenanceStore.Slot slot = store.lockSlot(observed.collectionId(), ROLE);
+        ArchiveAppointmentRecord appointment = store.findAppointment(observed.appointmentId(), true);
+        return new LockedJobAssignment(slot, appointment);
+    }
+
+    private CurrentJobAssignment currentJobAssignment(ArchiveActorScope actor,
+            ArchiveMaintenanceJobRecord job, LockedJobAssignment locked,
+            LockedJobIdentity identity) {
+        if (job.appointmentId() == null) {
+            if (job.appointmentRevision() != null || job.agentId() != null
+                    || job.bindingVersion() != null || job.permissionProfile() != null) {
+                conflict("ARCHIVE_ASSIGNMENT_CHANGED", "Archive job assignment snapshot is incomplete");
+            }
+            return new CurrentJobAssignment("UNASSIGNED", null, null, null, job.waitReason());
+        }
+        if (job.appointmentRevision() == null || job.agentId() == null
+                || job.bindingVersion() == null || job.permissionProfile() == null) {
+            conflict("ARCHIVE_ASSIGNMENT_CHANGED", "Archive job assignment snapshot is incomplete");
+        }
+        ArchiveJobHandlingFactsDTO.AssignmentSnapshot snapshot =
+                new ArchiveJobHandlingFactsDTO.AssignmentSnapshot(job.appointmentId(),
+                        Long.toString(job.appointmentRevision()), job.agentId(), job.permissionProfile());
+        ArchiveAppointmentRecord appointment = locked.appointment();
+        ArchiveMaintenanceStore.Slot slot = locked.slot();
+        if (appointment == null || slot == null) {
+            conflict("ARCHIVE_ASSIGNMENT_CHANGED", "Archive appointment snapshot is unavailable");
+        }
+        if (!same(actor.tenantId(), appointment.tenantId())
+                || !same(actor.clientId(), appointment.clientId())
+                || !same(actor.ownerJiacn(), appointment.ownerJiacn())) {
+            notFound();
+        }
+        if (!same(job.collectionId(), appointment.collectionId())
+                || !ROLE.equals(appointment.roleCode())
+                || !same(job.collectionId(), slot.collectionId())
+                || !ROLE.equals(slot.roleCode())
+                || !same(job.appointmentId(), appointment.appointmentId())
+                || !same(job.agentId(), appointment.agentId())
+                || !same(job.bindingVersion(), appointment.bindingVersion())
+                || !same(job.permissionProfile(), appointment.permissionProfile())) {
+            conflict("ARCHIVE_ASSIGNMENT_CHANGED", "Archive appointment no longer matches the job snapshot");
+        }
+        if ("ACTIVE".equals(appointment.status())
+                && appointment.revision() == job.appointmentRevision()
+                && same(job.appointmentId(), slot.currentAppointmentId())) {
+            if (!identity.current()) {
+                return new CurrentJobAssignment("BINDING_CHANGED", null, null, snapshot,
+                        "REASSIGNMENT_REQUIRED");
+            }
+            return new CurrentJobAssignment("ACTIVE", appointment.agentId(),
+                    appointment.permissionProfile(), snapshot, job.waitReason());
+        }
+        if ("REVOKED".equals(appointment.status())
+                && appointment.revision() > job.appointmentRevision()
+                && appointment.revokedAt() != null
+                && !same(job.appointmentId(), slot.currentAppointmentId())) {
+            return new CurrentJobAssignment("REVOKED", null, null, snapshot,
+                    "REASSIGNMENT_REQUIRED");
+        }
+        conflict("ARCHIVE_ASSIGNMENT_CHANGED", "Archive appointment is neither current nor validly revoked");
+        return null;
+    }
+
+    private ArchiveJobHandlingFactsDTO handlingFacts(ArchiveActorScope actor,
+            ArchiveMaintenanceJobRecord job, CurrentJobAssignment assignment) {
+        ArchiveJobHandlingFactsDTO.SourceRef sourceRef = null;
+        if (job.sourceId() != null) {
+            ArchiveSourceSnapshotRecord source = store.findSource(job.sourceId());
+            if (source == null || !same(source.sourceId(), job.sourceId())
+                    || !same(source.collectionId(), job.collectionId())
+                    || !same(source.tenantId(), job.tenantId())
+                    || !same(source.clientId(), job.clientId())
+                    || !same(source.ownerJiacn(), job.ownerJiacn())
+                    || !same(source.rawSha256(), job.sourceSha256())
+                    || !"READY".equals(source.state())) {
+                conflict("ARCHIVE_SOURCE_CHANGED", "Archive source binding changed");
+            }
+            sourceRef = new ArchiveJobHandlingFactsDTO.SourceRef(source.sourceId(),
+                    source.sourceName(), source.sourceVersion());
+        }
+
+        ArchiveDraftRecord draft = job.draftId() == null ? null : store.findDraftByJob(job.jobId(), true);
+        if (job.draftId() != null && (draft == null || !same(draft.draftId(), job.draftId())
+                || !same(draft.jobId(), job.jobId()))) {
+            conflict("ARCHIVE_DRAFT_CHANGED", "Archive draft binding changed");
+        }
+        ArchiveDraftUpdateRequest body = draft == null ? null : parseDraft(draft.contentJson());
+        long completedChapters = completedDraftChapters(body);
+        boolean totalKnown = trustedCompleteDraft(draft);
+        Long totalChapters = totalKnown ? completedChapters : null;
+
+        ArchiveJobHandlingFactsDTO.CurrentPublication publicationFacts = null;
+        if (job.publicationId() != null) {
+            ArchivePublicationRecord publication = store.findPublicationById(job.publicationId(), true);
+            if (!sameJobPublication(job, publication)) {
+                conflict("ARCHIVE_PUBLICATION_CHANGED", "Archive publication binding changed");
+            }
+            ArchivePublicationReadbackRecord readback = store.findPublicationReadback(
+                    publication.publicationId(), true);
+            if (readback == null || !same(readback.publicationId(), publication.publicationId())) {
+                throw new IllegalStateException("Committed archive publication readback is unavailable");
+            }
+            ArchiveEditionRecord edition = content.findEdition(publication.editionId());
+            List<ArchiveBlockRecord> blocks = edition == null ? List.of()
+                    : content.listBlocks(publication.editionId());
+            long persistedChapters = blocks.stream()
+                    .filter(block -> "CHAPTER".equals(block.blockType())).count();
+            boolean trustedEdition = edition != null && "READY".equals(edition.importState())
+                    && same(edition.editionId(), publication.editionId())
+                    && same(edition.workId(), publication.workId())
+                    && same(edition.sourceSha256(), publication.sourceSha256())
+                    && same(edition.manifestSha256(), publication.manifestSha256())
+                    && persistedChapters == edition.chapterCount();
+            if (trustedEdition) {
+                completedChapters = persistedChapters;
+                if ("PASSED".equals(readback.state())) {
+                    totalKnown = true;
+                    totalChapters = (long) edition.chapterCount();
+                }
+            }
+            ArchiveJobHandlingFactsDTO.ReaderTarget readerTarget =
+                    trustedEdition && "PUBLISHED".equals(publication.state())
+                            && "PASSED".equals(readback.state())
+                            && readerAccessPolicy != null
+                            && readerAccessPolicy.allows(actor.tenantId(), actor.clientId())
+                    ? new ArchiveJobHandlingFactsDTO.ReaderTarget(
+                            publication.workId(), publication.editionId()) : null;
+            ArchiveJobHandlingFactsDTO.Receipt receipt =
+                    new ArchiveJobHandlingFactsDTO.Receipt(publication.publicationId(),
+                            publication.jobId(), publication.workId(), publication.editionId(),
+                            Long.toString(publication.draftRevision()), publication.manifestSha256(),
+                            publication.sourceSha256());
+            publicationFacts = new ArchiveJobHandlingFactsDTO.CurrentPublication(
+                    publication.state(), receipt, verificationDto(readback), readerTarget);
+        }
+
+        return new ArchiveJobHandlingFactsDTO(job.title(), job.collectionId(), sourceRef,
+                assignment.assignedAgentId(), assignment.permissionProfile(), job.publicationMode(),
+                job.state(), assignment.blocker(), new ArchiveJobHandlingFactsDTO.Progress(
+                        Long.toString(completedChapters), totalKnown,
+                        totalChapters == null ? null : Long.toString(totalChapters)),
+                publicationFacts, assignment.status(), assignment.snapshot());
+    }
+
+    private boolean sameJobPublication(ArchiveMaintenanceJobRecord job,
+            ArchivePublicationRecord publication) {
+        return publication != null && same(publication.publicationId(), job.publicationId())
+                && same(publication.jobId(), job.jobId())
+                && same(publication.collectionId(), job.collectionId())
+                && same(publication.workId(), job.workId());
+    }
+
+    private boolean trustedCompleteDraft(ArchiveDraftRecord draft) {
+        if (draft == null || draft.validatedRevision() == null
+                || draft.validatedRevision() != draft.revision() || draft.validationId() == null
+                || !("VALIDATED".equals(draft.state()) || "SEALED".equals(draft.state()))) {
+            return false;
+        }
+        ArchiveValidationRecord validation = store.findCurrentValidation(
+                draft.draftId(), draft.revision());
+        return validation != null && same(validation.validationId(), draft.validationId())
+                && same(validation.draftId(), draft.draftId())
+                && validation.draftRevision() == draft.revision()
+                && "PASSED".equals(validation.outcome());
+    }
+
+    private long completedDraftChapters(ArchiveDraftUpdateRequest body) {
+        if (body == null || body.blocks() == null) return 0;
+        return body.blocks().stream().filter(this::completedDraftChapter).count();
+    }
+
+    private boolean completedDraftChapter(ArchiveDraftBlockInput block) {
+        if (block == null || !"CHAPTER".equals(block.blockType())
+                || block.ordinal() == null || block.ordinal() < 1
+                || !exact(block.blockKey(), 100) || !exact(block.title(), 255)
+                || block.paragraphs() == null || block.paragraphs().isEmpty()) {
+            return false;
+        }
+        int expected = 1;
+        for (ArchiveDraftParagraphInput paragraph : block.paragraphs()) {
+            if (paragraph == null || paragraph.ordinal() == null
+                    || paragraph.ordinal() != expected++ || paragraph.text() == null
+                    || paragraph.text().isEmpty()
+                    || paragraph.text().codePoints().anyMatch(Character::isISOControl)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private ArchiveDraftDTO draftDto(ArchiveDraftRecord value) {
@@ -3780,6 +4019,12 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
     private ArchiveMaintenanceException error(int status, String code, String message) {
         return new ArchiveMaintenanceException(status, code, message);
     }
+    private record LockedJobIdentity(boolean current) { }
+    private record LockedJobAssignment(ArchiveMaintenanceStore.Slot slot,
+            ArchiveAppointmentRecord appointment) { }
+    private record CurrentJobAssignment(String status, String assignedAgentId,
+            String permissionProfile, ArchiveJobHandlingFactsDTO.AssignmentSnapshot snapshot,
+            String blocker) { }
     private record RuntimeAuthorization(ArchiveJobRunRecord run,
             ArchiveExecutionGrantRecord grant, ArchiveAgentExecutionPort.Inspection inspection) { }
     private record ResolvedWork(String workId, String canonicalKey, String title) { }

@@ -274,7 +274,7 @@ class ArchiveNativeControllerContractTest {
         assertEquals(Set.of("jobId", "runId", "collectionId", "state", "waitReason", "revision",
                 "appointmentId", "assignedAgentId", "permissionProfile", "publicationMode",
                 "operation", "workId", "canonicalKey", "title", "sourceId", "draftId",
-                "publicationId"), names(json));
+                "publicationId", "handling"), names(json));
         assertFalse(json.toString().contains("ownerJiacn"));
         assertFalse(json.toString().contains("tenantId"));
 
@@ -287,6 +287,122 @@ class ArchiveNativeControllerContractTest {
                 () -> controller.resolveInput("job-a", "other", "\"7\"",
                         "{}".getBytes(java.nio.charset.StandardCharsets.UTF_8),
                         authenticatedJwt())).code());
+    }
+
+    @Test
+    void jobReadReturnsOnlyStructuredAuthorizedFactsWithExactDecimalStrings() throws Exception {
+        ArchiveMaintenanceService service = mock(ArchiveMaintenanceService.class);
+        ArchiveAdminController controller = new ArchiveAdminController(service, new ObjectMapper());
+        var verification = new cn.jia.chat.archive.maintenance.dto.ArchivePublicationVerificationDTO(
+                "PASSED", "2", "b".repeat(64), List.of(), "2026-10-02T00:00:00Z");
+        var receipt = new cn.jia.chat.archive.maintenance.dto.ArchiveJobHandlingFactsDTO.Receipt(
+                "publication-a", "job-a", "work-a", "edition-a", "9",
+                "c".repeat(64), "d".repeat(64));
+        var assignment = new cn.jia.chat.archive.maintenance.dto.ArchiveJobHandlingFactsDTO.AssignmentSnapshot(
+                "appointment-a", "4", "agent-a", "PUBLISH_VALIDATED");
+        var handling = new cn.jia.chat.archive.maintenance.dto.ArchiveJobHandlingFactsDTO(
+                "三国演义", "platform-classics",
+                new cn.jia.chat.archive.maintenance.dto.ArchiveJobHandlingFactsDTO.SourceRef(
+                        "source-a", "三国演义底本", "v1"),
+                "agent-a", "PUBLISH_VALIDATED", "MANUAL", "PUBLISHED", null,
+                new cn.jia.chat.archive.maintenance.dto.ArchiveJobHandlingFactsDTO.Progress(
+                        "120", true, "120"),
+                new cn.jia.chat.archive.maintenance.dto.ArchiveJobHandlingFactsDTO.CurrentPublication(
+                        "PUBLISHED", receipt, verification,
+                        new cn.jia.chat.archive.maintenance.dto.ArchiveJobHandlingFactsDTO.ReaderTarget(
+                                "work-a", "edition-a")), "ACTIVE", assignment);
+        var job = new cn.jia.chat.archive.maintenance.dto.ArchiveJobDTO(
+                "job-a", "run-a", "platform-classics", "PUBLISHED", null,
+                "9223372036854775806", "appointment-a", "agent-a",
+                "PUBLISH_VALIDATED", "MANUAL", "ADD_WORK", "work-a",
+                "three-kingdoms", "三国演义", "source-a", "draft-a",
+                "publication-a", handling);
+        var changedVerification = new cn.jia.chat.archive.maintenance.dto.ArchivePublicationVerificationDTO(
+                "FAILED", "3", "e".repeat(64), List.of("reader mismatch"),
+                "2026-10-02T00:01:00Z");
+        var changedHandling = new cn.jia.chat.archive.maintenance.dto.ArchiveJobHandlingFactsDTO(
+                handling.title(), handling.collectionId(), handling.source(), handling.assignedAgentId(),
+                handling.permissionProfile(), handling.publicationMode(), handling.stage(), handling.blocker(),
+                handling.progress(),
+                new cn.jia.chat.archive.maintenance.dto.ArchiveJobHandlingFactsDTO.CurrentPublication(
+                        "PUBLISHED", receipt, changedVerification, null),
+                handling.assignmentStatus(), handling.assignmentSnapshot());
+        var changedJob = new cn.jia.chat.archive.maintenance.dto.ArchiveJobDTO(
+                job.jobId(), job.runId(), job.collectionId(), job.state(), job.waitReason(), job.revision(),
+                job.appointmentId(), job.assignedAgentId(), job.permissionProfile(), job.publicationMode(),
+                job.operation(), job.workId(), job.canonicalKey(), job.title(), job.sourceId(), job.draftId(),
+                job.publicationId(), changedHandling);
+        when(service.getJob(any(), eq("job-a"))).thenReturn(job, changedJob);
+
+        var response = controller.job("job-a", authenticatedJwt());
+        var changedResponse = controller.job("job-a", authenticatedJwt());
+        com.fasterxml.jackson.databind.JsonNode json = new ObjectMapper().valueToTree(
+                response.getBody().getData());
+
+        assertTrue(response.getHeaders().getETag().matches("\"r-[0-9a-f]{64}\""));
+        assertNotEquals(response.getHeaders().getETag(), changedResponse.getHeaders().getETag(),
+                "same job revision with changed readback facts must change the representation validator");
+        assertEquals("9223372036854775806", json.get("revision").asText());
+        assertEquals("private, no-store", response.getHeaders().getCacheControl());
+        assertEquals("三国演义底本", json.at("/handling/source/sourceName").asText());
+        assertEquals("120", json.at("/handling/progress/completedChapters").asText());
+        assertTrue(json.at("/handling/progress/totalKnown").asBoolean());
+        assertEquals("publication-a", json.at(
+                "/handling/currentPublication/receipt/publicationId").asText());
+        assertEquals("PASSED", json.at(
+                "/handling/currentPublication/verification/state").asText());
+        assertEquals("edition-a", json.at(
+                "/handling/currentPublication/readerTarget/editionId").asText());
+        assertEquals(Set.of("title", "collectionId", "source", "assignedAgentId",
+                "permissionProfile", "publicationMode", "stage", "blocker", "progress",
+                "currentPublication", "assignmentStatus", "assignmentSnapshot"),
+                names(json.get("handling")));
+        assertEquals("ACTIVE", json.at("/handling/assignmentStatus").asText());
+        assertEquals(Set.of("appointmentId", "appointmentRevision", "assignedAgentId",
+                "permissionProfile"), names(json.at("/handling/assignmentSnapshot")));
+        var legacyHandling = new cn.jia.chat.archive.maintenance.dto.ArchiveJobHandlingFactsDTO(
+                "legacy", "platform-classics", null, "snapshot-agent", "DRAFT_ONLY",
+                "MANUAL", "WAITING_SKILL", "CLIENT_UPDATE_REQUIRED",
+                new cn.jia.chat.archive.maintenance.dto.ArchiveJobHandlingFactsDTO.Progress(
+                        "0", false, null), null);
+        assertEquals("UNVERIFIED", legacyHandling.assignmentStatus());
+        assertNull(legacyHandling.assignedAgentId());
+        assertNull(legacyHandling.permissionProfile());
+        assertNull(legacyHandling.assignmentSnapshot());
+        assertEquals(Set.of("sourceId", "sourceName", "sourceVersion"),
+                names(json.at("/handling/source")));
+        assertEquals(Set.of("completedChapters", "totalKnown", "totalChapters"),
+                names(json.at("/handling/progress")));
+        assertEquals(Set.of("state", "receipt", "verification", "readerTarget"),
+                names(json.at("/handling/currentPublication")));
+        assertEquals(Set.of("publicationId", "jobId", "workId", "editionId",
+                "draftRevision", "manifestSha256", "sourceSha256"),
+                names(json.at("/handling/currentPublication/receipt")));
+        assertEquals(Set.of("state", "revision", "verificationDigest", "findings", "checkedAt"),
+                names(json.at("/handling/currentPublication/verification")));
+        assertEquals(Set.of("workId", "editionId"),
+                names(json.at("/handling/currentPublication/readerTarget")));
+
+        var resumeResult = new cn.jia.chat.archive.maintenance.dto.ArchiveExecutionRecoveryDTO(
+                "job-a", "run-b", "2", "WAITING");
+        when(service.resume(any(), eq("job-a"), eq("resume-key"),
+                eq(9223372036854775806L), any())).thenReturn(resumeResult);
+        byte[] resumeBody = new ObjectMapper().writeValueAsBytes(new ArchiveResumeRequest(
+                "resume", "appointment-a", "4",
+                new ArchiveSkillRef("archive-maintainer", "1.0.0", "f".repeat(64))));
+        controller.resume("job-a", "resume-key", "\"v9223372036854775806\"",
+                resumeBody, authenticatedJwt());
+        verify(service).resume(any(), eq("job-a"), eq("resume-key"),
+                eq(9223372036854775806L), any());
+        assertEquals("INVALID_CONDITIONAL_HEADER", assertThrows(ArchiveMaintenanceException.class,
+                () -> controller.resume("job-a", "bad-key", response.getHeaders().getETag(),
+                        resumeBody, authenticatedJwt())).code(),
+                "representation validators must not masquerade as job mutation revisions");
+        String serialized = json.toString();
+        for (String forbidden : List.of("tenantId", "clientId", "ownerJiacn", "storageUri",
+                "rightsBasis", "sourceSummary", "content", "actorId", "credential")) {
+            assertFalse(serialized.contains(forbidden), forbidden);
+        }
     }
 
     @Test

@@ -54,6 +54,8 @@ class ArchiveMaintenanceServiceImplTest {
                 .thenReturn(new AgentTaskArtifactStorage.StoredContent(new byte[] { 1 }, SHA, 1, "text/plain"));
         content = mock(ArchiveContentStore.class);
         identities = mock(AgentIdentityService.class);
+        when(identities.lockBindingAuthority(anyString(), anyString(), anyString(),
+                anyLong(), anyString())).thenReturn(AgentIdentityService.BindingAuthority.CURRENT);
         ArchiveTransactions transactions = new ArchiveTransactions() {
             @Override public <T> T required(Supplier<T> action) { return action.get(); }
         };
@@ -73,8 +75,15 @@ class ArchiveMaintenanceServiceImplTest {
         ArchiveJobEventRecord event = new ArchiveJobEventRecord(JOB, 2, 1,
                 "EXECUTION_FENCED", 1, "{\"reason\":\"revoked\"}",
                 "2026-09-28T00:00:02Z");
-        when(store.findJob(JOB, false)).thenReturn(job);
+        when(store.findJob(eq(JOB), anyBoolean())).thenReturn(job);
+        when(store.findDraftByJob(JOB, true)).thenReturn(new ArchiveDraftRecord(
+                DRAFT, JOB, 0, "EDITABLE", "{\"blocks\":[],\"excludedSourceRanges\":[]}",
+                SHA, null, null));
         when(store.findAppointment(APPOINTMENT, false)).thenReturn(revoked);
+        when(store.findAppointment(APPOINTMENT, true)).thenReturn(revoked);
+        when(store.lockSlot(COLLECTION, "ARCHIVE_EDITOR")).thenReturn(
+                new ArchiveMaintenanceStore.Slot(COLLECTION, "ARCHIVE_EDITOR",
+                        current.appointmentId(), 2));
         when(store.findCurrentAppointment(COLLECTION, false)).thenReturn(current);
         when(store.listJobs(MANAGER, COLLECTION, 20)).thenReturn(List.of(job));
         when(store.listJobEvents(JOB, 0, 20)).thenReturn(List.of(event));
@@ -93,7 +102,15 @@ class ArchiveMaintenanceServiceImplTest {
         assertEquals(new ArchiveRecoveryContextDTO.CandidateAppointment("apt_current", "4",
                 new ArchiveSkillRef("archive-maintainer", "1.0.0", "b".repeat(64)),
                 "ACTIVE", "agent-lin"), result.candidates().getFirst());
-        assertEquals(JOB, service.getJob(MANAGER, JOB).jobId());
+        ArchiveJobDTO exactJob = service.getJob(MANAGER, JOB);
+        assertEquals(JOB, exactJob.jobId());
+        assertEquals("REVOKED", exactJob.handling().assignmentStatus());
+        assertNull(exactJob.handling().assignedAgentId());
+        assertNull(exactJob.handling().permissionProfile());
+        assertEquals("REASSIGNMENT_REQUIRED", exactJob.handling().blocker());
+        assertEquals(new ArchiveJobHandlingFactsDTO.AssignmentSnapshot(
+                APPOINTMENT, "1", AGENT, "DRAFT_ONLY"),
+                exactJob.handling().assignmentSnapshot());
         assertEquals(JOB, service.listJobs(MANAGER, COLLECTION, 20).getFirst().jobId());
         assertEquals("EXECUTION_FENCED",
                 service.jobEvents(MANAGER, JOB, 0, 20).getFirst().type());
@@ -296,6 +313,101 @@ class ArchiveMaintenanceServiceImplTest {
         assertTrue(result.findings().stream().anyMatch(f -> f.contains("source")));
         verify(content, never()).insertEdition(any());
     }
+    @Test
+    void exactJobReadProjectsTrustedProgressAndCurrentPublicationWithoutFutureWritePermission() throws Exception {
+        allowManager("job.manage");
+        var readerProperties = new cn.jia.chat.archive.config.ArchiveReaderProperties();
+        readerProperties.setEnabled(true);
+        service.setArchiveReaderAccessPolicy(
+                cn.jia.chat.archive.config.ArchiveReaderAccessPolicy.from(readerProperties));
+        ArchiveMaintenanceJobRecord base = job("PUBLISH_VALIDATED");
+        ArchiveMaintenanceJobRecord published = new ArchiveMaintenanceJobRecord(
+                base.jobId(), base.runId(), base.collectionId(), base.tenantId(), base.clientId(),
+                base.ownerJiacn(), base.appointmentId(), base.appointmentRevision(), base.agentId(),
+                base.bindingVersion(), base.permissionProfile(), base.managerAuthorizationRevision(),
+                base.publicationMode(), base.operation(), base.workId(), base.canonicalKey(), base.title(),
+                base.sourceId(), base.sourceSha256(), base.sourceSummary(), base.rightsBasis(),
+                "PUBLISHED", null, 9, base.draftId(), "pub-a", base.requestIntentId(),
+                base.requestSha256());
+        String draftJson = new ObjectMapper().writeValueAsString(new ArchiveDraftUpdateRequest(List.of(
+                new ArchiveDraftBlockInput("CHAPTER", "chapter-1", 1, "第一回", List.of(),
+                        List.of(new ArchiveDraftParagraphInput(1, "甲", List.of()))),
+                new ArchiveDraftBlockInput("CHAPTER", "chapter-2", 2, "第二回", List.of(),
+                        List.of(new ArchiveDraftParagraphInput(1, "乙", List.of())))), List.of()));
+        when(store.findJob(eq(JOB), anyBoolean())).thenReturn(published);
+        activeAppointment(appointment("PUBLISH_VALIDATED", "ACTIVE", 1));
+        when(store.findDraftByJob(JOB, true)).thenReturn(new ArchiveDraftRecord(
+                DRAFT, JOB, 5, "SEALED", draftJson, SHA, 5L, "val-a"));
+        when(store.findCurrentValidation(DRAFT, 5)).thenReturn(new ArchiveValidationRecord(
+                "val-a", DRAFT, 5, "PASSED", "b".repeat(64), "[]"));
+        when(store.findPublicationById("pub-a", true)).thenReturn(new ArchivePublicationRecord(
+                "pub-a", JOB, COLLECTION, "wrk_new", "edition-a", 5,
+                "c".repeat(64), SHA, "PUBLISHED", "HUMAN", "owner-a", 3));
+        when(store.findPublicationReadback("pub-a", true)).thenReturn(
+                new ArchivePublicationReadbackRecord("pub-a", "PASSED", 2,
+                        "d".repeat(64), "[]", Instant.parse("2026-10-02T00:00:00Z")));
+        when(content.findEdition("edition-a")).thenReturn(new ArchiveEditionRecord(
+                "edition-a", "wrk_new", "READY", SHA, "c".repeat(64), "e".repeat(64),
+                2, 2, 0, 2, 2, 0, 2, 2));
+        when(content.listBlocks("edition-a")).thenReturn(List.of(
+                new ArchiveBlockRecord("edition-a", "edition-a-c001", "CHAPTER", 1, 1,
+                        "第一回", 1, 1, SHA),
+                new ArchiveBlockRecord("edition-a", "edition-a-c002", "CHAPTER", 2, 2,
+                        "第二回", 1, 1, SHA)));
+
+        ArchiveJobDTO result = service.getJob(MANAGER, JOB);
+
+        assertEquals("固定来源", result.handling().source().sourceName());
+        assertEquals("ACTIVE", result.handling().assignmentStatus());
+        assertEquals(new ArchiveJobHandlingFactsDTO.AssignmentSnapshot(
+                APPOINTMENT, "1", AGENT, "PUBLISH_VALIDATED"),
+                result.handling().assignmentSnapshot());
+        assertEquals(AGENT, result.handling().assignedAgentId());
+        assertEquals("PUBLISH_VALIDATED", result.handling().permissionProfile());
+        assertEquals("2", result.handling().progress().completedChapters());
+        assertTrue(result.handling().progress().totalKnown());
+        assertEquals("2", result.handling().progress().totalChapters());
+        assertEquals("PASSED", result.handling().currentPublication().verification().state());
+        assertEquals("edition-a", result.handling().currentPublication().readerTarget().editionId());
+        assertEquals("pub-a", result.handling().currentPublication().receipt().publicationId());
+        verify(store).findManagerGrant(MANAGER, COLLECTION, true);
+        verify(store, never()).findManagerGrant(MANAGER, COLLECTION, false);
+        verify(sourceStorage, never()).read(any(), anyString(), anyString(), anyLong(), anyString());
+    }
+
+    @Test
+    void suspendedIdentityIsHistoricalOnlyAndUnexpectedIdentityFailuresRemainVisible() {
+        allowManager("job.manage");
+        ArchiveMaintenanceJobRecord job = job("DRAFT_ONLY");
+        when(store.findJob(eq(JOB), anyBoolean())).thenReturn(job);
+        activeAppointment(appointment("ACTIVE", 1));
+        when(store.findDraftByJob(JOB, true)).thenReturn(new ArchiveDraftRecord(
+                DRAFT, JOB, 0, "EDITABLE", "{\"blocks\":[],\"excludedSourceRanges\":[]}",
+                SHA, null, null));
+        when(identities.lockBindingAuthority(
+                "0", "client-a", "owner-a", 7L, AGENT)).thenReturn(
+                        AgentIdentityService.BindingAuthority.HISTORICAL);
+
+        ArchiveJobDTO result = service.getJob(MANAGER, JOB);
+
+        assertEquals("BINDING_CHANGED", result.handling().assignmentStatus());
+        assertNull(result.handling().assignedAgentId());
+        assertNull(result.handling().permissionProfile());
+        assertEquals("REASSIGNMENT_REQUIRED", result.handling().blocker());
+        assertEquals(new ArchiveJobHandlingFactsDTO.AssignmentSnapshot(
+                APPOINTMENT, "1", AGENT, "DRAFT_ONLY"),
+                result.handling().assignmentSnapshot());
+
+        var databaseFailure = new org.springframework.dao.DataAccessResourceFailureException(
+                "identity database unavailable");
+        when(identities.lockBindingAuthority(
+                "0", "client-a", "owner-a", 7L, AGENT)).thenThrow(databaseFailure);
+        assertSame(databaseFailure, assertThrows(
+                org.springframework.dao.DataAccessResourceFailureException.class,
+                () -> service.getJob(MANAGER, JOB)),
+                "only the identity service's explicit forbidden result may become historical-only facts");
+    }
+
     @Test
     void ordinaryReaderCannotManageAndIsNeverAutoPromoted() {
         when(store.findJob(JOB, false)).thenReturn(job("DRAFT_ONLY"));
@@ -1418,11 +1530,24 @@ class ArchiveMaintenanceServiceImplTest {
                 .thenAnswer(call -> confirmation.get());
         java.util.concurrent.atomic.AtomicReference<ArchiveMaintenanceJobRecord> saved =
                 new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<ArchiveDraftRecord> savedDraft =
+                new java.util.concurrent.atomic.AtomicReference<>();
         when(store.findJobByIntent(eq(MANAGER), anyString(), eq(true)))
                 .thenAnswer(call -> saved.get());
         doAnswer(call -> { saved.set(call.getArgument(0)); return null; })
                 .when(store).insertJob(any());
-        when(store.findJob(anyString(), eq(false))).thenAnswer(call -> saved.get());
+        doAnswer(call -> { savedDraft.set(call.getArgument(0)); return null; })
+                .when(store).insertDraft(any());
+        when(store.findJob(anyString(), anyBoolean())).thenAnswer(call -> {
+            ArchiveMaintenanceJobRecord job = saved.get();
+            return job != null && job.jobId().equals(call.getArgument(0)) ? job : null;
+        });
+        when(store.findDraftByJob(anyString(), eq(true))).thenAnswer(call -> {
+            ArchiveMaintenanceJobRecord job = saved.get();
+            ArchiveDraftRecord draft = savedDraft.get();
+            return job != null && draft != null && job.jobId().equals(call.getArgument(0))
+                    && draft.jobId().equals(job.jobId()) ? draft : null;
+        });
         operation("POST", "/archive/admin/v1/collections/" + COLLECTION + "/jobs", "JOB", "job-op");
 
         ArchiveMaintenanceRequestResultDTO first = service.confirmRequest(
@@ -1580,13 +1705,23 @@ class ArchiveMaintenanceServiceImplTest {
         when(content.lockWork("work-1")).thenReturn(new ArchiveWorkRecord("work-1", "小书", null));
         java.util.concurrent.atomic.AtomicReference<ArchiveMaintenanceJobRecord> saved =
                 new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<ArchiveDraftRecord> savedDraft =
+                new java.util.concurrent.atomic.AtomicReference<>();
         when(store.findJobByIntent(eq(MANAGER), eq("confirmed-shared"), eq(true)))
                 .thenAnswer(call -> saved.get());
         doAnswer(call -> { saved.set(call.getArgument(0)); return null; })
                 .when(store).insertJob(any());
-        when(store.findJob(anyString(), eq(false))).thenAnswer(call -> {
+        doAnswer(call -> { savedDraft.set(call.getArgument(0)); return null; })
+                .when(store).insertDraft(any());
+        when(store.findJob(anyString(), anyBoolean())).thenAnswer(call -> {
             ArchiveMaintenanceJobRecord job = saved.get();
             return job != null && job.jobId().equals(call.getArgument(0)) ? job : null;
+        });
+        when(store.findDraftByJob(anyString(), eq(true))).thenAnswer(call -> {
+            ArchiveMaintenanceJobRecord job = saved.get();
+            ArchiveDraftRecord draft = savedDraft.get();
+            return job != null && draft != null && job.jobId().equals(call.getArgument(0))
+                    && draft.jobId().equals(job.jobId()) ? draft : null;
         });
         operation("POST", "/archive/admin/v1/collections/" + COLLECTION + "/jobs", "JOB", "aj_route");
         ArchiveMaintenanceRequest business = new ArchiveMaintenanceRequest(COLLECTION,
@@ -2149,7 +2284,8 @@ class ArchiveMaintenanceServiceImplTest {
     private ArchiveAppointmentRecord appointment(String profile, String status, long revision) {
         return new ArchiveAppointmentRecord(APPOINTMENT, COLLECTION, "ARCHIVE_EDITOR", "0", "client-a",
                 "owner-a", AGENT, "7", "COLLECTION", "", profile, "archive-maintainer",
-                "1.0.0", SHA, status, revision, Instant.parse("2026-09-28T00:00:00Z"), null);
+                "1.0.0", SHA, status, revision, Instant.parse("2026-09-28T00:00:00Z"),
+                "REVOKED".equals(status) ? Instant.parse("2026-09-28T00:00:01Z") : null);
     }
 
     private void activeAppointment(ArchiveAppointmentRecord appointment) {

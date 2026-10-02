@@ -1,5 +1,6 @@
 package cn.jia.chat.archive.maintenance.http;
 
+import cn.jia.chat.archive.content.ArchiveEtags;
 import cn.jia.chat.archive.maintenance.dto.*;
 import cn.jia.chat.archive.maintenance.model.ArchiveActorScope;
 import cn.jia.chat.archive.maintenance.service.ArchiveMaintenanceException;
@@ -21,6 +22,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
 import java.util.Map;
@@ -230,10 +232,14 @@ public class ArchiveAdminController {
 
     @GetMapping("/jobs/{jobId}")
     public ResponseEntity<JsonResult<ArchiveJobDTO>> job(@PathVariable String jobId,
-                                                           Authentication authentication) {
+                                                            Authentication authentication) {
         ArchiveJobDTO result = service.getJob(actor(authentication), jobId);
-        return ResponseEntity.ok().header(HttpHeaders.ETAG, ArchiveHttpPreconditions.etag(result.revision()))
-                .body(JsonResult.success(result));
+        JsonResult<ArchiveJobDTO> body = JsonResult.success(result);
+        // ETag validates the complete GET representation. The decimal body revision remains the
+        // authoritative token for existing "vN" mutation If-Match requests.
+        return ResponseEntity.ok().header(HttpHeaders.ETAG, jobRepresentationEtag(body))
+                .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                .body(body);
     }
 
     @GetMapping("/jobs/{jobId}/recovery-context")
@@ -411,6 +417,14 @@ public class ArchiveAdminController {
             @RequestBody byte[] body, Authentication authentication) {
         return JsonResult.success(service.publish(actor(authentication), jobId, key,
                 ArchiveHttpPreconditions.revision(ifMatch), ArchiveStrictRequest.read(mapper, body, ArchivePublishRequest.class)));
+    }
+
+    private String jobRepresentationEtag(JsonResult<ArchiveJobDTO> body) {
+        try {
+            return "\"r-" + ArchiveEtags.sha256(mapper.writeValueAsBytes(body)) + "\"";
+        } catch (JsonProcessingException failure) {
+            throw new IllegalStateException("Archive job representation cannot be serialized", failure);
+        }
     }
 
     private ResponseEntity<JsonResult<ArchiveOperationAcceptedDTO>> acceptedOperation(

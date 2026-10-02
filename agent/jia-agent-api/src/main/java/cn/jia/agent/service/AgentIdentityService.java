@@ -45,6 +45,18 @@ public interface AgentIdentityService {
             String tenantId, String clientId, String ownerJiacn, long bindingId,
             String expectedCanonicalAgentId);
 
+    /**
+     * Locks the exact persisted identity/binding root when present and returns whether it is still
+     * current authority. Expected historical states (missing, suspended, retired, migrated or
+     * scope/identity mismatch) return {@link BindingAuthority#HISTORICAL}; infrastructure failures
+     * are not converted. The normal historical result keeps an enclosing transaction usable.
+     */
+    BindingAuthority lockBindingAuthority(
+            String tenantId, String clientId, String ownerJiacn, long bindingId,
+            String expectedCanonicalAgentId);
+
+    enum BindingAuthority { CURRENT, HISTORICAL }
+
     String resolveLegacyAgentIdInScope(
             String tenantId, String clientId, String ownerJiacn, String legacyAgentId);
 

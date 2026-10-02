@@ -1,11 +1,17 @@
 package cn.jia.chat.archive.maintenance.service;
 
+import cn.jia.agent.common.AgentConstants;
+import cn.jia.agent.dao.AgentIdentityAliasDao;
+import cn.jia.agent.dao.AgentIdentityRegistryDao;
+import cn.jia.agent.dao.AgentPersonaBindingDao;
 import cn.jia.agent.entity.AgentIdentityRegistryEntity;
+import cn.jia.agent.entity.AgentPersonaBindingEntity;
 import cn.jia.agent.entity.AgentRawCommandDispatchResult;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentTaskArtifactStorage;
 import cn.jia.agent.service.ArchiveAgentExecutionPort;
 import cn.jia.agent.service.InstalledSkillResolver;
+import cn.jia.agent.service.impl.AgentIdentityServiceImpl;
 import cn.jia.chat.archive.config.ArchiveSchemaInitializer;
 import cn.jia.chat.archive.config.ArchiveReaderDataSchemaInitializer;
 import cn.jia.chat.archive.maintenance.config.ArchiveMaintenanceProperties;
@@ -28,6 +34,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.dao.DataAccessException;
 import org.springframework.core.io.ByteArrayResource;
@@ -36,6 +43,8 @@ import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
+import org.springframework.transaction.interceptor.TransactionInterceptor;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.sql.Statement;
@@ -1914,6 +1923,401 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                 Long.class, COLLECTION));
     }
 
+    @Test
+    void jobHandlingFactsUseCurrentJobReadAuthorityAndOnlyPersistedTrustedProgress() throws Exception {
+        seedExecutionCandidate();
+        assertEquals(1, jdbc.update("UPDATE archive_collection_manager "
+                + "SET permissions='job.manage' WHERE collection_id=?", COLLECTION));
+        ArchiveMaintenanceServiceImpl service = service(new JdbcArchiveMaintenanceStore(jdbc),
+                new RootLockingPort(jdbc), new JdbcArchiveContentStore(jdbc));
+        enableReader(service);
+
+        ArchiveJobDTO initial = service.getJob(ACTOR, JOB);
+        assertEquals("title", initial.handling().title());
+        assertEquals(COLLECTION, initial.handling().collectionId());
+        assertEquals("source", initial.handling().source().sourceName());
+        assertEquals("v1", initial.handling().source().sourceVersion());
+        assertEquals("ACTIVE", initial.handling().assignmentStatus());
+        assertEquals(new ArchiveJobHandlingFactsDTO.AssignmentSnapshot(
+                APPOINTMENT, "1", AGENT, "DRAFT_ONLY"),
+                initial.handling().assignmentSnapshot());
+        assertEquals(AGENT, initial.handling().assignedAgentId());
+        assertEquals("DRAFT_ONLY", initial.handling().permissionProfile());
+        assertEquals("MANUAL", initial.handling().publicationMode());
+        assertEquals("WAITING_SKILL", initial.handling().stage());
+        assertEquals("CLIENT_UPDATE_REQUIRED", initial.handling().blocker());
+        assertEquals("0", initial.handling().progress().completedChapters());
+        assertFalse(initial.handling().progress().totalKnown());
+        assertNull(initial.handling().progress().totalChapters());
+        assertNull(initial.handling().currentPublication());
+        assertEquals("job.manage", jdbc.queryForObject(
+                "SELECT permissions FROM archive_collection_manager WHERE collection_id=?",
+                String.class, COLLECTION));
+
+        ArchiveDraftUpdateRequest partial = new ArchiveDraftUpdateRequest(
+                List.of(validDraft().blocks().getFirst()), List.of());
+        String partialJson = new ObjectMapper().writeValueAsString(partial);
+        assertEquals(1, jdbc.update("UPDATE archive_draft SET revision=1,state='EDITABLE',"
+                + "content_json=?,content_sha256=?,validated_revision=NULL,validation_id=NULL "
+                + "WHERE draft_id='draft-a'", partialJson,
+                cn.jia.chat.archive.content.ArchiveEtags.sha256(
+                        partialJson.getBytes(StandardCharsets.UTF_8))));
+        ArchiveJobDTO partialResult = service.getJob(ACTOR, JOB);
+        assertEquals("1", partialResult.handling().progress().completedChapters());
+        assertFalse(partialResult.handling().progress().totalKnown(),
+                "a partial persisted draft is not a trusted total");
+        assertNull(partialResult.handling().progress().totalChapters());
+
+        ArchiveDraftUpdateRequest complete = validDraft();
+        String completeJson = new ObjectMapper().writeValueAsString(complete);
+        assertEquals(1, jdbc.update("UPDATE archive_draft SET revision=2,state='VALIDATED',"
+                + "content_json=?,content_sha256=?,validated_revision=2,validation_id='validation-facts' "
+                + "WHERE draft_id='draft-a'", completeJson,
+                cn.jia.chat.archive.content.ArchiveEtags.sha256(
+                        completeJson.getBytes(StandardCharsets.UTF_8))));
+        jdbc.update("INSERT INTO archive_validation(validation_id,draft_id,draft_revision,outcome,"
+                + "validation_digest,findings_json) VALUES "
+                + "('validation-facts','draft-a',2,'PASSED',?,'[]')", "e".repeat(64));
+        assertEquals(1, jdbc.update("UPDATE archive_maintenance_job SET state='AWAITING_PUBLISH',"
+                + "wait_reason=NULL,revision=2 WHERE job_id=?", JOB));
+        ArchiveJobDTO validated = service.getJob(ACTOR, JOB);
+        assertEquals("2", validated.handling().progress().completedChapters());
+        assertTrue(validated.handling().progress().totalKnown());
+        assertEquals("2", validated.handling().progress().totalChapters());
+
+        seedJobPublicationFacts();
+        ArchiveJobDTO pending = service.getJob(ACTOR, JOB);
+        assertEquals("pub-job-a", pending.handling().currentPublication().receipt().publicationId());
+        assertEquals(JOB, pending.handling().currentPublication().receipt().jobId());
+        assertEquals("PENDING", pending.handling().currentPublication().verification().state());
+        assertNull(pending.handling().currentPublication().readerTarget());
+
+        assertEquals(1, jdbc.update("UPDATE archive_publication_readback SET state='FAILED',"
+                + "revision=2,verification_digest=?,findings_json='[\"reader mismatch\"]',"
+                + "checked_at=CURRENT_TIMESTAMP(6) WHERE publication_id='pub-job-a'", "f".repeat(64)));
+        ArchiveJobDTO failed = service.getJob(ACTOR, JOB);
+        assertEquals("FAILED", failed.handling().currentPublication().verification().state());
+        assertNull(failed.handling().currentPublication().readerTarget());
+
+        assertEquals(1, jdbc.update("UPDATE archive_publication_readback SET state='PASSED',"
+                + "revision=3,verification_digest=?,findings_json='[]',"
+                + "checked_at=CURRENT_TIMESTAMP(6) WHERE publication_id='pub-job-a'", "1".repeat(64)));
+        ArchiveJobDTO passed = service.getJob(ACTOR, JOB);
+        assertEquals("edition-job-a",
+                passed.handling().currentPublication().readerTarget().editionId());
+        assertEquals("work-a", passed.handling().currentPublication().readerTarget().workId());
+        ArchiveMaintenanceServiceImpl readerDisabled = service(new JdbcArchiveMaintenanceStore(jdbc),
+                new RootLockingPort(jdbc), new JdbcArchiveContentStore(jdbc));
+        assertNull(readerDisabled.getJob(ACTOR, JOB).handling().currentPublication().readerTarget(),
+                "a PASSED receipt does not itself grant current Reader access");
+
+        assertEquals(1, jdbc.update("UPDATE archive_publication SET state='WITHDRAWN' "
+                + "WHERE publication_id='pub-job-a'"));
+        ArchiveJobDTO withdrawn = service.getJob(ACTOR, JOB);
+        assertEquals("WITHDRAWN", withdrawn.handling().currentPublication().state());
+        assertEquals("PASSED", withdrawn.handling().currentPublication().verification().state(),
+                "immutable receipt and current verification remain distinct facts");
+        assertNull(withdrawn.handling().currentPublication().readerTarget());
+
+        seedPublicationJobMismatch();
+        ArchiveMaintenanceException mismatched = assertThrows(ArchiveMaintenanceException.class,
+                () -> service.getJob(ACTOR, JOB));
+        assertEquals("ARCHIVE_PUBLICATION_CHANGED", mismatched.code());
+    }
+
+    @Test
+    void waitingAndLeastPrivilegeJobFactsFailClosedForForeignOrRevokedScopes() {
+        seedWaitingResolutionCandidate();
+        ArchiveMaintenanceServiceImpl service = service(new JdbcArchiveMaintenanceStore(jdbc),
+                new RootLockingPort(jdbc), new JdbcArchiveContentStore(jdbc));
+
+        ArchiveJobDTO waiting = service.getJob(ACTOR, JOB);
+        assertEquals("WAITING_ASSIGNEE", waiting.handling().stage());
+        assertEquals("ASSIGNEE_REQUIRED", waiting.handling().blocker());
+        assertNull(waiting.handling().assignedAgentId());
+        assertEquals("0", waiting.handling().progress().completedChapters());
+        assertFalse(waiting.handling().progress().totalKnown());
+        assertNull(waiting.handling().progress().totalChapters());
+
+        assertEquals(1, jdbc.update("UPDATE archive_collection_manager "
+                + "SET permissions='job.create',revision=revision+1 WHERE collection_id=?", COLLECTION));
+        assertEquals(JOB, service.getJob(ACTOR, JOB).jobId(),
+                "job.create is the other intentionally supported least-privilege read grant");
+        for (ArchiveActorScope foreign : List.of(
+                new ArchiveActorScope("1", "client-a", "owner-a"),
+                new ArchiveActorScope("0", "client-b", "owner-a"),
+                new ArchiveActorScope("0", "client-a", "owner-b"))) {
+            ArchiveMaintenanceException hidden = assertThrows(ArchiveMaintenanceException.class,
+                    () -> service.getJob(foreign, JOB));
+            assertEquals(404, hidden.status());
+            assertEquals("ARCHIVE_RESOURCE_NOT_FOUND", hidden.code());
+        }
+        assertEquals(1, jdbc.update("UPDATE archive_collection_manager "
+                + "SET state='REVOKED',revision=revision+1 WHERE collection_id=?", COLLECTION));
+        ArchiveMaintenanceException revoked = assertThrows(ArchiveMaintenanceException.class,
+                () -> service.getJob(ACTOR, JOB));
+        assertEquals(403, revoked.status());
+        assertEquals("ARCHIVE_FORBIDDEN", revoked.code());
+    }
+
+    @Test
+    void jobFactsReauthorizeAfterConcurrentManagerRevocationBeforeLockedSnapshot() throws Exception {
+        seedExecutionCandidate();
+        assertEquals(1, jdbc.update("UPDATE archive_collection_manager "
+                + "SET permissions='job.manage' WHERE collection_id=?", COLLECTION));
+        CountDownLatch lockingAuthorizationReached = new CountDownLatch(1);
+        CountDownLatch revocationCommitted = new CountDownLatch(1);
+        AtomicBoolean firstLock = new AtomicBoolean(true);
+        JdbcArchiveMaintenanceStore latchingStore = new JdbcArchiveMaintenanceStore(jdbc) {
+            @Override
+            public cn.jia.chat.archive.maintenance.model.ArchiveManagerGrantRecord findManagerGrant(
+                    ArchiveActorScope actor, String collectionId, boolean lock) {
+                if (lock && COLLECTION.equals(collectionId) && firstLock.compareAndSet(true, false)) {
+                    lockingAuthorizationReached.countDown();
+                    await(revocationCommitted);
+                }
+                return super.findManagerGrant(actor, collectionId, lock);
+            }
+        };
+        ArchiveMaintenanceServiceImpl service = service(latchingStore,
+                new RootLockingPort(jdbc), new JdbcArchiveContentStore(jdbc));
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<String> read = pool.submit(() -> {
+                try {
+                    service.getJob(ACTOR, JOB);
+                    return "unexpected";
+                } catch (ArchiveMaintenanceException failure) {
+                    return failure.status() + ":" + failure.code();
+                }
+            });
+            assertTrue(lockingAuthorizationReached.await(5, TimeUnit.SECONDS),
+                    "job read did not reach its final locking authorization");
+            assertEquals(1, jdbc.update("UPDATE archive_collection_manager "
+                    + "SET state='REVOKED',revision=revision+1 WHERE collection_id=? "
+                    + "AND state='ACTIVE'", COLLECTION));
+            revocationCommitted.countDown();
+            assertEquals("403:ARCHIVE_FORBIDDEN", read.get(10, TimeUnit.SECONDS));
+        } finally {
+            revocationCommitted.countDown();
+            pool.shutdownNow();
+            pool.awaitTermination(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void appointmentRevocationLinearizesBeforeJobFactsAndClearsOnlyCurrentAssignmentAuthority()
+            throws Exception {
+        seedExecutionCandidate();
+        assertEquals(1, jdbc.update("UPDATE archive_collection_manager "
+                + "SET permissions='appoint,job.manage' WHERE collection_id=?", COLLECTION));
+        seedJobPublicationFacts();
+        assertEquals(1, jdbc.update("UPDATE archive_publication_readback SET state='PASSED',"
+                + "revision=2,verification_digest=?,findings_json='[]',checked_at=CURRENT_TIMESTAMP(6) "
+                + "WHERE publication_id='pub-job-a'", "1".repeat(64)));
+
+        CountDownLatch lockingAuthorizationReached = new CountDownLatch(1);
+        CountDownLatch revocationCommitted = new CountDownLatch(1);
+        AtomicBoolean firstLock = new AtomicBoolean(true);
+        JdbcArchiveMaintenanceStore readStore = new JdbcArchiveMaintenanceStore(jdbc) {
+            @Override
+            public cn.jia.chat.archive.maintenance.model.ArchiveManagerGrantRecord findManagerGrant(
+                    ArchiveActorScope actor, String collectionId, boolean lock) {
+                if (lock && COLLECTION.equals(collectionId) && firstLock.compareAndSet(true, false)) {
+                    lockingAuthorizationReached.countDown();
+                    await(revocationCommitted);
+                }
+                return super.findManagerGrant(actor, collectionId, lock);
+            }
+        };
+        ArchiveMaintenanceServiceImpl readService = service(readStore,
+                new RootLockingPort(jdbc), new JdbcArchiveContentStore(jdbc));
+        enableReader(readService);
+        ArchiveMaintenanceServiceImpl revokeService = service(new JdbcArchiveMaintenanceStore(jdbc),
+                new RootLockingPort(jdbc), new JdbcArchiveContentStore(jdbc));
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<ArchiveJobDTO> read = pool.submit(() -> readService.getJob(ACTOR, JOB));
+            assertTrue(lockingAuthorizationReached.await(5, TimeUnit.SECONDS),
+                    "job facts did not reach their final locking authorization");
+            ArchiveAppointmentDTO revoked = revokeService.revokeAppointment(ACTOR, APPOINTMENT,
+                    "revoke-before-job-facts", 1,
+                    new ArchiveAppointmentRevokeRequest("editor rotation"));
+            assertEquals("REVOKED", revoked.status());
+            revocationCommitted.countDown();
+
+            ArchiveJobDTO result = read.get(10, TimeUnit.SECONDS);
+            assertEquals("9", result.revision(), "appointment revocation must not rewrite job history");
+            assertEquals("PUBLISHED", result.state());
+            assertEquals("PUBLISHED", result.handling().stage());
+            assertEquals("REVOKED", result.handling().assignmentStatus());
+            assertNull(result.handling().assignedAgentId());
+            assertNull(result.handling().permissionProfile());
+            assertEquals("REASSIGNMENT_REQUIRED", result.handling().blocker());
+            assertEquals(new ArchiveJobHandlingFactsDTO.AssignmentSnapshot(
+                    APPOINTMENT, "1", AGENT, "DRAFT_ONLY"),
+                    result.handling().assignmentSnapshot());
+            assertEquals("edition-job-a",
+                    result.handling().currentPublication().readerTarget().editionId(),
+                    "revoking the producer appointment does not revoke an authorized published Reader target");
+        } finally {
+            revocationCommitted.countDown();
+            pool.shutdownNow();
+            pool.awaitTermination(5, TimeUnit.SECONDS);
+        }
+        assertEquals("PUBLISHED:9", jdbc.queryForObject(
+                "SELECT CONCAT(state, ':', revision) FROM archive_maintenance_job WHERE job_id=?",
+                String.class, JOB));
+        assertEquals("REVOKED:2", jdbc.queryForObject(
+                "SELECT CONCAT(status, ':', revision) FROM archive_appointment WHERE appointment_id=?",
+                String.class, APPOINTMENT));
+        assertNull(jdbc.queryForObject("SELECT current_appointment_id FROM archive_appointment_slot "
+                + "WHERE collection_id=? AND role_code='ARCHIVE_EDITOR'", String.class, COLLECTION));
+    }
+
+    @Test
+    void hostedBindingSuspensionLinearizesWithJobFactsAndClearsCurrentIdentityAuthority()
+            throws Exception {
+        seedExecutionCandidate();
+        assertEquals(1, jdbc.update("UPDATE archive_collection_manager "
+                + "SET permissions='job.manage' WHERE collection_id=?", COLLECTION));
+        seedJobPublicationFacts();
+        assertEquals(1, jdbc.update("UPDATE archive_publication_readback SET state='PASSED',"
+                + "revision=2,verification_digest=?,findings_json='[]',checked_at=CURRENT_TIMESTAMP(6) "
+                + "WHERE publication_id='pub-job-a'", "1".repeat(64)));
+        RealIdentityFixture identity = seedRealIdentityFixture();
+
+        CountDownLatch identityRootLocked = new CountDownLatch(1);
+        CountDownLatch allowJobReadToContinue = new CountDownLatch(1);
+        CountDownLatch suspensionLockAttempted = new CountDownLatch(1);
+        AgentIdentityService latchingIdentity = mock(AgentIdentityService.class);
+        when(latchingIdentity.lockBindingAuthority(
+                "0", "client-a", "owner-a", 7L, AGENT)).thenAnswer(call -> {
+                    AgentIdentityService.BindingAuthority authority =
+                            identity.service.lockBindingAuthority(
+                                    "0", "client-a", "owner-a", 7L, AGENT);
+                    identityRootLocked.countDown();
+                    await(allowJobReadToContinue);
+                    return authority;
+                });
+        ArchiveMaintenanceServiceImpl readService = service(
+                new JdbcArchiveMaintenanceStore(jdbc), new RootLockingPort(jdbc),
+                new JdbcArchiveContentStore(jdbc), transactions, latchingIdentity);
+        enableReader(readService);
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<ArchiveJobDTO> read = pool.submit(() -> readService.getJob(ACTOR, JOB));
+            assertTrue(identityRootLocked.await(5, TimeUnit.SECONDS),
+                    "job facts did not lock the persisted identity/binding root first");
+            Future<?> suspension = pool.submit(() -> transactions.required(() -> {
+                identity.suspendBinding(suspensionLockAttempted);
+                return null;
+            }));
+            assertTrue(suspensionLockAttempted.await(5, TimeUnit.SECONDS),
+                    "production identity suspension did not attempt the locked binding root");
+            allowJobReadToContinue.countDown();
+
+            ArchiveJobDTO beforeSuspensionCommit = read.get(10, TimeUnit.SECONDS);
+            assertEquals("ACTIVE", beforeSuspensionCommit.handling().assignmentStatus(),
+                    "a GET that owns the identity root linearizes before suspension");
+            assertEquals(AGENT, beforeSuspensionCommit.handling().assignedAgentId());
+            suspension.get(10, TimeUnit.SECONDS);
+        } finally {
+            allowJobReadToContinue.countDown();
+            pool.shutdownNow();
+            pool.awaitTermination(5, TimeUnit.SECONDS);
+        }
+
+        ArchiveMaintenanceServiceImpl afterService = service(
+                new JdbcArchiveMaintenanceStore(jdbc), new RootLockingPort(jdbc),
+                new JdbcArchiveContentStore(jdbc), transactions, identity.service);
+        enableReader(afterService);
+        ArchiveJobDTO afterSuspension = afterService.getJob(ACTOR, JOB);
+        assertEquals("BINDING_CHANGED", afterSuspension.handling().assignmentStatus());
+        assertNull(afterSuspension.handling().assignedAgentId());
+        assertNull(afterSuspension.handling().permissionProfile());
+        assertEquals("REASSIGNMENT_REQUIRED", afterSuspension.handling().blocker());
+        assertEquals(new ArchiveJobHandlingFactsDTO.AssignmentSnapshot(
+                APPOINTMENT, "1", AGENT, "DRAFT_ONLY"),
+                afterSuspension.handling().assignmentSnapshot());
+        assertEquals("edition-job-a",
+                afterSuspension.handling().currentPublication().readerTarget().editionId(),
+                "identity suspension does not rewrite an independently authorized published edition");
+        assertEquals("ACTIVE:1", jdbc.queryForObject(
+                "SELECT CONCAT(status, ':', revision) FROM archive_appointment WHERE appointment_id=?",
+                String.class, APPOINTMENT));
+        assertEquals("PUBLISHED:9", jdbc.queryForObject(
+                "SELECT CONCAT(state, ':', revision) FROM archive_maintenance_job WHERE job_id=?",
+                String.class, JOB));
+        assertEquals("0:SUSPENDED", jdbc.queryForObject(
+                "SELECT CONCAT(b.status, ':', i.lifecycle_status) "
+                        + "FROM agent_persona_binding b JOIN agent_identity_registry i "
+                        + "ON i.binding_id=b.id WHERE b.id=7", String.class));
+    }
+
+    private void enableReader(ArchiveMaintenanceServiceImpl service) {
+        cn.jia.chat.archive.config.ArchiveReaderProperties properties =
+                new cn.jia.chat.archive.config.ArchiveReaderProperties();
+        properties.setEnabled(true);
+        service.setArchiveReaderAccessPolicy(
+                cn.jia.chat.archive.config.ArchiveReaderAccessPolicy.from(properties));
+    }
+
+    private void seedJobPublicationFacts() {
+        String manifest = "2".repeat(64);
+        jdbc.update("INSERT INTO archive_work(work_id,title,active_edition_id) "
+                + "VALUES ('work-a','title',NULL)");
+        jdbc.update("INSERT INTO archive_collection_work(collection_id,work_id,canonical_key,revision) "
+                + "VALUES (?,'work-a','key-a',1)", COLLECTION);
+        jdbc.update("INSERT INTO archive_edition(edition_id,work_id,import_state,source_sha256,"
+                + "manifest_sha256,manifest_file_sha256,source_utf8_byte_length,chapter_count,"
+                + "preface_paragraph_count,chapter_paragraph_count,reader_paragraph_count,"
+                + "preface_utf8_byte_length,chapter_utf8_byte_length,reader_utf8_byte_length) "
+                + "VALUES ('edition-job-a','work-a','READY',?,?,?,6,2,0,2,2,0,6,6)",
+                SHA, manifest, "3".repeat(64));
+        for (int chapter = 1; chapter <= 2; chapter++) {
+            String blockId = "edition-job-a-c00" + chapter;
+            jdbc.update("INSERT INTO archive_chapter(edition_id,block_id,block_type,reader_ordinal,"
+                    + "chapter_number,title,paragraph_count,utf8_byte_length,block_content_sha256) "
+                    + "VALUES ('edition-job-a',?,'CHAPTER',?,?,?,1,3,?)", blockId,
+                    chapter, chapter, "chapter-" + chapter, "4".repeat(64));
+            jdbc.update("INSERT INTO archive_paragraph(edition_id,block_id,paragraph_id,ordinal,text,"
+                    + "utf8_byte_length,sha256) VALUES ('edition-job-a',?,?,1,?,3,?)", blockId,
+                    blockId + "-p0001", chapter == 1 ? "甲" : "乙", "5".repeat(64));
+        }
+        assertEquals(1, jdbc.update("UPDATE archive_work SET active_edition_id='edition-job-a' "
+                + "WHERE work_id='work-a' AND active_edition_id IS NULL"));
+        jdbc.update("INSERT INTO archive_publication(publication_id,job_id,collection_id,work_id,"
+                + "edition_id,draft_revision,manifest_sha256,source_sha256,state,actor_type,actor_id,"
+                + "authorization_revision) VALUES ('pub-job-a',?,?, 'work-a','edition-job-a',2,?,?,"
+                + "'PUBLISHED','HUMAN','owner-a',3)", JOB, COLLECTION, manifest, SHA);
+        jdbc.update("INSERT INTO archive_publication_readback(publication_id,state,revision,"
+                + "verification_digest,findings_json,checked_at) "
+                + "VALUES ('pub-job-a','PENDING',1,NULL,'[]',NULL)");
+        assertEquals(1, jdbc.update("UPDATE archive_maintenance_job SET publication_id='pub-job-a',"
+                + "state='PUBLISHED',wait_reason=NULL,revision=9 WHERE job_id=?", JOB));
+    }
+
+    private void seedPublicationJobMismatch() {
+        jdbc.update("INSERT INTO archive_maintenance_job(job_id,run_id,collection_id,tenant_id,client_id,"
+                + "owner_jiacn,appointment_id,appointment_revision,agent_id,binding_version,"
+                + "permission_profile,manager_authorization_revision,publication_mode,operation_code,"
+                + "work_id,canonical_key,title,source_id,source_sha256,source_summary,rights_basis,state,"
+                + "wait_reason,revision,draft_id,request_intent_id,request_sha256) "
+                + "VALUES ('job-b','run-b',?,'0','client-a','owner-a',?,1,?,'7','DRAFT_ONLY',3,"
+                + "'MANUAL','ADD_WORK','work-a','key-b','title-b','source-a',?,'source / v1',"
+                + "'authorized','WAITING_SKILL','CLIENT_UPDATE_REQUIRED',1,'draft-b','intent-b',?)",
+                COLLECTION, APPOINTMENT, AGENT, SHA, "6".repeat(64));
+        jdbc.update("INSERT INTO archive_job_run(run_id,job_id,execution_epoch,grant_revision,state,revision) "
+                + "VALUES ('run-b','job-b',1,1,'WAITING',1)");
+        jdbc.update("INSERT INTO archive_draft(draft_id,job_id,revision,state,content_json,content_sha256) "
+                + "VALUES ('draft-b','job-b',0,'EDITABLE',"
+                + "'{\"blocks\":[],\"excludedSourceRanges\":[]}',?)", "7".repeat(64));
+        assertEquals(1, jdbc.update("UPDATE archive_publication SET job_id='job-b' "
+                + "WHERE publication_id='pub-job-a'"));
+    }
+
     private void seedWaitingResolutionCandidate() {
         jdbc.update("INSERT INTO aam_test_agent_root(agent_id) VALUES (?)", AGENT);
         jdbc.update("INSERT INTO archive_collection_manager(collection_id,tenant_id,client_id,owner_jiacn,"
@@ -2156,9 +2560,18 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
             ArchiveAgentExecutionPort port, ArchiveContentStore contentStore,
             ArchiveTransactions archiveTransactions) {
         AgentIdentityService identities = mock(AgentIdentityService.class);
+        when(identities.lockBindingAuthority(eq("0"), eq("client-a"), eq("owner-a"),
+                anyLong(), anyString())).thenReturn(
+                        AgentIdentityService.BindingAuthority.CURRENT);
         when(identities.requireActiveIdentityForBinding(eq("0"), eq("client-a"), eq("owner-a"),
                 anyLong(), anyString())).thenAnswer(call -> new AgentIdentityRegistryEntity()
-                        .setCanonicalAgentId(call.getArgument(4)));
+                        .setCanonicalAgentId(call.getArgument(4, String.class)));
+        return service(store, port, contentStore, archiveTransactions, identities);
+    }
+
+    private ArchiveMaintenanceServiceImpl service(JdbcArchiveMaintenanceStore store,
+            ArchiveAgentExecutionPort port, ArchiveContentStore contentStore,
+            ArchiveTransactions archiveTransactions, AgentIdentityService identities) {
         AgentTaskArtifactStorage sourceStorage = mock(AgentTaskArtifactStorage.class);
         when(sourceStorage.store(any(), any(byte[].class), eq("text/plain")))
                 .thenAnswer(call -> {
@@ -2185,6 +2598,130 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         service.setArchiveMaintenanceProperties(properties);
         service.setArchiveAgentExecutionPort(port);
         return service;
+    }
+
+    private RealIdentityFixture seedRealIdentityFixture() {
+        jdbc.execute("CREATE TABLE agent_persona_binding ("
+                + "id BIGINT NOT NULL,jiacn VARCHAR(50) NOT NULL,persona_code VARCHAR(50) NOT NULL,"
+                + "agent_id VARCHAR(100) NOT NULL,bound_at BIGINT NOT NULL,status INT NOT NULL,"
+                + "tenant_id VARCHAR(50) NOT NULL,client_id VARCHAR(50) NOT NULL,"
+                + "PRIMARY KEY(id),CONSTRAINT chk_test_binding_status CHECK(status IN (0,1,2,3))) "
+                + "ENGINE=InnoDB");
+        jdbc.execute("CREATE TABLE agent_identity_registry ("
+                + "id BIGINT NOT NULL,canonical_agent_id VARCHAR(100) CHARACTER SET utf8mb4 "
+                + "COLLATE utf8mb4_0900_bin NOT NULL,canonical_type VARCHAR(32) NOT NULL,"
+                + "lifecycle_status VARCHAR(20) NOT NULL,tenant_id VARCHAR(50) NOT NULL,"
+                + "client_id VARCHAR(50) NOT NULL,owner_jiacn VARCHAR(50) NOT NULL,"
+                + "binding_id BIGINT NOT NULL,provisioned_at BIGINT NOT NULL,activated_at BIGINT NOT NULL,"
+                + "suspended_at BIGINT NULL,retired_at BIGINT NULL,audit_reason VARCHAR(1000) NOT NULL,"
+                + "PRIMARY KEY(id),UNIQUE KEY uk_test_identity_binding(binding_id)) ENGINE=InnoDB");
+        jdbc.update("INSERT INTO agent_persona_binding(id,jiacn,persona_code,agent_id,bound_at,status,"
+                + "tenant_id,client_id) VALUES (7,'owner-a','archive-editor',?,1,1,'0','client-a')",
+                AGENT);
+        jdbc.update("INSERT INTO agent_identity_registry(id,canonical_agent_id,canonical_type,"
+                + "lifecycle_status,tenant_id,client_id,owner_jiacn,binding_id,provisioned_at,"
+                + "activated_at,audit_reason) VALUES (11,?,'LEGACY_CANONICAL','ACTIVE','0',"
+                + "'client-a','owner-a',7,1,2,'archive identity fixture')", AGENT);
+
+        AgentPersonaBindingDao bindings = mock(AgentPersonaBindingDao.class);
+        when(bindings.findByIdForUpdate(anyLong())).thenAnswer(call ->
+                findIdentityBinding(call.getArgument(0), true));
+        when(bindings.updateById(any(AgentPersonaBindingEntity.class))).thenAnswer(call -> {
+            AgentPersonaBindingEntity binding = call.getArgument(0);
+            return jdbc.update("UPDATE agent_persona_binding SET status=? WHERE id=?",
+                    binding.getStatus(), binding.getId());
+        });
+
+        AgentIdentityRegistryDao registry = mock(AgentIdentityRegistryDao.class);
+        when(registry.findExactByBindingInScope(anyString(), anyString(), anyString(), anyLong()))
+                .thenAnswer(call -> findIdentity(call.getArgument(0), call.getArgument(1),
+                        call.getArgument(2), call.getArgument(3), false));
+        when(registry.findExactByBindingInScopeForUpdate(
+                anyString(), anyString(), anyString(), anyLong())).thenAnswer(call ->
+                        findIdentity(call.getArgument(0), call.getArgument(1),
+                                call.getArgument(2), call.getArgument(3), true));
+        when(registry.suspendUsable(anyLong(), anyLong())).thenAnswer(call -> {
+            long identityId = call.getArgument(0, Long.class);
+            long suspendedAt = call.getArgument(1, Long.class);
+            Object[] parameters = {suspendedAt, identityId};
+            return jdbc.update(
+                    "UPDATE agent_identity_registry SET lifecycle_status='SUSPENDED',suspended_at=? "
+                            + "WHERE id=? AND lifecycle_status IN ('PROVISIONED','ACTIVE')",
+                    parameters);
+        });
+        AgentIdentityAliasDao aliases = mock(AgentIdentityAliasDao.class);
+        AgentIdentityServiceImpl target = new AgentIdentityServiceImpl(registry, aliases, bindings);
+        ProxyFactory proxyFactory = new ProxyFactory();
+        proxyFactory.setTarget(target);
+        proxyFactory.setInterfaces(AgentIdentityService.class);
+        proxyFactory.addAdvice(new TransactionInterceptor(transactionManager,
+                new AnnotationTransactionAttributeSource()));
+        return new RealIdentityFixture(bindings, (AgentIdentityService) proxyFactory.getProxy());
+    }
+
+    private AgentPersonaBindingEntity findIdentityBinding(long bindingId, boolean lock) {
+        List<AgentPersonaBindingEntity> rows = jdbc.query(
+                "SELECT id,jiacn,persona_code,agent_id,bound_at,status,tenant_id,client_id "
+                        + "FROM agent_persona_binding WHERE id=?" + (lock ? " FOR UPDATE" : ""),
+                (rs, rowNum) -> {
+                    AgentPersonaBindingEntity binding = new AgentPersonaBindingEntity();
+                    binding.setId(rs.getLong("id"));
+                    binding.setJiacn(rs.getString("jiacn"));
+                    binding.setPersonaCode(rs.getString("persona_code"));
+                    binding.setAgentId(rs.getString("agent_id"));
+                    binding.setBoundAt(rs.getLong("bound_at"));
+                    binding.setStatus(rs.getInt("status"));
+                    binding.setTenantId(rs.getString("tenant_id"));
+                    binding.setClientId(rs.getString("client_id"));
+                    return binding;
+                }, bindingId);
+        return rows.isEmpty() ? null : rows.getFirst();
+    }
+
+    private AgentIdentityRegistryEntity findIdentity(String tenantId, String clientId,
+            String ownerJiacn, long bindingId, boolean lock) {
+        List<AgentIdentityRegistryEntity> rows = jdbc.query(
+                "SELECT id,canonical_agent_id,canonical_type,lifecycle_status,tenant_id,client_id,"
+                        + "owner_jiacn,binding_id,provisioned_at,activated_at,suspended_at,retired_at,"
+                        + "audit_reason FROM agent_identity_registry WHERE tenant_id=? AND client_id=? "
+                        + "AND owner_jiacn=? AND binding_id=?" + (lock ? " FOR UPDATE" : ""),
+                (rs, rowNum) -> {
+                    AgentIdentityRegistryEntity identity = new AgentIdentityRegistryEntity();
+                    identity.setId(rs.getLong("id"));
+                    identity.setCanonicalAgentId(rs.getString("canonical_agent_id"));
+                    identity.setCanonicalType(rs.getString("canonical_type"));
+                    identity.setLifecycleStatus(rs.getString("lifecycle_status"));
+                    identity.setTenantId(rs.getString("tenant_id"));
+                    identity.setClientId(rs.getString("client_id"));
+                    identity.setOwnerJiacn(rs.getString("owner_jiacn"));
+                    identity.setBindingId(rs.getLong("binding_id"));
+                    identity.setProvisionedAt(rs.getLong("provisioned_at"));
+                    identity.setActivatedAt(rs.getLong("activated_at"));
+                    identity.setSuspendedAt((Long) rs.getObject("suspended_at"));
+                    identity.setRetiredAt((Long) rs.getObject("retired_at"));
+                    identity.setAuditReason(rs.getString("audit_reason"));
+                    return identity;
+                }, tenantId, clientId, ownerJiacn, bindingId);
+        return rows.isEmpty() ? null : rows.getFirst();
+    }
+
+    private final class RealIdentityFixture {
+        private final AgentPersonaBindingDao bindings;
+        private final AgentIdentityService service;
+
+        private RealIdentityFixture(AgentPersonaBindingDao bindings, AgentIdentityService service) {
+            this.bindings = bindings;
+            this.service = service;
+        }
+
+        private void suspendBinding(CountDownLatch lockAttempted) {
+            lockAttempted.countDown();
+            AgentPersonaBindingEntity binding = bindings.findByIdForUpdate(7L);
+            assertEquals(AgentConstants.BINDING_STATUS_ACTIVE, binding.getStatus());
+            binding.setStatus(AgentConstants.BINDING_STATUS_SUSPENDED);
+            assertEquals(1, bindings.updateById(binding));
+            service.suspendForBinding("0", "client-a", "owner-a", 7L);
+        }
     }
 
     private void seedExecutionCandidate() {
@@ -2237,7 +2774,8 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                 statement.execute("SET FOREIGN_KEY_CHECKS=0");
                 try {
                     statement.execute("DROP TABLE IF EXISTS aam_test_agent_root");
-                    for (String table : new String[]{"archive_idempotency", "archive_note", "archive_bookmark",
+                    for (String table : new String[]{"agent_identity_registry", "agent_persona_binding",
+                            "archive_idempotency", "archive_note", "archive_bookmark",
                             "archive_reader_progress", "archive_admin_operation_receipt", "archive_operation", "archive_business_outbox", "archive_event",
                             "archive_edition_withdrawal", "archive_publication_readback", "archive_publication",
                             "archive_validation", "archive_draft", "archive_execution_grant", "archive_job_run",
