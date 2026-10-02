@@ -187,3 +187,34 @@ bootJar {
         }
     }
 }
+
+// Exact 49a931 -> 29ce multimedia schema/application wiring verification.
+// This opt-in fixture uses only a caller-provided isolated MySQL database; it is never part of
+// the default test/check graph and cannot select a production URL or start Provider traffic.
+def mmd29ceUpgradeWiringSourceSet = sourceSets.create('mmd29ceUpgradeWiring') {
+    java.srcDir 'src/mmd29ceUpgradeWiringTest/java'
+    resources.srcDir 'src/mmd29ceUpgradeWiringTest/resources'
+    // Compile and run against the real production application graph. Do not inherit the starter
+    // test graph: common-test is unrelated to this fixture and starts an avoidable compiler fork.
+    compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+    runtimeClasspath += output + compileClasspath + sourceSets.main.runtimeClasspath
+}
+dependencies {
+    add(mmd29ceUpgradeWiringSourceSet.implementationConfigurationName, libs.junit.jupiter)
+    add(mmd29ceUpgradeWiringSourceSet.runtimeOnlyConfigurationName, libs.mysql)
+    add(mmd29ceUpgradeWiringSourceSet.runtimeOnlyConfigurationName, libs.junit.platform.launcher)
+}
+tasks.register('mmd29ceUpgradeWiring', Test) {
+    group = 'verification'
+    description = 'Runs the exact old-catalog to 29ce MySQL migration, restart and JiaApplication wiring fixture.'
+    dependsOn tasks.named(mmd29ceUpgradeWiringSourceSet.classesTaskName)
+    testClassesDirs = mmd29ceUpgradeWiringSourceSet.output.classesDirs
+    classpath = mmd29ceUpgradeWiringSourceSet.runtimeClasspath
+    useJUnitPlatform()
+    maxParallelForks = 1
+    maxHeapSize = '256m'
+    jvmArgs '-XX:+UseSerialGC', '-XX:ActiveProcessorCount=2',
+            '-XX:MaxMetaspaceSize=160m', '-Xss256k'
+    systemProperty 'cyf.mmd29ce.repo-root', rootProject.rootDir.absolutePath
+    environment 'CYF_MMD29CE_DB_PREFIX', 'mmd29ce_20261002_01a0f2bb_'
+}
