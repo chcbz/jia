@@ -1,5 +1,6 @@
 package cn.jia.chat.config;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
@@ -33,14 +34,26 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
     private static final Map<String, String> CHECKS = expectedChecks();
 
     private final JdbcTemplate jdbc;
+    private final ChatDeliberationSchemaInitializer deliberationSchema;
     private final boolean enabled;
     private final boolean allowMigration;
     private volatile boolean ready;
 
+    @Autowired
     public ChatTypedDeliberationSchemaInitializer(JdbcTemplate jdbc,
+            ChatDeliberationSchemaInitializer deliberationSchema,
             @Value("${chat.typed-deliberation.enabled:false}") boolean enabled,
             @Value("${cyf.chat.typed-deliberation-schema.allow-additive-migration:false}") boolean allowMigration) {
         this.jdbc = Objects.requireNonNull(jdbc);
+        this.deliberationSchema = Objects.requireNonNull(deliberationSchema);
+        this.enabled = enabled;
+        this.allowMigration = allowMigration;
+    }
+
+    public ChatTypedDeliberationSchemaInitializer(JdbcTemplate jdbc,
+            boolean enabled, boolean allowMigration) {
+        this.jdbc = Objects.requireNonNull(jdbc);
+        this.deliberationSchema = null;
         this.enabled = enabled;
         this.allowMigration = allowMigration;
     }
@@ -51,6 +64,7 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
     public synchronized void initialize() throws Exception {
         ready = false;
         if (!enabled) return;
+        if (deliberationSchema != null) deliberationSchema.ensureInitialized();
         DataSource source = jdbc.getDataSource();
         if (source == null) throw new IllegalStateException("Typed deliberation DataSource unavailable");
         try (Connection connection = source.getConnection()) {

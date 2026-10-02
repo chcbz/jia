@@ -113,6 +113,8 @@ class Mmd29ceUpgradeWiringMySqlTest {
             "starter/src/main/java/cn/jia/JiaApplication.java";
     private static final String BOUNTY_BOOTSTRAP_INITIALIZER_REPAIR_PATH =
             "agent/jia-agent-service/src/main/java/cn/jia/agent/config/AgentTaskBountyBootstrapOutboxSchemaInitializer.java";
+    private static final String TYPED_SCHEMA_INITIALIZER_REPAIR_PATH =
+            "chat/jia-chat-service/src/main/java/cn/jia/chat/config/ChatTypedDeliberationSchemaInitializer.java";
     private static final Map<String, String> PRODUCTION_REPAIR_HASHES = Map.of(
             OUTBOX_RELAY_REPAIR_PATH,
             "d7c9b76ed7217fe376af8986dca5d15959151905e2f17be0af746ff7703a8bb1",
@@ -123,13 +125,16 @@ class Mmd29ceUpgradeWiringMySqlTest {
             JIA_APPLICATION_REPAIR_PATH,
             "55d70981cffad146d036cc46cbbbec48f42fa77d12472967e1814fc9d77d715b",
             BOUNTY_BOOTSTRAP_INITIALIZER_REPAIR_PATH,
-            "8a0caa905c2a86d4fcdf73f5a1cf9ec76f76836057f8b3f42208ec7fc06b329e");
+            "8a0caa905c2a86d4fcdf73f5a1cf9ec76f76836057f8b3f42208ec7fc06b329e",
+            TYPED_SCHEMA_INITIALIZER_REPAIR_PATH,
+            "ad1ae0bab7e2a59bdb7c32c45c62943685d1b3f0b3dc2ce65b5e0099c49f231a");
     private static final Set<String> AUTHORIZED_CANDIDATE_PATHS = Set.of(
             OUTBOX_RELAY_REPAIR_PATH,
             OUTBOX_RELAY_REGRESSION_PATH,
             DELIBERATION_MAPPER_REPAIR_PATH,
             JIA_APPLICATION_REPAIR_PATH,
             BOUNTY_BOOTSTRAP_INITIALIZER_REPAIR_PATH,
+            TYPED_SCHEMA_INITIALIZER_REPAIR_PATH,
             "starter/build.gradle",
             "starter/src/mmd29ceUpgradeWiringTest/java/cn/jia/mmd/Mmd29ceUpgradeWiringMySqlTest.java");
 
