@@ -3,6 +3,7 @@ package cn.jia.chat.archive.maintenance.service;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentTaskArtifactStorage;
 import cn.jia.agent.service.InstalledSkillResolver;
+import cn.jia.chat.archive.config.ArchiveJackson2Configuration;
 import cn.jia.chat.archive.service.ArchiveTransactions;
 import cn.jia.chat.archive.store.ArchiveContentStore;
 import cn.jia.chat.archive.maintenance.store.ArchiveMaintenanceStore;
@@ -11,9 +12,11 @@ import cn.jia.chat.archive.maintenance.model.ArchiveAppointmentRecord;
 import cn.jia.chat.archive.maintenance.model.ArchiveManagerGrantRecord;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.jackson.autoconfigure.JacksonAutoConfiguration;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -27,7 +30,6 @@ class ArchiveMaintenanceServiceWiringContextTest {
         ArchiveContentStore content = mock(ArchiveContentStore.class);
         ArchiveTransactions transactions = mock(ArchiveTransactions.class);
         AgentIdentityService identities = mock(AgentIdentityService.class);
-        ObjectMapper mapper = mock(ObjectMapper.class);
         AgentTaskArtifactStorage sourceStorage = mock(AgentTaskArtifactStorage.class);
 
         try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
@@ -35,16 +37,47 @@ class ArchiveMaintenanceServiceWiringContextTest {
             context.getBeanFactory().registerSingleton("archiveContentStore", content);
             context.getBeanFactory().registerSingleton("archiveTransactions", transactions);
             context.getBeanFactory().registerSingleton("agentIdentityService", identities);
-            context.getBeanFactory().registerSingleton("objectMapper", mapper);
             context.getBeanFactory().registerSingleton("agentTaskArtifactStorage", sourceStorage);
-            context.register(ArchiveMaintenanceServiceImpl.class);
+            context.register(ArchiveJackson2Configuration.class, ArchiveMaintenanceServiceImpl.class);
 
             context.refresh();
 
             ArchiveMaintenanceServiceImpl service = context.getBean(ArchiveMaintenanceServiceImpl.class);
+            ObjectMapper mapper = context.getBean(ObjectMapper.class);
             assertNotNull(service);
+            assertNotNull(mapper);
             assertSame(service, context.getBean(ArchiveMaintenanceService.class));
-            verifyNoInteractions(store, content, transactions, identities, mapper, sourceStorage);
+            verifyNoInteractions(store, content, transactions, identities, sourceStorage);
+        }
+    }
+
+    @Test
+    void archiveJackson2MapperCoexistsWithBoot4Jackson3HttpMapper() {
+        try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
+            context.register(JacksonAutoConfiguration.class, ArchiveJackson2Configuration.class);
+            context.refresh();
+
+            ObjectMapper archiveMapper = context.getBean(ObjectMapper.class);
+            tools.jackson.databind.ObjectMapper httpMapper =
+                    context.getBean(tools.jackson.databind.ObjectMapper.class);
+            assertNotNull(archiveMapper);
+            assertNotNull(httpMapper);
+            assertNotSame(archiveMapper, httpMapper);
+            assertSame(archiveMapper, context.getBean("archiveJackson2ObjectMapper"));
+        }
+    }
+
+    @Test
+    void archiveJackson2ConfigurationPreservesAnExistingMapper() {
+        ObjectMapper existing = new ObjectMapper();
+        try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
+            context.registerBean("customJackson2ObjectMapper", ObjectMapper.class, () -> existing);
+            context.register(ArchiveJackson2Configuration.class);
+            context.refresh();
+
+            assertSame(existing, context.getBean(ObjectMapper.class));
+            assertEquals(1, context.getBeansOfType(ObjectMapper.class).size());
+            assertFalse(context.containsBean("archiveJackson2ObjectMapper"));
         }
     }
 

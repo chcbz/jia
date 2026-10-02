@@ -13,6 +13,8 @@ import cn.jia.chat.service.JuyitingConversationScopeService;
 import cn.jia.core.util.JsonUtil;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.core.env.MapPropertySource;
 import org.mockito.ArgumentCaptor;
 
 import java.time.Clock;
@@ -22,6 +24,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -56,6 +59,34 @@ class ArchiveBusinessOutboxDispatcherTest {
         String properties = Files.readString(packagedDefaults, StandardCharsets.UTF_8);
         assertTrue(properties.lines().anyMatch(
                 "archive.maintenance.business-outbox.enabled=false"::equals));
+    }
+
+    @Test
+    void springConstructsEnabledDispatcherWithoutAClockBean() {
+        ArchiveMaintenanceStore store = mock(ArchiveMaintenanceStore.class);
+        ArchiveTransactions transactions = mock(ArchiveTransactions.class);
+        ChatConversationDao dao = mock(ChatConversationDao.class);
+        ChatConversationService conversations = mock(ChatConversationService.class);
+        ChatConversationEventBroker broker = mock(ChatConversationEventBroker.class);
+        JuyitingConversationScopeService scopes = mock(JuyitingConversationScopeService.class);
+        BuiltinHallAgentSupport builtin = mock(BuiltinHallAgentSupport.class);
+        try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
+            context.getEnvironment().getPropertySources().addFirst(new MapPropertySource("fixture",
+                    Map.of("archive.maintenance.business-outbox.enabled", "true")));
+            context.registerBean(ArchiveMaintenanceStore.class, () -> store);
+            context.registerBean(ArchiveTransactions.class, () -> transactions);
+            context.registerBean(ChatConversationDao.class, () -> dao);
+            context.registerBean(ChatConversationService.class, () -> conversations);
+            context.registerBean(ChatConversationEventBroker.class, () -> broker);
+            context.registerBean(JuyitingConversationScopeService.class, () -> scopes);
+            context.registerBean(BuiltinHallAgentSupport.class, () -> builtin);
+            context.register(ArchiveBusinessOutboxDispatcher.class);
+            context.refresh();
+
+            assertNotNull(context.getBean(ArchiveBusinessOutboxDispatcher.class));
+            assertTrue(context.getBeansOfType(Clock.class).isEmpty());
+            verifyNoInteractions(store, transactions, dao, conversations, broker, scopes, builtin);
+        }
     }
 
     @Test

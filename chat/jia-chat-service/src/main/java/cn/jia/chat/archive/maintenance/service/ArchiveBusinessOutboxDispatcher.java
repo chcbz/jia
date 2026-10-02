@@ -12,6 +12,7 @@ import cn.jia.chat.service.ChatConversationService;
 import cn.jia.chat.service.JuyitingConversationScopeService;
 import cn.jia.core.util.JsonUtil;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -47,6 +48,7 @@ public class ArchiveBusinessOutboxDispatcher {
     private final BuiltinHallAgentSupport builtin;
     private final Clock clock;
 
+    @Autowired
     public ArchiveBusinessOutboxDispatcher(ArchiveMaintenanceStore store,
             ArchiveTransactions transactions,
             ChatConversationDao conversationDao,
