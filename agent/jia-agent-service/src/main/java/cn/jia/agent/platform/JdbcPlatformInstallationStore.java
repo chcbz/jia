@@ -8,7 +8,7 @@ import java.util.List;
 
 @Repository
 @ConditionalOnProperty(prefix="agent.platform-skills",name="enabled",havingValue="true")
-public final class JdbcPlatformInstallationStore implements PlatformInstallationStore {
+public class JdbcPlatformInstallationStore implements PlatformInstallationStore {
     private final JdbcTemplate jdbc;
     public JdbcPlatformInstallationStore(JdbcTemplate jdbc) { this.jdbc=jdbc; }
     private static final RowMapper<Installation> ROW=(r,n)->new Installation(r.getString("installation_id"),
