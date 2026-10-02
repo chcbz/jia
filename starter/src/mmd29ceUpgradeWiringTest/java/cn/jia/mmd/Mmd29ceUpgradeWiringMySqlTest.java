@@ -45,6 +45,8 @@ import org.springframework.beans.factory.support.BeanDefinitionRegistry;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.support.EncodedResource;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.datasource.init.ScriptUtils;
 import org.springframework.scheduling.config.TaskManagementConfigUtils;
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
@@ -90,6 +92,7 @@ import java.util.stream.Stream;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -215,6 +218,9 @@ class Mmd29ceUpgradeWiringMySqlTest {
                 }
                 assertEquals(first, second, "second application start must not drift the catalog");
                 fixture.assertSchemaVersions();
+                fixture.assertSnapshotCheckDriftRejected();
+                assertEquals(second, fixture.catalog(),
+                        "negative CHECK probes must restore the exact accepted catalog");
 
                 Catalog fullyWired;
                 try (ConfigurableApplicationContext context = startApplication(fixture, redis, true)) {
@@ -423,7 +429,8 @@ class Mmd29ceUpgradeWiringMySqlTest {
     }
 
     private static void assertEndpointMappings(ConfigurableApplicationContext context) {
-        RequestMappingHandlerMapping mappings = context.getBean(RequestMappingHandlerMapping.class);
+        RequestMappingHandlerMapping mappings = context.getBean(
+                "requestMappingHandlerMapping", RequestMappingHandlerMapping.class);
         Set<String> paths = new TreeSet<>();
         mappings.getHandlerMethods().keySet().forEach(info -> paths.addAll(info.getPatternValues()));
         for (String required : Set.of(
@@ -604,6 +611,45 @@ class Mmd29ceUpgradeWiringMySqlTest {
                         ORDER BY table_name,constraint_name
                         """));
             }
+        }
+
+        void assertSnapshotCheckDriftRejected() throws Exception {
+            DriverManagerDataSource source = new DriverManagerDataSource(jdbcUrl(), user, password);
+            JdbcTemplate jdbc = new JdbcTemplate(source);
+            probeRejectedSnapshotCheck(jdbc, "chk_atrs_scope",
+                    "tenant_id='1' AND owner_jiacn<>'0'",
+                    "tenant_id='0' AND owner_jiacn<>'0'");
+            probeRejectedSnapshotCheck(jdbc, "chk_atrs_scope",
+                    "(tenant_id='0' AND owner_jiacn<>'0') OR TRUE",
+                    "tenant_id='0' AND owner_jiacn<>'0'");
+            probeRejectedSnapshotCheck(jdbc, "chk_atrs_content",
+                    "revision>=1 AND task_version_at_confirmation>=0 AND CHAR_LENGTH(title)>0 "
+                            + "AND content_sha256 REGEXP '^[0-9a-f]{64}$' "
+                            + "AND source IN ('CREATE','RECONFIRM','INVALID') AND created_at>0",
+                    "revision>=1 AND task_version_at_confirmation>=0 AND CHAR_LENGTH(title)>0 "
+                            + "AND content_sha256 REGEXP '^[0-9a-f]{64}$' "
+                            + "AND source IN ('CREATE','RECONFIRM') AND created_at>0");
+        }
+
+        private void probeRejectedSnapshotCheck(
+                JdbcTemplate jdbc, String name, String weakened, String restored) {
+            try {
+                replaceSnapshotCheck(jdbc, name, weakened);
+                IllegalStateException failure = assertThrows(IllegalStateException.class,
+                        () -> new AgentTaskRequirementSnapshotSchemaInitializer(jdbc).afterPropertiesSet(),
+                        "snapshot initializer accepted weakened CHECK " + name + ": " + weakened);
+                assertTrue(failure.getMessage().contains("Snapshot CHECK drift: " + name),
+                        "unexpected rejection for " + name + ": " + failure);
+            } finally {
+                replaceSnapshotCheck(jdbc, name, restored);
+            }
+            new AgentTaskRequirementSnapshotSchemaInitializer(jdbc).afterPropertiesSet();
+        }
+
+        private static void replaceSnapshotCheck(JdbcTemplate jdbc, String name, String expression) {
+            jdbc.execute("ALTER TABLE agent_task_requirement_snapshot DROP CHECK `" + name + "`");
+            jdbc.execute("ALTER TABLE agent_task_requirement_snapshot ADD CONSTRAINT `" + name
+                    + "` CHECK (" + expression + ")");
         }
 
         void assertSchemaVersions() throws Exception {
