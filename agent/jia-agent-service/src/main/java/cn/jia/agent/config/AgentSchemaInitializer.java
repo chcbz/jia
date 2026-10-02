@@ -903,10 +903,10 @@ public class AgentSchemaInitializer implements InitializingBean {
                     create_time         BIGINT DEFAULT NULL COMMENT 'Create time',
                     update_time         BIGINT DEFAULT NULL COMMENT 'Update time',
                     PRIMARY KEY (id),
-                    UNIQUE KEY uk_task_member_scope (tenant_id, client_id, task_id, agent_id),
-                    KEY idx_task_member_agent_status (tenant_id, client_id, agent_id, member_status),
-                    KEY idx_task_member_task_status (tenant_id, client_id, task_id, member_status),
-                    KEY idx_task_member_task_role (tenant_id, client_id, task_id, member_role, member_status)
+                    UNIQUE KEY uk_task_member_scope (tenant_id, client_id, owner_jiacn, task_id, agent_id),
+                    KEY idx_task_member_agent_status (tenant_id, client_id, owner_jiacn, agent_id, member_status),
+                    KEY idx_task_member_task_status (tenant_id, client_id, owner_jiacn, task_id, member_status),
+                    KEY idx_task_member_task_role (tenant_id, client_id, owner_jiacn, task_id, member_role, member_status)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped Agent task members'
                 """);
 
@@ -938,11 +938,11 @@ public class AgentSchemaInitializer implements InitializingBean {
                     create_time         BIGINT DEFAULT NULL COMMENT 'Create time',
                     update_time         BIGINT DEFAULT NULL COMMENT 'Update time',
                     PRIMARY KEY (id),
-                    UNIQUE KEY uk_work_item_scope (tenant_id, client_id, work_item_id),
-                    KEY idx_work_item_task_status (tenant_id, client_id, task_id, status, priority),
-                    KEY idx_work_item_assignee_status (tenant_id, client_id, assignee_agent_id, status, lease_until),
+                    UNIQUE KEY uk_work_item_scope (tenant_id, client_id, owner_jiacn, work_item_id),
+                    KEY idx_work_item_task_status (tenant_id, client_id, owner_jiacn, task_id, status, priority),
+                    KEY idx_work_item_assignee_status (tenant_id, client_id, owner_jiacn, assignee_agent_id, status, lease_until),
                     KEY idx_work_item_lease (status, lease_until, id),
-                    KEY idx_work_item_task_required (tenant_id, client_id, task_id, required_item, status)
+                    KEY idx_work_item_task_required (tenant_id, client_id, owner_jiacn, task_id, required_item, status)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped Agent task work items'
                 """);
 
@@ -1068,10 +1068,10 @@ public class AgentSchemaInitializer implements InitializingBean {
                     create_time         BIGINT DEFAULT NULL COMMENT 'Create time',
                     update_time         BIGINT DEFAULT NULL COMMENT 'Update time',
                     PRIMARY KEY (id),
-                    UNIQUE KEY uk_task_request_scope (tenant_id, client_id, request_id),
-                    KEY idx_task_request_task_status (tenant_id, client_id, task_id, status, priority, create_time),
-                    KEY idx_task_request_target_status (tenant_id, client_id, target_type, target_id, status, due_at),
-                    KEY idx_task_request_work_item (tenant_id, client_id, work_item_id, status)
+                    UNIQUE KEY uk_task_request_scope (tenant_id, client_id, owner_jiacn, request_id),
+                    KEY idx_task_request_task_status (tenant_id, client_id, owner_jiacn, task_id, status, priority, create_time),
+                    KEY idx_task_request_target_status (tenant_id, client_id, owner_jiacn, target_type, target_id, status, due_at),
+                    KEY idx_task_request_work_item (tenant_id, client_id, owner_jiacn, work_item_id, status)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped Agent collaboration requests'
                 """);
 
@@ -1097,11 +1097,11 @@ public class AgentSchemaInitializer implements InitializingBean {
                     create_time             BIGINT DEFAULT NULL COMMENT 'Create time',
                     update_time             BIGINT DEFAULT NULL COMMENT 'Update time',
                     PRIMARY KEY (id),
-                    UNIQUE KEY uk_artifact_version (tenant_id, client_id, artifact_id, artifact_version),
-                    KEY idx_artifact_task_created (tenant_id, client_id, task_id, created_at),
-                    KEY idx_artifact_work_item (tenant_id, client_id, work_item_id, artifact_type, created_at),
-                    KEY idx_artifact_producer (tenant_id, client_id, producer_agent_id, created_at),
-                    KEY idx_artifact_hash (tenant_id, client_id, content_hash)
+                    UNIQUE KEY uk_artifact_version (tenant_id, client_id, owner_jiacn, artifact_id, artifact_version),
+                    KEY idx_artifact_task_created (tenant_id, client_id, owner_jiacn, task_id, created_at),
+                    KEY idx_artifact_work_item (tenant_id, client_id, owner_jiacn, work_item_id, artifact_type, created_at),
+                    KEY idx_artifact_producer (tenant_id, client_id, owner_jiacn, producer_agent_id, created_at),
+                    KEY idx_artifact_hash (tenant_id, client_id, owner_jiacn, content_hash)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped versioned Agent task artifacts'
                 """);
 
