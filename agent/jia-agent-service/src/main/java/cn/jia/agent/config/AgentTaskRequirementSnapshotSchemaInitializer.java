@@ -13,6 +13,14 @@ import java.util.Objects;
 /** Only creates an absent table; rejects drift rather than rewriting existing identity/history. */
 public final class AgentTaskRequirementSnapshotSchemaInitializer implements InitializingBean {
     private static final String TABLE = "agent_task_requirement_snapshot";
+    private static final Map<String, String> CHECKS = Map.of(
+            "chk_atrs_scope",
+            "((`tenant_id` = _utf8mb4\\'0\\') and (`owner_jiacn` <> _utf8mb4\\'0\\'))",
+            "chk_atrs_content",
+            "((`revision` >= 1) and (`task_version_at_confirmation` >= 0) and "
+                    + "(char_length(`title`) > 0) and regexp_like(`content_sha256`,"
+                    + "_utf8mb4\\'^[0-9a-f]{64}$\\') and (`source` in "
+                    + "(_utf8mb4\\'CREATE\\',_utf8mb4\\'RECONFIRM\\')) and (`created_at` > 0))");
     private final JdbcTemplate jdbc;
 
     public AgentTaskRequirementSnapshotSchemaInitializer(JdbcTemplate jdbc) {
@@ -81,18 +89,14 @@ public final class AgentTaskRequirementSnapshotSchemaInitializer implements Init
                 + "ON cc.constraint_catalog=tc.constraint_catalog AND cc.constraint_schema=tc.constraint_schema "
                 + "AND cc.constraint_name=tc.constraint_name WHERE tc.constraint_schema=DATABASE() "
                 + "AND tc.table_name=? AND tc.constraint_type='CHECK'", TABLE);
-        if (checks.size()!=2 || checks.stream().anyMatch(r -> !"YES".equalsIgnoreCase(Objects.toString(r.get("enforced"), ""))))
-            throw new IllegalStateException("Snapshot CHECK drift");
-        check(checks,"chk_atrs_scope","tenant_id","owner_jiacn","'0'");
-        check(checks,"chk_atrs_content","revision","task_version_at_confirmation",
-                "char_length","title","content_sha256","create","reconfirm","created_at");
-    }
-    private static void check(List<Map<String,Object>> rows,String name,String... required) {
-        var row=rows.stream().filter(r -> name.equals(r.get("constraint_name"))).findFirst()
-                .orElseThrow(() -> new IllegalStateException("Snapshot CHECK absent: "+name));
-        String expression=Objects.toString(row.get("check_clause"),"").toLowerCase(Locale.ROOT);
-        for (String part:required)
-            if (!expression.contains(part)) throw new IllegalStateException("Snapshot CHECK drift: "+name);
+        if (checks.size()!=CHECKS.size()) throw new IllegalStateException("Snapshot CHECK drift");
+        for (Map.Entry<String, String> expected : CHECKS.entrySet()) {
+            var row=checks.stream().filter(r -> expected.getKey().equals(r.get("constraint_name"))).findFirst()
+                    .orElseThrow(() -> new IllegalStateException("Snapshot CHECK absent: "+expected.getKey()));
+            if (!"YES".equalsIgnoreCase(Objects.toString(row.get("enforced"), ""))
+                    || !expected.getValue().equals(Objects.toString(row.get("check_clause"), "")))
+                throw new IllegalStateException("Snapshot CHECK drift: "+expected.getKey());
+        }
     }
     static void index(List<Map<String,Object>> rows,String name,int nonUnique,List<String> expected) {
         var matching=rows.stream().filter(r -> name.equals(r.get("index_name"))).toList();
