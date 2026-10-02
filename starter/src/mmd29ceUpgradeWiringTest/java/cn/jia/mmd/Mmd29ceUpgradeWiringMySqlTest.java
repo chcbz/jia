@@ -102,7 +102,18 @@ class Mmd29ceUpgradeWiringMySqlTest {
     private static final String PREFIX = "mmd29ce_20261002_01a0f2bb_";
     private static final String DATABASE = "mmd29ce_20261002_01a0f2bb_wiring_r4";
     private static final String ISOLATED_SCHEDULE_BEAN = "wxSchedule";
-    private static final Set<String> FIXTURE_ONLY_PATHS = Set.of(
+    private static final String OUTBOX_RELAY_REPAIR_PATH =
+            "chat/jia-chat-service/src/main/java/cn/jia/chat/service/ChatDeliberationOutboxRelay.java";
+    private static final String OUTBOX_RELAY_REGRESSION_PATH =
+            "chat/jia-chat-service/src/chatDeliberationTest/java/cn/jia/chat/service/ChatDeliberationOutboxRelayTest.java";
+    private static final Map<String, String> PRODUCTION_REPAIR_HASHES = Map.of(
+            OUTBOX_RELAY_REPAIR_PATH,
+            "d7c9b76ed7217fe376af8986dca5d15959151905e2f17be0af746ff7703a8bb1",
+            OUTBOX_RELAY_REGRESSION_PATH,
+            "b65d901686fa151144497ce7970b3501a6c3c357b56bea73a896d138d0cf65ad");
+    private static final Set<String> AUTHORIZED_CANDIDATE_PATHS = Set.of(
+            OUTBOX_RELAY_REPAIR_PATH,
+            OUTBOX_RELAY_REGRESSION_PATH,
             "starter/build.gradle",
             "starter/src/mmd29ceUpgradeWiringTest/java/cn/jia/mmd/Mmd29ceUpgradeWiringMySqlTest.java");
 
@@ -423,11 +434,16 @@ class Mmd29ceUpgradeWiringMySqlTest {
         assertEquals(TARGET, git(repo, "rev-parse", TARGET + "^{commit}").strip(),
                 "fixture history must retain the exact production source commit");
         assertEquals(TARGET_TREE, git(repo, "rev-parse", TARGET + "^{tree}").strip());
-        assertEquals(FIXTURE_ONLY_PATHS, Set.copyOf(git(repo, "diff", "--name-only", TARGET + "..HEAD", "--")
+        assertEquals(AUTHORIZED_CANDIDATE_PATHS,
+                Set.copyOf(git(repo, "diff", "--name-only", TARGET + "..HEAD", "--")
                 .lines().filter(line -> !line.isBlank()).toList()),
-                "fixture child may not change production source");
+                "candidate may contain only the frozen fixture and exact audited production repair");
         assertTrue(git(repo, "status", "--porcelain", "--untracked-files=no").isBlank(),
                 "tracked fixture source must be clean");
+        for (Map.Entry<String, String> entry : PRODUCTION_REPAIR_HASHES.entrySet()) {
+            assertEquals(entry.getValue(), sha256(Files.readAllBytes(repo.resolve(entry.getKey()))),
+                    "production repair drift: " + entry.getKey());
+        }
         for (Map.Entry<String, String> entry : TARGET_DDL.entrySet()) {
             assertEquals(entry.getValue(), sha256(Files.readAllBytes(repo.resolve(entry.getKey()))), entry.getKey());
         }

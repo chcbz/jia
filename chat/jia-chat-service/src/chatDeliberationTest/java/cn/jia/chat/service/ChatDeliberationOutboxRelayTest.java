@@ -6,6 +6,7 @@ import cn.jia.chat.handler.AgentWebSocketHandler;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 
@@ -50,6 +51,27 @@ class ChatDeliberationOutboxRelayTest {
                 .thenReturn(new AgentWebSocketHandler.CapabilityDispatchResult(
                         AgentWebSocketHandler.CapabilityDispatchStatus.READY, true,
                         Map.of("decision", "READY", "profile", "CHAT")));
+    }
+
+    @Test
+    void springContextSelectsProductionConstructorAndStartsRelay() {
+        when(outbox.discover(anyLong(), anyInt())).thenReturn(List.of());
+        try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
+            context.registerBean(ChatDeliberationOutboxService.class, () -> outbox);
+            context.registerBean(ChatDeliberationService.class, () -> deliberation);
+            context.registerBean(AgentWebSocketHandler.class, () -> sockets);
+            context.registerBean(BuiltinHallAgentSupport.class, () -> builtin);
+            context.registerBean(ChatConversationEventBroker.class, () -> broker);
+            context.registerBean(ChatConversationService.class, () -> conversations);
+            context.registerBean(ChatClient.class, () -> chatClient);
+            context.registerBean(ChatDeliberationOutboxRelay.class);
+
+            context.refresh();
+
+            ChatDeliberationOutboxRelay springRelay = context.getBean(ChatDeliberationOutboxRelay.class);
+            assertNotNull(springRelay);
+            assertTrue(springRelay.isRunning());
+        }
     }
 
     @Test
