@@ -59,40 +59,35 @@ public class ArchiveMaintenanceSchemaInitializer {
                 SELECT table_name FROM information_schema.tables
                 WHERE table_schema=DATABASE() AND table_name IN (%s)
                 """.formatted(placeholders(expected.tables().size())), String.class, expected.tables().keySet().toArray()));
-        // The only additive predecessor accepted here is the exact eb31260f schema: every
-        // existing maintenance table except archive_publication_readback. The two older exact
-        // predecessors additionally omit the exact-admin receipt and, for 62223001, withdrawal.
-        // Arbitrary partial table sets are never treated as upgrade candidates. Legacy waiting-job
-        // CHECK shapes remain accepted only when attached to one of those complete predecessor sets.
+        // Exact additive chain: 18d66419 is the complete eighteen-table predecessor
+        // without archive_business_outbox. Older accepted predecessors remove readback, exact-admin,
+        // and withdrawal in that order; arbitrary partial sets remain fail-closed.
         Set<String> currentTables = expected.tables().keySet();
-        Set<String> predecessorTables = new LinkedHashSet<>(currentTables);
+        Set<String> businessOutboxPredecessorTables = new LinkedHashSet<>(currentTables);
+        businessOutboxPredecessorTables.remove("archive_business_outbox");
+        Set<String> predecessorTables = new LinkedHashSet<>(businessOutboxPredecessorTables);
         predecessorTables.remove("archive_publication_readback");
         Set<String> exactAdminPredecessorTables = new LinkedHashSet<>(predecessorTables);
         exactAdminPredecessorTables.remove("archive_admin_operation_receipt");
         Set<String> legacyPredecessorTables = new LinkedHashSet<>(exactAdminPredecessorTables);
         legacyPredecessorTables.remove("archive_edition_withdrawal");
         if (!existing.isEmpty() && !existing.equals(currentTables)
+                && !existing.equals(businessOutboxPredecessorTables)
                 && !existing.equals(predecessorTables)
                 && !existing.equals(exactAdminPredecessorTables)
                 && !existing.equals(legacyPredecessorTables)) {
             throw new IllegalStateException("Archive maintenance schema is partial or not an exact supported predecessor");
         }
+        boolean needsBusinessOutboxUpgrade = !existing.isEmpty()
+                && !existing.contains("archive_business_outbox");
         if (!existing.isEmpty()) {
-            try {
-                validate(existing, expected);
-            } catch (IllegalStateException currentDrift) {
-                if (!existing.contains("archive_maintenance_job")) throw currentDrift;
-                try {
-                    validate(existing, expected, Map.of("archive_maintenance_job",
-                            ArchiveMaintenanceSchemaCatalog.previousWaitingShapeJobTable(expected)));
-                    upgradePreviousWaitingShape();
-                } catch (IllegalStateException previousWaitingDrift) {
-                    validate(existing, expected, Map.of("archive_maintenance_job",
-                            ArchiveMaintenanceSchemaCatalog.legacyWaitingJobTable(expected)));
-                    upgradeLegacyWaitingJob();
-                }
-                validate(existing, expected);
+            if (needsBusinessOutboxUpgrade) {
+                validateAndUpgradeBusinessOutboxPredecessor(existing, expected);
+            } else {
+                WaitingShape waiting = validateWaitingShape(existing, expected, Map.of());
+                upgradeWaitingShape(waiting);
             }
+            validate(existing, expected);
         }
         if (!existing.equals(currentTables)) {
             DataSource ds = Objects.requireNonNull(jdbc.getDataSource(), "archive dataSource");
@@ -100,7 +95,197 @@ public class ArchiveMaintenanceSchemaInitializer {
         }
         validate(expected.tables().keySet(), expected);
         backfillPublicationReadbacks();
+        backfillBusinessOutbox();
         reconcileConfiguredManagers();
+    }
+
+    private void validateAndUpgradeBusinessOutboxPredecessor(Set<String> existing,
+            ArchiveMaintenanceSchemaCatalog.Definition expected) {
+        List<OutboxPredecessorShape> shapes = new ArrayList<>();
+        Map<String, ArchiveMaintenanceSchemaCatalog.Table> allOld = new LinkedHashMap<>();
+        allOld.put("archive_event",
+                ArchiveMaintenanceSchemaCatalog.predecessorOutboxSourceTable(expected, "archive_event"));
+        if (existing.contains("archive_edition_withdrawal")) {
+            allOld.put("archive_edition_withdrawal",
+                    ArchiveMaintenanceSchemaCatalog.predecessorOutboxSourceTable(
+                            expected, "archive_edition_withdrawal"));
+        }
+        shapes.add(new OutboxPredecessorShape(Map.copyOf(allOld), true,
+                existing.contains("archive_edition_withdrawal")));
+        if (existing.contains("archive_edition_withdrawal")) {
+            shapes.add(new OutboxPredecessorShape(Map.of("archive_edition_withdrawal",
+                    ArchiveMaintenanceSchemaCatalog.predecessorOutboxSourceTable(
+                            expected, "archive_edition_withdrawal")), false, true));
+        }
+        shapes.add(new OutboxPredecessorShape(Map.of(), false, false));
+
+        IllegalStateException rejected = null;
+        for (OutboxPredecessorShape shape : shapes) {
+            try {
+                WaitingShape waiting = validateWaitingShape(existing, expected, shape.overrides());
+                upgradeWaitingShape(waiting);
+                upgradeBusinessOutboxSources(existing, shape.upgradeEvent(),
+                        shape.upgradeWithdrawal());
+                return;
+            } catch (IllegalStateException drift) {
+                rejected = drift;
+            }
+        }
+        throw Objects.requireNonNull(rejected,
+                "archive business outbox predecessor validation failure");
+    }
+
+    private WaitingShape validateWaitingShape(Set<String> existing,
+            ArchiveMaintenanceSchemaCatalog.Definition expected,
+            Map<String, ArchiveMaintenanceSchemaCatalog.Table> baseOverrides) {
+        try {
+            validate(existing, expected, baseOverrides);
+            return WaitingShape.CURRENT;
+        } catch (IllegalStateException currentDrift) {
+            if (!existing.contains("archive_maintenance_job")) throw currentDrift;
+            try {
+                Map<String, ArchiveMaintenanceSchemaCatalog.Table> previous =
+                        new LinkedHashMap<>(baseOverrides);
+                previous.put("archive_maintenance_job",
+                        ArchiveMaintenanceSchemaCatalog.previousWaitingShapeJobTable(expected));
+                validate(existing, expected, previous);
+                return WaitingShape.PREVIOUS;
+            } catch (IllegalStateException previousWaitingDrift) {
+                Map<String, ArchiveMaintenanceSchemaCatalog.Table> legacy =
+                        new LinkedHashMap<>(baseOverrides);
+                legacy.put("archive_maintenance_job",
+                        ArchiveMaintenanceSchemaCatalog.legacyWaitingJobTable(expected));
+                validate(existing, expected, legacy);
+                return WaitingShape.LEGACY;
+            }
+        }
+    }
+
+    private void upgradeWaitingShape(WaitingShape waiting) {
+        if (waiting == WaitingShape.PREVIOUS) upgradePreviousWaitingShape();
+        if (waiting == WaitingShape.LEGACY) upgradeLegacyWaitingJob();
+    }
+
+    private void upgradeBusinessOutboxSources(Set<String> existing, boolean upgradeEvent,
+            boolean upgradeWithdrawal) {
+        if (upgradeEvent && existing.contains("archive_event")) {
+            jdbc.execute("""
+                    ALTER TABLE archive_event
+                      DROP CHECK chk_archive_event_outbox,
+                      ADD CONSTRAINT chk_archive_event_outbox CHECK (outbox_state IN ('PENDING','DELIVERED','NO_TARGET'))
+                    """);
+        }
+        if (upgradeWithdrawal && existing.contains("archive_edition_withdrawal")) {
+            jdbc.execute("""
+                    ALTER TABLE archive_edition_withdrawal
+                      DROP CHECK chk_archive_withdrawal_outbox,
+                      ADD CONSTRAINT chk_archive_withdrawal_outbox CHECK (outbox_state IN ('PENDING','DELIVERED','NO_TARGET'))
+                    """);
+        }
+    }
+
+    private enum WaitingShape { CURRENT, PREVIOUS, LEGACY }
+
+    private record OutboxPredecessorShape(
+            Map<String, ArchiveMaintenanceSchemaCatalog.Table> overrides,
+            boolean upgradeEvent, boolean upgradeWithdrawal) { }
+
+    private void backfillBusinessOutbox() {
+        transactions.required(() -> {
+            jdbc.update("""
+                    UPDATE archive_edition_withdrawal w
+                    JOIN archive_publication p ON p.publication_id=w.publication_id
+                    SET w.outbox_state='NO_TARGET'
+                    WHERE w.outbox_state='PENDING' AND p.job_id IS NULL
+                    """);
+            Integer unsupported = jdbc.queryForObject("""
+                    SELECT (SELECT COUNT(*) FROM archive_event WHERE outbox_state<>'PENDING')
+                         + (SELECT COUNT(*) FROM archive_edition_withdrawal w
+                            JOIN archive_publication p ON p.publication_id=w.publication_id
+                            WHERE p.job_id IS NOT NULL AND w.outbox_state<>'PENDING')
+                         + (SELECT COUNT(*) FROM archive_edition_withdrawal w
+                            JOIN archive_publication p ON p.publication_id=w.publication_id
+                            WHERE p.job_id IS NULL AND w.outbox_state<>'NO_TARGET')
+                    """, Integer.class);
+            Integer outboxRows = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM archive_business_outbox", Integer.class);
+            if (unsupported == null || outboxRows == null) {
+                throw new IllegalStateException("Archive business outbox backfill state is unavailable");
+            }
+            if (outboxRows == 0 && unsupported != 0) {
+                throw new IllegalStateException("Archive business outbox predecessor contains unsupported delivery state");
+            }
+            jdbc.update("""
+                    INSERT IGNORE INTO archive_business_outbox(
+                        projection_key,source_type,job_id,event_sequence,withdrawal_id,state,
+                        attempt_count,fencing_token,available_at,lease_until,last_error_code,projected_message_id)
+                    SELECT CONCAT('EVENT:',e.job_id,':',e.sequence),'JOB_EVENT',e.job_id,e.sequence,NULL,
+                           'READY',0,0,e.occurred_at,NULL,NULL,NULL
+                    FROM archive_event e
+                    LEFT JOIN archive_business_outbox o
+                      ON o.projection_key=CONCAT('EVENT:',e.job_id,':',e.sequence)
+                     AND o.job_id=e.job_id AND o.event_sequence=e.sequence
+                    WHERE e.outbox_state='PENDING' AND o.projection_key IS NULL
+                    """);
+            jdbc.update("""
+                    INSERT IGNORE INTO archive_business_outbox(
+                        projection_key,source_type,job_id,event_sequence,withdrawal_id,state,
+                        attempt_count,fencing_token,available_at,lease_until,last_error_code,projected_message_id)
+                    SELECT CONCAT('WITHDRAWAL:',w.withdrawal_id),'WITHDRAWAL',p.job_id,NULL,w.withdrawal_id,
+                           'READY',0,0,w.withdrawn_at,NULL,NULL,NULL
+                    FROM archive_edition_withdrawal w
+                    JOIN archive_publication p ON p.publication_id=w.publication_id
+                    LEFT JOIN archive_business_outbox o
+                      ON o.projection_key=CONCAT('WITHDRAWAL:',w.withdrawal_id)
+                     AND o.withdrawal_id=w.withdrawal_id
+                    WHERE w.outbox_state='PENDING' AND p.job_id IS NOT NULL
+                      AND o.projection_key IS NULL
+                    """);
+            Integer eventMissing = jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM archive_event e
+                    LEFT JOIN archive_business_outbox o
+                      ON o.projection_key=CONCAT('EVENT:',e.job_id,':',e.sequence)
+                     AND o.job_id=e.job_id AND o.event_sequence=e.sequence
+                    WHERE o.projection_key IS NULL
+                    """, Integer.class);
+            Integer withdrawalMissing = jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM archive_edition_withdrawal w
+                    JOIN archive_publication p ON p.publication_id=w.publication_id
+                    LEFT JOIN archive_business_outbox o
+                      ON o.projection_key=CONCAT('WITHDRAWAL:',w.withdrawal_id)
+                     AND o.withdrawal_id=w.withdrawal_id
+                    WHERE (p.job_id IS NOT NULL AND o.projection_key IS NULL)
+                       OR (p.job_id IS NULL
+                           AND (w.outbox_state<>'NO_TARGET' OR o.projection_key IS NOT NULL))
+                    """, Integer.class);
+            if (eventMissing == null || eventMissing != 0
+                    || withdrawalMissing == null || withdrawalMissing != 0) {
+                throw new IllegalStateException("Archive business outbox backfill is incomplete");
+            }
+            Integer inconsistent = jdbc.queryForObject("""
+                    SELECT
+                      (SELECT COUNT(*) FROM archive_event e
+                       JOIN archive_business_outbox o
+                         ON o.projection_key=CONCAT('EVENT:',e.job_id,':',e.sequence)
+                        AND o.job_id=e.job_id AND o.event_sequence=e.sequence
+                       WHERE NOT ((e.outbox_state='PENDING'
+                                   AND o.state IN ('READY','LEASED','WAITING_RETRY'))
+                              OR (e.outbox_state='DELIVERED' AND o.state='DELIVERED')
+                              OR (e.outbox_state='NO_TARGET' AND o.state='NO_TARGET')))
+                    + (SELECT COUNT(*) FROM archive_edition_withdrawal w
+                       JOIN archive_business_outbox o
+                         ON o.projection_key=CONCAT('WITHDRAWAL:',w.withdrawal_id)
+                        AND o.withdrawal_id=w.withdrawal_id
+                       WHERE NOT ((w.outbox_state='PENDING'
+                                   AND o.state IN ('READY','LEASED','WAITING_RETRY'))
+                              OR (w.outbox_state='DELIVERED' AND o.state='DELIVERED')
+                              OR (w.outbox_state='NO_TARGET' AND o.state='NO_TARGET')))
+                    """, Integer.class);
+            if (inconsistent == null || inconsistent != 0) {
+                throw new IllegalStateException("Archive business outbox source acknowledgement is inconsistent");
+            }
+            return null;
+        });
     }
 
     private void backfillPublicationReadbacks() {

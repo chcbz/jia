@@ -5,9 +5,12 @@ import jakarta.inject.Named;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 
@@ -101,6 +104,18 @@ public class JdbcArchiveMaintenanceStore implements ArchiveMaintenanceStore {
                     rs.getString("resulting_active_edition_id"), rs.getLong("resulting_work_revision"),
                     rs.getString("operation_key"), instant(rs.getTimestamp("withdrawn_at")),
                     rs.getString("outbox_state"));
+    private static final RowMapper<ArchiveBusinessOutboxRecord> BUSINESS_OUTBOX = (rs, n) -> {
+        long eventSequence = rs.getLong("event_sequence");
+        Long nullableEventSequence = rs.wasNull() ? null : eventSequence;
+        long projectedMessageId = rs.getLong("projected_message_id");
+        Long nullableMessageId = rs.wasNull() ? null : projectedMessageId;
+        return new ArchiveBusinessOutboxRecord(rs.getString("projection_key"),
+                rs.getString("source_type"), rs.getString("job_id"), nullableEventSequence,
+                rs.getString("withdrawal_id"), rs.getString("state"),
+                rs.getLong("attempt_count"), rs.getLong("fencing_token"),
+                instant(rs.getTimestamp("available_at")), instant(rs.getTimestamp("lease_until")),
+                rs.getString("last_error_code"), nullableMessageId);
+    };
     private static final RowMapper<ArchiveEditionVersionRecord> VERSION = (rs, n) -> {
         ArchiveWithdrawalRecord withdrawal = rs.getString("withdrawal_id") == null ? null : WITHDRAWAL.mapRow(rs, n);
         return new ArchiveEditionVersionRecord(rs.getString("publication_id"), rs.getString("job_id"),
@@ -272,6 +287,21 @@ public class JdbcArchiveMaintenanceStore implements ArchiveMaintenanceStore {
                 """ + (lock ? " FOR UPDATE" : ""), CONFIRMATION, confirmationRef,
                 actor.tenantId(), actor.clientId(), actor.ownerJiacn(), confirmationRef,
                 actor.tenantId(), actor.clientId(), actor.ownerJiacn()));
+    }
+
+    @Override
+    public ArchiveConfirmedRequestRecord findConfirmedRequestForJob(String jobId, boolean lock) {
+        return first(jdbc.query("""
+                SELECT c.* FROM archive_maintenance_job j
+                JOIN archive_confirmed_request c
+                  ON c.tenant_id=j.tenant_id AND c.client_id=j.client_id
+                 AND c.owner_jiacn=j.owner_jiacn AND c.request_intent_id=j.request_intent_id
+                 AND CAST(c.tenant_id AS BINARY)=CAST(j.tenant_id AS BINARY)
+                 AND CAST(c.client_id AS BINARY)=CAST(j.client_id AS BINARY)
+                 AND CAST(c.owner_jiacn AS BINARY)=CAST(j.owner_jiacn AS BINARY)
+                 AND CAST(c.request_intent_id AS BINARY)=CAST(j.request_intent_id AS BINARY)
+                WHERE j.job_id=?
+                """ + (lock ? " FOR UPDATE" : ""), CONFIRMATION, jobId));
     }
 
     @Override
@@ -548,8 +578,11 @@ public class JdbcArchiveMaintenanceStore implements ArchiveMaintenanceStore {
         return first(jdbc.query("SELECT * FROM archive_publication WHERE job_id=?",PUBLICATION,jobId));
     }
     @Override public ArchivePublicationRecord findPublicationById(String publicationId) {
-        return first(jdbc.query("SELECT * FROM archive_publication WHERE publication_id=?", PUBLICATION,
-                publicationId));
+        return findPublicationById(publicationId, false);
+    }
+    @Override public ArchivePublicationRecord findPublicationById(String publicationId, boolean lock) {
+        return first(jdbc.query("SELECT * FROM archive_publication WHERE publication_id=?"
+                + (lock ? " FOR UPDATE" : ""), PUBLICATION, publicationId));
     }
     @Override public void insertPublicationReadback(ArchivePublicationReadbackRecord readback) {
         if (jdbc.update("INSERT INTO archive_publication_readback(publication_id,state,revision,verification_digest,findings_json,checked_at) VALUES (?,?,?,?,?,?)",
@@ -560,8 +593,11 @@ public class JdbcArchiveMaintenanceStore implements ArchiveMaintenanceStore {
         }
     }
     @Override public ArchivePublicationReadbackRecord findPublicationReadback(String publicationId) {
-        return first(jdbc.query("SELECT * FROM archive_publication_readback WHERE publication_id=?",
-                READBACK, publicationId));
+        return findPublicationReadback(publicationId, false);
+    }
+    @Override public ArchivePublicationReadbackRecord findPublicationReadback(String publicationId, boolean lock) {
+        return first(jdbc.query("SELECT * FROM archive_publication_readback WHERE publication_id=?"
+                + (lock ? " FOR UPDATE" : ""), READBACK, publicationId));
     }
     @Override public int completePublicationReadback(String publicationId, long expectedRevision,
             String state, String verificationDigest, String findingsJson) {
@@ -580,7 +616,8 @@ public class JdbcArchiveMaintenanceStore implements ArchiveMaintenanceStore {
         return jdbc.update("UPDATE archive_publication SET state='WITHDRAWN' WHERE publication_id=? AND state='PUBLISHED'", publicationId);
     }
     @Override public void insertWithdrawal(ArchiveWithdrawalRecord w) {
-        jdbc.update("""
+        requireBusinessTransaction();
+        if (jdbc.update("""
                 INSERT INTO archive_edition_withdrawal(withdrawal_id,publication_id,collection_id,work_id,edition_id,
                 reason,tenant_id,client_id,owner_jiacn,actor_type,actor_id,authorization_revision,
                 requested_replacement_active_edition_id,resulting_active_edition_id,resulting_work_revision,
@@ -588,7 +625,25 @@ public class JdbcArchiveMaintenanceStore implements ArchiveMaintenanceStore {
                 """, w.withdrawalId(), w.publicationId(), w.collectionId(), w.workId(), w.editionId(),
                 w.reason(), w.tenantId(), w.clientId(), w.ownerJiacn(), w.actorType(), w.actorId(),
                 w.authorizationRevision(), w.requestedReplacementActiveEditionId(), w.resultingActiveEditionId(),
-                w.resultingWorkRevision(), w.operationKey(), Timestamp.from(w.withdrawnAt()), w.outboxState());
+                w.resultingWorkRevision(), w.operationKey(), Timestamp.from(w.withdrawnAt()), w.outboxState()) != 1) {
+            throw new IllegalStateException("Archive withdrawal insert failed");
+        }
+        int outboxInserted = jdbc.update("""
+                INSERT INTO archive_business_outbox(projection_key,source_type,job_id,event_sequence,withdrawal_id,
+                state,attempt_count,fencing_token,available_at,lease_until,last_error_code,projected_message_id)
+                SELECT CONCAT('WITHDRAWAL:',?), 'WITHDRAWAL',p.job_id,NULL,?,'READY',0,0,?,NULL,NULL,NULL
+                FROM archive_publication p WHERE p.publication_id=? AND p.job_id IS NOT NULL
+                """, w.withdrawalId(), w.withdrawalId(), Timestamp.from(w.withdrawnAt()),
+                w.publicationId());
+        if (outboxInserted == 1) return;
+        if (outboxInserted != 0 || jdbc.update("""
+                UPDATE archive_edition_withdrawal w
+                JOIN archive_publication p ON p.publication_id=w.publication_id
+                SET w.outbox_state='NO_TARGET'
+                WHERE w.withdrawal_id=? AND w.outbox_state='PENDING' AND p.job_id IS NULL
+                """, w.withdrawalId()) != 1) {
+            throw new IllegalStateException("Archive withdrawal outbox insert failed");
+        }
     }
     @Override public ArchiveWithdrawalRecord findWithdrawal(String withdrawalId) {
         return first(jdbc.query("""
@@ -596,6 +651,14 @@ public class JdbcArchiveMaintenanceStore implements ArchiveMaintenanceStore {
                        w.authorization_revision AS withdraw_authorization_revision
                 FROM archive_edition_withdrawal w WHERE w.withdrawal_id=?
                 """, WITHDRAWAL, withdrawalId));
+    }
+
+    @Override public ArchiveWithdrawalRecord findWithdrawalByPublication(String publicationId, boolean lock) {
+        return first(jdbc.query("""
+                SELECT w.*, w.actor_type AS withdraw_actor_type, w.actor_id AS withdraw_actor_id,
+                       w.authorization_revision AS withdraw_authorization_revision
+                FROM archive_edition_withdrawal w WHERE w.publication_id=?
+                """ + (lock ? " FOR UPDATE" : ""), WITHDRAWAL, publicationId));
     }
 
     private static String versionSelect() {
@@ -616,9 +679,18 @@ public class JdbcArchiveMaintenanceStore implements ArchiveMaintenanceStore {
         Long next = jdbc.queryForObject("SELECT COALESCE(MAX(sequence),0)+1 FROM archive_event WHERE job_id=?",
                 Long.class, jobId);
         if (next == null || next < 1) throw new IllegalStateException("Archive event sequence unavailable");
-        jdbc.update("INSERT INTO archive_event(job_id,sequence,schema_version,event_type,job_revision,data_json,outbox_state) "
+        if (jdbc.update("INSERT INTO archive_event(job_id,sequence,schema_version,event_type,job_revision,data_json,outbox_state) "
                         + "VALUES (?,?,1,?,?,?,'PENDING')",
-                jobId, next, eventType, jobRevision, dataJson);
+                jobId, next, eventType, jobRevision, dataJson) != 1) {
+            throw new IllegalStateException("Archive event insert failed");
+        }
+        if (jdbc.update("""
+                INSERT INTO archive_business_outbox(projection_key,source_type,job_id,event_sequence,withdrawal_id,
+                state,attempt_count,fencing_token,available_at,lease_until,last_error_code,projected_message_id)
+                VALUES (CONCAT('EVENT:',?,':',?),'JOB_EVENT',?,?,NULL,'READY',0,0,CURRENT_TIMESTAMP(6),NULL,NULL,NULL)
+                """, jobId, next, jobId, next) != 1) {
+            throw new IllegalStateException("Archive event outbox insert failed");
+        }
     }
 
     @Override public List<ArchiveJobEventRecord> listJobEvents(String jobId, long afterSequence, int limit) {
@@ -629,6 +701,116 @@ public class JdbcArchiveMaintenanceStore implements ArchiveMaintenanceStore {
                         rs.getString(6), rs.getTimestamp(7).toInstant().toString()),
                 jobId, afterSequence, limit);
     }
+    @Override public ArchiveJobEventRecord findJobEvent(String jobId, long sequence, boolean lock) {
+        return first(jdbc.query("SELECT job_id,sequence,schema_version,event_type,job_revision,data_json,occurred_at "
+                        + "FROM archive_event WHERE job_id=? AND sequence=?" + (lock ? " FOR UPDATE" : ""),
+                (rs, n) -> new ArchiveJobEventRecord(rs.getString(1), rs.getLong(2),
+                        rs.getLong(3), rs.getString(4), rs.getLong(5), rs.getString(6),
+                        rs.getTimestamp(7).toInstant().toString()), jobId, sequence));
+    }
+
+    @Override public List<ArchiveBusinessOutboxRecord> findBusinessOutboxCandidates(Instant now,
+            Instant afterAvailableAt, String afterProjectionKey, int limit) {
+        if (now == null || limit < 1 || limit > 100) {
+            throw new IllegalArgumentException("Archive business outbox scan is invalid");
+        }
+        List<ArchiveBusinessOutboxRecord> candidates = new ArrayList<>(limit * 3);
+        candidates.addAll(scanBusinessOutboxQueue("READY", "available_at",
+                "idx_archive_business_available", now, afterAvailableAt, afterProjectionKey, limit));
+        candidates.addAll(scanBusinessOutboxQueue("WAITING_RETRY", "available_at",
+                "idx_archive_business_available", now, afterAvailableAt, afterProjectionKey, limit));
+        candidates.addAll(scanBusinessOutboxQueue("LEASED", "lease_until",
+                "idx_archive_business_lease", now, afterAvailableAt, afterProjectionKey, limit));
+        return candidates.stream()
+                .sorted(Comparator.comparing(JdbcArchiveMaintenanceStore::businessCandidateAt)
+                        .thenComparing(ArchiveBusinessOutboxRecord::projectionKey))
+                .limit(limit)
+                .toList();
+    }
+
+    private List<ArchiveBusinessOutboxRecord> scanBusinessOutboxQueue(String state, String timeColumn,
+            String indexName, Instant now, Instant afterAvailableAt, String afterProjectionKey, int limit) {
+        boolean leased = "LEASED".equals(state);
+        boolean available = "READY".equals(state) || "WAITING_RETRY".equals(state);
+        if ((!leased && !available)
+                || (leased && (!("lease_until".equals(timeColumn))
+                        || !("idx_archive_business_lease".equals(indexName))))
+                || (available && (!("available_at".equals(timeColumn))
+                        || !("idx_archive_business_available".equals(indexName))))) {
+            throw new IllegalArgumentException("Archive business outbox queue is invalid");
+        }
+        String base = "SELECT o.* FROM archive_business_outbox o FORCE INDEX (" + indexName + ") "
+                + "WHERE o.state=? AND o." + timeColumn + "<=? ";
+        if (afterAvailableAt == null) {
+            return jdbc.query(base + "ORDER BY o." + timeColumn + ",o.projection_key LIMIT ?",
+                    BUSINESS_OUTBOX, state, Timestamp.from(now), limit);
+        }
+        Timestamp after = Timestamp.from(afterAvailableAt);
+        return jdbc.query(base + "AND (o." + timeColumn + ">? OR (o." + timeColumn
+                        + "=? AND o.projection_key>?)) ORDER BY o." + timeColumn
+                        + ",o.projection_key LIMIT ?",
+                BUSINESS_OUTBOX, state, Timestamp.from(now), after, after,
+                afterProjectionKey == null ? "" : afterProjectionKey, limit);
+    }
+
+    private static Instant businessCandidateAt(ArchiveBusinessOutboxRecord candidate) {
+        Instant value = "LEASED".equals(candidate.state())
+                ? candidate.leaseUntil() : candidate.availableAt();
+        if (value == null) throw new IllegalStateException("Archive business candidate time is unavailable");
+        return value;
+    }
+
+    @Override public ArchiveBusinessOutboxRecord findBusinessOutbox(String projectionKey, boolean lock) {
+        return first(jdbc.query("SELECT * FROM archive_business_outbox WHERE projection_key=?"
+                + (lock ? " FOR UPDATE" : ""), BUSINESS_OUTBOX, projectionKey));
+    }
+
+    @Override public int claimBusinessOutbox(String projectionKey, long expectedFencingToken,
+            String expectedState, Instant now, Instant leaseUntil) {
+        return jdbc.update("""
+                UPDATE archive_business_outbox
+                SET state='LEASED',attempt_count=attempt_count+1,fencing_token=fencing_token+1,
+                    lease_until=?,last_error_code=NULL
+                WHERE projection_key=? AND fencing_token=? AND state=?
+                  AND ((state IN ('READY','WAITING_RETRY') AND available_at<=?)
+                    OR (state='LEASED' AND lease_until<=?))
+                """, Timestamp.from(leaseUntil), projectionKey, expectedFencingToken, expectedState,
+                Timestamp.from(now), Timestamp.from(now));
+    }
+
+    @Override public int retryBusinessOutbox(String projectionKey, long fencingToken,
+            Instant availableAt, String errorCode) {
+        return jdbc.update("""
+                UPDATE archive_business_outbox
+                SET state='WAITING_RETRY',available_at=?,lease_until=NULL,last_error_code=?,projected_message_id=NULL
+                WHERE projection_key=? AND fencing_token=? AND state='LEASED'
+                """, Timestamp.from(availableAt), errorCode, projectionKey, fencingToken);
+    }
+
+    @Override public int completeBusinessOutbox(String projectionKey, long fencingToken,
+            String terminalState, Long projectedMessageId, String terminalCode) {
+        requireBusinessTransaction();
+        if (!("DELIVERED".equals(terminalState) || "NO_TARGET".equals(terminalState))) {
+            throw new IllegalArgumentException("Archive business outbox terminal state is invalid");
+        }
+        ArchiveBusinessOutboxRecord row = findBusinessOutbox(projectionKey, true);
+        if (row == null || row.fencingToken() != fencingToken || !"LEASED".equals(row.state())) return 0;
+        int updated = jdbc.update("""
+                UPDATE archive_business_outbox
+                SET state=?,lease_until=NULL,last_error_code=?,projected_message_id=?
+                WHERE projection_key=? AND fencing_token=? AND state='LEASED'
+                """, terminalState, terminalCode, projectedMessageId, projectionKey, fencingToken);
+        if (updated != 1) return 0;
+        String sourceState = terminalState;
+        int sourceUpdated = "JOB_EVENT".equals(row.sourceType())
+                ? jdbc.update("UPDATE archive_event SET outbox_state=? WHERE job_id=? AND sequence=? AND outbox_state='PENDING'",
+                        sourceState, row.jobId(), row.eventSequence())
+                : jdbc.update("UPDATE archive_edition_withdrawal SET outbox_state=? WHERE withdrawal_id=? AND outbox_state='PENDING'",
+                        sourceState, row.withdrawalId());
+        if (sourceUpdated != 1) throw new IllegalStateException("Archive business source acknowledgement failed");
+        return 1;
+    }
+
     @Override public Operation findOperation(ArchiveActorScope actor, String key) {
         return first(jdbc.query("SELECT http_method,canonical_path,request_sha256,target_type,target_id,state "
                 + "FROM archive_operation WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND operation_key=?",
@@ -694,6 +876,12 @@ public class JdbcArchiveMaintenanceStore implements ArchiveMaintenanceStore {
         return jdbc.update("UPDATE archive_admin_operation_receipt SET state='COMMITTED',result_json=?,committed_at=CURRENT_TIMESTAMP(6) WHERE operation_id=? AND state='PENDING' AND result_json IS NULL",
                 resultJson,id);
     }
+    private void requireBusinessTransaction() {
+        if (!TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new IllegalStateException("Archive business outbox mutation requires a transaction");
+        }
+    }
+
     private static Instant instant(Timestamp value) { return value == null ? null : value.toInstant(); }
     private static <T> T first(List<T> values) { return values.isEmpty() ? null : values.getFirst(); }
 }

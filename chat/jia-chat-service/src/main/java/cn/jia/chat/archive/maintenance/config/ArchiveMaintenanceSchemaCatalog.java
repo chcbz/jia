@@ -17,7 +17,7 @@ public final class ArchiveMaintenanceSchemaCatalog {
     public static final List<String> TABLE_ORDER = List.of("archive_collection", "archive_collection_manager",
             "archive_collection_work", "archive_appointment_slot", "archive_appointment",
             "archive_source_snapshot", "archive_confirmed_request", "archive_maintenance_job", "archive_job_run", "archive_execution_grant", "archive_draft", "archive_validation",
-            "archive_publication", "archive_publication_readback", "archive_edition_withdrawal", "archive_event", "archive_operation",
+            "archive_publication", "archive_publication_readback", "archive_edition_withdrawal", "archive_event", "archive_business_outbox", "archive_operation",
             "archive_admin_operation_receipt");
     private static final Pattern TABLE = Pattern.compile(
             "CREATE TABLE IF NOT EXISTS (\\w+) \\(\\s*(.*?)\\s*\\) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;",
@@ -106,6 +106,20 @@ public final class ArchiveMaintenanceSchemaCatalog {
             throw new IllegalStateException("Archive maintenance DDL table list drift");
         }
         return new Definition(Map.copyOf(tables));
+    }
+
+
+    static Table predecessorOutboxSourceTable(Definition current, String tableName) {
+        Table table = current.tables().get(tableName);
+        if (table == null || !("archive_event".equals(tableName)
+                || "archive_edition_withdrawal".equals(tableName))) {
+            throw new IllegalStateException("Archive outbox predecessor table is invalid");
+        }
+        Map<String, String> checks = new LinkedHashMap<>(table.checks());
+        String checkName = "archive_event".equals(tableName)
+                ? "chk_archive_event_outbox" : "chk_archive_withdrawal_outbox";
+        checks.put(checkName, "YES:" + normalizeCheck("outbox_state IN ('PENDING','DELIVERED')"));
+        return new Table(table.columns(), table.indexes(), table.foreignKeys(), Map.copyOf(checks));
     }
 
     static Table previousWaitingShapeJobTable(Definition current) {

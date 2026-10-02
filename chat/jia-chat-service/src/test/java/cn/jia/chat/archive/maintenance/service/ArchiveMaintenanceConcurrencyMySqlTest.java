@@ -1060,6 +1060,200 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
     }
 
     @Test
+    void businessOutboxRejectsNullJobEventSequenceByItsNamedSourceConstraint() {
+        jdbc.update("INSERT INTO archive_collection_manager(collection_id,tenant_id,client_id,owner_jiacn,"
+                + "permissions,state,revision) VALUES (?,'0','client-a','owner-a','job.manage','ACTIVE',1)",
+                COLLECTION);
+        jdbc.update("INSERT INTO archive_maintenance_job(job_id,collection_id,tenant_id,client_id,owner_jiacn,"
+                + "manager_authorization_revision,publication_mode,operation_code,state,wait_reason,revision,"
+                + "request_intent_id,request_sha256) VALUES ('shape-job',?,'0','client-a','owner-a',1,"
+                + "'MANUAL','ADD_WORK','WAITING_INPUT','SOURCE_AND_WORK',1,'shape-intent',?)",
+                COLLECTION, SHA);
+        jdbc.update("INSERT INTO archive_event(job_id,sequence,schema_version,event_type,job_revision,data_json,"
+                + "outbox_state) VALUES ('shape-job',1,1,'JOB_CREATED',1,'{}','PENDING')");
+
+        DataAccessException rejected = assertThrows(DataAccessException.class, () -> jdbc.update("""
+                INSERT INTO archive_business_outbox(
+                    projection_key,source_type,job_id,event_sequence,withdrawal_id,state,
+                    attempt_count,fencing_token,available_at,lease_until,last_error_code,projected_message_id)
+                VALUES ('EVENT:shape-job:null','JOB_EVENT','shape-job',NULL,NULL,'READY',0,0,
+                        CURRENT_TIMESTAMP(6),NULL,NULL,NULL)
+                """));
+        assertTrue(exceptionMessages(rejected).contains("chk_archive_business_source"),
+                "the negative row must reach the named source CHECK, not fail through a fixture FK");
+    }
+
+    @Test
+    void businessOutboxIndexAndCheckDriftRemainFailClosed() {
+        jdbc.execute("ALTER TABLE archive_business_outbox DROP INDEX idx_archive_business_lease");
+        IllegalStateException indexDrift = assertThrows(IllegalStateException.class,
+                () -> new ArchiveMaintenanceSchemaInitializer(jdbc,
+                        new JdbcArchiveMaintenanceStore(jdbc),
+                        new ArchiveMaintenanceProperties()).initialize());
+        assertTrue(indexDrift.getMessage().contains("archive_business_outbox.indexes"));
+
+        clean();
+        new ArchiveSchemaInitializer(jdbc).initialize();
+        new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
+                new ArchiveMaintenanceProperties()).initialize();
+        jdbc.execute("ALTER TABLE archive_business_outbox DROP CHECK chk_archive_business_source, "
+                + "ADD CONSTRAINT chk_archive_business_source CHECK "
+                + "(((source_type='JOB_EVENT') AND (event_sequence >= 1) "
+                + "AND (withdrawal_id IS NULL)) OR ((source_type='WITHDRAWAL') "
+                + "AND (event_sequence IS NULL) AND (withdrawal_id IS NOT NULL)))");
+        IllegalStateException checkDrift = assertThrows(IllegalStateException.class,
+                () -> new ArchiveMaintenanceSchemaInitializer(jdbc,
+                        new JdbcArchiveMaintenanceStore(jdbc),
+                        new ArchiveMaintenanceProperties()).initialize());
+        assertTrue(checkDrift.getMessage().contains("archive_business_outbox.checks"));
+    }
+
+    @Test
+    void businessOutboxSourceAcknowledgementDriftRemainsFailClosed() {
+        jdbc.update("INSERT INTO archive_collection_manager(collection_id,tenant_id,client_id,owner_jiacn,"
+                + "permissions,state,revision) VALUES (?,'0','client-a','owner-a','job.manage','ACTIVE',1)",
+                COLLECTION);
+        jdbc.update("INSERT INTO archive_maintenance_job(job_id,collection_id,tenant_id,client_id,owner_jiacn,"
+                + "manager_authorization_revision,publication_mode,operation_code,state,wait_reason,revision,"
+                + "request_intent_id,request_sha256) VALUES ('state-job',?,'0','client-a','owner-a',1,"
+                + "'MANUAL','ADD_WORK','WAITING_INPUT','SOURCE_AND_WORK',1,'state-intent',?)",
+                COLLECTION, SHA);
+        jdbc.update("INSERT INTO archive_event(job_id,sequence,schema_version,event_type,job_revision,data_json,"
+                + "outbox_state) VALUES ('state-job',1,1,'JOB_CREATED',1,'{}','PENDING')");
+        jdbc.update("INSERT INTO archive_business_outbox(projection_key,source_type,job_id,event_sequence,"
+                + "withdrawal_id,state,attempt_count,fencing_token,available_at,lease_until,last_error_code,"
+                + "projected_message_id) VALUES ('EVENT:state-job:1','JOB_EVENT','state-job',1,NULL,'READY',"
+                + "0,0,CURRENT_TIMESTAMP(6),NULL,NULL,NULL)");
+        jdbc.update("UPDATE archive_event SET outbox_state='DELIVERED' "
+                + "WHERE job_id='state-job' AND sequence=1");
+
+        IllegalStateException drift = assertThrows(IllegalStateException.class,
+                () -> new ArchiveMaintenanceSchemaInitializer(jdbc,
+                        new JdbcArchiveMaintenanceStore(jdbc),
+                        new ArchiveMaintenanceProperties()).initialize());
+        assertTrue(drift.getMessage().contains("source acknowledgement is inconsistent"));
+    }
+
+    @Test
+    void exactEighteenTablePredecessorBackfillsPendingBusinessFactsWithoutChangingPrivateBytes()
+            throws Exception {
+        clean();
+        new ArchiveSchemaInitializer(jdbc).initialize();
+        new ArchiveReaderDataSchemaInitializer(jdbc).initialize();
+        String ddl;
+        try (var input = new ClassPathResource("db/archive-maintenance-schema.sql").getInputStream()) {
+            ddl = new String(input.readAllBytes(), StandardCharsets.UTF_8);
+        }
+        new ResourceDatabasePopulator(new ByteArrayResource(
+                businessOutboxPredecessorSchema(ddl).getBytes(StandardCharsets.UTF_8)))
+                .execute(dataSource);
+        jdbc.update("INSERT INTO archive_collection_manager(collection_id,tenant_id,client_id,owner_jiacn,"
+                + "permissions,state,revision) VALUES (?,'0','client-a','owner-a','job.manage','ACTIVE',1)",
+                COLLECTION);
+        jdbc.update("INSERT INTO archive_maintenance_job(job_id,collection_id,tenant_id,client_id,owner_jiacn,"
+                + "manager_authorization_revision,publication_mode,operation_code,state,wait_reason,revision,"
+                + "request_intent_id,request_sha256) VALUES ('upgrade-outbox-job',?,'0','client-a','owner-a',1,"
+                + "'MANUAL','ADD_WORK','WAITING_INPUT','SOURCE_AND_WORK',1,'upgrade-outbox-intent',?)",
+                COLLECTION, SHA);
+        jdbc.update("INSERT INTO archive_event(job_id,sequence,schema_version,event_type,job_revision,data_json,"
+                + "outbox_state) VALUES ('upgrade-outbox-job',1,1,'JOB_CREATED',1,?,'PENDING')",
+                "{\"private\":\"preserve exactly\"}");
+        String eventDigest = jdbc.queryForObject(
+                "SELECT SHA2(CONCAT(event_type,':',data_json,':',outbox_state),256) FROM archive_event "
+                        + "WHERE job_id='upgrade-outbox-job' AND sequence=1", String.class);
+        jdbc.update("INSERT INTO archive_work(work_id,title,active_edition_id) VALUES "
+                + "('upgrade-outbox-work','title',NULL)");
+        jdbc.update("INSERT INTO archive_edition(edition_id,work_id,import_state,source_sha256,manifest_sha256,"
+                + "manifest_file_sha256,source_utf8_byte_length,chapter_count,preface_paragraph_count,"
+                + "chapter_paragraph_count,reader_paragraph_count,preface_utf8_byte_length,"
+                + "chapter_utf8_byte_length,reader_utf8_byte_length) VALUES ('upgrade-outbox-edition',"
+                + "'upgrade-outbox-work','READY',?,?,?,1,1,0,1,1,0,1,1)", SHA, SHA, SHA);
+        jdbc.update("INSERT INTO archive_chapter(edition_id,block_id,block_type,reader_ordinal,chapter_number,"
+                + "title,paragraph_count,utf8_byte_length,block_content_sha256) VALUES "
+                + "('upgrade-outbox-edition','upgrade-outbox-edition-c001','CHAPTER',1,1,'chapter',1,1,?)", SHA);
+        jdbc.update("INSERT INTO archive_paragraph(edition_id,block_id,paragraph_id,ordinal,text,"
+                + "utf8_byte_length,sha256) VALUES ('upgrade-outbox-edition','upgrade-outbox-edition-c001',"
+                + "'upgrade-outbox-edition-c001-p0001',1,'x',1,?)", SHA);
+        jdbc.update("INSERT INTO archive_note(tenant_id,client_id,owner_jiacn,note_id,edition_id,state,"
+                + "text,block_id,anchor_json,version) VALUES ('0','private-client','private-owner',"
+                + "'423e4567-e89b-82d3-a456-426614174000','upgrade-outbox-edition','ACTIVE',"
+                + "'private outbox upgrade fact',NULL,NULL,1)");
+        String privateDigest = jdbc.queryForObject("SELECT SHA2(CONCAT(owner_jiacn,':',text,':',version),256) "
+                + "FROM archive_note WHERE note_id='423e4567-e89b-82d3-a456-426614174000'", String.class);
+        jdbc.update("INSERT INTO archive_publication(publication_id,job_id,collection_id,work_id,edition_id,"
+                + "draft_revision,manifest_sha256,source_sha256,state,actor_type,actor_id,authorization_revision) "
+                + "VALUES ('upgrade-outbox-publication','upgrade-outbox-job',?,'upgrade-outbox-work',"
+                + "'upgrade-outbox-edition',1,?,?,'WITHDRAWN','HUMAN','owner-a',1)", COLLECTION, SHA, SHA);
+        jdbc.update("INSERT INTO archive_edition_withdrawal(withdrawal_id,publication_id,collection_id,work_id,"
+                + "edition_id,reason,tenant_id,client_id,owner_jiacn,actor_type,actor_id,authorization_revision,"
+                + "requested_replacement_active_edition_id,resulting_active_edition_id,resulting_work_revision,"
+                + "operation_key,outbox_state) VALUES ('upgrade-outbox-withdrawal','upgrade-outbox-publication',?,"
+                + "'upgrade-outbox-work','upgrade-outbox-edition','reason','0','client-a','owner-a','HUMAN',"
+                + "'owner-a',1,NULL,NULL,2,'upgrade-outbox-key','PENDING')", COLLECTION);
+        jdbc.update("INSERT INTO archive_edition(edition_id,work_id,import_state,source_sha256,manifest_sha256,"
+                + "manifest_file_sha256,source_utf8_byte_length,chapter_count,preface_paragraph_count,"
+                + "chapter_paragraph_count,reader_paragraph_count,preface_utf8_byte_length,"
+                + "chapter_utf8_byte_length,reader_utf8_byte_length) VALUES ('upgrade-bootstrap-edition',"
+                + "'upgrade-outbox-work','READY',?,?,?,1,1,0,1,1,0,1,1)", SHA, SHA, SHA);
+        jdbc.update("INSERT INTO archive_chapter(edition_id,block_id,block_type,reader_ordinal,chapter_number,"
+                + "title,paragraph_count,utf8_byte_length,block_content_sha256) VALUES "
+                + "('upgrade-bootstrap-edition','upgrade-bootstrap-edition-c001','CHAPTER',1,1,"
+                + "'chapter',1,1,?)", SHA);
+        jdbc.update("INSERT INTO archive_paragraph(edition_id,block_id,paragraph_id,ordinal,text,"
+                + "utf8_byte_length,sha256) VALUES ('upgrade-bootstrap-edition',"
+                + "'upgrade-bootstrap-edition-c001','upgrade-bootstrap-edition-c001-p0001',"
+                + "1,'x',1,?)", SHA);
+        jdbc.update("INSERT INTO archive_publication(publication_id,job_id,collection_id,work_id,edition_id,"
+                + "draft_revision,manifest_sha256,source_sha256,state,actor_type,actor_id,authorization_revision) "
+                + "VALUES ('upgrade-bootstrap-publication',NULL,?,'upgrade-outbox-work',"
+                + "'upgrade-bootstrap-edition',1,?,?,'WITHDRAWN','HUMAN','owner-a',1)",
+                COLLECTION, SHA, SHA);
+        jdbc.update("INSERT INTO archive_edition_withdrawal(withdrawal_id,publication_id,collection_id,work_id,"
+                + "edition_id,reason,tenant_id,client_id,owner_jiacn,actor_type,actor_id,authorization_revision,"
+                + "requested_replacement_active_edition_id,resulting_active_edition_id,resulting_work_revision,"
+                + "operation_key,outbox_state) VALUES ('upgrade-bootstrap-withdrawal',"
+                + "'upgrade-bootstrap-publication',?,'upgrade-outbox-work','upgrade-bootstrap-edition',"
+                + "'bootstrap reason','0','client-a','owner-a','HUMAN','owner-a',1,NULL,NULL,3,"
+                + "'upgrade-bootstrap-key','PENDING')", COLLECTION);
+        String withdrawalDigest = jdbc.queryForObject(
+                "SELECT SHA2(CONCAT(reason,':',actor_id,':',operation_key,':',outbox_state),256) "
+                        + "FROM archive_edition_withdrawal WHERE withdrawal_id='upgrade-outbox-withdrawal'",
+                String.class);
+        // Simulate an interrupted ordered DDL bridge: event CHECK upgraded, withdrawal/table pending.
+        jdbc.execute("ALTER TABLE archive_event DROP CHECK chk_archive_event_outbox, "
+                + "ADD CONSTRAINT chk_archive_event_outbox CHECK "
+                + "(outbox_state IN ('PENDING','DELIVERED','NO_TARGET'))");
+
+        new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
+                new ArchiveMaintenanceProperties()).initialize();
+
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM archive_business_outbox", Integer.class));
+        assertEquals("READY:PENDING", jdbc.queryForObject("SELECT CONCAT(o.state,':',e.outbox_state) "
+                + "FROM archive_business_outbox o JOIN archive_event e ON e.job_id=o.job_id "
+                + "AND e.sequence=o.event_sequence WHERE o.projection_key='EVENT:upgrade-outbox-job:1'",
+                String.class));
+        assertEquals("READY:PENDING", jdbc.queryForObject("SELECT CONCAT(o.state,':',w.outbox_state) "
+                + "FROM archive_business_outbox o JOIN archive_edition_withdrawal w "
+                + "ON w.withdrawal_id=o.withdrawal_id WHERE o.projection_key="
+                + "'WITHDRAWAL:upgrade-outbox-withdrawal'", String.class));
+        assertEquals("NO_TARGET:0", jdbc.queryForObject("SELECT CONCAT(w.outbox_state,':',"
+                + "(SELECT COUNT(*) FROM archive_business_outbox o "
+                + "WHERE o.withdrawal_id=w.withdrawal_id)) FROM archive_edition_withdrawal w "
+                + "WHERE w.withdrawal_id='upgrade-bootstrap-withdrawal'", String.class),
+                "an upgraded bootstrap withdrawal must terminate without a fabricated job");
+        assertEquals(eventDigest, jdbc.queryForObject(
+                "SELECT SHA2(CONCAT(event_type,':',data_json,':',outbox_state),256) FROM archive_event "
+                        + "WHERE job_id='upgrade-outbox-job' AND sequence=1", String.class));
+        assertEquals(withdrawalDigest, jdbc.queryForObject(
+                "SELECT SHA2(CONCAT(reason,':',actor_id,':',operation_key,':',outbox_state),256) "
+                        + "FROM archive_edition_withdrawal WHERE withdrawal_id='upgrade-outbox-withdrawal'",
+                String.class));
+        assertEquals(privateDigest, jdbc.queryForObject(
+                "SELECT SHA2(CONCAT(owner_jiacn,':',text,':',version),256) FROM archive_note "
+                        + "WHERE note_id='423e4567-e89b-82d3-a456-426614174000'", String.class));
+    }
+
+    @Test
     void completePreviousMaintenanceSchemaUpgradesAdditivelyAndMalformedBreakpointFailsClosed() throws Exception {
         clean();
         new ArchiveSchemaInitializer(jdbc).initialize();
@@ -1189,12 +1383,18 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         ArchiveWithdrawalDTO replay = service.withdraw(ACTOR, "work-withdraw", "edition-a", "withdraw-a", 1,
                 new ArchiveWithdrawRequest("rights correction", "edition-b"));
         assertEquals(first, replay);
+        assertEquals("NO_TARGET", first.outboxState());
+        assertEquals("NO_TARGET", replay.outboxState());
         assertEquals("edition-b", first.resultingActiveEditionId());
         assertEquals("2", first.resultingWorkRevision());
         assertEquals("edition-b:2:WITHDRAWN", jdbc.queryForObject(
                 "SELECT CONCAT(w.active_edition_id,':',cw.revision,':',p.state) FROM archive_work w JOIN archive_collection_work cw ON cw.work_id=w.work_id JOIN archive_publication p ON p.edition_id='edition-a' WHERE w.work_id='work-withdraw'", String.class));
-        assertEquals("rights correction:owner-a:5:withdraw-a:PENDING", jdbc.queryForObject(
+        assertEquals("rights correction:owner-a:5:withdraw-a:NO_TARGET", jdbc.queryForObject(
                 "SELECT CONCAT(reason,':',actor_id,':',authorization_revision,':',operation_key,':',outbox_state) FROM archive_edition_withdrawal WHERE publication_id='pub-edition-a'", String.class));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM archive_business_outbox "
+                + "WHERE withdrawal_id=?", Integer.class, first.withdrawalId()),
+                "a bootstrap publication without a maintenance job must terminate explicitly "
+                        + "without inventing a chat target");
         ArchiveEditionHistoryDTO history = service.editionHistory(ACTOR, "work-withdraw");
         ArchiveEditionVersionDTO withdrawn = history.editions().stream()
                 .filter(value -> "edition-a".equals(value.editionId())).findFirst().orElseThrow();
@@ -1459,13 +1659,24 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                         + "(SELECT text FROM archive_note WHERE note_id='423e4567-e89b-82d3-a456-426614174000'),':',"
                         + "(SELECT result_json FROM archive_admin_operation_receipt WHERE operation_id='admin-upgrade')),256)",
                 String.class);
+        jdbc.execute("DROP TABLE archive_business_outbox");
         jdbc.execute("DROP TABLE archive_publication_readback");
+        jdbc.execute("ALTER TABLE archive_event DROP CHECK chk_archive_event_outbox, "
+                + "ADD CONSTRAINT chk_archive_event_outbox CHECK "
+                + "(outbox_state IN ('PENDING','DELIVERED'))");
+        jdbc.execute("ALTER TABLE archive_edition_withdrawal "
+                + "DROP CHECK chk_archive_withdrawal_outbox, "
+                + "ADD CONSTRAINT chk_archive_withdrawal_outbox CHECK "
+                + "(outbox_state IN ('PENDING','DELIVERED'))");
 
         new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
                 new ArchiveMaintenanceProperties()).initialize();
 
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables "
                 + "WHERE table_schema=DATABASE() AND table_name='archive_publication_readback'",
+                Integer.class));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables "
+                + "WHERE table_schema=DATABASE() AND table_name='archive_business_outbox'",
                 Integer.class));
         assertEquals("3:3", jdbc.queryForObject(
                 "SELECT CONCAT(COUNT(*),':',SUM(state='PENDING')) FROM archive_publication_readback",
@@ -1476,7 +1687,6 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                         + "(SELECT result_json FROM archive_admin_operation_receipt WHERE operation_id='admin-upgrade')),256)",
                 String.class));
 
-        jdbc.execute("DROP TABLE archive_publication_readback");
         jdbc.execute("ALTER TABLE archive_admin_operation_receipt MODIFY COLUMN result_json "
                 + "TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL");
         IllegalStateException drift = assertThrows(IllegalStateException.class, () ->
@@ -1800,14 +2010,35 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         return result;
     }
 
+    private static String businessOutboxPredecessorSchema(String ddl) {
+        String predecessor = ddl.replace(
+                "outbox_state IN ('PENDING','DELIVERED','NO_TARGET')",
+                "outbox_state IN ('PENDING','DELIVERED')")
+                .replaceFirst("(?s)CREATE TABLE IF NOT EXISTS archive_business_outbox \\(.*?\\) "
+                        + "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;\\s*", "");
+        assertEquals("5f358f3cd71f5cd8c7ecc0c633ae3aa0770305e913fc1f0d711c5245847213c2",
+                cn.jia.chat.archive.content.ArchiveEtags.sha256(
+                        predecessor.replace("\r\n", "\n").getBytes(StandardCharsets.UTF_8)),
+                "the outbox predecessor must remain byte-bound to 18d66419 after LF normalization");
+        return predecessor;
+    }
+
     private static String withoutPublicationReadback(String ddl) {
-        String predecessor = ddl.replaceFirst(
+        String predecessor = businessOutboxPredecessorSchema(ddl).replaceFirst(
                 "(?s)CREATE TABLE IF NOT EXISTS archive_publication_readback \\(.*?\\) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;\\s*", "");
         assertEquals("c398de55270b8a7dd0467e796ae7a8dd0444458c51f0b437e7ac90f11a9c4118",
                 cn.jia.chat.archive.content.ArchiveEtags.sha256(
                         predecessor.replace("\r\n", "\n").getBytes(StandardCharsets.UTF_8)),
                 "the additive predecessor must remain byte-bound to eb31260f after LF normalization");
         return predecessor;
+    }
+
+    private static String exceptionMessages(Throwable failure) {
+        StringBuilder messages = new StringBuilder();
+        for (Throwable current = failure; current != null; current = current.getCause()) {
+            if (current.getMessage() != null) messages.append(current.getMessage()).append('\n');
+        }
+        return messages.toString();
     }
 
     private static String legacyWaitingJobDdl() {
@@ -2007,7 +2238,7 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                 try {
                     statement.execute("DROP TABLE IF EXISTS aam_test_agent_root");
                     for (String table : new String[]{"archive_idempotency", "archive_note", "archive_bookmark",
-                            "archive_reader_progress", "archive_admin_operation_receipt", "archive_operation", "archive_event",
+                            "archive_reader_progress", "archive_admin_operation_receipt", "archive_operation", "archive_business_outbox", "archive_event",
                             "archive_edition_withdrawal", "archive_publication_readback", "archive_publication",
                             "archive_validation", "archive_draft", "archive_execution_grant", "archive_job_run",
                             "archive_maintenance_job", "archive_confirmed_request", "archive_source_snapshot", "archive_appointment",

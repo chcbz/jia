@@ -2,6 +2,7 @@ package cn.jia.chat.archive.maintenance.store;
 
 import cn.jia.chat.archive.maintenance.model.*;
 import cn.jia.chat.archive.maintenance.dto.ArchiveJobEventDTO;
+import java.time.Instant;
 import java.util.List;
 
 public interface ArchiveMaintenanceStore {
@@ -28,6 +29,7 @@ public interface ArchiveMaintenanceStore {
 
     ArchiveConfirmedRequestRecord findConfirmedRequest(ArchiveActorScope actor,
                                                         String confirmationRef, boolean lock);
+    ArchiveConfirmedRequestRecord findConfirmedRequestForJob(String jobId, boolean lock);
     void insertConfirmedRequest(ArchiveConfirmedRequestRecord confirmation);
     int bindConfirmedRequest(ArchiveActorScope actor, String confirmationRef, long expectedRevision,
                              String conversationId, String canonicalMessageId,
@@ -77,8 +79,10 @@ public interface ArchiveMaintenanceStore {
     void insertPublication(ArchivePublicationRecord publication);
     ArchivePublicationRecord findPublicationByJob(String jobId);
     ArchivePublicationRecord findPublicationById(String publicationId);
+    ArchivePublicationRecord findPublicationById(String publicationId, boolean lock);
     void insertPublicationReadback(ArchivePublicationReadbackRecord readback);
     ArchivePublicationReadbackRecord findPublicationReadback(String publicationId);
+    ArchivePublicationReadbackRecord findPublicationReadback(String publicationId, boolean lock);
     int completePublicationReadback(String publicationId, long expectedRevision, String state,
                                     String verificationDigest, String findingsJson);
     ArchiveEditionVersionRecord findPublication(String workId, String editionId, boolean lock);
@@ -86,9 +90,20 @@ public interface ArchiveMaintenanceStore {
     int withdrawPublication(String publicationId);
     void insertWithdrawal(ArchiveWithdrawalRecord withdrawal);
     ArchiveWithdrawalRecord findWithdrawal(String withdrawalId);
+    ArchiveWithdrawalRecord findWithdrawalByPublication(String publicationId, boolean lock);
 
     void appendJobEvent(String jobId, long jobRevision, String eventType, String dataJson);
     List<ArchiveJobEventRecord> listJobEvents(String jobId, long afterSequence, int limit);
+    ArchiveJobEventRecord findJobEvent(String jobId, long sequence, boolean lock);
+
+    List<ArchiveBusinessOutboxRecord> findBusinessOutboxCandidates(Instant now, Instant afterAvailableAt,
+                                                                  String afterProjectionKey, int limit);
+    ArchiveBusinessOutboxRecord findBusinessOutbox(String projectionKey, boolean lock);
+    int claimBusinessOutbox(String projectionKey, long expectedFencingToken, String expectedState,
+                            Instant now, Instant leaseUntil);
+    int retryBusinessOutbox(String projectionKey, long fencingToken, Instant availableAt, String errorCode);
+    int completeBusinessOutbox(String projectionKey, long fencingToken, String terminalState,
+                               Long projectedMessageId, String terminalCode);
 
     Operation findOperation(ArchiveActorScope actor, String key);
     TargetOperation findOperationByTarget(ArchiveActorScope actor, String targetType, String targetId);

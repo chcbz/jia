@@ -138,6 +138,8 @@ def archiveMaintenanceMvpSourceSet = sourceSets.create('archiveMaintenanceMvp') 
         include 'cn/jia/chat/archive/maintenance/entry/ArchiveMaintenanceChatCoordinatorTest.java'
         include 'cn/jia/chat/archive/maintenance/service/ArchiveMaintenanceServiceWiringContextTest.java'
         include 'cn/jia/chat/archive/maintenance/service/ArchiveExecutionCommandDispatcherTest.java'
+        include 'cn/jia/chat/archive/maintenance/service/ArchiveBusinessOutboxDispatcherTest.java'
+        include 'cn/jia/chat/archive/maintenance/service/ArchiveBusinessOutboxMySqlTest.java'
         include 'cn/jia/chat/archive/maintenance/service/ArchivePlatformSkillProvisioningPolicyTest.java'
         include 'cn/jia/chat/archive/maintenance/service/ArchiveSourceMappingValidatorTest.java'
         include 'cn/jia/chat/archive/maintenance/service/ArchiveSourceMappingGoldenVectorTest.java'

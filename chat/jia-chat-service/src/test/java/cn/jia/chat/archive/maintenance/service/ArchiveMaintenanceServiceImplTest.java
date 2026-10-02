@@ -1981,6 +1981,7 @@ class ArchiveMaintenanceServiceImplTest {
         });
         doAnswer(call -> { saved.set(call.getArgument(0)); return null; })
                 .when(store).insertWithdrawal(any());
+        when(store.findWithdrawalByPublication("pub-a", true)).thenAnswer(call -> saved.get());
         when(store.findWithdrawal(anyString())).thenAnswer(call -> saved.get());
 
         ArchiveWithdrawalDTO first = service.withdraw(MANAGER, workId, editionId, "withdraw-key", 7,

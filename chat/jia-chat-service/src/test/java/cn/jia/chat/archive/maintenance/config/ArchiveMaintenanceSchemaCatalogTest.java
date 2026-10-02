@@ -42,6 +42,17 @@ class ArchiveMaintenanceSchemaCatalogTest {
                 adminOperation.foreignKeys().get("fk_archive_admin_operation_key"));
         assertTrue(adminOperation.checks().get("chk_archive_admin_operation_state")
                 .contains("result_jsonisnotnull"));
+        var businessOutbox = expected.tables().get("archive_business_outbox");
+        assertEquals("1:state,available_at,projection_key",
+                businessOutbox.indexes().get("idx_archive_business_available"));
+        assertEquals("1:state,lease_until,projection_key",
+                businessOutbox.indexes().get("idx_archive_business_lease"));
+        assertEquals("job_id>archive_event.job_id,event_sequence>archive_event.sequence",
+                businessOutbox.foreignKeys().get("fk_archive_business_event"));
+        assertTrue(businessOutbox.checks().get("chk_archive_business_source")
+                .contains("event_sequenceisnotnull"));
+        assertTrue(businessOutbox.checks().get("chk_archive_business_state")
+                .contains("NO_TARGET"));
         var event = expected.tables().get("archive_event");
         assertEquals("0:job_id,sequence", event.indexes().get("PRIMARY"));
         assertEquals("job_id>archive_maintenance_job.job_id", event.foreignKeys().get("fk_archive_event_job"));

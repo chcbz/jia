@@ -346,7 +346,7 @@ CREATE TABLE IF NOT EXISTS archive_edition_withdrawal (
     CONSTRAINT fk_archive_withdrawal_edition FOREIGN KEY (edition_id) REFERENCES archive_edition(edition_id),
     CONSTRAINT chk_archive_withdrawal_revision CHECK ((authorization_revision >= 1) AND (resulting_work_revision >= 1)),
     CONSTRAINT chk_archive_withdrawal_actor CHECK (actor_type = 'HUMAN'),
-    CONSTRAINT chk_archive_withdrawal_outbox CHECK (outbox_state IN ('PENDING','DELIVERED'))
+    CONSTRAINT chk_archive_withdrawal_outbox CHECK (outbox_state IN ('PENDING','DELIVERED','NO_TARGET'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 CREATE TABLE IF NOT EXISTS archive_event (
     job_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -361,7 +361,37 @@ CREATE TABLE IF NOT EXISTS archive_event (
     KEY idx_archive_event_outbox (outbox_state, occurred_at),
     CONSTRAINT fk_archive_event_job FOREIGN KEY (job_id) REFERENCES archive_maintenance_job(job_id),
     CONSTRAINT chk_archive_event_sequence CHECK ((sequence >= 1) AND (schema_version >= 1) AND (job_revision >= 1)),
-    CONSTRAINT chk_archive_event_outbox CHECK (outbox_state IN ('PENDING','DELIVERED'))
+    CONSTRAINT chk_archive_event_outbox CHECK (outbox_state IN ('PENDING','DELIVERED','NO_TARGET'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
+CREATE TABLE IF NOT EXISTS archive_business_outbox (
+    projection_key VARCHAR(180) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    source_type VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    job_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    event_sequence BIGINT NULL,
+    withdrawal_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    state VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    attempt_count BIGINT NOT NULL,
+    fencing_token BIGINT NOT NULL,
+    available_at TIMESTAMP(6) NOT NULL,
+    lease_until TIMESTAMP(6) NULL,
+    last_error_code VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    projected_message_id BIGINT NULL,
+    created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (projection_key),
+    UNIQUE KEY uk_archive_business_event (job_id,event_sequence),
+    UNIQUE KEY uk_archive_business_withdrawal (withdrawal_id),
+    KEY idx_archive_business_available (state,available_at,projection_key),
+    KEY idx_archive_business_lease (state,lease_until,projection_key),
+    CONSTRAINT fk_archive_business_job FOREIGN KEY (job_id) REFERENCES archive_maintenance_job(job_id),
+    CONSTRAINT fk_archive_business_event FOREIGN KEY (job_id,event_sequence) REFERENCES archive_event(job_id,sequence),
+    CONSTRAINT fk_archive_business_withdrawal FOREIGN KEY (withdrawal_id) REFERENCES archive_edition_withdrawal(withdrawal_id),
+    CONSTRAINT chk_archive_business_source CHECK (((source_type='JOB_EVENT') AND (event_sequence IS NOT NULL) AND (event_sequence >= 1) AND (withdrawal_id IS NULL)) OR ((source_type='WITHDRAWAL') AND (event_sequence IS NULL) AND (withdrawal_id IS NOT NULL))),
+    CONSTRAINT chk_archive_business_state CHECK (state IN ('READY','LEASED','WAITING_RETRY','DELIVERED','NO_TARGET')),
+    CONSTRAINT chk_archive_business_counters CHECK ((attempt_count >= 0) AND (fencing_token >= 0)),
+    CONSTRAINT chk_archive_business_lease CHECK (((state='LEASED') AND (lease_until IS NOT NULL)) OR ((state IN ('READY','WAITING_RETRY','DELIVERED','NO_TARGET')) AND (lease_until IS NULL))),
+    CONSTRAINT chk_archive_business_result CHECK (((state='DELIVERED') AND (projected_message_id IS NOT NULL)) OR ((state<>'DELIVERED') AND (projected_message_id IS NULL))),
+    CONSTRAINT chk_archive_business_error CHECK (((state IN ('READY','LEASED','DELIVERED')) AND (last_error_code IS NULL)) OR ((state IN ('WAITING_RETRY','NO_TARGET')) AND (last_error_code IS NOT NULL)))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 CREATE TABLE IF NOT EXISTS archive_operation (
     tenant_id VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,

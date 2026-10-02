@@ -303,6 +303,15 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
                 + String.valueOf(replacement));
         return transactions.required(() -> {
             ArchiveManagerGrantRecord manager = requireWithdrawManager(actor, observed.collectionId(), true);
+            ArchiveMaintenanceJobRecord publicationJob = observed.jobId() == null ? null
+                    : store.findJob(observed.jobId(), true);
+            if (observed.jobId() != null && (publicationJob == null
+                    || !same(publicationJob.jobId(), observed.jobId())
+                    || !same(publicationJob.collectionId(), observed.collectionId())
+                    || !same(publicationJob.workId(), workId)
+                    || !same(publicationJob.publicationId(), observed.publicationId()))) {
+                conflict("ARCHIVE_EDITION_CHANGED", "Archive publication job binding changed");
+            }
             ArchiveMaintenanceStore.Operation op = operation(actor, key, "POST", path, requestSha,
                     "EDITION_WITHDRAWAL", newId("awd"));
             if (!op.created()) {
@@ -324,6 +333,12 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             ArchiveEditionVersionRecord target = locked.stream()
                     .filter(value -> same(value.editionId(), editionId)).findFirst().orElse(null);
             if (target == null || !same(target.collectionId(), observed.collectionId())) notFound();
+            if (!same(target.jobId(), observed.jobId())
+                    || (publicationJob != null && (!same(publicationJob.publicationId(), target.publicationId())
+                            || !same(publicationJob.collectionId(), target.collectionId())
+                            || !same(publicationJob.workId(), target.workId())))) {
+                conflict("ARCHIVE_EDITION_CHANGED", "Archive publication job binding changed");
+            }
             if (!"PUBLISHED".equals(target.state()) || target.withdrawal() != null) {
                 conflict("ARCHIVE_EDITION_NOT_PUBLISHED", "Archive edition is not published");
             }
@@ -363,8 +378,19 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
                     manager.revision(), replacement, resultingActive, collectionWork.revision() + 1,
                     key, clock.instant(), "PENDING");
             store.insertWithdrawal(withdrawal);
-            store.commitOperation(actor, key, withdrawal.withdrawalId());
-            return withdrawalDto(withdrawal);
+            ArchiveWithdrawalRecord persisted = store.findWithdrawalByPublication(
+                    target.publicationId(), true);
+            if (persisted == null
+                    || !same(persisted.withdrawalId(), withdrawal.withdrawalId())
+                    || !same(persisted.publicationId(), target.publicationId())
+                    || !same(persisted.collectionId(), target.collectionId())
+                    || !same(persisted.workId(), workId)
+                    || !same(persisted.editionId(), editionId)
+                    || !same(persisted.operationKey(), key)) {
+                throw new IllegalStateException("Persisted archive withdrawal changed");
+            }
+            store.commitOperation(actor, key, persisted.withdrawalId());
+            return withdrawalDto(persisted);
         });
     }
 
@@ -1851,20 +1877,46 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         }
         if ("PASSED".equals(observed.state())) return publicationDto(publication);
         ReadbackOutcome outcome = inspectPublishedRepresentation(publication);
+        String findingsJson = json(outcome.findings());
         transactions.required(() -> {
-            ArchivePublicationRecord currentPublication = store.findPublicationById(publicationId);
-            ArchivePublicationReadbackRecord current = store.findPublicationReadback(publicationId);
-            if (currentPublication == null || current == null
+            // Reader I/O remains outside the transaction. Job-backed publications re-enter
+            // through the job root before publication/readback so event/outbox creation cannot
+            // reverse aggregate locks. Bootstrap publications have no job and emit no chat fact.
+            ArchiveMaintenanceJobRecord job = publication.jobId() == null ? null
+                    : store.findJob(publication.jobId(), true);
+            ArchivePublicationRecord currentPublication = store.findPublicationById(publicationId, true);
+            ArchivePublicationReadbackRecord current = store.findPublicationReadback(publicationId, true);
+            if ((publication.jobId() != null && job == null)
+                    || currentPublication == null || current == null
+                    || (job != null && (!same(job.publicationId(), publicationId)
+                            || !same(job.collectionId(), currentPublication.collectionId())
+                            || !same(job.workId(), currentPublication.workId())))
                     || !samePublicationReadbackIdentity(currentPublication, publication)) {
                 throw new IllegalStateException("Archive publication identity changed during readback verification");
             }
-            if (!"PASSED".equals(current.state())) {
-                store.completePublicationReadback(publicationId, current.revision(), outcome.state(),
-                        outcome.digest(), json(outcome.findings()));
+            if (!sameReadbackOutcome(current, outcome, findingsJson)) {
+                if (store.completePublicationReadback(publicationId, current.revision(), outcome.state(),
+                        outcome.digest(), findingsJson) != 1) {
+                    throw new IllegalStateException("Archive publication readback changed during verification");
+                }
+                if (job != null) {
+                    store.appendJobEvent(job.jobId(), job.revision(), "PUBLICATION_READBACK_COMPLETED",
+                            json(Map.of("publicationId", publicationId,
+                                    "state", outcome.state(),
+                                    "readbackRevision", Long.toString(current.revision() + 1),
+                                    "verificationDigest", outcome.digest())));
+                }
             }
             return null;
         });
         return publicationDto(publication);
+    }
+
+    private boolean sameReadbackOutcome(ArchivePublicationReadbackRecord current,
+            ReadbackOutcome outcome, String findingsJson) {
+        return same(current.state(), outcome.state())
+                && same(current.verificationDigest(), outcome.digest())
+                && same(current.findingsJson(), findingsJson);
     }
 
     private boolean samePublicationReadbackIdentity(ArchivePublicationRecord current,
