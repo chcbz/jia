@@ -783,6 +783,10 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
                 String t, String c, String o, String task, long at) {
             writeCalls++; throw new AssertionError("read must not supersede grant");
         }
+        @Override public boolean setCostAuthorizationRef(String t, String c, String o,
+                String task, String id, long version, String locator) {
+            writeCalls++; throw new AssertionError("read must not bind cost authorization");
+        }
         @Override public boolean revoke(String t, String c, String o, String task,
                 String id, long version, String key, String hash, long at) {
             writeCalls++; throw new AssertionError("read must not revoke grant");

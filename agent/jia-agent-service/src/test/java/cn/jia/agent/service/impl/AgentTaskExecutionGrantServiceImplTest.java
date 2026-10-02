@@ -529,6 +529,7 @@ class AgentTaskExecutionGrantServiceImplTest {
         }
         @Override public void insert(AgentTaskExecutionGrantEntity g){byAction.put(g.getSourceBusinessActionId(),g);byId.put(g.getGrantId(),g);}
         @Override public int supersedeActiveForTask(String t,String c,String o,String task,long at){int n=0;for(var g:byId.values())if(task.equals(g.getTaskId())&&"ACTIVE".equals(g.getState())){g.setState("SUPERSEDED").setGrantVersion(g.getGrantVersion()+1).setRevokedAt(at);n++;}return n;}
+        @Override public boolean setCostAuthorizationRef(String t,String c,String o,String task,String id,long v,String locator){var g=byId.get(id);if(g==null||!t.equals(g.getTenantId())||!c.equals(g.getClientId())||!o.equals(g.getOwnerJiacn())||!task.equals(g.getTaskId())||g.getGrantVersion()!=v||g.getCostAuthorizationRef()!=null)return false;g.setCostAuthorizationRef(locator);return true;}
         @Override public boolean revoke(String t,String c,String o,String task,String id,long v,String key,String hash,long at){var g=byId.get(id);if(g==null||!"ACTIVE".equals(g.getState())||g.getGrantVersion()!=v)return false;g.setState("REVOKED").setGrantVersion(v+1).setRevokedAt(at).setRevokeIdempotencyKey(key).setRevokeRequestHash(hash);return true;}
     }
 }
