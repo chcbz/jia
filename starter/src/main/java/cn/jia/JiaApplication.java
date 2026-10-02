@@ -21,7 +21,7 @@ import org.springframework.transaction.annotation.EnableTransactionManagement;
 @EnableTransactionManagement
 @EnableAsync
 @EnableScheduling
-@MapperScan({"cn.jia.*.mapper"})
+@MapperScan({"cn.jia.*.mapper", "cn.jia.chat.deliberation"})
 public class JiaApplication {
 
 	public static void main(String[] args) {

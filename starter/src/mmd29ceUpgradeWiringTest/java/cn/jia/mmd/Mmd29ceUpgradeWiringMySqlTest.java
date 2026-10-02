@@ -29,6 +29,7 @@ import cn.jia.chat.config.ChatConversationArchiveSchemaInitializer;
 import cn.jia.chat.config.ChatDeliberationSchemaInitializer;
 import cn.jia.chat.config.ChatSelectedOutputFinalizationSchemaInitializer;
 import cn.jia.chat.config.ChatTypedDeliberationSchemaInitializer;
+import cn.jia.chat.deliberation.ChatDeliberationMapper;
 import cn.jia.chat.service.ChatBountyAssetProjector;
 import cn.jia.chat.service.ChatBountyAssetRelay;
 import cn.jia.chat.service.ChatBountyBootstrapRelay;
@@ -108,17 +109,22 @@ class Mmd29ceUpgradeWiringMySqlTest {
             "chat/jia-chat-service/src/chatDeliberationTest/java/cn/jia/chat/service/ChatDeliberationOutboxRelayTest.java";
     private static final String DELIBERATION_MAPPER_REPAIR_PATH =
             "chat/jia-chat-mapper/src/main/java/cn/jia/chat/deliberation/ChatDeliberationMapper.java";
+    private static final String JIA_APPLICATION_REPAIR_PATH =
+            "starter/src/main/java/cn/jia/JiaApplication.java";
     private static final Map<String, String> PRODUCTION_REPAIR_HASHES = Map.of(
             OUTBOX_RELAY_REPAIR_PATH,
             "d7c9b76ed7217fe376af8986dca5d15959151905e2f17be0af746ff7703a8bb1",
             OUTBOX_RELAY_REGRESSION_PATH,
             "0751b26603ba8265c92bc63bbbcd88497587d779b9fed4b64c3b2370266e34cb",
             DELIBERATION_MAPPER_REPAIR_PATH,
-            "f865720b627cecbe970a11a9c533c2ac3d9525ff76af4b76e8c732b102c0be25");
+            "f865720b627cecbe970a11a9c533c2ac3d9525ff76af4b76e8c732b102c0be25",
+            JIA_APPLICATION_REPAIR_PATH,
+            "35ad9a9cf6214904b151982b85a82027034474efe6017541a1f35251f2b6ee1f");
     private static final Set<String> AUTHORIZED_CANDIDATE_PATHS = Set.of(
             OUTBOX_RELAY_REPAIR_PATH,
             OUTBOX_RELAY_REGRESSION_PATH,
             DELIBERATION_MAPPER_REPAIR_PATH,
+            JIA_APPLICATION_REPAIR_PATH,
             "starter/build.gradle",
             "starter/src/mmd29ceUpgradeWiringTest/java/cn/jia/mmd/Mmd29ceUpgradeWiringMySqlTest.java");
 
@@ -368,6 +374,8 @@ class Mmd29ceUpgradeWiringMySqlTest {
     }
 
     private static void assertFeatureBeansRunning(ConfigurableApplicationContext context) {
+        assertEquals(1, context.getBeanNamesForType(ChatDeliberationMapper.class).length,
+                "JiaApplication must register exactly one ChatDeliberationMapper bean");
         for (Class<?> type : List.of(
                 AgentTaskCreationOperationController.class,
                 AgentTaskDeliberationOperationController.class,
