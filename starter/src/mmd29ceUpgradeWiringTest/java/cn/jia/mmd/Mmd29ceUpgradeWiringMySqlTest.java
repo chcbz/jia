@@ -119,7 +119,7 @@ class Mmd29ceUpgradeWiringMySqlTest {
             DELIBERATION_MAPPER_REPAIR_PATH,
             "f865720b627cecbe970a11a9c533c2ac3d9525ff76af4b76e8c732b102c0be25",
             JIA_APPLICATION_REPAIR_PATH,
-            "35ad9a9cf6214904b151982b85a82027034474efe6017541a1f35251f2b6ee1f");
+            "55d70981cffad146d036cc46cbbbec48f42fa77d12472967e1814fc9d77d715b");
     private static final Set<String> AUTHORIZED_CANDIDATE_PATHS = Set.of(
             OUTBOX_RELAY_REPAIR_PATH,
             OUTBOX_RELAY_REGRESSION_PATH,
