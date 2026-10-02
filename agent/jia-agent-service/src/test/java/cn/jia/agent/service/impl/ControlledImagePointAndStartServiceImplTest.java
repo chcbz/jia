@@ -46,7 +46,7 @@ class ControlledImagePointAndStartServiceImplTest {
                 anyString(),anyString(),anyString(),anyString(),any());
     }
 
-    @Test void firstSubmitPersistsExactWrapperThenReplayAndGetRemainReadOnly() {
+    @Test void newTaskVersionZeroWithIssuedConsentCreatesProtocol3BridgeThenReplayAndGetRemainReadOnly() {
         AgentTaskExecutionGrantEntity grant=grant();
         AgentTaskProviderCostConsentEntity issued=consent("ISSUED",1L);
         AgentTaskProviderCostConsentDTO bound=consentView("BOUND","2");
@@ -62,7 +62,7 @@ class ControlledImagePointAndStartServiceImplTest {
                 ArgumentCaptor.forClass(ControlledImageBridgeOperationEntity.class);
         doNothing().when(operations).insert(any());
 
-        var first=service.submit(scope,"task","assignment-key",request("1"));
+        var first=service.submit(scope,"task","assignment-key",requestAtTaskVersion("1",0L));
 
         assertFalse(first.replay());
         assertEquals("BOUND",first.receipt().providerConsent().state());
@@ -73,6 +73,12 @@ class ControlledImagePointAndStartServiceImplTest {
         assertEquals(1L,operation.getExpectedConsentVersion());
         assertEquals(3,operation.getExecutionProtocolVersion());
         assertTrue(operation.getOperationGrantId().matches("opgrant_[0-9a-f]{32}"));
+        ArgumentCaptor<AgentTaskAssignDTO> submittedAssignment=ArgumentCaptor.forClass(AgentTaskAssignDTO.class);
+        ArgumentCaptor<AgentTaskMetaEntity> lockedRoot=ArgumentCaptor.forClass(AgentTaskMetaEntity.class);
+        verify(grants).assignControlledWithinLockedTask(eq(scope),eq("task"),eq("assignment-key"),
+                submittedAssignment.capture(),lockedRoot.capture());
+        assertEquals(0L,submittedAssignment.getValue().getExpectedTaskVersion());
+        assertEquals(0L,lockedRoot.getValue().getTaskVersion());
 
         AgentTaskProviderCostConsentEntity consumed=consent("CONSUMED",4L)
                 .setBoundGrantId("grant").setBoundGrantVersion(1L).setBoundAssignmentRevision(7L);
@@ -84,7 +90,7 @@ class ControlledImagePointAndStartServiceImplTest {
                 .thenReturn(consumed);
         when(consents.view(same(consumed),anyLong())).thenReturn(consentView("CONSUMED","4"));
 
-        var replay=service.submit(scope,"task","assignment-key",request("1"));
+        var replay=service.submit(scope,"task","assignment-key",requestAtTaskVersion("1",0L));
         var recovered=service.get(scope,"task","assignment-key");
 
         assertTrue(replay.replay());
@@ -124,6 +130,16 @@ class ControlledImagePointAndStartServiceImplTest {
                     () -> service.submit(scope,"task","assignment-key",invalid));
             assertEquals(ControlledImagePointAndStartService.Reason.BAD_REQUEST,failure.reason());
         }
+        verifyNoInteractions(transactions,grants,consents,authority,operations,grantRows,consentRows);
+    }
+
+    @Test void negativeTaskVersionIsRejectedBeforeTransaction() {
+        var request=requestAtTaskVersion("1",-1L);
+
+        var failure=assertThrows(ControlledImagePointAndStartService.Failure.class,
+                () -> service.submit(scope,"task","assignment-key",request));
+
+        assertEquals(ControlledImagePointAndStartService.Reason.BAD_REQUEST,failure.reason());
         verifyNoInteractions(transactions,grants,consents,authority,operations,grantRows,consentRows);
     }
 
@@ -172,16 +188,24 @@ class ControlledImagePointAndStartServiceImplTest {
         return requestWithConsent("consent_1234567890abcdef1234567890abcdef",version);
     }
     private static ControlledImagePointAndStartDTO.Request requestWithConsent(String consentId,String version) {
+        return requestWithConsentAtTaskVersion(consentId,version,6L);
+    }
+    private static ControlledImagePointAndStartDTO.Request requestAtTaskVersion(String version,long taskVersion) {
+        return requestWithConsentAtTaskVersion(
+                "consent_1234567890abcdef1234567890abcdef",version,taskVersion);
+    }
+    private static ControlledImagePointAndStartDTO.Request requestWithConsentAtTaskVersion(
+            String consentId,String version,long taskVersion) {
         AgentTaskAssignDTO assignment=new AgentTaskAssignDTO();
         assignment.setWorkflowVersion(2);assignment.setBusinessAction("assign_and_start");
-        assignment.setExpectedTaskVersion(6L);assignment.setRequirementRevision(3L);
+        assignment.setExpectedTaskVersion(taskVersion);assignment.setRequirementRevision(3L);
         assignment.setAgentId("agent");assignment.setRequestedOperations(java.util.List.of("GENERATE_IMAGE"));
         assignment.setInitialOperation("GENERATE_IMAGE");assignment.setInputRefs(java.util.List.of());
         return new ControlledImagePointAndStartDTO.Request(1,assignment,
                 new ControlledImagePointAndStartDTO.ProviderConsent(consentId,version));
     }
     private static AgentTaskMetaEntity root() {
-        AgentTaskMetaEntity root=new AgentTaskMetaEntity().setTaskId("task").setTaskVersion(7L)
+        AgentTaskMetaEntity root=new AgentTaskMetaEntity().setTaskId("task").setTaskVersion(0L)
                 .setAssignedAgentId("agent");
         root.setTenantId("0");root.setClientId("client");root.setOwnerJiacn("owner");return root;
     }

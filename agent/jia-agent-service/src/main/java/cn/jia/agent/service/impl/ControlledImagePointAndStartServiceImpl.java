@@ -134,7 +134,7 @@ public class ControlledImagePointAndStartServiceImpl implements ControlledImageP
         var assignment=request.assignment();
         if(!Objects.equals(2,assignment.getWorkflowVersion())
                 ||!Objects.equals("assign_and_start",assignment.getBusinessAction())
-                ||assignment.getExpectedTaskVersion()==null||assignment.getExpectedTaskVersion()<1
+                ||assignment.getExpectedTaskVersion()==null||assignment.getExpectedTaskVersion()<0
                 ||assignment.getExpectedTaskVersion()>MAX_SAFE
                 ||assignment.getRequirementRevision()==null||assignment.getRequirementRevision()<1
                 ||assignment.getRequirementRevision()>MAX_SAFE

@@ -42,13 +42,14 @@ class ControlledImagePointAndStartControllerTest {
         mvc.perform(post("/agent/tasks/task-1/point-and-start-controlled-image")
                         .principal(jwt("owner-a","client-a"))
                         .header("Idempotency-Key","assignment-key")
-                        .contentType(MediaType.APPLICATION_JSON).content(body(0,"1")))
+                        .contentType(MediaType.APPLICATION_JSON).content(body(0,"1",0L)))
                 .andExpect(status().isCreated())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL,"private, no-store"));
         var captured=org.mockito.ArgumentCaptor.forClass(ControlledImagePointAndStartDTO.Request.class);
         verify(service).submit(eq(new cn.jia.agent.service.AgentTaskExecutionGrantService.Scope(
                 "0","client-a","owner-a")),eq("task-1"),eq("assignment-key"),captured.capture());
         assertEquals("GENERATE_IMAGE",captured.getValue().assignment().getInitialOperation());
+        assertEquals(0L,captured.getValue().assignment().getExpectedTaskVersion());
         assertEquals("1",captured.getValue().providerConsent().expectedVersion());
     }
 
@@ -93,6 +94,9 @@ class ControlledImagePointAndStartControllerTest {
     }
 
     private static String body(int inputs,String version) {
+        return body(inputs,version,6L);
+    }
+    private static String body(int inputs,String version,long expectedTaskVersion) {
         StringBuilder refs=new StringBuilder("[");
         for (int i=0;i<inputs;i++) {
             if (i>0) refs.append(',');
@@ -102,7 +106,7 @@ class ControlledImagePointAndStartControllerTest {
         refs.append(']');
         return "{\"schemaVersion\":1,\"assignment\":{"+
                 "\"workflowVersion\":2,\"businessAction\":\"assign_and_start\","+
-                "\"expectedTaskVersion\":6,\"requirementRevision\":3,\"agentId\":\"agent-a\","+
+                "\"expectedTaskVersion\":"+expectedTaskVersion+",\"requirementRevision\":3,\"agentId\":\"agent-a\","+
                 "\"requestedOperations\":[\"GENERATE_IMAGE\"],\"initialOperation\":\"GENERATE_IMAGE\","+
                 "\"inputRefs\":"+refs+"},\"providerConsent\":{"+
                 "\"consentId\":\"consent_1234567890abcdef1234567890abcdef\","+
