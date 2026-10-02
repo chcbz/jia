@@ -368,7 +368,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                                 :conversationGrants.admitControlled(grantScope,valid.taskId(),command.grantId(),
                                     command.grantVersion(),command.assignmentRevision(),valid.targetAgentId(),
                                     command.permittedOperation(),"NEW_EXECUTION",null,null,null);
-                        if (controlledAdmission==null || controlledAdmission.costAuthorizationRef()==null
+                        if (controlledAdmission==null || !controlledAdmission.paidExecutionAuthorized()
+                                || controlledAdmission.costAuthorizationRef()==null
                                 || !controlledAdmission.costAuthorizationRef().matches("mmd-ci-v1:consent_[0-9a-f]{32}")
                                 || controlledAdmission.costAuthorizationVersion()==null)
                             throw failure(Reason.GRANT_REVOKED);

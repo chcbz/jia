@@ -96,7 +96,9 @@ public final class ControlledImageGrantAuthority {
             String expectedRuntimeInstanceId) {
         Authority persisted=verifyPersisted(scope,root,grant,purpose,executionId,runId);
         if ("EXISTING_RUN".equals(purpose)) return new V3Authority(persisted.consent(),null);
-        return new V3Authority(persisted.consent(),requireCurrentV3(scope,grant,persisted.consent(),
+        // Persisted consent and operator policy remain authority. A missing/offline live declaration
+        // is a retryable capability wait, not proof that the owner never authorized the cost.
+        return new V3Authority(persisted.consent(),currentV3(scope,grant,persisted.consent(),
                 expectedRuntimeInstanceId));
     }
 
@@ -129,7 +131,8 @@ public final class ControlledImageGrantAuthority {
     void requireBindableV3(AgentTaskExecutionGrantService.Scope scope,AgentTaskExecutionGrantEntity grant,
             AgentTaskProviderCostConsentEntity consent) {
         requireBindableTuple(scope,grant,consent);
-        requireCurrentV3(scope,grant,consent,null);
+        if (currentV3(scope,grant,consent,null)==null)
+            throw denied(Reason.PAID_EXECUTION_NOT_AUTHORIZED);
     }
 
 
@@ -197,7 +200,7 @@ public final class ControlledImageGrantAuthority {
     }
 
 
-    private ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.Declaration requireCurrentV3(
+    private ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.Declaration currentV3(
             AgentTaskExecutionGrantService.Scope scope,AgentTaskExecutionGrantEntity grant,
             AgentTaskProviderCostConsentEntity consent,String expectedRuntimeInstanceId) {
         var consentScope=new AgentTaskProviderCostConsentService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());
@@ -212,11 +215,12 @@ public final class ControlledImageGrantAuthority {
                 ||!Objects.equals(policy.pricingMode(),consent.getPricingMode())
                 ||policy.maxOutboundRequestAttempts()!=consent.getMaxOutboundRequestAttempts()
                 ||policy.expiresAt()!=consent.getExpiresAt())throw denied(Reason.PAID_EXECUTION_NOT_AUTHORIZED);
-        var lookup=v3Declarations.getIfUnique();if(lookup==null)throw denied(Reason.PAID_EXECUTION_NOT_AUTHORIZED);
+        var lookup=v3Declarations.getIfUnique();if(lookup==null)return null;
         var current=lookup.current(new ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.DeclarationScope(
                 scope.tenantId(),scope.clientId(),scope.ownerJiacn(),grant.getTargetAgentId()));
-        if(current==null||current.state()!=ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State.READY
-                ||current.runtimeInstanceId()==null||current.operations()==null
+        if(current==null||current.state()!=ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State.READY)
+            return null;
+        if(current.runtimeInstanceId()==null||current.operations()==null
                 ||!Set.copyOf(current.operations()).equals(Set.of("GENERATE_IMAGE","EDIT_IMAGE"))
                 ||!current.operations().contains("GENERATE_IMAGE")
                 ||!Objects.equals(current.providerLane(),consent.getProviderLane())

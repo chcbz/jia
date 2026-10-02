@@ -717,16 +717,30 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                 throw conflict("Controlled v3 grant changed during admission");
             Admission base=verifyAdmission(scope,root,grant,expectedGrantVersion,
                     expectedAssignmentRevision,targetAgentId,operation,false);
-            var verified=controlledAuthority.verifyV3(scope,root,grant,purpose,executionId,runId,runtimeInstanceId);
-            String inputDigest=sha256("TASK_LINKED_INPUT_SNAPSHOT_V1\n"+write(readInputs(grant.getInputScopeJson())));
-            if(!same(inputDigest,verified.consent().getInputSnapshotDigest())
-                    || !Objects.equals(grant.getRequirementRevision(),verified.consent().getRequirementRevision()))
-                throw new AgentTaskExecutionGrantException(Reason.PAID_EXECUTION_NOT_AUTHORIZED,
-                        "Controlled v3 consent tuple no longer matches the grant");
-            return new Admission(base.grantId(),base.grantVersion(),base.assignmentRevision(),
-                    base.targetAgentId(),base.operation(),true,base.inputs(),grant.getCostAuthorizationRef(),
-                    verified.consent().getVersion(),root.getTaskVersion(),grant.getRequirementRevision(),
-                    null,grant.getIdempotencyKey(),grant.getRequestHash());
+            try {
+                var verified=controlledAuthority.verifyV3(scope,root,grant,purpose,executionId,runId,
+                        runtimeInstanceId);
+                String inputDigest=sha256("TASK_LINKED_INPUT_SNAPSHOT_V1\n"+
+                        write(readInputs(grant.getInputScopeJson())));
+                if(!same(inputDigest,verified.consent().getInputSnapshotDigest())
+                        || !Objects.equals(grant.getRequirementRevision(),verified.consent().getRequirementRevision()))
+                    throw new AgentTaskExecutionGrantException(Reason.PAID_EXECUTION_NOT_AUTHORIZED,
+                            "Controlled v3 consent tuple no longer matches the grant");
+                boolean runtimeReady=verified.declaration()!=null;
+                return new Admission(base.grantId(),base.grantVersion(),base.assignmentRevision(),
+                        base.targetAgentId(),base.operation(),runtimeReady,base.inputs(),
+                        grant.getCostAuthorizationRef(),
+                        verified.consent().getVersion(),root.getTaskVersion(),grant.getRequirementRevision(),
+                        null,grant.getIdempotencyKey(),grant.getRequestHash());
+            } catch (AgentTaskExecutionGrantException unavailable) {
+                if(unavailable.reason()!=Reason.PAID_EXECUTION_NOT_AUTHORIZED)throw unavailable;
+                // Return the expected authorization wait before the REQUIRED template sees an
+                // exception. Otherwise its participation marks the outer Chat transaction rollback-only.
+                return new Admission(base.grantId(),base.grantVersion(),base.assignmentRevision(),
+                        base.targetAgentId(),base.operation(),false,base.inputs(),null,null,
+                        root.getTaskVersion(),grant.getRequirementRevision(),null,
+                        grant.getIdempotencyKey(),grant.getRequestHash());
+            }
         });}catch(AgentTaskCollaborationException failure){throw translate(failure);}
     }
 

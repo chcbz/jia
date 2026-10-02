@@ -440,6 +440,33 @@ class ControlledImageConversationStartTest {
         verify(consents,times(1)).reserveWithinLockedRoot(any(),anyString(),any(),anyLong(),anyString(),anyString());
     }
 
+    @Test void initialV3RuntimeWaitCannotCreateFromPersistedConsentLocatorAlone() {
+        AgentRuntimeEntity target=new AgentRuntimeEntity().setAgentId("agent").setOwnerJiacn("owner");
+        target.setClientId("client");target.setTenantId("0");
+        when(runtimes.findCandidateRosterByOwner("client","owner")).thenReturn(List.of(target));
+        when(executions.hasExecutionProtocolVersionColumn()).thenReturn(true);
+        when(executions.findByIdempotency(eq("0"),eq("client"),eq("owner"),anyString()))
+                .thenReturn(null);
+        when(grants.admitControlledV3(any(),eq("task"),eq("grant"),eq(1L),eq(7L),eq("agent"),
+                eq("GENERATE_IMAGE"),eq("NEW_EXECUTION"),isNull(),isNull(),isNull()))
+                .thenReturn(new AgentTaskExecutionGrantService.Admission("grant",1,7,"agent",
+                        "GENERATE_IMAGE",false,List.of(),
+                        "mmd-ci-v1:"+execution.getControlledConsentId(),2L));
+        var command=new PersonalWorkspaceExecutionService.ConversationCreate(
+                "conversation","task","agent","intent-runtime-wait","grant",1,7,"GENERATE_IMAGE",
+                "draw","image/png",List.of(),true,3);
+
+        var failure=assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                ()->service.createConversation(new PersonalWorkspaceExecutionService.OwnerScope(
+                        "0","client","owner"),command));
+
+        assertEquals(PersonalWorkspaceExecutionService.Reason.GRANT_REVOKED,failure.getReason());
+        verify(executions,never()).insert(any(PersonalWorkspaceExecutionEntity.class));
+        verifyNoInteractions(initialOperations);
+        verify(consents,never()).reserveWithinLockedRoot(
+                any(),anyString(),any(),anyLong(),anyString(),anyString());
+    }
+
     @Test void conversationInstructionAllowsLfButRejectsOtherIsoControlsBeforeAuthorityUse() {
         for (String invalid : List.of("Draw\rbackground", "Draw\u0000background",
                 "Draw\tbackground")) {

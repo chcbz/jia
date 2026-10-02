@@ -148,8 +148,17 @@ public class ChatBountyExecutionCoordinator {
             admitted=grants.admitControlledV3(scope,step.taskId(),step.grantId(),step.grantVersion(),
                     step.assignmentRevision(),step.targetAgentId(),operation,"NEW_EXECUTION",
                     null,null,null);
-            if (admitted==null || !admitted.paidExecutionAuthorized()
-                    || admitted.costAuthorizationRef()==null)
+            if (admitted==null) return waitFor(step,request,"WAITING_AUTHORIZATION");
+            if (!admitted.paidExecutionAuthorized()) {
+                boolean persistedCostAuthority=admitted.costAuthorizationRef()!=null
+                        && admitted.costAuthorizationVersion()!=null;
+                if ((admitted.costAuthorizationRef()==null)!=(admitted.costAuthorizationVersion()==null))
+                    throw new IllegalStateException("Bounty authorization wait result is inconsistent");
+                // Keep the durable ADMITTED candidate eligible while the authenticated runtime
+                // reconnects. No execution/provider side effect has occurred at this point.
+                return persistedCostAuthority?"WAITING_CAPABILITY":waitFor(step,request,"WAITING_AUTHORIZATION");
+            }
+            if (admitted.costAuthorizationRef()==null || admitted.costAuthorizationVersion()==null)
                 return waitFor(step,request,"WAITING_AUTHORIZATION");
         } catch (AgentTaskExecutionGrantException denied) {
             if (denied.reason()==AgentTaskExecutionGrantException.Reason.PAID_EXECUTION_NOT_AUTHORIZED)

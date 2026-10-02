@@ -164,6 +164,21 @@ class ChatBountyExecutionCoordinatorTest {
                         && hash.equals(command.references().getFirst().contentHash())));
     }
 
+    @Test void persistedCostAuthorityWaitsForRuntimeWithoutMutatingDurableRequestState() throws Exception {
+        persistedImageRequest();
+        when(grants.admitControlledV3(any(),eq("task"),eq("grant"),eq(1L),eq(2L),eq("agent"),
+                eq("GENERATE_IMAGE"),eq("NEW_EXECUTION"),isNull(),isNull(),isNull()))
+                .thenReturn(new AgentTaskExecutionGrantService.Admission("grant",1,2,
+                        "agent","GENERATE_IMAGE",false,List.of(),
+                        "mmd-ci-v1:consent_1234567890abcdef1234567890abcdef",2L));
+
+        assertEquals("WAITING_CAPABILITY",coordinator.coordinate(candidate));
+
+        verify(steps,never()).updateStepState(any(),anyString(),anyLong());
+        verify(requests,never()).updateRequestState(any(),anyString(),anyLong());
+        verifyNoInteractions(executions,conversations);
+    }
+
     @Test void missingPaidAuthorizationIsPersistedAsWaitingWithoutCreatingExecution() throws Exception {
         persistedImageRequest();
         when(grants.admitControlledV3(any(),eq("task"),eq("grant"),eq(1L),eq(2L),eq("agent"),

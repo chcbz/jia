@@ -88,6 +88,21 @@ class ControlledImageGrantAuthorityTest {
         verifyNoInteractions(sessions);
     }
 
+    @Test void offlineV3DeclarationKeepsPersistedConsentButDoesNotAuthorizeExecution() {
+        var bound=consent("BOUND").setReservedExecutionId(null).setReservedRunId(null);
+        when(consents.findByConsentForUpdate("0","client","owner","task",bound.getConsentId()))
+                .thenReturn(bound);
+        readyPolicyAndV3Declaration(new ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.Declaration(
+                ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State.OFFLINE,
+                null,List.of(),null,null,null,null,null,null,null));
+
+        var result=authority.verifyV3(scope,root(),grant(),"NEW_EXECUTION",null,null,null);
+
+        assertSame(bound,result.consent());
+        assertNull(result.declaration());
+        verifyNoInteractions(sessions);
+    }
+
     @Test void v3DeclarationAndPersistedReservationDriftFailClosed() {
         var bound=consent("BOUND").setReservedExecutionId(null).setReservedRunId(null);
         when(consents.findByConsentForUpdate("0","client","owner","task",bound.getConsentId()))
