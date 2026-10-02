@@ -110,7 +110,7 @@ class Mmd29ceUpgradeWiringMySqlTest {
             OUTBOX_RELAY_REPAIR_PATH,
             "d7c9b76ed7217fe376af8986dca5d15959151905e2f17be0af746ff7703a8bb1",
             OUTBOX_RELAY_REGRESSION_PATH,
-            "b65d901686fa151144497ce7970b3501a6c3c357b56bea73a896d138d0cf65ad");
+            "0751b26603ba8265c92bc63bbbcd88497587d779b9fed4b64c3b2370266e34cb");
     private static final Set<String> AUTHORIZED_CANDIDATE_PATHS = Set.of(
             OUTBOX_RELAY_REPAIR_PATH,
             OUTBOX_RELAY_REGRESSION_PATH,

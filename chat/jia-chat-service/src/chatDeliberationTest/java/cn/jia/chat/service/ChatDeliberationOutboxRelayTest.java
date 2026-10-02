@@ -57,13 +57,13 @@ class ChatDeliberationOutboxRelayTest {
     void springContextSelectsProductionConstructorAndStartsRelay() {
         when(outbox.discover(anyLong(), anyInt())).thenReturn(List.of());
         try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
-            context.registerBean(ChatDeliberationOutboxService.class, () -> outbox);
-            context.registerBean(ChatDeliberationService.class, () -> deliberation);
-            context.registerBean(AgentWebSocketHandler.class, () -> sockets);
-            context.registerBean(BuiltinHallAgentSupport.class, () -> builtin);
-            context.registerBean(ChatConversationEventBroker.class, () -> broker);
-            context.registerBean(ChatConversationService.class, () -> conversations);
-            context.registerBean(ChatClient.class, () -> chatClient);
+            context.getBeanFactory().registerSingleton("outbox", outbox);
+            context.getBeanFactory().registerSingleton("deliberation", deliberation);
+            context.getBeanFactory().registerSingleton("sockets", sockets);
+            context.getBeanFactory().registerSingleton("builtin", builtin);
+            context.getBeanFactory().registerSingleton("broker", broker);
+            context.getBeanFactory().registerSingleton("conversations", conversations);
+            context.getBeanFactory().registerSingleton("chatClient", chatClient);
             context.registerBean(ChatDeliberationOutboxRelay.class);
 
             context.refresh();
