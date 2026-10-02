@@ -115,6 +115,52 @@ class PersonalWorkspaceServiceImplTest {
     }
 
     @Test
+    void conversationTextArchivePersistsExactUtf8TextPlainAndScopesReplay() {
+        Fixture fixture = new Fixture();
+        byte[] bird = bytes("画一只鸟");
+        var command = new PersonalWorkspaceService.ConversationTextArchiveCommand(
+                new PersonalWorkspaceService.Idempotency("save-bird-text"), "a".repeat(64),
+                sha256(bird), "画一只鸟", "conversation-text-1675335-0-4.txt", bird);
+        var saved = fixture.service.archiveConversationText(OWNER_A, command);
+        var replay = fixture.service.archiveConversationText(OWNER_A, command);
+
+        assertEquals(saved.operation().operationId(), replay.operation().operationId());
+        assertEquals(saved.file().fileId(), replay.file().fileId());
+        assertEquals("TEXT", saved.file().mediaFamily());
+        assertEquals("text/plain", saved.version().contentMimeType());
+        assertEquals("AGENT_DELIVERY", saved.file().originKind());
+        assertArrayEquals(bird,
+                fixture.service.readContent(OWNER_A, saved.file().fileId(), 1).bytes());
+        assertEquals(1, fixture.storage.storeCount);
+        assertReason(PersonalWorkspaceException.Reason.NOT_FOUND,
+                () -> fixture.service.readContent(OWNER_B, saved.file().fileId(), 1));
+        assertReason(PersonalWorkspaceException.Reason.IDEMPOTENCY_CONFLICT,
+                () -> fixture.service.archiveConversationText(OWNER_A,
+                        new PersonalWorkspaceService.ConversationTextArchiveCommand(
+                                command.idempotency(), "b".repeat(64), command.sha256(),
+                                command.displayName(), command.filename(), bird)));
+        assertEquals(1, fixture.storage.storeCount);
+    }
+
+    @Test
+    void conversationTextArchiveRejectsMalformedUtf8AndWrongHashBeforeStorage() {
+        Fixture fixture = new Fixture();
+        byte[] malformed = {(byte) 0xc3, 0x28};
+        assertReason(PersonalWorkspaceException.Reason.BAD_REQUEST,
+                () -> fixture.service.archiveConversationText(OWNER_A,
+                        new PersonalWorkspaceService.ConversationTextArchiveCommand(
+                                new PersonalWorkspaceService.Idempotency("save-malformed-text"),
+                                "a".repeat(64), sha256(malformed), "bad", "bad.txt", malformed)));
+        byte[] bird = bytes("画一只鸟");
+        assertReason(PersonalWorkspaceException.Reason.BAD_REQUEST,
+                () -> fixture.service.archiveConversationText(OWNER_A,
+                        new PersonalWorkspaceService.ConversationTextArchiveCommand(
+                                new PersonalWorkspaceService.Idempotency("save-wrong-hash"),
+                                "a".repeat(64), "0".repeat(64), "bird", "bird.txt", bird)));
+        assertEquals(0, fixture.storage.storeCount);
+    }
+
+    @Test
     void ownerCanArchiveAndPreviewConfiguredAudioAndRasterConversationAssets() {
         Fixture fixture = new Fixture();
         Map<String, String> formats = Map.of(

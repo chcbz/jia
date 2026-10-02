@@ -7,6 +7,7 @@ import cn.jia.agent.service.PersonalWorkspaceService;
 import cn.jia.chat.archive.conversation.ChatConversationArchiveStore.Operation;
 import cn.jia.chat.archive.conversation.ChatConversationArchiveStore.Scope;
 import cn.jia.chat.archive.conversation.ChatConversationArchiveStore.Source;
+import cn.jia.chat.archive.conversation.ChatConversationArchiveStore.TextSource;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
@@ -21,15 +22,16 @@ import java.util.Objects;
 import java.util.UUID;
 
 import static cn.jia.chat.archive.conversation.ChatConversationArchiveException.Reason;
+import static cn.jia.chat.archive.conversation.ChatConversationArchiveStore.ASSET_REF;
+import static cn.jia.chat.archive.conversation.ChatConversationArchiveStore.TEXT_SELECTION;
 
 /**
- * Archives one exact persisted conversation asset without holding Chat locks across Agent/storage calls.
- * No GET path invokes this workflow; status projection is a direct Chat database read.
+ * Archives one exact persisted conversation source without holding Chat locks across Agent/storage calls.
+ * Chat commits the immutable source snapshot before invoking the private workspace.
  */
 @Service
 @ConditionalOnProperty(prefix = "chat.conversation-archive", name = "enabled", havingValue = "true")
 public final class ChatConversationArchiveService {
-    // Keep in sync with PersonalWorkspaceServiceImpl's exact MIME + filename whitelist.
     private static final Map<String, String> EXTENSIONS = Map.ofEntries(
             Map.entry("image/png", "png"), Map.entry("image/jpeg", "jpg"),
             Map.entry("image/webp", "webp"), Map.entry("image/gif", "gif"),
@@ -40,7 +42,8 @@ public final class ChatConversationArchiveService {
             Map.entry("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx"),
             Map.entry("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"),
             Map.entry("application/vnd.openxmlformats-officedocument.presentationml.presentation", "pptx"));
-    private static final String SAFE_FAILURE_MESSAGE = "Conversation asset was not saved";
+    private static final String SAFE_ASSET_FAILURE_MESSAGE = "Conversation asset was not saved";
+    private static final String SAFE_TEXT_FAILURE_MESSAGE = "Conversation text was not saved";
 
     private final ChatConversationArchiveStore store;
     private final ChatConversationArchiveTransactions transactions;
@@ -56,23 +59,38 @@ public final class ChatConversationArchiveService {
         this.workspace = Objects.requireNonNull(workspace, "workspace");
     }
 
-    public record Command(String conversationId, String idempotencyKey, String assetId,
-            long assetRevision) { }
-    public record ItemReceipt(String assetId, String revision, String state, String fileId,
-            Integer version, String errorCode, String message) { }
+    public record AssetRef(String assetId, long revision) { }
+    public record TextSelection(String messageId, int startCodePoint, int endCodePoint,
+            String sha256) { }
+    public record Command(String conversationId, String idempotencyKey, AssetRef assetRef,
+            TextSelection textSelection) {
+        public Command(String conversationId, String idempotencyKey, String assetId,
+                long assetRevision) {
+            this(conversationId, idempotencyKey, new AssetRef(assetId, assetRevision), null);
+        }
+    }
+    public record TextSelectionReceipt(String messageId, String messageRevision,
+            int startCodePoint, int endCodePoint, String sha256) { }
+    public record ItemReceipt(String sourceKind, String assetId, String revision,
+            TextSelectionReceipt textSelection, String state, String fileId, Integer version,
+            String errorCode, String message) { }
     public record Receipt(String operationId, String state, String revision,
             List<ItemReceipt> items) { }
 
     public Receipt archive(Scope scope, Command command) {
         validateScope(scope);
         validateCommand(command);
-        String requestSha = digestParts(command.conversationId(), command.assetId(),
-                Long.toString(command.assetRevision()));
-        Operation claimed = transactions.required(() -> claim(scope, command, requestSha));
+        return command.assetRef() != null ? archiveAsset(scope, command) : archiveText(scope, command);
+    }
+
+    private Receipt archiveAsset(Scope scope, Command command) {
+        AssetRef asset = command.assetRef();
+        String requestSha = assetRequestSha(command);
+        Operation claimed = transactions.required(() -> claimAsset(scope, command, requestSha));
         if ("SAVED".equals(claimed.state())) return receipt(claimed);
 
         Source source = store.findAuthorizedSource(scope, command.conversationId(),
-                command.assetId(), command.assetRevision());
+                asset.assetId(), asset.revision());
         if (!validSource(scope, command, source)) {
             failPermanently(scope, command.conversationId(), claimed.operationId(), "SOURCE_UNAVAILABLE");
             throw unavailable();
@@ -111,36 +129,70 @@ public final class ChatConversationArchiveService {
             String filename = "conversation-asset-" + source.assetId() + "." + extension;
             upload = workspace.archiveConversationAsset(workspaceScope(scope),
                     new PersonalWorkspaceService.ConversationArchiveCommand(
-                            new PersonalWorkspaceService.Idempotency(workspaceKey(scope, source)),
+                            new PersonalWorkspaceService.Idempotency(assetWorkspaceKey(scope, source)),
                             source.assetId(), source.assetRevision(), source.sha256(), filename,
                             filename, source.contentMimeType(), output.bytes()));
         } catch (PersonalWorkspaceException failure) {
-            if (failure.getReason() == PersonalWorkspaceException.Reason.PROCESSING) {
-                return receipt(saving);
-            }
-            if (failure.getReason() == PersonalWorkspaceException.Reason.UNSUPPORTED
-                    || failure.getReason() == PersonalWorkspaceException.Reason.BAD_REQUEST) {
-                failPermanently(scope, command.conversationId(), saving.operationId(), "UNSUPPORTED_MEDIA");
-                throw new ChatConversationArchiveException(Reason.UNSUPPORTED,
-                        "Conversation asset format is not supported by the workspace");
-            }
-            if (failure.getReason() == PersonalWorkspaceException.Reason.IDEMPOTENCY_CONFLICT
-                    || failure.getReason() == PersonalWorkspaceException.Reason.STORAGE_CORRUPT) {
-                failPermanently(scope, command.conversationId(), saving.operationId(), "WORKSPACE_CONFLICT");
-                throw new ChatConversationArchiveException(Reason.IDEMPOTENCY_CONFLICT,
-                        "Conversation archive operation conflicts with a prior save");
-            }
-            throw temporary(failure);
+            return handleWorkspaceFailure(scope, command, saving, failure);
         } catch (RuntimeException failure) {
             throw temporary(failure);
         }
-        Confirmed confirmed = confirmed(source, upload);
+        Confirmed confirmed = confirmed(source.sha256(), source.contentMimeType(),
+                source.byteLength(), upload);
         Operation saved = transactions.required(() -> markSaved(scope, command.conversationId(),
                 saving.operationId(), confirmed));
         return receipt(saved);
     }
 
-    /** Strictly read-only: no execution, task-root, provider, workspace or storage call. */
+    private Receipt archiveText(Scope scope, Command command) {
+        String requestSha = textRequestSha(command);
+        PreparedText prepared = transactions.required(() -> prepareText(scope, command, requestSha));
+        Operation claimed = prepared.operation();
+        if ("SAVED".equals(claimed.state())) return receipt(claimed);
+
+        Operation saving = transactions.required(() -> markSaving(scope, command.conversationId(),
+                claimed.operationId(), prepared.conversationGeneration()));
+        if ("SAVED".equals(saving.state())) return receipt(saving);
+
+        byte[] bytes = prepared.bytes();
+        PersonalWorkspaceViews.UploadView upload;
+        try {
+            String filename = "conversation-text-" + saving.messageId() + "-"
+                    + saving.selectionStartCodePoint() + "-" + saving.selectionEndCodePoint() + ".txt";
+            upload = workspace.archiveConversationText(workspaceScope(scope),
+                    new PersonalWorkspaceService.ConversationTextArchiveCommand(
+                            new PersonalWorkspaceService.Idempotency(textWorkspaceKey(scope, saving)),
+                            saving.sourceSnapshotKey(), saving.sourceSha256(), filename, filename, bytes));
+        } catch (PersonalWorkspaceException failure) {
+            return handleWorkspaceFailure(scope, command, saving, failure);
+        } catch (RuntimeException failure) {
+            throw temporary(failure);
+        }
+        Confirmed confirmed = confirmed(saving.sourceSha256(), "text/plain", bytes.length, upload);
+        Operation saved = transactions.required(() -> markSaved(scope, command.conversationId(),
+                saving.operationId(), confirmed));
+        return receipt(saved);
+    }
+
+    private Receipt handleWorkspaceFailure(Scope scope, Command command, Operation saving,
+            PersonalWorkspaceException failure) {
+        if (failure.getReason() == PersonalWorkspaceException.Reason.PROCESSING) return receipt(saving);
+        if (failure.getReason() == PersonalWorkspaceException.Reason.UNSUPPORTED
+                || failure.getReason() == PersonalWorkspaceException.Reason.BAD_REQUEST) {
+            failPermanently(scope, command.conversationId(), saving.operationId(), "UNSUPPORTED_MEDIA");
+            throw new ChatConversationArchiveException(Reason.UNSUPPORTED,
+                    "Conversation source format is not supported by the workspace");
+        }
+        if (failure.getReason() == PersonalWorkspaceException.Reason.IDEMPOTENCY_CONFLICT
+                || failure.getReason() == PersonalWorkspaceException.Reason.STORAGE_CORRUPT) {
+            failPermanently(scope, command.conversationId(), saving.operationId(), "WORKSPACE_CONFLICT");
+            throw new ChatConversationArchiveException(Reason.IDEMPOTENCY_CONFLICT,
+                    "Conversation archive operation conflicts with a prior save");
+        }
+        throw temporary(failure);
+    }
+
+    /** Strictly read-only: no execution, provider, workspace or storage call. */
     public Receipt get(Scope scope, String conversationId, String operationId) {
         validateScope(scope);
         exactId(conversationId, "conversationId", 100);
@@ -150,39 +202,170 @@ public final class ChatConversationArchiveService {
         return receipt(operation);
     }
 
-    private Operation claim(Scope scope, Command command, String requestSha) {
+    private Operation claimAsset(Scope scope, Command command, String requestSha) {
+        Operation existing = existingByKey(scope, command, requestSha);
+        if (existing != null) return existing;
+        AssetRef asset = command.assetRef();
         long now = System.currentTimeMillis();
-        String operationId = "arc_" + UUID.randomUUID().toString().replace("-", "");
-        Operation proposed = new Operation(operationId, scope.tenantId(), scope.ownerJiacn(),
-                scope.clientId(), command.conversationId(), null, command.idempotencyKey(),
-                requestSha, command.assetId(), command.assetRevision(), "PENDING", null, null,
-                null, null, null, 1, now, now);
+        Operation proposed = operation(command, scope, requestSha, now, null,
+                asset.assetId(), asset.revision(), null, null, null, null, null, null);
         if (store.tryInsert(proposed)) return proposed;
+        existing = existingByKey(scope, command, requestSha);
+        if (existing != null) return existing;
+        Operation bySource = store.lockBySource(scope, asset.assetId(), asset.revision());
+        if (bySource != null && sameAssetSource(command, requestSha, bySource)) return bySource;
+        throw persistence();
+    }
 
-        Operation byKey = store.lockByIdempotencyKey(scope, command.idempotencyKey());
-        if (byKey != null) {
-            if (!sameRequest(byKey, command, requestSha)) {
-                throw new ChatConversationArchiveException(Reason.IDEMPOTENCY_CONFLICT,
-                        "Idempotency-Key is already bound to another conversation asset");
-            }
-            if (!validPersisted(byKey)) throw persistence();
-            return byKey;
+    private PreparedText prepareText(Scope scope, Command command, String requestSha) {
+        Operation existing = existingByKey(scope, command, requestSha);
+        if (existing != null) {
+            if ("SAVED".equals(existing.state())) return new PreparedText(existing, null);
+            requireCurrentTextAuthority(scope, command, existing);
+            return preparedFromPersisted(existing);
         }
-        Operation bySource = store.lockBySource(scope, command.assetId(), command.assetRevision());
-        if (bySource != null) {
-            if (!command.conversationId().equals(bySource.conversationId())
-                    || !requestSha.equals(bySource.requestSha256()) || !validPersisted(bySource)) {
-                throw persistence();
-            }
-            return bySource;
+
+        TextMaterial material = resolveText(scope, command);
+        long now = System.currentTimeMillis();
+        TextSelection text = command.textSelection();
+        Operation proposed = operation(command, scope, requestSha, now,
+                material.conversationGeneration(), null, null, text.messageId(),
+                material.messageRevision(), text.startCodePoint(), text.endCodePoint(),
+                text.sha256(), material.snapshotKey(), material.sourceText());
+        if (store.tryInsert(proposed)) return preparedFromPersisted(proposed);
+
+        existing = existingByKey(scope, command, requestSha);
+        if (existing != null) {
+            if (!"SAVED".equals(existing.state())) requireCurrentTextAuthority(scope, command, existing);
+            return "SAVED".equals(existing.state())
+                    ? new PreparedText(existing, null) : preparedFromPersisted(existing);
+        }
+        Operation bySnapshot = store.lockBySourceSnapshot(scope, material.snapshotKey());
+        if (bySnapshot != null) {
+            requireSameTextSnapshot(command, requestSha, material, bySnapshot);
+            return "SAVED".equals(bySnapshot.state())
+                    ? new PreparedText(bySnapshot, null) : preparedFromPersisted(bySnapshot);
         }
         throw persistence();
+    }
+
+    private Operation existingByKey(Scope scope, Command command, String requestSha) {
+        Operation byKey = store.lockByIdempotencyKey(scope, command.idempotencyKey());
+        if (byKey == null) return null;
+        if (!sameRequest(byKey, command, requestSha)) {
+            throw new ChatConversationArchiveException(Reason.IDEMPOTENCY_CONFLICT,
+                    "Idempotency-Key is already bound to another conversation source");
+        }
+        if (!validPersisted(byKey)) throw persistence();
+        return byKey;
+    }
+
+    private void requireCurrentTextAuthority(Scope scope, Command command, Operation operation) {
+        long messageId;
+        try {
+            messageId = Long.parseLong(operation.messageId());
+        } catch (RuntimeException malformed) {
+            throw persistence();
+        }
+        TextSource current = store.findAuthorizedTextSourceForUpdate(
+                scope, command.conversationId(), messageId);
+        if (current == null || !operation.messageId().equals(current.messageId())
+                || !operation.conversationId().equals(current.conversationId())
+                || !Objects.equals(operation.conversationGeneration(), current.conversationGeneration())) {
+            throw unavailable();
+        }
+    }
+
+    private PreparedText preparedFromPersisted(Operation operation) {
+        if (!validPersisted(operation) || !TEXT_SELECTION.equals(operation.sourceKind())
+                || operation.sourceText() == null || operation.conversationGeneration() == null) {
+            throw persistence();
+        }
+        byte[] bytes = strictUtf8(operation.sourceText());
+        if (bytes.length == 0 || !operation.sourceSha256().equals(digest(bytes))
+                || operation.sourceText().codePointCount(0, operation.sourceText().length())
+                        != operation.selectionEndCodePoint() - operation.selectionStartCodePoint()) {
+            throw persistence();
+        }
+        return new PreparedText(operation, bytes);
+    }
+
+    private TextMaterial resolveText(Scope scope, Command command) {
+        TextSelection selection = command.textSelection();
+        long messageId;
+        try {
+            messageId = Long.parseLong(selection.messageId());
+        } catch (NumberFormatException invalid) {
+            throw invalid("Invalid textSelection.messageId");
+        }
+        TextSource source = store.findAuthorizedTextSourceForUpdate(
+                scope, command.conversationId(), messageId);
+        if (source == null || source.messageRevision() < 1 || source.conversationGeneration() < 1
+                || !selection.messageId().equals(source.messageId())
+                || !command.conversationId().equals(source.conversationId())
+                || source.content() == null || !validUnicodeScalar(source.content())) throw unavailable();
+        int codePoints = source.content().codePointCount(0, source.content().length());
+        if (selection.endCodePoint() > codePoints) {
+            throw invalid("textSelection code-point range is invalid");
+        }
+        int start = source.content().offsetByCodePoints(0, selection.startCodePoint());
+        int end = source.content().offsetByCodePoints(0, selection.endCodePoint());
+        String selected = source.content().substring(start, end);
+        byte[] bytes = strictUtf8(selected);
+        if (bytes.length == 0 || !selection.sha256().equals(digest(bytes))) {
+            throw invalid("textSelection sha256 does not match the persisted message");
+        }
+        String snapshotKey = digestParts(TEXT_SELECTION, scope.tenantId(), scope.ownerJiacn(),
+                scope.clientId(), command.conversationId(),
+                Long.toString(source.conversationGeneration()), source.messageId(),
+                Long.toString(source.messageRevision()), Integer.toString(selection.startCodePoint()),
+                Integer.toString(selection.endCodePoint()), selection.sha256());
+        return new TextMaterial(source.messageRevision(), source.conversationGeneration(),
+                snapshotKey, selected);
+    }
+
+    private static Operation operation(Command command, Scope scope, String requestSha, long now,
+            Long conversationGeneration, String assetId, Long assetRevision, String messageId,
+            Long messageRevision, Integer start, Integer end, String sourceSha,
+            String snapshotKey, String sourceText) {
+        return new Operation("arc_" + UUID.randomUUID().toString().replace("-", ""),
+                scope.tenantId(), scope.ownerJiacn(), scope.clientId(), command.conversationId(),
+                conversationGeneration, command.idempotencyKey(), requestSha,
+                command.assetRef() == null ? TEXT_SELECTION : ASSET_REF,
+                assetId, assetRevision, messageId, messageRevision, start, end, sourceSha,
+                snapshotKey, sourceText, "PENDING", null, null, null, null, null, 1, now, now);
+    }
+
+    private void requireSameTextSnapshot(Command command, String requestSha, TextMaterial material,
+            Operation operation) {
+        TextSelection text = command.textSelection();
+        if (!validPersisted(operation) || !TEXT_SELECTION.equals(operation.sourceKind())
+                || !command.conversationId().equals(operation.conversationId())
+                || !requestSha.equals(operation.requestSha256())
+                || !material.snapshotKey().equals(operation.sourceSnapshotKey())
+                || !text.messageId().equals(operation.messageId())
+                || !Objects.equals(material.messageRevision(), operation.messageRevision())
+                || !Objects.equals(material.conversationGeneration(), operation.conversationGeneration())
+                || !Objects.equals(text.startCodePoint(), operation.selectionStartCodePoint())
+                || !Objects.equals(text.endCodePoint(), operation.selectionEndCodePoint())
+                || !text.sha256().equals(operation.sourceSha256())) throw persistence();
+    }
+
+    private static boolean sameAssetSource(Command command, String requestSha, Operation operation) {
+        AssetRef asset = command.assetRef();
+        return validPersisted(operation) && ASSET_REF.equals(operation.sourceKind())
+                && command.conversationId().equals(operation.conversationId())
+                && requestSha.equals(operation.requestSha256())
+                && asset.assetId().equals(operation.assetId())
+                && Objects.equals(asset.revision(), operation.assetRevision());
     }
 
     private Operation markSaving(Scope scope, String conversationId, String operationId, long generation) {
         Operation current = store.lockByOperationId(scope, conversationId, operationId);
         if (current == null || !validPersisted(current)) throw unavailable();
         if ("SAVED".equals(current.state())) return current;
+        if (TEXT_SELECTION.equals(current.sourceKind())
+                && !Objects.equals(current.conversationGeneration(), generation)) throw persistence();
         if (store.markSaving(scope, operationId, current.rowRevision(), generation,
                 System.currentTimeMillis()) != 1) throw persistence();
         Operation updated = store.lockByOperationId(scope, conversationId, operationId);
@@ -213,14 +396,17 @@ public final class ChatConversationArchiveService {
             Operation current = store.lockByOperationId(scope, conversationId, operationId);
             if (current != null && !"SAVED".equals(current.state())) {
                 int updated = store.markPartialFailed(scope, operationId, current.rowRevision(), code,
-                        SAFE_FAILURE_MESSAGE, System.currentTimeMillis());
+                        TEXT_SELECTION.equals(current.sourceKind())
+                                ? SAFE_TEXT_FAILURE_MESSAGE : SAFE_ASSET_FAILURE_MESSAGE,
+                        System.currentTimeMillis());
                 if (updated != 1) throw persistence();
             }
             return null;
         });
     }
 
-    private Confirmed confirmed(Source source, PersonalWorkspaceViews.UploadView upload) {
+    private Confirmed confirmed(String expectedSha, String expectedMime, long expectedLength,
+            PersonalWorkspaceViews.UploadView upload) {
         if (upload == null || upload.operation() == null || upload.file() == null || upload.version() == null)
             throw temporary(null);
         var operation = upload.operation();
@@ -231,9 +417,9 @@ public final class ChatConversationArchiveService {
                 || operation.fileVersion() < 1 || !operation.fileId().equals(file.fileId())
                 || operation.fileVersion() != version.version() || !file.fileId().equals(version.fileId())
                 || !"ACTIVE".equals(file.state()) || version.version() < 1
-                || !source.sha256().equals(version.sha256())
-                || !source.contentMimeType().equals(version.contentMimeType())
-                || source.byteLength() != version.byteLength()) {
+                || !expectedSha.equals(version.sha256())
+                || !expectedMime.equals(version.contentMimeType())
+                || expectedLength != version.byteLength()) {
             throw new ChatConversationArchiveException(Reason.TEMPORARILY_UNAVAILABLE,
                     "Workspace did not confirm the archived file version");
         }
@@ -247,10 +433,21 @@ public final class ChatConversationArchiveService {
                     && version == operation.fileVersion();
         }
     }
+    private record TextMaterial(long messageRevision, long conversationGeneration,
+            String snapshotKey, String sourceText) { }
+    private record PreparedText(Operation operation, byte[] bytes) {
+        private PreparedText { bytes = bytes == null ? null : bytes.clone(); }
+        @Override public byte[] bytes() { return bytes == null ? null : bytes.clone(); }
+        long conversationGeneration() {
+            if (operation.conversationGeneration() == null) throw persistence();
+            return operation.conversationGeneration();
+        }
+    }
 
     private static boolean validSource(Scope scope, Command command, Source source) {
-        return source != null && command.assetId().equals(source.assetId())
-                && command.assetRevision() == source.assetRevision()
+        AssetRef asset = command.assetRef();
+        return source != null && asset.assetId().equals(source.assetId())
+                && asset.revision() == source.assetRevision()
                 && command.conversationId().equals(source.conversationId())
                 && source.conversationGeneration() >= 1 && exact(source.requestId(), 100)
                 && source.requestRevision() >= 1 && exact(source.stepId(), 64)
@@ -276,28 +473,62 @@ public final class ChatConversationArchiveService {
     }
 
     private static boolean sameRequest(Operation operation, Command command, String requestSha) {
-        return command.conversationId().equals(operation.conversationId())
-                && command.assetId().equals(operation.assetId())
-                && command.assetRevision() == operation.assetRevision()
-                && requestSha.equals(operation.requestSha256());
+        if (!command.conversationId().equals(operation.conversationId())
+                || !requestSha.equals(operation.requestSha256())) return false;
+        if (command.assetRef() != null) {
+            return ASSET_REF.equals(operation.sourceKind())
+                    && command.assetRef().assetId().equals(operation.assetId())
+                    && Objects.equals(command.assetRef().revision(), operation.assetRevision());
+        }
+        TextSelection text = command.textSelection();
+        return TEXT_SELECTION.equals(operation.sourceKind())
+                && text.messageId().equals(operation.messageId())
+                && Objects.equals(text.startCodePoint(), operation.selectionStartCodePoint())
+                && Objects.equals(text.endCodePoint(), operation.selectionEndCodePoint())
+                && text.sha256().equals(operation.sourceSha256());
     }
 
     private static boolean validPersisted(Operation operation) {
         if (operation == null || !exactWebId(operation.operationId(), 128)
                 || !exact(operation.tenantId(), 50) || !exact(operation.ownerJiacn(), 50)
-                || !exact(operation.clientId(), 50) || !exact(operation.conversationId(), 100)
+                || !exact(operation.clientId(), 50) || !exactWebId(operation.conversationId(), 100)
                 || !exact(operation.idempotencyKey(), 160)
                 || operation.requestSha256() == null || !operation.requestSha256().matches("[0-9a-f]{64}")
-                || !exact(operation.assetId(), 64) || operation.assetRevision() < 1
                 || operation.rowRevision() < 1 || !List.of("PENDING", "SAVING", "SAVED", "PARTIAL_FAILED")
                         .contains(operation.state())) return false;
+        if (ASSET_REF.equals(operation.sourceKind())) {
+            if (!exactWebId(operation.assetId(), 64) || operation.assetRevision() == null
+                    || operation.assetRevision() < 1 || operation.messageId() != null
+                    || operation.messageRevision() != null || operation.selectionStartCodePoint() != null
+                    || operation.selectionEndCodePoint() != null || operation.sourceSha256() != null
+                    || operation.sourceSnapshotKey() != null || operation.sourceText() != null) return false;
+        } else if (TEXT_SELECTION.equals(operation.sourceKind())) {
+            if (operation.assetId() != null || operation.assetRevision() != null
+                    || operation.conversationGeneration() == null || operation.conversationGeneration() < 1
+                    || operation.messageId() == null || !operation.messageId().matches("[1-9][0-9]{0,18}")
+                    || operation.messageRevision() == null || operation.messageRevision() < 1
+                    || operation.selectionStartCodePoint() == null || operation.selectionStartCodePoint() < 0
+                    || operation.selectionEndCodePoint() == null
+                    || operation.selectionEndCodePoint() <= operation.selectionStartCodePoint()
+                    || operation.sourceSha256() == null
+                    || !operation.sourceSha256().matches("[0-9a-f]{64}")
+                    || operation.sourceSnapshotKey() == null
+                    || !operation.sourceSnapshotKey().matches("[0-9a-f]{64}")
+                    || operation.sourceText() == null || operation.sourceText().isEmpty()
+                    || !validUnicodeScalar(operation.sourceText())) return false;
+            byte[] bytes = operation.sourceText().getBytes(StandardCharsets.UTF_8);
+            if (!operation.sourceSha256().equals(digest(bytes))
+                    || operation.sourceText().codePointCount(0, operation.sourceText().length())
+                            != operation.selectionEndCodePoint() - operation.selectionStartCodePoint()) return false;
+        } else return false;
         if ("SAVED".equals(operation.state())) {
             return operation.conversationGeneration() != null && operation.conversationGeneration() >= 1
                     && exact(operation.workspaceOperationId(), 100)
                     && exactWebId(operation.fileId(), 128)
                     && operation.fileVersion() != null && operation.fileVersion() >= 1;
         }
-        return operation.fileId() == null && operation.fileVersion() == null;
+        return operation.workspaceOperationId() == null
+                && operation.fileId() == null && operation.fileVersion() == null;
     }
 
     private static Receipt receipt(Operation operation) {
@@ -310,14 +541,38 @@ public final class ChatConversationArchiveService {
             case "PARTIAL_FAILED" -> "failed";
             default -> throw persistence();
         };
-        ItemReceipt item = new ItemReceipt(operation.assetId(), Long.toString(operation.assetRevision()),
-                itemState, operation.fileId(), operation.fileVersion(), operation.errorCode(), operation.message());
+        TextSelectionReceipt selection = TEXT_SELECTION.equals(operation.sourceKind())
+                ? new TextSelectionReceipt(operation.messageId(),
+                        Long.toString(operation.messageRevision()), operation.selectionStartCodePoint(),
+                        operation.selectionEndCodePoint(), operation.sourceSha256()) : null;
+        ItemReceipt item = new ItemReceipt(operation.sourceKind(), operation.assetId(),
+                operation.assetRevision() == null ? null : Long.toString(operation.assetRevision()),
+                selection, itemState, operation.fileId(), operation.fileVersion(),
+                operation.errorCode(), operation.message());
         return new Receipt(operation.operationId(), state, Long.toString(operation.rowRevision()), List.of(item));
     }
 
-    private static String workspaceKey(Scope scope, Source source) {
+    /** Legacy asset digest is intentionally byte-for-byte stable. */
+    private static String assetRequestSha(Command command) {
+        return digestParts(command.conversationId(), command.assetRef().assetId(),
+                Long.toString(command.assetRef().revision()));
+    }
+
+    private static String textRequestSha(Command command) {
+        TextSelection text = command.textSelection();
+        return digestParts(command.conversationId(), TEXT_SELECTION, text.messageId(),
+                Integer.toString(text.startCodePoint()), Integer.toString(text.endCodePoint()), text.sha256());
+    }
+
+    /** Legacy asset workspace idempotency is intentionally byte-for-byte stable. */
+    private static String assetWorkspaceKey(Scope scope, Source source) {
         return "chat-archive-" + digestParts(scope.tenantId(), scope.ownerJiacn(), scope.clientId(),
                 source.assetId(), Long.toString(source.assetRevision()));
+    }
+
+    private static String textWorkspaceKey(Scope scope, Operation operation) {
+        return "chat-archive-" + digestParts(scope.tenantId(), scope.ownerJiacn(), scope.clientId(),
+                TEXT_SELECTION, operation.sourceSnapshotKey());
     }
 
     private static PersonalWorkspaceExecutionService.OwnerScope executionScope(Scope scope) {
@@ -337,8 +592,25 @@ public final class ChatConversationArchiveService {
     private static void validateCommand(Command command) {
         if (command == null) throw invalid("Missing archive request");
         exactId(command.conversationId(), "conversationId", 100);
-        exactId(command.assetId(), "assetId", 64);
-        if (command.assetRevision() < 1) throw invalid("assetRef.revision must be positive");
+        if ((command.assetRef() == null) == (command.textSelection() == null))
+            throw invalid("Exactly one archive source is required");
+        if (command.assetRef() != null) {
+            exactId(command.assetRef().assetId(), "assetId", 64);
+            if (command.assetRef().revision() < 1) throw invalid("assetRef.revision must be positive");
+        } else {
+            TextSelection text = command.textSelection();
+            if (text.messageId() == null || !text.messageId().matches("[1-9][0-9]{0,18}"))
+                throw invalid("Invalid textSelection.messageId");
+            try {
+                if (Long.parseLong(text.messageId()) < 1) throw invalid("Invalid textSelection.messageId");
+            } catch (NumberFormatException invalid) {
+                throw invalid("Invalid textSelection.messageId");
+            }
+            if (text.startCodePoint() < 0 || text.endCodePoint() <= text.startCodePoint())
+                throw invalid("Invalid textSelection code-point range");
+            if (text.sha256() == null || !text.sha256().matches("[0-9a-f]{64}"))
+                throw invalid("Invalid textSelection.sha256");
+        }
         if (command.idempotencyKey() == null
                 || !command.idempotencyKey().matches("[A-Za-z0-9._~:/+\\-]{8,160}"))
             throw invalid("Invalid Idempotency-Key");
@@ -355,8 +627,26 @@ public final class ChatConversationArchiveService {
 
     private static boolean exact(String value, int max) {
         return value != null && !value.isBlank() && value.equals(value.strip())
-                && value.codePointCount(0, value.length()) <= max
-                && value.chars().noneMatch(Character::isISOControl);
+                && validUnicodeScalar(value) && value.codePointCount(0, value.length()) <= max
+                && value.codePoints().noneMatch(Character::isISOControl);
+    }
+
+    private static boolean validUnicodeScalar(String value) {
+        if (value == null) return false;
+        for (int index = 0; index < value.length(); index++) {
+            char current = value.charAt(index);
+            if (Character.isHighSurrogate(current)) {
+                if (index + 1 >= value.length() || !Character.isLowSurrogate(value.charAt(index + 1)))
+                    return false;
+                index++;
+            } else if (Character.isLowSurrogate(current)) return false;
+        }
+        return true;
+    }
+
+    private static byte[] strictUtf8(String value) {
+        if (!validUnicodeScalar(value)) throw persistence();
+        return value.getBytes(StandardCharsets.UTF_8);
     }
 
     private static String digest(byte[] value) {
@@ -383,7 +673,7 @@ public final class ChatConversationArchiveService {
     }
     private static ChatConversationArchiveException unavailable() {
         return new ChatConversationArchiveException(Reason.NOT_FOUND_OR_FORBIDDEN,
-                "Conversation asset is unavailable");
+                "Conversation archive source is unavailable");
     }
     private static ChatConversationArchiveException persistence() {
         return new ChatConversationArchiveException(Reason.PERSISTENCE_ERROR,

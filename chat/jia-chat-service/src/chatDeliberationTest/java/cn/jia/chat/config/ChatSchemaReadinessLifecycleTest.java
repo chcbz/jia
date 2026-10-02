@@ -43,18 +43,25 @@ class ChatSchemaReadinessLifecycleTest {
                     "request_revision", "conversation_id", "conversation_generation", "aggregate_state"),
             "chat_conversation", Set.of("id", "tenant_id", "jiacn", "client_id", "conversation_type",
                     "conversation_scope_type", "conversation_scope_key", "task_id", "deleted_at",
-                    "lifecycle_generation"));
+                    "lifecycle_generation"),
+            "chat_message", Set.of("id", "conversation_id", "message_type", "content",
+                    "create_time", "update_time", "tenant_id", "client_id", "jiacn",
+                    "conversation_type"));
     private static final List<String> OPERATION_COLUMNS = List.of("operation_id", "tenant_id",
             "owner_jiacn", "client_id", "conversation_id", "conversation_generation",
-            "idempotency_key", "request_sha256", "asset_id", "asset_revision", "state",
-            "workspace_operation_id", "file_id", "file_version", "error_code", "message",
-            "row_revision", "created_at", "updated_at");
+            "idempotency_key", "request_sha256", "source_kind", "asset_id", "asset_revision",
+            "message_id", "message_revision", "selection_start_code_point",
+            "selection_end_code_point", "source_sha256", "source_snapshot_key", "source_text",
+            "state", "workspace_operation_id", "file_id", "file_version", "error_code",
+            "message", "row_revision", "created_at", "updated_at");
     private static final Map<String, IndexSpec> OPERATION_INDEXES = Map.of(
             "PRIMARY", new IndexSpec(true, List.of("operation_id")),
             "uk_chat_archive_key", new IndexSpec(true,
                     List.of("tenant_id", "owner_jiacn", "client_id", "idempotency_key")),
             "uk_chat_archive_source", new IndexSpec(true,
                     List.of("tenant_id", "owner_jiacn", "client_id", "asset_id", "asset_revision")),
+            "uk_chat_archive_source_snapshot", new IndexSpec(true,
+                    List.of("tenant_id", "owner_jiacn", "client_id", "source_snapshot_key")),
             "uk_chat_archive_workspace", new IndexSpec(true,
                     List.of("tenant_id", "owner_jiacn", "client_id", "workspace_operation_id")),
             "idx_chat_archive_conversation", new IndexSpec(false,
@@ -63,7 +70,8 @@ class ChatSchemaReadinessLifecycleTest {
     private static final Set<String> OPERATION_CHECKS = Set.of("chk_chat_archive_asset_revision",
             "chk_chat_archive_generation", "chk_chat_archive_key_length",
             "chk_chat_archive_request_sha", "chk_chat_archive_state",
-            "chk_chat_archive_row_revision", "chk_chat_archive_saved_receipt");
+            "chk_chat_archive_row_revision", "chk_chat_archive_source_union",
+            "chk_chat_archive_saved_receipt");
 
     @Test
     void legacyInitializingBeanReproducesFailureBeforeApplicationRunnersExecute() {

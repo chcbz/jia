@@ -404,3 +404,37 @@ tasks.register('mmdU2TypedInspection', Test) {
     classpath = mmdU2TypedInspectionSourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+// AC12 text-selection archive closed loop. MySQL evidence remains opt-in and guarded.
+def mmdU3ConversationArchiveSourceSet = sourceSets.create('mmdU3ConversationArchive') {
+    java {
+        srcDir 'src/chatDeliberationTest/java'
+        include 'cn/jia/chat/archive/conversation/ChatConversationArchiveServiceTest.java'
+        include 'cn/jia/chat/archive/conversation/ChatConversationArchiveMySqlTestGuard.java'
+        include 'cn/jia/chat/archive/conversation/ChatConversationArchiveMySqlIntegrationTest.java'
+        include 'cn/jia/chat/api/ChatConversationArchiveControllerTest.java'
+        include 'cn/jia/chat/config/ChatConversationArchiveContractTest.java'
+        include 'cn/jia/chat/config/ChatSchemaReadinessLifecycleTest.java'
+    }
+    resources.srcDir 'src/chatDeliberationTest/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(mmdU3ConversationArchiveSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(mmdU3ConversationArchiveSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('mmdU3ConversationArchive', Test) {
+    maxParallelForks = 1
+    maxHeapSize = '256m'
+    jvmArgs '-XX:+UseSerialGC', '-XX:ActiveProcessorCount=2',
+            '-XX:MaxMetaspaceSize=192m', '-Xss256k'
+    group = 'verification'
+    description = 'Runs AC12 canonical archive wire, frozen text snapshot, ACL, recovery and schema tests.'
+    dependsOn tasks.named(mmdU3ConversationArchiveSourceSet.classesTaskName)
+    testClassesDirs = mmdU3ConversationArchiveSourceSet.output.classesDirs
+    classpath = mmdU3ConversationArchiveSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
