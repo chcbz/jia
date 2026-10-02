@@ -92,7 +92,7 @@ class ChatBountyExecutionCoordinatorTest {
 
     @Test void legacyIntentCannotSilentlyDropGrantedImageReference() throws Exception {
         persistedImageRequest();
-        when(grants.admitControlled(any(),eq("task"),eq("grant"),eq(1L),eq(2L),eq("agent"),
+        when(grants.admitControlledV3(any(),eq("task"),eq("grant"),eq(1L),eq(2L),eq("agent"),
                 eq("GENERATE_IMAGE"),eq("NEW_EXECUTION"),isNull(),isNull(),isNull()))
                 .thenReturn(new AgentTaskExecutionGrantService.Admission("grant",1,2,
                         "agent","GENERATE_IMAGE",true,List.of(new AgentTaskExecutionGrantService.AuthorizedInput(
@@ -135,7 +135,7 @@ class ChatBountyExecutionCoordinatorTest {
                     +"\"byteLength\":4,\"contentHash\":\""+hash+"\"}]}");
             return List.of(mapper.mapRow(row,0));
         });
-        when(grants.admitControlled(any(),eq("task"),eq("grant"),eq(1L),eq(2L),eq("agent"),
+        when(grants.admitControlledV3(any(),eq("task"),eq("grant"),eq(1L),eq(2L),eq("agent"),
                 eq("GENERATE_IMAGE"),eq("NEW_EXECUTION"),isNull(),isNull(),isNull()))
                 .thenReturn(new AgentTaskExecutionGrantService.Admission("grant",1,2,
                         "agent","GENERATE_IMAGE",true,List.of(new AgentTaskExecutionGrantService.AuthorizedInput(
@@ -163,7 +163,7 @@ class ChatBountyExecutionCoordinatorTest {
 
     @Test void missingPaidAuthorizationIsPersistedAsWaitingWithoutCreatingExecution() throws Exception {
         persistedImageRequest();
-        when(grants.admitControlled(any(),eq("task"),eq("grant"),eq(1L),eq(2L),eq("agent"),
+        when(grants.admitControlledV3(any(),eq("task"),eq("grant"),eq(1L),eq(2L),eq("agent"),
                 eq("GENERATE_IMAGE"),eq("NEW_EXECUTION"),isNull(),isNull(),isNull()))
                 .thenThrow(new AgentTaskExecutionGrantException(
                         AgentTaskExecutionGrantException.Reason.PAID_EXECUTION_NOT_AUTHORIZED,"no cost authorization"));
@@ -175,7 +175,7 @@ class ChatBountyExecutionCoordinatorTest {
 
     @Test void authorizedExactImageIntentBindsOneExecutionAndTransitionsRequest() throws Exception {
         persistedImageRequest();
-        when(grants.admitControlled(any(),eq("task"),eq("grant"),eq(1L),eq(2L),eq("agent"),
+        when(grants.admitControlledV3(any(),eq("task"),eq("grant"),eq(1L),eq(2L),eq("agent"),
                 eq("GENERATE_IMAGE"),eq("NEW_EXECUTION"),isNull(),isNull(),isNull()))
                 .thenReturn(new AgentTaskExecutionGrantService.Admission("grant",1,2,
                         "agent","GENERATE_IMAGE",true,List.of(),
