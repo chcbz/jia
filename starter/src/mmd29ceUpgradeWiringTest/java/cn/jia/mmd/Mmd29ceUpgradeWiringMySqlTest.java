@@ -616,40 +616,44 @@ class Mmd29ceUpgradeWiringMySqlTest {
         void assertSnapshotCheckDriftRejected() throws Exception {
             DriverManagerDataSource source = new DriverManagerDataSource(jdbcUrl(), user, password);
             JdbcTemplate jdbc = new JdbcTemplate(source);
-            probeRejectedSnapshotCheck(jdbc, "chk_atrs_scope",
-                    "tenant_id='1' AND owner_jiacn<>'0'",
-                    "tenant_id='0' AND owner_jiacn<>'0'");
-            probeRejectedSnapshotCheck(jdbc, "chk_atrs_scope",
-                    "(tenant_id='0' AND owner_jiacn<>'0') OR TRUE",
-                    "tenant_id='0' AND owner_jiacn<>'0'");
-            probeRejectedSnapshotCheck(jdbc, "chk_atrs_content",
-                    "revision>=1 AND task_version_at_confirmation>=0 AND CHAR_LENGTH(title)>0 "
-                            + "AND content_sha256 REGEXP '^[0-9a-f]{64}$' "
-                            + "AND source IN ('CREATE','RECONFIRM','INVALID') AND created_at>0",
-                    "revision>=1 AND task_version_at_confirmation>=0 AND CHAR_LENGTH(title)>0 "
-                            + "AND content_sha256 REGEXP '^[0-9a-f]{64}$' "
-                            + "AND source IN ('CREATE','RECONFIRM') AND created_at>0");
+            String original = Files.readString(repo.resolve(
+                    "agent/jia-agent-mapper/src/main/resources/db/agent-task-requirement-snapshot-v1.sql"),
+                    StandardCharsets.UTF_8).strip();
+            probeRejectedSnapshotCheck(jdbc, original, "chk_atrs_scope",
+                    "tenant_id='0' AND owner_jiacn<>'0'",
+                    "tenant_id='1' AND owner_jiacn<>'0'");
+            probeRejectedSnapshotCheck(jdbc, original, "chk_atrs_scope",
+                    "tenant_id='0' AND owner_jiacn<>'0'",
+                    "(tenant_id='0' AND owner_jiacn<>'0') OR TRUE");
+            probeRejectedSnapshotCheck(jdbc, original, "chk_atrs_content",
+                    "source IN ('CREATE','RECONFIRM')",
+                    "source IN ('CREATE','RECONFIRM','INVALID')");
         }
 
-        private void probeRejectedSnapshotCheck(
-                JdbcTemplate jdbc, String name, String weakened, String restored) {
+        private static void probeRejectedSnapshotCheck(JdbcTemplate jdbc, String original,
+                String name, String accepted, String weakened) {
+            assertTrue(original.contains(accepted), "probe source missing accepted expression " + accepted);
+            assertEquals(original.indexOf(accepted), original.lastIndexOf(accepted),
+                    "probe replacement must be unique: " + accepted);
+            String candidate = original.replace(accepted, weakened);
+            assertFalse(candidate.equals(original), "negative probe did not change DDL");
             try {
-                replaceSnapshotCheck(jdbc, name, weakened);
+                jdbc.execute("DROP TABLE agent_task_requirement_snapshot");
+                jdbc.execute(stripTerminator(candidate));
                 IllegalStateException failure = assertThrows(IllegalStateException.class,
                         () -> new AgentTaskRequirementSnapshotSchemaInitializer(jdbc).afterPropertiesSet(),
                         "snapshot initializer accepted weakened CHECK " + name + ": " + weakened);
                 assertTrue(failure.getMessage().contains("Snapshot CHECK drift: " + name),
                         "unexpected rejection for " + name + ": " + failure);
             } finally {
-                replaceSnapshotCheck(jdbc, name, restored);
+                jdbc.execute("DROP TABLE IF EXISTS agent_task_requirement_snapshot");
+                jdbc.execute(stripTerminator(original));
             }
             new AgentTaskRequirementSnapshotSchemaInitializer(jdbc).afterPropertiesSet();
         }
 
-        private static void replaceSnapshotCheck(JdbcTemplate jdbc, String name, String expression) {
-            jdbc.execute("ALTER TABLE agent_task_requirement_snapshot DROP CHECK `" + name + "`");
-            jdbc.execute("ALTER TABLE agent_task_requirement_snapshot ADD CONSTRAINT `" + name
-                    + "` CHECK (" + expression + ")");
+        private static String stripTerminator(String sql) {
+            return sql.endsWith(";") ? sql.substring(0, sql.length() - 1) : sql;
         }
 
         void assertSchemaVersions() throws Exception {
