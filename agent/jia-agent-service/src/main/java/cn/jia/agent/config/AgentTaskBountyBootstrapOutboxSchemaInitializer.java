@@ -132,8 +132,8 @@ public final class AgentTaskBountyBootstrapOutboxSchemaInitializer implements In
         requireCheck(checks, "chk_atbbo_tenant", "tenant_id", "='0'");
         requireCheck(checks, "chk_atbbo_revision", "grant_version", "attempt_count", "version");
         requireCheck(checks, "chk_atbbo_hash", "payload_hash", "reference_summary_sha256");
-        requireCheck(checks, "chk_atbbo_references", "json_type", "reference_summary_json", "array");
-        requireCheck(checks, "chk_atbbo_state", "pending", "claimed", "retry", "admitted", "dead");
+        requireCheck(checks, "chk_atbbo_references", "json_type", "reference_summary_json", "'ARRAY'");
+        requireCheck(checks, "chk_atbbo_state", "'PENDING'", "'CLAIMED'", "'RETRY'", "'ADMITTED'", "'DEAD'");
         requireCheck(checks, "chk_atbbo_lifecycle", "admitted_conversation_id",
                 "admitted_request_id", "lease_owner", "reconciled_at");
         requireCheck(checks, "chk_atbbo_time", "created_at", "lease_until", "reconciled_at");
@@ -170,7 +170,7 @@ public final class AgentTaskBountyBootstrapOutboxSchemaInitializer implements In
     private static void requireCheck(Map<String,String> checks, String name, String... fragments) {
         String normalized = AgentTaskFundingSchemaInitializer.normalizeCheck(checks.get(name));
         for (String fragment : fragments) {
-            if (!normalized.contains(fragment.toLowerCase(Locale.ROOT))) {
+            if (!normalized.contains(fragment)) {
                 throw new IllegalStateException("Bounty bootstrap CHECK expression drift: " + name);
             }
         }
