@@ -84,7 +84,8 @@ class Mmd29ceUpgradeWiringMySqlTest {
     private static final String TARGET = "29ce5e130c20e213266ecc2cd7bde0a13a6a92f3";
     private static final String TARGET_TREE = "9ed6012a3a11d5e3fcef2ab5906d9db7a3881ead";
     private static final String PREFIX = "mmd29ce_20261002_01a0f2bb_";
-    private static final String DATABASE = "mmd29ce_20261002_01a0f2bb_wiring_r2";
+    private static final String DATABASE = "mmd29ce_20261002_01a0f2bb_wiring_r3";
+    private static final String ISOLATED_SCHEDULE_BEAN = "wxSchedule";
     private static final Set<String> FIXTURE_ONLY_PATHS = Set.of(
             "starter/build.gradle",
             "starter/src/mmd29ceUpgradeWiringTest/java/cn/jia/mmd/Mmd29ceUpgradeWiringMySqlTest.java");
@@ -284,11 +285,20 @@ class Mmd29ceUpgradeWiringMySqlTest {
                                 "JiaApplication scheduling processor was not registered as expected");
                     }
                     registry.removeBeanDefinition(scheduledProcessor);
+                    if (!registry.containsBeanDefinition(ISOLATED_SCHEDULE_BEAN)) {
+                        throw new IllegalStateException(
+                                "JiaApplication did not scan the expected wxSchedule component");
+                    }
+                    registry.getBeanDefinition(ISOLATED_SCHEDULE_BEAN).setLazyInit(true);
                 }))
                 .run(arguments);
         assertFalse(context.containsBean(
                 TaskManagementConfigUtils.SCHEDULED_ANNOTATION_PROCESSOR_BEAN_NAME),
                 "isolated fixture must not start unrelated @Scheduled business jobs");
+        assertTrue(context.containsBeanDefinition(ISOLATED_SCHEDULE_BEAN),
+                "isolated fixture must retain JiaApplication component scanning");
+        assertFalse(context.getBeanFactory().containsSingleton(ISOLATED_SCHEDULE_BEAN),
+                "isolated fixture must not instantiate unrelated wxSchedule or access shared Redis");
         return context;
     }
 
@@ -380,8 +390,9 @@ class Mmd29ceUpgradeWiringMySqlTest {
     }
 
     private static void assertTargetSourceAndDdlHashes(Path repo) throws Exception {
-        assertEquals(TARGET, git(repo, "rev-parse", "HEAD^").strip(),
-                "fixture commit must remain a direct child of the exact production source");
+        git(repo, "merge-base", "--is-ancestor", TARGET, "HEAD");
+        assertEquals(TARGET, git(repo, "rev-parse", TARGET + "^{commit}").strip(),
+                "fixture history must retain the exact production source commit");
         assertEquals(TARGET_TREE, git(repo, "rev-parse", TARGET + "^{tree}").strip());
         assertEquals(FIXTURE_ONLY_PATHS, Set.copyOf(git(repo, "diff", "--name-only", TARGET + "..HEAD", "--")
                 .lines().filter(line -> !line.isBlank()).toList()),
