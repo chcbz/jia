@@ -129,8 +129,7 @@ class ChatBountyExecutionCoordinatorSpringTransactionTest {
         ControlledImageProviderProperties properties=operatorProperties();
         NativeProviderCredentialBindingLookup bindingLookup=scope ->
                 new NativeProviderCredentialBindingLookup.Snapshot(
-                        NativeProviderCredentialBindingLookup.State.READY,1,"CONTROLLED_IMAGE_HTTP_V1",
-                        "binding",1L,"model",16,1,1);
+                        NativeProviderCredentialBindingLookup.State.OFFLINE,null,null,null,null,null,null,null,null);
         var policy=new ControlledImageProviderOperatorPolicy(properties,provider(bindingLookup,
                 NativeProviderCredentialBindingLookup.class));
         ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup declarationLookup=scope->{
