@@ -743,6 +743,7 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
                     "^consent_[0-9a-f]{32}$","^opgrant_[0-9a-f]{32}$")) {
                 canonical=canonical.replace("cast('"+pattern+"'ascharcharsetbinary)",
                         "'"+pattern+"'");
+                canonical=canonical.replace("_ascii'"+pattern+"'","'"+pattern+"'");
             }
             return canonical;
         } catch (IllegalArgumentException malformed) {

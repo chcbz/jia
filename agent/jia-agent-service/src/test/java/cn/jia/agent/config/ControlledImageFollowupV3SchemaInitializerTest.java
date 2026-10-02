@@ -36,6 +36,9 @@ class ControlledImageFollowupV3SchemaInitializerTest {
         String legacy="regexp_like(content_sha256,cast('^[0-9a-f]{64}$' as char charset binary))";
         assertEquals(ControlledImageFollowupV3SchemaInitializer.canonicalControlledCheck(plain),
                 ControlledImageFollowupV3SchemaInitializer.canonicalControlledCheck(legacy));
+        assertEquals(ControlledImageFollowupV3SchemaInitializer.canonicalControlledCheck(plain),
+                ControlledImageFollowupV3SchemaInitializer.canonicalControlledCheck(
+                        "regexp_like(content_sha256,_ascii\\'^[0-9a-f]{64}$\\')"));
         for (String drift:List.of(
                 "regexp_like(content_sha256,'^[0-9A-F]{64}$')",
                 "regexp_like(content_sha256,'^[0-9a-f]{63}$')",
