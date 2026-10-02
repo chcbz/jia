@@ -178,9 +178,13 @@ class ControlledImageBridgeMySqlTest {
         when(identities.lockActiveCanonicalAgentIdsInScope(
                 "0","client","owner",List.of("agent-zero"))).thenReturn(List.of("agent-zero"));
         AgentTaskRequirementSnapshotService requirements=mock(AgentTaskRequirementSnapshotService.class);
-        when(requirements.requireCurrent(any(),eq("task-zero"),eq(1L))).thenReturn(
-                new AgentTaskRequirementSnapshotService.Snapshot("0","client","owner","task-zero",1L,
-                        "Draw a bird","Generate one image","a".repeat(64),"CREATE"));
+        var requirementSnapshot = new AgentTaskRequirementSnapshotService.Snapshot(
+                "0","client","owner","task-zero",1L,
+                "Draw a bird","Generate one image","a".repeat(64),"CREATE");
+        when(requirements.requireCurrent(any(),eq("task-zero"),eq(1L)))
+                .thenReturn(requirementSnapshot);
+        when(requirements.read(any(),eq("task-zero"),eq(1L)))
+                .thenReturn(requirementSnapshot);
         var json=new tools.jackson.databind.ObjectMapper();
         var grants=new AgentTaskExecutionGrantServiceImpl(grantRows,bootstrapRows,
                 mock(PersonalWorkspaceTaskLinkDao.class),mock(PersonalWorkspaceDao.class),legacy,identities,
@@ -236,6 +240,14 @@ class ControlledImageBridgeMySqlTest {
                   FROM agent_task_provider_cost_consent
                  WHERE task_id='task-zero' AND consent_id=?
                 """,String.class,consent.consentId()));
+        var readService = new AgentTaskDeliberationOperationReadServiceImpl(
+                grantRows,bootstrapRows,operations,requirements,transactions,json);
+        var projected = readService.read(new AgentTaskExecutionGrantService.Scope(
+                "0","client","owner"),"task-zero","assignment-zero");
+        assertEquals(1,projected.assignmentRevision());
+        assertEquals("ACTIVE",projected.grantState());
+        assertEquals("GENERATE_IMAGE",projected.initialOperation());
+        assertTrue(projected.currentAssignment());
     }
 
     @Test void twoExecutionRunsCanReserveOnlyOneConsent() throws Exception {
@@ -508,6 +520,9 @@ class ControlledImageBridgeMySqlTest {
     private ControlledImageBridgeOperationDao mysqlBridgeOperationDao() {
         ControlledImageBridgeOperationDao rows=mock(ControlledImageBridgeOperationDao.class);
         when(rows.lock(anyString(),anyString(),anyString(),anyString(),anyString())).thenReturn(null);
+        when(rows.find(anyString(),anyString(),anyString(),anyString(),anyString()))
+                .thenAnswer(invocation->bridgeBy(invocation.getArgument(0),invocation.getArgument(1),
+                        invocation.getArgument(2),invocation.getArgument(3),invocation.getArgument(4)));
         doAnswer(invocation->{
             ControlledImageBridgeOperationEntity row=invocation.getArgument(0);
             assertEquals(1,jdbc.update("""
@@ -525,6 +540,34 @@ class ControlledImageBridgeMySqlTest {
             return null;
         }).when(rows).insert(any());
         return rows;
+    }
+
+    private ControlledImageBridgeOperationEntity bridgeBy(String tenant,String client,String owner,
+            String task,String key) {
+        List<ControlledImageBridgeOperationEntity> rows=jdbc.query("""
+                SELECT * FROM agent_controlled_image_bridge_operation
+                 WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND task_id=?
+                   AND assignment_idempotency_key=?
+                """,(result,index)->{
+            ControlledImageBridgeOperationEntity row=new ControlledImageBridgeOperationEntity()
+                    .setOwnerJiacn(result.getString("owner_jiacn"))
+                    .setTaskId(result.getString("task_id"))
+                    .setAssignmentIdempotencyKey(result.getString("assignment_idempotency_key"))
+                    .setWrapperDigest(result.getString("wrapper_digest"))
+                    .setConsentId(result.getString("consent_id"))
+                    .setExpectedConsentVersion(result.getLong("expected_consent_version"))
+                    .setGrantId(result.getString("grant_id"))
+                    .setGrantVersion(result.getLong("grant_version"))
+                    .setAssignmentRevision(result.getLong("assignment_revision"))
+                    .setAuthorityLocator(result.getString("authority_locator"))
+                    .setExecutionProtocolVersion(result.getInt("execution_protocol_version"))
+                    .setOperationGrantId(result.getString("operation_grant_id"))
+                    .setCreatedAt(result.getLong("created_at"));
+            row.setTenantId(result.getString("tenant_id"));
+            row.setClientId(result.getString("client_id"));
+            return row;
+        },tenant,client,owner,task,key);
+        return rows.isEmpty()?null:rows.getFirst();
     }
 
     private static AgentTaskAssignDTO zeroVersionAssignment() {

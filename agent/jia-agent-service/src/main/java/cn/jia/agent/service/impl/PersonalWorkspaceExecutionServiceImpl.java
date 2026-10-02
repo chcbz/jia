@@ -2177,7 +2177,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         if (command == null) throw failure(Reason.BAD_REQUEST);
         String conversation = optional(command.conversationId(), 100);
         id(command.targetAgentId(), "targetAgentId", 100); String task = optional(command.taskId(), 100);
-        text(command.instruction(), "instruction", 4000);
+        instructionText(command.instruction(), 4000);
         String outputMime = command.outputContentMimeType() == null
                 ? PersonalWorkspaceExecutionProperties.DOCX : command.outputContentMimeType();
         if (!executionAvailable || !SUPPORTED_OUTPUT_MIME_TYPES.contains(outputMime)
@@ -2308,6 +2308,11 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     private static void validateIdempotency(String key) { id(key,"Idempotency-Key",100); }
     private static void id(String value,String name,int max) { if(value==null||value.isBlank()||!value.equals(value.strip())||value.codePointCount(0,value.length())>max||value.chars().anyMatch(Character::isISOControl))throw failure(Reason.BAD_REQUEST); }
     private static String optional(String value,int max) { if(value==null)return null;id(value,"optional",max);return value; }
+    private static void instructionText(String value,int max) {
+        if(value==null||value.isBlank()||value.codePointCount(0,value.length())>max
+                ||value.codePoints().anyMatch(codePoint -> codePoint!='\n'
+                        && Character.isISOControl(codePoint)))throw failure(Reason.BAD_REQUEST);
+    }
     private static void text(String value,String name,int max) { if(value==null||value.isBlank()||value.codePointCount(0,value.length())>max||value.chars().anyMatch(Character::isISOControl))throw failure(Reason.BAD_REQUEST); }
     private static PersonalWorkspaceStorage.Scope storageScope(OwnerScope scope) { return new PersonalWorkspaceStorage.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()); }
     private static PersonalWorkspaceStorage.Scope storageScope(RuntimeScope scope) { return new PersonalWorkspaceStorage.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()); }

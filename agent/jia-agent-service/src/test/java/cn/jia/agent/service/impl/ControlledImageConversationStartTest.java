@@ -413,14 +413,16 @@ class ControlledImageConversationStartTest {
         var persisted=org.mockito.ArgumentCaptor.forClass(PersonalWorkspaceExecutionEntity.class);
         var source=org.mockito.ArgumentCaptor.forClass(ControlledImageExecutionSourceV3Entity.class);
 
+        String instruction="Draw a yellow bird\n\nUse a vivid background";
         var command=new PersonalWorkspaceExecutionService.ConversationCreate(
                 "conversation","task","agent","intent-v3","grant",1,7,"GENERATE_IMAGE",
-                "draw","image/png",List.of(ref),true,3);
+                instruction,"image/png",List.of(ref),true,3);
         var created=service.createConversation(new PersonalWorkspaceExecutionService.OwnerScope(
                 "0","client","owner"),command);
 
         verify(executions).insert(persisted.capture());verify(followupSources).insert(source.capture());
         assertEquals(3,persisted.getValue().getExecutionProtocolVersion());
+        assertEquals(instruction,persisted.getValue().getInstruction());
         assertEquals(bridge.getOperationGrantId(),persisted.getValue().getOperationGrantId());
         assertTrue(persisted.getValue().getRuntimeInputSnapshotDigest().matches("[0-9a-f]{64}"));
         assertEquals("TASK_LINKED_WORKSPACE_VERSION",source.getValue().getSourceKind());
@@ -436,6 +438,22 @@ class ControlledImageConversationStartTest {
         assertEquals(created.executionId(),replay.executionId());
         verify(executions,times(1)).insert(any(PersonalWorkspaceExecutionEntity.class));
         verify(consents,times(1)).reserveWithinLockedRoot(any(),anyString(),any(),anyLong(),anyString(),anyString());
+    }
+
+    @Test void conversationInstructionAllowsLfButRejectsOtherIsoControlsBeforeAuthorityUse() {
+        for (String invalid : List.of("Draw\rbackground", "Draw\u0000background",
+                "Draw\tbackground")) {
+            var command=new PersonalWorkspaceExecutionService.ConversationCreate(
+                    "conversation","task","agent","intent-v3","grant",1,7,"GENERATE_IMAGE",
+                    invalid,"image/png",List.of(),true,3);
+            var failure=assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                    ()->service.createConversation(new PersonalWorkspaceExecutionService.OwnerScope(
+                            "0","client","owner"),command));
+            assertEquals(PersonalWorkspaceExecutionService.Reason.BAD_REQUEST,failure.getReason());
+        }
+        verifyNoInteractions(grants);
+        verify(consents,never()).reserveWithinLockedRoot(
+                any(),anyString(),any(),anyLong(),anyString(),anyString());
     }
 
     @Test void initialV3RejectsLegacyInputPurposeAndMissingProtocolCatalogBeforeAuthorityReserve() {

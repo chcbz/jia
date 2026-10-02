@@ -118,14 +118,15 @@ class ChatBountyExecutionCoordinatorTest {
                         .setClientId("client").setRequestId("req").setRequestRevision(1L)
                         .setConversationId("42").setConversationGeneration(1L)
                         .setAggregateState("PLANNING").setUserMessageId(7L).setStateVersion(0L));
+        String exactInstruction="画一只鸟\n\n背景更鲜艳";
         when(requirements.read(any(),eq("task"),eq(1L)))
                 .thenReturn(new AgentTaskRequirementSnapshotService.Snapshot(
-                        "0","client","owner","task",1,"画一只鸟",null,requirementHash,"task"));
+                        "0","client","owner","task",1,"画一只鸟","背景更鲜艳",requirementHash,"task"));
         when(jdbc.query(anyString(), org.mockito.ArgumentMatchers.<RowMapper<Object>>any(),
                 any(Object[].class))).thenAnswer(invocation->{
             @SuppressWarnings("unchecked") RowMapper<Object> mapper=invocation.getArgument(1);
             var row=mock(java.sql.ResultSet.class);
-            when(row.getString(1)).thenReturn("画一只鸟");
+            when(row.getString(1)).thenReturn(exactInstruction);
             when(row.getString(2)).thenReturn("{\"requestId\":\"req\",\"taskId\":\"task\","
                     +"\"targetAgentId\":\"agent\",\"permittedOperation\":\"GENERATE_IMAGE\","
                     +"\"sourceBusinessActionId\":\"assignment\",\"requirementRevision\":1,"
@@ -156,7 +157,9 @@ class ChatBountyExecutionCoordinatorTest {
         when(requests.updateRequestState(any(),eq("RUNNING"),anyLong())).thenReturn(1);
         assertEquals("RUNNING",coordinator.coordinate(candidate));
         verify(executions).createConversation(any(),argThat(command ->
-                command.references().size()==1 && "file".equals(command.references().getFirst().fileId())
+                exactInstruction.equals(command.instruction())
+                        && command.references().size()==1
+                        && "file".equals(command.references().getFirst().fileId())
                         && command.references().getFirst().version()==1
                         && hash.equals(command.references().getFirst().contentHash())));
     }

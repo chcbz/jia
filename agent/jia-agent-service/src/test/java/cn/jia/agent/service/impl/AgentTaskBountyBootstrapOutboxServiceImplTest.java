@@ -3,10 +3,12 @@ package cn.jia.agent.service.impl;
 import cn.jia.agent.api.AgentTaskDeliberationOperationController;
 import cn.jia.agent.dao.AgentTaskBountyBootstrapOutboxDao;
 import cn.jia.agent.dao.AgentTaskExecutionGrantDao;
+import cn.jia.agent.dao.ControlledImageBridgeOperationDao;
 import cn.jia.agent.entity.AgentTaskBountyBootstrapClaimDTO;
 import cn.jia.agent.entity.AgentTaskBountyBootstrapOutboxEntity;
 import cn.jia.agent.entity.AgentTaskBountyBootstrapReconcileDTO;
 import cn.jia.agent.entity.AgentTaskExecutionGrantEntity;
+import cn.jia.agent.entity.ControlledImageBridgeOperationEntity;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.service.AgentTaskDeliberationOperationReadService;
@@ -423,6 +425,48 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
         }
 
         @Test
+        void protocol3PostBindAuthorityRequiresTheExactPersistedBridge() {
+            ReadFixture accepted = new ReadFixture();
+            accepted.grants.grant.setCostAuthorizationRef(
+                    "mmd-ci-v1:consent_1234567890abcdef1234567890abcdef");
+            when(accepted.controlledImageOperations.find(
+                    "0", "client", "owner", "task-1", "original-key"))
+                    .thenReturn(accepted.protocol3Bridge());
+
+            assertEquals("grant-1", accepted.service.read(
+                    scope(), "task-1", "original-key").grantId());
+            verify(accepted.controlledImageOperations).find(
+                    "0", "client", "owner", "task-1", "original-key");
+
+            ReadFixture malformedLocator = new ReadFixture();
+            malformedLocator.grants.grant.setCostAuthorizationRef("mmd-ci-v1:consent-not-exact");
+            assertReadReason(AgentTaskDeliberationOperationReadService.ReadException.Reason.INTEGRITY_ERROR,
+                    () -> malformedLocator.service.read(scope(), "task-1", "original-key"));
+            verifyNoInteractions(malformedLocator.controlledImageOperations);
+
+            List<java.util.function.Consumer<ControlledImageBridgeOperationEntity>> corruptions = List.of(
+                    row -> row.setConsentId("consent_abcdefabcdefabcdefabcdefabcdefab"),
+                    row -> row.setGrantId("grant-other"),
+                    row -> row.setGrantVersion(2L),
+                    row -> row.setAssignmentRevision(4L),
+                    row -> row.setExecutionProtocolVersion(2),
+                    row -> row.setOperationGrantId("opgrant-not-exact"));
+            for (var corrupt : corruptions) {
+                ReadFixture rejected = new ReadFixture();
+                rejected.grants.grant.setCostAuthorizationRef(
+                        "mmd-ci-v1:consent_1234567890abcdef1234567890abcdef");
+                ControlledImageBridgeOperationEntity bridge = rejected.protocol3Bridge();
+                corrupt.accept(bridge);
+                when(rejected.controlledImageOperations.find(
+                        "0", "client", "owner", "task-1", "original-key"))
+                        .thenReturn(bridge);
+                assertReadReason(
+                        AgentTaskDeliberationOperationReadService.ReadException.Reason.INTEGRITY_ERROR,
+                        () -> rejected.service.read(scope(), "task-1", "original-key"));
+            }
+        }
+
+        @Test
         void admittedAndNonAdmittedIdentifierRulesAreExact() {
             ReadFixture fixture = new ReadFixture();
             fixture.bootstraps.row.setStatus("ADMITTED")
@@ -543,6 +587,7 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
             private final AgentTaskMetaEntity root;
             private final ReadGrantDao grants;
             private final ReadBootstrapDao bootstraps;
+            private final ControlledImageBridgeOperationDao controlledImageOperations;
             private final AgentTaskRequirementSnapshotService requirements;
             private final AgentTaskMutationTransaction transactions;
             private final AgentTaskDeliberationOperationReadServiceImpl service;
@@ -559,6 +604,7 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
                         explicitSelector, hashExpectedTaskVersion);
                 grants = new ReadGrantDao(order, grant);
                 bootstraps = new ReadBootstrapDao(order, bootstrap(grant, initialOperation));
+                controlledImageOperations = mock(ControlledImageBridgeOperationDao.class);
                 requirements = mock(AgentTaskRequirementSnapshotService.class);
                 transactions = mock(AgentTaskMutationTransaction.class);
                 when(transactions.executeWithLockedTaskRootInOwnerScope(anyString(), anyString(),
@@ -579,7 +625,25 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
                                 "task-1", 1L, "Title", "Full immutable requirement",
                                 "b".repeat(64), "CREATE"));
                 service = new AgentTaskDeliberationOperationReadServiceImpl(grants, bootstraps,
-                        requirements, transactions, json);
+                        controlledImageOperations, requirements, transactions, json);
+            }
+
+            private ControlledImageBridgeOperationEntity protocol3Bridge() {
+                ControlledImageBridgeOperationEntity row = new ControlledImageBridgeOperationEntity()
+                        .setOwnerJiacn("owner").setTaskId("task-1")
+                        .setAssignmentIdempotencyKey("original-key")
+                        .setWrapperDigest("c".repeat(64))
+                        .setConsentId("consent_1234567890abcdef1234567890abcdef")
+                        .setExpectedConsentVersion(1L).setGrantId("grant-1")
+                        .setGrantVersion(1L).setAssignmentRevision(3L)
+                        .setAuthorityLocator(
+                                "mmd-ci-v1:consent_1234567890abcdef1234567890abcdef")
+                        .setExecutionProtocolVersion(3)
+                        .setOperationGrantId("opgrant_1234567890abcdef1234567890abcdef")
+                        .setCreatedAt(1L);
+                row.setTenantId("0");
+                row.setClientId("client");
+                return row;
             }
         }
 

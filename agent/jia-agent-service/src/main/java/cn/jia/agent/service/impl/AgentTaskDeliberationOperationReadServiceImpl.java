@@ -2,9 +2,11 @@ package cn.jia.agent.service.impl;
 
 import cn.jia.agent.dao.AgentTaskBountyBootstrapOutboxDao;
 import cn.jia.agent.dao.AgentTaskExecutionGrantDao;
+import cn.jia.agent.dao.ControlledImageBridgeOperationDao;
 import cn.jia.agent.entity.AgentTaskBountyBootstrapClaimDTO.ReferenceSummary;
 import cn.jia.agent.entity.AgentTaskBountyBootstrapOutboxEntity;
 import cn.jia.agent.entity.AgentTaskExecutionGrantEntity;
+import cn.jia.agent.entity.ControlledImageBridgeOperationEntity;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.exception.AgentTaskCollaborationException;
 import cn.jia.agent.service.AgentTaskDeliberationOperationReadService;
@@ -43,6 +45,7 @@ public final class AgentTaskDeliberationOperationReadServiceImpl
 
     private final AgentTaskExecutionGrantDao grants;
     private final AgentTaskBountyBootstrapOutboxDao bootstraps;
+    private final ControlledImageBridgeOperationDao controlledImageOperations;
     private final AgentTaskRequirementSnapshotService requirements;
     private final AgentTaskMutationTransaction transactions;
     private final ObjectMapper json;
@@ -50,10 +53,13 @@ public final class AgentTaskDeliberationOperationReadServiceImpl
     @Inject
     public AgentTaskDeliberationOperationReadServiceImpl(AgentTaskExecutionGrantDao grants,
             AgentTaskBountyBootstrapOutboxDao bootstraps,
+            ControlledImageBridgeOperationDao controlledImageOperations,
             AgentTaskRequirementSnapshotService requirements,
             AgentTaskMutationTransaction transactions, ObjectMapper json) {
         this.grants = Objects.requireNonNull(grants, "grants");
         this.bootstraps = Objects.requireNonNull(bootstraps, "bootstraps");
+        this.controlledImageOperations = Objects.requireNonNull(
+                controlledImageOperations, "controlledImageOperations");
         this.requirements = Objects.requireNonNull(requirements, "requirements");
         this.transactions = Objects.requireNonNull(transactions, "transactions");
         this.json = Objects.requireNonNull(json, "json");
@@ -123,6 +129,7 @@ public final class AgentTaskDeliberationOperationReadServiceImpl
             throw integrity(corrupt);
         }
         requireBootstrap(bootstrap, scope, taskId, action, grant, grantFacts, references);
+        requireControlledImageAuthority(scope, taskId, idempotencyKey, grant, bootstrap);
         requireRequestHash(grant, grantFacts.operations(), grantFacts.inputs(),
                 bootstrap.getPermittedOperation());
         requireSnapshot(scope, taskId, grant);
@@ -153,7 +160,6 @@ public final class AgentTaskDeliberationOperationReadServiceImpl
                     || !"MMD_U1_V1".equals(grant.getPolicyRevision())
                     || !"NO_TOOLS_V1".equals(grant.getPermittedToolPolicyRef())
                     || !Boolean.FALSE.equals(grant.getAllowOwnTaskDerivedAssets())
-                    || grant.getCostAuthorizationRef() != null
                     || grant.getRequirementRevision() == null || grant.getRequirementRevision() < 1
                     || grant.getAssignmentRevision() == null || grant.getAssignmentRevision() < 0
                     || grant.getGrantVersion() == null || grant.getGrantVersion() < 1
@@ -204,6 +210,47 @@ public final class AgentTaskDeliberationOperationReadServiceImpl
                 exactPersisted(row.getAdmittedRequestId(), 100);
             } else if (row.getAdmittedConversationId() != null
                     || row.getAdmittedRequestId() != null) {
+                throw integrity();
+            }
+        } catch (IntegrityFailure failure) {
+            throw failure;
+        } catch (RuntimeException corrupt) {
+            throw integrity(corrupt);
+        }
+    }
+
+    private void requireControlledImageAuthority(AgentTaskExecutionGrantService.Scope scope,
+            String taskId, String key, AgentTaskExecutionGrantEntity grant,
+            AgentTaskBountyBootstrapOutboxEntity bootstrap) {
+        String locator = grant.getCostAuthorizationRef();
+        if (locator == null) return;
+        try {
+            if (!locator.matches("mmd-ci-v1:consent_[0-9a-f]{32}")) throw integrity();
+            ControlledImageBridgeOperationEntity operation = controlledImageOperations.find(
+                    scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId, key);
+            String consentId = locator.substring("mmd-ci-v1:".length());
+            if (operation == null
+                    || !Objects.equals(scope.tenantId(), operation.getTenantId())
+                    || !Objects.equals(scope.clientId(), operation.getClientId())
+                    || !Objects.equals(scope.ownerJiacn(), operation.getOwnerJiacn())
+                    || !Objects.equals(taskId, operation.getTaskId())
+                    || !Objects.equals(key, operation.getAssignmentIdempotencyKey())
+                    || operation.getWrapperDigest() == null
+                    || !operation.getWrapperDigest().matches("[0-9a-f]{64}")
+                    || !Objects.equals(consentId, operation.getConsentId())
+                    || operation.getExpectedConsentVersion() == null
+                    || operation.getExpectedConsentVersion() < 1
+                    || !Objects.equals(grant.getGrantId(), operation.getGrantId())
+                    || operation.getGrantVersion() == null
+                    || !Objects.equals(bootstrap.getGrantVersion(), operation.getGrantVersion())
+                    || operation.getGrantVersion() > grant.getGrantVersion()
+                    || !Objects.equals(grant.getAssignmentRevision(),
+                            operation.getAssignmentRevision())
+                    || !Objects.equals(locator, operation.getAuthorityLocator())
+                    || !Objects.equals(3, operation.getExecutionProtocolVersion())
+                    || operation.getOperationGrantId() == null
+                    || !operation.getOperationGrantId().matches("opgrant_[0-9a-f]{32}")
+                    || operation.getCreatedAt() == null || operation.getCreatedAt() < 1) {
                 throw integrity();
             }
         } catch (IntegrityFailure failure) {
