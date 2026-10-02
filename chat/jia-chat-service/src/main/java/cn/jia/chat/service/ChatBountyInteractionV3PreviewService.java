@@ -19,7 +19,7 @@ public class ChatBountyInteractionV3PreviewService {
    cn.jia.chat.deliberation.ChatBountyBindingStore bindings){this.conversations=Objects.requireNonNull(conversations);this.scopes=Objects.requireNonNull(scopes);this.grants=Objects.requireNonNull(grants);this.sources=Objects.requireNonNull(sources);this.authority=Objects.requireNonNull(authority);this.bindings=Objects.requireNonNull(bindings);}
  public record Prepared(ControlledImageFollowupAuthorityService.PreviewCommand command,
    ControlledImageFollowupAuthorityService.Preview authorityPreview,String ownerPayloadSha256,String instructionSha256,String sourceSnapshotSha256) { }
- @Transactional(readOnly=true,rollbackFor=Exception.class)
+ @Transactional(rollbackFor=Exception.class)
  public ChatBountyInteractionV3Wire.ContextData context(String tenant,ServerResolvedSender sender,String conversation){
   if(!"0".equals(tenant)||sender==null||!"user".equals(sender.type()))throw notFound();
   try {
