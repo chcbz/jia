@@ -21,14 +21,26 @@ public final class JdbcChatConversationArchiveStore implements ChatConversationA
     private static final RowMapper<Operation> OPERATION = (rs, ignored) -> {
         long generation = rs.getLong("conversation_generation");
         Long nullableGeneration = rs.wasNull() ? null : generation;
+        long assetRevision = rs.getLong("asset_revision");
+        Long nullableAssetRevision = rs.wasNull() ? null : assetRevision;
+        long messageRevision = rs.getLong("message_revision");
+        Long nullableMessageRevision = rs.wasNull() ? null : messageRevision;
+        int selectionStart = rs.getInt("selection_start_code_point");
+        Integer nullableSelectionStart = rs.wasNull() ? null : selectionStart;
+        int selectionEnd = rs.getInt("selection_end_code_point");
+        Integer nullableSelectionEnd = rs.wasNull() ? null : selectionEnd;
         int version = rs.getInt("file_version");
         Integer nullableVersion = rs.wasNull() ? null : version;
         return new Operation(rs.getString("operation_id"), rs.getString("tenant_id"),
                 rs.getString("owner_jiacn"), rs.getString("client_id"),
                 rs.getString("conversation_id"), nullableGeneration,
                 rs.getString("idempotency_key"), rs.getString("request_sha256"),
-                rs.getString("asset_id"), rs.getLong("asset_revision"), rs.getString("state"),
-                rs.getString("workspace_operation_id"), rs.getString("file_id"), nullableVersion,
+                rs.getString("source_kind"), rs.getString("asset_id"), nullableAssetRevision,
+                rs.getString("message_id"), nullableMessageRevision, nullableSelectionStart,
+                nullableSelectionEnd, rs.getString("source_sha256"),
+                rs.getString("source_snapshot_key"), rs.getString("source_text"),
+                rs.getString("state"), rs.getString("workspace_operation_id"),
+                rs.getString("file_id"), nullableVersion,
                 rs.getString("error_code"), rs.getString("message"), rs.getLong("row_revision"),
                 rs.getLong("created_at"), rs.getLong("updated_at"));
     };
@@ -45,13 +57,18 @@ public final class JdbcChatConversationArchiveStore implements ChatConversationA
             return jdbc.update("""
                     INSERT INTO chat_conversation_archive_operation
                       (operation_id,tenant_id,owner_jiacn,client_id,conversation_id,
-                       conversation_generation,idempotency_key,request_sha256,asset_id,asset_revision,
-                       state,workspace_operation_id,file_id,file_version,error_code,message,row_revision,
-                       created_at,updated_at)
-                    VALUES (?,?,?,?,?,NULL,?,?,?,?, 'PENDING',NULL,NULL,NULL,NULL,NULL,1,?,?)
+                       conversation_generation,idempotency_key,request_sha256,source_kind,
+                       asset_id,asset_revision,message_id,message_revision,
+                       selection_start_code_point,selection_end_code_point,source_sha256,
+                       source_snapshot_key,source_text,state,workspace_operation_id,file_id,file_version,
+                       error_code,message,row_revision,created_at,updated_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'PENDING',NULL,NULL,NULL,NULL,NULL,1,?,?)
                     """, row.operationId(), row.tenantId(), row.ownerJiacn(), row.clientId(),
-                    row.conversationId(), row.idempotencyKey(), row.requestSha256(), row.assetId(),
-                    row.assetRevision(), row.createdAt(), row.updatedAt()) == 1;
+                    row.conversationId(), row.conversationGeneration(), row.idempotencyKey(),
+                    row.requestSha256(), row.sourceKind(), row.assetId(), row.assetRevision(),
+                    row.messageId(), row.messageRevision(), row.selectionStartCodePoint(),
+                    row.selectionEndCodePoint(), row.sourceSha256(), row.sourceSnapshotKey(),
+                    row.sourceText(), row.createdAt(), row.updatedAt()) == 1;
         } catch (DuplicateKeyException duplicate) {
             return false;
         }
@@ -71,10 +88,22 @@ public final class JdbcChatConversationArchiveStore implements ChatConversationA
     public Operation lockBySource(Scope scope, String assetId, long revision) {
         return first(jdbc.query("SELECT * FROM chat_conversation_archive_operation WHERE "
                 + EXACT_OPERATION_SCOPE + """
+                  AND source_kind='assetRef'
                   AND asset_id=? AND BINARY asset_id=BINARY ?
                   AND OCTET_LENGTH(asset_id)=OCTET_LENGTH(?) AND asset_revision=?
                 FOR UPDATE
                 """, OPERATION, concat(scopeArgs(scope), assetId, assetId, assetId, revision)));
+    }
+
+    @Override
+    public Operation lockBySourceSnapshot(Scope scope, String snapshotKey) {
+        return first(jdbc.query("SELECT * FROM chat_conversation_archive_operation WHERE "
+                + EXACT_OPERATION_SCOPE + """
+                  AND source_kind='textSelection'
+                  AND source_snapshot_key=? AND BINARY source_snapshot_key=BINARY ?
+                  AND OCTET_LENGTH(source_snapshot_key)=OCTET_LENGTH(?)
+                FOR UPDATE
+                """, OPERATION, concat(scopeArgs(scope), snapshotKey, snapshotKey, snapshotKey)));
     }
 
     @Override
@@ -187,6 +216,54 @@ public final class JdbcChatConversationArchiveStore implements ChatConversationA
                 rs.getLong(4), rs.getString(5), rs.getLong(6), rs.getString(7), rs.getString(8),
                 rs.getString(9), rs.getString(10), rs.getString(11), rs.getString(12),
                 rs.getString(13), rs.getLong(14)),args);
+        return rows.size() == 1 ? rows.getFirst() : null;
+    }
+
+    @Override
+    public TextSource findAuthorizedTextSourceForUpdate(Scope scope, String conversationId,
+            long messageId) {
+        List<TextSource> rows = jdbc.query("""
+                SELECT CAST(m.id AS CHAR),m.update_time,m.conversation_id,
+                       c.lifecycle_generation,m.content
+                FROM chat_conversation c
+                STRAIGHT_JOIN chat_message m
+                  ON m.conversation_id=CAST(c.id AS CHAR)
+                 AND BINARY m.conversation_id=BINARY CAST(c.id AS CHAR)
+                 AND OCTET_LENGTH(m.conversation_id)=OCTET_LENGTH(CAST(c.id AS CHAR))
+                WHERE c.id=CAST(? AS UNSIGNED)
+                  AND BINARY CAST(c.id AS CHAR)=BINARY ?
+                  AND OCTET_LENGTH(CAST(c.id AS CHAR))=OCTET_LENGTH(?)
+                  AND m.id=?
+                  AND c.tenant_id=? AND BINARY c.tenant_id=BINARY ?
+                  AND OCTET_LENGTH(c.tenant_id)=OCTET_LENGTH(?)
+                  AND c.jiacn=? AND BINARY c.jiacn=BINARY ?
+                  AND OCTET_LENGTH(c.jiacn)=OCTET_LENGTH(?)
+                  AND c.client_id=? AND BINARY c.client_id=BINARY ?
+                  AND OCTET_LENGTH(c.client_id)=OCTET_LENGTH(?)
+                  AND m.tenant_id=c.tenant_id AND BINARY m.tenant_id=BINARY c.tenant_id
+                  AND OCTET_LENGTH(m.tenant_id)=OCTET_LENGTH(c.tenant_id)
+                  AND m.jiacn=c.jiacn AND BINARY m.jiacn=BINARY c.jiacn
+                  AND OCTET_LENGTH(m.jiacn)=OCTET_LENGTH(c.jiacn)
+                  AND m.client_id=c.client_id AND BINARY m.client_id=BINARY c.client_id
+                  AND OCTET_LENGTH(m.client_id)=OCTET_LENGTH(c.client_id)
+                  AND c.deleted_at IS NULL
+                  AND c.lifecycle_generation>=1
+                  AND c.conversation_type='juyiting'
+                  AND c.conversation_scope_type='bounty'
+                  AND c.task_id IS NOT NULL
+                  AND BINARY c.conversation_scope_key=BINARY CONCAT('task:',c.task_id)
+                  AND m.conversation_type='juyiting'
+                  AND m.message_type IN ('USER','ASSISTANT','SYSTEM')
+                  AND m.content IS NOT NULL
+                  AND m.create_time IS NOT NULL AND m.create_time>0
+                  AND m.update_time IS NOT NULL AND m.update_time>=m.create_time
+                FOR UPDATE
+                """, (rs, ignored) -> new TextSource(rs.getString(1), rs.getLong(2),
+                        rs.getString(3), rs.getLong(4), rs.getString(5)),
+                conversationId, conversationId, conversationId, messageId,
+                scope.tenantId(), scope.tenantId(), scope.tenantId(),
+                scope.ownerJiacn(), scope.ownerJiacn(), scope.ownerJiacn(),
+                scope.clientId(), scope.clientId(), scope.clientId());
         return rows.size() == 1 ? rows.getFirst() : null;
     }
 

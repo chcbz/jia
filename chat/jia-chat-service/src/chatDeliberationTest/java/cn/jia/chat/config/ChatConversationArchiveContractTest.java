@@ -37,13 +37,28 @@ class ChatConversationArchiveContractTest {
         assertTrue(sql.contains("create table if not exists chat_conversation_archive_operation"));
         assertTrue(compact.contains("uk_chat_archive_key (tenant_id,owner_jiacn,client_id,idempotency_key)"));
         assertTrue(compact.contains("uk_chat_archive_source (tenant_id,owner_jiacn,client_id,asset_id,asset_revision)"));
+        assertTrue(compact.contains("uk_chat_archive_source_snapshot (tenant_id,owner_jiacn,client_id,source_snapshot_key)"));
         assertTrue(compact.contains("uk_chat_archive_workspace (tenant_id,owner_jiacn,client_id,workspace_operation_id)"));
+        assertTrue(sql.contains("source_kind='textselection'"));
+        assertTrue(sql.contains("char_length(source_text)=selection_end_code_point-selection_start_code_point"));
         assertTrue(sql.contains("chk_chat_archive_saved_receipt"));
         assertTrue(sql.contains("file_version>=1"));
         assertTrue(sql.contains("engine=innodb default charset=utf8mb4 collate=utf8mb4_0900_bin"));
         assertFalse(sql.contains("drop table"));
         assertFalse(sql.contains("delete from"));
         assertFalse(sql.contains("alter table chat_conversation_asset"));
+
+        String migration;
+        try (var stream = getClass().getResourceAsStream(
+                "/db/chat-conversation-archive-text-selection-migration.sql")) {
+            if (stream == null) throw new AssertionError("archive text migration resource missing");
+            migration = new String(stream.readAllBytes(), StandardCharsets.UTF_8).toLowerCase();
+        }
+        assertTrue(migration.contains("source_snapshot_key"));
+        assertTrue(migration.contains("uk_chat_archive_source_snapshot"));
+        assertTrue(migration.contains("chk_chat_archive_source_union"));
+        assertFalse(migration.contains("drop table"));
+        assertFalse(migration.contains("delete from"));
     }
 
     @Test
@@ -61,6 +76,10 @@ class ChatConversationArchiveContractTest {
         assertTrue(source.contains("a.run_id"));
         assertTrue(source.contains("s.state='OUTPUT_COMMITTED'"));
         assertTrue(source.contains("r.aggregate_state='OUTPUT_COMMITTED'"));
+        assertTrue(source.contains("STRAIGHT_JOIN chat_message m"));
+        assertTrue(source.contains("c.conversation_scope_type='bounty'"));
+        assertTrue(source.contains("m.update_time>=m.create_time"));
+        assertTrue(source.contains("FOR UPDATE"));
         assertFalse(source.contains("http://"));
         assertFalse(source.contains("https://"));
     }
@@ -70,12 +89,13 @@ class ChatConversationArchiveContractTest {
         String service = Files.readString(Path.of(
                 "src/main/java/cn/jia/chat/archive/conversation/ChatConversationArchiveService.java"));
         int begin = service.indexOf("public Receipt get(");
-        int end = service.indexOf("private Operation claim", begin);
+        int end = service.indexOf("private Operation claimAsset", begin);
         String get = service.substring(begin, end);
         assertTrue(get.contains("store.findByOperationId"));
         assertFalse(get.contains("executions."));
         assertFalse(get.contains("workspace."));
         assertFalse(get.contains("readConversationOutput"));
         assertFalse(get.contains("archiveConversationAsset"));
+        assertFalse(get.contains("archiveConversationText"));
     }
 }

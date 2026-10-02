@@ -7,24 +7,25 @@ import cn.jia.chat.archive.conversation.ChatConversationArchiveException.Reason;
 import cn.jia.chat.archive.conversation.ChatConversationArchiveStore.Operation;
 import cn.jia.chat.archive.conversation.ChatConversationArchiveStore.Scope;
 import cn.jia.chat.archive.conversation.ChatConversationArchiveStore.Source;
+import cn.jia.chat.archive.conversation.ChatConversationArchiveStore.TextSource;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
-import org.mockito.ArgumentCaptor;
-
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class ChatConversationArchiveServiceTest {
     private static final Scope OWNER = new Scope("0", "owner", "client");
-    private static final byte[] BYTES = "verified image bytes".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] ASSET_BYTES = "verified image bytes".getBytes(StandardCharsets.UTF_8);
+    private static final String BIRD = "画一只鸟";
+    private static final byte[] BIRD_BYTES = BIRD.getBytes(StandardCharsets.UTF_8);
     private final FakeStore store = new FakeStore();
     private final PersonalWorkspaceExecutionService executions = mock(PersonalWorkspaceExecutionService.class);
     private final PersonalWorkspaceService workspace = mock(PersonalWorkspaceService.class);
@@ -35,188 +36,190 @@ class ChatConversationArchiveServiceTest {
                 }
             }, executions, workspace);
 
-    private ChatConversationArchiveService.Command command(String key, String asset) {
+    private ChatConversationArchiveService.Command asset(String key, String asset) {
         return new ChatConversationArchiveService.Command("42", key, asset, 1);
     }
 
-    private Source source(String asset, String mime, String hash, long length) {
-        return new Source(asset, 1, "42", 3, "request-1", 1, "step-1", "task-1",
-                "execution-1", "run-1", "output-1", mime, hash, length);
+    private ChatConversationArchiveService.Command text(String key, String message,
+            int start, int end, String selected) {
+        return new ChatConversationArchiveService.Command("42", key, null,
+                new ChatConversationArchiveService.TextSelection(
+                        message, start, end, sha(selected.getBytes(StandardCharsets.UTF_8))));
     }
 
-    private void ready(String asset) {
-        ready(asset, "image/png");
-    }
-
-    private void ready(String asset, String mime) {
-        String hash = sha(BYTES);
-        store.sources.put(asset, source(asset, mime, hash, BYTES.length));
+    private void readyAsset(String asset) {
+        String hash = sha(ASSET_BYTES);
+        store.sources.put(asset, new Source(asset, 1, "42", 3, "request-1", 1,
+                "step-1", "task-1", "execution-1", "run-1", "output-1",
+                "image/png", hash, ASSET_BYTES.length));
         when(executions.readConversationOutput(any(), eq("task-1"), eq("run-1"), eq("output-1")))
                 .thenReturn(new PersonalWorkspaceExecutionService.ConversationOutput("execution-1",
-                        "output-1", "/untrusted/runtime/path", mime, hash,
-                        BYTES.length, BYTES));
-        when(workspace.archiveConversationAsset(any(), any())).thenReturn(upload(hash, mime));
+                        "output-1", "/untrusted/runtime/path", "image/png", hash,
+                        ASSET_BYTES.length, ASSET_BYTES));
+        when(workspace.archiveConversationAsset(any(), any()))
+                .thenReturn(upload(hash, "image/png", ASSET_BYTES.length));
+    }
+
+    private void readyText(String messageId, long revision, String content) {
+        store.textSources.put(messageId, new TextSource(messageId, revision, "42", 3, content));
+        when(workspace.archiveConversationText(any(), any())).thenAnswer(invocation -> {
+            PersonalWorkspaceService.ConversationTextArchiveCommand command = invocation.getArgument(1);
+            return upload(command.sha256(), "text/plain", command.content().length);
+        });
     }
 
     @Test
-    void savesOnlyVerifiedBytesAndReturnsTheWebReceiptAllowlist() {
-        ready("asset_1");
-        var receipt = service.archive(OWNER, command("archive-key-0001", "asset_1"));
+    void assetContractRetainsLegacyWorkspaceKeyAndReceipt() {
+        readyAsset("asset_1");
+        var receipt = service.archive(OWNER, asset("archive-key-0001", "asset_1"));
         assertEquals("saved", receipt.state());
+        assertEquals("assetRef", receipt.items().getFirst().sourceKind());
         assertEquals("asset_1", receipt.items().getFirst().assetId());
-        assertEquals("saved", receipt.items().getFirst().state());
-        assertEquals("pws_file_1", receipt.items().getFirst().fileId());
-        assertEquals(1, receipt.items().getFirst().version());
-        assertTrue(Long.parseLong(receipt.revision()) >= 1);
+        assertNull(receipt.items().getFirst().textSelection());
         verify(workspace).archiveConversationAsset(eq(new PersonalWorkspaceService.Scope("0", "client", "owner")),
                 argThat(command -> command.idempotency().key().startsWith("chat-archive-")
                         && command.idempotency().key().length() == 77
                         && command.assetId().equals("asset_1") && command.revision() == 1
-                        && command.filename().equals("conversation-asset-asset_1.png")
-                        && command.displayName().equals(command.filename())
-                        && java.util.Arrays.equals(command.content(), BYTES)));
+                        && java.util.Arrays.equals(command.content(), ASSET_BYTES)));
     }
 
     @Test
-    void sameKeyReplayAndDifferentKeyForSameSourceNeverCreateAnotherFile() {
-        ready("asset_1");
-        var first = service.archive(OWNER, command("archive-key-0001", "asset_1"));
-        var replay = service.archive(OWNER, command("archive-key-0001", "asset_1"));
-        var otherKey = service.archive(OWNER, command("archive-key-0002", "asset_1"));
-        assertEquals(first.operationId(), replay.operationId());
-        assertEquals(first.operationId(), otherKey.operationId());
-        verify(workspace, times(1)).archiveConversationAsset(any(), any());
-        verify(executions, times(1)).readConversationOutput(any(), any(), any(), any());
+    void exactPersistedBirdSelectionIsSavedAsUtf8TextPlainAndReceiptFreezesRevision() {
+        readyText("1675335", 1700000000000L, BIRD);
+        var receipt = service.archive(OWNER, text("archive-text-0001", "1675335", 0, 4, BIRD));
+        assertEquals("saved", receipt.state());
+        var item = receipt.items().getFirst();
+        assertEquals("textSelection", item.sourceKind());
+        assertEquals("1675335", item.textSelection().messageId());
+        assertEquals("1700000000000", item.textSelection().messageRevision());
+        assertEquals(0, item.textSelection().startCodePoint());
+        assertEquals(4, item.textSelection().endCodePoint());
+        assertEquals(sha(BIRD_BYTES), item.textSelection().sha256());
+
+        ArgumentCaptor<PersonalWorkspaceService.ConversationTextArchiveCommand> command =
+                ArgumentCaptor.forClass(PersonalWorkspaceService.ConversationTextArchiveCommand.class);
+        verify(workspace).archiveConversationText(
+                eq(new PersonalWorkspaceService.Scope("0", "client", "owner")), command.capture());
+        assertArrayEquals(BIRD_BYTES, command.getValue().content());
+        assertEquals(sha(BIRD_BYTES), command.getValue().sha256());
+        assertEquals("conversation-text-1675335-0-4.txt", command.getValue().filename());
+        assertNotNull(store.only().sourceText());
+        assertEquals(BIRD, store.only().sourceText());
     }
 
     @Test
-    void sameKeyForAnotherSourceIsAConflictBeforeAgentOrWorkspace() {
-        ready("asset_1");
-        service.archive(OWNER, command("archive-key-0001", "asset_1"));
-        clearInvocations(executions, workspace);
+    void wrongSelectionHashFailsBeforeOperationOrWorkspace() {
+        readyText("1675335", 7, BIRD);
+        var command = new ChatConversationArchiveService.Command("42", "archive-text-0001", null,
+                new ChatConversationArchiveService.TextSelection("1675335", 0, 4, "0".repeat(64)));
         var failure = assertThrows(ChatConversationArchiveException.class,
-                () -> service.archive(OWNER, command("archive-key-0001", "asset_2")));
-        assertEquals(Reason.IDEMPOTENCY_CONFLICT, failure.reason());
-        verifyNoInteractions(executions, workspace);
+                () -> service.archive(OWNER, command));
+        assertEquals(Reason.INVALID_REQUEST, failure.reason());
+        assertTrue(store.byOperation.isEmpty());
+        verifyNoInteractions(workspace, executions);
     }
 
     @Test
-    void missingForeignOrRevisionMismatchedSourceNeverReadsAgentStorage() {
+    void supplementaryCharacterUsesUnicodeCodePointBoundariesAndRejectsMalformedSurrogates() {
+        String content = "A🐦B";
+        readyText("9", 8, content);
+        service.archive(OWNER, text("archive-text-bird", "9", 1, 2, "🐦"));
+        verify(workspace).archiveConversationText(any(), argThat(command ->
+                java.util.Arrays.equals("🐦".getBytes(StandardCharsets.UTF_8), command.content())));
+
+        readyText("10", 8, "A\uD83DB");
         var failure = assertThrows(ChatConversationArchiveException.class,
-                () -> service.archive(OWNER, command("archive-key-0001", "asset_1")));
+                () -> service.archive(OWNER, text("archive-text-bad-surrogate", "10", 1, 2, "B")));
         assertEquals(Reason.NOT_FOUND_OR_FORBIDDEN, failure.reason());
-        verifyNoInteractions(executions, workspace);
-        Operation operation = store.only();
-        assertEquals("PARTIAL_FAILED", operation.state());
-        assertEquals("SOURCE_UNAVAILABLE", operation.errorCode());
     }
 
     @Test
-    void executionOutputIdentityMimeLengthAndBytesHashMustAllMatch() {
-        ready("asset_1");
-        when(executions.readConversationOutput(any(), any(), any(), any()))
-                .thenReturn(new PersonalWorkspaceExecutionService.ConversationOutput("execution-1",
-                        "output-1", "bird.png", "image/png", sha(BYTES), BYTES.length,
-                        "altered".getBytes(StandardCharsets.UTF_8)));
-        var failure = assertThrows(ChatConversationArchiveException.class,
-                () -> service.archive(OWNER, command("archive-key-0001", "asset_1")));
-        assertEquals(Reason.NOT_FOUND_OR_FORBIDDEN, failure.reason());
-        verifyNoInteractions(workspace);
-        assertEquals("SOURCE_MISMATCH", store.only().errorCode());
-    }
-
-    @Test
-    void unsupportedPersistedMimeFailsClosedBeforeWorkspaceWrite() {
-        String hash = sha(BYTES);
-        store.sources.put("asset_1", source("asset_1", "text/html", hash, BYTES.length));
-        when(executions.readConversationOutput(any(), any(), any(), any()))
-                .thenReturn(new PersonalWorkspaceExecutionService.ConversationOutput("execution-1",
-                        "output-1", "untrusted.html", "text/html", hash, BYTES.length, BYTES));
-        var failure = assertThrows(ChatConversationArchiveException.class,
-                () -> service.archive(OWNER, command("archive-key-0001", "asset_1")));
-        assertEquals(Reason.UNSUPPORTED, failure.reason());
-        verifyNoInteractions(workspace);
-        assertEquals("UNSUPPORTED_MEDIA", store.only().errorCode());
-    }
-
-    @Test
-    void archivesEachSupportedAudioAndRasterFormatWithItsExactWorkspaceExtension() {
-        Map<String, String> formats = Map.of("image/webp", "webp", "image/gif", "gif",
-                "audio/mpeg", "mp3", "audio/ogg", "ogg", "audio/wav", "wav",
-                "audio/mp4", "m4a", "audio/webm", "webm");
-        int index = 0;
-        for (var format : formats.entrySet()) {
-            String assetId = "asset_media_" + (++index);
-            ready(assetId, format.getKey());
-            var receipt = service.archive(OWNER, command("archive-key-media-" + index, assetId));
-            assertEquals("saved", receipt.state());
-            assertEquals(assetId, receipt.items().getFirst().assetId());
-            verify(workspace).archiveConversationAsset(any(), argThat(command ->
-                    assetId.equals(command.assetId()) && format.getKey().equals(command.contentMimeType())
-                            && ("conversation-asset-" + assetId + "." + format.getValue()).equals(command.filename())
-                            && java.util.Arrays.equals(command.content(), BYTES)));
-        }
-        verify(workspace, times(formats.size())).archiveConversationAsset(any(), any());
-    }
-
-    @Test
-    void lostAckReplaysTheSameWorkspaceOperationKeyAndReconcilesTheOriginalFile() {
-        ready("asset_1");
+    void unknownWorkspaceResponseRetriesThePersistedSelectionEvenAfterMessageChanges() {
+        readyText("1675335", 7, BIRD);
         store.failNextSavedUpdate = true;
         var first = assertThrows(ChatConversationArchiveException.class,
-                () -> service.archive(OWNER, command("archive-key-0001", "asset_1")));
+                () -> service.archive(OWNER, text("archive-text-0001", "1675335", 0, 4, BIRD)));
         assertEquals(Reason.PERSISTENCE_ERROR, first.reason());
         assertEquals("SAVING", store.only().state());
-        var recovered = service.archive(OWNER, command("archive-key-0001", "asset_1"));
+
+        store.textSources.put("1675335", new TextSource("1675335", 8, "42", 3, "消息已改变"));
+        var recovered = service.archive(OWNER,
+                text("archive-text-0001", "1675335", 0, 4, BIRD));
         assertEquals("saved", recovered.state());
-        ArgumentCaptor<PersonalWorkspaceService.ConversationArchiveCommand> commands =
-                ArgumentCaptor.forClass(PersonalWorkspaceService.ConversationArchiveCommand.class);
-        verify(workspace, times(2)).archiveConversationAsset(any(), commands.capture());
+        ArgumentCaptor<PersonalWorkspaceService.ConversationTextArchiveCommand> commands =
+                ArgumentCaptor.forClass(PersonalWorkspaceService.ConversationTextArchiveCommand.class);
+        verify(workspace, times(2)).archiveConversationText(any(), commands.capture());
+        assertArrayEquals(BIRD_BYTES, commands.getAllValues().get(0).content());
+        assertArrayEquals(BIRD_BYTES, commands.getAllValues().get(1).content());
         assertEquals(commands.getAllValues().get(0).idempotency().key(),
                 commands.getAllValues().get(1).idempotency().key());
-        assertEquals("pws_file_1", recovered.items().getFirst().fileId());
     }
 
     @Test
-    void savedRequiresAConcreteCommittedWorkspaceOperationFileAndVersion() {
-        ready("asset_1");
-        var hash = sha(BYTES);
-        when(workspace.archiveConversationAsset(any(), any())).thenReturn(new PersonalWorkspaceViews.UploadView(
-                new PersonalWorkspaceViews.OperationView("workspace-op-1", "COMMITTED", null, null, null),
-                null, null));
-        var failure = assertThrows(ChatConversationArchiveException.class,
-                () -> service.archive(OWNER, command("archive-key-0001", "asset_1")));
-        assertEquals(Reason.TEMPORARILY_UNAVAILABLE, failure.reason());
-        assertEquals("SAVING", store.only().state());
-        assertNull(store.only().fileId());
-    }
-
-    @Test
-    void getIsReadOnlyAndOwnerConversationScoped() {
-        ready("asset_1");
-        var saved = service.archive(OWNER, command("archive-key-0001", "asset_1"));
-        clearInvocations(executions, workspace);
-        assertEquals(saved, service.get(OWNER, "42", saved.operationId()));
+    void sourceRevocationStopsUnknownResponseRetryBeforeAnotherWorkspaceCall() {
+        readyText("1675335", 7, BIRD);
+        store.failNextSavedUpdate = true;
         assertThrows(ChatConversationArchiveException.class,
-                () -> service.get(new Scope("0", "foreign", "client"), "42", saved.operationId()));
+                () -> service.archive(OWNER, text("archive-text-0001", "1675335", 0, 4, BIRD)));
+        store.textSources.clear();
+        var failure = assertThrows(ChatConversationArchiveException.class,
+                () -> service.archive(OWNER, text("archive-text-0001", "1675335", 0, 4, BIRD)));
+        assertEquals(Reason.NOT_FOUND_OR_FORBIDDEN, failure.reason());
+        verify(workspace, times(1)).archiveConversationText(any(), any());
+    }
+
+    @Test
+    void sameKeyDifferentPayloadConflictsBeforeSourceOrWorkspace() {
+        readyText("1675335", 7, BIRD + "。 ");
+        service.archive(OWNER, text("archive-text-0001", "1675335", 0, 4, BIRD));
+        clearInvocations(workspace);
+        var failure = assertThrows(ChatConversationArchiveException.class,
+                () -> service.archive(OWNER, text("archive-text-0001", "1675335", 0, 2, "画一")));
+        assertEquals(Reason.IDEMPOTENCY_CONFLICT, failure.reason());
+        verifyNoInteractions(workspace);
+    }
+
+    @Test
+    void differentKeyForSameFrozenSnapshotReturnsWinnerAndDoesNotCreateAnotherFile() {
+        readyText("1675335", 7, BIRD);
+        var first = service.archive(OWNER, text("archive-text-0001", "1675335", 0, 4, BIRD));
+        var duplicate = service.archive(OWNER, text("archive-text-0002", "1675335", 0, 4, BIRD));
+        assertEquals(first.operationId(), duplicate.operationId());
+        verify(workspace, times(1)).archiveConversationText(any(), any());
+    }
+
+    @Test
+    void crossOwnerAndConversationCannotResolveMessageOrOperation() {
+        readyText("1675335", 7, BIRD);
+        assertEquals(Reason.NOT_FOUND_OR_FORBIDDEN, assertThrows(ChatConversationArchiveException.class,
+                () -> service.archive(new Scope("0", "foreign", "client"),
+                        text("archive-text-0001", "1675335", 0, 4, BIRD))).reason());
+        var saved = service.archive(OWNER, text("archive-text-0001", "1675335", 0, 4, BIRD));
         assertThrows(ChatConversationArchiveException.class,
                 () -> service.get(OWNER, "43", saved.operationId()));
-        verifyNoInteractions(executions, workspace);
+        assertThrows(ChatConversationArchiveException.class,
+                () -> service.get(new Scope("0", "foreign", "client"), "42", saved.operationId()));
     }
 
-    private PersonalWorkspaceViews.UploadView upload(String hash) {
-        return upload(hash, "image/png");
+    @Test
+    void assetSameKeyDifferentPayloadStillConflicts() {
+        readyAsset("asset_1");
+        service.archive(OWNER, asset("archive-key-0001", "asset_1"));
+        var failure = assertThrows(ChatConversationArchiveException.class,
+                () -> service.archive(OWNER, asset("archive-key-0001", "asset_2")));
+        assertEquals(Reason.IDEMPOTENCY_CONFLICT, failure.reason());
     }
 
-    private PersonalWorkspaceViews.UploadView upload(String hash, String mime) {
+    private static PersonalWorkspaceViews.UploadView upload(String hash, String mime, long length) {
         return new PersonalWorkspaceViews.UploadView(
                 new PersonalWorkspaceViews.OperationView("workspace-op-1", "COMMITTED", "pws_file_1", 1, null),
                 new PersonalWorkspaceViews.FileView("pws_file_1", "UPLOAD", "AGENT_DELIVERY",
-                        "conversation asset", mime.startsWith("audio/") ? "AUDIO" : "IMAGE", "ACTIVE", 1, 1, 1,
+                        "conversation source", "text/plain".equals(mime) ? "TEXT" : "IMAGE",
+                        "ACTIVE", 1, 1, 1,
                         new PersonalWorkspaceViews.Capabilities("AVAILABLE", "AVAILABLE", "UNVERIFIED",
                                 "AVAILABLE", "AVAILABLE")),
-                new PersonalWorkspaceViews.VersionView("pws_file_1", 1, "asset", mime,
-                        BYTES.length, hash, 1, "READY"));
+                new PersonalWorkspaceViews.VersionView("pws_file_1", 1, "source", mime,
+                        length, hash, 1, "READY"));
     }
 
     private static String sha(byte[] bytes) {
@@ -227,15 +230,18 @@ class ChatConversationArchiveServiceTest {
     private static final class FakeStore implements ChatConversationArchiveStore {
         private final Map<String, Operation> byOperation = new LinkedHashMap<>();
         private final Map<String, Source> sources = new LinkedHashMap<>();
+        private final Map<String, TextSource> textSources = new LinkedHashMap<>();
         private boolean failNextSavedUpdate;
 
         @Override public boolean tryInsert(Operation operation) {
             boolean key = byOperation.values().stream().anyMatch(row -> scope(row, operation)
                     && row.idempotencyKey().equals(operation.idempotencyKey()));
-            boolean source = byOperation.values().stream().anyMatch(row -> scope(row, operation)
-                    && row.assetId().equals(operation.assetId())
-                    && row.assetRevision() == operation.assetRevision());
-            if (key || source) return false;
+            boolean asset = operation.assetId() != null && byOperation.values().stream().anyMatch(row ->
+                    scope(row, operation) && operation.assetId().equals(row.assetId())
+                            && operation.assetRevision().equals(row.assetRevision()));
+            boolean snapshot = operation.sourceSnapshotKey() != null && byOperation.values().stream().anyMatch(row ->
+                    scope(row, operation) && operation.sourceSnapshotKey().equals(row.sourceSnapshotKey()));
+            if (key || asset || snapshot) return false;
             byOperation.put(operation.operationId(), operation);
             return true;
         }
@@ -245,7 +251,12 @@ class ChatConversationArchiveServiceTest {
         }
         @Override public Operation lockBySource(Scope scope, String asset, long revision) {
             return byOperation.values().stream().filter(row -> scope(scope, row)
-                    && row.assetId().equals(asset) && row.assetRevision() == revision).findFirst().orElse(null);
+                    && asset.equals(row.assetId()) && row.assetRevision() != null
+                    && row.assetRevision() == revision).findFirst().orElse(null);
+        }
+        @Override public Operation lockBySourceSnapshot(Scope scope, String snapshot) {
+            return byOperation.values().stream().filter(row -> scope(scope, row)
+                    && snapshot.equals(row.sourceSnapshotKey())).findFirst().orElse(null);
         }
         @Override public Operation lockByOperationId(Scope scope, String conversation, String operation) {
             return findByOperationId(scope, conversation, operation);
@@ -260,10 +271,16 @@ class ChatConversationArchiveServiceTest {
             return row != null && conversation.equals(row.conversationId()) && revision == row.assetRevision()
                     ? row : null;
         }
+        @Override public TextSource findAuthorizedTextSourceForUpdate(
+                Scope scope, String conversation, long messageId) {
+            if (!OWNER.equals(scope)) return null;
+            TextSource row = textSources.get(Long.toString(messageId));
+            return row != null && conversation.equals(row.conversationId()) ? row : null;
+        }
         @Override public int markSaving(Scope scope, String id, long expected, long generation, long now) {
             Operation row = byOperation.get(id);
-            if (row == null || !scope(scope, row) || row.rowRevision() != expected || "SAVED".equals(row.state()))
-                return 0;
+            if (row == null || !scope(scope, row) || row.rowRevision() != expected
+                    || "SAVED".equals(row.state())) return 0;
             byOperation.put(id, copy(row, generation, "SAVING", null, null, null, null, null, now));
             return 1;
         }
@@ -299,8 +316,11 @@ class ChatConversationArchiveServiceTest {
                 String workspaceOperation, String file, Integer version, String code, String message, long now) {
             return new Operation(row.operationId(), row.tenantId(), row.ownerJiacn(), row.clientId(),
                     row.conversationId(), generation, row.idempotencyKey(), row.requestSha256(),
-                    row.assetId(), row.assetRevision(), state, workspaceOperation, file, version,
-                    code, message, row.rowRevision() + 1, row.createdAt(), now);
+                    row.sourceKind(), row.assetId(), row.assetRevision(), row.messageId(),
+                    row.messageRevision(), row.selectionStartCodePoint(), row.selectionEndCodePoint(),
+                    row.sourceSha256(), row.sourceSnapshotKey(), row.sourceText(), state,
+                    workspaceOperation, file, version, code, message, row.rowRevision() + 1,
+                    row.createdAt(), now);
         }
     }
 }

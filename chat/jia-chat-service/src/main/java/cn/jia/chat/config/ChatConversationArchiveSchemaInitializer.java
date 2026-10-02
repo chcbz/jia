@@ -22,6 +22,8 @@ import java.util.Set;
 @ConditionalOnProperty(prefix = "chat.conversation-archive", name = "enabled", havingValue = "true")
 public final class ChatConversationArchiveSchemaInitializer implements InitializingBean {
     static final String RESOURCE = "db/chat-conversation-archive-schema.sql";
+    static final String MIGRATION_RESOURCE =
+            "db/chat-conversation-archive-text-selection-migration.sql";
     static final String TABLE = "chat_conversation_archive_operation";
     private static final Map<String, Set<String>> SOURCE_COLUMNS = Map.of(
             "chat_conversation_asset", Set.of("asset_id", "tenant_id", "owner_jiacn", "client_id",
@@ -37,18 +39,25 @@ public final class ChatConversationArchiveSchemaInitializer implements Initializ
                     "request_revision", "conversation_id", "conversation_generation", "aggregate_state"),
             "chat_conversation", Set.of("id", "tenant_id", "jiacn", "client_id", "conversation_type",
                     "conversation_scope_type", "conversation_scope_key", "task_id", "deleted_at",
-                    "lifecycle_generation"));
+                    "lifecycle_generation"),
+            "chat_message", Set.of("id", "conversation_id", "message_type", "content",
+                    "create_time", "update_time", "tenant_id", "client_id", "jiacn",
+                    "conversation_type"));
     private static final Set<String> OPERATION_COLUMNS = Set.of("operation_id", "tenant_id",
             "owner_jiacn", "client_id", "conversation_id", "conversation_generation",
-            "idempotency_key", "request_sha256", "asset_id", "asset_revision", "state",
-            "workspace_operation_id", "file_id", "file_version", "error_code", "message",
-            "row_revision", "created_at", "updated_at");
+            "idempotency_key", "request_sha256", "source_kind", "asset_id", "asset_revision",
+            "message_id", "message_revision", "selection_start_code_point",
+            "selection_end_code_point", "source_sha256", "source_snapshot_key", "source_text",
+            "state", "workspace_operation_id", "file_id", "file_version", "error_code",
+            "message", "row_revision", "created_at", "updated_at");
     private static final Map<String, Index> INDEXES = Map.of(
             "PRIMARY", new Index(true, List.of("operation_id")),
             "uk_chat_archive_key", new Index(true,
                     List.of("tenant_id", "owner_jiacn", "client_id", "idempotency_key")),
             "uk_chat_archive_source", new Index(true,
                     List.of("tenant_id", "owner_jiacn", "client_id", "asset_id", "asset_revision")),
+            "uk_chat_archive_source_snapshot", new Index(true,
+                    List.of("tenant_id", "owner_jiacn", "client_id", "source_snapshot_key")),
             "uk_chat_archive_workspace", new Index(true,
                     List.of("tenant_id", "owner_jiacn", "client_id", "workspace_operation_id")),
             "idx_chat_archive_conversation", new Index(false,
@@ -57,7 +66,8 @@ public final class ChatConversationArchiveSchemaInitializer implements Initializ
     private static final Set<String> CHECKS = Set.of("chk_chat_archive_asset_revision",
             "chk_chat_archive_generation", "chk_chat_archive_key_length",
             "chk_chat_archive_request_sha", "chk_chat_archive_state",
-            "chk_chat_archive_row_revision", "chk_chat_archive_saved_receipt");
+            "chk_chat_archive_row_revision", "chk_chat_archive_source_union",
+            "chk_chat_archive_saved_receipt");
 
     private final JdbcTemplate jdbc;
     private final ChatSchemaReadiness schemaReadiness;
@@ -73,11 +83,17 @@ public final class ChatConversationArchiveSchemaInitializer implements Initializ
         requireMySql8();
         schemaReadiness.ensureInitialized();
         validateSourceTables();
-        ResourceDatabasePopulator populator = new ResourceDatabasePopulator(new ClassPathResource(RESOURCE));
+        executeResource(RESOURCE);
+        executeResource(MIGRATION_RESOURCE);
+        validateOperationTable();
+    }
+
+    private void executeResource(String resource) {
+        ResourceDatabasePopulator populator = new ResourceDatabasePopulator(
+                new ClassPathResource(resource));
         populator.setContinueOnError(false);
         populator.setIgnoreFailedDrops(false);
         populator.execute(requireDataSource());
-        validateOperationTable();
     }
 
     private void validateSourceTables() {

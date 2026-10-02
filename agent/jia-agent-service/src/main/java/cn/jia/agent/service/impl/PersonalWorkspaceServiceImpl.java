@@ -14,6 +14,8 @@ import jakarta.inject.Inject;
 import jakarta.inject.Named;
 
 import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -140,6 +142,50 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
             throw failure;
         }
     }
+    /** Internal archive of bytes derived from a server-locked Chat message snapshot. */
+    @Override public PersonalWorkspaceViews.UploadView archiveConversationText(Scope scope,
+            ConversationTextArchiveCommand command) {
+        validateScope(scope);
+        if (command == null || command.sourceSnapshotKey() == null
+                || !command.sourceSnapshotKey().matches("[0-9a-f]{64}")
+                || command.sha256() == null || !command.sha256().matches("[0-9a-f]{64}")) bad();
+        ValidUpload valid = validate(new UploadCommand(command.idempotency(), command.displayName(),
+                command.filename(), "text/plain", command.content()));
+        requireStrictUtf8(valid.content());
+        if (!command.sha256().equals(hash(valid.content()))) bad();
+        String requestHash = hash("ARCHIVE_TEXT", command.sourceSnapshotKey(), command.sha256(),
+                valid.key(), valid.displayName(), valid.filename(), valid.mime());
+        PersonalWorkspaceWriteService.Claim claim = writes.claim(writeScope(scope), "ARCHIVE_TEXT",
+                valid.key(), requestHash);
+        if (!claim.claimed()) return completedUpload(scope, claim.operation());
+        String fileId = "pws_" + UUID.randomUUID().toString().replace("-", "");
+        try {
+            PersonalWorkspaceStorage.StoredObject stored = storage.store(storageScope(scope),
+                    valid.content(), "text/plain");
+            if (!command.sha256().equals(stored.sha256())
+                    || valid.content().length != stored.byteLength()
+                    || !"text/plain".equals(stored.mimeType()))
+                throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.STORAGE_CORRUPT);
+            long now = System.currentTimeMillis();
+            PersonalWorkspaceFileEntity file = new PersonalWorkspaceFileEntity().setFileId(fileId)
+                    .setOwnerJiacn(scope.ownerJiacn()).setSourceKind("UPLOAD")
+                    .setOriginKind("AGENT_DELIVERY").setDisplayName(valid.displayName())
+                    .setMediaFamily("TEXT").setState("ACTIVE").setMetadataRevision(1L)
+                    .setLatestVersion(1).setCreatedAt(now);
+            file.setTenantId(scope.tenantId()); file.setClientId(scope.clientId());
+            PersonalWorkspaceVersionEntity version = new PersonalWorkspaceVersionEntity()
+                    .setFileId(fileId).setOwnerJiacn(scope.ownerJiacn()).setVersion(1)
+                    .setOriginalFilename(valid.filename()).setContentMimeType("text/plain")
+                    .setByteLength(stored.byteLength()).setContentHash(stored.sha256())
+                    .setStorageUri(stored.storageUri()).setCreatedAt(now);
+            version.setTenantId(scope.tenantId()); version.setClientId(scope.clientId());
+            writes.completeCreate(writeScope(scope), claim.operation(), file, version);
+            return new PersonalWorkspaceViews.UploadView(operation(claim.operation()), view(file), version(version));
+        } catch (RuntimeException failure) {
+            writes.fail(writeScope(scope), claim.operation(), reason(failure));
+            throw failure;
+        }
+    }
     @Override public PersonalWorkspaceViews.UploadView appendVersion(Scope scope,String fileId,UploadCommand command,int expectedPreviousVersion){
         PersonalWorkspaceFileEntity old=file(scope,fileId); if(!"ACTIVE".equals(old.getState())||expectedPreviousVersion<1) bad(); ValidUpload valid=validate(command); String requestHash=hash("APPEND",valid,fileId,String.valueOf(expectedPreviousVersion));
         PersonalWorkspaceWriteService.Claim claim=writes.claim(writeScope(scope),"APPEND",valid.key(),requestHash); if(!claim.claimed())return completedUpload(scope,claim.operation());
@@ -217,6 +263,18 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
     private static void text(String value,int max){id(value,"text",max);}
     private static String lower(String v){if(v==null)return null;String mime=v.split(";",2)[0].trim().toLowerCase(Locale.ROOT);return "image/jpg".equals(mime)?"image/jpeg":mime;}
     private static String blankToNull(String value){return value==null||value.isBlank()?null:value;}
+    private static void requireStrictUtf8(byte[] bytes) {
+        try {
+            String decoded = StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(bytes)).toString();
+            byte[] encoded = decoded.getBytes(StandardCharsets.UTF_8);
+            if (!java.util.Arrays.equals(bytes, encoded)) bad();
+        } catch (CharacterCodingException malformed) {
+            bad();
+        }
+    }
     private static String hash(String... values){try{MessageDigest d=MessageDigest.getInstance("SHA-256");for(String v:values){byte[]b=Objects.requireNonNullElse(v,"").getBytes(StandardCharsets.UTF_8);d.update(ByteBuffer.allocate(4).putInt(b.length).array());d.update(b);}return HexFormat.of().formatHex(d.digest());}catch(NoSuchAlgorithmException e){throw new IllegalStateException(e);}}
     private static String hash(byte[] bytes){try{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(Objects.requireNonNull(bytes,"bytes")));}catch(NoSuchAlgorithmException e){throw new IllegalStateException(e);}}
     private static String hash(String type,ValidUpload v,String... rest){List<String> p=new ArrayList<>();p.add(type);p.add(v.key());p.add(v.displayName());p.add(v.filename());p.add(v.mime());p.add(hash(v.content()));p.addAll(List.of(rest));return hash(p.toArray(String[]::new));}
