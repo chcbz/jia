@@ -61,7 +61,8 @@ public class ChatBountyExecutionCoordinator {
                 FROM chat_interaction_step s
                 JOIN chat_step_execution_link l ON l.step_id=s.step_id
                   AND l.tenant_id=s.tenant_id AND l.owner_jiacn=s.owner_jiacn AND l.client_id=s.client_id
-                WHERE s.kind='EXECUTE' AND s.state='ADMITTED'
+                WHERE s.kind='EXECUTE' AND s.state IN ('ADMITTED','WAITING_AUTHORIZATION',
+                  'WAITING_CAPABILITY','WAITING_INPUT_RESOLVER')
                   AND l.state='WAITING_ADMISSION' AND l.execution_id IS NULL
                 ORDER BY s.created_at,s.step_id LIMIT ?
                 """, (rs, row) -> new Pending(rs.getString(1),rs.getString(2),
@@ -78,14 +79,15 @@ public class ChatBountyExecutionCoordinator {
                 || !Objects.equals(step.tenantId(),candidate.tenantId())
                 || !Objects.equals(step.ownerJiacn(),candidate.ownerJiacn())
                 || !Objects.equals(step.clientId(),candidate.clientId())
-                || !"EXECUTE".equals(step.kind()) || !"ADMITTED".equals(step.state())) return "NOT_PENDING";
+                || !"EXECUTE".equals(step.kind()) || !retryable(step.state())) return "NOT_PENDING";
         var scope=new AgentTaskExecutionGrantService.Scope(step.tenantId(),step.clientId(),step.ownerJiacn());
         // Re-read persisted input and recompute its canonical digest, not just the browser's hint.
         ChatRequestEntity request=requests.findRequest(step.tenantId(),step.ownerJiacn(),step.clientId(),step.requestId());
         if (request == null || !Objects.equals(request.getConversationId(),step.conversationId())
                 || !Objects.equals(request.getConversationGeneration(),step.conversationGeneration())
                 || !Objects.equals(request.getRequestRevision(),step.requestRevision())
-                || !"PLANNING".equals(request.getAggregateState()) || request.getUserMessageId()==null)
+                || !matchingRequestState(step.state(),request.getAggregateState())
+                || request.getUserMessageId()==null)
             throw new IllegalStateException("Bounty request state is inconsistent");
         List<Input> inputs=jdbc.query("""
                 SELECT m.content,m.metadata FROM chat_message m WHERE m.id=?
@@ -156,7 +158,8 @@ public class ChatBountyExecutionCoordinator {
                     throw new IllegalStateException("Bounty authorization wait result is inconsistent");
                 // Keep the durable ADMITTED candidate eligible while the authenticated runtime
                 // reconnects. No execution/provider side effect has occurred at this point.
-                return persistedCostAuthority?"WAITING_CAPABILITY":waitFor(step,request,"WAITING_AUTHORIZATION");
+                return persistedCostAuthority?waitFor(step,request,"WAITING_CAPABILITY"):
+                        waitFor(step,request,"WAITING_AUTHORIZATION");
             }
             if (admitted.costAuthorizationRef()==null || admitted.costAuthorizationVersion()==null)
                 return waitFor(step,request,"WAITING_AUTHORIZATION");
@@ -207,10 +210,22 @@ public class ChatBountyExecutionCoordinator {
     }
 
     private String waitFor(ChatInteractionStepStore.Step step, ChatRequestEntity request, String state) {
+        if (Objects.equals(state,step.state()) && Objects.equals(state,request.getAggregateState()))
+            return state;
         long now=System.currentTimeMillis();
         if (steps.updateStepState(step,state,now)!=1 || requests.updateRequestState(request,state,now)!=1)
             throw new IllegalStateException("Bounty waiting state was not committed");
         return state;
+    }
+
+    private static boolean retryable(String state) {
+        return List.of("ADMITTED","WAITING_AUTHORIZATION","WAITING_CAPABILITY",
+                "WAITING_INPUT_RESOLVER").contains(state);
+    }
+
+    private static boolean matchingRequestState(String stepState,String requestState) {
+        return "ADMITTED".equals(stepState) ? "PLANNING".equals(requestState)
+                : Objects.equals(stepState,requestState);
     }
 
     /** Null means an unsupported material format; inconsistent snapshots fail closed. */

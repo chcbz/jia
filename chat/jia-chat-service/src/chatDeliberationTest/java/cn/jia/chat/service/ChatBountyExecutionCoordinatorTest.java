@@ -164,8 +164,19 @@ class ChatBountyExecutionCoordinatorTest {
                         && hash.equals(command.references().getFirst().contentHash())));
     }
 
-    @Test void persistedCostAuthorityWaitsForRuntimeWithoutMutatingDurableRequestState() throws Exception {
+    @Test void persistedCapabilityWaitIsIdempotentUntilRuntimeReturns() throws Exception {
         persistedImageRequest();
+        String digest=steps.findStep("0","owner","client","req",1,1).inputSnapshotDigest();
+        when(steps.findStep("0","owner","client","req",1,1)).thenReturn(
+                new ChatInteractionStepStore.Step("step","0","owner","client","req",1,1,
+                        "42",1,"task",2,"grant",1,"agent","EXECUTE","WAITING_CAPABILITY",
+                        1,digest,1,2));
+        when(requests.findRequest("0","owner","client","req")).thenReturn(
+                new ChatRequestEntity().setTenantId("0").setOwnerJiacn("owner")
+                        .setClientId("client").setRequestId("req").setRequestRevision(1L)
+                        .setConversationId("42").setConversationGeneration(1L)
+                        .setAggregateState("WAITING_CAPABILITY").setUserMessageId(7L)
+                        .setStateVersion(1L));
         when(grants.admitControlledV3(any(),eq("task"),eq("grant"),eq(1L),eq(2L),eq("agent"),
                 eq("GENERATE_IMAGE"),eq("NEW_EXECUTION"),isNull(),isNull(),isNull()))
                 .thenReturn(new AgentTaskExecutionGrantService.Admission("grant",1,2,

@@ -154,13 +154,15 @@ class ChatBountyExecutionCoordinatorSpringTransactionTest {
         factory.addAdvice(new TransactionInterceptor(manager,new AnnotationTransactionAttributeSource()));
         var coordinator=(ChatBountyExecutionCoordinator)factory.getProxy();
 
+        when(steps.updateStepState(same(step),eq("WAITING_CAPABILITY"),anyLong())).thenReturn(1);
+        when(requests.updateRequestState(same(request),eq("WAITING_CAPABILITY"),anyLong())).thenReturn(1);
         assertEquals("WAITING_CAPABILITY",coordinator.coordinate(
                 new ChatBountyExecutionCoordinator.Pending("0","owner","client","req","step")));
         assertEquals(1,evidence.queryForObject(
                 "SELECT COUNT(*) FROM controlled_chat_atomic_evidence WHERE label='v3_declaration_read'",
                 Integer.class));
-        verify(steps,never()).updateStepState(any(),anyString(),anyLong());
-        verify(requests,never()).updateRequestState(any(),anyString(),anyLong());
+        verify(steps).updateStepState(same(step),eq("WAITING_CAPABILITY"),anyLong());
+        verify(requests).updateRequestState(same(request),eq("WAITING_CAPABILITY"),anyLong());
         verifyNoInteractions(executions,conversations);
     }
 
