@@ -60,6 +60,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.security.DigestInputStream;
 import java.security.MessageDigest;
+import java.security.SecureRandom;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
@@ -69,6 +70,7 @@ import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
@@ -236,11 +238,11 @@ class Mmd29ceUpgradeWiringMySqlTest {
         properties.put("spring.data.redis.host", redis.host());
         properties.put("spring.data.redis.port", Integer.toString(redis.port()));
         properties.put("spring.data.redis.database", "0");
-        properties.put("spring.data.redis.password", "");
+        properties.put("spring.data.redis.password", redis.password());
         properties.put("spring.redis.host", redis.host());
         properties.put("spring.redis.port", Integer.toString(redis.port()));
         properties.put("spring.redis.database", "0");
-        properties.put("spring.redis.password", "");
+        properties.put("spring.redis.password", redis.password());
         properties.put("spring.ai.model.chat", "none");
         properties.put("spring.ai.model.embedding", "none");
         properties.put("spring.ai.model.audio.transcription", "none");
@@ -704,6 +706,7 @@ class Mmd29ceUpgradeWiringMySqlTest {
         private static final String OWNER_MARKER = "MMD29CE-OWNED-REDIS";
         private static final Duration START_TIMEOUT = Duration.ofSeconds(10);
         private static final Duration STOP_TIMEOUT = Duration.ofSeconds(5);
+        private static final SecureRandom PASSWORD_RANDOM = new SecureRandom();
         private static final Map<String, String> BINARY_SHA256 = Map.of(
                 "redis-server-7.4.1-linux-amd64",
                 "ff1628a3c48e4e4e409fac6a72395d1cf181d9c07566f15daf807d7e270259a4",
@@ -715,14 +718,16 @@ class Mmd29ceUpgradeWiringMySqlTest {
         private final long pid;
         private final Instant startInstant;
         private final int port;
+        private final String password;
 
         private OwnedRedisServer(
-                Path root, Process process, Instant startInstant, int port) {
+                Path root, Process process, Instant startInstant, int port, String password) {
             this.root = root;
             this.process = process;
             this.pid = process.pid();
             this.startInstant = startInstant;
             this.port = port;
+            this.password = password;
         }
 
         static OwnedRedisServer start() throws Exception {
@@ -733,11 +738,13 @@ class Mmd29ceUpgradeWiringMySqlTest {
                 Path binary = extractVerifiedBinary(root);
                 requireExactVersion(binary, "7.4.1");
                 int port = freePort();
+                String password = newPassword();
                 Path config = root.resolve("redis.conf");
                 Files.writeString(config, String.format(Locale.ROOT, """
                         bind 127.0.0.1
                         port %d
                         protected-mode yes
+                        requirepass %s
                         save ""
                         appendonly no
                         daemonize no
@@ -746,7 +753,7 @@ class Mmd29ceUpgradeWiringMySqlTest {
                         dbfilename dump.rdb
                         pidfile %s
                         logfile ""
-                        """, port, root, root.resolve("redis.pid")),
+                        """, port, password, root, root.resolve("redis.pid")),
                         StandardCharsets.US_ASCII, StandardOpenOption.CREATE_NEW);
 
                 ProcessBuilder builder = new ProcessBuilder(binary.toString(), config.toString());
@@ -764,7 +771,7 @@ class Mmd29ceUpgradeWiringMySqlTest {
                 Instant startInstant = process.toHandle().info().startInstant()
                         .orElseThrow(() -> new IOException(
                                 "Owned Redis child start identity unavailable"));
-                server = new OwnedRedisServer(root, process, startInstant, port);
+                server = new OwnedRedisServer(root, process, startInstant, port, password);
                 server.awaitReady();
                 System.out.printf(Locale.ROOT,
                         "MMD29CE_OWNED_REDIS_READY pid=%d start=%s host=%s port=%d root=%s%n",
@@ -791,6 +798,10 @@ class Mmd29ceUpgradeWiringMySqlTest {
 
         int port() {
             return port;
+        }
+
+        String password() {
+            return password;
         }
 
         void assertExactOwnedChildAlive() {
@@ -941,6 +952,12 @@ class Mmd29ceUpgradeWiringMySqlTest {
                 socket.bind(new InetSocketAddress("127.0.0.1", 0));
                 return socket.getLocalPort();
             }
+        }
+
+        private static String newPassword() {
+            byte[] bytes = new byte[32];
+            PASSWORD_RANDOM.nextBytes(bytes);
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
         }
 
         private static String sha256(Path file) throws Exception {
