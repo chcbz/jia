@@ -49,10 +49,16 @@ import org.springframework.scheduling.config.TaskManagementConfigUtils;
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -60,15 +66,23 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -84,7 +98,7 @@ class Mmd29ceUpgradeWiringMySqlTest {
     private static final String TARGET = "29ce5e130c20e213266ecc2cd7bde0a13a6a92f3";
     private static final String TARGET_TREE = "9ed6012a3a11d5e3fcef2ab5906d9db7a3881ead";
     private static final String PREFIX = "mmd29ce_20261002_01a0f2bb_";
-    private static final String DATABASE = "mmd29ce_20261002_01a0f2bb_wiring_r3";
+    private static final String DATABASE = "mmd29ce_20261002_01a0f2bb_wiring_r4";
     private static final String ISOLATED_SCHEDULE_BEAN = "wxSchedule";
     private static final Set<String> FIXTURE_ONLY_PATHS = Set.of(
             "starter/build.gradle",
@@ -141,43 +155,48 @@ class Mmd29ceUpgradeWiringMySqlTest {
         Fixture fixture = Fixture.fromEnvironment();
         assertEquals(PREFIX, fixture.prefix());
         assertTargetSourceAndDdlHashes(fixture.repo());
-        fixture.createEmptyDatabase();
-        try {
-            fixture.seedOldSourceCatalog();
-            assertEquals(Set.of(), fixture.presentTables(NEW_TABLES));
+        try (OwnedRedisServer redis = OwnedRedisServer.start()) {
+            fixture.createEmptyDatabase();
+            try {
+                fixture.seedOldSourceCatalog();
+                assertEquals(Set.of(), fixture.presentTables(NEW_TABLES));
 
-            Catalog first;
-            try (ConfigurableApplicationContext context = startApplication(fixture, false)) {
-                forceMigrationBeans(context);
-                first = fixture.catalog();
-            }
-            assertEquals(NEW_TABLES, fixture.presentTables(NEW_TABLES));
-            fixture.assertSchemaVersions();
+                Catalog first;
+                try (ConfigurableApplicationContext context = startApplication(fixture, redis, false)) {
+                    forceMigrationBeans(context);
+                    first = fixture.catalog();
+                }
+                assertEquals(NEW_TABLES, fixture.presentTables(NEW_TABLES));
+                fixture.assertSchemaVersions();
 
-            Catalog second;
-            try (ConfigurableApplicationContext context = startApplication(fixture, false)) {
-                forceMigrationBeans(context);
-                second = fixture.catalog();
-            }
-            assertEquals(first, second, "second application start must not drift the catalog");
-            fixture.assertSchemaVersions();
+                Catalog second;
+                try (ConfigurableApplicationContext context = startApplication(fixture, redis, false)) {
+                    forceMigrationBeans(context);
+                    second = fixture.catalog();
+                }
+                assertEquals(first, second, "second application start must not drift the catalog");
+                fixture.assertSchemaVersions();
 
-            Catalog fullyWired;
-            try (ConfigurableApplicationContext context = startApplication(fixture, true)) {
-                forceMigrationBeans(context);
-                assertFeatureBeansRunning(context);
-                assertEndpointMappings(context);
-                fullyWired = fixture.catalog();
+                Catalog fullyWired;
+                try (ConfigurableApplicationContext context = startApplication(fixture, redis, true)) {
+                    forceMigrationBeans(context);
+                    assertFeatureBeansRunning(context);
+                    assertEndpointMappings(context);
+                    fullyWired = fixture.catalog();
+                }
+                assertEquals(second, fullyWired,
+                        "enabling the full feature wiring must not drift the catalog");
+                fixture.assertSchemaVersions();
+                fixture.assertNoBusinessRows();
+            } finally {
+                fixture.dropOwnedDatabase();
             }
-            assertEquals(second, fullyWired, "enabling the full feature wiring must not drift the catalog");
-            fixture.assertSchemaVersions();
-            fixture.assertNoBusinessRows();
-        } finally {
-            fixture.dropOwnedDatabase();
         }
     }
 
-    private static ConfigurableApplicationContext startApplication(Fixture fixture, boolean fullFeatureWiring) {
+    private static ConfigurableApplicationContext startApplication(
+            Fixture fixture, OwnedRedisServer redis, boolean fullFeatureWiring) {
+        redis.assertExactOwnedChildAlive();
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("spring.profiles.active", "mmd29ce-isolated");
         properties.put("spring.datasource.dbUrl", fixture.jdbcUrl());
@@ -214,6 +233,14 @@ class Mmd29ceUpgradeWiringMySqlTest {
         properties.put("spring.rabbitmq.listener.simple.auto-startup", "false");
         properties.put("spring.rabbitmq.listener.direct.auto-startup", "false");
         properties.put("spring.data.redis.repositories.enabled", "false");
+        properties.put("spring.data.redis.host", redis.host());
+        properties.put("spring.data.redis.port", Integer.toString(redis.port()));
+        properties.put("spring.data.redis.database", "0");
+        properties.put("spring.data.redis.password", "");
+        properties.put("spring.redis.host", redis.host());
+        properties.put("spring.redis.port", Integer.toString(redis.port()));
+        properties.put("spring.redis.database", "0");
+        properties.put("spring.redis.password", "");
         properties.put("spring.ai.model.chat", "none");
         properties.put("spring.ai.model.embedding", "none");
         properties.put("spring.ai.model.audio.transcription", "none");
@@ -672,4 +699,294 @@ class Mmd29ceUpgradeWiringMySqlTest {
             for (Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);
         }
     }
+
+    private static final class OwnedRedisServer implements AutoCloseable {
+        private static final String OWNER_MARKER = "MMD29CE-OWNED-REDIS";
+        private static final Duration START_TIMEOUT = Duration.ofSeconds(10);
+        private static final Duration STOP_TIMEOUT = Duration.ofSeconds(5);
+        private static final Map<String, String> BINARY_SHA256 = Map.of(
+                "redis-server-7.4.1-linux-amd64",
+                "ff1628a3c48e4e4e409fac6a72395d1cf181d9c07566f15daf807d7e270259a4",
+                "redis-server-7.4.1-linux-arm64",
+                "86d14ebaf58d55c2c4513de2617f90b844ddf40c561fd7f350b98648dfa6ebef");
+
+        private final Path root;
+        private final Process process;
+        private final long pid;
+        private final Instant startInstant;
+        private final int port;
+
+        private OwnedRedisServer(
+                Path root, Process process, Instant startInstant, int port) {
+            this.root = root;
+            this.process = process;
+            this.pid = process.pid();
+            this.startInstant = startInstant;
+            this.port = port;
+        }
+
+        static OwnedRedisServer start() throws Exception {
+            Path root = createOwnedRoot();
+            Process process = null;
+            OwnedRedisServer server = null;
+            try {
+                Path binary = extractVerifiedBinary(root);
+                requireExactVersion(binary, "7.4.1");
+                int port = freePort();
+                Path config = root.resolve("redis.conf");
+                Files.writeString(config, String.format(Locale.ROOT, """
+                        bind 127.0.0.1
+                        port %d
+                        protected-mode yes
+                        save ""
+                        appendonly no
+                        daemonize no
+                        databases 1
+                        dir %s
+                        dbfilename dump.rdb
+                        pidfile %s
+                        logfile ""
+                        """, port, root, root.resolve("redis.pid")),
+                        StandardCharsets.US_ASCII, StandardOpenOption.CREATE_NEW);
+
+                ProcessBuilder builder = new ProcessBuilder(binary.toString(), config.toString());
+                builder.directory(root.toFile());
+                builder.redirectErrorStream(true);
+                builder.redirectOutput(root.resolve("redis.log").toFile());
+                builder.environment().clear();
+                builder.environment().put("PATH",
+                        "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
+                builder.environment().put("LANG", "C");
+                builder.environment().put("LC_ALL", "C");
+                builder.environment().put("HOME", root.toString());
+                builder.environment().put("TMPDIR", root.resolve("tmp").toString());
+                process = builder.start();
+                Instant startInstant = process.toHandle().info().startInstant()
+                        .orElseThrow(() -> new IOException(
+                                "Owned Redis child start identity unavailable"));
+                server = new OwnedRedisServer(root, process, startInstant, port);
+                server.awaitReady();
+                System.out.printf(Locale.ROOT,
+                        "MMD29CE_OWNED_REDIS_READY pid=%d start=%s host=%s port=%d root=%s%n",
+                        server.pid, server.startInstant, server.host(), server.port, server.root);
+                return server;
+            } catch (Throwable failure) {
+                try {
+                    if (server != null) {
+                        server.close();
+                    } else {
+                        stopNewChild(process);
+                        deleteOwnedRoot(root);
+                    }
+                } catch (Throwable cleanupFailure) {
+                    failure.addSuppressed(cleanupFailure);
+                }
+                throw failure;
+            }
+        }
+
+        String host() {
+            return "127.0.0.1";
+        }
+
+        int port() {
+            return port;
+        }
+
+        void assertExactOwnedChildAlive() {
+            assertTrue(process.isAlive(), "owned Redis child exited before application start");
+            assertTrue(isExactOwnedChild(), "owned Redis child identity changed before application start");
+        }
+
+        private void awaitReady() throws Exception {
+            long deadline = System.nanoTime() + START_TIMEOUT.toNanos();
+            IOException lastFailure = null;
+            while (System.nanoTime() < deadline) {
+                if (!process.isAlive()) {
+                    throw new IOException("Owned Redis exited before readiness: " + boundedLog());
+                }
+                try (Socket socket = new Socket()) {
+                    socket.connect(new InetSocketAddress(host(), port), 100);
+                    return;
+                } catch (IOException exception) {
+                    lastFailure = exception;
+                    Thread.sleep(25);
+                }
+            }
+            throw new IOException("Owned Redis readiness timed out: " + boundedLog(), lastFailure);
+        }
+
+        @Override
+        public void close() throws Exception {
+            IOException failure = null;
+            if (process.isAlive()) {
+                if (!isExactOwnedChild()) {
+                    failure = new IOException(
+                            "Owned Redis child identity changed; refusing process control");
+                } else {
+                    process.destroy();
+                    if (!process.waitFor(STOP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
+                        if (!isExactOwnedChild()) {
+                            failure = new IOException(
+                                    "Owned Redis child identity changed before forced stop");
+                        } else {
+                            process.destroyForcibly();
+                            if (!process.waitFor(STOP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
+                                failure = new IOException("Owned Redis child did not stop");
+                            }
+                        }
+                    }
+                }
+            }
+            if (!process.isAlive()) {
+                try {
+                    deleteOwnedRoot(root);
+                    System.out.printf(Locale.ROOT,
+                            "MMD29CE_OWNED_REDIS_CLOSED pid=%d start=%s port=%d%n",
+                            pid, startInstant, port);
+                } catch (IOException cleanupFailure) {
+                    if (failure == null) {
+                        failure = cleanupFailure;
+                    } else {
+                        failure.addSuppressed(cleanupFailure);
+                    }
+                }
+            }
+            if (failure != null) {
+                throw failure;
+            }
+        }
+
+        private boolean isExactOwnedChild() {
+            return process.pid() == pid && process.toHandle().info().startInstant()
+                    .map(startInstant::equals).orElse(false);
+        }
+
+        private String boundedLog() {
+            Path log = root.resolve("redis.log");
+            if (!Files.exists(log)) {
+                return "";
+            }
+            try (InputStream input = Files.newInputStream(log)) {
+                return new String(input.readNBytes(4096), StandardCharsets.UTF_8);
+            } catch (IOException exception) {
+                return "log unavailable";
+            }
+        }
+
+        private static Path createOwnedRoot() throws IOException {
+            Path root = Files.createTempDirectory("cyf-mmd29ce-redis-");
+            Files.writeString(root.resolve(OWNER_MARKER), "owned\n",
+                    StandardCharsets.US_ASCII, StandardOpenOption.CREATE_NEW);
+            Files.createDirectory(root.resolve("tmp"));
+            return root;
+        }
+
+        private static Path extractVerifiedBinary(Path root) throws Exception {
+            String resource = binaryResource();
+            Path binary = root.resolve("redis-server");
+            try (InputStream input = Mmd29ceUpgradeWiringMySqlTest.class
+                    .getResourceAsStream("/" + resource)) {
+                if (input == null) {
+                    throw new IOException("Embedded Redis 7.4.1 binary resource is unavailable");
+                }
+                Files.copy(input, binary);
+            }
+            if (!BINARY_SHA256.get(resource).equals(sha256(binary))) {
+                throw new IOException("Embedded Redis 7.4.1 binary checksum mismatch");
+            }
+            if (!binary.toFile().setExecutable(true, true)) {
+                throw new IOException("Embedded Redis 7.4.1 binary is not executable");
+            }
+            return binary;
+        }
+
+        private static String binaryResource() throws IOException {
+            String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+            if (!os.contains("linux")) {
+                throw new IOException("Embedded Redis fixture requires Linux");
+            }
+            String architecture = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
+            String suffix = switch (architecture) {
+                case "amd64", "x86_64" -> "amd64";
+                case "aarch64", "arm64" -> "arm64";
+                default -> throw new IOException(
+                        "Embedded Redis fixture does not support architecture " + architecture);
+            };
+            return "redis-server-7.4.1-linux-" + suffix;
+        }
+
+        private static void requireExactVersion(Path binary, String expected) throws Exception {
+            Process probe = new ProcessBuilder(binary.toString(), "--version")
+                    .redirectErrorStream(true).start();
+            if (!probe.waitFor(STOP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
+                probe.destroyForcibly();
+                probe.waitFor(STOP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+                throw new IOException("Owned Redis version probe timed out");
+            }
+            String output = new String(probe.getInputStream().readAllBytes(),
+                    StandardCharsets.US_ASCII);
+            if (probe.exitValue() != 0) {
+                throw new IOException("Owned Redis version probe failed");
+            }
+            Matcher matcher = Pattern.compile("(?:v=)?(\\d+\\.\\d+(?:\\.\\d+)?)")
+                    .matcher(output);
+            if (!matcher.find() || !expected.equals(matcher.group(1))) {
+                throw new IOException("Expected Redis " + expected + " but version output differed");
+            }
+        }
+
+        private static int freePort() throws IOException {
+            try (ServerSocket socket = new ServerSocket()) {
+                socket.bind(new InetSocketAddress("127.0.0.1", 0));
+                return socket.getLocalPort();
+            }
+        }
+
+        private static String sha256(Path file) throws Exception {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            try (DigestInputStream input = new DigestInputStream(
+                    Files.newInputStream(file), digest)) {
+                input.transferTo(java.io.OutputStream.nullOutputStream());
+            }
+            return HexFormat.of().formatHex(digest.digest());
+        }
+
+        private static void stopNewChild(Process process) throws Exception {
+            if (process == null || !process.isAlive()) {
+                return;
+            }
+            process.destroy();
+            if (!process.waitFor(STOP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
+                process.destroyForcibly();
+                if (!process.waitFor(STOP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
+                    throw new IOException("New owned Redis child did not stop");
+                }
+            }
+        }
+
+        private static void deleteOwnedRoot(Path root) throws IOException {
+            if (!Files.isRegularFile(root.resolve(OWNER_MARKER))) {
+                throw new IOException("Owned Redis fixture marker missing");
+            }
+            try (Stream<Path> paths = Files.walk(root)) {
+                IOException[] failure = new IOException[1];
+                paths.sorted(Comparator.reverseOrder()).forEach(path -> {
+                    try {
+                        Files.delete(path);
+                    } catch (IOException exception) {
+                        if (failure[0] == null) {
+                            failure[0] = exception;
+                        } else {
+                            failure[0].addSuppressed(exception);
+                        }
+                    }
+                });
+                if (failure[0] != null) {
+                    throw failure[0];
+                }
+            }
+        }
+    }
+
 }

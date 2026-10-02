@@ -203,6 +203,8 @@ dependencies {
     add(mmd29ceUpgradeWiringSourceSet.implementationConfigurationName, libs.junit.jupiter)
     add(mmd29ceUpgradeWiringSourceSet.runtimeOnlyConfigurationName, libs.mysql)
     add(mmd29ceUpgradeWiringSourceSet.runtimeOnlyConfigurationName, libs.junit.platform.launcher)
+    add(mmd29ceUpgradeWiringSourceSet.runtimeOnlyConfigurationName,
+            'com.github.lansheng228:embedded-redis:7.4.1') { transitive = false }
 }
 tasks.register('mmd29ceUpgradeWiring', Test) {
     group = 'verification'
