@@ -8,6 +8,7 @@ import cn.jia.agent.entity.AgentTaskProviderCostConsentEntity;
 import cn.jia.agent.service.AgentTaskExecutionGrantException;
 import cn.jia.agent.service.AgentTaskExecutionGrantService;
 import cn.jia.agent.service.ControlledImageExecutionSessionLookup;
+import cn.jia.agent.service.ControlledImageFollowupAuthorityService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 
@@ -24,8 +25,13 @@ class ControlledImageGrantAuthorityTest {
     @SuppressWarnings("unchecked")
     private final ObjectProvider<ControlledImageExecutionSessionLookup> sessions=mock(ObjectProvider.class);
     private final ControlledImageExecutionSessionLookup lookup=mock(ControlledImageExecutionSessionLookup.class);
+    @SuppressWarnings("unchecked")
+    private final ObjectProvider<ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup> v3Declarations=
+            mock(ObjectProvider.class);
+    private final ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup v3Lookup=
+            mock(ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.class);
     private final ControlledImageGrantAuthority authority=
-            new ControlledImageGrantAuthority(grants,consents,policies,sessions);
+            new ControlledImageGrantAuthority(grants,consents,policies,sessions,v3Declarations);
     private final AgentTaskExecutionGrantService.Scope scope=
             new AgentTaskExecutionGrantService.Scope("0","client","owner");
 
@@ -68,6 +74,46 @@ class ControlledImageGrantAuthorityTest {
         }
     }
 
+    @Test void v3ReadyDeclarationAdmitsBoundInitialExecutionWithoutLegacySession() {
+        var bound=consent("BOUND").setReservedExecutionId(null).setReservedRunId(null);
+        when(consents.findByConsentForUpdate("0","client","owner","task",bound.getConsentId()))
+                .thenReturn(bound);
+        readyPolicyAndV3Declaration(v3Declaration("runtime","binding",1L,"model",
+                List.of("GENERATE_IMAGE","EDIT_IMAGE")));
+
+        var result=authority.verifyV3(scope,root(),grant(),"NEW_EXECUTION",null,null,null);
+
+        assertSame(bound,result.consent());
+        assertEquals("runtime",result.declaration().runtimeInstanceId());
+        verifyNoInteractions(sessions);
+    }
+
+    @Test void v3DeclarationAndPersistedReservationDriftFailClosed() {
+        var bound=consent("BOUND").setReservedExecutionId(null).setReservedRunId(null);
+        when(consents.findByConsentForUpdate("0","client","owner","task",bound.getConsentId()))
+                .thenReturn(bound);
+        readyPolicyAndV3Declaration(v3Declaration("runtime","binding",1L,"model",
+                List.of("GENERATE_IMAGE","EDIT_IMAGE")));
+        assertDenied(() -> authority.verifyV3(scope,root(),grant(),"PROVIDER_START",
+                "other-execution","run","runtime"));
+
+        for (var drift:List.of(
+                v3Declaration("other-runtime","binding",1L,"model",List.of("GENERATE_IMAGE","EDIT_IMAGE")),
+                v3Declaration("runtime","other-binding",1L,"model",List.of("GENERATE_IMAGE","EDIT_IMAGE")),
+                v3Declaration("runtime","binding",2L,"model",List.of("GENERATE_IMAGE","EDIT_IMAGE")),
+                v3Declaration("runtime","binding",1L,"other-model",List.of("GENERATE_IMAGE","EDIT_IMAGE")),
+                v3Declaration("runtime","binding",1L,"model",List.of("GENERATE_IMAGE")))) {
+            reset(v3Lookup);when(v3Lookup.current(any())).thenReturn(drift);
+            assertDenied(() -> authority.verifyV3(scope,root(),grant(),"NEW_EXECUTION",null,null,
+                    "runtime"));
+        }
+
+        var alreadyReserved=consent("BOUND");
+        when(consents.findByConsentForUpdate("0","client","owner","task",alreadyReserved.getConsentId()))
+                .thenReturn(alreadyReserved);
+        assertDenied(() -> authority.verifyV3(scope,root(),grant(),"NEW_EXECUTION",null,null,null));
+    }
+
     @Test void ownerSummaryRequiresARealBoundTupleNotLocatorShapeAlone() {
         var grant=grant();
         assertFalse(authority.isPersistedAuthorized(grant));
@@ -89,6 +135,22 @@ class ControlledImageGrantAuthorityTest {
         assertNull(existing.session());
         assertDenied(() -> authority.verify(scope,root(),grant(),"PROVIDER_START","execution","run","runtime"));
         verifyNoInteractions(policies,sessions);
+    }
+
+    private void readyPolicyAndV3Declaration(
+            ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.Declaration declaration) {
+        when(policies.requireCurrent(any(),eq("agent"),eq("binding"),eq(1L),anyLong()))
+                .thenReturn(new ControlledImageProviderOperatorPolicy.Policy("CONTROLLED_IMAGE_HTTP_V1",
+                        "binding",1,"model","OPERATOR_TEMPLATE","operator","policy-r1",
+                        "UNPRICED_EXTERNAL_ACCOUNT",1,9_000_000_000_000L));
+        when(v3Declarations.getIfUnique()).thenReturn(v3Lookup);
+        when(v3Lookup.current(any())).thenReturn(declaration);
+    }
+    private static ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.Declaration v3Declaration(
+            String runtime,String binding,Long epoch,String model,List<String> operations) {
+        return new ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.Declaration(
+                ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State.READY,
+                runtime,operations,"CONTROLLED_IMAGE_HTTP_V1",binding,epoch,model,16,1,1);
     }
 
     private void readyPolicyAndSession() {

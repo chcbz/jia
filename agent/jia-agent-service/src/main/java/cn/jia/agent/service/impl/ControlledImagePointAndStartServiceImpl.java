@@ -71,7 +71,7 @@ public class ControlledImagePointAndStartServiceImpl implements ControlledImageP
                     throw failure(Reason.CONFLICT);
                 grants.requireControlledBindingSnapshot(grant,consent.getRequirementRevision(),
                         consent.getInputSnapshotDigest());
-                AgentTaskProviderCostConsentDTO consentView=consents.bindWithinLockedRoot(consentScope,taskId,
+                AgentTaskProviderCostConsentDTO consentView=consents.bindV3WithinLockedRoot(consentScope,taskId,
                         consent,valid.expectedVersion(),grant,authority);
                 var row=new ControlledImageBridgeOperationEntity();row.setTenantId(scope.tenantId());
                 row.setClientId(scope.clientId());row.setOwnerJiacn(scope.ownerJiacn()).setTaskId(taskId)
@@ -80,6 +80,8 @@ public class ControlledImagePointAndStartServiceImpl implements ControlledImageP
                         .setGrantId(grant.getGrantId()).setGrantVersion(grant.getGrantVersion())
                         .setAssignmentRevision(grant.getAssignmentRevision())
                         .setAuthorityLocator(ControlledImageGrantAuthority.LOCATOR_PREFIX+valid.consentId())
+                        .setExecutionProtocolVersion(3)
+                        .setOperationGrantId("opgrant_"+java.util.UUID.randomUUID().toString().replace("-",""))
                         .setCreatedAt(System.currentTimeMillis());operations.insert(row);
                 return new Result(new ControlledImagePointAndStartDTO.Receipt(1,grants.view(grant),consentView),false);
             });
@@ -105,6 +107,9 @@ public class ControlledImagePointAndStartServiceImpl implements ControlledImageP
         var grant=grantRows.findByGrant(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,operation.getGrantId());
         var consent=consentRows.findByConsent(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,operation.getConsentId());
         if(grant==null||consent==null
+                ||!Objects.equals(3,operation.getExecutionProtocolVersion())
+                ||operation.getOperationGrantId()==null
+                ||!operation.getOperationGrantId().matches("opgrant_[0-9a-f]{32}")
                 ||!Objects.equals(operation.getGrantId(),grant.getGrantId())
                 ||grant.getGrantVersion()==null
                 ||grant.getGrantVersion()<operation.getGrantVersion()

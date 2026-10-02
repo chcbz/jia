@@ -5,6 +5,7 @@ import cn.jia.agent.entity.*;
 import cn.jia.agent.service.*;
 import jakarta.inject.*;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.transaction.TransactionException;
@@ -26,12 +27,14 @@ public class ControlledImageFollowupAuthorityServiceImpl implements ControlledIm
  private final PersonalWorkspaceExecutionDao executions; private final ControlledImageExecutionSourceV3Dao sources;
  private final ControlledImageProviderOperatorPolicy policies; private final ObjectProvider<RuntimeDeclarationLookup> lookups;
  private final ObjectProvider<RuntimeSourceAccessLookup> sourceAccess;
+ private ControlledImageBridgeOperationDao initialOperations;
  private final ObjectMapper json;
  @Inject public ControlledImageFollowupAuthorityServiceImpl(AgentTaskMutationTransaction tx,
    AgentTaskExecutionGrantService grants,AgentTaskProviderCostConsentDao consents,
    ControlledImageIntentOperationGrantDao opgrants,PersonalWorkspaceExecutionDao executions,
    ControlledImageExecutionSourceV3Dao sources,ControlledImageProviderOperatorPolicy policies,
    ObjectProvider<RuntimeDeclarationLookup> lookups,ObjectProvider<RuntimeSourceAccessLookup> sourceAccess,ObjectMapper json){this.tx=Objects.requireNonNull(tx);this.grants=Objects.requireNonNull(grants);this.consents=Objects.requireNonNull(consents);this.opgrants=Objects.requireNonNull(opgrants);this.executions=Objects.requireNonNull(executions);this.sources=Objects.requireNonNull(sources);this.policies=Objects.requireNonNull(policies);this.lookups=Objects.requireNonNull(lookups);this.sourceAccess=Objects.requireNonNull(sourceAccess);this.json=Objects.requireNonNull(json);}
+ @Autowired(required=false) public void setInitialControlledImageV3(ControlledImageBridgeOperationDao operations){this.initialOperations=operations;}
 
  @Override @Transactional(readOnly=true,rollbackFor=Exception.class)
  public Preview preview(Scope scope,PreviewCommand command){validate(scope,command);try{
@@ -128,14 +131,15 @@ public class ControlledImageFollowupAuthorityServiceImpl implements ControlledIm
    late.verify();return new Reservation(row.getExecutionId(),row.getRunId(),c.authority().consentId(),c.authority().operationGrantId(),c.authority().consentVersion()+2,c.authority().operationGrantVersion()+1,c.runtimeInputSnapshotDigest());
   });}catch(Failure f){throw f;}catch(RuntimeException f){throw translate(f);}}
 
- @Override @Transactional(readOnly=true,rollbackFor=Exception.class)
+ @Override @Transactional(rollbackFor=Exception.class)
  public RuntimeAuthority runtimeAuthority(RuntimeScope scope,String taskId,String runId,String purpose){
   if(scope==null||!Set.of("COMMAND","INPUTS","EXISTING_RUN").contains(purpose))throw fail(Reason.BAD_REQUEST);
   Scope owner=new Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());validScope(owner);id(scope.targetAgentId(),100);id(scope.runtimeInstanceId(),100);id(taskId,100);id(runId,100);
   try{var execution=executions.findByTaskRun(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,runId);
    if(execution==null||!Objects.equals(3,execution.getExecutionProtocolVersion())||!same(scope.targetAgentId(),execution.getTargetAgentId()))throw fail(Reason.NOT_FOUND_OR_FORBIDDEN);
    var op=opgrants.findById(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,execution.getOperationGrantId());
-   if(op==null||!same(execution.getOperationGrantId(),op.getOperationGrantId())||!same(execution.getExecutionId(),op.getReservedExecutionId())||!same(runId,op.getReservedRunId()))throw fail(Reason.CONFLICT);
+   if(op==null)return initialRuntimeAuthority(scope,execution,purpose);
+   if(!same(execution.getOperationGrantId(),op.getOperationGrantId())||!same(execution.getExecutionId(),op.getReservedExecutionId())||!same(runId,op.getReservedRunId()))throw fail(Reason.CONFLICT);
    var consent=consents.findFollowupByConsent(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,execution.getControlledConsentId());
    boolean state=consent!=null && ("EXISTING_RUN".equals(purpose)
      ? reservedOrConsumed(op.getState()) && reservedOrConsumed(consent.getState())
@@ -170,7 +174,9 @@ public class ControlledImageFollowupAuthorityServiceImpl implements ControlledIm
   if(scope==null||c==null||late==null)throw fail(Reason.BAD_REQUEST);validScope(new Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()));id(scope.targetAgentId(),100);id(scope.runtimeInstanceId(),100);id(c.taskId(),100);id(c.runId(),100);id(c.executionId(),100);id(c.commandId(),100);id(c.messageId(),100);hash(c.inputSnapshotDigest());positive(c.leaseVersion());id(c.leaseId(),100);
   try{return tx.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),c.taskId(),root->{
    var execution=executions.lockByTaskRun(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),c.taskId(),c.runId());if(execution==null||!Objects.equals(3,execution.getExecutionProtocolVersion())||!same(c.executionId(),execution.getExecutionId())||!same(scope.targetAgentId(),execution.getTargetAgentId())||!same(c.operation(),execution.getPermittedOperation())||!same(c.inputSnapshotDigest(),execution.getRuntimeInputSnapshotDigest())||execution.getConversationProviderStartedAt()!=null)throw fail(Reason.CONFLICT);
-   var op=opgrants.lockById(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),c.taskId(),execution.getOperationGrantId());var consent=consents.findFollowupByConsentForUpdate(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),c.taskId(),execution.getControlledConsentId());
+   var op=opgrants.lockById(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),c.taskId(),execution.getOperationGrantId());
+   if(op==null)return consumeInitialForStart(scope,c,late,execution);
+   var consent=consents.findFollowupByConsentForUpdate(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),c.taskId(),execution.getControlledConsentId());
    if(op==null||consent==null||!"RESERVED".equals(op.getState())||!"RESERVED".equals(consent.getState())||!same(execution.getExecutionId(),op.getReservedExecutionId())||!same(execution.getRunId(),op.getReservedRunId())||!same(execution.getExecutionId(),consent.getReservedExecutionId())||!same(c.inputSnapshotDigest(),consent.getRuntimeInputSnapshotSha256()))throw fail(Reason.CONFLICT);
    Scope owner=new Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());
    PreviewCommand preview=previewFrom(op,execution);var base=baseline(owner,preview);requireBaseline(preview,base);
@@ -184,6 +190,60 @@ public class ControlledImageFollowupAuthorityServiceImpl implements ControlledIm
    long now=System.currentTimeMillis();op.setConsumedLeaseId(c.leaseId()).setUpdateTime(now);consent.setConsumedLeaseId(c.leaseId()).setConsumedAt(now).setUpdateTime(now);if(!opgrants.consume(op,op.getVersion())||!consents.consumeFollowup(consent,consent.getVersion())||!executions.markControlledProviderStartedV3(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),c.taskId(),c.runId(),c.executionId(),consent.getConsentId(),op.getOperationGrantId(),c.leaseVersion(),now))throw fail(Reason.CONFLICT);
    return new StartReceipt(c.taskId(),c.runId(),execution.getConversationId(),c.executionId(),c.commandId(),c.messageId(),c.operation(),c.inputSnapshotDigest(),expected,c.leaseVersion());
   });}catch(Failure f){throw f;}catch(RuntimeException f){throw translate(f);}}
+
+
+ private RuntimeAuthority initialRuntimeAuthority(RuntimeScope scope,PersonalWorkspaceExecutionEntity execution,String purpose){
+  if(initialOperations==null||execution.getOperationGrantId()==null)throw fail(Reason.UNAVAILABLE);
+  var bridge=initialOperations.findByOperationGrant(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),execution.getTaskId(),execution.getOperationGrantId());
+  var consent=consents.findByConsent(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),execution.getTaskId(),execution.getControlledConsentId());
+  requireInitialBridge(execution,bridge,consent);
+  String authorityPurpose="EXISTING_RUN".equals(purpose)?"EXISTING_RUN":"PROVIDER_START";
+  var admitted=grants.admitControlledV3(new AgentTaskExecutionGrantService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),
+    execution.getTaskId(),execution.getTaskGrantId(),execution.getTaskGrantVersion(),execution.getAssignmentRevision(),
+    execution.getTargetAgentId(),execution.getPermittedOperation(),authorityPurpose,execution.getExecutionId(),execution.getRunId(),
+    "EXISTING_RUN".equals(purpose)?null:scope.runtimeInstanceId());
+  if(admitted==null||!admitted.paidExecutionAuthorized()||!same(admitted.costAuthorizationRef(),"mmd-ci-v1:"+consent.getConsentId()))throw fail(Reason.CONFLICT);
+  RuntimeDeclarationLookup.Declaration declaration;
+  if("EXISTING_RUN".equals(purpose)) {
+   var session=sessionDeclaration(new Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),scope.targetAgentId(),execution.getPermittedOperation());
+   if(!same(scope.runtimeInstanceId(),session.runtimeInstanceId()))throw fail(Reason.CONFLICT);
+   declaration=null;
+  } else declaration=declaration(new Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),scope.targetAgentId());
+  if(declaration!=null&&(!same(scope.runtimeInstanceId(),declaration.runtimeInstanceId())
+    ||!same(declaration.bindingId(),consent.getBindingId())||!Objects.equals(declaration.bindingEpoch(),consent.getBindingEpoch())
+    ||!same(declaration.modelId(),consent.getModelId())))throw fail(Reason.CONFLICT);
+  return new RuntimeAuthority(execution.getExecutionId(),execution.getPermittedOperation(),execution.getRuntimeInputSnapshotDigest(),
+    new ProviderExecution(consent.getProviderLane(),consent.getConsentId(),consent.getBindingId(),Long.toString(consent.getBindingEpoch()),consent.getModelId(),16,1,1));
+ }
+ private StartReceipt consumeInitialForStart(RuntimeScope scope,StartCommand c,LateCheck late,PersonalWorkspaceExecutionEntity execution){
+  if(initialOperations==null||execution.getOperationGrantId()==null)throw fail(Reason.UNAVAILABLE);
+  var bridge=initialOperations.lockByOperationGrant(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),c.taskId(),execution.getOperationGrantId());
+  var consent=consents.findByConsentForUpdate(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),c.taskId(),execution.getControlledConsentId());
+  requireInitialBridge(execution,bridge,consent);
+  if(!"RESERVED".equals(consent.getState())||!same(execution.getExecutionId(),consent.getReservedExecutionId())
+    ||!same(execution.getRunId(),consent.getReservedRunId()))throw fail(Reason.CONFLICT);
+  var admitted=grants.admitControlledV3(new AgentTaskExecutionGrantService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),
+    c.taskId(),execution.getTaskGrantId(),execution.getTaskGrantVersion(),execution.getAssignmentRevision(),
+    execution.getTargetAgentId(),execution.getPermittedOperation(),"PROVIDER_START",execution.getExecutionId(),execution.getRunId(),scope.runtimeInstanceId());
+  if(admitted==null||!admitted.paidExecutionAuthorized()||!same(admitted.costAuthorizationRef(),"mmd-ci-v1:"+consent.getConsentId()))throw fail(Reason.CONFLICT);
+  var d=declaration(new Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),scope.targetAgentId());
+  ProviderExecution expected=new ProviderExecution(d.providerLane(),consent.getConsentId(),d.bindingId(),Long.toString(d.bindingEpoch()),d.modelId(),16,1,1);
+  if(!same(scope.runtimeInstanceId(),d.runtimeInstanceId())||!expected.equals(c.providerExecution()))throw fail(Reason.CONFLICT);
+  late.verify();long now=System.currentTimeMillis();consent.setConsumedLeaseId(c.leaseId()).setConsumedAt(now).setUpdateTime(now);
+  if(!consents.consume(consent,consent.getVersion())||!executions.markControlledProviderStartedV3(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),c.taskId(),c.runId(),c.executionId(),consent.getConsentId(),bridge.getOperationGrantId(),c.leaseVersion(),now))throw fail(Reason.CONFLICT);
+  return new StartReceipt(c.taskId(),c.runId(),execution.getConversationId(),c.executionId(),c.commandId(),c.messageId(),c.operation(),c.inputSnapshotDigest(),expected,c.leaseVersion());
+ }
+ private static void requireInitialBridge(PersonalWorkspaceExecutionEntity execution,ControlledImageBridgeOperationEntity bridge,AgentTaskProviderCostConsentEntity consent){
+  if(bridge==null||consent==null||!Objects.equals(3,bridge.getExecutionProtocolVersion())
+    ||bridge.getOperationGrantId()==null||!bridge.getOperationGrantId().matches("opgrant_[0-9a-f]{32}")
+    ||!same(execution.getOperationGrantId(),bridge.getOperationGrantId())||!same(execution.getTaskId(),bridge.getTaskId())
+    ||!same(execution.getControlledConsentId(),bridge.getConsentId())||!same(execution.getTaskGrantId(),bridge.getGrantId())
+    ||!Objects.equals(execution.getTaskGrantVersion(),bridge.getGrantVersion())||!Objects.equals(execution.getAssignmentRevision(),bridge.getAssignmentRevision())
+    ||consent.getConsentPurpose()!=null&&!"INITIAL_ASSIGN_AND_START".equals(consent.getConsentPurpose())
+    ||consent.getOperationGrantId()!=null||!same(consent.getConsentId(),bridge.getConsentId())
+    ||!same(consent.getBoundGrantId(),bridge.getGrantId())||!Objects.equals(consent.getBoundGrantVersion(),bridge.getGrantVersion())
+    ||!Objects.equals(consent.getBoundAssignmentRevision(),bridge.getAssignmentRevision()))throw fail(Reason.CONFLICT);
+ }
 
  private void requireSourceAccess(Scope scope,PreviewCommand preview,boolean lock){
   var lookup=sourceAccess.getIfUnique();if(lookup==null)throw fail(Reason.UNAVAILABLE);

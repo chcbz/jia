@@ -3,6 +3,8 @@ package cn.jia.agent.service.impl;
 import cn.jia.agent.config.PersonalWorkspaceExecutionProperties;
 import cn.jia.agent.dao.AgentRuntimeDao;
 import cn.jia.agent.dao.AgentTaskWorkItemDao;
+import cn.jia.agent.dao.ControlledImageBridgeOperationDao;
+import cn.jia.agent.dao.ControlledImageExecutionSourceV3Dao;
 import cn.jia.agent.dao.PersonalWorkspaceDao;
 import cn.jia.agent.dao.PersonalWorkspaceExecutionDao;
 import cn.jia.agent.dao.PersonalWorkspaceTaskLinkDao;
@@ -10,6 +12,8 @@ import cn.jia.agent.entity.AgentRuntimeEntity;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.entity.AgentTaskProviderCostConsentDTO;
 import cn.jia.agent.entity.AgentTaskProviderCostConsentEntity;
+import cn.jia.agent.entity.ControlledImageBridgeOperationEntity;
+import cn.jia.agent.entity.ControlledImageExecutionSourceV3Entity;
 import cn.jia.agent.entity.PersonalWorkspaceExecutionEntity;
 import cn.jia.agent.entity.PersonalWorkspaceExecutionInputEntity;
 import cn.jia.agent.entity.PersonalWorkspaceFileEntity;
@@ -17,6 +21,7 @@ import cn.jia.agent.entity.PersonalWorkspaceVersionEntity;
 import cn.jia.agent.service.AgentTaskExecutionGrantService;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.service.AgentWorkItemLeaseService;
+import cn.jia.agent.service.ControlledImageFollowupAuthorityService;
 import cn.jia.agent.service.PersonalWorkspaceExecutionService;
 import cn.jia.agent.service.PersonalWorkspaceStorage;
 import cn.jia.chat.service.WorkspaceConversationAccessService;
@@ -44,6 +49,9 @@ class ControlledImageConversationStartTest {
     private final AgentTaskExecutionGrantService grants=mock(AgentTaskExecutionGrantService.class);
     private final AgentTaskMutationTransaction transactions=mock(AgentTaskMutationTransaction.class);
     private final AgentTaskProviderCostConsentServiceImpl consents=mock(AgentTaskProviderCostConsentServiceImpl.class);
+    private final ControlledImageFollowupAuthorityService followupAuthority=mock(ControlledImageFollowupAuthorityService.class);
+    private final ControlledImageExecutionSourceV3Dao followupSources=mock(ControlledImageExecutionSourceV3Dao.class);
+    private final ControlledImageBridgeOperationDao initialOperations=mock(ControlledImageBridgeOperationDao.class);
     private final WorkspaceConversationAccessService conversationAccess=
             mock(WorkspaceConversationAccessService.class);
     private final PersonalWorkspaceExecutionService.RuntimeScope runtime=
@@ -57,6 +65,8 @@ class ControlledImageConversationStartTest {
                 new PersonalWorkspaceExecutionProperties(List.of("image/png")));
         service.setConversationAdmission(grants,transactions);
         service.setControlledConsentLifecycle(consents);
+        service.setControlledImageFollowupV3(followupAuthority,followupSources);
+        service.setInitialControlledImageV3(initialOperations);
         service.setTaskExecutionDependencies(conversationAccess,mock(AgentTaskWorkItemDao.class),
                 mock(AgentWorkItemLeaseService.class));
         when(conversationAccess.requireAccessible(
@@ -369,6 +379,84 @@ class ControlledImageConversationStartTest {
         verify(workspace,never()).lockFile(anyString(),anyString(),anyString(),anyString());
         verify(consents).reserveWithinLockedRoot(any(),eq("task"),any(),eq(2L),
                 eq(created.executionId()),eq(created.runId()));
+    }
+
+    @Test void initialV3CreatePersistsProtocolGrantSourcesDigestAndReplaysWithoutSecondReserve() {
+        byte[] bytes="reference".getBytes(StandardCharsets.UTF_8);String hash=sha(bytes);
+        var ref=new PersonalWorkspaceExecutionService.ReferenceSelection(
+                "file-1",1,"REFERENCE","image/png",bytes.length,hash);
+        AgentRuntimeEntity target=new AgentRuntimeEntity().setAgentId("agent").setOwnerJiacn("owner");
+        target.setClientId("client");target.setTenantId("0");
+        when(runtimes.findCandidateRosterByOwner("client","owner")).thenReturn(List.of(target));
+        when(executions.hasExecutionProtocolVersionColumn()).thenReturn(true);
+        when(executions.findByIdempotency(eq("0"),eq("client"),eq("owner"),anyString()))
+                .thenReturn(null);
+        when(workspace.findFile("0","client","owner","file-1")).thenReturn(file("file-1"));
+        when(workspace.findVersion("0","client","owner","file-1",1))
+                .thenReturn(version("file-1",bytes.length,hash));
+        var admission=new AgentTaskExecutionGrantService.Admission("grant",1,7,"agent",
+                "GENERATE_IMAGE",true,List.of(new AgentTaskExecutionGrantService.AuthorizedInput(
+                        "file-1",1,"REFERENCE","image/png",bytes.length,hash)),
+                "mmd-ci-v1:"+execution.getControlledConsentId(),2L);
+        when(grants.admitControlledV3(any(),eq("task"),eq("grant"),eq(1L),eq(7L),eq("agent"),
+                eq("GENERATE_IMAGE"),eq("NEW_EXECUTION"),isNull(),isNull(),isNull()))
+                .thenReturn(admission);
+        var bridge=new ControlledImageBridgeOperationEntity().setTaskId("task").setConsentId(
+                execution.getControlledConsentId()).setGrantId("grant").setGrantVersion(1L)
+                .setAssignmentRevision(7L).setExecutionProtocolVersion(3)
+                .setOperationGrantId("opgrant_1234567890abcdef1234567890abcdef");
+        when(initialOperations.lockByAuthority("0","client","owner","task",
+                execution.getControlledConsentId(),"grant")).thenReturn(bridge);
+        when(consents.lockForBridge(any(),eq("task"),eq(execution.getControlledConsentId())))
+                .thenReturn(consentEntity().setState("BOUND").setVersion(2L)
+                        .setReservedExecutionId(null).setReservedRunId(null));
+        var persisted=org.mockito.ArgumentCaptor.forClass(PersonalWorkspaceExecutionEntity.class);
+        var source=org.mockito.ArgumentCaptor.forClass(ControlledImageExecutionSourceV3Entity.class);
+
+        var command=new PersonalWorkspaceExecutionService.ConversationCreate(
+                "conversation","task","agent","intent-v3","grant",1,7,"GENERATE_IMAGE",
+                "draw","image/png",List.of(ref),true,3);
+        var created=service.createConversation(new PersonalWorkspaceExecutionService.OwnerScope(
+                "0","client","owner"),command);
+
+        verify(executions).insert(persisted.capture());verify(followupSources).insert(source.capture());
+        assertEquals(3,persisted.getValue().getExecutionProtocolVersion());
+        assertEquals(bridge.getOperationGrantId(),persisted.getValue().getOperationGrantId());
+        assertTrue(persisted.getValue().getRuntimeInputSnapshotDigest().matches("[0-9a-f]{64}"));
+        assertEquals("TASK_LINKED_WORKSPACE_VERSION",source.getValue().getSourceKind());
+        assertEquals("REFERENCE",source.getValue().getPurpose());
+        assertEquals("file-1",source.getValue().getFileId());
+        verify(consents).reserveWithinLockedRoot(any(),eq("task"),any(),eq(2L),
+                eq(created.executionId()),eq(created.runId()));
+
+        when(executions.findByIdempotency(eq("0"),eq("client"),eq("owner"),anyString()))
+                .thenReturn(persisted.getValue());
+        var replay=service.createConversation(new PersonalWorkspaceExecutionService.OwnerScope(
+                "0","client","owner"),command);
+        assertEquals(created.executionId(),replay.executionId());
+        verify(executions,times(1)).insert(any(PersonalWorkspaceExecutionEntity.class));
+        verify(consents,times(1)).reserveWithinLockedRoot(any(),anyString(),any(),anyLong(),anyString(),anyString());
+    }
+
+    @Test void initialV3RejectsLegacyInputPurposeAndMissingProtocolCatalogBeforeAuthorityReserve() {
+        var inputRef=new PersonalWorkspaceExecutionService.ReferenceSelection(
+                "file-1",1,"INPUT","image/png",1,"a".repeat(64));
+        var command=new PersonalWorkspaceExecutionService.ConversationCreate(
+                "conversation","task","agent","intent-v3","grant",1,7,"GENERATE_IMAGE",
+                "draw","image/png",List.of(inputRef),true,3);
+        assertEquals(PersonalWorkspaceExecutionService.Reason.BAD_REQUEST,
+                assertThrows(PersonalWorkspaceExecutionService.Failure.class,()->service.createConversation(
+                        new PersonalWorkspaceExecutionService.OwnerScope("0","client","owner"),command)).getReason());
+
+        var noRefs=new PersonalWorkspaceExecutionService.ConversationCreate(
+                "conversation","task","agent","intent-v3b","grant",1,7,"GENERATE_IMAGE",
+                "draw","image/png",List.of(),true,3);
+        assertEquals(PersonalWorkspaceExecutionService.Reason.CAPABILITY_UNAVAILABLE,
+                assertThrows(PersonalWorkspaceExecutionService.Failure.class,()->service.createConversation(
+                        new PersonalWorkspaceExecutionService.OwnerScope("0","client","owner"),noRefs)).getReason());
+        verify(grants,never()).admitControlledV3(any(),anyString(),anyString(),anyLong(),anyLong(),
+                anyString(),anyString(),anyString(),any(),any(),any());
+        verify(consents,never()).reserveWithinLockedRoot(any(),anyString(),any(),anyLong(),anyString(),anyString());
     }
 
     private void admit(List<AgentTaskExecutionGrantService.AuthorizedInput> inputs) {

@@ -85,10 +85,10 @@ public final class PointAndStartCapabilityService {
         }
         blockers.add("COST_AUTHORIZATION_UNAVAILABLE");
         String inputRefsPolicy = inputRefsPolicy(lane, nativeExecution);
-        return new Capability(1, taskId, targetAgentId, LANE, lane,
+        return new Capability(3, taskId, targetAgentId, LANE, lane,
                 new NativeExecution(nativeExecution.state().name(), nativeExecution.transport(),
                         nativeExecution.schemaVersion(), nativeExecution.supportedOperations()),
-                new Authorization("UNAVAILABLE", false),
+                new ExecutionAuthorization("UNAVAILABLE", false),
                 new NewStart(false, List.copyOf(blockers)), requested, initial, inputRefsPolicy,
                 new OriginalIntentRecovery(false, "RECOVERY_REQUIRED",
                         "EXPLICIT_USER_EXACT_ORIGINAL_KEY_AND_BODY_ONLY"));
@@ -153,7 +153,7 @@ public final class PointAndStartCapabilityService {
     }
 
     public record Capability(int schemaVersion, String taskId, String targetAgentId, String lane,
-            ServerLane serverLane, NativeExecution nativeExecution, Authorization authorization,
+            ServerLane serverLane, NativeExecution nativeExecution, ExecutionAuthorization executionAuthorization,
             NewStart newStart, List<String> requestedOperations, String initialOperation,
             String inputRefsPolicy, OriginalIntentRecovery originalIntentRecovery) {
         public Capability { requestedOperations = List.copyOf(requestedOperations); }
@@ -165,7 +165,7 @@ public final class PointAndStartCapabilityService {
             List<String> supportedOperations) {
         public NativeExecution { supportedOperations = List.copyOf(supportedOperations); }
     }
-    public record Authorization(String state, boolean paidExecutionAuthorized) { }
+    public record ExecutionAuthorization(String state, boolean paidExecutionAuthorized) { }
     public record NewStart(boolean eligible, List<String> blockingReasons) {
         public NewStart { blockingReasons = List.copyOf(blockingReasons); }
     }

@@ -145,7 +145,7 @@ public class ChatBountyExecutionCoordinator {
         // Root -> target/files -> grant -> consent is established before any Chat row lock.
         AgentTaskExecutionGrantService.Admission admitted;
         try {
-            admitted=grants.admitControlled(scope,step.taskId(),step.grantId(),step.grantVersion(),
+            admitted=grants.admitControlledV3(scope,step.taskId(),step.grantId(),step.grantVersion(),
                     step.assignmentRevision(),step.targetAgentId(),operation,"NEW_EXECUTION",
                     null,null,null);
             if (admitted==null || !admitted.paidExecutionAuthorized()
@@ -166,7 +166,7 @@ public class ChatBountyExecutionCoordinator {
                 new PersonalWorkspaceExecutionService.ConversationCreate(step.conversationId(),
                 step.taskId(),step.targetAgentId(),observedLink.executionIntentId(),step.grantId(),
                 step.grantVersion(),step.assignmentRevision(),operation,inputs.getFirst().content(),
-                "image/png",references,true));
+                "image/png",references,true,3));
         if (execution==null || !"CONVERSATION".equals(execution.executionMode())
                 || !Objects.equals(execution.taskId(),step.taskId())
                 || !Objects.equals(execution.conversationId(),step.conversationId())

@@ -694,6 +694,42 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         });}catch(AgentTaskCollaborationException failure){throw translate(failure);}
     }
 
+
+    @Override
+    public Admission admitControlledV3(Scope scope,String taskId,String grantId,long expectedGrantVersion,
+            long expectedAssignmentRevision,String targetAgentId,String operation,String purpose,
+            String executionId,String runId,String runtimeInstanceId) {
+        validateScope(scope);exact(taskId,"taskId",100);exact(grantId,"grantId",100);
+        exact(targetAgentId,"targetAgentId",100);exact(operation,"operation",40);
+        if(controlledAuthority==null)throw new AgentTaskExecutionGrantException(
+                Reason.PAID_EXECUTION_NOT_AUTHORIZED,"Controlled image v3 authority is unavailable");
+        if(expectedGrantVersion<1 || expectedGrantVersion>MAX_SAFE_INTEGER
+                || expectedAssignmentRevision<0 || expectedAssignmentRevision>MAX_SAFE_INTEGER)
+            throw bad("Expected controlled v3 authority version is invalid");
+        try{return transactions.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),
+                scope.ownerJiacn(),taskId,root->{
+            AgentTaskExecutionGrantEntity observed=grants.findByGrant(scope.tenantId(),
+                    scope.clientId(),scope.ownerJiacn(),taskId,grantId);
+            if(observed==null)throw notFound();
+            lockTargetAndPersistedInputs(scope,taskId,targetAgentId,observed);
+            AgentTaskExecutionGrantEntity grant=controlledAuthority.lockGrant(scope,taskId,grantId);
+            if(!same(observed.getRequestHash(),grant.getRequestHash()))
+                throw conflict("Controlled v3 grant changed during admission");
+            Admission base=verifyAdmission(scope,root,grant,expectedGrantVersion,
+                    expectedAssignmentRevision,targetAgentId,operation,false);
+            var verified=controlledAuthority.verifyV3(scope,root,grant,purpose,executionId,runId,runtimeInstanceId);
+            String inputDigest=sha256("TASK_LINKED_INPUT_SNAPSHOT_V1\n"+write(readInputs(grant.getInputScopeJson())));
+            if(!same(inputDigest,verified.consent().getInputSnapshotDigest())
+                    || !Objects.equals(grant.getRequirementRevision(),verified.consent().getRequirementRevision()))
+                throw new AgentTaskExecutionGrantException(Reason.PAID_EXECUTION_NOT_AUTHORIZED,
+                        "Controlled v3 consent tuple no longer matches the grant");
+            return new Admission(base.grantId(),base.grantVersion(),base.assignmentRevision(),
+                    base.targetAgentId(),base.operation(),true,base.inputs(),grant.getCostAuthorizationRef(),
+                    verified.consent().getVersion(),root.getTaskVersion(),grant.getRequirementRevision(),
+                    null,grant.getIdempotencyKey(),grant.getRequestHash());
+        });}catch(AgentTaskCollaborationException failure){throw translate(failure);}
+    }
+
     @Override
     public Admission resolveAndAdmit(Scope scope, String taskId, long expectedAssignmentRevision,
             String targetAgentId, String operation, boolean paidExecution) {

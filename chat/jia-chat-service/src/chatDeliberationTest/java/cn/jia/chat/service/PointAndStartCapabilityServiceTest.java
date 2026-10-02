@@ -46,8 +46,8 @@ class PointAndStartCapabilityServiceTest {
         assertEquals("READY",result.nativeExecution().state());
         assertEquals(List.of("GENERATE_IMAGE"),result.requestedOperations());
         assertEquals("GENERATE_IMAGE",result.initialOperation());
-        assertEquals("UNAVAILABLE",result.authorization().state());
-        assertFalse(result.authorization().paidExecutionAuthorized());
+        assertEquals("UNAVAILABLE",result.executionAuthorization().state());
+        assertFalse(result.executionAuthorization().paidExecutionAuthorized());
         assertFalse(result.newStart().eligible());
         assertEquals(List.of("COST_AUTHORIZATION_UNAVAILABLE"),result.newStart().blockingReasons());
         assertEquals("EMPTY_ONLY",result.inputRefsPolicy());
@@ -58,12 +58,12 @@ class PointAndStartCapabilityServiceTest {
     void enabledTaskReferencesRequireTheActualReadyNativeLaneAndKeepFeesUnavailable() {
         readySources();
         var result=service(allEnabled(true)).read(scope,"task-a","agent-a");
-        assertEquals(1,result.schemaVersion());
+        assertEquals(3,result.schemaVersion());
         assertEquals("TASK_LINKED_REFERENCE",result.inputRefsPolicy());
         assertEquals(List.of("GENERATE_IMAGE"),result.requestedOperations());
         assertEquals("GENERATE_IMAGE",result.initialOperation());
-        assertEquals("UNAVAILABLE",result.authorization().state());
-        assertFalse(result.authorization().paidExecutionAuthorized());
+        assertEquals("UNAVAILABLE",result.executionAuthorization().state());
+        assertFalse(result.executionAuthorization().paidExecutionAuthorized());
         assertFalse(result.newStart().eligible());
         assertEquals(List.of("COST_AUTHORIZATION_UNAVAILABLE"),result.newStart().blockingReasons());
         assertFalse(result.originalIntentRecovery().legacyFallbackAllowed());

@@ -24,5 +24,7 @@ public class ControlledImageBridgeOperationEntity extends BaseEntity {
     private Long grantVersion;
     private Long assignmentRevision;
     private String authorityLocator;
+    private Integer executionProtocolVersion;
+    private String operationGrantId;
     private Long createdAt;
 }

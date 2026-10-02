@@ -3,9 +3,13 @@ package cn.jia.chat.api;
 import cn.jia.chat.service.ControlledImagePointAndStartCapabilityService;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
+import cn.jia.core.entity.JsonResult;
+import cn.jia.core.security.SensitiveResponseBodyAdvice;
+import cn.jia.core.security.SensitiveResponseProperties;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.MediaType;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.test.web.servlet.MockMvc;
@@ -13,7 +17,9 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -33,26 +39,14 @@ class AgentTaskControlledImageCapabilityControllerTest {
     @AfterEach void clear() { EsContextHolder.clearContext(); }
 
     @Test void exactOwnerQueryProjectsConsentRequiredWithoutIssuingAnything() throws Exception {
-        var capability=new ControlledImagePointAndStartCapabilityService.Capability(2,"task-1","agent-a",
-                "ORDINARY_SINGLE_AGENT_CONTROLLED_IMAGE_ASSIGN_AND_START",
-                new ControlledImagePointAndStartCapabilityService.ServerLane("READY",List.of()),
-                new ControlledImagePointAndStartCapabilityService.ControlledExecution("READY",
-                        "PERSONAL_WORKSPACE_CONTROLLED_IMAGE_HTTP_V2",1,List.of("GENERATE_IMAGE")),
-                new ControlledImagePointAndStartCapabilityService.ProviderBinding("CONTROLLED_IMAGE_HTTP_V1",
-                        "binding-a","1","model-a",16,1,1),
-                new ControlledImagePointAndStartCapabilityService.Authorization("CONSENT_REQUIRED",false),
-                new ControlledImagePointAndStartCapabilityService.NewStart(false,
-                        List.of("OWNER_EXACT_CONSENT_REQUIRED")),
-                List.of("GENERATE_IMAGE"),"GENERATE_IMAGE","TASK_LINKED_REFERENCE",16,
-                new ControlledImagePointAndStartCapabilityService.OriginalIntentRecovery(false,
-                        "RECOVERY_REQUIRED","EXPLICIT_USER_EXACT_ORIGINAL_KEY_AND_BODY_ONLY"));
+        var capability=capability();
         when(service.read(any(),eq("task-1"),eq("agent-a"))).thenReturn(capability);
         mvc.perform(get("/agent/tasks/task-1/point-and-start-controlled-image-capability")
                         .queryParam("targetAgentId","agent-a").principal(jwt("owner-a","client-a")))
                 .andExpect(status().isOk()).andExpect(header().string("Cache-Control","private, no-store"))
-                .andExpect(jsonPath("$.data.schemaVersion").value(2))
-                .andExpect(jsonPath("$.data.authorization.state").value("CONSENT_REQUIRED"))
-                .andExpect(jsonPath("$.data.authorization.paidExecutionAuthorized").value(false))
+                .andExpect(jsonPath("$.data.schemaVersion").value(3))
+                .andExpect(jsonPath("$.data.executionAuthorization.state").value("CONSENT_REQUIRED"))
+                .andExpect(jsonPath("$.data.executionAuthorization.paidExecutionAuthorized").value(false))
                 .andExpect(jsonPath("$.data.newStart.eligible").value(false));
         verify(service).read(eq(new cn.jia.agent.service.AgentTaskExecutionGrantService.Scope(
                 "0","client-a","owner-a")),eq("task-1"),eq("agent-a"));
@@ -77,6 +71,37 @@ class AgentTaskControlledImageCapabilityControllerTest {
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value("CONTROLLED_IMAGE_CAPABILITY_SOURCE_UNAVAILABLE"));
     }
+
+    @Test void actualSensitiveResponseAdvicePreservesBusinessAuthorizationObjectAndStillNullsSecretField() {
+        var body=JsonResult.success(new SanitizerProbe(capability(),Map.of("state","must-not-leak")));
+        Object sanitized=new SensitiveResponseBodyAdvice(new SensitiveResponseProperties()).beforeBodyWrite(
+                body,null,MediaType.APPLICATION_JSON,null,null,null);
+        Map<?,?> root=assertInstanceOf(Map.class,sanitized);
+        Map<?,?> data=assertInstanceOf(Map.class,root.get("data"));
+        assertNull(data.get("authorization"));
+        Map<?,?> projected=assertInstanceOf(Map.class,data.get("capability"));
+        Map<?,?> executionAuthorization=assertInstanceOf(Map.class,projected.get("executionAuthorization"));
+        assertEquals("CONSENT_REQUIRED",executionAuthorization.get("state"));
+        assertEquals(false,executionAuthorization.get("paidExecutionAuthorized"));
+    }
+
+    private static ControlledImagePointAndStartCapabilityService.Capability capability() {
+        return new ControlledImagePointAndStartCapabilityService.Capability(3,"task-1","agent-a",
+                "ORDINARY_SINGLE_AGENT_CONTROLLED_IMAGE_ASSIGN_AND_START",
+                new ControlledImagePointAndStartCapabilityService.ServerLane("READY",List.of()),
+                new ControlledImagePointAndStartCapabilityService.ControlledExecution("READY",
+                        "PERSONAL_WORKSPACE_CONTROLLED_IMAGE_HTTP_V3",3,List.of("GENERATE_IMAGE")),
+                new ControlledImagePointAndStartCapabilityService.ProviderBinding("CONTROLLED_IMAGE_HTTP_V1",
+                        "binding-a","1","model-a",16,1,1),
+                new ControlledImagePointAndStartCapabilityService.ExecutionAuthorization("CONSENT_REQUIRED",false),
+                new ControlledImagePointAndStartCapabilityService.NewStart(false,
+                        List.of("OWNER_EXACT_CONSENT_REQUIRED")),
+                List.of("GENERATE_IMAGE"),"GENERATE_IMAGE","TASK_LINKED_REFERENCE",16,
+                new ControlledImagePointAndStartCapabilityService.OriginalIntentRecovery(false,
+                        "RECOVERY_REQUIRED","EXPLICIT_USER_EXACT_ORIGINAL_KEY_AND_BODY_ONLY"));
+    }
+    private record SanitizerProbe(ControlledImagePointAndStartCapabilityService.Capability capability,
+            Map<String,String> authorization) { }
 
     private static JwtAuthenticationToken jwt(String owner,String client) {
         Jwt token=Jwt.withTokenValue("fixture").header("alg","none").claim("tenant_id","0")

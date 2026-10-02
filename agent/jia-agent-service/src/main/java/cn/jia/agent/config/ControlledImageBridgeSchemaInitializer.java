@@ -20,18 +20,44 @@ public final class ControlledImageBridgeSchemaInitializer implements Initializin
     @Override public void afterPropertiesSet(){
         Integer count=jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name=?",Integer.class,TABLE);
         if(count==null||count==0)jdbc.execute(ddl());
+        else ensureV3Extension();
         Map<String,Object> table=jdbc.queryForMap("SELECT engine,table_collation FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name=?",TABLE);
         if(!"InnoDB".equalsIgnoreCase(Objects.toString(table.get("engine"),""))
                 ||!"utf8mb4_0900_bin".equalsIgnoreCase(Objects.toString(table.get("table_collation"),"")))
             throw new IllegalStateException("Controlled-image bridge table drift");
         validateColumns(jdbc.queryForList("SELECT column_name,column_type,is_nullable,collation_name FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=? ORDER BY ordinal_position",TABLE));
+        Map<String,Object> protocolColumn=jdbc.queryForMap("SELECT column_default,extra FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=? AND column_name='execution_protocol_version'",TABLE);
+        Map<String,Object> operationGrantColumn=jdbc.queryForMap("SELECT column_default,extra FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=? AND column_name='operation_grant_id'",TABLE);
+        if(!"2".equals(Objects.toString(protocolColumn.get("column_default"),""))
+                ||!Objects.toString(protocolColumn.get("extra"),"").isBlank()
+                ||operationGrantColumn.get("column_default")!=null
+                ||!Objects.toString(operationGrantColumn.get("extra"),"").isBlank())
+            throw new IllegalStateException("Controlled-image bridge v3 column default drift");
         var indexes=jdbc.queryForList("SELECT index_name,non_unique,seq_in_index,column_name,sub_part FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name=? ORDER BY index_name,seq_in_index",TABLE);
         index(indexes,"PRIMARY",0,List.of("id"));
         index(indexes,"uk_acibo_scope_key",0,List.of("tenant_id","client_id","owner_jiacn","task_id","assignment_idempotency_key"));
         index(indexes,"uk_acibo_scope_consent",0,List.of("tenant_id","client_id","owner_jiacn","task_id","consent_id"));
         index(indexes,"uk_acibo_scope_grant",0,List.of("tenant_id","client_id","owner_jiacn","task_id","grant_id"));
-        if(indexes.size()!=16)throw new IllegalStateException("Controlled-image bridge index drift");
+        index(indexes,"uk_acibo_scope_operation_grant",0,List.of("tenant_id","client_id","owner_jiacn","task_id","operation_grant_id"));
+        if(indexes.size()!=21)throw new IllegalStateException("Controlled-image bridge index drift");
         validateChecks(jdbc.queryForList("SELECT tc.constraint_name,tc.enforced,cc.check_clause FROM information_schema.table_constraints tc JOIN information_schema.check_constraints cc ON cc.constraint_catalog=tc.constraint_catalog AND cc.constraint_schema=tc.constraint_schema AND cc.constraint_name=tc.constraint_name WHERE tc.constraint_schema=DATABASE() AND tc.table_name=? AND tc.constraint_type='CHECK'",TABLE));
+    }
+
+
+    private void ensureV3Extension() {
+        addColumn("execution_protocol_version","INT NOT NULL DEFAULT 2 AFTER authority_locator");
+        addColumn("operation_grant_id","VARCHAR(100) COLLATE utf8mb4_0900_bin DEFAULT NULL AFTER execution_protocol_version");
+        Integer index=jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name=? AND index_name='uk_acibo_scope_operation_grant'",Integer.class,TABLE);
+        if(index==null||index==0)jdbc.execute("ALTER TABLE "+TABLE+" ADD UNIQUE KEY uk_acibo_scope_operation_grant(tenant_id,client_id,owner_jiacn,task_id,operation_grant_id)");
+        else if(index!=5)throw new IllegalStateException("Controlled-image bridge operation-grant index drift");
+        Integer check=jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema=DATABASE() AND table_name=? AND constraint_name='chk_acibo_protocol' AND constraint_type='CHECK'",Integer.class,TABLE);
+        if(check==null||check==0)jdbc.execute("ALTER TABLE "+TABLE+" ADD CONSTRAINT chk_acibo_protocol CHECK((execution_protocol_version=2 AND operation_grant_id IS NULL) OR (execution_protocol_version=3 AND operation_grant_id REGEXP BINARY '^opgrant_[0-9a-f]{32}$'))");
+        else if(check!=1)throw new IllegalStateException("Controlled-image bridge protocol CHECK ambiguity");
+    }
+    private void addColumn(String name,String definition) {
+        Integer count=jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=? AND column_name=?",Integer.class,TABLE,name);
+        if(count==null||count==0)jdbc.execute("ALTER TABLE "+TABLE+" ADD COLUMN "+name+" "+definition);
+        else if(count!=1)throw new IllegalStateException("Controlled-image bridge column ambiguity: "+name);
     }
 
     static Map<String,String> checkExpressions(){return CHECKS;}
@@ -81,7 +107,8 @@ public final class ControlledImageBridgeSchemaInitializer implements Initializin
         c.put("wrapper_digest",a("char(64)","NO"));c.put("consent_id",b("varchar(100)","NO"));
         c.put("expected_consent_version",n("bigint","NO"));c.put("grant_id",b("varchar(100)","NO"));
         c.put("grant_version",n("bigint","NO"));c.put("assignment_revision",n("bigint","NO"));
-        c.put("authority_locator",b("varchar(100)","NO"));c.put("created_at",n("bigint","NO"));
+        c.put("authority_locator",b("varchar(100)","NO"));c.put("execution_protocol_version",n("int","NO"));
+        c.put("operation_grant_id",b("varchar(100)","YES"));c.put("created_at",n("bigint","NO"));
         c.put("tenant_id",b("varchar(50)","NO"));c.put("client_id",b("varchar(50)","NO"));
         c.put("create_time",n("bigint","YES"));c.put("update_time",n("bigint","YES"));return c;}
     private static Column n(String type,String nullable){return new Column(type,nullable,null);}
@@ -96,6 +123,7 @@ public final class ControlledImageBridgeSchemaInitializer implements Initializin
         c.put("chk_acibo_hash","regexp_like(wrapper_digest,cast('^[0-9a-f]{64}$' as char charset binary))");
         c.put("chk_acibo_consent","regexp_like(consent_id,cast('^consent_[0-9a-f]{32}$' as char charset binary))");
         c.put("chk_acibo_locator","(authority_locator=concat('mmd-ci-v1:',consent_id))");
+        c.put("chk_acibo_protocol","(((execution_protocol_version=2) and (operation_grant_id is null)) or ((execution_protocol_version=3) and regexp_like(operation_grant_id,cast('^opgrant_[0-9a-f]{32}$' as char charset binary))))");
         c.put("chk_acibo_versions","((expected_consent_version>0) and (grant_version>0) and (assignment_revision>=0))");
         c.put("chk_acibo_time","(created_at>0)");return Map.copyOf(c);}
     static String ddl(){try{String source=new ClassPathResource("db/agent-controlled-image-bridge-v1.sql").getContentAsString(StandardCharsets.UTF_8).trim();String normalized=source.toLowerCase(Locale.ROOT).replaceAll("\\s+"," ");if(!normalized.startsWith("create table if not exists "+TABLE+" ")||normalized.substring(0,normalized.length()-1).contains(";")||normalized.contains(" alter table ")||normalized.contains(" drop ")||normalized.contains(" insert ")||normalized.contains(" update ")||normalized.contains(" delete "))throw new IllegalStateException("Unsafe bridge DDL");return source.endsWith(";")?source.substring(0,source.length()-1):source;}catch(Exception e){throw new IllegalStateException("Invalid bridge DDL",e);}}

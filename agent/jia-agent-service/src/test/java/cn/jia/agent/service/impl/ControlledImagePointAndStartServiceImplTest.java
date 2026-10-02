@@ -55,7 +55,7 @@ class ControlledImagePointAndStartServiceImplTest {
                 .thenReturn(grantView);
         when(authority.lockGrant(scope,"task","grant")).thenReturn(grant);
         when(consents.lockForBridge(any(),eq("task"),eq(issued.getConsentId()))).thenReturn(issued);
-        when(consents.bindWithinLockedRoot(any(),eq("task"),same(issued),eq(1L),same(grant),same(authority)))
+        when(consents.bindV3WithinLockedRoot(any(),eq("task"),same(issued),eq(1L),same(grant),same(authority)))
                 .thenReturn(bound);
         when(grants.view(grant)).thenReturn(grantView);
         ArgumentCaptor<ControlledImageBridgeOperationEntity> persisted=
@@ -71,6 +71,8 @@ class ControlledImagePointAndStartServiceImplTest {
         assertEquals(64,operation.getWrapperDigest().length());
         assertEquals("mmd-ci-v1:"+issued.getConsentId(),operation.getAuthorityLocator());
         assertEquals(1L,operation.getExpectedConsentVersion());
+        assertEquals(3,operation.getExecutionProtocolVersion());
+        assertTrue(operation.getOperationGrantId().matches("opgrant_[0-9a-f]{32}"));
 
         AgentTaskProviderCostConsentEntity consumed=consent("CONSUMED",4L)
                 .setBoundGrantId("grant").setBoundGrantVersion(1L).setBoundAssignmentRevision(7L);
@@ -132,7 +134,7 @@ class ControlledImagePointAndStartServiceImplTest {
                 .thenReturn(grantView());
         when(authority.lockGrant(scope,"task","grant")).thenReturn(grant);
         when(consents.lockForBridge(any(),eq("task"),eq(issued.getConsentId()))).thenReturn(issued);
-        when(consents.bindWithinLockedRoot(any(),eq("task"),same(issued),eq(1L),same(grant),same(authority)))
+        when(consents.bindV3WithinLockedRoot(any(),eq("task"),same(issued),eq(1L),same(grant),same(authority)))
                 .thenReturn(consentView("BOUND","2"));
         doThrow(new org.springframework.dao.DuplicateKeyException("same consent already mapped"))
                 .when(operations).insert(any());
@@ -142,7 +144,7 @@ class ControlledImagePointAndStartServiceImplTest {
 
         assertEquals(ControlledImagePointAndStartService.Reason.CONFLICT,failure.reason());
         verify(operations).insert(any());
-        verify(consents).bindWithinLockedRoot(any(),eq("task"),same(issued),eq(1L),same(grant),same(authority));
+        verify(consents).bindV3WithinLockedRoot(any(),eq("task"),same(issued),eq(1L),same(grant),same(authority));
     }
 
     @Test void readbackRejectsRegressedOrUnrelatedAuthorityWithoutWriting() {

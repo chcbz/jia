@@ -41,10 +41,12 @@ class PersonalWorkspaceControlledImageV3ExecutionTest {
   int catalog=source.indexOf("boolean executionProtocolColumn=command.controlledImage()",conversation);
   int root=source.indexOf("executeWithLockedTaskRootInOwnerScope",catalog);
   int row=source.indexOf("PersonalWorkspaceExecutionEntity row=new PersonalWorkspaceExecutionEntity()",root);
-  int guardedV2=source.indexOf("if(executionProtocolColumn) row.setExecutionProtocolVersion(2)",row);
-  int insert=source.indexOf("executions.insert(row)",guardedV2);
-  assertTrue(conversation>=0&&catalog>conversation&&root>catalog&&row>root&&guardedV2>row&&insert>guardedV2);
-  assertFalse(source.substring(row,guardedV2).contains("setExecutionProtocolVersion"));
+  int failClosedV3=source.indexOf("if(controlledProtocol==3&&!executionProtocolColumn)",catalog);
+  int guardedProtocol=source.indexOf("if(executionProtocolColumn) row.setExecutionProtocolVersion(controlledProtocol)",row);
+  int insert=source.indexOf("executions.insert(row)",guardedProtocol);
+  assertTrue(conversation>=0&&catalog>conversation&&failClosedV3>catalog&&root>failClosedV3
+    &&row>root&&guardedProtocol>row&&insert>guardedProtocol);
+  assertFalse(source.substring(row,guardedProtocol).contains("setExecutionProtocolVersion"));
  }
 
  @Test void protocolThreeCannotFallbackToLegacyInputsOrPublishResultsBeforeStart() throws Exception {

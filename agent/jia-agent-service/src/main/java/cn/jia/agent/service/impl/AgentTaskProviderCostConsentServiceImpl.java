@@ -289,6 +289,24 @@ public class AgentTaskProviderCostConsentServiceImpl
         return view(row,now);
     }
 
+    AgentTaskProviderCostConsentDTO bindV3WithinLockedRoot(Scope scope,String taskId,
+            AgentTaskProviderCostConsentEntity row,long expectedVersion,
+            AgentTaskExecutionGrantEntity grant,ControlledImageGrantAuthority authority) {
+        if (row==null || grant==null || authority==null || !"ISSUED".equals(row.getState())
+                || !Objects.equals(expectedVersion,row.getVersion())
+                || !Objects.equals(row.getAssignmentBaseHash(),grant.getRequestHash())
+                || !Objects.equals(row.getTargetAgentId(),grant.getTargetAgentId()))
+            throw failure(Reason.CONFLICT);
+        long now=System.currentTimeMillis();
+        authority.requireBindableV3(grantScope(scope),grant,row);
+        row.setBoundGrantId(grant.getGrantId()).setBoundGrantVersion(grant.getGrantVersion())
+                .setBoundAssignmentRevision(grant.getAssignmentRevision()).setUpdateTime(now);
+        if (!consents.bind(row,expectedVersion)) throw failure(Reason.CONFLICT);
+        row.setState("BOUND").setVersion(expectedVersion+1);
+        authority.bindLocator(grantScope(scope),grant,row);
+        return view(row,now);
+    }
+
     AgentTaskProviderCostConsentDTO reserveWithinLockedRoot(Scope scope,String taskId,
             AgentTaskProviderCostConsentEntity row,long expectedVersion,String executionId,String runId) {
         if (row==null || !"BOUND".equals(row.getState()) || !Objects.equals(expectedVersion,row.getVersion()))

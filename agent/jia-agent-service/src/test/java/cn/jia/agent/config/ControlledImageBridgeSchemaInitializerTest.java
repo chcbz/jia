@@ -18,8 +18,9 @@ class ControlledImageBridgeSchemaInitializerTest {
         assertTrue(normalized.startsWith("create table if not exists agent_controlled_image_bridge_operation "));
         assertFalse(normalized.contains(";"));
         for(String required:List.of("engine=innodb","utf8mb4_0900_bin","uk_acibo_scope_key",
-                "uk_acibo_scope_consent","uk_acibo_scope_grant","chk_acibo_locator",
-                "authority_locator=concat('mmd-ci-v1:',consent_id)")) assertTrue(normalized.contains(required),required);
+                "uk_acibo_scope_consent","uk_acibo_scope_grant","uk_acibo_scope_operation_grant",
+                "chk_acibo_locator","chk_acibo_protocol","execution_protocol_version int not null default 2",
+                "operation_grant_id varchar(100)","authority_locator=concat('mmd-ci-v1:',consent_id)")) assertTrue(normalized.contains(required),required);
         for(String forbidden:List.of(" alter table "," drop "," insert "," update "," delete "))
             assertFalse((" "+normalized+" ").contains(forbidden),forbidden);
     }
@@ -44,7 +45,7 @@ class ControlledImageBridgeSchemaInitializerTest {
 
     @Test void bridgeExactChecksRejectSameNamedWeakOrUnenforcedDefinitions() {
         Set<String> names=Set.of("chk_acibo_scope","chk_acibo_hash","chk_acibo_consent",
-                "chk_acibo_locator","chk_acibo_versions","chk_acibo_time");
+                "chk_acibo_locator","chk_acibo_protocol","chk_acibo_versions","chk_acibo_time");
         assertEquals(names,ControlledImageBridgeSchemaInitializer.checkExpressions().keySet());
         List<Map<String,Object>> pristine=bridgeCatalogChecks();
         assertDoesNotThrow(()->ControlledImageBridgeSchemaInitializer.validateChecks(pristine));
@@ -119,6 +120,8 @@ class ControlledImageBridgeSchemaInitializerTest {
         column(rows,"grant_version","bigint","NO",null);
         column(rows,"assignment_revision","bigint","NO",null);
         column(rows,"authority_locator","varchar(100)","NO","utf8mb4_0900_bin");
+        column(rows,"execution_protocol_version","int","NO",null);
+        column(rows,"operation_grant_id","varchar(100)","YES","utf8mb4_0900_bin");
         column(rows,"created_at","bigint","NO",null);
         column(rows,"tenant_id","varchar(50)","NO","utf8mb4_0900_bin");
         column(rows,"client_id","varchar(50)","NO","utf8mb4_0900_bin");
@@ -137,6 +140,7 @@ class ControlledImageBridgeSchemaInitializerTest {
                 "chk_acibo_hash","regexp_like(`wrapper_digest`,cast(_utf8mb4'^[0-9a-f]{64}$' as char charset binary))",
                 "chk_acibo_consent","regexp_like(`consent_id`,cast(_utf8mb4'^consent_[0-9a-f]{32}$' as char charset binary))",
                 "chk_acibo_locator","(`authority_locator` = concat(_utf8mb4'mmd-ci-v1:',`consent_id`))",
+                "chk_acibo_protocol","(((`execution_protocol_version` = 2) and (`operation_grant_id` is null)) or ((`execution_protocol_version` = 3) and regexp_like(`operation_grant_id`,cast(_utf8mb4'^opgrant_[0-9a-f]{32}$' as char charset binary))))",
                 "chk_acibo_versions","((`expected_consent_version` > 0) and (`grant_version` > 0) and (`assignment_revision` >= 0))",
                 "chk_acibo_time","(`created_at` > 0)");
         List<Map<String,Object>> rows=new ArrayList<>();

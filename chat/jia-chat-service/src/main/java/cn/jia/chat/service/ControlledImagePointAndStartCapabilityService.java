@@ -2,7 +2,7 @@ package cn.jia.chat.service;
 
 import cn.jia.agent.service.AgentTaskExecutionGrantService;
 import cn.jia.agent.service.AgentTaskPointAndStartPolicyService;
-import cn.jia.agent.service.ControlledImageExecutionSessionLookup;
+import cn.jia.agent.service.ControlledImageFollowupAuthorityService;
 import cn.jia.agent.service.ControlledImageProviderAuthorityLookup;
 import cn.jia.agent.service.PersonalWorkspaceStorage;
 import org.springframework.beans.factory.ObjectProvider;
@@ -14,14 +14,15 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
-/** Side-effect-free controlled-image v2 capability; consent remains explicitly required. */
+/** Side-effect-free controlled-image v3 capability; consent remains explicitly required. */
 @Service
 public final class ControlledImagePointAndStartCapabilityService {
     private static final String LANE="ORDINARY_SINGLE_AGENT_CONTROLLED_IMAGE_ASSIGN_AND_START";
-    private static final String TRANSPORT="PERSONAL_WORKSPACE_CONTROLLED_IMAGE_HTTP_V2";
+    private static final String TRANSPORT="PERSONAL_WORKSPACE_CONTROLLED_IMAGE_HTTP_V3";
     private static final List<String> OPERATIONS=List.of("GENERATE_IMAGE");
-    private final ControlledImageExecutionSessionLookup sessions;
+    private final ObjectProvider<ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup> declarations;
     private final ControlledImageProviderAuthorityLookup operatorAuthority;
     private final AgentTaskPointAndStartPolicyService taskPolicy;
     private final PersonalWorkspaceStorage storage;
@@ -30,7 +31,8 @@ public final class ControlledImagePointAndStartCapabilityService {
     private final Flags flags;
 
     @Autowired
-    public ControlledImagePointAndStartCapabilityService(ControlledImageExecutionSessionLookup sessions,
+    public ControlledImagePointAndStartCapabilityService(
+            ObjectProvider<ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup> declarations,
             ControlledImageProviderAuthorityLookup operatorAuthority,
             AgentTaskPointAndStartPolicyService taskPolicy,PersonalWorkspaceStorage storage,
             ObjectProvider<ChatBountyBootstrapRelay> bootstrapRelay,
@@ -45,18 +47,19 @@ public final class ControlledImagePointAndStartCapabilityService {
             @Value("${agent.task-deliberation-operation.read-enabled:false}") boolean operationReadEnabled,
             @Value("${agent.task-requirement-snapshot.read-enabled:false}") boolean requirementReadEnabled,
             @Value("${agent.task-reference-inputs.enabled:false}") boolean referenceInputsEnabled) {
-        this(sessions,operatorAuthority,taskPolicy,storage,bootstrapRelay,executionRelay,
+        this(declarations,operatorAuthority,taskPolicy,storage,bootstrapRelay,executionRelay,
                 new Flags(bridgeEnabled,providerEnabled,storageEnabled,conversationEnabled,
                         websocketEnabled,bootstrapEnabled,executionEnabled,operationReadEnabled,
                         requirementReadEnabled,referenceInputsEnabled));
     }
 
-    ControlledImagePointAndStartCapabilityService(ControlledImageExecutionSessionLookup sessions,
+    ControlledImagePointAndStartCapabilityService(
+            ObjectProvider<ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup> declarations,
             ControlledImageProviderAuthorityLookup operatorAuthority,
             AgentTaskPointAndStartPolicyService taskPolicy,PersonalWorkspaceStorage storage,
             ObjectProvider<ChatBountyBootstrapRelay> bootstrapRelay,
             ObjectProvider<ChatBountyExecutionRelay> executionRelay,Flags flags) {
-        this.sessions=Objects.requireNonNull(sessions);this.operatorAuthority=Objects.requireNonNull(operatorAuthority);
+        this.declarations=Objects.requireNonNull(declarations);this.operatorAuthority=Objects.requireNonNull(operatorAuthority);
         this.taskPolicy=Objects.requireNonNull(taskPolicy);this.storage=Objects.requireNonNull(storage);
         this.bootstrapRelay=Objects.requireNonNull(bootstrapRelay);this.executionRelay=Objects.requireNonNull(executionRelay);
         this.flags=Objects.requireNonNull(flags);
@@ -66,12 +69,13 @@ public final class ControlledImagePointAndStartCapabilityService {
         var policy=taskPolicy.read(scope,taskId,targetAgentId);
         requirePolicy(policy,taskId,targetAgentId);
         ServerLane lane=serverLane();
-        ControlledImageExecutionSessionLookup.Snapshot session=sessions.current(
-                new ControlledImageExecutionSessionLookup.Scope(scope.tenantId(),scope.clientId(),
-                        scope.ownerJiacn(),targetAgentId));
+        var lookup=declarations.getIfUnique();
+        var session=lookup==null?null:lookup.current(
+                new ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.DeclarationScope(
+                        scope.tenantId(),scope.clientId(),scope.ownerJiacn(),targetAgentId));
         requireSession(session);
         ControlledImageProviderAuthorityLookup.Snapshot operator=null;
-        if(session.state()==ControlledImageExecutionSessionLookup.State.READY) {
+        if(session.state()==ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State.READY) {
             operator=operatorAuthority.current(new ControlledImageProviderAuthorityLookup.Scope(
                     scope.tenantId(),scope.clientId(),scope.ownerJiacn()),targetAgentId,
                     session.bindingId(),Objects.requireNonNull(session.bindingEpoch()));
@@ -79,21 +83,21 @@ public final class ControlledImagePointAndStartCapabilityService {
         }
         LinkedHashSet<String> blockers=new LinkedHashSet<>(lane.blockingReasons());
         if(!policy.eligible())blockers.add(policy.blockingReason());
-        if(session.state()!=ControlledImageExecutionSessionLookup.State.READY)
+        if(session.state()!=ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State.READY)
             blockers.add("CONTROLLED_EXECUTION_"+session.state().name());
         if(operator==null||operator.state()!=ControlledImageProviderAuthorityLookup.State.READY)
             blockers.add("OPERATOR_POLICY_UNAVAILABLE");
         boolean ready="READY".equals(lane.state())&&policy.eligible()
-                &&session.state()==ControlledImageExecutionSessionLookup.State.READY
+                &&session.state()==ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State.READY
                 &&operator!=null&&operator.state()==ControlledImageProviderAuthorityLookup.State.READY;
         if(ready)blockers.add("OWNER_EXACT_CONSENT_REQUIRED");
         List<String> requested=ready?OPERATIONS:List.of();
-        return new Capability(2,taskId,targetAgentId,LANE,lane,
-                ready?new ControlledExecution("READY",TRANSPORT,1,OPERATIONS)
+        return new Capability(3,taskId,targetAgentId,LANE,lane,
+                ready?new ControlledExecution("READY",TRANSPORT,3,OPERATIONS)
                         :new ControlledExecution("UNAVAILABLE",null,null,List.of()),
                 ready?new ProviderBinding(session.providerLane(),session.bindingId(),
                         Long.toString(session.bindingEpoch()),session.modelId(),16,1,1):null,
-                new Authorization(ready?"CONSENT_REQUIRED":"UNAVAILABLE",false),
+                new ExecutionAuthorization(ready?"CONSENT_REQUIRED":"UNAVAILABLE",false),
                 new NewStart(false,List.copyOf(blockers)),requested,
                 requested.size()==1?requested.getFirst():null,"TASK_LINKED_REFERENCE",16,
                 new OriginalIntentRecovery(false,"RECOVERY_REQUIRED",
@@ -123,22 +127,24 @@ public final class ControlledImagePointAndStartCapabilityService {
                 :new ServerLane("NOT_RUNNING",List.copyOf(notRunning));
     }
 
-    private static void requireSession(ControlledImageExecutionSessionLookup.Snapshot value) {
+    private static void requireSession(
+            ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.Declaration value) {
         if(value==null||value.state()==null)throw new SourceUnavailable();
-        boolean ready=value.state()==ControlledImageExecutionSessionLookup.State.READY;
-        if(ready&&(!Objects.equals(value.schemaVersion(),1)||!TRANSPORT.equals(value.transport())
-                ||!OPERATIONS.equals(value.supportedOperations())
+        boolean ready=value.state()==ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State.READY;
+        if(ready&&(value.runtimeInstanceId()==null
+                ||value.operations()==null||!Set.copyOf(value.operations()).equals(Set.of("GENERATE_IMAGE","EDIT_IMAGE"))
                 ||!"CONTROLLED_IMAGE_HTTP_V1".equals(value.providerLane())
                 ||value.bindingId()==null||value.bindingEpoch()==null||value.bindingEpoch()<1
                 ||value.modelId()==null||!Objects.equals(value.maxInputItems(),16)
                 ||!Objects.equals(value.maxOutboundRequestAttempts(),1)
                 ||!Objects.equals(value.precallFenceVersion(),1))
-                ||!ready&&(value.schemaVersion()!=null||value.transport()!=null
-                    ||value.supportedOperations()==null||!value.supportedOperations().isEmpty()))
+                ||!ready&&(value.runtimeInstanceId()!=null||value.providerLane()!=null
+                    ||value.bindingId()!=null||value.bindingEpoch()!=null||value.modelId()!=null
+                    ||value.operations()==null||!value.operations().isEmpty()))
             throw new SourceUnavailable();
     }
     private static void requireOperator(ControlledImageProviderAuthorityLookup.Snapshot value,
-            ControlledImageExecutionSessionLookup.Snapshot session) {
+            ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.Declaration session) {
         if(value==null||value.state()==null)throw new SourceUnavailable();
         if(value.state()==ControlledImageProviderAuthorityLookup.State.READY
                 &&(!Objects.equals(value.providerLane(),session.providerLane())
@@ -158,7 +164,7 @@ public final class ControlledImagePointAndStartCapabilityService {
 
     public record Capability(int schemaVersion,String taskId,String targetAgentId,String lane,
             ServerLane serverLane,ControlledExecution controlledExecution,ProviderBinding providerBinding,
-            Authorization authorization,NewStart newStart,List<String> requestedOperations,
+            ExecutionAuthorization executionAuthorization,NewStart newStart,List<String> requestedOperations,
             String initialOperation,String inputRefsPolicy,int maxInputItems,
             OriginalIntentRecovery originalIntentRecovery) {
         public Capability { requestedOperations=List.copyOf(requestedOperations); }
@@ -172,7 +178,7 @@ public final class ControlledImagePointAndStartCapabilityService {
     }
     public record ProviderBinding(String providerLane,String bindingId,String bindingEpoch,
             String modelId,int maxInputItems,int maxOutboundRequestAttempts,int precallFenceVersion) { }
-    public record Authorization(String state,boolean paidExecutionAuthorized) { }
+    public record ExecutionAuthorization(String state,boolean paidExecutionAuthorized) { }
     public record NewStart(boolean eligible,List<String> blockingReasons) {
         public NewStart { blockingReasons=List.copyOf(blockingReasons); }
     }

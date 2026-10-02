@@ -9,6 +9,8 @@ import cn.jia.agent.service.AgentTaskExecutionGrantException;
 import cn.jia.agent.service.AgentTaskExecutionGrantService;
 import cn.jia.agent.service.AgentTaskProviderCostConsentService;
 import cn.jia.agent.service.ControlledImageExecutionSessionLookup;
+import cn.jia.agent.service.ControlledImageFollowupAuthorityService;
+import jakarta.inject.Inject;
 import jakarta.inject.Named;
 import org.springframework.beans.factory.ObjectProvider;
 
@@ -25,13 +27,25 @@ public final class ControlledImageGrantAuthority {
     private final AgentTaskProviderCostConsentDao consents;
     private final ControlledImageProviderOperatorPolicy policies;
     private final ObjectProvider<ControlledImageExecutionSessionLookup> sessions;
+    private final ObjectProvider<ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup> v3Declarations;
 
+    @Inject
+    public ControlledImageGrantAuthority(AgentTaskExecutionGrantDao grants,
+            AgentTaskProviderCostConsentDao consents,
+            ControlledImageProviderOperatorPolicy policies,
+            ObjectProvider<ControlledImageExecutionSessionLookup> sessions,
+            ObjectProvider<ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup> v3Declarations) {
+        this.grants=Objects.requireNonNull(grants);this.consents=Objects.requireNonNull(consents);
+        this.policies=Objects.requireNonNull(policies);this.sessions=Objects.requireNonNull(sessions);
+        this.v3Declarations=Objects.requireNonNull(v3Declarations);
+    }
+
+    /** Source-compatible test constructor for the legacy-v2 authority lane. */
     public ControlledImageGrantAuthority(AgentTaskExecutionGrantDao grants,
             AgentTaskProviderCostConsentDao consents,
             ControlledImageProviderOperatorPolicy policies,
             ObjectProvider<ControlledImageExecutionSessionLookup> sessions) {
-        this.grants=Objects.requireNonNull(grants);this.consents=Objects.requireNonNull(consents);
-        this.policies=Objects.requireNonNull(policies);this.sessions=Objects.requireNonNull(sessions);
+        this(grants,consents,policies,sessions,emptyProvider());
     }
 
     AgentTaskExecutionGrantEntity lockGrant(AgentTaskExecutionGrantService.Scope scope,String taskId,
@@ -77,9 +91,59 @@ public final class ControlledImageGrantAuthority {
     }
 
 
+    V3Authority verifyV3(AgentTaskExecutionGrantService.Scope scope, AgentTaskMetaEntity root,
+            AgentTaskExecutionGrantEntity grant, String purpose, String executionId, String runId,
+            String expectedRuntimeInstanceId) {
+        Authority persisted=verifyPersisted(scope,root,grant,purpose,executionId,runId);
+        if ("EXISTING_RUN".equals(purpose)) return new V3Authority(persisted.consent(),null);
+        return new V3Authority(persisted.consent(),requireCurrentV3(scope,grant,persisted.consent(),
+                expectedRuntimeInstanceId));
+    }
+
+    private Authority verifyPersisted(AgentTaskExecutionGrantService.Scope scope,AgentTaskMetaEntity root,
+            AgentTaskExecutionGrantEntity grant,String purpose,String executionId,String runId) {
+        if (scope==null || root==null || grant==null || !"ACTIVE".equals(grant.getState())
+                || !Objects.equals(root.getTaskId(),grant.getTaskId())
+                || !Objects.equals(root.getAssignedAgentId(),grant.getTargetAgentId())
+                || grant.getCostAuthorizationRef()==null
+                || !grant.getCostAuthorizationRef().matches("mmd-ci-v1:consent_[0-9a-f]{32}"))
+            throw denied(Reason.PAID_EXECUTION_NOT_AUTHORIZED);
+        String consentId=grant.getCostAuthorizationRef().substring(LOCATOR_PREFIX.length());
+        var consent=consents.findByConsentForUpdate(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                grant.getTaskId(),consentId);
+        if(consent==null||!sameTuple(grant,consent)
+                ||consent.getConsentPurpose()!=null&&!"INITIAL_ASSIGN_AND_START".equals(consent.getConsentPurpose())
+                ||consent.getOperationGrantId()!=null)throw denied(Reason.PAID_EXECUTION_NOT_AUTHORIZED);
+        String required=switch(purpose){case "NEW_EXECUTION"->"BOUND";case "PROVIDER_START"->"RESERVED";
+            case "EXISTING_RUN"->"CONSUMED";default->throw denied(Reason.BAD_REQUEST);};
+        if(!required.equals(consent.getState())
+                || "NEW_EXECUTION".equals(purpose)
+                    && (consent.getReservedExecutionId()!=null || consent.getReservedRunId()!=null)
+                || !"NEW_EXECUTION".equals(purpose)
+                    && (!Objects.equals(executionId,consent.getReservedExecutionId())
+                        || !Objects.equals(runId,consent.getReservedRunId())))
+            throw denied(Reason.PAID_EXECUTION_NOT_AUTHORIZED);
+        return new Authority(consent,null);
+    }
+
+    void requireBindableV3(AgentTaskExecutionGrantService.Scope scope,AgentTaskExecutionGrantEntity grant,
+            AgentTaskProviderCostConsentEntity consent) {
+        requireBindableTuple(scope,grant,consent);
+        requireCurrentV3(scope,grant,consent,null);
+    }
+
+
     void requireBindable(AgentTaskExecutionGrantService.Scope scope,AgentTaskExecutionGrantEntity grant,
             AgentTaskProviderCostConsentEntity consent) {
+        requireBindableTuple(scope,grant,consent);
+        requireCurrentSession(scope,grant,consent,null);
+    }
+
+    private static void requireBindableTuple(AgentTaskExecutionGrantService.Scope scope,
+            AgentTaskExecutionGrantEntity grant,AgentTaskProviderCostConsentEntity consent) {
         if(scope==null||grant==null||consent==null||!"ISSUED".equals(consent.getState())
+                ||consent.getConsentPurpose()!=null&&!"INITIAL_ASSIGN_AND_START".equals(consent.getConsentPurpose())
+                ||consent.getOperationGrantId()!=null
                 ||!Objects.equals(grant.getTenantId(),consent.getTenantId())
                 ||!Objects.equals(grant.getClientId(),consent.getClientId())
                 ||!Objects.equals(grant.getOwnerJiacn(),consent.getOwnerJiacn())
@@ -91,7 +155,6 @@ public final class ControlledImageGrantAuthority {
                         "ASSIGN_AND_START:"+consent.getAssignmentIdempotencyKey())
                 ||!Objects.equals(grant.getRequestHash(),consent.getAssignmentBaseHash()))
             throw denied(Reason.PAID_EXECUTION_NOT_AUTHORIZED);
-        requireCurrentSession(scope,grant,consent,null);
     }
 
     private ControlledImageExecutionSessionLookup.Snapshot requireCurrentSession(
@@ -131,6 +194,47 @@ public final class ControlledImageGrantAuthority {
                 || expectedRuntimeInstanceId!=null && !current.matchesRuntime(expectedRuntimeInstanceId))
             throw denied(Reason.PAID_EXECUTION_NOT_AUTHORIZED);
         return current;
+    }
+
+
+    private ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.Declaration requireCurrentV3(
+            AgentTaskExecutionGrantService.Scope scope,AgentTaskExecutionGrantEntity grant,
+            AgentTaskProviderCostConsentEntity consent,String expectedRuntimeInstanceId) {
+        var consentScope=new AgentTaskProviderCostConsentService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());
+        final ControlledImageProviderOperatorPolicy.Policy policy;
+        try { policy=policies.requireCurrent(consentScope,grant.getTargetAgentId(),consent.getBindingId(),
+                consent.getBindingEpoch(),System.currentTimeMillis()); }
+        catch(ControlledImageProviderOperatorPolicy.PolicyFailure unavailable){throw denied(Reason.PAID_EXECUTION_NOT_AUTHORIZED);}
+        if(policy==null||!Objects.equals(policy.providerLane(),consent.getProviderLane())
+                ||!Objects.equals(policy.modelId(),consent.getModelId())||!Objects.equals(policy.custody(),consent.getCustody())
+                ||!Objects.equals(policy.issuer(),consent.getOperatorIssuer())
+                ||!Objects.equals(policy.policyRevision(),consent.getOperatorPolicyRevision())
+                ||!Objects.equals(policy.pricingMode(),consent.getPricingMode())
+                ||policy.maxOutboundRequestAttempts()!=consent.getMaxOutboundRequestAttempts()
+                ||policy.expiresAt()!=consent.getExpiresAt())throw denied(Reason.PAID_EXECUTION_NOT_AUTHORIZED);
+        var lookup=v3Declarations.getIfUnique();if(lookup==null)throw denied(Reason.PAID_EXECUTION_NOT_AUTHORIZED);
+        var current=lookup.current(new ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.DeclarationScope(
+                scope.tenantId(),scope.clientId(),scope.ownerJiacn(),grant.getTargetAgentId()));
+        if(current==null||current.state()!=ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State.READY
+                ||current.runtimeInstanceId()==null||current.operations()==null
+                ||!Set.copyOf(current.operations()).equals(Set.of("GENERATE_IMAGE","EDIT_IMAGE"))
+                ||!current.operations().contains("GENERATE_IMAGE")
+                ||!Objects.equals(current.providerLane(),consent.getProviderLane())
+                ||!Objects.equals(current.bindingId(),consent.getBindingId())
+                ||!Objects.equals(current.bindingEpoch(),consent.getBindingEpoch())
+                ||!Objects.equals(current.modelId(),consent.getModelId())
+                ||!Objects.equals(current.maxInputItems(),16)
+                ||!Objects.equals(current.maxOutboundRequestAttempts(),1)
+                ||!Objects.equals(current.precallFenceVersion(),1)
+                ||expectedRuntimeInstanceId!=null&&!Objects.equals(expectedRuntimeInstanceId,current.runtimeInstanceId()))
+            throw denied(Reason.PAID_EXECUTION_NOT_AUTHORIZED);
+        return current;
+    }
+
+    private static ObjectProvider<ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup>
+            emptyProvider() {
+        return new org.springframework.beans.factory.support.StaticListableBeanFactory().getBeanProvider(
+                ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.class);
     }
 
     boolean isPersistedAuthorized(AgentTaskExecutionGrantEntity grant) {
@@ -178,4 +282,6 @@ public final class ControlledImageGrantAuthority {
     }
     record Authority(AgentTaskProviderCostConsentEntity consent,
             ControlledImageExecutionSessionLookup.Snapshot session) { }
+    record V3Authority(AgentTaskProviderCostConsentEntity consent,
+            ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.Declaration declaration) { }
 }

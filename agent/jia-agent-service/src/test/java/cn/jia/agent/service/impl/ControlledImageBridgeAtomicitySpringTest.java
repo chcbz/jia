@@ -55,7 +55,7 @@ class ControlledImageBridgeAtomicitySpringTest {
                 });
         when(authority.lockGrant(scope,"task","grant")).thenReturn(grant);
         when(consents.lockForBridge(any(),eq("task"),eq(issued.getConsentId()))).thenReturn(issued);
-        when(consents.bindWithinLockedRoot(any(),eq("task"),same(issued),eq(1L),same(grant),same(authority)))
+        when(consents.bindV3WithinLockedRoot(any(),eq("task"),same(issued),eq(1L),same(grant),same(authority)))
                 .thenAnswer(invocation -> {
                     assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
                     jdbc.update("INSERT INTO bridge_atomic_evidence(label) VALUES ('bound')");

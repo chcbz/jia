@@ -87,19 +87,30 @@ public interface PersonalWorkspaceExecutionService {
     record ConversationCreate(String conversationId, String taskId, String targetAgentId,
             String intentId, String grantId, long grantVersion, long assignmentRevision,
             String permittedOperation, String instruction, String outputContentMimeType,
-            List<ReferenceSelection> references, boolean controlledImage) {
+            List<ReferenceSelection> references, boolean controlledImage,
+            int controlledImageProtocolVersion) {
         public ConversationCreate { references = List.copyOf(references); }
+        /** Legacy constructor preserves protocol-v2 behavior byte-for-byte. */
+        public ConversationCreate(String conversationId,String taskId,String targetAgentId,String intentId,
+                String grantId,long grantVersion,long assignmentRevision,String permittedOperation,
+                String instruction,String outputContentMimeType,List<ReferenceSelection> references,
+                boolean controlledImage) {
+            this(conversationId,taskId,targetAgentId,intentId,grantId,grantVersion,assignmentRevision,
+                    permittedOperation,instruction,outputContentMimeType,references,controlledImage,
+                    controlledImage?2:1);
+        }
         public ConversationCreate(String conversationId,String taskId,String targetAgentId,String intentId,
                 String grantId,long grantVersion,long assignmentRevision,String permittedOperation,
                 String instruction,String outputContentMimeType,List<ReferenceSelection> references) {
             this(conversationId,taskId,targetAgentId,intentId,grantId,grantVersion,assignmentRevision,
-                    permittedOperation,instruction,outputContentMimeType,references,false);
+                    permittedOperation,instruction,outputContentMimeType,references,false,1);
         }
         public ConversationCreate(String conversationId, String taskId, String targetAgentId,
                 String intentId, String grantId, long grantVersion, long assignmentRevision,
                 String permittedOperation, String instruction, String outputContentMimeType) {
             this(conversationId, taskId, targetAgentId, intentId, grantId, grantVersion,
-                    assignmentRevision, permittedOperation, instruction, outputContentMimeType, List.of(),false);
+                    assignmentRevision, permittedOperation, instruction, outputContentMimeType,
+                    List.of(),false,1);
         }
     }
     record ConversationOutput(String executionId, String outputId, String originalFilename,

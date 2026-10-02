@@ -6,6 +6,7 @@ import cn.jia.agent.dao.AgentTaskWorkItemDao;
 import cn.jia.agent.dao.PersonalWorkspaceDao;
 import cn.jia.agent.dao.PersonalWorkspaceExecutionDao;
 import cn.jia.agent.dao.ControlledImageExecutionSourceV3Dao;
+import cn.jia.agent.dao.ControlledImageBridgeOperationDao;
 import cn.jia.agent.dao.PersonalWorkspaceTaskLinkDao;
 import cn.jia.agent.entity.AgentRuntimeEntity;
 import cn.jia.agent.entity.AgentTaskArtifactPublishDTO;
@@ -121,9 +122,14 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     private AgentTaskProviderCostConsentServiceImpl controlledConsents;
     private ControlledImageFollowupAuthorityService followupAuthority;
     private ControlledImageExecutionSourceV3Dao followupSources;
+    private ControlledImageBridgeOperationDao initialControlledOperations;
     @Autowired(required=false)
     public void setControlledImageFollowupV3(ControlledImageFollowupAuthorityService authority,
             ControlledImageExecutionSourceV3Dao sources) { this.followupAuthority=authority;this.followupSources=sources; }
+    @Autowired(required=false)
+    public void setInitialControlledImageV3(ControlledImageBridgeOperationDao operations) {
+        this.initialControlledOperations=operations;
+    }
 
     @Autowired(required = false)
     public void setControlledConsentLifecycle(AgentTaskProviderCostConsentServiceImpl consents) {
@@ -286,8 +292,11 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         id(command.intentId(), "intentId", 90);
         id(command.grantId(), "grantId", 100);
         id(command.permittedOperation(), "permittedOperation", 40);
+        int controlledProtocol=command.controlledImage()?command.controlledImageProtocolVersion():1;
         if (command.grantVersion() < 1 || command.assignmentRevision() < 0
-                || !"GENERATE_IMAGE".equals(command.permittedOperation()))
+                || !"GENERATE_IMAGE".equals(command.permittedOperation())
+                || command.controlledImage()&&!Set.of(2,3).contains(controlledProtocol)
+                || !command.controlledImage()&&controlledProtocol!=1)
             throw failure(Reason.BAD_REQUEST);
         ValidCreate valid=validCreate(new CreateCommand(command.conversationId(), command.targetAgentId(),
                 command.taskId(), command.instruction(), command.outputContentMimeType(), List.of()));
@@ -295,11 +304,15 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 || command.controlledImage() && !"image/png".equals(valid.outputContentMimeType()))
             throw failure(Reason.CAPABILITY_UNAVAILABLE);
         if (command.references().size()>(command.controlledImage()?16:32)) throw failure(Reason.BAD_REQUEST);
+        if(controlledProtocol==3&&(followupSources==null||initialControlledOperations==null))
+            throw failure(Reason.CAPABILITY_UNAVAILABLE);
         for (var ref:command.references()) {
             id(ref.fileId(),"fileId",100);
-            if (ref.version()<1 || !Set.of("INPUT","REFERENCE").contains(ref.purpose())
+            if (ref.version()<1
+                    || controlledProtocol==3 && !"REFERENCE".equals(ref.purpose())
+                    || controlledProtocol!=3 && !Set.of("INPUT","REFERENCE").contains(ref.purpose())
                     || !Set.of("image/png","image/jpeg").contains(ref.contentMimeType())
-                    || ref.byteLength()<0 || ref.contentHash()==null
+                    || ref.byteLength()<(controlledProtocol==3?1:0) || ref.contentHash()==null
                     || !ref.contentHash().matches("[0-9a-f]{64}")) throw failure(Reason.BAD_REQUEST);
         }
         String key="conv_"+plainSha(command.intentId());
@@ -307,12 +320,15 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 valid.targetAgentId(),command.intentId(),command.grantId(),
                 Long.toString(command.grantVersion()),Long.toString(command.assignmentRevision()),
                 command.permittedOperation(),valid.instruction(),valid.outputContentMimeType(),
-                command.controlledImage()?"CONTROLLED_IMAGE_HTTP_V2":"NATIVE_CONVERSATION_HTTP_V1",
+                command.controlledImage()?(controlledProtocol==3?"CONTROLLED_IMAGE_HTTP_V3":"CONTROLLED_IMAGE_HTTP_V2")
+                        :"NATIVE_CONVERSATION_HTTP_V1",
                 referenceWire(command.references()));
         // Resolve additive catalog shape before taking the task root. This query is server-owned
         // metadata only; it performs no migration and never executes while Agent/Chat rows are locked.
         boolean executionProtocolColumn=command.controlledImage()
                 && executions.hasExecutionProtocolVersionColumn();
+        if(controlledProtocol==3&&!executionProtocolColumn)
+            throw failure(Reason.CAPABILITY_UNAVAILABLE);
         return taskMutations.executeWithLockedTaskRootInOwnerScope(scope.tenantId(), scope.clientId(),
                 scope.ownerJiacn(),valid.taskId(),root -> {
                     requireConversationRoot(root,scope,valid.taskId(),valid.targetAgentId(),command.assignmentRevision());
@@ -340,16 +356,34 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                             throw failure(Reason.NOT_FOUND);
                     } catch (RuntimeException denied) { throw failure(Reason.NOT_FOUND); }
                     AgentTaskExecutionGrantService.Admission controlledAdmission=null;
+                    cn.jia.agent.entity.ControlledImageBridgeOperationEntity initialV3Authority=null;
                     if (command.controlledImage()) {
                         if (controlledConsents==null) throw failure(Reason.CAPABILITY_UNAVAILABLE);
-                        controlledAdmission=conversationGrants.admitControlled(new AgentTaskExecutionGrantService.Scope(
-                                scope.tenantId(),scope.clientId(),scope.ownerJiacn()),valid.taskId(),command.grantId(),
-                                command.grantVersion(),command.assignmentRevision(),valid.targetAgentId(),
-                                command.permittedOperation(),"NEW_EXECUTION",null,null,null);
+                        var grantScope=new AgentTaskExecutionGrantService.Scope(
+                                scope.tenantId(),scope.clientId(),scope.ownerJiacn());
+                        controlledAdmission=controlledProtocol==3
+                                ?conversationGrants.admitControlledV3(grantScope,valid.taskId(),command.grantId(),
+                                    command.grantVersion(),command.assignmentRevision(),valid.targetAgentId(),
+                                    command.permittedOperation(),"NEW_EXECUTION",null,null,null)
+                                :conversationGrants.admitControlled(grantScope,valid.taskId(),command.grantId(),
+                                    command.grantVersion(),command.assignmentRevision(),valid.targetAgentId(),
+                                    command.permittedOperation(),"NEW_EXECUTION",null,null,null);
                         if (controlledAdmission==null || controlledAdmission.costAuthorizationRef()==null
                                 || !controlledAdmission.costAuthorizationRef().matches("mmd-ci-v1:consent_[0-9a-f]{32}")
                                 || controlledAdmission.costAuthorizationVersion()==null)
                             throw failure(Reason.GRANT_REVOKED);
+                        if(controlledProtocol==3) {
+                            String consentId=controlledAdmission.costAuthorizationRef().substring("mmd-ci-v1:".length());
+                            initialV3Authority=initialControlledOperations.lockByAuthority(scope.tenantId(),scope.clientId(),
+                                    scope.ownerJiacn(),valid.taskId(),consentId,command.grantId());
+                            if(initialV3Authority==null||!Objects.equals(3,initialV3Authority.getExecutionProtocolVersion())
+                                    ||initialV3Authority.getOperationGrantId()==null
+                                    ||!initialV3Authority.getOperationGrantId().matches("opgrant_[0-9a-f]{32}")
+                                    ||!same(command.grantId(),initialV3Authority.getGrantId())
+                                    ||!Objects.equals(command.grantVersion(),initialV3Authority.getGrantVersion())
+                                    ||!Objects.equals(command.assignmentRevision(),initialV3Authority.getAssignmentRevision()))
+                                throw failure(Reason.GRANT_REVOKED);
+                        }
                     }
                     PersonalWorkspaceExecutionEntity row=new PersonalWorkspaceExecutionEntity()
                             .setExecutionId(identifier("pwe_")).setOwnerJiacn(scope.ownerJiacn())
@@ -368,7 +402,11 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                     // The execution_protocol_version column belongs to the additive v3 catalog.
                     // Old/default-off schemas must not see it in generated INSERT SQL; on the full
                     // catalog protocol 1 is the database default, while controlled v2 is explicit.
-                    if(executionProtocolColumn) row.setExecutionProtocolVersion(2);
+                    if(executionProtocolColumn) row.setExecutionProtocolVersion(controlledProtocol);
+                    if(controlledProtocol==3) {
+                        row.setOperationGrantId(initialV3Authority.getOperationGrantId());
+                        row.setRuntimeInputSnapshotDigest(initialV3Digest(row,command.references()));
+                    }
                     scoped(row,scope);
                     var authorized=controlledAdmission==null?requireConversationGrant(scope,row,"NEW_EXECUTION",null)
                             :controlledAdmission;
@@ -399,6 +437,11 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                                 .setGrantState("ACTIVE").setCreatedAt(now).setRevokedAt(null);
                         scoped(input,scope);executions.insertInput(input);
                     }
+                    if(controlledProtocol==3) {
+                        int sourceOrdinal=0;long sourceCreatedAt=row.getCreatedAt();
+                        for(var ref:command.references()) followupSources.insert(
+                                initialV3Source(scope,row,++sourceOrdinal,ref,sourceCreatedAt));
+                    }
                     if (controlledAdmission!=null) {
                         String consentId=row.getControlledConsentId();
                         var consentScope=new cn.jia.agent.service.AgentTaskProviderCostConsentService.Scope(
@@ -410,6 +453,40 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                     return view(scope,row);
                 });
     }
+
+
+    private static ControlledImageExecutionSourceV3Entity initialV3Source(OwnerScope scope,
+            PersonalWorkspaceExecutionEntity execution,int ordinal,ReferenceSelection ref,long now) {
+        Map<String,Object> descriptor=new LinkedHashMap<>();descriptor.put("fileId",ref.fileId());
+        descriptor.put("kind","TASK_LINKED_WORKSPACE_VERSION");descriptor.put("purpose","REFERENCE");
+        descriptor.put("version",Integer.toString(ref.version()));
+        var row=new ControlledImageExecutionSourceV3Entity().setOwnerJiacn(scope.ownerJiacn())
+                .setExecutionId(execution.getExecutionId()).setInputRef("input_"+ordinal)
+                .setInputOrdinal(ordinal).setSourceKind("TASK_LINKED_WORKSPACE_VERSION")
+                .setContentMimeType(ref.contentMimeType()).setByteLength(ref.byteLength())
+                .setContentSha256(ref.contentHash()).setSourceJson(v3Json(descriptor))
+                .setFileId(ref.fileId()).setFileVersion(ref.version()).setPurpose("REFERENCE")
+                .setCreatedAt(now);
+        row.setTenantId(scope.tenantId());row.setClientId(scope.clientId());return row;
+    }
+    private static String initialV3Digest(PersonalWorkspaceExecutionEntity execution,
+            List<ReferenceSelection> references) {
+        List<Map<String,Object>> inputs=new ArrayList<>();int ordinal=0;
+        for(var ref:references) {
+            Map<String,Object> descriptor=new LinkedHashMap<>();descriptor.put("fileId",ref.fileId());
+            descriptor.put("kind","TASK_LINKED_WORKSPACE_VERSION");descriptor.put("purpose","REFERENCE");
+            descriptor.put("version",Integer.toString(ref.version()));
+            Map<String,Object> input=new LinkedHashMap<>();input.put("byteLength",Long.toString(ref.byteLength()));
+            input.put("contentMimeType",ref.contentMimeType());input.put("inputRef","input_"+(++ordinal));
+            input.put("sha256",ref.contentHash());input.put("source",descriptor);inputs.add(input);
+        }
+        Map<String,Object> domain=new LinkedHashMap<>();domain.put("conversationId",execution.getConversationId());
+        domain.put("executionId",execution.getExecutionId());domain.put("inputs",inputs);
+        domain.put("noReferencedMaterials",inputs.isEmpty());domain.put("operation",execution.getPermittedOperation());
+        domain.put("runId",execution.getRunId());domain.put("schemaVersion",1);domain.put("taskId",execution.getTaskId());
+        return plainSha(v3Json(domain));
+    }
+
 
     @Override
     @Transactional(rollbackFor = Exception.class)

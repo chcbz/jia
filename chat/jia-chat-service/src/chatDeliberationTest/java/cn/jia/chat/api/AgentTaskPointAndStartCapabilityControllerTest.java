@@ -27,10 +27,10 @@ class AgentTaskPointAndStartCapabilityControllerTest {
         assertEquals(HttpStatus.OK,response.getStatusCode());
         assertEquals("private, no-store",response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL));
         var body=response.getBody().getData();
-        assertEquals(1,body.schemaVersion());
+        assertEquals(3,body.schemaVersion());
         assertEquals(List.of("GENERATE_IMAGE"),body.requestedOperations());
         assertEquals("TASK_LINKED_REFERENCE",body.inputRefsPolicy());
-        assertFalse(body.authorization().paidExecutionAuthorized());
+        assertFalse(body.executionAuthorization().paidExecutionAuthorized());
         assertFalse(body.newStart().eligible());
         verify(service).read(argThat(scope->"0".equals(scope.tenantId())&&"client-a".equals(scope.clientId())&&"owner-a".equals(scope.ownerJiacn())),eq("task-a"),eq("agent-a"));
     }
@@ -64,10 +64,10 @@ class AgentTaskPointAndStartCapabilityControllerTest {
         JwtAuthenticationToken value=new JwtAuthenticationToken(token);value.setAuthenticated(true);return value;
     }
     private static PointAndStartCapabilityService.Capability capability(){
-        return new PointAndStartCapabilityService.Capability(1,"task-a","agent-a","ORDINARY_SINGLE_AGENT_ASSIGN_AND_START",
+        return new PointAndStartCapabilityService.Capability(3,"task-a","agent-a","ORDINARY_SINGLE_AGENT_ASSIGN_AND_START",
                 new PointAndStartCapabilityService.ServerLane("READY",List.of()),
                 new PointAndStartCapabilityService.NativeExecution("READY","PERSONAL_WORKSPACE_CONVERSATION_HTTP_V1",1,List.of("GENERATE_IMAGE")),
-                new PointAndStartCapabilityService.Authorization("UNAVAILABLE",false),
+                new PointAndStartCapabilityService.ExecutionAuthorization("UNAVAILABLE",false),
                 new PointAndStartCapabilityService.NewStart(false,List.of("COST_AUTHORIZATION_UNAVAILABLE")),
                 List.of("GENERATE_IMAGE"),"GENERATE_IMAGE","TASK_LINKED_REFERENCE",
                 new PointAndStartCapabilityService.OriginalIntentRecovery(false,"RECOVERY_REQUIRED","EXPLICIT_USER_EXACT_ORIGINAL_KEY_AND_BODY_ONLY"));

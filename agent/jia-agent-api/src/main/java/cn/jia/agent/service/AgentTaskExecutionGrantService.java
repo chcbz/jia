@@ -32,6 +32,10 @@ public interface AgentTaskExecutionGrantService {
     Admission admitControlled(Scope scope,String taskId,String grantId,long expectedGrantVersion,
             long expectedAssignmentRevision,String targetAgentId,String operation,String purpose,
             String executionId,String runId,String runtimeInstanceId);
+    /** Initial controlled-image protocol-v3 admission; never accepts legacy-v2 runtime readiness. */
+    Admission admitControlledV3(Scope scope,String taskId,String grantId,long expectedGrantVersion,
+            long expectedAssignmentRevision,String targetAgentId,String operation,String purpose,
+            String executionId,String runId,String runtimeInstanceId);
 
     /** Server-side lookup for Chat/application orchestration; browser grant identifiers are not trusted. */
     Admission resolveAndAdmit(Scope scope, String taskId, long expectedAssignmentRevision,
