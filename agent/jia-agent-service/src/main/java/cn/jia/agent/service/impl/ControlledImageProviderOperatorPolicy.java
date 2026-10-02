@@ -26,9 +26,6 @@ public final class ControlledImageProviderOperatorPolicy {
 
     Policy requireCurrent(AgentTaskProviderCostConsentService.Scope scope, String targetAgentId,
             String requestedBindingId, long requestedBindingEpoch, long now) {
-        if (!properties.isEnabled() || properties.getOperatorPolicies().isEmpty()) {
-            throw unavailable();
-        }
         NativeProviderCredentialBindingLookup lookup = lookups.getIfUnique();
         if (lookup == null) throw unavailable();
         final NativeProviderCredentialBindingLookup.Snapshot current;
@@ -45,39 +42,47 @@ public final class ControlledImageProviderOperatorPolicy {
                 || current.maxInputItems() == null || current.maxInputItems() != 16
                 || current.maxOutboundRequestAttempts() == null
                 || current.maxOutboundRequestAttempts() != 1
-                || current.precallFenceVersion() == null || current.precallFenceVersion() != 1) {
-            throw new PolicyFailure(Reason.CONFLICT, null);
-        }
-        if (!same(requestedBindingId, current.bindingId())
+                || current.precallFenceVersion() == null || current.precallFenceVersion() != 1
+                || !same(requestedBindingId, current.bindingId())
                 || requestedBindingEpoch != current.bindingEpoch()) {
             throw new PolicyFailure(Reason.CONFLICT, null);
         }
-        List<ControlledImageProviderProperties.OperatorPolicy> matches = properties
-                .getOperatorPolicies().stream().filter(policy -> matches(policy, scope,
-                        targetAgentId, current)).toList();
-        if (matches.size() != 1) {
-            throw new PolicyFailure(matches.isEmpty() ? Reason.FORBIDDEN
-                    : Reason.SOURCE_UNAVAILABLE, null);
+        Policy policy=requireConfigured(scope,targetAgentId,requestedBindingId,
+                requestedBindingEpoch,now);
+        if (!Objects.equals(policy.providerLane(),current.providerLane())
+                || !Objects.equals(policy.modelId(),current.modelId())) {
+            throw new PolicyFailure(Reason.CONFLICT,null);
         }
-        ControlledImageProviderProperties.OperatorPolicy value = matches.getFirst();
-        requireValid(value);
-        if (value.getExpiresAt() <= now) throw new PolicyFailure(Reason.CONFLICT, null);
-        return new Policy(value.getProviderLane(), value.getBindingId(), value.getBindingEpoch(),
-                value.getModelId(), value.getCustody(), value.getIssuer(),
-                value.getPolicyRevision(), PRICING_MODE, 1, value.getExpiresAt());
+        return policy;
     }
 
-    private static boolean matches(ControlledImageProviderProperties.OperatorPolicy policy,
-            AgentTaskProviderCostConsentService.Scope scope, String target,
-            NativeProviderCredentialBindingLookup.Snapshot current) {
-        return policy != null && Objects.equals(scope.tenantId(), policy.getTenantId())
-                && Objects.equals(scope.clientId(), policy.getClientId())
-                && Objects.equals(scope.ownerJiacn(), policy.getOwnerJiacn())
-                && Objects.equals(target, policy.getTargetAgentId())
-                && Objects.equals(current.providerLane(), policy.getProviderLane())
-                && Objects.equals(current.bindingId(), policy.getBindingId())
-                && Objects.equals(current.bindingEpoch(), policy.getBindingEpoch())
-                && Objects.equals(current.modelId(), policy.getModelId());
+    /** Current server delegation without treating a disconnected runtime as revoked owner authority. */
+    Policy requireConfigured(AgentTaskProviderCostConsentService.Scope scope,String targetAgentId,
+            String requestedBindingId,long requestedBindingEpoch,long now) {
+        if (!properties.isEnabled() || properties.getOperatorPolicies().isEmpty()) throw unavailable();
+        List<ControlledImageProviderProperties.OperatorPolicy> matches=properties.getOperatorPolicies()
+                .stream().filter(policy->matchesConfigured(policy,scope,targetAgentId,
+                        requestedBindingId,requestedBindingEpoch)).toList();
+        if(matches.size()!=1)throw new PolicyFailure(matches.isEmpty()?Reason.FORBIDDEN:
+                Reason.SOURCE_UNAVAILABLE,null);
+        ControlledImageProviderProperties.OperatorPolicy value=matches.getFirst();
+        requireValid(value);
+        if(value.getExpiresAt()<=now)throw new PolicyFailure(Reason.CONFLICT,null);
+        return new Policy(value.getProviderLane(),value.getBindingId(),value.getBindingEpoch(),
+                value.getModelId(),value.getCustody(),value.getIssuer(),value.getPolicyRevision(),
+                PRICING_MODE,1,value.getExpiresAt());
+    }
+
+    private static boolean matchesConfigured(ControlledImageProviderProperties.OperatorPolicy policy,
+            AgentTaskProviderCostConsentService.Scope scope,String target,String requestedBindingId,
+            long requestedBindingEpoch) {
+        return policy!=null&&Objects.equals(scope.tenantId(),policy.getTenantId())
+                &&Objects.equals(scope.clientId(),policy.getClientId())
+                &&Objects.equals(scope.ownerJiacn(),policy.getOwnerJiacn())
+                &&Objects.equals(target,policy.getTargetAgentId())
+                &&PROVIDER_LANE.equals(policy.getProviderLane())
+                &&Objects.equals(requestedBindingId,policy.getBindingId())
+                &&Objects.equals(requestedBindingEpoch,policy.getBindingEpoch());
     }
 
     private static void requireValid(ControlledImageProviderProperties.OperatorPolicy policy) {

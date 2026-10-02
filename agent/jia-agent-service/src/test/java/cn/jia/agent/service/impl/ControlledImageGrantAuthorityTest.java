@@ -154,7 +154,7 @@ class ControlledImageGrantAuthorityTest {
 
     private void readyPolicyAndV3Declaration(
             ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.Declaration declaration) {
-        when(policies.requireCurrent(any(),eq("agent"),eq("binding"),eq(1L),anyLong()))
+        when(policies.requireConfigured(any(),eq("agent"),eq("binding"),eq(1L),anyLong()))
                 .thenReturn(new ControlledImageProviderOperatorPolicy.Policy("CONTROLLED_IMAGE_HTTP_V1",
                         "binding",1,"model","OPERATOR_TEMPLATE","operator","policy-r1",
                         "UNPRICED_EXTERNAL_ACCOUNT",1,9_000_000_000_000L));

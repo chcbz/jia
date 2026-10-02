@@ -205,7 +205,7 @@ public final class ControlledImageGrantAuthority {
             AgentTaskProviderCostConsentEntity consent,String expectedRuntimeInstanceId) {
         var consentScope=new AgentTaskProviderCostConsentService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());
         final ControlledImageProviderOperatorPolicy.Policy policy;
-        try { policy=policies.requireCurrent(consentScope,grant.getTargetAgentId(),consent.getBindingId(),
+        try { policy=policies.requireConfigured(consentScope,grant.getTargetAgentId(),consent.getBindingId(),
                 consent.getBindingEpoch(),System.currentTimeMillis()); }
         catch(ControlledImageProviderOperatorPolicy.PolicyFailure unavailable){throw denied(Reason.PAID_EXECUTION_NOT_AUTHORIZED);}
         if(policy==null||!Objects.equals(policy.providerLane(),consent.getProviderLane())
