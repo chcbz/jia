@@ -25,8 +25,8 @@ CREATE TABLE IF NOT EXISTS agent_controlled_image_intent_operation_grant (
  UNIQUE KEY uk_aciiog_scope_execution(tenant_id,client_id,owner_jiacn,reserved_execution_id),
  UNIQUE KEY uk_aciiog_scope_run(tenant_id,client_id,owner_jiacn,reserved_run_id),
  CONSTRAINT chk_aciiog_scope CHECK(tenant_id='0' AND owner_jiacn<>'0'),
- CONSTRAINT chk_aciiog_ids CHECK(operation_grant_id REGEXP BINARY '^opgrant_[0-9a-f]{32}$' AND consent_id REGEXP BINARY '^consent_[0-9a-f]{32}$'),
- CONSTRAINT chk_aciiog_hashes CHECK(requirement_sha256 REGEXP BINARY '^[0-9a-f]{64}$' AND instruction_sha256 REGEXP BINARY '^[0-9a-f]{64}$' AND source_snapshot_sha256 REGEXP BINARY '^[0-9a-f]{64}$' AND owner_payload_sha256 REGEXP BINARY '^[0-9a-f]{64}$' AND issue_request_digest REGEXP BINARY '^[0-9a-f]{64}$' AND (revoke_request_digest IS NULL OR revoke_request_digest REGEXP BINARY '^[0-9a-f]{64}$')),
+ CONSTRAINT chk_aciiog_ids CHECK(operation_grant_id REGEXP '^opgrant_[0-9a-f]{32}$' AND consent_id REGEXP '^consent_[0-9a-f]{32}$'),
+ CONSTRAINT chk_aciiog_hashes CHECK(requirement_sha256 REGEXP '^[0-9a-f]{64}$' AND instruction_sha256 REGEXP '^[0-9a-f]{64}$' AND source_snapshot_sha256 REGEXP '^[0-9a-f]{64}$' AND owner_payload_sha256 REGEXP '^[0-9a-f]{64}$' AND issue_request_digest REGEXP '^[0-9a-f]{64}$' AND (revoke_request_digest IS NULL OR revoke_request_digest REGEXP '^[0-9a-f]{64}$')),
  CONSTRAINT chk_aciiog_versions CHECK(conversation_generation>0 AND baseline_grant_version>0 AND task_version>=0 AND assignment_revision>=0 AND requirement_revision>0 AND version>0),
  CONSTRAINT chk_aciiog_operation CHECK(operation IN ('GENERATE_IMAGE','EDIT_IMAGE')),
  CONSTRAINT chk_aciiog_sources CHECK(JSON_TYPE(source_snapshot_json)='ARRAY' AND ((operation='GENERATE_IMAGE' AND JSON_LENGTH(source_snapshot_json) BETWEEN 0 AND 16 AND JSON_SEARCH(source_snapshot_json,'one','CURRENT_CONVERSATION_ASSET',NULL,'$[*].kind') IS NULL) OR (operation='EDIT_IMAGE' AND JSON_LENGTH(source_snapshot_json)=1 AND JSON_UNQUOTE(JSON_EXTRACT(source_snapshot_json,'$[0].kind'))='CURRENT_CONVERSATION_ASSET'))),
@@ -51,6 +51,6 @@ CREATE TABLE IF NOT EXISTS agent_controlled_image_execution_source_v3 (
  PRIMARY KEY(id), UNIQUE KEY uk_acies_scope_ref(tenant_id,client_id,owner_jiacn,execution_id,input_ref),
  UNIQUE KEY uk_acies_scope_ordinal(tenant_id,client_id,owner_jiacn,execution_id,input_ordinal),
  CONSTRAINT chk_acies_scope CHECK(tenant_id='0' AND owner_jiacn<>'0'),
- CONSTRAINT chk_acies_common CHECK(input_ordinal BETWEEN 1 AND 16 AND content_mime_type IN ('image/jpeg','image/png') AND byte_length>0 AND content_sha256 REGEXP BINARY '^[0-9a-f]{64}$'),
+ CONSTRAINT chk_acies_common CHECK(input_ordinal BETWEEN 1 AND 16 AND content_mime_type IN ('image/jpeg','image/png') AND byte_length>0 AND content_sha256 REGEXP '^[0-9a-f]{64}$'),
  CONSTRAINT chk_acies_union CHECK((source_kind='TASK_LINKED_WORKSPACE_VERSION' AND file_id IS NOT NULL AND file_version>0 AND purpose='REFERENCE' AND conversation_id IS NULL AND conversation_generation IS NULL AND asset_id IS NULL AND asset_revision IS NULL AND producer_request_id IS NULL AND producer_request_revision IS NULL AND producer_step_id IS NULL AND producer_execution_id IS NULL AND producer_run_id IS NULL AND producer_output_id IS NULL) OR (source_kind='CURRENT_CONVERSATION_ASSET' AND file_id IS NULL AND file_version IS NULL AND purpose IS NULL AND conversation_id IS NOT NULL AND conversation_generation>0 AND asset_id IS NOT NULL AND asset_revision>0 AND producer_request_id IS NOT NULL AND producer_request_revision>0 AND producer_step_id IS NOT NULL AND producer_execution_id IS NOT NULL AND producer_run_id IS NOT NULL AND producer_output_id IS NOT NULL))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;

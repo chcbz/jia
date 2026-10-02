@@ -17,6 +17,7 @@ class ControlledImageBridgeSchemaInitializerTest {
         String normalized=ddl.replaceAll("\\s+"," ").trim().toLowerCase(Locale.ROOT);
         assertTrue(normalized.startsWith("create table if not exists agent_controlled_image_bridge_operation "));
         assertFalse(normalized.contains(";"));
+        assertFalse(normalized.contains("regexp binary"));
         for(String required:List.of("engine=innodb","utf8mb4_0900_bin","uk_acibo_scope_key",
                 "uk_acibo_scope_consent","uk_acibo_scope_grant","uk_acibo_scope_operation_grant",
                 "chk_acibo_locator","chk_acibo_protocol","execution_protocol_version int not null default 2",
@@ -77,7 +78,7 @@ class ControlledImageBridgeSchemaInitializerTest {
         for(String required:List.of("add unique key uk_pwex_controlled_consent",
                 "add constraint chk_pwex_controlled_consent check",
                 "controlled_consent_id is null","execution_mode='conversation'",
-                "controlled_consent_id regexp binary '^consent_[0-9a-f]{32}$'",
+                "controlled_consent_id regexp '^consent_[0-9a-f]{32}$'",
                 "permitted_operation='generate_image'","output_content_mime_type='image/png'"))
             assertTrue(normalized.contains(required),required);
         assertFalse(normalized.contains(";"));

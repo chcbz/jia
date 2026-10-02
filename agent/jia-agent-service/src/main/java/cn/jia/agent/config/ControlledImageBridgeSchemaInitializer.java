@@ -51,7 +51,7 @@ public final class ControlledImageBridgeSchemaInitializer implements Initializin
         if(index==null||index==0)jdbc.execute("ALTER TABLE "+TABLE+" ADD UNIQUE KEY uk_acibo_scope_operation_grant(tenant_id,client_id,owner_jiacn,task_id,operation_grant_id)");
         else if(index!=5)throw new IllegalStateException("Controlled-image bridge operation-grant index drift");
         Integer check=jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema=DATABASE() AND table_name=? AND constraint_name='chk_acibo_protocol' AND constraint_type='CHECK'",Integer.class,TABLE);
-        if(check==null||check==0)jdbc.execute("ALTER TABLE "+TABLE+" ADD CONSTRAINT chk_acibo_protocol CHECK((execution_protocol_version=2 AND operation_grant_id IS NULL) OR (execution_protocol_version=3 AND operation_grant_id REGEXP BINARY '^opgrant_[0-9a-f]{32}$'))");
+        if(check==null||check==0)jdbc.execute("ALTER TABLE "+TABLE+" ADD CONSTRAINT chk_acibo_protocol CHECK((execution_protocol_version=2 AND operation_grant_id IS NULL) OR (execution_protocol_version=3 AND operation_grant_id REGEXP '^opgrant_[0-9a-f]{32}$'))");
         else if(check!=1)throw new IllegalStateException("Controlled-image bridge protocol CHECK ambiguity");
     }
     private void addColumn(String name,String definition) {
@@ -88,7 +88,7 @@ public final class ControlledImageBridgeSchemaInitializer implements Initializin
         }
     }
     private static String canonicalCheck(String value) {
-        try { return AgentTaskCreationOperationSchemaInitializer.canonicalCheckExpression(value); }
+        try { return ControlledImageFollowupV3SchemaInitializer.canonicalControlledCheck(value); }
         catch (IllegalArgumentException malformed) {
             throw new IllegalStateException("Controlled-image bridge malformed CHECK catalog",malformed);
         }

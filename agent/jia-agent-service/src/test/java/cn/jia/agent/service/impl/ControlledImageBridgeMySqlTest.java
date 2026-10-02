@@ -64,16 +64,16 @@ class ControlledImageBridgeMySqlTest {
                 +"DROP CHECK chk_acibo_locator, ADD CONSTRAINT chk_acibo_locator "
                 +"CHECK (authority_locator=CONCAT('mmd-ci-v1:',consent_id))");
         for(String weakened:java.util.List.of(
-                "((execution_protocol_version=2 AND operation_grant_id IS NULL) OR (execution_protocol_version=3 AND operation_grant_id REGEXP BINARY '^wrong_[0-9a-f]{32}$'))",
-                "(((execution_protocol_version=2 AND operation_grant_id IS NULL) OR (execution_protocol_version=3 AND operation_grant_id REGEXP BINARY '^opgrant_[0-9a-f]{32}$')) OR TRUE)")) {
+                "((execution_protocol_version=2 AND operation_grant_id IS NULL) OR (execution_protocol_version=3 AND operation_grant_id REGEXP '^wrong_[0-9a-f]{32}$'))",
+                "(((execution_protocol_version=2 AND operation_grant_id IS NULL) OR (execution_protocol_version=3 AND operation_grant_id REGEXP '^opgrant_[0-9a-f]{32}$')) OR TRUE)")) {
             jdbc.execute("ALTER TABLE agent_controlled_image_bridge_operation DROP CHECK chk_acibo_protocol, ADD CONSTRAINT chk_acibo_protocol CHECK ("+weakened+")");
             assertThrows(IllegalStateException.class,
                     ()->new ControlledImageBridgeSchemaInitializer(jdbc).afterPropertiesSet());
         }
-        jdbc.execute("ALTER TABLE agent_controlled_image_bridge_operation DROP CHECK chk_acibo_protocol, ADD CONSTRAINT chk_acibo_protocol CHECK ((execution_protocol_version=2 AND operation_grant_id IS NULL) OR (execution_protocol_version=3 AND operation_grant_id REGEXP BINARY '^opgrant_[0-9a-f]{32}$')) NOT ENFORCED");
+        jdbc.execute("ALTER TABLE agent_controlled_image_bridge_operation DROP CHECK chk_acibo_protocol, ADD CONSTRAINT chk_acibo_protocol CHECK ((execution_protocol_version=2 AND operation_grant_id IS NULL) OR (execution_protocol_version=3 AND operation_grant_id REGEXP '^opgrant_[0-9a-f]{32}$')) NOT ENFORCED");
         assertThrows(IllegalStateException.class,
                 ()->new ControlledImageBridgeSchemaInitializer(jdbc).afterPropertiesSet());
-        jdbc.execute("ALTER TABLE agent_controlled_image_bridge_operation DROP CHECK chk_acibo_protocol, ADD CONSTRAINT chk_acibo_protocol CHECK ((execution_protocol_version=2 AND operation_grant_id IS NULL) OR (execution_protocol_version=3 AND operation_grant_id REGEXP BINARY '^opgrant_[0-9a-f]{32}$'))");
+        jdbc.execute("ALTER TABLE agent_controlled_image_bridge_operation DROP CHECK chk_acibo_protocol, ADD CONSTRAINT chk_acibo_protocol CHECK ((execution_protocol_version=2 AND operation_grant_id IS NULL) OR (execution_protocol_version=3 AND operation_grant_id REGEXP '^opgrant_[0-9a-f]{32}$'))");
         jdbc.execute("ALTER TABLE agent_personal_workspace_execution "
                 +"DROP CHECK chk_pwex_controlled_consent, "
                 +"ADD CONSTRAINT chk_pwex_controlled_consent CHECK (1=1)");
@@ -106,6 +106,9 @@ class ControlledImageBridgeMySqlTest {
 
     @Test void twoExecutionRunsCanReserveOnlyOneConsent() throws Exception {
         insertConsent("consent_1234567890abcdef1234567890abcdef","BOUND",2,null,null);
+        assertThrows(DataAccessException.class,()->jdbc.update(
+                "UPDATE agent_task_provider_cost_consent SET request_digest=? WHERE consent_id=?",
+                "A"+"a".repeat(63),"consent_1234567890abcdef1234567890abcdef"));
         CountDownLatch start=new CountDownLatch(1);
         try(var executor=Executors.newFixedThreadPool(2)) {
             var first=executor.submit(()->reserveAttempt(start,"execution-a","run-a"));
@@ -213,8 +216,8 @@ class ControlledImageBridgeMySqlTest {
                   UNIQUE KEY uk_acibo_scope_consent(tenant_id,client_id,owner_jiacn,task_id,consent_id),
                   UNIQUE KEY uk_acibo_scope_grant(tenant_id,client_id,owner_jiacn,task_id,grant_id),
                   CONSTRAINT chk_acibo_scope CHECK(tenant_id='0' AND owner_jiacn<>'0'),
-                  CONSTRAINT chk_acibo_hash CHECK(wrapper_digest REGEXP BINARY '^[0-9a-f]{64}$'),
-                  CONSTRAINT chk_acibo_consent CHECK(consent_id REGEXP BINARY '^consent_[0-9a-f]{32}$'),
+                  CONSTRAINT chk_acibo_hash CHECK(wrapper_digest REGEXP '^[0-9a-f]{64}$'),
+                  CONSTRAINT chk_acibo_consent CHECK(consent_id REGEXP '^consent_[0-9a-f]{32}$'),
                   CONSTRAINT chk_acibo_locator CHECK(authority_locator=CONCAT('mmd-ci-v1:',consent_id)),
                   CONSTRAINT chk_acibo_versions CHECK(expected_consent_version>0 AND grant_version>0 AND assignment_revision>=0),
                   CONSTRAINT chk_acibo_time CHECK(created_at>0)

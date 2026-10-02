@@ -202,9 +202,9 @@ public final class AgentTaskProviderCostConsentSchemaInitializer implements Init
             String wanted;
             String clause;
             try {
-                wanted=AgentTaskCreationOperationSchemaInitializer.canonicalCheckExpression(
+                wanted=ControlledImageFollowupV3SchemaInitializer.canonicalControlledCheck(
                         expected.getValue());
-                clause=AgentTaskCreationOperationSchemaInitializer.canonicalCheckExpression(
+                clause=ControlledImageFollowupV3SchemaInitializer.canonicalControlledCheck(
                         found.clause());
             } catch (IllegalArgumentException malformed) {
                 throw new IllegalStateException(

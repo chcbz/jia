@@ -95,6 +95,14 @@ class ControlledImageIntentOperationGrantMySqlTest {
         assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM "
                 +"agent_controlled_image_intent_operation_grant WHERE execution_intent_id='intent-shared'",
                 Integer.class));
+        assertThrows(DataAccessException.class,()->jdbc.update(
+                "UPDATE agent_controlled_image_intent_operation_grant SET operation_grant_id=? "
+                        +"WHERE execution_intent_id='intent-shared'",
+                "opgrant_A"+"a".repeat(31)));
+        assertThrows(DataAccessException.class,()->jdbc.update(
+                "UPDATE agent_controlled_image_intent_operation_grant SET requirement_sha256=? "
+                        +"WHERE execution_intent_id='intent-shared'",
+                "A"+"a".repeat(63)));
     }
 
     private int insertAuthority(CountDownLatch start,String suffix) {

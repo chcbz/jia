@@ -81,7 +81,7 @@ public final class ControlledImageExecutionSchemaInitializer implements Initiali
 
     private static String canonicalCheck(String value) {
         try {
-            return AgentTaskCreationOperationSchemaInitializer.canonicalCheckExpression(value);
+            return ControlledImageFollowupV3SchemaInitializer.canonicalControlledCheck(value);
         } catch (IllegalArgumentException malformed) {
             throw new IllegalStateException("Controlled execution malformed CHECK catalog", malformed);
         }

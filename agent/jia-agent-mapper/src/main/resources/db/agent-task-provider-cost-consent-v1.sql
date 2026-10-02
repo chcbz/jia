@@ -62,12 +62,12 @@ CREATE TABLE IF NOT EXISTS agent_task_provider_cost_consent (
     AND CHAR_LENGTH(operator_issuer) BETWEEN 1 AND 100
     AND CHAR_LENGTH(operator_policy_revision) BETWEEN 1 AND 100),
   CONSTRAINT chk_atpcc_hashes CHECK (
-    request_digest REGEXP BINARY '^[0-9a-f]{64}$'
-    AND assignment_base_hash REGEXP BINARY '^[0-9a-f]{64}$'
-    AND requirement_sha256 REGEXP BINARY '^[0-9a-f]{64}$'
-    AND input_snapshot_digest REGEXP BINARY '^[0-9a-f]{64}$'
+    request_digest REGEXP '^[0-9a-f]{64}$'
+    AND assignment_base_hash REGEXP '^[0-9a-f]{64}$'
+    AND requirement_sha256 REGEXP '^[0-9a-f]{64}$'
+    AND input_snapshot_digest REGEXP '^[0-9a-f]{64}$'
     AND (revoke_request_digest IS NULL
-      OR revoke_request_digest REGEXP BINARY '^[0-9a-f]{64}$')),
+      OR revoke_request_digest REGEXP '^[0-9a-f]{64}$')),
   CONSTRAINT chk_atpcc_provider CHECK (
     provider_lane='CONTROLLED_IMAGE_HTTP_V1'
     AND pricing_mode='UNPRICED_EXTERNAL_ACCOUNT'

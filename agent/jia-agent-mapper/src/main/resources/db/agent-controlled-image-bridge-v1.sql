@@ -22,10 +22,10 @@ CREATE TABLE IF NOT EXISTS agent_controlled_image_bridge_operation (
  UNIQUE KEY uk_acibo_scope_grant(tenant_id,client_id,owner_jiacn,task_id,grant_id),
  UNIQUE KEY uk_acibo_scope_operation_grant(tenant_id,client_id,owner_jiacn,task_id,operation_grant_id),
  CONSTRAINT chk_acibo_scope CHECK(tenant_id='0' AND owner_jiacn<>'0'),
- CONSTRAINT chk_acibo_hash CHECK(wrapper_digest REGEXP BINARY '^[0-9a-f]{64}$'),
- CONSTRAINT chk_acibo_consent CHECK(consent_id REGEXP BINARY '^consent_[0-9a-f]{32}$'),
+ CONSTRAINT chk_acibo_hash CHECK(wrapper_digest REGEXP '^[0-9a-f]{64}$'),
+ CONSTRAINT chk_acibo_consent CHECK(consent_id REGEXP '^consent_[0-9a-f]{32}$'),
  CONSTRAINT chk_acibo_locator CHECK(authority_locator=CONCAT('mmd-ci-v1:',consent_id)),
- CONSTRAINT chk_acibo_protocol CHECK((execution_protocol_version=2 AND operation_grant_id IS NULL) OR (execution_protocol_version=3 AND operation_grant_id REGEXP BINARY '^opgrant_[0-9a-f]{32}$')),
+ CONSTRAINT chk_acibo_protocol CHECK((execution_protocol_version=2 AND operation_grant_id IS NULL) OR (execution_protocol_version=3 AND operation_grant_id REGEXP '^opgrant_[0-9a-f]{32}$')),
  CONSTRAINT chk_acibo_versions CHECK(expected_consent_version>0 AND grant_version>0 AND assignment_revision>=0),
  CONSTRAINT chk_acibo_time CHECK(created_at>0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;

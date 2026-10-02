@@ -28,6 +28,22 @@ class ControlledImageFollowupV3SchemaInitializerTest {
         assertTrue(ddl.contains("create table if not exists agent_controlled_image_execution_source_v3"));
         for(String forbidden:List.of(" alter table "," drop "," update "," delete "," insert "," create trigger "))
             assertFalse((" "+ddl+" ").contains(forbidden),forbidden);
+        assertFalse(ddl.contains("regexp binary"));
+    }
+
+    @Test void binaryCollationCanonicalizationAcceptsOnlyFrozenLegacyRenderings() {
+        String plain="regexp_like(content_sha256,'^[0-9a-f]{64}$')";
+        String legacy="regexp_like(content_sha256,cast('^[0-9a-f]{64}$' as char charset binary))";
+        assertEquals(ControlledImageFollowupV3SchemaInitializer.canonicalControlledCheck(plain),
+                ControlledImageFollowupV3SchemaInitializer.canonicalControlledCheck(legacy));
+        for (String drift:List.of(
+                "regexp_like(content_sha256,'^[0-9A-F]{64}$')",
+                "regexp_like(content_sha256,'^[0-9a-f]{63}$')",
+                "regexp_like(content_sha256,'^[0-9a-f]{64}$') OR TRUE",
+                "regexp_like(content_sha256,cast('^[0-9a-f]{64}$' as binary))")) {
+            assertNotEquals(ControlledImageFollowupV3SchemaInitializer.canonicalControlledCheck(plain),
+                    ControlledImageFollowupV3SchemaInitializer.canonicalControlledCheck(drift));
+        }
     }
 
     @Test void allSixBridgeChecksAreExactEnforcedAndRejectSameNamedWeakDefinitions() {
@@ -68,13 +84,13 @@ class ControlledImageFollowupV3SchemaInitializerTest {
     @Test void strictPurposeAndExecutionProtocolUnionsRetainLegacyAndV3MutualExclusion() {
         String purpose=ControlledImageFollowupV3SchemaInitializer.consentPurposeCheckExpression();
         for(String required:List.of("INITIAL_ASSIGN_AND_START","FOLLOWUP_EXECUTE",
-                "operation_grant_id IS NULL","operation_grant_id REGEXP BINARY",
+                "operation_grant_id IS NULL","operation_grant_id REGEXP",
                 "runtime_input_snapshot_sha256 IS NULL","reserved_execution_id IS NOT NULL"))
             assertTrue(purpose.contains(required),required);
         String controlled=ControlledImageFollowupV3SchemaInitializer.controlledConsentCheckExpression();
         for(String required:List.of("execution_protocol_version=2","execution_protocol_version=3",
                 "permitted_operation='GENERATE_IMAGE'","permitted_operation IN ('GENERATE_IMAGE','EDIT_IMAGE')",
-                "operation_grant_id IS NULL","runtime_input_snapshot_digest REGEXP BINARY"))
+                "operation_grant_id IS NULL","runtime_input_snapshot_digest REGEXP"))
             assertTrue(controlled.contains(required),required);
         String legacy=ControlledImageFollowupV3SchemaInitializer.legacyControlledConsentCheckExpression();
         assertFalse(legacy.contains("execution_protocol_version"));

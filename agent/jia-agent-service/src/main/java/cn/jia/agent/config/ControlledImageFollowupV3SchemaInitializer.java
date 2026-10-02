@@ -452,7 +452,7 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
     }
 
     static String consentPurposeCheckExpression() {
-        String hash=" REGEXP BINARY '^[0-9a-f]{64}$'";
+        String hash=" REGEXP '^[0-9a-f]{64}$'";
         return "consent_purpose IN ('INITIAL_ASSIGN_AND_START','FOLLOWUP_EXECUTE') AND ("
                 + "(consent_purpose='INITIAL_ASSIGN_AND_START' AND operation_grant_id IS NULL "
                 + "AND execution_intent_id IS NULL AND conversation_id IS NULL "
@@ -460,7 +460,7 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
                 + "AND instruction_sha256 IS NULL AND source_snapshot_sha256 IS NULL "
                 + "AND owner_payload_sha256 IS NULL AND runtime_input_snapshot_sha256 IS NULL) OR "
                 + "(consent_purpose='FOLLOWUP_EXECUTE' "
-                + "AND operation_grant_id REGEXP BINARY '^opgrant_[0-9a-f]{32}$' "
+                + "AND operation_grant_id REGEXP '^opgrant_[0-9a-f]{32}$' "
                 + "AND CHAR_LENGTH(execution_intent_id) BETWEEN 1 AND 100 "
                 + "AND CHAR_LENGTH(conversation_id) BETWEEN 1 AND 100 "
                 + "AND conversation_generation>0 AND operation IN ('GENERATE_IMAGE','EDIT_IMAGE') "
@@ -478,17 +478,17 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
     }
     private static String legacyControlledConsentCheckDdl() {
         return "controlled_consent_id IS NULL OR (execution_mode='CONVERSATION' "
-                + "AND controlled_consent_id REGEXP BINARY '^consent_[0-9a-f]{32}$' "
+                + "AND controlled_consent_id REGEXP '^consent_[0-9a-f]{32}$' "
                 + "AND permitted_operation='GENERATE_IMAGE' AND output_content_mime_type='image/png')";
     }
     private static String controlledConsentCheckDdl() {
         return "controlled_consent_id IS NULL OR (execution_mode='CONVERSATION' "
-                + "AND controlled_consent_id REGEXP BINARY '^consent_[0-9a-f]{32}$' AND ("
+                + "AND controlled_consent_id REGEXP '^consent_[0-9a-f]{32}$' AND ("
                 + "(execution_protocol_version=2 AND permitted_operation='GENERATE_IMAGE' "
                 + "AND operation_grant_id IS NULL AND runtime_input_snapshot_digest IS NULL) OR "
                 + "(execution_protocol_version=3 AND permitted_operation IN ('GENERATE_IMAGE','EDIT_IMAGE') "
-                + "AND operation_grant_id REGEXP BINARY '^opgrant_[0-9a-f]{32}$' "
-                + "AND runtime_input_snapshot_digest REGEXP BINARY '^[0-9a-f]{64}$')) "
+                + "AND operation_grant_id REGEXP '^opgrant_[0-9a-f]{32}$' "
+                + "AND runtime_input_snapshot_digest REGEXP '^[0-9a-f]{64}$')) "
                 + "AND output_content_mime_type='image/png')";
     }
 
@@ -496,12 +496,12 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
         return "(execution_protocol_version=1 AND controlled_consent_id IS NULL "
                 + "AND operation_grant_id IS NULL AND runtime_input_snapshot_digest IS NULL) OR "
                 + "(execution_protocol_version=2 "
-                + "AND controlled_consent_id REGEXP BINARY '^consent_[0-9a-f]{32}$' "
+                + "AND controlled_consent_id REGEXP '^consent_[0-9a-f]{32}$' "
                 + "AND operation_grant_id IS NULL AND runtime_input_snapshot_digest IS NULL) OR "
                 + "(execution_protocol_version=3 AND execution_mode='CONVERSATION' "
-                + "AND controlled_consent_id REGEXP BINARY '^consent_[0-9a-f]{32}$' "
-                + "AND operation_grant_id REGEXP BINARY '^opgrant_[0-9a-f]{32}$' "
-                + "AND runtime_input_snapshot_digest REGEXP BINARY '^[0-9a-f]{64}$' "
+                + "AND controlled_consent_id REGEXP '^consent_[0-9a-f]{32}$' "
+                + "AND operation_grant_id REGEXP '^opgrant_[0-9a-f]{32}$' "
+                + "AND runtime_input_snapshot_digest REGEXP '^[0-9a-f]{64}$' "
                 + "AND permitted_operation IN ('GENERATE_IMAGE','EDIT_IMAGE') "
                 + "AND output_content_mime_type='image/png')";
     }
@@ -729,11 +729,28 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
     private static Column a(String type, String nullable, String defaultValue) {
         return new Column(type, nullable, "ascii_bin", defaultValue);
     }
-    private static String canonicalCheck(String value) {
-        try { return AgentTaskCreationOperationSchemaInitializer.canonicalCheckExpression(value); }
-        catch (IllegalArgumentException malformed) {
+    /**
+     * MySQL 8.0.21 rendered REGEXP BINARY as an explicit binary cast, while MySQL 8.0.46
+     * rejects that redundant coercion when the validated column already uses a *_bin collation.
+     * Normalize only the three frozen controlled-image patterns; operators, grouping, literals and
+     * every non-whitelisted cast remain byte-significant after the shared catalog canonicalizer.
+     */
+    static String canonicalControlledCheck(String value) {
+        try {
+            String canonical=AgentTaskCreationOperationSchemaInitializer
+                    .canonicalCheckExpression(value);
+            for (String pattern:List.of("^[0-9a-f]{64}$",
+                    "^consent_[0-9a-f]{32}$","^opgrant_[0-9a-f]{32}$")) {
+                canonical=canonical.replace("cast('"+pattern+"'ascharcharsetbinary)",
+                        "'"+pattern+"'");
+            }
+            return canonical;
+        } catch (IllegalArgumentException malformed) {
             throw new IllegalStateException("Follow-up malformed CHECK catalog", malformed);
         }
+    }
+    private static String canonicalCheck(String value) {
+        return canonicalControlledCheck(value);
     }
     private static Object[] concat(Object first, Object[] rest) {
         Object[] result = new Object[rest.length + 1]; result[0] = first;
