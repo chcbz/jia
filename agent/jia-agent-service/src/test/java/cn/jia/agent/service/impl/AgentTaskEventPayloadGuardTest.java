@@ -43,11 +43,11 @@ class AgentTaskEventPayloadGuardTest extends BaseMockTest {
 
     @Test
     void writerNormalizesAllowedPayloadBeforePersistence() {
-        when(eventDao.lockAndAllocateVersion("tenant-a", "client-a", "task-1"))
+        when(eventDao.lockAndAllocateVersion("0", "client-a", "owner-a", "task-1"))
                 .thenReturn(0L);
         when(eventDao.insertEvent(any())).thenReturn(1);
         when(eventDao.commitEventVersion(
-                any(), any(), any(), anyLong(), anyLong(), anyLong())).thenReturn(1);
+                any(), any(), any(), any(), anyLong(), anyLong(), anyLong())).thenReturn(1);
 
         writer.append(command(" { \"toStatus\" : \"done\", \"fromStatus\" : \"working\" } "));
 
@@ -82,7 +82,7 @@ class AgentTaskEventPayloadGuardTest extends BaseMockTest {
 
     private AgentTaskEventWriteCommand command(String eventJson) {
         return new AgentTaskEventWriteCommand()
-                .setTenantId("tenant-a")
+                .setTenantId("0").setOwnerJiacn("owner-a")
                 .setClientId("client-a")
                 .setTaskId("task-1")
                 .setEventId("evt-1")

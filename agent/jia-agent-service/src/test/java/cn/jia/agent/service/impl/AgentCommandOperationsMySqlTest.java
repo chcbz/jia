@@ -65,7 +65,8 @@ import static org.mockito.Mockito.times;
  */
 @EnabledIfEnvironmentVariable(named = "D09_MYSQL_URL", matches = ".+")
 class AgentCommandOperationsMySqlTest {
-    private static final String TENANT = "tenant-a";
+    private static final String OWNER = "owner-a";
+    private static final String TENANT = "0";
     private static final String CLIENT = "client-a";
     private static final String TARGET = "agent-a";
     private static final long NOW = 1_700_000_000_000L;
@@ -463,10 +464,10 @@ class AgentCommandOperationsMySqlTest {
         String taskId = "task-" + id;
         String intentId = "intent-" + id;
         String commandId = AgentCommandCanonicalCodec.hallCommandId(
-                TENANT, CLIENT, taskId, TARGET, intentId,
+                TENANT, CLIENT, OWNER, taskId, TARGET, intentId,
                 AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE);
         return new AgentCommandDraft(
-                1, commandId, taskId, intentId, TENANT, CLIENT, taskId,
+                1, commandId, taskId, intentId, TENANT, CLIENT, OWNER, taskId,
                 "work-" + id, TARGET, AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE,
                 ISSUED, EXPIRES, intentId, new AgentHallCommandPayload(
                         "execute", "Execute bounded work", "juyiting",

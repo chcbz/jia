@@ -889,7 +889,7 @@ class AgentWorkItemReassignmentServiceTest {
     private AgentCommandDeliveryEntity sourceFor(String targetAgentId, String intent) {
         long issued = NOW - 600_000;
         String commandId = AgentCommandCanonicalCodec.hallCommandId(
-                TENANT, CLIENT, TASK, targetAgentId, intent,
+                TENANT, CLIENT, OWNER, TASK, targetAgentId, intent,
                 AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE);
         AgentCommandDraft draft = new AgentCommandDraft(
                 1, commandId, TASK, intent, TENANT, CLIENT, OWNER, TASK, WORK, targetAgentId,
@@ -898,7 +898,7 @@ class AgentWorkItemReassignmentServiceTest {
                 new AgentHallCommandPayload("work_item_execute", "Execute original work item",
                         "juyiting", null, null, null, "autonomous", false, null));
         byte[] bytes = AgentCommandCanonicalCodec.businessBytes(draft);
-        AgentCommandDeliveryEntity value = new AgentCommandDeliveryEntity()
+        AgentCommandDeliveryEntity value = new AgentCommandDeliveryEntity().setOwnerJiacn(OWNER)
                 .setCommandId(commandId).setTaskId(TASK).setWorkItemId(WORK)
                 .setTargetAgentId(targetAgentId)
                 .setCommandType(AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE)

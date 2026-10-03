@@ -5,8 +5,9 @@ import tools.jackson.databind.json.JsonMapper;
 import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 class AgentSkillInstallCommandCodecTest {
+    private static final String OWNER = "owner-a";
     private AgentCommandDraft draft() {
-        return new AgentCommandDraft(1,"cmd_skill_si_1","so_1","si_1","Tenant-A","Client-A","so_1",null,"agt_1","SKILL_INSTALL",1,3600001,
+        return new AgentCommandDraft(1,AgentCommandCanonicalCodec.skillInstallCommandId("0", "Client-A", OWNER, "si_1"),"so_1","si_1","0","Client-A",OWNER, "so_1",null,"agt_1","SKILL_INSTALL",1,3600001,
                 new AgentSkillInstallPayload("so_1","si_1","spv_repo_test_1_0_0","repo-test","1.0.0","522","sha256:"+"a".repeat(64),"/internal/agent/skill-installations/si_1/package"));
     }
     @Test void exactBusinessRoundTripAndFlatFrozenW10Fields() {
@@ -49,7 +50,7 @@ class AgentSkillInstallCommandCodecTest {
             assertThrows(IllegalArgumentException.class,()->AgentCommandCanonicalCodec.wireBytes(d,"message-1",invalid));
     }
     @Test void arbitraryPackagePathAndConflictingOrderIdentityAreRejected() {
-        var d=draft();var bad=new AgentCommandDraft(1,d.commandId(),d.correlationId(),d.causationId(),d.tenantId(),d.clientId(),d.taskId(),null,d.targetAgentId(),"SKILL_INSTALL",1,3600001,
+        var d=draft();var bad=new AgentCommandDraft(1,d.commandId(),d.correlationId(),d.causationId(),d.tenantId(),d.clientId(),d.ownerJiacn(), d.taskId(),null,d.targetAgentId(),"SKILL_INSTALL",1,3600001,
                 new AgentSkillInstallPayload("other-order","si_1","spv_repo_test_1_0_0","repo-test","1.0.0","522","sha256:"+"a".repeat(64),"https://untrusted/package"));
         assertThrows(IllegalArgumentException.class,()->AgentCommandCanonicalCodec.businessBytes(bad));
     }

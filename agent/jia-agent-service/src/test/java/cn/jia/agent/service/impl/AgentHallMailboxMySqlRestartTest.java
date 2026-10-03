@@ -560,35 +560,41 @@ class AgentHallMailboxMySqlRestartTest {
         AgentTaskCollaborationAccessService access =
                 mock(AgentTaskCollaborationAccessService.class);
         when(access.resolveMemberAccessForUpdate(
-                anyString(), anyString(), anyString(), anyString()))
+                anyString(), anyString(), anyString(), anyString(), anyString()))
                 .thenAnswer(invocation -> {
                     String tenantId = invocation.getArgument(0);
                     String clientId = invocation.getArgument(1);
-                    String taskId = invocation.getArgument(2);
-                    String agentId = invocation.getArgument(3);
+                    String ownerJiacn = invocation.getArgument(2);
+                    String taskId = invocation.getArgument(3);
+                    String agentId = invocation.getArgument(4);
                     List<String> taskStatus = context.jdbc().query(
                             """
                             SELECT reward_status FROM agent_task_meta
-                            WHERE tenant_id=? AND client_id=? AND task_id=?
+                            WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND task_id=?
                               AND CAST(tenant_id AS BINARY)=CAST(? AS BINARY)
                               AND CAST(client_id AS BINARY)=CAST(? AS BINARY)
+                              AND CAST(owner_jiacn AS BINARY)=CAST(? AS BINARY)
+                              AND OCTET_LENGTH(owner_jiacn)=OCTET_LENGTH(?)
                               AND CAST(task_id AS BINARY)=CAST(? AS BINARY)
                             LIMIT 2 FOR UPDATE
                             """, (row, index) -> row.getString(1),
-                            tenantId, clientId, taskId, tenantId, clientId, taskId);
+                            tenantId, clientId, ownerJiacn, taskId,
+                            tenantId, clientId, ownerJiacn, ownerJiacn, taskId);
                     if (taskStatus.size() != 1) return AgentTaskAccessLevel.NONE;
                     List<String> memberStatus = context.jdbc().query(
                             """
                             SELECT member_status FROM agent_task_member
-                            WHERE tenant_id=? AND client_id=? AND task_id=? AND agent_id=?
+                            WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND task_id=? AND agent_id=?
                               AND CAST(tenant_id AS BINARY)=CAST(? AS BINARY)
                               AND CAST(client_id AS BINARY)=CAST(? AS BINARY)
+                              AND CAST(owner_jiacn AS BINARY)=CAST(? AS BINARY)
+                              AND OCTET_LENGTH(owner_jiacn)=OCTET_LENGTH(?)
                               AND CAST(task_id AS BINARY)=CAST(? AS BINARY)
                               AND CAST(agent_id AS BINARY)=CAST(? AS BINARY)
                             LIMIT 2 FOR UPDATE
                             """, (row, index) -> row.getString(1),
-                            tenantId, clientId, taskId, agentId,
-                            tenantId, clientId, taskId, agentId);
+                            tenantId, clientId, ownerJiacn, taskId, agentId,
+                            tenantId, clientId, ownerJiacn, ownerJiacn, taskId, agentId);
                     if (memberStatus.size() != 1) return AgentTaskAccessLevel.NONE;
                     return switch (memberStatus.getFirst()) {
                         case "accepted", "working", "blocked" ->

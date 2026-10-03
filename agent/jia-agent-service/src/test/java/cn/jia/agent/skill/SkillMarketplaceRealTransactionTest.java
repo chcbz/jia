@@ -39,7 +39,7 @@ import static org.mockito.ArgumentMatchers.*;
  * No sockets, broker, runner, or provisioning. Runtime/owner/key adapters are explicit trusted fixtures.
  * Paid terminal selectors require W06's centralized CAPTURE_SKILL/REFUND_SKILL primitive integration. */
 class SkillMarketplaceRealTransactionTest {
-    private static final HostingRentHttp.Actor ACTOR=new HostingRentHttp.Actor("payer-sub","Tenant-A","Client-A");
+    private static final HostingRentHttp.Actor ACTOR=new HostingRentHttp.Actor("payer-sub","0","Client-A","Tenant-A");
     private static final String AGENT="agt_00000000000000000000000000000001";
     private static final String TRANSPORT_SCHEMA="db/agent-command-transport-schema.sql";
     private static final String MYSQL_AUDIT_UPDATE_TRIGGER="""
@@ -332,7 +332,7 @@ class SkillMarketplaceRealTransactionTest {
         runtime.setTokenHash("registration-2");versions.observe(runtime);
         assertThrows(SkillMarketplaceException.class,()->service.purchase(ACTOR,uuid(),body,false));
         assertThrows(SkillMarketplaceException.class,()->service.quote(ACTOR,uuid(),Map.of("targetAgentId",AGENT,"productVersionId","spv_deploy_runner_1_0_0","expectedAgentVersion","2"),false));
-        assertThrows(SkillMarketplaceException.class,()->service.purchase(new HostingRentHttp.Actor(ACTOR.actorId(),"tenant-a",ACTOR.clientId()),uuid(),body,false));
+        assertThrows(SkillMarketplaceException.class,()->service.purchase(new HostingRentHttp.Actor(ACTOR.actorId(),"0",ACTOR.clientId(),"tenant-a"),uuid(),body,false));
         assertEquals(0,count("economy_transaction"));assertEquals(0,count("agent_command_delivery"));
     }
     @Test void concurrentSameKeyHasOneReserveOneDeliveryAndImmutableReceipt() throws Exception {
