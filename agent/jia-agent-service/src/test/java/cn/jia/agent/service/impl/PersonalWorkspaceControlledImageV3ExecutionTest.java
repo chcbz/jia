@@ -47,8 +47,18 @@ class PersonalWorkspaceControlledImageV3ExecutionTest {
     "a".repeat(64),false,List.of(new PersonalWorkspaceExecutionService.RuntimeInputV3(
       "input_1",source,"image/png","4","b".repeat(64))));
   var output=new org.springframework.mock.http.MockHttpOutputMessage();
+  // Production applies global response advice before the converter. Its bean-to-Map
+  // projection previously reintroduced null union fields despite @JsonInclude(NON_NULL).
+  var method=cn.jia.agent.api.PersonalWorkspaceConversationRuntimeController.class.getMethod(
+    "inputsV3",String.class,String.class,
+    cn.jia.agent.api.PersonalWorkspaceConversationRuntimeController.FenceRequest.class,
+    jakarta.servlet.http.HttpServletRequest.class,org.springframework.security.core.Authentication.class);
+  var advised=new cn.jia.core.security.SensitiveResponseBodyAdvice(
+    new cn.jia.core.security.SensitiveResponseProperties()).beforeBodyWrite(snapshot,
+      new org.springframework.core.MethodParameter(method,-1),org.springframework.http.MediaType.APPLICATION_JSON,
+      org.springframework.http.converter.json.JacksonJsonHttpMessageConverter.class,null,null);
   new org.springframework.http.converter.json.JacksonJsonHttpMessageConverter().write(
-    snapshot,org.springframework.http.MediaType.APPLICATION_JSON,output);
+    advised,org.springframework.http.MediaType.APPLICATION_JSON,output);
   var root=tools.jackson.databind.json.JsonMapper.builder().build().readTree(output.getBodyAsString());
   assertEquals(3,root.get("schemaVersion").intValue());
   assertEquals(operation,root.get("operation").textValue());
