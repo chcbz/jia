@@ -102,7 +102,7 @@ public class ControlledImageFollowupAuthorityServiceImpl implements ControlledIm
     "actionRequestId",command.actionRequestId(),"parentOutcomeId",command.parentOutcomeId(),
     "parentFinalDigest",command.parentFinalDigest(),"originalUserMessageId",Long.toString(command.originalUserMessageId()),
     "originalUserContentSha256",command.originalUserContentSha256(),"ownerPayloadSha256",p.ownerPayloadSha256(),
-    "interactionRequestDigest",command.interactionRequestDigest(),"previewSha256",ordinaryDigest(p))));
+    "interactionRequestDigest",command.interactionRequestDigest(),"previewSha256",ordinaryDigest(p)));
   return tx.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),p.taskId(),root->{
   // This proof is supplied by the Chat owner, not by the model or an external controller.
   // Acquire the root before Chat checks and before grant writes. The caller transaction
