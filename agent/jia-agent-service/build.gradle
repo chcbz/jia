@@ -746,6 +746,8 @@ dependencies {
             'org.springframework.security:spring-security-oauth2-jose')
     add(mmdControlledImageFollowupV3SourceSet.runtimeOnlyConfigurationName,
             'org.junit.platform:junit-platform-launcher:6.0.1')
+    // Composed native HTTP filter test loads the production authentication service.
+    add(mmdControlledImageFollowupV3SourceSet.runtimeOnlyConfigurationName, project(':oauth:jia-oauth-api'))
     add(mmdControlledImageFollowupV3SourceSet.runtimeOnlyConfigurationName, libs.mysql)
     add(mmdControlledImageFollowupV3SourceSet.runtimeOnlyConfigurationName, 'com.h2database:h2')
     add(mmdControlledImageFollowupV3SourceSet.runtimeOnlyConfigurationName, 'com.jayway.jsonpath:json-path')
