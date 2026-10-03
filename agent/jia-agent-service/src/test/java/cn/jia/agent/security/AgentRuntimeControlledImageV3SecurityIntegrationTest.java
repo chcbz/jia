@@ -98,6 +98,60 @@ class AgentRuntimeControlledImageV3SecurityIntegrationTest {
         assertNull(result.get("password"));assertEquals("file",result.get("fileId"));
     }
 
+    @Test void spoolUploadRequiresNativeIdentityStrictProofAndExactBytesBeforeServiceWrites() throws Exception {
+        var executions=org.mockito.Mockito.mock(cn.jia.agent.service.PersonalWorkspaceExecutionService.class);
+        var authentication=org.mockito.Mockito.mock(AgentRuntimeAuthenticationService.class);
+        var principal=new AgentRuntimeAuthentication(new AgentRuntimeAuthentication.Scope("0","client","owner","agent","runtime"));
+        org.mockito.Mockito.when(authentication.authenticate("agent","runtime","a".repeat(32))).thenReturn(principal);
+        var aware=new org.springframework.security.web.servletapi.SecurityContextHolderAwareRequestFilter();aware.afterPropertiesSet();
+        var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(
+            new cn.jia.agent.api.PersonalWorkspaceConversationRuntimeController(executions))
+            .addFilters(new AgentRuntimeAuthenticationFilter(authentication),aware).build();
+        byte[] bytes=new byte[]{1,2,3}; // Controller tests byte proof; service tests real PNG format.
+        String hash=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+        String manifest="pwe_m_"+"b".repeat(64);
+        String path="/internal/agent/tasks/task-1/runs/run-1/conversation/result-commits/"+manifest;
+        String proof="{\"schemaVersion\":1,\"executionId\":\"execution\",\"commandId\":\"command\","
+            +"\"messageId\":\"message\",\"inputSnapshotDigest\":\""+"c".repeat(64)+"\",\"outputs\":[{"
+            +"\"outputId\":\"output_1\",\"sha256\":\""+hash+"\",\"length\":3}]}";
+        var scope=new cn.jia.agent.service.PersonalWorkspaceExecutionService.RuntimeScope("0","client","owner","agent","runtime");
+        var command=new cn.jia.agent.service.PersonalWorkspaceExecutionService.ConversationResultRecovery("execution",
+            "command","message","c".repeat(64),List.of(new cn.jia.agent.service.PersonalWorkspaceExecutionService.OutputDeclaration("output_1",hash,3)));
+        org.mockito.Mockito.when(executions.recoverConversationOutput(org.mockito.ArgumentMatchers.eq(scope),
+            org.mockito.ArgumentMatchers.eq("task-1"),org.mockito.ArgumentMatchers.eq("run-1"),org.mockito.ArgumentMatchers.eq(manifest),
+            org.mockito.ArgumentMatchers.eq(command),org.mockito.ArgumentMatchers.eq("bird.png"),org.mockito.ArgumentMatchers.eq("image/png"),
+            org.mockito.AdditionalMatchers.aryEq(bytes))).thenReturn(
+                new cn.jia.agent.service.PersonalWorkspaceExecutionService.CommitView(manifest,"COMMITTED",List.of()));
+        var ok=mvc.perform(spoolRequest(path,proof,bytes)).andReturn().getResponse();
+        assertEquals(200,ok.getStatus());assertEquals("private, no-store",ok.getHeader("Cache-Control"));
+        assertTrue(ok.getContentAsString().contains("COMMITTED"));
+        org.mockito.Mockito.verify(executions).recoverConversationOutput(org.mockito.ArgumentMatchers.eq(scope),
+            org.mockito.ArgumentMatchers.eq("task-1"),org.mockito.ArgumentMatchers.eq("run-1"),org.mockito.ArgumentMatchers.eq(manifest),
+            org.mockito.ArgumentMatchers.eq(command),org.mockito.ArgumentMatchers.eq("bird.png"),org.mockito.ArgumentMatchers.eq("image/png"),
+            org.mockito.AdditionalMatchers.aryEq(bytes));
+        org.mockito.Mockito.clearInvocations(executions);
+        for (String invalid:List.of(proof.replace("\"schemaVersion\":1","\"schemaVersion\":2"),
+            proof.replace("\"length\":3","\"length\":4"),proof.replace(hash,"0".repeat(64)),
+            proof.replace("\"length\":3","\"length\":\"3\""),proof.replace("\"length\":3","\"length\":3.0"),
+            proof.replace("{\"schemaVersion\":1","{\"schemaVersion\":1,\"schemaVersion\":1"),
+            proof.replace("{\"schemaVersion\":1","{\"fence\":{},\"schemaVersion\":1"),proof+" {}"))
+            assertEquals(400,mvc.perform(spoolRequest(path,invalid,bytes)).andReturn().getResponse().getStatus());
+        assertEquals(400,mvc.perform(spoolRequest(path,proof,new byte[]{3,2,1})).andReturn().getResponse().getStatus());
+        assertEquals(403,mvc.perform(spoolRequest(path,proof,bytes).header("Origin","https://browser.invalid")).andReturn().getResponse().getStatus());
+        assertEquals(401,mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart(path)
+            .file("file",bytes).param("proof",proof)).andReturn().getResponse().getStatus());
+        assertEquals(403,mvc.perform(spoolRequest(path+"/more",proof,bytes)).andReturn().getResponse().getStatus());
+        org.mockito.Mockito.verifyNoInteractions(executions);
+    }
+
+    private static org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder spoolRequest(
+            String path,String proof,byte[] bytes) {
+        return org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart(path)
+            .file(new org.springframework.mock.web.MockMultipartFile("file","bird.png","image/png",bytes))
+            .param("proof",proof).header("Authorization","AgentRuntime "+"a".repeat(32))
+            .header("X-Agent-Id","agent").header("X-Agent-Runtime-Id","runtime");
+    }
+
     private static org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder nativeInputsRequest() {
         return org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(
           "/internal/agent/tasks/task-1/runs/run-1/conversation/inputs-v3")

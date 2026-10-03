@@ -680,6 +680,109 @@ class PersonalWorkspaceConversationExecutionTest {
     }
 
 
+    @Test void spoolOnlyResultUploadsAndCommitsAfterExpiryWithoutRenewingOrReexecuting() throws Exception {
+        byte[] bytes=recoverableV3();
+        var replacement=new PersonalWorkspaceExecutionService.RuntimeScope("0","client","owner","agent","replacement");
+        execution.setConversationLeaseExpiresAt(1L);
+        var proof=recoveryProof(bytes);
+        var first=service.recoverConversationOutput(replacement,"task-1","run-1",recoveryManifest(bytes),
+                proof,"bird.png","image/png",bytes);
+        assertEquals("COMMITTED",first.state());
+        assertEquals("OUTPUT_COMMITTED",execution.getExecutionState());
+        assertEquals(first,service.recoverConversationOutput(replacement,"task-1","run-1",recoveryManifest(bytes),
+                proof,"bird.png","image/png",bytes));
+        assertEquals(first,service.recoverStagedConversationOutput(replacement,"task-1","run-1",recoveryManifest(bytes),proof));
+        verify(storage,times(1)).store(any(),any(byte[].class),eq("image/png"));
+        verify(rows,times(1)).insertOutput(any());verify(rows,times(1)).update(execution);
+        assertEquals("runtime",execution.getConversationLeaseRuntimeId());
+        assertEquals(1L,execution.getConversationLeaseVersion());assertEquals(1L,execution.getConversationLeaseExpiresAt());
+        assertEquals(10L,execution.getConversationProviderStartedAt());
+        verify(followup,times(3)).runtimeAuthority(any(),eq("task-1"),eq("run-1"),eq("RESULT_RECOVERY"));
+        verifyNoMoreInteractions(followup);verifyNoInteractions(followupSources,writes);
+    }
+
+    @Test void spoolRecoveryRejectsForeignLiveLeaseAndMissingStartWithoutWritingBytes() throws Exception {
+        byte[] bytes=recoverableV3();var proof=recoveryProof(bytes);String manifest=recoveryManifest(bytes);
+        var replacement=new PersonalWorkspaceExecutionService.RuntimeScope("0","client","owner","agent","replacement");
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class,()->service.recoverConversationOutput(
+                replacement,"task-1","run-1",manifest,proof,"bird.png","image/png",bytes));
+        execution.setConversationProviderStartedAt(null);
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class,()->service.recoverConversationOutput(
+                RUNTIME,"task-1","run-1",manifest,proof,"bird.png","image/png",bytes));
+        verify(storage,never()).store(any(),any(byte[].class),anyString());verify(rows,never()).insertOutput(any());
+    }
+
+    @Test void spoolRecoveryRejectsChangedBytesManifestCommandAndSnapshotBeforeStorage() throws Exception {
+        byte[] bytes=recoverableV3();var proof=recoveryProof(bytes);String manifest=recoveryManifest(bytes);
+        byte[] changed=bytes.clone();changed[changed.length-1]^=1;
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class,()->service.recoverConversationOutput(
+                RUNTIME,"task-1","run-1",manifest,proof,"bird.png","image/png",changed));
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class,()->service.recoverConversationOutput(
+                RUNTIME,"task-1","run-1","pwe_m_"+"0".repeat(64),proof,"bird.png","image/png",bytes));
+        for (var wrong:List.of(
+                new PersonalWorkspaceExecutionService.ConversationResultRecovery("other",commandId(),messageId(),"7".repeat(64),proof.outputs()),
+                new PersonalWorkspaceExecutionService.ConversationResultRecovery("exec-1","wrong",messageId(),"7".repeat(64),proof.outputs()),
+                new PersonalWorkspaceExecutionService.ConversationResultRecovery("exec-1",commandId(),"wrong","7".repeat(64),proof.outputs()),
+                new PersonalWorkspaceExecutionService.ConversationResultRecovery("exec-1",commandId(),messageId(),"8".repeat(64),proof.outputs())))
+            assertThrows(PersonalWorkspaceExecutionService.Failure.class,()->service.recoverConversationOutput(
+                    RUNTIME,"task-1","run-1",manifest,wrong,"bird.png","image/png",bytes));
+        verify(storage,never()).store(any(),any(byte[].class),anyString());verify(rows,never()).insertOutput(any());
+    }
+
+    @Test void spoolRecoveryStillRequiresCurrentAclAssignmentAndOwnerAndConsumedAuthority() throws Exception {
+        byte[] bytes=recoverableV3();var proof=recoveryProof(bytes);String manifest=recoveryManifest(bytes);
+        root.setAssignedAgentId("other");
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class,()->service.recoverConversationOutput(
+                RUNTIME,"task-1","run-1",manifest,proof,"bird.png","image/png",bytes));
+        root.setAssignedAgentId("agent");
+        for(var scope:List.of(
+                new PersonalWorkspaceExecutionService.RuntimeScope("foreign","client","owner","agent","runtime"),
+                new PersonalWorkspaceExecutionService.RuntimeScope("0","foreign","owner","agent","runtime"),
+                new PersonalWorkspaceExecutionService.RuntimeScope("0","client","foreign","agent","runtime"),
+                new PersonalWorkspaceExecutionService.RuntimeScope("0","client","owner","foreign","runtime")))
+            assertThrows(PersonalWorkspaceExecutionService.Failure.class,()->service.recoverConversationOutput(
+                    scope,"task-1","run-1",manifest,proof,"bird.png","image/png",bytes));
+        when(conversation.requireAccessible(any(),eq("42"))).thenThrow(new IllegalStateException("revoked"));
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class,()->service.recoverConversationOutput(
+                RUNTIME,"task-1","run-1",manifest,proof,"bird.png","image/png",bytes));
+        verify(storage,never()).store(any(),any(byte[].class),anyString());verify(rows,never()).insertOutput(any());
+    }
+
+    @Test void spoolRecoveryNeverOverwritesAConflictingPersistedOutputOrResurrectsFailure() throws Exception {
+        byte[] bytes=recoverableV3();var proof=recoveryProof(bytes);String manifest=recoveryManifest(bytes);
+        service.recoverConversationOutput(RUNTIME,"task-1","run-1",manifest,proof,"bird.png","image/png",bytes);
+        output.setContentHash("0".repeat(64));
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class,()->service.recoverConversationOutput(
+                RUNTIME,"task-1","run-1",manifest,proof,"bird.png","image/png",bytes));
+        output.setContentHash(sha(bytes));execution.setExecutionState("FAILED");
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class,()->service.recoverConversationOutput(
+                RUNTIME,"task-1","run-1",manifest,proof,"bird.png","image/png",bytes));
+        verify(storage,times(1)).store(any(),any(byte[].class),anyString());verify(rows,times(1)).insertOutput(any());
+    }
+
+    private byte[] recoverableV3() throws Exception {
+        enable();startedV3();byte[] bytes=png();String hash=sha(bytes);
+        var authority=followup.runtimeAuthority(null,"task-1","run-1","RESULT");
+        clearInvocations(followup);
+        when(followup.runtimeAuthority(any(),eq("task-1"),eq("run-1"),eq("RESULT_RECOVERY"))).thenReturn(authority);
+        when(storage.store(any(),any(byte[].class),eq("image/png")))
+                .thenReturn(new PersonalWorkspaceStorage.StoredObject("private/result",hash,bytes.length,"image/png"));
+        when(rows.lockOutput("0","client","owner","exec-1","output_1")).thenAnswer(ignored -> output);
+        doAnswer(invocation -> { output=invocation.getArgument(0);return null; }).when(rows).insertOutput(any());
+        when(rows.lockOutputs("0","client","owner","exec-1"))
+                .thenAnswer(ignored -> output==null?List.of():List.of(output));
+        when(storage.read(any(),eq("private/result"),eq(hash),eq((long)bytes.length),eq("image/png")))
+                .thenReturn(new PersonalWorkspaceStorage.StoredContent(bytes,hash,bytes.length,"image/png"));
+        return bytes;
+    }
+    private PersonalWorkspaceExecutionService.ConversationResultRecovery recoveryProof(byte[] bytes) {
+        return new PersonalWorkspaceExecutionService.ConversationResultRecovery("exec-1",commandId(),messageId(),
+                "7".repeat(64),List.of(new PersonalWorkspaceExecutionService.OutputDeclaration("output_1",sha(bytes),bytes.length)));
+    }
+    private String recoveryManifest(byte[] bytes) {
+        return "pwe_m_"+sha(("task-1\nrun-1\noutput_1\n"+sha(bytes)+"\n"+bytes.length+"\n").getBytes(StandardCharsets.UTF_8));
+    }
+
     private void startedV3() {
         execution.setExecutionProtocolVersion(3)
                 .setControlledConsentId("consent_1234567890abcdef1234567890abcdef")

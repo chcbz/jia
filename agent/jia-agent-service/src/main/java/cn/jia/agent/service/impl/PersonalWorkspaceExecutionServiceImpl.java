@@ -1483,11 +1483,33 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     @Transactional(rollbackFor = Exception.class)
     public CommitView recoverStagedConversationOutput(RuntimeScope scope, String taskId, String runId,
             String manifestId, ConversationResultRecovery command) {
+        return recoverConversationResult(scope,taskId,runId,manifestId,command,null,null,null);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public CommitView recoverConversationOutput(RuntimeScope scope, String taskId, String runId,
+            String manifestId, ConversationResultRecovery command, String filename,
+            String contentMimeType, byte[] content) {
+        if (content==null || content.length==0) throw failure(Reason.BAD_REQUEST);
+        return recoverConversationResult(scope,taskId,runId,manifestId,command,filename,contentMimeType,content);
+    }
+
+    private CommitView recoverConversationResult(RuntimeScope scope, String taskId, String runId,
+            String manifestId, ConversationResultRecovery command, String filename,
+            String contentMimeType, byte[] content) {
         requireConversationExecutionEnabled(); id(manifestId,"manifestId",100);
         if (command==null || !safeId(command.executionId(),100) || !safeId(command.commandId(),100)
                 || !safeId(command.messageId(),100) || !sha(command.inputSnapshotDigest()))
             throw failure(Reason.BAD_REQUEST);
         validateManifest(command.outputs());
+        var declared=command.outputs().getFirst();
+        if (content!=null && (declared.byteLength()!=content.length
+                || !same(declared.sha256(),plainSha(content)))) throw failure(Reason.BAD_REQUEST);
+        // Validate the original manifest before any content-addressed storage side effect.
+        var proof=new PersonalWorkspaceExecutionOutputEntity().setOutputId(declared.outputId())
+                .setContentHash(declared.sha256()).setByteLength(declared.byteLength());
+        if (!same(manifestId(taskId,runId,List.of(proof)),manifestId)) throw failure(Reason.OUTPUT_CONFLICT);
         return withConversationRoot(scope,taskId,runId,true,true,false,"RESULT_RECOVERY",execution -> {
             if (!Objects.equals(3,execution.getExecutionProtocolVersion())
                     || execution.getControlledConsentId()==null
@@ -1501,8 +1523,21 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                     && expiry!=null && expiry>System.currentTimeMillis()
                     && !same(scope.runtimeInstanceId(),execution.getConversationLeaseRuntimeId()))
                 throw failure(Reason.TASK_CONFLICT);
-            // lockAndVerifyManifest binds every declared byte to persisted STAGED/COMMITTED output.
-            // No new storage writes, source material reads, cost consumption or lease changes.
+            // An authenticated result upload is not a new execution permission. The root,
+            // assignment, current conversation ACL and historical consumed START were checked above.
+            // Existing immutable output wins: do not overwrite or store again after a lost ACK.
+            if (content!=null) {
+                var existing=executions.lockOutput(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                        execution.getExecutionId(),declared.outputId());
+                if (existing==null) {
+                    if (!"QUEUED".equals(execution.getExecutionState())) throw failure(Reason.OUTPUT_CONFLICT);
+                    stageOutputLocked(scope,execution,declared.outputId(),filename,contentMimeType,content);
+                } else if (!same(existing.getContentMimeType(),contentMimeType)) {
+                    throw failure(Reason.OUTPUT_CONFLICT);
+                }
+            }
+            // Staging and commit share this transaction. Never read source materials, consume cost,
+            // restart the Provider, or rewrite the historical START/lease during recovery.
             return commitConversationOutputs(scope,execution,manifestId,command.outputs());
         });
     }

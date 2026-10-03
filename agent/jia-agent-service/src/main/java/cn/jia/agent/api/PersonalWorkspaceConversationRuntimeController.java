@@ -211,6 +211,47 @@ public final class PersonalWorkspaceConversationRuntimeController {
                                     item.sha256(),item.length())))));
     }
 
+    @PostMapping(value="/{taskId}/runs/{runId}/conversation/result-commits/{manifestId}",
+            consumes=MediaType.MULTIPART_FORM_DATA_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<PersonalWorkspaceExecutionService.CommitView> recoverUploaded(
+            @PathVariable String taskId,@PathVariable String runId,@PathVariable String manifestId,
+            @RequestParam("proof") String proof,@RequestParam("file") MultipartFile file,
+            HttpServletRequest request,Authentication authentication) throws IOException {
+        noQueryString(request);
+        var command=resultRecovery(proof);
+        if (file==null) throw new BadRequest();
+        byte[] bytes=file.getBytes();
+        var output=command.outputs().getFirst();
+        if (output.byteLength()!=bytes.length || !output.sha256().equals(digest(bytes))) throw new BadRequest();
+        return ok(executions.recoverConversationOutput(scope(authentication),taskId,runId,manifestId,
+                command,file.getOriginalFilename(),file.getContentType(),bytes));
+    }
+
+    private static PersonalWorkspaceExecutionService.ConversationResultRecovery resultRecovery(String raw) {
+        try {
+            JsonNode value=STRICT_JSON.readTree(raw);
+            if (value==null || !value.isObject() || !fields(value).equals(Set.of("schemaVersion",
+                    "executionId","commandId","messageId","inputSnapshotDigest","outputs"))
+                    || !integral(value.get("schemaVersion"),1)) throw new BadRequest();
+            for (String key:List.of("executionId","commandId","messageId"))
+                if (!safeTextId(value.get(key),100)) throw new BadRequest();
+            var digest=value.get("inputSnapshotDigest");
+            if (!text(digest) || !digest.textValue().matches("[a-f0-9]{64}")) throw new BadRequest();
+            var outputs=value.get("outputs");
+            if (!outputs.isArray() || outputs.size()!=1) throw new BadRequest();
+            var output=outputs.get(0);
+            if (!output.isObject() || !fields(output).equals(Set.of("outputId","sha256","length"))
+                    || !text(output.get("outputId")) || !"output_1".equals(output.get("outputId").textValue())
+                    || !text(output.get("sha256")) || !output.get("sha256").textValue().matches("[a-f0-9]{64}")
+                    || !safeIntegral(output.get("length"),1)) throw new BadRequest();
+            return new PersonalWorkspaceExecutionService.ConversationResultRecovery(
+                    value.get("executionId").textValue(),value.get("commandId").textValue(),
+                    value.get("messageId").textValue(),digest.textValue(),List.of(
+                        new PersonalWorkspaceExecutionService.OutputDeclaration("output_1",
+                            output.get("sha256").textValue(),output.get("length").longValue())));
+        } catch (RuntimeException invalid) { throw new BadRequest(); }
+    }
+
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/failure",consumes=MediaType.APPLICATION_JSON_VALUE,
             produces=MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<PersonalWorkspaceExecutionService.ExecutionView> failure(@PathVariable String taskId,
