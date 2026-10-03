@@ -100,14 +100,17 @@ public class ControlledImageFollowupAuthorityServiceImpl implements ControlledIm
     "parentFinalDigest",command.parentFinalDigest(),"originalUserMessageId",Long.toString(command.originalUserMessageId()),
     "originalUserContentSha256",command.originalUserContentSha256(),"ownerPayloadSha256",p.ownerPayloadSha256(),
     "interactionRequestDigest",command.interactionRequestDigest())));
+  return tx.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),p.taskId(),root->{
   // This proof is supplied by the Chat owner, not by the model or an external controller.
-  // Check before any grant writes; root transaction makes any later failure roll back both sides.
+  // Acquire the root before Chat checks and before grant writes. The caller transaction
+  // makes issuance, reservation and Chat child writes roll back together.
   late.verify();
   var issued=issueAuthorized(scope,p,"ordinary_"+command.actionRequestId(),originDigest,
     "ORDINARY_ACTION",current->{},late);
   return reserve(scope,new ReserveCommand(p,new Authority(issued.consentId(),Long.parseLong(issued.consentVersion()),
     issued.operationGrantId(),Long.parseLong(issued.operationGrantVersion())),command.interactionRequestDigest(),
     runtimeDigest(p,command.executionId(),command.runId()),command.executionId(),command.runId(),"image/png"),late);
+  });
  }
 
  private ControlledImageFollowupAuthorityDTO issueAuthorized(Scope scope,PreviewCommand preview,

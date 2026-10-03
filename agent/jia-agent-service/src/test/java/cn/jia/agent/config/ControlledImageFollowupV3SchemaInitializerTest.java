@@ -104,7 +104,7 @@ class ControlledImageFollowupV3SchemaInitializerTest {
         assertStrictObservedCatalog("source",observedSourceCatalogChecks(),
                 ControlledImageFollowupV3SchemaInitializer.sourceCheckExpressions());
         assertStrictObservedCatalog("consent",observedConsentCatalogChecks(),Map.of(
-                "chk_atpcc_purpose_union",additive.get("chk_atpcc_purpose_union")));
+                "chk_atpcc_purpose_union",ControlledImageFollowupV3SchemaInitializer.legacyConsentPurposeCatalogCheckExpression()));
         assertStrictObservedCatalog("execution",observedExecutionCatalogChecks(),Map.of(
                 "chk_pwex_controlled_consent",additive.get("chk_pwex_controlled_consent"),
                 "chk_pwex_execution_protocol",additive.get("chk_pwex_execution_protocol")));

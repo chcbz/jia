@@ -147,6 +147,8 @@ class AgentTaskProviderCostConsentSchemaInitializerTest {
     @Test void legacyRestartAcceptsObservedMysql821PurposeUnionAndRejectsEveryDriftShape() {
         String observed=observedMysql821PurposeUnionCatalogCheck();
         assertEquals(observed,ControlledImageFollowupV3SchemaInitializer
+                .legacyConsentPurposeCatalogCheckExpression());
+        assertNotEquals(observed,ControlledImageFollowupV3SchemaInitializer
                 .consentPurposeCatalogCheckExpression());
         assertNotEquals(observed,ControlledImageFollowupV3SchemaInitializer
                 .consentPurposeCheckExpression());

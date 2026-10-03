@@ -90,6 +90,75 @@ class ControlledImageIntentOperationGrantSpringTransactionTest {
         verifyNoInteractions(executions,sources);
     }
 
+    @Test void ordinaryAdmissionRequiresCallerTransactionAndRollsBackIssueReservationAndLateChatTogether() {
+        for (int failAt : List.of(2,3,0)) {
+            setUp();
+            var manager=new DataSourceTransactionManager(evidence.getDataSource());
+            var grants=mock(AgentTaskExecutionGrantService.class);
+            var consents=mock(AgentTaskProviderCostConsentDao.class);
+            var operations=mock(ControlledImageIntentOperationGrantDao.class);
+            var executions=mock(PersonalWorkspaceExecutionDao.class);
+            var sources=mock(ControlledImageExecutionSourceV3Dao.class);
+            var policies=mock(ControlledImageProviderOperatorPolicy.class);
+            @SuppressWarnings("unchecked") ObjectProvider<ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup> lookups=mock(ObjectProvider.class);
+            @SuppressWarnings("unchecked") ObjectProvider<ControlledImageFollowupAuthorityService.RuntimeSourceAccessLookup> access=mock(ObjectProvider.class);
+            var declaration=mock(ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.class);
+            when(lookups.getIfUnique()).thenReturn(declaration);
+            when(declaration.current(any())).thenReturn(new ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.Declaration(
+                    ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State.READY,"runtime",
+                    List.of("GENERATE_IMAGE","EDIT_IMAGE"),"CONTROLLED_IMAGE_HTTP_V1","binding",7L,"model",16,1,1));
+            when(grants.admitFollowupBaseline(any(),eq("task"),eq("baseline"),eq(1L),eq(0L),eq(0L),eq(1L),eq("agent")))
+                    .thenReturn(new AgentTaskExecutionGrantService.Admission("baseline",1,0,"agent",null,
+                            false,List.of(),null,null,0L,1L,"1".repeat(64),"assign-key","5".repeat(64)));
+            when(policies.requireCurrent(any(),eq("agent"),eq("binding"),eq(7L),anyLong())).thenReturn(
+                    new ControlledImageProviderOperatorPolicy.Policy("CONTROLLED_IMAGE_HTTP_V1","binding",7,
+                            "model","OPERATOR_TEMPLATE","operator","policy-r1","UNPRICED_EXTERNAL_ACCOUNT",1,Long.MAX_VALUE));
+            var consent=new java.util.concurrent.atomic.AtomicReference<cn.jia.agent.entity.AgentTaskProviderCostConsentEntity>();
+            var operation=new java.util.concurrent.atomic.AtomicReference<cn.jia.agent.entity.ControlledImageIntentOperationGrantEntity>();
+            doAnswer(inv->{consent.set(inv.getArgument(0));evidence.update("INSERT INTO followup_atomic_evidence VALUES ('consent')");return null;}).when(consents).insert(any());
+            doAnswer(inv->{operation.set(inv.getArgument(0));evidence.update("INSERT INTO followup_atomic_evidence VALUES ('operation')");return null;}).when(operations).insert(any());
+            doAnswer(inv->{evidence.update("INSERT INTO followup_atomic_evidence VALUES ('execution')");return null;}).when(executions).insert(any());
+            doAnswer(inv->consent.get()).when(consents).findFollowupByConsent(anyString(),anyString(),anyString(),anyString(),anyString());
+            doAnswer(inv->consent.get()).when(consents).findFollowupByConsentForUpdate(anyString(),anyString(),anyString(),anyString(),anyString());
+            doAnswer(inv->operation.get()).when(operations).lockById(anyString(),anyString(),anyString(),anyString(),anyString());
+            when(operations.reserve(any(),eq(1L))).thenReturn(true);
+            when(consents.bindFollowup(any(),eq(1L))).thenReturn(true);
+            when(consents.reserveFollowup(any(),eq(2L))).thenReturn(true);
+            var target=new ControlledImageFollowupAuthorityServiceImpl(transactions,grants,consents,operations,
+                    executions,sources,policies,lookups,access,new ObjectMapper());
+            var factory=new org.springframework.aop.framework.ProxyFactory(target);
+            factory.addAdvice(new org.springframework.transaction.interceptor.TransactionInterceptor(manager,
+                    new org.springframework.transaction.annotation.AnnotationTransactionAttributeSource()));
+            var service=(ControlledImageFollowupAuthorityService)factory.getProxy();
+            var command=new ControlledImageFollowupAuthorityService.OrdinaryActionCommand(preview(),"act_"+"a".repeat(40),
+                    "parent-outcome","sha256:"+"b".repeat(64),901L,"c".repeat(64),"execution","run","6".repeat(64));
+            var scope=new ControlledImageFollowupAuthorityService.Scope("0","client","owner");
+            assertThrows(org.springframework.transaction.IllegalTransactionStateException.class,
+                    ()->service.admitOrdinaryAction(scope,command,()->{}));
+            var callbacks=new java.util.concurrent.atomic.AtomicInteger();
+            Runnable work=()->new org.springframework.transaction.support.TransactionTemplate(manager).execute(status ->
+                    service.admitOrdinaryAction(scope,command,()->{
+                        int call=callbacks.incrementAndGet();
+                        if(call==2)assertEquals(2,evidence.queryForObject("SELECT COUNT(*) FROM followup_atomic_evidence",Integer.class));
+                        if(call==3){
+                            assertEquals(3,evidence.queryForObject("SELECT COUNT(*) FROM followup_atomic_evidence",Integer.class));
+                            evidence.update("INSERT INTO followup_atomic_evidence VALUES ('chat_child')");
+                        }
+                        if(call==failAt)throw new IllegalStateException("injected-ordinary-late-"+failAt);
+                    }));
+            if(failAt>0){
+                var failure=assertThrows(ControlledImageFollowupAuthorityService.Failure.class,work::run);
+                assertNotNull(failure.getCause());assertEquals("injected-ordinary-late-"+failAt,failure.getCause().getMessage());
+                assertEquals(failAt,callbacks.get());
+                assertEquals(0,evidence.queryForObject("SELECT COUNT(*) FROM followup_atomic_evidence",Integer.class));
+            }else{
+                work.run();assertEquals(3,callbacks.get());
+                assertEquals(4,evidence.queryForObject("SELECT COUNT(*) FROM followup_atomic_evidence",Integer.class));
+                assertEquals("ORDINARY_ACTION",consent.get().getConsentPurpose());
+            }
+        }
+    }
+
     private static ControlledImageFollowupAuthorityService.PreviewCommand preview() {
         return new ControlledImageFollowupAuthorityService.PreviewCommand("task","conversation",1,
                 "interaction-key","request","step","intent",
