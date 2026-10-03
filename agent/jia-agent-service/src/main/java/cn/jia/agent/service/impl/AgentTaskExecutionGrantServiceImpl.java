@@ -50,7 +50,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
     static final String ASSIGN_HASH_DOMAIN = "ASSIGN_AND_START";
     static final String INITIAL_OPERATION_HASH_DOMAIN = "ASSIGN_AND_START_INITIAL_OPERATION_V1";
     private static final Set<String> OPERATIONS = Set.of(
-            "INSPECT_INPUTS", "GENERATE_IMAGE", "EDIT_IMAGE", "GENERATE_AUDIO", "EDIT_AUDIO");
+            "DELIBERATE", "INSPECT_INPUTS", "GENERATE_IMAGE", "EDIT_IMAGE", "GENERATE_AUDIO", "EDIT_AUDIO");
     private static final Set<String> PURPOSES = Set.of("INPUT", "REFERENCE");
     private static final int MAX_INPUTS = 32;
     private static final long MAX_SAFE_INTEGER = 9_007_199_254_740_991L;
@@ -106,6 +106,76 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         }
     }
 
+    @Override
+    public AgentTaskExecutionGrantDTO assignForDeliberation(Scope scope, String taskId,
+            String key, String targetAgentId, long expectedTaskVersion, long requirementRevision) {
+        validateScope(scope); exact(taskId,"taskId",100); exact(key,"Idempotency-Key",100);
+        exact(targetAgentId,"targetAgentId",100);
+        if (expectedTaskVersion<0 || expectedTaskVersion==Long.MAX_VALUE || requirementRevision<1)
+            throw bad("Expected task/requirement revision is invalid");
+        String canonicalAgent=legacyAssignments.resolveAgentId(scope.tenantId(),scope.clientId(),
+                scope.ownerJiacn(),targetAgentId);
+        String actionId="ASSIGN_AND_START:"+key;
+        try {
+            return transactions.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),
+                    scope.ownerJiacn(),taskId,root -> {
+                requireCurrentRequirement(scope, taskId, requirementRevision);
+                // A retry reconstructs its ORIGINAL catalogue, not whatever was linked later.
+                // The common request hash still checks task, explicit target and both revisions.
+                AgentTaskExecutionGrantEntity previous=grants.findByActionForUpdate(scope.tenantId(),
+                        scope.clientId(),scope.ownerJiacn(),actionId);
+                List<AgentTaskGrantInputDTO> inputs=previous==null ? allTaskMaterials(scope,taskId)
+                        : readInputs(previous.getInputScopeJson()).stream().map(input ->
+                            material(input.fileId(),input.version(),input.purpose())).toList();
+                AgentTaskAssignDTO request=new AgentTaskAssignDTO();
+                request.setWorkflowVersion(2); request.setBusinessAction(ACTION);
+                request.setAgentId(canonicalAgent); request.setExpectedTaskVersion(expectedTaskVersion);
+                request.setRequirementRevision(requirementRevision);
+                request.setRequestedOperations(List.of("DELIBERATE","INSPECT_INPUTS"));
+                request.setInitialOperation("DELIBERATE"); request.setInputRefs(inputs);
+                ValidAssign valid=validateAssign(scope,taskId,key,request);
+                return assignLocked(scope,valid,canonicalAgent,hashAssign(valid,canonicalAgent),actionId,root);
+            });
+        } catch (AgentTaskCollaborationException failure) { throw translate(failure); }
+    }
+
+    /** Called under the owner-scoped task root, before target/file/grant child mutation. */
+    private List<AgentTaskGrantInputDTO> allTaskMaterials(Scope scope,String taskId) {
+        var selected=new java.util.LinkedHashMap<String,AgentTaskGrantInputDTO>();
+        Long before=null; String after=null;
+        while (true) {
+            List<PersonalWorkspaceTaskFileLinkEntity> page=taskLinks.list(scope.tenantId(),scope.clientId(),
+                    scope.ownerJiacn(),taskId,before,after,MAX_INPUTS+1);
+            if (page==null || page.size()>MAX_INPUTS+1) throw invalidState("Task material catalogue is unavailable");
+            for (var link:page) {
+                if (link==null || !same(link.getTenantId(),scope.tenantId())
+                        || !same(link.getClientId(),scope.clientId()) || !same(link.getOwnerJiacn(),scope.ownerJiacn())
+                        || !same(link.getTaskId(),taskId)) throw invalidState("Task material catalogue scope changed");
+                if (!"ACTIVE".equals(link.getLinkState()) || !PURPOSES.contains(link.getLinkRole())) continue;
+                String identity=link.getFileId()+"\0"+link.getFileVersion();
+                AgentTaskGrantInputDTO old=selected.get(identity);
+                // A version may have both historical roles; it is still one product attachment.
+                if (old==null || "INPUT".equals(link.getLinkRole())) selected.put(identity,
+                        material(link.getFileId(),link.getFileVersion(),link.getLinkRole()));
+                if (selected.size()>MAX_INPUTS) throw bad("Task material catalogue exceeds 32 fixed versions");
+            }
+            if (page.size()<MAX_INPUTS+1) break;
+            var last=page.getLast();
+            if (last.getCreatedAt()==null || last.getRelationId()==null
+                    || before!=null && (last.getCreatedAt()>before
+                        || Objects.equals(before,last.getCreatedAt())
+                            && compareUtf8(last.getRelationId(),after)<=0))
+                throw invalidState("Task material catalogue cursor did not advance");
+            before=last.getCreatedAt(); after=last.getRelationId();
+        }
+        return List.copyOf(selected.values());
+    }
+
+    private static AgentTaskGrantInputDTO material(String fileId,Integer version,String role) {
+        AgentTaskGrantInputDTO value=new AgentTaskGrantInputDTO();
+        value.setFileId(fileId); value.setVersion(version); value.setPurpose(role); return value;
+    }
+
     AgentTaskExecutionGrantDTO assignControlledWithinLockedTask(Scope scope,String taskId,
             String idempotencyKey,AgentTaskAssignDTO request,AgentTaskMetaEntity root) {
         ValidAssign valid=validateAssign(scope,taskId,idempotencyKey,request);
@@ -125,6 +195,21 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
                 "ASSIGN_AND_START:"+valid.idempotencyKey(),root);
     }
 
+    private void requireCurrentRequirement(Scope scope, String taskId, long requirementRevision) {
+        try {
+            var confirmed = requirementSnapshots.requireCurrent(scope,taskId,requirementRevision);
+            if (confirmed == null || confirmed.revision()!=requirementRevision
+                    || !scope.tenantId().equals(confirmed.tenantId())
+                    || !scope.clientId().equals(confirmed.clientId())
+                    || !scope.ownerJiacn().equals(confirmed.ownerJiacn())
+                    || !taskId.equals(confirmed.taskId()))
+                throw new IllegalStateException("Requirement snapshot scope/revision mismatch");
+        }
+        catch (IllegalArgumentException | IllegalStateException absent) {
+            throw invalidState("Current owner-confirmed requirement revision is missing or stale");
+        }
+    }
+
     private AgentTaskExecutionGrantDTO assignLocked(Scope scope, ValidAssign valid,
             String canonicalAgent, String requestHash, String actionId, AgentTaskMetaEntity root) {
         // Frozen task-root lock order: requirement latest read -> grant action ->
@@ -133,18 +218,7 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         // admission and must never acquire Rabbit/Agent delivery semantics.
         // Root is already locked. Client revision is only a hint: compare with latest
         // server-owned immutable requirement before taking grant/outbox action locks.
-        try {
-            var confirmed = requirementSnapshots.requireCurrent(scope,valid.taskId(),valid.requirementRevision());
-            if (confirmed == null || confirmed.revision()!=valid.requirementRevision()
-                    || !scope.tenantId().equals(confirmed.tenantId())
-                    || !scope.clientId().equals(confirmed.clientId())
-                    || !scope.ownerJiacn().equals(confirmed.ownerJiacn())
-                    || !valid.taskId().equals(confirmed.taskId()))
-                throw new IllegalStateException("Requirement snapshot scope/revision mismatch");
-        }
-        catch (IllegalArgumentException | IllegalStateException absent) {
-            throw invalidState("Current owner-confirmed requirement revision is missing or stale");
-        }
+        requireCurrentRequirement(scope, valid.taskId(), valid.requirementRevision());
         AgentTaskExecutionGrantEntity replay = grants.findByActionForUpdate(scope.tenantId(),
                 scope.clientId(),scope.ownerJiacn(),actionId);
         AgentTaskBountyBootstrapOutboxEntity existingBootstrap =

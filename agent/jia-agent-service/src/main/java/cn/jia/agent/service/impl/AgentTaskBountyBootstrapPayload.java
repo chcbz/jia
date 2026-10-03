@@ -17,7 +17,7 @@ import java.util.Set;
 final class AgentTaskBountyBootstrapPayload {
     static final String REQUIREMENT_ANCHOR = "TASK_REQUIREMENT_REVISION_V1";
     private static final Set<String> OPERATIONS = Set.of(
-            "INSPECT_INPUTS", "GENERATE_IMAGE", "EDIT_IMAGE", "GENERATE_AUDIO", "EDIT_AUDIO");
+            "DELIBERATE", "INSPECT_INPUTS", "GENERATE_IMAGE", "EDIT_IMAGE", "GENERATE_AUDIO", "EDIT_AUDIO");
 
     private AgentTaskBountyBootstrapPayload() { }
 

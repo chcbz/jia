@@ -43,7 +43,7 @@ public final class AgentTaskDeliberationOperationReadServiceImpl
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
     private static final String ACTION_PREFIX = "ASSIGN_AND_START:";
     private static final Set<String> OPERATIONS = Set.of(
-            "INSPECT_INPUTS", "GENERATE_IMAGE", "EDIT_IMAGE", "GENERATE_AUDIO", "EDIT_AUDIO");
+            "DELIBERATE", "INSPECT_INPUTS", "GENERATE_IMAGE", "EDIT_IMAGE", "GENERATE_AUDIO", "EDIT_AUDIO");
     private static final Set<String> PURPOSES = Set.of("INPUT", "REFERENCE");
     private static final Set<String> GRANT_STATES = Set.of("ACTIVE", "REVOKED", "SUPERSEDED");
     private static final Set<String> BOOTSTRAP_STATES = Set.of(

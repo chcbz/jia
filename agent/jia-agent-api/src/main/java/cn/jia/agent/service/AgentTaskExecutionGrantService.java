@@ -9,6 +9,11 @@ public interface AgentTaskExecutionGrantService {
     AgentTaskExecutionGrantDTO assignAndGrant(Scope scope, String taskId,
             String idempotencyKey, AgentTaskAssignDTO request);
 
+    /** New product entry: the server snapshots all active task materials; no image/paid action is selected. */
+    AgentTaskExecutionGrantDTO assignForDeliberation(Scope scope, String taskId,
+            String idempotencyKey, String targetAgentId, long expectedTaskVersion,
+            long requirementRevision);
+
     AgentTaskExecutionGrantDTO revoke(Scope scope, String taskId, String grantId,
             String idempotencyKey, long expectedGrantVersion);
 

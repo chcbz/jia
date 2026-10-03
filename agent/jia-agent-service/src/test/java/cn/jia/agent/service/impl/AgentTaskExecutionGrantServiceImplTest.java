@@ -68,6 +68,143 @@ class AgentTaskExecutionGrantServiceImplTest {
     }
 
     @Test
+    void pointWithoutMaterialsCreatesDeliberationNotImageOrPaidAuthority() {
+        when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
+        var receipt=service.assignForDeliberation(scope(),"task-1","point-empty","agent-1",0,1);
+        assertEquals(List.of("DELIBERATE","INSPECT_INPUTS"),receipt.getPermittedOperations());
+        assertFalse(receipt.getPaidExecutionAuthorized());
+        assertTrue(receipt.getInputs().isEmpty());
+        assertEquals("DELIBERATE",bootstraps.byAction.values().iterator().next().getPermittedOperation());
+        assertNull(grants.byAction.values().iterator().next().getCostAuthorizationRef());
+    }
+
+    @Test
+    void pointFreezesAllMixedMediaAndReplayDoesNotReadChangedCatalogue() {
+        List<PersonalWorkspaceTaskFileLinkEntity> materials=new java.util.ArrayList<>();
+        int i=0;
+        for(String mime:List.of("image/png","application/pdf","audio/ogg","text/plain")) {
+            var link=pointMaterial("file-"+(++i),1,"INPUT",mime);
+            materials.add(link);
+        }
+        when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(materials);
+        var first=service.assignForDeliberation(scope(),"task-1","point-mixed","agent-1",0,1);
+        assertEquals(4,first.getInputs().size());
+        assertEquals(List.of("image/png","application/pdf","audio/ogg","text/plain"),
+                first.getInputs().stream().map(v->v.contentMimeType()).toList());
+        when(links.list("0","client","owner","task-1",null,null,33))
+                .thenThrow(new AssertionError("Replay must use the original fixed catalogue"));
+        var again=service.assignForDeliberation(scope(),"task-1","point-mixed","agent-1",0,1);
+        assertEquals(first.getGrantId(),again.getGrantId());
+        assertEquals(first.getInputs(),again.getInputs());
+        assertEquals(1,bootstraps.byAction.size());
+        verify(links,times(1)).list("0","client","owner","task-1",null,null,33);
+        verify(legacy,times(1)).assignResolvedVersionedWithLockedTask(anyString(),anyString(),anyString(),
+                anyString(),anyList(),eq(false),anyLong(),any(),same(root));
+    }
+
+    @Test
+    void pointSameKeyDifferentTargetOrVersionConflictsWithoutSecondAssignment() {
+        when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
+        service.assignForDeliberation(scope(),"task-1","point-conflict","agent-1",0,1);
+        when(legacy.resolveAgentId("0","client","owner","agent-2")).thenReturn("agent-2");
+        for(Runnable changed:List.<Runnable>of(
+                ()->service.assignForDeliberation(scope(),"task-1","point-conflict","agent-2",0,1),
+                ()->service.assignForDeliberation(scope(),"task-1","point-conflict","agent-1",1,1),
+                ()->service.assignForDeliberation(scope(),"task-1","point-conflict","agent-1",0,2))) {
+            var failure=assertThrows(AgentTaskExecutionGrantException.class,changed::run);
+            assertEquals(AgentTaskExecutionGrantException.Reason.IDEMPOTENCY_CONFLICT,failure.reason());
+        }
+        assertEquals(1,grants.byAction.size()); assertEquals(1,bootstraps.byAction.size());
+    }
+
+    @Test
+    void pointDeduplicatesRolesButKeepsDistinctVersionsAndIgnoresOutputs() {
+        var reference=pointMaterial("file-1",1,"REFERENCE","image/png");
+        var input=pointMaterial("file-1",1,"INPUT","image/png");
+        var second=pointMaterial("file-1",2,"INPUT","image/png");
+        var output=pointMaterial("output",1,"OUTPUT","image/png");
+        var removed=pointMaterial("removed",1,"INPUT","image/png").setLinkState("REMOVED");
+        when(links.list("0","client","owner","task-1",null,null,33))
+                .thenReturn(List.of(reference,input,second,output,removed));
+        var receipt=service.assignForDeliberation(scope(),"task-1","point-versions","agent-1",0,1);
+        assertEquals(2,receipt.getInputs().size());
+        assertEquals(List.of(1,2),receipt.getInputs().stream().map(v->v.version()).toList());
+        assertTrue(receipt.getInputs().stream().allMatch(v->"INPUT".equals(v.purpose())));
+    }
+
+    @Test
+    void pointPaginatesPastNonInputRowsInsteadOfSilentlyDroppingMaterials() {
+        var first=new java.util.ArrayList<PersonalWorkspaceTaskFileLinkEntity>();
+        for(int i=0;i<33;i++)first.add(pointMaterial("output-"+i,1,"OUTPUT","text/plain")
+                .setCreatedAt(100L).setRelationId(String.format("r%02d",i)));
+        when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(first);
+        when(links.list("0","client","owner","task-1",100L,"r32",33))
+                .thenReturn(List.of(pointMaterial("late-input",1,"INPUT","audio/ogg")));
+        var receipt=service.assignForDeliberation(scope(),"task-1","point-page","agent-1",0,1);
+        assertEquals("late-input",receipt.getInputs().getFirst().fileId());
+    }
+
+    @Test
+    void pointRejectsMoreThan32DistinctVersionsBeforeAssignment() {
+        var rows=new java.util.ArrayList<PersonalWorkspaceTaskFileLinkEntity>();
+        for(int i=0;i<33;i++)rows.add(pointMaterial("file-"+i,1,"INPUT","text/plain"));
+        when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(rows);
+        var failure=assertThrows(AgentTaskExecutionGrantException.class,
+                ()->service.assignForDeliberation(scope(),"task-1","point-limit","agent-1",0,1));
+        assertEquals(AgentTaskExecutionGrantException.Reason.BAD_REQUEST,failure.reason());
+        assertNull(root.getAssignedAgentId()); assertTrue(grants.byAction.isEmpty());
+    }
+
+    @Test
+    void pointRejectsCrossOwnerCatalogueBeforeReadingBytesOrAssigning() {
+        var foreign=pointMaterial("foreign",1,"INPUT","text/plain").setOwnerJiacn("other");
+        when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of(foreign));
+        var failure=assertThrows(AgentTaskExecutionGrantException.class,
+                ()->service.assignForDeliberation(scope(),"task-1","point-acl","agent-1",0,1));
+        assertEquals(AgentTaskExecutionGrantException.Reason.INVALID_PERSISTED_STATE,failure.reason());
+        assertNull(root.getAssignedAgentId()); assertTrue(grants.byAction.isEmpty());
+        verify(workspace,never()).lockFile(anyString(),anyString(),anyString(),anyString());
+    }
+
+    @Test
+    void pointUnavailableVersionPreventsAssignmentAndGrant() {
+        var row=pointMaterial("gone",1,"INPUT","application/pdf");
+        when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of(row));
+        when(workspace.findVersion("0","client","owner","gone",1)).thenReturn(null);
+        var failure=assertThrows(AgentTaskExecutionGrantException.class,
+                ()->service.assignForDeliberation(scope(),"task-1","point-gone","agent-1",0,1));
+        assertEquals(AgentTaskExecutionGrantException.Reason.NOT_FOUND,failure.reason());
+        assertNull(root.getAssignedAgentId()); assertTrue(grants.byAction.isEmpty());
+        assertTrue(bootstraps.byAction.isEmpty());
+    }
+
+    @Test
+    void pointBootstrapFailureRollsBackAssignmentGrantAndIntentInTransactionHarness() {
+        when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
+        service=new AgentTaskExecutionGrantServiceImpl(grants,bootstraps,links,workspace,legacy,identities,
+                new RollbackTransaction(root,grants,bootstraps),new ObjectMapper(),requirementSnapshots);
+        bootstraps.failInsert=true;
+        assertThrows(IllegalStateException.class,
+                ()->service.assignForDeliberation(scope(),"task-1","point-rollback","agent-1",0,1));
+        assertNull(root.getAssignedAgentId()); assertEquals(0L,root.getTaskVersion());
+        assertTrue(grants.byAction.isEmpty()); assertTrue(bootstraps.byAction.isEmpty());
+    }
+
+    private PersonalWorkspaceTaskFileLinkEntity pointMaterial(String id,int version,String role,String mime) {
+        var row=new PersonalWorkspaceTaskFileLinkEntity().setOwnerJiacn("owner").setTaskId("task-1")
+                .setFileId(id).setFileVersion(version).setLinkRole(role).setLinkState("ACTIVE")
+                .setRelationId("relation-"+id).setCreatedAt(100L);
+        row.setTenantId("0"); row.setClientId("client");
+        when(links.lockBySelection("0","client","owner","task-1",id,version,role)).thenReturn(row);
+        when(workspace.lockFile("0","client","owner",id))
+                .thenReturn(new PersonalWorkspaceFileEntity().setState("ACTIVE"));
+        when(workspace.findVersion("0","client","owner",id,version))
+                .thenReturn(new PersonalWorkspaceVersionEntity().setFileId(id).setVersion(version)
+                        .setContentMimeType(mime).setByteLength(12L).setContentHash("b".repeat(64)));
+        return row;
+    }
+
+    @Test
     void missingOrStaleServerRequirementPreventsAssignmentAndOutbox() {
         when(requirementSnapshots.requireCurrent(any(),eq("task-1"),anyLong()))
                 .thenThrow(new IllegalStateException("No persisted owner confirmation"));

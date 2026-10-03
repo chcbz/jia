@@ -48,6 +48,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 class AgentTaskBountyBootstrapOutboxServiceImplTest {
@@ -516,6 +517,74 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
                     () -> staleReceipt.service.read(scope(), "task-1", "original-key"));
         }
 
+        private AgentTaskDeliberationOperationReadService.Operation pointOperation(String initial) {
+            return new AgentTaskDeliberationOperationReadService.Operation(
+                    "task-1", "agent-1", 1, 1, 1, "grant-1", 1, "ACTIVE",
+                    List.of("DELIBERATE", "INSPECT_INPUTS"),List.of(),"bootstrap-1","PENDING",0,
+                    initial,null,null,true);
+        }
+
+        @Test
+        void pointHttpUsesOnlyExplicitTargetVersionsAndReadRecoveryDoesNotWrite() throws Exception {
+            var reads=mock(AgentTaskDeliberationOperationReadService.class);
+            var grants=mock(AgentTaskExecutionGrantService.class);
+            when(reads.read(scope(),"task-1","point-key")).thenReturn(pointOperation("DELIBERATE"));
+            var mvc=MockMvcBuilders.standaloneSetup(new AgentTaskDeliberationOperationController(reads,grants)).build();
+            mvc.perform(post("/agent/tasks/task-1/point-and-deliberate").principal(jwtToken("owner","client"))
+                    .header("Idempotency-Key","point-key").contentType("application/json")
+                    .content("{\"targetAgentId\":\"agent-1\",\"expectedTaskVersion\":\"0\",\"requirementRevision\":\"1\"}"))
+                    .andExpect(status().isOk()).andExpect(header().string(HttpHeaders.CACHE_CONTROL,"private, no-store"))
+                    .andExpect(jsonPath("$.data.initialOperation").value("DELIBERATE"))
+                    .andExpect(jsonPath("$.data.taskVersion").value("1"));
+            verify(grants).assignForDeliberation(scope(),"task-1","point-key","agent-1",0,1);
+            clearInvocations(grants);
+            mvc.perform(get("/agent/tasks/task-1/point-and-deliberate/request")
+                    .principal(jwtToken("owner","client")).header("Idempotency-Key","point-key"))
+                    .andExpect(status().isOk());
+            verifyNoInteractions(grants);
+        }
+
+        @Test
+        void pointHttpRejectsClientAuthorityAttachmentsDuplicateFieldsAndLossyNumbers() throws Exception {
+            var reads=mock(AgentTaskDeliberationOperationReadService.class);
+            var grants=mock(AgentTaskExecutionGrantService.class);
+            var mvc=MockMvcBuilders.standaloneSetup(new AgentTaskDeliberationOperationController(reads,grants)).build();
+            String good="{\"targetAgentId\":\"agent-1\",\"expectedTaskVersion\":\"0\",\"requirementRevision\":\"1\"}";
+            var invalid=new java.util.ArrayList<String>();
+            for(String extra:List.of("attachments","inputRefs","purpose","operation","paidExecutionAuthorized","tools","owner"))
+                invalid.add(good.substring(0,good.length()-1)+",\""+extra+"\":null}");
+            invalid.add(good.replace("\"0\"","0")); invalid.add(good.replace("\"0\"","\"00\""));
+            invalid.add(good.replace("\"1\"","\"0\""));
+            invalid.add(good.replace("\"0\"","\"9223372036854775807\""));
+            invalid.add(good.substring(0,good.length()-1)+",\"targetAgentId\":\"agent-2\"}");
+            invalid.add(good+" {}"); invalid.add("{}"); invalid.add("null");
+            for(String body:invalid) mvc.perform(post("/agent/tasks/task-1/point-and-deliberate")
+                    .principal(jwtToken("owner","client")).header("Idempotency-Key","point-key")
+                    .contentType("application/json").content(body)).andExpect(status().isBadRequest());
+            mvc.perform(post("/agent/tasks/task-1/point-and-deliberate?owner=other")
+                    .principal(jwtToken("owner","client")).header("Idempotency-Key","point-key")
+                    .contentType("application/json").content(good)).andExpect(status().isBadRequest());
+            mvc.perform(post("/agent/tasks/task-1/point-and-deliberate")
+                    .principal(jwtToken("owner","client")).header("Idempotency-Key","one","two")
+                    .contentType("application/json").content(good)).andExpect(status().isBadRequest());
+            mvc.perform(post("/agent/tasks/task-1/point-and-deliberate")
+                    .header("Idempotency-Key","point-key").contentType("application/json").content(good))
+                    .andExpect(status().isUnauthorized());
+            verifyNoInteractions(grants,reads);
+        }
+
+        @Test
+        void pointReadDoesNotReinterpretAnEarlierImageOperation() throws Exception {
+            var reads=mock(AgentTaskDeliberationOperationReadService.class);
+            var grants=mock(AgentTaskExecutionGrantService.class);
+            when(reads.read(scope(),"task-1","point-key")).thenReturn(pointOperation("GENERATE_IMAGE"));
+            var mvc=MockMvcBuilders.standaloneSetup(new AgentTaskDeliberationOperationController(reads,grants)).build();
+            mvc.perform(get("/agent/tasks/task-1/point-and-deliberate/request")
+                    .principal(jwtToken("owner","client")).header("Idempotency-Key","point-key"))
+                    .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("AGENT_GRANT_IDEMPOTENCY_CONFLICT"));
+            verifyNoInteractions(grants);
+        }
+
         @Test
         void controllerUsesJwtOnlyReturnsStringFencesNoStoreAndDefaultOff() throws Exception {
             AgentTaskDeliberationOperationReadService reads =
@@ -529,7 +598,7 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
                     "GENERATE_IMAGE", "77", "initial-request-1", true);
             when(reads.read(scope(), "task-1", "original-key")).thenReturn(operation);
             MockMvc mvc = MockMvcBuilders.standaloneSetup(
-                    new AgentTaskDeliberationOperationController(reads)).build();
+                    new AgentTaskDeliberationOperationController(reads, mock(AgentTaskExecutionGrantService.class))).build();
 
             mvc.perform(get("/agent/tasks/task-1/assignment-operation")
                             .principal(jwtToken("owner", "client"))
@@ -571,7 +640,7 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
             AgentTaskDeliberationOperationReadService reads =
                     mock(AgentTaskDeliberationOperationReadService.class);
             MockMvc mvc = MockMvcBuilders.standaloneSetup(
-                    new AgentTaskDeliberationOperationController(reads)).build();
+                    new AgentTaskDeliberationOperationController(reads, mock(AgentTaskExecutionGrantService.class))).build();
             mvc.perform(get("/agent/tasks/task-1/assignment-operation")
                             .header("Idempotency-Key", "original-key"))
                     .andExpect(status().isUnauthorized())
@@ -589,7 +658,7 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
                     .andExpect(status().isBadRequest());
 
             AgentTaskDeliberationOperationController direct =
-                    new AgentTaskDeliberationOperationController(reads);
+                    new AgentTaskDeliberationOperationController(reads, mock(AgentTaskExecutionGrantService.class));
             assertThrows(RuntimeException.class, () -> direct.read("task-1 ", "original-key",
                     new MockHttpServletRequest(), jwtToken("owner", "client")));
             assertThrows(RuntimeException.class, () -> direct.read("task-1", " key",
