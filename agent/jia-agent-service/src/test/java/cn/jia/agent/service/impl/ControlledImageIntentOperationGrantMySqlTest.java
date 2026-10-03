@@ -169,7 +169,8 @@ class ControlledImageIntentOperationGrantMySqlTest {
         var rows=checkCatalogue();
         // MySQL 8.0.21 ALTER renders this ASCII-only regexp literal as _ascii rather than
         // _utf8mb4 on the existing ASCII hash columns. Preserve every other predicate byte.
-        for(var row:rows) if("chk_aciiog_hashes".equals(row.get("CONSTRAINT_NAME"))) {
+        for(var row:rows) if(java.util.Set.of("chk_aciiog_hashes","chk_acies_common")
+                .contains(row.get("CONSTRAINT_NAME"))) {
             row.put("CHECK_CLAUSE",row.get("CHECK_CLAUSE").toString()
                     .replace("_utf8mb4\\'^[0-9a-f]{64}$\\'","_ascii\\'^[0-9a-f]{64}$\\'"));
         }
