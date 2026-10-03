@@ -70,7 +70,7 @@ class PersonalWorkspaceConversationExecutionTest {
                 .setRunId("run-1").setExecutionMode("CONVERSATION").setConversationId("42")
                 .setTargetAgentId("agent").setTaskGrantId("grant-1").setTaskGrantVersion(1L)
                 .setAssignmentRevision(7L).setPermittedOperation("GENERATE_IMAGE")
-                .setExecutionState("QUEUED").setOutputContentMimeType("image/png");
+                .setExecutionState("QUEUED").setGrantRevision(1L).setOutputContentMimeType("image/png");
         execution.setTenantId("0");execution.setClientId("client");execution.setOwnerJiacn("owner");
         when(rows.listInputs(eq("0"),eq("client"),eq("owner"),anyString())).thenReturn(List.of());
         when(rows.findByTaskRun("0","client","owner","task-1","run-1")).thenReturn(execution);
