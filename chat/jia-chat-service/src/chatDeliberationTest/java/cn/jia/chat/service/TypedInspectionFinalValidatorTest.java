@@ -92,7 +92,7 @@ class TypedInspectionFinalValidatorTest {
             var r = new LinkedHashMap<>(receiptSource); r.put("sourceRefId", id); rs.add(r);
         }
         facts.put("availableSources", fs); authority.put("sources", as); receipt.put("sources", rs);
-        receipt.put("inputDigest", ChatDeliberationService.digest(mapOf("authorizationId", receipt.get("authorizationId"),
+        receipt.put("inputDigest", ChatDeliberationService.digest(mapOf("schemaVersion", 1, "authorizationId", receipt.get("authorizationId"),
                 "manifestDigest", receipt.get("manifestDigest"), "sources", rs)));
         var result = TypedInspectionFinalValidator.validate(binding(), facts, authority, "Inspected.", answer("Inspected."), receipt);
         assertEquals(32, result.inspectionInputReceipt().sources().size());
