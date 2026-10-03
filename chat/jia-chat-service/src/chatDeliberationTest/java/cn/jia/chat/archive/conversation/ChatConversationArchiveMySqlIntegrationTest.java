@@ -197,6 +197,40 @@ class ChatConversationArchiveMySqlIntegrationTest {
                 """, "b".repeat(64)));
     }
 
+    @Test
+    void sourceUnionRejectsSqlUnknownForEveryRequiredTextFieldAndAssetRevision() {
+        var text = transactions.required(() ->
+                store.findAuthorizedTextSourceForUpdate(OWNER, "42", 1675335L));
+        assertNotNull(text);
+        Operation row = textOperation("arc_null_guard", "archive-text-null-guard", "1".repeat(64),
+                text.messageRevision(), 0, 4, sha(text.content()), "2".repeat(64),
+                text.content(), System.currentTimeMillis());
+        assertTrue(transactions.required(() -> store.tryInsert(row)));
+        for (String column : java.util.List.of("conversation_generation", "message_id",
+                "message_revision", "selection_start_code_point", "selection_end_code_point",
+                "source_sha256", "source_snapshot_key", "source_text")) {
+            assertThrows(DataAccessException.class, () -> jdbc.update(
+                    "UPDATE chat_conversation_archive_operation SET " + column
+                            + "=NULL WHERE operation_id='arc_null_guard'"), column);
+        }
+        jdbc.update("""
+                INSERT INTO chat_conversation_archive_operation
+                  (operation_id,tenant_id,owner_jiacn,client_id,conversation_id,
+                   idempotency_key,request_sha256,source_kind,asset_id,asset_revision,
+                   state,row_revision,created_at,updated_at)
+                VALUES ('arc_asset_null_guard','0','owner','client','42',
+                        'archive-asset-null-guard',?,'assetRef','asset_null_guard',1,'PENDING',1,1,1)
+                """, "a".repeat(64));
+        assertThrows(DataAccessException.class, () -> jdbc.update("""
+                UPDATE chat_conversation_archive_operation SET asset_revision=NULL
+                WHERE operation_id='arc_asset_null_guard'
+                """));
+        assertEquals("画一只鸟", jdbc.queryForObject("""
+                SELECT source_text FROM chat_conversation_archive_operation
+                WHERE operation_id='arc_null_guard'
+                """, String.class));
+    }
+
     private Operation textOperation(String operationId, String key, String requestSha,
             long messageRevision, int start, int end, String sourceSha, String snapshot,
             String text, long now) {

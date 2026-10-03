@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS chat_conversation_archive_operation (
   CONSTRAINT chk_chat_archive_request_sha CHECK (request_sha256 REGEXP '^[0-9a-f]{64}$'),
   CONSTRAINT chk_chat_archive_state CHECK (state IN ('PENDING','SAVING','SAVED','PARTIAL_FAILED')),
   CONSTRAINT chk_chat_archive_row_revision CHECK (row_revision>=1),
-  CONSTRAINT chk_chat_archive_source_union CHECK (
+  CONSTRAINT chk_chat_archive_source_union CHECK ((
     (source_kind='assetRef' AND asset_id IS NOT NULL AND asset_revision>=1
       AND message_id IS NULL AND message_revision IS NULL
       AND selection_start_code_point IS NULL AND selection_end_code_point IS NULL
@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS chat_conversation_archive_operation (
       AND source_snapshot_key REGEXP '^[0-9a-f]{64}$'
       AND source_text IS NOT NULL AND OCTET_LENGTH(source_text)>0
       AND CHAR_LENGTH(source_text)=selection_end_code_point-selection_start_code_point)
-  ),
+  ) IS TRUE),
   CONSTRAINT chk_chat_archive_saved_receipt CHECK
     (state<>'SAVED' OR (conversation_generation>=1 AND workspace_operation_id IS NOT NULL
       AND file_id IS NOT NULL AND file_version>=1))

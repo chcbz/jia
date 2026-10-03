@@ -76,7 +76,7 @@ public final class ChatConversationArchiveSchemaInitializer implements Initializ
                     "state IN ('PENDING','SAVING','SAVED','PARTIAL_FAILED')"),
             Map.entry("chk_chat_archive_row_revision", "row_revision>=1"),
             Map.entry("chk_chat_archive_source_union", """
-                    (source_kind='assetRef' AND asset_id IS NOT NULL AND asset_revision>=1
+                    ((source_kind='assetRef' AND asset_id IS NOT NULL AND asset_revision>=1
                       AND message_id IS NULL AND message_revision IS NULL
                       AND selection_start_code_point IS NULL AND selection_end_code_point IS NULL
                       AND source_sha256 IS NULL AND source_snapshot_key IS NULL AND source_text IS NULL)
@@ -89,7 +89,7 @@ public final class ChatConversationArchiveSchemaInitializer implements Initializ
                       AND source_sha256 REGEXP '^[0-9a-f]{64}$'
                       AND source_snapshot_key REGEXP '^[0-9a-f]{64}$'
                       AND source_text IS NOT NULL AND OCTET_LENGTH(source_text)>0
-                      AND CHAR_LENGTH(source_text)=selection_end_code_point-selection_start_code_point)
+                      AND CHAR_LENGTH(source_text)=selection_end_code_point-selection_start_code_point)) IS TRUE
                     """),
             Map.entry("chk_chat_archive_saved_receipt", """
                     state<>'SAVED' OR (conversation_generation>=1 AND workspace_operation_id IS NOT NULL
@@ -248,7 +248,7 @@ public final class ChatConversationArchiveSchemaInitializer implements Initializ
                     ((state <> 'SAVED') or ((conversation_generation >= 1) and (workspace_operation_id is not null) and (file_id is not null) and (file_version >= 1)))
                     """),
             Map.entry("chk_chat_archive_source_union", """
-                    (((source_kind = 'assetRef') and (asset_id is not null) and (asset_revision >= 1) and (message_id is null) and (message_revision is null) and (selection_start_code_point is null) and (selection_end_code_point is null) and (source_sha256 is null) and (source_snapshot_key is null) and (source_text is null)) or ((source_kind = 'textSelection') and (asset_id is null) and (asset_revision is null) and (conversation_generation >= 1) and regexp_like(message_id,'^[1-9][0-9]{0,18}$') and (message_revision >= 1) and (selection_start_code_point >= 0) and (selection_end_code_point > selection_start_code_point) and regexp_like(source_sha256,'^[0-9a-f]{64}$') and regexp_like(source_snapshot_key,'^[0-9a-f]{64}$') and (source_text is not null) and (length(source_text) > 0) and (char_length(source_text) = (selection_end_code_point - selection_start_code_point))))
+                    ((((source_kind = 'assetRef') and (asset_id is not null) and (asset_revision >= 1) and (message_id is null) and (message_revision is null) and (selection_start_code_point is null) and (selection_end_code_point is null) and (source_sha256 is null) and (source_snapshot_key is null) and (source_text is null)) or ((source_kind = 'textSelection') and (asset_id is null) and (asset_revision is null) and (conversation_generation >= 1) and regexp_like(message_id,'^[1-9][0-9]{0,18}$') and (message_revision >= 1) and (selection_start_code_point >= 0) and (selection_end_code_point > selection_start_code_point) and regexp_like(source_sha256,'^[0-9a-f]{64}$') and regexp_like(source_snapshot_key,'^[0-9a-f]{64}$') and (source_text is not null) and (length(source_text) > 0) and (char_length(source_text) = (selection_end_code_point - selection_start_code_point)))) is true)
                     """),
             Map.entry("chk_chat_archive_state", """
                     (state in ('PENDING','SAVING','SAVED','PARTIAL_FAILED'))
