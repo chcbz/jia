@@ -23,6 +23,33 @@ class ChatActionContinuationTransactionTest {
     @Configuration @EnableTransactionManagement(proxyTargetClass=true)
     static class TxConfig { }
 
+    @Test void rejectedActionEventAndDeadSettlementShareOneTransaction() {
+        for(String failAt:List.of("event","version","settle","none")) {
+            var f=new ChatActionContinuationTest.Fixture(); var consumer=f.consumer(); var claim=f.claim();
+            var source=new DriverManagerDataSource("jdbc:h2:mem:rejected_"+UUID.randomUUID()+";DB_CLOSE_DELAY=-1","sa","");
+            var evidence=new JdbcTemplate(source); evidence.execute("CREATE TABLE writes(label VARCHAR(20) PRIMARY KEY)");
+            java.util.function.Function<String,Integer> write=label->{
+                assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
+                evidence.update("INSERT INTO writes(label) VALUES(?)",label);
+                if(label.equals(failAt))throw new IllegalStateException("injected-"+label); return 1;
+            };
+            doAnswer(i->{ChatConversationEventEntity event=i.getArgument(0);event.setEventSequence(1L);return write.apply("event");})
+                    .when(f.dao).insertEvent(any());
+            doAnswer(i->write.apply("version")).when(f.dao).assignEventVersion(anyLong());
+            doAnswer(i->write.apply("settle")).when(f.dao).settleOutbox(eq(claim.row()),eq("DEAD"),isNull(),eq("ACTION_REQUEST_CHANGED"),isNull(),anyLong());
+            try(var context=new AnnotationConfigApplicationContext()) {
+                context.register(TxConfig.class);
+                context.registerBean("transactionManager",DataSourceTransactionManager.class,()->new DataSourceTransactionManager(source));
+                context.registerBean(ChatActionDispatchService.class,()->consumer); context.refresh();
+                var actual=context.getBean(ChatActionDispatchService.class);
+                if("none".equals(failAt)) {actual.reject(claim);assertEquals(3,evidence.queryForObject("SELECT COUNT(*) FROM writes",Integer.class));}
+                else {assertEquals("injected-"+failAt,assertThrows(RuntimeException.class,()->actual.reject(claim)).getMessage());
+                    assertEquals(0,evidence.queryForObject("SELECT COUNT(*) FROM writes",Integer.class));}
+                assertEquals(1,f.requests.size()); assertEquals(1,f.messages.size()); assertEquals(0,f.children.size());
+            }
+        }
+    }
+
     @Test void childAdmissionAndClaimSettlementRollBackTogetherAtEveryLateWriteFailure() {
         for (String failAt:List.of("request","snapshot","turn","dispatch","admission","event","event-version","settle","none")) {
             var f=new ChatActionContinuationTest.Fixture(); var consumer=f.consumer(); var claim=f.claim();

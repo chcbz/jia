@@ -165,7 +165,9 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
             case "FINAL_PERSISTED" -> deliverFinal(claim, payload);
             case ChatActionFinalService.ACTION_EVENT -> {
                 if (actions == null) throw new IllegalStateException("Action admission service is unavailable");
-                actions.consume(claim); // No SSE subscription or socket call is required for durable admission.
+                try { actions.consume(claim); }
+                catch (ChatActionDispatchService.Rejected stale) { actions.reject(claim); }
+                // Other exceptions retain normal fenced retry; no deadline/attempt count turns them into failure.
             }
             default -> outbox.dead(claim, "UNSUPPORTED_EVENT_TYPE", System.currentTimeMillis());
         }

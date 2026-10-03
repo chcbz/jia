@@ -93,6 +93,31 @@ class ChatActionContinuationTest {
         order.verify(f.dao).lockOutboxById("0","owner","client",claim.row().getEventId());
     }
 
+    @Test void changedAssignmentBecomesDurableFailureWithoutAnotherAttemptOrUserMessage() {
+        var f=new Fixture(); var consumer=f.consumer(); var claim=f.claim();
+        f.root.setAssignedAgentId("other");
+        assertThrows(ChatActionDispatchService.Rejected.class,()->consumer.consume(claim));
+        when(f.dao.settleOutbox(eq(claim.row()),eq("DEAD"),isNull(),eq("ACTION_REQUEST_CHANGED"),isNull(),anyLong())).thenReturn(1);
+        consumer.reject(claim);
+        assertEquals("DEAD",claim.row().getStatus()); assertEquals(1,f.requests.size());
+        assertEquals(1,f.messages.size()); assertEquals(0,f.children.size()); assertEquals(1,f.events.size());
+        assertEquals("action_failed",f.events.getFirst().getEventType());
+        verify(f.dao,never()).insertRequest(argThat(r->!r.getRequestId().equals(f.action.outcome().requestId())));
+        verify(f.dao,never()).settleOutbox(any(),eq("RETRY"),any(),any(),any(),anyLong());
+    }
+
+    @Test void rejectionCannotDiscardAnExistingChildOrTakeOverAStaleClaim() {
+        var f=new Fixture(); var consumer=f.consumer(); consumer.consume(f.claim());
+        var next=f.claim(); int events=f.events.size();
+        assertThrows(ChatDeliberationException.class,()->consumer.reject(next));
+        assertEquals(events,f.events.size()); assertEquals(1,f.children.size());
+        verify(f.dao,never()).settleOutbox(any(),eq("DEAD"),any(),any(),any(),anyLong());
+        when(f.dao.lockOutboxById(anyString(),anyString(),anyString(),anyString()))
+                .thenReturn(new ChatDispatchOutboxEntity().setStatus("CLAIMED").setLeaseOwner("foreign").setFencingToken(2L).setVersion(2L));
+        assertThrows(IllegalStateException.class,()->consumer.reject(next));
+        assertEquals(events,f.events.size());
+    }
+
     @Test void recoveredClaimUsesOriginalChildEvenWhenRuntimeHasDisconnected() {
         var f=new Fixture(); var consumer=f.consumer(); consumer.consume(f.claim());
         int dispatches=f.outboxes.size();

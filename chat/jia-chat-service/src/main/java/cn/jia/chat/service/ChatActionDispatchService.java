@@ -22,6 +22,12 @@ public class ChatActionDispatchService {
     /** Existing execution adapter must persist its own stable child under the caller's transaction. */
     public interface Executor { String admit(ChatActionFinalService.BoundAction action); }
 
+    /** Confirmed stale immutable request, not a transient DB/lease/runtime failure. */
+    public static final class Rejected extends ChatDeliberationException {
+        public Rejected() { super(Reason.CONFLICT, "Action request no longer applies"); }
+    }
+
+
     private final ChatActionFinalService finals;
     private final AgentTaskMutationTransaction tasks;
     private final ChatBountyBindingStore bindings;
@@ -54,7 +60,7 @@ public class ChatActionDispatchService {
             if (root == null || root.getTaskVersion() == null || root.getTaskVersion() < parent.assignmentRevision()
                     || !target.equals(root.getAssignedAgentId()) || binding == null || binding.conversationId() == null
                     || !scope.conversationId().equals(Long.toString(binding.conversationId()))
-                    || parent.assignmentRevision() != binding.assignmentRevision()) throw conflict("Action assignment changed");
+                    || parent.assignmentRevision() != binding.assignmentRevision()) throw new Rejected();
             var conversation = conversations.lockScopedById(scope.ownerJiacn(), scope.clientId(), scope.conversationId());
             if (conversation == null || conversation.getId() == null || conversation.getDeletedAt() != null
                     || !scope.tenantId().equals(conversation.getTenantId()) || !scope.ownerJiacn().equals(conversation.getJiacn())
@@ -63,7 +69,7 @@ public class ChatActionDispatchService {
                     || !"juyiting".equals(conversation.getConversationType()) || !"bounty".equals(conversation.getConversationScopeType())
                     || !parent.taskId().equals(conversation.getTaskId()) || !("task:"+parent.taskId()).equals(conversation.getConversationScopeKey())
                     || !List.of(target).equals(scopes.parsePersistedTargetAgentIds(conversation.getTargetAgentIds())))
-                throw conflict("Action conversation changed");
+                throw new Rejected();
             // Lock order: task root -> binding -> conversation -> outbox. Claim/retry transactions never take task locks.
             var locked = outbox.requireActiveClaim(claim, System.currentTimeMillis());
             var action = finals.loadAction(locked);
@@ -78,6 +84,31 @@ public class ChatActionDispatchService {
                 executor.admit(action);
             }
             if (!outbox.sent(claim, System.currentTimeMillis())) throw conflict("Action outbox lease changed");
+            return null;
+        });
+    }
+
+    /** Runs only after consume has rolled back a confirmed rejection. No child can be discarded.
+     * Same lock order as admission; the failure event and DEAD settlement commit together. */
+    @Transactional(rollbackFor = Exception.class)
+    public void reject(ChatDeliberationOutboxService.Claim claim) {
+        var initial = finals.loadAction(claim.row()); var parent = initial.outcome(); var scope = parent.scope();
+        tasks.executeWithLockedTaskRootInOwnerScope(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), parent.taskId(), root -> {
+            bindings.lock(new ChatBountyBindingStore.Scope(scope.tenantId(), scope.ownerJiacn(), scope.clientId()), parent.taskId());
+            var conversation = conversations.lockScopedById(scope.ownerJiacn(), scope.clientId(), scope.conversationId());
+            var locked = outbox.requireActiveClaim(claim, System.currentTimeMillis());
+            var action = finals.loadAction(locked);
+            if (!initial.equals(action) || typed.findAdmissionByKey(scope, locked.getEventId(), true) != null)
+                throw conflict("Rejected action already has a child");
+            // A removed or replaced generation receives no new visible event; its old action still terminates.
+            if (conversation != null && conversation.getDeletedAt() == null
+                    && Objects.equals(scope.conversationGeneration(), conversation.getLifecycleGeneration())
+                    && scope.tenantId().equals(conversation.getTenantId()) && scope.ownerJiacn().equals(conversation.getJiacn())
+                    && scope.clientId().equals(conversation.getClientId())
+                    && scope.conversationId().equals(String.valueOf(conversation.getId())))
+                deliberation.persistActionFailed(action, System.currentTimeMillis());
+            if (!outbox.dead(claim, "ACTION_REQUEST_CHANGED", System.currentTimeMillis()))
+                throw conflict("Rejected action lease changed");
             return null;
         });
     }

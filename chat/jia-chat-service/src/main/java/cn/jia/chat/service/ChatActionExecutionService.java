@@ -104,26 +104,35 @@ public class ChatActionExecutionService implements ChatActionDispatchService.Exe
         var grantScope=new AgentTaskExecutionGrantService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());
         var current=grants.currentFollowupContext(grantScope,parent.taskId(),target);
         if (current==null || !parent.taskId().equals(current.taskId()) || !target.equals(current.targetAgentId())
-                || current.assignmentRevision()!=parent.assignmentRevision()) throw conflict();
+                || current.assignmentRevision()!=parent.assignmentRevision()) throw new ChatActionDispatchService.Rejected();
         var baseline=grants.resolveFollowupBaseline(grantScope,parent.taskId(),current.baselineGrantVersion(),current.taskVersion(),
                 current.assignmentRevision(),current.requirementRevision(),target);
         var refs=catalog.stream().map(ChatActionExecutionService::selector).map(s->new ChatConversationAssetSourceResolver.Ref(
                 s.kind(),s.fileId(),s.version()==null?null:Integer.valueOf(s.version()),s.purpose(),s.assetId(),
                 s.assetRevision()==null?null:Long.valueOf(s.assetRevision()))).toList();
-        var resolved=sources.resolveAction(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.conversationId(),
-                scope.conversationGeneration(),parent.taskId(),target,operation,refs,baseline.inputs());
-        if (resolved.size()!=catalog.size()) throw conflict();
+        List<ControlledImageFollowupAuthorityService.Source> resolved;
+        try {
+            resolved=sources.resolveAction(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.conversationId(),
+                    scope.conversationGeneration(),parent.taskId(),target,operation,refs,baseline.inputs());
+        } catch (ChatDeliberationException stale) {
+            if (stale.reason()==ChatDeliberationException.Reason.CONFLICT
+                    || stale.reason()==ChatDeliberationException.Reason.INVALID_REQUEST
+                    || stale.reason()==ChatDeliberationException.Reason.NOT_FOUND_OR_FORBIDDEN)
+                throw new ChatActionDispatchService.Rejected();
+            throw stale;
+        }
+        if (resolved.size()!=catalog.size()) throw new ChatActionDispatchService.Rejected();
         // The adapter re-resolves ACL/lineage; compare bytes with the immutable dispatch catalogue too.
         for (int i=0;i<resolved.size();i++) {
             var expected=catalog.get(i); var actual=resolved.get(i);
             boolean chat="CHAT".equals(action.validated().binding().get("route"));
             if (!actual.contentMimeType().equals(expected.get(chat?"contentMimeType":"mimeType"))
                     || !actual.sha256().equals(expected.get(chat?"contentHash":"sha256"))
-                    || !Long.toString(actual.byteLength()).equals(expected.get("byteLength"))) throw conflict();
+                    || !Long.toString(actual.byteLength()).equals(expected.get("byteLength"))) throw new ChatActionDispatchService.Rejected();
             var ref=refs.get(i);
             if (!ref.kind().equals(actual.kind()) || !Objects.equals(ref.fileId(),actual.fileId())
                     || !Objects.equals(ref.version(),actual.fileVersion()) || !Objects.equals(ref.purpose(),actual.purpose())
-                    || !Objects.equals(ref.assetId(),actual.assetId()) || !Objects.equals(ref.assetRevision(),actual.assetRevision())) throw conflict();
+                    || !Objects.equals(ref.assetId(),actual.assetId()) || !Objects.equals(ref.assetRevision(),actual.assetRevision())) throw new ChatActionDispatchService.Rejected();
         }
         var sourceDomain=resolved.stream().map(x->Map.<String,Object>of("byteLength",Long.toString(x.byteLength()),
                 "contentMimeType",x.contentMimeType(),"inputRef",x.inputRef(),"kind",x.kind(),"sha256",x.sha256(),

@@ -850,6 +850,16 @@ public class ChatDeliberationService {
                 "childRequestId", childRequestId, "childRoute", route), now);
     }
 
+    @Transactional(propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
+    public ChatConversationEventEntity persistActionFailed(ChatActionFinalService.BoundAction action, long now) {
+        var parent = action.outcome(); var scope = parent.scope();
+        var turn = requireLockedTurn(scope.tenantId(), scope.ownerJiacn(), scope.clientId(), parent.turnId());
+        if (!parent.finalDigest().equals(turn.getFinalDigest())) throw conflict("Action parent changed");
+        String actionId = ChatActionFinalValidator.actionEventId(action.validated());
+        return persistEvent(turn, stableId("evt", actionId, "ACTION_FAILED"), "action_failed", Map.of(
+                "actionRequestId", actionId, "parentOutcomeId", parent.outcomeId()), now);
+    }
+
     public ChatConversationEventEntity persistTypedQuestionAnswered(ChatTurnEntity turn,
             String pendingQuestionId, long stateVersion, String replyRequestId,
             String parentOutcomeId, long now) {

@@ -65,6 +65,17 @@ class ChatDeliberationOutboxRelayTest {
         verify(outbox,never()).sent(any(),anyLong()); // Consumer settles atomically with child admission.
     }
 
+    @Test void onlyExplicitImmutableRejectionTerminatesActionWhileTransportOrLeaseFailureStillPropagates() {
+        var actions=mock(ChatActionDispatchService.class); relay.setActions(actions);
+        var claim=new ChatDeliberationOutboxService.Claim(new ChatDispatchOutboxEntity()
+                .setEventType(ChatActionFinalService.ACTION_EVENT).setPayloadJson("{}"),false);
+        doThrow(new ChatActionDispatchService.Rejected()).when(actions).consume(claim);
+        relay.deliverClaim(claim); verify(actions).reject(claim);
+        reset(actions); doThrow(new IllegalStateException("temporary-database-error")).when(actions).consume(claim);
+        assertThrows(IllegalStateException.class,()->relay.deliverClaim(claim));
+        verify(actions,never()).reject(any()); verifyNoInteractions(sockets,chatClient);
+    }
+
     @Test
     void nativeInspectionDispatchUsesTheBoundManifestInsteadOfRequiringLegacyPretendMaterialization() {
         var f=new ChatActionContinuationTest.Fixture();
