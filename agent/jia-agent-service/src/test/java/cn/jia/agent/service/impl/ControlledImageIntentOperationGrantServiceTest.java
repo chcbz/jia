@@ -138,6 +138,22 @@ class ControlledImageIntentOperationGrantServiceTest {
         verify(executions,times(1)).insert(any()); verify(consents,times(1)).insert(any());
     }
 
+    @Test void ordinaryActionCannotReplayChangedInstructionBehindUnchangedCallerDigests() {
+        ordinaryStore();var command=ordinary();service.admitOrdinaryAction(scope,command,()->{});
+        var p=command.preview();
+        var changedPreview=new ControlledImageFollowupAuthorityService.PreviewCommand(p.taskId(),p.conversationId(),
+                p.conversationGeneration(),p.interactionIdempotencyKey(),p.requestId(),p.stepId(),p.executionIntentId(),
+                p.baseline(),p.operation(),"different instruction",p.instructionSha256(),p.ownerPayloadSha256(),
+                p.sourceSnapshotSha256(),p.sources());
+        var changed=new ControlledImageFollowupAuthorityService.OrdinaryActionCommand(changedPreview,
+                command.actionRequestId(),command.parentOutcomeId(),command.parentFinalDigest(),command.originalUserMessageId(),
+                command.originalUserContentSha256(),command.executionId(),command.runId(),command.interactionRequestDigest());
+        var failure=assertThrows(ControlledImageFollowupAuthorityService.Failure.class,
+                ()->service.admitOrdinaryAction(scope,changed,()->{}));
+        assertEquals(ControlledImageFollowupAuthorityService.Reason.CONFLICT,failure.reason());
+        verify(executions,times(1)).insert(any());
+    }
+
     private ControlledImageFollowupAuthorityService.OrdinaryActionCommand ordinary() {
         return new ControlledImageFollowupAuthorityService.OrdinaryActionCommand(preview(),"act_"+"a".repeat(40),
                 "outcome-parent","sha256:"+"b".repeat(64),901L,"c".repeat(64),"execution","run","6".repeat(64));
