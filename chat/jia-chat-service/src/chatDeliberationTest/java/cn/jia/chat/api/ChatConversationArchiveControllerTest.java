@@ -124,11 +124,11 @@ class ChatConversationArchiveControllerTest {
         assertThrows(ChatConversationArchiveException.class, () -> controller.archive("42",
                 "archive-text-0001", Map.of("mode", "CREATE", "items", List.of(Map.of(
                         "textSelection", Map.of("messageId", "1675335", "startCodePoint", 0,
-                                "endCodePoint", 4, "sha256", hash))), authentication));
+                                "endCodePoint", 4, "sha256", hash)))), authentication));
         assertThrows(ChatConversationArchiveException.class, () -> controller.archive("42",
                 "archive-text-0001", Map.of("mode", "create", "items", List.of(Map.of(
                         "textSelection", Map.of("messageId", "1675335", "startCodePoint", 0,
-                                "endCodePoint", 4, "sha256", hash, "text", "画一只鸟"))), authentication));
+                                "endCodePoint", 4, "sha256", hash, "text", "画一只鸟")))), authentication));
         verifyNoInteractions(archives, identities, tenants);
     }
 
