@@ -13,6 +13,7 @@ import org.junit.jupiter.params.provider.EnumSource;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -107,6 +108,23 @@ class AgentTaskEventProjectionTest {
         assertEquals(reason.name().toLowerCase(java.util.Locale.ROOT),
                 frame.data().get("reason"));
         assertEquals(Set.of("currentVersion", "reason"), frame.data().keySet());
+    }
+
+    @Test
+    void sameTenantTaskAndClientCannotProjectAnotherOwnersEventOrCursor() {
+        for (String foreignOwner : List.of("owner-b", "OWNER-A")) {
+            TaskScope foreignScope = new TaskScope(TENANT, CLIENT, foreignOwner, TASK);
+            DurableEvent event = new DurableEvent(foreignScope, 1L, "foreign-event",
+                    TaskEventType.TASK_CREATED, "system", null, "task", TASK,
+                    validTaskPayload(), 1234L);
+            assertThrows(IllegalArgumentException.class,
+                    () -> AgentTaskEventProjection.project(subject("worker", OTHER), event));
+            for (ResyncReason reason : ResyncReason.values()) {
+                ResyncRequired cursor = new ResyncRequired(foreignScope, 7L, reason);
+                assertThrows(IllegalArgumentException.class,
+                        () -> AgentTaskEventProjection.project(subject("worker", OTHER), cursor));
+            }
+        }
     }
 
     @Test

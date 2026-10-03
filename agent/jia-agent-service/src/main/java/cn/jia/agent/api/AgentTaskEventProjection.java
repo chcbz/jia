@@ -53,7 +53,7 @@ final class AgentTaskEventProjection {
 
     private static Frame durable(AuthorizedSubject subject, DurableEvent event) {
         requireScope(subject, event.scope().tenantId(), event.scope().clientId(),
-                event.scope().taskId());
+                event.scope().ownerJiacn(), event.scope().taskId());
         if (event.eventVersion() <= 0 || event.occurredAt() <= 0) {
             throw invalid();
         }
@@ -102,7 +102,7 @@ final class AgentTaskEventProjection {
 
     private static Frame resync(AuthorizedSubject subject, ResyncRequired resync) {
         requireScope(subject, resync.scope().tenantId(), resync.scope().clientId(),
-                resync.scope().taskId());
+                resync.scope().ownerJiacn(), resync.scope().taskId());
         if (resync.currentVersion() < 0 || resync.reason() == null) {
             throw invalid();
         }
@@ -181,9 +181,10 @@ final class AgentTaskEventProjection {
     }
 
     private static void requireScope(AuthorizedSubject subject,
-            String tenantId, String clientId, String taskId) {
+            String tenantId, String clientId, String ownerJiacn, String taskId) {
         if (!subject.tenantId().equals(tenantId)
                 || !subject.clientId().equals(clientId)
+                || !subject.ownerJiacn().equals(ownerJiacn)
                 || !subject.taskId().equals(taskId)) {
             throw invalid();
         }
