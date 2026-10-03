@@ -86,6 +86,21 @@ class ChatConversationEventsHttpTest {
         verify(events,never()).replayEventsThrough("0","owner","client","42",3,0,7,500);
     }
 
+    @Test void durableMetadataOverridesPayloadAndKeepsLargeCursorExact() throws Exception {
+        long sequence=9007199254740993L;
+        when(events.eventHighWatermark("0","owner","client","42",3)).thenReturn(sequence);
+        when(events.replayEventsThrough("0","owner","client","42",3,0,sequence,500))
+                .thenReturn(List.of(event(sequence,"part.ready",
+                        "{\"type\":\"wrong\",\"conversationId\":\"foreign\",\"conversationGeneration\":\"999\",\"eventSequence\":\"1\"}")));
+        String body=read(null);
+        var event=payloads(body).getFirst();
+        assertEquals("part.ready",event.get("type"));assertEquals("42",event.get("conversationId"));
+        assertEquals("3",event.get("conversationGeneration"));
+        assertEquals("9007199254740993",event.get("eventSequence"));
+        assertEquals("9007199254740993",event.get("eventVersion"));
+        assertTrue(body.contains("id:9007199254740993"),body);
+    }
+
     @Test void explicitSseAcceptStillGetsReadableNonSuccessJsonForDeniedIdentity() throws Exception {
         mvc.perform(get("/chat/conversation/events").param("id","42").accept(MediaType.TEXT_EVENT_STREAM)
                         .principal(jwt("foreign")))

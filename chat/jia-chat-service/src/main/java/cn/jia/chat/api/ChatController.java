@@ -50,6 +50,7 @@ import org.springframework.ai.chat.prompt.PromptTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -659,7 +660,7 @@ public class ChatController {
     }
 
     @RequestMapping(value = "/conversation/events", method = RequestMethod.GET, produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<String> conversationEvents(@RequestParam(name = "id") String id,
+    public Flux<ServerSentEvent<String>> conversationEvents(@RequestParam(name = "id") String id,
             @RequestParam(name = "cursor", required = false) String cursor,
             @RequestHeader(name = "Last-Event-ID", required = false) String lastEventId,
             Authentication authentication) {
@@ -692,15 +693,17 @@ public class ChatController {
                 throw new ChatDeliberationException(ChatDeliberationException.Reason.INVALID_REQUEST,
                         "Event cursor is ahead of the conversation watermark");
             }
-            List<String> replay = loadReplayThrough(service, tenantId, ownerJiacn, ownerClientId,
+            List<ServerSentEvent<String>> replay = loadReplayThrough(service, tenantId, ownerJiacn, ownerClientId,
                     id, generation, after, watermark);
             AtomicLong deliveredSequence = new AtomicLong(watermark);
-            Flux<String> catchUpThenLive = liveSubscription.flux()
+            Flux<ServerSentEvent<String>> catchUpThenLive = liveSubscription.flux()
                     .concatMap(json -> durableCatchUp(service, tenantId, ownerJiacn, ownerClientId,
                             id, generation, deliveredSequence, json));
-            String ready = "data: {\"type\":\"stream_ready\",\"cursor\":\"" + watermark
-                    + "\",\"nextCursor\":\"" + watermark + "\"}\n\n";
-            Flux<String> stream = Flux.fromIterable(replay).concatWithValues(ready).concatWith(catchUpThenLive)
+            // MVC owns SSE framing; preframed Strings are encoded again as data:data:/data:id:.
+            ServerSentEvent<String> ready = ServerSentEvent.builder(JsonUtil.toSafeJson(Map.of(
+                    "type", "stream_ready", "cursor", Long.toString(watermark),
+                    "nextCursor", Long.toString(watermark)))).build();
+            Flux<ServerSentEvent<String>> stream = Flux.fromIterable(replay).concatWithValues(ready).concatWith(catchUpThenLive)
                     .doFinally(ignored -> liveSubscription.close());
             return ChatStreamPolicy.firstFrame(ChatStreamPolicy.bounded(stream));
         } catch (RuntimeException failure) {
@@ -722,7 +725,7 @@ public class ChatController {
                 .map(event -> "data: " + event + "\n\n")));
     }
 
-    private List<String> loadReplayThrough(ChatDeliberationService service, String tenantId,
+    private List<ServerSentEvent<String>> loadReplayThrough(ChatDeliberationService service, String tenantId,
             String ownerJiacn, String clientId, String conversationId, long generation,
             long after, long watermark) {
         try {
@@ -737,13 +740,13 @@ public class ChatController {
         }
     }
 
-    private Flux<String> durableCatchUp(ChatDeliberationService service, String tenantId,
+    private Flux<ServerSentEvent<String>> durableCatchUp(ChatDeliberationService service, String tenantId,
             String ownerJiacn, String clientId, String conversationId, long generation,
             AtomicLong deliveredSequence, String liveJson) {
         long signalled = eventSequence(liveJson);
         long current = deliveredSequence.get();
         if (signalled <= current) return Flux.empty();
-        List<String> recovered = loadReplayThrough(service, tenantId, ownerJiacn, clientId,
+        List<ServerSentEvent<String>> recovered = loadReplayThrough(service, tenantId, ownerJiacn, clientId,
                 conversationId, generation, current, signalled);
         if (!recovered.isEmpty()) deliveredSequence.set(signalled);
         return Flux.fromIterable(recovered);
@@ -788,14 +791,19 @@ public class ChatController {
     }
 
     @SuppressWarnings("unchecked")
-    private String sseStoredEvent(cn.jia.chat.deliberation.ChatConversationEventEntity stored) {
+    private ServerSentEvent<String> sseStoredEvent(cn.jia.chat.deliberation.ChatConversationEventEntity stored) {
         try {
             Map<String,Object> event = JsonUtil.getMapper().readValue(stored.getPayloadJson(), Map.class);
+            // Routing metadata is authoritative from the owner-scoped journal row, not its payload.
+            event.put("type", stored.getEventType());
+            event.put("conversationId", stored.getConversationId());
+            event.put("conversationGeneration", Long.toString(stored.getConversationGeneration()));
             event.put("eventId", stored.getEventId());
             event.put("eventSequence", Long.toString(stored.getEventSequence()));
             event.put("eventVersion", Long.toString(stored.getEventVersion()));
             event.put("occurredAt", Long.toString(stored.getOccurredAt()));
-            return "id: " + stored.getEventSequence() + "\ndata: " + JsonUtil.toSafeJson(event) + "\n\n";
+            return ServerSentEvent.builder(JsonUtil.toSafeJson(event))
+                    .id(Long.toString(stored.getEventSequence())).build();
         } catch (Exception invalid) {
             throw new ChatDeliberationException(ChatDeliberationException.Reason.PERSISTENCE_ERROR,
                     "Stored chat event is invalid");
@@ -942,7 +950,7 @@ public class ChatController {
                 failure.reason() == ChatDeliberationException.Reason.NOT_FOUND_OR_FORBIDDEN
                         ? "Chat request is unavailable" : failure.getMessage());
         result.setStatus(status.value());
-        return ResponseEntity.status(status).body(result);
+        return ResponseEntity.status(status).contentType(MediaType.APPLICATION_JSON).body(result);
     }
 
     @ExceptionHandler(AgentTaskThreadException.class)
