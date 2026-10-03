@@ -736,6 +736,8 @@ dependencies {
             platform("org.springframework.boot:spring-boot-dependencies:${libs.versions.spring.boot.asProvider().get()}"))
     add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName, libs.junit.jupiter)
     add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName, 'org.mockito:mockito-core')
+    // Real DAO fixture must participate in Spring-managed transactions through SqlSessionTemplate.
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName, 'org.mybatis:mybatis-spring:4.0.0')
     add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName, 'org.springframework:spring-test')
     add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName, 'org.hamcrest:hamcrest')
     add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName,
