@@ -295,6 +295,46 @@ class ChatBountyExecutionTerminationMySqlTest {
         fail(Reason.UNAVAILABLE,this::abandon);assertEquals(1,countEvents());
     }
 
+    @Test void v3StartedAuthorityBindingSurvivesAbandonAndSchemaRestartWithoutReadmittingProvider() {
+        new cn.jia.agent.config.AgentTaskProviderCostConsentSchemaInitializer(jdbc).afterPropertiesSet();
+        new cn.jia.agent.config.ControlledImageExecutionSchemaInitializer(jdbc).afterPropertiesSet();
+        new cn.jia.agent.config.ControlledImageFollowupV3SchemaInitializer(jdbc).afterPropertiesSet();
+        jdbc.update("""
+                UPDATE agent_personal_workspace_execution SET controlled_consent_id=?,execution_protocol_version=3,
+                  operation_grant_id=?,runtime_input_snapshot_digest=?
+                ""","consent_"+"1".repeat(32),"opgrant_"+"2".repeat(32),"7".repeat(64));
+        String query="""
+                SELECT controlled_consent_id,execution_protocol_version,operation_grant_id,runtime_input_snapshot_digest,
+                  conversation_provider_started_at,conversation_provider_lease_version FROM agent_personal_workspace_execution
+                """;
+        var before=jdbc.queryForList(query);var authority=mock(ControlledImageFollowupAuthorityService.class);
+        runtime.setControlledImageFollowupV3(authority,mock(ControlledImageExecutionSourceV3Dao.class));
+        Receipt receipt=abandon();assertEquals(before,jdbc.queryForList(query));
+        assertEquals(receipt,inTx(()->service.get(OWNER,"req",KEY)));assertEquals(receipt,abandon());
+        assertDoesNotThrow(()->new PersonalWorkspaceExecutionSchemaInitializer(jdbc).afterPropertiesSet());
+        assertDoesNotThrow(()->new cn.jia.agent.config.ControlledImageExecutionSchemaInitializer(jdbc).afterPropertiesSet());
+        assertDoesNotThrow(()->new cn.jia.agent.config.ControlledImageFollowupV3SchemaInitializer(jdbc).afterPropertiesSet());
+        byte[] bytes;try{bytes=png();}catch(Exception e){throw new AssertionError(e);}
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class,()->inTx(()->runtime.stageConversationOutput(
+                runtimeScope(),"task","run",fence(),"output_1","bird.png","image/png",bytes)));
+        verifyNoInteractions(authority);
+    }
+
+    @Test void malformedVersionsKeysReasonsAndForgedCommandBindingsCannotWrite() {
+        for(String bad:Arrays.asList(null,"-1","01","1.0","9223372036854775808")) {
+            fail(Reason.INVALID_REQUEST,()->inTx(()->service.abandon(OWNER,"req",KEY,
+                    new Command("step","exec",bad,"2",ChatBountyExecutionTerminationService.REASON))));
+        }
+        for(String bad:Arrays.asList(null,"tiny","space is forbidden","bad\nkey-0001"))
+            fail(Reason.INVALID_REQUEST,()->inTx(()->service.abandon(OWNER,"req",bad,COMMAND)));
+        fail(Reason.INVALID_REQUEST,()->inTx(()->service.abandon(OWNER,"req",KEY,new Command("step","exec","0","2","PROVIDER_NOT_STARTED"))));
+        fail(Reason.NOT_FOUND_OR_FORBIDDEN,()->inTx(()->service.abandon(OWNER,"req",KEY,
+                new Command("foreign-step","exec","0","2",ChatBountyExecutionTerminationService.REASON))));
+        fail(Reason.NOT_FOUND_OR_FORBIDDEN,()->inTx(()->service.abandon(OWNER,"req",KEY,
+                new Command("step","foreign-exec","0","2",ChatBountyExecutionTerminationService.REASON))));
+        assertPristine();verifyNoInteractions(broker);
+    }
+
     private void seed() {
         jdbc.update("""
                 INSERT INTO chat_request(tenant_id,owner_jiacn,client_id,request_id,request_revision,request_digest,
