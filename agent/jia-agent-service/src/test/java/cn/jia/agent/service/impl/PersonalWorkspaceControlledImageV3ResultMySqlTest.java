@@ -263,9 +263,10 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
         assertEquals(1,outputs.size());assertEquals(hash,outputs.getFirst().sha256());
         var output=inTx(() -> service.readConversationOutput(owner,"task",row.getRunId(),"output_1"));
         assertArrayEquals(bytes,output.bytes());
-        var denied=new PersonalWorkspaceExecutionService.OwnerScope("0","client","foreign");
-        assertThrows(PersonalWorkspaceExecutionService.Failure.class,
-                () -> inTx(() -> service.listConversationOutputs(denied,"task",row.getRunId())));
+        var actual=(ControlledImageFollowupAuthorityService)ReflectionTestUtils.getField(service,"followupAuthority");
+        assertThrows(ControlledImageFollowupAuthorityService.Failure.class,
+                () -> inTx(() -> actual.committedResultAuthority(
+                        new ControlledImageFollowupAuthorityService.Scope("0","client","foreign"),"task",row.getRunId())));
         grant.setState("REVOKED");
         assertThrows(PersonalWorkspaceExecutionService.Failure.class,
                 () -> inTx(() -> service.readConversationOutput(owner,"task",row.getRunId(),"output_1")));
