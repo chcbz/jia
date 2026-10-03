@@ -93,7 +93,7 @@ class AgentTaskArtifactOutcomeMapperContractTest {
         Path migration = root.resolve(
                 "agent/jia-agent-mapper/src/main/resources/db/agent-task-artifact-outcome-f06.sql");
         String ddl = Files.readString(migration, StandardCharsets.UTF_8);
-        String lower = ddl.toLowerCase();
+        String lower = ddl.replaceAll("\\s+", " ").toLowerCase(java.util.Locale.ROOT);
 
         assertTrue(lower.contains("create table if not exists agent_task_artifact_outcome"));
         assertTrue(lower.contains("outcome_state in ('accepted', 'superseded')"));
