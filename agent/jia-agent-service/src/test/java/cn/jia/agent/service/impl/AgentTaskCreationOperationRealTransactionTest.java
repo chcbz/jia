@@ -218,6 +218,30 @@ class AgentTaskCreationOperationRealTransactionTest {
         assertCounts(1, 1, 1, 2, 2, 1);
     }
 
+    @Test
+    void genericMaterialsFailureCannotLeaveTaskOrPartialLinksAndRecoveryDoesNotWriteAgain() {
+        var old = command();
+        var generic = new AgentTaskCreationOperationService.CreateCommand(2, old.title(),
+                old.descriptionPresent(), old.description(), old.requiredAbilitiesPresent(),
+                old.requiredAbilities(), old.rewardPresent(), old.reward(), old.inputRefs().stream()
+                    .map(ref -> new AgentTaskCreationOperationService.InputReference(ref.fileId(), ref.version(), "INPUT")).toList());
+        failSecondReference.set(true);
+        assertThrows(AgentTaskCreationOperationService.Failure.class, () -> service.create(SCOPE, "v2-rollback", generic));
+        assertCounts(0, 0, 0, 0, 0, 0);
+        failSecondReference.set(false); failCompletion.set(true);
+        assertThrows(AgentTaskCreationOperationService.Failure.class, () -> service.create(SCOPE, "v2-cas", generic));
+        assertCounts(0, 0, 0, 0, 0, 0);
+        failCompletion.set(false);
+        var first = service.create(SCOPE, "v2-success", generic);
+        assertCounts(1, 1, 1, 2, 2, 1);
+        assertEquals(List.of("INPUT", "INPUT"), jdbc.queryForList("SELECT role FROM fixture_link ORDER BY file_id", String.class));
+        int calls = linkCalls.get();
+        assertEquals(first.receipt(), service.getByIdempotencyKey(SCOPE, "v2-success", 2));
+        assertTrue(service.create(SCOPE, "v2-success", generic).replay());
+        assertEquals(calls, linkCalls.get());
+        assertCounts(1, 1, 1, 2, 2, 1);
+    }
+
     private void assertCounts(int tasks, int snapshots, int events, int links,
             int linkOperations, int operations) {
         assertEquals(tasks, count("fixture_task"));

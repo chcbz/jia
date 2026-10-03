@@ -84,19 +84,21 @@ public class AgentTaskCreationOperationServiceImpl
         requireWriteTransaction();
         requireAuthenticatedScope(scope);
         ValidRequest valid = validate(idempotencyKey, command);
-        String refsJson = refsJson(valid.references());
+        String refsJson = refsJson(valid.references(), valid.schemaVersion());
         String requestHash = requestHash(valid);
-        String proposedOperationId = identifier("atco_");
+        // Persist the protocol resource type, including for the empty-attachment case.
+        String proposedOperationId = identifier(valid.schemaVersion() == 1 ? "atco_" : "atco2_");
         try {
             AgentTaskCreationOperationEntity operation = operations.reserveAndLock(
                     scope.tenantId(), scope.clientId(), scope.ownerJiacn(), idempotencyKey,
                     requestHash, proposedOperationId, refsJson, System.currentTimeMillis());
             validateOperationScope(operation, scope, idempotencyKey);
-            if (!constantTimeEquals(requestHash, operation.getRequestHash())) {
+            if (operationVersion(operation) != valid.schemaVersion()
+                    || !constantTimeEquals(requestHash, operation.getRequestHash())) {
                 throw failure(Reason.IDEMPOTENCY_CONFLICT);
             }
             if (!Objects.equals(valid.references(),
-                    parsePersistedRefs(operation.getInputRefsJson()))) {
+                    parsePersistedRefs(operation.getInputRefsJson(), operationVersion(operation)))) {
                 throw failure(Reason.UNAVAILABLE);
             }
             boolean owner = proposedOperationId.equals(operation.getOperationId());
@@ -124,10 +126,10 @@ public class AgentTaskCreationOperationServiceImpl
                     scope.tenantId(), scope.clientId(), scope.ownerJiacn());
             for (int index = 0; index < valid.references().size(); index++) {
                 InputReference reference = valid.references().get(index);
-                requireReferenceVersionLocked(scope, taskId, reference);
+                requireReferenceVersionLocked(scope, taskId, reference, valid.schemaVersion());
                 PersonalWorkspaceTaskLinkService.LinkView linked = links.create(linkScope, taskId,
                         new PersonalWorkspaceTaskLinkService.CreateCommand(reference.fileId(),
-                                reference.version(), "REFERENCE",
+                                reference.version(), reference.purpose(),
                                 operation.getOperationId() + ":ref:" + index));
                 requireExactLink(linked, taskId, reference);
             }
@@ -139,7 +141,7 @@ public class AgentTaskCreationOperationServiceImpl
             }
             operation.setOperationState("COMMITTED").setTaskId(taskId)
                     .setRequirementRevision(1L).setCompletedAt(completedAt);
-            return new Result(new Receipt(1, operation.getOperationId(), taskId, 1,
+            return new Result(new Receipt(valid.schemaVersion(), operation.getOperationId(), taskId, 1,
                     "COMMITTED", valid.references(), created), false);
         } catch (Failure failure) {
             throw failure;
@@ -162,7 +164,14 @@ public class AgentTaskCreationOperationServiceImpl
     @Override
     @Transactional(readOnly = true, rollbackFor = Exception.class)
     public Receipt getByIdempotencyKey(Scope scope, String idempotencyKey) {
+        return getByIdempotencyKey(scope, idempotencyKey, 1);
+    }
+
+    @Override
+    @Transactional(readOnly = true, rollbackFor = Exception.class)
+    public Receipt getByIdempotencyKey(Scope scope, String idempotencyKey, int schemaVersion) {
         requireAuthenticatedScope(scope);
+        requireSchemaVersion(schemaVersion);
         requireKey(idempotencyKey);
         try {
             AgentTaskCreationOperationEntity operation = operations.find(
@@ -171,6 +180,7 @@ public class AgentTaskCreationOperationServiceImpl
                 throw failure(Reason.NOT_FOUND);
             }
             validateOperationScope(operation, scope, idempotencyKey);
+            if (operationVersion(operation) != schemaVersion) throw failure(Reason.IDEMPOTENCY_CONFLICT);
             return receipt(scope, operation);
         } catch (Failure failure) {
             throw failure;
@@ -195,7 +205,7 @@ public class AgentTaskCreationOperationServiceImpl
                 || !operation.getRequestHash().matches("[0-9a-f]{64}")) {
             throw failure(Reason.UNAVAILABLE);
         }
-        List<InputReference> references = parsePersistedRefs(operation.getInputRefsJson());
+        List<InputReference> references = parsePersistedRefs(operation.getInputRefsJson(), operationVersion(operation));
         if (!linkRows.taskExists(scope.tenantId(), scope.clientId(), scope.ownerJiacn(),
                 operation.getTaskId())) {
             throw failure(Reason.NOT_FOUND);
@@ -212,12 +222,12 @@ public class AgentTaskCreationOperationServiceImpl
         }
         AgentTaskDTO task = agents.getTask(operation.getTaskId());
         requireTaskProjection(task, scope, operation.getTaskId());
-        return new Receipt(1, operation.getOperationId(), operation.getTaskId(), 1,
+        return new Receipt(operationVersion(operation), operation.getOperationId(), operation.getTaskId(), 1,
                 "COMMITTED", references, task);
     }
 
     private void requireReferenceVersionLocked(Scope scope, String taskId,
-            InputReference reference) {
+            InputReference reference, int schemaVersion) {
         if (!linkRows.lockTask(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId)) {
             throw failure(Reason.NOT_FOUND);
         }
@@ -237,7 +247,8 @@ public class AgentTaskCreationOperationServiceImpl
                 || !Objects.equals(scope.tenantId(), version.getTenantId())
                 || !Objects.equals(scope.clientId(), version.getClientId())
                 || !Objects.equals(scope.ownerJiacn(), version.getOwnerJiacn())
-                || !IMAGE_MIME_TYPES.contains(version.getContentMimeType())) {
+                || version.getContentMimeType() == null || version.getContentMimeType().isBlank()
+                || (schemaVersion == 1 && !IMAGE_MIME_TYPES.contains(version.getContentMimeType()))) {
             throw failure(Reason.NOT_FOUND);
         }
     }
@@ -247,7 +258,7 @@ public class AgentTaskCreationOperationServiceImpl
         if (linked == null || !Objects.equals(taskId, linked.taskId())
                 || !Objects.equals(reference.fileId(), linked.fileId())
                 || reference.version() != linked.version()
-                || !"REFERENCE".equals(linked.role())
+                || !Objects.equals(reference.purpose(), linked.role())
                 || !"ACTIVE".equals(linked.state())
                 || linked.relationRevision() < 1) {
             throw failure(Reason.UNAVAILABLE);
@@ -307,6 +318,8 @@ public class AgentTaskCreationOperationServiceImpl
         if (command == null || command.title() == null || command.title().isBlank()) {
             throw failure(Reason.BAD_REQUEST);
         }
+        requireSchemaVersion(command.schemaVersion());
+        String purpose = purpose(command.schemaVersion());
         requireOriginalText(command.title(), false);
         if (command.description() != null) requireOriginalText(command.description(), true);
         if (!command.descriptionPresent() && command.description() != null
@@ -329,26 +342,26 @@ public class AgentTaskCreationOperationServiceImpl
         for (InputReference reference : references) {
             if (reference == null || !validId(reference.fileId(), 100)
                     || reference.version() < 1
-                    || !"REFERENCE".equals(reference.purpose())
+                    || !purpose.equals(reference.purpose())
                     || !selected.add(reference.fileId() + "\u0000" + reference.version()
-                            + "\u0000REFERENCE")) {
+                            + "\u0000" + purpose)) {
                 throw failure(Reason.BAD_REQUEST);
             }
         }
         references.sort(REFERENCE_ORDER);
-        return new ValidRequest(command.title(), command.descriptionPresent(),
+        return new ValidRequest(command.schemaVersion(), command.title(), command.descriptionPresent(),
                 command.description(), command.requiredAbilitiesPresent(), abilities,
                 command.rewardPresent(), command.reward(), List.copyOf(references));
     }
 
-    private String refsJson(List<InputReference> references) {
+    private String refsJson(List<InputReference> references, int schemaVersion) {
         try {
             ArrayNode array = json.createArrayNode();
             for (InputReference reference : references) {
                 ObjectNode item = array.addObject();
                 item.put("fileId", reference.fileId());
                 item.put("version", reference.version());
-                item.put("purpose", "REFERENCE");
+                if (schemaVersion == 1) item.put("purpose", "REFERENCE");
             }
             return json.writeValueAsString(array);
         } catch (Exception failure) {
@@ -356,7 +369,8 @@ public class AgentTaskCreationOperationServiceImpl
         }
     }
 
-    private List<InputReference> parsePersistedRefs(String value) {
+    private List<InputReference> parsePersistedRefs(String value, int schemaVersion) {
+        String purpose = purpose(schemaVersion);
         try {
             JsonNode root = json.readTree(value);
             if (root == null || !root.isArray() || root.size() > 32) {
@@ -365,20 +379,21 @@ public class AgentTaskCreationOperationServiceImpl
             List<InputReference> references = new ArrayList<>();
             Set<String> selected = new HashSet<>();
             for (JsonNode node : root) {
-                if (!node.isObject() || node.size() != 3
-                        || !node.has("fileId") || !node.has("version") || !node.has("purpose")
+                if (!node.isObject() || node.size() != (schemaVersion == 1 ? 3 : 2)
+                        || !node.has("fileId") || !node.has("version")
                         || !node.get("fileId").isTextual()
                         || !node.get("version").isIntegralNumber()
                         || !node.get("version").canConvertToInt()
-                        || !node.get("purpose").isTextual()) {
+                        || (schemaVersion == 1 && (!node.has("purpose") || !node.get("purpose").isTextual()
+                            || !"REFERENCE".equals(node.get("purpose").textValue())))) {
                     throw failure(Reason.UNAVAILABLE);
                 }
                 InputReference reference = new InputReference(node.get("fileId").textValue(),
-                        node.get("version").intValue(), node.get("purpose").textValue());
+                        node.get("version").intValue(), purpose);
                 if (!validId(reference.fileId(), 100) || reference.version() < 1
-                        || !"REFERENCE".equals(reference.purpose())
+                        || !purpose.equals(reference.purpose())
                         || !selected.add(reference.fileId() + "\u0000" + reference.version()
-                                + "\u0000REFERENCE")) {
+                                + "\u0000" + purpose)) {
                     throw failure(Reason.UNAVAILABLE);
                 }
                 references.add(reference);
@@ -410,7 +425,7 @@ public class AgentTaskCreationOperationServiceImpl
     private static String requestHash(ValidRequest request) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            add(digest, "AGENT_TASK_CREATION_OPERATION_V1");
+            add(digest, "AGENT_TASK_CREATION_OPERATION_V" + request.schemaVersion());
             add(digest, request.title());
             optional(digest, request.descriptionPresent(), request.description());
             digest.update((byte) (request.requiredAbilitiesPresent() ? 1 : 0));
@@ -435,7 +450,7 @@ public class AgentTaskCreationOperationServiceImpl
             for (InputReference reference : request.references()) {
                 add(digest, reference.fileId());
                 digest.update(ByteBuffer.allocate(4).putInt(reference.version()).array());
-                add(digest, "REFERENCE");
+                add(digest, reference.purpose());
             }
             return HexFormat.of().formatHex(digest.digest());
         } catch (NoSuchAlgorithmException impossible) {
@@ -562,6 +577,20 @@ public class AgentTaskCreationOperationServiceImpl
                 right == null ? new byte[0] : right.getBytes(StandardCharsets.US_ASCII));
     }
 
+    private static void requireSchemaVersion(int schemaVersion) {
+        if (schemaVersion != 1 && schemaVersion != 2) throw failure(Reason.BAD_REQUEST);
+    }
+
+    private static String purpose(int schemaVersion) {
+        requireSchemaVersion(schemaVersion);
+        return schemaVersion == 1 ? "REFERENCE" : "INPUT";
+    }
+
+    /** Immutable server-generated resource type; never inferred from MIME or nonempty inputs. */
+    private static int operationVersion(AgentTaskCreationOperationEntity operation) {
+        return operation.getOperationId().startsWith("atco2_") ? 2 : 1;
+    }
+
     private static String identifier(String prefix) {
         return prefix + UUID.randomUUID().toString().replace("-", "");
     }
@@ -571,7 +600,7 @@ public class AgentTaskCreationOperationServiceImpl
         return new Failure(reason, cause);
     }
 
-    private record ValidRequest(String title,
+    private record ValidRequest(int schemaVersion, String title,
             boolean descriptionPresent, String description,
             boolean requiredAbilitiesPresent, List<String> requiredAbilities,
             boolean rewardPresent, Integer reward,

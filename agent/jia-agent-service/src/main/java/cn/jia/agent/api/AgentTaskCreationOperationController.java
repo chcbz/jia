@@ -42,6 +42,9 @@ public final class AgentTaskCreationOperationController {
     static final String CACHE_CONTROL = "private, no-store";
     private static final Set<String> REQUEST_FIELDS = Set.of(
             "title", "description", "requiredAbilities", "reward", "inputRefs");
+    private static final Set<String> MATERIAL_REQUEST_FIELDS = Set.of(
+            "title", "description", "requiredAbilities", "reward", "attachments");
+    private static final Set<String> ATTACHMENT_FIELDS = Set.of("fileId", "version");
     private static final Set<String> REFERENCE_FIELDS = Set.of("fileId", "version", "purpose");
 
     private static final ObjectMapper STRICT_JSON = JsonMapper.builder()
@@ -62,7 +65,7 @@ public final class AgentTaskCreationOperationController {
             HttpServletRequest request, Authentication authentication) {
         AgentTaskCreationOperationService.Scope scope = scope(authentication);
         requireSingleKeyAndNoQuery(request, idempotencyKey);
-        AgentTaskCreationOperationService.CreateCommand command = command(rawBody);
+        AgentTaskCreationOperationService.CreateCommand command = command(rawBody, 1);
         AgentTaskCreationOperationService.Result result =
                 operations.create(scope, idempotencyKey, command);
         if (result == null || result.receipt() == null) {
@@ -83,6 +86,46 @@ public final class AgentTaskCreationOperationController {
         return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(operations.getByIdempotencyKey(scope, idempotencyKey));
+    }
+
+    @PostMapping(value = "/v2", consumes = MediaType.APPLICATION_JSON_VALUE,
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<AgentTaskCreationOperationService.MaterialsReceipt> createV2(
+            @RequestBody(required = false) String rawBody,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            HttpServletRequest request, Authentication authentication) {
+        AgentTaskCreationOperationService.Scope scope = scope(authentication);
+        requireSingleKeyAndNoQuery(request, idempotencyKey);
+        var result = operations.create(scope, idempotencyKey, command(rawBody, 2));
+        if (result == null) throw new AgentTaskCreationOperationService.Failure(
+                AgentTaskCreationOperationService.Reason.UNAVAILABLE);
+        return ResponseEntity.status(result.replay() ? HttpStatus.OK : HttpStatus.CREATED)
+                .header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
+                .contentType(MediaType.APPLICATION_JSON).body(materialsReceipt(result.receipt()));
+    }
+
+    @GetMapping(value = "/v2/request", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<AgentTaskCreationOperationService.MaterialsReceipt> requestV2(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            HttpServletRequest request, Authentication authentication) {
+        AgentTaskCreationOperationService.Scope scope = scope(authentication);
+        requireSingleKeyAndNoQuery(request, idempotencyKey);
+        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(materialsReceipt(operations.getByIdempotencyKey(scope, idempotencyKey, 2)));
+    }
+
+    private static AgentTaskCreationOperationService.MaterialsReceipt materialsReceipt(
+            AgentTaskCreationOperationService.Receipt receipt) {
+        if (receipt == null || receipt.schemaVersion() != 2
+                || receipt.inputRefs().stream().anyMatch(ref -> !"INPUT".equals(ref.purpose()))) {
+            throw new AgentTaskCreationOperationService.Failure(
+                    AgentTaskCreationOperationService.Reason.UNAVAILABLE);
+        }
+        return new AgentTaskCreationOperationService.MaterialsReceipt(2, receipt.operationId(),
+                receipt.taskId(), receipt.requirementRevision(), receipt.state(),
+                receipt.inputRefs().stream().map(ref -> new AgentTaskCreationOperationService.Attachment(
+                        ref.fileId(), ref.version())).toList(), receipt.task());
     }
 
     @ExceptionHandler(AuthenticationFailure.class)
@@ -122,7 +165,7 @@ public final class AgentTaskCreationOperationController {
                 "Task creation is temporarily unavailable");
     }
 
-    private AgentTaskCreationOperationService.CreateCommand command(String rawBody) {
+    private AgentTaskCreationOperationService.CreateCommand command(String rawBody, int schemaVersion) {
         if (rawBody == null || rawBody.isBlank()) throw new InvalidRequest();
         try {
             JsonNode root = STRICT_JSON.readTree(rawBody);
@@ -130,7 +173,7 @@ public final class AgentTaskCreationOperationController {
                 throw new InvalidRequest();
             }
             Set<String> fields = fieldNames(root);
-            if (!REQUEST_FIELDS.containsAll(fields) || !root.get("title").isTextual()) {
+            if (!(schemaVersion == 1 ? REQUEST_FIELDS : MATERIAL_REQUEST_FIELDS).containsAll(fields) || !root.get("title").isTextual()) {
                 throw new InvalidRequest();
             }
             String title = root.get("title").textValue();
@@ -141,8 +184,9 @@ public final class AgentTaskCreationOperationController {
             boolean rewardPresent = root.has("reward");
             Integer reward = integer(root.get("reward"), rewardPresent);
             List<AgentTaskCreationOperationService.InputReference> references =
-                    references(root.get("inputRefs"), root.has("inputRefs"));
-            return new AgentTaskCreationOperationService.CreateCommand(title,
+                    schemaVersion == 1 ? references(root.get("inputRefs"), root.has("inputRefs"))
+                            : attachments(root.get("attachments"), root.has("attachments"));
+            return new AgentTaskCreationOperationService.CreateCommand(schemaVersion, title,
                     descriptionPresent, description, abilitiesPresent, abilities,
                     rewardPresent, reward, references);
         } catch (InvalidRequest failure) {
@@ -200,6 +244,25 @@ public final class AgentTaskCreationOperationController {
                     fileId, version, purpose));
         }
         return List.copyOf(references);
+    }
+
+    private static List<AgentTaskCreationOperationService.InputReference> attachments(
+            JsonNode value, boolean present) {
+        if (!present) return List.of();
+        if (value == null || !value.isArray() || value.size() > 32) throw new InvalidRequest();
+        List<AgentTaskCreationOperationService.InputReference> attachments = new ArrayList<>();
+        Set<String> selected = new HashSet<>();
+        for (JsonNode item : value) {
+            if (!item.isObject() || !fieldNames(item).equals(ATTACHMENT_FIELDS)
+                    || !item.get("fileId").isTextual()
+                    || !item.get("version").isIntegralNumber()
+                    || !item.get("version").canConvertToInt()) throw new InvalidRequest();
+            String fileId = item.get("fileId").textValue();
+            int version = item.get("version").intValue();
+            if (version < 1 || !selected.add(fileId + "\u0000" + version)) throw new InvalidRequest();
+            attachments.add(new AgentTaskCreationOperationService.InputReference(fileId, version, "INPUT"));
+        }
+        return List.copyOf(attachments);
     }
 
     private static Set<String> fieldNames(JsonNode node) {

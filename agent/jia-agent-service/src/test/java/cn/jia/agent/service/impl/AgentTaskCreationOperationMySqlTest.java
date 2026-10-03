@@ -167,6 +167,46 @@ class AgentTaskCreationOperationMySqlTest {
         }
     }
 
+    @Test
+    void v2NeutralJsonAndTypedReceiptReuseRealMapperReservationAndSemanticCommit() throws Exception {
+        var configuration = new com.baomidou.mybatisplus.core.MybatisConfiguration();
+        configuration.setMapUnderscoreToCamelCase(true);
+        configuration.addMapper(cn.jia.agent.mapper.AgentTaskCreationOperationMapper.class);
+        var bean = new com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean();
+        bean.setDataSource(source); bean.setConfiguration(configuration);
+        var template = new org.mybatis.spring.SqlSessionTemplate(bean.getObject());
+        var dao = new cn.jia.agent.dao.impl.AgentTaskCreationOperationDaoImpl(
+                template.getMapper(cn.jia.agent.mapper.AgentTaskCreationOperationMapper.class));
+        var transaction = new TransactionTemplate(new DataSourceTransactionManager(source));
+        String refs = "[{\"fileId\":\"file-a\",\"version\":1},{\"fileId\":\"file-b\",\"version\":2}]";
+        List<String> before = definitions();
+        transaction.executeWithoutResult(status -> {
+            var original = dao.reserveAndLock("0", "client-a", "owner-a", "generic-key", "a".repeat(64),
+                    "atco2_original", refs, 1L);
+            assertEquals("atco2_original", original.getOperationId());
+            // Same key, even with another protocol tag/hash, must never replace the owner receipt.
+            var duplicate = dao.reserveAndLock("0", "client-a", "owner-a", "generic-key", "b".repeat(64),
+                    "atco_legacy_contender", "[]", 2L);
+            assertEquals("atco2_original", duplicate.getOperationId());
+            assertEquals("a".repeat(64), duplicate.getRequestHash());
+            assertTrue(dao.complete("0", "client-a", "owner-a", "atco2_original", "a".repeat(64),
+                    "[{\"version\":1,\"fileId\":\"file-a\"}, {\"version\":2,\"fileId\":\"file-b\"}]",
+                    "task-v2", 1L, 2L));
+            assertFalse(dao.complete("0", "client-a", "owner-a", "atco2_original", "a".repeat(64),
+                    refs, "different-task", 1L, 3L));
+        });
+        var receipt = dao.find("0", "client-a", "owner-a", "generic-key");
+        assertEquals("COMMITTED", receipt.getOperationState());
+        assertEquals("task-v2", receipt.getTaskId());
+        var parsed = tools.jackson.databind.json.JsonMapper.builder().build().readTree(receipt.getInputRefsJson());
+        assertEquals(2, parsed.size()); assertEquals(2, parsed.get(0).size());
+        assertEquals("file-b", parsed.get(1).get("fileId").textValue());
+        assertEquals(null, dao.find("0", "client-a", "owner-b", "generic-key"));
+        new AgentTaskCreationOperationSchemaInitializer(jdbc).afterPropertiesSet();
+        assertEquals(before, definitions());
+        assertEquals(1, count());
+    }
+
     private void insertProcessing(String owner, String key, String operationId, String refs) {
         jdbc.update("""
                 INSERT INTO agent_task_creation_operation

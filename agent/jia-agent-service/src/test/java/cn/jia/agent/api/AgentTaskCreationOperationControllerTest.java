@@ -145,6 +145,77 @@ class AgentTaskCreationOperationControllerTest {
     }
 
     @Test
+    void v2EmptyOptionalSelectionReplayAndReadPreserveExplicitSchema() throws Exception {
+        var empty = new AgentTaskCreationOperationService.Receipt(2, "atco2_empty", "42", 1,
+                "COMMITTED", List.of(), receipt().task());
+        when(operations.create(any(), eq("empty-v2"), any())).thenReturn(
+                new AgentTaskCreationOperationService.Result(empty, false),
+                new AgentTaskCreationOperationService.Result(empty, true));
+        when(operations.getByIdempotencyKey(any(), eq("empty-v2"), eq(2))).thenReturn(empty);
+        for (String body : List.of("{\"title\":\"x\"}", "{\"title\":\"x\",\"attachments\":[]}")) {
+            mvc.perform(post("/agent/tasks/creation-operations/v2").principal(jwt("owner-a", "client-a"))
+                            .header("Idempotency-Key", "empty-v2").contentType(MediaType.APPLICATION_JSON).content(body))
+                    .andExpect(status().is2xxSuccessful())
+                    .andExpect(jsonPath("$.schemaVersion").value(2))
+                    .andExpect(jsonPath("$.attachments").isEmpty());
+        }
+        mvc.perform(get("/agent/tasks/creation-operations/v2/request").principal(jwt("owner-a", "client-a"))
+                        .header("Idempotency-Key", "empty-v2"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.schemaVersion").value(2))
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
+        var captured = org.mockito.ArgumentCaptor.forClass(AgentTaskCreationOperationService.CreateCommand.class);
+        verify(operations, org.mockito.Mockito.times(2)).create(any(), eq("empty-v2"), captured.capture());
+        assertEquals(captured.getAllValues().getFirst(), captured.getAllValues().getLast());
+        assertEquals(2, captured.getValue().schemaVersion());
+        verify(operations, never()).getByIdempotencyKey(any(), any());
+    }
+
+    @Test
+    void v2RejectsPurposeTransportFieldsDuplicatesAndWrongVersionsBeforeService() throws Exception {
+        for (String body : List.of(
+                "{\"title\":\"x\",\"attachments\":null}",
+                "{\"title\":\"x\",\"inputRefs\":[]}",
+                "{\"title\":\"x\",\"attachments\":[],\"model\":\"image\"}",
+                "{\"title\":\"x\",\"attachments\":[],\"owner\":\"victim\"}",
+                "{\"title\":\"x\",\"title\":\"y\"}",
+                "{\"title\":\"x\"} {}",
+                "{\"title\":\"x\",\"attachments\":[{\"fileId\":\"f\",\"version\":1,\"purpose\":\"REFERENCE\"}]}",
+                "{\"title\":\"x\",\"attachments\":[{\"fileId\":\"f\",\"version\":1,\"url\":\"https://foreign/\"}]}",
+                "{\"title\":\"x\",\"attachments\":[{\"fileId\":\"f\",\"version\":0}]}",
+                "{\"title\":\"x\",\"attachments\":[{\"fileId\":\"f\",\"version\":1.0}]}",
+                "{\"title\":\"x\",\"attachments\":[{\"fileId\":\"f\",\"version\":2147483648}]}",
+                "{\"title\":\"x\",\"attachments\":[{\"fileId\":\"f\",\"version\":1},{\"fileId\":\"f\",\"version\":1}]}")) {
+            mvc.perform(post("/agent/tasks/creation-operations/v2").principal(jwt("owner-a", "client-a"))
+                            .header("Idempotency-Key", "bad").contentType(MediaType.APPLICATION_JSON).content(body))
+                    .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("BAD_REQUEST"));
+        }
+        mvc.perform(post("/agent/tasks/creation-operations").principal(jwt("owner-a", "client-a"))
+                        .header("Idempotency-Key", "legacy").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"x\",\"attachments\":[]}"))
+                .andExpect(status().isBadRequest());
+        verify(operations, never()).create(any(), any(), any());
+    }
+
+    @Test
+    void v2ReadKeepsIdentityHeaderQueryAndVersionConflictBoundaries() throws Exception {
+        mvc.perform(get("/agent/tasks/creation-operations/v2/request").header("Idempotency-Key", "key"))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(get("/agent/tasks/creation-operations/v2/request").principal(jwt("owner-b", "client-a"))
+                        .header("Idempotency-Key", "key")).andExpect(status().isForbidden());
+        mvc.perform(get("/agent/tasks/creation-operations/v2/request?file=other").principal(jwt("owner-a", "client-a"))
+                        .header("Idempotency-Key", "key")).andExpect(status().isBadRequest());
+        mvc.perform(get("/agent/tasks/creation-operations/v2/request").principal(jwt("owner-a", "client-a"))
+                        .header("Idempotency-Key", "key", "other")).andExpect(status().isBadRequest());
+        verify(operations, never()).getByIdempotencyKey(any(), any(), org.mockito.ArgumentMatchers.anyInt());
+        when(operations.getByIdempotencyKey(any(), eq("legacy-key"), eq(2))).thenThrow(
+                new AgentTaskCreationOperationService.Failure(AgentTaskCreationOperationService.Reason.IDEMPOTENCY_CONFLICT));
+        mvc.perform(get("/agent/tasks/creation-operations/v2/request").principal(jwt("owner-a", "client-a"))
+                        .header("Idempotency-Key", "legacy-key"))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("IDEMPOTENCY_CONFLICT"))
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
+    }
+
+    @Test
     void rawAllowlistDuplicateHeadersTrailingTokensAndReferenceShapeFailBeforeService() throws Exception {
         for (String body : List.of(
                 "{\"title\":\"x\",\"title\":\"y\",\"inputRefs\":[]}",

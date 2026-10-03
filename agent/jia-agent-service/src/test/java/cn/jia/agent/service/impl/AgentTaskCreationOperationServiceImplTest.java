@@ -230,6 +230,113 @@ class AgentTaskCreationOperationServiceImplTest {
                 anyString(), anyString(), anyString(), anyString(), anyLong());
     }
 
+    @Test
+    void v2MixedMaterialsUseExactVersionsCanonicalNeutralJsonAndReadOnlyReplay() throws Exception {
+        var inputs = List.of(input("file-d", 3), input("file-b", 2), input("file-a", 1), input("file-c", 1));
+        when(workspace.findVersion("0", "client-a", "owner-a", "file-b", 2))
+                .thenReturn(version("file-b", 2, "application/pdf"));
+        when(workspace.findVersion("0", "client-a", "owner-a", "file-c", 1))
+                .thenReturn(version("file-c", 1, "audio/mpeg"));
+        when(workspace.findVersion("0", "client-a", "owner-a", "file-d", 3))
+                .thenReturn(version("file-d", 3, "text/plain"));
+        var first = inTransaction(() -> service.create(SCOPE, "mixed", materialCommand(inputs)));
+        assertEquals(2, first.receipt().schemaVersion());
+        assertTrue(first.receipt().operationId().matches("atco2_[0-9a-f]{32}"));
+        assertEquals(List.of(input("file-a", 1), input("file-b", 2), input("file-c", 1), input("file-d", 3)),
+                first.receipt().inputRefs());
+        assertEquals("[{\"fileId\":\"file-a\",\"version\":1},{\"fileId\":\"file-b\",\"version\":2},"
+                + "{\"fileId\":\"file-c\",\"version\":1},{\"fileId\":\"file-d\",\"version\":3}]", stored.get().getInputRefsJson());
+        // MySQL may reorder object keys/spaces; compare the strict parsed schema, never raw JSON bytes.
+        stored.get().setInputRefsJson("[{\"version\": 1, \"fileId\": \"file-a\"},"
+                + "{\"version\": 2, \"fileId\": \"file-b\"}, {\"version\": 1, \"fileId\": \"file-c\"},"
+                + "{\"version\": 3, \"fileId\": \"file-d\"}]");
+        var replay = inTransaction(() -> service.create(SCOPE, "mixed", materialCommand(first.receipt().inputRefs())));
+        assertTrue(replay.replay());
+        assertEquals(first.receipt(), replay.receipt());
+        when(operations.find("0", "client-a", "owner-a", "mixed")).thenReturn(stored.get());
+        assertEquals(first.receipt(), service.getByIdempotencyKey(SCOPE, "mixed", 2));
+        verify(agents, times(1)).createTask(any());
+        verify(links, times(4)).create(any(), eq("task-1"), any());
+        verify(workspace, never()).findVersion("0", "client-a", "owner-a", "file-b", 3);
+        assertEquals(AgentTaskCreationOperationService.Reason.IDEMPOTENCY_CONFLICT,
+                assertThrows(AgentTaskCreationOperationService.Failure.class, () -> inTransaction(() ->
+                        service.create(SCOPE, "mixed", materialCommand(List.of(input("file-b", 3)))))).reason());
+    }
+
+    @Test
+    void emptySelectionsPersistVersionAndNeverCrossReplayBetweenV1AndV2() {
+        var legacy = command("完整🚀标题", true, "", true, List.of(), true, null, List.of());
+        var generic = materialCommand(List.of());
+        String legacyHash = null;
+        for (int schema : List.of(1, 2)) {
+            stored.set(null);
+            var original = schema == 1 ? legacy : generic;
+            var other = schema == 1 ? generic : legacy;
+            var created = inTransaction(() -> service.create(SCOPE, "empty", original));
+            when(operations.find("0", "client-a", "owner-a", "empty")).thenReturn(stored.get());
+            assertEquals(schema, created.receipt().schemaVersion());
+            assertEquals("[]", stored.get().getInputRefsJson());
+            assertEquals(created.receipt(), service.getByIdempotencyKey(SCOPE, "empty", schema));
+            assertEquals(AgentTaskCreationOperationService.Reason.IDEMPOTENCY_CONFLICT,
+                    assertThrows(AgentTaskCreationOperationService.Failure.class, () -> inTransaction(() ->
+                            service.create(SCOPE, "empty", other))).reason());
+            assertEquals(AgentTaskCreationOperationService.Reason.IDEMPOTENCY_CONFLICT,
+                    assertThrows(AgentTaskCreationOperationService.Failure.class, () ->
+                            service.getByIdempotencyKey(SCOPE, "empty", schema == 1 ? 2 : 1)).reason());
+            if (schema == 1) legacyHash = stored.get().getRequestHash();
+            else assertFalse(legacyHash.equals(stored.get().getRequestHash()));
+        }
+        verify(links, never()).create(any(), anyString(), any());
+    }
+
+    @Test
+    void genericCreationRejectsDuplicateRoleInjectionAndUnownedOrTrashedVersion() {
+        for (var refs : List.of(List.of(input("f", 1), input("f", 1)), List.of(ref("f", 1)))) {
+            assertEquals(AgentTaskCreationOperationService.Reason.BAD_REQUEST,
+                    assertThrows(AgentTaskCreationOperationService.Failure.class, () -> inTransaction(() ->
+                            service.create(SCOPE, "invalid", materialCommand(refs)))).reason());
+        }
+        verify(agents, never()).createTask(any());
+        var foreign = version("file-x", 1, "audio/wav").setOwnerJiacn("owner-b");
+        when(workspace.findVersion("0", "client-a", "owner-a", "file-x", 1)).thenReturn(foreign);
+        assertEquals(AgentTaskCreationOperationService.Reason.NOT_FOUND,
+                assertThrows(AgentTaskCreationOperationService.Failure.class, () -> inTransaction(() ->
+                        service.create(SCOPE, "foreign", materialCommand(List.of(input("file-x", 1)))))).reason());
+        stored.set(null);
+        when(workspace.lockFile("0", "client-a", "owner-a", "file-x"))
+                .thenReturn(file("file-x", "TRASHED"));
+        assertEquals(AgentTaskCreationOperationService.Reason.NOT_FOUND,
+                assertThrows(AgentTaskCreationOperationService.Failure.class, () -> inTransaction(() ->
+                        service.create(SCOPE, "trashed", materialCommand(List.of(input("file-x", 1)))))).reason());
+        verify(links, never()).create(any(), anyString(), any());
+    }
+
+    @Test
+    void v2PersistedAttachmentsRemainStrictAndCannotContainPurposeOrForeignFields() {
+        inTransaction(() -> service.create(SCOPE, "strict", materialCommand(List.of(input("file-a", 1)))));
+        when(operations.find("0", "client-a", "owner-a", "strict")).thenReturn(stored.get());
+        for (String corrupt : List.of(
+                "[{\"fileId\":\"file-a\",\"version\":1,\"purpose\":\"INPUT\"}]",
+                "[{\"fileId\":\"file-a\",\"version\":1,\"owner\":\"victim\"}]",
+                "[{\"fileId\":\"file-a\",\"version\":1.1}]",
+                "[{\"fileId\":\"file-a\",\"version\":1},{\"fileId\":\"file-a\",\"version\":1}]")) {
+            stored.get().setInputRefsJson(corrupt);
+            assertEquals(AgentTaskCreationOperationService.Reason.UNAVAILABLE,
+                    assertThrows(AgentTaskCreationOperationService.Failure.class, () ->
+                            service.getByIdempotencyKey(SCOPE, "strict", 2)).reason());
+        }
+    }
+
+    private static AgentTaskCreationOperationService.InputReference input(String id, int version) {
+        return new AgentTaskCreationOperationService.InputReference(id, version, "INPUT");
+    }
+
+    private static AgentTaskCreationOperationService.CreateCommand materialCommand(
+            List<AgentTaskCreationOperationService.InputReference> refs) {
+        return new AgentTaskCreationOperationService.CreateCommand(2, "完整🚀标题", true, "",
+                true, List.of(), true, null, refs);
+    }
+
     private <T> T inTransaction(java.util.concurrent.Callable<T> work) {
         return transactions.execute(status -> {
             try {
