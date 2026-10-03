@@ -15,7 +15,8 @@ public interface ControlledImageFollowupAuthorityService {
             String conversationId,String interactionIdempotencyKey);
     ControlledImageFollowupAuthorityDTO revoke(Scope scope, RevokeCommand command);
     Reservation reserve(Scope scope, ReserveCommand command, LateCheck lateCheck);
-    /** COMMAND/INPUTS/EXISTING_RUN revalidate source/session; RESULT uses the consumed START lease only. */
+    /** COMMAND/INPUTS/EXISTING_RUN revalidate live authority; FAILURE selects reserved pre-START
+     * admission or the consumed START lease, while RESULT always requires the consumed START lease. */
     RuntimeAuthority runtimeAuthority(RuntimeScope scope,String taskId,String runId,String purpose);
     StartReceipt consumeForStart(RuntimeScope scope, StartCommand command, LateCheck lateCheck);
 

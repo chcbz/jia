@@ -133,7 +133,7 @@ public class ControlledImageFollowupAuthorityServiceImpl implements ControlledIm
 
  @Override @Transactional(rollbackFor=Exception.class)
  public RuntimeAuthority runtimeAuthority(RuntimeScope scope,String taskId,String runId,String purpose){
-  if(scope==null||!Set.of("COMMAND","INPUTS","EXISTING_RUN","RESULT").contains(purpose))throw fail(Reason.BAD_REQUEST);
+  if(scope==null||!Set.of("COMMAND","INPUTS","EXISTING_RUN","RESULT","FAILURE").contains(purpose))throw fail(Reason.BAD_REQUEST);
   Scope owner=new Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());validScope(owner);id(scope.targetAgentId(),100);id(scope.runtimeInstanceId(),100);id(taskId,100);id(runId,100);
   try{var execution=executions.findByTaskRun(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,runId);
    if(execution==null||!Objects.equals(3,execution.getExecutionProtocolVersion())||!same(scope.targetAgentId(),execution.getTargetAgentId()))throw fail(Reason.NOT_FOUND_OR_FORBIDDEN);
@@ -141,7 +141,10 @@ public class ControlledImageFollowupAuthorityServiceImpl implements ControlledIm
    if(op==null)return initialRuntimeAuthority(scope,execution,purpose);
    if(!same(execution.getOperationGrantId(),op.getOperationGrantId())||!same(execution.getExecutionId(),op.getReservedExecutionId())||!same(runId,op.getReservedRunId()))throw fail(Reason.CONFLICT);
    var consent=consents.findFollowupByConsent(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,execution.getControlledConsentId());
-   if("RESULT".equals(purpose)) {
+   boolean failure="FAILURE".equals(purpose);
+   boolean providerStarted=execution.getConversationProviderStartedAt()!=null
+     ||execution.getConversationProviderLeaseVersion()!=null;
+   if("RESULT".equals(purpose)||failure&&providerStarted) {
     // Provider START already consumed the only callable authority. Result delivery proves that
     // exact persisted lease and deliberately does not reacquire declaration, policy or source access.
     requireConsumedResultAuthority(scope,execution,op,consent);
@@ -155,16 +158,17 @@ public class ControlledImageFollowupAuthorityServiceImpl implements ControlledIm
    RuntimeDeclarationLookup.Declaration currentDeclaration=null;
    if(!"EXISTING_RUN".equals(purpose)) {
     var base=baseline(owner,preview);requireBaseline(preview,base);
-    currentDeclaration=requireCurrentProvider(owner,preview,consent);
+    if(!failure)currentDeclaration=requireCurrentProvider(owner,preview,consent);
    }
-   requireSourceAccess(owner,preview,false);
+   // A pre-START failure may be reporting the exact source-read error; rechecking that source here
+   // would turn an honest terminal report into a false 404. Root/grant/session/fence/Chat ACL remain.
+   if(!failure)requireSourceAccess(owner,preview,false);
    ProviderExecution provider;
-   if("EXISTING_RUN".equals(purpose)) {
+   if("EXISTING_RUN".equals(purpose)||failure) {
     var session=sessionDeclaration(owner,scope.targetAgentId(),execution.getPermittedOperation());
     if(!same(scope.runtimeInstanceId(),session.runtimeInstanceId())
       ||!session.operations().contains(execution.getPermittedOperation()))throw fail(Reason.CONFLICT);
-    provider=new ProviderExecution(consent.getProviderLane(),consent.getConsentId(),consent.getBindingId(),
-      Long.toString(consent.getBindingEpoch()),consent.getModelId(),16,1,1);
+    provider=persistedProvider(consent);
    } else {
     var d=Objects.requireNonNull(currentDeclaration);
     if(!same(scope.runtimeInstanceId(),d.runtimeInstanceId())||!d.operations().contains(execution.getPermittedOperation())
@@ -203,7 +207,9 @@ public class ControlledImageFollowupAuthorityServiceImpl implements ControlledIm
   var bridge=initialOperations.findByOperationGrant(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),execution.getTaskId(),execution.getOperationGrantId());
   var consent=consents.findByConsent(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),execution.getTaskId(),execution.getControlledConsentId());
   requireInitialBridge(execution,bridge,consent);
-  if("RESULT".equals(purpose)) {
+  boolean providerStarted=execution.getConversationProviderStartedAt()!=null
+    ||execution.getConversationProviderLeaseVersion()!=null;
+  if("RESULT".equals(purpose)||"FAILURE".equals(purpose)&&providerStarted) {
    requireConsumedResultAuthority(scope,execution,null,consent);
    return runtimeAuthority(execution,persistedProvider(consent));
   }

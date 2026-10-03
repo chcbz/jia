@@ -298,6 +298,94 @@ class ControlledImageIntentOperationGrantServiceTest {
         verify(sourceAccess,never()).getIfUnique();
     }
 
+    @Test void followupPreStartFailureUsesReservedAuthorityWithoutRequiringBrokenSourceAgain() {
+        var operation=operationGrant("issue-key","a".repeat(64)).setState("RESERVED").setVersion(2L)
+                .setReservedExecutionId("execution").setReservedRunId("run");
+        var consent=followupConsent(operation).setState("RESERVED").setVersion(3L)
+                .setReservedExecutionId("execution").setReservedRunId("run")
+                .setRuntimeInputSnapshotSha256("7".repeat(64));
+        var execution=new PersonalWorkspaceExecutionEntity().setExecutionId("execution").setTaskId("task")
+                .setRunId("run").setExecutionProtocolVersion(3).setTargetAgentId("agent")
+                .setPermittedOperation("GENERATE_IMAGE").setOperationGrantId(operation.getOperationGrantId())
+                .setControlledConsentId(consent.getConsentId()).setConversationId("conversation")
+                .setInstruction("draw").setRuntimeInputSnapshotDigest("7".repeat(64));
+        when(executions.findByTaskRun("0","client","owner","task","run")).thenReturn(execution);
+        when(operationGrants.findById("0","client","owner","task",operation.getOperationGrantId()))
+                .thenReturn(operation);
+        when(consents.findFollowupByConsent("0","client","owner","task",consent.getConsentId()))
+                .thenReturn(consent);
+        when(grants.admitFollowupBaseline(any(),eq("task"),eq("baseline"),eq(1L),eq(0L),
+                eq(0L),eq(1L),eq("agent"))).thenReturn(baseline());
+        when(declaration.currentSession(any())).thenReturn(
+                new ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.SessionDeclaration(
+                        ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State.READY,
+                        "runtime",List.of("GENERATE_IMAGE","EDIT_IMAGE")));
+
+        var authority=service.runtimeAuthority(new ControlledImageFollowupAuthorityService.RuntimeScope(
+                "0","client","owner","agent","runtime"),"task","run","FAILURE");
+
+        assertEquals("execution",authority.executionId());
+        assertEquals(consent.getConsentId(),authority.providerExecution().consentId());
+        verify(declaration).currentSession(any());
+        verify(declaration,never()).current(any());
+        verify(sourceAccess,never()).getIfUnique();
+        verifyNoInteractions(policies);
+    }
+
+    @Test void initialPreStartFailureUsesOrdinaryReservedAdmissionNotConsumedResultLease() {
+        var execution=new PersonalWorkspaceExecutionEntity().setExecutionId("execution").setTaskId("task")
+                .setRunId("run").setExecutionProtocolVersion(3).setTargetAgentId("agent")
+                .setPermittedOperation("GENERATE_IMAGE").setTaskGrantId("baseline")
+                .setTaskGrantVersion(1L).setAssignmentRevision(0L)
+                .setOperationGrantId("opgrant_1234567890abcdef1234567890abcdef")
+                .setControlledConsentId("consent_1234567890abcdef1234567890abcdef")
+                .setRuntimeInputSnapshotDigest("7".repeat(64));
+        var bridge=new ControlledImageBridgeOperationEntity().setTaskId("task")
+                .setExecutionProtocolVersion(3).setOperationGrantId(execution.getOperationGrantId())
+                .setConsentId(execution.getControlledConsentId()).setGrantId("baseline")
+                .setGrantVersion(1L).setAssignmentRevision(0L);
+        var consent=new AgentTaskProviderCostConsentEntity().setConsentId(execution.getControlledConsentId())
+                .setConsentPurpose("INITIAL_ASSIGN_AND_START").setOperationGrantId(null)
+                .setBoundGrantId("baseline").setBoundGrantVersion(1L).setBoundAssignmentRevision(0L)
+                .setTargetAgentId("agent").setState("RESERVED").setVersion(3L)
+                .setReservedExecutionId("execution").setReservedRunId("run")
+                .setProviderLane("CONTROLLED_IMAGE_HTTP_V1").setBindingId("binding").setBindingEpoch(7L)
+                .setModelId("model").setMaxOutboundRequestAttempts(1);
+        consent.setTenantId("0");consent.setClientId("client");consent.setOwnerJiacn("owner");consent.setTaskId("task");
+        when(executions.findByTaskRun("0","client","owner","task","run")).thenReturn(execution);
+        when(operationGrants.findById("0","client","owner","task",execution.getOperationGrantId()))
+                .thenReturn(null);
+        when(initialOperations.findByOperationGrant("0","client","owner","task",execution.getOperationGrantId()))
+                .thenReturn(bridge);
+        when(consents.findByConsent("0","client","owner","task",consent.getConsentId()))
+                .thenReturn(consent);
+        when(grants.admitControlledV3(any(),eq("task"),eq("baseline"),eq(1L),eq(0L),eq("agent"),
+                eq("GENERATE_IMAGE"),eq("PROVIDER_START"),eq("execution"),eq("run"),eq("runtime")))
+                .thenReturn(new AgentTaskExecutionGrantService.Admission("baseline",1,0,"agent",
+                        "GENERATE_IMAGE",true,List.of(),"mmd-ci-v1:"+consent.getConsentId(),3L));
+
+        var authority=service.runtimeAuthority(new ControlledImageFollowupAuthorityService.RuntimeScope(
+                "0","client","owner","agent","runtime"),"task","run","FAILURE");
+
+        assertEquals("execution",authority.executionId());
+        verify(grants).admitControlledV3(any(),eq("task"),eq("baseline"),eq(1L),eq(0L),eq("agent"),
+                eq("GENERATE_IMAGE"),eq("PROVIDER_START"),eq("execution"),eq("run"),eq("runtime"));
+        verify(sourceAccess,never()).getIfUnique();
+    }
+
+    @Test void postStartFailureUsesConsumedResultLeaseWithoutLiveRevalidation() {
+        ResultFixture fixture=resultFixture();
+        stubResultFixture(fixture);
+
+        var authority=service.runtimeAuthority(new ControlledImageFollowupAuthorityService.RuntimeScope(
+                "0","client","owner","agent","runtime"),"task","run","FAILURE");
+
+        assertEquals("execution",authority.executionId());
+        verifyNoInteractions(grants,policies);
+        verify(declarations,never()).getIfUnique();
+        verify(sourceAccess,never()).getIfUnique();
+    }
+
     @Test void resultAuthorityRejectsReservedOrMismatchedConsumedStartTupleFailClosed() {
         List<Consumer<ResultFixture>> drifts=List.of(
                 value -> value.execution().setConversationLeaseRuntimeId("other-runtime"),

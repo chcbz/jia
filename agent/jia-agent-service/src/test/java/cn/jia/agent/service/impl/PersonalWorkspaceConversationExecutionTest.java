@@ -589,7 +589,24 @@ class PersonalWorkspaceConversationExecutionTest {
         assertEquals("FAILED",result.state());
         assertEquals(startedAt,execution.getConversationProviderStartedAt());
         assertEquals(1L,execution.getConversationProviderLeaseVersion());
-        verify(followup).runtimeAuthority(any(),eq("task-1"),eq("run-1"),eq("RESULT"));
+        verify(followup).runtimeAuthority(any(),eq("task-1"),eq("run-1"),eq("FAILURE"));
+        verify(rows).update(execution);
+        verify(storage,never()).store(any(),any(byte[].class),anyString());
+    }
+
+
+    @Test void v3PreStartFailureUsesReservedFailureAuthorityWithoutConsumedResultLease() {
+        enable();reservedV3();
+
+        var result=service.failConversation(RUNTIME,"task-1","run-1",
+                new PersonalWorkspaceExecutionService.ConversationFence(1,"lease-token"),
+                "AGENT_DELIVERY_FAILED");
+
+        assertEquals("FAILED",result.state());
+        assertNull(execution.getConversationProviderStartedAt());
+        assertNull(execution.getConversationProviderLeaseVersion());
+        verify(followup).runtimeAuthority(any(),eq("task-1"),eq("run-1"),eq("FAILURE"));
+        verify(followup,never()).runtimeAuthority(any(),eq("task-1"),eq("run-1"),eq("RESULT"));
         verify(rows).update(execution);
         verify(storage,never()).store(any(),any(byte[].class),anyString());
     }
@@ -671,7 +688,25 @@ class PersonalWorkspaceConversationExecutionTest {
                 .setConversationLeaseToken("lease-token").setConversationLeaseRuntimeId("runtime")
                 .setConversationLeaseVersion(1L).setConversationLeaseExpiresAt(Long.MAX_VALUE)
                 .setConversationProviderStartedAt(10L).setConversationProviderLeaseVersion(1L);
+        var authority=new ControlledImageFollowupAuthorityService.RuntimeAuthority(
+                "exec-1","GENERATE_IMAGE","7".repeat(64),
+                new ControlledImageFollowupAuthorityService.ProviderExecution(
+                        "CONTROLLED_IMAGE_HTTP_V1",execution.getControlledConsentId(),
+                        "binding","1","model",16,1,1));
         when(followup.runtimeAuthority(any(),eq("task-1"),eq("run-1"),eq("RESULT")))
+                .thenReturn(authority);
+        when(followup.runtimeAuthority(any(),eq("task-1"),eq("run-1"),eq("FAILURE")))
+                .thenReturn(authority);
+    }
+
+    private void reservedV3() {
+        execution.setExecutionProtocolVersion(3)
+                .setControlledConsentId("consent_1234567890abcdef1234567890abcdef")
+                .setOperationGrantId("opgrant_1234567890abcdef1234567890abcdef")
+                .setRuntimeInputSnapshotDigest("7".repeat(64))
+                .setConversationLeaseToken("lease-token").setConversationLeaseRuntimeId("runtime")
+                .setConversationLeaseVersion(1L).setConversationLeaseExpiresAt(Long.MAX_VALUE);
+        when(followup.runtimeAuthority(any(),eq("task-1"),eq("run-1"),eq("FAILURE")))
                 .thenReturn(new ControlledImageFollowupAuthorityService.RuntimeAuthority(
                         "exec-1","GENERATE_IMAGE","7".repeat(64),
                         new ControlledImageFollowupAuthorityService.ProviderExecution(

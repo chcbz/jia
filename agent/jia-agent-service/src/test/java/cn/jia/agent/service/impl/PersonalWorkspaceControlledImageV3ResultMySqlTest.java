@@ -148,6 +148,29 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
         assertEquals("OUTPUT_COMMITTED",rows.find("0","client","owner","exec-result").getExecutionState());
     }
 
+    @Test void preStartInitialAndFollowupFailuresPersistWithoutProviderOrOutputMutation() {
+        persist("exec-initial-prestart","run-initial-prestart","42",false);
+        persist("exec-followup-prestart","run-followup-prestart","42",false);
+        var runtime=new PersonalWorkspaceExecutionService.RuntimeScope("0","client","owner","agent","runtime");
+        var fence=new PersonalWorkspaceExecutionService.ConversationFence(1,"lease-token");
+
+        var initial=inTx(() -> service.failConversation(runtime,"task","run-initial-prestart",fence,
+                "AGENT_DELIVERY_FAILED"));
+        var followup=inTx(() -> service.failConversation(runtime,"task","run-followup-prestart",fence,
+                "AGENT_DELIVERY_FAILED"));
+
+        assertEquals("FAILED",initial.state());assertEquals("FAILED",followup.state());
+        for(String executionId:List.of("exec-initial-prestart","exec-followup-prestart")) {
+            var row=inTx(() -> rows.find("0","client","owner",executionId));
+            assertEquals("FAILED",row.getExecutionState());
+            assertNull(row.getConversationProviderStartedAt());
+            assertNull(row.getConversationProviderLeaseVersion());
+        }
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM agent_personal_workspace_execution_output",
+                Integer.class));
+        verify(authority,times(2)).runtimeAuthority(any(),eq("task"),contains("prestart"),eq("FAILURE"));
+    }
+
     @Test void currentConversationAclAndRuntimeFenceStillBlockRealDaoWrites() throws Exception {
         persist("exec-denied","run-denied","denied-conversation");
         when(conversation.requireAccessible(any(),eq("denied-conversation"))).thenReturn(
@@ -198,7 +221,8 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
         when(conversation.requireAccessible(any(),eq("42"))).thenReturn(
                 new WorkspaceConversationAccessService.ConversationView("42","bounty","task:task",
                         "task",List.of("agent"),1,1));
-        when(authority.runtimeAuthority(any(),eq("task"),anyString(),eq("RESULT")))
+        when(authority.runtimeAuthority(any(),eq("task"),anyString(),
+                argThat(purpose -> "RESULT".equals(purpose)||"FAILURE".equals(purpose))))
                 .thenAnswer(invocation -> {
                     String run=invocation.getArgument(2);
                     var execution=rows.findByTaskRun("0","client","owner","task",run);
@@ -213,6 +237,11 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
     }
 
     private PersonalWorkspaceExecutionEntity persist(String executionId,String runId,String conversationId) {
+        return persist(executionId,runId,conversationId,true);
+    }
+
+    private PersonalWorkspaceExecutionEntity persist(String executionId,String runId,String conversationId,
+            boolean providerStarted) {
         String authoritySuffix=sha(executionId).substring(0,32);
         var row=new PersonalWorkspaceExecutionEntity().setExecutionId(executionId).setOwnerJiacn("owner")
                 .setTaskId("task").setRunId(runId).setExecutionMode("CONVERSATION")
@@ -224,10 +253,10 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
                 .setRuntimeInputSnapshotDigest("7".repeat(64))
                 .setConversationLeaseToken("lease-token").setConversationLeaseRuntimeId("runtime")
                 .setConversationLeaseVersion(1L).setConversationLeaseExpiresAt(Long.MAX_VALUE)
-                .setConversationProviderStartedAt(10L).setConversationProviderLeaseVersion(1L)
                 .setConversationId(conversationId).setTargetAgentId("agent").setInstruction("draw")
                 .setOutputContentMimeType("image/png").setExecutionState("QUEUED").setGrantRevision(1L)
                 .setIdempotencyKey("idem-"+executionId).setRequestHash("8".repeat(64)).setCreatedAt(1L);
+        if(providerStarted)row.setConversationProviderStartedAt(10L).setConversationProviderLeaseVersion(1L);
         row.setTenantId("0");row.setClientId("client");
         return inTx(() -> { rows.insert(row);return row; });
     }

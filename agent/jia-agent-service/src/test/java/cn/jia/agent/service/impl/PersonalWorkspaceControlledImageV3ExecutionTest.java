@@ -58,13 +58,18 @@ class PersonalWorkspaceControlledImageV3ExecutionTest {
   assertTrue(legacyInputs>=0&&rejectV3>legacyInputs&&legacyProjection>rejectV3);
 
   int stage=source.indexOf("StagedOutput stageConversationOutput(");
+  int stageAuthority=source.indexOf("\"RESULT\"",stage);
   int stageFence=source.indexOf("requireControlledV3StartedForResult(execution)",stage);
   int stageWrite=source.indexOf("stageOutputLocked(",stage);
-  assertTrue(stage>=0&&stageFence>stage&&stageWrite>stageFence);
+  assertTrue(stage>=0&&stageAuthority>stage&&stageFence>stageAuthority&&stageWrite>stageFence);
   int commit=source.indexOf("CommitView commitConversationOutput(");
+  int commitAuthority=source.indexOf("\"RESULT\"",commit);
   int commitFence=source.indexOf("requireControlledV3StartedForResult(execution)",commit);
   int commitWrite=source.indexOf("commitConversationOutputs(",commit);
-  assertTrue(commit>=0&&commitFence>commit&&commitWrite>commitFence);
+  assertTrue(commit>=0&&commitAuthority>commit&&commitFence>commitAuthority&&commitWrite>commitFence);
+  int failureMethod=source.indexOf("ExecutionView failConversation(");
+  int failureAuthority=source.indexOf("\"FAILURE\"",failureMethod);
+  assertTrue(failureMethod>=0&&failureAuthority>failureMethod);
 
   Method guard=PersonalWorkspaceExecutionServiceImpl.class.getDeclaredMethod(
     "requireControlledV3StartedForResult",PersonalWorkspaceExecutionEntity.class);
