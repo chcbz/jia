@@ -61,6 +61,10 @@ public class ChatDeliberationService {
     private ChatTypedDeliberationService typedDeliberation;
     private ChatTypedInspectionService typedInspection;
     private ChatInspectionAuthorityService inspectionAuthority;
+    private ChatActionFinalService actionFinals;
+
+    @Autowired(required = false)
+    public void setActionFinals(ChatActionFinalService actionFinals) { this.actionFinals = actionFinals; }
 
     // Retain the existing constructor for legacy tests and integrations. In production the
     // scoped store is injected, so durable v2 requests can be read from the same GET endpoint.
@@ -427,7 +431,12 @@ public class ChatDeliberationService {
         if (inspectionMarker && deliberationMarker) throw persistence("Snapshot has conflicting typed contracts");
         ChatTypedDeliberationService.Prepared typedPrepared = null;
         ChatTypedInspectionService.Prepared inspectionPrepared = null;
-        if (inspectionMarker) {
+        ChatActionFinalService.Prepared actionPrepared = null;
+        if (ChatActionFinalService.isV3(finalFacts)) {
+            if (actionFinals == null) throw persistence("Action final service is unavailable");
+            actionPrepared = actionFinals.prepare(turn, finalSnapshot, safeContent, outcomeContractVersion,
+                    rawInteractionOutcomeJson, rawInspectionInputReceiptJson);
+        } else if (inspectionMarker) {
             if (typedInspection == null) throw persistence("Typed inspection service is unavailable");
             inspectionPrepared = typedInspection.prepare(turn, finalSnapshot, safeContent, outcomeContractVersion,
                     rawInteractionOutcomeJson, rawInspectionInputReceiptJson);
@@ -437,7 +446,7 @@ public class ChatDeliberationService {
         } else if (outcomeContractVersion != null || rawInteractionOutcomeJson != null || deliberationMarker) {
             throw persistence("Typed deliberation service is unavailable");
         }
-        String finalDigest = inspectionPrepared != null ? inspectionPrepared.validated().finalDigest()
+        String finalDigest = actionPrepared != null ? actionPrepared.validated().finalDigest() : inspectionPrepared != null ? inspectionPrepared.validated().finalDigest()
                 : typedPrepared == null ? "sha256:" + sha256(safeContent) : typedPrepared.validated().finalDigest();
         if ((ChatDeliberationStates.FINAL_PERSISTED.equals(turn.getState())
                 || ChatDeliberationStates.PUBLISHED.equals(turn.getState()))
@@ -475,6 +484,7 @@ public class ChatDeliberationService {
         metadata.put("replyToMessageId", Long.toString(request.getUserMessageId()));
         metadata.put("targetAgentId", turn.getTargetAgentId());
         metadata.put("finalDigest", finalDigest);
+        if (actionPrepared != null) metadata.put("outcomeId", actionFinals.outcomeId(actionPrepared));
         if (typedPrepared != null) metadata.put("outcomeId", typedDeliberation.outcomeId(typedPrepared));
         if (inspectionPrepared != null) metadata.put("outcomeId", typedInspection.outcomeId(inspectionPrepared));
         ChatMessageEntity message = new ChatMessageEntity()
@@ -492,6 +502,7 @@ public class ChatDeliberationService {
                 ? null : typedDeliberation.persist(typedPrepared, message.getId(), now);
         ChatTypedInspectionService.Persisted inspectionPersisted = inspectionPrepared == null
                 ? null : typedInspection.persist(inspectionPrepared, message.getId(), now);
+        Map<String, Object> actionPersisted = actionPrepared == null ? null : actionFinals.persist(actionPrepared, message.getId(), now);
         if (dao.persistFinal(turn, finalDigest, message.getId(), now) != 1) {
             throw conflict("Concurrent final state change");
         }
@@ -502,6 +513,7 @@ public class ChatDeliberationService {
         finalPayload.put("agentId", trustedSender.agentId());
         finalPayload.put("senderType", trustedSender.type());
         finalPayload.put("senderName", trustedSender.displayName());
+        if (actionPersisted != null) finalPayload.put("typedOutcome", actionPersisted);
         if (typedPersisted != null) finalPayload.put("typedOutcome", typedPersisted.eventView());
         if (inspectionPersisted != null) finalPayload.put("typedOutcome", inspectionPersisted.eventView());
         ChatConversationEventEntity finalEvent = persistEvent(turn, finalEventId, "agent_message",
@@ -517,6 +529,7 @@ public class ChatDeliberationService {
         outboxPayload.put("eventSequence", Long.toString(finalEvent.getEventSequence()));
         outboxPayload.put("eventVersion", Long.toString(finalEvent.getEventVersion()));
         outboxPayload.put("finalDigest", finalDigest);
+        if (actionPersisted != null) outboxPayload.put("typedOutcome", actionPersisted);
         if (typedPersisted != null) outboxPayload.put("typedOutcome", typedPersisted.eventView());
         if (inspectionPersisted != null) outboxPayload.put("typedOutcome", inspectionPersisted.eventView());
         ChatDispatchOutboxEntity outbox = new ChatDispatchOutboxEntity()

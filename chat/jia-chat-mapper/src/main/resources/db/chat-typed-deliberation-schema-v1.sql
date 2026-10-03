@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS chat_typed_outcome (
   CONSTRAINT chk_chat_typed_outcome_digest CHECK
     (final_digest REGEXP BINARY '^sha256:[0-9a-f]{64}$'),
   CONSTRAINT chk_chat_typed_outcome_kind CHECK
-    (kind IN ('ANSWER','CLARIFY','EXECUTION_PROPOSAL')),
+    (kind IN ('ANSWER','CLARIFY','EXECUTION_PROPOSAL','ACTION_REQUEST')),
   CONSTRAINT chk_chat_typed_outcome_json CHECK
     (JSON_VALID(binding_json) AND JSON_VALID(facts_json) AND JSON_VALID(outcome_json)
       AND JSON_VALID(source_catalog_json))

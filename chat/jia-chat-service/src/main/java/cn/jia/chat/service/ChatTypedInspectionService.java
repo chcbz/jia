@@ -24,6 +24,10 @@ import java.util.Objects;
 /** INSPECT v2 final validator/persistence sibling; it grants no execution or source authority. */
 @Service
 public class ChatTypedInspectionService {
+    private ChatActionFinalService actionFinals;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setActionFinals(ChatActionFinalService actionFinals) { this.actionFinals = actionFinals; }
+
     public record Prepared(TypedInspectionFinalValidator.ValidatedFinal validated,
             ChatTypedDeliberationStore.Scope scope,ChatTypedDeliberationStore.Admission admission,
             String envelopeJson,ChatTypedDeliberationStore.Outcome existing){}
@@ -74,7 +78,11 @@ public class ChatTypedInspectionService {
     }
 
     @Transactional(readOnly=true)
-    public ChatTypedInspectionWire.Projection read(ChatTypedDeliberationStore.Scope scope,String requestId,String turnId,long revision){
+    public Object read(ChatTypedDeliberationStore.Scope scope,String requestId,String turnId,long revision){
+        if (actionFinals != null) {
+            var current = actionFinals.readIfV3(scope, requestId, turnId, revision, "INSPECT");
+            if (current != null) return current;
+        }
         var admission=store.findAdmissionByRequest(scope,requestId);if(admission==null)throw unavailable();requireInspectionAdmission(admission);
         verifyAdmission(admission,requestId,revision,turnId);Map<String,Object> typed=ChatTypedInspectionContextService.inspection(admission.sourceCatalogJson());
         List<Map<String,Object>> sources=ChatTypedInspectionContextService.sources(admission.sourceCatalogJson());

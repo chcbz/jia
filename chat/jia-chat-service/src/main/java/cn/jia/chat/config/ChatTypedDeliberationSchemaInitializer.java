@@ -31,6 +31,9 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
     private static final Map<String, List<Column>> COLUMNS = expectedColumns();
     private static final Map<String, Map<String, Index>> INDEXES = expectedIndexes();
     private static final Map<String, ForeignKey> FOREIGN_KEYS = expectedForeignKeys();
+    private static final String KIND_CHECK = "chk_chat_typed_outcome_kind";
+    private static final String PREVIOUS_KIND = "kind IN ('ANSWER','CLARIFY','EXECUTION_PROPOSAL')";
+    private static final String ACTION_KIND = "kind IN ('ANSWER','CLARIFY','EXECUTION_PROPOSAL','ACTION_REQUEST')";
     private static final Map<String, String> CHECKS = expectedChecks();
 
     private final JdbcTemplate jdbc;
@@ -78,7 +81,7 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
                     if (!allowMigration) return;
                     for (String statement : ddl()) locked.execute(statement);
                 }
-                validateCatalog(locked);
+                if (!ensureActionCatalog(locked, allowMigration)) return;
                 if (allowMigration) {
                     locked.update("""
                             INSERT INTO chat_deliberation_schema_version(version,stage,updated_at)
@@ -150,7 +153,22 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
         return true;
     }
 
-    static void validateCatalog(JdbcTemplate locked) {
+    /** Called only while holding the shared schema lock on the same connection. */
+    static boolean ensureActionCatalog(JdbcTemplate locked, boolean allowMigration) {
+        // Validate the complete catalogue first. An unrelated drift must never cause any DDL.
+        boolean previousKind = validateCatalog(locked, true);
+        if (previousKind) {
+            if (!allowMigration) return false;
+            locked.execute("ALTER TABLE chat_typed_outcome DROP CHECK " + KIND_CHECK
+                    + ", ADD CONSTRAINT " + KIND_CHECK + " CHECK (" + ACTION_KIND + ")");
+            validateCatalog(locked);
+        }
+        return true;
+    }
+
+    static void validateCatalog(JdbcTemplate locked) { validateCatalog(locked, false); }
+
+    private static boolean validateCatalog(JdbcTemplate locked, boolean allowPreviousKind) {
         for (String table : TABLES) {
             List<Map<String, Object>> metadata = locked.queryForList("""
                     SELECT engine,table_collation FROM information_schema.tables
@@ -164,8 +182,9 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
             validateColumns(locked, table);
             validateIndexes(locked, table);
         }
-        validateChecks(locked);
+        boolean previousKind = validateChecks(locked, allowPreviousKind);
         validateForeignKeys(locked);
+        return previousKind;
     }
 
     private static void validateColumns(JdbcTemplate locked, String table) {
@@ -206,7 +225,9 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
         }
     }
 
-    static void validateChecks(JdbcTemplate locked) {
+    static void validateChecks(JdbcTemplate locked) { validateChecks(locked, false); }
+
+    static boolean validateChecks(JdbcTemplate locked, boolean allowPreviousKind) {
         List<Map<String, Object>> rows = locked.queryForList("""
                 SELECT tc.constraint_name,tc.enforced,cc.check_clause
                 FROM information_schema.table_constraints tc
@@ -222,11 +243,18 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
                     || !"YES".equalsIgnoreCase(text(row, "enforced"))) throw drift("checks");
         }
         if (!actual.keySet().equals(CHECKS.keySet())) throw drift("check set");
+        boolean previousKind = false;
         for (Map.Entry<String, String> entry : CHECKS.entrySet()) {
             String wanted = normalizeAtomicParentheses(stripOuterParentheses(canonicalCheck(entry.getValue())));
             String found = normalizeAtomicParentheses(stripOuterParentheses(actual.get(entry.getKey())));
-            if (!wanted.equals(found)) throw drift(entry.getKey());
+            if (!wanted.equals(found)) {
+                if (allowPreviousKind && KIND_CHECK.equals(entry.getKey())
+                        && normalizeAtomicParentheses(stripOuterParentheses(canonicalCheck(PREVIOUS_KIND))).equals(found))
+                    previousKind = true;
+                else throw drift(entry.getKey());
+            }
         }
+        return previousKind;
     }
 
     static void validateForeignKeys(JdbcTemplate locked) {
@@ -476,7 +504,7 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
                 Map.entry("chk_chat_typed_outcome_generation","conversation_generation>=1"),
                 Map.entry("chk_chat_typed_outcome_revision","((request_revision=1) AND (assignment_revision>=0))"),
                 Map.entry("chk_chat_typed_outcome_digest","REGEXP_LIKE(final_digest,CAST('^sha256:[0-9a-f]{64}$' AS CHAR CHARSET binary))"),
-                Map.entry("chk_chat_typed_outcome_kind","kind IN ('ANSWER','CLARIFY','EXECUTION_PROPOSAL')"),
+                Map.entry(KIND_CHECK,ACTION_KIND),
                 Map.entry("chk_chat_typed_outcome_json","(json_valid(binding_json) and json_valid(facts_json) and json_valid(outcome_json) and json_valid(source_catalog_json))"),
                 Map.entry("chk_chat_typed_pending_state","state IN ('OPEN','ANSWERED')"),
                 Map.entry("chk_chat_typed_pending_version","(((state = 'OPEN') and (state_version = 0) and (reply_request_id is null) and (reply_idempotency_key is null) and (reply_body_digest is null)) or ((state = 'ANSWERED') and (state_version = 1) and (reply_request_id is not null) and (reply_idempotency_key is not null) and regexp_like(reply_body_digest,cast('^sha256:[0-9a-f]{64}$' as char charset binary))))"),

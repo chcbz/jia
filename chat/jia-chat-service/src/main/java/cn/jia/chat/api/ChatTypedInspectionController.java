@@ -76,7 +76,7 @@ public final class ChatTypedInspectionController {
     }
 
     @GetMapping("/{conversationId}/requests/{requestId}/inspection-outcome")
-    public ResponseEntity<JsonResult<ChatTypedInspectionWire.Projection>> outcome(
+    public ResponseEntity<JsonResult<Object>> outcome(
             @PathVariable String conversationId, @PathVariable String requestId,
             Authentication authentication, HttpServletRequest servletRequest) {
         if (servletRequest.getQueryString() != null || servletRequest.getContentLengthLong() > 0) {
@@ -91,7 +91,7 @@ public final class ChatTypedInspectionController {
         ChatTypedDeliberationStore.Scope storeScope = new ChatTypedDeliberationStore.Scope(
                 identity.tenantId(), identity.sender().jiacn(), identity.sender().clientId(),
                 conversationId, decimal(request.conversationGeneration()));
-        ChatTypedInspectionWire.Projection value = inspection.read(storeScope, requestId,
+        Object value = inspection.read(storeScope, requestId,
                 request.turns().getFirst().turnId(), decimal(request.requestRevision()));
         return ResponseEntity.ok().cacheControl(CacheControl.noStore())
                 .header("X-Content-Type-Options", "nosniff").body(JsonResult.success(value));

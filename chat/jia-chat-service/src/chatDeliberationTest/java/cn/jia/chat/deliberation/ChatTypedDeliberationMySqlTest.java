@@ -82,6 +82,36 @@ class ChatTypedDeliberationMySqlTest {
                 ()->new ChatTypedDeliberationSchemaInitializer(jdbc,true,false).initialize());
     }
 
+    @Test void exactPreviousKindNeedsMigrationAndPreservesExistingRows() throws Exception {
+        new ChatTypedDeliberationSchemaInitializer(jdbc,true,true).initialize();
+        installPreviousKind(); insertRequestAndTurn(); insertOutcome("outcome-a","turn-a");
+        var before=jdbc.queryForList("SELECT * FROM chat_typed_outcome");
+        var disabled=new ChatTypedDeliberationSchemaInitializer(jdbc,true,false);
+        disabled.initialize(); assertFalse(disabled.ready());
+        assertFalse(showCreates().getFirst().contains("ACTION_REQUEST"));
+        var upgrade=new ChatTypedDeliberationSchemaInitializer(jdbc,true,true);
+        upgrade.initialize(); assertTrue(upgrade.ready());
+        assertEquals(before,jdbc.queryForList("SELECT * FROM chat_typed_outcome"));
+        assertEquals(1,jdbc.update("UPDATE chat_typed_outcome SET kind='ACTION_REQUEST' WHERE outcome_id='outcome-a'"));
+        assertThrows(DataAccessException.class,()->jdbc.update("UPDATE chat_typed_outcome SET kind='SHELL' WHERE outcome_id='outcome-a'"));
+        var expected=showCreates();
+        var restart=new ChatTypedDeliberationSchemaInitializer(jdbc,true,false);
+        restart.initialize(); assertTrue(restart.ready()); assertEquals(expected,showCreates());
+    }
+
+    @Test void unrelatedCatalogueDriftPreventsKindMutation() throws Exception {
+        new ChatTypedDeliberationSchemaInitializer(jdbc,true,true).initialize(); installPreviousKind();
+        jdbc.execute("ALTER TABLE chat_typed_pending_question DROP FOREIGN KEY fk_chat_typed_pending_outcome");
+        var before=showCreates();
+        assertThrows(IllegalStateException.class,()->new ChatTypedDeliberationSchemaInitializer(jdbc,true,true).initialize());
+        assertEquals(before,showCreates());
+    }
+
+    private void installPreviousKind() {
+        jdbc.execute("ALTER TABLE chat_typed_outcome DROP CHECK chk_chat_typed_outcome_kind, "
+                + "ADD CONSTRAINT chk_chat_typed_outcome_kind CHECK (kind IN ('ANSWER','CLARIFY','EXECUTION_PROPOSAL'))");
+    }
+
     @Test void realUniqueForeignKeyAndCheckConstraintsRejectInvalidRows() throws Exception {
         new ChatTypedDeliberationSchemaInitializer(jdbc,true,true).initialize();
         insertRequestAndTurn();

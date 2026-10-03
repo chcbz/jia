@@ -21,6 +21,10 @@ import java.util.Objects;
 /** Validates and persists typed final sidecars. It creates no grant, consent, step or execution. */
 @Service
 public class ChatTypedDeliberationService {
+    private ChatActionFinalService actionFinals;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setActionFinals(ChatActionFinalService actionFinals) { this.actionFinals = actionFinals; }
+
     public record Prepared(TypedDeliberationFinalValidator.ValidatedFinal validated,
             ChatTypedDeliberationStore.Scope scope, ChatTypedDeliberationStore.Admission admission,
             String sourceCatalogJson, ChatTypedDeliberationStore.Outcome existing) { }
@@ -99,8 +103,12 @@ public class ChatTypedDeliberationService {
     }
 
     @Transactional(readOnly=true)
-    public ChatTypedDeliberationWire.TypedProjection read(ChatTypedDeliberationStore.Scope scope,String requestId,
+    public Object read(ChatTypedDeliberationStore.Scope scope,String requestId,
             String expectedTurnId,long requestRevision){
+        if (actionFinals != null) {
+            var current = actionFinals.readIfV3(scope, requestId, expectedTurnId, requestRevision, "CHAT");
+            if (current != null) return current;
+        }
         var admission=store.findAdmissionByRequest(scope,requestId);if(admission==null)throw unavailable();
         if(admission.sourceCatalogJson()!=null&&admission.sourceCatalogJson().stripLeading().startsWith("{"))throw unavailable();
         verifyAdmission(admission,requestId,requestRevision,expectedTurnId);

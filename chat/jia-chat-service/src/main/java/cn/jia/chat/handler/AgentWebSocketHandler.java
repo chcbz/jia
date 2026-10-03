@@ -1455,6 +1455,10 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             }
             strict.put("outcomeContractVersion", 2);
             strict.put("__typedRawInspectionInputReceiptJson", receipt.toString());
+        } else if (semanticInteger(version, 3)) {
+            if (receipt != null && !receipt.isObject()) throw new IllegalArgumentException("invalid inspection receipt");
+            strict.put("outcomeContractVersion", 3);
+            if (receipt != null) strict.put("__typedRawInspectionInputReceiptJson", receipt.toString());
         } else {
             throw new IllegalArgumentException("invalid typed sidecar version");
         }
@@ -1467,7 +1471,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         if (value instanceof Byte || value instanceof Short
                 || value instanceof Integer || value instanceof Long) {
             int version = ((Number) value).intValue();
-            return version == 1 || version == 2 ? version : null;
+            return version == 1 || version == 2 || version == 3 ? version : null;
         }
         return null;
     }

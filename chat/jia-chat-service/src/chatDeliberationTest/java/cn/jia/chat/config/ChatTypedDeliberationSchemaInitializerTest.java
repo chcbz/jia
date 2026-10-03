@@ -91,7 +91,8 @@ class ChatTypedDeliberationSchemaInitializerTest {
         assertEquals(18,actual.size());
         JdbcTemplate accepted=mock(JdbcTemplate.class);
         when(accepted.queryForList(anyString(),any(Object[].class))).thenReturn(actual);
-        ChatTypedDeliberationSchemaInitializer.validateChecks(accepted);
+        assertTrue(ChatTypedDeliberationSchemaInitializer.validateChecks(accepted, true));
+        assertThrows(IllegalStateException.class, () -> ChatTypedDeliberationSchemaInitializer.validateChecks(accepted));
         for(String corrected:List.of("chk_chat_typed_admission_digest","chk_chat_typed_admission_reply",
                 "chk_chat_typed_admission_turns","chk_chat_typed_outcome_json","chk_chat_typed_pending_version",
                 "chk_chat_typed_proposal_parent","chk_chat_typed_proposal_sources")) {
@@ -101,8 +102,25 @@ class ChatTypedDeliberationSchemaInitializerTest {
             assertNotEquals(clause,changed,corrected);row.put("check_clause",changed);
             JdbcTemplate rejected=mock(JdbcTemplate.class);
             when(rejected.queryForList(anyString(),any(Object[].class))).thenReturn(weakened);
-            assertThrows(IllegalStateException.class,()->ChatTypedDeliberationSchemaInitializer.validateChecks(rejected),corrected);
+            assertThrows(IllegalStateException.class,()->ChatTypedDeliberationSchemaInitializer.validateChecks(rejected, true),corrected);
         }
+    }
+
+    @Test void exactWidenedKindIsReadyAndUnknownWeakenedKindsAreNotMigrated() throws Exception {
+        List<Map<String,Object>> rows=capturedCheckRows(capturedCheckCatalog());
+        var kind=rows.stream().filter(row -> "chk_chat_typed_outcome_kind".equals(row.get("constraint_name")))
+                .findFirst().orElseThrow();
+        JdbcTemplate jdbc=mock(JdbcTemplate.class);
+        when(jdbc.queryForList(anyString(),any(Object[].class))).thenReturn(rows);
+        kind.put("check_clause", "kind IN ('ANSWER','CLARIFY','EXECUTION_PROPOSAL','ACTION_REQUEST')");
+        assertFalse(ChatTypedDeliberationSchemaInitializer.validateChecks(jdbc, true));
+        assertDoesNotThrow(() -> ChatTypedDeliberationSchemaInitializer.validateChecks(jdbc));
+        for (String changed : List.of("kind IN ('ANSWER','CLARIFY','EXECUTION_PROPOSAL','SHELL')",
+                "kind IS NOT NULL", "kind IN ('ANSWER','CLARIFY')")) {
+            kind.put("check_clause",changed);
+            assertThrows(IllegalStateException.class, () -> ChatTypedDeliberationSchemaInitializer.validateChecks(jdbc,true));
+        }
+        verify(jdbc,never()).execute(anyString());
     }
 
     @Test void indexOrderPrefixExpressionAndUnexpectedIndexesFailClosed() {

@@ -20,6 +20,7 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import java.lang.reflect.Field;
 import java.util.Map;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import static org.junit.jupiter.api.Assertions.*;
@@ -135,6 +136,32 @@ class AgentWebSocketTypedDeliberationTest {
                 eq("request"),eq("turn"),eq("dispatch"),eq("snapshot"),eq("sha256:"+"a".repeat(64)),
                 eq("你好🌏"),eq(2),rawOutcome.capture(),rawReceipt.capture(),any());
         assertEquals(outcome,rawOutcome.getValue());assertEquals(receipt,rawReceipt.getValue());
+    }
+
+    @Test void v3FinalForwardsExactOrdinaryOutcomeAndOptionalInspectionReceipt() throws Exception {
+        for (boolean inspect : List.of(false,true)) {
+            @SuppressWarnings("unchecked") ObjectProvider<AgentService> provider=mock(ObjectProvider.class);
+            AgentWebSocketHandler handler=handler(provider); ChatConversationService conversations=mock(ChatConversationService.class);
+            ChatDeliberationService deliberation=mock(ChatDeliberationService.class);
+            handler.setChatConversationService(conversations);handler.setChatDeliberationService(deliberation);
+            WebSocketSession session=session("action-final-"+inspect);bind(handler,session);
+            ChatConversationEntity conversation=new ChatConversationEntity().setId(42L).setConversationType("juyiting")
+                    .setTargetAgentIds("[\"agent-a\"]").setLifecycleGeneration(1L);
+            conversation.setTenantId("0");conversation.setClientId("client");conversation.setJiacn("owner");
+            when(conversations.getOwned("owner","client","42")).thenReturn(conversation);
+            when(deliberation.persistFinal(anyString(),anyString(),anyString(),anyString(),anyLong(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),any(),any(),any(),any()))
+                    .thenReturn(new ChatDeliberationService.FinalResult(ChatDeliberationService.FinalStatus.PERSISTED,9L,"8","evt",turn(),null));
+            String outcome="{\"schemaVersion\":3,\"kind\":\"ANSWER\",\"text\":\"plain\",\"clarification\":null,\"action\":null}";
+            String receipt="{\"schemaVersion\":1,\"sources\":[]}";
+            String wire=baseWire()+",\"outcomeContractVersion\":3,\"interactionOutcome\":"+outcome
+                    +(inspect?",\"inspectionInputReceipt\":"+receipt:"")+"}";
+            handler.handleTextMessage(session,new TextMessage(wire));
+            verify(deliberation).persistFinal(eq("0"),eq("owner"),eq("client"),eq("42"),eq(1L),eq("agent-a"),eq("request"),eq("turn"),eq("dispatch"),
+                    eq("snapshot"),eq("sha256:"+"a".repeat(64)),eq("plain"),eq(3),eq(outcome),eq(inspect?receipt:null),any());
+            clearInvocations(deliberation);
+            handler.handleTextMessage(session,new TextMessage(wire.replace("\"schemaVersion\":3", "\"schemaVersion\":3,\"schemaVersion\":3")));
+            verifyNoInteractions(deliberation);
+        }
     }
 
     @Test void incompleteOrNestedTypedSidecarsNeverReachTheFinalService() throws Exception {

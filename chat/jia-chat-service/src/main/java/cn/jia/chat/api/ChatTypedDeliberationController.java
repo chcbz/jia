@@ -56,7 +56,7 @@ public final class ChatTypedDeliberationController {
     }
 
     @GetMapping("/{conversationId}/requests/{requestId}/typed-outcome")
-    public ResponseEntity<JsonResult<ChatTypedDeliberationWire.TypedProjection>> outcome(
+    public ResponseEntity<JsonResult<Object>> outcome(
             @PathVariable String conversationId,@PathVariable String requestId,Authentication authentication) {
         Scope identity=scope(authentication);var request=deliberation.getRequest(identity.tenantId(),
                 identity.sender().jiacn(),identity.sender().clientId(),requestId);

@@ -51,6 +51,46 @@ class ChatTypedDeliberationSpringTransactionTest {
     }
 
 
+    @Test void v3ActionAndIndependentOutboxJoinTheFinalTransactionAtEveryFailurePoint() {
+        for (FailurePoint point : List.of(FailurePoint.MESSAGE, FailurePoint.OUTCOME, FailurePoint.ACTION_OUTBOX,
+                FailurePoint.TURN, FailurePoint.EVENT, FailurePoint.OUTBOX, FailurePoint.AGGREGATE, FailurePoint.NONE)) {
+            try (Fixture fixture = fixture(point, true)) {
+                String raw="{\"schemaVersion\":3,\"kind\":\"ACTION_REQUEST\",\"text\":\"正在整理\","
+                        + "\"clarification\":null,\"action\":{\"actionId\":\"write-document\",\"instruction\":\"整理文档\",\"sourceRefIds\":[]}}";
+                if (point == FailurePoint.NONE) {
+                    var result=fixture.service.persistFinal("0","owner","client","42",1,"agent","request","turn","dispatch", "snapshot",
+                            "sha256:"+"a".repeat(64),"正在整理",3,raw,agent());
+                    assertEquals(ChatDeliberationService.FinalStatus.PERSISTED,result.status());
+                    assertEquals(7,fixture.count());
+                    assertTrue(org.springframework.aop.support.AopUtils.isCglibProxy(fixture.context.getBean(ChatActionFinalService.class)));
+                } else {
+                    assertThrows(ChatDeliberationException.class,()->fixture.service.persistFinal("0","owner","client","42",1,"agent","request",
+                            "turn","dispatch","snapshot","sha256:"+"a".repeat(64),"正在整理",3,raw,agent()),point.name());
+                    assertEquals(0,fixture.count(),point.name());
+                }
+            }
+        }
+    }
+
+    @Test void v3ClarificationFailureRollsBackAndSuccessRetainsExactQuestion() {
+        for (FailurePoint point : List.of(FailurePoint.PENDING,FailurePoint.NONE)) {
+            try (Fixture fixture=fixture(point,true)) {
+                String raw="{\"schemaVersion\":3,\"kind\":\"CLARIFY\",\"text\":\"请说明用途\","
+                        + "\"clarification\":{\"question\":\"用于哪里？\",\"requiredFacts\":[\"用途\"]},\"action\":null}";
+                if (point==FailurePoint.NONE) {
+                    var result=fixture.service.persistFinal("0","owner","client","42",1,"agent","request","turn","dispatch","snapshot",
+                            "sha256:"+"a".repeat(64),"请说明用途",3,raw,agent());
+                    assertEquals(ChatDeliberationService.FinalStatus.PERSISTED,result.status());
+                    assertEquals(7,fixture.count());
+                } else {
+                    assertThrows(ChatDeliberationException.class,()->fixture.service.persistFinal("0","owner","client","42",1,"agent","request",
+                            "turn","dispatch","snapshot","sha256:"+"a".repeat(64),"请说明用途",3,raw,agent()));
+                    assertEquals(0,fixture.count());
+                }
+            }
+        }
+    }
+
     @Test void pendingAndProposalFailuresRollBackMessageAndOutcomeInTheSameTransaction() {
         for (FailurePoint point : List.of(FailurePoint.PENDING, FailurePoint.PROPOSAL)) {
             try (Fixture fixture=fixture(point)) {
@@ -161,7 +201,9 @@ class ChatTypedDeliberationSpringTransactionTest {
         }
     }
 
-    private static Fixture fixture(FailurePoint point) {
+    private static Fixture fixture(FailurePoint point) { return fixture(point, false); }
+
+    private static Fixture fixture(FailurePoint point, boolean v3) {
         DriverManagerDataSource source=new DriverManagerDataSource(
                 "jdbc:h2:mem:typed_final_"+UUID.randomUUID()+";MODE=MYSQL;DB_CLOSE_DELAY=-1","sa","");
         JdbcTemplate evidence=new JdbcTemplate(source);
@@ -194,6 +236,11 @@ class ChatTypedDeliberationSpringTransactionTest {
                                 "schemaVersion",1,"referenceMode","NONE",
                                 "supportedOperations",List.of("GENERATE_IMAGE","EDIT_IMAGE"),
                                 "availableSources",List.of()))));
+        snapshot.setRoute("CHAT");
+        if (v3) snapshot.setFactsManifestJson(CanonicalContextJson.write(Map.of("task",Map.of("id","task"),
+                "typedDeliberation",Map.of("schemaVersion",3,"availableSources",List.of(),"inspectedSourceRefIds",List.of(),
+                        "availableActions",List.of(Map.of("actionId","write-document","kind","EXECUTE","operation","WRITE_DOCUMENT",
+                                "inputMediaTypes",List.of("text","file"),"minSources",0,"maxSources",32))))));
         ChatRequestEntity request=new ChatRequestEntity().setTenantId("0").setOwnerJiacn("owner")
                 .setClientId("client").setRequestId("request").setRequestRevision(1L)
                 .setConversationId("42").setConversationGeneration(1L).setUserMessageId(7L)
@@ -215,10 +262,9 @@ class ChatTypedDeliberationSpringTransactionTest {
             return point==FailurePoint.MESSAGE?0:1;
         });
         when(typedStore.insertOutcome(any())).thenAnswer(invocation->{active(evidence);evidence.update("INSERT INTO typed_atomic_evidence VALUES ('outcome')");return point==FailurePoint.OUTCOME?0:1;});
-        when(typedStore.insertPending(any())).thenAnswer(invocation->{active(evidence);evidence.update("INSERT INTO typed_atomic_evidence VALUES ('pending')");return point==FailurePoint.PENDING?0:1;});
-        when(typedStore.findPendingByOutcome(eq(scope),anyString(),eq(false))).thenAnswer(invocation->
-                new ChatTypedDeliberationStore.PendingQuestion("pending",invocation.getArgument(1),scope,"OPEN",0,
-                        "请选择图片","[\"SOURCE_SELECTION\"]",null,null,null,1,1));
+        var pendingRef=new java.util.concurrent.atomic.AtomicReference<ChatTypedDeliberationStore.PendingQuestion>();
+        when(typedStore.insertPending(any())).thenAnswer(invocation->{active(evidence);evidence.update("INSERT INTO typed_atomic_evidence VALUES ('pending')");pendingRef.set(invocation.getArgument(0));return point==FailurePoint.PENDING?0:1;});
+        when(typedStore.findPendingByOutcome(eq(scope),anyString(),eq(false))).thenAnswer(invocation->pendingRef.get());
         when(typedStore.insertProposal(any())).thenAnswer(invocation->{active(evidence);evidence.update("INSERT INTO typed_atomic_evidence VALUES ('proposal')");return point==FailurePoint.PROPOSAL?0:1;});
         when(typedStore.findProposalByOutcome(eq(scope),anyString())).thenAnswer(invocation->
                 new ChatTypedDeliberationStore.Proposal("proposal",invocation.getArgument(1),scope,"PROPOSED",0,
@@ -226,7 +272,10 @@ class ChatTypedDeliberationSpringTransactionTest {
         when(dao.persistFinal(same(turn),anyString(),eq(9L),anyLong())).thenAnswer(invocation->{active(evidence);evidence.update("INSERT INTO typed_atomic_evidence VALUES ('turn')");return point==FailurePoint.TURN?0:1;});
         when(dao.insertEvent(any())).thenAnswer(invocation->{active(evidence);evidence.update("INSERT INTO typed_atomic_evidence VALUES ('event')");ChatConversationEventEntity event=invocation.getArgument(0);event.setEventSequence(1L);return point==FailurePoint.EVENT?0:1;});
         when(dao.assignEventVersion(1L)).thenReturn(1);
-        when(dao.insertOutbox(any())).thenAnswer(invocation->{active(evidence);evidence.update("INSERT INTO typed_atomic_evidence VALUES ('outbox')");return point==FailurePoint.OUTBOX?0:1;});
+        when(dao.insertOutbox(any())).thenAnswer(invocation->{active(evidence);ChatDispatchOutboxEntity event=invocation.getArgument(0);
+            boolean action=ChatActionFinalService.ACTION_EVENT.equals(event.getEventType());
+            evidence.update("INSERT INTO typed_atomic_evidence VALUES (?)",action?"action-outbox":"outbox");
+            return point==(action?FailurePoint.ACTION_OUTBOX:FailurePoint.OUTBOX)?0:1;});
         when(dao.updateRequestState(same(request),eq(ChatDeliberationStates.COMPLETED),anyLong())).thenAnswer(invocation->{active(evidence);evidence.update("INSERT INTO typed_atomic_evidence VALUES ('aggregate')");return point==FailurePoint.AGGREGATE?0:1;});
 
         AnnotationConfigApplicationContext context=new AnnotationConfigApplicationContext();
@@ -235,6 +284,8 @@ class ChatTypedDeliberationSpringTransactionTest {
         context.registerBean(DataSourceTransactionManager.class,()->new DataSourceTransactionManager(source));
         context.registerBean(ChatInteractionStepStore.class,()->interactionSteps);
         context.registerBean(ChatTypedDeliberationStore.class,()->typedStore);
+        if (v3) context.registerBean(ChatActionFinalService.class,()->new ChatActionFinalService(typedStore,dao,
+                mock(cn.jia.chat.handler.TypedInspectionSessionRegistry.class)));
         context.registerBean(ChatTypedDeliberationService.class,()->new ChatTypedDeliberationService(typedStore));
         context.registerBean(ChatDeliberationService.class,()->{
             ChatDeliberationService service=new ChatDeliberationService(dao,conversations,messages,agents);
@@ -253,7 +304,7 @@ class ChatTypedDeliberationSpringTransactionTest {
     @Configuration(proxyBeanMethods=false)
     @EnableTransactionManagement(proxyTargetClass=true)
     static class TransactionConfig { }
-    private enum FailurePoint { MESSAGE,OUTCOME,PENDING,PROPOSAL,TURN,EVENT,OUTBOX,AGGREGATE,NONE }
+    private enum FailurePoint { MESSAGE,OUTCOME,PENDING,PROPOSAL,TURN,EVENT,OUTBOX,ACTION_OUTBOX,AGGREGATE,NONE }
     private record Fixture(AnnotationConfigApplicationContext context,ChatDeliberationService service,
             JdbcTemplate evidence) implements AutoCloseable {
         int count(){return evidence.queryForObject("SELECT COUNT(*) FROM typed_atomic_evidence",Integer.class);}
