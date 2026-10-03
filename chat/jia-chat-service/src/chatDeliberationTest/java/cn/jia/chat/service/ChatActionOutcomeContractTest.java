@@ -59,14 +59,11 @@ class ChatActionOutcomeContractTest {
         action.put("sourceRefIds", List.of("source-image")); assertDoesNotThrow(() -> ChatActionOutcomeContract.outcome(raw,facts));
         action.put("sourceRefIds", List.of("source-image","source-image")); assertThrows(IllegalArgumentException.class, () -> ChatActionOutcomeContract.outcome(raw,facts));
     }
-    @Test void inspectionProgressChecksAlreadyReadAndCurrentReceiptInputs() throws Exception {
+    @Test void recordedReadingDoesNotCreateAnUnsupportedNoRereadGate() throws Exception {
         var rawFacts = facts(); var facts = ChatActionOutcomeContract.facts(rawFacts); var raw = action();
-        var result = ChatActionOutcomeContract.outcome(raw,facts);
         var all = facts.availableSources().stream().map(ChatActionOutcomeContract.Source::sourceRefId).toList();
-        assertThrows(IllegalArgumentException.class, () -> ChatActionOutcomeContract.requireInspectionProgress(result,facts,all));
-        assertDoesNotThrow(() -> ChatActionOutcomeContract.requireInspectionProgress(result,facts,List.of("source-image")));
         rawFacts.put("inspectedSourceRefIds", all); var read = ChatActionOutcomeContract.facts(rawFacts);
-        assertThrows(IllegalArgumentException.class, () -> ChatActionOutcomeContract.outcome(raw,read));
+        assertDoesNotThrow(() -> ChatActionOutcomeContract.outcome(raw,read));
     }
     @Test void contractRejectsOldOutcomeRatherThanTranslatingIt() throws Exception {
         var facts = ChatActionOutcomeContract.facts(facts());

@@ -114,23 +114,11 @@ public final class ChatActionOutcomeContract {
                 if (selected.size() < descriptor.minSources() || selected.size() > descriptor.maxSources()
                         || selected.stream().anyMatch(ref -> !catalog.containsKey(ref)
                         || !descriptor.inputMediaTypes().contains(catalog.get(ref).mediaType()))) throw invalid("ACTION_SELECTION_INVALID");
-                if ("INSPECT_INPUTS".equals(descriptor.kind()) && facts.inspectedSourceRefIds().containsAll(selected))
-                    throw invalid("ACTION_INSPECTION_NO_PROGRESS");
                 action = new Action(id, instruction, selected);
             }
             default -> throw invalid("ACTION_OUTCOME_KIND_INVALID");
         }
         return new Outcome(VERSION, kind, text, clarification, action);
-    }
-
-    /** Called only after the INSPECT manifest/receipt has been independently authorized and validated. */
-    public static void requireInspectionProgress(Outcome outcome, Facts facts, List<String> providedSourceRefIds) {
-        if (outcome.action() == null) return;
-        var capability = facts.availableActions().stream().filter(a -> a.actionId().equals(outcome.action().actionId()))
-                .findFirst().orElseThrow(() -> invalid("ACTION_NOT_ADVERTISED"));
-        Set<String> provided = new HashSet<>(facts.inspectedSourceRefIds()); provided.addAll(providedSourceRefIds);
-        if ("INSPECT_INPUTS".equals(capability.kind()) && provided.containsAll(outcome.action().sourceRefIds()))
-            throw invalid("ACTION_INSPECTION_NO_PROGRESS");
     }
 
     private static JsonNode parse(String value) {
