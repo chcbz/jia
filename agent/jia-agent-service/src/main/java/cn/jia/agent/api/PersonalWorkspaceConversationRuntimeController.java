@@ -1,6 +1,7 @@
 package cn.jia.agent.api;
 
 import cn.jia.agent.security.AgentRuntimeAuthentication;
+import cn.jia.core.security.AllowSensitiveOutput;
 import cn.jia.agent.service.PersonalWorkspaceExecutionService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpHeaders;
@@ -122,6 +123,10 @@ public final class PersonalWorkspaceConversationRuntimeController {
         catch(PersonalWorkspaceExecutionService.Failure failure){throw new ControlledStartFailure(failure);}
     }
 
+    // This native-only DTO contains authorized source IDs/hashes, never credentials or file bytes.
+    // Bean-to-Map sanitization loses the source union's NON_NULL serialization contract.
+    // Keep the exact wire shape without weakening runtime authentication, fencing, or other routes.
+    @AllowSensitiveOutput(reason="Native authenticated V3 input metadata requires exact source union fields; no secrets")
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/inputs-v3",consumes=MediaType.APPLICATION_JSON_VALUE,
             produces=MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<PersonalWorkspaceExecutionService.ConversationInputSnapshotV3> inputsV3(
