@@ -21,6 +21,7 @@ public class ChatDeliberationDaoImpl implements ChatDeliberationDao {
     public ChatTurnEntity lockTurn(String t,String o,String c,String r){return mapper.lockTurn(t,o,c,r);}
     public ChatContextSnapshotEntity findSnapshot(String t,String o,String c,String s){return mapper.findSnapshot(t,o,c,s);}
     public ChatDispatchOutboxEntity lockOutbox(String t,String o,String c,String turn,String event){return mapper.lockOutbox(t,o,c,turn,event);}
+    public ChatDispatchOutboxEntity findOutboxById(String t,String o,String c,String e){return mapper.findOutboxById(t,o,c,e);}
     public ChatDispatchOutboxEntity lockOutboxById(String t,String o,String c,String e){return mapper.lockOutboxById(t,o,c,e);}
     public ChatDispatchOutboxEntity lockOutboxByDispatch(String t,String o,String c,String d){return mapper.lockOutboxByDispatch(t,o,c,d);}
     public List<ChatDispatchOutboxEntity> findDueOutbox(long n,int l){return mapper.findDueOutbox(n,l);}

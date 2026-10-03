@@ -16,6 +16,7 @@ public interface ChatDeliberationDao {
     ChatTurnEntity lockTurn(String tenantId, String ownerJiacn, String clientId, String turnId);
     ChatContextSnapshotEntity findSnapshot(String tenantId, String ownerJiacn, String clientId, String snapshotId);
     ChatDispatchOutboxEntity lockOutbox(String tenantId, String ownerJiacn, String clientId, String turnId, String eventType);
+    ChatDispatchOutboxEntity findOutboxById(String tenantId, String ownerJiacn, String clientId, String eventId);
     ChatDispatchOutboxEntity lockOutboxById(String tenantId, String ownerJiacn, String clientId, String eventId);
     ChatDispatchOutboxEntity lockOutboxByDispatch(String tenantId, String ownerJiacn, String clientId, String dispatchId);
     List<ChatDispatchOutboxEntity> findDueOutbox(long now, int limit);

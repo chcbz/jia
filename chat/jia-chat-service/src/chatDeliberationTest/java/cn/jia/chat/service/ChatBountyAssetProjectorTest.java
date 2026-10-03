@@ -83,6 +83,37 @@ class ChatBountyAssetProjectorTest {
         verifyNoInteractions(broker); // No signal before a real transaction commits.
     }
 
+    @Test void confirmedFailureAndRevocationBecomeOneDurableTerminalEventWithoutFakeOutput() {
+        for(String executionState:List.of("FAILED","INPUTS_REVOKED")) {
+            ready();
+            when(executions.get(scope,"exec")).thenReturn(new PersonalWorkspaceExecutionService.ExecutionView(
+                    "exec","task","run","42","agent",executionState,"INTERNAL_CODE","private-details",1,
+                    "image/png",List.of(),null,"CONVERSATION",null,null,null));
+            var row=events.findRequest("0","owner","client","req");
+            row.setRequestRevision(1L).setConversationGeneration(1L);
+            String expected="INPUTS_REVOKED".equals(executionState)?"CANCELLED":"FAILED";
+            when(events.updateRequestState(eq(row),eq(expected),anyLong())).thenReturn(1);
+            clearInvocations(messages,events,executions,jdbc);
+            assertEquals(1,projector.project(candidate));
+            verify(events).insertEvent(argThat(e->"execution_terminal".equals(e.getEventType())
+                    && e.getEventId().length()<=64 && e.getPayloadJson().contains(expected)
+                    && !e.getPayloadJson().contains("private-details")));
+            verify(executions,never()).listConversationOutputs(any(),anyString(),anyString());
+            verifyNoInteractions(messages);
+            row.setAggregateState(expected).setStateVersion(2L);
+            assertEquals(0,projector.project(candidate));
+            verify(events,times(1)).insertEvent(any());
+        }
+    }
+
+    @Test void unknownProviderOutcomeCannotBecomeAFalseTerminalFailure() {
+        ready(); when(executions.get(scope,"exec")).thenReturn(new PersonalWorkspaceExecutionService.ExecutionView(
+                "exec","task","run","42","agent","OUTPUT_STAGED",null,null,1,
+                "image/png",List.of(),null,"CONVERSATION",null,null,null));
+        assertEquals(0,projector.project(candidate)); verifyNoInteractions(messages,events,broker);
+        verify(jdbc,never()).update(anyString(),any(Object[].class));
+    }
+
     @Test void repeatProjectionReadsCurrentAssetAndDoesNotCreateAnotherMessageOrEvent() throws Exception {
         ready();
         String source = "0\nowner\nclient\nstep\noutput_1";

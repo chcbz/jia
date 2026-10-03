@@ -25,6 +25,14 @@
         "sourceRefIds": []
       }
     },
-    "inspection": null
+    "inspection": null,
+    "actionProgress": {
+      "actionRequestId": "act_74953fac11db0de180e45f381a98922881c24cde",
+      "state": "QUEUED",
+      "dispatchVersion": "0",
+      "childRequestId": null,
+      "childRoute": null,
+      "childStateVersion": null
+    }
   }
 }

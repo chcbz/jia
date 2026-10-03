@@ -174,6 +174,17 @@ public interface ChatDeliberationMapper {
             """ + EXACT_SCOPE + """
             AND event_id=#{eventId}
             AND CAST(event_id AS BINARY)=CAST(#{eventId} AS BINARY)
+            AND OCTET_LENGTH(event_id)=OCTET_LENGTH(#{eventId}) LIMIT 1
+            """)
+    ChatDispatchOutboxEntity findOutboxById(@Param("tenantId") String tenantId,
+            @Param("ownerJiacn") String ownerJiacn, @Param("clientId") String clientId,
+            @Param("eventId") String eventId);
+
+    @Select("""
+            SELECT * FROM chat_dispatch_outbox WHERE
+            """ + EXACT_SCOPE + """
+            AND event_id=#{eventId}
+            AND CAST(event_id AS BINARY)=CAST(#{eventId} AS BINARY)
             AND OCTET_LENGTH(event_id)=OCTET_LENGTH(#{eventId}) LIMIT 1 FOR UPDATE
             """)
     ChatDispatchOutboxEntity lockOutboxById(@Param("tenantId") String tenantId,

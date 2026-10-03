@@ -79,7 +79,7 @@ public class ChatActionExecutionService implements ChatActionDispatchService.Exe
         var child=new ChatRequestEntity().setTenantId(scope.tenantId()).setOwnerJiacn(scope.ownerJiacn())
                 .setClientId(scope.clientId()).setRequestId(requestId).setRequestRevision(1L).setRequestDigest(bodyDigest)
                 .setConversationId(scope.conversationId()).setConversationGeneration(scope.conversationGeneration())
-                .setUserMessageId(user.getId()).setAggregateState("PLANNING").setStateVersion(0L).setCreatedAt(now).setUpdatedAt(now);
+                .setUserMessageId(user.getId()).setAggregateState("RUNNING").setStateVersion(0L).setCreatedAt(now).setUpdatedAt(now);
         if (dao.insertRequest(child)!=1 || child.getId()==null) throw persistence();
         var step=new ChatInteractionStepStore.Step(stepId,scope.tenantId(),scope.ownerJiacn(),scope.clientId(),requestId,1,1,
                 scope.conversationId(),scope.conversationGeneration(),parent.taskId(),parent.assignmentRevision(),

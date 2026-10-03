@@ -70,7 +70,7 @@ public class ChatBountyAssetProjector {
                   AND l.tenant_id=s.tenant_id AND l.owner_jiacn=s.owner_jiacn AND l.client_id=s.client_id
                 JOIN agent_personal_workspace_execution e ON e.execution_id=l.execution_id
                   AND e.tenant_id=s.tenant_id AND e.client_id=s.client_id AND e.owner_jiacn=s.owner_jiacn
-                  AND e.execution_state='OUTPUT_COMMITTED' AND e.execution_mode='CONVERSATION'
+                  AND e.execution_state IN ('OUTPUT_COMMITTED','FAILED','INPUTS_REVOKED') AND e.execution_mode='CONVERSATION'
                 WHERE s.kind='EXECUTE' AND s.state='RUNNING' AND l.state='RUNNING'
                   AND (? IS NULL OR s.step_id > ?)
                 ORDER BY s.step_id LIMIT ?
@@ -98,12 +98,13 @@ public class ChatBountyAssetProjector {
                 candidate.clientId(), candidate.ownerJiacn());
         var execution = executions.get(scope, candidate.executionId());
         if (execution == null || !"CONVERSATION".equals(execution.executionMode())
-                || !"OUTPUT_COMMITTED".equals(execution.state())
+                || !Set.of("OUTPUT_COMMITTED", "FAILED", "INPUTS_REVOKED").contains(execution.state())
                 || !candidate.executionId().equals(execution.executionId())
                 || !step.taskId().equals(execution.taskId())
                 || !request.conversationId().equals(execution.conversationId())
                 || !step.targetAgentId().equals(execution.targetAgentId())
                 || execution.runId() == null) return 0;
+        if (!"OUTPUT_COMMITTED".equals(execution.state())) return projectFailure(candidate, request, step, execution.state());
         List<PersonalWorkspaceExecutionService.ConversationOutputInfo> outputs = executions.listConversationOutputs(
                 scope, step.taskId(), execution.runId());
         if (outputs == null || outputs.isEmpty() || outputs.size() > 128)
@@ -224,6 +225,66 @@ public class ChatBountyAssetProjector {
                 throw new IllegalStateException("Unable to finalize request projection");
         }
         return count;
+    }
+
+    /** A confirmed execution terminal state is also a durable conversation fact, not an endless spinner.
+     * Unknown transport outcomes are NOT candidates; no retry or provider operation occurs here. */
+    private int projectFailure(Candidate candidate, ChatDeliberationService.RequestView request,
+            ChatDeliberationService.StepView step, String executionState) {
+        var live = conversations.lockScopedById(candidate.ownerJiacn(), candidate.clientId(), request.conversationId());
+        if (live == null || live.getDeletedAt() != null || live.getLifecycleGeneration() == null
+                || !request.conversationId().equals(String.valueOf(live.getId()))
+                || !request.conversationGeneration().equals(Long.toString(live.getLifecycleGeneration()))
+                || !candidate.tenantId().equals(live.getTenantId()) || !candidate.ownerJiacn().equals(live.getJiacn())
+                || !candidate.clientId().equals(live.getClientId()) || !step.taskId().equals(live.getTaskId())
+                || !"bounty".equals(live.getConversationScopeType())
+                || !("task:" + step.taskId()).equals(live.getConversationScopeKey())) return 0;
+        var row = events.findRequest(candidate.tenantId(), candidate.ownerJiacn(), candidate.clientId(), candidate.requestId());
+        if (row == null || !"RUNNING".equals(row.getAggregateState())) return 0; // Another consumer already projected it.
+        if (!candidate.tenantId().equals(row.getTenantId()) || !candidate.ownerJiacn().equals(row.getOwnerJiacn())
+                || !candidate.clientId().equals(row.getClientId()) || !candidate.requestId().equals(row.getRequestId())
+                || !request.conversationId().equals(row.getConversationId())
+                || !Objects.equals(live.getLifecycleGeneration(), row.getConversationGeneration())
+                || !Objects.equals(Long.valueOf(request.requestRevision()), row.getRequestRevision()))
+            throw new IllegalStateException("Failure request scope changed");
+        String state = "INPUTS_REVOKED".equals(executionState) ? "CANCELLED" : "FAILED";
+        long now = System.currentTimeMillis();
+        if (jdbc.update("""
+                UPDATE chat_interaction_step SET state=?,state_version=state_version+1,updated_at=?
+                WHERE step_id=? AND tenant_id=? AND owner_jiacn=? AND client_id=? AND state='RUNNING' AND state_version=?
+                """, state, now, candidate.stepId(), candidate.tenantId(), candidate.ownerJiacn(), candidate.clientId(),
+                Long.parseLong(step.stateVersion())) != 1 || events.updateRequestState(row, state, now) != 1)
+            throw new IllegalStateException("Unable to finalize failed execution projection");
+        var frame = new java.util.LinkedHashMap<String, Object>();
+        frame.put("type", "execution_terminal"); frame.put("conversationId", request.conversationId());
+        frame.put("requestId", candidate.requestId()); frame.put("requestRevision", request.requestRevision());
+        frame.put("stepId", candidate.stepId()); frame.put("state", state);
+        frame.put("stateVersion", Long.toString(row.getStateVersion() + 1));
+        var event = new ChatConversationEventEntity().setEventId("mmd-terminal-" + outputSuffix(
+                        new PersonalWorkspaceExecutionService.OwnerScope(candidate.tenantId(), candidate.clientId(), candidate.ownerJiacn()),
+                        candidate.stepId(), "terminal"))
+                .setTenantId(candidate.tenantId()).setOwnerJiacn(candidate.ownerJiacn()).setClientId(candidate.clientId())
+                .setConversationId(request.conversationId()).setConversationGeneration(live.getLifecycleGeneration())
+                .setRequestId(candidate.requestId()).setEventType("execution_terminal").setEventVersion(0L)
+                .setPayloadJson(CanonicalContextJson.write(frame)).setOccurredAt(now);
+        if (events.insertEvent(event) != 1 || event.getEventSequence() == null
+                || events.assignEventVersion(event.getEventSequence()) != 1)
+            throw new IllegalStateException("Unable to persist failed execution event");
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            frame.put("eventId", event.getEventId()); frame.put("eventSequence", Long.toString(event.getEventSequence()));
+            frame.put("eventVersion", Long.toString(event.getEventSequence()));
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override public void afterCommit() {
+                    broker.publishIfSubscribed(request.conversationId(), live.getLifecycleGeneration(), () -> {
+                        var current = conversations.findScopedById(candidate.ownerJiacn(), candidate.clientId(), request.conversationId());
+                        return current != null && current.getDeletedAt() == null && candidate.tenantId().equals(current.getTenantId())
+                                && candidate.ownerJiacn().equals(current.getJiacn()) && candidate.clientId().equals(current.getClientId())
+                                && Objects.equals(current.getLifecycleGeneration(), live.getLifecycleGeneration());
+                    }, frame);
+                }
+            });
+        }
+        return 1;
     }
 
     /** History is a projection of durable, live-generation source links, not model metadata. */

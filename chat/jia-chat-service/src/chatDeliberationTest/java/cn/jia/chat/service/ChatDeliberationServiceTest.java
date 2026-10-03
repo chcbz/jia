@@ -501,6 +501,7 @@ class ChatDeliberationServiceTest {
             return outboxes.values().stream().filter(x->t.equals(x.getTenantId())&&o.equals(x.getOwnerJiacn())
                     &&c.equals(x.getClientId())&&turn.equals(x.getTurnId())&&event.equals(x.getEventType())).findFirst().orElse(null);
         }
+        public ChatDispatchOutboxEntity findOutboxById(String t,String o,String c,String e) { return lockOutboxById(t,o,c,e); }
         public ChatDispatchOutboxEntity lockOutboxById(String t,String o,String c,String id){ return outboxes.get(id); }
         public ChatDispatchOutboxEntity lockOutboxByDispatch(String t,String o,String c,String id){ return outboxes.values().stream().filter(x->id.equals(x.getDispatchId())&&"DISPATCH".equals(x.getEventType())).findFirst().orElse(null); }
         public List<ChatDispatchOutboxEntity> findDueOutbox(long now,int limit){ return outboxes.values().stream().filter(x->x.getAvailableAt()!=null&&x.getAvailableAt()<=now).limit(limit).toList(); }

@@ -25,7 +25,7 @@ class ChatActionExecutionServiceTest {
         assertEquals(2,f.base.messages.size()); assertEquals(3,f.base.requests.size());
         assertEquals(metadata,f.user().getMetadata()); assertEquals("请画一只鸟",f.user().getContent());
         var child=f.base.requests.get(id); assertEquals(f.user().getId(),child.getUserMessageId());
-        assertEquals("PLANNING",child.getAggregateState());
+        assertEquals("RUNNING",child.getAggregateState()); // Asset projector consumes RUNNING, not PLANNING.
         assertEquals(1,f.reservations.size()); var ordinary=f.reservations.getFirst();
         assertEquals(f.user().getId(),ordinary.originalUserMessageId());
         assertEquals(ChatBountyInteractionV3Wire.shaText("请画一只鸟"),ordinary.originalUserContentSha256());

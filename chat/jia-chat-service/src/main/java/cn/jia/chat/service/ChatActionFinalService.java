@@ -150,7 +150,7 @@ public class ChatActionFinalService {
                 || !Objects.equals(event.getClientId(), turn.getClientId())
                 || !Objects.equals(event.getTurnId(), turn.getTurnId())) throw unavailable();
         var scope = scope(turn);
-        var view = readIfV3(scope, turn.getRequestId(), turn.getTurnId(), turn.getRequestRevision(), turn.getRoute());
+        var view = read(scope, turn.getRequestId(), turn.getTurnId(), turn.getRequestRevision(), turn.getRoute(), false);
         if (view == null || !"READY".equals(view.get("state"))
                 || !"ACTION_REQUEST".equals(map(view.get("outcome")).get("kind"))) throw unavailable();
         var row = store.findOutcomeByRequest(scope, turn.getRequestId());
@@ -172,6 +172,11 @@ public class ChatActionFinalService {
     @Transactional(readOnly = true)
     public Map<String, Object> readIfV3(ChatTypedDeliberationStore.Scope scope, String requestId,
             String turnId, long revision, String expectedRoute) {
+        return read(scope, requestId, turnId, revision, expectedRoute, true);
+    }
+
+    private Map<String, Object> read(ChatTypedDeliberationStore.Scope scope, String requestId,
+            String turnId, long revision, String expectedRoute, boolean includeProgress) {
         var turn = dao.findTurn(scope.tenantId(), scope.ownerJiacn(), scope.clientId(), turnId);
         if (turn == null || !scope.equals(scope(turn)) || !requestId.equals(turn.getRequestId())
                 || !Objects.equals(revision, turn.getRequestRevision()) || !expectedRoute.equals(turn.getRoute())) throw unavailable();
@@ -212,7 +217,72 @@ public class ChatActionFinalService {
         view.put("requestId", requestId); view.put("requestRevision", Long.toString(revision)); view.put("turnId", turnId);
         view.put("state", row == null ? "PENDING" : "READY"); view.put("outcome", outcome);
         view.put("inspection", inspection == null ? null : inspectionView(inspection, validated));
+        view.put("actionProgress", includeProgress && row != null && "ACTION_REQUEST".equals(row.kind())
+                ? actionProgress(row, validated, admission) : null);
         return Collections.unmodifiableMap(view);
+    }
+
+    /** Mutable delivery progress is separate from the immutable model final/digest.
+     * Reads existing outbox and child facts only; never admits or retries an action. */
+    Map<String, Object> actionProgress(ChatTypedDeliberationStore.Outcome parent,
+            ChatActionFinalValidator.ValidatedFinal v, ChatTypedDeliberationStore.Admission original) {
+        var scope = parent.scope(); String actionId = ChatActionFinalValidator.actionEventId(v);
+        var event = dao.findOutboxById(scope.tenantId(), scope.ownerJiacn(), scope.clientId(), actionId);
+        if (event == null || !scope.tenantId().equals(event.getTenantId()) || !scope.ownerJiacn().equals(event.getOwnerJiacn())
+                || !scope.clientId().equals(event.getClientId()) || !actionId.equals(event.getEventId())
+                || !parent.turnId().equals(event.getTurnId()) || !v.binding().get("dispatchId").equals(event.getDispatchId())
+                || !ACTION_EVENT.equals(event.getEventType()) || event.getVersion() == null || event.getVersion() < 0
+                || !canonical(actionPayload(parent, v)).equals(canonical(parse(event.getPayloadJson()))))
+            throw persistence("Action progress identity is inconsistent");
+        var childAdmission = store.findAdmissionByKey(scope, actionId, false);
+        String state, childId = null, route = null, childVersion = null;
+        if (childAdmission == null) {
+            state = switch (event.getStatus()) {
+                case "READY", "RETRY", "CLAIMED" -> "QUEUED";
+                case "DEAD" -> "FAILED";
+                default -> throw persistence("Settled action has no child");
+            };
+        } else {
+            var capability = v.dispatchFacts().availableActions().stream().filter(c -> c.actionId().equals(
+                    v.interactionOutcome().action().actionId())).findFirst().orElseThrow();
+            route = "INSPECT_INPUTS".equals(capability.kind()) ? "INSPECT" : "EXECUTE";
+            childId = "INSPECT".equals(route) ? ChatDeliberationService.inspectionContinuationRequestId(actionId)
+                    : cn.jia.chat.api.ChatBountyInteractionV3Wire.shaText("action-execute\n" + actionId);
+            if (!"SENT".equals(event.getStatus()) || !scope.equals(childAdmission.scope())
+                    || !actionId.equals(childAdmission.idempotencyKey()) || !childId.equals(childAdmission.requestId())
+                    || !parent.outcomeId().equals(childAdmission.parentOutcomeId()) || !parent.taskId().equals(childAdmission.taskId())
+                    || parent.assignmentRevision() != childAdmission.assignmentRevision()
+                    || original.userMessageId() != childAdmission.userMessageId() || childAdmission.requestRevision() != 1
+                    || !"ADMITTED".equals(childAdmission.state()) || childAdmission.stateVersion() != 0)
+                throw persistence("Action progress child lineage is inconsistent");
+            var child = dao.findRequest(scope.tenantId(), scope.ownerJiacn(), scope.clientId(), childId);
+            if (child == null || !scope.tenantId().equals(child.getTenantId()) || !scope.ownerJiacn().equals(child.getOwnerJiacn())
+                    || !scope.clientId().equals(child.getClientId()) || !childId.equals(child.getRequestId())
+                    || !scope.conversationId().equals(child.getConversationId())
+                    || !Objects.equals(scope.conversationGeneration(), child.getConversationGeneration())
+                    || !Objects.equals(1L, child.getRequestRevision()) || !Objects.equals(original.userMessageId(), child.getUserMessageId())
+                    || child.getStateVersion() == null || child.getStateVersion() < 0)
+                throw persistence("Action progress child scope is inconsistent");
+            childVersion = Long.toString(child.getStateVersion());
+            state = switch (child.getAggregateState()) {
+                case "RUNNING", "RECEIVED", "QUEUED" -> "RUNNING";
+                case "COMPLETED" -> {
+                    if (!"INSPECT".equals(route)) throw persistence("Execution has no projected output");
+                    yield "COMPLETED";
+                }
+                case "OUTPUT_COMMITTED" -> {
+                    if (!"EXECUTE".equals(route)) throw persistence("Inspection has invalid terminal state");
+                    yield "COMPLETED";
+                }
+                case "FAILED" -> "FAILED";
+                case "CANCELLED" -> "CANCELLED";
+                default -> throw persistence("Action child state is unsupported");
+            };
+        }
+        var result = new LinkedHashMap<String, Object>(); result.put("actionRequestId", actionId);
+        result.put("state", state); result.put("dispatchVersion", Long.toString(event.getVersion()));
+        result.put("childRequestId", childId); result.put("childRoute", route); result.put("childStateVersion", childVersion);
+        return Collections.unmodifiableMap(result);
     }
 
     private Map<String, Object> projection(ChatTypedDeliberationStore.Outcome row, ChatActionFinalValidator.ValidatedFinal v) {

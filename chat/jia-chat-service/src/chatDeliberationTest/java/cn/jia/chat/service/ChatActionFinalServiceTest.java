@@ -47,6 +47,7 @@ class ChatActionFinalServiceTest {
         when(store.insertPending(any())).thenAnswer(call->{pending.set(call.getArgument(0));return 1;});
         when(store.findPendingByOutcome(eq(scope),anyString(),eq(false))).thenAnswer(call->pending.get());
         when(dao.insertOutbox(any())).thenAnswer(call->{event.set(call.getArgument(0));return 1;});
+        when(dao.findOutboxById(eq("0"),eq("owner"),eq("client"),anyString())).thenAnswer(call->event.get());
         when(dao.findTurn("0","owner","client","turn")).thenReturn(turn);
         when(dao.findSnapshot("0","owner","client","snapshot")).thenReturn(snapshot);
     }
@@ -87,6 +88,60 @@ class ChatActionFinalServiceTest {
         event.get().setOwnerJiacn("foreign");
         assertThrows(ChatDeliberationException.class,()->service.loadAction(event.get()));
         verifyNoInteractions(sessions);
+    }
+
+    @Test void actionProgressReadsDurableChildWithoutChangingFinalOrAdmittingAgain() {
+        ready(); var immutable=persist(ACTION);
+        assertEquals("QUEUED", map(service.readIfV3(scope,"request","turn",1,"CHAT").get("actionProgress")).get("state"));
+        var child=progressChild("RUNNING",0);
+        for (String state:List.of("RUNNING","OUTPUT_COMMITTED","FAILED","CANCELLED")) {
+            child.setAggregateState(state).setStateVersion(child.getStateVersion()+1);
+            var read=service.readIfV3(scope,"request","turn",1,"CHAT");
+            assertEquals(immutable,read.get("outcome"));
+            var progress=map(read.get("actionProgress"));
+            assertEquals("OUTPUT_COMMITTED".equals(state)?"COMPLETED":state,progress.get("state"));
+            assertEquals(child.getRequestId(),progress.get("childRequestId"));
+            assertEquals(Long.toString(child.getStateVersion()),progress.get("childStateVersion"));
+            assertEquals("EXECUTE",progress.get("childRoute"));
+        }
+        verify(dao,times(1)).insertOutbox(any()); verify(store,times(1)).insertOutcome(any());
+        verify(dao,never()).insertRequest(any()); verify(store,never()).insertAdmission(any());
+    }
+
+    @Test void actionProgressRejectsMissingForeignAndNonProjectedChild() {
+        ready(); persist(ACTION); event.get().setStatus("SENT");
+        assertThrows(ChatDeliberationException.class,()->service.readIfV3(scope,"request","turn",1,"CHAT"));
+        var child=progressChild("RUNNING",0);
+        child.setOwnerJiacn("foreign");
+        assertThrows(ChatDeliberationException.class,()->service.readIfV3(scope,"request","turn",1,"CHAT"));
+        child.setOwnerJiacn("owner").setConversationGeneration(2L);
+        assertThrows(ChatDeliberationException.class,()->service.readIfV3(scope,"request","turn",1,"CHAT"));
+        child.setConversationGeneration(1L).setAggregateState("COMPLETED");
+        assertThrows(ChatDeliberationException.class,()->service.readIfV3(scope,"request","turn",1,"CHAT"));
+        child.setAggregateState("RUNNING").setStateVersion(-1L);
+        assertThrows(ChatDeliberationException.class,()->service.readIfV3(scope,"request","turn",1,"CHAT"));
+    }
+
+    @Test void failedAdmissionProjectsSafeTerminalStateWithoutLeakingInternalErrors() {
+        ready(); persist(ACTION); event.get().setStatus("DEAD").setVersion(3L).setLastError("secret-runtime-details");
+        var progress=map(service.readIfV3(scope,"request","turn",1,"CHAT").get("actionProgress"));
+        assertEquals("FAILED",progress.get("state")); assertEquals("3",progress.get("dispatchVersion"));
+        assertNull(progress.get("childRequestId")); assertNull(progress.get("childStateVersion"));
+        assertFalse(progress.toString().contains("secret"));
+        verify(dao,never()).lockOutboxById(anyString(),anyString(),anyString(),anyString());
+    }
+
+    private ChatRequestEntity progressChild(String state,long version) {
+        String actionId=event.get().getEventId();
+        String id=cn.jia.chat.api.ChatBountyInteractionV3Wire.shaText("action-execute\n"+actionId);
+        event.get().setStatus("SENT").setVersion(2L);
+        var admission=new ChatTypedDeliberationStore.Admission("child-admission",scope,actionId,"digest","body",
+                "DISCUSSION","task",3,row.get().outcomeId(),null,id,1,8,"[]","[]","ADMITTED",0,1,1);
+        when(store.findAdmissionByKey(scope,actionId,false)).thenReturn(admission);
+        var child=new ChatRequestEntity().setTenantId("0").setOwnerJiacn("owner").setClientId("client")
+                .setRequestId(id).setRequestRevision(1L).setUserMessageId(8L).setConversationId("42")
+                .setConversationGeneration(1L).setAggregateState(state).setStateVersion(version);
+        when(dao.findRequest("0","owner","client",id)).thenReturn(child); return child;
     }
 
     @Test void answersDoNotCreateActionEventsAndPendingReadDoesNotPretendCompletion() {

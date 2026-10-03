@@ -87,6 +87,7 @@ class ChatDeliberationOutboxServiceTest {
     private static final class FakeDao implements ChatDeliberationDao {
         ChatDispatchOutboxEntity row;
         public List<ChatDispatchOutboxEntity> findDueOutbox(long now,int limit){return List.of(copy(row));}
+        public ChatDispatchOutboxEntity findOutboxById(String t,String o,String c,String e) { return lockOutboxById(t,o,c,e); }
         public ChatDispatchOutboxEntity lockOutboxById(String t,String o,String c,String id){return copy(row);}
         public ChatDispatchOutboxEntity lockOutboxByDispatch(String t,String o,String c,String id){return copy(row);}
         public int claimOutbox(ChatDispatchOutboxEntity expected,String owner,long until,long fence,long now){
