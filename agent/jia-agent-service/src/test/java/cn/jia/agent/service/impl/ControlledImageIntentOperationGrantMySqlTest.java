@@ -105,6 +105,117 @@ class ControlledImageIntentOperationGrantMySqlTest {
                 "A"+"a".repeat(63)));
     }
 
+    @Test void previousPurposeAndMaterialChecksUpgradeWithoutChangingRowsAndRestartExactly() {
+        new ControlledImageFollowupV3SchemaInitializer(jdbc).afterPropertiesSet();
+        installPreviousChecks();
+        assertEquals(1, insertAuthority(new CountDownLatch(0), "a"));
+        jdbc.update("""
+                INSERT INTO agent_controlled_image_execution_source_v3
+                  (owner_jiacn,execution_id,input_ref,input_ordinal,source_kind,content_mime_type,
+                   byte_length,content_sha256,source_json,file_id,file_version,purpose,created_at,tenant_id,client_id)
+                VALUES ('owner','execution','input',1,'TASK_LINKED_WORKSPACE_VERSION','image/png',1,?,
+                        JSON_OBJECT(),'file',1,'REFERENCE',1,'0','client')
+                """, "a".repeat(64));
+        var beforeGrant=jdbc.queryForList("SELECT * FROM agent_controlled_image_intent_operation_grant");
+        var beforeSource=jdbc.queryForList("SELECT * FROM agent_controlled_image_execution_source_v3");
+        assertThrows(DataAccessException.class,()->jdbc.update(
+                "UPDATE agent_controlled_image_execution_source_v3 SET purpose='INPUT'"));
+        assertThrows(DataAccessException.class,()->jdbc.update("""
+                UPDATE agent_controlled_image_intent_operation_grant
+                SET operation='EDIT_IMAGE',source_snapshot_json=JSON_ARRAY(JSON_OBJECT('kind','TASK_LINKED_WORKSPACE_VERSION'))
+                """));
+        new ControlledImageFollowupV3SchemaInitializer(jdbc).afterPropertiesSet();
+        assertEquals(beforeGrant,jdbc.queryForList("SELECT * FROM agent_controlled_image_intent_operation_grant"));
+        assertEquals(beforeSource,jdbc.queryForList("SELECT * FROM agent_controlled_image_execution_source_v3"));
+        assertEquals(1,jdbc.update("UPDATE agent_controlled_image_execution_source_v3 SET purpose='INPUT'"));
+        assertEquals(1,jdbc.update("""
+                UPDATE agent_controlled_image_intent_operation_grant
+                SET operation='EDIT_IMAGE',source_snapshot_json=JSON_ARRAY(JSON_OBJECT('kind','TASK_LINKED_WORKSPACE_VERSION'))
+                """));
+        assertThrows(DataAccessException.class,()->jdbc.update(
+                "UPDATE agent_controlled_image_execution_source_v3 SET purpose='OUTPUT'"));
+        assertThrows(DataAccessException.class,()->jdbc.update(
+                "UPDATE agent_controlled_image_intent_operation_grant SET source_snapshot_json=JSON_ARRAY()"));
+        var migrated=checkCatalogue();
+        new ControlledImageFollowupV3SchemaInitializer(jdbc).afterPropertiesSet();
+        assertEquals(migrated,checkCatalogue());
+        assertTrue(migrated.toString().contains("ORDINARY_ACTION"));
+    }
+
+    @Test void unrelatedMaterialDriftStopsAllThreeExtensionsBeforeAnyAlter() {
+        new ControlledImageFollowupV3SchemaInitializer(jdbc).afterPropertiesSet();
+        installPreviousChecks();
+        jdbc.execute("ALTER TABLE agent_controlled_image_execution_source_v3 "
+                +"DROP CHECK chk_acies_common, ADD CONSTRAINT chk_acies_common CHECK (1=1)");
+        var before=checkCatalogue();
+        assertThrows(IllegalStateException.class,
+                ()->new ControlledImageFollowupV3SchemaInitializer(jdbc).afterPropertiesSet());
+        assertEquals(before,checkCatalogue());
+        assertFalse(before.toString().contains("ORDINARY_ACTION"));
+    }
+
+    @Test void restartResumesExactKnownPartiallyWidenedMaterialChecks() {
+        new ControlledImageFollowupV3SchemaInitializer(jdbc).afterPropertiesSet();
+        var complete=checkCatalogue();
+        replaceCheck("agent_controlled_image_intent_operation_grant","chk_aciiog_sources",previousGrantSources());
+        new ControlledImageFollowupV3SchemaInitializer(jdbc).afterPropertiesSet();
+        assertEquals(complete,checkCatalogue());
+        replaceCheck("agent_controlled_image_execution_source_v3","chk_acies_union",previousSourceUnion());
+        new ControlledImageFollowupV3SchemaInitializer(jdbc).afterPropertiesSet();
+        assertEquals(complete,checkCatalogue());
+    }
+
+    private java.util.List<java.util.Map<String,Object>> checkCatalogue() {
+        return jdbc.queryForList("""
+                SELECT tc.table_name,tc.constraint_name,cc.check_clause,tc.enforced
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.check_constraints cc
+                  ON cc.constraint_schema=tc.constraint_schema AND cc.constraint_name=tc.constraint_name
+                WHERE tc.constraint_schema=DATABASE() AND tc.constraint_type='CHECK'
+                ORDER BY tc.table_name,tc.constraint_name
+                """);
+    }
+    private void replaceCheck(String table,String name,String clause) {
+        jdbc.execute("ALTER TABLE "+table+" DROP CHECK "+name+", ADD CONSTRAINT "+name+" CHECK ("+clause+")");
+    }
+    private void installPreviousChecks() {
+        // Independent pre-ordinary-action predicates. Never used for production migration.
+        String hash=" REGEXP '^[0-9a-f]{64}$'";
+        replaceCheck("agent_task_provider_cost_consent","chk_atpcc_purpose_union",
+                "consent_purpose IN ('INITIAL_ASSIGN_AND_START','FOLLOWUP_EXECUTE') AND ("
+                +"(consent_purpose='INITIAL_ASSIGN_AND_START' AND operation_grant_id IS NULL "
+                +"AND execution_intent_id IS NULL AND conversation_id IS NULL AND conversation_generation IS NULL "
+                +"AND operation IS NULL AND instruction_sha256 IS NULL AND source_snapshot_sha256 IS NULL "
+                +"AND owner_payload_sha256 IS NULL AND runtime_input_snapshot_sha256 IS NULL) OR "
+                +"(consent_purpose='FOLLOWUP_EXECUTE' AND operation_grant_id REGEXP '^opgrant_[0-9a-f]{32}$' "
+                +"AND CHAR_LENGTH(execution_intent_id) BETWEEN 1 AND 100 AND CHAR_LENGTH(conversation_id) BETWEEN 1 AND 100 "
+                +"AND conversation_generation>0 AND operation IN ('GENERATE_IMAGE','EDIT_IMAGE') "
+                +"AND instruction_sha256"+hash+" AND source_snapshot_sha256"+hash+" AND owner_payload_sha256"+hash
+                +" AND ((reserved_execution_id IS NULL AND runtime_input_snapshot_sha256 IS NULL) OR "
+                +"(reserved_execution_id IS NOT NULL AND runtime_input_snapshot_sha256"+hash+"))))");
+        replaceCheck("agent_controlled_image_intent_operation_grant","chk_aciiog_sources",previousGrantSources());
+        replaceCheck("agent_controlled_image_execution_source_v3","chk_acies_union",previousSourceUnion());
+    }
+    private static String previousGrantSources() {
+        return "JSON_TYPE(source_snapshot_json)='ARRAY' AND ((operation='GENERATE_IMAGE' "
+                +"AND JSON_LENGTH(source_snapshot_json) BETWEEN 0 AND 16 "
+                +"AND JSON_SEARCH(source_snapshot_json,'one','CURRENT_CONVERSATION_ASSET',NULL,'$[*].kind') IS NULL) "
+                +"OR (operation='EDIT_IMAGE' AND JSON_LENGTH(source_snapshot_json)=1 "
+                +"AND JSON_UNQUOTE(JSON_EXTRACT(source_snapshot_json,'$[0].kind'))='CURRENT_CONVERSATION_ASSET'))";
+    }
+    private static String previousSourceUnion() {
+        return "(source_kind='TASK_LINKED_WORKSPACE_VERSION' AND file_id IS NOT NULL AND file_version>0 "
+                +"AND purpose='REFERENCE' AND conversation_id IS NULL AND conversation_generation IS NULL "
+                +"AND asset_id IS NULL AND asset_revision IS NULL AND producer_request_id IS NULL "
+                +"AND producer_request_revision IS NULL AND producer_step_id IS NULL AND producer_execution_id IS NULL "
+                +"AND producer_run_id IS NULL AND producer_output_id IS NULL) OR "
+                +"(source_kind='CURRENT_CONVERSATION_ASSET' AND file_id IS NULL AND file_version IS NULL AND purpose IS NULL "
+                +"AND conversation_id IS NOT NULL AND conversation_generation>0 AND asset_id IS NOT NULL "
+                +"AND asset_revision>0 AND producer_request_id IS NOT NULL AND producer_request_revision>0 "
+                +"AND producer_step_id IS NOT NULL AND producer_execution_id IS NOT NULL "
+                +"AND producer_run_id IS NOT NULL AND producer_output_id IS NOT NULL)";
+    }
+
     private int insertAuthority(CountDownLatch start,String suffix) {
         await(start);
         try {
