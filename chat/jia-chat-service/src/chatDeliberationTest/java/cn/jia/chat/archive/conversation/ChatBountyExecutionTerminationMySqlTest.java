@@ -317,7 +317,7 @@ class ChatBountyExecutionTerminationMySqlTest {
                 .setConversationId("42").setTargetAgentId("agent").setInstruction("draw")
                 .setOutputContentMimeType("image/png").setExecutionState("QUEUED").setGrantRevision(1L)
                 .setIdempotencyKey("conv_"+sha("intent")).setRequestHash("c".repeat(64)).setCreatedAt(1L);
-        execution.setTenantId("0");execution.setClientId("client");inTx(()->executions.insert(execution));
+        execution.setTenantId("0");execution.setClientId("client");inTx(()->{executions.insert(execution);return execution;});
     }
     private void configureRuntime(WorkspaceConversationAccessService access) {
         runtime=new PersonalWorkspaceExecutionServiceImpl(executions,mock(PersonalWorkspaceDao.class),
