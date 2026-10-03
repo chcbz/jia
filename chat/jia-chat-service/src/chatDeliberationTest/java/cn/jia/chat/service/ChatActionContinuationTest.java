@@ -173,6 +173,7 @@ class ChatActionContinuationTest {
         final Map<String,ChatTypedDeliberationStore.Admission> children=new LinkedHashMap<>();
         final List<ChatConversationEventEntity> events=new ArrayList<>();
         final TypedInspectionSessionRegistry registry=new TypedInspectionSessionRegistry();
+        final boolean mixedMaterials;
         final ChatTypedInspectionContextService inspections;
         final ChatConversationEntity conversation=new ChatConversationEntity().setId(42L).setJiacn("owner").setConversationType("juyiting")
                 .setConversationScopeType("bounty").setConversationScopeKey("task:task").setTaskId("task").setLifecycleGeneration(1L).setTargetAgentIds("[\"agent\"]");
@@ -182,7 +183,9 @@ class ChatActionContinuationTest {
         final ChatTurnEntity parentTurn;
 
         Fixture() { this(false); }
-        Fixture(boolean chatParent) {
+        Fixture(boolean chatParent) { this(chatParent,false); }
+        Fixture(boolean chatParent,boolean mixedMaterials) {
+            this.mixedMaterials=mixedMaterials;
             conversation.setTenantId("0"); conversation.setClientId("client");
             root.setAssignedAgentId("agent");root.setTaskVersion(3L);
             when(conversations.lockScopedById("owner","client","42")).thenReturn(conversation);
@@ -208,12 +211,19 @@ class ChatActionContinuationTest {
                     Map.entry("contract","juyiting-typed-inspection-v1"),Map.entry("enabled",true),Map.entry("profileId","profile"),
                     Map.entry("engineContractId","engine"),Map.entry("enginePolicyDigest",digest('a')),Map.entry("toolPolicyDigest",digest('b')),
                     Map.entry("inputPolicyDigest",digest('c')),Map.entry("toolPolicy","STRICT_NO_TOOLS"),Map.entry("recovery","durable-inbox-turn-readback-v1"),
-                    Map.entry("supportedInputs",List.of(Map.of("mediaKind","text","mimeType","text/plain","carrier","DIRECT_TEXT","carrierContractDigest",digest('d'))))),()->true);
+                    Map.entry("supportedInputs",mixedMaterials?ChatMixedMaterialWireTest.supportedInputs():List.of(Map.of("mediaKind","text","mimeType","text/plain","carrier","DIRECT_TEXT","carrierContractDigest",digest('d'))))),()->true);
             var jdbc=mock(JdbcTemplate.class);
-            when(jdbc.queryForList(anyString(),any(Object[].class))).thenReturn(List.of(Map.of("content_mime_type","text/plain","content_hash","a".repeat(64),"byte_length",12L)));
+            when(jdbc.queryForList(anyString(),any(Object[].class))).thenAnswer(invocation -> {
+                if (!mixedMaterials) return List.of(Map.of("content_mime_type","text/plain","content_hash","a".repeat(64),"byte_length",12L));
+                String file=invocation.getArgument(5);
+                int index=Integer.parseInt(file.substring(file.lastIndexOf('-')+1));
+                byte[] bytes=ChatMixedMaterialWireTest.materialBytes(index);
+                return List.of(Map.of("content_mime_type",ChatMixedMaterialWireTest.mime(index),
+                        "content_hash",ChatMixedMaterialWireTest.sha(bytes),"byte_length",(long)bytes.length));
+            });
             var capabilities=mock(ChatActionCapabilityService.class);
             when(capabilities.available(any(),anyList())).thenReturn(List.of(Map.of("actionId","inspect-materials","kind","INSPECT_INPUTS", "operation","INSPECT_INPUTS",
-                    "inputMediaTypes",List.of("text"),"minSources",1,"maxSources",32)));
+                    "inputMediaTypes",mixedMaterials?List.of("text","image","audio","file"):List.of("text"),"minSources",1,"maxSources",32)));
             inspections=new ChatTypedInspectionContextService(jdbc,mock(ChatConversationArchiveStore.class),registry,capabilities,true);
             var parentContext=context("parent","file");
             var input=new ChatMessageDTO();input.setRequestId("parent");input.setContent("请整理资料");
@@ -228,8 +238,8 @@ class ChatActionContinuationTest {
                         "engine","CODEX_APP_SERVER_NATIVE_OUTPUT_SCHEMA","strictNoToolsVerified",false,"toolPolicy","read-only-constrained"));
                 var schema=mock(cn.jia.chat.config.ChatTypedDeliberationSchemaInitializer.class);when(schema.ready()).thenReturn(true);
                 var chatContext=new ChatTypedDeliberationContextService(jdbc,chatSessions,schema,capabilities,true).resolve(
-                        new ChatTypedDeliberationContextService.Scope("0","owner","client","42",1),"task","agent",List.of(
-                                new cn.jia.chat.api.ChatTypedDeliberationWire.SourceSelector("TASK_LINKED_WORKSPACE_VERSION","file","1","INPUT",null,null)));
+                        new ChatTypedDeliberationContextService.Scope("0","owner","client","42",1),"task","agent",selectors("file").stream().map(s ->
+                                new cn.jia.chat.api.ChatTypedDeliberationWire.SourceSelector(s.kind(),s.fileId(),s.version(),s.purpose(),s.assetId(),s.assetRevision())).toList());
                 parentCatalog=chatContext.sourceCatalogJson();parentFacts=chatContext.facts();
                 admitted=deliberation.admit("0",sender,"42",1,chatScope,InteractionRoute.CHAT,input,null,parentFacts);
             } else admitted=deliberation.admitInspection("0",sender,"42",1,chatScope,input,null,parentContext.typedInspection(),null);
@@ -241,7 +251,7 @@ class ChatActionContinuationTest {
             var receipt=new LinkedHashMap<String,Object>();receipt.put("schemaVersion",1);receipt.put("authorizationId",parentContext.typedInspection().get("authorizationId"));
             receipt.put("manifestDigest",parentContext.typedInspection().get("manifestDigest"));receipt.put("sources",sources.stream().map(s->Map.of("sourceRefId",s.get("sourceRefId"),"sha256",s.get("sha256"),"byteLength",s.get("byteLength"),"carrier",s.get("carrier"),"contributionDigest",digest('e'))).toList());
             receipt.put("inputDigest",ChatDeliberationService.digest(receipt));receipt.put("engineThreadId","native-thread");receipt.put("engineTurnId","native-turn");
-            var outcome=Map.of("schemaVersion",3,"kind","ACTION_REQUEST","text","继续处理","action",Map.of("actionId","inspect-materials","instruction","查看已选资料","sourceRefIds",sources.stream().map(s->s.get("sourceRefId")).toList()));
+            var outcome=Map.of("schemaVersion",3,"kind","ACTION_REQUEST","text","继续处理","action",Map.of("actionId","inspect-materials","instruction",mixedMaterials?"逐项核对所选资料并汇总。".repeat(400):"查看已选资料","sourceRefIds",sources.stream().map(s->s.get("sourceRefId")).toList()));
             var union=new LinkedHashMap<String,Object>(outcome);union.put("clarification",null);
             var authority=Map.of("authorizationId",parentContext.typedInspection().get("authorizationId"),"manifestDigest",parentContext.typedInspection().get("manifestDigest"),"sources",sources);
             var validated=ChatActionFinalValidator.validateJson(bound,parentFacts,chatParent?null:authority,"继续处理",3,CanonicalContextJson.write(union),chatParent?null:CanonicalContextJson.write(receipt));
@@ -256,7 +266,12 @@ class ChatActionContinuationTest {
         ChatMessageEntity user(){return messages.getFirst();}
         String childId(){return ChatDeliberationService.inspectionContinuationRequestId(ChatActionFinalValidator.actionEventId(action.validated()));}
         ChatTypedInspectionContextService.Context childContext(){return context(childId(),"file");}
-        ChatTypedInspectionContextService.Context context(String request,String file){return inspections.resolve(new ChatTypedInspectionContextService.Scope("0","owner","client","42",1,"task",3,request,1,"agent"),List.of(new ChatTypedInspectionWire.SourceSelector("TASK_LINKED_WORKSPACE_VERSION",file,"1","INPUT",null,null)));}
+        ChatTypedInspectionContextService.Context context(String request,String file){return inspections.resolve(new ChatTypedInspectionContextService.Scope("0","owner","client","42",1,"task",3,request,1,"agent"),selectors(file));}
+        List<ChatTypedInspectionWire.SourceSelector> selectors(String file) {
+            if (!mixedMaterials) return List.of(new ChatTypedInspectionWire.SourceSelector("TASK_LINKED_WORKSPACE_VERSION",file,"1","INPUT",null,null));
+            return java.util.stream.IntStream.range(0,32).mapToObj(i->new ChatTypedInspectionWire.SourceSelector(
+                    "TASK_LINKED_WORKSPACE_VERSION",file+"-"+i,"1",i%2==0?"INPUT":"REFERENCE",null,null)).toList();
+        }
         @SuppressWarnings("unchecked") Map<String,Object> object(Object value){return (Map<String,Object>)value;}
         @SuppressWarnings("unchecked") Map<String,Object> map(String json){return cn.jia.core.util.JsonUtil.getMapper().readValue(json,Map.class);}
         ChatDeliberationOutboxService.Claim claim(){
