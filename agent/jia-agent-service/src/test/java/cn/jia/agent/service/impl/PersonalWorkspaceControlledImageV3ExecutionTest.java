@@ -21,6 +21,40 @@ class PersonalWorkspaceControlledImageV3ExecutionTest {
     "a".repeat(64),false,List.of(new PersonalWorkspaceExecutionService.RuntimeInputV3("input_1",source,"image/png","4","b".repeat(64))));
   assertEquals(1,snapshot.inputs().size());assertFalse(snapshot.noReferencedMaterials());
  }
+ @Test void workspaceSourceHttpJsonContainsOnlyItsFourProtocolFields() throws Exception {
+  var source=new PersonalWorkspaceExecutionService.RuntimeSource("TASK_LINKED_WORKSPACE_VERSION",
+    "file","2","REFERENCE",null,null,null,null,null,null,null,null,null);
+  var json=sourceHttpJson(source,"GENERATE_IMAGE");
+  assertEquals(java.util.Set.of("kind","fileId","version","purpose"),
+    new java.util.HashSet<>(json.propertyNames()));
+  assertEquals("2",json.get("version").textValue());
+  assertEquals("REFERENCE",json.get("purpose").textValue());
+ }
+ @Test void conversationAssetHttpJsonContainsOnlyItsTenProtocolFields() throws Exception {
+  var source=new PersonalWorkspaceExecutionService.RuntimeSource("CURRENT_CONVERSATION_ASSET",null,null,null,
+    "conversation","1","asset","2","request","step","execution0","run0","output_1");
+  var json=sourceHttpJson(source,"EDIT_IMAGE");
+  assertEquals(java.util.Set.of("kind","conversationId","conversationGeneration","assetId","assetRevision",
+    "producerRequestId","producerStepId","producerExecutionId","producerRunId","producerOutputId"),
+    new java.util.HashSet<>(json.propertyNames()));
+  assertEquals("2",json.get("assetRevision").textValue());
+  assertEquals("1",json.get("conversationGeneration").textValue());
+ }
+ private static tools.jackson.databind.JsonNode sourceHttpJson(
+   PersonalWorkspaceExecutionService.RuntimeSource source,String operation) throws Exception {
+  // Exercise the actual Spring HTTP converter, not a hand-written JSON fixture or record accessors.
+  var snapshot=new PersonalWorkspaceExecutionService.ConversationInputSnapshotV3(3,"execution",1,operation,
+    "a".repeat(64),false,List.of(new PersonalWorkspaceExecutionService.RuntimeInputV3(
+      "input_1",source,"image/png","4","b".repeat(64))));
+  var output=new org.springframework.mock.http.MockHttpOutputMessage();
+  new org.springframework.http.converter.json.JacksonJsonHttpMessageConverter().write(
+    snapshot,org.springframework.http.MediaType.APPLICATION_JSON,output);
+  var root=tools.jackson.databind.json.JsonMapper.builder().build().readTree(output.getBodyAsString());
+  assertEquals(3,root.get("schemaVersion").intValue());
+  assertEquals(operation,root.get("operation").textValue());
+  assertEquals("4",root.get("inputs").get(0).get("byteLength").textValue());
+  return root.get("inputs").get(0).get("source");
+ }
  @Test void v3InboxChecksCurrentConversationAclBeforeReturningRuntimeAuthority() throws Exception {
   String source=java.nio.file.Files.readString(java.nio.file.Path.of(
     "src/main/java/cn/jia/agent/service/impl/PersonalWorkspaceExecutionServiceImpl.java"));
