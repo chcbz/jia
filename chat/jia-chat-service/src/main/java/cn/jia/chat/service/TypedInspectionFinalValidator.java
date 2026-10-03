@@ -295,7 +295,20 @@ public final class TypedInspectionFinalValidator {
         return new DispatchFacts(1, referenceMode, operations, sources);
     }
 
+    /** Reuses the exact input-receipt contract without translating v3 actions into legacy proposals. */
+    public static InspectionInputReceipt validateInputReceiptJson(Object authority,
+            List<String> dispatchedSourceRefIds, String rawReceipt) {
+        return receipt(parseJson(rawReceipt), authority(authority, dispatchedSourceRefIds));
+    }
+
     private static InspectionAuthority authority(Object value, DispatchFacts facts) {
+        return authority(value, facts.availableSources().stream().map(Source::sourceRefId).toList());
+    }
+
+    private static InspectionAuthority authority(Object value, List<String> sourceRefIds) {
+        if (sourceRefIds == null || sourceRefIds.size() > MAX_SOURCES
+                || sourceRefIds.stream().anyMatch(id -> !boundedSourceIdentifier(id))
+                || new HashSet<>(sourceRefIds).size() != sourceRefIds.size()) fail(Reason.INVALID_RECEIPT);
         if (!(value instanceof Map<?, ?>)) fail(Reason.INVALID_RECEIPT);
         Map<?, ?> raw = (Map<?, ?>) value;
         Object authorization = raw.get("authorizationId"), manifestDigest = raw.get("manifestDigest"), sourcesValue = raw.get("sources");
@@ -322,8 +335,8 @@ public final class TypedInspectionFinalValidator {
                     || !carrierDigest.matches("sha256:[0-9a-f]{64}")) fail(Reason.INVALID_RECEIPT);
             prior = id; normalized.add(new ManifestSource(id, sha, bytes, mime, carrier, carrierDigest));
         }
-        if (normalized.size() != facts.availableSources().size()) fail(Reason.INVALID_RECEIPT);
-        for (int i=0;i<normalized.size();i++) if(!normalized.get(i).sourceRefId().equals(facts.availableSources().get(i).sourceRefId())) fail(Reason.INVALID_RECEIPT);
+        if (normalized.size() != sourceRefIds.size()) fail(Reason.INVALID_RECEIPT);
+        for (int i=0;i<normalized.size();i++) if(!normalized.get(i).sourceRefId().equals(sourceRefIds.get(i))) fail(Reason.INVALID_RECEIPT);
         return new InspectionAuthority(authorizationId, digest, normalized);
     }
 
@@ -585,7 +598,7 @@ public final class TypedInspectionFinalValidator {
         return map;
     }
 
-    private static Map<String,Object> receiptMap(InspectionInputReceipt value) {
+    static Map<String,Object> receiptMap(InspectionInputReceipt value) {
         Map<String,Object> map=new LinkedHashMap<>();map.put("schemaVersion",1);map.put("authorizationId",value.authorizationId());
         map.put("manifestDigest",value.manifestDigest());map.put("inputDigest",value.inputDigest());
         map.put("engineThreadId",value.engineThreadId());map.put("engineTurnId",value.engineTurnId());
