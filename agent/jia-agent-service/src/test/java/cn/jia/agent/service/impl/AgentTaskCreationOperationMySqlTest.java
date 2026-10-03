@@ -203,7 +203,9 @@ class AgentTaskCreationOperationMySqlTest {
         assertEquals("file-b", parsed.get(1).get("fileId").textValue());
         assertEquals(null, dao.find("0", "client-a", "owner-b", "generic-key"));
         new AgentTaskCreationOperationSchemaInitializer(jdbc).afterPropertiesSet();
-        assertEquals(before, definitions());
+        // The reservation/duplicate INSERT advances only the data counter, not the schema.
+        assertEquals(before.stream().map(ddl -> ddl.replaceAll(" AUTO_INCREMENT=[0-9]+", "")).toList(),
+                definitions().stream().map(ddl -> ddl.replaceAll(" AUTO_INCREMENT=[0-9]+", "")).toList());
         assertEquals(1, count());
     }
 
