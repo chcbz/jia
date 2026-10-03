@@ -155,6 +155,38 @@ class ChatSchemaReadinessLifecycleTest {
     }
 
     @Test
+    void archiveCatalogRenderingPreservesEveryKnownConstraintAndRejectsWeakenedLogic() {
+        assertEquals(ChatConversationArchiveSchemaInitializer.CHECKS.keySet(),
+                ChatConversationArchiveSchemaInitializer.MYSQL8_CHECK_RENDERINGS.keySet());
+        ChatConversationArchiveSchemaInitializer.MYSQL8_CHECK_RENDERINGS.forEach((name, actual) -> {
+            String expected = ChatConversationArchiveSchemaInitializer.CHECKS.get(name);
+            assertEquals(ChatConversationArchiveSchemaInitializer.normalizeCheck(expected),
+                    ChatConversationArchiveSchemaInitializer.normalizeCheck(actual), name);
+            String weakened = actual.replace(" and ", " or ").replace(">= 1", ">= 0");
+            if (!weakened.equals(actual)) {
+                assertNotEquals(ChatConversationArchiveSchemaInitializer.normalizeCheck(expected),
+                        ChatConversationArchiveSchemaInitializer.normalizeCheck(weakened), name);
+            }
+        });
+    }
+
+    @Test
+    void archiveCatalogNormalizationDoesNotEraseGroupingOrChangeLiteralPatterns() {
+        String expected = ChatConversationArchiveSchemaInitializer.normalizeCheck(
+                ChatConversationArchiveSchemaInitializer.CHECKS.get("chk_chat_archive_source_union"));
+        String actual = ChatConversationArchiveSchemaInitializer.MYSQL8_CHECK_RENDERINGS.get(
+                "chk_chat_archive_source_union");
+        assertNotEquals(expected, ChatConversationArchiveSchemaInitializer.normalizeCheck(
+                actual.replace(" - ", " + ")));
+        assertNotEquals(expected, ChatConversationArchiveSchemaInitializer.normalizeCheck(
+                actual.replace("{0,18}", "{0,19}")));
+        assertNotEquals(expected, ChatConversationArchiveSchemaInitializer.normalizeCheck(
+                actual.replace("'assetRef'", "'assetref'")));
+        assertNotEquals(ChatConversationArchiveSchemaInitializer.normalizeCheck("a=1 OR (b=2 AND c=3)"),
+                ChatConversationArchiveSchemaInitializer.normalizeCheck("(a=1 OR b=2) AND c=3"));
+    }
+
+    @Test
     void archiveCheckDefinitionDriftStillFailsClosedAfterSourcesBecomeReady() {
         LifecycleState state = new LifecycleState();
         state.archiveCheckDrift = true;

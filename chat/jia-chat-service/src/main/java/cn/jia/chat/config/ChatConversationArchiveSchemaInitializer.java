@@ -224,95 +224,46 @@ public final class ChatConversationArchiveSchemaInitializer implements Initializ
     }
 
 
+    // Exact renderings observed from information_schema on isolated MySQL 8.0.21.
+    // This is a finite equivalence table for our eight constraints, not a general SQL
+    // simplifier: stripping parentheses around AND/OR or arithmetic can accept drift.
+    // Unknown spellings fail closed until an actual database rendering proves equivalence.
+    static final Map<String, String> MYSQL8_CHECK_RENDERINGS = Map.ofEntries(
+            Map.entry("chk_chat_archive_asset_revision", """
+                    ((asset_revision is null) or (asset_revision >= 1))
+                    """),
+            Map.entry("chk_chat_archive_generation", """
+                    ((conversation_generation is null) or (conversation_generation >= 1))
+                    """),
+            Map.entry("chk_chat_archive_key_length", """
+                    (char_length(idempotency_key) between 8 and 160)
+                    """),
+            Map.entry("chk_chat_archive_request_sha", """
+                    regexp_like(request_sha256,'^[0-9a-f]{64}$')
+                    """),
+            Map.entry("chk_chat_archive_row_revision", """
+                    (row_revision >= 1)
+                    """),
+            Map.entry("chk_chat_archive_saved_receipt", """
+                    ((state <> 'SAVED') or ((conversation_generation >= 1) and (workspace_operation_id is not null) and (file_id is not null) and (file_version >= 1)))
+                    """),
+            Map.entry("chk_chat_archive_source_union", """
+                    (((source_kind = 'assetRef') and (asset_id is not null) and (asset_revision >= 1) and (message_id is null) and (message_revision is null) and (selection_start_code_point is null) and (selection_end_code_point is null) and (source_sha256 is null) and (source_snapshot_key is null) and (source_text is null)) or ((source_kind = 'textSelection') and (asset_id is null) and (asset_revision is null) and (conversation_generation >= 1) and regexp_like(message_id,'^[1-9][0-9]{0,18}$') and (message_revision >= 1) and (selection_start_code_point >= 0) and (selection_end_code_point > selection_start_code_point) and regexp_like(source_sha256,'^[0-9a-f]{64}$') and regexp_like(source_snapshot_key,'^[0-9a-f]{64}$') and (source_text is not null) and (length(source_text) > 0) and (char_length(source_text) = (selection_end_code_point - selection_start_code_point))))
+                    """),
+            Map.entry("chk_chat_archive_state", """
+                    (state in ('PENDING','SAVING','SAVED','PARTIAL_FAILED'))
+                    """));
+
     static String normalizeCheck(String source) {
         String canonical = ChatTypedDeliberationSchemaInitializer.canonicalCheck(source);
-        // MySQL 8 may catalog the REGEXP operator as REGEXP_LIKE(...). Treat only that
-        // syntax rewrite as equivalent; the identifiers and literal patterns remain exact.
-        canonical = canonical.replaceAll(
-                "regexp_like\\(([a-z0-9_]+),('(?:''|[^'])*')\\)", "$1regexp$2");
-        return normalizeAtomicParentheses(stripOuterParentheses(canonical));
-    }
-
-    private static String normalizeAtomicParentheses(String value) {
-        String current = value;
-        boolean changed;
-        do {
-            changed = false;
-            int[] stack = new int[current.length()];
-            int size = 0;
-            for (int index = 0; index < current.length(); index++) {
-                char character = current.charAt(index);
-                if (character == '\'') {
-                    while (index + 1 < current.length() && current.charAt(index + 1) != '\'') index++;
-                    continue;
-                }
-                if (character == '(') stack[size++] = index;
-                else if (character == ')' && size > 0) {
-                    int open = stack[--size];
-                    if (groupingParenthesis(current, open)
-                            && !containsTopLevelBoolean(current, open + 1, index)) {
-                        current = current.substring(0, open) + current.substring(open + 1, index)
-                                + current.substring(index + 1);
-                        changed = true;
-                        break;
-                    }
-                }
-            }
-        } while (changed);
-        return current;
-    }
-
-    private static boolean groupingParenthesis(String value, int open) {
-        if (open == 0) return true;
-        char previous = value.charAt(open - 1);
-        return !(Character.isLetterOrDigit(previous) || previous == '_');
-    }
-
-    private static boolean containsTopLevelBoolean(String value, int start, int end) {
-        int depth = 0;
-        boolean quote = false;
-        for (int index = start; index < end; index++) {
-            char character = value.charAt(index);
-            if (character == '\'') {
-                if (quote && index + 1 < end && value.charAt(index + 1) == '\'') index++;
-                else quote = !quote;
-                continue;
-            }
-            if (quote) continue;
-            if (character == '(') depth++;
-            else if (character == ')') depth--;
-            else if (depth == 0 && (value.startsWith("and", index) || value.startsWith("or", index)))
-                return true;
-        }
-        return false;
-    }
-
-    private static String stripOuterParentheses(String value) {
-        String current = value;
-        while (current.length() >= 2 && current.charAt(0) == '('
-                && current.charAt(current.length() - 1) == ')'
-                && outerPairCoversWhole(current)) {
-            current = current.substring(1, current.length() - 1);
-        }
-        return current;
-    }
-
-    private static boolean outerPairCoversWhole(String value) {
-        int depth = 0;
-        boolean quote = false;
-        for (int index = 0; index < value.length(); index++) {
-            char character = value.charAt(index);
-            if (character == '\'') {
-                if (quote && index + 1 < value.length() && value.charAt(index + 1) == '\'') index++;
-                else quote = !quote;
-            } else if (!quote && character == '(') depth++;
-            else if (!quote && character == ')') {
-                depth--;
-                if (depth == 0 && index < value.length() - 1) return false;
-                if (depth < 0) return false;
+        for (Map.Entry<String, String> rendering : MYSQL8_CHECK_RENDERINGS.entrySet()) {
+            if (canonical.equals(ChatTypedDeliberationSchemaInitializer.canonicalCheck(
+                    rendering.getValue()))) {
+                return ChatTypedDeliberationSchemaInitializer.canonicalCheck(
+                        CHECKS.get(rendering.getKey()));
             }
         }
-        return depth == 0 && !quote;
+        return canonical;
     }
 
     private static Set<String> difference(Set<String> expected, Set<String> actual) {

@@ -64,10 +64,10 @@ class ChatConversationArchiveServiceTest {
 
     private void readyText(String messageId, long revision, String content) {
         store.textSources.put(messageId, new TextSource(messageId, revision, "42", 3, content));
-        when(workspace.archiveConversationText(any(), any())).thenAnswer(invocation -> {
+        doAnswer(invocation -> {
             PersonalWorkspaceService.ConversationTextArchiveCommand command = invocation.getArgument(1);
             return upload(command.sha256(), "text/plain", command.content().length);
-        });
+        }).when(workspace).archiveConversationText(any(), any());
     }
 
     @Test
