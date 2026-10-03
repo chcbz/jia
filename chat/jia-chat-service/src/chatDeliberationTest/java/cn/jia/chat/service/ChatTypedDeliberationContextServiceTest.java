@@ -32,7 +32,10 @@ class ChatTypedDeliberationContextServiceTest {
         var selectors=List.of(new ChatTypedDeliberationWire.SourceSelector("TASK_LINKED_WORKSPACE_VERSION","file","2","REFERENCE",null,null),
                 new ChatTypedDeliberationWire.SourceSelector("CURRENT_CONVERSATION_ASSET",null,null,null,"asset","3"));
         var context=service().resolve(scope,"task","agent",selectors);
-        assertEquals("AVAILABLE",context.facts().get("referenceMode"));
+        var facts=ChatActionOutcomeContract.facts(context.facts());
+        assertEquals(3,facts.schemaVersion());assertEquals(2,facts.availableSources().size());
+        assertEquals(java.util.Set.of("image","audio"),facts.availableSources().stream()
+                .map(ChatActionOutcomeContract.Source::mediaType).collect(java.util.stream.Collectors.toSet()));
         assertTrue(context.sourceCatalogJson().contains("\"contentHash\":\""+"a".repeat(64)+"\""));
         assertTrue(context.sourceCatalogJson().contains("\"parentRequestId\":\"r0\""));
         assertFalse(context.sourceCatalogJson().contains("path"));assertFalse(context.sourceCatalogJson().contains("url"));
