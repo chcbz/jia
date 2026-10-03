@@ -66,6 +66,8 @@ public interface PersonalWorkspaceExecutionService {
             List<RuntimeInputV3> inputs) { public ConversationInputSnapshotV3 { inputs=List.copyOf(inputs); } }
     record RuntimeInputV3(String inputRef,RuntimeSource source,String contentMimeType,
             String byteLength,String sha256) { }
+    // Each source kind has an exact wire field set; absent union arms must not become JSON nulls.
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
     record RuntimeSource(String kind,String fileId,String version,String purpose,String conversationId,
             String conversationGeneration,String assetId,String assetRevision,String producerRequestId,
             String producerStepId,String producerExecutionId,String producerRunId,String producerOutputId) { }
