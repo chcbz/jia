@@ -215,7 +215,8 @@ class ChatActionContinuationTest {
             var jdbc=mock(JdbcTemplate.class);
             when(jdbc.queryForList(anyString(),any(Object[].class))).thenAnswer(invocation -> {
                 if (!mixedMaterials) return List.of(Map.of("content_mime_type","text/plain","content_hash","a".repeat(64),"byte_length",12L));
-                String file=invocation.getArgument(5);
+                String sql=invocation.getArgument(0);
+                String file=invocation.getArgument(sql.contains("WHERE BINARY l.tenant_id")?5:9);
                 int index=Integer.parseInt(file.substring(file.lastIndexOf('-')+1));
                 byte[] bytes=ChatMixedMaterialWireTest.materialBytes(index);
                 return List.of(Map.of("content_mime_type",ChatMixedMaterialWireTest.mime(index),
