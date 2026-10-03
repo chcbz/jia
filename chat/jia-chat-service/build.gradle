@@ -439,3 +439,34 @@ tasks.register('mmdU3ConversationArchive', Test) {
     classpath = mmdU3ConversationArchiveSourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+// Started-but-undelivered owner termination: strict wire and real isolated MySQL transactions.
+def mmdExecutionTerminationSourceSet = sourceSets.create('mmdExecutionTermination') {
+    java {
+        srcDir 'src/chatDeliberationTest/java'
+        include 'cn/jia/chat/archive/conversation/ChatConversationArchiveMySqlTestGuard.java'
+        include 'cn/jia/chat/archive/conversation/ChatBountyExecutionTerminationMySqlTest.java'
+        include 'cn/jia/chat/api/ChatBountyExecutionTerminationControllerTest.java'
+    }
+    resources.srcDir 'src/chatDeliberationTest/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(mmdExecutionTerminationSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(mmdExecutionTerminationSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('mmdExecutionTermination', Test) {
+    maxParallelForks = 1
+    maxHeapSize = '256m'
+    jvmArgs '-XX:+UseSerialGC', '-XX:ActiveProcessorCount=2',
+            '-XX:MaxMetaspaceSize=192m', '-Xss256k'
+    group = 'verification'
+    description = 'Runs exact owner abandonment, paid-fact preservation, replay, ACL and SQL race tests.'
+    dependsOn tasks.named(mmdExecutionTerminationSourceSet.classesTaskName)
+    testClassesDirs = mmdExecutionTerminationSourceSet.output.classesDirs
+    classpath = mmdExecutionTerminationSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
