@@ -156,13 +156,24 @@ class ControlledImageIntentOperationGrantMySqlTest {
 
     @Test void restartResumesExactKnownPartiallyWidenedMaterialChecks() {
         new ControlledImageFollowupV3SchemaInitializer(jdbc).afterPropertiesSet();
-        var complete=checkCatalogue();
+        var complete=stableAsciiHashCatalogue();
         replaceCheck("agent_controlled_image_intent_operation_grant","chk_aciiog_sources",previousGrantSources());
         new ControlledImageFollowupV3SchemaInitializer(jdbc).afterPropertiesSet();
-        assertEquals(complete,checkCatalogue());
+        assertEquals(complete,stableAsciiHashCatalogue());
         replaceCheck("agent_controlled_image_execution_source_v3","chk_acies_union",previousSourceUnion());
         new ControlledImageFollowupV3SchemaInitializer(jdbc).afterPropertiesSet();
-        assertEquals(complete,checkCatalogue());
+        assertEquals(complete,stableAsciiHashCatalogue());
+    }
+
+    private java.util.List<java.util.Map<String,Object>> stableAsciiHashCatalogue() {
+        var rows=checkCatalogue();
+        // MySQL 8.0.21 ALTER renders this ASCII-only regexp literal as _ascii rather than
+        // _utf8mb4 on the existing ASCII hash columns. Preserve every other predicate byte.
+        for(var row:rows) if("chk_aciiog_hashes".equals(row.get("CONSTRAINT_NAME"))) {
+            row.put("CHECK_CLAUSE",row.get("CHECK_CLAUSE").toString()
+                    .replace("_utf8mb4\\'^[0-9a-f]{64}$\\'","_ascii\\'^[0-9a-f]{64}$\\'"));
+        }
+        return rows;
     }
 
     private java.util.List<java.util.Map<String,Object>> checkCatalogue() {
