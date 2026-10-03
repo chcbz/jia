@@ -68,7 +68,7 @@ class ControlledImageIntentOperationGrantServiceTest {
         var row=operationGrant("issue-key","a".repeat(64));
         when(operationGrants.lockByIssueKey("0","client","owner","task","issue-key")).thenReturn(row);
         when(consents.findFollowupByConsent("0","client","owner","task",row.getConsentId()))
-                .thenReturn(consent(row));
+                .thenReturn(followupConsent(row));
         var late=mock(ControlledImageFollowupAuthorityService.LateCheck.class);
 
         var replay=service.issue(scope,issue("a".repeat(64)),late);
@@ -79,6 +79,94 @@ class ControlledImageIntentOperationGrantServiceTest {
         verify(late,never()).verify();
         verify(operationGrants,never()).insert(any());
         verify(consents,never()).insert(any());
+    }
+
+    @Test void ordinaryActionUsesExistingPolicyWithoutAcknowledgementAndReplaysOfflineWithoutNewExecution() {
+        var rows=ordinaryStore(); var checks=new java.util.concurrent.atomic.AtomicInteger();
+        var command=ordinary();
+        var first=service.admitOrdinaryAction(scope,command,checks::incrementAndGet);
+        assertEquals("execution",first.executionId()); assertEquals("run",first.runId());
+        assertEquals("ORDINARY_ACTION",rows.consent.get().getConsentPurpose());
+        assertEquals("ordinary_"+command.actionRequestId(),rows.operation.get().getIssueIdempotencyKey());
+        assertEquals("policy-r1",rows.consent.get().getOperatorPolicyRevision());
+        assertEquals(1,rows.consent.get().getMaxOutboundRequestAttempts());
+        assertEquals("RESERVED",rows.consent.get().getState());
+        assertEquals("QUEUED",rows.execution.get().getExecutionState());
+        int previousChecks=checks.get();
+        clearInvocations(grants,policies,declaration,executions,consents,operationGrants);
+        when(declaration.current(any())).thenThrow(new IllegalStateException("offline"));
+        var replay=service.admitOrdinaryAction(scope,command,checks::incrementAndGet);
+        assertEquals(first,replay); assertTrue(checks.get()>previousChecks);
+        verifyNoInteractions(grants,policies,declaration);
+        verify(executions,never()).insert(any()); verify(consents,never()).insert(any());
+        verify(operationGrants,never()).insert(any());
+    }
+
+    @Test void ordinaryActionCannotInventUserProofOrConvertLegacyAuthority() {
+        ordinaryStore(); var command=ordinary();
+        assertThrows(IllegalStateException.class,()->service.admitOrdinaryAction(scope,command,
+                ()->{throw new IllegalStateException("original USER changed");}));
+        verifyNoInteractions(grants,policies,executions,consents,operationGrants);
+        var rows=ordinaryStore();
+        service.admitOrdinaryAction(scope,command,()->{});
+        rows.consent.get().setConsentPurpose("FOLLOWUP_EXECUTE");
+        var failure=assertThrows(ControlledImageFollowupAuthorityService.Failure.class,
+                ()->service.admitOrdinaryAction(scope,command,()->{}));
+        assertEquals(ControlledImageFollowupAuthorityService.Reason.CONFLICT,failure.reason());
+        verify(executions,times(1)).insert(any());
+    }
+
+    @Test void ordinaryActionWithRevokedOperatorPolicyCannotMintAuthorityOrQueueExecution() {
+        ordinaryStore();
+        when(policies.requireCurrent(any(),eq("agent"),eq("binding"),eq(7L),anyLong()))
+                .thenThrow(new ControlledImageProviderOperatorPolicy.PolicyFailure(
+                        ControlledImageProviderOperatorPolicy.Reason.FORBIDDEN,null));
+        assertThrows(ControlledImageFollowupAuthorityService.Failure.class,
+                ()->service.admitOrdinaryAction(scope,ordinary(),()->{}));
+        verify(executions,never()).insert(any());verify(consents,never()).insert(any());
+        verify(operationGrants,never()).insert(any());
+    }
+
+    @Test void ordinaryActionSameEventWithChangedOriginalUserConflictsInsteadOfMintingAnotherAttempt() {
+        ordinaryStore();var command=ordinary();service.admitOrdinaryAction(scope,command,()->{});
+        var changed=new ControlledImageFollowupAuthorityService.OrdinaryActionCommand(command.preview(),
+                command.actionRequestId(),command.parentOutcomeId(),command.parentFinalDigest(),902L,
+                command.originalUserContentSha256(),command.executionId(),command.runId(),command.interactionRequestDigest());
+        var failure=assertThrows(ControlledImageFollowupAuthorityService.Failure.class,
+                ()->service.admitOrdinaryAction(scope,changed,()->{}));
+        assertEquals(ControlledImageFollowupAuthorityService.Reason.CONFLICT,failure.reason());
+        verify(executions,times(1)).insert(any()); verify(consents,times(1)).insert(any());
+    }
+
+    private ControlledImageFollowupAuthorityService.OrdinaryActionCommand ordinary() {
+        return new ControlledImageFollowupAuthorityService.OrdinaryActionCommand(preview(),"act_"+"a".repeat(40),
+                "outcome-parent","sha256:"+"b".repeat(64),901L,"c".repeat(64),"execution","run","6".repeat(64));
+    }
+    private record OrdinaryRows(java.util.concurrent.atomic.AtomicReference<AgentTaskProviderCostConsentEntity> consent,
+            java.util.concurrent.atomic.AtomicReference<ControlledImageIntentOperationGrantEntity> operation,
+            java.util.concurrent.atomic.AtomicReference<PersonalWorkspaceExecutionEntity> execution) { }
+    private OrdinaryRows ordinaryStore() {
+        var rows=new OrdinaryRows(new java.util.concurrent.atomic.AtomicReference<>(),
+                new java.util.concurrent.atomic.AtomicReference<>(),new java.util.concurrent.atomic.AtomicReference<>());
+        when(grants.admitFollowupBaseline(any(),eq("task"),eq("baseline"),eq(1L),eq(0L),eq(0L),eq(1L),eq("agent")))
+                .thenReturn(baseline());
+        when(policies.requireCurrent(any(),eq("agent"),eq("binding"),eq(7L),anyLong()))
+                .thenReturn(new ControlledImageProviderOperatorPolicy.Policy("CONTROLLED_IMAGE_HTTP_V1",
+                        "binding",7,"model","OPERATOR_TEMPLATE","operator","policy-r1",
+                        "UNPRICED_EXTERNAL_ACCOUNT",1,Long.MAX_VALUE));
+        doAnswer(i->{rows.consent.set(i.getArgument(0));return null;}).when(consents).insert(any());
+        doAnswer(i->{rows.operation.set(i.getArgument(0));return null;}).when(operationGrants).insert(any());
+        doAnswer(i->{rows.execution.set(i.getArgument(0));return null;}).when(executions).insert(any());
+        doAnswer(i->rows.consent.get()).when(consents).findFollowupByConsent(anyString(),anyString(),anyString(),anyString(),anyString());
+        doAnswer(i->rows.consent.get()).when(consents).findFollowupByConsentForUpdate(anyString(),anyString(),anyString(),anyString(),anyString());
+        doAnswer(i->rows.operation.get()).when(operationGrants).lockByIssueKey(anyString(),anyString(),anyString(),anyString(),anyString());
+        doAnswer(i->rows.operation.get()).when(operationGrants).lockById(anyString(),anyString(),anyString(),anyString(),anyString());
+        doAnswer(i->rows.operation.get()).when(operationGrants).findById(anyString(),anyString(),anyString(),anyString(),anyString());
+        doAnswer(i->rows.execution.get()).when(executions).findByIdempotency(anyString(),anyString(),anyString(),anyString());
+        doAnswer(i->{rows.operation.get().setState("RESERVED").setVersion(2L);return true;}).when(operationGrants).reserve(any(),eq(1L));
+        doAnswer(i->{rows.consent.get().setState("BOUND").setVersion(2L);return true;}).when(consents).bindFollowup(any(),eq(1L));
+        doAnswer(i->{rows.consent.get().setState("RESERVED").setVersion(3L);return true;}).when(consents).reserveFollowup(any(),eq(2L));
+        return rows;
     }
 
     @Test void sameIssueKeyWithChangedBodyConflictsWithoutCurrentChecksOrWrites() {
@@ -147,7 +235,7 @@ class ControlledImageIntentOperationGrantServiceTest {
         when(operationGrants.findByIssueKey("0","client","owner","task","issue-key"))
                 .thenReturn(row).thenThrow(new DataAccessResourceFailureException("down"));
         when(consents.findFollowupByConsent("0","client","owner","task",row.getConsentId()))
-                .thenReturn(consent(row));
+                .thenReturn(followupConsent(row));
 
         var reconcile=assertThrows(ControlledImageFollowupAuthorityService.Failure.class,
                 () -> service.reconcileIssue(scope,"task","conversation","issue-key","a".repeat(64)));

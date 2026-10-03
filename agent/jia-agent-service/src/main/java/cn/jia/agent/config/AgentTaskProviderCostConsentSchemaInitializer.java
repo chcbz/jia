@@ -210,7 +210,10 @@ public final class AgentTaskProviderCostConsentSchemaInitializer implements Init
                 throw new IllegalStateException(
                         "Provider-consent malformed CHECK catalog: "+expected.getKey(),malformed);
             }
-            if (!wanted.equals(clause)) {
+            boolean knownMigrationSource="chk_atpcc_purpose_union".equals(expected.getKey())
+                    && clause.equals(ControlledImageFollowupV3SchemaInitializer.canonicalControlledCheck(
+                        ControlledImageFollowupV3SchemaInitializer.legacyConsentPurposeCatalogCheckExpression()));
+            if (!wanted.equals(clause) && !knownMigrationSource) {
                 throw new IllegalStateException("Provider-consent CHECK definition drift: "+expected.getKey());
             }
         }

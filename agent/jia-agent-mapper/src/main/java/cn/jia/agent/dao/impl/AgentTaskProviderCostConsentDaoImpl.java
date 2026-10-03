@@ -88,7 +88,7 @@ public final class AgentTaskProviderCostConsentDaoImpl
     @Override public boolean reserveFollowup(AgentTaskProviderCostConsentEntity consent,long expectedVersion) { validateFollowup(consent);return mapper.reserveFollowup(consent,expectedVersion)==1; }
     @Override public boolean consumeFollowup(AgentTaskProviderCostConsentEntity consent,long expectedVersion) { validateFollowup(consent);return mapper.consumeFollowup(consent,expectedVersion)==1; }
     @Override public boolean revokeFollowup(AgentTaskProviderCostConsentEntity consent,long expectedVersion) { validateFollowup(consent);return mapper.revokeFollowup(consent,expectedVersion)==1; }
-    private static void validateFollowup(AgentTaskProviderCostConsentEntity row){validate(row);if(!"FOLLOWUP_EXECUTE".equals(row.getConsentPurpose())||row.getOperationGrantId()==null)throw new IllegalArgumentException("followup consent");}
+    private static void validateFollowup(AgentTaskProviderCostConsentEntity row){validate(row);if(!java.util.Set.of("FOLLOWUP_EXECUTE","ORDINARY_ACTION").contains(row.getConsentPurpose())||row.getOperationGrantId()==null)throw new IllegalArgumentException("followup consent");}
 
     private boolean hasPurposeColumn() {
         int count=mapper.countConsentPurposeColumn();

@@ -81,34 +81,67 @@ public class ControlledImageFollowupAuthorityServiceImpl implements ControlledIm
   if(command==null||command.preview()==null||late==null)throw fail(Reason.BAD_REQUEST);
   validate(scope,command.preview()); id(command.issueIdempotencyKey(),100); hash(command.issueRequestDigest());
   if(!ACK.equals(command.acknowledgement())||command.expectedPreview()==null||command.requestedProvider()==null)throw fail(Reason.BAD_REQUEST);
-  try{return tx.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),command.preview().taskId(),root->{
-   var replay=opgrants.lockByIssueKey(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),command.preview().taskId(),command.issueIdempotencyKey());
-   if(replay!=null){if(!same(replay.getIssueRequestDigest(),command.issueRequestDigest()))throw fail(Reason.CONFLICT);return view(scope,replay,true);}
-   var base=baseline(scope,command.preview());requireBaseline(command.preview(),base);
-   Preview current=currentPreview(scope,command.preview());requireExpected(command,current);
+  return issueAuthorized(scope,command.preview(),command.issueIdempotencyKey(),command.issueRequestDigest(),
+    "FOLLOWUP_EXECUTE", current->requireExpected(command,current),late);
+ }
+
+ /** The authority basis is recorded as ORDINARY_ACTION, never as a fabricated user checkbox. */
+ @Override @Transactional(propagation=org.springframework.transaction.annotation.Propagation.MANDATORY,rollbackFor=Exception.class)
+ public Reservation admitOrdinaryAction(Scope scope,OrdinaryActionCommand command,LateCheck late){
+  if(command==null||late==null)throw fail(Reason.BAD_REQUEST);
+  validate(scope,command.preview());id(command.actionRequestId(),100);id(command.parentOutcomeId(),100);
+  if(!command.actionRequestId().matches("act_[0-9a-f]{40}")||command.originalUserMessageId()<1
+    ||command.parentFinalDigest()==null||!command.parentFinalDigest().matches("sha256:[0-9a-f]{64}"))throw fail(Reason.BAD_REQUEST);
+  hash(command.originalUserContentSha256());hash(command.interactionRequestDigest());
+  id(command.executionId(),100);id(command.runId(),100);
+  var p=command.preview();
+  String originDigest=sha(write(Map.of("schemaVersion",3,"origin","ORDINARY_ACTION",
+    "actionRequestId",command.actionRequestId(),"parentOutcomeId",command.parentOutcomeId(),
+    "parentFinalDigest",command.parentFinalDigest(),"originalUserMessageId",Long.toString(command.originalUserMessageId()),
+    "originalUserContentSha256",command.originalUserContentSha256(),"ownerPayloadSha256",p.ownerPayloadSha256(),
+    "interactionRequestDigest",command.interactionRequestDigest())));
+  // This proof is supplied by the Chat owner, not by the model or an external controller.
+  // Check before any grant writes; root transaction makes any later failure roll back both sides.
+  late.verify();
+  var issued=issueAuthorized(scope,p,"ordinary_"+command.actionRequestId(),originDigest,
+    "ORDINARY_ACTION",current->{},late);
+  return reserve(scope,new ReserveCommand(p,new Authority(issued.consentId(),Long.parseLong(issued.consentVersion()),
+    issued.operationGrantId(),Long.parseLong(issued.operationGrantVersion())),command.interactionRequestDigest(),
+    runtimeDigest(p,command.executionId(),command.runId()),command.executionId(),command.runId(),"image/png"),late);
+ }
+
+ private ControlledImageFollowupAuthorityDTO issueAuthorized(Scope scope,PreviewCommand preview,
+   String issueKey,String issueDigest,String purpose,java.util.function.Consumer<Preview> expected,LateCheck late){
+  try{return tx.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),preview.taskId(),root->{
+   var replay=opgrants.lockByIssueKey(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),preview.taskId(),issueKey);
+   if(replay!=null){if(!same(replay.getIssueRequestDigest(),issueDigest))throw fail(Reason.CONFLICT);var authority=consents.findFollowupByConsent(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),preview.taskId(),replay.getConsentId());
+    if(authority==null||!purpose.equals(authority.getConsentPurpose()))throw fail(Reason.CONFLICT);
+    return view(scope,replay,true);}
+   var base=baseline(scope,preview);requireBaseline(preview,base);
+   Preview current=currentPreview(scope,preview);expected.accept(current);
    String consentId="consent_"+UUID.randomUUID().toString().replace("-","");
    String opId="opgrant_"+UUID.randomUUID().toString().replace("-",""); long now=System.currentTimeMillis();
-   var policy=policies.requireCurrent(consentScope(scope),command.preview().baseline().targetAgentId(),current.provider().bindingId(),current.provider().bindingEpoch(),now);
+   var policy=policies.requireCurrent(consentScope(scope),preview.baseline().targetAgentId(),current.provider().bindingId(),current.provider().bindingEpoch(),now);
    if(!same(policy.bindingId(),current.provider().bindingId())||policy.bindingEpoch()!=current.provider().bindingEpoch()
       ||!same(policy.modelId(),current.provider().modelId())||!same(policy.custody(),current.provider().custody())
       ||!same(policy.policyRevision(),current.provider().operatorPolicyRevision())||!same(policy.pricingMode(),current.pricingMode())
       ||policy.maxOutboundRequestAttempts()!=current.maxOutboundRequestAttempts()||policy.expiresAt()!=current.expiresAt())throw fail(Reason.CONFLICT);
-   var consent=new AgentTaskProviderCostConsentEntity().setConsentId(consentId).setConsentPurpose("FOLLOWUP_EXECUTE")
-    .setOperationGrantId(opId).setExecutionIntentId(command.preview().executionIntentId()).setConversationId(command.preview().conversationId())
-    .setConversationGeneration(command.preview().conversationGeneration()).setOperation(command.preview().operation())
-    .setInstructionSha256(command.preview().instructionSha256()).setSourceSnapshotSha256(command.preview().sourceSnapshotSha256())
-    .setOwnerPayloadSha256(command.preview().ownerPayloadSha256()).setRuntimeInputSnapshotSha256(null);
+   var consent=new AgentTaskProviderCostConsentEntity().setConsentId(consentId).setConsentPurpose(purpose)
+    .setOperationGrantId(opId).setExecutionIntentId(preview.executionIntentId()).setConversationId(preview.conversationId())
+    .setConversationGeneration(preview.conversationGeneration()).setOperation(preview.operation())
+    .setInstructionSha256(preview.instructionSha256()).setSourceSnapshotSha256(preview.sourceSnapshotSha256())
+    .setOwnerPayloadSha256(preview.ownerPayloadSha256()).setRuntimeInputSnapshotSha256(null);
    consent.setTenantId(scope.tenantId());consent.setClientId(scope.clientId());consent.setOwnerJiacn(scope.ownerJiacn())
-    .setTaskId(command.preview().taskId()).setTargetAgentId(command.preview().baseline().targetAgentId())
-    .setIdempotencyKey(command.issueIdempotencyKey()).setRequestDigest(command.issueRequestDigest())
+    .setTaskId(preview.taskId()).setTargetAgentId(preview.baseline().targetAgentId())
+    .setIdempotencyKey(issueKey).setRequestDigest(issueDigest)
     .setAssignmentIdempotencyKey(base.assignmentIdempotencyKey()).setAssignmentBaseHash(base.assignmentBaseHash())
-    .setTaskVersion(command.preview().baseline().taskVersion()).setRequirementRevision(command.preview().baseline().requirementRevision())
-    .setRequirementSha256(command.preview().baseline().requirementSha256()).setInputSnapshotDigest(command.preview().sourceSnapshotSha256())
-    .setInputSnapshotJson(write(command.preview().sources())).setProviderLane(policy.providerLane()).setBindingId(policy.bindingId())
+    .setTaskVersion(preview.baseline().taskVersion()).setRequirementRevision(preview.baseline().requirementRevision())
+    .setRequirementSha256(preview.baseline().requirementSha256()).setInputSnapshotDigest(preview.sourceSnapshotSha256())
+    .setInputSnapshotJson(write(preview.sources())).setProviderLane(policy.providerLane()).setBindingId(policy.bindingId())
     .setBindingEpoch(policy.bindingEpoch()).setModelId(policy.modelId()).setCustody(policy.custody()).setOperatorIssuer(policy.issuer())
     .setOperatorPolicyRevision(policy.policyRevision()).setPricingMode(policy.pricingMode()).setMaxOutboundRequestAttempts(1)
     .setExpiresAt(policy.expiresAt()).setState("ISSUED").setVersion(1L).setCreatedAt(now);
-   var op=operationRow(scope,command,base,opId,consentId,now);
+   var op=operationRow(scope,preview,issueKey,issueDigest,base,opId,consentId,now);
    consents.insert(consent);opgrants.insert(op);late.verify();return view(scope,op,false);
   });}catch(Failure f){throw f;}catch(RuntimeException f){throw translate(f);}}
 
@@ -390,7 +423,7 @@ public class ControlledImageFollowupAuthorityServiceImpl implements ControlledIm
  private RuntimeDeclarationLookup.Declaration declaration(Scope s,String target){var lookup=lookups.getIfUnique();if(lookup==null)throw fail(Reason.UNAVAILABLE);var d=lookup.current(new RuntimeDeclarationLookup.DeclarationScope(s.tenantId(),s.clientId(),s.ownerJiacn(),target));if(d==null||d.state()!=RuntimeDeclarationLookup.State.READY||d.runtimeInstanceId()==null||!Set.copyOf(d.operations()).equals(Set.of("GENERATE_IMAGE","EDIT_IMAGE"))||!"CONTROLLED_IMAGE_HTTP_V1".equals(d.providerLane())||d.bindingEpoch()==null||d.bindingEpoch()<1||d.maxInputItems()==null||d.maxInputItems()!=16||d.maxOutboundRequestAttempts()==null||d.maxOutboundRequestAttempts()!=1||d.precallFenceVersion()==null||d.precallFenceVersion()!=1)throw fail(Reason.UNAVAILABLE);return d;}
  private RuntimeDeclarationLookup.SessionDeclaration sessionDeclaration(Scope s,String target,String operation){var lookup=lookups.getIfUnique();if(lookup==null)throw fail(Reason.UNAVAILABLE);var d=lookup.currentSession(new RuntimeDeclarationLookup.DeclarationScope(s.tenantId(),s.clientId(),s.ownerJiacn(),target));if(d==null||d.state()!=RuntimeDeclarationLookup.State.READY||d.runtimeInstanceId()==null||!Set.copyOf(d.operations()).equals(Set.of("GENERATE_IMAGE","EDIT_IMAGE"))||!d.operations().contains(operation))throw fail(Reason.UNAVAILABLE);return d;}
  private static void requireExpected(IssueCommand c,Preview p){var e=c.expectedPreview();var requested=c.requestedProvider();var x=c.preview();if(!sameHash(e.ownerPayloadSha256(),x.ownerPayloadSha256())||!sameHash(e.instructionSha256(),x.instructionSha256())||!sameHash(e.sourceSnapshotSha256(),x.sourceSnapshotSha256())||!same(e.modelId(),p.provider().modelId())||!same(e.custody(),p.provider().custody())||!same(e.operatorPolicyRevision(),p.provider().operatorPolicyRevision())||!same(requested.bindingId(),p.provider().bindingId())||requested.bindingEpoch()!=p.provider().bindingEpoch()||!same(requested.modelId(),p.provider().modelId())||!same(requested.custody(),p.provider().custody())||!same(requested.operatorPolicyRevision(),p.provider().operatorPolicyRevision()))throw fail(Reason.CONFLICT);}
- private ControlledImageIntentOperationGrantEntity operationRow(Scope s,IssueCommand c,AgentTaskExecutionGrantService.Admission b,String opId,String consentId,long now){var x=c.preview();var r=new ControlledImageIntentOperationGrantEntity().setOperationGrantId(opId).setOwnerJiacn(s.ownerJiacn()).setTaskId(x.taskId()).setTargetAgentId(x.baseline().targetAgentId()).setConversationId(x.conversationId()).setConversationGeneration(x.conversationGeneration()).setInteractionIdempotencyKey(x.interactionIdempotencyKey()).setRequestId(x.requestId()).setStepId(x.stepId()).setExecutionIntentId(x.executionIntentId()).setBaselineGrantId(x.baseline().grantId()).setBaselineGrantVersion(x.baseline().grantVersion()).setTaskVersion(x.baseline().taskVersion()).setAssignmentRevision(x.baseline().assignmentRevision()).setRequirementRevision(x.baseline().requirementRevision()).setRequirementSha256(x.baseline().requirementSha256()).setOperation(x.operation()).setInstructionSha256(x.instructionSha256()).setSourceSnapshotSha256(x.sourceSnapshotSha256()).setSourceSnapshotJson(write(x.sources())).setOwnerPayloadSha256(x.ownerPayloadSha256()).setConsentId(consentId).setIssueIdempotencyKey(c.issueIdempotencyKey()).setIssueRequestDigest(c.issueRequestDigest()).setState("AUTHORIZED").setVersion(1L).setCreatedAt(now);r.setTenantId(s.tenantId());r.setClientId(s.clientId());return r;}
+ private ControlledImageIntentOperationGrantEntity operationRow(Scope s,PreviewCommand x,String issueKey,String issueDigest,AgentTaskExecutionGrantService.Admission b,String opId,String consentId,long now){var r=new ControlledImageIntentOperationGrantEntity().setOperationGrantId(opId).setOwnerJiacn(s.ownerJiacn()).setTaskId(x.taskId()).setTargetAgentId(x.baseline().targetAgentId()).setConversationId(x.conversationId()).setConversationGeneration(x.conversationGeneration()).setInteractionIdempotencyKey(x.interactionIdempotencyKey()).setRequestId(x.requestId()).setStepId(x.stepId()).setExecutionIntentId(x.executionIntentId()).setBaselineGrantId(x.baseline().grantId()).setBaselineGrantVersion(x.baseline().grantVersion()).setTaskVersion(x.baseline().taskVersion()).setAssignmentRevision(x.baseline().assignmentRevision()).setRequirementRevision(x.baseline().requirementRevision()).setRequirementSha256(x.baseline().requirementSha256()).setOperation(x.operation()).setInstructionSha256(x.instructionSha256()).setSourceSnapshotSha256(x.sourceSnapshotSha256()).setSourceSnapshotJson(write(x.sources())).setOwnerPayloadSha256(x.ownerPayloadSha256()).setConsentId(consentId).setIssueIdempotencyKey(issueKey).setIssueRequestDigest(issueDigest).setState("AUTHORIZED").setVersion(1L).setCreatedAt(now);r.setTenantId(s.tenantId());r.setClientId(s.clientId());return r;}
  private void requireAuthority(ReserveCommand c,ControlledImageIntentOperationGrantEntity o,AgentTaskProviderCostConsentEntity consent){var x=c.preview();
   if(o==null||consent==null||!"AUTHORIZED".equals(o.getState())||!"ISSUED".equals(consent.getState())
     ||!Objects.equals(c.authority().operationGrantVersion(),o.getVersion())||!Objects.equals(c.authority().consentVersion(),consent.getVersion())
@@ -403,7 +436,7 @@ public class ControlledImageFollowupAuthorityServiceImpl implements ControlledIm
     ||!sameHash(x.baseline().requirementSha256(),o.getRequirementSha256())||!same(x.baseline().targetAgentId(),o.getTargetAgentId())
     ||!sameHash(x.ownerPayloadSha256(),o.getOwnerPayloadSha256())||!sameHash(x.instructionSha256(),o.getInstructionSha256())
     ||!sameHash(x.sourceSnapshotSha256(),o.getSourceSnapshotSha256())||!same(x.operation(),o.getOperation())
-    ||!"FOLLOWUP_EXECUTE".equals(consent.getConsentPurpose())||!same(o.getExecutionIntentId(),consent.getExecutionIntentId())
+    ||!Set.of("FOLLOWUP_EXECUTE","ORDINARY_ACTION").contains(consent.getConsentPurpose())||!same(o.getExecutionIntentId(),consent.getExecutionIntentId())
     ||!same(o.getConversationId(),consent.getConversationId())||!Objects.equals(o.getConversationGeneration(),consent.getConversationGeneration())
     ||!same(o.getOperation(),consent.getOperation())||!sameHash(o.getInstructionSha256(),consent.getInstructionSha256())
     ||!sameHash(o.getSourceSnapshotSha256(),consent.getSourceSnapshotSha256())||!sameHash(o.getOwnerPayloadSha256(),consent.getOwnerPayloadSha256())

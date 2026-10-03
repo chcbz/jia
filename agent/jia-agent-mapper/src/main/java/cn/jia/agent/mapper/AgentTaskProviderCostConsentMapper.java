@@ -145,7 +145,7 @@ public interface AgentTaskProviderCostConsentMapper
     @Select("SELECT " + FOLLOWUP_COLUMNS + " FROM agent_task_provider_cost_consent"
             + " WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}"
             + " AND task_id=#{taskId} AND consent_id=#{consentId}" + EXACT_SCOPE + """
-              AND consent_purpose='FOLLOWUP_EXECUTE'
+              AND consent_purpose IN ('FOLLOWUP_EXECUTE','ORDINARY_ACTION')
               AND CAST(consent_id AS BINARY)=CAST(#{consentId} AS BINARY)
               AND OCTET_LENGTH(consent_id)=OCTET_LENGTH(#{consentId})
              LIMIT 1
@@ -157,7 +157,7 @@ public interface AgentTaskProviderCostConsentMapper
     @Select("SELECT " + FOLLOWUP_COLUMNS + " FROM agent_task_provider_cost_consent"
             + " WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}"
             + " AND task_id=#{taskId} AND consent_id=#{consentId}" + EXACT_SCOPE + """
-              AND consent_purpose='FOLLOWUP_EXECUTE'
+              AND consent_purpose IN ('FOLLOWUP_EXECUTE','ORDINARY_ACTION')
               AND CAST(consent_id AS BINARY)=CAST(#{consentId} AS BINARY)
               AND OCTET_LENGTH(consent_id)=OCTET_LENGTH(#{consentId})
              LIMIT 1 FOR UPDATE
@@ -240,7 +240,7 @@ public interface AgentTaskProviderCostConsentMapper
               bound_assignment_revision=#{row.boundAssignmentRevision},update_time=#{row.updateTime}
             WHERE tenant_id=#{row.tenantId} AND client_id=#{row.clientId} AND owner_jiacn=#{row.ownerJiacn}
               AND task_id=#{row.taskId} AND consent_id=#{row.consentId}
-              AND consent_purpose='FOLLOWUP_EXECUTE' AND operation_grant_id=#{row.operationGrantId}
+              AND consent_purpose IN ('FOLLOWUP_EXECUTE','ORDINARY_ACTION') AND operation_grant_id=#{row.operationGrantId}
               AND state='ISSUED' AND version=#{expectedVersion}
               AND CAST(tenant_id AS BINARY)=CAST(#{row.tenantId} AS BINARY)
               AND CAST(client_id AS BINARY)=CAST(#{row.clientId} AS BINARY)
@@ -255,7 +255,7 @@ public interface AgentTaskProviderCostConsentMapper
               runtime_input_snapshot_sha256=#{row.runtimeInputSnapshotSha256},update_time=#{row.updateTime}
             WHERE tenant_id=#{row.tenantId} AND client_id=#{row.clientId} AND owner_jiacn=#{row.ownerJiacn}
               AND task_id=#{row.taskId} AND consent_id=#{row.consentId}
-              AND consent_purpose='FOLLOWUP_EXECUTE' AND operation_grant_id=#{row.operationGrantId}
+              AND consent_purpose IN ('FOLLOWUP_EXECUTE','ORDINARY_ACTION') AND operation_grant_id=#{row.operationGrantId}
               AND state='BOUND' AND version=#{expectedVersion}
               AND CAST(tenant_id AS BINARY)=CAST(#{row.tenantId} AS BINARY)
               AND CAST(client_id AS BINARY)=CAST(#{row.clientId} AS BINARY)
@@ -269,7 +269,7 @@ public interface AgentTaskProviderCostConsentMapper
               consumed_lease_id=#{row.consumedLeaseId},consumed_at=#{row.consumedAt},update_time=#{row.updateTime}
             WHERE tenant_id=#{row.tenantId} AND client_id=#{row.clientId} AND owner_jiacn=#{row.ownerJiacn}
               AND task_id=#{row.taskId} AND consent_id=#{row.consentId}
-              AND consent_purpose='FOLLOWUP_EXECUTE' AND operation_grant_id=#{row.operationGrantId}
+              AND consent_purpose IN ('FOLLOWUP_EXECUTE','ORDINARY_ACTION') AND operation_grant_id=#{row.operationGrantId}
               AND state='RESERVED' AND version=#{expectedVersion}
               AND CAST(tenant_id AS BINARY)=CAST(#{row.tenantId} AS BINARY)
               AND CAST(client_id AS BINARY)=CAST(#{row.clientId} AS BINARY)
@@ -284,7 +284,7 @@ public interface AgentTaskProviderCostConsentMapper
               revoked_at=#{row.revokedAt},update_time=#{row.updateTime}
             WHERE tenant_id=#{row.tenantId} AND client_id=#{row.clientId} AND owner_jiacn=#{row.ownerJiacn}
               AND task_id=#{row.taskId} AND consent_id=#{row.consentId}
-              AND consent_purpose='FOLLOWUP_EXECUTE' AND operation_grant_id=#{row.operationGrantId}
+              AND consent_purpose IN ('FOLLOWUP_EXECUTE','ORDINARY_ACTION') AND operation_grant_id=#{row.operationGrantId}
               AND state IN ('ISSUED','BOUND','RESERVED') AND version=#{expectedVersion}
               AND CAST(tenant_id AS BINARY)=CAST(#{row.tenantId} AS BINARY)
               AND CAST(client_id AS BINARY)=CAST(#{row.clientId} AS BINARY)

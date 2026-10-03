@@ -12,6 +12,32 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ControlledImageFollowupV3SchemaInitializerTest {
+    @Test void ordinaryPurposeMigrationIsExactAndDoesNotAcceptUnrelatedCatalogDrift() {
+        var jdbc=org.mockito.Mockito.mock(org.springframework.jdbc.core.JdbcTemplate.class);
+        var initializer=new ControlledImageFollowupV3SchemaInitializer(jdbc);
+        var old=Map.<String,Object>of("constraint_name","chk_atpcc_purpose_union","enforced","YES",
+                "check_clause",ControlledImageFollowupV3SchemaInitializer.legacyConsentPurposeCatalogCheckExpression());
+        org.mockito.Mockito.when(jdbc.queryForList(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.<Object[]>any())).thenReturn(List.of(old));
+        initializer.migrateOrdinaryActionPurpose();
+        var sql=org.mockito.ArgumentCaptor.forClass(String.class);
+        org.mockito.Mockito.verify(jdbc).execute(sql.capture());
+        assertTrue(sql.getValue().contains("'ORDINARY_ACTION'"));
+        assertTrue(sql.getValue().startsWith("ALTER TABLE agent_task_provider_cost_consent DROP CHECK chk_atpcc_purpose_union"));
+        var current=new LinkedHashMap<>(old);current.put("check_clause",
+                ControlledImageFollowupV3SchemaInitializer.consentPurposeCatalogCheckExpression());
+        assertNotEquals(old.get("check_clause"),current.get("check_clause"));
+        org.mockito.Mockito.when(jdbc.queryForList(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.<Object[]>any())).thenReturn(List.of(current));
+        initializer.migrateOrdinaryActionPurpose();
+        org.mockito.Mockito.verify(jdbc,org.mockito.Mockito.times(1)).execute(org.mockito.ArgumentMatchers.anyString());
+        current.put("enforced","NO");
+        assertThrows(IllegalStateException.class,initializer::migrateOrdinaryActionPurpose);
+        current.put("enforced","YES");current.put("check_clause","consent_purpose IS NOT NULL");
+        assertThrows(IllegalStateException.class,initializer::migrateOrdinaryActionPurpose);
+        org.mockito.Mockito.verify(jdbc,org.mockito.Mockito.times(1)).execute(org.mockito.ArgumentMatchers.anyString());
+    }
+
     @Test void featureIsDefaultOffAndDdlHasOnlyTwoExactCreateStatements() {
         ConditionalOnProperty condition=ControlledImageFollowupV3SchemaInitializer.class
                 .getAnnotation(ConditionalOnProperty.class);

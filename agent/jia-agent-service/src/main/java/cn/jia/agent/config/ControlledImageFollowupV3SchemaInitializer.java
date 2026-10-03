@@ -99,8 +99,11 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
         validateNewTable(OPERATION_GRANT_TABLE, operationGrantColumns(), operationGrantIndexes(),
                 OPERATION_GRANT_CHECKS);
         validateNewTable(SOURCE_TABLE, sourceColumns(), sourceIndexes(), SOURCE_CHECKS);
-        validateConsentExtension();
+        validateConsentExtension(true);
         validateExecutionExtension();
+        // Validate the complete existing catalog before the single purpose-union extension.
+        migrateOrdinaryActionPurpose();
+        validateConsentExtension(false);
     }
 
     private void migrateConsent() {
@@ -164,14 +167,18 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
                 + "chk_pwex_controlled_consent CHECK (" + controlledConsentCheckDdl() + ")");
     }
 
-    private void validateConsentExtension() {
+    private void validateConsentExtension(boolean allowLegacy) {
         validateOwnedColumns(CONSENT_TABLE, consentExtensionColumns());
         validateIndex(CONSENT_TABLE, "uk_atpcc_scope_operation_grant", true,
                 List.of("tenant_id", "client_id", "owner_jiacn", "task_id", "operation_grant_id"));
         validateIndex(CONSENT_TABLE, "uk_atpcc_scope_execution_intent", true,
                 List.of("tenant_id", "client_id", "owner_jiacn", "task_id", "execution_intent_id"));
-        validateOwnedChecks(CONSENT_TABLE,
-                Map.of("chk_atpcc_purpose_union", ADDITIVE_CHECKS.get("chk_atpcc_purpose_union")));
+        String expected = ADDITIVE_CHECKS.get("chk_atpcc_purpose_union");
+        var purpose = checks(CONSENT_TABLE).stream().filter(row ->
+                "chk_atpcc_purpose_union".equals(text(row,"constraint_name"))).toList();
+        if (allowLegacy && purpose.size()==1 && canonicalCheck(text(purpose.getFirst(),"check_clause"))
+                .equals(canonicalCheck(PURPOSE_UNION_CATALOG_CHECK))) expected=PURPOSE_UNION_CATALOG_CHECK;
+        validateOwnedChecks(CONSENT_TABLE, Map.of("chk_atpcc_purpose_union", expected));
     }
 
     private void validateExecutionExtension() {
@@ -446,20 +453,39 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
                 || name.startsWith("chk_pwex_execution_protocol");
     }
 
-    /** Exact observed MySQL catalog rendering; never use this value to generate DDL. */
+    /** Known pre-ordinary catalog, accepted only for the narrow in-place migration. */
+    static String legacyConsentPurposeCatalogCheckExpression() { return PURPOSE_UNION_CATALOG_CHECK; }
+
+    /** Expected MySQL rendering for the new union; never use this value to generate DDL. */
     static String consentPurposeCatalogCheckExpression() {
-        return PURPOSE_UNION_CATALOG_CHECK;
+        return PURPOSE_UNION_CATALOG_CHECK
+                .replace("_utf8mb4\\'FOLLOWUP_EXECUTE\\'))", "_utf8mb4\\'FOLLOWUP_EXECUTE\\',_utf8mb4\\'ORDINARY_ACTION\\'))")
+                .replace("`consent_purpose` = _utf8mb4\\'FOLLOWUP_EXECUTE\\'",
+                        "`consent_purpose` in (_utf8mb4\\'FOLLOWUP_EXECUTE\\',_utf8mb4\\'ORDINARY_ACTION\\')");
+    }
+
+    void migrateOrdinaryActionPurpose() {
+        var rows=checks(CONSENT_TABLE).stream().filter(row ->
+                "chk_atpcc_purpose_union".equals(text(row,"constraint_name"))).toList();
+        if(rows.size()!=1 || !"YES".equalsIgnoreCase(text(rows.getFirst(),"enforced")))
+            throw new IllegalStateException("Ordinary action purpose CHECK unavailable");
+        String actual=canonicalCheck(text(rows.getFirst(),"check_clause"));
+        if(actual.equals(canonicalCheck(consentPurposeCatalogCheckExpression())))return;
+        if(!actual.equals(canonicalCheck(PURPOSE_UNION_CATALOG_CHECK)))
+            throw new IllegalStateException("Ordinary action purpose CHECK drift");
+        jdbc.execute("ALTER TABLE "+CONSENT_TABLE+" DROP CHECK chk_atpcc_purpose_union, "
+                +"ADD CONSTRAINT chk_atpcc_purpose_union CHECK ("+consentPurposeCheckExpression()+")");
     }
 
     static String consentPurposeCheckExpression() {
         String hash=" REGEXP '^[0-9a-f]{64}$'";
-        return "consent_purpose IN ('INITIAL_ASSIGN_AND_START','FOLLOWUP_EXECUTE') AND ("
+        return "consent_purpose IN ('INITIAL_ASSIGN_AND_START','FOLLOWUP_EXECUTE','ORDINARY_ACTION') AND ("
                 + "(consent_purpose='INITIAL_ASSIGN_AND_START' AND operation_grant_id IS NULL "
                 + "AND execution_intent_id IS NULL AND conversation_id IS NULL "
                 + "AND conversation_generation IS NULL AND operation IS NULL "
                 + "AND instruction_sha256 IS NULL AND source_snapshot_sha256 IS NULL "
                 + "AND owner_payload_sha256 IS NULL AND runtime_input_snapshot_sha256 IS NULL) OR "
-                + "(consent_purpose='FOLLOWUP_EXECUTE' "
+                + "(consent_purpose IN ('FOLLOWUP_EXECUTE','ORDINARY_ACTION') "
                 + "AND operation_grant_id REGEXP '^opgrant_[0-9a-f]{32}$' "
                 + "AND CHAR_LENGTH(execution_intent_id) BETWEEN 1 AND 100 "
                 + "AND CHAR_LENGTH(conversation_id) BETWEEN 1 AND 100 "
@@ -529,7 +555,7 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
 
     private static Map<String, String> additiveChecks() {
         Map<String, String> checks = new LinkedHashMap<>();
-        checks.put("chk_atpcc_purpose_union", PURPOSE_UNION_CATALOG_CHECK);
+        checks.put("chk_atpcc_purpose_union", consentPurposeCatalogCheckExpression());
         checks.put("chk_pwex_controlled_consent", CONTROLLED_CONSENT_V3_CATALOG_CHECK);
         checks.put("chk_pwex_execution_protocol", EXECUTION_PROTOCOL_CATALOG_CHECK);
         return java.util.Collections.unmodifiableMap(checks);

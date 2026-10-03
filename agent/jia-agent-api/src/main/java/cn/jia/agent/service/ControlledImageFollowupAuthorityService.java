@@ -6,6 +6,15 @@ import java.util.List;
 /** Root-first aggregate for one owner-issued schema-3 controlled-image intent. No Provider call occurs here. */
 public interface ControlledImageFollowupAuthorityService {
     Preview preview(Scope scope, PreviewCommand command);
+    /** Internal coordinator entry: original USER + immutable Agent action under EXISTING operator
+     * delegation. No browser acknowledgement, policy creation, or Provider call. Caller must join
+     * its durable action transaction and recheck the real USER/final in lateCheck. */
+    Reservation admitOrdinaryAction(Scope scope, OrdinaryActionCommand command, LateCheck lateCheck);
+    record OrdinaryActionCommand(PreviewCommand preview, String actionRequestId,
+            String parentOutcomeId, String parentFinalDigest, long originalUserMessageId,
+            String originalUserContentSha256, String executionId, String runId,
+            String interactionRequestDigest) { }
+
     ControlledImageFollowupAuthorityDTO issue(Scope scope, IssueCommand command, LateCheck lateCheck);
     ControlledImageFollowupAuthorityDTO getByIssueKey(Scope scope, String taskId,
             String conversationId, String issueIdempotencyKey);
