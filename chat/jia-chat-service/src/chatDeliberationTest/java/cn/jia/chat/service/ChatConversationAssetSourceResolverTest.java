@@ -64,6 +64,18 @@ class ChatConversationAssetSourceResolverTest {
         verify(archive).findAuthorizedSourceForUpdate(any(),eq("conversation"),eq("asset"),eq(3L),eq("agent"));
     }
 
+    @Test void ordinaryEditDerivesProducerFromAuthorizedAssetWithoutModelSuppliedParent() {
+        when(archive.findAuthorizedSourceForUpdate(any(),eq("conversation"),eq("asset"),eq(3L),eq("agent"))).thenReturn(asset());
+        var resolved=resolver.resolveAction("0","client","owner","conversation",2,"task","agent","EDIT_IMAGE",
+                List.of(new ChatConversationAssetSourceResolver.Ref("CURRENT_CONVERSATION_ASSET",null,null,null,"asset",3L)),List.of());
+        assertEquals("request-parent",resolved.getFirst().producerRequestId());
+        assertEquals("step-parent",resolved.getFirst().producerStepId());
+        verifyNoInteractions(steps);
+        reset(archive);
+        assertThrows(ChatDeliberationException.class,()->resolver.resolveAction("0","client","owner","conversation",2,"task","agent","EDIT_IMAGE",
+                List.of(new ChatConversationAssetSourceResolver.Ref("CURRENT_CONVERSATION_ASSET",null,null,null,"asset",3L)),List.of()));
+    }
+
     @Test void anotherParentOrAclRevocationFailsWithoutFallingBackToBrowserLineage() {
         when(archive.findAuthorizedSource(any(),eq("conversation"),eq("asset"),eq(3L),eq("agent")))
                 .thenReturn(asset());

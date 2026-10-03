@@ -93,7 +93,7 @@ public final class ChatActionCapabilityService {
         if (declaration.operations().contains("GENERATE_IMAGE")) actions.add(action("generate-image", "EXECUTE",
                 "GENERATE_IMAGE", List.of("image"), 0, declaration.maxInputItems()));
         if (declaration.operations().contains("EDIT_IMAGE")) actions.add(action("edit-image", "EXECUTE",
-                "EDIT_IMAGE", List.of("image"), 1, declaration.maxInputItems()));
+                "EDIT_IMAGE", List.of("image"), 1, 1));
     }
 
     private static Map<String, Object> action(String id, String kind, String operation,

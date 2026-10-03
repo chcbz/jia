@@ -50,7 +50,8 @@ class ChatActionCapabilityServiceTest {
         var actions = service().available(scope, List.of());
         assertEquals(List.of("generate-image","edit-image"), actions.stream().map(a->a.get("actionId")).toList());
         assertEquals(0, actions.getFirst().get("minSources")); assertEquals(1, actions.getLast().get("minSources"));
-        for(var action:actions) { assertEquals(16,action.get("maxSources")); assertEquals(List.of("image"),action.get("inputMediaTypes")); }
+        assertEquals(16, actions.getFirst().get("maxSources")); assertEquals(1, actions.getLast().get("maxSources"));
+        for(var action:actions) assertEquals(List.of("image"),action.get("inputMediaTypes"));
         assertDoesNotThrow(()->ChatActionOutcomeContract.facts(Map.of("schemaVersion",3,"availableActions",actions,
                 "availableSources",List.of(),"inspectedSourceRefIds",List.of())));
         verify(executions).current(new RuntimeDeclarationLookup.DeclarationScope("0","client","owner","agent"));

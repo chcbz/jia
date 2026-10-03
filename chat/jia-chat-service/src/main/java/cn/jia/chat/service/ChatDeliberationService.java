@@ -151,29 +151,7 @@ public class ChatDeliberationService {
         if (scope == null || !"bounty".equals(scope.scopeType()) || !parent.taskId().equals(scope.taskId())
                 || scope.targetAgentIds().size() != 1 || !scope.targetAgentIds().getFirst().equals(
                         action.validated().binding().get("targetAgentId"))) throw unavailable();
-        requireLockedConversation(owner.tenantId(), owner.ownerJiacn(), owner.clientId(),
-                owner.conversationId(), owner.conversationGeneration());
-        var turn = requireLockedTurn(owner.tenantId(), owner.ownerJiacn(), owner.clientId(), parent.turnId());
-        if (!parent.finalDigest().equals(turn.getFinalDigest()) || !parent.requestId().equals(turn.getRequestId())
-                || !Objects.equals(parent.requestRevision(), turn.getRequestRevision())
-                || !Objects.equals(parent.assistantMessageId(), turn.getFinalMessageId())
-                || !Objects.equals(owner.conversationId(), turn.getConversationId())
-                || !Objects.equals(owner.conversationGeneration(), turn.getConversationGeneration())
-                || !Objects.equals(scope.targetAgentIds().getFirst(), turn.getTargetAgentId())
-                || !(ChatDeliberationStates.FINAL_PERSISTED.equals(turn.getState())
-                    || ChatDeliberationStates.PUBLISHED.equals(turn.getState()))) throw unavailable();
-        var original = dao.findRequest(owner.tenantId(), owner.ownerJiacn(), owner.clientId(), parent.requestId());
-        if (original == null || !Objects.equals(original.getRequestRevision(), parent.requestRevision())
-                || !Objects.equals(original.getConversationId(), owner.conversationId())
-                || !Objects.equals(original.getConversationGeneration(), owner.conversationGeneration())
-                || !Objects.equals(original.getUserMessageId(), action.admission().userMessageId())) throw unavailable();
-        // The ID comes from the exact owner-scoped durable request, never from the browser/model.
-        var user = messageDao.selectById(original.getUserMessageId());
-        if (user == null || !Objects.equals(original.getUserMessageId(), user.getId())
-                || !owner.tenantId().equals(user.getTenantId()) || !owner.ownerJiacn().equals(user.getJiacn())
-                || !owner.clientId().equals(user.getClientId()) || !owner.conversationId().equals(user.getConversationId())
-                || !"USER".equals(user.getMessageType()) || !"user".equals(user.getSenderType())
-                || !"juyiting".equals(user.getConversationType())) throw unavailable();
+        var user = requireActionUser(action);
         String actionId = ChatActionFinalValidator.actionEventId(action.validated());
         String requestId = inspectionContinuationRequestId(actionId);
         var inspection = ChatTypedInspectionContextService.validateTypedInspection(context.typedInspection());
@@ -183,7 +161,7 @@ public class ChatDeliberationService {
                 "clientId", owner.clientId(), "conversationId", owner.conversationId(),
                 "conversationGeneration", Long.toString(owner.conversationGeneration()), "taskId", parent.taskId(),
                 "assignmentRevision", Long.toString(parent.assignmentRevision()), "requestId", requestId,
-                "requestRevision", "1", "targetAgentId", turn.getTargetAgentId()))) throw unavailable();
+                "requestRevision", "1", "targetAgentId", action.validated().binding().get("targetAgentId")))) throw unavailable();
         var selected = action.validated().interactionOutcome().action().sourceRefIds();
         var materialized = ChatActionOutcomeContract.facts(inspection.get("discussionFacts")).availableSources().stream()
                 .map(ChatActionOutcomeContract.Source::sourceRefId).toList();
@@ -201,6 +179,49 @@ public class ChatDeliberationService {
         var sender = new ServerResolvedSender("user", user.getSenderName(), owner.ownerJiacn(), owner.clientId(), DisplayNameSource.FALLBACK);
         return admitTrusted(owner.tenantId(), sender, owner.conversationId(), owner.conversationGeneration(), scope,
                 InteractionRoute.INSPECT, input, null, null, null, inspection, user, lineage);
+    }
+
+    /** Both action routes reuse the immutable original USER; an Agent instruction is never consent. */
+    @Transactional(propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
+    public ChatMessageEntity requireActionUser(ChatActionFinalService.BoundAction action) {
+        var parent = Objects.requireNonNull(action).outcome(); var owner = parent.scope();
+        requireLockedConversation(owner.tenantId(), owner.ownerJiacn(), owner.clientId(),
+                owner.conversationId(), owner.conversationGeneration());
+        var turn = requireLockedTurn(owner.tenantId(), owner.ownerJiacn(), owner.clientId(), parent.turnId());
+        if (!parent.finalDigest().equals(turn.getFinalDigest()) || !parent.requestId().equals(turn.getRequestId())
+                || !Objects.equals(parent.requestRevision(), turn.getRequestRevision())
+                || !Objects.equals(parent.assistantMessageId(), turn.getFinalMessageId())
+                || !Objects.equals(owner.conversationId(), turn.getConversationId())
+                || !Objects.equals(owner.conversationGeneration(), turn.getConversationGeneration())
+                || !Objects.equals(action.validated().binding().get("targetAgentId"), turn.getTargetAgentId())
+                || !(ChatDeliberationStates.FINAL_PERSISTED.equals(turn.getState())
+                    || ChatDeliberationStates.PUBLISHED.equals(turn.getState()))) throw unavailable();
+        var original = dao.findRequest(owner.tenantId(), owner.ownerJiacn(), owner.clientId(), parent.requestId());
+        if (original == null || !Objects.equals(original.getRequestRevision(), parent.requestRevision())
+                || !Objects.equals(original.getConversationId(), owner.conversationId())
+                || !Objects.equals(original.getConversationGeneration(), owner.conversationGeneration())
+                || !Objects.equals(original.getUserMessageId(), action.admission().userMessageId())) throw unavailable();
+        // The ID comes from the exact owner-scoped durable request, never from the browser/model.
+        var user = messageDao.selectById(original.getUserMessageId());
+        if (user == null || !Objects.equals(original.getUserMessageId(), user.getId())
+                || !owner.tenantId().equals(user.getTenantId()) || !owner.ownerJiacn().equals(user.getJiacn())
+                || !owner.clientId().equals(user.getClientId()) || !owner.conversationId().equals(user.getConversationId())
+                || !"USER".equals(user.getMessageType()) || !"user".equals(user.getSenderType())
+                || !"juyiting".equals(user.getConversationType())) throw unavailable();
+        var snapshot = dao.findSnapshot(owner.tenantId(), owner.ownerJiacn(), owner.clientId(), turn.getSnapshotId());
+        if (snapshot == null || !Objects.equals(turn.getSnapshotId(), action.validated().binding().get("snapshotId"))
+                || !Objects.equals(turn.getContextDigest(), action.validated().binding().get("contextDigest"))
+                || !Objects.equals(snapshot.getContextDigest(), turn.getContextDigest())
+                || !Objects.equals(snapshot.getRequestId(), parent.requestId())
+                || !Objects.equals(snapshot.getRequestRevision(), parent.requestRevision())
+                || !Objects.equals(snapshot.getConversationId(), owner.conversationId())
+                || !Objects.equals(snapshot.getConversationGeneration(), owner.conversationGeneration())) throw unavailable();
+        var facts = parseJsonMap(snapshot.getFactsManifestJson());
+        if (!contextDigest(parseJsonMap(snapshot.getSourceVectorJson()), facts).equals(snapshot.getContextDigest())) throw unavailable();
+        var current = castContextMap(castContextMap(facts.get("authorizedContext")).get("currentUserMessage"));
+        if (!Long.toString(user.getId()).equals(current.get("messageId")) || !"USER".equals(current.get("role"))
+                || !("sha256:" + sha256(requireContent(user.getContent()))).equals(current.get("contentHash"))) throw unavailable();
+        return user;
     }
 
     static String inspectionContinuationRequestId(String actionId) {
