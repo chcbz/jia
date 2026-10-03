@@ -14,6 +14,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class ChatTypedInspectionContextServiceTest {
+    private final ChatActionCapabilityService capabilities = mock(ChatActionCapabilityService.class);
     private final JdbcTemplate jdbc = mock(JdbcTemplate.class);
     private final ChatConversationArchiveStore archive = mock(ChatConversationArchiveStore.class);
     private final TypedInspectionSessionRegistry sessions = new TypedInspectionSessionRegistry();
@@ -27,7 +28,7 @@ class ChatTypedInspectionContextServiceTest {
                 Map.entry("recovery", "durable-inbox-turn-readback-v1"), Map.entry("supportedInputs", List.of(
                         input("text", "text/plain", "DIRECT_TEXT"), input("image", "image/png", "LOCAL_IMAGE"),
                         input("audio", "audio/wav", "LOCAL_AUDIO"), input("file", "application/pdf", "PARSED_TEXT")))), () -> true);
-        return new ChatTypedInspectionContextService(jdbc, archive, sessions, true);
+        return new ChatTypedInspectionContextService(jdbc, archive, sessions, capabilities, true);
     }
     @Test void all32MixedMaterialsFreezeExactRoleVersionAndMetadata() {
         var service = service();
@@ -50,6 +51,10 @@ class ChatTypedInspectionContextServiceTest {
         var context = service.resolve(scope, selectors);
         var sources = ChatTypedInspectionContextService.sources(context.admissionEnvelopeJson());
         assertEquals(32, sources.size()); assertEquals(selectors, context.selectors());
+        var facts=ChatActionOutcomeContract.facts(context.typedInspection().get("discussionFacts"));
+        assertEquals(3,facts.schemaVersion());assertEquals(List.of(),facts.availableActions());
+        assertEquals(List.of(),facts.inspectedSourceRefIds());
+        assertEquals(context.typedInspection(), ChatTypedInspectionContextService.inspection(context.admissionEnvelopeJson()));
         assertEquals(4, sources.stream().map(s -> s.get("mediaKind")).distinct().count());
         assertFalse(context.admissionEnvelopeJson().contains("storage_uri")); verifyNoInteractions(archive);
         selectors.add(selector("file-32", "INPUT"));

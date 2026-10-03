@@ -36,12 +36,14 @@ public final class ChatTypedDeliberationContextService {
     private final TypedDeliberationSessionRegistry sessions;
     private final ChatTypedDeliberationSchemaInitializer schema;
     private final boolean enabled;
+    private final ChatActionCapabilityService capabilities;
 
     public ChatTypedDeliberationContextService(JdbcTemplate jdbc, TypedDeliberationSessionRegistry sessions,
-            ChatTypedDeliberationSchemaInitializer schema,
+            ChatTypedDeliberationSchemaInitializer schema, ChatActionCapabilityService capabilities,
             @Value("${chat.typed-deliberation.enabled:false}") boolean enabled) {
         this.jdbc=Objects.requireNonNull(jdbc); this.sessions=Objects.requireNonNull(sessions);
         this.schema=Objects.requireNonNull(schema); this.enabled=enabled;
+        this.capabilities=Objects.requireNonNull(capabilities);
     }
 
     public Context resolve(Scope scope, String taskId, String targetAgentId,
@@ -75,9 +77,12 @@ public final class ChatTypedDeliberationContextService {
         }
         catalog.sort(Comparator.comparing(value -> (String)value.get("sourceRefId")));
         available.sort(Comparator.comparing(value -> (String)value.get("sourceRefId")));
-        Map<String,Object> facts=new LinkedHashMap<>(); facts.put("schemaVersion",1);
-        facts.put("referenceMode",available.isEmpty()?"NONE":"AVAILABLE");
-        facts.put("supportedOperations",ready.supportedOperations()); facts.put("availableSources",List.copyOf(available));
+        Map<String,Object> facts=new LinkedHashMap<>(); facts.put("schemaVersion",3);
+        facts.put("availableSources",List.copyOf(available));
+        facts.put("inspectedSourceRefIds",List.of());
+        facts.put("availableActions",capabilities.available(new ChatActionCapabilityService.Scope(
+                scope.tenantId(),scope.ownerJiacn(),scope.clientId(),targetAgentId),List.copyOf(catalog)));
+        ChatActionOutcomeContract.facts(facts);
         return new Context(Map.copyOf(facts),CanonicalContextJson.write(catalog),normalized,ready.frozenDeclaration());
     }
 

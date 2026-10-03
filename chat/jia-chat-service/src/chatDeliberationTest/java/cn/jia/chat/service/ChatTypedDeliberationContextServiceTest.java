@@ -12,6 +12,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class ChatTypedDeliberationContextServiceTest {
+    private final ChatActionCapabilityService capabilities=mock(ChatActionCapabilityService.class);
     private final JdbcTemplate jdbc=mock(JdbcTemplate.class);
     private final TypedDeliberationSessionRegistry sessions=new TypedDeliberationSessionRegistry();
     private final ChatTypedDeliberationSchemaInitializer schema=mock(ChatTypedDeliberationSchemaInitializer.class);
@@ -20,7 +21,7 @@ class ChatTypedDeliberationContextServiceTest {
 
     @Test void noneUsesLiveDeclarationAndNeverReadsBytes() {
         ready();var context=service().resolve(scope,"task","agent",List.of());
-        assertEquals("NONE",context.facts().get("referenceMode"));assertEquals(List.of(),context.facts().get("availableSources"));
+        assertEquals(3,context.facts().get("schemaVersion"));assertEquals(List.of(),context.facts().get("availableActions"));assertFalse(context.facts().containsKey("supportedOperations"));assertEquals(List.of(),context.facts().get("availableSources"));
         verifyNoInteractions(jdbc);
     }
     @Test void workspaceAndConversationAssetProjectOnlyAuthoritativeMetadata() {
@@ -90,7 +91,20 @@ class ChatTypedDeliberationContextServiceTest {
         verifyNoInteractions(jdbc);
     }
 
+    @Test void newContextCarriesV3LiveActionsWithoutFabricatingReadFacts() {
+        ready();
+        var action=Map.<String,Object>of("actionId","generate-image","kind","EXECUTE","operation","GENERATE_IMAGE",
+                "inputMediaTypes",List.of("image"),"minSources",0,"maxSources",16);
+        when(capabilities.available(any(),anyList())).thenReturn(List.of(action));
+        var context=service().resolve(scope,"task","agent",List.of());
+        var facts=ChatActionOutcomeContract.facts(context.facts());
+        assertEquals(3,facts.schemaVersion());assertEquals("generate-image",facts.availableActions().getFirst().actionId());
+        assertEquals(List.of(),facts.inspectedSourceRefIds());
+        verify(capabilities).available(new ChatActionCapabilityService.Scope("0","owner","client","agent"),List.of());
+        verifyNoInteractions(jdbc);
+    }
+
     private void ready(){when(schema.ready()).thenReturn(true);sessions.register("s1","0","owner","client","agent",declaration());}
     private static Map<String,Object> declaration(){return Map.of("schemaVersion",3,"state","READY","carrier","CHAT_MESSAGE_FINAL_SIDECAR_V3","referenceModes",List.of("NONE","AVAILABLE"),"outcomeKinds",List.of("ANSWER","CLARIFY","ACTION_REQUEST"),"engine","CODEX_APP_SERVER_NATIVE_OUTPUT_SCHEMA","strictNoToolsVerified",false,"toolPolicy","read-only-constrained");}
-    private ChatTypedDeliberationContextService service(){return new ChatTypedDeliberationContextService(jdbc,sessions,schema,true);}
+    private ChatTypedDeliberationContextService service(){return new ChatTypedDeliberationContextService(jdbc,sessions,schema,capabilities,true);}
 }

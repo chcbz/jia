@@ -70,14 +70,16 @@ public final class ChatTypedInspectionContextService {
     private final ChatConversationArchiveStore archive;
     private final TypedInspectionSessionRegistry sessions;
     private final boolean enabled;
+    private final ChatActionCapabilityService capabilities;
 
     public ChatTypedInspectionContextService(JdbcTemplate jdbc, ChatConversationArchiveStore archive,
-            TypedInspectionSessionRegistry sessions,
+            TypedInspectionSessionRegistry sessions, ChatActionCapabilityService capabilities,
             @Value("${chat.typed-inspection.enabled:false}") boolean enabled) {
         this.jdbc = Objects.requireNonNull(jdbc);
         this.archive = Objects.requireNonNull(archive);
         this.sessions = Objects.requireNonNull(sessions);
         this.enabled = enabled;
+        this.capabilities = Objects.requireNonNull(capabilities);
     }
 
     public Context resolve(Scope scope, List<ChatTypedInspectionWire.SourceSelector> requested) {
@@ -136,10 +138,15 @@ public final class ChatTypedInspectionContextService {
                 "kind", sourceKind(((Map<?, ?>) source.get("selector")).get("kind")),
                 "mediaType", source.get("mediaKind"))).toList();
         Map<String, Object> discussionFacts = new LinkedHashMap<>();
-        discussionFacts.put("schemaVersion", 1);
-        discussionFacts.put("referenceMode", "AVAILABLE");
-        discussionFacts.put("supportedOperations", List.of("GENERATE_IMAGE", "EDIT_IMAGE"));
+        discussionFacts.put("schemaVersion", 3);
         discussionFacts.put("availableSources", available);
+        // Dispatch is not proof of reading; only a validated native input receipt establishes that.
+        discussionFacts.put("inspectedSourceRefIds", List.of());
+        var capabilityCatalog = sources.stream().map(source -> Map.<String,Object>of(
+                "mediaType", source.get("mediaKind"), "contentMimeType", source.get("mimeType"))).toList();
+        discussionFacts.put("availableActions", capabilities.available(new ChatActionCapabilityService.Scope(
+                scope.tenantId(), scope.ownerJiacn(), scope.clientId(), scope.targetAgentId()), capabilityCatalog));
+        ChatActionOutcomeContract.facts(discussionFacts);
 
         Map<String, Object> typed = new LinkedHashMap<>();
         typed.put("schemaVersion", 1);
@@ -201,12 +208,16 @@ public final class ChatTypedInspectionContextService {
         exactText(typed.get("contract"), ChatTypedInspectionWire.CONTRACT);
         exactText(typed.get("purpose"), "INSPECT");
 
-        Map<String, Object> facts = exactMap(typed.get("discussionFacts"), FACT_KEYS);
-        exactOne(facts.get("schemaVersion"));
-        exactText(facts.get("referenceMode"), "AVAILABLE");
-        if (!(facts.get("supportedOperations") instanceof List<?> operations)
-                || !operations.equals(List.of("GENERATE_IMAGE", "EDIT_IMAGE"))) {
-            throw new IllegalArgumentException();
+        Map<String, Object> facts = map(typed.get("discussionFacts"));
+        if (Integer.valueOf(3).equals(facts.get("schemaVersion"))) {
+            ChatActionOutcomeContract.facts(facts);
+        } else {
+            // Read-only recovery of already persisted v1 envelopes; new dispatch is always v3.
+            facts = exactMap(facts, FACT_KEYS);
+            exactOne(facts.get("schemaVersion"));
+            exactText(facts.get("referenceMode"), "AVAILABLE");
+            if (!(facts.get("supportedOperations") instanceof List<?> operations)
+                    || !operations.equals(List.of("GENERATE_IMAGE", "EDIT_IMAGE"))) throw new IllegalArgumentException();
         }
         if (!(facts.get("availableSources") instanceof List<?> available)) {
             throw new IllegalArgumentException();
