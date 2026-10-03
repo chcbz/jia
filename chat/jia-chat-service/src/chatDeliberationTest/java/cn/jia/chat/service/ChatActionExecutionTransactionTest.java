@@ -49,12 +49,12 @@ class ChatActionExecutionTransactionTest {
                 evidence.update("INSERT INTO writes(label) VALUES(?)",label);
                 if(label.equals(failAt))throw new IllegalStateException("injected-"+label);return 1;
             };
-            when(f.authority.admitOrdinaryAction(any(),any(),any())).thenAnswer(i->{
+            doAnswer(i->{
                 var command=(ControlledImageFollowupAuthorityService.OrdinaryActionCommand)i.getArgument(1);
                 var check=(ControlledImageFollowupAuthorityService.LateCheck)i.getArgument(2);check.verify();
                 write.apply("authority");check.verify();write.apply("reservation");check.verify();
                 return new ControlledImageFollowupAuthorityService.Reservation(command.executionId(),command.runId(),"consent","operation",2,2,"a".repeat(64));
-            });
+            }).when(f.authority).admitOrdinaryAction(any(),any(),any());
             doAnswer(i->{ChatRequestEntity row=i.getArgument(0);row.setId(3L);return write.apply("request");}).when(f.base.dao).insertRequest(any());
             doAnswer(i->write.apply("step")).when(f.steps).insertStep(any());
             doAnswer(i->write.apply("link")).when(f.steps).insertLink(any());

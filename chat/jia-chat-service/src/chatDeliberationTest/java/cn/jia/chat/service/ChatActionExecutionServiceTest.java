@@ -108,11 +108,11 @@ class ChatActionExecutionServiceTest {
     @Test void lateOriginalUserChangeAndWrongReservedIdentityDoNotPersistChild() {
         for (boolean changedUser:List.of(true,false)) {
             var f=new Fixture(false);
-            when(f.authority.admitOrdinaryAction(any(),any(),any())).thenAnswer(i->{
+            doAnswer(i->{
                 var command=(ControlledImageFollowupAuthorityService.OrdinaryActionCommand)i.getArgument(1);
                 if(changedUser) { f.user().setContent("另一项请求"); ((ControlledImageFollowupAuthorityService.LateCheck)i.getArgument(2)).verify(); }
                 return new ControlledImageFollowupAuthorityService.Reservation("wrong",command.runId(),"consent","operation",2,2,"a".repeat(64));
-            });
+            }).when(f.authority).admitOrdinaryAction(any(),any(),any());
             assertThrows(ChatDeliberationException.class,()->f.service.admit(f.action));
             assertEquals(2,f.base.requests.size()); assertTrue(f.links.isEmpty());
         }
