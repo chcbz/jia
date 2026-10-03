@@ -55,7 +55,7 @@ class ChatActionFinalServiceTest {
         var prepared=prepare(raw); var view=service.persist(prepared,9,12);
         turn.setFinalMessageId(9L).setFinalDigest(prepared.validated().finalDigest()); return view;
     }
-    @Test void actionPersistsItsOwnKindAndIndependentStableOutboxWithoutConsentOrProposal() {
+    @Test void actionPersistsItsOwnKindAndIndependentStableOutboxWithoutConsentOrProposal() throws Exception {
         ready(); var view=persist(ACTION);
         assertEquals("ACTION_REQUEST",row.get().kind()); assertEquals("ACTION_REQUESTED",event.get().getEventType());
         assertEquals("READY",event.get().getStatus()); assertEquals(0,event.get().getAttemptCount());
@@ -66,6 +66,11 @@ class ChatActionFinalServiceTest {
         var read=service.readIfV3(scope,"request","turn",1,"CHAT");
         assertEquals(3,read.get("schemaVersion")); assertEquals("CHAT",read.get("route")); assertEquals("READY",read.get("state"));
         assertEquals(view,read.get("outcome")); assertNull(read.get("inspection"));
+        try (var input=getClass().getResourceAsStream("/contracts/action-final-projection-v3.json")) {
+            assertNotNull(input);
+            var fixture=cn.jia.core.util.JsonUtil.getMapper().readValue(input,Map.class);
+            assertEquals(fixture.get("chatAction"),read);
+        }
     }
     @Test void answersDoNotCreateActionEventsAndPendingReadDoesNotPretendCompletion() {
         ready(); var read=service.readIfV3(scope,"request","turn",1,"CHAT");
@@ -123,5 +128,43 @@ class ChatActionFinalServiceTest {
         assertNull(service.readIfV3(scope,"request","turn",1,"CHAT"));
         assertThrows(ChatDeliberationException.class,()->prepare(ACTION)); verify(store,never()).insertOutcome(any());
     }
+    @Test void inspectionPersistsExactInputReceiptAndReadsAfterRuntimeDisconnect() {
+        ready();
+        var registry=new TypedInspectionSessionRegistry();
+        registry.register("inspection-session","0","owner","client","agent",Map.ofEntries(
+                Map.entry("schemaVersion",1),Map.entry("contract","juyiting-typed-inspection-v1"),Map.entry("enabled",true),
+                Map.entry("profileId","profile"),Map.entry("engineContractId","engine"),Map.entry("enginePolicyDigest",digest('a')),
+                Map.entry("toolPolicyDigest",digest('b')),Map.entry("inputPolicyDigest",digest('c')),Map.entry("toolPolicy","STRICT_NO_TOOLS"),
+                Map.entry("recovery","durable-inbox-turn-readback-v1"),Map.entry("supportedInputs",List.of(Map.of(
+                        "mediaKind","text","mimeType","text/plain","carrier","DIRECT_TEXT","carrierContractDigest",digest('d'))))),()->true);
+        var jdbc=mock(org.springframework.jdbc.core.JdbcTemplate.class);
+        when(jdbc.queryForList(anyString(),any(Object[].class))).thenReturn(List.of(Map.of("content_mime_type","text/plain",
+                "content_hash","a".repeat(64),"byte_length",12L)));
+        var contextService=new ChatTypedInspectionContextService(jdbc,mock(cn.jia.chat.archive.conversation.ChatConversationArchiveStore.class),
+                registry,mock(ChatActionCapabilityService.class),true);
+        var context=contextService.resolve(new ChatTypedInspectionContextService.Scope("0","owner","client","42",1,"task",3,"request",1,"agent"),
+                List.of(new cn.jia.chat.api.ChatTypedInspectionWire.SourceSelector("TASK_LINKED_WORKSPACE_VERSION","file","1","INPUT",null,null)));
+        turn.setRoute("INSPECT");snapshot.setRoute("INSPECT").setFactsManifestJson(CanonicalContextJson.write(Map.of(
+                "task",Map.of("id","task"),"typedInspection",context.typedInspection())));
+        when(store.findAdmissionByRequest(scope,"request")).thenReturn(new ChatTypedDeliberationStore.Admission("admission",scope,"key",digest('b'),
+                digest('c'),"DISCUSSION","task",3,null,null,"request",1,8,"[\"turn\"]",context.admissionEnvelopeJson(),"ADMITTED",0,1,1));
+        var sources=ChatTypedInspectionContextService.sources(context.admissionEnvelopeJson()).stream().map(source->Map.of(
+                "sourceRefId",source.get("sourceRefId"),"sha256",source.get("sha256"),"byteLength",source.get("byteLength"),
+                "carrier",source.get("carrier"),"contributionDigest",digest('e'))).toList();
+        var receipt=new java.util.LinkedHashMap<String,Object>();receipt.put("schemaVersion",1);
+        receipt.put("authorizationId",context.typedInspection().get("authorizationId"));receipt.put("manifestDigest",context.typedInspection().get("manifestDigest"));
+        receipt.put("sources",sources);receipt.put("inputDigest",ChatDeliberationService.digest(receipt));
+        receipt.put("engineThreadId","native-thread");receipt.put("engineTurnId","native-turn");
+        var inspecting=new ChatActionFinalService(store,dao,registry);
+        assertThrows(ChatDeliberationException.class,()->inspecting.prepare(turn,snapshot,"处理中",3,ANSWER,null));
+        var prepared=inspecting.prepare(turn,snapshot,"处理中",3,ANSWER,CanonicalContextJson.write(receipt));
+        inspecting.persist(prepared,9,12);turn.setFinalMessageId(9L).setFinalDigest(prepared.validated().finalDigest());
+        registry.remove("inspection-session");
+        var read=inspecting.readIfV3(scope,"request","turn",1,"INSPECT");
+        assertEquals(receipt.get("inputDigest"),map(map(read.get("inspection")).get("inputSummary")).get("inputDigest"));
+        assertFalse(CanonicalContextJson.write(read).contains("native-thread"));
+        assertThrows(ChatDeliberationException.class,()->inspecting.prepare(turn,snapshot,"处理中",3,ANSWER,CanonicalContextJson.write(receipt)));
+    }
+    private static String digest(char c) { return "sha256:"+String.valueOf(c).repeat(64); }
     @SuppressWarnings("unchecked") private static Map<String,Object> map(Object value) { return (Map<String,Object>)value; }
 }
