@@ -6,6 +6,7 @@ import cn.jia.core.util.JsonUtil;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Propagation;
 
 import java.util.List;
 import java.util.Map;
@@ -128,6 +129,18 @@ public class ChatDeliberationOutboxService {
             return value instanceof String text ? text : null;
         } catch (Exception malformed) {
             return null;
+        }
+    }
+
+    /** Hold the exact durable claim through a short action-admission transaction. */
+    @Transactional(propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
+    public ChatDispatchOutboxEntity requireActiveClaim(Claim claim, long now) {
+        if (claim == null || !claim.active()) throw new IllegalStateException("Inactive action outbox claim");
+        synchronized (claim) {
+            ChatDispatchOutboxEntity row = lockCurrent(claim);
+            if (row.getLeaseUntil() == null || row.getLeaseUntil() <= now)
+                throw new IllegalStateException("Expired action outbox claim");
+            return row;
         }
     }
 

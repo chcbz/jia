@@ -54,6 +54,18 @@ class ChatDeliberationOutboxRelayTest {
     }
 
     @Test
+    void actionsAreAdmittedWithoutAnyBrowserSubscriberAndNeverUseSocketDispatch() {
+        var actions=mock(ChatActionDispatchService.class); relay.setActions(actions);
+        var row=new ChatDispatchOutboxEntity().setEventType(ChatActionFinalService.ACTION_EVENT).setPayloadJson("{}");
+        var claim=new ChatDeliberationOutboxService.Claim(row,false);
+        relay.deliverClaim(claim);
+        verify(actions).consume(claim);
+        verifyNoInteractions(sockets,chatClient);
+        verify(outbox,never()).dead(any(),anyString(),anyLong());
+        verify(outbox,never()).sent(any(),anyLong()); // Consumer settles atomically with child admission.
+    }
+
+    @Test
     void springContextSelectsProductionConstructorAndStartsRelay() {
         when(outbox.discover(anyLong(), anyInt())).thenReturn(List.of());
         try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {

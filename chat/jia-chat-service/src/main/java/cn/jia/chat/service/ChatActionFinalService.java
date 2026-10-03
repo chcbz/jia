@@ -26,6 +26,10 @@ public class ChatActionFinalService {
             ChatTypedDeliberationStore.Scope scope, ChatTypedDeliberationStore.Admission admission,
             ChatTypedDeliberationStore.Outcome existing) { }
 
+    /** Immutable stored parent; the action itself is not execution authority. */
+    public record BoundAction(ChatTypedDeliberationStore.Outcome outcome,
+            ChatTypedDeliberationStore.Admission admission, ChatActionFinalValidator.ValidatedFinal validated) { }
+
     private final ChatTypedDeliberationStore store;
     private final ChatDeliberationDao dao;
     private final TypedInspectionSessionRegistry sessions;
@@ -114,7 +118,8 @@ public class ChatActionFinalService {
         return projection(row, v);
     }
 
-    private void persistActionEvent(ChatTypedDeliberationStore.Outcome row, ChatActionFinalValidator.ValidatedFinal v, long now) {
+    private static Map<String, Object> actionPayload(ChatTypedDeliberationStore.Outcome row,
+            ChatActionFinalValidator.ValidatedFinal v) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("schemaVersion", 3); payload.put("conversationId", row.scope().conversationId());
         payload.put("conversationGeneration", Long.toString(row.scope().conversationGeneration()));
@@ -122,12 +127,45 @@ public class ChatActionFinalService {
         payload.put("turnId", row.turnId()); payload.put("outcomeId", row.outcomeId());
         payload.put("finalDigest", row.finalDigest()); payload.put("taskId", row.taskId());
         payload.put("targetAgentId", v.binding().get("targetAgentId")); payload.put("actionId", v.interactionOutcome().action().actionId());
+        return Collections.unmodifiableMap(payload);
+    }
+
+    private void persistActionEvent(ChatTypedDeliberationStore.Outcome row, ChatActionFinalValidator.ValidatedFinal v, long now) {
         var event = new ChatDispatchOutboxEntity().setEventId(ChatActionFinalValidator.actionEventId(v))
                 .setTenantId(row.scope().tenantId()).setOwnerJiacn(row.scope().ownerJiacn()).setClientId(row.scope().clientId())
                 .setTurnId(row.turnId()).setDispatchId((String)v.binding().get("dispatchId"))
-                .setEventType(ACTION_EVENT).setStatus("READY").setPayloadJson(canonical(payload))
+                .setEventType(ACTION_EVENT).setStatus("READY").setPayloadJson(canonical(actionPayload(row, v)))
                 .setVersion(0L).setAvailableAt(now).setAttemptCount(0).setFencingToken(0L).setCreatedAt(now).setUpdatedAt(now);
         if (dao.insertOutbox(event) != 1) throw persistence("Unable to persist action event");
+    }
+
+    /** Validate the durable event against the actual immutable final, not copied event instructions. */
+    @Transactional(readOnly = true)
+    public BoundAction loadAction(ChatDispatchOutboxEntity event) {
+        if (event == null || !ACTION_EVENT.equals(event.getEventType())) throw unavailable();
+        var turn = dao.findTurn(event.getTenantId(), event.getOwnerJiacn(), event.getClientId(), event.getTurnId());
+        if (turn == null || !Objects.equals(event.getDispatchId(), turn.getDispatchId())
+                || !Objects.equals(event.getTenantId(), turn.getTenantId())
+                || !Objects.equals(event.getOwnerJiacn(), turn.getOwnerJiacn())
+                || !Objects.equals(event.getClientId(), turn.getClientId())
+                || !Objects.equals(event.getTurnId(), turn.getTurnId())) throw unavailable();
+        var scope = scope(turn);
+        var view = readIfV3(scope, turn.getRequestId(), turn.getTurnId(), turn.getRequestRevision(), turn.getRoute());
+        if (view == null || !"READY".equals(view.get("state"))
+                || !"ACTION_REQUEST".equals(map(view.get("outcome")).get("kind"))) throw unavailable();
+        var row = store.findOutcomeByRequest(scope, turn.getRequestId());
+        var admission = requireAdmission(scope, turn.getRequestId(), turn.getTurnId(), turn.getRequestRevision());
+        var stored = parse(row.outcomeJson());
+        Map<String, Object> inputAuthority = null;
+        if ("INSPECT".equals(turn.getRoute())) inputAuthority = authority(
+                ChatTypedInspectionContextService.inspection(admission.sourceCatalogJson()));
+        var validated = ChatActionFinalValidator.validateJson(parse(row.bindingJson()), parse(row.factsJson()),
+                inputAuthority, row.text(), 3, canonical(stored.get("interactionOutcome")),
+                stored.get("inspectionInputReceipt") == null ? null : canonical(stored.get("inspectionInputReceipt")));
+        if (!ChatActionFinalValidator.actionEventId(validated).equals(event.getEventId())
+                || !canonical(actionPayload(row, validated)).equals(canonical(parse(event.getPayloadJson()))))
+            throw persistence("Action event differs from immutable final");
+        return new BoundAction(row, admission, validated);
     }
 
     /** Returns null only for old immutable contracts; no legacy proposal is promoted to an action. */

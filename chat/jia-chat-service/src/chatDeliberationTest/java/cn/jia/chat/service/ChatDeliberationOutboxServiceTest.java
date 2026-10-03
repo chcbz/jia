@@ -34,6 +34,17 @@ class ChatDeliberationOutboxServiceTest {
 
 
     @Test
+    void actionAdmissionRequiresTheCurrentUnexpiredFenceAndRejectsSettledClaims() {
+        FakeDao dao=new FakeDao(); dao.row=row().setStatus("READY");
+        var service=new ChatDeliberationOutboxService(dao);
+        var claim=service.claim(dao.row,"action-owner",100L,50L);
+        assertNotNull(service.requireActiveClaim(claim,101L));
+        assertThrows(IllegalStateException.class,()->service.requireActiveClaim(claim,150L));
+        assertTrue(service.sent(claim,151L));
+        assertThrows(IllegalStateException.class,()->service.requireActiveClaim(claim,152L));
+    }
+
+    @Test
     void heartbeatExtendsLeaseAndPreventsSecondInstanceFromStealingLongCall() {
         FakeDao dao = new FakeDao();
         dao.row = row().setStatus("READY");

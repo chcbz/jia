@@ -72,6 +72,23 @@ class ChatActionFinalServiceTest {
             assertEquals(fixture.get("chatAction"),read);
         }
     }
+    @Test void actionConsumptionReadsImmutableFinalAndRejectsEventScopePayloadAndIdentityDrift() {
+        ready(); persist(ACTION);
+        var loaded=service.loadAction(event.get());
+        assertEquals(row.get(),loaded.outcome());
+        assertEquals("write-document",loaded.validated().interactionOutcome().action().actionId());
+        var originalPayload=event.get().getPayloadJson();
+        event.get().setPayloadJson(originalPayload.replace("write-document","generate-image"));
+        assertThrows(ChatDeliberationException.class,()->service.loadAction(event.get()));
+        event.get().setPayloadJson(originalPayload.replace("{","{\"instruction\":\"invented\","));
+        assertThrows(ChatDeliberationException.class,()->service.loadAction(event.get()));
+        event.get().setPayloadJson(originalPayload).setEventId("act_foreign");
+        assertThrows(ChatDeliberationException.class,()->service.loadAction(event.get()));
+        event.get().setOwnerJiacn("foreign");
+        assertThrows(ChatDeliberationException.class,()->service.loadAction(event.get()));
+        verifyNoInteractions(sessions);
+    }
+
     @Test void answersDoNotCreateActionEventsAndPendingReadDoesNotPretendCompletion() {
         ready(); var read=service.readIfV3(scope,"request","turn",1,"CHAT");
         assertEquals("PENDING",read.get("state")); assertNull(read.get("outcome"));

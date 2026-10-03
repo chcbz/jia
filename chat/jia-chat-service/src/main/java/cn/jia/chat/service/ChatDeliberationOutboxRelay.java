@@ -51,6 +51,11 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
     private final ChatConversationEventBroker broker;
     private final ChatConversationService conversations;
     private final ChatClient chatClient;
+    private ChatActionDispatchService actions;
+
+    @Autowired(required = false)
+    public void setActions(ChatActionDispatchService actions) { this.actions = actions; }
+
     private final String leaseOwner = ChatDeliberationOutboxService.leaseOwner();
     private final long leaseMillis;
     private final long heartbeatMillis;
@@ -158,6 +163,10 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
             case "DISPATCH" -> deliverDispatch(claim, payload);
             case "CANCEL_REQUESTED" -> deliverCancel(claim, payload);
             case "FINAL_PERSISTED" -> deliverFinal(claim, payload);
+            case ChatActionFinalService.ACTION_EVENT -> {
+                if (actions == null) throw new IllegalStateException("Action admission service is unavailable");
+                actions.consume(claim); // No SSE subscription or socket call is required for durable admission.
+            }
             default -> outbox.dead(claim, "UNSUPPORTED_EVENT_TYPE", System.currentTimeMillis());
         }
     }
