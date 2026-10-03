@@ -60,6 +60,36 @@ class ChatTypedDeliberationContextServiceTest {
         when(schema.ready()).thenReturn(false);
         assertEquals(ChatDeliberationException.Reason.PERSISTENCE_ERROR,assertThrows(ChatDeliberationException.class,()->service().resolve(scope,"task","agent",List.of())).reason());
     }
+    @Test void full32MixedInputCatalogueUsesExactRoleAndOwnerPredicates() {
+        ready();
+        when(jdbc.queryForList(contains("agent_personal_workspace_task_file_link"),any(Object[].class)))
+                .thenAnswer(inv->{
+                    String sql=inv.getArgument(0);
+                    assertTrue(sql.contains("l.link_role=? AND BINARY l.link_role=BINARY ?"));
+                    assertTrue(sql.contains("l.owner_jiacn=? AND BINARY l.owner_jiacn=BINARY ?"));
+                    Object[] args=java.util.Arrays.copyOfRange(inv.getArguments(),1,inv.getArguments().length);
+                    assertEquals("INPUT",args[args.length-1]);assertEquals("INPUT",args[args.length-2]);
+                    return List.of(Map.of("content_mime_type","application/pdf","content_hash","a".repeat(64),"byte_length",12L));
+                });
+        var selectors=new java.util.ArrayList<ChatTypedDeliberationWire.SourceSelector>();
+        for(int i=0;i<32;i++)selectors.add(new ChatTypedDeliberationWire.SourceSelector(
+                "TASK_LINKED_WORKSPACE_VERSION","file-"+i,"1","INPUT",null,null));
+        var result=service().resolve(scope,"task","agent",selectors);
+        assertEquals(32,result.selectors().size());
+        assertEquals(32,((List<?>)result.facts().get("availableSources")).size());
+        assertEquals(32,ChatTypedDeliberationContextService.parseCatalog(result.sourceCatalogJson()).size());
+        assertFalse(result.sourceCatalogJson().contains("storageUri"));
+        selectors.add(new ChatTypedDeliberationWire.SourceSelector("TASK_LINKED_WORKSPACE_VERSION","excess","1","INPUT",null,null));
+        assertThrows(ChatDeliberationException.class,()->service().resolve(scope,"task","agent",selectors));
+    }
+
+    @Test void serverConstructedInvalidRoleIsRejectedBeforeAnyCatalogueQuery() {
+        ready();
+        var invalid=new ChatTypedDeliberationWire.SourceSelector("TASK_LINKED_WORKSPACE_VERSION","file","1","OUTPUT",null,null);
+        assertThrows(ChatDeliberationException.class,()->service().resolve(scope,"task","agent",List.of(invalid)));
+        verifyNoInteractions(jdbc);
+    }
+
     private void ready(){when(schema.ready()).thenReturn(true);sessions.register("s1","0","owner","client","agent",declaration());}
     private static Map<String,Object> declaration(){return Map.of("schemaVersion",1,"state","READY","carrier","CHAT_MESSAGE_FINAL_SIDECAR_V1","referenceModes",List.of("NONE","AVAILABLE"),"outcomeKinds",List.of("ANSWER","CLARIFY","EXECUTION_PROPOSAL"),"engine","CODEX_APP_SERVER_NATIVE_OUTPUT_SCHEMA","strictNoToolsVerified",false,"toolPolicy","read-only-constrained");}
     private ChatTypedDeliberationContextService service(){return new ChatTypedDeliberationContextService(jdbc,sessions,schema,true);}

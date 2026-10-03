@@ -83,7 +83,7 @@ public final class ChatTypedDeliberationWire {
         Long parentVersion = nullableDecimal(body.get("expectedParentStateVersion"));
         String pending = nullableText(body.get("pendingQuestionId"), 64);
         Long pendingVersion = nullableDecimal(body.get("expectedPendingQuestionStateVersion"));
-        if (!(body.get("sourceSelectors") instanceof List<?> raw) || raw.size() > 16) throw invalid();
+        if (!(body.get("sourceSelectors") instanceof List<?> raw) || raw.size() > 32) throw invalid();
         List<SourceSelector> selectors = new ArrayList<>();
         Set<SourceSelector> uniqueSelectors = new HashSet<>();
         for (Object item : raw) {
@@ -107,6 +107,12 @@ public final class ChatTypedDeliberationWire {
         result.put("assetRevision",value.assetRevision()); return result;
     }
 
+    /** Validate server-constructed selectors too; scope/role is never inferred by the SQL edge. */
+    public static SourceSelector validateSelector(SourceSelector value) {
+        if (value == null) throw invalid();
+        return selector(selectorMap(value));
+    }
+
     private static SourceSelector selector(Object raw) {
         if (!(raw instanceof Map<?, ?> map) || !map.keySet().stream().allMatch(String.class::isInstance)
                 || !map.keySet().equals(SELECTOR_KEYS)) throw invalid();
@@ -117,7 +123,7 @@ public final class ChatTypedDeliberationWire {
         String assetId = nullableText(map.get("assetId"), 64);
         String assetRevision = nullableCanonicalDecimal(map.get("assetRevision"));
         if ("TASK_LINKED_WORKSPACE_VERSION".equals(kind)) {
-            if (fileId == null || version == null || !"REFERENCE".equals(purpose)
+            if (fileId == null || version == null || !Set.of("INPUT", "REFERENCE").contains(purpose == null ? "" : purpose)
                     || assetId != null || assetRevision != null
                     || Long.parseLong(version) > Integer.MAX_VALUE) throw invalid();
         } else if ("CURRENT_CONVERSATION_ASSET".equals(kind)) {

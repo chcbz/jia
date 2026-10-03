@@ -50,6 +50,20 @@ class ChatTypedDeliberationControllerTest {
         assertThrows(ChatDeliberationException.class,()->ChatTypedDeliberationWire.parse(rawBody()+"{}"));
     }
 
+    @Test void inputRoleAndFull32SelectorsAreAcceptedButOutputAuthorityIsRejected() {
+        var selectors=new java.util.ArrayList<Map<String,Object>>();
+        for(int i=0;i<32;i++) {
+            var entry=selector("1");entry.put("fileId","file-"+i);entry.put("purpose","INPUT");selectors.add(entry);
+        }
+        var command=body();command.put("sourceSelectors",selectors);
+        assertEquals(32,ChatTypedDeliberationWire.parse(command).sourceSelectors().size());
+        selectors.getFirst().put("purpose","OUTPUT");
+        assertThrows(ChatDeliberationException.class,()->ChatTypedDeliberationWire.parse(command));
+        selectors.getFirst().put("purpose","INPUT");
+        var extra=selector("1");extra.put("fileId","file-32");selectors.add(extra);
+        assertThrows(ChatDeliberationException.class,()->ChatTypedDeliberationWire.parse(command));
+    }
+
     @Test void getIsReadOnlyAndReturnsPendingProjectionWithoutCapabilityLookup() {
         when(tenants.resolve(authentication)).thenReturn("0");when(identities.resolve(any())).thenReturn(sender);
         var request=new ChatDeliberationService.RequestView("request","1","42","5","8","RUNNING","0",List.of(

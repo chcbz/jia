@@ -49,7 +49,7 @@ public final class ChatTypedDeliberationContextService {
         if (!enabled || !schema.ready()) throw unavailable("Typed deliberation schema is unavailable");
         exact(scope.tenantId(),50); exact(scope.ownerJiacn(),50); exact(scope.clientId(),50);
         exact(scope.conversationId(),100); exact(taskId,100); exact(targetAgentId,100);
-        if (scope.conversationGeneration()<1 || requested==null || requested.size()>16) throw invalid();
+        if (scope.conversationGeneration()<1 || requested==null || requested.size()>32) throw invalid();
         TypedDeliberationSessionRegistry.Ready ready;
         try {
             ready=sessions.requireSingleReady(new TypedDeliberationSessionRegistry.Scope(
@@ -61,7 +61,8 @@ public final class ChatTypedDeliberationContextService {
         List<Map<String,Object>> available=new ArrayList<>();
         List<ChatTypedDeliberationWire.SourceSelector> normalized=new ArrayList<>();
         Set<String> sourceRefs=new HashSet<>();
-        for (var selector:requested) {
+        for (var raw:requested) {
+            var selector=ChatTypedDeliberationWire.validateSelector(raw);
             Map<String,Object> entry="TASK_LINKED_WORKSPACE_VERSION".equals(selector.kind())
                     ? workspace(scope,taskId,selector) : asset(scope,selector);
             String sourceRef=sourceRefId(scope,entry);
@@ -111,9 +112,9 @@ public final class ChatTypedDeliberationContextService {
                   AND l.client_id=? AND BINARY l.client_id=BINARY ?
                   AND l.task_id=? AND BINARY l.task_id=BINARY ?
                   AND l.file_id=? AND BINARY l.file_id=BINARY ? AND l.file_version=?
-                  AND l.link_role='REFERENCE' AND l.link_state='ACTIVE'
+                  AND l.link_role=? AND BINARY l.link_role=BINARY ? AND l.link_state='ACTIVE'
                 """,s.tenantId(),s.tenantId(),s.ownerJiacn(),s.ownerJiacn(),s.clientId(),s.clientId(),
-                taskId,taskId,x.fileId(),x.fileId(),Integer.parseInt(x.version()));
+                taskId,taskId,x.fileId(),x.fileId(),Integer.parseInt(x.version()),x.purpose(),x.purpose());
         if(rows.size()!=1)throw missing(); Map<String,Object> row=rows.getFirst();
         return source("TASK_WORKSPACE_FILE","TASK_LINKED_WORKSPACE_VERSION",x,
                 text(row,"content_mime_type"),text(row,"content_hash"),number(row,"byte_length"),null,null);

@@ -3,6 +3,7 @@ package cn.jia.chat.service;
 import cn.jia.agent.entity.AgentTaskBountyBootstrapClaimDTO;
 import cn.jia.agent.service.AgentTaskExecutionGrantService;
 import cn.jia.agent.service.AgentTaskRequirementSnapshotService;
+import cn.jia.chat.api.ChatTypedDeliberationWire;
 import cn.jia.chat.dao.ChatConversationDao;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.deliberation.ChatConversationEventEntity;
@@ -29,12 +30,13 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * Exactly one initial user request for a trusted assignment action. This does not send a CHAT
- * turn or call a Provider: a later execution coordinator must re-admit the persisted step.
+ * Exactly one initial user request for a trusted assignment action. DELIBERATE admits a durable
+ * typed CHAT turn; explicit execution intents retain their separately authorized step admission.
+ * This transaction never calls a Provider or grants executable/paid authority.
  */
 @Service
 public class ChatBountyBootstrapAdmissionService {
-    private static final Set<String> OPERATIONS = Set.of("INSPECT_INPUTS", "GENERATE_IMAGE",
+    private static final Set<String> OPERATIONS = Set.of("DELIBERATE", "INSPECT_INPUTS", "GENERATE_IMAGE",
             "EDIT_IMAGE", "GENERATE_AUDIO", "EDIT_AUDIO");
     private final AgentTaskRequirementSnapshotService requirements;
     private final ChatBountyConversationService discussions;
@@ -44,11 +46,13 @@ public class ChatBountyBootstrapAdmissionService {
     private final ChatInteractionStepStore steps;
     private final ChatConversationEventBroker broker;
     private final ObjectMapper json;
+    private final ChatTypedDiscussionAdmissionService typedDiscussion;
 
     public ChatBountyBootstrapAdmissionService(AgentTaskRequirementSnapshotService requirements,
             ChatBountyConversationService discussions, ChatConversationDao conversations,
             ChatMessageDao messages, ChatDeliberationDao deliberation,
-            ChatInteractionStepStore steps, ChatConversationEventBroker broker, ObjectMapper json) {
+            ChatInteractionStepStore steps, ChatConversationEventBroker broker, ObjectMapper json,
+            ChatTypedDiscussionAdmissionService typedDiscussion) {
         this.requirements = Objects.requireNonNull(requirements);
         this.discussions = Objects.requireNonNull(discussions);
         this.conversations = Objects.requireNonNull(conversations);
@@ -57,6 +61,7 @@ public class ChatBountyBootstrapAdmissionService {
         this.steps = Objects.requireNonNull(steps);
         this.broker = Objects.requireNonNull(broker);
         this.json = Objects.requireNonNull(json);
+        this.typedDiscussion = Objects.requireNonNull(typedDiscussion);
     }
 
     public record Admission(String conversationId, long conversationGeneration,
@@ -120,6 +125,30 @@ public class ChatBountyBootstrapAdmissionService {
         ChatBountyConversationService.Discussion discussion = discussions.ensure(scope,
                 claim.taskId(), claim.grantId(), claim.grantVersion(), claim.assignmentRevision(),
                 claim.targetAgentId(), claim.permittedOperation(), requirement.title());
+        if ("DELIBERATE".equals(claim.permittedOperation())) {
+            var selectors = claim.references().stream().map(reference ->
+                    new ChatTypedDeliberationWire.SourceSelector("TASK_LINKED_WORKSPACE_VERSION",
+                            reference.fileId(), Integer.toString(reference.version()), reference.purpose(),
+                            null, null)).toList();
+            var command = new ChatTypedDeliberationWire.DiscussionCommand("DISCUSSION", claim.taskId(),
+                    claim.assignmentRevision(), content, null, null, null, null, selectors);
+            // Stable per original action. The typed admission persists the source catalogue and
+            // one dispatch outbox atomically; replay returns its receipt without a second turn.
+            // ensure() acquired this same task root/binding before the conversation lock.
+            String key = stable("mmd-initial-discuss", claim.tenantId(), claim.clientId(),
+                    claim.ownerJiacn(), claim.taskId(), claim.sourceBusinessActionId());
+            var admitted = typedDiscussion.admit(claim.tenantId(), new ServerResolvedSender(
+                    ServerResolvedSender.USER_TYPE, claim.ownerJiacn(), claim.ownerJiacn(),
+                    claim.clientId(), DisplayNameSource.JIACN), discussion.conversationId(), key, command);
+            if (admitted == null || !"ADMITTED".equals(admitted.state())
+                    || !exact(admitted.requestId(), 100) || !exact(admitted.userMessageId(), 100)
+                    || admitted.turnIds().size() != 1) {
+                throw new IllegalStateException("Initial typed discussion was not durably admitted");
+            }
+            // CHAT has no execution step. Never manufacture a step or execution identifier.
+            return new Admission(discussion.conversationId(), discussion.generation(),
+                    admitted.requestId(), admitted.userMessageId(), null, admitted.replay());
+        }
         String requestId = stable("mmd-initial-request", claim.tenantId(), claim.clientId(),
                 claim.ownerJiacn(), claim.taskId(), claim.sourceBusinessActionId());
         String stepId = stable("mmd-initial-step", requestId);

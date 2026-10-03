@@ -32,9 +32,10 @@ class ChatBountyBootstrapAdmissionServiceTest {
     private final ChatDeliberationDao deliberation = mock(ChatDeliberationDao.class);
     private final ChatInteractionStepStore steps = mock(ChatInteractionStepStore.class);
     private final ChatConversationEventBroker broker = mock(ChatConversationEventBroker.class);
+    private final ChatTypedDiscussionAdmissionService typedDiscussion = mock(ChatTypedDiscussionAdmissionService.class);
     private final ChatBountyBootstrapAdmissionService service = new ChatBountyBootstrapAdmissionService(
             requirements, discussions, conversations, messages, deliberation, steps, broker,
-            JsonUtil.getMapper());
+            JsonUtil.getMapper(), typedDiscussion);
     private final AgentTaskExecutionGrantService.Scope scope =
             new AgentTaskExecutionGrantService.Scope("0", "client", "owner");
     private final String snapshotHash = "a".repeat(64);
@@ -92,6 +93,68 @@ class ChatBountyBootstrapAdmissionServiceTest {
             return 1;
         });
         when(deliberation.assignEventVersion(77L)).thenReturn(1);
+    }
+
+    private AgentTaskBountyBootstrapClaimDTO genericClaim(
+            List<AgentTaskBountyBootstrapClaimDTO.ReferenceSummary> references) throws Exception {
+        return new AgentTaskBountyBootstrapClaimDTO("bootstrap-generic", "0", "client", "owner",
+                "task-1", "action-generic", 1L, "TASK_REQUIREMENT_REVISION_V1", 3L,
+                "agent-1", "grant-1", 1L, "DELIBERATE", references,
+                sha(JsonUtil.getMapper().writeValueAsString(references)), "worker-1",
+                System.currentTimeMillis()+60_000, 1, 2);
+    }
+
+    private cn.jia.chat.api.ChatTypedDeliberationWire.Accepted typedReceipt(boolean replay) {
+        return new cn.jia.chat.api.ChatTypedDeliberationWire.Accepted(1,"DISCUSSION","request-typed",
+                "42",List.of("turn-typed"),"ADMITTED","0","7","/chat/requests/request-typed",
+                "/chat/conversations/10/requests/request-typed/typed-outcome",replay,null);
+    }
+
+    @Test void genericBootstrapSendsExactRequirementAndAll32MixedMaterialsToTypedDiscussion() throws Exception {
+        authorized();
+        when(discussions.ensure(scope,"task-1","grant-1",1,3,"agent-1","DELIBERATE","画一只鸟"))
+                .thenReturn(new ChatBountyConversationService.Discussion("10",1,true));
+        when(typedDiscussion.admit(eq("0"),any(),eq("10"),anyString(),any())).thenReturn(typedReceipt(false));
+        var refs=new java.util.ArrayList<AgentTaskBountyBootstrapClaimDTO.ReferenceSummary>();
+        var mimes=List.of("image/png","application/pdf","audio/ogg","text/plain");
+        for(int i=0;i<32;i++)refs.add(new AgentTaskBountyBootstrapClaimDTO.ReferenceSummary(
+                "file-"+i,1,"INPUT",mimes.get(i%4),100,"b".repeat(64)));
+        var accepted=service.admit(genericClaim(refs));
+        assertEquals("request-typed",accepted.requestId()); assertNull(accepted.stepId());
+        var command=org.mockito.ArgumentCaptor.forClass(cn.jia.chat.api.ChatTypedDeliberationWire.DiscussionCommand.class);
+        verify(typedDiscussion).admit(eq("0"),eq(new ServerResolvedSender("user","owner","owner","client",DisplayNameSource.JIACN)),
+                eq("10"),anyString(),command.capture());
+        assertEquals("画一只鸟\n\n蓝色羽毛",command.getValue().content());
+        assertEquals("task-1",command.getValue().taskId());assertEquals(3,command.getValue().expectedAssignmentRevision());
+        assertEquals(32,command.getValue().sourceSelectors().size());
+        assertTrue(command.getValue().sourceSelectors().stream().allMatch(x->"INPUT".equals(x.purpose())));
+        verifyNoInteractions(steps,messages,deliberation,broker);
+    }
+
+    @Test void genericTextOnlyBootstrapUsesSameTypedKeyOnReplayAndNoExecutionStep() throws Exception {
+        authorized();
+        when(discussions.ensure(scope,"task-1","grant-1",1,3,"agent-1","DELIBERATE","画一只鸟"))
+                .thenReturn(new ChatBountyConversationService.Discussion("10",1,true));
+        when(typedDiscussion.admit(eq("0"),any(),eq("10"),anyString(),any()))
+                .thenReturn(typedReceipt(false),typedReceipt(true));
+        var claim=genericClaim(List.of());
+        var first=service.admit(claim); var again=service.admit(claim);
+        assertFalse(first.replay());assertTrue(again.replay());assertEquals(first.requestId(),again.requestId());
+        var keys=org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(typedDiscussion,times(2)).admit(eq("0"),any(),eq("10"),keys.capture(),
+                argThat(c->"DISCUSSION".equals(c.intent())&&c.sourceSelectors().isEmpty()));
+        assertEquals(keys.getAllValues().getFirst(),keys.getAllValues().getLast());
+        verifyNoInteractions(steps,messages,deliberation,broker);
+    }
+
+    @Test void genericBootstrapDoesNotFallbackToImageIfTypedRuntimeIsUnavailable() throws Exception {
+        authorized();
+        when(discussions.ensure(scope,"task-1","grant-1",1,3,"agent-1","DELIBERATE","画一只鸟"))
+                .thenReturn(new ChatBountyConversationService.Discussion("10",1,true));
+        when(typedDiscussion.admit(eq("0"),any(),eq("10"),anyString(),any()))
+                .thenThrow(new ChatDeliberationException(ChatDeliberationException.Reason.PERSISTENCE_ERROR,"Runtime unavailable"));
+        assertThrows(ChatDeliberationException.class,()->service.admit(genericClaim(List.of())));
+        verifyNoInteractions(steps,messages,deliberation,broker);
     }
 
     @Test void acceptedInitialRequestIsNotDispatchedAsChatOrMarkedAsGenerated() throws Exception {
