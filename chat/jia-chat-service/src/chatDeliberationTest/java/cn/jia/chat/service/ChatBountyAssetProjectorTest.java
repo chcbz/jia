@@ -85,6 +85,7 @@ class ChatBountyAssetProjectorTest {
 
     @Test void confirmedFailureAndRevocationBecomeOneDurableTerminalEventWithoutFakeOutput() {
         for(String executionState:List.of("FAILED","INPUTS_REVOKED")) {
+            reset(jdbc, requests, events, conversations, messages, executions, broker);
             ready();
             when(executions.get(scope,"exec")).thenReturn(new PersonalWorkspaceExecutionService.ExecutionView(
                     "exec","task","run","42","agent",executionState,"INTERNAL_CODE","private-details",1,
@@ -103,6 +104,49 @@ class ChatBountyAssetProjectorTest {
             row.setAggregateState(expected).setStateVersion(2L);
             assertEquals(0,projector.project(candidate));
             verify(events,times(1)).insertEvent(any());
+        }
+    }
+
+    @Test void failureRequestStepEventAndVersionRollbackTogetherAndPublishOnlyAfterCommit() {
+        for (String failAt:List.of("step","request","event","version","none")) {
+            var f=new ChatBountyAssetProjectorTest(); f.ready();
+            var source=new org.springframework.jdbc.datasource.DriverManagerDataSource(
+                    "jdbc:h2:mem:terminal_"+java.util.UUID.randomUUID(),"sa","");
+            var evidence=new JdbcTemplate(source);
+            // Keep connection alive for the transaction and assertions; no production database is used.
+            source.setUrl(source.getUrl()+";DB_CLOSE_DELAY=-1");
+            evidence.execute("CREATE TABLE writes(label VARCHAR(20) PRIMARY KEY)");
+            java.util.function.Function<String,Integer> write=label->{
+                assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
+                evidence.update("INSERT INTO writes(label) VALUES(?)",label);
+                if(label.equals(failAt))throw new IllegalStateException("injected-"+label);return 1;
+            };
+            when(f.executions.get(f.scope,"exec")).thenReturn(new PersonalWorkspaceExecutionService.ExecutionView(
+                    "exec","task","run","42","agent","FAILED",null,null,1,"image/png",List.of(),null,"CONVERSATION",null,null,null));
+            f.events.findRequest("0","owner","client","req").setRequestRevision(1L).setConversationGeneration(1L);
+            doAnswer(i->write.apply("step")).when(f.jdbc).update(contains("UPDATE chat_interaction_step"),any(Object[].class));
+            doAnswer(i->write.apply("request")).when(f.events).updateRequestState(any(),eq("FAILED"),anyLong());
+            doAnswer(i->{cn.jia.chat.deliberation.ChatConversationEventEntity event=i.getArgument(0);
+                event.setEventSequence(9L);return write.apply("event");}).when(f.events).insertEvent(any());
+            doAnswer(i->write.apply("version")).when(f.events).assignEventVersion(9L);
+            try(var context=new org.springframework.context.annotation.AnnotationConfigApplicationContext()) {
+                context.register(ChatActionExecutionTransactionTest.TxConfig.class);
+                context.registerBean("transactionManager",org.springframework.jdbc.datasource.DataSourceTransactionManager.class,
+                        ()->new org.springframework.jdbc.datasource.DataSourceTransactionManager(source));
+                context.registerBean(ChatBountyAssetProjector.class,()->f.projector); context.refresh();
+                var actual=context.getBean(ChatBountyAssetProjector.class);
+                assertTrue(org.springframework.aop.support.AopUtils.isCglibProxy(actual));
+                if("none".equals(failAt)) {
+                    assertEquals(1,actual.project(f.candidate));
+                    assertEquals(4,evidence.queryForObject("SELECT COUNT(*) FROM writes",Integer.class));
+                    verify(f.broker).publishIfSubscribed(eq("42"),eq(1L),any(),argThat(frame->"FAILED".equals(frame.get("state"))));
+                } else {
+                    assertEquals("injected-"+failAt,assertThrows(RuntimeException.class,()->actual.project(f.candidate)).getMessage());
+                    assertEquals(0,evidence.queryForObject("SELECT COUNT(*) FROM writes",Integer.class));
+                    verifyNoInteractions(f.broker);
+                }
+                verifyNoInteractions(f.messages);
+            }
         }
     }
 
