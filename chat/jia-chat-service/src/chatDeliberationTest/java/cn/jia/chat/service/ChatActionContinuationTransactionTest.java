@@ -34,14 +34,14 @@ class ChatActionContinuationTransactionTest {
                 if(label.equals(failAt)) throw new IllegalStateException("injected-"+label);
                 return 1;
             };
-            when(f.dao.insertRequest(any())).thenAnswer(i->{ChatRequestEntity row=i.getArgument(0);row.setId(2L);return write.apply("request");});
-            when(f.dao.insertSnapshot(any())).thenAnswer(i->write.apply("snapshot"));
-            when(f.dao.insertTurn(any())).thenAnswer(i->write.apply("turn"));
-            when(f.dao.insertOutbox(any())).thenAnswer(i->write.apply("dispatch"));
-            when(f.typed.insertAdmission(any())).thenAnswer(i->write.apply("admission"));
-            when(f.dao.insertEvent(any())).thenAnswer(i->{ChatConversationEventEntity row=i.getArgument(0);row.setEventSequence(1L);return write.apply("event");});
-            when(f.dao.assignEventVersion(anyLong())).thenAnswer(i->write.apply("event-version"));
-            when(f.dao.settleOutbox(eq(claim.row()),eq("SENT"),isNull(),isNull(),anyLong(),anyLong())).thenAnswer(i->write.apply("settle"));
+            doAnswer(i->{ChatRequestEntity row=i.getArgument(0);row.setId(2L);return write.apply("request");}).when(f.dao).insertRequest(any());
+            doAnswer(i->write.apply("snapshot")).when(f.dao).insertSnapshot(any());
+            doAnswer(i->write.apply("turn")).when(f.dao).insertTurn(any());
+            doAnswer(i->write.apply("dispatch")).when(f.dao).insertOutbox(any());
+            doAnswer(i->write.apply("admission")).when(f.typed).insertAdmission(any());
+            doAnswer(i->{ChatConversationEventEntity row=i.getArgument(0);row.setEventSequence(1L);return write.apply("event");}).when(f.dao).insertEvent(any());
+            doAnswer(i->write.apply("event-version")).when(f.dao).assignEventVersion(anyLong());
+            doAnswer(i->write.apply("settle")).when(f.dao).settleOutbox(eq(claim.row()),eq("SENT"),isNull(),isNull(),anyLong(),anyLong());
             try(var context=new AnnotationConfigApplicationContext()) {
                 context.register(TxConfig.class);
                 context.registerBean("transactionManager",DataSourceTransactionManager.class,()->new DataSourceTransactionManager(source));
