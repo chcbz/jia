@@ -312,6 +312,52 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
         return grant;
     }
 
+    @Test void spoolOnlyRecoveryRollsBackDatabaseThenCommitsExactBytesWithoutNewStart() throws Exception {
+        var row=persist("exec-spool","run-spool","42");byte[] bytes=png();String hash=sha(bytes);
+        jdbc.update("UPDATE agent_personal_workspace_execution SET conversation_lease_expires_at=1 WHERE execution_id=?",row.getExecutionId());
+        var runtime=new PersonalWorkspaceExecutionService.RuntimeScope("0","client","owner","agent","replacement");
+        var proof=recovery(row,hash,bytes.length);
+        String manifest="pwe_m_"+sha("task\n"+row.getRunId()+"\noutput_1\n"+hash+"\n"+bytes.length+"\n");
+        assertThrows(IllegalStateException.class,()->inTx(()->{
+            service.recoverConversationOutput(runtime,"task",row.getRunId(),manifest,proof,"bird.png","image/png",bytes);
+            throw new IllegalStateException("rollback after result commit");
+        }));
+        assertEquals("QUEUED",rows.find("0","client","owner",row.getExecutionId()).getExecutionState());
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM agent_personal_workspace_execution_output",Integer.class));
+        var result=inTx(()->service.recoverConversationOutput(runtime,"task",row.getRunId(),manifest,proof,"bird.png","image/png",bytes));
+        assertEquals("COMMITTED",result.state());assertEquals(hash,result.items().getFirst().sha256());
+        assertEquals(result,inTx(()->service.recoverConversationOutput(runtime,"task",row.getRunId(),manifest,proof,"bird.png","image/png",bytes)));
+        var saved=rows.find("0","client","owner",row.getExecutionId());
+        assertEquals("OUTPUT_COMMITTED",saved.getExecutionState());assertEquals(10L,saved.getConversationProviderStartedAt());
+        assertEquals("runtime",saved.getConversationLeaseRuntimeId());assertEquals(1L,saved.getConversationLeaseVersion());
+        assertEquals(1L,saved.getConversationLeaseExpiresAt());assertEquals(1L,saved.getConversationProviderLeaseVersion());
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM agent_personal_workspace_execution_output",Integer.class));
+        var output=inTx(()->rows.lockOutput("0","client","owner",row.getExecutionId(),"output_1"));
+        var storage=(PersonalWorkspaceStorage)ReflectionTestUtils.getField(service,"storage");
+        assertArrayEquals(bytes,storage.read(new PersonalWorkspaceStorage.Scope("0","client","owner"),
+                output.getStorageUri(),hash,bytes.length,"image/png").content());
+    }
+
+    @Test void concurrentSpoolReconciliationHasOneImmutableOutput() throws Exception {
+        var row=persist("exec-spool-race","run-spool-race","42");byte[] bytes=png();String hash=sha(bytes);
+        jdbc.update("UPDATE agent_personal_workspace_execution SET conversation_lease_expires_at=1 WHERE execution_id=?",row.getExecutionId());
+        var runtime=new PersonalWorkspaceExecutionService.RuntimeScope("0","client","owner","agent","replacement");
+        var proof=recovery(row,hash,bytes.length);
+        String manifest="pwe_m_"+sha("task\n"+row.getRunId()+"\noutput_1\n"+hash+"\n"+bytes.length+"\n");
+        var start=new java.util.concurrent.CountDownLatch(1);
+        try(var executor=java.util.concurrent.Executors.newFixedThreadPool(2)) {
+            java.util.concurrent.Callable<PersonalWorkspaceExecutionService.CommitView> call=()->{
+                start.await();return inTx(()->service.recoverConversationOutput(runtime,"task",row.getRunId(),manifest,
+                        proof,"bird.png","image/png",bytes));
+            };
+            var first=executor.submit(call);var second=executor.submit(call);start.countDown();
+            assertEquals(first.get(10,java.util.concurrent.TimeUnit.SECONDS),second.get(10,java.util.concurrent.TimeUnit.SECONDS));
+        }
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM agent_personal_workspace_execution_output",Integer.class));
+        assertEquals("OUTPUT_COMMITTED",rows.find("0","client","owner",row.getExecutionId()).getExecutionState());
+        assertEquals(hash,inTx(()->rows.lockOutput("0","client","owner",row.getExecutionId(),"output_1")).getContentHash());
+    }
+
     private static PersonalWorkspaceExecutionService.ConversationResultRecovery recovery(
             PersonalWorkspaceExecutionEntity row,String hash,long length) {
         return new PersonalWorkspaceExecutionService.ConversationResultRecovery(row.getExecutionId(),

@@ -144,7 +144,7 @@ class AgentRuntimeControlledImageV3SecurityIntegrationTest {
         org.mockito.Mockito.verifyNoInteractions(executions);
     }
 
-    private static org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder spoolRequest(
+    private static org.springframework.test.web.servlet.request.MockMultipartHttpServletRequestBuilder spoolRequest(
             String path,String proof,byte[] bytes) {
         return org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart(path)
             .file(new org.springframework.mock.web.MockMultipartFile("file","bird.png","image/png",bytes))
