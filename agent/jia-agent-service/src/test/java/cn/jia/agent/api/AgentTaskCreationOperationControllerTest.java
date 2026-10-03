@@ -113,6 +113,38 @@ class AgentTaskCreationOperationControllerTest {
     }
 
     @Test
+    void v2NeutralAttachmentsHaveNoUserChosenImagePurposeOrProviderInstruction() throws Exception {
+        var v2 = new AgentTaskCreationOperationService.Receipt(2, "atco2_1", "42", 1,
+                "COMMITTED", List.of(
+                    new AgentTaskCreationOperationService.InputReference("file-a", 1, "INPUT"),
+                    new AgentTaskCreationOperationService.InputReference("file-b", 2, "INPUT")),
+                receipt().task());
+        when(operations.create(any(), eq("v2-key"), any())).thenReturn(
+                new AgentTaskCreationOperationService.Result(v2, false));
+        MvcResult result = mvc.perform(post("/agent/tasks/creation-operations/v2")
+                        .principal(jwt("owner-a", "client-a"))
+                        .header("Idempotency-Key", "v2-key")
+                        .contentType(MediaType.APPLICATION_JSON).content("""
+                          {"title":"整理图片和音频资料", "description":"不要求生图", "attachments":[
+                            {"fileId":"file-a","version":1}, {"fileId":"file-b","version":2}]}
+                          """))
+                .andExpect(status().isCreated())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
+                .andExpect(jsonPath("$.schemaVersion").value(2))
+                .andExpect(jsonPath("$.attachments[1].version").value(2))
+                .andExpect(jsonPath("$.attachments[0].purpose").doesNotExist())
+                .andExpect(jsonPath("$.inputRefs").doesNotExist()).andReturn();
+        Set<String> names = new java.util.HashSet<>();
+        json.readTree(result.getResponse().getContentAsString()).propertyNames().forEach(names::add);
+        assertEquals(Set.of("schemaVersion", "operationId", "taskId", "requirementRevision",
+                "state", "attachments", "task"), names);
+        var command = org.mockito.ArgumentCaptor.forClass(AgentTaskCreationOperationService.CreateCommand.class);
+        verify(operations).create(any(), eq("v2-key"), command.capture());
+        assertEquals("INPUT", command.getValue().inputRefs().getFirst().purpose());
+        assertEquals("不要求生图", command.getValue().description());
+    }
+
+    @Test
     void rawAllowlistDuplicateHeadersTrailingTokensAndReferenceShapeFailBeforeService() throws Exception {
         for (String body : List.of(
                 "{\"title\":\"x\",\"title\":\"y\",\"inputRefs\":[]}",
