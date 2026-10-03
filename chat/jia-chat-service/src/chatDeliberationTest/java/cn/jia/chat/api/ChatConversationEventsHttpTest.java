@@ -114,6 +114,6 @@ class ChatConversationEventsHttpTest {
     private static JwtAuthenticationToken jwt(String tenant) {
         return new JwtAuthenticationToken(Jwt.withTokenValue("fixture").header("alg","none").subject("owner")
                 .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).claim("tenant_id",tenant)
-                .claim("jiacn","owner").claim("client_id","client").build());
+                .claim("jiacn","owner").claim("client_id","client").build(), List.of());
     }
 }
