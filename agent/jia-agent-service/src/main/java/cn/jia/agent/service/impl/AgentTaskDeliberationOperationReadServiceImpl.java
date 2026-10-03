@@ -18,6 +18,9 @@ import jakarta.inject.Named;
 import org.springframework.dao.DataAccessException;
 import org.springframework.transaction.TransactionException;
 import tools.jackson.core.type.TypeReference;
+import tools.jackson.core.StreamReadFeature;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.ObjectMapper;
 
 import java.nio.charset.StandardCharsets;
@@ -35,6 +38,9 @@ import java.util.Set;
 @Named
 public final class AgentTaskDeliberationOperationReadServiceImpl
         implements AgentTaskDeliberationOperationReadService {
+    private static final ObjectMapper PERSISTED_JSON = JsonMapper.builder()
+            .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
     private static final String ACTION_PREFIX = "ASSIGN_AND_START:";
     private static final Set<String> OPERATIONS = Set.of(
             "INSPECT_INPUTS", "GENERATE_IMAGE", "EDIT_IMAGE", "GENERATE_AUDIO", "EDIT_AUDIO");
@@ -333,8 +339,7 @@ public final class AgentTaskDeliberationOperationReadServiceImpl
                 if (!OPERATIONS.contains(value) || !unique.add(value)) throw integrity();
             }
             List<String> canonical = unique.stream().sorted().toList();
-            if (!canonical.equals(values) || !Objects.equals(source,
-                    json.writeValueAsString(values))) throw integrity();
+            if (!canonical.equals(values) || !sameJsonValue(source, json.writeValueAsString(values))) throw integrity();
             return List.copyOf(values);
         } catch (IntegrityFailure failure) {
             throw failure;
@@ -367,14 +372,20 @@ public final class AgentTaskDeliberationOperationReadServiceImpl
             canonical.sort(Comparator.comparing(InputSummary::fileId,
                     AgentTaskDeliberationOperationReadServiceImpl::compareUtf8)
                     .thenComparingInt(InputSummary::version).thenComparing(InputSummary::purpose));
-            if (!canonical.equals(values) || !Objects.equals(source,
-                    json.writeValueAsString(values))) throw integrity();
+            if (!canonical.equals(values) || !sameJsonValue(source, json.writeValueAsString(values))) throw integrity();
             return List.copyOf(values);
         } catch (IntegrityFailure failure) {
             throw failure;
         } catch (RuntimeException corrupt) {
             throw integrity(corrupt);
         }
+    }
+
+    private static boolean sameJsonValue(String stored, String canonical) {
+        // MySQL JSON changes object-key order and whitespace. Compare exact typed
+        // values, not storage formatting; unknown/missing/coerced fields, duplicate
+        // keys, trailing documents and array reordering still fail closed.
+        return Objects.equals(PERSISTED_JSON.readTree(stored), PERSISTED_JSON.readTree(canonical));
     }
 
     private void requireRequestHash(AgentTaskExecutionGrantEntity grant, List<String> operations,
