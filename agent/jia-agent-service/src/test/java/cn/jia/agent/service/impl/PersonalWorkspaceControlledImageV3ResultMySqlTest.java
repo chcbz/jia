@@ -261,7 +261,7 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
         var outputs=inTx(() -> service.listConversationOutputs(owner,"task",row.getRunId()));
         assertEquals(1,outputs.size());assertEquals(hash,outputs.getFirst().sha256());
         var output=inTx(() -> service.readConversationOutput(owner,"task",row.getRunId(),"output_1"));
-        assertArrayEquals(bytes,output.content());
+        assertArrayEquals(bytes,output.bytes());
     }
 
     private static PersonalWorkspaceExecutionService.ConversationResultRecovery recovery(
