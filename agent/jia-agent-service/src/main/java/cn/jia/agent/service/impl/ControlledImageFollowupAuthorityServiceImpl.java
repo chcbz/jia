@@ -28,6 +28,7 @@ public class ControlledImageFollowupAuthorityServiceImpl implements ControlledIm
  private final ControlledImageProviderOperatorPolicy policies; private final ObjectProvider<RuntimeDeclarationLookup> lookups;
  private final ObjectProvider<RuntimeSourceAccessLookup> sourceAccess;
  private ControlledImageBridgeOperationDao initialOperations;
+ private AgentTaskExecutionGrantDao resultGrants;
  private final ObjectMapper json;
  @Inject public ControlledImageFollowupAuthorityServiceImpl(AgentTaskMutationTransaction tx,
    AgentTaskExecutionGrantService grants,AgentTaskProviderCostConsentDao consents,
@@ -35,6 +36,41 @@ public class ControlledImageFollowupAuthorityServiceImpl implements ControlledIm
    ControlledImageExecutionSourceV3Dao sources,ControlledImageProviderOperatorPolicy policies,
    ObjectProvider<RuntimeDeclarationLookup> lookups,ObjectProvider<RuntimeSourceAccessLookup> sourceAccess,ObjectMapper json){this.tx=Objects.requireNonNull(tx);this.grants=Objects.requireNonNull(grants);this.consents=Objects.requireNonNull(consents);this.opgrants=Objects.requireNonNull(opgrants);this.executions=Objects.requireNonNull(executions);this.sources=Objects.requireNonNull(sources);this.policies=Objects.requireNonNull(policies);this.lookups=Objects.requireNonNull(lookups);this.sourceAccess=Objects.requireNonNull(sourceAccess);this.json=Objects.requireNonNull(json);}
  @Autowired(required=false) public void setInitialControlledImageV3(ControlledImageBridgeOperationDao operations){this.initialOperations=operations;}
+
+ @Autowired(required=false) public void setCommittedResultGrants(AgentTaskExecutionGrantDao resultGrants){this.resultGrants=resultGrants;}
+
+ /** Called beneath the owner-scoped task-root lock. A completed object is not a runtime command. */
+ @Override @Transactional(readOnly=true,rollbackFor=Exception.class)
+ public CommittedResultAuthority committedResultAuthority(Scope scope,String taskId,String runId){
+  validScope(scope);id(taskId,100);id(runId,100);
+  if(resultGrants==null)throw fail(Reason.UNAVAILABLE);
+  var execution=executions.findByTaskRun(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,runId);
+  if(execution==null||!Objects.equals(3,execution.getExecutionProtocolVersion())
+    ||!"CONVERSATION".equals(execution.getExecutionMode())||!"OUTPUT_COMMITTED".equals(execution.getExecutionState())
+    ||!same(scope.tenantId(),execution.getTenantId())||!same(scope.clientId(),execution.getClientId())
+    ||!same(scope.ownerJiacn(),execution.getOwnerJiacn())||!same(taskId,execution.getTaskId())
+    ||!same(runId,execution.getRunId()))throw fail(Reason.NOT_FOUND_OR_FORBIDDEN);
+  // Revocation/reassignment remains effective, without re-reading old reference files or Provider configuration.
+  var grant=resultGrants.findByGrant(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,execution.getTaskGrantId());
+  if(grant==null||!"ACTIVE".equals(grant.getState())||!same(execution.getTaskGrantId(),grant.getGrantId())
+    ||!same(scope.tenantId(),grant.getTenantId())||!same(scope.clientId(),grant.getClientId())
+    ||!same(scope.ownerJiacn(),grant.getOwnerJiacn())||!same(taskId,grant.getTaskId())
+    ||!same(execution.getTargetAgentId(),grant.getTargetAgentId())
+    ||execution.getTaskGrantVersion()==null||execution.getAssignmentRevision()==null
+    ||!Objects.equals(execution.getTaskGrantVersion(),grant.getGrantVersion())
+    ||!Objects.equals(execution.getAssignmentRevision(),grant.getAssignmentRevision()))throw fail(Reason.CONFLICT);
+  var op=opgrants.findById(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,execution.getOperationGrantId());
+  AgentTaskProviderCostConsentEntity consent;
+  if(op==null){
+   if(initialOperations==null)throw fail(Reason.UNAVAILABLE);
+   var bridge=initialOperations.findByOperationGrant(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,execution.getOperationGrantId());
+   consent=consents.findByConsent(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,execution.getControlledConsentId());
+   requireInitialBridge(execution,bridge,consent);
+  }else consent=consents.findFollowupByConsent(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,execution.getControlledConsentId());
+  requireConsumedStartTuple(execution,op,consent);
+  return new CommittedResultAuthority(execution.getExecutionId(),execution.getTargetAgentId(),
+    execution.getPermittedOperation(),execution.getRuntimeInputSnapshotDigest());
+ }
 
  @Override @Transactional(readOnly=true,rollbackFor=Exception.class)
  public Preview preview(Scope scope,PreviewCommand command){validate(scope,command);try{
@@ -234,7 +270,6 @@ public class ControlledImageFollowupAuthorityServiceImpl implements ControlledIm
  private static void requireConsumedResultAuthority(RuntimeScope scope,
    PersonalWorkspaceExecutionEntity execution,ControlledImageIntentOperationGrantEntity op,
    AgentTaskProviderCostConsentEntity consent,boolean recovery){
-  Long leaseVersion=execution.getConversationProviderLeaseVersion();
   String originalRuntime=execution.getConversationLeaseRuntimeId();
   // Authentication independently proves the current live registered runtime. Recovery validates
   // the historical consumed START against its original runtime, never rewrites it for a new caller.
@@ -247,6 +282,13 @@ public class ControlledImageFollowupAuthorityServiceImpl implements ControlledIm
       &&execution.getConversationLeaseExpiresAt()!=null
       &&execution.getConversationLeaseExpiresAt()>System.currentTimeMillis()
       &&!same(scope.runtimeInstanceId(),originalRuntime))throw fail(Reason.CONFLICT);
+  requireConsumedStartTuple(execution,op,consent);
+ }
+ private static void requireConsumedStartTuple(PersonalWorkspaceExecutionEntity execution,
+   ControlledImageIntentOperationGrantEntity op,AgentTaskProviderCostConsentEntity consent){
+  Long leaseVersion=execution.getConversationProviderLeaseVersion();
+  String originalRuntime=execution.getConversationLeaseRuntimeId();
+  if(originalRuntime==null||originalRuntime.isBlank())throw fail(Reason.CONFLICT);
   if(consent==null||!"CONSUMED".equals(consent.getState())||consent.getConsumedAt()==null
     ||!same(execution.getControlledConsentId(),consent.getConsentId())
     ||!same(execution.getExecutionId(),consent.getReservedExecutionId())

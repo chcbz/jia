@@ -18,6 +18,11 @@ public interface ControlledImageFollowupAuthorityService {
     /** COMMAND/INPUTS/EXISTING_RUN revalidate live authority; FAILURE selects reserved pre-START
      * admission or the consumed START lease, while RESULT always requires the consumed START lease. */
     RuntimeAuthority runtimeAuthority(RuntimeScope scope,String taskId,String runId,String purpose);
+    /** Owner-only committed-result proof. Caller holds the current task root and enforces Chat ACL.
+     * No runtime identity, Provider binding, input reads, lease or callable grant is issued. */
+    CommittedResultAuthority committedResultAuthority(Scope scope,String taskId,String runId);
+    record CommittedResultAuthority(String executionId,String targetAgentId,String operation,
+            String inputSnapshotDigest) { }
     StartReceipt consumeForStart(RuntimeScope scope, StartCommand command, LateCheck lateCheck);
 
     record Scope(String tenantId,String clientId,String ownerJiacn) { }

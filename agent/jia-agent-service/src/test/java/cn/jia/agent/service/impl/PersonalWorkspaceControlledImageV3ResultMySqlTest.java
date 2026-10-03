@@ -257,11 +257,58 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
                 new PersonalWorkspaceExecutionService.ConversationFence(1,"lease-token"),"output_1","bird.png","image/png",bytes));
         String manifest="pwe_m_"+sha("task\n"+row.getRunId()+"\noutput_1\n"+hash+"\n"+bytes.length+"\n");
         inTx(() -> service.recoverStagedConversationOutput(runtime,"task",row.getRunId(),manifest,recovery(row,hash,bytes.length)));
+        var grant=useActualOwnerAuthority(rows.find("0","client","owner",row.getExecutionId()));
         var owner=new PersonalWorkspaceExecutionService.OwnerScope("0","client","owner");
         var outputs=inTx(() -> service.listConversationOutputs(owner,"task",row.getRunId()));
         assertEquals(1,outputs.size());assertEquals(hash,outputs.getFirst().sha256());
         var output=inTx(() -> service.readConversationOutput(owner,"task",row.getRunId(),"output_1"));
         assertArrayEquals(bytes,output.bytes());
+        var denied=new PersonalWorkspaceExecutionService.OwnerScope("0","client","foreign");
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                () -> inTx(() -> service.listConversationOutputs(denied,"task",row.getRunId())));
+        grant.setState("REVOKED");
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                () -> inTx(() -> service.readConversationOutput(owner,"task",row.getRunId(),"output_1")));
+        grant.setState("ACTIVE");
+        when(conversation.requireAccessible(any(),eq("42"))).thenThrow(new IllegalStateException("revoked"));
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                () -> inTx(() -> service.listConversationOutputs(owner,"task",row.getRunId())));
+        assertEquals("COMMITTED",inTx(() -> rows.lockOutput("0","client","owner",row.getExecutionId(),"output_1")).getOutputState());
+    }
+
+    /** Actual owner authority + actual execution DAO/MySQL/storage, no fabricated successful proof. */
+    @SuppressWarnings("unchecked")
+    private cn.jia.agent.entity.AgentTaskExecutionGrantEntity useActualOwnerAuthority(PersonalWorkspaceExecutionEntity e) {
+        var consentDao=mock(cn.jia.agent.dao.AgentTaskProviderCostConsentDao.class);
+        var opDao=mock(cn.jia.agent.dao.ControlledImageIntentOperationGrantDao.class);
+        var bridgeDao=mock(cn.jia.agent.dao.ControlledImageBridgeOperationDao.class);
+        var grantDao=mock(cn.jia.agent.dao.AgentTaskExecutionGrantDao.class);
+        var actual=new ControlledImageFollowupAuthorityServiceImpl(mock(AgentTaskMutationTransaction.class),
+                mock(cn.jia.agent.service.AgentTaskExecutionGrantService.class),consentDao,opDao,rows,
+                mock(ControlledImageExecutionSourceV3Dao.class),mock(ControlledImageProviderOperatorPolicy.class),
+                mock(org.springframework.beans.factory.ObjectProvider.class),
+                mock(org.springframework.beans.factory.ObjectProvider.class),new tools.jackson.databind.ObjectMapper());
+        actual.setInitialControlledImageV3(bridgeDao);actual.setCommittedResultGrants(grantDao);
+        var grant=new cn.jia.agent.entity.AgentTaskExecutionGrantEntity().setGrantId(e.getTaskGrantId())
+                .setTaskId("task").setOwnerJiacn("owner").setTargetAgentId("agent").setState("ACTIVE")
+                .setGrantVersion(e.getTaskGrantVersion()).setAssignmentRevision(e.getAssignmentRevision());
+        grant.setTenantId("0");grant.setClientId("client");
+        when(grantDao.findByGrant("0","client","owner","task",e.getTaskGrantId())).thenReturn(grant);
+        var bridge=new cn.jia.agent.entity.ControlledImageBridgeOperationEntity().setTaskId("task")
+                .setExecutionProtocolVersion(3).setOperationGrantId(e.getOperationGrantId())
+                .setConsentId(e.getControlledConsentId()).setGrantId(e.getTaskGrantId())
+                .setGrantVersion(e.getTaskGrantVersion()).setAssignmentRevision(e.getAssignmentRevision());
+        when(bridgeDao.findByOperationGrant("0","client","owner","task",e.getOperationGrantId())).thenReturn(bridge);
+        var consent=new cn.jia.agent.entity.AgentTaskProviderCostConsentEntity().setConsentId(e.getControlledConsentId())
+                .setConsentPurpose("INITIAL_ASSIGN_AND_START").setBoundGrantId(e.getTaskGrantId())
+                .setBoundGrantVersion(e.getTaskGrantVersion()).setBoundAssignmentRevision(e.getAssignmentRevision())
+                .setTargetAgentId("agent").setState("CONSUMED").setConsumedAt(10L)
+                .setReservedExecutionId(e.getExecutionId()).setReservedRunId(e.getRunId())
+                .setRuntimeInputSnapshotSha256(e.getRuntimeInputSnapshotDigest())
+                .setConsumedLeaseId("pwe_lease_"+sha("controlled-provider-start-v3\n"+e.getExecutionId()+"\nruntime\n1"));
+        when(consentDao.findByConsent("0","client","owner","task",e.getControlledConsentId())).thenReturn(consent);
+        service.setControlledImageFollowupV3(actual,mock(ControlledImageExecutionSourceV3Dao.class));
+        return grant;
     }
 
     private static PersonalWorkspaceExecutionService.ConversationResultRecovery recovery(

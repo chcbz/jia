@@ -31,6 +31,7 @@ import static org.mockito.Mockito.*;
 
 class ControlledImageIntentOperationGrantServiceTest {
     private final AgentTaskMutationTransaction transactions=mock(AgentTaskMutationTransaction.class);
+    private final cn.jia.agent.dao.AgentTaskExecutionGrantDao resultGrants=mock(cn.jia.agent.dao.AgentTaskExecutionGrantDao.class);
     private final AgentTaskExecutionGrantService grants=mock(AgentTaskExecutionGrantService.class);
     private final AgentTaskProviderCostConsentDao consents=mock(AgentTaskProviderCostConsentDao.class);
     private final ControlledImageIntentOperationGrantDao operationGrants=mock(ControlledImageIntentOperationGrantDao.class);
@@ -55,6 +56,7 @@ class ControlledImageIntentOperationGrantServiceTest {
             return mutation.apply(new AgentTaskMetaEntity().setTaskId("task"));
         });
         ((ControlledImageFollowupAuthorityServiceImpl)service).setInitialControlledImageV3(initialOperations);
+        ((ControlledImageFollowupAuthorityServiceImpl)service).setCommittedResultGrants(resultGrants);
         when(declarations.getIfUnique()).thenReturn(declaration);
         when(declaration.current(any())).thenReturn(new ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.Declaration(
                 ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State.READY,"runtime",
@@ -296,6 +298,8 @@ class ControlledImageIntentOperationGrantServiceTest {
         execution.setExecutionState("QUEUED").setConversationLeaseExpiresAt(1L);
         assertEquals("execution",service.runtimeAuthority(new ControlledImageFollowupAuthorityService.RuntimeScope(
                 "0","client","owner","agent","replacement-runtime"),"task","run","RESULT_RECOVERY").executionId());
+        enableOwnerResultRead(execution);
+        assertEquals("execution",service.committedResultAuthority(scope,"task","run").executionId());
         assertEquals(lease,consent.getConsumedLeaseId());
         assertEquals("runtime",execution.getConversationLeaseRuntimeId());
         verifyNoInteractions(grants,policies);
@@ -498,6 +502,53 @@ class ControlledImageIntentOperationGrantServiceTest {
         verifyNoInteractions(grants,operationGrants,consents,executions,sources,policies);
     }
 
+
+    @Test void ownerCommittedResultUsesDurableProofAndNeverRuntimeOrProviderReadiness() {
+        var f=resultFixture();stubResultFixture(f);enableOwnerResultRead(f.execution());
+        f.execution().setConversationLeaseExpiresAt(1L);
+        var proof=service.committedResultAuthority(scope,"task","run");
+        assertEquals("execution",proof.executionId());assertEquals("agent",proof.targetAgentId());
+        assertEquals("7".repeat(64),proof.inputSnapshotDigest());
+        verifyNoInteractions(grants,policies,declaration);
+        verify(declarations,never()).getIfUnique();verify(sourceAccess,never()).getIfUnique();
+        verify(executions,never()).update(any());
+    }
+
+    @Test void ownerResultRejectsNonCommittedScopeRevokedGrantAndAlteredConsumedAuthority() {
+        List<Consumer<ResultFixture>> changes=List.of(
+            f -> f.execution().setExecutionState("QUEUED"),
+            f -> f.execution().setOwnerJiacn("foreign"),
+            f -> f.execution().setClientId("foreign"),
+            f -> f.execution().setTenantId("foreign"),
+            f -> f.execution().setTargetAgentId("foreign"),
+            f -> f.execution().setConversationLeaseRuntimeId("changed"),
+            f -> f.consent().setState("REVOKED"),
+            f -> f.consent().setConsumedLeaseId("wrong"),
+            f -> f.operation().setState("REVOKED"));
+        for(var change:changes){
+            var f=resultFixture();stubResultFixture(f);enableOwnerResultRead(f.execution());change.accept(f);
+            assertThrows(ControlledImageFollowupAuthorityService.Failure.class,
+                    () -> service.committedResultAuthority(scope,"task","run"));
+        }
+        for(String state:List.of("REVOKED","SUPERSEDED")){
+            var f=resultFixture();stubResultFixture(f);var grant=enableOwnerResultRead(f.execution());grant.setState(state);
+            assertThrows(ControlledImageFollowupAuthorityService.Failure.class,
+                    () -> service.committedResultAuthority(scope,"task","run"));
+        }
+        verify(declarations,never()).getIfUnique();verify(sourceAccess,never()).getIfUnique();
+    }
+
+    private cn.jia.agent.entity.AgentTaskExecutionGrantEntity enableOwnerResultRead(PersonalWorkspaceExecutionEntity e){
+        e.setTenantId("0");e.setClientId("client");e.setOwnerJiacn("owner");
+        e.setExecutionMode("CONVERSATION").setExecutionState("OUTPUT_COMMITTED");
+        if(e.getTaskGrantId()==null)e.setTaskGrantId("baseline").setTaskGrantVersion(1L).setAssignmentRevision(1L);
+        var g=new cn.jia.agent.entity.AgentTaskExecutionGrantEntity().setGrantId(e.getTaskGrantId())
+                .setTaskId("task").setOwnerJiacn("owner").setTargetAgentId("agent").setState("ACTIVE")
+                .setGrantVersion(e.getTaskGrantVersion()).setAssignmentRevision(e.getAssignmentRevision());
+        g.setTenantId("0");g.setClientId("client");
+        when(resultGrants.findByGrant("0","client","owner","task",e.getTaskGrantId())).thenReturn(g);
+        return g;
+    }
 
     private ResultFixture resultFixture() {
         String lease="pwe_lease_"+sha("controlled-provider-start-v3\nexecution\nruntime\n1");

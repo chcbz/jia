@@ -500,7 +500,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                     if (row==null || !"CONVERSATION".equals(row.getExecutionMode())
                             || !"OUTPUT_COMMITTED".equals(row.getExecutionState())) throw failure(Reason.NOT_FOUND);
                     requireConversationRoot(root,scope,taskId,row.getTargetAgentId(),row.getAssignmentRevision());
-                    requireConversationGrant(scope,row,"EXISTING_RUN",null);
+                    requireOwnerCommittedConversationAuthority(scope,row);
                     requireCurrentControlledConversationAccess(scope,row);
                     var locked=executions.lockByTaskRun(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,runId);
                     if (locked==null || !same(row.getExecutionId(),locked.getExecutionId())
@@ -532,7 +532,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                     if (row==null || !"CONVERSATION".equals(row.getExecutionMode())
                             || !"OUTPUT_COMMITTED".equals(row.getExecutionState())) throw failure(Reason.NOT_FOUND);
                     requireConversationRoot(root,scope,taskId,row.getTargetAgentId(),row.getAssignmentRevision());
-                    requireConversationGrant(scope,row,"EXISTING_RUN",null);
+                    requireOwnerCommittedConversationAuthority(scope,row);
                     requireCurrentControlledConversationAccess(scope,row);
                     var locked=executions.lockByTaskRun(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,runId);
                     if (locked==null || !same(row.getExecutionId(),locked.getExecutionId())
@@ -561,6 +561,23 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                     }
                     return List.copyOf(result);
                 });
+    }
+
+    private void requireOwnerCommittedConversationAuthority(OwnerScope scope,PersonalWorkspaceExecutionEntity row) {
+        if (!Objects.equals(3,row.getExecutionProtocolVersion())) {
+            requireConversationGrant(scope,row,"EXISTING_RUN",null);
+            return;
+        }
+        if (followupAuthority==null) throw failure(Reason.CAPABILITY_UNAVAILABLE);
+        try {
+            var proof=followupAuthority.committedResultAuthority(new ControlledImageFollowupAuthorityService.Scope(
+                    scope.tenantId(),scope.clientId(),scope.ownerJiacn()),row.getTaskId(),row.getRunId());
+            if (proof==null || !same(row.getExecutionId(),proof.executionId())
+                    || !same(row.getTargetAgentId(),proof.targetAgentId())
+                    || !same(row.getPermittedOperation(),proof.operation())
+                    || !same(row.getRuntimeInputSnapshotDigest(),proof.inputSnapshotDigest()))
+                throw failure(Reason.GRANT_REVOKED);
+        } catch (RuntimeException denied) { throw failure(Reason.GRANT_REVOKED); }
     }
 
     private static void requireConversationRoot(AgentTaskMetaEntity root,OwnerScope scope,
