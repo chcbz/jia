@@ -63,6 +63,32 @@ class ControlledImageBridgeMySqlTest {
         admin.execute("DROP DATABASE IF EXISTS `"+database+"`");
     }
 
+    @Test void actualMySqlJsonRoundTripPreservesNonemptyAssignmentReadInputs() throws Exception {
+        String original = "[{\"fileId\":\"reference-v2\",\"version\":2,\"purpose\":\"REFERENCE\","
+                + "\"contentMimeType\":\"image/png\",\"byteLength\":1863523,\"contentHash\":\""
+                + "a".repeat(64) + "\"}]";
+        String stored = jdbc.queryForObject("SELECT CAST(? AS JSON)", String.class, original);
+        assertNotEquals(original, stored, "real MySQL changes JSON formatting/key order");
+        var reader = new AgentTaskDeliberationOperationReadServiceImpl(
+                mock(AgentTaskExecutionGrantDao.class), mock(AgentTaskBountyBootstrapOutboxDao.class),
+                mock(ControlledImageBridgeOperationDao.class), mock(AgentTaskRequirementSnapshotService.class),
+                mock(AgentTaskMutationTransaction.class), new tools.jackson.databind.ObjectMapper());
+        var inputs = AgentTaskDeliberationOperationReadServiceImpl.class
+                .getDeclaredMethod("readInputs", String.class);
+        inputs.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        var actual = (List<AgentTaskDeliberationOperationReadService.InputSummary>) inputs.invoke(reader, stored);
+        assertEquals(2, actual.getFirst().version());
+        assertEquals(1863523, actual.getFirst().byteLength());
+        assertEquals("a".repeat(64), actual.getFirst().contentHash());
+        var operations = AgentTaskDeliberationOperationReadServiceImpl.class
+                .getDeclaredMethod("readOperations", String.class);
+        operations.setAccessible(true);
+        String rawOperations = jdbc.queryForObject("SELECT CAST(? AS JSON)", String.class,
+                "[\"EDIT_IMAGE\",\"GENERATE_IMAGE\"]");
+        assertEquals(List.of("EDIT_IMAGE", "GENERATE_IMAGE"), operations.invoke(reader, rawOperations));
+    }
+
     @Test void actualMySqlNormalizesExactChecksAndRejectsSameNamedWeakDefinitions() {
         assertDoesNotThrow(()->new ControlledImageBridgeSchemaInitializer(jdbc).afterPropertiesSet());
         assertDoesNotThrow(()->new ControlledImageExecutionSchemaInitializer(jdbc).afterPropertiesSet());

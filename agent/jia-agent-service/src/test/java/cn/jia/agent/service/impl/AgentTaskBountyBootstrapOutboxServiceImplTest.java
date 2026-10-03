@@ -311,6 +311,40 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
         }
 
         @Test
+        void mysqlJsonObjectOrderAndWhitespacePreserveExactReferenceAndAuthority() {
+            ReadFixture fixture = new ReadFixture(List.of("EDIT_IMAGE", "GENERATE_IMAGE"),
+                    "GENERATE_IMAGE", true, 2L);
+            fixture.grants.grant.setPermittedOperationsJson("[\"EDIT_IMAGE\", \"GENERATE_IMAGE\"]");
+            fixture.grants.grant.setInputScopeJson("[{\"fileId\": \"file-1\", \"purpose\": \"REFERENCE\","
+                    + " \"version\": 2, \"byteLength\": 123, \"contentHash\": \"" + "a".repeat(64)
+                    + "\", \"contentMimeType\": \"image/png\"}]");
+            var result = fixture.service.read(scope(), "task-1", "original-key");
+            assertEquals(2, result.inputs().getFirst().version());
+            assertEquals("a".repeat(64), result.inputs().getFirst().contentHash());
+            assertEquals(List.of("EDIT_IMAGE", "GENERATE_IMAGE"), result.permittedOperations());
+            assertEquals(0, fixture.grants.writeCalls);
+            assertEquals(0, fixture.bootstraps.writeCalls);
+        }
+
+        @Test
+        void formattedJsonStillRejectsExtraMissingCoercedDuplicateAndDriftedFields() {
+            String original = new ReadFixture().grants.grant.getInputScopeJson();
+            for (String invalid : List.of(
+                    original.replace("\"version\":2", "\"version\":\"2\""),
+                    original.replace("\"version\":2", "\"version\":2,\"version\":2"),
+                    original.replace("\"version\":2", "\"version\":2,\"untrusted\":true"),
+                    original.replace("\"byteLength\":123,", ""),
+                    original.replace("a".repeat(64), "b".repeat(64)),
+                    original + " []")) {
+                ReadFixture fixture = new ReadFixture();
+                fixture.grants.grant.setInputScopeJson(invalid);
+                assertReadReason(AgentTaskDeliberationOperationReadService.ReadException.Reason.INTEGRITY_ERROR,
+                        () -> fixture.service.read(scope(), "task-1", "original-key"));
+                assertEquals(0, fixture.grants.writeCalls);
+            }
+        }
+
+        @Test
         void explicitHashDomainRestoresCompleteAuthorizationSetAndPersistedInitialAction() {
             List<String> operations = List.of(
                     "EDIT_IMAGE", "GENERATE_IMAGE", "INSPECT_INPUTS");
