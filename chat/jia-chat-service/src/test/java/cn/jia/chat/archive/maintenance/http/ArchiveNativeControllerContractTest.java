@@ -6,6 +6,7 @@ import cn.jia.chat.archive.maintenance.dto.ArchiveDraftUpdateRequest;
 import cn.jia.chat.archive.maintenance.dto.ArchiveRuntimeContextDTO;
 import cn.jia.chat.archive.maintenance.dto.ArchiveRuntimeFailureRequest;
 import cn.jia.chat.archive.maintenance.dto.ArchiveRuntimeStartRequest;
+import cn.jia.chat.archive.maintenance.dto.ArchiveRuntimeResultDTO;
 import cn.jia.chat.archive.maintenance.dto.ArchivePublishRequest;
 import cn.jia.chat.archive.maintenance.dto.ArchiveRecoveryContextDTO;
 import cn.jia.chat.archive.maintenance.dto.ArchiveSkillRef;
@@ -38,6 +39,8 @@ class ArchiveNativeControllerContractTest {
         Set<String> methods = Arrays.stream(ArchiveNativeController.class.getDeclaredMethods())
                 .map(java.lang.reflect.Method::getName).collect(Collectors.toSet());
         assertTrue(methods.contains("publish"));
+        assertTrue(methods.contains("putBlock"));
+        assertFalse(methods.contains("updateDraft"));
         assertFalse(methods.contains("createAppointment"));
         assertEquals(Set.of("jobId", "runId", "collectionId", "workId", "operation",
                         "expectedWorkRevision", "expectedActiveEditionId", "appointmentId",
@@ -414,6 +417,12 @@ class ArchiveNativeControllerContractTest {
         when(authentication.getPrincipal()).thenReturn(new AgentRuntimeAuthentication.Scope(
                 "0", "client-a", "owner-a", "agent-a", "runtime-a"));
         MockHttpServletRequest request = exactRequest();
+        when(service.runtimeContext(any(ArchiveRuntimeScope.class), eq("job-a"), eq("run-a")))
+                .thenReturn(new ArchiveRuntimeContextDTO(
+                        "job-a", "run-a", "collection-a", "work-a", "REVISE_WORK", "4", null,
+                        "appointment-a", "1", "agent-a", "1", "PUBLISH_VALIDATED", "MANUAL",
+                        "RUNNING", null, new ArchiveSkillRef("archive-maintainer", "1.0.0", "f".repeat(64)),
+                        "source-a", "a".repeat(64), "source-summary", "rights-basis", "draft-a", "7"));
         controller.context("job-a", "run-a", authentication, request);
         ArgumentCaptor<ArchiveRuntimeScope> scope = ArgumentCaptor.forClass(ArchiveRuntimeScope.class);
         verify(service).runtimeContext(scope.capture(), eq("job-a"), eq("run-a"));
@@ -448,6 +457,21 @@ class ArchiveNativeControllerContractTest {
         when(authentication.getPrincipal()).thenReturn(new AgentRuntimeAuthentication.Scope(
                 "0", "client-a", "owner-a", "agent-a", "runtime-a"));
         MockHttpServletRequest request = exactRequest();
+        ArchiveRuntimeResultDTO result = new ArchiveRuntimeResultDTO(
+                "job-a", "run-a", "command-a", "2", "3", "RUNNING", "2",
+                "RUNNING", "3", "RUNNING", null, null, null, "7",
+                null, null, null, null, null, null, null);
+        when(service.runtimeStart(any(ArchiveRuntimeScope.class), eq("job-a"), eq("run-a"),
+                any(ArchiveRuntimeStartRequest.class))).thenReturn(result);
+        when(service.runtimeFailure(any(ArchiveRuntimeScope.class), eq("job-a"), eq("run-a"),
+                any(ArchiveRuntimeFailureRequest.class))).thenReturn(result);
+        when(service.runtimeResult(any(ArchiveRuntimeScope.class), eq("job-a"), eq("run-a")))
+                .thenReturn(result);
+        when(service.runtimePublish(any(ArchiveRuntimeScope.class), eq("job-a"), eq("run-a"),
+                eq("publish-key"), eq(7L), any(ArchivePublishRequest.class)))
+                .thenReturn(new cn.jia.chat.archive.maintenance.dto.ArchivePublicationDTO(
+                        "publication-a", "job-a", "work-a", "edition-a", "7",
+                        "b".repeat(64), "a".repeat(64), "PUBLISHED", "PENDING"));
 
         controller.start("job-a", "run-a", ("{\"commandId\":\"command-a\","
                 + "\"messageId\":\"message-a\",\"attempt\":\"2\","
@@ -496,6 +520,240 @@ class ArchiveNativeControllerContractTest {
                         validPublish, authentication, request)).code());
     }
 
+    @Test
+    void nativeDtosMatchFrozenControlledClientKeySetsAndKeepAdminVerificationSeparate() {
+        assertEquals(Set.of("jobId", "runId", "commandId", "attempt", "executionEpoch",
+                        "runState", "runRevision", "jobState", "jobRevision", "stage",
+                        "validationId", "validationOutcome", "validationDigest", "draftRevision",
+                        "publicationId", "workId", "editionId", "publicationState",
+                        "failurePhase", "failureCode", "failureRetryable"),
+                fields(ArchiveRuntimeResultDTO.class));
+        assertEquals(Set.of("agentId", "appointmentId", "appointmentRevision", "bindingVersion",
+                        "collectionId", "draftId", "draftRevision", "expectedActiveEditionId",
+                        "expectedWorkRevision", "jobId", "operation", "permissionProfile",
+                        "publicationMode", "requiredSkill", "rightsBasis", "runId", "sourceId",
+                        "sourceSha256", "sourceSummary", "state", "waitReason", "workId"),
+                fields(ArchiveRuntimeContextDTO.class));
+        assertEquals(Set.of("key", "packageSha256", "version"), fields(ArchiveSkillRef.class));
+        assertEquals(Set.of("content", "contentSha256", "draftId", "jobId", "revision", "state",
+                        "validatedRevision", "validationId"),
+                fields(cn.jia.chat.archive.maintenance.dto.ArchiveDraftDTO.class));
+        assertEquals(Set.of("draftId", "draftRevision", "findings", "outcome",
+                        "validationDigest", "validationId"),
+                fields(cn.jia.chat.archive.maintenance.dto.ArchiveValidationDTO.class));
+        assertEquals(Set.of("operationId", "jobId", "state"),
+                fields(cn.jia.chat.archive.maintenance.dto.ArchiveOperationAcceptedDTO.class));
+        assertEquals(Set.of("draftRevision", "editionId", "jobId", "manifestSha256",
+                        "publicationId", "readbackState", "sourceSha256", "state", "workId"),
+                fields(cn.jia.chat.archive.maintenance.dto.ArchiveNativePublicationDTO.class));
+        assertTrue(fields(cn.jia.chat.archive.maintenance.dto.ArchivePublicationDTO.class)
+                .contains("verification"), "admin publication facts must retain current verification");
+    }
+    @Test
+    void nativeBlockAndValidationUseOnlyExactRouteAndStrict202ReceiptThenScoped200Query()
+            throws Exception {
+        ArchiveMaintenanceService service = mock(ArchiveMaintenanceService.class);
+        var block = new ArchiveDraftBlockInput("CHAPTER", "chapter-1", 1, "第一回",
+                List.of(), List.of());
+        var content = new ArchiveDraftUpdateRequest(List.of(block), List.of());
+        var draft = new cn.jia.chat.archive.maintenance.dto.ArchiveDraftDTO(
+                "draft-a", "job-a", "1", "EDITABLE", content,
+                "a".repeat(64), null, null);
+        when(service.runtimePutBlock(any(), eq("job-a"), eq("run-a"), eq("chapter-1"),
+                eq("block-key"), eq(0L), eq(content))).thenReturn(draft);
+        when(service.runtimeValidate(any(), eq("job-a"), eq("run-a"),
+                eq("validate-key"), eq(1L))).thenReturn(
+                new cn.jia.chat.archive.maintenance.dto.ArchiveOperationAcceptedDTO(
+                        "val-a", "job-a", "COMMITTED"));
+        var validation = new cn.jia.chat.archive.maintenance.dto.ArchiveValidationDTO(
+                "val-a", "draft-a", "1", "FAILED", "b".repeat(64),
+                List.of("finding"));
+        when(service.runtimeValidation(any(), eq("job-a"), eq("run-a"), eq("val-a")))
+                .thenReturn(validation);
+        when(service.runtimeValidation(any(), eq("job-a"), eq("run-a"), isNull()))
+                .thenReturn(validation);
+        AgentRuntimeAuthentication authentication = mock(AgentRuntimeAuthentication.class);
+        when(authentication.isAuthenticated()).thenReturn(true);
+        when(authentication.getPrincipal()).thenReturn(new AgentRuntimeAuthentication.Scope(
+                "0", "client-a", "owner-a", "agent-a", "runtime-a"));
+        var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders
+                .standaloneSetup(new ArchiveNativeController(service, new ObjectMapper()))
+                .setControllerAdvice(new cn.jia.core.security.SensitiveResponseBodyAdvice(
+                        new cn.jia.core.security.SensitiveResponseProperties()))
+                .setMessageConverters(
+                        new org.springframework.http.converter.ByteArrayHttpMessageConverter(),
+                        new org.springframework.http.converter.json.JacksonJsonHttpMessageConverter(
+                                tools.jackson.databind.json.JsonMapper.builder().build()))
+                .build();
+        String blockJson = new ObjectMapper().writeValueAsString(content);
+        var put = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .put("/internal/archive/v1/jobs/job-a/runs/run-a/blocks/chapter-1")
+                        .principal(authentication).contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content(blockJson).header("Idempotency-Key", "block-key")
+                        .header("If-Match", "\"v0\"")
+                        .header("X-Archive-Grant-Ref", "grant-a")
+                        .header("X-Archive-Execution-Ref", "execution-a")
+                        .header("X-Archive-Command-Id", "command-a")
+                        .header("X-Archive-Command-Attempt", "2")
+                        .header("X-Archive-Execution-Epoch", "3"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andReturn().getResponse();
+        assertEquals("\"v1\"", put.getHeader("ETag"));
+
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .put("/internal/archive/v1/jobs/job-a/runs/run-a/draft")
+                        .principal(authentication).contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content(blockJson))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status()
+                        .isMethodNotAllowed());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .put("/internal/archive/v1/jobs/job-a/runs/run-a/draft/blocks/chapter-1")
+                        .principal(authentication).contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content(blockJson))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isNotFound());
+
+        var accepted = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/internal/archive/v1/jobs/job-a/runs/run-a/validate")
+                        .principal(authentication).header("Idempotency-Key", "validate-key")
+                        .header("If-Match", "\"v1\"")
+                        .header("X-Archive-Grant-Ref", "grant-a")
+                        .header("X-Archive-Execution-Ref", "execution-a")
+                        .header("X-Archive-Command-Id", "command-a")
+                        .header("X-Archive-Command-Attempt", "2")
+                        .header("X-Archive-Execution-Epoch", "3"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isAccepted())
+                .andReturn().getResponse();
+        assertEquals("/internal/archive/v1/jobs/job-a/runs/run-a/validation?operationId=val-a",
+                accepted.getHeader("Location"));
+        var acceptedJson = new ObjectMapper().readTree(accepted.getContentAsByteArray());
+        assertEquals(Set.of("code", "data", "msg", "status"), names(acceptedJson));
+        assertEquals(202, acceptedJson.path("status").asInt());
+        assertEquals(Set.of("operationId", "jobId", "state"), names(acceptedJson.path("data")));
+
+        var queried = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .get("/internal/archive/v1/jobs/job-a/runs/run-a/validation")
+                        .queryParam("operationId", "val-a").principal(authentication)
+                        .header("X-Archive-Grant-Ref", "grant-a")
+                        .header("X-Archive-Execution-Ref", "execution-a")
+                        .header("X-Archive-Command-Id", "command-a")
+                        .header("X-Archive-Command-Attempt", "2")
+                        .header("X-Archive-Execution-Epoch", "3"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andReturn().getResponse();
+        var queriedJson = new ObjectMapper().readTree(queried.getContentAsByteArray());
+        assertEquals(200, queriedJson.path("status").asInt());
+        assertEquals("val-a", queriedJson.at("/data/validationId").asText());
+
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .get("/internal/archive/v1/jobs/job-a/runs/run-a/validation")
+                        .principal(authentication)
+                        .header("X-Archive-Grant-Ref", "grant-a")
+                        .header("X-Archive-Execution-Ref", "execution-a")
+                        .header("X-Archive-Command-Id", "command-a")
+                        .header("X-Archive-Command-Attempt", "2")
+                        .header("X-Archive-Execution-Epoch", "3"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.data.validationId").value("val-a"));
+        verify(service).runtimeValidation(any(), eq("job-a"), eq("run-a"), isNull());
+
+        ArchiveNativeController controller = new ArchiveNativeController(service, new ObjectMapper());
+        MockHttpServletRequest duplicateQuery = exactRequest();
+        duplicateQuery.addParameter("operationId", "val-a", "val-b");
+        assertEquals("INVALID_REQUEST", assertThrows(ArchiveMaintenanceException.class,
+                () -> controller.validation("job-a", "run-a", authentication,
+                        duplicateQuery)).code());
+        byte[] multipleBlocks = ("{\"blocks\":[" + new ObjectMapper().writeValueAsString(block)
+                + "," + new ObjectMapper().writeValueAsString(block)
+                + "],\"excludedSourceRanges\":[]}")
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        assertEquals("INVALID_REQUEST", assertThrows(ArchiveMaintenanceException.class,
+                () -> controller.putBlock("job-a", "run-a", "chapter-1", "key", "\"v0\"",
+                        multipleBlocks, authentication, exactRequest())).code());
+        byte[] identityInjection = blockJson.replaceFirst("\\{", "{\"ownerJiacn\":\"forged\",")
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        assertEquals("INVALID_REQUEST", assertThrows(ArchiveMaintenanceException.class,
+                () -> controller.putBlock("job-a", "run-a", "chapter-1", "key", "\"v0\"",
+                        identityInjection, authentication, exactRequest())).code());
+    }
+
+    @Test
+    void nativeResultUsesExactFourFieldEnvelopeThroughJackson3MvcConverter() throws Exception {
+        ArchiveMaintenanceService service = mock(ArchiveMaintenanceService.class);
+        ArchiveRuntimeResultDTO running = new ArchiveRuntimeResultDTO(
+                "job-a", "run-a", "command-a", "2", "3", "RUNNING", "2",
+                "RUNNING", "3", "RUNNING", null, null, null, "0",
+                null, null, null, null, null, null, null);
+        when(service.runtimeResult(any(ArchiveRuntimeScope.class), eq("job-a"), eq("run-a")))
+                .thenReturn(running);
+        var publication = new cn.jia.chat.archive.maintenance.dto.ArchivePublicationDTO(
+                "publication-a", "job-a", "work-a", "edition-a", "1", "a".repeat(64),
+                "b".repeat(64), "PUBLISHED", "PASSED",
+                new cn.jia.chat.archive.maintenance.dto.ArchivePublicationVerificationDTO(
+                        "PASSED", "2", "c".repeat(64), List.of(), "2026-10-03T08:00:00Z"));
+        when(service.runtimePublish(any(ArchiveRuntimeScope.class), eq("job-a"), eq("run-a"),
+                eq("publish-key"), eq(1L), any(ArchivePublishRequest.class))).thenReturn(publication);
+        AgentRuntimeAuthentication authentication = mock(AgentRuntimeAuthentication.class);
+        when(authentication.isAuthenticated()).thenReturn(true);
+        when(authentication.getPrincipal()).thenReturn(new AgentRuntimeAuthentication.Scope(
+                "0", "client-a", "owner-a", "agent-a", "runtime-a"));
+
+        var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders
+                .standaloneSetup(new ArchiveNativeController(service, new ObjectMapper()))
+                .setControllerAdvice(new cn.jia.core.security.SensitiveResponseBodyAdvice(
+                        new cn.jia.core.security.SensitiveResponseProperties()))
+                .setMessageConverters(
+                        new org.springframework.http.converter.ByteArrayHttpMessageConverter(),
+                        new org.springframework.http.converter.json.JacksonJsonHttpMessageConverter(
+                                tools.jackson.databind.json.JsonMapper.builder().build()))
+                .build();
+        var response = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .get("/internal/archive/v1/jobs/job-a/runs/run-a/result")
+                        .principal(authentication)
+                        .header("X-Archive-Grant-Ref", "grant-a")
+                        .header("X-Archive-Execution-Ref", "execution-a")
+                        .header("X-Archive-Command-Id", "command-a")
+                        .header("X-Archive-Command-Attempt", "2")
+                        .header("X-Archive-Execution-Epoch", "3"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andReturn().getResponse();
+
+        var json = new ObjectMapper().readTree(response.getContentAsByteArray());
+        assertEquals(Set.of("code", "data", "msg", "status"), names(json));
+        assertFalse(json.has("location"));
+        assertEquals("E0", json.path("code").asText());
+        assertEquals("ok", json.path("msg").asText());
+        assertEquals(200, json.path("status").asInt());
+        assertEquals(Set.of("jobId", "runId", "commandId", "attempt", "executionEpoch",
+                        "runState", "runRevision", "jobState", "jobRevision", "stage",
+                        "validationId", "validationOutcome", "validationDigest", "draftRevision",
+                        "publicationId", "workId", "editionId", "publicationState",
+                        "failurePhase", "failureCode", "failureRetryable"), names(json.path("data")));
+        assertTrue(json.at("/data/validationId").isNull());
+        assertTrue(json.at("/data/publicationId").isNull());
+        assertTrue(json.at("/data/failureCode").isNull());
+        var publishResponse = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/internal/archive/v1/jobs/job-a/runs/run-a/publish")
+                        .principal(authentication)
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"validationId\":\"validation-a\",\"expectedActiveEditionId\":null,"
+                                + "\"expectedWorkRevision\":\"4\"}")
+                        .header("Idempotency-Key", "publish-key")
+                        .header("If-Match", "\"v1\"")
+                        .header("X-Archive-Grant-Ref", "grant-a")
+                        .header("X-Archive-Execution-Ref", "execution-a")
+                        .header("X-Archive-Command-Id", "command-a")
+                        .header("X-Archive-Command-Attempt", "2")
+                        .header("X-Archive-Execution-Epoch", "3"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andReturn().getResponse();
+        var publishJson = new ObjectMapper().readTree(publishResponse.getContentAsByteArray());
+        assertEquals(Set.of("code", "data", "msg", "status"), names(publishJson));
+        assertEquals(Set.of("draftRevision", "editionId", "jobId", "manifestSha256",
+                        "publicationId", "readbackState", "sourceSha256", "state", "workId"),
+                names(publishJson.path("data")));
+        assertFalse(publishJson.path("data").has("verification"));
+    }
     private static Set<String> fields(Class<?> type) {
         return Arrays.stream(type.getRecordComponents()).map(java.lang.reflect.RecordComponent::getName)
                 .collect(Collectors.toSet());

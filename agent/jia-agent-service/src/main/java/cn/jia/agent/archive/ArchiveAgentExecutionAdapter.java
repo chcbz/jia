@@ -24,6 +24,7 @@ import java.util.Set;
 @Service
 @ConditionalOnProperty(prefix = "archive.maintenance", name = "execution-enabled", havingValue = "true")
 public final class ArchiveAgentExecutionAdapter implements ArchiveAgentExecutionPort {
+    private static final Set<String> DISPATCH_ADMISSION_DELIVERY = Set.of("CONSUMED");
     private static final Set<String> AUTHORIZED_DELIVERY = Set.of("SENT", "RECEIVED", "STARTED", "SUCCEEDED");
     private static final Set<String> RESULT_DELIVERY = Set.of("SENT", "RECEIVED", "STARTED",
             "SUCCEEDED", "FAILED", "REJECTED");
@@ -61,6 +62,21 @@ public final class ArchiveAgentExecutionAdapter implements ArchiveAgentExecution
         this.sessions = Objects.requireNonNull(sessions);
         this.tx = new TransactionTemplate(Objects.requireNonNull(manager));
         this.clock = Objects.requireNonNull(clock);
+    }
+
+    @Override
+    public Readiness observeReadiness(TargetRequest request) {
+        Objects.requireNonNull(request, "request");
+        AgentRuntimeAuthenticationService.ControlledReadiness current =
+                authentication.inspectControlledTarget(request.tenant(), request.client(), request.owner(),
+                        request.canonicalAgent(), request.binding(), REQUIRED_PROTOCOL);
+        return switch (current.state()) {
+            case READY -> Readiness.ready();
+            case AGENT_OFFLINE -> Readiness.blocked("AGENT_OFFLINE");
+            case BINDING_CHANGED -> Readiness.blocked("BINDING_CHANGED");
+            case CLIENT_UPDATE_REQUIRED -> Readiness.blocked("CLIENT_UPDATE_REQUIRED");
+            case AUTHENTICATION_CHANGED -> Readiness.blocked("AUTHENTICATION_CHANGED");
+        };
     }
 
     @Override
@@ -154,6 +170,28 @@ public final class ArchiveAgentExecutionAdapter implements ArchiveAgentExecution
                 delivery.getActiveAttempt(), request.executionEpoch(), expiresAt,
                 lockedTarget.runtimeInstanceId(), lockedTarget.registrationHash(), proof,
                 written.duplicate());
+    }
+
+    @Override
+    public Inspection inspectDispatch(Expected expected, LockedTarget lockedTarget) {
+        Objects.requireNonNull(expected, "expected");
+        Objects.requireNonNull(lockedTarget, "lockedTarget");
+        require(TransactionSynchronizationManager.isActualTransactionActive()
+                && !TransactionSynchronizationManager.isCurrentTransactionReadOnly(),
+                "ARCHIVE_EXECUTION_TRANSACTION_REQUIRED");
+        exactLockedTarget(expected.target(), lockedTarget);
+        require(expected.runtimeInstanceId().equals(lockedTarget.runtimeInstanceId())
+                && MessageDigest.isEqual(expected.registrationHash(), lockedTarget.registrationHash()),
+                "ARCHIVE_EXECUTION_TARGET_FENCED");
+        exactProof(expected, verifiedSkill(expected.tenant(), expected.client(), expected.owner(),
+                expected.canonicalAgent(), expected.binding(), expected.skillOrigin(),
+                expected.skillProof().key(), expected.skillProof().version(),
+                expected.skillProof().packageDigest()));
+        AgentCommandDeliveryEntity delivery = deliveries.lockDelivery(expected.tenant(), expected.client(),
+                expected.owner(), expected.commandId());
+        verifyDelivery(delivery, expected, DISPATCH_ADMISSION_DELIVERY);
+        require(clock.millis() < expected.expiresAt(), "ARCHIVE_EXECUTION_EXPIRED");
+        return new Inspection(true, delivery.getStatus(), delivery.getActiveMessageId());
     }
 
     @Override

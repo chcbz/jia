@@ -7,6 +7,9 @@ import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.agent.entity.AgentCapabilityDTO;
 import cn.jia.agent.entity.AgentCommandAck;
 import cn.jia.agent.entity.AgentCommandAckRejectedException;
+import cn.jia.agent.entity.AgentArchiveMaintenancePayload;
+import cn.jia.agent.entity.AgentCommandDraft;
+import cn.jia.agent.entity.AgentPlatformSkillInstallPayload;
 import cn.jia.agent.entity.AgentCommandReconnectScope;
 import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentActionDispatchResultDTO;
@@ -24,6 +27,7 @@ import cn.jia.agent.service.AgentCommandReconnectSignal;
 import cn.jia.agent.service.AgentExecutionReportService;
 import cn.jia.agent.service.AgentRawCommandDispatcher;
 import cn.jia.agent.service.AgentService;
+import cn.jia.agent.service.impl.AgentCommandCanonicalCodec;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
@@ -2064,6 +2068,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         return session.isOpen() && agent.equals(sessionAgentId(session)) && tenant.equals(sessionJiacn(session))
                 && client.equals(sessionClientId(session)) && key.equals(sessionAttribute(session,"managedApiKeyId"))
                 && successfullyRegisteredAgentIds(session.getId()).contains(agent)
+                && registeredAgentIds(session.getId()).contains(agent)
                 && session.getAttributes().get("skillRegistrationHash") instanceof byte[] hash
                 && java.security.MessageDigest.isEqual(generation,hash);
     }
@@ -2073,18 +2078,90 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     public AgentRawCommandDispatchResult dispatchManagedSkill(String tenant,String client,String agent,String key,byte[] generation,byte[] raw) {
         if (org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive())
             throw new IllegalStateException("Skill WebSocket I/O inside transaction");
+        final String commandType;
+        final JsonNode node;
         try {
-            var node=STRICT_RAW_COMMAND_JSON.readTree(raw);
-            if (!"SKILL_INSTALL".equals(textJson(node,"commandType"))
-                    || !validRawCommandEnvelope(tenant,client,textJson(node,"orderId"),agent,raw))
-                return AgentRawCommandDispatchResult.rejected();
-        } catch(Exception invalid) { return AgentRawCommandDispatchResult.rejected(); }
-        // Latest registration generation selects one exact authenticated session, not an owner-wide broadcast.
+            node=STRICT_RAW_COMMAND_JSON.readTree(raw);
+            commandType=textJson(node,"commandType");
+        } catch(IllegalArgumentException invalid) {
+            return AgentRawCommandDispatchResult.rejected();
+        } catch(Exception malformed) {
+            return AgentRawCommandDispatchResult.rejected();
+        }
+        // Keep the controlled authorization/identity/database boundary outside the JSON catch:
+        // malformed or denied commands are rejected, while infrastructure failures remain retryable.
+        if (AgentCommandCanonicalCodec.isControlledCommandType(commandType))
+            return dispatchControlledCommand(tenant,client,agent,key,generation,raw);
+        if (!"SKILL_INSTALL".equals(commandType)
+                || !validRawCommandEnvelope(tenant,client,textJson(node,"orderId"),agent,raw))
+            return AgentRawCommandDispatchResult.rejected();
+        // Legacy managed marketplace commands retain their exact registered-session behavior.
         for(var session:sessions.values()) if(matchesManagedSkill(session,tenant,client,agent,key,generation)) {
             try { synchronized(session) { session.sendMessage(new TextMessage(raw)); } return AgentRawCommandDispatchResult.sent(1,1); }
             catch(Exception failure) { return AgentRawCommandDispatchResult.sendFailed(1); }
         }
         return AgentRawCommandDispatchResult.offline();
+    }
+
+    private AgentRawCommandDispatchResult dispatchControlledCommand(String tenant,String client,String agent,
+            String key,byte[] generation,byte[] raw) {
+        if (tenant==null || client==null || agent==null || key==null || generation==null)
+            return AgentRawCommandDispatchResult.rejected();
+        AgentCommandDraft draft;
+        long binding;
+        try {
+            draft=AgentCommandCanonicalCodec.decodeControlledWireBytes(raw);
+            if (!tenant.equals(draft.tenantId()) || !client.equals(draft.clientId())
+                    || !agent.equals(draft.targetAgentId()) || runtimeAuthentication==null)
+                return AgentRawCommandDispatchResult.rejected();
+            binding=controlledBinding(draft);
+        } catch(IllegalArgumentException invalid) {
+            return AgentRawCommandDispatchResult.rejected();
+        }
+        String protocol=draft.commandType()+"/v1";
+        for(var session:sessions.values()) {
+            if (!matchesControlledSessionAttributes(session,draft,key,generation)) continue;
+            final cn.jia.agent.security.AgentRuntimeAuthenticationService.ControlledTarget proof;
+            try {
+                proof=runtimeAuthentication.requireControlledSession(session.getId(),draft.tenantId(),
+                        draft.clientId(),draft.ownerJiacn(),draft.targetAgentId(),binding,protocol);
+            } catch(IllegalArgumentException denied) {
+                if ("AGENT_RUNTIME_UNAUTHENTICATED".equals(denied.getMessage())) continue;
+                throw denied;
+            }
+            if (!sessionRuntimeInstanceId(session).equals(proof.runtimeInstanceId())
+                    || !key.equals(proof.apiKeyId())
+                    || !java.security.MessageDigest.isEqual(generation,proof.registrationHash())) continue;
+            try {
+                synchronized(session) { session.sendMessage(new TextMessage(raw)); }
+                return AgentRawCommandDispatchResult.sent(1,1);
+            } catch(Exception failure) {
+                return AgentRawCommandDispatchResult.sendFailed(1);
+            }
+        }
+        return AgentRawCommandDispatchResult.offline();
+    }
+
+    private boolean matchesControlledSessionAttributes(WebSocketSession session,AgentCommandDraft draft,
+            String key,byte[] generation) {
+        return session.isOpen() && draft.targetAgentId().equals(sessionAgentId(session))
+                && draft.ownerJiacn().equals(sessionJiacn(session))
+                && draft.clientId().equals(sessionClientId(session))
+                && key.equals(sessionAttribute(session,"managedApiKeyId"))
+                && successfullyRegisteredAgentIds(session.getId()).contains(draft.targetAgentId())
+                && registeredAgentIds(session.getId()).contains(draft.targetAgentId())
+                && session.getAttributes().get("skillRegistrationHash") instanceof byte[] hash
+                && java.security.MessageDigest.isEqual(generation,hash)
+                && sessionRuntimeInstanceId(session)!=null;
+    }
+
+    private long controlledBinding(AgentCommandDraft draft) {
+        String binding = draft.payload() instanceof AgentPlatformSkillInstallPayload platform
+                ? platform.bindingVersion()
+                : draft.payload() instanceof AgentArchiveMaintenancePayload archive
+                ? archive.bindingVersion() : null;
+        if (binding==null) throw new IllegalArgumentException("Controlled binding is missing");
+        return Long.parseLong(binding);
     }
 
     public boolean isAgentConnected(String tenantId, String clientId, String agentId) {

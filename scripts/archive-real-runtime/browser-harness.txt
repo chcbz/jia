@@ -1,0 +1,37 @@
+# Real Runtime browser handoff (test-only; contains no secrets)
+
+## Required environment
+
+- `CYF_WEB_ORIGIN`: loopback/RFC1918 Vite origin, for example `http://192.168.144.1:18122`.
+- `CYF_FIXTURE_API_ORIGIN`: loopback/RFC1918 fixture API origin from `start.ps1`.
+- `CYF_WEB_ROOT`: accepted Web checkout; start Vite with `VITE_API_BASE_URL` equal to the fixture API origin.
+- `CYF_FIXTURE_ADMIN_TOKEN_FILE`: fixture-generated JWT file; never print or copy it into evidence.
+- `CYF_FIXTURE_JOB_ID`, `CYF_FIXTURE_WORK_ID`, `CYF_FIXTURE_EDITION_ID`: IDs produced by the actual runtime flow.
+- `CYF_BROWSER_RESULT_FILE`: private result JSON path.
+- `CYF_PLAYWRIGHT_ENTRY` (only when Web has no local `playwright` package): absolute path to an already installed Playwright ESM entry. This is test tooling, not a business-runtime double.
+- `CYF_BROWSER_CHANNEL` (optional): exactly `chrome` or `msedge` to make Playwright reuse that installed system browser. Leave unset to retain Playwright's default managed Chromium lookup.
+
+Start Web only on the measured loopback/host-only address, never `0.0.0.0` or WLAN/public interfaces:
+
+```text
+VITE_API_BASE_URL=<CYF_FIXTURE_API_ORIGIN> npm run dev -- --host <host-only-ip> --port 18122
+```
+
+When the Playwright package expects a managed Chromium revision that is not installed, select an already installed browser without downloading another binary:
+
+```powershell
+$env:CYF_BROWSER_CHANNEL='msedge'
+node api/scripts/archive-real-runtime/run-browser.mjs
+```
+
+Otherwise leave `CYF_BROWSER_CHANNEL` unset and run `node api/scripts/archive-real-runtime/run-browser.mjs`. The script injects the real signed fixture JWT through the application's normal `api_token` storage contract; it never intercepts or fabricates `fetch` responses.
+
+## Automated actual path
+
+For both 900x600 and 540x960 it opens `/juyiting`, dismisses onboarding if present, opens the real 典籍阁 UI, selects 任职与维护, selects the exact job, opens 版本与记录, selects the exact work/edition, waits for actual Admin and Reader HTTP responses, then opens 阅读已核验版本 and requires a rendered `.reader-paragraph`.
+
+Evidence records only method, URL path, status, bounded safe ETag, same-origin Location pathname, viewport result and screenshots. It never records Authorization, JWT, response bodies, source text, chapter text, notes, bookmarks, credentials or Rabbit secrets.
+
+## Main must still exercise manually and archive separately
+
+The navigation script is intentionally not whole-feature acceptance. Main must separately verify Source 202 + Location recovery, body revision to If-Match, same-key replay, direct 401/403, withdrawn exact-edition 410 with private rows retained, receipt-card to maintenance panel to Reader, MANUAL/AUTO publication, response-loss/durable replay, single publication activation, appointment/identity/manager revocation fences and work CAS. None is PASS until its actual run evidence exists.

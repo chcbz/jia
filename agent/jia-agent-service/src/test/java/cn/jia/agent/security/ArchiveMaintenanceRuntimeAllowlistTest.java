@@ -9,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class ArchiveMaintenanceRuntimeAllowlistTest {
-    private static final String PATH = "/internal/archive/v1/jobs/job-1/runs/run-1/draft";
+    private static final String PATH = "/internal/archive/v1/jobs/job-1/runs/run-1/blocks/chapter-1";
 
     @Test
     void exactArchiveRoutesIncludingPublishAreAllowedButAdjacentPathsAreNot() {
@@ -17,8 +17,9 @@ class ArchiveMaintenanceRuntimeAllowlistTest {
         assertTrue(allowed("GET", "/internal/archive/v1/jobs/job-1/runs/run-1/draft"));
         assertTrue(allowed("GET", "/internal/archive/v1/jobs/job-1/runs/run-1/sources/src-1/content"));
         assertFalse(allowed("GET", "/internal/archive/v1/jobs/job-1/runs/run-1/sources/%2f/content"));
-        assertTrue(allowed("PUT", "/internal/archive/v1/jobs/job-1/runs/run-1/draft"));
-        assertTrue(allowed("PUT", "/internal/archive/v1/jobs/job-1/runs/run-1/draft/blocks/chapter-1"));
+        assertTrue(allowed("PUT", "/internal/archive/v1/jobs/job-1/runs/run-1/blocks/chapter-1"));
+        assertFalse(allowed("PUT", "/internal/archive/v1/jobs/job-1/runs/run-1/draft"));
+        assertFalse(allowed("PUT", "/internal/archive/v1/jobs/job-1/runs/run-1/draft/blocks/chapter-1"));
         assertTrue(allowed("POST", "/internal/archive/v1/jobs/job-1/runs/run-1/start"));
         assertTrue(allowed("POST", "/internal/archive/v1/jobs/job-1/runs/run-1/failure"));
         assertTrue(allowed("GET", "/internal/archive/v1/jobs/job-1/runs/run-1/result"));
@@ -31,7 +32,7 @@ class ArchiveMaintenanceRuntimeAllowlistTest {
         assertFalse(allowed("GET", "/internal/archive/v1/jobs/job-1/runs/run-1/publish"));
         assertFalse(allowed("GET", "/internal/archive/v1/jobs/job-1/runs/run-1/context/extra"));
         assertFalse(allowed("GET", "/internal/archive/v1/jobs/job-1/runs/run-1/%2e%2e/context"));
-        assertFalse(allowed("PUT", "/internal/archive/v1/jobs/job-1/runs/run-1/draft/blocks/chapter-1/extra"));
+        assertFalse(allowed("PUT", "/internal/archive/v1/jobs/job-1/runs/run-1/blocks/chapter-1/extra"));
     }
 
     @Test

@@ -16,3 +16,53 @@ version = '1.1.2-SNAPSHOT'
 description = 'jia-chat-starter'
 
 rootProject.ext.configureStandaloneLauncher.call(project, 'cn.jia.JiaChatApplication')
+
+// AAM disposable shared-runtime harness. Main owns execution under the global Gradle lock.
+def archiveRealRuntimeSourceSet = sourceSets.create('archiveRealRuntime') {
+    java.srcDir 'src/archiveRealRuntimeTest/java'
+    resources.srcDir 'src/archiveRealRuntimeTest/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(archiveRealRuntimeSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.implementation, configurations.testImplementation
+}
+configurations.named(archiveRealRuntimeSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.runtimeOnly, configurations.testRuntimeOnly
+}
+dependencies {
+    // Fixture-local full Rabbit listener infrastructure; agent-service keeps spring-rabbit implementation-scoped.
+    archiveRealRuntimeImplementation libs.spring.boot.starter.amqp
+    // Boot 4 moved WebServerApplicationContext into the split web-server module.
+    archiveRealRuntimeImplementation "org.springframework.boot:spring-boot-web-server:${libs.versions.spring.boot.asProvider().get()}"
+    // TaskTools is a shared production component and requires the real TaskService.
+    archiveRealRuntimeImplementation project(':task:jia-task-service')
+    archiveRealRuntimeImplementation project(':oauth:jia-oauth-resource')
+    archiveRealRuntimeImplementation project(':oauth:jia-oauth-service')
+    archiveRealRuntimeImplementation project(':oauth:jia-oauth-mapper')
+    archiveRealRuntimeImplementation project(':user:jia-user-service')
+    archiveRealRuntimeImplementation project(':user:jia-user-mapper')
+    archiveRealRuntimeRuntimeOnly libs.mysql
+}
+// The fixture must be launched by scripts/archive-real-runtime/start.ps1 inside the POSIX chroot.
+tasks.register('archiveRealRuntimeClasspath') {
+    group = 'verification'
+    description = 'Exports the exact fixture runtime classpath without starting services.'
+    dependsOn tasks.named(archiveRealRuntimeSourceSet.classesTaskName)
+    dependsOn archiveRealRuntimeSourceSet.runtimeClasspath
+    doLast {
+        def destination = providers.environmentVariable('CYF_RUNTIME_CLASSPATH_FILE')
+                .map { file(it) }.getOrElse(layout.buildDirectory.file('archive-real-runtime/classpath.txt').get().asFile)
+        destination.parentFile.mkdirs()
+        def mainCompile = tasks.named(sourceSets.main.compileJavaTaskName).get()
+        def legalAbsentMainClassDirs = mainCompile.source.files.isEmpty()
+                ? sourceSets.main.output.classesDirs.files.collect { it.absoluteFile.toPath().normalize() }.toSet()
+                : Collections.emptySet()
+        def entries = archiveRealRuntimeSourceSet.runtimeClasspath.files.findAll { entry ->
+            if (entry.exists()) return true
+            if (legalAbsentMainClassDirs.contains(entry.absoluteFile.toPath().normalize())) return false
+            throw new GradleException("Runtime classpath entry is missing: ${entry.absolutePath}")
+        }
+        destination.text = entries.collect { it.absolutePath }.join(System.lineSeparator()) + System.lineSeparator()
+    }
+}

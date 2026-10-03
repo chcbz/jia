@@ -1,8 +1,10 @@
 package cn.jia.agent.security;
 
+import cn.jia.agent.common.AgentErrorConstants;
 import cn.jia.agent.config.AgentTaskEventsGate;
 import cn.jia.agent.dao.AgentRuntimeDao;
 import cn.jia.agent.service.AgentIdentityService;
+import cn.jia.agent.service.impl.AgentServiceImpl;
 import cn.jia.oauth.service.ApiKeyService;
 import cn.jia.user.security.AccountSecurityService;
 import cn.jia.user.security.AccountSecuritySnapshot;
@@ -83,22 +85,98 @@ public final class AgentRuntimeAuthenticationService {
         commandProtocols.put(agentId, new ProtocolBinding(binding, Set.copyOf(protocols)));
     }
 
+    /**
+     * Read-only current controlled-session projection. Expected lifecycle/session/protocol changes
+     * are returned as facts; database and other infrastructure failures still propagate.
+     */
+    public ControlledReadiness inspectControlledTarget(String tenant, String client, String owner,
+            String agentId, long bindingId, String requiredProtocol) {
+        if (!SINGLE_TENANT_ID.equals(tenant) || !exact(client, 50) || "0".equals(client)
+                || !exact(owner, 50) || "0".equals(owner) || !validAgentReference(agentId)
+                || bindingId < 1 || !exact(requiredProtocol, 100)) throw denied();
+        Binding binding = bindings.get(agentId);
+        if (binding == null || !binding.connected.getAsBoolean()) return ControlledReadiness.offline();
+        if (!tenant.equals(binding.scope.tenantId()) || !client.equals(binding.scope.clientId())
+                || !owner.equals(binding.scope.ownerJiacn())) return ControlledReadiness.bindingChanged();
+        var row = runtimes.findByAgentId(agentId);
+        if (row == null || !agentId.equals(row.getAgentId())
+                || !tenant.equals(row.getTenantId()) || !client.equals(row.getClientId())
+                || !owner.equals(row.getOwnerJiacn())
+                || !Long.valueOf(bindingId).equals(row.getBindingId())) {
+            return ControlledReadiness.bindingChanged();
+        }
+        if (!Set.of("online", "busy").contains(row.getStatus())) return ControlledReadiness.offline();
+        if (!validToken(row.getTokenHash())) return ControlledReadiness.authenticationChanged();
+        try {
+            validate(binding, row.getTokenHash());
+        } catch (AgentServiceImpl.AgentBizException changed) {
+            if (!AgentErrorConstants.AGENT_FORBIDDEN.equals(changed.getCode())) throw changed;
+            return ControlledReadiness.bindingChanged();
+        } catch (IllegalArgumentException changed) {
+            return ControlledReadiness.authenticationChanged();
+        }
+        ProtocolBinding capabilities = commandProtocols.get(agentId);
+        if (capabilities == null || capabilities.binding != binding
+                || !capabilities.protocols.contains(requiredProtocol)) {
+            return ControlledReadiness.clientUpdateRequired();
+        }
+        if (bindings.get(agentId) != binding || commandProtocols.get(agentId) != capabilities
+                || !binding.connected.getAsBoolean()) return ControlledReadiness.offline();
+        return ControlledReadiness.ready(new ControlledTarget(binding.scope.runtimeInstanceId(), binding.apiKeyId,
+                cn.jia.agent.skill.SkillMarketplaceService.sessionRegistrationHash(agentId, row.getTokenHash())));
+    }
+
     /** Revalidates current key/account/registration, then returns server-only exact-session evidence. */
     public ControlledTarget requireControlledTarget(String tenant, String client, String owner,
             String agentId, long bindingId, String requiredProtocol) {
-        Binding binding=bindings.get(agentId);
-        var capabilities=commandProtocols.get(agentId);
-        if (binding==null || capabilities==null || capabilities.binding!=binding
-                || !capabilities.protocols.contains(requiredProtocol)
-                || !tenant.equals(binding.scope.tenantId()) || !client.equals(binding.scope.clientId())
-                || !owner.equals(binding.scope.ownerJiacn())) throw denied();
-        var row=runtimes.findByAgentId(agentId);
-        if (row==null || !Long.valueOf(bindingId).equals(row.getBindingId())) throw denied();
-        validate(binding, row.getTokenHash());
-        if (bindings.get(agentId)!=binding || commandProtocols.get(agentId)!=capabilities) throw denied();
-        return new ControlledTarget(binding.scope.runtimeInstanceId(), binding.apiKeyId,
-                cn.jia.agent.skill.SkillMarketplaceService.sessionRegistrationHash(agentId,row.getTokenHash()));
+        ControlledReadiness readiness = inspectControlledTarget(
+                tenant, client, owner, agentId, bindingId, requiredProtocol);
+        if (readiness.state() != ControlledReadinessState.READY) throw denied();
+        return readiness.target();
     }
+    /**
+     * Revalidates the controlled target and proves that the candidate socket is the exact current
+     * authenticated binding. A superseded socket with the same Agent, key and registration token
+     * must not receive controlled work.
+     */
+    public ControlledTarget requireControlledSession(String sessionId, String tenant, String client,
+            String owner, String agentId, long bindingId, String requiredProtocol) {
+        Binding before = bindings.get(agentId);
+        if (before == null || !before.sessionId.equals(sessionId)) throw denied();
+        ControlledTarget target = requireControlledTarget(
+                tenant, client, owner, agentId, bindingId, requiredProtocol);
+        Binding after = bindings.get(agentId);
+        if (after != before || !after.sessionId.equals(sessionId)) throw denied();
+        return target;
+    }
+
+    public enum ControlledReadinessState {
+        READY, AGENT_OFFLINE, BINDING_CHANGED, CLIENT_UPDATE_REQUIRED, AUTHENTICATION_CHANGED
+    }
+
+    public record ControlledReadiness(ControlledReadinessState state, ControlledTarget target) {
+        public ControlledReadiness {
+            if (state == null || (state == ControlledReadinessState.READY) != (target != null)) {
+                throw new IllegalArgumentException("Invalid controlled readiness");
+            }
+        }
+        public static ControlledReadiness ready(ControlledTarget target) {
+            return new ControlledReadiness(ControlledReadinessState.READY, target);
+        }
+        public static ControlledReadiness offline() {
+            return new ControlledReadiness(ControlledReadinessState.AGENT_OFFLINE, null);
+        }
+        public static ControlledReadiness bindingChanged() {
+            return new ControlledReadiness(ControlledReadinessState.BINDING_CHANGED, null);
+        }
+        public static ControlledReadiness clientUpdateRequired() {
+            return new ControlledReadiness(ControlledReadinessState.CLIENT_UPDATE_REQUIRED, null);
+        }
+        public static ControlledReadiness authenticationChanged() {
+            return new ControlledReadiness(ControlledReadinessState.AUTHENTICATION_CHANGED, null);
+        }
+    }
+
     public record ControlledTarget(String runtimeInstanceId, String apiKeyId, byte[] registrationHash) {
         public ControlledTarget { registrationHash=registrationHash.clone(); }
         @Override public byte[] registrationHash() { return registrationHash.clone(); }

@@ -228,6 +228,56 @@ public final class AgentCommandCanonicalCodec {
         return bounded(json);
     }
 
+    /**
+     * Decodes only the two frozen controlled-command wire families and proves that the supplied
+     * bytes are the exact canonical transport encoding. This is deliberately narrower than the
+     * generic Inbox provenance reader: WebSocket dispatch must not accept an equivalent JSON
+     * object, a compatibility alias, or an envelope with an extra transport field.
+     */
+    public static AgentCommandDraft decodeControlledWireBytes(byte[] raw) {
+        if (raw == null || raw.length == 0 || raw.length > MAX_CANONICAL_BYTES) {
+            throw invalid("controlled wire bytes are missing or oversized");
+        }
+        try {
+            JsonNode root = STRICT_JSON.readTree(raw);
+            if (root == null || !root.isObject() || root.size() != 20
+                    || !AgentProtocolConstants.TYPE_COMMAND_DISPATCH.equals(text(root, "messageType"))) {
+                throw invalid("controlled wire envelope is invalid");
+            }
+            String commandType = text(root, "commandType");
+            if (!isControlledCommandType(commandType)) {
+                throw invalid("controlled wire command type is invalid");
+            }
+            String messageId = text(root, "messageId");
+            int attempt = integer(root, "attempt");
+            if (attempt <= 0) throw invalid("controlled wire attempt must be positive");
+            AgentCommandDraft draft = new AgentCommandDraft(
+                    integer(root, "schemaVersion"),
+                    text(root, "commandId"),
+                    text(root, "correlationId"),
+                    text(root, "causationId"),
+                    text(root, "tenantId"),
+                    text(root, "clientId"),
+                    text(root, "ownerJiacn"),
+                    text(root, "taskId"),
+                    nullableText(root, "workItemId"),
+                    text(root, "targetAgentId"),
+                    commandType,
+                    longValue(root, "issuedAt"),
+                    longValue(root, "expiresAt"),
+                    null,
+                    decodeControlled(commandType, root.get("payload")));
+            if (!Arrays.equals(raw, wireBytes(draft, messageId, attempt))) {
+                throw invalid("controlled wire bytes are not the frozen canonical encoding");
+            }
+            return draft;
+        } catch (IllegalArgumentException invalid) {
+            throw invalid;
+        } catch (Exception malformed) {
+            throw invalid("controlled wire bytes cannot be decoded");
+        }
+    }
+
     public static AgentCommandDraft decodeBusinessBytes(byte[] raw) {
         if (raw == null || raw.length == 0 || raw.length > MAX_CANONICAL_BYTES) {
             throw invalid("canonical business bytes are missing or oversized");

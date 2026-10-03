@@ -3,6 +3,7 @@ package cn.jia.core.security;
 import org.junit.jupiter.api.Test;
 
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -125,6 +126,78 @@ class SensitiveDataSanitizerTest {
     }
 
     @Test
+    void unannotatedContentKeepsDefaultTextSecretAndDepthSanitization() {
+        Map<String, Object> source = new LinkedHashMap<>();
+        source.put("content", "token=fixture_literal");
+        source.put("password", "raw-password");
+        Map<String, Object> cursor = source;
+        for (int depth = 0; depth < 8; depth++) {
+            Map<String, Object> nested = new LinkedHashMap<>();
+            cursor.put("nested", nested);
+            cursor = nested;
+        }
+        cursor.put("text", "must-not-be-reached");
+
+        Map<?, ?> result = (Map<?, ?>) SensitiveDataSanitizer.sanitize(source);
+
+        assertEquals("token=******", result.get("content"));
+        assertNull(result.get("password"));
+        Map<?, ?> level = result;
+        for (int depth = 0; depth < 7; depth++) {
+            level = (Map<?, ?>) level.get("nested");
+            assertNotNull(level);
+        }
+        assertNull(level.get("nested"));
+    }
+
+    @Test
+    void exactContentPreservesValidatedTextAndDepthButStillSanitizesSecretsAndCycles() {
+        Map<String, Object> exact = new LinkedHashMap<>();
+        Map<String, Object> cursor = exact;
+        for (int depth = 0; depth < 10; depth++) {
+            Map<String, Object> nested = new LinkedHashMap<>();
+            cursor.put("nested", nested);
+            cursor = nested;
+        }
+        cursor.put("text", "token=fixture_literal");
+        cursor.put("password", "deep-password");
+        CredentialBean credentialBean = new CredentialBean();
+        credentialBean.refreshToken = "bean-refresh-token";
+        cursor.put("credentialBean", credentialBean);
+        exact.put("apiKey", "root-api-key");
+        exact.put("self", exact);
+
+        ExactContainer source = new ExactContainer();
+        source.content = exact;
+
+        Map<?, ?> result = (Map<?, ?>) SensitiveDataSanitizer.sanitize(source);
+        Map<?, ?> exactResult = (Map<?, ?>) result.get("content");
+        assertNull(exactResult.get("apiKey"));
+        assertEquals("[Circular]", exactResult.get("self"));
+        Map<?, ?> deepResult = exactResult;
+        for (int depth = 0; depth < 10; depth++) {
+            deepResult = (Map<?, ?>) deepResult.get("nested");
+            assertNotNull(deepResult);
+        }
+        assertEquals("token=fixture_literal", deepResult.get("text"));
+        assertNull(deepResult.get("password"));
+        assertNull(((Map<?, ?>) deepResult.get("credentialBean")).get("refreshToken"));
+
+        SensitiveSanitizeConfig dropConfig = SensitiveSanitizeConfig.defaults();
+        dropConfig.setSecretStrategy(SensitiveStrategy.DROP);
+        Map<?, ?> dropped = (Map<?, ?>) SensitiveDataSanitizer.sanitize(source, dropConfig);
+        Map<?, ?> droppedExact = (Map<?, ?>) dropped.get("content");
+        assertFalse(droppedExact.containsKey("apiKey"));
+        Map<?, ?> droppedDeep = droppedExact;
+        for (int depth = 0; depth < 10; depth++) {
+            droppedDeep = (Map<?, ?>) droppedDeep.get("nested");
+        }
+        assertEquals("token=fixture_literal", droppedDeep.get("text"));
+        assertFalse(droppedDeep.containsKey("password"));
+        assertFalse(((Map<?, ?>) droppedDeep.get("credentialBean")).containsKey("refreshToken"));
+    }
+
+    @Test
     void handlesCyclicReferences() {
         Node root = new Node();
         root.name = "root";
@@ -153,6 +226,15 @@ class SensitiveDataSanitizerTest {
         @SensitiveField(strategy = SensitiveStrategy.KEEP)
         String visibleToken;
         String normal;
+    }
+
+    static class ExactContainer {
+        @ExactContentOutput(reason = "test validated author content")
+        Map<String, Object> content;
+    }
+
+    static class CredentialBean {
+        String refreshToken;
     }
 
     static class Node {

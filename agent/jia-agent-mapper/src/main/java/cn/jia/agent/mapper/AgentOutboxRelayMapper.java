@@ -19,8 +19,8 @@ public interface AgentOutboxRelayMapper {
             AND OCTET_LENGTH(o.tenant_id)=OCTET_LENGTH(TRIM(o.tenant_id))
             AND CAST(o.client_id AS BINARY)=CAST(TRIM(o.client_id) AS BINARY)
             AND OCTET_LENGTH(o.client_id)=OCTET_LENGTH(TRIM(o.client_id))
-            AND o.tenant_id NOT REGEXP CONCAT('[',CHAR(92),'p{Cc}]')
-            AND o.client_id NOT REGEXP CONCAT('[',CHAR(92),'p{Cc}]')
+            AND o.tenant_id NOT REGEXP CONCAT('[',CHAR(92 USING utf8mb4),'p{Cc}]')
+            AND o.client_id NOT REGEXP CONCAT('[',CHAR(92 USING utf8mb4),'p{Cc}]')
             AND o.version<9223372036854775806
             AND EXISTS (
                 SELECT 1 FROM agent_command_delivery d

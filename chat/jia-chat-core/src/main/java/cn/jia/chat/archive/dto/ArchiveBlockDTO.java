@@ -1,5 +1,6 @@
 package cn.jia.chat.archive.dto;
 
+import cn.jia.core.security.ExactContentOutput;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonPropertyOrder;
 
@@ -15,7 +16,7 @@ public record ArchiveBlockDTO(
         String blockType,
         String blockId,
         Integer number,
-        String title,
+        @ExactContentOutput(reason = "published archive block title must be byte-faithful") String title,
         int paragraphCount,
         long utf8ByteLength,
         List<ArchiveParagraphDTO> paragraphs) {

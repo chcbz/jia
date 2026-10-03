@@ -38,7 +38,6 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.Objects;
-import java.util.Set;
 
 /**
  * D07 durable Inbox processor. It owns no Rabbit listener, broker ACK, WebSocket send, or domain mutation.
@@ -52,14 +51,6 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
     public static final int MAX_WIRE_BYTES = 16_777_215;
 
     private static final Logger LOG = LoggerFactory.getLogger(AgentCommandInboxServiceImpl.class);
-    private static final Set<String> COMMAND_TYPES = Set.of("SKILL_INSTALL",
-            AgentProtocolConstants.COMMAND_TASK_INVITE,
-            AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE,
-            AgentProtocolConstants.COMMAND_WORK_ITEM_RESUME,
-            AgentProtocolConstants.COMMAND_WORK_ITEM_CANCEL,
-            AgentProtocolConstants.COMMAND_REQUEST_RESPOND,
-            AgentProtocolConstants.COMMAND_REVIEW_EXECUTE,
-            AgentProtocolConstants.COMMAND_CONTEXT_REFRESH);
     private static final ObjectMapper STRICT_WIRE_JSON = JsonMapper.builder()
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
@@ -908,7 +899,7 @@ public final class AgentCommandInboxServiceImpl implements AgentCommandInboxServ
         String taskId = wireExact(root, "taskId", 100);
         String targetAgentId = wireExact(root, "targetAgentId", 100);
         String commandType = wireExact(root, "commandType", 64);
-        if (!COMMAND_TYPES.contains(commandType)) {
+        if (!AgentCommandCanonicalCodec.isSupportedCommandType(commandType)) {
             throw new IllegalArgumentException("wire command type is invalid");
         }
         long activeAttempt = wireLong(root, "attempt");

@@ -211,8 +211,8 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
 
         port.expired = true;
         assertEquals("EXECUTION_FENCED", assertThrows(ArchiveMaintenanceException.class,
-                () -> service.runtimeUpdateDraft(runtime(), JOB, RUN, "expired-write", 0,
-                        new ArchiveDraftUpdateRequest(List.of(), List.of()))).code());
+                () -> service.runtimePutBlock(runtime(), JOB, RUN, "one", "expired-write", 0,
+                        oneBlockRequest("one"))).code());
         port.expired = false;
 
         ArchiveRuntimeFailureRequest failure = new ArchiveRuntimeFailureRequest(
@@ -290,6 +290,98 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
     }
 
     @Test
+    void nativeBlockReplayPrecedesCasAndCannotLoseLaterBlocks() {
+        seedExecutionCandidate();
+        JdbcArchiveMaintenanceStore store = new JdbcArchiveMaintenanceStore(jdbc);
+        ArchiveMaintenanceServiceImpl service = service(store, new RootLockingPort(jdbc));
+        service.ensureExecution(ACTOR, JOB, "ensure-blocks", 1);
+        ArchiveRuntimeScope scope = runtime();
+        service.runtimeStart(scope, JOB, RUN,
+                new ArchiveRuntimeStartRequest("command-a", "message-a", "1", "1"));
+
+        ArchiveDraftUpdateRequest firstBody = blockRequest("one", 1);
+        ArchiveDraftDTO first = service.runtimePutBlock(scope, JOB, RUN, "one",
+                "block-one", 0, firstBody);
+        assertEquals("1", first.revision());
+        ArchiveDraftDTO second = service.runtimePutBlock(scope, JOB, RUN, "two",
+                "block-two", 1, blockRequest("two", 2));
+        assertEquals("2", second.revision());
+
+        ArchiveDraftDTO replay = service.runtimePutBlock(scope, JOB, RUN, "one",
+                "block-one", 0, firstBody);
+        assertEquals("2", replay.revision());
+        assertEquals(List.of("one", "two"), replay.content().blocks().stream()
+                .map(ArchiveDraftBlockInput::blockKey).toList());
+        assertEquals("IDEMPOTENCY_CONFLICT", assertThrows(ArchiveMaintenanceException.class,
+                () -> service.runtimePutBlock(scope, JOB, RUN, "one", "block-one", 1,
+                        firstBody)).code());
+        assertEquals("ARCHIVE_REVISION_CONFLICT", assertThrows(ArchiveMaintenanceException.class,
+                () -> service.runtimePutBlock(scope, JOB, RUN, "three", "block-three", 0,
+                        blockRequest("three", 3))).code());
+    }
+
+    @Test
+    void failedNativeValidationIsReadableByReceiptAndCurrentCandidateWithoutDraftPointer()
+            throws Exception {
+        seedExecutionCandidate();
+        JdbcArchiveMaintenanceStore store = new JdbcArchiveMaintenanceStore(jdbc);
+        ArchiveMaintenanceServiceImpl service = service(store, new RootLockingPort(jdbc));
+        service.ensureExecution(ACTOR, JOB, "ensure-failed-validation", 1);
+        ArchiveRuntimeScope scope = runtime();
+        service.runtimeStart(scope, JOB, RUN,
+                new ArchiveRuntimeStartRequest("command-a", "message-a", "1", "1"));
+        String invalid = new ObjectMapper().writeValueAsString(
+                new ArchiveDraftUpdateRequest(List.of(), List.of()));
+        jdbc.update("UPDATE archive_draft SET revision=1,content_json=?,content_sha256=? "
+                + "WHERE draft_id='draft-a'", invalid, "c".repeat(64));
+
+        ArchiveOperationAcceptedDTO accepted = service.runtimeValidate(scope, JOB, RUN,
+                "validate-failed", 1);
+        assertNull(jdbc.queryForObject("SELECT validation_id FROM archive_draft "
+                + "WHERE draft_id='draft-a'", String.class));
+        ArchiveValidationDTO exact = service.runtimeValidation(scope, JOB, RUN,
+                accepted.operationId());
+        ArchiveValidationDTO current = service.runtimeValidation(scope, JOB, RUN, null);
+        assertEquals("FAILED", exact.outcome());
+        assertEquals(accepted.operationId(), exact.validationId());
+        assertEquals(exact, current);
+    }
+
+    @Test
+    void nativeValidationReplayUsesOriginalRequestFingerprintAfterCandidateChanges() throws Exception {
+        seedExecutionCandidate();
+        JdbcArchiveMaintenanceStore store = new JdbcArchiveMaintenanceStore(jdbc);
+        ArchiveMaintenanceServiceImpl service = service(store, new RootLockingPort(jdbc));
+        service.ensureExecution(ACTOR, JOB, "ensure-validation-replay", 1);
+        ArchiveRuntimeScope scope = runtime();
+        service.runtimeStart(scope, JOB, RUN,
+                new ArchiveRuntimeStartRequest("command-a", "message-a", "1", "1"));
+        String invalid = new ObjectMapper().writeValueAsString(
+                new ArchiveDraftUpdateRequest(List.of(), List.of()));
+        jdbc.update("UPDATE archive_draft SET revision=1,content_json=?,content_sha256=? "
+                + "WHERE draft_id='draft-a'", invalid, "c".repeat(64));
+
+        ArchiveOperationAcceptedDTO accepted = service.runtimeValidate(scope, JOB, RUN,
+                "validate-replay", 1);
+        assertEquals("FAILED", service.runtimeValidation(scope, JOB, RUN,
+                accepted.operationId()).outcome());
+
+        ArchiveDraftDTO changed = service.runtimePutBlock(scope, JOB, RUN, "one",
+                "block-after-validation", 1, blockRequest("one", 1));
+        assertEquals("2", changed.revision());
+
+        ArchiveOperationAcceptedDTO replay = service.runtimeValidate(scope, JOB, RUN,
+                "validate-replay", 1);
+        assertEquals(accepted, replay);
+        ArchiveValidationDTO fixedCandidate = service.runtimeValidation(scope, JOB, RUN,
+                accepted.operationId());
+        assertEquals("1", fixedCandidate.draftRevision());
+        assertEquals("FAILED", fixedCandidate.outcome());
+        assertEquals("IDEMPOTENCY_CONFLICT", assertThrows(ArchiveMaintenanceException.class,
+                () -> service.runtimeValidate(scope, JOB, RUN, "validate-replay", 2)).code());
+    }
+
+    @Test
     void draftOnlyValidationCompletesAndReadOnlyRevocationFencesWithoutPublication() throws Exception {
         seedExecutionCandidate();
         JdbcArchiveMaintenanceStore store = new JdbcArchiveMaintenanceStore(jdbc);
@@ -303,9 +395,12 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         jdbc.update("UPDATE archive_draft SET revision=1,content_json=?,content_sha256=? WHERE draft_id='draft-a'",
                 draftJson, "c".repeat(64));
 
-        ArchiveValidationDTO validation = service.runtimeValidate(originalRuntime, JOB, RUN,
+        ArchiveOperationAcceptedDTO accepted = service.runtimeValidate(originalRuntime, JOB, RUN,
                 "validate-complete", 1);
+        ArchiveValidationDTO validation = service.runtimeValidation(originalRuntime, JOB, RUN,
+                accepted.operationId());
         assertEquals("PASSED", validation.outcome());
+        assertEquals(accepted.operationId(), validation.validationId());
         assertEquals("COMPLETED:READ_ONLY:AWAITING_PUBLISH", jdbc.queryForObject(
                 "SELECT CONCAT(r.state, ':', g.state, ':', j.state) FROM archive_job_run r "
                         + "JOIN archive_execution_grant g ON g.run_id=r.run_id "
@@ -319,9 +414,13 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
 
         port.expired = true;
         assertEquals("COMPLETED", service.runtimeResult(originalRuntime, JOB, RUN).runState());
+        ArchiveOperationAcceptedDTO replay = service.runtimeValidate(originalRuntime, JOB, RUN,
+                "validate-complete", 1);
+        assertEquals(accepted, replay);
+        assertEquals("PASSED", service.runtimeValidation(originalRuntime, JOB, RUN, null).outcome());
         assertEquals("EXECUTION_FENCED", assertThrows(ArchiveMaintenanceException.class,
-                () -> service.runtimeUpdateDraft(runtime(), JOB, RUN, "write-after-complete", 1,
-                        validDraft())).code());
+                () -> service.runtimePutBlock(runtime(), JOB, RUN, "one", "write-after-complete", 1,
+                        oneBlockRequest("one"))).code());
         assertEquals("EXECUTION_FENCED", assertThrows(ArchiveMaintenanceException.class,
                 () -> service.runtimeValidate(runtime(), JOB, RUN, "validate-after-complete", 1)).code());
         assertEquals(draftRevision, jdbc.queryForObject(
@@ -342,6 +441,9 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                 () -> service.runtimeResult(originalRuntime, JOB, RUN)).code());
         assertEquals("ARCHIVE_ASSIGNMENT_CHANGED", assertThrows(ArchiveMaintenanceException.class,
                 () -> service.runtimeContext(originalRuntime, JOB, RUN)).code());
+        assertEquals("ARCHIVE_ASSIGNMENT_CHANGED", assertThrows(ArchiveMaintenanceException.class,
+                () -> service.runtimeValidation(originalRuntime, JOB, RUN,
+                        accepted.operationId())).code());
     }
 
     @Test
@@ -368,7 +470,8 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         String draftJson = new ObjectMapper().writeValueAsString(validDraft());
         jdbc.update("UPDATE archive_draft SET revision=1,content_json=?,content_sha256=? WHERE draft_id='draft-a'",
                 draftJson, "c".repeat(64));
-        ArchiveValidationDTO validation = service.runtimeValidate(scope, JOB, RUN, "validate-auto", 1);
+        ArchiveOperationAcceptedDTO accepted = service.runtimeValidate(scope, JOB, RUN, "validate-auto", 1);
+        ArchiveValidationDTO validation = service.runtimeValidation(scope, JOB, RUN, accepted.operationId());
         assertEquals("PASSED", validation.outcome());
         assertEquals("RUNNING:ACTIVE:AWAITING_PUBLISH", jdbc.queryForObject(
                 "SELECT CONCAT(r.state, ':', g.state, ':', j.state) FROM archive_job_run r "
@@ -399,8 +502,8 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                 Integer.class));
         assertEquals(1, eventCount("PUBLICATION_COMMITTED"));
         assertEquals("EXECUTION_FENCED", assertThrows(ArchiveMaintenanceException.class,
-                () -> service.runtimeUpdateDraft(scope, JOB, RUN, "write-after-publish", 1,
-                        validDraft())).code());
+                () -> service.runtimePutBlock(scope, JOB, RUN, "one", "write-after-publish", 1,
+                        oneBlockRequest("one"))).code());
     }
 
     @Test
@@ -635,7 +738,8 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         String draftJson = new ObjectMapper().writeValueAsString(validDraft());
         jdbc.update("UPDATE archive_draft SET revision=1,content_json=?,content_sha256=? WHERE draft_id='draft-a'",
                 draftJson, "c".repeat(64));
-        ArchiveValidationDTO validation = service.runtimeValidate(scope, JOB, RUN, "validate-revise", 1);
+        ArchiveOperationAcceptedDTO accepted = service.runtimeValidate(scope, JOB, RUN, "validate-revise", 1);
+        ArchiveValidationDTO validation = service.runtimeValidation(scope, JOB, RUN, accepted.operationId());
         assertEquals("PASSED", validation.outcome());
         jdbc.update("UPDATE archive_collection_work SET revision=revision+1 "
                 + "WHERE collection_id=? AND work_id='work-a'", COLLECTION);
@@ -2534,6 +2638,16 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                 validationId, "e".repeat(64));
     }
 
+    private ArchiveDraftUpdateRequest oneBlockRequest(String blockKey) {
+        return blockRequest(blockKey, 1);
+    }
+
+    private ArchiveDraftUpdateRequest blockRequest(String blockKey, int ordinal) {
+        return new ArchiveDraftUpdateRequest(List.of(new ArchiveDraftBlockInput(
+                "CHAPTER", blockKey, ordinal, "第" + ordinal + "回", List.of(), List.of())),
+                List.of());
+    }
+
     private ArchiveDraftUpdateRequest validDraft() {
         return new ArchiveDraftUpdateRequest(List.of(
                 new ArchiveDraftBlockInput("CHAPTER", "one", 1, "第一回",
@@ -2945,3 +3059,4 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         }
     }
 }
+

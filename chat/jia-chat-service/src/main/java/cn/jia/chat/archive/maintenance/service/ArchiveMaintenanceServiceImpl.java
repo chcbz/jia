@@ -198,11 +198,12 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         if (grant == null || !"ACTIVE".equals(grant.state())) {
             return new ArchiveCapabilitiesDTO(collectionId, List.of(),
                     appointment == null ? "VACANT" : "OCCUPIED",
-                    appointment == null ? "WAITING_ASSIGNEE" : "CLIENT_UPDATE_REQUIRED");
+                    appointment == null ? "WAITING_ASSIGNEE" : "UNAVAILABLE");
         }
+        String readiness = appointment == null ? "WAITING_ASSIGNEE"
+                : appointmentReadiness(actor, appointment, appointment).readiness();
         return new ArchiveCapabilitiesDTO(collectionId, permissions(grant.permissions()),
-                appointment == null ? "VACANT" : "OCCUPIED",
-                appointment == null ? "WAITING_ASSIGNEE" : "CLIENT_UPDATE_REQUIRED");
+                appointment == null ? "VACANT" : "OCCUPIED", readiness);
     }
 
     @Override
@@ -404,7 +405,9 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
     @Override
     public List<ArchiveAppointmentDTO> appointments(ArchiveActorScope actor, String collectionId) {
         requireManager(actor, collectionId, "appoint", false);
-        return store.listAppointments(actor, collectionId).stream().map(value -> appointmentDto(actor, value)).toList();
+        ArchiveAppointmentRecord current = store.findCurrentAppointment(collectionId, false);
+        return store.listAppointments(actor, collectionId).stream()
+                .map(value -> appointmentDto(actor, value, current)).toList();
     }
 
     @Override
@@ -419,7 +422,7 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
                 actor.tenantId(), actor.clientId(), actor.ownerJiacn(), binding, request.agentId());
         String canonical = identity.getCanonicalAgentId();
         String requestSha = sha(request);
-        return transactions.required(() -> {
+        ArchiveAppointmentRecord result = transactions.required(() -> {
             identities.lockActiveCanonicalAgentIdsInScope(actor.tenantId(), actor.clientId(),
                     actor.ownerJiacn(), List.of(canonical));
             identities.requireActiveIdentityForBinding(actor.tenantId(), actor.clientId(),
@@ -429,7 +432,9 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             ArchiveMaintenanceStore.Operation operation = operation(actor, key, "POST",
                     "/archive/admin/v1/collections/" + collectionId + "/appointments",
                     requestSha, "APPOINTMENT", appointmentId);
-            if (!operation.created()) return appointmentDto(actor, requireAppointmentForActor(actor, operation.targetId(), false));
+            if (!operation.created()) {
+                return requireAppointmentForActor(actor, operation.targetId(), false);
+            }
             store.ensureSlot(collectionId, ROLE);
             ArchiveMaintenanceStore.Slot slot = store.lockSlot(collectionId, ROLE);
             if (slot == null || slot.revision() != expectedSlotRevision) {
@@ -449,8 +454,9 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
                 conflict("ARCHIVE_APPOINTMENT_CONFLICT", "Archive editor slot changed");
             }
             store.commitOperation(actor, key, appointmentId);
-            return appointmentDto(actor, created);
+            return created;
         });
+        return appointmentDto(actor, result, currentAppointmentFor(result));
     }
 
     @Override
@@ -461,7 +467,7 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         requireKey(key);
         String requestSha = sha(request == null ? new ArchiveAppointmentRevokeRequest(null) : request);
         ArchiveAppointmentRecord observed = requireAppointmentForActor(actor, appointmentId, false);
-        return transactions.required(() -> {
+        ArchiveAppointmentRecord result = transactions.required(() -> {
             if (executionEnabled) {
                 requireExecutionPort().lockIdentityRoot(target(observed));
             }
@@ -469,7 +475,9 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             ArchiveMaintenanceStore.Operation operation = operation(actor, key, "POST",
                     "/archive/admin/v1/appointments/" + appointmentId + "/revoke",
                     requestSha, "APPOINTMENT", appointmentId);
-            if (!operation.created()) return appointmentDto(actor, requireAppointmentForActor(actor, operation.targetId(), false));
+            if (!operation.created()) {
+                return requireAppointmentForActor(actor, operation.targetId(), false);
+            }
             ArchiveMaintenanceStore.Slot slot = store.lockSlot(observed.collectionId(), ROLE);
             ArchiveAppointmentRecord current = requireAppointmentForActor(actor, appointmentId, true);
             if (current.revision() != expectedRevision) revisionConflict(current.revision());
@@ -489,8 +497,9 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
                 conflict("ARCHIVE_APPOINTMENT_CHANGED", "Archive appointment changed");
             }
             store.commitOperation(actor, key, appointmentId);
-            return appointmentDto(actor, requireAppointmentForActor(actor, appointmentId, false));
+            return requireAppointmentForActor(actor, appointmentId, false);
         });
+        return appointmentDto(actor, result, currentAppointmentFor(result));
     }
 
     @Override
@@ -1519,7 +1528,7 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
     public ArchiveDraftDTO updateDraft(ArchiveActorScope actor, String jobId, String key,
             long expectedRevision, ArchiveDraftUpdateRequest request) {
         ArchiveMaintenanceJobRecord job = requireJobForActor(actor, jobId, false);
-        return updateDraftAuthorized(actor, job, key, expectedRevision, request, false, null);
+        return updateDraftAuthorized(actor, job, key, expectedRevision, request);
     }
 
     @Override
@@ -2238,44 +2247,46 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
     }
 
     @Override
-    public ArchiveDraftDTO runtimeUpdateDraft(ArchiveRuntimeScope runtime, String jobId, String runId,
-            String key, long expectedRevision, ArchiveDraftUpdateRequest request) {
-        ArchiveMaintenanceJobRecord job = authorizeRuntime(runtime, jobId, runId);
-        return updateDraftAuthorized(actor(runtime), job, key, expectedRevision, request, true, runtime);
-    }
-
-    @Override
     public ArchiveDraftDTO runtimePutBlock(ArchiveRuntimeScope runtime, String jobId, String runId,
-            String blockKey, String key, long expectedRevision, ArchiveDraftBlockInput request) {
+            String blockKey, String key, long expectedRevision, ArchiveDraftUpdateRequest request) {
         ArchiveMaintenanceJobRecord job = authorizeRuntime(runtime, jobId, runId);
-        if (request == null || !Objects.equals(blockKey, request.blockKey())) {
-            invalid("Native block path and body must identify the same block");
+        if (request == null || request.blocks().size() != 1
+                || !Objects.equals(blockKey, request.blocks().getFirst().blockKey())) {
+            invalid("Native block request must contain exactly the path-selected block");
         }
-        ArchiveDraftRecord draft = requireDraft(jobId, false);
-        ArchiveDraftUpdateRequest current = parseDraft(draft.contentJson());
-        ArrayList<ArchiveDraftBlockInput> blocks = new ArrayList<>(current.blocks());
-        blocks.removeIf(block -> blockKey.equals(block.blockKey()));
-        blocks.add(request);
-        blocks.sort(Comparator.comparingInt(block -> block.ordinal() == null
-                ? Integer.MAX_VALUE : block.ordinal()));
-        return updateDraftAuthorized(actor(runtime), job, key, expectedRevision,
-                new ArchiveDraftUpdateRequest(blocks, current.excludedSourceRanges()), true, runtime);
+        return updateRuntimeBlockAuthorized(runtime, job, blockKey, key, expectedRevision, request);
     }
 
     @Override
-    public ArchiveValidationDTO runtimeValidate(ArchiveRuntimeScope runtime, String jobId, String runId,
-            String key, long expectedDraftRevision) {
-        ArchiveMaintenanceJobRecord job = authorizeRuntime(runtime, jobId, runId);
-        return validateAuthorized(actor(runtime), job, key, expectedDraftRevision, true, runtime);
+    public ArchiveOperationAcceptedDTO runtimeValidate(ArchiveRuntimeScope runtime, String jobId,
+            String runId, String key, long expectedDraftRevision) {
+        ArchiveMaintenanceJobRecord job = authorizeRuntime(runtime, jobId, runId, true);
+        ArchiveValidationDTO validation = validateAuthorized(actor(runtime), job, key,
+                expectedDraftRevision, true, runtime);
+        return new ArchiveOperationAcceptedDTO(validation.validationId(), jobId, "COMMITTED");
     }
 
     @Override
-    public ArchiveValidationDTO runtimeValidation(ArchiveRuntimeScope runtime, String jobId, String runId) {
-        authorizeRuntime(runtime, jobId, runId);
+    public ArchiveValidationDTO runtimeValidation(ArchiveRuntimeScope runtime, String jobId,
+            String runId, String operationId) {
+        ArchiveMaintenanceJobRecord job = authorizeRuntime(runtime, jobId, runId, true);
         ArchiveDraftRecord draft = requireDraft(jobId, false);
-        ArchiveValidationRecord validation = draft.validationId() == null
-                ? null : store.findValidation(draft.validationId());
-        if (validation == null) notFound();
+        ArchiveValidationRecord validation;
+        if (operationId == null) {
+            validation = store.findLatestValidation(draft.draftId(), draft.revision());
+        } else {
+            exactId(operationId);
+            ArchiveMaintenanceStore.TargetOperation receipt = store.findOperationByTarget(
+                    actor(runtime), "VALIDATION", operationId);
+            String expectedPath = "/internal/archive/v1/jobs/" + jobId + "/runs/" + runId + "/validate";
+            if (receipt == null || !"POST".equals(receipt.httpMethod())
+                    || !expectedPath.equals(receipt.canonicalPath())
+                    || !"COMMITTED".equals(receipt.state())) {
+                notFound();
+            }
+            validation = store.findValidation(operationId);
+        }
+        if (validation == null || !draft.draftId().equals(validation.draftId())) notFound();
         return validationDto(validation);
     }
 
@@ -2328,32 +2339,70 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         return verifyPublicationSafely(committed);
     }
 
+    private ArchiveDraftDTO updateRuntimeBlockAuthorized(ArchiveRuntimeScope runtime,
+            ArchiveMaintenanceJobRecord observed, String blockKey, String key,
+            long expectedRevision, ArchiveDraftUpdateRequest request) {
+        requireKey(key);
+        String requestSha = digest(expectedRevision + ":" + sha(request));
+        return transactions.required(() -> {
+            ArchiveAgentExecutionPort.LockedTarget lockedTarget = lockControlledTarget(target(observed));
+            ArchiveManagerGrantRecord manager = requireManager(actor(runtime), observed.collectionId(),
+                    "draft.write", true);
+            requireManagerRevision(manager, observed);
+            ArchiveAppointmentRecord appointment = requireCurrentAppointmentForJob(observed, true);
+            ArchiveMaintenanceJobRecord job = requireJobForActor(actor(runtime), observed.jobId(), true);
+            requireManagerRevision(manager, job);
+            RuntimeAuthorization authorization = authorizeRuntimeLocked(
+                    runtime, job, appointment, lockedTarget);
+            requireProducerRunning(authorization.run());
+            requireRuntimeWritable(job);
+            ArchiveDraftRecord draft = requireDraft(job.jobId(), true);
+            requireDraftMutable(job, draft);
+            String path = "/internal/archive/v1/jobs/" + job.jobId() + "/runs/" + job.runId()
+                    + "/blocks/" + blockKey;
+            ArchiveMaintenanceStore.Operation op = operation(actor(runtime), key, "PUT", path,
+                    requestSha, "DRAFT", draft.draftId());
+            if (!same(op.targetId(), draft.draftId())) {
+                conflict("IDEMPOTENCY_CONFLICT", "Native block receipt resource changed");
+            }
+            if (!op.created()) return draftDto(requireDraft(job.jobId(), false));
+            if (draft.revision() != expectedRevision) revisionConflict(draft.revision());
+
+            ArchiveDraftUpdateRequest current = parseDraft(draft.contentJson());
+            ArrayList<ArchiveDraftBlockInput> blocks = new ArrayList<>(current.blocks());
+            blocks.removeIf(block -> blockKey.equals(block.blockKey()));
+            blocks.add(request.blocks().getFirst());
+            blocks.sort(Comparator.comparingInt(block -> block.ordinal() == null
+                    ? Integer.MAX_VALUE : block.ordinal()));
+            ArchiveDraftUpdateRequest merged = new ArchiveDraftUpdateRequest(
+                    blocks, request.excludedSourceRanges());
+            String json = json(merged);
+            long next = draft.revision() + 1;
+            if (store.updateDraft(draft.draftId(), expectedRevision, next, "EDITABLE",
+                    json, digest(json), null, null) != 1) {
+                revisionConflict(draft.revision());
+            }
+            store.appendJobEvent(job.jobId(), job.revision(), "DRAFT_UPDATED",
+                    json(Map.of("draftId", draft.draftId(), "draftRevision", Long.toString(next),
+                            "blockKey", blockKey)));
+            store.commitOperation(actor(runtime), key, draft.draftId());
+            return draftDto(requireDraft(job.jobId(), false));
+        });
+    }
+
     private ArchiveDraftDTO updateDraftAuthorized(ArchiveActorScope actor,
             ArchiveMaintenanceJobRecord observed, String key, long expectedRevision,
-            ArchiveDraftUpdateRequest request, boolean runtime, ArchiveRuntimeScope runtimeScope) {
+            ArchiveDraftUpdateRequest request) {
         requireKey(key);
         Objects.requireNonNull(request, "request");
         String requestSha = sha(request);
         return transactions.required(() -> {
-            ArchiveAgentExecutionPort.LockedTarget lockedTarget = runtime
-                    ? lockControlledTarget(target(observed)) : null;
-            ArchiveManagerGrantRecord manager = requireManager(actor, observed.collectionId(), "draft.write", true);
-            if (runtime) requireManagerRevision(manager, observed);
-            ArchiveAppointmentRecord appointment = runtime
-                    ? requireCurrentAppointmentForJob(observed, true) : null;
+            ArchiveManagerGrantRecord manager = requireManager(actor, observed.collectionId(),
+                    "draft.write", true);
             ArchiveMaintenanceJobRecord job = requireJobForActor(actor, observed.jobId(), true);
-            if (runtime) {
-                requireManagerRevision(manager, job);
-                RuntimeAuthorization authorization = authorizeRuntimeLocked(
-                        runtimeScope, job, appointment, lockedTarget);
-                requireProducerRunning(authorization.run());
-                requireRuntimeWritable(job);
-            }
             ArchiveDraftRecord draft = requireDraft(job.jobId(), true);
             requireDraftMutable(job, draft);
-            String path = runtime
-                    ? "/internal/archive/v1/jobs/" + job.jobId() + "/runs/" + job.runId() + "/draft"
-                    : "/archive/admin/v1/jobs/" + job.jobId() + "/draft";
+            String path = "/archive/admin/v1/jobs/" + job.jobId() + "/draft";
             ArchiveMaintenanceStore.Operation op = operation(actor, key, "PUT", path,
                     requestSha, "DRAFT", draft.draftId());
             if (!op.created()) return draftDto(requireDraft(job.jobId(), false));
@@ -2366,9 +2415,8 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             }
             Map<String, String> updateFacts = Map.of("draftId", draft.draftId(),
                     "draftRevision", Long.toString(next));
-            store.appendJobEvent(job.jobId(), job.revision(),
-                    "DRAFT_UPDATED",
-                    runtime ? json(updateFacts) : humanAudit(actor, manager, updateFacts));
+            store.appendJobEvent(job.jobId(), job.revision(), "DRAFT_UPDATED",
+                    humanAudit(actor, manager, updateFacts));
             store.commitOperation(actor, key, draft.draftId());
             return draftDto(requireDraft(job.jobId(), false));
         });
@@ -2398,24 +2446,40 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             RuntimeAuthorization authorization = null;
             if (runtime) {
                 requireManagerRevision(manager, job);
-                authorization = authorizeRuntimeLocked(runtimeScope, job, appointment, lockedTarget);
-                requireProducerRunning(authorization.run());
-                requireRuntimeWritable(job);
+                authorization = authorizeRuntimeLocked(runtimeScope, job, appointment,
+                        lockedTarget, true);
             }
             ArchiveDraftRecord draft = requireDraft(job.jobId(), true);
-            requireDraftMutable(job, draft);
-            if (draft.revision() != expectedRevision) revisionConflict(draft.revision());
             String path = runtime
                     ? "/internal/archive/v1/jobs/" + job.jobId() + "/runs/" + job.runId() + "/validate"
                     : "/archive/admin/v1/jobs/" + job.jobId() + "/validate";
+            String requestSha = runtime
+                    ? digest(path + ":" + draft.draftId() + ":" + expectedRevision)
+                    : digest(draft.draftId() + ":" + expectedRevision + ":" + draft.contentSha256());
             ArchiveMaintenanceStore.Operation op = operation(actor, key, "POST", path,
-                    digest(draft.contentSha256() + ":" + expectedRevision),
-                    "VALIDATION", newId("val"));
+                    requestSha, "VALIDATION", newId("val"));
             if (!op.created()) {
                 ArchiveValidationRecord existing = store.findValidation(op.targetId());
-                if (existing == null) conflict("ARCHIVE_OPERATION_IN_PROGRESS", "Validation state is not committed");
+                if (existing == null) {
+                    conflict("ARCHIVE_OPERATION_IN_PROGRESS", "Validation state is not committed");
+                }
+                if (!draft.draftId().equals(existing.draftId())
+                        || existing.draftRevision() != expectedRevision) {
+                    conflict("IDEMPOTENCY_CONFLICT", "Validation receipt scope changed");
+                }
                 return validationDto(existing);
             }
+            if (runtime) {
+                if (!"RUNNING".equals(authorization.run().state())
+                        || !"ACTIVE".equals(authorization.grant().state())) {
+                    throw error(403, "EXECUTION_FENCED",
+                            "Only the exact committed validation operation may be replayed after completion");
+                }
+                requireProducerRunning(authorization.run());
+                requireRuntimeWritable(job);
+            }
+            requireDraftMutable(job, draft);
+            if (draft.revision() != expectedRevision) revisionConflict(draft.revision());
             List<String> findings = new ArrayList<>();
             try {
                 ArchiveDraftUpdateRequest body = parseDraft(draft.contentJson());
@@ -2473,6 +2537,11 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
 
     private ArchiveMaintenanceJobRecord authorizeRuntime(ArchiveRuntimeScope runtime,
             String jobId, String runId) {
+        return authorizeRuntime(runtime, jobId, runId, false);
+    }
+
+    private ArchiveMaintenanceJobRecord authorizeRuntime(ArchiveRuntimeScope runtime,
+            String jobId, String runId, boolean allowTerminalResult) {
         requireRuntime(runtime);
         ArchiveMaintenanceJobRecord observed = requireJob(jobId, false);
         requireExecutionCandidate(observed);
@@ -2480,12 +2549,13 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         requireRuntimeJobScope(runtime, observed);
         return transactions.required(() -> {
             ArchiveAgentExecutionPort.LockedTarget lockedTarget = lockControlledTarget(target(observed));
-            ArchiveManagerGrantRecord manager = requireManager(actor(runtime), observed.collectionId(), "draft.write", true);
+            ArchiveManagerGrantRecord manager = requireManager(actor(runtime), observed.collectionId(),
+                    "draft.write", true);
             requireManagerRevision(manager, observed);
             ArchiveAppointmentRecord appointment = requireCurrentAppointmentForJob(observed, true);
             ArchiveMaintenanceJobRecord current = requireJob(jobId, true);
             requireManagerRevision(manager, current);
-            authorizeRuntimeLocked(runtime, current, appointment, lockedTarget, false);
+            authorizeRuntimeLocked(runtime, current, appointment, lockedTarget, allowTerminalResult);
             return current;
         });
     }
@@ -3492,39 +3562,124 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
                 value.requiredSkillSha256());
     }
 
-    private ArchiveAppointmentDTO appointmentDto(ArchiveActorScope actor, ArchiveAppointmentRecord value) {
-        ArchiveSkillReadinessDTO skillReadiness = skillReadiness(actor, value);
+    private ArchiveAppointmentRecord currentAppointmentFor(ArchiveAppointmentRecord value) {
+        return "ACTIVE".equals(value.status())
+                ? store.findCurrentAppointment(value.collectionId(), false) : null;
+    }
+
+    private ArchiveAppointmentDTO appointmentDto(ArchiveActorScope actor, ArchiveAppointmentRecord value,
+            ArchiveAppointmentRecord current) {
+        AppointmentReadiness readiness = appointmentReadiness(actor, value, current);
         return new ArchiveAppointmentDTO(value.appointmentId(), value.collectionId(),
                 value.roleCode(), value.agentId(), value.bindingVersion(), value.workScopeMode(),
                 csv(value.workIds()), value.permissionProfile(), skillRef(value),
-                value.status(), Long.toString(value.revision()),
-                "ACTIVE".equals(value.status()) ? "CLIENT_UPDATE_REQUIRED" : "REVOKED",
-                skillReadiness);
+                value.status(), Long.toString(value.revision()), readiness.readiness(),
+                readiness.skillReadiness());
     }
 
-    private ArchiveSkillReadinessDTO skillReadiness(ArchiveActorScope actor, ArchiveAppointmentRecord value) {
+    private AppointmentReadiness appointmentReadiness(ArchiveActorScope actor,
+            ArchiveAppointmentRecord value, ArchiveAppointmentRecord current) {
         boolean currentScope = actor != null && same(actor.tenantId(), value.tenantId())
                 && same(actor.clientId(), value.clientId()) && same(actor.ownerJiacn(), value.ownerJiacn());
-        InstalledSkillResolver.Resolution resolution = InstalledSkillResolver.Resolution.unavailable();
-        if (currentScope && "ACTIVE".equals(value.status()) && installedSkillResolver != null) {
-            try {
-                resolution = installedSkillResolver.resolve(new InstalledSkillResolver.Request(
-                        value.tenantId(), value.clientId(), value.ownerJiacn(), value.agentId(),
-                        parsePositive(value.bindingVersion(), "bindingVersion"),
-                        InstalledSkillResolver.Origin.PLATFORM_PROVISIONED,
-                        value.requiredSkillKey(), value.requiredSkillVersion(), value.requiredSkillSha256()));
-            } catch (RuntimeException unavailable) {
-                resolution = InstalledSkillResolver.Resolution.unavailable();
-            }
+        if (!"ACTIVE".equals(value.status())) {
+            return blockedReadiness("REVOKED", InstalledSkillResolver.State.REVOKED,
+                    null, "APPOINTMENT_REVOKED");
         }
-        ArchiveInstalledSkillProofDTO proof = resolution.proof() == null ? null
-                : new ArchiveInstalledSkillProofDTO(resolution.proof().installationRef(),
-                        Long.toString(resolution.proof().revision()), resolution.proof().key(),
-                        resolution.proof().version(), resolution.proof().packageDigest());
-        String state = !"ACTIVE".equals(value.status()) ? InstalledSkillResolver.State.REVOKED.name()
-                : resolution.state().name();
-        return new ArchiveSkillReadinessDTO(state, proof, false, "EXECUTION_NOT_WIRED");
+        if (!currentScope) {
+            return blockedReadiness("UNAVAILABLE", InstalledSkillResolver.State.UNAVAILABLE,
+                    null, "SCOPE_UNAVAILABLE");
+        }
+        if (!sameCurrentAppointment(value, current)) {
+            return blockedReadiness("REASSIGNMENT_REQUIRED", InstalledSkillResolver.State.UNAVAILABLE,
+                    null, "REASSIGNMENT_REQUIRED");
+        }
+
+        long binding;
+        try {
+            binding = parsePositive(value.bindingVersion(), "bindingVersion");
+        } catch (ArchiveMaintenanceException invalid) {
+            return blockedReadiness("BINDING_CHANGED", InstalledSkillResolver.State.UNAVAILABLE,
+                    null, "BINDING_CHANGED");
+        }
+        ArchiveAgentExecutionPort.Readiness execution = !executionEnabled
+                ? ArchiveAgentExecutionPort.Readiness.blocked("EXECUTION_DISABLED")
+                : executionPort == null
+                ? ArchiveAgentExecutionPort.Readiness.blocked("EXECUTION_NOT_WIRED")
+                : executionPort.observeReadiness(new ArchiveAgentExecutionPort.TargetRequest(
+                        value.tenantId(), value.clientId(), value.ownerJiacn(), value.agentId(), binding));
+        if (execution == null) {
+            execution = ArchiveAgentExecutionPort.Readiness.blocked("EXECUTION_NOT_WIRED");
+        }
+
+        InstalledSkillResolver.Resolution resolution = InstalledSkillResolver.Resolution.unavailable();
+        if (!"BINDING_CHANGED".equals(execution.blocker()) && installedSkillResolver != null) {
+            resolution = exactSkillResolution(installedSkillResolver.resolve(new InstalledSkillResolver.Request(
+                    value.tenantId(), value.clientId(), value.ownerJiacn(), value.agentId(), binding,
+                    InstalledSkillResolver.Origin.PLATFORM_PROVISIONED,
+                    value.requiredSkillKey(), value.requiredSkillVersion(), value.requiredSkillSha256())), value);
+        }
+        ArchiveInstalledSkillProofDTO proof = skillProofDto(resolution.proof());
+        if (!execution.executable()) {
+            return blockedReadiness(execution.blocker(), resolution.state(), proof, execution.blocker());
+        }
+        String skillBlocker = switch (resolution.state()) {
+            case VERIFIED -> null;
+            case PENDING -> "SKILL_INSTALL_PENDING";
+            case REVOKED -> "SKILL_INSTALL_REVOKED";
+            case UNAVAILABLE -> "SKILL_INSTALL_UNAVAILABLE";
+        };
+        if (skillBlocker != null) {
+            return blockedReadiness(skillBlocker, resolution.state(), proof, skillBlocker);
+        }
+        return new AppointmentReadiness("READY",
+                new ArchiveSkillReadinessDTO(InstalledSkillResolver.State.VERIFIED.name(), proof, true, null));
     }
+
+    private InstalledSkillResolver.Resolution exactSkillResolution(
+            InstalledSkillResolver.Resolution resolution, ArchiveAppointmentRecord appointment) {
+        if (resolution == null || resolution.state() == InstalledSkillResolver.State.UNAVAILABLE) {
+            return InstalledSkillResolver.Resolution.unavailable();
+        }
+        InstalledSkillResolver.Proof proof = resolution.proof();
+        if (proof == null || !same(proof.key(), appointment.requiredSkillKey())
+                || !same(proof.version(), appointment.requiredSkillVersion())
+                || !same(proof.packageDigest(), appointment.requiredSkillSha256())) {
+            return InstalledSkillResolver.Resolution.unavailable();
+        }
+        return resolution;
+    }
+
+    private ArchiveInstalledSkillProofDTO skillProofDto(InstalledSkillResolver.Proof proof) {
+        return proof == null ? null : new ArchiveInstalledSkillProofDTO(proof.installationRef(),
+                Long.toString(proof.revision()), proof.key(), proof.version(), proof.packageDigest());
+    }
+
+    private AppointmentReadiness blockedReadiness(String readiness,
+            InstalledSkillResolver.State state, ArchiveInstalledSkillProofDTO proof, String blocker) {
+        return new AppointmentReadiness(readiness,
+                new ArchiveSkillReadinessDTO(state.name(), proof, false, blocker));
+    }
+
+    private boolean sameCurrentAppointment(ArchiveAppointmentRecord expected,
+            ArchiveAppointmentRecord current) {
+        return current != null && "ACTIVE".equals(current.status())
+                && same(expected.appointmentId(), current.appointmentId())
+                && same(expected.collectionId(), current.collectionId())
+                && same(expected.roleCode(), current.roleCode())
+                && same(expected.tenantId(), current.tenantId())
+                && same(expected.clientId(), current.clientId())
+                && same(expected.ownerJiacn(), current.ownerJiacn())
+                && same(expected.agentId(), current.agentId())
+                && same(expected.bindingVersion(), current.bindingVersion())
+                && same(expected.permissionProfile(), current.permissionProfile())
+                && same(expected.requiredSkillKey(), current.requiredSkillKey())
+                && same(expected.requiredSkillVersion(), current.requiredSkillVersion())
+                && same(expected.requiredSkillSha256(), current.requiredSkillSha256())
+                && expected.revision() == current.revision();
+    }
+
+    private record AppointmentReadiness(String readiness,
+            ArchiveSkillReadinessDTO skillReadiness) { }
 
     private ArchiveJobDTO jobDto(ArchiveMaintenanceJobRecord value) {
         return jobDto(value, null);

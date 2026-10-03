@@ -94,15 +94,21 @@ public final class FixtureArchiveExecutionPort implements ArchiveAgentExecutionP
     }
 
     @Override
+    public Inspection inspectDispatch(Expected expected, LockedTarget lockedTarget) {
+        requireWriteTransaction();
+        return inspect(expected, lockedTarget, "CONSUMED");
+    }
+
+    @Override
     public Inspection inspectExecution(Expected expected, LockedTarget lockedTarget) {
         requireWriteTransaction();
-        return inspect(expected, lockedTarget);
+        return inspect(expected, lockedTarget, "STARTED");
     }
 
     @Override
     public Inspection inspectResult(Expected expected, LockedTarget lockedTarget) {
         requireWriteTransaction();
-        return inspect(expected, lockedTarget);
+        return inspect(expected, lockedTarget, "STARTED");
     }
 
     @Override
@@ -123,7 +129,7 @@ public final class FixtureArchiveExecutionPort implements ArchiveAgentExecutionP
         return value.wire().clone();
     }
 
-    private Inspection inspect(Expected expected, LockedTarget lockedTarget) {
+    private Inspection inspect(Expected expected, LockedTarget lockedTarget, String deliveryState) {
         exactTarget(expected.target(), lockedTarget);
         Issued value = requireIssued(expected, null);
         AgentRuntimeAuthenticationService.ControlledTarget live = authentication.requireControlledTarget(
@@ -133,7 +139,7 @@ public final class FixtureArchiveExecutionPort implements ArchiveAgentExecutionP
                 || !Arrays.equals(expected.registrationHash(), live.registrationHash())) {
             throw new Denied("ARCHIVE_EXECUTION_TARGET_FENCED");
         }
-        return new Inspection(true, "STARTED", value.messageId());
+        return new Inspection(true, deliveryState, value.messageId());
     }
 
     private Issued requireIssued(Expected expected, byte[] exactWire) {

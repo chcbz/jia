@@ -39,6 +39,29 @@ class AgentControlledCommandCodecTest {
         assertEquals("2",wire.get("executionEpoch").asString());
         assertEquals("1",wire.get("deliveryEpoch").asString()); assertFalse(wire.has("instruction"));
     }
+    @Test void controlledWireDecoderRequiresExactFrozenBytesAndRejectsBypassFields() {
+        for (var draft : List.of(
+                draft("PLATFORM_SKILL_INSTALL", platform(
+                        "/internal/agent/platform-skills/installations/psi_1/package")),
+                draft("ARCHIVE_MAINTENANCE_EXECUTE", archive(
+                        "/internal/archive/v1/jobs/job_1/runs/run_1/context")))) {
+            byte[] wire = AgentCommandCanonicalCodec.wireBytes(draft, "message_1", 2);
+            assertEquals(draft, AgentCommandCanonicalCodec.decodeControlledWireBytes(wire));
+            String json = new String(wire, StandardCharsets.UTF_8);
+            for (String bad : List.of(
+                    json.replace("\"messageId\":\"message_1\"",
+                            "\"messageId\":\"message_1\",\"eventId\":\"event_1\""),
+                    json.replace("\"ownerJiacn\":\"owner\"",
+                            "\"ownerJiacn\":\"owner\",\"ownerJiacn\":\"owner\""),
+                    json.replace("\"fencingToken\":\"1\"",
+                            "\"fencingToken\":1"))) {
+                assertThrows(IllegalArgumentException.class, () ->
+                        AgentCommandCanonicalCodec.decodeControlledWireBytes(
+                                bad.getBytes(StandardCharsets.UTF_8)));
+            }
+        }
+    }
+
     @Test void controlledRouterUsesInstallationForPlatformAndRunForArchive() {
         var install=draft("PLATFORM_SKILL_INSTALL",platform("/internal/agent/platform-skills/installations/psi_1/package"));
         assertEquals("psi_1",AgentCommandRabbitMessageDecoder.controlledResourceId(AgentCommandCanonicalCodec.wireBytes(install,"msg"),install.commandType(),install.taskId()));

@@ -1210,8 +1210,8 @@ class ArchiveMaintenanceServiceImplTest {
                 new ArchiveAgentExecutionPort.Inspection(true, "STARTED", "message-replaced"));
 
         assertEquals("EXECUTION_FENCED", assertThrows(ArchiveMaintenanceException.class,
-                () -> service.runtimeUpdateDraft(runtime(), JOB, RUN, "write-stale-message", 0,
-                        new ArchiveDraftUpdateRequest(List.of(), List.of()))).code());
+                () -> service.runtimePutBlock(runtime(), JOB, RUN, "one", "write-stale-message", 0,
+                        oneBlockRequest("one"))).code());
         assertEquals("EXECUTION_FENCED", assertThrows(ArchiveMaintenanceException.class,
                 () -> service.runtimeFailure(runtime(), JOB, RUN,
                         new ArchiveRuntimeFailureRequest("RUNNER", "RUNNER_CRASH", true))).code());
@@ -1280,10 +1280,11 @@ class ArchiveMaintenanceServiceImplTest {
         when(store.completeRun(RUN, 3)).thenReturn(1);
         when(store.releaseExecutionGrant(RUN, 1)).thenReturn(1);
 
-        ArchiveValidationDTO validation = service.runtimeValidate(runtime(), JOB, RUN,
+        ArchiveOperationAcceptedDTO validation = service.runtimeValidate(runtime(), JOB, RUN,
                 "validate-native", 1);
 
-        assertEquals("PASSED", validation.outcome());
+        assertEquals("val_native", validation.operationId());
+        assertEquals("COMMITTED", validation.state());
         verify(store).completeRun(RUN, 3);
         verify(store).releaseExecutionGrant(RUN, 1);
         verify(store).appendJobEvent(eq(JOB), eq(4L), eq("EXECUTION_COMPLETED"), anyString());
@@ -1291,21 +1292,21 @@ class ArchiveMaintenanceServiceImplTest {
 
     @Test
     void manualPublishValidatedValidationStillCompletesAndReleasesProducer() throws Exception {
-        ArchiveValidationDTO validation = successfulRuntimeValidation("MANUAL", "PUBLISH_VALIDATED");
-        assertEquals("PASSED", validation.outcome());
+        ArchiveOperationAcceptedDTO validation = successfulRuntimeValidation("MANUAL", "PUBLISH_VALIDATED");
+        assertEquals("val_mode", validation.operationId());
         verify(store).completeRun(RUN, 3);
         verify(store).releaseExecutionGrant(RUN, 1);
     }
 
     @Test
     void autoPublishValidatedValidationRetainsProducerOnlyForNativePublish() throws Exception {
-        ArchiveValidationDTO validation = successfulRuntimeValidation("AUTO", "PUBLISH_VALIDATED");
-        assertEquals("PASSED", validation.outcome());
+        ArchiveOperationAcceptedDTO validation = successfulRuntimeValidation("AUTO", "PUBLISH_VALIDATED");
+        assertEquals("val_mode", validation.operationId());
         verify(store, never()).completeRun(anyString(), anyLong());
         verify(store, never()).releaseExecutionGrant(anyString(), anyLong());
     }
 
-    private ArchiveValidationDTO successfulRuntimeValidation(String publicationMode,
+    private ArchiveOperationAcceptedDTO successfulRuntimeValidation(String publicationMode,
             String permissionProfile) throws Exception {
         ArchiveAgentExecutionPort port = enableRuntime();
         ArchiveMaintenanceJobRecord runningJob = executionJob(permissionProfile, publicationMode,
@@ -1340,6 +1341,11 @@ class ArchiveMaintenanceServiceImplTest {
         when(store.completeRun(RUN, 3)).thenReturn(1);
         when(store.releaseExecutionGrant(RUN, 1)).thenReturn(1);
         return service.runtimeValidate(runtime(), JOB, RUN, "validate-mode", 1);
+    }
+
+    private ArchiveDraftUpdateRequest oneBlockRequest(String blockKey) {
+        return new ArchiveDraftUpdateRequest(List.of(new ArchiveDraftBlockInput(
+                "CHAPTER", blockKey, 1, "第一回", List.of(), List.of())), List.of());
     }
 
     private ArchiveDraftUpdateRequest body(String first, String second) {
@@ -1455,50 +1461,188 @@ class ArchiveMaintenanceServiceImplTest {
     }
 
     @Test
-    void appointmentSkillReadinessIsReadOnlyAdditiveAndNeverUnlocksExecution() {
+    void appointmentReadinessRequiresCurrentSlotAuthenticatedProtocolAndExactVerifiedProof() {
         allowManager("appoint");
-        ArchiveAppointmentRecord active=appointment("ACTIVE",1);
-        when(store.listAppointments(MANAGER,COLLECTION)).thenReturn(List.of(active));
-        InstalledSkillResolver resolver=mock(InstalledSkillResolver.class);
-        when(resolver.resolve(any())).thenReturn(new InstalledSkillResolver.Resolution(
-                InstalledSkillResolver.State.VERIFIED,new InstalledSkillResolver.Proof(
-                        "psi_verified",4,"archive-maintainer","1.0.0",SHA)));
-        service.setInstalledSkillResolver(resolver);
+        ArchiveAppointmentRecord active = appointment("ACTIVE", 1);
+        when(store.listAppointments(MANAGER, COLLECTION)).thenReturn(List.of(active));
+        when(store.findCurrentAppointment(COLLECTION, false)).thenReturn(active);
+        InstalledSkillResolver resolver = verifiedSkillResolver();
+        ArchiveAgentExecutionPort port = enableRuntime();
+        when(port.observeReadiness(any())).thenReturn(ArchiveAgentExecutionPort.Readiness.ready());
 
-        ArchiveAppointmentDTO result=service.appointments(MANAGER,COLLECTION).getFirst();
-        assertEquals("CLIENT_UPDATE_REQUIRED",result.readiness());
-        assertEquals("VERIFIED",result.skillReadiness().state());
-        assertEquals("psi_verified",result.skillReadiness().proof().installationRef());
-        assertEquals("4",result.skillReadiness().proof().revision());
-        assertFalse(result.skillReadiness().executable());
-        assertEquals("EXECUTION_NOT_WIRED",result.skillReadiness().blocker());
-        ArgumentCaptor<InstalledSkillResolver.Request> request=ArgumentCaptor.forClass(InstalledSkillResolver.Request.class);
-        verify(resolver).resolve(request.capture());
-        assertEquals(new InstalledSkillResolver.Request("0","client-a","owner-a",AGENT,7,
-                InstalledSkillResolver.Origin.PLATFORM_PROVISIONED,"archive-maintainer","1.0.0",SHA),request.getValue());
-        verify(store,never()).lockSlot(anyString(),anyString());
-        verify(store,never()).beginOperation(any(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString());
+        ArchiveAppointmentDTO result = service.appointments(MANAGER, COLLECTION).getFirst();
+        ArchiveCapabilitiesDTO capabilities = service.capabilities(MANAGER, COLLECTION);
+
+        assertEquals("READY", result.readiness());
+        assertEquals("READY", capabilities.readiness());
+        assertEquals("OCCUPIED", capabilities.appointmentStatus());
+        assertEquals("VERIFIED", result.skillReadiness().state());
+        assertEquals("psi_verified", result.skillReadiness().proof().installationRef());
+        assertEquals("4", result.skillReadiness().proof().revision());
+        assertTrue(result.skillReadiness().executable());
+        assertNull(result.skillReadiness().blocker());
+        ArgumentCaptor<InstalledSkillResolver.Request> skillRequest =
+                ArgumentCaptor.forClass(InstalledSkillResolver.Request.class);
+        verify(resolver, times(2)).resolve(skillRequest.capture());
+        assertEquals(new InstalledSkillResolver.Request("0", "client-a", "owner-a", AGENT, 7,
+                InstalledSkillResolver.Origin.PLATFORM_PROVISIONED,
+                "archive-maintainer", "1.0.0", SHA), skillRequest.getValue());
+        verify(port, times(2)).observeReadiness(new ArchiveAgentExecutionPort.TargetRequest(
+                "0", "client-a", "owner-a", AGENT, 7));
+        verify(port, never()).lockIdentityRoot(any());
+        verify(port, never()).requireControlledTarget(any(), any());
+        verify(store, never()).lockSlot(anyString(), anyString());
+        verify(store, never()).beginOperation(any(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString());
     }
 
     @Test
-    void revokedOrForeignAppointmentNeverQueriesOrLeaksInstalledProof() {
+    void appointmentReadinessFailsClosedForDisabledMissingPortOfflineOldProtocolAndBindingChange() {
         allowManager("appoint");
-        InstalledSkillResolver resolver=mock(InstalledSkillResolver.class);
-        service.setInstalledSkillResolver(resolver);
-        ArchiveAppointmentRecord revoked=appointment("REVOKED",2);
-        when(store.listAppointments(MANAGER,COLLECTION)).thenReturn(List.of(revoked));
-        ArchiveAppointmentDTO result=service.appointments(MANAGER,COLLECTION).getFirst();
-        assertEquals("REVOKED",result.skillReadiness().state());assertNull(result.skillReadiness().proof());
+        ArchiveAppointmentRecord active = appointment("ACTIVE", 1);
+        when(store.listAppointments(MANAGER, COLLECTION)).thenReturn(List.of(active));
+        when(store.findCurrentAppointment(COLLECTION, false)).thenReturn(active);
+        InstalledSkillResolver resolver = verifiedSkillResolver();
 
-        ArchiveAppointmentRecord own=appointment("ACTIVE",1);
-        ArchiveAppointmentRecord foreign=new ArchiveAppointmentRecord(own.appointmentId(),own.collectionId(),own.roleCode(),
-                own.tenantId(),own.clientId(),"owner-b",own.agentId(),own.bindingVersion(),own.workScopeMode(),own.workIds(),
-                own.permissionProfile(),own.requiredSkillKey(),own.requiredSkillVersion(),own.requiredSkillSha256(),
-                own.status(),own.revision(),own.createdAt(),own.revokedAt());
-        when(store.listAppointments(MANAGER,COLLECTION)).thenReturn(List.of(foreign));
-        result=service.appointments(MANAGER,COLLECTION).getFirst();
-        assertEquals("UNAVAILABLE",result.skillReadiness().state());assertNull(result.skillReadiness().proof());
+        ArchiveAppointmentDTO disabled = service.appointments(MANAGER, COLLECTION).getFirst();
+        assertEquals("EXECUTION_DISABLED", disabled.readiness());
+        assertEquals("VERIFIED", disabled.skillReadiness().state());
+        assertFalse(disabled.skillReadiness().executable());
+        assertEquals("EXECUTION_DISABLED", disabled.skillReadiness().blocker());
+
+        ArchiveMaintenanceProperties properties = new ArchiveMaintenanceProperties();
+        properties.setExecutionEnabled(true);
+        service.setArchiveMaintenanceProperties(properties);
+        ArchiveAppointmentDTO missingPort = service.appointments(MANAGER, COLLECTION).getFirst();
+        assertEquals("EXECUTION_NOT_WIRED", missingPort.readiness());
+        assertEquals("EXECUTION_NOT_WIRED", missingPort.skillReadiness().blocker());
+
+        ArchiveAgentExecutionPort port = mock(ArchiveAgentExecutionPort.class);
+        service.setArchiveAgentExecutionPort(port);
+        for (String blocker : List.of("AGENT_OFFLINE", "CLIENT_UPDATE_REQUIRED", "AUTHENTICATION_CHANGED")) {
+            when(port.observeReadiness(any())).thenReturn(ArchiveAgentExecutionPort.Readiness.blocked(blocker));
+            ArchiveAppointmentDTO blocked = service.appointments(MANAGER, COLLECTION).getFirst();
+            assertEquals(blocker, blocked.readiness());
+            assertEquals("VERIFIED", blocked.skillReadiness().state());
+            assertFalse(blocked.skillReadiness().executable());
+            assertEquals(blocker, blocked.skillReadiness().blocker());
+        }
+
+        clearInvocations(resolver);
+        when(port.observeReadiness(any())).thenReturn(
+                ArchiveAgentExecutionPort.Readiness.blocked("BINDING_CHANGED"));
+        ArchiveAppointmentDTO bindingChanged = service.appointments(MANAGER, COLLECTION).getFirst();
+        assertEquals("BINDING_CHANGED", bindingChanged.readiness());
+        assertEquals("UNAVAILABLE", bindingChanged.skillReadiness().state());
+        assertNull(bindingChanged.skillReadiness().proof());
         verifyNoInteractions(resolver);
+    }
+
+    @Test
+    void appointmentReadinessRejectsWrongOrRevokedProofAndNonCurrentSlot() {
+        allowManager("appoint");
+        ArchiveAppointmentRecord active = appointment("ACTIVE", 1);
+        when(store.listAppointments(MANAGER, COLLECTION)).thenReturn(List.of(active));
+        when(store.findCurrentAppointment(COLLECTION, false)).thenReturn(active);
+        ArchiveAgentExecutionPort port = enableRuntime();
+        when(port.observeReadiness(any())).thenReturn(ArchiveAgentExecutionPort.Readiness.ready());
+        InstalledSkillResolver resolver = mock(InstalledSkillResolver.class);
+        service.setInstalledSkillResolver(resolver);
+
+        when(resolver.resolve(any())).thenReturn(new InstalledSkillResolver.Resolution(
+                InstalledSkillResolver.State.PENDING, new InstalledSkillResolver.Proof(
+                        "psi_pending", 4, "archive-maintainer", "1.0.0", SHA)));
+        ArchiveAppointmentDTO pendingProof = service.appointments(MANAGER, COLLECTION).getFirst();
+        assertEquals("SKILL_INSTALL_PENDING", pendingProof.readiness());
+        assertEquals("PENDING", pendingProof.skillReadiness().state());
+        assertFalse(pendingProof.skillReadiness().executable());
+
+        when(resolver.resolve(any())).thenReturn(new InstalledSkillResolver.Resolution(
+                InstalledSkillResolver.State.REVOKED, new InstalledSkillResolver.Proof(
+                        "psi_revoked", 5, "archive-maintainer", "1.0.0", SHA)));
+        ArchiveAppointmentDTO revokedProof = service.appointments(MANAGER, COLLECTION).getFirst();
+        assertEquals("SKILL_INSTALL_REVOKED", revokedProof.readiness());
+        assertEquals("REVOKED", revokedProof.skillReadiness().state());
+        assertFalse(revokedProof.skillReadiness().executable());
+
+        when(resolver.resolve(any())).thenReturn(new InstalledSkillResolver.Resolution(
+                InstalledSkillResolver.State.VERIFIED, new InstalledSkillResolver.Proof(
+                        "psi_wrong", 6, "archive-maintainer", "2.0.0", SHA)));
+        ArchiveAppointmentDTO wrongProof = service.appointments(MANAGER, COLLECTION).getFirst();
+        assertEquals("SKILL_INSTALL_UNAVAILABLE", wrongProof.readiness());
+        assertEquals("UNAVAILABLE", wrongProof.skillReadiness().state());
+        assertNull(wrongProof.skillReadiness().proof());
+
+        ArchiveAppointmentRecord replacement = new ArchiveAppointmentRecord("apt-replacement", COLLECTION,
+                "ARCHIVE_EDITOR", "0", "client-a", "owner-a", "agent-lin", "8",
+                "COLLECTION", "", "DRAFT_ONLY", "archive-maintainer", "1.0.0", SHA,
+                "ACTIVE", 2, Instant.parse("2026-09-28T00:00:01Z"), null);
+        when(store.findCurrentAppointment(COLLECTION, false)).thenReturn(replacement);
+        clearInvocations(port, resolver);
+        ArchiveAppointmentDTO stale = service.appointments(MANAGER, COLLECTION).getFirst();
+        assertEquals("REASSIGNMENT_REQUIRED", stale.readiness());
+        assertEquals("UNAVAILABLE", stale.skillReadiness().state());
+        assertEquals("REASSIGNMENT_REQUIRED", stale.skillReadiness().blocker());
+        verifyNoInteractions(port, resolver);
+    }
+
+    @Test
+    void revokedForeignOrUnauthorizedCapabilitiesNeverQueryOrLeakCurrentExecutionFacts() {
+        allowManager("appoint");
+        InstalledSkillResolver resolver = mock(InstalledSkillResolver.class);
+        ArchiveAgentExecutionPort port = enableRuntime();
+        service.setInstalledSkillResolver(resolver);
+        ArchiveAppointmentRecord revoked = appointment("REVOKED", 2);
+        when(store.listAppointments(MANAGER, COLLECTION)).thenReturn(List.of(revoked));
+        ArchiveAppointmentDTO result = service.appointments(MANAGER, COLLECTION).getFirst();
+        assertEquals("REVOKED", result.skillReadiness().state());
+        assertNull(result.skillReadiness().proof());
+
+        ArchiveAppointmentRecord own = appointment("ACTIVE", 1);
+        ArchiveAppointmentRecord foreign = new ArchiveAppointmentRecord(own.appointmentId(), own.collectionId(),
+                own.roleCode(), own.tenantId(), own.clientId(), "owner-b", own.agentId(),
+                own.bindingVersion(), own.workScopeMode(), own.workIds(), own.permissionProfile(),
+                own.requiredSkillKey(), own.requiredSkillVersion(), own.requiredSkillSha256(),
+                own.status(), own.revision(), own.createdAt(), own.revokedAt());
+        when(store.listAppointments(MANAGER, COLLECTION)).thenReturn(List.of(foreign));
+        when(store.findCurrentAppointment(COLLECTION, false)).thenReturn(foreign);
+        result = service.appointments(MANAGER, COLLECTION).getFirst();
+        assertEquals("UNAVAILABLE", result.skillReadiness().state());
+        assertNull(result.skillReadiness().proof());
+        verifyNoInteractions(resolver, port);
+
+        clearInvocations(resolver, port);
+        reset(store);
+        when(store.findCurrentAppointment(COLLECTION, false)).thenReturn(own);
+        ArchiveCapabilitiesDTO capabilities = service.capabilities(MANAGER, COLLECTION);
+        assertTrue(capabilities.allowedActions().isEmpty());
+        assertEquals("OCCUPIED", capabilities.appointmentStatus());
+        assertEquals("UNAVAILABLE", capabilities.readiness());
+        verifyNoInteractions(resolver, port);
+    }
+
+    @Test
+    void readinessInfrastructureFailuresRemainVisibleRatherThanClaimingReady() {
+        allowManager("appoint");
+        ArchiveAppointmentRecord active = appointment("ACTIVE", 1);
+        when(store.listAppointments(MANAGER, COLLECTION)).thenReturn(List.of(active));
+        when(store.findCurrentAppointment(COLLECTION, false)).thenReturn(active);
+        InstalledSkillResolver resolver = verifiedSkillResolver();
+        ArchiveAgentExecutionPort port = enableRuntime();
+        var runtimeFailure = new org.springframework.dao.DataAccessResourceFailureException(
+                "runtime readiness unavailable");
+        when(port.observeReadiness(any())).thenThrow(runtimeFailure);
+        assertSame(runtimeFailure, assertThrows(
+                org.springframework.dao.DataAccessResourceFailureException.class,
+                () -> service.appointments(MANAGER, COLLECTION)));
+
+        doReturn(ArchiveAgentExecutionPort.Readiness.ready()).when(port).observeReadiness(any());
+        var proofFailure = new org.springframework.dao.DataAccessResourceFailureException(
+                "installation proof unavailable");
+        when(resolver.resolve(any())).thenThrow(proofFailure);
+        assertSame(proofFailure, assertThrows(
+                org.springframework.dao.DataAccessResourceFailureException.class,
+                () -> service.appointments(MANAGER, COLLECTION)));
     }
 
     @Test
@@ -2020,6 +2164,15 @@ class ArchiveMaintenanceServiceImplTest {
         verify(store, never()).insertJob(any());
         verify(store, never()).insertRun(anyString(), anyString(), anyLong(), anyLong());
         verify(store, never()).insertDraft(any());
+    }
+
+    private InstalledSkillResolver verifiedSkillResolver() {
+        InstalledSkillResolver resolver = mock(InstalledSkillResolver.class);
+        when(resolver.resolve(any())).thenReturn(new InstalledSkillResolver.Resolution(
+                InstalledSkillResolver.State.VERIFIED, new InstalledSkillResolver.Proof(
+                        "psi_verified", 4, "archive-maintainer", "1.0.0", SHA)));
+        service.setInstalledSkillResolver(resolver);
+        return resolver;
     }
 
     private ArchiveAgentExecutionPort enableRuntime() {

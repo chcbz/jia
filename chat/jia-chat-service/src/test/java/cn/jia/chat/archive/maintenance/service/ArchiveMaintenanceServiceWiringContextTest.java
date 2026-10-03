@@ -82,7 +82,7 @@ class ArchiveMaintenanceServiceWiringContextTest {
     }
 
     @Test
-    void optionalResolverBeanIsInjectedButVerifiedProofStillCannotUnlockExecution() {
+    void optionalResolverBeanIsInjectedButDefaultOffRemainsExplicitlyDisabled() {
         ArchiveMaintenanceStore store = mock(ArchiveMaintenanceStore.class);
         ArchiveContentStore content = mock(ArchiveContentStore.class);
         ArchiveTransactions transactions = mock(ArchiveTransactions.class);
@@ -94,10 +94,12 @@ class ArchiveMaintenanceServiceWiringContextTest {
         String sha="a".repeat(64);
         when(store.findManagerGrant(actor,"collection-a",false)).thenReturn(new ArchiveManagerGrantRecord(
                 "collection-a","0","client-a","owner-a","appoint",1,"ACTIVE"));
-        when(store.listAppointments(actor,"collection-a")).thenReturn(java.util.List.of(new ArchiveAppointmentRecord(
-                "apt-a","collection-a","ARCHIVE_EDITOR","0","client-a","owner-a","agent-a","7",
-                "COLLECTION","","DRAFT_ONLY","archive-maintainer","1.0.0",sha,"ACTIVE",1,
-                java.time.Instant.parse("2026-09-30T00:00:00Z"),null)));
+        ArchiveAppointmentRecord appointment = new ArchiveAppointmentRecord(
+                "apt-a", "collection-a", "ARCHIVE_EDITOR", "0", "client-a", "owner-a", "agent-a", "7",
+                "COLLECTION", "", "DRAFT_ONLY", "archive-maintainer", "1.0.0", sha, "ACTIVE", 1,
+                java.time.Instant.parse("2026-09-30T00:00:00Z"), null);
+        when(store.listAppointments(actor, "collection-a")).thenReturn(java.util.List.of(appointment));
+        when(store.findCurrentAppointment("collection-a", false)).thenReturn(appointment);
         when(resolver.resolve(any())).thenReturn(new InstalledSkillResolver.Resolution(
                 InstalledSkillResolver.State.VERIFIED,new InstalledSkillResolver.Proof(
                         "psi-a",2,"archive-maintainer","1.0.0",sha)));
@@ -113,11 +115,11 @@ class ArchiveMaintenanceServiceWiringContextTest {
             context.register(ArchiveMaintenanceServiceImpl.class);
             context.refresh();
 
-            var appointment=context.getBean(ArchiveMaintenanceServiceImpl.class).appointments(actor,"collection-a").getFirst();
-            assertEquals("VERIFIED",appointment.skillReadiness().state());
-            assertEquals("CLIENT_UPDATE_REQUIRED",appointment.readiness());
-            assertFalse(appointment.skillReadiness().executable());
-            assertEquals("EXECUTION_NOT_WIRED",appointment.skillReadiness().blocker());
+            var appointmentDto=context.getBean(ArchiveMaintenanceServiceImpl.class).appointments(actor,"collection-a").getFirst();
+            assertEquals("VERIFIED",appointmentDto.skillReadiness().state());
+            assertEquals("EXECUTION_DISABLED", appointmentDto.readiness());
+            assertFalse(appointmentDto.skillReadiness().executable());
+            assertEquals("EXECUTION_DISABLED", appointmentDto.skillReadiness().blocker());
             verify(resolver).resolve(any());
         }
     }

@@ -51,6 +51,8 @@ class AgentOutboxRelayMapperContractTest {
             assertTrue(sql.contains("char_length(o.tenant_id) between 1 and 50"), methodName);
             assertTrue(sql.contains("char_length(o.client_id) between 1 and 50"), methodName);
             assertTrue(sql.contains(
+                    "not regexp concat('[',char(92 using utf8mb4),'p{cc}]')"), methodName);
+            assertFalse(sql.contains(
                     "not regexp concat('[',char(92),'p{cc}]')"), methodName);
             assertTrue(sql.contains("exists ( select 1 from agent_command_delivery"), methodName);
             assertTrue(sql.contains("o.version<9223372036854775806"), methodName);

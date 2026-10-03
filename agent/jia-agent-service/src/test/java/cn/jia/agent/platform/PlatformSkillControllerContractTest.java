@@ -1,5 +1,7 @@
 package cn.jia.agent.platform;
 
+import cn.jia.core.security.SensitiveResponseBodyAdvice;
+import cn.jia.core.security.SensitiveResponseProperties;
 import org.junit.jupiter.api.Test;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -7,11 +9,14 @@ import java.util.Arrays;
 import java.util.List;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.converter.json.JacksonJsonHttpMessageConverter;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import tools.jackson.databind.json.JsonMapper;
 import cn.jia.agent.security.AgentRuntimeAuthenticationFilter;
 import static cn.jia.agent.platform.PlatformInstallationStore.Scope;
 import static cn.jia.agent.platform.PlatformSkillInstallationService.Actor;
@@ -26,16 +31,22 @@ class PlatformSkillControllerContractTest {
                 PlatformSkillCatalog.APPROVED_RELEASE_SHA256,"archive-maintainer/utf8-exact-v1");
         var actor=new Actor("user-a",new Scope("0","client-a","owner-a"));
         when(service.catalog(actor)).thenReturn(List.of(expected));
-        MockMvc mvc=MockMvcBuilders.standaloneSetup(new PlatformSkillController(service)).build();
+        MockMvc mvc=MockMvcBuilders.standaloneSetup(new PlatformSkillController(service))
+                .setControllerAdvice(new SensitiveResponseBodyAdvice(new SensitiveResponseProperties()))
+                .setMessageConverters(new JacksonJsonHttpMessageConverter(JsonMapper.builder().build()))
+                .build();
 
-        mvc.perform(get("/agent/platform-skills/catalog").principal(jwt("user-a","client-a","owner-a")))
+        var response=mvc.perform(get("/agent/platform-skills/catalog").principal(jwt("user-a","client-a","owner-a")))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL,"private, no-store"))
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.length()").value(1))
                 .andExpect(jsonPath("$[0].key").value("archive-maintainer"))
                 .andExpect(jsonPath("$[0].version").value("1.0.0"))
                 .andExpect(jsonPath("$[0].packageSha256").value(PlatformSkillCatalog.APPROVED_RELEASE_SHA256))
-                .andExpect(jsonPath("$[0].protocol").value("archive-maintainer/utf8-exact-v1"));
+                .andExpect(jsonPath("$[0].protocol").value("archive-maintainer/utf8-exact-v1"))
+                .andReturn();
+        assertFalse(response.getResponse().getContentAsString().contains("E999"));
         assertArrayEquals(new String[]{"key","version","packageSha256","protocol"},
                 Arrays.stream(PlatformSkillCatalogView.class.getRecordComponents()).map(c->c.getName()).toArray(String[]::new));
         verify(service).catalog(actor);

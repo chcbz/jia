@@ -3,7 +3,9 @@ package cn.jia.agent.service.impl;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.config.AgentRabbitSafetyProperties;
 import cn.jia.agent.dao.AgentCommandInboxDao;
+import cn.jia.agent.entity.AgentArchiveMaintenancePayload;
 import cn.jia.agent.entity.AgentCommandDeliveryEntity;
+import cn.jia.agent.entity.AgentCommandDraft;
 import cn.jia.agent.entity.AgentConsumerInboxEntity;
 import cn.jia.agent.entity.AgentInboxClaim;
 import cn.jia.agent.entity.AgentInboxClaimToken;
@@ -14,6 +16,9 @@ import cn.jia.agent.entity.AgentInboxIdentityConflictException;
 import cn.jia.agent.entity.AgentInboxMessage;
 import cn.jia.agent.entity.AgentInboxSourceNotSettledException;
 import cn.jia.agent.entity.AgentOutboxEventEntity;
+import cn.jia.agent.entity.AgentPlatformSkillInstallPayload;
+import cn.jia.agent.platform.PlatformSkillInstallationService;
+import cn.jia.agent.service.ArchiveAgentExecutionPort;
 import org.h2.jdbcx.JdbcDataSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
@@ -841,6 +846,58 @@ class AgentCommandInboxServiceImplTest {
     }
 
     @Test
+    void canonicalControlledCommandWiresReachTheDurableInboxClaimBoundary() {
+        for (AgentCommandDraft draft : List.of(platformDraft(), archiveDraft())) {
+            byte[] wire = AgentCommandCanonicalCodec.wireBytes(draft, "msg-1");
+            RecordingDao dao = controlledDao(draft, wire);
+
+            AgentInboxClaim claim = service(dao, enabledGate()).claim(
+                    controlledMessage(draft, wire), "worker-a", NOW, LEASE);
+
+            assertEquals(AgentInboxClaim.Kind.ACQUIRED, claim.kind(), draft.commandType());
+            assertEquals("CONSUMED", dao.delivery.getStatus(), draft.commandType());
+            assertNotNull(dao.inbox, draft.commandType());
+            assertEquals(draft.commandId(), dao.inbox.getCommandId(), draft.commandType());
+            assertArrayEquals(wire, dao.inbox.getWirePayload(), draft.commandType());
+            assertEquals(List.of("delivery", "outbox", "inbox", "insertInbox", "updateDelivery"),
+                    dao.operations, draft.commandType());
+        }
+    }
+
+    @Test
+    void controlledTypeAdmissionDoesNotRelaxUnknownDuplicateBypassOrCallerScopeChecks() {
+        AgentCommandDraft draft = platformDraft();
+        byte[] canonical = AgentCommandCanonicalCodec.wireBytes(draft, "msg-1");
+        String json = new String(canonical, java.nio.charset.StandardCharsets.UTF_8);
+        List<byte[]> invalid = List.of(
+                json.replace("\"commandType\":\"PLATFORM_SKILL_INSTALL\"",
+                                "\"commandType\":\"UNSUPPORTED_CONTROLLED_COMMAND\"")
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                json.replace("\"commandType\":\"PLATFORM_SKILL_INSTALL\"",
+                                "\"commandType\":\"PLATFORM_SKILL_INSTALL\","
+                                        + "\"commandType\":\"PLATFORM_SKILL_INSTALL\"")
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                json.replace("\"payload\":", "\"eventId\":\"evt-1\",\"payload\":")
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        for (byte[] raw : invalid) {
+            RecordingDao dao = controlledDao(draft, canonical);
+            assertThrows(AgentInboxIdentityConflictException.class,
+                    () -> service(dao, enabledGate()).claim(
+                            controlledMessage(draft, raw), "worker-a", NOW, LEASE));
+            assertEquals(0, dao.accesses);
+        }
+
+        RecordingDao wrongTenant = controlledDao(draft, canonical);
+        AgentInboxMessage callerScopeDrift = new AgentInboxMessage(
+                AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
+                "tenant-other", draft.clientId(), "msg-1", "evt-1", draft.commandId(), 1,
+                canonical);
+        assertThrows(AgentInboxIdentityConflictException.class,
+                () -> service(wrongTenant, enabledGate())
+                        .claim(callerScopeDrift, "worker-a", NOW, LEASE));
+        assertEquals(0, wrongTenant.accesses);
+    }
+    @Test
     void consumerNameMustBeFrozenStableAsciiLogicalName() {
         RecordingDao dao = new RecordingDao();
         AgentCommandInboxServiceImpl service = service(dao, enabledGate());
@@ -857,6 +914,66 @@ class AgentCommandInboxServiceImplTest {
         assertEquals(0, dao.accesses);
     }
 
+    private static AgentCommandDraft platformDraft() {
+        long issuedAt = NOW - 1_000;
+        long expiresAt = issuedAt + AgentCommandCanonicalCodec.TASK_INVITE_TTL_MILLIS;
+        String type = PlatformSkillInstallationService.TYPE;
+        String target = "agt_" + "1".repeat(32);
+        String commandId = AgentCommandCanonicalCodec.controlledCommandId(
+                "0", "client-a", "owner-a", "psi_1", target, type);
+        return new AgentCommandDraft(
+                1, commandId, "psi_1", "challenge_1", "0", "client-a", "owner-a",
+                "psi_1", null, target, type, issuedAt, expiresAt,
+                new AgentPlatformSkillInstallPayload(
+                        1, "psi_1", "17", "archive-maintainer", "1.0.0",
+                        "a".repeat(64), "challenge_1",
+                        "/internal/agent/platform-skills/installations/psi_1/package"));
+    }
+
+    private static AgentCommandDraft archiveDraft() {
+        long issuedAt = NOW - 1_000;
+        long expiresAt = issuedAt + AgentCommandCanonicalCodec.TASK_INVITE_TTL_MILLIS;
+        String type = ArchiveAgentExecutionPort.COMMAND_TYPE;
+        String target = "agt_" + "2".repeat(32);
+        String commandId = AgentCommandCanonicalCodec.controlledCommandId(
+                "0", "client-a", "owner-a", "run_1", target, type);
+        return new AgentCommandDraft(
+                1, commandId, "job_1", "run_1", "0", "client-a", "owner-a",
+                "job_1", null, target, type, issuedAt, expiresAt,
+                new AgentArchiveMaintenancePayload(
+                        1, "job_1", "run_1", "2", "appointment_1", "3", "4", "17",
+                        "grant_1", "execution_1", "dispatch_1", "psi_1",
+                        "a".repeat(64),
+                        "/internal/archive/v1/jobs/job_1/runs/run_1/context"));
+    }
+
+    private static RecordingDao controlledDao(AgentCommandDraft draft, byte[] wire) {
+        RecordingDao dao = new RecordingDao(draft.expiresAt());
+        byte[] business = AgentCommandCanonicalCodec.businessBytes(draft);
+        dao.delivery.setCommandId(draft.commandId()).setTaskId(draft.taskId())
+                .setTargetAgentId(draft.targetAgentId()).setCommandType(draft.commandType())
+                .setCommandPayload(business).setCommandPayloadHash(sha256(business))
+                .setActiveMessageId("msg-1").setAttemptCount(1).setActiveAttempt(1)
+                .setExpiresAt(draft.expiresAt()).setStatus("PUBLISHED").setVersion(0L);
+        dao.delivery.setTenantId(draft.tenantId());
+        dao.delivery.setClientId(draft.clientId());
+        dao.outbox.setEventId("evt-1").setMessageId("msg-1")
+                .setCommandId(draft.commandId()).setDeliveryId(1L)
+                .setAggregateType("task").setAggregateId(draft.taskId())
+                .setWirePayload(wire).setWirePayloadHash(sha256(wire))
+                .setStatus("PUBLISHED").setAttemptCount(1).setActiveAttempt(1)
+                .setExpiresAt(draft.expiresAt()).setVersion(0L);
+        dao.outbox.setTenantId(draft.tenantId());
+        dao.outbox.setClientId(draft.clientId());
+        return dao;
+    }
+
+    private static AgentInboxMessage controlledMessage(AgentCommandDraft draft, byte[] wire) {
+        return new AgentInboxMessage(
+                AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
+                draft.tenantId(), draft.clientId(), "msg-1", "evt-1", draft.commandId(), 1,
+                wire);
+    }
     private AgentCommandInboxServiceImpl service(RecordingDao dao, AgentRabbitSafetyGate gate) {
         JdbcDataSource source = new JdbcDataSource();
         source.setURL("jdbc:h2:mem:d07_unit_" + System.nanoTime());

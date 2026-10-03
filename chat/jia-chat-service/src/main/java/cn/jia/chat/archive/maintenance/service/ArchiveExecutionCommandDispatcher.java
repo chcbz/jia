@@ -50,7 +50,7 @@ public final class ArchiveExecutionCommandDispatcher implements AgentControlledC
         try {
             snapshot = transactions.required(() -> authorize(port, tenant, client, owner, runId,
                     targetAgentId, commandId));
-        } catch (RuntimeException fenced) {
+        } catch (ArchiveAgentExecutionPort.Denied | AuthorizationDenied fenced) {
             return AgentRawCommandDispatchResult.rejected();
         }
         try {
@@ -114,8 +114,16 @@ public final class ArchiveExecutionCommandDispatcher implements AgentControlledC
                 || !appointment.requiredSkillKey().equals(grant.skillKey())
                 || !appointment.requiredSkillVersion().equals(grant.skillVersion())
                 || !appointment.requiredSkillSha256().equals(grant.packageSha256())) denied();
-        ArchiveAgentExecutionPort.Expected expected = expected(job, grant);
-        port.inspectExecution(expected, lockedTarget);
+        ArchiveAgentExecutionPort.Expected expected;
+        try {
+            expected = expected(job, grant);
+        } catch (IllegalArgumentException corruptGrant) {
+            denied();
+            return null;
+        }
+        ArchiveAgentExecutionPort.Inspection inspection = port.inspectDispatch(expected, lockedTarget);
+        if (inspection == null || !inspection.authorized()
+                || !"CONSUMED".equals(inspection.deliveryState())) denied();
         return new Snapshot(expected, grant.revision());
     }
 
@@ -134,11 +142,14 @@ public final class ArchiveExecutionCommandDispatcher implements AgentControlledC
     private static ArchiveAgentExecutionPort.TargetRequest target(ArchiveMaintenanceJobRecord job) {
         long binding;
         try { binding = Long.parseLong(job.bindingVersion()); }
-        catch (RuntimeException invalid) { denied(); return null; }
+        catch (NumberFormatException invalid) { denied(); return null; }
         return new ArchiveAgentExecutionPort.TargetRequest(job.tenantId(), job.clientId(),
                 job.ownerJiacn(), job.agentId(), binding);
     }
 
-    private static void denied() { throw new IllegalStateException("ARCHIVE_EXECUTION_FENCED"); }
+    private static void denied() { throw new AuthorizationDenied(); }
+    private static final class AuthorizationDenied extends IllegalStateException {
+        private AuthorizationDenied() { super("ARCHIVE_EXECUTION_FENCED"); }
+    }
     private record Snapshot(ArchiveAgentExecutionPort.Expected expected, long grantRevision) { }
 }

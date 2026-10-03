@@ -56,9 +56,8 @@ public interface ArchiveMaintenanceService {
     ArchiveRuntimeResultDTO runtimeResult(ArchiveRuntimeScope runtime,String jobId,String runId);
     ArchiveRuntimeContextDTO runtimeContext(ArchiveRuntimeScope runtime,String jobId,String runId);
     ArchiveDraftDTO runtimeDraft(ArchiveRuntimeScope runtime,String jobId,String runId);
-    ArchiveDraftDTO runtimeUpdateDraft(ArchiveRuntimeScope runtime,String jobId,String runId,String operationKey,long expectedRevision,ArchiveDraftUpdateRequest request);
-    ArchiveDraftDTO runtimePutBlock(ArchiveRuntimeScope runtime,String jobId,String runId,String blockKey,String operationKey,long expectedRevision,ArchiveDraftBlockInput request);
-    ArchiveValidationDTO runtimeValidate(ArchiveRuntimeScope runtime,String jobId,String runId,String operationKey,long expectedDraftRevision);
-    ArchiveValidationDTO runtimeValidation(ArchiveRuntimeScope runtime,String jobId,String runId);
+    ArchiveDraftDTO runtimePutBlock(ArchiveRuntimeScope runtime,String jobId,String runId,String blockKey,String operationKey,long expectedRevision,ArchiveDraftUpdateRequest request);
+    ArchiveOperationAcceptedDTO runtimeValidate(ArchiveRuntimeScope runtime,String jobId,String runId,String operationKey,long expectedDraftRevision);
+    ArchiveValidationDTO runtimeValidation(ArchiveRuntimeScope runtime,String jobId,String runId,String operationId);
     ArchivePublicationDTO runtimePublish(ArchiveRuntimeScope runtime,String jobId,String runId,String operationKey,long expectedDraftRevision,ArchivePublishRequest request);
 }

@@ -83,14 +83,23 @@ class ArchiveAgentExecutionAdapterTest {
         ArchiveAgentExecutionPort.Grant grant = adapter.ensureExecution(request, lockedTarget);
         assertEquals("runtime-a", grant.runtimeInstanceId());
         assertEquals("installation-a", grant.skillProof().installationRef());
-        ArchiveAgentExecutionPort.Expected expected = new ArchiveAgentExecutionPort.Expected(
-                request.tenant(), request.client(), request.owner(), request.canonicalAgent(),
-                request.binding(), request.jobId(), request.runId(), request.appointmentId(),
-                request.appointmentRevision(), request.managerAuthorizationRevision(),
-                request.grantRef(), request.executionRef(), request.executionEpoch(),
-                request.dispatchKey(), grant.commandId(), grant.activeAttempt(), grant.expiresAt(),
-                grant.runtimeInstanceId(), grant.registrationHash(), request.skillOrigin(),
-                grant.skillProof(), request.contextRef());
+        ArchiveAgentExecutionPort.Expected expected = expected(request, grant, grant.activeAttempt());
+        deliveryStatus.set("CONSUMED");
+        assertEquals("message-a", adapter.inspectDispatch(expected, lockedTarget).activeMessageId());
+        assertEquals("ARCHIVE_EXECUTION_DELIVERY_FENCED", assertThrows(
+                ArchiveAgentExecutionPort.Denied.class,
+                () -> adapter.inspectExecution(expected, lockedTarget)).code());
+        for (String preDispatchState : new String[] { "PENDING", "PUBLISHED", "DEAD" }) {
+            deliveryStatus.set(preDispatchState);
+            assertEquals("ARCHIVE_EXECUTION_DELIVERY_FENCED", assertThrows(
+                    ArchiveAgentExecutionPort.Denied.class,
+                    () -> adapter.inspectDispatch(expected, lockedTarget)).code());
+        }
+        deliveryStatus.set("CONSUMED");
+        ArchiveAgentExecutionPort.Expected staleAttempt = expected(request, grant, grant.activeAttempt() + 1);
+        assertEquals("ARCHIVE_EXECUTION_DELIVERY_FENCED", assertThrows(
+                ArchiveAgentExecutionPort.Denied.class,
+                () -> adapter.inspectDispatch(staleAttempt, lockedTarget)).code());
         deliveryStatus.set("STARTED");
         assertEquals("message-a", adapter.inspectExecution(expected, lockedTarget).activeMessageId());
         deliveryStatus.set("FAILED");
@@ -128,6 +137,43 @@ class ArchiveAgentExecutionAdapterTest {
         assertEquals("ARCHIVE_EXECUTION_SKILL_NOT_VERIFIED", assertThrows(
                 ArchiveAgentExecutionPort.Denied.class,
                 () -> adapter.ensureExecution(request, lockedTarget)).code());
+    }
+
+    @Test
+    void readinessMapsExactAuthenticatedSessionFactsWithoutLocksWritesOrTransport() {
+        AgentIdentityService identities = mock(AgentIdentityService.class);
+        AgentRuntimeDao runtimes = mock(AgentRuntimeDao.class);
+        AgentRuntimeAuthenticationService authentication = mock(AgentRuntimeAuthenticationService.class);
+        InstalledSkillResolver skills = mock(InstalledSkillResolver.class);
+        @SuppressWarnings("unchecked") ObjectProvider<AgentCommandTransportWriter> writers = mock(ObjectProvider.class);
+        AgentCommandTransportDao deliveries = mock(AgentCommandTransportDao.class);
+        @SuppressWarnings("unchecked") ObjectProvider<AgentManagedSessionLookup> sessions = mock(ObjectProvider.class);
+        PlatformTransactionManager manager = mock(PlatformTransactionManager.class);
+        var adapter = new ArchiveAgentExecutionAdapter(identities, runtimes, authentication, skills,
+                writers, deliveries, sessions, manager,
+                Clock.fixed(Instant.ofEpochMilli(1_000_000L), ZoneOffset.UTC));
+        ArchiveAgentExecutionPort.TargetRequest target = request().target();
+        var controlled = new AgentRuntimeAuthenticationService.ControlledTarget(
+                "runtime-a", "key-a", REGISTRATION);
+
+        when(authentication.inspectControlledTarget("0", "client-a", "owner-a", "agent-a", 7,
+                ArchiveAgentExecutionPort.REQUIRED_PROTOCOL)).thenReturn(
+                        AgentRuntimeAuthenticationService.ControlledReadiness.ready(controlled));
+        assertEquals(ArchiveAgentExecutionPort.Readiness.ready(), adapter.observeReadiness(target));
+
+        for (var state : new Object[][] {
+                { AgentRuntimeAuthenticationService.ControlledReadiness.offline(), "AGENT_OFFLINE" },
+                { AgentRuntimeAuthenticationService.ControlledReadiness.bindingChanged(), "BINDING_CHANGED" },
+                { AgentRuntimeAuthenticationService.ControlledReadiness.clientUpdateRequired(), "CLIENT_UPDATE_REQUIRED" },
+                { AgentRuntimeAuthenticationService.ControlledReadiness.authenticationChanged(), "AUTHENTICATION_CHANGED" }
+        }) {
+            when(authentication.inspectControlledTarget("0", "client-a", "owner-a", "agent-a", 7,
+                    ArchiveAgentExecutionPort.REQUIRED_PROTOCOL)).thenReturn(
+                            (AgentRuntimeAuthenticationService.ControlledReadiness) state[0]);
+            assertEquals(ArchiveAgentExecutionPort.Readiness.blocked((String) state[1]),
+                    adapter.observeReadiness(target));
+        }
+        verifyNoInteractions(identities, runtimes, skills, writers, deliveries, sessions, manager);
     }
 
     @Test
@@ -223,6 +269,18 @@ class ArchiveAgentExecutionAdapterTest {
                 .filter(constructor -> constructor.isAnnotationPresent(
                         org.springframework.beans.factory.annotation.Autowired.class)).count();
         assertEquals(1, annotated);
+    }
+
+    private static ArchiveAgentExecutionPort.Expected expected(
+            ArchiveAgentExecutionPort.Request request, ArchiveAgentExecutionPort.Grant grant, int attempt) {
+        return new ArchiveAgentExecutionPort.Expected(
+                request.tenant(), request.client(), request.owner(), request.canonicalAgent(),
+                request.binding(), request.jobId(), request.runId(), request.appointmentId(),
+                request.appointmentRevision(), request.managerAuthorizationRevision(),
+                request.grantRef(), request.executionRef(), request.executionEpoch(),
+                request.dispatchKey(), grant.commandId(), attempt, grant.expiresAt(),
+                grant.runtimeInstanceId(), grant.registrationHash(), request.skillOrigin(),
+                grant.skillProof(), request.contextRef());
     }
 
     private static ArchiveAgentExecutionPort.Request request() {

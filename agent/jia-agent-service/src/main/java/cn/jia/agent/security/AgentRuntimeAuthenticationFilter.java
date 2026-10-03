@@ -50,7 +50,7 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
                 || "GET".equals(request.getMethod()) && path.matches("/internal/archive/v1/jobs/" + id
                 + "/runs/" + id + "/sources/" + id + "/content")
                 || "PUT".equals(request.getMethod()) && path.matches("/internal/archive/v1/jobs/" + id
-                + "/runs/" + id + "/draft(?:/blocks/" + id + ")?")
+                + "/runs/" + id + "/blocks/" + id)
                 || "POST".equals(request.getMethod()) && path.matches("/internal/archive/v1/jobs/" + id
                 + "/runs/" + id + "/(?:start|failure|validate|publish)");
     }

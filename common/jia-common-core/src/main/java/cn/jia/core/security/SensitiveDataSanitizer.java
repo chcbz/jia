@@ -36,7 +36,7 @@ public final class SensitiveDataSanitizer {
             return source;
         }
         try {
-            return sanitizeValue(source, effectiveConfig, new IdentityHashMap<>(), 0);
+            return sanitizeValue(source, effectiveConfig, new IdentityHashMap<>(), 0, false);
         } catch (RuntimeException e) {
             if (effectiveConfig.isFailOpen()) {
                 log.warn("Failed to sanitize response, returning original object", e);
@@ -47,17 +47,18 @@ public final class SensitiveDataSanitizer {
     }
 
     private static Object sanitizeValue(Object value, SensitiveSanitizeConfig config,
-                                        IdentityHashMap<Object, Boolean> visited, int depth) {
+                                        IdentityHashMap<Object, Boolean> visited, int depth,
+                                        boolean exactContent) {
         if (value == null) {
             return null;
         }
         if (value instanceof CharSequence text) {
-            return redactSensitiveText(text.toString(), config);
+            return exactContent ? text.toString() : redactSensitiveText(text.toString(), config);
         }
         if (isSimpleValue(value)) {
             return value;
         }
-        if (depth >= config.getMaxDepth()) {
+        if (!exactContent && depth >= config.getMaxDepth()) {
             return null;
         }
         if (visited.containsKey(value)) {
@@ -66,12 +67,12 @@ public final class SensitiveDataSanitizer {
         visited.put(value, Boolean.TRUE);
         try {
             if (value instanceof Map<?, ?> map) {
-                return sanitizeMap(map, config, visited, depth);
+                return sanitizeMap(map, config, visited, depth, exactContent);
             }
             if (value instanceof Iterable<?> iterable) {
                 List<Object> result = new ArrayList<>();
                 for (Object item : iterable) {
-                    result.add(sanitizeValue(item, config, visited, depth + 1));
+                    result.add(sanitizeValue(item, config, visited, depth + 1, exactContent));
                 }
                 return result;
             }
@@ -79,21 +80,22 @@ public final class SensitiveDataSanitizer {
                 int length = Array.getLength(value);
                 List<Object> result = new ArrayList<>(length);
                 for (int i = 0; i < length; i++) {
-                    result.add(sanitizeValue(Array.get(value, i), config, visited, depth + 1));
+                    result.add(sanitizeValue(Array.get(value, i), config, visited, depth + 1, exactContent));
                 }
                 return result;
             }
             if (value.getClass().getName().startsWith("java.")) {
                 return value;
             }
-            return sanitizeBean(value, config, visited, depth);
+            return sanitizeBean(value, config, visited, depth, exactContent);
         } finally {
             visited.remove(value);
         }
     }
 
     private static Map<Object, Object> sanitizeMap(Map<?, ?> source, SensitiveSanitizeConfig config,
-                                                   IdentityHashMap<Object, Boolean> visited, int depth) {
+                                                   IdentityHashMap<Object, Boolean> visited, int depth,
+                                                   boolean exactContent) {
         Map<Object, Object> result = new LinkedHashMap<>();
         for (Map.Entry<?, ?> entry : source.entrySet()) {
             String fieldName = String.valueOf(entry.getKey());
@@ -101,13 +103,14 @@ public final class SensitiveDataSanitizer {
             if (decision.strategy == SensitiveStrategy.DROP && !config.isAuditOnly()) {
                 continue;
             }
-            result.put(entry.getKey(), applyDecision(entry.getValue(), decision, config, visited, depth));
+            result.put(entry.getKey(), applyDecision(entry.getValue(), decision, config, visited, depth, exactContent));
         }
         return result;
     }
 
     private static Map<String, Object> sanitizeBean(Object source, SensitiveSanitizeConfig config,
-                                                    IdentityHashMap<Object, Boolean> visited, int depth) {
+                                                    IdentityHashMap<Object, Boolean> visited, int depth,
+                                                    boolean exactContent) {
         Map<String, Object> result = new LinkedHashMap<>();
         for (Field field : fieldsOf(source.getClass())) {
             if (Modifier.isStatic(field.getModifiers()) || field.isSynthetic()) {
@@ -119,7 +122,7 @@ public final class SensitiveDataSanitizer {
                 continue;
             }
             try {
-                result.put(field.getName(), applyDecision(field.get(source), decision, config, visited, depth));
+                result.put(field.getName(), applyDecision(field.get(source), decision, config, visited, depth, exactContent));
             } catch (IllegalAccessException e) {
                 throw new IllegalStateException("Cannot access field " + field.getName(), e);
             }
@@ -128,9 +131,10 @@ public final class SensitiveDataSanitizer {
     }
 
     private static Object applyDecision(Object value, FieldDecision decision, SensitiveSanitizeConfig config,
-                                        IdentityHashMap<Object, Boolean> visited, int depth) {
+                                        IdentityHashMap<Object, Boolean> visited, int depth,
+                                        boolean exactContent) {
         if (config.isAuditOnly() || decision.strategy == SensitiveStrategy.KEEP) {
-            return sanitizeValue(value, config, visited, depth + 1);
+            return sanitizeValue(value, config, visited, depth + 1, exactContent || decision.exactContent);
         }
         if (decision.strategy == SensitiveStrategy.NULL) {
             return null;
@@ -138,21 +142,22 @@ public final class SensitiveDataSanitizer {
         if (decision.strategy == SensitiveStrategy.MASK) {
             return mask(decision.fieldName, value);
         }
-        return sanitizeValue(value, config, visited, depth + 1);
+        return sanitizeValue(value, config, visited, depth + 1, exactContent || decision.exactContent);
     }
 
     private static FieldDecision decide(String fieldName, Field field, SensitiveSanitizeConfig config) {
+        boolean exactContent = field != null && field.isAnnotationPresent(ExactContentOutput.class);
         SensitiveField annotation = field == null ? null : field.getAnnotation(SensitiveField.class);
         if (annotation != null) {
-            return new FieldDecision(fieldName, annotation.strategy());
+            return new FieldDecision(fieldName, annotation.strategy(), exactContent);
         }
         if (config.isSecretField(fieldName)) {
-            return new FieldDecision(fieldName, config.getSecretStrategy());
+            return new FieldDecision(fieldName, config.getSecretStrategy(), exactContent);
         }
         if (config.isMaskDisplayFields() && config.isMaskField(fieldName)) {
-            return new FieldDecision(fieldName, SensitiveStrategy.MASK);
+            return new FieldDecision(fieldName, SensitiveStrategy.MASK, exactContent);
         }
-        return new FieldDecision(fieldName, SensitiveStrategy.KEEP);
+        return new FieldDecision(fieldName, SensitiveStrategy.KEEP, exactContent);
     }
 
     private static List<Field> fieldsOf(Class<?> type) {
@@ -235,6 +240,6 @@ public final class SensitiveDataSanitizer {
         return result.toString();
     }
 
-    private record FieldDecision(String fieldName, SensitiveStrategy strategy) {
+    private record FieldDecision(String fieldName, SensitiveStrategy strategy, boolean exactContent) {
     }
 }

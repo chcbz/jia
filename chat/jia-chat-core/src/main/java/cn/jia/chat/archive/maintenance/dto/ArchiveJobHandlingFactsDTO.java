@@ -1,8 +1,10 @@
 package cn.jia.chat.archive.maintenance.dto;
 
+import cn.jia.core.security.ExactContentOutput;
+
 /** Authorized, server-derived handling facts for one exact maintenance job. */
 public record ArchiveJobHandlingFactsDTO(
-        String title,
+        @ExactContentOutput(reason = "validated archive work title must be byte-faithful") String title,
         String collectionId,
         SourceRef source,
         String assignedAgentId,
@@ -26,7 +28,9 @@ public record ArchiveJobHandlingFactsDTO(
                 progress, currentPublication, "UNVERIFIED", null);
     }
 
-    public record SourceRef(String sourceId, String sourceName, String sourceVersion) { }
+    public record SourceRef(String sourceId,
+            @ExactContentOutput(reason = "validated source name must be byte-faithful") String sourceName,
+            @ExactContentOutput(reason = "validated source version must be byte-faithful") String sourceVersion) { }
 
     /** Immutable job-time assignment; it is not current authority. */
     public record AssignmentSnapshot(String appointmentId, String appointmentRevision,

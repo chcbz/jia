@@ -26,7 +26,7 @@ public final class PlatformSkillController {
     private final PlatformSkillInstallationService installs;
     public PlatformSkillController(PlatformSkillInstallationService installs) { this.installs=installs; }
     @GetMapping("/agent/platform-skills/catalog")
-    public ResponseEntity<List<PlatformSkillCatalogView>> catalog(Authentication auth,HttpServletRequest request) {
+    public ResponseEntity<?> catalog(Authentication auth,HttpServletRequest request) {
         noQuery(request);
         return privateResponse(installs.catalog(actor(auth)));
     }

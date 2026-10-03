@@ -2,8 +2,10 @@ package cn.jia.chat.archive.maintenance.http;
 
 import cn.jia.agent.security.AgentRuntimeAuthentication;
 import cn.jia.chat.archive.maintenance.dto.ArchiveDraftBlockInput;
+import cn.jia.chat.archive.maintenance.dto.ArchiveOperationAcceptedDTO;
 import cn.jia.chat.archive.maintenance.dto.ArchiveDraftDTO;
 import cn.jia.chat.archive.maintenance.dto.ArchiveDraftUpdateRequest;
+import cn.jia.chat.archive.maintenance.dto.ArchiveNativePublicationDTO;
 import cn.jia.chat.archive.maintenance.dto.ArchiveRuntimeContextDTO;
 import cn.jia.chat.archive.maintenance.dto.ArchiveRuntimeFailureRequest;
 import cn.jia.chat.archive.maintenance.dto.ArchiveRuntimeResultDTO;
@@ -14,7 +16,6 @@ import cn.jia.chat.archive.maintenance.dto.ArchiveValidationDTO;
 import cn.jia.chat.archive.maintenance.model.ArchiveRuntimeScope;
 import cn.jia.chat.archive.maintenance.service.ArchiveMaintenanceException;
 import cn.jia.chat.archive.maintenance.service.ArchiveMaintenanceService;
-import cn.jia.core.entity.JsonResult;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.http.HttpHeaders;
@@ -57,33 +58,33 @@ public class ArchiveNativeController {
     }
 
     @PostMapping("/start")
-    public JsonResult<ArchiveRuntimeResultDTO> start(@PathVariable String jobId,
+    public ArchiveNativeResponse<ArchiveRuntimeResultDTO> start(@PathVariable String jobId,
             @PathVariable String runId, @RequestBody byte[] body, Authentication authentication,
             HttpServletRequest request) {
         ArchiveRuntimeStartRequest claim = ArchiveStrictRequest.read(mapper, body,
                 ArchiveRuntimeStartRequest.class);
-        return JsonResult.success(service.runtimeStart(runtime(authentication, request), jobId, runId, claim));
+        return ArchiveNativeResponse.success(service.runtimeStart(runtime(authentication, request), jobId, runId, claim));
     }
 
     @PostMapping("/failure")
-    public JsonResult<ArchiveRuntimeResultDTO> failure(@PathVariable String jobId,
+    public ArchiveNativeResponse<ArchiveRuntimeResultDTO> failure(@PathVariable String jobId,
             @PathVariable String runId, @RequestBody byte[] body, Authentication authentication,
             HttpServletRequest request) {
         ArchiveRuntimeFailureRequest failure = ArchiveStrictRequest.read(mapper, body,
                 ArchiveRuntimeFailureRequest.class);
-        return JsonResult.success(service.runtimeFailure(runtime(authentication, request), jobId, runId, failure));
+        return ArchiveNativeResponse.success(service.runtimeFailure(runtime(authentication, request), jobId, runId, failure));
     }
 
     @GetMapping("/result")
-    public JsonResult<ArchiveRuntimeResultDTO> result(@PathVariable String jobId,
+    public ArchiveNativeResponse<ArchiveRuntimeResultDTO> result(@PathVariable String jobId,
             @PathVariable String runId, Authentication authentication, HttpServletRequest request) {
-        return JsonResult.success(service.runtimeResult(runtime(authentication, request), jobId, runId));
+        return ArchiveNativeResponse.success(service.runtimeResult(runtime(authentication, request), jobId, runId));
     }
 
     @GetMapping("/context")
-    public JsonResult<ArchiveRuntimeContextDTO> context(@PathVariable String jobId,
+    public ArchiveNativeResponse<ArchiveRuntimeContextDTO> context(@PathVariable String jobId,
             @PathVariable String runId, Authentication authentication, HttpServletRequest request) {
-        return JsonResult.success(service.runtimeContext(runtime(authentication, request), jobId, runId));
+        return ArchiveNativeResponse.success(service.runtimeContext(runtime(authentication, request), jobId, runId));
     }
 
     @GetMapping("/sources/{sourceId}/content")
@@ -100,64 +101,57 @@ public class ArchiveNativeController {
                 .header(HttpHeaders.CONTENT_TYPE, "text/plain; charset=utf-8").body(bytes);
     }
     @GetMapping("/draft")
-    public ResponseEntity<JsonResult<ArchiveDraftDTO>> draft(@PathVariable String jobId,
+    public ResponseEntity<ArchiveNativeResponse<ArchiveDraftDTO>> draft(@PathVariable String jobId,
             @PathVariable String runId, Authentication authentication, HttpServletRequest request) {
         ArchiveDraftDTO result = service.runtimeDraft(runtime(authentication, request), jobId, runId);
         return ResponseEntity.ok().header(HttpHeaders.ETAG, ArchiveHttpPreconditions.etag(result.revision()))
-                .body(JsonResult.success(result));
+                .body(ArchiveNativeResponse.success(result));
     }
 
-    @PutMapping("/draft")
-    public ResponseEntity<JsonResult<ArchiveDraftDTO>> updateDraft(@PathVariable String jobId,
-            @PathVariable String runId,
-            @RequestHeader(value = "Idempotency-Key", required = false) String key,
-            @RequestHeader(value = HttpHeaders.IF_MATCH, required = false) String ifMatch,
-            @RequestBody byte[] body, Authentication authentication, HttpServletRequest servletRequest) {
-        ArchiveDraftUpdateRequest request = draftRequest(ArchiveStrictRequest.tree(mapper, body));
-        ArchiveDraftDTO result = service.runtimeUpdateDraft(runtime(authentication, servletRequest), jobId, runId, key,
-                ArchiveHttpPreconditions.revision(ifMatch), request);
-        return ResponseEntity.ok().header(HttpHeaders.ETAG, ArchiveHttpPreconditions.etag(result.revision()))
-                .body(JsonResult.success(result));
-    }
-
-    @PutMapping("/draft/blocks/{blockKey}")
-    public ResponseEntity<JsonResult<ArchiveDraftDTO>> putBlock(@PathVariable String jobId,
+    @PutMapping("/blocks/{blockKey}")
+    public ResponseEntity<ArchiveNativeResponse<ArchiveDraftDTO>> putBlock(@PathVariable String jobId,
             @PathVariable String runId, @PathVariable String blockKey,
             @RequestHeader(value = "Idempotency-Key", required = false) String key,
             @RequestHeader(value = HttpHeaders.IF_MATCH, required = false) String ifMatch,
             @RequestBody byte[] body, Authentication authentication, HttpServletRequest servletRequest) {
-        ArchiveDraftBlockInput request = blockRequest(ArchiveStrictRequest.tree(mapper, body));
-        ArchiveDraftDTO result = service.runtimePutBlock(runtime(authentication, servletRequest), jobId, runId, blockKey, key,
-                ArchiveHttpPreconditions.revision(ifMatch), request);
+        ArchiveDraftUpdateRequest request = blockRequest(ArchiveStrictRequest.tree(mapper, body), blockKey);
+        ArchiveDraftDTO result = service.runtimePutBlock(runtime(authentication, servletRequest), jobId, runId,
+                blockKey, key, ArchiveHttpPreconditions.revision(ifMatch), request);
         return ResponseEntity.ok().header(HttpHeaders.ETAG, ArchiveHttpPreconditions.etag(result.revision()))
-                .body(JsonResult.success(result));
+                .body(ArchiveNativeResponse.success(result));
     }
 
     @PostMapping("/validate")
-    public JsonResult<ArchiveValidationDTO> validate(@PathVariable String jobId,
-            @PathVariable String runId,
+    public ResponseEntity<ArchiveNativeResponse<ArchiveOperationAcceptedDTO>> validate(
+            @PathVariable String jobId, @PathVariable String runId,
             @RequestHeader(value = "Idempotency-Key", required = false) String key,
             @RequestHeader(value = HttpHeaders.IF_MATCH, required = false) String ifMatch,
             Authentication authentication, HttpServletRequest request) {
-        return JsonResult.success(service.runtimeValidate(runtime(authentication, request), jobId, runId, key,
-                ArchiveHttpPreconditions.revision(ifMatch)));
+        ArchiveOperationAcceptedDTO accepted = service.runtimeValidate(runtime(authentication, request),
+                jobId, runId, key, ArchiveHttpPreconditions.revision(ifMatch));
+        String location = "/internal/archive/v1/jobs/" + jobId + "/runs/" + runId
+                + "/validation?operationId=" + accepted.operationId();
+        return ResponseEntity.status(202).header(HttpHeaders.LOCATION, location)
+                .body(ArchiveNativeResponse.accepted(accepted));
     }
 
     @GetMapping("/validation")
-    public JsonResult<ArchiveValidationDTO> validation(@PathVariable String jobId,
+    public ArchiveNativeResponse<ArchiveValidationDTO> validation(@PathVariable String jobId,
             @PathVariable String runId, Authentication authentication, HttpServletRequest request) {
-        return JsonResult.success(service.runtimeValidation(runtime(authentication, request), jobId, runId));
+        return ArchiveNativeResponse.success(service.runtimeValidation(runtime(authentication, request),
+                jobId, runId, validationOperationId(request)));
     }
 
     @PostMapping("/publish")
-    public JsonResult<ArchivePublicationDTO> publish(@PathVariable String jobId,
+    public ArchiveNativeResponse<ArchiveNativePublicationDTO> publish(@PathVariable String jobId,
             @PathVariable String runId,
             @RequestHeader(value = "Idempotency-Key", required = false) String key,
             @RequestHeader(value = HttpHeaders.IF_MATCH, required = false) String ifMatch,
             @RequestBody byte[] body, Authentication authentication, HttpServletRequest request) {
-        return JsonResult.success(service.runtimePublish(runtime(authentication, request), jobId, runId, key,
-                ArchiveHttpPreconditions.revision(ifMatch),
-                ArchiveStrictRequest.read(mapper, body, ArchivePublishRequest.class)));
+        return ArchiveNativeResponse.success(new ArchiveNativePublicationDTO(
+                service.runtimePublish(runtime(authentication, request), jobId, runId, key,
+                        ArchiveHttpPreconditions.revision(ifMatch),
+                        ArchiveStrictRequest.read(mapper, body, ArchivePublishRequest.class))));
     }
 
     private ArchiveRuntimeScope runtime(Authentication authentication, HttpServletRequest request) {
@@ -191,20 +185,30 @@ public class ArchiveNativeController {
                 "Runtime execution proof is incomplete");
     }
 
-    private ArchiveDraftUpdateRequest draftRequest(JsonNode body) {
-        requireObjectFields(body, DRAFT_FIELDS);
+    private ArchiveDraftUpdateRequest blockRequest(JsonNode body, String blockKey) {
+        requireExactObjectFields(body, DRAFT_FIELDS);
         JsonNode blocks = body.get("blocks");
-        if (blocks == null || !blocks.isArray()) bad();
-        for (JsonNode block : blocks) validateBlock(block);
+        if (blocks == null || !blocks.isArray() || blocks.size() != 1) bad();
+        validateBlock(blocks.get(0));
         validateExclusions(body.get("excludedSourceRanges"));
-        try { return mapper.convertValue(body, ArchiveDraftUpdateRequest.class); }
-        catch (IllegalArgumentException failure) { throw invalidNative(); }
+        try {
+            ArchiveDraftUpdateRequest request = mapper.convertValue(body, ArchiveDraftUpdateRequest.class);
+            ArchiveDraftBlockInput block = request.blocks().getFirst();
+            if (!Objects.equals(blockKey, block.blockKey())) bad();
+            return request;
+        } catch (IllegalArgumentException | IndexOutOfBoundsException failure) {
+            throw invalidNative();
+        }
     }
 
-    private ArchiveDraftBlockInput blockRequest(JsonNode body) {
-        validateBlock(body);
-        try { return mapper.convertValue(body, ArchiveDraftBlockInput.class); }
-        catch (IllegalArgumentException failure) { throw invalidNative(); }
+    private String validationOperationId(HttpServletRequest request) {
+        var parameters = request.getParameterMap();
+        if (parameters.isEmpty()) return null;
+        if (parameters.size() != 1 || !parameters.containsKey("operationId")) bad();
+        String[] values = parameters.get("operationId");
+        if (values == null || values.length != 1 || values[0] == null
+                || !values[0].matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}")) bad();
+        return values[0];
     }
 
     private void validateBlock(JsonNode node) {
@@ -226,6 +230,12 @@ public class ArchiveNativeController {
     private void validateExclusions(JsonNode exclusions) {
         if (exclusions == null || !exclusions.isArray()) bad();
         for (JsonNode exclusion : exclusions) requireObjectFields(exclusion, EXCLUSION_FIELDS);
+    }
+
+    private void requireExactObjectFields(JsonNode node, Set<String> expected) {
+        requireObjectFields(node, expected);
+        if (node.size() != expected.size()) bad();
+        for (String field : expected) if (!node.has(field)) bad();
     }
 
     private void requireObjectFields(JsonNode node, Set<String> allowed) {

@@ -104,11 +104,34 @@ public interface ArchiveAgentExecutionPort {
         }
     }
 
+    /** Read-only current execution projection. It must never create a grant or perform transport I/O. */
+    record Readiness(boolean executable, String blocker) {
+        public Readiness {
+            if (blocker == null || !blocker.matches("[A-Z][A-Z0-9_]{0,63}")
+                    || executable != "READY".equals(blocker)) {
+                throw new IllegalArgumentException("Invalid archive execution readiness");
+            }
+        }
+        public static Readiness ready() { return new Readiness(true, "READY"); }
+        public static Readiness blocked(String blocker) { return new Readiness(false, blocker); }
+    }
+
+    /** No locks and no network I/O; implementations revalidate persisted and authenticated session facts. */
+    default Readiness observeReadiness(TargetRequest request) {
+        Objects.requireNonNull(request, "request");
+        return Readiness.blocked("EXECUTION_NOT_WIRED");
+    }
+
     /** Must be the first domain lock acquired in the caller's write transaction. */
     LockedIdentityRoot lockIdentityRoot(TargetRequest request);
     /** Positive admission only: requires current online/session/protocol state after root locking. */
     LockedTarget requireControlledTarget(TargetRequest request, LockedIdentityRoot root);
     Grant ensureExecution(Request request, LockedTarget lockedTarget);
+    /** Pre-WebSocket handoff gate after the shared durable inbox has consumed the command. */
+    default Inspection inspectDispatch(Expected expected, LockedTarget lockedTarget) {
+        throw new Denied("ARCHIVE_EXECUTION_DISPATCH_PHASE_UNSUPPORTED");
+    }
+    /** Native execution/result admission after the command has been handed to the controlled session. */
     Inspection inspectExecution(Expected expected, LockedTarget lockedTarget);
     default Inspection inspectResult(Expected expected, LockedTarget lockedTarget) {
         return inspectExecution(expected, lockedTarget);
