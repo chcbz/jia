@@ -91,6 +91,6 @@ class ChatTypedDeliberationContextServiceTest {
     }
 
     private void ready(){when(schema.ready()).thenReturn(true);sessions.register("s1","0","owner","client","agent",declaration());}
-    private static Map<String,Object> declaration(){return Map.of("schemaVersion",1,"state","READY","carrier","CHAT_MESSAGE_FINAL_SIDECAR_V1","referenceModes",List.of("NONE","AVAILABLE"),"outcomeKinds",List.of("ANSWER","CLARIFY","EXECUTION_PROPOSAL"),"engine","CODEX_APP_SERVER_NATIVE_OUTPUT_SCHEMA","strictNoToolsVerified",false,"toolPolicy","read-only-constrained");}
+    private static Map<String,Object> declaration(){return Map.of("schemaVersion",3,"state","READY","carrier","CHAT_MESSAGE_FINAL_SIDECAR_V3","referenceModes",List.of("NONE","AVAILABLE"),"outcomeKinds",List.of("ANSWER","CLARIFY","ACTION_REQUEST"),"engine","CODEX_APP_SERVER_NATIVE_OUTPUT_SCHEMA","strictNoToolsVerified",false,"toolPolicy","read-only-constrained");}
     private ChatTypedDeliberationContextService service(){return new ChatTypedDeliberationContextService(jdbc,sessions,schema,true);}
 }

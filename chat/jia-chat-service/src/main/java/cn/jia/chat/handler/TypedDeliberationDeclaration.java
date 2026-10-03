@@ -12,9 +12,8 @@ public final class TypedDeliberationDeclaration {
     private static final Set<String> KEYS = Set.of("schemaVersion", "state", "carrier",
             "referenceModes", "outcomeKinds", "engine", "strictNoToolsVerified", "toolPolicy");
     private static final List<String> MODES = List.of("NONE", "AVAILABLE");
-    private static final List<String> KINDS = List.of("ANSWER", "CLARIFY", "EXECUTION_PROPOSAL");
-    private static final List<String> OPERATIONS = List.of("GENERATE_IMAGE", "EDIT_IMAGE");
-    private static final String CARRIER = "CHAT_MESSAGE_FINAL_SIDECAR_V1";
+    private static final List<String> KINDS = List.of("ANSWER", "CLARIFY", "ACTION_REQUEST");
+    private static final String CARRIER = "CHAT_MESSAGE_FINAL_SIDECAR_V3";
     private static final String ENGINE = "CODEX_APP_SERVER_NATIVE_OUTPUT_SCHEMA";
     private static final String TOOL_POLICY = "read-only-constrained";
 
@@ -29,7 +28,7 @@ public final class TypedDeliberationDeclaration {
                     || !candidate.keySet().stream().allMatch(String.class::isInstance)
                     || !candidate.keySet().equals(KEYS)) throw invalid();
             @SuppressWarnings("unchecked") Map<String, Object> value = (Map<String, Object>) candidate;
-            exactInteger(value.get("schemaVersion"), 1);
+            exactInteger(value.get("schemaVersion"), 3);
             String state = exactText(value.get("state"));
             if (!Set.of("READY", "UNAVAILABLE").contains(state)) throw invalid();
             exact(value.get("carrier"), CARRIER);
@@ -46,11 +45,12 @@ public final class TypedDeliberationDeclaration {
 
     public State state() { return state; }
     public List<String> supportedOperations() {
-        return state == State.READY ? OPERATIONS : List.of();
+        // Planner readiness is not evidence of any execution adapter or paid authority.
+        return List.of();
     }
     public Map<String, Object> frozenReceipt() {
         Map<String, Object> value = new LinkedHashMap<>();
-        value.put("schemaVersion", 1);
+        value.put("schemaVersion", 3);
         value.put("state", state.name());
         value.put("carrier", CARRIER);
         value.put("referenceModes", MODES);

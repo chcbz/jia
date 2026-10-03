@@ -9,18 +9,18 @@ import static org.junit.jupiter.api.Assertions.*;
 class TypedDeliberationDeclarationTest {
     static Map<String,Object> declaration(String state) {
         Map<String,Object> value=new LinkedHashMap<>();
-        value.put("schemaVersion",1);value.put("state",state);
-        value.put("carrier","CHAT_MESSAGE_FINAL_SIDECAR_V1");
+        value.put("schemaVersion",3);value.put("state",state);
+        value.put("carrier","CHAT_MESSAGE_FINAL_SIDECAR_V3");
         value.put("referenceModes",List.of("NONE","AVAILABLE"));
-        value.put("outcomeKinds",List.of("ANSWER","CLARIFY","EXECUTION_PROPOSAL"));
+        value.put("outcomeKinds",List.of("ANSWER","CLARIFY","ACTION_REQUEST"));
         value.put("engine","CODEX_APP_SERVER_NATIVE_OUTPUT_SCHEMA");
         value.put("strictNoToolsVerified",false);value.put("toolPolicy","read-only-constrained");
         return value;
     }
-    @Test void exactReadyDeclarationEnablesOnlyFrozenOperations() {
+    @Test void exactReadyDeclarationAdvertisesPlanningNotImageOrPaidCapabilities() {
         var parsed=TypedDeliberationDeclaration.parse(declaration("READY"));
         assertEquals(TypedDeliberationDeclaration.State.READY,parsed.state());
-        assertEquals(List.of("GENERATE_IMAGE","EDIT_IMAGE"),parsed.supportedOperations());
+        assertTrue(parsed.supportedOperations().isEmpty());
         assertEquals(declaration("READY"),parsed.frozenReceipt());
     }
     @Test void unavailableIsValidButNeverReady() {
@@ -36,4 +36,11 @@ class TypedDeliberationDeclarationTest {
         Map<String,Object> weakened=declaration("READY");weakened.put("strictNoToolsVerified",true);
         assertEquals(TypedDeliberationDeclaration.State.UNSUPPORTED,TypedDeliberationDeclaration.parse(weakened).state());
     }
+    @Test void legacyDeclarationDoesNotSilentlyNegotiateNewRequests() {
+        var old = declaration("READY"); old.put("schemaVersion",1);
+        old.put("carrier","CHAT_MESSAGE_FINAL_SIDECAR_V1");
+        old.put("outcomeKinds",List.of("ANSWER","CLARIFY","EXECUTION_PROPOSAL"));
+        assertEquals(TypedDeliberationDeclaration.State.UNSUPPORTED,TypedDeliberationDeclaration.parse(old).state());
+    }
+
 }
