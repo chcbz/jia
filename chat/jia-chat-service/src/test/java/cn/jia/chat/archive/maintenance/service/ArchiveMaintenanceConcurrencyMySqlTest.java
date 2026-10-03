@@ -7,6 +7,7 @@ import cn.jia.agent.dao.AgentPersonaBindingDao;
 import cn.jia.agent.entity.AgentIdentityRegistryEntity;
 import cn.jia.agent.entity.AgentPersonaBindingEntity;
 import cn.jia.agent.entity.AgentRawCommandDispatchResult;
+import cn.jia.agent.exception.AgentTaskArtifactStorageException;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentTaskArtifactStorage;
 import cn.jia.agent.service.ArchiveAgentExecutionPort;
@@ -237,6 +238,415 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                 "SELECT CONCAT(r.state, ':', g.state) FROM archive_job_run r "
                         + "JOIN archive_execution_grant g ON g.run_id=r.run_id WHERE r.run_id=?",
                 String.class, RUN));
+    }
+
+    @Test
+    void secondConsecutiveSameInputRootCauseBlocksKeepsHistoryAndChangedCandidateAllowsRecovery() {
+        BlockedFailureFixture fixture = createBlockedFailure();
+        assertTrue(fixture.secondFailure().blockedRootCause());
+        assertEquals("BLOCKED_ROOT_CAUSE", jdbc.queryForObject(
+                "SELECT wait_reason FROM archive_maintenance_job WHERE job_id=?", String.class, JOB));
+        assertEquals(2, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM archive_execution_failure WHERE job_id=?", Integer.class, JOB));
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM archive_execution_failure WHERE job_id=? AND blocked_root_cause=1",
+                Integer.class, JOB));
+
+        ArchiveRuntimeFailureRequest same = new ArchiveRuntimeFailureRequest(
+                "RUNNER", "RUNNER_CRASH", true);
+        assertEquals(fixture.secondFailure().failureId(), fixture.service().runtimeFailure(
+                fixture.secondScope(), JOB, fixture.secondRunId(), same).failureId());
+        assertEquals("ARCHIVE_EXECUTION_FAILURE_CONFLICT", assertThrows(
+                ArchiveMaintenanceException.class, () -> fixture.service().runtimeFailure(
+                        fixture.secondScope(), JOB, fixture.secondRunId(),
+                        new ArchiveRuntimeFailureRequest("RUNNER", "DIFFERENT_FAILURE", true))).code());
+        assertEquals(2, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM archive_execution_failure WHERE job_id=?", Integer.class, JOB));
+
+        String replacementAgent = "agent-b";
+        String replacementAppointment = "appointment-b";
+        jdbc.update("INSERT INTO aam_test_agent_root(agent_id) VALUES (?)", replacementAgent);
+        jdbc.update("INSERT INTO archive_appointment(appointment_id,collection_id,role_code,tenant_id,client_id,"
+                + "owner_jiacn,agent_id,binding_version,work_scope_mode,work_ids,permission_profile,"
+                + "required_skill_key,required_skill_version,required_skill_sha256,status,revision) "
+                + "VALUES (?,?,'ARCHIVE_EDITOR','0','client-a','owner-a',?,'8','COLLECTION','',"
+                + "'DRAFT_ONLY','archive-maintainer','1.0.0',?,'ACTIVE',1)",
+                replacementAppointment, COLLECTION, replacementAgent, SHA);
+        assertEquals(1, jdbc.update("UPDATE archive_appointment_slot SET current_appointment_id=?,"
+                + "revision=revision+1 WHERE collection_id=? AND role_code='ARCHIVE_EDITOR'",
+                replacementAppointment, COLLECTION));
+
+        ArchiveRecoveryContextDTO context = fixture.service().recoveryContext(ACTOR, JOB);
+        ArchiveRecoveryContextDTO.CandidateAppointment candidate = context.candidates().getFirst();
+        assertEquals(replacementAppointment, candidate.appointmentId());
+        assertTrue(candidate.inputChanged());
+        assertTrue(candidate.recoveryAllowed());
+        assertFalse(context.resumeAllowed());
+
+        long revision = jobRevision();
+        ArchiveSkillRef skill = new ArchiveSkillRef("archive-maintainer", "1.0.0", SHA);
+        ArchiveReassignRequest request = new ArchiveReassignRequest("candidate materially changed",
+                APPOINTMENT, "1", skill, replacementAppointment, "1", skill);
+        ArchiveExecutionRecoveryDTO recovered = fixture.service().reassign(
+                ACTOR, JOB, "reassign-after-block", revision, request);
+        ArchiveExecutionRecoveryDTO replay = fixture.service().reassign(
+                ACTOR, JOB, "reassign-after-block", revision, request);
+        assertEquals(recovered.runId(), replay.runId(),
+                "same-key replay must precede stale If-Match and the root-cause gate");
+        assertEquals(2, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM archive_execution_failure WHERE job_id=?", Integer.class, JOB));
+        assertEquals(replacementAppointment, jdbc.queryForObject(
+                "SELECT appointment_id FROM archive_maintenance_job WHERE job_id=?", String.class, JOB));
+        assertEquals("ARCHIVE_RESOURCE_NOT_FOUND", assertThrows(ArchiveMaintenanceException.class,
+                () -> fixture.service().runtimeResult(fixture.secondScope(), JOB,
+                        fixture.secondRunId())).code(), "old epoch must remain isolated");
+    }
+
+    @Test
+    void blockedFailureRejectsReasonOnlyAndConsumesStructuredRepairResolutionOnce() {
+        BlockedFailureFixture fixture = createBlockedFailure();
+        long revision = jobRevision();
+        ArchiveSkillRef skill = new ArchiveSkillRef("archive-maintainer", "1.0.0", SHA);
+        for (String reason : List.of("changed words only", "another free form reason")) {
+            ArchiveResumeRequest reasonOnly = new ArchiveResumeRequest(reason, APPOINTMENT, "1", skill);
+            assertEquals("ARCHIVE_ROOT_CAUSE_BLOCKED", assertThrows(ArchiveMaintenanceException.class,
+                    () -> fixture.service().resume(ACTOR, JOB, "reason-only-" + reason.length(),
+                            revision, reasonOnly)).code());
+        }
+        assertEquals(2, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM archive_execution_failure WHERE job_id=?", Integer.class, JOB));
+
+        ArchiveResumeRequest wrongFailure = new ArchiveResumeRequest("repair complete", APPOINTMENT,
+                "1", skill, new ArchiveRepairResolution("999999", "RUNTIME_REPAIRED"));
+        assertEquals("ARCHIVE_REPAIR_RESOLUTION_CONFLICT", assertThrows(
+                ArchiveMaintenanceException.class, () -> fixture.service().resume(ACTOR, JOB,
+                        "wrong-repair", revision, wrongFailure)).code());
+
+        ArchiveResumeRequest wrongType = new ArchiveResumeRequest("wrong repair type", APPOINTMENT,
+                "1", skill, new ArchiveRepairResolution(fixture.secondFailure().failureId(),
+                        "DEPENDENCY_REPAIRED"));
+        assertEquals("ARCHIVE_REPAIR_RESOLUTION_CONFLICT", assertThrows(
+                ArchiveMaintenanceException.class, () -> fixture.service().resume(ACTOR, JOB,
+                        "wrong-repair-type", revision, wrongType)).code());
+
+        ArchiveResumeRequest repaired = new ArchiveResumeRequest("runtime was repaired", APPOINTMENT,
+                "1", skill, new ArchiveRepairResolution(fixture.secondFailure().failureId(),
+                        "RUNTIME_REPAIRED"));
+        assertEquals("ARCHIVE_REPAIR_NOT_VERIFIED", assertThrows(
+                ArchiveMaintenanceException.class, () -> fixture.service().resume(ACTOR, JOB,
+                        "unverified-repair", revision, repaired)).code());
+        fixture.port().rotateRuntimeRegistration();
+        ArchiveExecutionRecoveryDTO recovered = fixture.service().resume(
+                ACTOR, JOB, "resolved-repair", revision, repaired);
+        ArchiveExecutionRecoveryDTO replay = fixture.service().resume(
+                ACTOR, JOB, "resolved-repair", revision, repaired);
+        assertEquals(recovered.runId(), replay.runId());
+        assertEquals("RUNTIME_REPAIRED:owner-a:3", jdbc.queryForObject(
+                "SELECT CONCAT(repair_resolution_code,':',resolved_by_owner_jiacn,':',"
+                        + "resolution_manager_revision) FROM archive_execution_failure WHERE failure_id=?",
+                String.class, Long.parseLong(fixture.secondFailure().failureId())));
+        assertEquals(2, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM archive_execution_failure WHERE job_id=?", Integer.class, JOB));
+
+        ArchiveResumeRequest reused = new ArchiveResumeRequest("reuse old repair", APPOINTMENT, "1",
+                skill, new ArchiveRepairResolution(fixture.secondFailure().failureId(),
+                        "RUNTIME_REPAIRED"));
+        assertEquals("ARCHIVE_REPAIR_RESOLUTION_CONFLICT", assertThrows(
+                ArchiveMaintenanceException.class, () -> fixture.service().resume(ACTOR, JOB,
+                        "reuse-repair", jobRevision(), reused)).code());
+    }
+
+    @Test
+    void repairedRuntimeFactsStartOneNewPairButUnchangedFactsCannotUnlockTheNextBlock() {
+        BlockedFailureFixture fixture = createBlockedFailure();
+        ArchiveSkillRef skill = new ArchiveSkillRef("archive-maintainer", "1.0.0", SHA);
+        ArchiveResumeRequest repaired = new ArchiveResumeRequest("runtime was repaired", APPOINTMENT,
+                "1", skill, new ArchiveRepairResolution(fixture.secondFailure().failureId(),
+                        "RUNTIME_REPAIRED"));
+        fixture.port().rotateRuntimeRegistration();
+        ArchiveExecutionRecoveryDTO afterRepair = fixture.service().resume(ACTOR, JOB,
+                "resume-after-real-runtime-repair", jobRevision(), repaired);
+        fixture.service().ensureExecution(ACTOR, JOB, "ensure-after-real-runtime-repair",
+                jobRevision());
+        ArchiveRuntimeScope thirdScope = runtime(afterRepair.runId());
+        start(fixture.service(), afterRepair.runId(), thirdScope, "message-after-repair");
+        ArchiveRuntimeFailureRequest sameCause = new ArchiveRuntimeFailureRequest(
+                "RUNNER", "RUNNER_CRASH", true);
+        ArchiveRuntimeResultDTO thirdFailure = fixture.service().runtimeFailure(thirdScope, JOB,
+                afterRepair.runId(), sameCause);
+        assertFalse(thirdFailure.blockedRootCause(),
+                "a verified repair starts one new bounded failure pair");
+
+        ArchiveExecutionRecoveryDTO boundedRetry = fixture.service().resume(ACTOR, JOB,
+                "resume-new-bounded-pair", jobRevision(),
+                new ArchiveResumeRequest("one bounded retry after repair", APPOINTMENT, "1", skill));
+        fixture.service().ensureExecution(ACTOR, JOB, "ensure-new-bounded-pair", jobRevision());
+        ArchiveRuntimeScope fourthScope = runtime(boundedRetry.runId());
+        start(fixture.service(), boundedRetry.runId(), fourthScope, "message-new-bounded-pair");
+        ArchiveRuntimeResultDTO fourthFailure = fixture.service().runtimeFailure(fourthScope, JOB,
+                boundedRetry.runId(), sameCause);
+        assertTrue(fourthFailure.blockedRootCause());
+
+        ArchiveResumeRequest unchangedFacts = new ArchiveResumeRequest(
+                "claim the same runtime repair again", APPOINTMENT, "1", skill,
+                new ArchiveRepairResolution(fourthFailure.failureId(), "RUNTIME_REPAIRED"));
+        assertEquals("ARCHIVE_REPAIR_NOT_VERIFIED", assertThrows(
+                ArchiveMaintenanceException.class, () -> fixture.service().resume(ACTOR, JOB,
+                        "reject-reused-runtime-facts", jobRevision(), unchangedFacts)).code());
+        assertEquals(4, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM archive_execution_failure WHERE job_id=?", Integer.class, JOB));
+        assertNull(jdbc.queryForObject("SELECT repair_resolution_code FROM "
+                + "archive_execution_failure WHERE failure_id=?", String.class,
+                Long.parseLong(fourthFailure.failureId())));
+    }
+
+    @Test
+    void changedRootCauseStartsANewBoundedPairInsteadOfBlocking() {
+        seedExecutionCandidate();
+        ArchiveMaintenanceServiceImpl service = service(new JdbcArchiveMaintenanceStore(jdbc),
+                new RootLockingPort(jdbc));
+        service.ensureExecution(ACTOR, JOB, "ensure-first-root", 1);
+        ArchiveRuntimeScope firstScope = runtime(RUN);
+        start(service, RUN, firstScope, "message-a");
+        assertFalse(service.runtimeFailure(firstScope, JOB, RUN,
+                new ArchiveRuntimeFailureRequest("RUNNER", "RUNNER_CRASH", true))
+                .blockedRootCause());
+        ArchiveSkillRef skill = new ArchiveSkillRef("archive-maintainer", "1.0.0", SHA);
+        ArchiveExecutionRecoveryDTO resumed = service.resume(ACTOR, JOB, "resume-different-root",
+                jobRevision(), new ArchiveResumeRequest("bounded retry", APPOINTMENT, "1", skill));
+        service.ensureExecution(ACTOR, JOB, "ensure-different-root", jobRevision());
+        ArchiveRuntimeScope secondScope = runtime(resumed.runId());
+        start(service, resumed.runId(), secondScope, "message-a");
+        ArchiveRuntimeResultDTO second = service.runtimeFailure(secondScope, JOB, resumed.runId(),
+                new ArchiveRuntimeFailureRequest("SOURCE_READ", "SOURCE_UNAVAILABLE", true));
+        assertFalse(second.blockedRootCause());
+        assertEquals("SOURCE_UNAVAILABLE", jdbc.queryForObject(
+                "SELECT wait_reason FROM archive_maintenance_job WHERE job_id=?", String.class, JOB));
+        assertEquals(2, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM archive_execution_failure WHERE job_id=?", Integer.class, JOB));
+    }
+
+    @Test
+    void configurationRepairRequiresChangedVerifiedInstallationFacts() {
+        RootLockingPort port = new RootLockingPort(jdbc);
+        BlockedFailureFixture fixture = createBlockedFailure(true, true, null,
+                "VALIDATION", "VALIDATION_CONFIGURATION", null, port);
+        fixture.service().setInstalledSkillResolver(request -> {
+            assertFalse(TransactionSynchronizationManager.isActualTransactionActive(),
+                    "installation proof must be read outside the database transaction");
+            return new InstalledSkillResolver.Resolution(
+                    InstalledSkillResolver.State.VERIFIED, port.skillProof());
+        });
+        ArchiveSkillRef skill = new ArchiveSkillRef("archive-maintainer", "1.0.0", SHA);
+        ArchiveResumeRequest repair = new ArchiveResumeRequest("configuration repaired", APPOINTMENT,
+                "1", skill, new ArchiveRepairResolution(fixture.secondFailure().failureId(),
+                        "CONFIGURATION_REPAIRED"));
+        assertEquals("ARCHIVE_REPAIR_NOT_VERIFIED", assertThrows(
+                ArchiveMaintenanceException.class, () -> fixture.service().resume(ACTOR, JOB,
+                        "same-installation", jobRevision(), repair)).code());
+        port.rotateInstallation();
+        assertEquals("WAITING", fixture.service().resume(ACTOR, JOB,
+                "changed-installation", jobRevision(), repair).state());
+    }
+
+    @Test
+    void dependencyRepairRequiresFailedBaselineAndSuccessfulPrivateSourceReadback() {
+        TestSourceStorage sourceStorage = new TestSourceStorage(false);
+        RootLockingPort port = new RootLockingPort(jdbc);
+        BlockedFailureFixture fixture = createBlockedFailure(true, true, null,
+                "SOURCE_READ", "SOURCE_UNAVAILABLE", sourceStorage, port);
+        ArchiveSkillRef skill = new ArchiveSkillRef("archive-maintainer", "1.0.0", SHA);
+        ArchiveResumeRequest repair = new ArchiveResumeRequest("source dependency repaired", APPOINTMENT,
+                "1", skill, new ArchiveRepairResolution(fixture.secondFailure().failureId(),
+                        "DEPENDENCY_REPAIRED"));
+        assertEquals("ARCHIVE_REPAIR_NOT_VERIFIED", assertThrows(
+                ArchiveMaintenanceException.class, () -> fixture.service().resume(ACTOR, JOB,
+                        "source-still-unavailable", jobRevision(), repair)).code());
+        sourceStorage.available = true;
+        assertEquals("WAITING", fixture.service().resume(ACTOR, JOB,
+                "source-readback-recovered", jobRevision(), repair).state());
+        assertTrue(sourceStorage.reads.get() >= 3);
+    }
+
+    @Test
+    void dependencyRepairRechecksManagerAfterExternalReadBeforeConsumingEvidence() {
+        TestSourceStorage sourceStorage = new TestSourceStorage(false);
+        RootLockingPort port = new RootLockingPort(jdbc);
+        BlockedFailureFixture fixture = createBlockedFailure(true, true, null,
+                "SOURCE_READ", "SOURCE_UNAVAILABLE", sourceStorage, port);
+        sourceStorage.available = true;
+        sourceStorage.afterRead = () -> assertEquals(1, jdbc.update(
+                "UPDATE archive_collection_manager SET state='REVOKED',revision=revision+1 "
+                        + "WHERE collection_id=? AND tenant_id='0' AND client_id='client-a' "
+                        + "AND owner_jiacn='owner-a' AND state='ACTIVE'", COLLECTION));
+        ArchiveSkillRef skill = new ArchiveSkillRef("archive-maintainer", "1.0.0", SHA);
+        ArchiveResumeRequest repair = new ArchiveResumeRequest("source repaired", APPOINTMENT,
+                "1", skill, new ArchiveRepairResolution(fixture.secondFailure().failureId(),
+                        "DEPENDENCY_REPAIRED"));
+        assertEquals("ARCHIVE_FORBIDDEN", assertThrows(ArchiveMaintenanceException.class,
+                () -> fixture.service().resume(ACTOR, JOB, "revoked-after-source-read",
+                        jobRevision(), repair)).code());
+        assertNull(jdbc.queryForObject("SELECT repair_resolution_code FROM "
+                + "archive_execution_failure WHERE failure_id=?", String.class,
+                Long.parseLong(fixture.secondFailure().failureId())));
+        assertEquals(2, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM archive_job_run WHERE job_id=?", Integer.class, JOB));
+    }
+
+    @Test
+    void dependencyRepairRejectsSourceBindingChangedAfterExternalRead() {
+        TestSourceStorage sourceStorage = new TestSourceStorage(false);
+        RootLockingPort port = new RootLockingPort(jdbc);
+        BlockedFailureFixture fixture = createBlockedFailure(true, true, null,
+                "SOURCE_READ", "SOURCE_UNAVAILABLE", sourceStorage, port);
+        sourceStorage.available = true;
+        port.afterRootLock = () -> assertEquals(1, jdbc.update(
+                "UPDATE archive_source_snapshot SET raw_sha256=? WHERE source_id='source-a'",
+                "e".repeat(64)));
+        ArchiveSkillRef skill = new ArchiveSkillRef("archive-maintainer", "1.0.0", SHA);
+        ArchiveResumeRequest repair = new ArchiveResumeRequest("source repaired", APPOINTMENT,
+                "1", skill, new ArchiveRepairResolution(fixture.secondFailure().failureId(),
+                        "DEPENDENCY_REPAIRED"));
+        assertEquals("ARCHIVE_REPAIR_NOT_VERIFIED", assertThrows(
+                ArchiveMaintenanceException.class, () -> fixture.service().resume(ACTOR, JOB,
+                        "source-binding-changed-after-read", jobRevision(), repair)).code());
+        assertNull(jdbc.queryForObject("SELECT repair_resolution_code FROM "
+                + "archive_execution_failure WHERE failure_id=?", String.class,
+                Long.parseLong(fixture.secondFailure().failureId())));
+        assertEquals(2, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM archive_job_run WHERE job_id=?", Integer.class, JOB));
+    }
+
+    @Test
+    void alternatingRetryableStillBlocksTheSamePhaseAndCode() {
+        BlockedFailureFixture fixture = createBlockedFailure(true, false, null);
+        assertTrue(fixture.secondFailure().blockedRootCause());
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(DISTINCT root_cause_fingerprint) FROM archive_execution_failure "
+                        + "WHERE job_id=?", Integer.class, JOB));
+    }
+
+    @Test
+    void collectionScopeGarbageCannotForgeChangedExecutionInput() {
+        BlockedFailureFixture fixture = createBlockedFailure(true, true, () ->
+                assertEquals(1, jdbc.update("UPDATE archive_appointment SET work_ids=? "
+                        + "WHERE appointment_id=?", "ignored-z,ignored-a,ignored-z", APPOINTMENT)));
+        assertTrue(fixture.secondFailure().blockedRootCause());
+        ArchiveRecoveryContextDTO context = fixture.service().recoveryContext(ACTOR, JOB);
+        assertFalse(context.resumeAllowed());
+        assertFalse(context.latestFailure().inputChangedForResume());
+    }
+
+    @Test
+    void explicitScopeOrderingAndDuplicatesCannotForgeChangedExecutionInput() {
+        seedExecutionCandidate();
+        assertEquals(1, jdbc.update("UPDATE archive_appointment SET work_scope_mode='EXPLICIT_WORKS',"
+                + "work_ids='work-z,work-a,work-z' WHERE appointment_id=?", APPOINTMENT));
+        assertEquals(1, jdbc.update("UPDATE archive_maintenance_job SET operation_code='REVISE_WORK' "
+                + "WHERE job_id=?", JOB));
+        ArchiveMaintenanceServiceImpl service = service(new JdbcArchiveMaintenanceStore(jdbc),
+                new RootLockingPort(jdbc));
+        service.ensureExecution(ACTOR, JOB, "ensure-explicit-first", 1);
+        ArchiveRuntimeScope firstScope = runtime(RUN);
+        start(service, RUN, firstScope, "message-explicit-first");
+        ArchiveRuntimeFailureRequest failure = new ArchiveRuntimeFailureRequest(
+                "RUNNER", "RUNNER_CRASH", true);
+        assertFalse(service.runtimeFailure(firstScope, JOB, RUN, failure).blockedRootCause());
+
+        assertEquals(1, jdbc.update("UPDATE archive_appointment SET work_ids='work-a,work-z' "
+                + "WHERE appointment_id=?", APPOINTMENT));
+        ArchiveSkillRef skill = new ArchiveSkillRef("archive-maintainer", "1.0.0", SHA);
+        ArchiveExecutionRecoveryDTO resumed = service.resume(ACTOR, JOB, "resume-explicit-second",
+                jobRevision(), new ArchiveResumeRequest("same semantic explicit scope", APPOINTMENT,
+                        "1", skill));
+        service.ensureExecution(ACTOR, JOB, "ensure-explicit-second", jobRevision());
+        ArchiveRuntimeScope secondScope = runtime(resumed.runId());
+        start(service, resumed.runId(), secondScope, "message-explicit-second");
+        ArchiveRuntimeResultDTO second = service.runtimeFailure(secondScope, JOB, resumed.runId(),
+                failure);
+
+        assertTrue(second.blockedRootCause());
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(DISTINCT input_fingerprint) FROM archive_execution_failure WHERE job_id=?",
+                Integer.class, JOB));
+        ArchiveRecoveryContextDTO context = service.recoveryContext(ACTOR, JOB);
+        assertFalse(context.resumeAllowed());
+        assertFalse(context.latestFailure().inputChangedForResume());
+    }
+
+    @Test
+    void genuinelyChangedDraftAllowsResumeWithoutConsumingARepairResolution() {
+        BlockedFailureFixture fixture = createBlockedFailure();
+        assertEquals(1, jdbc.update("UPDATE archive_draft SET revision=revision+1,content_sha256=? "
+                + "WHERE job_id=?", "e".repeat(64), JOB));
+        ArchiveRecoveryContextDTO context = fixture.service().recoveryContext(ACTOR, JOB);
+        assertTrue(context.resumeAllowed());
+        assertTrue(context.latestFailure().inputChangedForResume());
+        ArchiveSkillRef skill = new ArchiveSkillRef("archive-maintainer", "1.0.0", SHA);
+        assertEquals("WAITING", fixture.service().resume(ACTOR, JOB, "resume-changed-draft",
+                jobRevision(), new ArchiveResumeRequest("draft candidate changed", APPOINTMENT,
+                        "1", skill)).state());
+        assertEquals(2, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM archive_execution_failure WHERE job_id=?", Integer.class, JOB));
+        assertNull(jdbc.queryForObject("SELECT repair_resolution_code FROM "
+                + "archive_execution_failure WHERE failure_id=?", String.class,
+                Long.parseLong(fixture.secondFailure().failureId())));
+    }
+
+    @Test
+    void genuinelyChangedSkillCandidateAllowsReassignWithoutRepairResolution() {
+        BlockedFailureFixture fixture = createBlockedFailure();
+        String changedSkillSha = "e".repeat(64);
+        String replacement = "appointment-skill-b";
+        jdbc.update("INSERT INTO archive_appointment(appointment_id,collection_id,role_code,tenant_id,client_id,"
+                + "owner_jiacn,agent_id,binding_version,work_scope_mode,work_ids,permission_profile,"
+                + "required_skill_key,required_skill_version,required_skill_sha256,status,revision) "
+                + "VALUES (?,?,'ARCHIVE_EDITOR','0','client-a','owner-a',?,'7','COLLECTION','',"
+                + "'DRAFT_ONLY','archive-maintainer','2.0.0',?,'ACTIVE',1)",
+                replacement, COLLECTION, AGENT, changedSkillSha);
+        assertEquals(1, jdbc.update("UPDATE archive_appointment_slot SET current_appointment_id=?,"
+                + "revision=revision+1 WHERE collection_id=? AND role_code='ARCHIVE_EDITOR'",
+                replacement, COLLECTION));
+        ArchiveRecoveryContextDTO context = fixture.service().recoveryContext(ACTOR, JOB);
+        ArchiveRecoveryContextDTO.CandidateAppointment candidate = context.candidates().getFirst();
+        assertEquals(replacement, candidate.appointmentId());
+        assertTrue(candidate.inputChanged());
+        assertTrue(candidate.recoveryAllowed());
+        ArchiveSkillRef oldSkill = new ArchiveSkillRef("archive-maintainer", "1.0.0", SHA);
+        ArchiveSkillRef changedSkill = new ArchiveSkillRef("archive-maintainer", "2.0.0",
+                changedSkillSha);
+        assertEquals("WAITING", fixture.service().reassign(ACTOR, JOB, "reassign-changed-skill",
+                jobRevision(), new ArchiveReassignRequest("skill candidate changed", APPOINTMENT,
+                        "1", oldSkill, replacement, "1", changedSkill)).state());
+    }
+
+    @Test
+    void genuinelyChangedWorkScopeCandidateAllowsReassignForExistingWork() {
+        seedExecutionCandidate();
+        assertEquals(1, jdbc.update("UPDATE archive_maintenance_job SET operation_code='REVISE_WORK' "
+                + "WHERE job_id=?", JOB));
+        RootLockingPort port = new RootLockingPort(jdbc);
+        ArchiveMaintenanceServiceImpl service = service(new JdbcArchiveMaintenanceStore(jdbc), port);
+        BlockedFailureFixture fixture = driveBlockedFailure(service, port, true, true, null,
+                "RUNNER", "RUNNER_CRASH");
+        String replacement = "appointment-scope-b";
+        jdbc.update("INSERT INTO archive_appointment(appointment_id,collection_id,role_code,tenant_id,client_id,"
+                + "owner_jiacn,agent_id,binding_version,work_scope_mode,work_ids,permission_profile,"
+                + "required_skill_key,required_skill_version,required_skill_sha256,status,revision) "
+                + "VALUES (?,?,'ARCHIVE_EDITOR','0','client-a','owner-a',?,'7','EXPLICIT_WORKS','work-a',"
+                + "'DRAFT_ONLY','archive-maintainer','1.0.0',?,'ACTIVE',1)",
+                replacement, COLLECTION, AGENT, SHA);
+        assertEquals(1, jdbc.update("UPDATE archive_appointment_slot SET current_appointment_id=?,"
+                + "revision=revision+1 WHERE collection_id=? AND role_code='ARCHIVE_EDITOR'",
+                replacement, COLLECTION));
+        ArchiveRecoveryContextDTO context = fixture.service().recoveryContext(ACTOR, JOB);
+        ArchiveRecoveryContextDTO.CandidateAppointment candidate = context.candidates().getFirst();
+        assertTrue(candidate.inputChanged());
+        assertTrue(candidate.recoveryAllowed());
+        ArchiveSkillRef skill = new ArchiveSkillRef("archive-maintainer", "1.0.0", SHA);
+        assertEquals("WAITING", fixture.service().reassign(ACTOR, JOB, "reassign-changed-scope",
+                jobRevision(), new ArchiveReassignRequest("scope candidate changed", APPOINTMENT,
+                        "1", skill, replacement, "1", skill)).state());
     }
 
     @Test
@@ -844,8 +1254,22 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                 String.class, APPOINTMENT));
 
         ArchiveSkillRef skill = new ArchiveSkillRef("archive-maintainer", "1.0.0", SHA);
+        assertEquals("INVALID_REQUEST", assertThrows(ArchiveMaintenanceException.class,
+                () -> service.createAppointment(ACTOR, COLLECTION, "reject-collection-garbage", 2,
+                        new ArchiveAppointmentCreateRequest(agentB, "8", "COLLECTION",
+                                List.of("work-a"), "DRAFT_ONLY", skill))).code());
+        ArchiveAppointmentDTO normalized = service.createAppointment(ACTOR, COLLECTION,
+                "create-normalized-explicit", 2, new ArchiveAppointmentCreateRequest(agentB, "8",
+                        "EXPLICIT_WORKS", List.of("work-z", "work-a", "work-z"),
+                        "DRAFT_ONLY", skill));
+        assertEquals(List.of("work-a", "work-z"), normalized.workIds());
+        assertEquals("work-a,work-z", jdbc.queryForObject(
+                "SELECT work_ids FROM archive_appointment WHERE appointment_id=?",
+                String.class, normalized.appointmentId()));
+        service.revokeAppointment(ACTOR, normalized.appointmentId(), "revoke-normalized-explicit", 1,
+                new ArchiveAppointmentRevokeRequest("use collection scope for add-work recovery"));
         ArchiveAppointmentDTO replacement = service.createAppointment(ACTOR, COLLECTION,
-                "create-replacement", 2, new ArchiveAppointmentCreateRequest(agentB, "8",
+                "create-replacement", 4, new ArchiveAppointmentCreateRequest(agentB, "8",
                         "COLLECTION", List.of(), "DRAFT_ONLY", skill));
         ArchiveReassignRequest request = new ArchiveReassignRequest("explicit replacement",
                 APPOINTMENT, "1", skill, replacement.appointmentId(), replacement.revision(), skill);
@@ -1748,6 +2172,54 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
     }
 
     @Test
+    void exact659b66cSchemaUpgradesAtomicallyAndPartialOrDriftedPredecessorsFailClosed() throws Exception {
+        clean();
+        new ArchiveSchemaInitializer(jdbc).initialize();
+        byte[] predecessor;
+        try (var input = new ClassPathResource(
+                "db/archive-maintenance-schema-659b66c.sql").getInputStream()) {
+            predecessor = input.readAllBytes();
+        }
+        assertEquals(34715, predecessor.length);
+        assertEquals("782a64f159bdd36df0657ad29c11bff4c7e122ad0dac56fc7f8fe30eab7408b2",
+                cn.jia.chat.archive.content.ArchiveEtags.sha256(predecessor));
+        new ResourceDatabasePopulator(new ByteArrayResource(predecessor)).execute(dataSource);
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables "
+                + "WHERE table_schema=DATABASE() AND table_name='archive_execution_failure'",
+                Integer.class));
+        new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
+                new ArchiveMaintenanceProperties()).initialize();
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables "
+                + "WHERE table_schema=DATABASE() AND table_name='archive_execution_failure'",
+                Integer.class));
+
+        clean();
+        new ArchiveSchemaInitializer(jdbc).initialize();
+        new ResourceDatabasePopulator(new ByteArrayResource(predecessor)).execute(dataSource);
+        jdbc.execute("ALTER TABLE archive_job_run MODIFY COLUMN failure_code VARCHAR(63) "
+                + "CHARACTER SET ascii COLLATE ascii_bin NULL");
+        IllegalStateException drift = assertThrows(IllegalStateException.class, () ->
+                new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
+                        new ArchiveMaintenanceProperties()).initialize());
+        assertTrue(drift.getMessage().contains("archive_job_run.columns"), drift.getMessage());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables "
+                + "WHERE table_schema=DATABASE() AND table_name='archive_execution_failure'",
+                Integer.class));
+
+        clean();
+        new ArchiveSchemaInitializer(jdbc).initialize();
+        new ResourceDatabasePopulator(new ByteArrayResource(predecessor)).execute(dataSource);
+        jdbc.execute("DROP TABLE archive_validation");
+        IllegalStateException partial = assertThrows(IllegalStateException.class, () ->
+                new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
+                        new ArchiveMaintenanceProperties()).initialize());
+        assertTrue(partial.getMessage().contains("partial"), partial.getMessage());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables "
+                + "WHERE table_schema=DATABASE() AND table_name='archive_execution_failure'",
+                Integer.class));
+    }
+
+    @Test
     void exactEb31260SchemaAddsReadbackWithoutChangingPrivateOrOperationFactsAndDriftFailsClosed() {
         seedExecutionCandidate();
         seedPublishedContent();
@@ -2619,12 +3091,76 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
     }
 
     private ArchiveRuntimeScope runtime() {
+        return runtime(RUN);
+    }
+
+    private ArchiveRuntimeScope runtime(String runId) {
         ArchiveExecutionGrantRecord grant = new JdbcArchiveMaintenanceStore(jdbc)
-                .findExecutionGrant(RUN, false);
+                .findExecutionGrant(runId, false);
         return new ArchiveRuntimeScope(grant.tenantId(), grant.clientId(), grant.ownerJiacn(),
                 grant.agentId(), grant.runtimeInstanceId(), grant.grantRef(), grant.executionRef(),
                 grant.commandId(), grant.activeAttempt(), grant.executionEpoch());
     }
+
+    private long jobRevision() {
+        return jdbc.queryForObject("SELECT revision FROM archive_maintenance_job WHERE job_id=?",
+                Long.class, JOB);
+    }
+
+    private void start(ArchiveMaintenanceServiceImpl service, String runId,
+            ArchiveRuntimeScope scope, String messageId) {
+        service.runtimeStart(scope, JOB, runId, new ArchiveRuntimeStartRequest(scope.commandId(),
+                messageId, Long.toString(scope.activeAttempt()),
+                Long.toString(scope.executionEpoch())));
+    }
+
+    private BlockedFailureFixture createBlockedFailure() {
+        return createBlockedFailure(true, true, null);
+    }
+
+    private BlockedFailureFixture createBlockedFailure(boolean firstRetryable,
+            boolean secondRetryable, Runnable betweenFailures) {
+        return createBlockedFailure(firstRetryable, secondRetryable, betweenFailures,
+                "RUNNER", "RUNNER_CRASH", null, new RootLockingPort(jdbc));
+    }
+
+    private BlockedFailureFixture createBlockedFailure(boolean firstRetryable,
+            boolean secondRetryable, Runnable betweenFailures, String phase, String code,
+            AgentTaskArtifactStorage sourceStorage, RootLockingPort port) {
+        seedExecutionCandidate();
+        ArchiveMaintenanceServiceImpl service = sourceStorage == null
+                ? service(new JdbcArchiveMaintenanceStore(jdbc), port)
+                : service(new JdbcArchiveMaintenanceStore(jdbc), port,
+                        mock(ArchiveContentStore.class), transactions, sourceStorage);
+        return driveBlockedFailure(service, port, firstRetryable, secondRetryable,
+                betweenFailures, phase, code);
+    }
+
+    private BlockedFailureFixture driveBlockedFailure(ArchiveMaintenanceServiceImpl service,
+            RootLockingPort port, boolean firstRetryable, boolean secondRetryable,
+            Runnable betweenFailures, String phase, String code) {
+        service.ensureExecution(ACTOR, JOB, "ensure-blocked-first", 1);
+        ArchiveRuntimeScope firstScope = runtime(RUN);
+        start(service, RUN, firstScope, "message-a");
+        ArchiveRuntimeResultDTO firstFailure = service.runtimeFailure(firstScope, JOB, RUN,
+                new ArchiveRuntimeFailureRequest(phase, code, firstRetryable));
+        assertFalse(firstFailure.blockedRootCause());
+        if (betweenFailures != null) betweenFailures.run();
+        ArchiveSkillRef skill = new ArchiveSkillRef("archive-maintainer", "1.0.0", SHA);
+        ArchiveExecutionRecoveryDTO resumed = service.resume(ACTOR, JOB, "resume-blocked-second",
+                jobRevision(), new ArchiveResumeRequest("one bounded retry", APPOINTMENT, "1", skill));
+        service.ensureExecution(ACTOR, JOB, "ensure-blocked-second", jobRevision());
+        ArchiveRuntimeScope secondScope = runtime(resumed.runId());
+        start(service, resumed.runId(), secondScope, "message-a");
+        ArchiveRuntimeResultDTO secondFailure = service.runtimeFailure(secondScope, JOB,
+                resumed.runId(), new ArchiveRuntimeFailureRequest(
+                        phase, code, secondRetryable));
+        return new BlockedFailureFixture(service, port, resumed.runId(), secondScope, secondFailure);
+    }
+
+    private record BlockedFailureFixture(ArchiveMaintenanceServiceImpl service, RootLockingPort port,
+            String secondRunId, ArchiveRuntimeScope secondScope,
+            ArchiveRuntimeResultDTO secondFailure) { }
 
     private void seedValidatedDraft(String validationId) throws Exception {
         String contentJson = new ObjectMapper().writeValueAsString(validDraft());
@@ -2686,24 +3222,26 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
     private ArchiveMaintenanceServiceImpl service(JdbcArchiveMaintenanceStore store,
             ArchiveAgentExecutionPort port, ArchiveContentStore contentStore,
             ArchiveTransactions archiveTransactions, AgentIdentityService identities) {
-        AgentTaskArtifactStorage sourceStorage = mock(AgentTaskArtifactStorage.class);
-        when(sourceStorage.store(any(), any(byte[].class), eq("text/plain")))
-                .thenAnswer(call -> {
-                    AgentTaskArtifactStorage.Scope scope = call.getArgument(0);
-                    byte[] bytes = call.getArgument(1);
-                    return new AgentTaskArtifactStorage.StoredObject(
-                            "cyf-artifact://" + scope.taskId(),
-                            cn.jia.chat.archive.content.ArchiveEtags.sha256(bytes),
-                            bytes.length, "text/plain", true);
-                });
-        when(sourceStorage.matches(any(), anyString(), anyString())).thenReturn(true);
-        when(sourceStorage.read(any(), anyString(), anyString(), anyLong(), anyString()))
-                .thenAnswer(call -> {
-                    assertFalse(TransactionSynchronizationManager.isActualTransactionActive(),
-                            "source storage must be read outside the database transaction");
-                    return new AgentTaskArtifactStorage.StoredContent(
-                            SOURCE, SHA, SOURCE.length, "text/plain");
-                });
+        AgentTaskArtifactStorage sourceStorage = new TestSourceStorage(true);
+        return service(store, port, contentStore, archiveTransactions, identities, sourceStorage);
+    }
+
+    private ArchiveMaintenanceServiceImpl service(JdbcArchiveMaintenanceStore store,
+            ArchiveAgentExecutionPort port, ArchiveContentStore contentStore,
+            ArchiveTransactions archiveTransactions, AgentTaskArtifactStorage sourceStorage) {
+        AgentIdentityService identities = mock(AgentIdentityService.class);
+        when(identities.lockBindingAuthority(eq("0"), eq("client-a"), eq("owner-a"),
+                anyLong(), anyString())).thenReturn(AgentIdentityService.BindingAuthority.CURRENT);
+        when(identities.requireActiveIdentityForBinding(eq("0"), eq("client-a"), eq("owner-a"),
+                anyLong(), anyString())).thenAnswer(call -> new AgentIdentityRegistryEntity()
+                        .setCanonicalAgentId(call.getArgument(4, String.class)));
+        return service(store, port, contentStore, archiveTransactions, identities, sourceStorage);
+    }
+
+    private ArchiveMaintenanceServiceImpl service(JdbcArchiveMaintenanceStore store,
+            ArchiveAgentExecutionPort port, ArchiveContentStore contentStore,
+            ArchiveTransactions archiveTransactions, AgentIdentityService identities,
+            AgentTaskArtifactStorage sourceStorage) {
         ArchiveMaintenanceServiceImpl service = new ArchiveMaintenanceServiceImpl(store,
                 contentStore, archiveTransactions, identities, new ObjectMapper(),
                 sourceStorage, Clock.fixed(Instant.parse("2026-09-30T00:00:00Z"), ZoneOffset.UTC));
@@ -2892,7 +3430,7 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                             "archive_idempotency", "archive_note", "archive_bookmark",
                             "archive_reader_progress", "archive_admin_operation_receipt", "archive_operation", "archive_business_outbox", "archive_event",
                             "archive_edition_withdrawal", "archive_publication_readback", "archive_publication",
-                            "archive_validation", "archive_draft", "archive_execution_grant", "archive_job_run",
+                            "archive_validation", "archive_draft", "archive_execution_failure", "archive_execution_grant", "archive_job_run",
                             "archive_maintenance_job", "archive_confirmed_request", "archive_source_snapshot", "archive_appointment",
                             "archive_appointment_slot", "archive_collection_work", "archive_collection_manager",
                             "archive_collection", "archive_paragraph", "archive_chapter", "archive_edition",
@@ -2949,14 +3487,66 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         }
     }
 
+    private static final class TestSourceStorage implements AgentTaskArtifactStorage {
+        volatile boolean available;
+        final AtomicInteger reads = new AtomicInteger();
+        volatile Runnable afterRead;
+
+        TestSourceStorage(boolean available) { this.available = available; }
+
+        @Override public StoredObject store(Scope scope, byte[] content, String mimeType) {
+            return new StoredObject("cyf-artifact://" + scope.taskId(),
+                    cn.jia.chat.archive.content.ArchiveEtags.sha256(content),
+                    content.length, mimeType, true);
+        }
+        @Override public StoredContent read(Scope scope, String storageUri, String expectedSha256,
+                long expectedByteLength, String expectedMimeType) {
+            assertFalse(TransactionSynchronizationManager.isActualTransactionActive(),
+                    "source storage must be read outside the database transaction");
+            reads.incrementAndGet();
+            if (!available) throw new AgentTaskArtifactStorageException(
+                    AgentTaskArtifactStorageException.Reason.IO_FAILURE, "test unavailable");
+            Runnable callback = afterRead;
+            afterRead = null;
+            if (callback != null) callback.run();
+            return new StoredContent(SOURCE, SHA, SOURCE.length, "text/plain");
+        }
+        @Override public boolean owns(String storageUri) { return true; }
+        @Override public boolean matches(Scope scope, String storageUri, String expectedSha256) {
+            return available;
+        }
+    }
+
     private static class RootLockingPort implements ArchiveAgentExecutionPort {
         private final JdbcTemplate jdbc;
         private final AtomicInteger rootAttempts = new AtomicInteger();
         final CountDownLatch firstRootAttempted = new CountDownLatch(1);
         final CountDownLatch secondRootAttempted = new CountDownLatch(1);
         volatile boolean expired;
+        volatile String runtimeInstanceId = "runtime-a";
+        volatile byte[] registrationHash = new byte[32];
+        volatile String installationRef = "installation-a";
+        volatile long installationRevision = 1;
+        volatile Runnable afterRootLock;
 
         RootLockingPort(JdbcTemplate jdbc) { this.jdbc = jdbc; }
+
+        void rotateRuntimeRegistration() {
+            runtimeInstanceId = "runtime-b";
+            byte[] rotated = registrationHash.clone();
+            rotated[0] = (byte) (rotated[0] + 1);
+            registrationHash = rotated;
+        }
+
+        void rotateInstallation() {
+            installationRef = "installation-b";
+            installationRevision++;
+        }
+
+        InstalledSkillResolver.Proof skillProof() {
+            return new InstalledSkillResolver.Proof(installationRef, installationRevision,
+                    "archive-maintainer", "1.0.0", ArchiveMaintenanceConcurrencyMySqlTest.SHA);
+        }
 
         @Override
         public LockedIdentityRoot lockIdentityRoot(TargetRequest request) {
@@ -2967,6 +3557,9 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                     "SELECT agent_id FROM aam_test_agent_root WHERE agent_id=? FOR UPDATE",
                     String.class, request.canonicalAgent());
             if (!request.canonicalAgent().equals(locked)) throw new Denied("TARGET_FENCED");
+            Runnable callback = afterRootLock;
+            afterRootLock = null;
+            if (callback != null) callback.run();
             return new LockedIdentityRoot(request.tenant(), request.client(), request.owner(),
                     request.canonicalAgent(), request.binding());
         }
@@ -2974,15 +3567,15 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         @Override
         public LockedTarget requireControlledTarget(TargetRequest request, LockedIdentityRoot root) {
             return new LockedTarget(request.tenant(), request.client(), request.owner(),
-                    request.canonicalAgent(), request.binding(), "runtime-a", new byte[32]);
+                    request.canonicalAgent(), request.binding(), runtimeInstanceId,
+                    registrationHash);
         }
 
         @Override
         public Grant ensureExecution(Request request, LockedTarget lockedTarget) {
             return new Grant(request.grantRef(), request.executionRef(), "command-a", 1,
-                    request.executionEpoch(), 2_000_000_000_000L, "runtime-a", new byte[32],
-                    new InstalledSkillResolver.Proof("installation-a", 1, "archive-maintainer",
-                            "1.0.0", ArchiveMaintenanceConcurrencyMySqlTest.SHA), false);
+                    request.executionEpoch(), 2_000_000_000_000L, runtimeInstanceId,
+                    registrationHash, skillProof(), false);
         }
 
         @Override public Inspection inspectExecution(Expected expected, LockedTarget lockedTarget) {
@@ -3059,4 +3652,3 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         }
     }
 }
-

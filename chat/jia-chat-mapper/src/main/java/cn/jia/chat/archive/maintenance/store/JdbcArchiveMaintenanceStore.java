@@ -60,6 +60,24 @@ public class JdbcArchiveMaintenanceStore implements ArchiveMaintenanceStore {
                 rs.getString("failure_phase"), rs.getString("failure_code"), nullableRetryable,
                 rs.getString("state"), rs.getLong("revision"));
     };
+    private static final RowMapper<ArchiveExecutionFailureRecord> EXECUTION_FAILURE = (rs, n) -> {
+        long resolutionRevision = rs.getLong("resolution_manager_revision");
+        Long nullableResolutionRevision = rs.wasNull() ? null : resolutionRevision;
+        return new ArchiveExecutionFailureRecord(rs.getLong("failure_id"), rs.getString("job_id"),
+                rs.getString("run_id"), rs.getLong("attempt"), rs.getString("input_fingerprint"),
+                rs.getString("root_cause_fingerprint"), rs.getString("phase"), rs.getString("code"),
+                rs.getLong("retryable") == 1, rs.getString("diagnostic"),
+                rs.getString("runtime_instance_id"), rs.getString("registration_fingerprint"),
+                rs.getString("installation_ref"), rs.getLong("installation_revision"),
+                rs.getString("skill_key"), rs.getString("skill_version"),
+                rs.getString("package_sha256"), rs.getString("source_verification_state"),
+                rs.getString("source_verification_fingerprint"),
+                rs.getLong("blocked_root_cause") == 1, rs.getString("repair_resolution_code"),
+                rs.getString("repair_evidence_fingerprint"),
+                rs.getString("resolved_by_tenant_id"), rs.getString("resolved_by_client_id"),
+                rs.getString("resolved_by_owner_jiacn"), nullableResolutionRevision,
+                instant(rs.getTimestamp("resolved_at")), instant(rs.getTimestamp("failed_at")));
+    };
     private static final RowMapper<ArchiveExecutionGrantRecord> EXECUTION = (rs, n) ->
             new ArchiveExecutionGrantRecord(rs.getString("grant_ref"), rs.getString("run_id"),
                     rs.getString("tenant_id"), rs.getString("client_id"), rs.getString("owner_jiacn"),
@@ -439,6 +457,45 @@ public class JdbcArchiveMaintenanceStore implements ArchiveMaintenanceStore {
     }
     @Override public int completeRun(String runId,long expected) {
         return jdbc.update("UPDATE archive_job_run SET state='COMPLETED',revision=revision+1 WHERE run_id=? AND revision=? AND state='RUNNING' AND started_message_id IS NOT NULL",runId,expected);
+    }
+    @Override public ArchiveExecutionFailureRecord findExecutionFailureByRun(String runId,boolean lock) {
+        return first(jdbc.query("SELECT * FROM archive_execution_failure WHERE run_id=?"+(lock?" FOR UPDATE":""),
+                EXECUTION_FAILURE,runId));
+    }
+    @Override public ArchiveExecutionFailureRecord findLatestExecutionFailure(String jobId,boolean lock) {
+        return first(jdbc.query("SELECT * FROM archive_execution_failure WHERE job_id=? ORDER BY failure_id DESC LIMIT 1"+(lock?" FOR UPDATE":""),
+                EXECUTION_FAILURE,jobId));
+    }
+    @Override public void insertExecutionFailure(ArchiveExecutionFailureRecord f) {
+        if (jdbc.update("""
+                INSERT INTO archive_execution_failure(job_id,run_id,attempt,input_fingerprint,
+                root_cause_fingerprint,phase,code,retryable,diagnostic,runtime_instance_id,
+                registration_fingerprint,installation_ref,installation_revision,skill_key,
+                skill_version,package_sha256,source_verification_state,
+                source_verification_fingerprint,blocked_root_cause)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,f.jobId(),f.runId(),f.attempt(),f.inputFingerprint(),f.rootCauseFingerprint(),
+                f.phase(),f.code(),f.retryable()?1:0,f.diagnostic(),f.runtimeInstanceId(),
+                f.registrationFingerprint(),f.installationRef(),f.installationRevision(),
+                f.skillKey(),f.skillVersion(),f.packageSha256(),f.sourceVerificationState(),
+                f.sourceVerificationFingerprint(),f.blockedRootCause()?1:0)!=1) {
+            throw new IllegalStateException("Archive execution failure insert failed");
+        }
+    }
+    @Override public int resolveExecutionFailure(long failureId,ArchiveActorScope actor,
+            long managerRevision,String resolutionCode,String repairEvidenceFingerprint) {
+        return jdbc.update("""
+                UPDATE archive_execution_failure
+                SET repair_resolution_code=?,repair_evidence_fingerprint=?,
+                    resolved_by_tenant_id=?,resolved_by_client_id=?,
+                    resolved_by_owner_jiacn=?,resolution_manager_revision=?,resolved_at=CURRENT_TIMESTAMP(6)
+                WHERE failure_id=? AND blocked_root_cause=1 AND repair_resolution_code IS NULL
+                  AND repair_evidence_fingerprint IS NULL
+                  AND resolved_by_tenant_id IS NULL AND resolved_by_client_id IS NULL
+                  AND resolved_by_owner_jiacn IS NULL AND resolution_manager_revision IS NULL
+                  AND resolved_at IS NULL
+                """,resolutionCode,repairEvidenceFingerprint,actor.tenantId(),actor.clientId(),
+                actor.ownerJiacn(),managerRevision,failureId);
     }
     @Override public ArchiveExecutionGrantRecord findExecutionGrant(String runId,boolean lock) {
         return first(jdbc.query("SELECT * FROM archive_execution_grant WHERE run_id=?"+(lock?" FOR UPDATE":""),EXECUTION,runId));

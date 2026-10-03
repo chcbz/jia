@@ -244,48 +244,6 @@ CREATE TABLE IF NOT EXISTS archive_execution_grant (
     CONSTRAINT chk_archive_execution_expiry CHECK (expires_at > 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
-CREATE TABLE IF NOT EXISTS archive_execution_failure (
-    failure_id BIGINT NOT NULL AUTO_INCREMENT,
-    job_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-    run_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-    attempt BIGINT NOT NULL,
-    input_fingerprint CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-    root_cause_fingerprint CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-    phase VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-    code VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-    retryable BIGINT NOT NULL,
-    diagnostic VARCHAR(160) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
-    runtime_instance_id VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
-    registration_fingerprint CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-    installation_ref VARCHAR(100) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-    installation_revision BIGINT NOT NULL,
-    skill_key VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
-    skill_version VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
-    package_sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-    source_verification_state VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-    source_verification_fingerprint CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
-    blocked_root_cause BIGINT NOT NULL,
-    repair_resolution_code VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NULL,
-    repair_evidence_fingerprint CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
-    resolved_by_tenant_id VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
-    resolved_by_client_id VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
-    resolved_by_owner_jiacn VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
-    resolution_manager_revision BIGINT NULL,
-    resolved_at TIMESTAMP(6) NULL,
-    failed_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-    PRIMARY KEY (failure_id),
-    UNIQUE KEY uk_archive_failure_run (run_id),
-    KEY idx_archive_failure_job_history (job_id, failure_id),
-    CONSTRAINT fk_archive_failure_job FOREIGN KEY (job_id) REFERENCES archive_maintenance_job(job_id),
-    CONSTRAINT fk_archive_failure_run FOREIGN KEY (run_id) REFERENCES archive_job_run(run_id),
-    CONSTRAINT chk_archive_failure_attempt CHECK (attempt >= 1),
-    CONSTRAINT chk_archive_failure_installation_revision CHECK (installation_revision >= 1),
-    CONSTRAINT chk_archive_failure_retryable CHECK (retryable IN (0,1)),
-    CONSTRAINT chk_archive_failure_source_verification CHECK (((source_verification_state='READABLE') AND (source_verification_fingerprint IS NOT NULL)) OR ((source_verification_state IN ('NOT_APPLICABLE','UNAVAILABLE','CORRUPT')) AND (source_verification_fingerprint IS NULL))),
-    CONSTRAINT chk_archive_failure_blocked CHECK (blocked_root_cause IN (0,1)),
-    CONSTRAINT chk_archive_failure_resolution CHECK (((repair_resolution_code IS NULL) AND (repair_evidence_fingerprint IS NULL) AND (resolved_by_tenant_id IS NULL) AND (resolved_by_client_id IS NULL) AND (resolved_by_owner_jiacn IS NULL) AND (resolution_manager_revision IS NULL) AND (resolved_at IS NULL)) OR ((repair_resolution_code IN ('RUNTIME_REPAIRED','DEPENDENCY_REPAIRED','CONFIGURATION_REPAIRED')) AND (repair_evidence_fingerprint IS NOT NULL) AND (resolved_by_tenant_id IS NOT NULL) AND (resolved_by_client_id IS NOT NULL) AND (resolved_by_owner_jiacn IS NOT NULL) AND (resolution_manager_revision >= 1) AND (resolved_at IS NOT NULL)))
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
-
 CREATE TABLE IF NOT EXISTS archive_draft (
     draft_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
     job_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,

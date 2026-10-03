@@ -76,9 +76,11 @@ class ArchiveMaintenanceServiceImplTest {
                 "EXECUTION_FENCED", 1, "{\"reason\":\"revoked\"}",
                 "2026-09-28T00:00:02Z");
         when(store.findJob(eq(JOB), anyBoolean())).thenReturn(job);
-        when(store.findDraftByJob(JOB, true)).thenReturn(new ArchiveDraftRecord(
+        ArchiveDraftRecord recoveryDraft = new ArchiveDraftRecord(
                 DRAFT, JOB, 0, "EDITABLE", "{\"blocks\":[],\"excludedSourceRanges\":[]}",
-                SHA, null, null));
+                SHA, null, null);
+        when(store.findDraftByJob(JOB, true)).thenReturn(recoveryDraft);
+        when(store.findDraftByJob(JOB, false)).thenReturn(recoveryDraft);
         when(store.findAppointment(APPOINTMENT, false)).thenReturn(revoked);
         when(store.findAppointment(APPOINTMENT, true)).thenReturn(revoked);
         when(store.lockSlot(COLLECTION, "ARCHIVE_EDITOR")).thenReturn(
@@ -1172,7 +1174,19 @@ class ArchiveMaintenanceServiceImplTest {
         when(store.findRun(RUN, true)).thenReturn(running, failed);
         when(store.findExecutionGrant(RUN, true)).thenReturn(
                 executionGrant("ACTIVE", 1), executionGrant("READ_ONLY", 1));
-        when(store.findDraftByJob(JOB, false)).thenReturn(emptyDraft());
+        ArchiveDraftRecord failureDraft = emptyDraft();
+        when(store.findDraftByJob(JOB, false)).thenReturn(failureDraft);
+        when(store.findDraftByJob(JOB, true)).thenReturn(failureDraft);
+        ArchiveExecutionFailureRecord failureRecord = new ArchiveExecutionFailureRecord(
+                11, JOB, RUN, 1, "1".repeat(64), "2".repeat(64), "RUNNER",
+                "RUNNER_CRASH", true,
+                "Execution failed at RUNNER with RUNNER_CRASH; retryable=true; one bounded retry remains",
+                "runtime-a", "3".repeat(64), "psi_verified", 4,
+                "archive-maintainer", "1.0.0", SHA, "NOT_APPLICABLE", null,
+                false, null, null, null, null, null, null, null,
+                Instant.parse("2026-09-28T00:00:03Z"));
+        when(store.findExecutionFailureByRun(RUN, true)).thenReturn(null, failureRecord);
+        when(store.findExecutionFailureByRun(RUN, false)).thenReturn(failureRecord);
         when(port.inspectExecution(any(), any())).thenReturn(
                 new ArchiveAgentExecutionPort.Inspection(true, "STARTED", "message-a"));
         when(port.inspectResult(any(), any())).thenReturn(

@@ -9,6 +9,7 @@ import cn.jia.chat.archive.maintenance.dto.ArchiveRuntimeStartRequest;
 import cn.jia.chat.archive.maintenance.dto.ArchiveRuntimeResultDTO;
 import cn.jia.chat.archive.maintenance.dto.ArchivePublishRequest;
 import cn.jia.chat.archive.maintenance.dto.ArchiveRecoveryContextDTO;
+import cn.jia.chat.archive.maintenance.dto.ArchiveRepairResolution;
 import cn.jia.chat.archive.maintenance.dto.ArchiveSkillRef;
 import cn.jia.chat.archive.maintenance.dto.ArchiveResumeRequest;
 import cn.jia.chat.archive.maintenance.dto.ArchiveReassignRequest;
@@ -57,10 +58,11 @@ class ArchiveNativeControllerContractTest {
         assertFalse(blockFields.contains("ownerJiacn"));
         assertFalse(blockFields.contains("permissions"));
         assertEquals(Set.of("reason", "expectedAppointmentId", "expectedAppointmentRevision",
-                        "expectedSkill"), fields(ArchiveResumeRequest.class));
+                        "expectedSkill", "repairResolution"), fields(ArchiveResumeRequest.class));
         assertEquals(Set.of("reason", "expectedAppointmentId", "expectedAppointmentRevision",
-                        "expectedSkill", "newAppointmentId", "newAppointmentRevision", "newSkill"),
-                fields(ArchiveReassignRequest.class));
+                        "expectedSkill", "newAppointmentId", "newAppointmentRevision", "newSkill",
+                        "repairResolution"), fields(ArchiveReassignRequest.class));
+        assertEquals(Set.of("failureId", "resolutionCode"), fields(ArchiveRepairResolution.class));
         Set<String> adminMethods = Arrays.stream(ArchiveAdminController.class.getDeclaredMethods())
                 .map(java.lang.reflect.Method::getName).collect(Collectors.toSet());
         assertTrue(adminMethods.containsAll(Set.of("resolveInput", "resume", "reassign")));
@@ -150,7 +152,10 @@ class ArchiveNativeControllerContractTest {
                         "REVOKED"),
                 List.of(new ArchiveRecoveryContextDTO.CandidateAppointment("appointment-new",
                         "5", new ArchiveSkillRef("archive-maintainer", "1.0.0",
-                                "a".repeat(64)), "ACTIVE", "agent-a")));
+                                "a".repeat(64)), "ACTIVE", "agent-a", true, true)),
+                false, new ArchiveRecoveryContextDTO.LatestFailure("19", "RUNNER",
+                        "RUNNER_CRASH", true, "bounded diagnostic", true, false,
+                        List.of("RUNTIME_REPAIRED")));
         when(service.recoveryContext(any(), eq("job-a"))).thenReturn(dto);
 
         var response = controller.recoveryContext("job-a", authenticatedJwt());
@@ -166,12 +171,16 @@ class ArchiveNativeControllerContractTest {
         var root = new ObjectMapper().valueToTree(response.getBody());
         assertEquals(Set.of("status", "code", "msg", "data"), names(root));
         var data = root.get("data");
-        assertEquals(Set.of("jobId", "jobRevision", "previousAppointment", "candidates"),
-                names(data));
+        assertEquals(Set.of("jobId", "jobRevision", "previousAppointment", "candidates",
+                        "resumeAllowed", "latestFailure"), names(data));
         assertEquals(Set.of("appointmentId", "revision", "requiredSkill", "status"),
                 names(data.get("previousAppointment")));
-        assertEquals(Set.of("appointmentId", "revision", "requiredSkill", "status", "agentId"),
+        assertEquals(Set.of("appointmentId", "revision", "requiredSkill", "status", "agentId",
+                        "recoveryAllowed", "inputChanged"),
                 names(data.get("candidates").get(0)));
+        assertEquals(Set.of("failureId", "phase", "code", "retryable", "diagnostic",
+                        "blockedRootCause", "inputChangedForResume", "allowedRepairResolutionCodes"),
+                names(data.get("latestFailure")));
         assertEquals(Set.of("key", "version", "packageSha256"),
                 names(data.get("previousAppointment").get("requiredSkill")));
         String raw = root.toString();
@@ -397,6 +406,19 @@ class ArchiveNativeControllerContractTest {
                 resumeBody, authenticatedJwt());
         verify(service).resume(any(), eq("job-a"), eq("resume-key"),
                 eq(9223372036854775806L), any());
+        byte[] injectedRepair = ("{\"reason\":\"resume\","
+                + "\"expectedAppointmentId\":\"appointment-a\","
+                + "\"expectedAppointmentRevision\":\"4\","
+                + "\"expectedSkill\":{\"key\":\"archive-maintainer\","
+                + "\"version\":\"1.0.0\",\"packageSha256\":\"" + "f".repeat(64) + "\"},"
+                + "\"repairResolution\":{\"failureId\":\"19\","
+                + "\"resolutionCode\":\"RUNTIME_REPAIRED\",\"ownerJiacn\":\"forged\"}}")
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        assertEquals("INVALID_REQUEST", assertThrows(ArchiveMaintenanceException.class,
+                () -> controller.resume("job-a", "injected-repair", "\"v9223372036854775806\"",
+                        injectedRepair, authenticatedJwt())).code());
+        verify(service, never()).resume(any(), eq("job-a"), eq("injected-repair"),
+                anyLong(), any());
         assertEquals("INVALID_CONDITIONAL_HEADER", assertThrows(ArchiveMaintenanceException.class,
                 () -> controller.resume("job-a", "bad-key", response.getHeaders().getETag(),
                         resumeBody, authenticatedJwt())).code(),
@@ -526,7 +548,8 @@ class ArchiveNativeControllerContractTest {
                         "runState", "runRevision", "jobState", "jobRevision", "stage",
                         "validationId", "validationOutcome", "validationDigest", "draftRevision",
                         "publicationId", "workId", "editionId", "publicationState",
-                        "failurePhase", "failureCode", "failureRetryable"),
+                        "failurePhase", "failureCode", "failureRetryable", "failureId",
+                        "blockedRootCause", "failureDiagnostic"),
                 fields(ArchiveRuntimeResultDTO.class));
         assertEquals(Set.of("agentId", "appointmentId", "appointmentRevision", "bindingVersion",
                         "collectionId", "draftId", "draftRevision", "expectedActiveEditionId",
@@ -728,7 +751,8 @@ class ArchiveNativeControllerContractTest {
                         "runState", "runRevision", "jobState", "jobRevision", "stage",
                         "validationId", "validationOutcome", "validationDigest", "draftRevision",
                         "publicationId", "workId", "editionId", "publicationState",
-                        "failurePhase", "failureCode", "failureRetryable"), names(json.path("data")));
+                        "failurePhase", "failureCode", "failureRetryable", "failureId",
+                        "blockedRootCause", "failureDiagnostic"), names(json.path("data")));
         assertTrue(json.at("/data/validationId").isNull());
         assertTrue(json.at("/data/publicationId").isNull());
         assertTrue(json.at("/data/failureCode").isNull());

@@ -48,6 +48,12 @@ public interface ArchiveMaintenanceStore {
     int startRun(String runId, long expectedRevision, String messageId);
     int failRun(String runId, long expectedRevision, String phase, String code, boolean retryable);
     int completeRun(String runId, long expectedRevision);
+    ArchiveExecutionFailureRecord findExecutionFailureByRun(String runId, boolean lock);
+    ArchiveExecutionFailureRecord findLatestExecutionFailure(String jobId, boolean lock);
+    void insertExecutionFailure(ArchiveExecutionFailureRecord failure);
+    int resolveExecutionFailure(long failureId, ArchiveActorScope actor,
+                                long managerRevision, String resolutionCode,
+                                String repairEvidenceFingerprint);
     ArchiveExecutionGrantRecord findExecutionGrant(String runId, boolean lock);
     List<ArchiveExecutionGrantRecord> listActiveExecutionGrants(String appointmentId, boolean lock);
     List<String> lockRunIdsForAppointment(String appointmentId);

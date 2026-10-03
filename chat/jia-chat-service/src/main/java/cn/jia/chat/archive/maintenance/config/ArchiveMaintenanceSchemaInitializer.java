@@ -63,7 +63,12 @@ public class ArchiveMaintenanceSchemaInitializer {
         // without archive_business_outbox. Older accepted predecessors remove readback, exact-admin,
         // and withdrawal in that order; arbitrary partial sets remain fail-closed.
         Set<String> currentTables = expected.tables().keySet();
-        Set<String> businessOutboxPredecessorTables = new LinkedHashSet<>(currentTables);
+        // RECOVERY-13 predecessor is byte-bound in tests to the exact 659b66c Git blob.
+        // All older supported shapes branch from that nineteen-table schema; accepting a
+        // shape that already contains only part of RECOVERY-13 would hide interrupted DDL.
+        Set<String> recovery13PredecessorTables = new LinkedHashSet<>(currentTables);
+        recovery13PredecessorTables.remove("archive_execution_failure");
+        Set<String> businessOutboxPredecessorTables = new LinkedHashSet<>(recovery13PredecessorTables);
         businessOutboxPredecessorTables.remove("archive_business_outbox");
         Set<String> predecessorTables = new LinkedHashSet<>(businessOutboxPredecessorTables);
         predecessorTables.remove("archive_publication_readback");
@@ -72,6 +77,7 @@ public class ArchiveMaintenanceSchemaInitializer {
         Set<String> legacyPredecessorTables = new LinkedHashSet<>(exactAdminPredecessorTables);
         legacyPredecessorTables.remove("archive_edition_withdrawal");
         if (!existing.isEmpty() && !existing.equals(currentTables)
+                && !existing.equals(recovery13PredecessorTables)
                 && !existing.equals(businessOutboxPredecessorTables)
                 && !existing.equals(predecessorTables)
                 && !existing.equals(exactAdminPredecessorTables)

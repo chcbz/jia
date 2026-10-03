@@ -16,7 +16,7 @@ import java.util.regex.Pattern;
 public final class ArchiveMaintenanceSchemaCatalog {
     public static final List<String> TABLE_ORDER = List.of("archive_collection", "archive_collection_manager",
             "archive_collection_work", "archive_appointment_slot", "archive_appointment",
-            "archive_source_snapshot", "archive_confirmed_request", "archive_maintenance_job", "archive_job_run", "archive_execution_grant", "archive_draft", "archive_validation",
+            "archive_source_snapshot", "archive_confirmed_request", "archive_maintenance_job", "archive_job_run", "archive_execution_grant", "archive_execution_failure", "archive_draft", "archive_validation",
             "archive_publication", "archive_publication_readback", "archive_edition_withdrawal", "archive_event", "archive_business_outbox", "archive_operation",
             "archive_admin_operation_receipt");
     private static final Pattern TABLE = Pattern.compile(

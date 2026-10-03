@@ -124,6 +124,25 @@ class ArchiveMaintenanceSchemaCatalogTest {
                 run.columns().get("failure_retryable"));
         assertTrue(run.checks().get("chk_archive_run_state").contains("RUNNING"));
         assertTrue(run.checks().get("chk_archive_run_lifecycle").contains("started_message_id"));
+        var failure = expected.tables().get("archive_execution_failure");
+        assertEquals(new ArchiveMaintenanceSchemaCatalog.Column("bigint", false, null),
+                failure.columns().get("failure_id"));
+        assertEquals(new ArchiveMaintenanceSchemaCatalog.Column("char(64)", false, "ascii_bin"),
+                failure.columns().get("input_fingerprint"));
+        assertEquals(new ArchiveMaintenanceSchemaCatalog.Column("char(64)", false, "ascii_bin"),
+                failure.columns().get("registration_fingerprint"));
+        assertEquals(new ArchiveMaintenanceSchemaCatalog.Column("varchar(16)", false, "ascii_bin"),
+                failure.columns().get("source_verification_state"));
+        assertEquals(new ArchiveMaintenanceSchemaCatalog.Column("char(64)", true, "ascii_bin"),
+                failure.columns().get("repair_evidence_fingerprint"));
+        assertEquals("0:run_id", failure.indexes().get("uk_archive_failure_run"));
+        assertEquals("1:job_id,failure_id", failure.indexes().get("idx_archive_failure_job_history"));
+        assertEquals("run_id>archive_job_run.run_id",
+                failure.foreignKeys().get("fk_archive_failure_run"));
+        assertTrue(failure.checks().get("chk_archive_failure_resolution")
+                .contains("RUNTIME_REPAIRED"));
+        assertTrue(failure.checks().get("chk_archive_failure_source_verification")
+                .contains("READABLE"));
         var execution = expected.tables().get("archive_execution_grant");
         assertEquals(new ArchiveMaintenanceSchemaCatalog.Column("bigint", false, null),
                 execution.columns().get("manager_authorization_revision"));
@@ -138,6 +157,22 @@ class ArchiveMaintenanceSchemaCatalogTest {
             ArchiveMaintenanceSchemaCatalog.verify(table, expected.tables().get(table),
                     expected.tables().get(table), "InnoDB:utf8mb4_0900_bin");
         }
+    }
+
+    @Test
+    void recovery13PredecessorFixtureIsExact659b66cGitBlob() throws Exception {
+        byte[] bytes;
+        try (var input = getClass().getClassLoader().getResourceAsStream(
+                "db/archive-maintenance-schema-659b66c.sql")) {
+            org.junit.jupiter.api.Assertions.assertNotNull(input);
+            bytes = input.readAllBytes();
+        }
+        assertEquals(34715, bytes.length);
+        assertEquals("782a64f159bdd36df0657ad29c11bff4c7e122ad0dac56fc7f8fe30eab7408b2",
+                cn.jia.chat.archive.content.ArchiveEtags.sha256(bytes));
+        String sql = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+        assertEquals(19, sql.split("CREATE TABLE IF NOT EXISTS ", -1).length - 1);
+        assertTrue(!sql.contains("archive_execution_failure"));
     }
 
     @Test
