@@ -250,6 +250,20 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
         assertEquals("STAGED",inTx(() -> rows.lockOutput("0","client","owner",row.getExecutionId(),"output_1")).getOutputState());
     }
 
+    @Test void committedV3OwnerCanListAndReadOriginalBytesWithoutRuntimeIdentity() throws Exception {
+        var row=persist("exec-owner-read","run-owner-read","42");byte[] bytes=png();String hash=sha(bytes);
+        var runtime=new PersonalWorkspaceExecutionService.RuntimeScope("0","client","owner","agent","runtime");
+        inTx(() -> service.stageConversationOutput(runtime,"task",row.getRunId(),
+                new PersonalWorkspaceExecutionService.ConversationFence(1,"lease-token"),"output_1","bird.png","image/png",bytes));
+        String manifest="pwe_m_"+sha("task\n"+row.getRunId()+"\noutput_1\n"+hash+"\n"+bytes.length+"\n");
+        inTx(() -> service.recoverStagedConversationOutput(runtime,"task",row.getRunId(),manifest,recovery(row,hash,bytes.length)));
+        var owner=new PersonalWorkspaceExecutionService.OwnerScope("0","client","owner");
+        var outputs=inTx(() -> service.listConversationOutputs(owner,"task",row.getRunId()));
+        assertEquals(1,outputs.size());assertEquals(hash,outputs.getFirst().sha256());
+        var output=inTx(() -> service.readConversationOutput(owner,"task",row.getRunId(),"output_1"));
+        assertArrayEquals(bytes,output.content());
+    }
+
     private static PersonalWorkspaceExecutionService.ConversationResultRecovery recovery(
             PersonalWorkspaceExecutionEntity row,String hash,long length) {
         return new PersonalWorkspaceExecutionService.ConversationResultRecovery(row.getExecutionId(),
