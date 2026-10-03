@@ -50,7 +50,7 @@ class ChatActionContinuationTransactionTest {
                 var proxied=context.getBean(ChatActionDispatchService.class);
                 assertTrue(org.springframework.aop.support.AopUtils.isCglibProxy(proxied));
                 if("none".equals(failAt)) {proxied.consume(claim);assertEquals(8,evidence.queryForObject("SELECT COUNT(*) FROM writes",Integer.class));}
-                else {assertThrows(RuntimeException.class,()->proxied.consume(claim),failAt);assertEquals(0,evidence.queryForObject("SELECT COUNT(*) FROM writes",Integer.class),failAt);}
+                else {var failed=assertThrows(RuntimeException.class,()->proxied.consume(claim),failAt);assertEquals("injected-"+failAt,failed.getMessage());assertEquals(0,evidence.queryForObject("SELECT COUNT(*) FROM writes",Integer.class),failAt);}
                 assertEquals(1,f.messages.size());
             }
         }

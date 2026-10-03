@@ -102,6 +102,17 @@ class ChatActionContinuationTest {
         assertEquals(1,f.events.size()); assertEquals(dispatches,f.outboxes.size());
     }
 
+    @Test void ordinaryChatActionResolvesTheSameExactSourceIntoNativeInspectionWithoutUserConfirmation() {
+        var f=new Fixture(true); var consumer=f.consumer(); consumer.consume(f.claim());
+        assertEquals("CHAT",f.parentTurn.getRoute()); assertEquals(1,f.messages.size());
+        var child=f.children.values().iterator().next();
+        assertEquals(f.action.admission().userMessageId(),child.userMessageId());
+        var source=ChatTypedInspectionContextService.sources(child.sourceCatalogJson()).getFirst();
+        assertEquals(f.action.validated().interactionOutcome().action().sourceRefIds(),List.of(source.get("sourceRefId")));
+        assertTrue(f.turns.values().stream().anyMatch(t->child.requestId().equals(t.getRequestId()) && "INSPECT".equals(t.getRoute())));
+        assertNull(f.action.validated().inspectionInputReceipt()); // Catalogue-only CHAT never pretends to have read bytes.
+    }
+
     @Test void assignmentConversationAndStolenLeaseFailBeforeChildWrites() {
         for(String drift:List.of("assignment","target","generation","scope","fence")) {
             var f=new Fixture(); var consumer=f.consumer(); var claim=f.claim();
@@ -145,7 +156,8 @@ class ChatActionContinuationTest {
         final ChatActionFinalService.BoundAction action;
         final ChatTurnEntity parentTurn;
 
-        Fixture() {
+        Fixture() { this(false); }
+        Fixture(boolean chatParent) {
             conversation.setTenantId("0"); conversation.setClientId("client");
             root.setAssignedAgentId("agent");root.setTaskVersion(3L);
             when(conversations.lockScopedById("owner","client","42")).thenReturn(conversation);
@@ -180,11 +192,26 @@ class ChatActionContinuationTest {
             inspections=new ChatTypedInspectionContextService(jdbc,mock(ChatConversationArchiveStore.class),registry,capabilities,true);
             var parentContext=context("parent","file");
             var input=new ChatMessageDTO();input.setRequestId("parent");input.setContent("请整理资料");
-            var admitted=deliberation.admitInspection("0",new ServerResolvedSender("user","用户","owner","client",DisplayNameSource.NICKNAME),"42",1,chatScope,input,null,parentContext.typedInspection(),null);
+            var sender=new ServerResolvedSender("user","用户","owner","client",DisplayNameSource.NICKNAME);
+            String parentCatalog=parentContext.admissionEnvelopeJson();
+            Map<String,Object> parentFacts=object(parentContext.typedInspection().get("discussionFacts"));
+            ChatDeliberationService.Admission admitted;
+            if (chatParent) {
+                var chatSessions=new cn.jia.chat.handler.TypedDeliberationSessionRegistry();
+                chatSessions.register("chat-session","0","owner","client","agent",Map.of("schemaVersion",3,"state","READY", "carrier","CHAT_MESSAGE_FINAL_SIDECAR_V3",
+                        "referenceModes",List.of("NONE","AVAILABLE"),"outcomeKinds",List.of("ANSWER","CLARIFY","ACTION_REQUEST"),
+                        "engine","CODEX_APP_SERVER_NATIVE_OUTPUT_SCHEMA","strictNoToolsVerified",false,"toolPolicy","read-only-constrained"));
+                var schema=mock(cn.jia.chat.config.ChatTypedDeliberationSchemaInitializer.class);when(schema.ready()).thenReturn(true);
+                var chatContext=new ChatTypedDeliberationContextService(jdbc,chatSessions,schema,capabilities,true).resolve(
+                        new ChatTypedDeliberationContextService.Scope("0","owner","client","42",1),"task","agent",List.of(
+                                new cn.jia.chat.api.ChatTypedDeliberationWire.SourceSelector("TASK_LINKED_WORKSPACE_VERSION","file","1","INPUT",null,null)));
+                parentCatalog=chatContext.sourceCatalogJson();parentFacts=chatContext.facts();
+                admitted=deliberation.admit("0",sender,"42",1,chatScope,InteractionRoute.CHAT,input,null,parentFacts);
+            } else admitted=deliberation.admitInspection("0",sender,"42",1,chatScope,input,null,parentContext.typedInspection(),null);
             var d=admitted.dispatches().getFirst(); parentTurn=turns.get(d.turnId());
             Map<String,Object> bound=new LinkedHashMap<>();bound.put("tenantId","0");bound.put("ownerJiacn","owner");bound.put("clientId","client");bound.put("conversationId","42");
             bound.put("conversationGeneration","1");bound.put("requestId","parent");bound.put("requestRevision","1");bound.put("turnId",d.turnId());bound.put("dispatchId",d.dispatchId());
-            bound.put("snapshotId",d.contextSnapshotId());bound.put("contextDigest",d.contextHash());bound.put("targetAgentId","agent");bound.put("route","INSPECT");bound.put("taskId","task");
+            bound.put("snapshotId",d.contextSnapshotId());bound.put("contextDigest",d.contextHash());bound.put("targetAgentId","agent");bound.put("route",chatParent?"CHAT":"INSPECT");bound.put("taskId","task");
             var sources=ChatTypedInspectionContextService.sources(parentContext.admissionEnvelopeJson());
             var receipt=new LinkedHashMap<String,Object>();receipt.put("schemaVersion",1);receipt.put("authorizationId",parentContext.typedInspection().get("authorizationId"));
             receipt.put("manifestDigest",parentContext.typedInspection().get("manifestDigest"));receipt.put("sources",sources.stream().map(s->Map.of("sourceRefId",s.get("sourceRefId"),"sha256",s.get("sha256"),"byteLength",s.get("byteLength"),"carrier",s.get("carrier"),"contributionDigest",digest('e'))).toList());
@@ -192,13 +219,13 @@ class ChatActionContinuationTest {
             var outcome=Map.of("schemaVersion",3,"kind","ACTION_REQUEST","text","继续处理","action",Map.of("actionId","inspect-materials","instruction","查看已选资料","sourceRefIds",sources.stream().map(s->s.get("sourceRefId")).toList()));
             var union=new LinkedHashMap<String,Object>(outcome);union.put("clarification",null);
             var authority=Map.of("authorizationId",parentContext.typedInspection().get("authorizationId"),"manifestDigest",parentContext.typedInspection().get("manifestDigest"),"sources",sources);
-            var validated=ChatActionFinalValidator.validateJson(bound,parentContext.typedInspection().get("discussionFacts"),authority,"继续处理",3,CanonicalContextJson.write(union),CanonicalContextJson.write(receipt));
+            var validated=ChatActionFinalValidator.validateJson(bound,parentFacts,chatParent?null:authority,"继续处理",3,CanonicalContextJson.write(union),chatParent?null:CanonicalContextJson.write(receipt));
             parentTurn.setFinalDigest(validated.finalDigest()).setFinalMessageId(999L).setState(ChatDeliberationStates.FINAL_PERSISTED);
             var scope=new ChatTypedDeliberationStore.Scope("0","owner","client","42",1);
             var parentAdmission=new ChatTypedDeliberationStore.Admission("parent-admit",scope,"parent-key",digest('b'),digest('c'),"DISCUSSION","task",3,null,null,"parent",1,901,
-                    CanonicalContextJson.write(List.of(d.turnId())),parentContext.admissionEnvelopeJson(),"ADMITTED",0,1,1);
+                    CanonicalContextJson.write(List.of(d.turnId())),parentCatalog,"ADMITTED",0,1,1);
             var stored=new ChatTypedDeliberationStore.Outcome("parent-outcome",scope,"parent",1,d.turnId(),"task",3,999,validated.finalDigest(),"ACTION_REQUEST","继续处理",
-                    CanonicalContextJson.write(bound),CanonicalContextJson.write(ChatActionFinalValidator.factsMap(validated.dispatchFacts())),"unused-in-fixture",parentContext.admissionEnvelopeJson(),1);
+                    CanonicalContextJson.write(bound),CanonicalContextJson.write(ChatActionFinalValidator.factsMap(validated.dispatchFacts())),"unused-in-fixture",parentCatalog,1);
             action=new ChatActionFinalService.BoundAction(stored,parentAdmission,validated);
         }
         ChatMessageEntity user(){return messages.getFirst();}
