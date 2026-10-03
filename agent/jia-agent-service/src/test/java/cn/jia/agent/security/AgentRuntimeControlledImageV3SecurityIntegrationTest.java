@@ -74,7 +74,7 @@ class AgentRuntimeControlledImageV3SecurityIntegrationTest {
         assertEquals(403,mvc.perform(nativeInputsRequest().header("Origin","https://browser.invalid")).andReturn().getResponse().getStatus());
         assertEquals(401,mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(
           "/internal/agent/tasks/task-1/runs/run-1/conversation/inputs-v3").contentType("application/json")
-          .content("{}"))).andReturn().getResponse().getStatus());
+          .content("{}")).andReturn().getResponse().getStatus());
         org.mockito.Mockito.verifyNoInteractions(executions);
         org.mockito.Mockito.when(executions.conversationInputsV3(org.mockito.ArgumentMatchers.any(),
           org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.any()))
