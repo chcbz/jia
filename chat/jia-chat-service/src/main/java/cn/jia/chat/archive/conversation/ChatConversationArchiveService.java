@@ -215,7 +215,7 @@ public final class ChatConversationArchiveService {
         AssetRef asset = command.assetRef();
         long now = System.currentTimeMillis();
         Operation proposed = operation(command, scope, requestSha, now, null,
-                asset.assetId(), asset.revision(), null, null, null, null, null, null);
+                asset.assetId(), asset.revision(), null, null, null, null, null, null, null);
         if (store.tryInsert(proposed)) return proposed;
         existing = existingByKey(scope, command, requestSha);
         if (existing != null) return existing;
