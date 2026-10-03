@@ -35,6 +35,8 @@ class PersonalWorkspaceConversationExecutionTest {
     private final AgentTaskExecutionGrantService grants=mock(AgentTaskExecutionGrantService.class);
     private final AgentTaskMutationTransaction transactions=mock(AgentTaskMutationTransaction.class);
     private final WorkspaceConversationAccessService conversation=mock(WorkspaceConversationAccessService.class);
+    private final ControlledImageFollowupAuthorityService followup=mock(ControlledImageFollowupAuthorityService.class);
+    private final ControlledImageExecutionSourceV3Dao followupSources=mock(ControlledImageExecutionSourceV3Dao.class);
     private PersonalWorkspaceExecutionServiceImpl service;
     private AgentTaskMetaEntity root;
     private PersonalWorkspaceExecutionEntity execution;
@@ -49,6 +51,7 @@ class PersonalWorkspaceConversationExecutionTest {
                 mock(PersonalWorkspaceTaskLinkDao.class),runtimes,storage,writes,
                 new PersonalWorkspaceExecutionProperties(List.of("image/png")));
         service.setConversationAdmission(grants,transactions);
+        service.setControlledImageFollowupV3(followup,followupSources);
         service.setTaskExecutionDependencies(conversation,mock(AgentTaskWorkItemDao.class),
                 mock(AgentWorkItemLeaseService.class));
         root=new AgentTaskMetaEntity().setTaskId("task-1").setAssignedAgentId("agent").setTaskVersion(7L);
@@ -547,6 +550,70 @@ class PersonalWorkspaceConversationExecutionTest {
         verifyNoInteractions(writes);
     }
 
+
+    @Test void v3ConsumedResultStagesAndCommitsWithResultAuthorityOnly() throws Exception {
+        enable();startedV3();byte[] bytes=png();String hash=sha(bytes);
+        when(storage.store(any(),any(byte[].class),eq("image/png")))
+                .thenReturn(new PersonalWorkspaceStorage.StoredObject("private/result",hash,bytes.length,"image/png"));
+        when(rows.lockOutput("0","client","owner","exec-1","output_1"))
+                .thenAnswer(ignored -> output);
+        doAnswer(invocation -> { output=invocation.getArgument(0);return null; })
+                .when(rows).insertOutput(any());
+        when(rows.lockOutputs("0","client","owner","exec-1"))
+                .thenAnswer(ignored -> List.of(output));
+        when(storage.read(any(),eq("private/result"),eq(hash),eq((long)bytes.length),eq("image/png")))
+                .thenReturn(new PersonalWorkspaceStorage.StoredContent(bytes,hash,bytes.length,"image/png"));
+        var fence=new PersonalWorkspaceExecutionService.ConversationFence(1,"lease-token");
+
+        var staged=service.stageConversationOutput(RUNTIME,"task-1","run-1",fence,
+                "output_1","bird.png","image/png",bytes);
+        String manifest="pwe_m_"+sha(("task-1\nrun-1\noutput_1\n"+hash+"\n"+bytes.length+"\n")
+                .getBytes(StandardCharsets.UTF_8));
+        var committed=service.commitConversationOutput(RUNTIME,"task-1","run-1",fence,manifest,
+                List.of(new PersonalWorkspaceExecutionService.OutputDeclaration("output_1",hash,bytes.length)));
+
+        assertEquals(hash,staged.sha256());
+        assertEquals("COMMITTED",committed.state());
+        assertEquals("OUTPUT_COMMITTED",execution.getExecutionState());
+        verify(followup,times(2)).runtimeAuthority(argThat(scope -> "runtime".equals(scope.runtimeInstanceId())),
+                eq("task-1"),eq("run-1"),eq("RESULT"));
+        verifyNoInteractions(followupSources,writes);
+    }
+
+    @Test void v3ConsumedResultFailureUsesResultAuthorityAndKeepsProviderStartFact() {
+        enable();startedV3();long startedAt=execution.getConversationProviderStartedAt();
+        var result=service.failConversation(RUNTIME,"task-1","run-1",
+                new PersonalWorkspaceExecutionService.ConversationFence(1,"lease-token"),
+                "AGENT_DELIVERY_FAILED");
+
+        assertEquals("FAILED",result.state());
+        assertEquals(startedAt,execution.getConversationProviderStartedAt());
+        assertEquals(1L,execution.getConversationProviderLeaseVersion());
+        verify(followup).runtimeAuthority(any(),eq("task-1"),eq("run-1"),eq("RESULT"));
+        verify(rows).update(execution);
+        verify(storage,never()).store(any(),any(byte[].class),anyString());
+    }
+
+    @Test void v3ResultStillRejectsStaleFenceAndCurrentConversationAclRevocation() throws Exception {
+        enable();startedV3();byte[] bytes=png();
+        var stale=assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                () -> service.stageConversationOutput(RUNTIME,"task-1","run-1",
+                        new PersonalWorkspaceExecutionService.ConversationFence(2,"lease-token"),
+                        "output_1","bird.png","image/png",bytes));
+        assertEquals(PersonalWorkspaceExecutionService.Reason.TASK_CONFLICT,stale.getReason());
+        verify(storage,never()).store(any(),any(byte[].class),anyString());
+
+        reset(conversation);
+        when(conversation.requireAccessible(any(),eq("42")))
+                .thenThrow(new IllegalStateException("conversation ACL revoked"));
+        var denied=assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                () -> service.failConversation(RUNTIME,"task-1","run-1",
+                        new PersonalWorkspaceExecutionService.ConversationFence(1,"lease-token"),
+                        "AGENT_DELIVERY_FAILED"));
+        assertEquals(PersonalWorkspaceExecutionService.Reason.NOT_FOUND,denied.getReason());
+        verify(rows,never()).update(execution);
+    }
+
     @Test void nativeClaimIsIdempotentWhileLiveAndNewVersionFencesExpiredAttempt() {
         enable();
         var first=service.claimConversationStart(RUNTIME,"task-1","run-1",commandId(),messageId());
@@ -593,6 +660,23 @@ class PersonalWorkspaceConversationExecutionTest {
         verify(rows).insertOutput(argThat(out -> "CONVERSATION".equals(out.getOutputPurpose())
                 && out.getWorkspaceFileId()==null && out.getArtifactId()==null));
         verifyNoInteractions(writes);
+    }
+
+
+    private void startedV3() {
+        execution.setExecutionProtocolVersion(3)
+                .setControlledConsentId("consent_1234567890abcdef1234567890abcdef")
+                .setOperationGrantId("opgrant_1234567890abcdef1234567890abcdef")
+                .setRuntimeInputSnapshotDigest("7".repeat(64))
+                .setConversationLeaseToken("lease-token").setConversationLeaseRuntimeId("runtime")
+                .setConversationLeaseVersion(1L).setConversationLeaseExpiresAt(Long.MAX_VALUE)
+                .setConversationProviderStartedAt(10L).setConversationProviderLeaseVersion(1L);
+        when(followup.runtimeAuthority(any(),eq("task-1"),eq("run-1"),eq("RESULT")))
+                .thenReturn(new ControlledImageFollowupAuthorityService.RuntimeAuthority(
+                        "exec-1","GENERATE_IMAGE","7".repeat(64),
+                        new ControlledImageFollowupAuthorityService.ProviderExecution(
+                                "CONTROLLED_IMAGE_HTTP_V1",execution.getControlledConsentId(),
+                                "binding","1","model",16,1,1)));
     }
 
     private void enable() { ReflectionTestUtils.setField(service,"conversationExecutionEnabled",true); }

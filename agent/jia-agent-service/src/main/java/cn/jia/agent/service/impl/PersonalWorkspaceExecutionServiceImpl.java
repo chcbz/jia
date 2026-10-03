@@ -585,7 +585,11 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             var grantScope=new AgentTaskExecutionGrantService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());
             if(Objects.equals(3,execution.getExecutionProtocolVersion())) {
                 if(followupAuthority==null||runtimeInstanceId==null)throw failure(Reason.CAPABILITY_UNAVAILABLE);
-                String authorityPurpose="EXISTING_RUN".equals(purpose)?"EXISTING_RUN":"COMMAND";
+                String authorityPurpose=switch(purpose) {
+                    case "EXISTING_RUN" -> "EXISTING_RUN";
+                    case "RESULT" -> "RESULT";
+                    default -> "COMMAND";
+                };
                 var exact=followupAuthority.runtimeAuthority(new ControlledImageFollowupAuthorityService.RuntimeScope(
                         scope.tenantId(),scope.clientId(),scope.ownerJiacn(),execution.getTargetAgentId(),runtimeInstanceId),
                         execution.getTaskId(),execution.getRunId(),authorityPurpose);
@@ -1436,7 +1440,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     public StagedOutput stageConversationOutput(RuntimeScope scope, String taskId, String runId,
             ConversationFence fence, String outputId, String filename, String mimeType, byte[] content) {
         requireConversationExecutionEnabled();
-        return withConversationRoot(scope,taskId,runId,true,execution -> {
+        return withConversationRoot(scope,taskId,runId,true,false,false,"RESULT",execution -> {
             requireConversationFence(scope,execution,fence,false);
             requireControlledV3StartedForResult(execution);
             return stageOutputLocked(scope,execution,outputId,filename,mimeType,content);
@@ -1448,7 +1452,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     public CommitView commitConversationOutput(RuntimeScope scope, String taskId, String runId,
             ConversationFence fence, String manifestId, List<OutputDeclaration> outputs) {
         requireConversationExecutionEnabled();id(manifestId,"manifestId",100);validateManifest(outputs);
-        return withConversationRoot(scope,taskId,runId,true,true,false,execution -> {
+        return withConversationRoot(scope,taskId,runId,true,true,false,"RESULT",execution -> {
             requireConversationFence(scope,execution,fence,"OUTPUT_COMMITTED".equals(execution.getExecutionState()));
             requireControlledV3StartedForResult(execution);
             return commitConversationOutputs(scope,execution,manifestId,outputs);
@@ -1460,7 +1464,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     public ExecutionView failConversation(RuntimeScope scope, String taskId, String runId,
             ConversationFence fence, String code) {
         requireConversationExecutionEnabled();runtimeFailureCode(code);
-        return withConversationRoot(scope,taskId,runId,true,false,true,execution -> {
+        return withConversationRoot(scope,taskId,runId,true,false,true,"RESULT",execution -> {
             requireConversationFence(scope,execution,fence,"FAILED".equals(execution.getExecutionState()));
             return failLocked(scope,execution);
         });
@@ -1643,10 +1647,15 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     /** Root -> grant admission -> execution/output; no execution-to-task lock inversion. */
     private <T> T withConversationRoot(RuntimeScope scope,String taskId,String runId,boolean lock,
             java.util.function.Function<PersonalWorkspaceExecutionEntity,T> action) {
-        return withConversationRoot(scope,taskId,runId,lock,false,false,action);
+        return withConversationRoot(scope,taskId,runId,lock,false,false,"EXISTING_RUN",action);
     }
     private <T> T withConversationRoot(RuntimeScope scope,String taskId,String runId,boolean lock,
             boolean allowCommitted,boolean allowFailed,
+            java.util.function.Function<PersonalWorkspaceExecutionEntity,T> action) {
+        return withConversationRoot(scope,taskId,runId,lock,allowCommitted,allowFailed,"EXISTING_RUN",action);
+    }
+    private <T> T withConversationRoot(RuntimeScope scope,String taskId,String runId,boolean lock,
+            boolean allowCommitted,boolean allowFailed,String controlledPostStartPurpose,
             java.util.function.Function<PersonalWorkspaceExecutionEntity,T> action) {
         validateRuntimeScope(scope);id(taskId,"taskId",100);id(runId,"runId",100);
         if (taskMutations==null || conversationGrants==null) throw failure(Reason.CAPABILITY_UNAVAILABLE);
@@ -1662,7 +1671,9 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                     boolean controlled=candidate.getControlledConsentId()!=null;
                     String purpose=controlled
                             ? candidate.getConversationProviderStartedAt()==null
-                                ? "PROVIDER_START" : "EXISTING_RUN"
+                                ? "PROVIDER_START"
+                                : Objects.equals(3,candidate.getExecutionProtocolVersion())
+                                    ? controlledPostStartPurpose : "EXISTING_RUN"
                             : "NEW_EXECUTION";
                     if (controlled) requireConversationGrant(owner,candidate,purpose,
                             Objects.equals(3,candidate.getExecutionProtocolVersion())?scope.runtimeInstanceId()
