@@ -751,7 +751,7 @@ public class ChatDeliberationService {
         requireIdentity(tenantId, 50); requireIdentity(ownerJiacn, 50); requireIdentity(clientId, 50);
         requireIdentity(conversationId, MAX_ID);
         if (generation < 1) throw invalid("Invalid event cursor");
-        requireLockedConversation(tenantId, ownerJiacn, clientId, conversationId, generation);
+        requireReadableConversation(tenantId, ownerJiacn, clientId, conversationId, generation);
         return dao.eventHighWatermark(tenantId, ownerJiacn, clientId, conversationId, generation);
     }
 
@@ -770,7 +770,7 @@ public class ChatDeliberationService {
         requireIdentity(conversationId, MAX_ID);
         if (generation < 1 || afterSequence < 0 || throughSequence < afterSequence
                 || limit < 1 || limit > 500) throw invalid("Invalid event cursor");
-        requireLockedConversation(tenantId, ownerJiacn, clientId, conversationId, generation);
+        requireReadableConversation(tenantId, ownerJiacn, clientId, conversationId, generation);
         return dao.replayEvents(tenantId, ownerJiacn, clientId, conversationId, generation,
                 afterSequence, throughSequence, limit);
     }
@@ -1304,6 +1304,21 @@ public class ChatDeliberationService {
         }
     }
 
+    /** Event replay is read-only: SELECT FOR UPDATE is rejected by MySQL read-only transactions.
+     * Keep the same exact owner/tenant/lifecycle fence without acquiring a mutation lock.
+     * Admission, cancellation and result mutations continue to use requireLockedConversation.
+     */
+    private ChatConversationEntity requireReadableConversation(String tenantId, String owner, String client,
+            String conversationId, long generation) {
+        ChatConversationEntity conversation;
+        try {
+            conversation = conversationDao.findScopedById(owner, client, conversationId);
+        } catch (RuntimeException e) {
+            throw unavailable();
+        }
+        return requireConversationGeneration(conversation, tenantId, generation);
+    }
+
     private ChatConversationEntity requireLockedConversation(String tenantId, String owner, String client,
             String conversationId, long generation) {
         ChatConversationEntity conversation;
@@ -1312,6 +1327,11 @@ public class ChatDeliberationService {
         } catch (RuntimeException e) {
             throw unavailable();
         }
+        return requireConversationGeneration(conversation, tenantId, generation);
+    }
+
+    private ChatConversationEntity requireConversationGeneration(ChatConversationEntity conversation,
+            String tenantId, long generation) {
         if (conversation == null || conversation.getDeletedAt() != null
                 || !tenantId.equals(conversation.getTenantId())
                 || conversation.getLifecycleGeneration() == null
