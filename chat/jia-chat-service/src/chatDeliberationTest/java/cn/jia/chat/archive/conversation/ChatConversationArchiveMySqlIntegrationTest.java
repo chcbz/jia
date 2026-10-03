@@ -198,6 +198,49 @@ class ChatConversationArchiveMySqlIntegrationTest {
     }
 
     @Test
+    void migrationResumesAfterPartialAdditiveDdlWithoutRewritingLegacyOperation() {
+        jdbc.execute("DROP TABLE chat_conversation_archive_operation");
+        createLegacyOperationTable();
+        jdbc.update("""
+                INSERT INTO chat_conversation_archive_operation
+                  (operation_id,tenant_id,owner_jiacn,client_id,conversation_id,
+                   conversation_generation,idempotency_key,request_sha256,asset_id,asset_revision,
+                   state,row_revision,created_at,updated_at)
+                VALUES ('arc_interrupted','0','owner','client','42',3,
+                        'archive-interrupted-1',?,'asset_interrupted',1,'PENDING',1,1,1)
+                """, "a".repeat(64));
+        // Model a process interruption after committed MySQL DDL, before the remaining steps.
+        jdbc.execute("""
+                ALTER TABLE chat_conversation_archive_operation
+                ADD COLUMN source_kind VARCHAR(20) NOT NULL DEFAULT 'assetRef' AFTER request_sha256
+                """);
+        jdbc.execute("""
+                ALTER TABLE chat_conversation_archive_operation
+                ADD COLUMN message_id VARCHAR(20) DEFAULT NULL AFTER asset_revision
+                """);
+        jdbc.execute("""
+                ALTER TABLE chat_conversation_archive_operation
+                MODIFY COLUMN asset_id VARCHAR(64) DEFAULT NULL
+                """);
+        var before = jdbc.queryForMap("""
+                SELECT operation_id,asset_id,asset_revision,state,row_revision,request_sha256,
+                       created_at,updated_at FROM chat_conversation_archive_operation
+                WHERE operation_id='arc_interrupted'
+                """);
+        var initializer = new ChatConversationArchiveSchemaInitializer(
+                jdbc, mock(ChatSchemaReadiness.class));
+        assertDoesNotThrow(initializer::afterPropertiesSet);
+        assertEquals(before, jdbc.queryForMap("""
+                SELECT operation_id,asset_id,asset_revision,state,row_revision,request_sha256,
+                       created_at,updated_at FROM chat_conversation_archive_operation
+                WHERE operation_id='arc_interrupted'
+                """));
+        String resumed = showCreate();
+        assertDoesNotThrow(initializer::afterPropertiesSet);
+        assertEquals(resumed, showCreate());
+    }
+
+    @Test
     void sourceUnionRejectsSqlUnknownForEveryRequiredTextFieldAndAssetRevision() {
         var text = transactions.required(() ->
                 store.findAuthorizedTextSourceForUpdate(OWNER, "42", 1675335L));
