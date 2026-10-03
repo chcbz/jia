@@ -29,6 +29,9 @@ public class ControlledImageFollowupAuthorityServiceImpl implements ControlledIm
  private final ObjectProvider<RuntimeSourceAccessLookup> sourceAccess;
  private ControlledImageBridgeOperationDao initialOperations;
  private AgentTaskExecutionGrantDao resultGrants;
+ private static final ObjectMapper ORDINARY_DIGEST_JSON=tools.jackson.databind.json.JsonMapper.builder()
+   .enable(tools.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS)
+   .enable(tools.jackson.databind.MapperFeature.SORT_PROPERTIES_ALPHABETICALLY).build();
  private final ObjectMapper json;
  @Inject public ControlledImageFollowupAuthorityServiceImpl(AgentTaskMutationTransaction tx,
    AgentTaskExecutionGrantService grants,AgentTaskProviderCostConsentDao consents,
@@ -95,11 +98,11 @@ public class ControlledImageFollowupAuthorityServiceImpl implements ControlledIm
   hash(command.originalUserContentSha256());hash(command.interactionRequestDigest());
   id(command.executionId(),100);id(command.runId(),100);
   var p=command.preview();
-  String originDigest=sha(write(Map.of("schemaVersion",3,"origin","ORDINARY_ACTION",
+  String originDigest=ordinaryDigest(Map.of("schemaVersion",3,"origin","ORDINARY_ACTION",
     "actionRequestId",command.actionRequestId(),"parentOutcomeId",command.parentOutcomeId(),
     "parentFinalDigest",command.parentFinalDigest(),"originalUserMessageId",Long.toString(command.originalUserMessageId()),
     "originalUserContentSha256",command.originalUserContentSha256(),"ownerPayloadSha256",p.ownerPayloadSha256(),
-    "interactionRequestDigest",command.interactionRequestDigest(),"previewSha256",sha(write(p)))));
+    "interactionRequestDigest",command.interactionRequestDigest(),"previewSha256",ordinaryDigest(p))));
   return tx.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),p.taskId(),root->{
   // This proof is supplied by the Chat owner, not by the model or an external controller.
   // Acquire the root before Chat checks and before grant writes. The caller transaction
@@ -483,6 +486,8 @@ public class ControlledImageFollowupAuthorityServiceImpl implements ControlledIm
  private static boolean reservedOrConsumed(String state){return "RESERVED".equals(state)||"CONSUMED".equals(state);}
  private static boolean same(Object a,Object b){return Objects.equals(a,b);}
  private static boolean sameHash(String a,String b){return a!=null&&b!=null&&MessageDigest.isEqual(a.getBytes(StandardCharsets.US_ASCII),b.getBytes(StandardCharsets.US_ASCII));}
+ private static String ordinaryDigest(Object value){try{return sha(ORDINARY_DIGEST_JSON.writeValueAsString(value));}
+  catch(Exception error){throw fail(Reason.UNAVAILABLE,error);}}
  private String write(Object v){try{return json.writeValueAsString(v);}catch(Exception e){throw fail(Reason.UNAVAILABLE,e);}}
  private static String sha(String v){try{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(v.getBytes(StandardCharsets.UTF_8)));}catch(Exception e){throw new IllegalStateException(e);}}
  private static Failure fail(Reason r){return new Failure(r);}private static Failure fail(Reason r,Throwable c){return new Failure(r,c);}

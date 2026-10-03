@@ -97,6 +97,22 @@ class ControlledImageIntentOperationGrantServiceTest {
         verify(consents,never()).insert(any());verify(operationGrants,never()).insert(any());verify(executions,never()).insert(any());
     }
 
+    @Test void ordinaryOriginAndPreviewDigestsUseCanonicalOrderAcrossJvmMapAndRecordOrdering() throws Exception {
+        var rows=ordinaryStore();var command=ordinary();service.admitOrdinaryAction(scope,command,()->{});
+        var mapper=tools.jackson.databind.json.JsonMapper.builder()
+                .enable(tools.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS)
+                .enable(tools.jackson.databind.MapperFeature.SORT_PROPERTIES_ALPHABETICALLY).build();
+        var fields=new java.util.LinkedHashMap<String,Object>();
+        fields.put("schemaVersion",3);fields.put("origin","ORDINARY_ACTION");fields.put("actionRequestId",command.actionRequestId());
+        fields.put("parentOutcomeId",command.parentOutcomeId());fields.put("parentFinalDigest",command.parentFinalDigest());
+        fields.put("originalUserMessageId",Long.toString(command.originalUserMessageId()));fields.put("originalUserContentSha256",command.originalUserContentSha256());
+        fields.put("ownerPayloadSha256",command.preview().ownerPayloadSha256());fields.put("interactionRequestDigest",command.interactionRequestDigest());
+        fields.put("previewSha256",sha(mapper.writeValueAsString(command.preview())));
+        assertEquals(sha(mapper.writeValueAsString(fields)),rows.operation.get().getIssueRequestDigest());
+        var reverse=new java.util.LinkedHashMap<String,Object>();new java.util.ArrayList<>(fields.keySet()).reversed().forEach(key->reverse.put(key,fields.get(key)));
+        assertEquals(sha(mapper.writeValueAsString(reverse)),rows.operation.get().getIssueRequestDigest());
+    }
+
     @Test void exactIssueReplayPrecedesBaselinePolicyAndLateChecks() {
         var row=operationGrant("issue-key","a".repeat(64));
         when(operationGrants.lockByIssueKey("0","client","owner","task","issue-key")).thenReturn(row);

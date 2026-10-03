@@ -96,7 +96,7 @@ class PersonalWorkspaceControlledImageV3ExecutionTest {
    }
    var domain=Map.of("schemaVersion",1,"executionId","execution","taskId","task","runId","run","conversationId","conversation",
      "operation",operation,"noReferencedMaterials",false,"inputs",inputs);
-   String serialized=(String)canonical.invoke(null,domain);
+   String serialized=tools.jackson.databind.json.JsonMapper.builder().enable(tools.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS).build().writeValueAsString(domain);
    String digest=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(serialized.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
    var execution=new PersonalWorkspaceExecutionEntity().setExecutionId("execution").setTaskId("task").setRunId("run")
      .setConversationId("conversation").setPermittedOperation(operation).setExecutionProtocolVersion(3).setRuntimeInputSnapshotDigest(digest);
