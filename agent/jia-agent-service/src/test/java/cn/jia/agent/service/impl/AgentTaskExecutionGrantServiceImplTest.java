@@ -138,8 +138,8 @@ class AgentTaskExecutionGrantServiceImplTest {
         for(int i=0;i<33;i++)first.add(pointMaterial("output-"+i,1,"OUTPUT","text/plain")
                 .setCreatedAt(100L).setRelationId(String.format("r%02d",i)));
         when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(first);
-        when(links.list("0","client","owner","task-1",100L,"r32",33))
-                .thenReturn(List.of(pointMaterial("late-input",1,"INPUT","audio/ogg")));
+        var late=pointMaterial("late-input",1,"INPUT","audio/ogg");
+        when(links.list("0","client","owner","task-1",100L,"r32",33)).thenReturn(List.of(late));
         var receipt=service.assignForDeliberation(scope(),"task-1","point-page","agent-1",0,1);
         assertEquals("late-input",receipt.getInputs().getFirst().fileId());
     }
