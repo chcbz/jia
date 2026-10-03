@@ -130,6 +130,8 @@ class ChatBountyAssetProjectorTest {
                 event.setEventSequence(9L);return write.apply("event");}).when(f.events).insertEvent(any());
             doAnswer(i->write.apply("version")).when(f.events).assignEventVersion(9L);
             try(var context=new org.springframework.context.annotation.AnnotationConfigApplicationContext()) {
+                context.getEnvironment().getPropertySources().addFirst(new org.springframework.core.env.MapPropertySource(
+                        "terminal-test", java.util.Map.of("chat.bounty-asset.enabled", "true")));
                 context.register(ChatActionExecutionTransactionTest.TxConfig.class);
                 context.registerBean("transactionManager",org.springframework.jdbc.datasource.DataSourceTransactionManager.class,
                         ()->new org.springframework.jdbc.datasource.DataSourceTransactionManager(source));
