@@ -13,8 +13,10 @@ import org.mockito.ArgumentCaptor;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -156,6 +158,35 @@ class ChatConversationArchiveServiceTest {
     }
 
     @Test
+    void retryNeverHoldsOperationAndMessageLocksInTheSameTransaction() {
+        readyText("1675335", 7, BIRD);
+        ChatConversationArchiveService tracked = new ChatConversationArchiveService(store,
+                new TrackingTransactions(store.events), executions, workspace);
+        store.failNextSavedUpdate = true;
+        assertThrows(ChatConversationArchiveException.class,
+                () -> tracked.archive(OWNER,
+                        text("archive-text-lock-order", "1675335", 0, 4, BIRD)));
+
+        store.events.clear();
+        assertEquals("saved", tracked.archive(OWNER,
+                text("archive-text-lock-order", "1675335", 0, 4, BIRD)).state());
+
+        List<String> transaction = new ArrayList<>();
+        for (String event : store.events) {
+            if ("tx:start".equals(event)) transaction.clear();
+            else if ("tx:end".equals(event)) {
+                assertFalse(transaction.contains("operation:key")
+                                && transaction.contains("source:message"),
+                        "retry must not acquire operation then source in one transaction: "
+                                + store.events);
+            } else transaction.add(event);
+        }
+        assertEquals(List.of("tx:start", "operation:key", "tx:end",
+                        "tx:start", "source:message", "tx:end"),
+                store.events.subList(0, 6), store.events.toString());
+    }
+
+    @Test
     void sourceRevocationStopsUnknownResponseRetryBeforeAnotherWorkspaceCall() {
         readyText("1675335", 7, BIRD);
         store.failNextSavedUpdate = true;
@@ -227,7 +258,25 @@ class ChatConversationArchiveServiceTest {
         catch (Exception impossible) { throw new IllegalStateException(impossible); }
     }
 
+    private static final class TrackingTransactions implements ChatConversationArchiveTransactions {
+        private final List<String> events;
+
+        private TrackingTransactions(List<String> events) {
+            this.events = events;
+        }
+
+        @Override public <T> T required(java.util.function.Supplier<T> action) {
+            events.add("tx:start");
+            try {
+                return action.get();
+            } finally {
+                events.add("tx:end");
+            }
+        }
+    }
+
     private static final class FakeStore implements ChatConversationArchiveStore {
+        private final List<String> events = new ArrayList<>();
         private final Map<String, Operation> byOperation = new LinkedHashMap<>();
         private final Map<String, Source> sources = new LinkedHashMap<>();
         private final Map<String, TextSource> textSources = new LinkedHashMap<>();
@@ -246,6 +295,7 @@ class ChatConversationArchiveServiceTest {
             return true;
         }
         @Override public Operation lockByIdempotencyKey(Scope scope, String key) {
+            events.add("operation:key");
             return byOperation.values().stream().filter(row -> scope(scope, row)
                     && row.idempotencyKey().equals(key)).findFirst().orElse(null);
         }
@@ -259,6 +309,7 @@ class ChatConversationArchiveServiceTest {
                     && snapshot.equals(row.sourceSnapshotKey())).findFirst().orElse(null);
         }
         @Override public Operation lockByOperationId(Scope scope, String conversation, String operation) {
+            events.add("operation:id");
             return findByOperationId(scope, conversation, operation);
         }
         @Override public Operation findByOperationId(Scope scope, String conversation, String operation) {
@@ -273,6 +324,7 @@ class ChatConversationArchiveServiceTest {
         }
         @Override public TextSource findAuthorizedTextSourceForUpdate(
                 Scope scope, String conversation, long messageId) {
+            events.add("source:message");
             if (!OWNER.equals(scope)) return null;
             TextSource row = textSources.get(Long.toString(messageId));
             return row != null && conversation.equals(row.conversationId()) ? row : null;

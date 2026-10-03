@@ -411,6 +411,7 @@ def mmdU3ConversationArchiveSourceSet = sourceSets.create('mmdU3ConversationArch
         srcDir 'src/chatDeliberationTest/java'
         include 'cn/jia/chat/archive/conversation/ChatConversationArchiveServiceTest.java'
         include 'cn/jia/chat/archive/conversation/ChatConversationArchiveMySqlTestGuard.java'
+        include 'cn/jia/chat/archive/conversation/ChatConversationArchiveMySqlTestGuardTest.java'
         include 'cn/jia/chat/archive/conversation/ChatConversationArchiveMySqlIntegrationTest.java'
         include 'cn/jia/chat/api/ChatConversationArchiveControllerTest.java'
         include 'cn/jia/chat/config/ChatConversationArchiveContractTest.java'

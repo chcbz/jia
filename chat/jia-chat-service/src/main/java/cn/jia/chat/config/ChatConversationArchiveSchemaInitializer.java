@@ -63,11 +63,38 @@ public final class ChatConversationArchiveSchemaInitializer implements Initializ
             "idx_chat_archive_conversation", new Index(false,
                     List.of("tenant_id", "owner_jiacn", "client_id", "conversation_id",
                             "updated_at", "operation_id")));
-    private static final Set<String> CHECKS = Set.of("chk_chat_archive_asset_revision",
-            "chk_chat_archive_generation", "chk_chat_archive_key_length",
-            "chk_chat_archive_request_sha", "chk_chat_archive_state",
-            "chk_chat_archive_row_revision", "chk_chat_archive_source_union",
-            "chk_chat_archive_saved_receipt");
+    static final Map<String, String> CHECKS = Map.ofEntries(
+            Map.entry("chk_chat_archive_asset_revision",
+                    "asset_revision IS NULL OR asset_revision>=1"),
+            Map.entry("chk_chat_archive_generation",
+                    "conversation_generation IS NULL OR conversation_generation>=1"),
+            Map.entry("chk_chat_archive_key_length",
+                    "CHAR_LENGTH(idempotency_key) BETWEEN 8 AND 160"),
+            Map.entry("chk_chat_archive_request_sha",
+                    "request_sha256 REGEXP '^[0-9a-f]{64}$'"),
+            Map.entry("chk_chat_archive_state",
+                    "state IN ('PENDING','SAVING','SAVED','PARTIAL_FAILED')"),
+            Map.entry("chk_chat_archive_row_revision", "row_revision>=1"),
+            Map.entry("chk_chat_archive_source_union", """
+                    (source_kind='assetRef' AND asset_id IS NOT NULL AND asset_revision>=1
+                      AND message_id IS NULL AND message_revision IS NULL
+                      AND selection_start_code_point IS NULL AND selection_end_code_point IS NULL
+                      AND source_sha256 IS NULL AND source_snapshot_key IS NULL AND source_text IS NULL)
+                    OR
+                    (source_kind='textSelection' AND asset_id IS NULL AND asset_revision IS NULL
+                      AND conversation_generation>=1
+                      AND message_id REGEXP '^[1-9][0-9]{0,18}$' AND message_revision>=1
+                      AND selection_start_code_point>=0
+                      AND selection_end_code_point>selection_start_code_point
+                      AND source_sha256 REGEXP '^[0-9a-f]{64}$'
+                      AND source_snapshot_key REGEXP '^[0-9a-f]{64}$'
+                      AND source_text IS NOT NULL AND OCTET_LENGTH(source_text)>0
+                      AND CHAR_LENGTH(source_text)=selection_end_code_point-selection_start_code_point)
+                    """),
+            Map.entry("chk_chat_archive_saved_receipt", """
+                    state<>'SAVED' OR (conversation_generation>=1 AND workspace_operation_id IS NOT NULL
+                      AND file_id IS NOT NULL AND file_version>=1)
+                    """));
 
     private final JdbcTemplate jdbc;
     private final ChatSchemaReadiness schemaReadiness;
@@ -153,17 +180,29 @@ public final class ChatConversationArchiveSchemaInitializer implements Initializ
         }
 
         List<Map<String, Object>> checks = jdbc.queryForList("""
-                SELECT tc.constraint_name,tc.enforced
+                SELECT tc.constraint_name,tc.enforced,cc.check_clause
                 FROM information_schema.table_constraints tc
+                JOIN information_schema.check_constraints cc
+                  ON cc.constraint_catalog=tc.constraint_catalog
+                 AND cc.constraint_schema=tc.constraint_schema
+                 AND cc.constraint_name=tc.constraint_name
                 WHERE tc.constraint_schema=DATABASE() AND tc.table_name=?
                   AND tc.constraint_type='CHECK'
                 """, TABLE);
         Map<String, String> actualChecks = new LinkedHashMap<>();
-        for (Map<String, Object> row : checks)
-            actualChecks.put(text(row, "constraint_name"), text(row, "enforced"));
-        for (String check : CHECKS) {
-            if (!"YES".equalsIgnoreCase(actualChecks.get(check)))
-                throw new IllegalStateException("Conversation archive check drift: " + check);
+        for (Map<String, Object> row : checks) {
+            String name = text(row, "constraint_name");
+            if (name == null || !"YES".equalsIgnoreCase(text(row, "enforced"))
+                    || actualChecks.put(name, normalizeCheck(text(row, "check_clause"))) != null) {
+                throw new IllegalStateException("Conversation archive check catalog drift");
+            }
+        }
+        if (!actualChecks.keySet().equals(CHECKS.keySet()))
+            throw new IllegalStateException("Conversation archive check set drift");
+        for (Map.Entry<String, String> expected : CHECKS.entrySet()) {
+            if (!normalizeCheck(expected.getValue()).equals(actualChecks.get(expected.getKey())))
+                throw new IllegalStateException("Conversation archive check definition drift: "
+                        + expected.getKey());
         }
     }
 
@@ -182,6 +221,98 @@ public final class ChatConversationArchiveSchemaInitializer implements Initializ
         DataSource dataSource = jdbc.getDataSource();
         if (dataSource == null) throw new IllegalStateException("Conversation archive DataSource is unavailable");
         return dataSource;
+    }
+
+
+    static String normalizeCheck(String source) {
+        String canonical = ChatTypedDeliberationSchemaInitializer.canonicalCheck(source);
+        // MySQL 8 may catalog the REGEXP operator as REGEXP_LIKE(...). Treat only that
+        // syntax rewrite as equivalent; the identifiers and literal patterns remain exact.
+        canonical = canonical.replaceAll(
+                "regexp_like\\(([a-z0-9_]+),('(?:''|[^'])*')\\)", "$1regexp$2");
+        return normalizeAtomicParentheses(stripOuterParentheses(canonical));
+    }
+
+    private static String normalizeAtomicParentheses(String value) {
+        String current = value;
+        boolean changed;
+        do {
+            changed = false;
+            int[] stack = new int[current.length()];
+            int size = 0;
+            for (int index = 0; index < current.length(); index++) {
+                char character = current.charAt(index);
+                if (character == '\'') {
+                    while (index + 1 < current.length() && current.charAt(index + 1) != '\'') index++;
+                    continue;
+                }
+                if (character == '(') stack[size++] = index;
+                else if (character == ')' && size > 0) {
+                    int open = stack[--size];
+                    if (groupingParenthesis(current, open)
+                            && !containsTopLevelBoolean(current, open + 1, index)) {
+                        current = current.substring(0, open) + current.substring(open + 1, index)
+                                + current.substring(index + 1);
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+        } while (changed);
+        return current;
+    }
+
+    private static boolean groupingParenthesis(String value, int open) {
+        if (open == 0) return true;
+        char previous = value.charAt(open - 1);
+        return !(Character.isLetterOrDigit(previous) || previous == '_');
+    }
+
+    private static boolean containsTopLevelBoolean(String value, int start, int end) {
+        int depth = 0;
+        boolean quote = false;
+        for (int index = start; index < end; index++) {
+            char character = value.charAt(index);
+            if (character == '\'') {
+                if (quote && index + 1 < end && value.charAt(index + 1) == '\'') index++;
+                else quote = !quote;
+                continue;
+            }
+            if (quote) continue;
+            if (character == '(') depth++;
+            else if (character == ')') depth--;
+            else if (depth == 0 && (value.startsWith("and", index) || value.startsWith("or", index)))
+                return true;
+        }
+        return false;
+    }
+
+    private static String stripOuterParentheses(String value) {
+        String current = value;
+        while (current.length() >= 2 && current.charAt(0) == '('
+                && current.charAt(current.length() - 1) == ')'
+                && outerPairCoversWhole(current)) {
+            current = current.substring(1, current.length() - 1);
+        }
+        return current;
+    }
+
+    private static boolean outerPairCoversWhole(String value) {
+        int depth = 0;
+        boolean quote = false;
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            if (character == '\'') {
+                if (quote && index + 1 < value.length() && value.charAt(index + 1) == '\'') index++;
+                else quote = !quote;
+            } else if (!quote && character == '(') depth++;
+            else if (!quote && character == ')') {
+                depth--;
+                if (depth == 0 && index < value.length() - 1) return false;
+                if (depth < 0) return false;
+            }
+        }
+        return depth == 0 && !quote;
     }
 
     private static Set<String> difference(Set<String> expected, Set<String> actual) {

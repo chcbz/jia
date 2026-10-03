@@ -46,6 +46,38 @@ SET @ddl := IF((SELECT is_nullable FROM information_schema.columns WHERE table_s
   'ALTER TABLE chat_conversation_archive_operation MODIFY COLUMN asset_revision BIGINT DEFAULT NULL', 'SELECT 1');
 PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
+-- Tighten only the two exact legacy checks whose intended definition changed. Unknown
+-- same-named definitions remain untouched and are rejected by the Java initializer; migration must
+-- never turn unrecognized drift into an apparently valid schema.
+SET @legacy_check := (SELECT REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+    LOWER(cc.check_clause),'`',''),' ',''),CHAR(9),''),CHAR(10),''),CHAR(13),''),'(',''),')','')
+  FROM information_schema.check_constraints cc
+  JOIN information_schema.table_constraints tc
+    ON tc.constraint_schema=cc.constraint_schema AND tc.constraint_name=cc.constraint_name
+  WHERE tc.constraint_schema=@cyf_schema AND tc.table_name='chat_conversation_archive_operation'
+    AND tc.constraint_type='CHECK' AND tc.constraint_name='chk_chat_archive_asset_revision');
+SET @ddl := IF((SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema=@cyf_schema
+  AND table_name='chat_conversation_archive_operation' AND constraint_name='chk_chat_archive_asset_revision')=0,
+  'ALTER TABLE chat_conversation_archive_operation ADD CONSTRAINT chk_chat_archive_asset_revision CHECK (asset_revision IS NULL OR asset_revision>=1)',
+  IF(@legacy_check='asset_revision>=1',
+    'ALTER TABLE chat_conversation_archive_operation DROP CHECK chk_chat_archive_asset_revision, ADD CONSTRAINT chk_chat_archive_asset_revision CHECK (asset_revision IS NULL OR asset_revision>=1)',
+    'SELECT 1'));
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @legacy_check := (SELECT REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+    LOWER(cc.check_clause),'`',''),' ',''),CHAR(9),''),CHAR(10),''),CHAR(13),''),'(',''),')','')
+  FROM information_schema.check_constraints cc
+  JOIN information_schema.table_constraints tc
+    ON tc.constraint_schema=cc.constraint_schema AND tc.constraint_name=cc.constraint_name
+  WHERE tc.constraint_schema=@cyf_schema AND tc.table_name='chat_conversation_archive_operation'
+    AND tc.constraint_type='CHECK' AND tc.constraint_name='chk_chat_archive_request_sha');
+SET @ddl := IF((SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema=@cyf_schema
+  AND table_name='chat_conversation_archive_operation' AND constraint_name='chk_chat_archive_request_sha')=0,
+  'ALTER TABLE chat_conversation_archive_operation ADD CONSTRAINT chk_chat_archive_request_sha CHECK (request_sha256 REGEXP ''^[0-9a-f]{64}$'')',
+  IF(@legacy_check='char_lengthrequest_sha256=64',
+    'ALTER TABLE chat_conversation_archive_operation DROP CHECK chk_chat_archive_request_sha, ADD CONSTRAINT chk_chat_archive_request_sha CHECK (request_sha256 REGEXP ''^[0-9a-f]{64}$'')',
+    'SELECT 1'));
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 SET @ddl := IF((SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=@cyf_schema
   AND table_name='chat_conversation_archive_operation' AND index_name='uk_chat_archive_source_snapshot')=0,
   'CREATE UNIQUE INDEX uk_chat_archive_source_snapshot ON chat_conversation_archive_operation (tenant_id,owner_jiacn,client_id,source_snapshot_key)', 'SELECT 1');

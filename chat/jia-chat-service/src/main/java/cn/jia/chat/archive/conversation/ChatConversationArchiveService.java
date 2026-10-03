@@ -150,6 +150,13 @@ public final class ChatConversationArchiveService {
         Operation claimed = prepared.operation();
         if ("SAVED".equals(claimed.state())) return receipt(claimed);
 
+        // Never hold an archive-operation row lock while acquiring the source-message lock.
+        // New claims use source -> operation; retries recheck source authority in this separate
+        // transaction before the operation CAS, preventing an operation -> source inversion.
+        transactions.required(() -> {
+            requireCurrentTextAuthority(scope, command, claimed);
+            return null;
+        });
         Operation saving = transactions.required(() -> markSaving(scope, command.conversationId(),
                 claimed.operationId(), prepared.conversationGeneration()));
         if ("SAVED".equals(saving.state())) return receipt(saving);
@@ -220,9 +227,8 @@ public final class ChatConversationArchiveService {
     private PreparedText prepareText(Scope scope, Command command, String requestSha) {
         Operation existing = existingByKey(scope, command, requestSha);
         if (existing != null) {
-            if ("SAVED".equals(existing.state())) return new PreparedText(existing, null);
-            requireCurrentTextAuthority(scope, command, existing);
-            return preparedFromPersisted(existing);
+            return "SAVED".equals(existing.state())
+                    ? new PreparedText(existing, null) : preparedFromPersisted(existing);
         }
 
         TextMaterial material = resolveText(scope, command);
@@ -236,7 +242,6 @@ public final class ChatConversationArchiveService {
 
         existing = existingByKey(scope, command, requestSha);
         if (existing != null) {
-            if (!"SAVED".equals(existing.state())) requireCurrentTextAuthority(scope, command, existing);
             return "SAVED".equals(existing.state())
                     ? new PreparedText(existing, null) : preparedFromPersisted(existing);
         }

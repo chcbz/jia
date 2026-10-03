@@ -67,11 +67,8 @@ class ChatSchemaReadinessLifecycleTest {
             "idx_chat_archive_conversation", new IndexSpec(false,
                     List.of("tenant_id", "owner_jiacn", "client_id", "conversation_id",
                             "updated_at", "operation_id")));
-    private static final Set<String> OPERATION_CHECKS = Set.of("chk_chat_archive_asset_revision",
-            "chk_chat_archive_generation", "chk_chat_archive_key_length",
-            "chk_chat_archive_request_sha", "chk_chat_archive_state",
-            "chk_chat_archive_row_revision", "chk_chat_archive_source_union",
-            "chk_chat_archive_saved_receipt");
+    private static final Map<String, String> OPERATION_CHECKS =
+            ChatConversationArchiveSchemaInitializer.CHECKS;
 
     @Test
     void legacyInitializingBeanReproducesFailureBeforeApplicationRunnersExecute() {
@@ -140,6 +137,33 @@ class ChatSchemaReadinessLifecycleTest {
         assertEquals(1, state.coreAttempts);
         assertEquals(1, state.deliberationAttempts);
         assertFalse(state.archiveTableCreated, state.events.toString());
+    }
+
+    @Test
+    void archiveCheckNormalizationAcceptsOnlyMySqlRegexpRenderingEquivalence() {
+        assertEquals(
+                ChatConversationArchiveSchemaInitializer.normalizeCheck(
+                        "request_sha256 REGEXP '^[0-9a-f]{64}$'"),
+                ChatConversationArchiveSchemaInitializer.normalizeCheck(
+                        "REGEXP_LIKE(`request_sha256`, _utf8mb4'^[0-9a-f]{64}$')"));
+        assertNotEquals(
+                ChatConversationArchiveSchemaInitializer.normalizeCheck(
+                        "request_sha256 REGEXP '^[0-9a-f]{64}$'"),
+                ChatConversationArchiveSchemaInitializer.normalizeCheck(
+                        "REGEXP_LIKE(`request_sha256`, _utf8mb4'^[0-9A-F]{64}$')"));
+    }
+
+    @Test
+    void archiveCheckDefinitionDriftStillFailsClosedAfterSourcesBecomeReady() {
+        LifecycleState state = new LifecycleState();
+        state.archiveCheckDrift = true;
+
+        Exception failure = assertThrows(Exception.class, () -> runApplication(state, false));
+
+        assertTrue(messageChain(failure).contains("Conversation archive check definition drift"),
+                messageChain(failure));
+        assertEquals(1, state.coreAttempts);
+        assertEquals(1, state.deliberationAttempts);
     }
 
     @Test
@@ -237,6 +261,7 @@ class ChatSchemaReadinessLifecycleTest {
         private boolean archiveTableCreated;
         private boolean sourceColumnDrift;
         private boolean archiveIndexDrift;
+        private boolean archiveCheckDrift;
     }
 
     private static final class RecordingChatSchemaInitializer extends ChatSchemaInitializer {
@@ -356,8 +381,11 @@ class ChatSchemaReadinessLifecycleTest {
                 return rows;
             }
             if (normalized.contains("from information_schema.table_constraints")) {
-                return OPERATION_CHECKS.stream()
-                        .map(name -> row("constraint_name", name, "enforced", "YES"))
+                return OPERATION_CHECKS.entrySet().stream()
+                        .map(entry -> row("constraint_name", entry.getKey(), "enforced", "YES",
+                                "check_clause", state.archiveCheckDrift
+                                        && "chk_chat_archive_source_union".equals(entry.getKey())
+                                                ? "1=1" : entry.getValue()))
                         .toList();
             }
             throw new AssertionError("Unexpected metadata query: " + sql);
