@@ -26,7 +26,7 @@ class HostingRentHttpTest {
     private static final String KEY = "00000000-0000-0000-0000-000000000001";
     private static final String QUOTES = "/agent/personas/wuyong/hosting-rent/quotes";
     private static final String BIND = "/agent/personas/wuyong/bind";
-    private static final HostingRentHttp.Actor ACTOR = new HostingRentHttp.Actor("Login-A", "Tenant-A", "Client-A");
+    private static final HostingRentHttp.Actor ACTOR = new HostingRentHttp.Actor("Login-A", "0", "Client-A", "Tenant-A");
     private final HostingRentApplicationService application = mock(HostingRentApplicationService.class);
     private final AgentService agents = mock(AgentService.class);
     private final AgentPersonaProvisioningService provisioning = mock(AgentPersonaProvisioningService.class);
@@ -135,7 +135,7 @@ class HostingRentHttpTest {
                         .content("{\"mode\":\"local\"}"))
                 .andExpect(status().isOk());
         var scope = new cn.jia.agent.service.AgentHostedBindingTransaction.Scope(
-                "Tenant-A", "Client-A", "Tenant-A");
+                "0", "Client-A", "Tenant-A");
         verify(provisioning, times(2)).bind(scope, "wuyong", null);
         verify(provisioning).bind(scope, "wuyong", " ");
         verify(provisioning, times(2)).bind(scope, "wuyong", "local");

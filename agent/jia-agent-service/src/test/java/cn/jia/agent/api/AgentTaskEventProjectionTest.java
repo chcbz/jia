@@ -24,12 +24,13 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AgentTaskEventProjectionTest {
-    private static final String TENANT = "tenant-a";
+    private static final String TENANT = "0";
+    private static final String OWNER = "owner-a";
     private static final String CLIENT = "client-a";
     private static final String TASK = "task-1";
     private static final String ACTOR = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private static final String OTHER = "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    private static final TaskScope SCOPE = new TaskScope(TENANT, CLIENT, TENANT, TASK);
+    private static final TaskScope SCOPE = new TaskScope(TENANT, CLIENT, OWNER, TASK);
 
     @Test
     void visibleProjectionHasOnlyFrozenFieldsExactDecimalStringsAndAllowedPayload() {
@@ -143,7 +144,7 @@ class AgentTaskEventProjectionTest {
                             taskCreated(1, "evt-1", numericTaskPayload(invalidNumber))));
         }
         DurableEvent crossScope = new DurableEvent(
-                new TaskScope(TENANT, "client-b", TENANT, TASK), 1, "evt-1",
+                new TaskScope(TENANT, "client-b", OWNER, TASK), 1, "evt-1",
                 TaskEventType.TASK_CREATED, "system", null, "task", TASK,
                 validTaskPayload(), 1234);
         assertThrows(IllegalArgumentException.class, () -> AgentTaskEventProjection.project(
@@ -193,7 +194,7 @@ class AgentTaskEventProjectionTest {
     }
 
     private static AuthorizedSubject subject(String role, String coordinator) {
-        return new AuthorizedSubject(TENANT, CLIENT, TASK, ACTOR, role, coordinator);
+        return new AuthorizedSubject(TENANT, CLIENT, OWNER, TASK, ACTOR, role, coordinator);
     }
 
     private static String numericTaskPayload(String resultVersion) {

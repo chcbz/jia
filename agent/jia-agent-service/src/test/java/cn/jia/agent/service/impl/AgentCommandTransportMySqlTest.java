@@ -45,7 +45,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** D02 transaction, failure, idempotency, and lock-order evidence on isolated MySQL 8.0.21. */
 @EnabledIfEnvironmentVariable(named = "D02_MYSQL_URL", matches = ".+")
 class AgentCommandTransportMySqlTest {
-    private static final String TENANT = "tenant-a";
+    private static final String OWNER = "owner-a";
+    private static final String TENANT = "0";
     private static final String CLIENT = "client-a";
     private static final String TASK = "task-1";
     private static final String TARGET = "agent-1";
@@ -320,10 +321,10 @@ class AgentCommandTransportMySqlTest {
 
     private AgentCommandDraft draft(String title) {
         String commandId = AgentCommandCanonicalCodec.taskInviteCommandId(
-                TENANT, CLIENT, TASK, TARGET);
+                TENANT, CLIENT, OWNER, TASK, TARGET);
         return new AgentCommandDraft(
                 AgentCommandCanonicalCodec.SCHEMA_VERSION, commandId, TASK, EVENT,
-                TENANT, CLIENT, TASK, null, TARGET,
+                TENANT, CLIENT, OWNER, TASK, null, TARGET,
                 AgentProtocolConstants.COMMAND_TASK_INVITE,
                 OCCURRED_AT, OCCURRED_AT + AgentCommandCanonicalCodec.TASK_INVITE_TTL_MILLIS,
                 new AgentTaskInvitePayload(

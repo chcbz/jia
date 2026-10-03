@@ -17,13 +17,14 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AgentCommandBrokerRedrivePolicyTest {
+    private static final String OWNER = "owner-a";
     private static final long NOW = 1_700_000_000_000L;
     private static final long ISSUED = NOW - 1_000L;
     private static final long EXPIRES = ISSUED + AgentCommandCanonicalCodec.HALL_COMMAND_TTL_MILLIS;
     private static final String MESSAGE = "11111111-1111-1111-1111-111111111111";
     private static final String PARENT = "22222222-2222-2222-2222-222222222222";
     private static final String COMMAND = AgentCommandCanonicalCodec.hallCommandId(
-            "tenant-a", "client-a", "task-1", "agent-a", "intent-1",
+            "0", "client-a", OWNER, "task-1", "agent-a", "intent-1",
             AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE);
     private final AgentRabbitTopologyManifest manifest = AgentRabbitTopologyManifest.canonical();
     private final AgentCommandBrokerRedrivePolicy policy = new AgentCommandBrokerRedrivePolicy();
@@ -131,7 +132,7 @@ class AgentCommandBrokerRedrivePolicyTest {
     private AgentCommandBrokerRedrivePolicy.Evaluation evaluate(
             Fixture fixture, String ownOperationId) {
         return policy.evaluate(new AgentCommandBrokerRedrivePolicy.SourceBundle(
-                        "tenant-a", "client-a", 1L, "task-1", "agent-a", MESSAGE,
+                        "0", "client-a", 1L, "task-1", "agent-a", MESSAGE,
                         fixture.delivery, fixture.active, fixture.current, fixture.previous,
                         null, fixture.blockers),
                 NOW, manifest.defaultCommandPublishRoute(), manifest.sha256(), ownOperationId);
@@ -149,7 +150,8 @@ class AgentCommandBrokerRedrivePolicyTest {
                 .setCommandPayloadHash(AgentCommandCanonicalCodec.sha256(business))
                 .setStatus("PUBLISHED").setAttemptCount(1).setActiveMessageId(MESSAGE)
                 .setActiveAttempt(1).setExpiresAt(EXPIRES).setVersion(1L);
-        delivery.setTenantId("tenant-a"); delivery.setClientId("client-a");
+        delivery.setOwnerJiacn(OWNER);
+        delivery.setTenantId("0"); delivery.setClientId("client-a");
         delivery.setCreateTime(NOW - 20); delivery.setUpdateTime(NOW - 5);
         AgentOutboxEventEntity outbox = outbox(
                 2L, "event-1", MESSAGE, wire, 1, null, null, null, null);
@@ -188,7 +190,7 @@ class AgentCommandBrokerRedrivePolicyTest {
                 .setMandatoryReturnStatus("NOT_RETURNED").setPublishedAt(NOW - 9)
                 .setVersion(1L).setReplayParentMessageId(parent).setReplayRequesterId(requester)
                 .setReplayApproverId(approver).setReplayReason(reason);
-        outbox.setTenantId("tenant-a"); outbox.setClientId("client-a");
+        outbox.setTenantId("0"); outbox.setClientId("client-a");
         outbox.setCreateTime(NOW - 20); outbox.setUpdateTime(NOW - 4);
         return outbox;
     }
@@ -214,13 +216,13 @@ class AgentCommandBrokerRedrivePolicyTest {
                 .setSettlementState(AgentCommandRedriveSettlementState.PENDING)
                 .setRequestedAt(NOW - 100).setVersion(0L)
                 .setDispositionGuard(1).setRedriveGuard(1);
-        operation.setTenantId("tenant-a"); operation.setClientId("client-a");
+        operation.setTenantId("0"); operation.setClientId("client-a");
         return operation;
     }
 
     private AgentCommandDraft draft() {
         return new AgentCommandDraft(
-                1, COMMAND, "task-1", "intent-1", "tenant-a", "client-a", "task-1",
+                1, COMMAND, "task-1", "intent-1", "0", "client-a", OWNER, "task-1",
                 "work-1", "agent-a", AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE,
                 ISSUED, EXPIRES, "intent-1", new AgentHallCommandPayload(
                         "execute", "Execute bounded work", "juyiting",

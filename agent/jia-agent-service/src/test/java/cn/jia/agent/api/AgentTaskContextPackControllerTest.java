@@ -63,30 +63,44 @@ class AgentTaskContextPackControllerTest extends BaseMockTest {
         poisoned.setJiacn("cookie-tenant");
         poisoned.setClientId("cookie-client");
         EsContextHolder.setContext(poisoned);
-        when(service.generate("tenant-a", "client-a", TASK, ACTOR, "9"))
-                .thenReturn(pack("tenant-a", "client-a", "9"));
+        when(service.generate("0", "client-a", "tenant-a", TASK, ACTOR, "9"))
+                .thenReturn(pack("0", "client-a", "9"));
 
         mvc.perform(get("/agent/tasks/{taskId}/context-pack", TASK)
                         .queryParam("expectedVersion", "9").principal(jwt(ACTOR)))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
-                .andExpect(jsonPath("$.provenance.tenantId").value("tenant-a"))
+                .andExpect(jsonPath("$.provenance.tenantId").value("0"))
                 .andExpect(jsonPath("$.provenance.clientId").value("client-a"))
                 .andExpect(jsonPath("$.provenance.taskId").value(TASK))
                 .andExpect(jsonPath("$.provenance.actorAgentId").value(ACTOR));
-        verify(service).generate("tenant-a", "client-a", TASK, ACTOR, "9");
+        verify(service).generate("0", "client-a", "tenant-a", TASK, ACTOR, "9");
+    }
+
+    @Test
+    void differentJwtOwnersUseDistinctScopeWithinSharedTenant() throws Exception {
+        for (String owner : List.of("owner-a", "owner-b")) {
+            when(service.generate("0", "client-a", owner, TASK, ACTOR, "9"))
+                    .thenReturn(pack("0", "client-a", "9"));
+            mvc.perform(get("/agent/tasks/{taskId}/context-pack", TASK)
+                            .queryParam("expectedVersion", "9")
+                            .principal(jwtClaims(owner, "client-a", ACTOR, ACTOR)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.provenance.tenantId").value("0"));
+            verify(service).generate("0", "client-a", owner, TASK, ACTOR, "9");
+        }
     }
 
     @Test
     void canonicalVersionBoundariesRemainRetrievable() throws Exception {
         for (String version : List.of("0", "9223372036854775807")) {
-            when(service.generate("tenant-a", "client-a", TASK, ACTOR, version))
-                    .thenReturn(pack("tenant-a", "client-a", version));
+            when(service.generate("0", "client-a", "tenant-a", TASK, ACTOR, version))
+                    .thenReturn(pack("0", "client-a", version));
             mvc.perform(get("/agent/tasks/{taskId}/context-pack", TASK)
                             .queryParam("expectedVersion", version).principal(jwt(ACTOR)))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.provenance.currentEventVersion").value(version));
-            verify(service).generate("tenant-a", "client-a", TASK, ACTOR, version);
+            verify(service).generate("0", "client-a", "tenant-a", TASK, ACTOR, version);
         }
     }
 
@@ -193,15 +207,15 @@ class AgentTaskContextPackControllerTest extends BaseMockTest {
 
     @Test
     void gateFailureStaleAndAuthenticatedActorsAclDenialsUseNonLeakingResponses() throws Exception {
-        when(gate.allows("tenant-a", "client-a")).thenReturn(false);
+        when(gate.allows("0", "client-a")).thenReturn(false);
         mvc.perform(get("/agent/tasks/{taskId}/context-pack", TASK).principal(jwt(ACTOR)))
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
                 .andExpect(jsonPath("$.code").value("TASK_CONTEXT_PACK_UNAVAILABLE"));
         verifyNoInteractions(service);
 
-        when(gate.allows("tenant-a", "client-a")).thenReturn(true);
-        when(service.generate("tenant-a", "client-a", TASK, ACTOR, "8"))
+        when(gate.allows("0", "client-a")).thenReturn(true);
+        when(service.generate("0", "client-a", "tenant-a", TASK, ACTOR, "8"))
                 .thenThrow(new AgentTaskContextPackException(
                         AgentTaskContextPackException.Reason.STALE_VERSION));
         mvc.perform(get("/agent/tasks/{taskId}/context-pack", TASK)
@@ -211,7 +225,7 @@ class AgentTaskContextPackControllerTest extends BaseMockTest {
 
         // Each request uses its OWN authenticated subject, never a nominated query actor.
         for (String actor : List.of(ACTOR, "inactive-agent", "foreign-agent", "non-member")) {
-            when(service.generate("tenant-a", "client-a", TASK, actor, null))
+            when(service.generate("0", "client-a", "tenant-a", TASK, actor, null))
                     .thenThrow(new AgentTaskContextPackException(
                             AgentTaskContextPackException.Reason.NOT_FOUND_OR_FORBIDDEN));
             mvc.perform(get("/agent/tasks/{taskId}/context-pack", TASK).principal(jwt(actor)))
@@ -219,7 +233,7 @@ class AgentTaskContextPackControllerTest extends BaseMockTest {
                     .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
                     .andExpect(jsonPath("$.code").value("TASK_CONTEXT_PACK_NOT_FOUND"));
         }
-        when(service.generate("tenant-a", "client-a", "foreign-task", ACTOR, null))
+        when(service.generate("0", "client-a", "tenant-a", "foreign-task", ACTOR, null))
                 .thenThrow(new AgentTaskContextPackException(
                         AgentTaskContextPackException.Reason.NOT_FOUND_OR_FORBIDDEN));
         mvc.perform(get("/agent/tasks/{taskId}/context-pack", "foreign-task").principal(jwt(ACTOR)))
@@ -246,13 +260,13 @@ class AgentTaskContextPackControllerTest extends BaseMockTest {
                 value -> value.getProvenance().setCurrentEventVersion("9223372036854775808"),
                 value -> value.getProvenance().setCurrentEventVersion("8"));
         for (Consumer<AgentTaskContextPackDTO> corrupt : corruptions) {
-            AgentTaskContextPackDTO value = pack("tenant-a", "client-a", "9");
+            AgentTaskContextPackDTO value = pack("0", "client-a", "9");
             value.getTaskDescription().getDescription().setValue("foreign-raw-secret");
             corrupt.accept(value);
-            when(service.generate("tenant-a", "client-a", TASK, ACTOR, "9")).thenReturn(value);
+            when(service.generate("0", "client-a", "tenant-a", TASK, ACTOR, "9")).thenReturn(value);
             assertUnavailableOutput();
         }
-        when(service.generate("tenant-a", "client-a", TASK, ACTOR, "9")).thenReturn(null);
+        when(service.generate("0", "client-a", "tenant-a", TASK, ACTOR, "9")).thenReturn(null);
         assertUnavailableOutput();
     }
 
@@ -268,10 +282,10 @@ class AgentTaskContextPackControllerTest extends BaseMockTest {
 
     @Test
     void serializedResponseAboveBoundFailsClosedInsteadOfTruncating() throws Exception {
-        AgentTaskContextPackDTO result = pack("tenant-a", "client-a", "9");
+        AgentTaskContextPackDTO result = pack("0", "client-a", "9");
         result.getTaskDescription().getDescription().setValue(
                 "x".repeat(AgentTaskContextPackController.MAX_SERIALIZED_BYTES));
-        when(service.generate("tenant-a", "client-a", TASK, ACTOR, null)).thenReturn(result);
+        when(service.generate("0", "client-a", "tenant-a", TASK, ACTOR, null)).thenReturn(result);
         mvc.perform(get("/agent/tasks/{taskId}/context-pack", TASK).principal(jwt(ACTOR)))
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))

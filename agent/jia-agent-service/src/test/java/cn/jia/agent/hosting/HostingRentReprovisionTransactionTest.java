@@ -27,7 +27,7 @@ import static org.mockito.ArgumentMatchers.*;
 class HostingRentReprovisionTransactionTest {
     private static final String AGENT = "agt_0123456789abcdef0123456789abcdef";
     private static final String KEY = "00000000-0000-0000-0000-000000000001";
-    private static final HostingRentHttp.Actor ACTOR = new HostingRentHttp.Actor("login-sub", "Tenant-A", "Client-A");
+    private static final HostingRentHttp.Actor ACTOR = new HostingRentHttp.Actor("login-sub", "0", "Client-A", "Tenant-A");
     private final EconomyHostingRentMapper rent = mock(EconomyHostingRentMapper.class);
     private final HostingRentLedgerService ledger = mock(HostingRentLedgerService.class);
     private final ManagedHostingProvisioner provider = mock(ManagedHostingProvisioner.class);
@@ -48,11 +48,11 @@ class HostingRentReprovisionTransactionTest {
         jdbc.execute("CREATE TABLE free_request(request_id VARCHAR(100) PRIMARY KEY, key_value VARBINARY(36) UNIQUE, hash_value BINARY(32), lease_version BIGINT, paid_through BIGINT, requested_at BIGINT, status VARCHAR(32))");
         initial = new EconomyHostingProvisioningIntentEntity().setIntentId("hri-original").setQuotePurpose("INITIAL")
                 .setStatus("ACTIVE").setAgentId(AGENT).setLeaseId("hrl-one").setPrincipalType("USER").setPrincipalId("login-sub");
-        when(rent.selectInitialIntent("Tenant-A", "Client-A", "hrl-one")).thenReturn(initial);
-        when(rent.selectIntentForUpdate("Tenant-A", "Client-A", "hri-original")).thenAnswer(call -> {
+        when(rent.selectInitialIntent("0", "Client-A", "hrl-one")).thenReturn(initial);
+        when(rent.selectIntentForUpdate("0", "Client-A", "hri-original")).thenAnswer(call -> {
             jdbc.queryForObject("SELECT id FROM initial_root WHERE id=1 FOR UPDATE", Integer.class); return initial;
         });
-        when(rent.selectLeaseForUpdate("Tenant-A", "Client-A", "hrl-one")).thenAnswer(call ->
+        when(rent.selectLeaseForUpdate("0", "Client-A", "hrl-one")).thenAnswer(call ->
                 jdbc.queryForObject("SELECT * FROM lease_root WHERE id=1 FOR UPDATE", (rs, row) -> new EconomyHostingLeaseEntity()
                         .setLeaseId("hrl-one").setAgentId(AGENT).setPersonaCode("wuyong").setBindingId("17")
                         .setPrincipalType("USER").setPrincipalId("login-sub").setStatus(rs.getString("status"))
@@ -74,14 +74,14 @@ class HostingRentReprovisionTransactionTest {
         var binding = new AgentPersonaBindingEntity().setId(17L).setStatus(1).setAgentId(AGENT).setPersonaCode("wuyong").setJiacn("Tenant-A");
         binding.setClientId("Client-A");
         var identity = new AgentIdentityRegistryEntity().setCanonicalAgentId(AGENT).setBindingId(17L);
-        when(identities.requireRegistrationIdentityInScope("Tenant-A", "Client-A", "Tenant-A", AGENT)).thenReturn(identity);
+        when(identities.requireRegistrationIdentityInScope("0", "Client-A", "Tenant-A", AGENT)).thenReturn(identity);
         when(identities.requireActiveBinding(identity, null)).thenReturn(binding);
         var bindings = mock(AgentPersonaBindingDao.class); when(bindings.findByIdForUpdate(17L)).thenReturn(binding);
         ObjectProvider<ManagedHostingProvisioner> providers = mock(ObjectProvider.class); when(providers.getIfAvailable()).thenReturn(provider);
         when(provider.available()).thenReturn(true);
         when(provider.availableFor(anyString(), anyString(), anyString())).thenAnswer(call -> provider.available());
         app = new HostingRentApplicationService(new AgentHostingRentProperties(true, null, null, null),
-                new EconomyPreviewGate(new EconomyPreviewProperties(true, List.of(new EconomyPreviewProperties.AllowedScope("Tenant-A", "Client-A")))),
+                new EconomyPreviewGate(new EconomyPreviewProperties(true, List.of(new EconomyPreviewProperties.AllowedScope("0", "Client-A")))),
                 owners, rent, ledger, mock(AgentHostingRentBindingMapper.class), bindings, mock(AgentRuntimeDao.class), identities,
                 providers, reconciler, new DataSourceTransactionManager(dataSource), true);
     }
