@@ -155,7 +155,7 @@ class ChatBountyExecutionTerminationMySqlTest {
         assertEquals("3",receipt.stepStateVersion());assertTrue(receipt.providerAlreadyStarted());
         assertFalse(receipt.providerStopped());assertTrue(receipt.paidFactsPreserved());
         assertEquals(before,paidFields());assertEquals("FAILED",executionState());
-        assertEquals(ChatBountyExecutionTerminationService.REASON,
+        assertEquals("AGENT_DELIVERY_FAILED",
                 jdbc.queryForObject("SELECT failure_code FROM agent_personal_workspace_execution",String.class));
         assertEquals(receipt,inTx(()->service.get(OWNER,"req",KEY)));
         assertEquals(receipt,abandon());assertEquals(1,countEvents());
@@ -227,10 +227,9 @@ class ChatBountyExecutionTerminationMySqlTest {
     }
 
     @Test void actualStagedBytesBlockAbandonmentEvenBeforeExecutionProjectionChanges() throws Exception {
-        stage();assertEquals("OUTPUT_STAGED",executionState());
-        fail(Reason.CONFLICT,this::abandon);
-        // Exercise the independent output-row guard, including a stale execution projection.
-        jdbc.update("UPDATE agent_personal_workspace_execution SET execution_state='QUEUED'");
+        stage();assertEquals("QUEUED",executionState());
+        // Conversation stage stores bytes without changing execution_state: guard the actual output.
+        assertEquals("STAGED",jdbc.queryForObject("SELECT output_state FROM agent_personal_workspace_execution_output",String.class));
         fail(Reason.CONFLICT,this::abandon);assertEquals("RUNNING",requestState());assertEquals(0,countEvents());
     }
 
@@ -267,7 +266,8 @@ class ChatBountyExecutionTerminationMySqlTest {
         }else{
             assertFalse(stageResult instanceof Exception,String.valueOf(stageResult));
             assertInstanceOf(Failure.class,abandonResult);assertEquals(Reason.CONFLICT,((Failure)abandonResult).reason());
-            assertEquals("OUTPUT_STAGED",executionState());assertEquals("RUNNING",requestState());assertEquals(0,countEvents());
+            assertEquals("QUEUED",executionState());assertEquals("RUNNING",requestState());assertEquals(0,countEvents());
+            assertEquals("STAGED",jdbc.queryForObject("SELECT output_state FROM agent_personal_workspace_execution_output",String.class));
         }
     }
 

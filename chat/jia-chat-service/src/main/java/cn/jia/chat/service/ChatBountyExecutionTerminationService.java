@@ -32,6 +32,9 @@ import java.util.Objects;
 @ConditionalOnProperty(prefix="chat.bounty-media",name="enabled",havingValue="true")
 public class ChatBountyExecutionTerminationService {
     public static final String REASON = "OWNER_ABANDONED_UNDELIVERED";
+    // Execution FAILED means delivery did not complete, not that Provider generation was cancelled.
+    // Keep its existing schema/API code; the immutable journal carries the specific owner decision.
+    private static final String DELIVERY_FAILURE_CODE = "AGENT_DELIVERY_FAILED";
     public enum Reason { INVALID_REQUEST, NOT_FOUND_OR_FORBIDDEN, CONFLICT, UNAVAILABLE }
     public static final class Failure extends RuntimeException {
         private final Reason reason;
@@ -119,7 +122,7 @@ public class ChatBountyExecutionTerminationService {
                     WHERE BINARY tenant_id=BINARY ? AND BINARY client_id=BINARY ? AND BINARY owner_jiacn=BINARY ?
                       AND BINARY execution_id=BINARY ? AND execution_state='QUEUED'
                       AND conversation_provider_started_at=? AND conversation_provider_lease_version=?
-                    """,REASON,now,scope.tenantId(),scope.clientId(),scope.ownerJiacn(),row.executionId(),
+                    """,DELIVERY_FAILURE_CODE,now,scope.tenantId(),scope.clientId(),scope.ownerJiacn(),row.executionId(),
                     execution.providerStartedAt(),execution.providerLeaseVersion())!=1)throw fail(Reason.CONFLICT);
             if(jdbc.update("""
                     UPDATE chat_interaction_step SET state='CANCELLED',state_version=state_version+1,updated_at=?
