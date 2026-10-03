@@ -97,13 +97,54 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
         migrateConsent();
         migrateExecution();
         validateNewTable(OPERATION_GRANT_TABLE, operationGrantColumns(), operationGrantIndexes(),
-                OPERATION_GRANT_CHECKS);
-        validateNewTable(SOURCE_TABLE, sourceColumns(), sourceIndexes(), SOURCE_CHECKS);
+                materialCheckExpectation(OPERATION_GRANT_TABLE, OPERATION_GRANT_CHECKS, legacyOperationGrantCheckExpressions()));
+        validateNewTable(SOURCE_TABLE, sourceColumns(), sourceIndexes(),
+                materialCheckExpectation(SOURCE_TABLE, SOURCE_CHECKS, legacySourceCheckExpressions()));
         validateConsentExtension(true);
         validateExecutionExtension();
         // Validate the complete existing catalog before the single purpose-union extension.
         migrateOrdinaryActionPurpose();
+        migrateUnifiedMaterialSources();
         validateConsentExtension(false);
+        validateNewTable(OPERATION_GRANT_TABLE, operationGrantColumns(), operationGrantIndexes(), OPERATION_GRANT_CHECKS);
+        validateNewTable(SOURCE_TABLE, sourceColumns(), sourceIndexes(), SOURCE_CHECKS);
+    }
+
+    /** Accept only the complete known old/current catalog; this is a narrow in-place widening,
+     * not permission to ignore drift or to rewrite selected task roles. */
+    private Map<String,String> materialCheckExpectation(String table, Map<String,String> current, Map<String,String> legacy) {
+        var observed=checks(table);var expected=new LinkedHashMap<>(current);
+        for(var row:observed){String name=text(row,"constraint_name");
+            if(legacy.containsKey(name)&&canonicalCheck(legacy.get(name)).equals(canonicalCheck(text(row,"check_clause"))))
+                expected.put(name,legacy.get(name));
+        }
+        validateExactChecks(table,observed,expected);
+        return java.util.Collections.unmodifiableMap(expected);
+    }
+
+    void migrateUnifiedMaterialSources() {
+        // Preflight both before either ALTER. MySQL DDL is not transactional; a stopped migration
+        // resumes only from exact known per-table states and verifies the final catalogs afterward.
+        var operation=materialCheckExpectation(OPERATION_GRANT_TABLE,OPERATION_GRANT_CHECKS,legacyOperationGrantCheckExpressions());
+        var source=materialCheckExpectation(SOURCE_TABLE,SOURCE_CHECKS,legacySourceCheckExpressions());
+        replaceMaterialCheck(OPERATION_GRANT_TABLE,"chk_aciiog_sources",operation,OPERATION_GRANT_CHECKS);
+        replaceMaterialCheck(SOURCE_TABLE,"chk_acies_union",source,SOURCE_CHECKS);
+    }
+
+    private void replaceMaterialCheck(String table,String name,Map<String,String> observed,Map<String,String> expected) {
+        if(canonicalCheck(observed.get(name)).equals(canonicalCheck(expected.get(name))))return;
+        jdbc.execute("ALTER TABLE "+table+" DROP CHECK "+name+", ADD CONSTRAINT "+name+" CHECK ("+expected.get(name)+")");
+    }
+
+    static Map<String,String> legacyOperationGrantCheckExpressions() {
+        var value=new LinkedHashMap<>(OPERATION_GRANT_CHECKS);
+        value.put("chk_aciiog_sources","((json_type(source_snapshot_json)='ARRAY') and (((operation='GENERATE_IMAGE') and (json_length(source_snapshot_json) between 0 and 16) and (json_search(source_snapshot_json,'one','CURRENT_CONVERSATION_ASSET',null,'$[*].kind') is null)) or ((operation='EDIT_IMAGE') and (json_length(source_snapshot_json)=1) and (json_unquote(json_extract(source_snapshot_json,'$[0].kind'))='CURRENT_CONVERSATION_ASSET'))))");
+        return java.util.Collections.unmodifiableMap(value);
+    }
+    static Map<String,String> legacySourceCheckExpressions() {
+        var value=new LinkedHashMap<>(SOURCE_CHECKS);
+        value.put("chk_acies_union",value.get("chk_acies_union").replace("purpose in ('INPUT','REFERENCE')","purpose='REFERENCE'"));
+        return java.util.Collections.unmodifiableMap(value);
     }
 
     private void migrateConsent() {
@@ -539,7 +580,7 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
         checks.put("chk_aciiog_hashes", "(regexp_like(requirement_sha256,cast('^[0-9a-f]{64}$' as char charset binary)) and regexp_like(instruction_sha256,cast('^[0-9a-f]{64}$' as char charset binary)) and regexp_like(source_snapshot_sha256,cast('^[0-9a-f]{64}$' as char charset binary)) and regexp_like(owner_payload_sha256,cast('^[0-9a-f]{64}$' as char charset binary)) and regexp_like(issue_request_digest,cast('^[0-9a-f]{64}$' as char charset binary)) and ((revoke_request_digest is null) or regexp_like(revoke_request_digest,cast('^[0-9a-f]{64}$' as char charset binary))))");
         checks.put("chk_aciiog_versions", "((conversation_generation>0) and (baseline_grant_version>0) and (task_version>=0) and (assignment_revision>=0) and (requirement_revision>0) and (version>0))");
         checks.put("chk_aciiog_operation", "(operation in ('GENERATE_IMAGE','EDIT_IMAGE'))");
-        checks.put("chk_aciiog_sources", "((json_type(source_snapshot_json)='ARRAY') and (((operation='GENERATE_IMAGE') and (json_length(source_snapshot_json) between 0 and 16) and (json_search(source_snapshot_json,'one','CURRENT_CONVERSATION_ASSET',null,'$[*].kind') is null)) or ((operation='EDIT_IMAGE') and (json_length(source_snapshot_json)=1) and (json_unquote(json_extract(source_snapshot_json,'$[0].kind'))='CURRENT_CONVERSATION_ASSET'))))");
+        checks.put("chk_aciiog_sources", "((json_type(source_snapshot_json)='ARRAY') and (((operation='GENERATE_IMAGE') and (json_length(source_snapshot_json) between 0 and 16)) or ((operation='EDIT_IMAGE') and (json_length(source_snapshot_json)=1))))");
         checks.put("chk_aciiog_state", "(state in ('AUTHORIZED','RESERVED','CONSUMED','REVOKED'))");
         checks.put("chk_aciiog_lifecycle", "(((state='AUTHORIZED') and (reserved_execution_id is null) and (reserved_run_id is null) and (consumed_lease_id is null) and (revoke_idempotency_key is null) and (revoke_request_digest is null) and (revoked_at is null)) or ((state='RESERVED') and (reserved_execution_id is not null) and (reserved_run_id is not null) and (consumed_lease_id is null) and (revoke_idempotency_key is null) and (revoke_request_digest is null) and (revoked_at is null)) or ((state='CONSUMED') and (reserved_execution_id is not null) and (reserved_run_id is not null) and (consumed_lease_id is not null) and (revoke_idempotency_key is null) and (revoke_request_digest is null) and (revoked_at is null)) or ((state='REVOKED') and (((reserved_execution_id is null) and (reserved_run_id is null)) or ((reserved_execution_id is not null) and (reserved_run_id is not null))) and (consumed_lease_id is null) and (revoke_idempotency_key is not null) and (revoke_request_digest is not null) and (revoked_at is not null)))");
         return java.util.Collections.unmodifiableMap(checks);
@@ -549,7 +590,7 @@ public final class ControlledImageFollowupV3SchemaInitializer implements Initial
         Map<String, String> checks = new LinkedHashMap<>();
         checks.put("chk_acies_scope", "((tenant_id='0') and (owner_jiacn<>'0'))");
         checks.put("chk_acies_common", "((input_ordinal between 1 and 16) and (content_mime_type in ('image/jpeg','image/png')) and (byte_length>0) and regexp_like(content_sha256,cast('^[0-9a-f]{64}$' as char charset binary)))");
-        checks.put("chk_acies_union", "(((source_kind='TASK_LINKED_WORKSPACE_VERSION') and (file_id is not null) and (file_version>0) and (purpose='REFERENCE') and (conversation_id is null) and (conversation_generation is null) and (asset_id is null) and (asset_revision is null) and (producer_request_id is null) and (producer_request_revision is null) and (producer_step_id is null) and (producer_execution_id is null) and (producer_run_id is null) and (producer_output_id is null)) or ((source_kind='CURRENT_CONVERSATION_ASSET') and (file_id is null) and (file_version is null) and (purpose is null) and (conversation_id is not null) and (conversation_generation>0) and (asset_id is not null) and (asset_revision>0) and (producer_request_id is not null) and (producer_request_revision>0) and (producer_step_id is not null) and (producer_execution_id is not null) and (producer_run_id is not null) and (producer_output_id is not null)))");
+        checks.put("chk_acies_union", "(((source_kind='TASK_LINKED_WORKSPACE_VERSION') and (file_id is not null) and (file_version>0) and (purpose in ('INPUT','REFERENCE')) and (conversation_id is null) and (conversation_generation is null) and (asset_id is null) and (asset_revision is null) and (producer_request_id is null) and (producer_request_revision is null) and (producer_step_id is null) and (producer_execution_id is null) and (producer_run_id is null) and (producer_output_id is null)) or ((source_kind='CURRENT_CONVERSATION_ASSET') and (file_id is null) and (file_version is null) and (purpose is null) and (conversation_id is not null) and (conversation_generation>0) and (asset_id is not null) and (asset_revision>0) and (producer_request_id is not null) and (producer_request_revision>0) and (producer_step_id is not null) and (producer_execution_id is not null) and (producer_run_id is not null) and (producer_output_id is not null)))");
         return java.util.Collections.unmodifiableMap(checks);
     }
 

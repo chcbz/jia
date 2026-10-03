@@ -38,6 +38,41 @@ class ControlledImageFollowupV3SchemaInitializerTest {
         org.mockito.Mockito.verify(jdbc,org.mockito.Mockito.times(1)).execute(org.mockito.ArgumentMatchers.anyString());
     }
 
+    @Test void unifiedSourcesMigrateOnlyExactOldChecksAndResumeFromKnownPartialState() {
+        for(boolean operationAlreadyNew:List.of(false,true)) {
+            var jdbc=org.mockito.Mockito.mock(org.springframework.jdbc.core.JdbcTemplate.class);
+            var operation=rows(operationAlreadyNew?ControlledImageFollowupV3SchemaInitializer.operationGrantCheckExpressions():observedOperationCatalogChecks());
+            var source=rows(observedSourceCatalogChecks());
+            org.mockito.Mockito.when(jdbc.queryForList(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.<Object[]>any()))
+                    .thenAnswer(i->{Object[] args=i.getArguments();return String.valueOf(args[1]).contains("intent_operation_grant")?operation:source;});
+            var initializer=new ControlledImageFollowupV3SchemaInitializer(jdbc);initializer.migrateUnifiedMaterialSources();
+            var sql=org.mockito.ArgumentCaptor.forClass(String.class);
+            org.mockito.Mockito.verify(jdbc,org.mockito.Mockito.times(operationAlreadyNew?1:2)).execute(sql.capture());
+            assertTrue(sql.getAllValues().getLast().contains("purpose in ('INPUT','REFERENCE')"));
+            operation.clear();operation.addAll(rows(ControlledImageFollowupV3SchemaInitializer.operationGrantCheckExpressions()));
+            source.clear();source.addAll(rows(ControlledImageFollowupV3SchemaInitializer.sourceCheckExpressions()));
+            initializer.migrateUnifiedMaterialSources();
+            org.mockito.Mockito.verify(jdbc,org.mockito.Mockito.times(operationAlreadyNew?1:2)).execute(org.mockito.ArgumentMatchers.anyString());
+        }
+    }
+
+    @Test void sourceCatalogDriftFailsBeforeEitherMaterialAlter() {
+        for(String drift:List.of("weak","unenforced","extra","missing")) {
+            var jdbc=org.mockito.Mockito.mock(org.springframework.jdbc.core.JdbcTemplate.class);
+            var source=rows(observedSourceCatalogChecks());
+            switch(drift){
+                case "weak" -> source.getFirst().put("check_clause","1=1");
+                case "unenforced" -> source.getFirst().put("enforced","NO");
+                case "extra" -> source.add(check("unexpected","YES","1=1"));
+                case "missing" -> source.removeFirst();
+            }
+            org.mockito.Mockito.when(jdbc.queryForList(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.<Object[]>any()))
+                    .thenAnswer(i->{Object[] args=i.getArguments();return String.valueOf(args[1]).contains("intent_operation_grant")?rows(observedOperationCatalogChecks()):source;});
+            assertThrows(IllegalStateException.class,()->new ControlledImageFollowupV3SchemaInitializer(jdbc).migrateUnifiedMaterialSources(),drift);
+            org.mockito.Mockito.verify(jdbc,org.mockito.Mockito.never()).execute(org.mockito.ArgumentMatchers.anyString());
+        }
+    }
+
     @Test void featureIsDefaultOffAndDdlHasOnlyTwoExactCreateStatements() {
         ConditionalOnProperty condition=ControlledImageFollowupV3SchemaInitializer.class
                 .getAnnotation(ConditionalOnProperty.class);
@@ -100,9 +135,9 @@ class ControlledImageFollowupV3SchemaInitializerTest {
     @Test void observedMysql8021OwnedChecksAcceptExactLiteralsAndRejectEveryDriftShape() {
         Map<String,String> additive=ControlledImageFollowupV3SchemaInitializer.additiveCheckExpressions();
         assertStrictObservedCatalog("operation",observedOperationCatalogChecks(),
-                ControlledImageFollowupV3SchemaInitializer.operationGrantCheckExpressions());
+                ControlledImageFollowupV3SchemaInitializer.legacyOperationGrantCheckExpressions());
         assertStrictObservedCatalog("source",observedSourceCatalogChecks(),
-                ControlledImageFollowupV3SchemaInitializer.sourceCheckExpressions());
+                ControlledImageFollowupV3SchemaInitializer.legacySourceCheckExpressions());
         assertStrictObservedCatalog("consent",observedConsentCatalogChecks(),Map.of(
                 "chk_atpcc_purpose_union",ControlledImageFollowupV3SchemaInitializer.legacyConsentPurposeCatalogCheckExpression()));
         assertStrictObservedCatalog("execution",observedExecutionCatalogChecks(),Map.of(

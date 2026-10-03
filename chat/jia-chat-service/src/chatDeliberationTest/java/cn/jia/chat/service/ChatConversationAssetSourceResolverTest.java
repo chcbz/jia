@@ -64,6 +64,41 @@ class ChatConversationAssetSourceResolverTest {
         verify(archive).findAuthorizedSourceForUpdate(any(),eq("conversation"),eq("asset"),eq(3L),eq("agent"));
     }
 
+    @Test void ordinaryWorkspaceInputCanGuideGenerationOrBeEditedWithoutChangingItsTaskRole() {
+        var baseline=List.of(new AgentTaskExecutionGrantService.AuthorizedInput("file",2,"INPUT","image/png",9,"a".repeat(64)));
+        var refs=List.of(new ChatConversationAssetSourceResolver.Ref("TASK_LINKED_WORKSPACE_VERSION","file",2,"INPUT",null,null));
+        for(String operation:List.of("GENERATE_IMAGE","EDIT_IMAGE")){
+            var selected=resolver.resolveAction("0","client","owner","conversation",2,"task","agent",operation,refs,baseline);
+            assertEquals("INPUT",selected.getFirst().purpose());assertEquals("a".repeat(64),selected.getFirst().sha256());
+            assertTrue(selected.getFirst().sourceJson().contains("\"purpose\":\"INPUT\""));
+        }
+        verifyNoInteractions(archive,steps);
+        assertThrows(ChatDeliberationException.class,()->resolver.resolveAction("0","client","owner","conversation",2,"task","agent","EDIT_IMAGE",
+                List.of(new ChatConversationAssetSourceResolver.Ref("TASK_LINKED_WORKSPACE_VERSION","file",2,"REFERENCE",null,null)),baseline));
+    }
+
+    @Test void ordinaryGenerationUsesWorkspaceAndExactConversationAssetTogetherInSelectedOrder() {
+        when(archive.findAuthorizedSourceForUpdate(any(),eq("conversation"),eq("asset"),eq(3L),eq("agent"))).thenReturn(asset());
+        var selected=resolver.resolveAction("0","client","owner","conversation",2,"task","agent","GENERATE_IMAGE",
+                List.of(new ChatConversationAssetSourceResolver.Ref("TASK_LINKED_WORKSPACE_VERSION","file",2,"INPUT",null,null),
+                        new ChatConversationAssetSourceResolver.Ref("CURRENT_CONVERSATION_ASSET",null,null,null,"asset",3L)),
+                List.of(new AgentTaskExecutionGrantService.AuthorizedInput("file",2,"INPUT","image/jpeg",7,"a".repeat(64))));
+        assertEquals(List.of("input_1","input_2"),selected.stream().map(ControlledImageFollowupAuthorityService.Source::inputRef).toList());
+        assertEquals("INPUT",selected.getFirst().purpose());assertEquals("execution-parent",selected.getLast().producerExecutionId());
+        assertNull(selected.getLast().purpose());assertEquals("b".repeat(64),selected.getLast().sha256());
+    }
+
+    @Test void unsupportedMaterialPurposeMimeAndForeignAssetNeverBecomeImageInputs() {
+        for(String purpose:List.of("OUTPUT","DELIVERABLE"))assertThrows(ChatDeliberationException.class,()->resolver.resolveAction(
+                "0","client","owner","conversation",2,"task","agent","GENERATE_IMAGE",
+                List.of(new ChatConversationAssetSourceResolver.Ref("TASK_LINKED_WORKSPACE_VERSION","file",2,purpose,null,null)),List.of()));
+        assertThrows(ChatDeliberationException.class,()->resolver.resolveAction("0","client","owner","conversation",2,"task","agent","EDIT_IMAGE",
+                List.of(new ChatConversationAssetSourceResolver.Ref("TASK_LINKED_WORKSPACE_VERSION","file",2,"INPUT",null,null)),
+                List.of(new AgentTaskExecutionGrantService.AuthorizedInput("file",2,"INPUT","audio/wav",7,"a".repeat(64)))));
+        assertThrows(ChatDeliberationException.class,()->resolver.resolveAction("0","client","owner","foreign",2,"task","agent","GENERATE_IMAGE",
+                List.of(new ChatConversationAssetSourceResolver.Ref("CURRENT_CONVERSATION_ASSET",null,null,null,"asset",3L)),List.of()));
+    }
+
     @Test void ordinaryEditDerivesProducerFromAuthorizedAssetWithoutModelSuppliedParent() {
         when(archive.findAuthorizedSourceForUpdate(any(),eq("conversation"),eq("asset"),eq(3L),eq("agent"))).thenReturn(asset());
         var resolved=resolver.resolveAction("0","client","owner","conversation",2,"task","agent","EDIT_IMAGE",

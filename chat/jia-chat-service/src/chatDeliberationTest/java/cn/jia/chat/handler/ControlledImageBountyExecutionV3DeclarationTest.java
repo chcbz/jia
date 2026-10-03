@@ -61,7 +61,7 @@ class ControlledImageBountyExecutionV3DeclarationTest {
         return Map.of("operation",operation,
                 "inputManifest",Map.of("schemaVersion",3,"minItems",edit?1:0,"maxItems",edit?1:16,
                         "mimeTypes",List.of("image/jpeg","image/png"),
-                        "sourceKinds",List.of(edit?"CURRENT_CONVERSATION_ASSET":"TASK_LINKED_WORKSPACE_VERSION")),
+                        "sourceKinds",List.of("TASK_LINKED_WORKSPACE_VERSION","CURRENT_CONVERSATION_ASSET")),
                 "resultManifest",Map.of("schemaVersion",1,"minItems",1,"maxItems",1,
                         "outputId","output_1","mimeTypes",List.of("image/png")));
     }

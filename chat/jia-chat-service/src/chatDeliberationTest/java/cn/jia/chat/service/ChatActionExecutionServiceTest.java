@@ -102,7 +102,7 @@ class ChatActionExecutionServiceTest {
         var command=f.reservations.getFirst(); assertEquals(List.of(source("a")),command.preview().sources());
         assertTrue(f.base.children.values().iterator().next().sourceCatalogJson().contains("source_"+"a".repeat(40)));
         verify(f.sources,times(4)).resolveAction(eq("0"),eq("client"),eq("owner"),eq("42"),eq(1L),eq("task"),eq("agent"),eq("GENERATE_IMAGE"),
-                eq(List.of(new ChatConversationAssetSourceResolver.Ref("TASK_LINKED_WORKSPACE_VERSION","file",1,"REFERENCE",null,null))),anyList());
+                eq(List.of(new ChatConversationAssetSourceResolver.Ref("TASK_LINKED_WORKSPACE_VERSION","file",1,"INPUT",null,null))),anyList());
     }
 
     @Test void lateOriginalUserChangeAndWrongReservedIdentityDoNotPersistChild() {
@@ -126,9 +126,9 @@ class ChatActionExecutionServiceTest {
     }
 
     static ControlledImageFollowupAuthorityService.Source source(String hash) {
-        return new ControlledImageFollowupAuthorityService.Source("input_1","TASK_LINKED_WORKSPACE_VERSION","file",1,"REFERENCE",
+        return new ControlledImageFollowupAuthorityService.Source("input_1","TASK_LINKED_WORKSPACE_VERSION","file",1,"INPUT",
                 null,null,null,null,null,null,null,null,null,null,"image/png",12,hash.repeat(64),
-                "{\"fileId\":\"file\",\"kind\":\"TASK_LINKED_WORKSPACE_VERSION\",\"purpose\":\"REFERENCE\",\"version\":\"1\"}");
+                "{\"fileId\":\"file\",\"kind\":\"TASK_LINKED_WORKSPACE_VERSION\",\"purpose\":\"INPUT\",\"version\":\"1\"}");
     }
 
     static class Fixture {
@@ -145,7 +145,7 @@ class ChatActionExecutionServiceTest {
         final ChatActionExecutionService service;
         Fixture(boolean withSource) {
             base.consumer(); // Install durable admission and task/binding/claim mock storage.
-            var selector=Map.of("kind","TASK_LINKED_WORKSPACE_VERSION","fileId","file","version","1","purpose","REFERENCE");
+            var selector=Map.of("kind","TASK_LINKED_WORKSPACE_VERSION","fileId","file","version","1","purpose","INPUT");
             var catalog=withSource?List.<Map<String,Object>>of(Map.of("sourceRefId","source_"+"a".repeat(40),"selector",selector,
                     "sourceKind","TASK_WORKSPACE_FILE","selectorKind","TASK_LINKED_WORKSPACE_VERSION","mediaType","image",
                     "contentMimeType","image/png","contentHash","a".repeat(64),"byteLength","12")):List.<Map<String,Object>>of();

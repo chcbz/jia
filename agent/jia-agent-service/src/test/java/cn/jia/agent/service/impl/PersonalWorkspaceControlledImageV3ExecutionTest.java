@@ -6,6 +6,10 @@ import org.junit.jupiter.api.Test;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.List;
+import java.util.Map;
+import java.util.ArrayList;
+import cn.jia.agent.entity.ControlledImageExecutionSourceV3Entity;
+import static org.mockito.Mockito.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PersonalWorkspaceControlledImageV3ExecutionTest {
@@ -65,6 +69,67 @@ class PersonalWorkspaceControlledImageV3ExecutionTest {
   assertEquals("4",root.get("inputs").get(0).get("byteLength").textValue());
   return root.get("inputs").get(0).get("source");
  }
+ @Test void ordinarySourcesUseActualRuntimeRowValidationAndHttpProjectionForCrossClientWire() throws Exception {
+  var sourceDao=mock(cn.jia.agent.dao.ControlledImageExecutionSourceV3Dao.class);
+  var implementation=mock(PersonalWorkspaceExecutionServiceImpl.class,CALLS_REAL_METHODS);
+  org.springframework.test.util.ReflectionTestUtils.setField(implementation,"followupSources",sourceDao);
+  byte[] bytes=java.util.Base64.getDecoder().decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGPgEpH7DwABpAE8k4sOtwAAAABJRU5ErkJggg==");
+  String hash=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+  var descriptor=PersonalWorkspaceExecutionServiceImpl.class.getDeclaredMethod("v3SourceDescriptor",ControlledImageExecutionSourceV3Entity.class,String.class);descriptor.setAccessible(true);
+  var rowCheck=PersonalWorkspaceExecutionServiceImpl.class.getDeclaredMethod("verifiedV3SourceRows",PersonalWorkspaceExecutionService.RuntimeScope.class,PersonalWorkspaceExecutionEntity.class);rowCheck.setAccessible(true);
+  var project=PersonalWorkspaceExecutionServiceImpl.class.getDeclaredMethod("runtimeInputV3",ControlledImageExecutionSourceV3Entity.class);project.setAccessible(true);
+  var canonical=PersonalWorkspaceExecutionServiceImpl.class.getDeclaredMethod("v3Json",Object.class);canonical.setAccessible(true);
+  var cases=new ArrayList<Map<String,Object>>();
+  for(String mode:List.of("mixed-generation","workspace-edit","asset-generation")){
+   String operation="workspace-edit".equals(mode)?"EDIT_IMAGE":"GENERATE_IMAGE";
+   var workspace=sourceRow("input_1",1,bytes.length,hash).setSourceKind("TASK_LINKED_WORKSPACE_VERSION").setFileId("file")
+     .setFileVersion(2).setPurpose("INPUT");
+   var asset=sourceRow("mixed-generation".equals(mode)?"input_2":"input_1","mixed-generation".equals(mode)?2:1,bytes.length,hash)
+     .setSourceKind("CURRENT_CONVERSATION_ASSET").setConversationId("conversation").setConversationGeneration(2L)
+     .setAssetId("asset").setAssetRevision(1L).setProducerRequestId("request_previous").setProducerRequestRevision(1L)
+     .setProducerStepId("step_previous").setProducerExecutionId("execution_previous").setProducerRunId("run_previous").setProducerOutputId("output_1");
+   var rows="mixed-generation".equals(mode)?List.of(workspace,asset):List.of("workspace-edit".equals(mode)?workspace:asset);
+   var inputs=new ArrayList<Map<String,Object>>();var nativeInputs=new ArrayList<PersonalWorkspaceExecutionService.RuntimeInputV3>();
+   for(var row:rows){var source=descriptor.invoke(null,row,operation);row.setSourceJson((String)canonical.invoke(null,source));
+    inputs.add(Map.of("inputRef",row.getInputRef(),"source",source,"contentMimeType","image/png","byteLength",Long.toString(row.getByteLength()),"sha256",hash));
+    nativeInputs.add((PersonalWorkspaceExecutionService.RuntimeInputV3)project.invoke(null,row));
+   }
+   var domain=Map.of("schemaVersion",1,"executionId","execution","taskId","task","runId","run","conversationId","conversation",
+     "operation",operation,"noReferencedMaterials",false,"inputs",inputs);
+   String serialized=(String)canonical.invoke(null,domain);
+   String digest=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(serialized.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+   var execution=new PersonalWorkspaceExecutionEntity().setExecutionId("execution").setTaskId("task").setRunId("run")
+     .setConversationId("conversation").setPermittedOperation(operation).setExecutionProtocolVersion(3).setRuntimeInputSnapshotDigest(digest);
+   when(sourceDao.list("0","client","owner","execution")).thenReturn(rows);
+   assertEquals(rows,rowCheck.invoke(implementation,new PersonalWorkspaceExecutionService.RuntimeScope("0","client","owner","agent","runtime"),execution));
+   var provider=new PersonalWorkspaceExecutionService.ProviderExecution("CONTROLLED_IMAGE_HTTP_V1","consent_1234567890abcdef1234567890abcdef","binding","1","operator-model",16,1,1);
+   var command=new PersonalWorkspaceExecutionService.ControlledConversationRuntimeCommandV3(3,"execution","task","run","conversation","command","message",operation,"draw",digest,"image/png","output_1",provider);
+   var snapshot=new PersonalWorkspaceExecutionService.ConversationInputSnapshotV3(3,"execution",1,operation,digest,false,nativeInputs);
+   cases.add(Map.of("caseId",mode,"command",command,"inputSnapshot",httpJson(snapshot),"inputBytesBase64",java.util.Base64.getEncoder().encodeToString(bytes)));
+   rows.getFirst().setContentSha256("f".repeat(64));
+   var changed=assertThrows(InvocationTargetException.class,()->rowCheck.invoke(implementation,new PersonalWorkspaceExecutionService.RuntimeScope("0","client","owner","agent","runtime"),execution));
+   assertInstanceOf(PersonalWorkspaceExecutionService.Failure.class,changed.getCause());
+  }
+  // Captured from JUnit stdout for the Client parser/materializer regression, not Provider evidence.
+  System.out.println("MMD_UNIFIED_EXECUTION_WIRE="+tools.jackson.databind.json.JsonMapper.builder().build().writeValueAsString(cases));
+ }
+ private static ControlledImageExecutionSourceV3Entity sourceRow(String ref,int ordinal,long length,String hash){
+  var row=new ControlledImageExecutionSourceV3Entity().setExecutionId("execution").setOwnerJiacn("owner").setInputRef(ref).setInputOrdinal(ordinal)
+    .setContentMimeType("image/png").setByteLength(length).setContentSha256(hash).setCreatedAt(1L);
+  row.setTenantId("0");row.setClientId("client");return row;
+ }
+ private static Object httpJson(PersonalWorkspaceExecutionService.ConversationInputSnapshotV3 snapshot) throws Exception {
+  var output=new org.springframework.mock.http.MockHttpOutputMessage();
+  var method=cn.jia.agent.api.PersonalWorkspaceConversationRuntimeController.class.getMethod("inputsV3",String.class,String.class,
+    cn.jia.agent.api.PersonalWorkspaceConversationRuntimeController.FenceRequest.class,jakarta.servlet.http.HttpServletRequest.class,
+    org.springframework.security.core.Authentication.class);
+  var advised=new cn.jia.core.security.SensitiveResponseBodyAdvice(new cn.jia.core.security.SensitiveResponseProperties()).beforeBodyWrite(snapshot,
+    new org.springframework.core.MethodParameter(method,-1),org.springframework.http.MediaType.APPLICATION_JSON,
+    org.springframework.http.converter.json.JacksonJsonHttpMessageConverter.class,null,null);
+  new org.springframework.http.converter.json.JacksonJsonHttpMessageConverter().write(advised,org.springframework.http.MediaType.APPLICATION_JSON,output);
+  return tools.jackson.databind.json.JsonMapper.builder().build().readValue(output.getBodyAsString(),Map.class);
+ }
+
  @Test void v3InboxChecksCurrentConversationAclBeforeReturningRuntimeAuthority() throws Exception {
   String source=java.nio.file.Files.readString(java.nio.file.Path.of(
     "src/main/java/cn/jia/agent/service/impl/PersonalWorkspaceExecutionServiceImpl.java"));

@@ -23,21 +23,44 @@ public class ChatConversationAssetSourceResolver implements ControlledImageFollo
   if("GENERATE_IMAGE".equals(operation)){if(refs.size()>16)throw invalid();if(parent!=null){var prior=lock?steps.findStepForUpdate(tenant,owner,client,parent.requestId(),1,1):steps.findStep(tenant,owner,client,parent.requestId(),1,1);if(prior==null||!parent.stepId().equals(prior.stepId())||!conversation.equals(prior.conversationId())||generation!=prior.conversationGeneration()||!task.equals(prior.taskId()))throw conflict();}Set<String> seen=new HashSet<>();int i=0;for(Ref ref:refs){if(ref==null||!"TASK_LINKED_WORKSPACE_VERSION".equals(ref.kind())||ref.fileId()==null||ref.version()==null||ref.version()<1||!"REFERENCE".equals(ref.purpose())||!seen.add(ref.fileId()+"\n"+ref.version()))throw invalid();var exact=baseline.stream().filter(v->ref.fileId().equals(v.fileId())&&ref.version()==v.version()&&"REFERENCE".equals(v.purpose())).findFirst().orElseThrow(ChatConversationAssetSourceResolver::conflict);if(exact.byteLength()<1||!List.of("image/jpeg","image/png").contains(exact.contentMimeType()))throw conflict();String sourceJson=CanonicalContextJson.write(Map.of("fileId",exact.fileId(),"kind",ref.kind(),"purpose","REFERENCE","version",Integer.toString(exact.version())));out.add(new ControlledImageFollowupAuthorityService.Source("input_"+(++i),ref.kind(),exact.fileId(),exact.version(),"REFERENCE",null,null,null,null,null,null,null,null,null,null,exact.contentMimeType(),exact.byteLength(),exact.contentHash(),sourceJson));}return List.copyOf(out);}
   if(!"EDIT_IMAGE".equals(operation)||refs.size()!=1||parent==null)throw invalid();Ref ref=refs.getFirst();if(ref==null||!"CURRENT_CONVERSATION_ASSET".equals(ref.kind())||ref.assetId()==null||ref.assetRevision()==null||ref.assetRevision()<1)throw invalid();var scope=new ChatConversationArchiveStore.Scope(tenant,owner,client);var source=lock?archive.findAuthorizedSourceForUpdate(scope,conversation,ref.assetId(),ref.assetRevision(),targetAgent):archive.findAuthorizedSource(scope,conversation,ref.assetId(),ref.assetRevision(),targetAgent);if(source==null||source.conversationGeneration()!=generation||!task.equals(source.taskId())||!parent.requestId().equals(source.requestId())||!parent.stepId().equals(source.stepId())||source.byteLength()<1||!List.of("image/jpeg","image/png").contains(source.contentMimeType()))throw conflict();String sourceJson=CanonicalContextJson.write(Map.of("assetId",source.assetId(),"assetRevision",Long.toString(source.assetRevision()),"conversationGeneration",Long.toString(source.conversationGeneration()),"conversationId",source.conversationId(),"kind","CURRENT_CONVERSATION_ASSET","producerExecutionId",source.executionId(),"producerOutputId",source.outputId(),"producerRequestId",source.requestId(),"producerRunId",source.runId(),"producerStepId",source.stepId()));return List.of(new ControlledImageFollowupAuthorityService.Source("input_1","CURRENT_CONVERSATION_ASSET",null,null,null,source.conversationId(),source.conversationGeneration(),source.assetId(),source.assetRevision(),source.requestId(),source.requestRevision(),source.stepId(),source.executionId(),source.runId(),source.outputId(),source.contentMimeType(),source.byteLength(),source.sha256(),sourceJson));
  }
- /** Internal action path: derive edit lineage from the exact authorized asset, never from model text. */
+ /** Ordinary actions use task materials as selected, not a fabricated REFERENCE role.
+  * A picture can come from the workspace or this conversation for either supported operation. */
  public List<ControlledImageFollowupAuthorityService.Source> resolveAction(String tenant,String client,String owner,
    String conversation,long generation,String task,String targetAgent,String operation,List<Ref> refs,
    List<AgentTaskExecutionGrantService.AuthorizedInput> baseline){
-  Parent parent=null;
-  if("EDIT_IMAGE".equals(operation)){
-   if(refs==null||refs.size()!=1||!"CURRENT_CONVERSATION_ASSET".equals(refs.getFirst().kind())
-     ||refs.getFirst().assetId()==null||refs.getFirst().assetRevision()==null)throw invalid();
-   var ref=refs.getFirst();
-   var source=archive.findAuthorizedSourceForUpdate(new ChatConversationArchiveStore.Scope(tenant,owner,client),
-     conversation,ref.assetId(),ref.assetRevision(),targetAgent);
-   if(source==null||source.conversationGeneration()!=generation||!task.equals(source.taskId()))throw conflict();
-   parent=new Parent(source.requestId(),source.stepId());
+  if(refs==null||baseline==null||!Set.of("GENERATE_IMAGE","EDIT_IMAGE").contains(operation)
+    ||refs.size()>16||("EDIT_IMAGE".equals(operation)&&refs.size()!=1))throw invalid();
+  var out=new ArrayList<ControlledImageFollowupAuthorityService.Source>();var seen=new HashSet<String>();
+  for(Ref ref:refs){
+   if(ref==null)throw invalid();String inputRef="input_"+(out.size()+1);
+   if("TASK_LINKED_WORKSPACE_VERSION".equals(ref.kind())){
+    if(ref.fileId()==null||ref.version()==null||ref.version()<1||ref.purpose()==null
+      ||!Set.of("INPUT","REFERENCE").contains(ref.purpose())||ref.assetId()!=null||ref.assetRevision()!=null
+      ||!seen.add("workspace\n"+ref.fileId()+"\n"+ref.version()))throw invalid();
+    var exact=baseline.stream().filter(v->ref.fileId().equals(v.fileId())&&ref.version()==v.version()
+      &&ref.purpose().equals(v.purpose())).findFirst().orElseThrow(ChatConversationAssetSourceResolver::conflict);
+    if(exact.byteLength()<1||!List.of("image/jpeg","image/png").contains(exact.contentMimeType()))throw conflict();
+    String json=CanonicalContextJson.write(Map.of("fileId",exact.fileId(),"kind",ref.kind(),"purpose",exact.purpose(),"version",Integer.toString(exact.version())));
+    out.add(new ControlledImageFollowupAuthorityService.Source(inputRef,ref.kind(),exact.fileId(),exact.version(),exact.purpose(),
+      null,null,null,null,null,null,null,null,null,null,exact.contentMimeType(),exact.byteLength(),exact.contentHash(),json));
+   }else if("CURRENT_CONVERSATION_ASSET".equals(ref.kind())){
+    if(ref.assetId()==null||ref.assetRevision()==null||ref.assetRevision()<1||ref.fileId()!=null||ref.version()!=null||ref.purpose()!=null
+      ||!seen.add("asset\n"+ref.assetId()+"\n"+ref.assetRevision()))throw invalid();
+    var source=archive.findAuthorizedSourceForUpdate(new ChatConversationArchiveStore.Scope(tenant,owner,client),
+      conversation,ref.assetId(),ref.assetRevision(),targetAgent);
+    if(source==null||!conversation.equals(source.conversationId())||source.conversationGeneration()!=generation
+      ||!task.equals(source.taskId())||!ref.assetId().equals(source.assetId())||ref.assetRevision()!=source.assetRevision()
+      ||source.byteLength()<1||!List.of("image/jpeg","image/png").contains(source.contentMimeType()))throw conflict();
+    String json=CanonicalContextJson.write(Map.of("assetId",source.assetId(),"assetRevision",Long.toString(source.assetRevision()),
+      "conversationGeneration",Long.toString(source.conversationGeneration()),"conversationId",source.conversationId(),"kind",ref.kind(),
+      "producerExecutionId",source.executionId(),"producerOutputId",source.outputId(),"producerRequestId",source.requestId(),
+      "producerRunId",source.runId(),"producerStepId",source.stepId()));
+    out.add(new ControlledImageFollowupAuthorityService.Source(inputRef,ref.kind(),null,null,null,source.conversationId(),
+      source.conversationGeneration(),source.assetId(),source.assetRevision(),source.requestId(),source.requestRevision(),source.stepId(),
+      source.executionId(),source.runId(),source.outputId(),source.contentMimeType(),source.byteLength(),source.sha256(),json));
+   }else throw invalid();
   }
-  return resolve(tenant,client,owner,conversation,generation,task,targetAgent,operation,refs,parent,baseline,true);
+  return List.copyOf(out);
  }
  @Override public void verify(ControlledImageFollowupAuthorityService.RuntimeSourceAccessLookup.SourceAccessScope scope,
    List<ControlledImageFollowupAuthorityService.Source> sources,boolean lock){

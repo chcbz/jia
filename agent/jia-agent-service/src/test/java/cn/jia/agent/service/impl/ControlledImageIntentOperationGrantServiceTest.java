@@ -64,6 +64,39 @@ class ControlledImageIntentOperationGrantServiceTest {
                 "model",16,1,1));
     }
 
+    @Test void ordinaryWorkspaceEditKeepsInputRoleAndBindsExactGrantBytes() {
+        var rows=ordinaryStore();var original=ordinary();var source=new ControlledImageFollowupAuthorityService.Source(
+                "input_1","TASK_LINKED_WORKSPACE_VERSION","file",2,"INPUT",null,null,null,null,null,null,null,null,null,null,
+                "image/png",9,"a".repeat(64),"{\"fileId\":\"file\",\"kind\":\"TASK_LINKED_WORKSPACE_VERSION\",\"purpose\":\"INPUT\",\"version\":\"2\"}");
+        var p=original.preview();var selected=new ControlledImageFollowupAuthorityService.PreviewCommand(p.taskId(),p.conversationId(),
+                p.conversationGeneration(),p.interactionIdempotencyKey(),p.requestId(),p.stepId(),p.executionIntentId(),p.baseline(),
+                "EDIT_IMAGE",p.instruction(),p.instructionSha256(),p.ownerPayloadSha256(),p.sourceSnapshotSha256(),List.of(source));
+        var b=baseline();when(grants.admitFollowupBaseline(any(),anyString(),anyString(),anyLong(),anyLong(),anyLong(),anyLong(),anyString())).thenReturn(
+                new AgentTaskExecutionGrantService.Admission(b.grantId(),b.grantVersion(),b.assignmentRevision(),b.targetAgentId(),null,false,
+                        List.of(new AgentTaskExecutionGrantService.AuthorizedInput("file",2,"INPUT","image/png",9,"a".repeat(64))),
+                        null,null,b.taskVersion(),b.requirementRevision(),b.requirementSha256(),b.assignmentIdempotencyKey(),b.assignmentBaseHash()));
+        var command=new ControlledImageFollowupAuthorityService.OrdinaryActionCommand(selected,original.actionRequestId(),original.parentOutcomeId(),
+                original.parentFinalDigest(),original.originalUserMessageId(),original.originalUserContentSha256(),original.executionId(),original.runId(),original.interactionRequestDigest());
+        assertEquals("execution",service.admitOrdinaryAction(scope,command,()->{}).executionId());
+        assertEquals("EDIT_IMAGE",rows.execution.get().getPermittedOperation());
+        var captured=org.mockito.ArgumentCaptor.forClass(cn.jia.agent.entity.ControlledImageExecutionSourceV3Entity.class);
+        verify(sources).insert(captured.capture());assertEquals("INPUT",captured.getValue().getPurpose());assertEquals("file",captured.getValue().getFileId());
+    }
+
+    @Test void selectedWorkspaceRoleOrBytesOutsideCurrentBaselineCannotGetAuthority() {
+        ordinaryStore();var p=preview();
+        for(String purpose:List.of("INPUT","REFERENCE")){
+            var source=new ControlledImageFollowupAuthorityService.Source("input_1","TASK_LINKED_WORKSPACE_VERSION","file",2,purpose,
+                    null,null,null,null,null,null,null,null,null,null,"image/png",9,"a".repeat(64),"{}");
+            var selected=new ControlledImageFollowupAuthorityService.PreviewCommand(p.taskId(),p.conversationId(),p.conversationGeneration(),
+                    p.interactionIdempotencyKey(),p.requestId(),p.stepId(),p.executionIntentId(),p.baseline(),"GENERATE_IMAGE",p.instruction(),
+                    p.instructionSha256(),p.ownerPayloadSha256(),p.sourceSnapshotSha256(),List.of(source));
+            assertEquals(ControlledImageFollowupAuthorityService.Reason.CONFLICT,
+                    assertThrows(ControlledImageFollowupAuthorityService.Failure.class,()->service.preview(scope,selected)).reason());
+        }
+        verify(consents,never()).insert(any());verify(operationGrants,never()).insert(any());verify(executions,never()).insert(any());
+    }
+
     @Test void exactIssueReplayPrecedesBaselinePolicyAndLateChecks() {
         var row=operationGrant("issue-key","a".repeat(64));
         when(operationGrants.lockByIssueKey("0","client","owner","task","issue-key")).thenReturn(row);

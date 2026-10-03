@@ -1144,8 +1144,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             String operation) {
         Map<String,Object> value=new LinkedHashMap<>();
         if("TASK_LINKED_WORKSPACE_VERSION".equals(row.getSourceKind())) {
-            if(!"GENERATE_IMAGE".equals(operation)||row.getFileId()==null||row.getFileVersion()==null
-                    ||row.getFileVersion()<1||!"REFERENCE".equals(row.getPurpose())
+            if(!Set.of("GENERATE_IMAGE","EDIT_IMAGE").contains(operation)||row.getFileId()==null||row.getFileVersion()==null
+                    ||row.getFileVersion()<1||!("REFERENCE".equals(row.getPurpose())||"INPUT".equals(row.getPurpose()))
                     ||row.getConversationId()!=null||row.getConversationGeneration()!=null
                     ||row.getAssetId()!=null||row.getAssetRevision()!=null||row.getProducerRequestId()!=null
                     ||row.getProducerRequestRevision()!=null||row.getProducerStepId()!=null
@@ -1154,7 +1154,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             value.put("fileId",row.getFileId());value.put("kind",row.getSourceKind());
             value.put("purpose",row.getPurpose());value.put("version",Integer.toString(row.getFileVersion()));
         } else if("CURRENT_CONVERSATION_ASSET".equals(row.getSourceKind())) {
-            if(!"EDIT_IMAGE".equals(operation)||row.getFileId()!=null||row.getFileVersion()!=null
+            if(!Set.of("GENERATE_IMAGE","EDIT_IMAGE").contains(operation)||row.getFileId()!=null||row.getFileVersion()!=null
                     ||row.getPurpose()!=null||row.getConversationId()==null
                     ||row.getConversationGeneration()==null||row.getConversationGeneration()<1
                     ||row.getAssetId()==null||row.getAssetRevision()==null||row.getAssetRevision()<1
