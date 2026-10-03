@@ -96,7 +96,7 @@ class ChatActionContinuationTest {
     @Test void recoveredClaimUsesOriginalChildEvenWhenRuntimeHasDisconnected() {
         var f=new Fixture(); var consumer=f.consumer(); consumer.consume(f.claim());
         int dispatches=f.outboxes.size();
-        f.registry.unregister("session");
+        f.registry.remove("session");
         consumer.consume(f.claim());
         assertEquals(2,f.requests.size()); assertEquals(1,f.messages.size()); assertEquals(1,f.children.size());
         assertEquals(1,f.events.size()); assertEquals(dispatches,f.outboxes.size());
