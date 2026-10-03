@@ -61,6 +61,24 @@ class ChatInspectionAuthorityServiceTest {
                 org.mockito.ArgumentMatchers.anyString());
     }
 
+    @Test
+    void contentAndFinalRecheckBindTheExactInputRoleUnderTheOwnerTaskLock() {
+        var scope = new ChatTypedDeliberationStore.Scope("0", "owner", "client", "42", 1);
+        when(jdbc.queryForList(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any(Object[].class)))
+                .thenAnswer(inv -> {
+                    String sql = inv.getArgument(0);
+                    org.junit.jupiter.api.Assertions.assertTrue(sql.contains("l.link_role=? AND BINARY l.link_role=BINARY ?"));
+                    org.junit.jupiter.api.Assertions.assertTrue(sql.contains("FOR UPDATE"));
+                    Object[] args = java.util.Arrays.copyOfRange(inv.getArguments(), 1, inv.getArguments().length);
+                    assertEquals(java.util.List.of("0", "owner", "client", "task", "file", 2, "INPUT", "INPUT"), java.util.Arrays.asList(args));
+                    return java.util.List.of(java.util.Map.of("content_hash", "a".repeat(64)));
+                });
+        var row = org.springframework.test.util.ReflectionTestUtils.invokeMethod(service, "workspaceRow", scope, "task",
+                java.util.Map.of("fileId", "file", "version", "2", "purpose", "INPUT"));
+        assertEquals(java.util.Map.of("content_hash", "a".repeat(64)), row);
+        verifyNoInteractions(storage);
+    }
+
     private static AgentRuntimeAuthentication.Scope runtime(String agent) {
         return new AgentRuntimeAuthentication.Scope("0", "client", "owner", agent, "runtime-1");
     }

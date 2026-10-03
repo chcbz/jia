@@ -38,6 +38,23 @@ class ChatTypedInspectionWireTest {
         reject(VALID.replace("DISCUSSION", "CLARIFICATION_REPLY"));
     }
 
+    @Test
+    void fullMixed32MaterialSelectorsAreAcceptedWithoutPurposeCoercion() {
+        String selector = "{\"kind\":\"TASK_LINKED_WORKSPACE_VERSION\",\"fileId\":\"file-%d\","
+                + "\"version\":\"1\",\"purpose\":\"%s\",\"assetId\":null,\"assetRevision\":null}";
+        var selectors = new java.util.ArrayList<String>();
+        for (int i = 0; i < 32; i++) selectors.add(selector.formatted(i, i % 2 == 0 ? "INPUT" : "REFERENCE"));
+        String prefix = VALID.substring(0, VALID.indexOf("\"sourceSelectors\":")) + "\"sourceSelectors\":[";
+        var parsed = ChatTypedInspectionWire.parse(prefix + String.join(",", selectors) + "]}");
+        assertEquals(32, parsed.sourceSelectors().size());
+        assertEquals("INPUT", parsed.sourceSelectors().getFirst().purpose());
+        assertEquals("REFERENCE", parsed.sourceSelectors().get(1).purpose());
+        selectors.add(selector.formatted(32, "INPUT"));
+        reject(prefix + String.join(",", selectors) + "]}");
+        for (String role : java.util.List.of("OUTPUT", "input", "REFERENCE ")) reject(VALID.replace("REFERENCE", role));
+        reject(VALID.replace("\"version\":\"2\"", "\"version\":\"2147483648\""));
+    }
+
     private static void reject(String raw) {
         assertThrows(ChatDeliberationException.class, () -> ChatTypedInspectionWire.parse(raw));
     }

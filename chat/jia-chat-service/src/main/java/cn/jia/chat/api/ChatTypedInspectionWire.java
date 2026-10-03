@@ -77,7 +77,7 @@ public final class ChatTypedInspectionWire {
         Long parentVersion = nullableDecimal(body.get("expectedParentStateVersion"));
         String pending = nullableText(body.get("pendingQuestionId"), 64);
         Long pendingVersion = nullableDecimal(body.get("expectedPendingQuestionStateVersion"));
-        if (!(body.get("sourceSelectors") instanceof List<?> raw) || raw.size() > 16) throw invalid();
+        if (!(body.get("sourceSelectors") instanceof List<?> raw) || raw.size() > 32) throw invalid();
         List<SourceSelector> selectors = new ArrayList<>();
         Set<SourceSelector> unique = new HashSet<>();
         for (Object item : raw) { SourceSelector selector = selector(item); if (!unique.add(selector)) throw invalid(); selectors.add(selector); }
@@ -95,6 +95,11 @@ public final class ChatTypedInspectionWire {
         result.put("assetRevision",value.assetRevision()); return result;
     }
 
+    public static SourceSelector validateSelector(SourceSelector value) {
+        if (value == null) throw invalid();
+        return selector(selectorMap(value));
+    }
+
     private static SourceSelector selector(Object raw) {
         if (!(raw instanceof Map<?, ?> map) || !map.keySet().stream().allMatch(String.class::isInstance)
                 || !map.keySet().equals(SELECTOR_KEYS)) throw invalid();
@@ -102,7 +107,7 @@ public final class ChatTypedInspectionWire {
         String version=nullableCanonicalDecimal(map.get("version")),purpose=nullableText(map.get("purpose"),20);
         String asset=nullableText(map.get("assetId"),64),revision=nullableCanonicalDecimal(map.get("assetRevision"));
         if ("TASK_LINKED_WORKSPACE_VERSION".equals(kind)) {
-            if (file==null||version==null||!"REFERENCE".equals(purpose)||asset!=null||revision!=null
+            if (file==null||version==null||!("INPUT".equals(purpose)||"REFERENCE".equals(purpose))||asset!=null||revision!=null
                     ||Long.parseLong(version)>Integer.MAX_VALUE) throw invalid();
         } else if ("CURRENT_CONVERSATION_ASSET".equals(kind)) {
             if(file!=null||version!=null||purpose!=null||asset==null||revision==null)throw invalid();

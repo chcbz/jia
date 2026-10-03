@@ -32,7 +32,7 @@ public final class TypedInspectionFinalValidator {
     private static final int MAX_CONTENT_UTF16 = 200_000;
     private static final int MAX_INSTRUCTION_CODE_POINTS = 4_000;
     private static final int MAX_SOURCE_ID_UTF16 = 512;
-    private static final int MAX_SOURCES = 16;
+    private static final int MAX_SOURCES = 32;
     private static final Set<String> FACT_KEYS = Set.of(
             "schemaVersion", "referenceMode", "supportedOperations", "availableSources");
     private static final Set<String> SOURCE_KEYS = Set.of("sourceRefId", "kind", "mediaType");

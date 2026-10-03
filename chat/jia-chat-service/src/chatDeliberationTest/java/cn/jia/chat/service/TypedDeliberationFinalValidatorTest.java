@@ -398,18 +398,18 @@ class TypedDeliberationFinalValidatorTest {
     }
 
     @Test
-    void tv28ReferenceCatalogOriginal16BoundPreserved() {
-        List<Object> sixteen = new ArrayList<>();
-        for (int index = 0; index < 16; index++) {
-            sixteen.add(source("source_" + index, "TASK_WORKSPACE_FILE", "file"));
+    void tv28ReferenceCatalogMatchesUnified32Materials() {
+        List<Object> thirtyTwo = new ArrayList<>();
+        for (int index = 0; index < 32; index++) {
+            thirtyTwo.add(source("source_" + index, "TASK_WORKSPACE_FILE", "file"));
         }
         var result = TypedDeliberationFinalValidator.validate(binding(),
-                facts(List.of(), sixteen, "AVAILABLE"), "正文", answer("正文"));
-        assertEquals(16, result.dispatchFacts().availableSources().size());
-        List<Object> seventeen = new ArrayList<>(sixteen);
-        seventeen.add(source("source_16", "TASK_WORKSPACE_FILE", "file"));
+                facts(List.of(), thirtyTwo, "AVAILABLE"), "正文", answer("正文"));
+        assertEquals(32, result.dispatchFacts().availableSources().size());
+        List<Object> thirtyThree = new ArrayList<>(thirtyTwo);
+        thirtyThree.add(source("source_32", "TASK_WORKSPACE_FILE", "file"));
         rejects(INVALID_FACTS, () -> TypedDeliberationFinalValidator.validate(binding(),
-                facts(List.of(), seventeen, "AVAILABLE"), "正文", answer("正文")));
+                facts(List.of(), thirtyThree, "AVAILABLE"), "正文", answer("正文")));
     }
 
     @Test

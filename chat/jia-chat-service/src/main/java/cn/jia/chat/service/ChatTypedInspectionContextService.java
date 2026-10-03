@@ -83,7 +83,7 @@ public final class ChatTypedInspectionContextService {
     public Context resolve(Scope scope, List<ChatTypedInspectionWire.SourceSelector> requested) {
         if (!enabled) throw unavailable("Typed inspection is disabled");
         validate(scope);
-        if (requested == null || requested.isEmpty() || requested.size() > 16) throw invalid();
+        if (requested == null || requested.isEmpty() || requested.size() > 32) throw invalid();
         TypedInspectionSessionRegistry.Ready ready;
         try {
             ready = sessions.requireSingleReady(new TypedInspectionSessionRegistry.Scope(
@@ -94,7 +94,8 @@ public final class ChatTypedInspectionContextService {
 
         List<Map<String, Object>> sources = new ArrayList<>();
         Set<String> refs = new HashSet<>();
-        for (ChatTypedInspectionWire.SourceSelector selector : requested) {
+        for (ChatTypedInspectionWire.SourceSelector rawSelector : requested) {
+            ChatTypedInspectionWire.SourceSelector selector = ChatTypedInspectionWire.validateSelector(rawSelector);
             Map<String, Object> catalog = "TASK_LINKED_WORKSPACE_VERSION".equals(selector.kind())
                     ? workspace(scope, selector) : asset(scope, selector);
             String sourceRefId = sourceRefId(scope, catalog);
@@ -217,7 +218,7 @@ public final class ChatTypedInspectionContextService {
         validateScope(exactMap(manifest.get("scope"), SCOPE_KEYS));
         validateProfile(exactMap(manifest.get("profile"), PROFILE_KEYS));
         if (!(manifest.get("sources") instanceof List<?> rawSources)
-                || rawSources.isEmpty() || rawSources.size() > 16
+                || rawSources.isEmpty() || rawSources.size() > 32
                 || available.size() != rawSources.size()) {
             throw new IllegalArgumentException();
         }
@@ -297,9 +298,9 @@ public final class ChatTypedInspectionContextService {
                 WHERE BINARY l.tenant_id=BINARY ? AND BINARY l.owner_jiacn=BINARY ?
                   AND BINARY l.client_id=BINARY ? AND BINARY l.task_id=BINARY ?
                   AND BINARY l.file_id=BINARY ? AND l.file_version=?
-                  AND l.link_role='REFERENCE' AND l.link_state='ACTIVE'
+                  AND l.link_role=? AND BINARY l.link_role=BINARY ? AND l.link_state='ACTIVE'
                 """, scope.tenantId(), scope.ownerJiacn(), scope.clientId(), scope.taskId(),
-                selector.fileId(), Integer.parseInt(selector.version()));
+                selector.fileId(), Integer.parseInt(selector.version()), selector.purpose(), selector.purpose());
         if (rows.size() != 1) throw missing();
         return catalog("TASK_WORKSPACE_FILE", selector,
                 text(rows.getFirst(), "content_mime_type"),
@@ -397,7 +398,10 @@ public final class ChatTypedInspectionContextService {
         if ("TASK_LINKED_WORKSPACE_VERSION".equals(kind)) {
             exact(selector.get("fileId"), 100);
             positiveDecimal(selector.get("version"));
-            exactText(selector.get("purpose"), "REFERENCE");
+            if (!Set.of("INPUT", "REFERENCE").contains(string(selector.get("purpose")))
+                    || Long.parseLong(string(selector.get("version"))) > Integer.MAX_VALUE) {
+                throw new IllegalArgumentException();
+            }
             if (selector.get("assetId") != null || selector.get("assetRevision") != null) {
                 throw new IllegalArgumentException();
             }

@@ -78,6 +78,29 @@ class TypedInspectionFinalValidatorTest {
         rejects(INVALID_RECEIPT, () -> validate(fixture, alias));
     }
 
+    @Test
+    void full32MaterialFinalReceiptValidatesWithoutTruncation() throws Exception {
+        var fixture = fixture(); var facts = facts(fixture); var authority = authority(fixture); var receipt = receipt(fixture);
+        var factSource = map(list(facts.get("availableSources")).getFirst());
+        var authoritySource = map(list(authority.get("sources")).getFirst());
+        var receiptSource = map(list(receipt.get("sources")).getFirst());
+        List<Object> fs = new ArrayList<>(), as = new ArrayList<>(), rs = new ArrayList<>();
+        for (int i = 0; i < 32; i++) {
+            String id = "source_%040d".formatted(i);
+            var f = new LinkedHashMap<>(factSource); f.put("sourceRefId", id); fs.add(f);
+            var a = new LinkedHashMap<>(authoritySource); a.put("sourceRefId", id); as.add(a);
+            var r = new LinkedHashMap<>(receiptSource); r.put("sourceRefId", id); rs.add(r);
+        }
+        facts.put("availableSources", fs); authority.put("sources", as); receipt.put("sources", rs);
+        receipt.put("inputDigest", ChatDeliberationService.digest(mapOf("authorizationId", receipt.get("authorizationId"),
+                "manifestDigest", receipt.get("manifestDigest"), "sources", rs)));
+        var result = TypedInspectionFinalValidator.validate(binding(), facts, authority, "Inspected.", answer("Inspected."), receipt);
+        assertEquals(32, result.inspectionInputReceipt().sources().size());
+        fs.add(mapOf("sourceRefId", "source_%040d".formatted(32), "kind", "TASK_WORKSPACE_FILE", "mediaType", "text"));
+        assertThrows(TypedInspectionFinalValidator.ValidationException.class,
+                () -> TypedInspectionFinalValidator.validate(binding(), facts, authority, "Inspected.", answer("Inspected."), receipt));
+    }
+
     private static TypedInspectionFinalValidator.ValidatedFinal validate(
             Map<String, Object> fixture, Map<String, Object> receipt) {
         return TypedInspectionFinalValidator.validate(binding(), facts(fixture), authority(fixture),

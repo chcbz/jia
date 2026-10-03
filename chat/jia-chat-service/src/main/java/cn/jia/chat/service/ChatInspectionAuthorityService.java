@@ -380,10 +380,11 @@ public class ChatInspectionAuthorityService {
                 WHERE BINARY l.tenant_id=BINARY ? AND BINARY l.owner_jiacn=BINARY ?
                   AND BINARY l.client_id=BINARY ? AND BINARY l.task_id=BINARY ?
                   AND BINARY l.file_id=BINARY ? AND l.file_version=?
-                  AND l.link_role='REFERENCE' AND l.link_state='ACTIVE' FOR UPDATE
+                  AND l.link_role=? AND BINARY l.link_role=BINARY ? AND l.link_state='ACTIVE' FOR UPDATE
                 """, scope.tenantId(), scope.ownerJiacn(), scope.clientId(), taskId,
                 string(selector.get("fileId")),
-                Integer.parseInt(string(selector.get("version"))));
+                Integer.parseInt(string(selector.get("version"))),
+                string(selector.get("purpose")), string(selector.get("purpose")));
         if (rows.size() != 1) throw conflict("Inspection workspace link changed");
         return rows.getFirst();
     }
