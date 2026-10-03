@@ -66,6 +66,27 @@ class ChatDeliberationOutboxRelayTest {
     }
 
     @Test
+    void nativeInspectionDispatchUsesTheBoundManifestInsteadOfRequiringLegacyPretendMaterialization() {
+        var f=new ChatActionContinuationTest.Fixture();
+        var child=f.deliberation.admitInspectionContinuation(f.action,f.childContext(),f.chatScope);
+        var row=f.outboxes.values().stream().filter(o->child.dispatches().getFirst().turnId().equals(o.getTurnId())).findFirst().orElseThrow();
+        when(conversations.isLiveGeneration("owner","client","42",1L)).thenReturn(true);
+        relay.deliverClaim(new ChatDeliberationOutboxService.Claim(row,false));
+        verify(sockets).sendNegotiatedChatMessageToAgent(eq("0"),eq("owner"),eq("client"),eq("agent"),
+                eq(cn.jia.chat.deliberation.InteractionRoute.INSPECT),anyMap());
+        verify(outbox).awaitingAck(any(),anyLong(),anyLong());
+        verify(deliberation,never()).failTargetCapability(anyString(),anyString(),anyString(),anyString(),anyString(),anyMap());
+        row.setPayloadJson(row.getPayloadJson().replace("\"requestId\":\""+child.requestId()+"\"", "\"requestId\":\"foreign\""));
+        // Break the native manifest's scope without changing the outer request identity.
+        var payload=f.map(row.getPayloadJson()); payload.put("requestId",child.requestId());
+        row.setPayloadJson(CanonicalContextJson.write(payload));
+        clearInvocations(sockets);
+        relay.deliverClaim(new ChatDeliberationOutboxService.Claim(row,false));
+        verifyNoInteractions(sockets);
+        verify(outbox).dead(any(),eq("TARGET_INSPECT_INPUT_NOT_MATERIALIZED"),anyLong());
+    }
+
+    @Test
     void springContextSelectsProductionConstructorAndStartsRelay() {
         when(outbox.discover(anyLong(), anyInt())).thenReturn(List.of());
         try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {

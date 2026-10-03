@@ -176,7 +176,7 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
         String agentId = text(p, "targetAgentId");
         InteractionRoute route = route(p);
         if (route == InteractionRoute.EXECUTE
-                || (route == InteractionRoute.INSPECT && !hasMaterializedInput(p))) {
+                || (route == InteractionRoute.INSPECT && !hasInspectionInput(p))) {
             String reason = route == InteractionRoute.EXECUTE
                     ? "TARGET_EXECUTE_VIA_CHAT_FORBIDDEN"
                     : "TARGET_INSPECT_INPUT_NOT_MATERIALIZED";
@@ -460,6 +460,25 @@ public class ChatDeliberationOutboxRelay implements SmartLifecycle, AutoCloseabl
         } catch (RuntimeException invalid) {
             throw new IllegalStateException("Invalid interaction route");
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private boolean hasInspectionInput(Map<String, Object> payload) {
+        if (payload.get("factsManifest") instanceof Map<?, ?> facts && facts.containsKey("typedInspection")) {
+            // Native INSPECT fetches exact bytes using the bound server manifest; it must not pretend
+            // those bytes were already materialized in the legacy CHAT history before dispatch.
+            try {
+                var typed = ChatTypedInspectionContextService.validateTypedInspection(facts.get("typedInspection"));
+                var manifest = (Map<String, Object>) typed.get("manifest");
+                var scope = (Map<String, Object>) manifest.get("scope");
+                for (String key : List.of("tenantId", "ownerJiacn", "clientId", "conversationId", "conversationGeneration",
+                        "taskId", "requestId", "requestRevision", "targetAgentId")) {
+                    if (!java.util.Objects.equals(scope.get(key), payload.get(key))) return false;
+                }
+                return true;
+            } catch (RuntimeException invalid) { return false; }
+        }
+        return hasMaterializedInput(payload);
     }
 
     @SuppressWarnings("unchecked")
