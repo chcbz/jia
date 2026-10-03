@@ -536,6 +536,34 @@ class AgentRuntimeSecurityIntegrationTest {
     }
 
     @Test
+    void stagedRecoveryHttpContractUsesCurrentNativeIdentityAndNeverAcceptsBrowserOrStartBody() throws Exception {
+        var scope=new PersonalWorkspaceExecutionService.RuntimeScope(TENANT,CLIENT_A,OWNER_A,A,"runtime-a");
+        var proof=new PersonalWorkspaceExecutionService.ConversationResultRecovery("execution-a","command-a","message-a",
+                "b".repeat(64),List.of(new PersonalWorkspaceExecutionService.OutputDeclaration("output_1","a".repeat(64),12L)));
+        String manifest="pwe_m_"+"c".repeat(64);
+        String path="/internal/agent/tasks/task-a/runs/run-a/conversation/result-commits/"+manifest;
+        when(workspaceExecutions.recoverStagedConversationOutput(scope,"task-a","run-a",manifest,proof))
+                .thenReturn(new PersonalWorkspaceExecutionService.CommitView(manifest,"COMMITTED",List.of()));
+        String body="{\"schemaVersion\":1,\"executionId\":\"execution-a\",\"commandId\":\"command-a\","
+                +"\"messageId\":\"message-a\",\"inputSnapshotDigest\":\""+"b".repeat(64)+"\","
+                +"\"outputs\":[{\"outputId\":\"output_1\",\"sha256\":\""+"a".repeat(64)+"\",\"length\":12}]}";
+        conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A).contentType("application/json").content(body))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.state").value("COMMITTED"));
+        conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A).contentType("application/json")
+                .content(body.replace("\"schemaVersion\":1","\"schemaVersion\":2"))).andExpect(status().isBadRequest());
+        conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A).contentType("application/json")
+                .content("{\"fence\":{\"version\":1,\"token\":\"old\"}}")).andExpect(status().isBadRequest());
+        conversationMvc.perform(headers(post(path),A,"runtime-b",TOKEN_A).contentType("application/json").content(body))
+                .andExpect(status().isUnauthorized());
+        conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A).header("Origin","https://kit.chaoyoufan.cn")
+                .contentType("application/json").content(body)).andExpect(status().isForbidden());
+        conversationMvc.perform(headers(get(path),A,"runtime-a",TOKEN_A)).andExpect(status().isForbidden());
+        conversationMvc.perform(headers(post(path+"/content"),A,"runtime-a",TOKEN_A)).andExpect(status().isForbidden());
+        verify(workspaceExecutions).recoverStagedConversationOutput(scope,"task-a","run-a",manifest,proof);
+        verifyNoMoreInteractions(workspaceExecutions);
+    }
+
+    @Test
     void conversationUploadChecksDigestBeforeStorageAndFencesRuntimeIdentity() throws Exception {
         byte[] bytes=new byte[]{1,2,3};
         String sha=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));

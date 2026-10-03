@@ -196,6 +196,67 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
         assertEquals("QUEUED",rows.find("0","client","owner","exec-denied").getExecutionState());
     }
 
+    @Test void expiredStagedResultCommitsOriginalBytesAndReplaysWithoutRewritingStart() throws Exception {
+        var row=persist("exec-recover","run-recover","42");
+        byte[] bytes=png();String hash=sha(bytes);
+        var original=new PersonalWorkspaceExecutionService.RuntimeScope("0","client","owner","agent","runtime");
+        var replacement=new PersonalWorkspaceExecutionService.RuntimeScope("0","client","owner","agent","replacement");
+        inTx(() -> service.stageConversationOutput(original,"task",row.getRunId(),
+                new PersonalWorkspaceExecutionService.ConversationFence(1,"lease-token"),
+                "output_1","bird.png","image/png",bytes));
+        String manifest="pwe_m_"+sha("task\n"+row.getRunId()+"\noutput_1\n"+hash+"\n"+bytes.length+"\n");
+        var command=recovery(row,hash,bytes.length);
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                () -> inTx(() -> service.recoverStagedConversationOutput(replacement,"task",row.getRunId(),manifest,command)));
+        jdbc.update("UPDATE agent_personal_workspace_execution SET conversation_lease_expires_at=1 WHERE execution_id=?",row.getExecutionId());
+        var committed=inTx(() -> service.recoverStagedConversationOutput(replacement,"task",row.getRunId(),manifest,command));
+        assertEquals("COMMITTED",committed.state());assertEquals(hash,committed.items().getFirst().sha256());
+        assertEquals(committed,inTx(() -> service.recoverStagedConversationOutput(replacement,"task",row.getRunId(),manifest,command)));
+        var saved=rows.find("0","client","owner",row.getExecutionId());
+        assertEquals("OUTPUT_COMMITTED",saved.getExecutionState());
+        assertEquals("runtime",saved.getConversationLeaseRuntimeId());assertEquals(1L,saved.getConversationLeaseVersion());
+        assertEquals(1L,saved.getConversationLeaseExpiresAt());assertEquals(10L,saved.getConversationProviderStartedAt());
+        assertEquals(1L,saved.getConversationProviderLeaseVersion());
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM agent_personal_workspace_execution_output",Integer.class));
+    }
+
+    @Test void stagedRecoveryRejectsWrongProofAclScopeMissingBytesAndRollbackLeavesStaged() throws Exception {
+        var row=persist("exec-proof","run-proof","42");byte[] bytes=png();String hash=sha(bytes);
+        var runtime=new PersonalWorkspaceExecutionService.RuntimeScope("0","client","owner","agent","runtime");
+        var proof=recovery(row,hash,bytes.length);
+        String manifest="pwe_m_"+sha("task\n"+row.getRunId()+"\noutput_1\n"+hash+"\n"+bytes.length+"\n");
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                () -> inTx(() -> service.recoverStagedConversationOutput(runtime,"task",row.getRunId(),manifest,proof)));
+        inTx(() -> service.stageConversationOutput(runtime,"task",row.getRunId(),
+                new PersonalWorkspaceExecutionService.ConversationFence(1,"lease-token"),"output_1","bird.png","image/png",bytes));
+        var changed=new PersonalWorkspaceExecutionService.ConversationResultRecovery(row.getExecutionId(),
+                proof.commandId(),proof.messageId(),"0".repeat(64),proof.outputs());
+        for(var bad:List.of(changed,recovery(row,"a".repeat(64),bytes.length),recovery(row,hash,bytes.length+1)))
+            assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                    () -> inTx(() -> service.recoverStagedConversationOutput(runtime,"task",row.getRunId(),manifest,bad)));
+        for(var badScope:List.of(new PersonalWorkspaceExecutionService.RuntimeScope("0","client","other-owner","agent","runtime"),
+                new PersonalWorkspaceExecutionService.RuntimeScope("0","client","owner","other-agent","runtime")))
+            assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                    () -> inTx(() -> service.recoverStagedConversationOutput(badScope,"task",row.getRunId(),manifest,proof)));
+        assertThrows(IllegalStateException.class,() -> inTx(() -> {
+            service.recoverStagedConversationOutput(runtime,"task",row.getRunId(),manifest,proof);
+            throw new IllegalStateException("simulated transaction failure");
+        }));
+        assertEquals("QUEUED",rows.find("0","client","owner",row.getExecutionId()).getExecutionState());
+        assertEquals("STAGED",inTx(() -> rows.lockOutput("0","client","owner",row.getExecutionId(),"output_1")).getOutputState());
+        when(conversation.requireAccessible(any(),eq("42"))).thenThrow(new IllegalStateException("revoked"));
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                () -> inTx(() -> service.recoverStagedConversationOutput(runtime,"task",row.getRunId(),manifest,proof)));
+        assertEquals("STAGED",inTx(() -> rows.lockOutput("0","client","owner",row.getExecutionId(),"output_1")).getOutputState());
+    }
+
+    private static PersonalWorkspaceExecutionService.ConversationResultRecovery recovery(
+            PersonalWorkspaceExecutionEntity row,String hash,long length) {
+        return new PersonalWorkspaceExecutionService.ConversationResultRecovery(row.getExecutionId(),
+                "pwe_cmd_"+sha("command\n"+row.getExecutionId()),"pwe_msg_"+sha("message\n"+row.getExecutionId()),
+                row.getRuntimeInputSnapshotDigest(),List.of(new PersonalWorkspaceExecutionService.OutputDeclaration("output_1",hash,length)));
+    }
+
     private void configureService() {
         PersonalWorkspaceStorage storage=new FileSystemPersonalWorkspaceStorage(
                 storageRoot.toAbsolutePath(),1_000_000,Set.of("image/png"));
@@ -222,7 +283,7 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
                 new WorkspaceConversationAccessService.ConversationView("42","bounty","task:task",
                         "task",List.of("agent"),1,1));
         when(authority.runtimeAuthority(any(),eq("task"),anyString(),
-                argThat(purpose -> "RESULT".equals(purpose)||"FAILURE".equals(purpose))))
+                argThat(purpose -> "RESULT".equals(purpose)||"FAILURE".equals(purpose)||"RESULT_RECOVERY".equals(purpose))))
                 .thenAnswer(invocation -> {
                     String run=invocation.getArgument(2);
                     var execution=rows.findByTaskRun("0","client","owner","task",run);

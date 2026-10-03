@@ -189,6 +189,23 @@ public final class PersonalWorkspaceConversationRuntimeController {
                         item.outputId(),item.sha256(),item.length()))));
     }
 
+    @PostMapping(value="/{taskId}/runs/{runId}/conversation/result-commits/{manifestId}",
+            consumes=MediaType.APPLICATION_JSON_VALUE,produces=MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<PersonalWorkspaceExecutionService.CommitView> recoverStaged(
+            @PathVariable String taskId,@PathVariable String runId,@PathVariable String manifestId,
+            @RequestBody ResultRecoveryRequest body,HttpServletRequest request,Authentication authentication) {
+        noQuery(request);
+        if (body==null || !Integer.valueOf(1).equals(body.schemaVersion())
+                || body.outputs()==null || body.outputs().size()!=1) throw new BadRequest();
+        var item=body.outputs().getFirst();
+        if (item==null || item.length()==null || item.length()<0) throw new BadRequest();
+        return ok(executions.recoverStagedConversationOutput(scope(authentication),taskId,runId,manifestId,
+                new PersonalWorkspaceExecutionService.ConversationResultRecovery(body.executionId(),
+                        body.commandId(),body.messageId(),body.inputSnapshotDigest(),List.of(
+                            new PersonalWorkspaceExecutionService.OutputDeclaration(item.outputId(),
+                                    item.sha256(),item.length())))));
+    }
+
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/failure",consumes=MediaType.APPLICATION_JSON_VALUE,
             produces=MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<PersonalWorkspaceExecutionService.ExecutionView> failure(@PathVariable String taskId,
@@ -336,6 +353,8 @@ public final class PersonalWorkspaceConversationRuntimeController {
     public record FenceRequest(long version,String token) { }
     public record CommitItem(String outputId,String sha256,Long length) { }
     public record CommitRequest(FenceRequest fence,List<CommitItem> outputs) { }
+    public record ResultRecoveryRequest(Integer schemaVersion,String executionId,String commandId,
+            String messageId,String inputSnapshotDigest,List<CommitItem> outputs) { }
     public record FailRequest(FenceRequest fence,String code) { }
     public record ErrorBody(String code,String message) { }
     private static final class BadRequest extends RuntimeException { }

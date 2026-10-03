@@ -293,6 +293,11 @@ class ControlledImageIntentOperationGrantServiceTest {
                 "0","client","owner","agent","runtime"),"task","run","RESULT");
 
         assertEquals("execution",result.executionId());
+        execution.setExecutionState("QUEUED").setConversationLeaseExpiresAt(1L);
+        assertEquals("execution",service.runtimeAuthority(new ControlledImageFollowupAuthorityService.RuntimeScope(
+                "0","client","owner","agent","replacement-runtime"),"task","run","RESULT_RECOVERY").executionId());
+        assertEquals(lease,consent.getConsumedLeaseId());
+        assertEquals("runtime",execution.getConversationLeaseRuntimeId());
         verifyNoInteractions(grants,policies);
         verify(declarations,never()).getIfUnique();
         verify(sourceAccess,never()).getIfUnique();
@@ -384,6 +389,50 @@ class ControlledImageIntentOperationGrantServiceTest {
         verifyNoInteractions(grants,policies);
         verify(declarations,never()).getIfUnique();
         verify(sourceAccess,never()).getIfUnique();
+    }
+
+    @Test void resultRecoveryUsesImmutableOriginalStartAcrossExpiredRuntimeReplacement() {
+        ResultFixture fixture=resultFixture();
+        fixture.execution().setExecutionState("QUEUED").setConversationLeaseExpiresAt(1L);
+        stubResultFixture(fixture);
+        var replacement=new ControlledImageFollowupAuthorityService.RuntimeScope(
+                "0","client","owner","agent","replacement-runtime");
+        String originalLease=fixture.consent().getConsumedLeaseId();
+        assertEquals("execution",service.runtimeAuthority(replacement,"task","run","RESULT_RECOVERY").executionId());
+        // Ordinary upload/commit and START never inherit this result-only relaxation.
+        assertThrows(ControlledImageFollowupAuthorityService.Failure.class,
+                () -> service.runtimeAuthority(replacement,"task","run","RESULT"));
+        assertThrows(ControlledImageFollowupAuthorityService.Failure.class,
+                () -> service.runtimeAuthority(replacement,"task","run","COMMAND"));
+        assertEquals("runtime",fixture.execution().getConversationLeaseRuntimeId());
+        assertEquals(1L,fixture.execution().getConversationLeaseVersion());
+        assertEquals(originalLease,fixture.consent().getConsumedLeaseId());
+        verifyNoInteractions(grants,policies);
+        verify(declarations,never()).getIfUnique();verify(sourceAccess,never()).getIfUnique();
+    }
+
+    @Test void resultRecoveryRejectsLiveForeignLeaseRevocationAndHistoricalTupleCorruption() {
+        List<Consumer<ResultFixture>> drifts=List.of(
+                value -> value.execution().setConversationLeaseExpiresAt(Long.MAX_VALUE),
+                value -> value.execution().setConversationLeaseExpiresAt(null),
+                value -> value.execution().setConversationLeaseRuntimeId("different-history"),
+                value -> value.execution().setConversationProviderStartedAt(null),
+                value -> value.execution().setConversationLeaseVersion(2L),
+                value -> value.execution().setExecutionState("FAILED"),
+                value -> value.consent().setState("REVOKED"),
+                value -> value.operation().setState("REVOKED"),
+                value -> value.consent().setConsumedLeaseId("wrong"),
+                value -> value.operation().setConsumedLeaseId("wrong"));
+        for(var drift:drifts) {
+            ResultFixture fixture=resultFixture();
+            fixture.execution().setExecutionState("QUEUED").setConversationLeaseExpiresAt(1L);
+            drift.accept(fixture);stubResultFixture(fixture);
+            assertThrows(ControlledImageFollowupAuthorityService.Failure.class,
+                    () -> service.runtimeAuthority(new ControlledImageFollowupAuthorityService.RuntimeScope(
+                            "0","client","owner","agent","replacement-runtime"),"task","run","RESULT_RECOVERY"));
+        }
+        verifyNoInteractions(grants,policies);
+        verify(declarations,never()).getIfUnique();verify(sourceAccess,never()).getIfUnique();
     }
 
     @Test void resultAuthorityRejectsReservedOrMismatchedConsumedStartTupleFailClosed() {

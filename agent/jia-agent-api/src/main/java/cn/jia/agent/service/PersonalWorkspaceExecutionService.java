@@ -74,6 +74,11 @@ public interface PersonalWorkspaceExecutionService {
             String outputId, String filename, String contentMimeType, byte[] content);
     CommitView commitConversationOutput(RuntimeScope scope, String taskId, String runId, ConversationFence fence,
             String manifestId, List<OutputDeclaration> outputs);
+    /** Result-only reconciliation of already staged bytes. Never issues a lease or starts a Provider. */
+    CommitView recoverStagedConversationOutput(RuntimeScope scope, String taskId, String runId,
+            String manifestId, ConversationResultRecovery command);
+    record ConversationResultRecovery(String executionId, String commandId, String messageId,
+            String inputSnapshotDigest, List<OutputDeclaration> outputs) { }
     ExecutionView failConversation(RuntimeScope scope, String taskId, String runId, ConversationFence fence,
             String code);
     /** Never put these values in a browser response, ordinary queue payload or logs. */

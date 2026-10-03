@@ -29,6 +29,15 @@ class AgentRuntimeControlledImageV3SecurityIntegrationTest {
                 "/internal/agent/tasks/conversation-executions/controlled-image-v3-commands")));
     }
 
+    @Test void stagedResultRecoveryIsOneExactNativePostNotAnUploadOrStartCapability() {
+        String path="/internal/agent/tasks/task-1/runs/run-1/conversation/result-commits/pwe_m_"+"a".repeat(64);
+        assertTrue(AgentRuntimeAuthenticationFilter.allowed(request("POST",path)));
+        for(String method:List.of("GET","PUT","DELETE"))
+            assertFalse(AgentRuntimeAuthenticationFilter.allowed(request(method,path)));
+        for(String suffix:List.of("/content","/start","/lease","/extra","/"))
+            assertFalse(AgentRuntimeAuthenticationFilter.allowed(request("POST",path+suffix)));
+    }
+
     private static MockHttpServletRequest request(String method,String path) {
         return new MockHttpServletRequest(method,path);
     }

@@ -133,7 +133,7 @@ public class ControlledImageFollowupAuthorityServiceImpl implements ControlledIm
 
  @Override @Transactional(rollbackFor=Exception.class)
  public RuntimeAuthority runtimeAuthority(RuntimeScope scope,String taskId,String runId,String purpose){
-  if(scope==null||!Set.of("COMMAND","INPUTS","EXISTING_RUN","RESULT","FAILURE").contains(purpose))throw fail(Reason.BAD_REQUEST);
+  if(scope==null||!Set.of("COMMAND","INPUTS","EXISTING_RUN","RESULT","RESULT_RECOVERY","FAILURE").contains(purpose))throw fail(Reason.BAD_REQUEST);
   Scope owner=new Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());validScope(owner);id(scope.targetAgentId(),100);id(scope.runtimeInstanceId(),100);id(taskId,100);id(runId,100);
   try{var execution=executions.findByTaskRun(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,runId);
    if(execution==null||!Objects.equals(3,execution.getExecutionProtocolVersion())||!same(scope.targetAgentId(),execution.getTargetAgentId()))throw fail(Reason.NOT_FOUND_OR_FORBIDDEN);
@@ -144,10 +144,10 @@ public class ControlledImageFollowupAuthorityServiceImpl implements ControlledIm
    boolean failure="FAILURE".equals(purpose);
    boolean providerStarted=execution.getConversationProviderStartedAt()!=null
      ||execution.getConversationProviderLeaseVersion()!=null;
-   if("RESULT".equals(purpose)||failure&&providerStarted) {
+   if("RESULT".equals(purpose)||"RESULT_RECOVERY".equals(purpose)||failure&&providerStarted) {
     // Provider START already consumed the only callable authority. Result delivery proves that
     // exact persisted lease and deliberately does not reacquire declaration, policy or source access.
-    requireConsumedResultAuthority(scope,execution,op,consent);
+    requireConsumedResultAuthority(scope,execution,op,consent,"RESULT_RECOVERY".equals(purpose));
     return runtimeAuthority(execution,persistedProvider(consent));
    }
    boolean state=consent!=null && ("EXISTING_RUN".equals(purpose)
@@ -209,8 +209,8 @@ public class ControlledImageFollowupAuthorityServiceImpl implements ControlledIm
   requireInitialBridge(execution,bridge,consent);
   boolean providerStarted=execution.getConversationProviderStartedAt()!=null
     ||execution.getConversationProviderLeaseVersion()!=null;
-  if("RESULT".equals(purpose)||"FAILURE".equals(purpose)&&providerStarted) {
-   requireConsumedResultAuthority(scope,execution,null,consent);
+  if("RESULT".equals(purpose)||"RESULT_RECOVERY".equals(purpose)||"FAILURE".equals(purpose)&&providerStarted) {
+   requireConsumedResultAuthority(scope,execution,null,consent,"RESULT_RECOVERY".equals(purpose));
    return runtimeAuthority(execution,persistedProvider(consent));
   }
   String authorityPurpose="EXISTING_RUN".equals(purpose)?"EXISTING_RUN":"PROVIDER_START";
@@ -233,8 +233,20 @@ public class ControlledImageFollowupAuthorityServiceImpl implements ControlledIm
  }
  private static void requireConsumedResultAuthority(RuntimeScope scope,
    PersonalWorkspaceExecutionEntity execution,ControlledImageIntentOperationGrantEntity op,
-   AgentTaskProviderCostConsentEntity consent){
+   AgentTaskProviderCostConsentEntity consent,boolean recovery){
   Long leaseVersion=execution.getConversationProviderLeaseVersion();
+  String originalRuntime=execution.getConversationLeaseRuntimeId();
+  // Authentication independently proves the current live registered runtime. Recovery validates
+  // the historical consumed START against its original runtime, never rewrites it for a new caller.
+  if(originalRuntime==null||originalRuntime.isBlank()
+    ||recovery&&(!Set.of("QUEUED","OUTPUT_COMMITTED").contains(
+      Objects.requireNonNullElse(execution.getExecutionState(),""))
+      ||execution.getConversationLeaseExpiresAt()==null)
+    ||!recovery&&!same(scope.runtimeInstanceId(),originalRuntime)
+    ||recovery&&!"OUTPUT_COMMITTED".equals(execution.getExecutionState())
+      &&execution.getConversationLeaseExpiresAt()!=null
+      &&execution.getConversationLeaseExpiresAt()>System.currentTimeMillis()
+      &&!same(scope.runtimeInstanceId(),originalRuntime))throw fail(Reason.CONFLICT);
   if(consent==null||!"CONSUMED".equals(consent.getState())||consent.getConsumedAt()==null
     ||!same(execution.getControlledConsentId(),consent.getConsentId())
     ||!same(execution.getExecutionId(),consent.getReservedExecutionId())
@@ -243,12 +255,11 @@ public class ControlledImageFollowupAuthorityServiceImpl implements ControlledIm
     ||consent.getOperation()!=null&&!same(execution.getPermittedOperation(),consent.getOperation())
     ||execution.getConversationProviderStartedAt()==null||execution.getConversationProviderStartedAt()<1
     ||leaseVersion==null||leaseVersion<1||leaseVersion>SAFE
-    ||!same(scope.runtimeInstanceId(),execution.getConversationLeaseRuntimeId())
     ||!Objects.equals(execution.getConversationLeaseVersion(),leaseVersion)
     ||consent.getRuntimeInputSnapshotSha256()!=null
       &&!sameHash(consent.getRuntimeInputSnapshotSha256(),execution.getRuntimeInputSnapshotDigest()))
    throw fail(Reason.CONFLICT);
-  String leaseId=resultLeaseId(execution,scope.runtimeInstanceId(),leaseVersion);
+  String leaseId=resultLeaseId(execution,originalRuntime,leaseVersion);
   if(!same(leaseId,consent.getConsumedLeaseId()))throw fail(Reason.CONFLICT);
   if(op!=null&&(!"CONSUMED".equals(op.getState())
     ||!same(execution.getOperationGrantId(),op.getOperationGrantId())

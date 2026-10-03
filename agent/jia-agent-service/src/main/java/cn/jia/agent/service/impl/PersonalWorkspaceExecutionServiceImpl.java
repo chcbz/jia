@@ -588,6 +588,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 String authorityPurpose=switch(purpose) {
                     case "EXISTING_RUN" -> "EXISTING_RUN";
                     case "RESULT" -> "RESULT";
+                    case "RESULT_RECOVERY" -> "RESULT_RECOVERY";
                     case "FAILURE" -> "FAILURE";
                     default -> "COMMAND";
                 };
@@ -1457,6 +1458,35 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             requireConversationFence(scope,execution,fence,"OUTPUT_COMMITTED".equals(execution.getExecutionState()));
             requireControlledV3StartedForResult(execution);
             return commitConversationOutputs(scope,execution,manifestId,outputs);
+        });
+    }
+
+    /** Existing immutable server bytes only: no expired START fence is renewed or reused. */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public CommitView recoverStagedConversationOutput(RuntimeScope scope, String taskId, String runId,
+            String manifestId, ConversationResultRecovery command) {
+        requireConversationExecutionEnabled(); id(manifestId,"manifestId",100);
+        if (command==null || !safeId(command.executionId(),100) || !safeId(command.commandId(),100)
+                || !safeId(command.messageId(),100) || !sha(command.inputSnapshotDigest()))
+            throw failure(Reason.BAD_REQUEST);
+        validateManifest(command.outputs());
+        return withConversationRoot(scope,taskId,runId,true,true,false,"RESULT_RECOVERY",execution -> {
+            if (!Objects.equals(3,execution.getExecutionProtocolVersion())
+                    || execution.getControlledConsentId()==null
+                    || !same(command.executionId(),execution.getExecutionId())
+                    || !same(command.inputSnapshotDigest(),execution.getRuntimeInputSnapshotDigest()))
+                throw failure(Reason.NOT_FOUND);
+            requireStartCommand(execution,command.commandId(),command.messageId());
+            requireControlledV3StartedForResult(execution);
+            Long expiry=execution.getConversationLeaseExpiresAt();
+            if (!"OUTPUT_COMMITTED".equals(execution.getExecutionState())
+                    && expiry!=null && expiry>System.currentTimeMillis()
+                    && !same(scope.runtimeInstanceId(),execution.getConversationLeaseRuntimeId()))
+                throw failure(Reason.TASK_CONFLICT);
+            // lockAndVerifyManifest binds every declared byte to persisted STAGED/COMMITTED output.
+            // No new storage writes, source material reads, cost consumption or lease changes.
+            return commitConversationOutputs(scope,execution,manifestId,command.outputs());
         });
     }
 
