@@ -938,7 +938,7 @@ class AgentWorkItemReassignmentServiceTest {
     private AgentWorkItemReassignmentEntity receipt(
             String id, String commandId, String target, String fence) {
         AgentWorkItemReassignmentEntity value = new AgentWorkItemReassignmentEntity()
-                .setId(1L).setReassignmentId(id).setRequestSha256("1".repeat(64))
+                .setId(1L).setOwnerJiacn(OWNER).setReassignmentId(id).setRequestSha256("1".repeat(64))
                 .setTaskId(TASK).setWorkItemId(WORK).setOperatorSubject("operator-1")
                 .setCoordinatorAgentId(COORDINATOR).setPreviousAgentId(PREVIOUS)
                 .setTargetAgentId(target).setSourceCommandId(source.getCommandId())
@@ -991,12 +991,12 @@ class AgentWorkItemReassignmentServiceTest {
                 String tenant, String client) {
             long bindingId = nextId++;
             AgentPersonaBindingEntity binding = new AgentPersonaBindingEntity()
-                    .setId(bindingId).setJiacn(tenant).setPersonaCode("persona-" + bindingId)
+                    .setId(bindingId).setJiacn(OWNER).setPersonaCode("persona-" + bindingId)
                     .setAgentId(agentId).setBoundAt(1L).setStatus(bindingStatus);
             binding.setTenantId(tenant); binding.setClientId(client);
             AgentIdentityRegistryEntity identity = new AgentIdentityRegistryEntity()
                     .setId(100L + bindingId).setCanonicalAgentId(agentId).setCanonicalType(type)
-                    .setLifecycleStatus(lifecycle).setOwnerJiacn(tenant).setBindingId(bindingId)
+                    .setLifecycleStatus(lifecycle).setOwnerJiacn(OWNER).setBindingId(bindingId)
                     .setProvisionedAt(1L).setActivatedAt(2L).setAuditReason("test identity authority");
             if (AgentConstants.IDENTITY_STATUS_SUSPENDED.equals(lifecycle)) identity.setSuspendedAt(3L);
             identity.setTenantId(tenant); identity.setClientId(client);

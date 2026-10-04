@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** Frozen C01B E01-E22 production-entry and event contract audit. */
+/** C01B event contract plus owner-scoped plan/reassignment/funding entry audit. */
 class C01BTaskEventContractTest {
     private static final Set<String> EVENT_TYPES = Set.of(
             "TASK_CREATED", "TASK_ASSIGNED", "TASK_STARTED", "TASK_BLOCKED",
@@ -31,7 +31,7 @@ class C01BTaskEventContractTest {
             "WORK_ITEM_CLAIMED", "WORK_ITEM_STARTED", "WORK_ITEM_SUBMITTED",
             "WORK_ITEM_COMPLETED", "WORK_ITEM_REQUEUED", "WORK_ITEM_BLOCKED",
             "WORK_ITEM_FAILED", "WORK_ITEM_CANCELLED", "WORK_ITEM_LEASE_RENEWED",
-            "WORK_ITEM_LEASE_RELEASED", "PROGRESS_REPORTED", "HELP_REQUESTED",
+            "WORK_ITEM_LEASE_RELEASED", "WORK_ITEM_REASSIGNED", "PROGRESS_REPORTED", "HELP_REQUESTED",
             "REVIEW_REQUESTED", "REQUEST_CREATED", "REQUEST_ACKNOWLEDGED",
             "REQUEST_RESOLVED", "REQUEST_REJECTED", "REQUEST_CANCELLED",
             "THREAD_CREATED", "MESSAGE_POSTED", "ARTIFACT_PUBLISHED",
@@ -56,24 +56,34 @@ class C01BTaskEventContractTest {
             "memberCount", "workItemCount", "completedWorkItemCount",
             "failedWorkItemCount", "createdAt", "updatedAt", "assignedAt", "startedAt",
             "completedAt", "acknowledgedAt", "resolvedAt", "cancelledAt", "publishedAt",
-            "previousLeaseExpiresAt", "leaseExpiresAt");
+            "previousLeaseExpiresAt", "leaseExpiresAt",
+            "reassignmentId", "coordinatorAgentId", "previousAgentId", "targetAgentId",
+            "sourceCommandId", "commandId", "requestDigest", "leaseFenceSha256");
 
     private static final Map<String, Integer> PRODUCTION_APPEND_COUNTS = Map.ofEntries(
+            Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentWorkItemPlanServiceImpl.java", 1),
+            Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/funding/FundedBountyServiceImpl.java", 2),
+            Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/funding/FundedBountySettlementServiceImpl.java", 1),
             Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskStateServiceImpl.java", 1),
             Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentWorkItemLeaseServiceImpl.java", 1),
+            Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentWorkItemReassignmentServiceImpl.java", 1),
             Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskAggregationServiceImpl.java", 1),
             Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskCollaborationServiceImpl.java", 2),
             Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskArtifactOutcomeServiceImpl.java", 1),
             Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentWorkItemResultCommitServiceImpl.java", 1),
             Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskFormalDeliveryServiceImpl.java", 3),
-            Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskFormalDeliveryDecisionServiceImpl.java", 3),
+            Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskFormalDeliveryDecisionServiceImpl.java", 4),
             Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentLegacyTaskCompatibilityService.java", 5),
             Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentServiceImpl.java", 3),
             Map.entry("chat/jia-chat-service/src/main/java/cn/jia/chat/service/impl/AgentTaskThreadCreationTransaction.java", 2));
 
     private static final Set<String> ALLOWED_WRITER_IMPORTS = Set.of(
+            "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentWorkItemPlanServiceImpl.java",
+            "agent/jia-agent-service/src/main/java/cn/jia/agent/service/funding/FundedBountyServiceImpl.java",
+            "agent/jia-agent-service/src/main/java/cn/jia/agent/service/funding/FundedBountySettlementServiceImpl.java",
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskStateServiceImpl.java",
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentWorkItemLeaseServiceImpl.java",
+            "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentWorkItemReassignmentServiceImpl.java",
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskAggregationServiceImpl.java",
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskCollaborationServiceImpl.java",
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskArtifactOutcomeServiceImpl.java",
@@ -103,9 +113,9 @@ class C01BTaskEventContractTest {
             assertTrue(schema.contains(
                     "Aggregate type: task/member/work_item/request/artifact/thread/message/formal_delivery"));
             assertTrue(schema.contains(
-                    "UNIQUE KEY uk_task_event_version (tenant_id, client_id, task_id, event_version)"));
+                    "UNIQUE KEY uk_task_event_version (tenant_id, client_id, owner_jiacn, task_id, event_version)"));
             assertTrue(schema.contains(
-                    "UNIQUE KEY uk_task_event_id (tenant_id, client_id, event_id)"));
+                    "UNIQUE KEY uk_task_event_id (tenant_id, client_id, owner_jiacn, event_id)"));
         }
     }
 
@@ -118,7 +128,8 @@ class C01BTaskEventContractTest {
             String source = Files.readString(root.resolve(entry.getKey()), StandardCharsets.UTF_8);
             assertTrue(source.contains("AgentTaskMutationTransaction"), entry.getKey());
             int count = occurrences(source, "eventWriter.append(")
-                    + occurrences(source, "taskEventWriter.append(");
+                    + occurrences(source, "taskEventWriter.append(")
+                    + occurrences(source, "events.append(");
             actualAppendCounts.put(entry.getKey(), count);
         }
         assertEquals(PRODUCTION_APPEND_COUNTS, actualAppendCounts);

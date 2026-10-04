@@ -2421,17 +2421,20 @@ public class AgentServiceImpl implements AgentService {
             stats.setIntelligence(persona.getIntelligence());
             stats.setLeadership(persona.getLeadership());
         }
-        String tenantId = entity.getOwnerJiacn();
+        String tenantId = SINGLE_TENANT_ID;
+        String ownerJiacn = entity.getOwnerJiacn();
         String clientId = entity.getClientId();
-        List<AgentTaskMetaEntity> tasks = StringUtil.isBlank(tenantId) || StringUtil.isBlank(clientId)
+        List<AgentTaskMetaEntity> tasks = StringUtil.isBlank(ownerJiacn) || StringUtil.isBlank(clientId)
                 ? List.of()
                 : Optional.ofNullable(agentTaskMetaDao.findByAgentId(
                         tenantId, clientId, entity.getAgentId(), TASK_MEMBERSHIP_SNAPSHOT_LIMIT))
                         .orElseGet(Collections::emptyList);
         require(tasks.size() < TASK_MEMBERSHIP_SNAPSHOT_LIMIT,
                 "Agent task statistics snapshot exceeds the safe limit");
-        tasks.forEach(task -> requireScopedLegacyAgentTaskProjection(
-                task, tenantId, clientId, entity.getAgentId()));
+        tasks.forEach(task -> {
+            requireScopedLegacyAgentTaskProjection(task, tenantId, clientId, entity.getAgentId());
+            requireOwnedTaskProjection(task, tenantId, clientId, ownerJiacn, task.getTaskId());
+        });
         stats.setCompletedTaskCount((int) tasks.stream()
                 .filter(task -> AgentConstants.TASK_STATUS_COMPLETED.equals(task.getRewardStatus()))
                 .count());

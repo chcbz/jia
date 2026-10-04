@@ -418,7 +418,7 @@ class AgentWorkItemLeaseRealDatabaseTest {
                 AGENT_A, "lease-a", 900L, 0, 3);
 
         List<AgentTaskWorkItemEntity> rows = realWorkItemDao.listExpiredLeases(
-                TENANT, CLIENT, 1_000L, 10);
+                TENANT, CLIENT, OWNER, 1_000L, 10);
 
         assertEquals(List.of("work-z", "work-a", "work-b"), rows.stream()
                 .map(AgentTaskWorkItemEntity::getWorkItemId).toList());

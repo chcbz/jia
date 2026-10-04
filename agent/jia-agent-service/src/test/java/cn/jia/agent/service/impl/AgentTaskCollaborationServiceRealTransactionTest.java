@@ -392,7 +392,7 @@ class AgentTaskCollaborationServiceRealTransactionTest {
                 new Class<?>[]{AgentTaskWorkItemDao.class},
                 (proxy, method, args) -> {
                     if (method.getName().equals("updateActiveLeaseByVersion")
-                            && args[10] instanceof AgentTaskWorkItemDTO update
+                            && args[11] instanceof AgentTaskWorkItemDTO update
                             && "submitted".equals(update.getStatus())) {
                         beforeResultCas.countDown();
                         if (!allowResultCas.await(10, TimeUnit.SECONDS)) {

@@ -138,7 +138,7 @@ class AgentTaskCollaborationServiceImplTest {
         when(taskDao.findByTaskIdInOwnerScope(TENANT, CLIENT, "other-owner", TASK)).thenReturn(null);
 
         AgentTaskCollaborationException error = assertThrows(AgentTaskCollaborationException.class,
-                () -> service.list("tenant-b", CLIENT, OWNER, TASK, ACTOR, (AgentTaskRequestQueryDTO) null));
+                () -> service.list(TENANT, CLIENT, "other-owner", TASK, ACTOR, (AgentTaskRequestQueryDTO) null));
 
         assertEquals(Reason.NOT_FOUND, error.getReason());
         assertEquals("Resource was not found in the requested scope", error.getMessage());

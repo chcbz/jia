@@ -200,11 +200,13 @@ class AgentTaskAggregationRealDatabaseTest {
     void anotherOwnerCannotAggregateTheSameTenantTask() {
         insertTask(TASK, TENANT, "running", 0L);
         insertWork(TASK, "owner-work", true, "submitted", 0, 3, null, null);
-        for (String owner : List.of("owner-b", "OWNER-A", OWNER + " ")) {
+        for (String owner : List.of("owner-b", "OWNER-A")) {
             AgentTaskStateException hidden = assertThrows(AgentTaskStateException.class,
                     () -> aggregateService.aggregate(TENANT, CLIENT, owner, TASK, command(0L)));
             assertEquals(Reason.NOT_FOUND, hidden.getReason());
         }
+        assertThrows(IllegalArgumentException.class,
+                () -> aggregateService.aggregate(TENANT, CLIENT, OWNER + " ", TASK, command(0L)));
         assertTask("running", 0L);
         assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_event", Integer.class));
     }
@@ -215,13 +217,13 @@ class AgentTaskAggregationRealDatabaseTest {
         insertWork(TENANT_ZERO_TASK, "0", "zero-work", true,
                 "submitted", 0, 3, null, null);
 
-        assertNull(taskMetaDao.findByTaskIdInOwnerScope(
+        assertThrows(IllegalArgumentException.class, () -> taskMetaDao.findByTaskIdInOwnerScope(
                 OTHER_TENANT, CLIENT, OWNER, TENANT_ZERO_TASK));
-        assertNull(taskMetaDao.findByTaskIdForUpdateInOwnerScope(
+        assertThrows(IllegalArgumentException.class, () -> taskMetaDao.findByTaskIdForUpdateInOwnerScope(
                 OTHER_TENANT, CLIENT, OWNER, TENANT_ZERO_TASK));
-        assertEquals(List.of(), taskMetaDao.findAggregationSnapshot(
+        assertThrows(IllegalArgumentException.class, () -> taskMetaDao.findAggregationSnapshot(
                 OTHER_TENANT, CLIENT, OWNER, TENANT_ZERO_TASK));
-        assertEquals(0, taskMetaDao.updateStatusByVersionInOwnerScope(
+        assertThrows(IllegalArgumentException.class, () -> taskMetaDao.updateStatusByVersionInOwnerScope(
                 OTHER_TENANT, CLIENT, OWNER, TENANT_ZERO_TASK, 0L,
                 "failed", null, null, "must-not-cross-scope"));
 

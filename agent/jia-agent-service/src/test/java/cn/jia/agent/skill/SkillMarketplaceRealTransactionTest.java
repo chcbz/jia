@@ -124,7 +124,7 @@ class SkillMarketplaceRealTransactionTest {
         var commands=new AgentCommandTransportDaoImpl(sql.getMapper(AgentCommandTransportMapper.class));
         AgentCommandTransportWriter writer=new AgentCommandTransportWriterImpl(commands,transport,agents,mock(AgentTaskCollaborationAccessService.class),manager);
         var packages=new SkillPackages(); keys=mock(ApiKeyService.class);
-        key=new OauthApiKeyEntity();key.setId("key-1");key.setJiacn(ACTOR.tenantId());key.setClientId(ACTOR.clientId());key.setTenantId(ACTOR.tenantId());key.setStatus(1);
+        key=new OauthApiKeyEntity();key.setId("key-1");key.setJiacn(ACTOR.ownerJiacn());key.setClientId(ACTOR.clientId());key.setTenantId(ACTOR.tenantId());key.setStatus(1);
         when(keys.get("key-1")).thenReturn(key);
         credentialMapper=spy(sql.getMapper(EconomySkillCredentialMapper.class));
         doReturn(List.of()).when(credentialMapper).hostingCandidates(anyString(),anyString(),anyString());
@@ -345,7 +345,7 @@ class SkillMarketplaceRealTransactionTest {
     }
     @Test void foreignAgentKeyOrStaleDeliveryCannotDownloadOrSettle() {
         service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_inspector_1_0_0"),false);var i=installation();sent(i);
-        var foreign=new OauthApiKeyEntity();foreign.setId("other-key");foreign.setTenantId(ACTOR.tenantId());foreign.setJiacn(ACTOR.tenantId());foreign.setClientId(ACTOR.clientId());foreign.setStatus(1);
+        var foreign=new OauthApiKeyEntity();foreign.setId("other-key");foreign.setTenantId(ACTOR.tenantId());foreign.setJiacn(ACTOR.ownerJiacn());foreign.setClientId(ACTOR.clientId());foreign.setStatus(1);
         assertThrows(SkillMarketplaceException.class,()->results.packageBytes(foreign,i.getInstallationId()));
         assertThrows(SkillMarketplaceException.class,()->results.accept(ACTOR.tenantId(),ACTOR.clientId(),"other-agent","key-1",result(i,"SUCCEEDED",null)));
         jdbc.update("UPDATE agent_command_delivery SET active_attempt=2");

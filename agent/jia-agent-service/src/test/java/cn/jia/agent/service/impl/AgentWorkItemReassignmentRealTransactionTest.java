@@ -325,9 +325,9 @@ class AgentWorkItemReassignmentRealTransactionTest {
     private void insertFixture() {
         jdbc.update("""
                 INSERT INTO agent_task_meta
-                (task_id,reward_status,coordinator_agent_id,task_version,current_event_version,
+                (task_id,reward_status,coordinator_agent_id,task_version,current_event_version,risk_level,
                  tenant_id,client_id,owner_jiacn,create_time,update_time)
-                VALUES (?, 'running', ?, 7, 0, ?, ?, ?, 1, 1)
+                VALUES (?, 'running', ?, 7, 0, 'low', ?, ?, ?, 1, 1)
                 """, TASK, COORDINATOR, TENANT, CLIENT, OWNER);
         for (String[] member : new String[][] {
                 {PREVIOUS, "worker"}, {TARGET, "worker"}, {COORDINATOR, "coordinator"}}) {

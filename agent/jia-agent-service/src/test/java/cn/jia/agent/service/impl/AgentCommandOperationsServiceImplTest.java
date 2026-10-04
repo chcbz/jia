@@ -124,7 +124,7 @@ class AgentCommandOperationsServiceImplTest {
         var view = service.acceptBrokerRedriveV1(
                 request(null), "redrive-key-0001", NOW);
 
-        assertEquals("48d2609b-ad5b-83e4-8b66-5dcd1fa8fd29", view.operationId());
+        assertEquals("c14cfd18-1b3c-8fa8-a884-4aa97a5b9143", view.operationId());
         assertEquals("BROKER_REDRIVE", view.operationType());
         assertEquals("ACCEPTED", view.status());
         assertEquals("0", view.version());
