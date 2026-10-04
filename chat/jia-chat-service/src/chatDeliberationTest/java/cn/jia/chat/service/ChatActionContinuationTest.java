@@ -36,10 +36,12 @@ class ChatActionContinuationTest {
             assertTrue(f.deliberation.admitInspectionContinuation(f.action,context,f.chatScope).replay());
             assertEquals("901",child.userMessageId());assertEquals(1,f.messages.size());
             assertEquals(content,f.user().getContent());
+            var storedSources=(List<?>)f.map(f.user().getMetadata()).get("typedSourceSelectors");
+            assertEquals("1",f.object(storedSources.getFirst()).get("version"));
             var authorized=f.object(child.dispatches().getFirst().factsManifest().get("authorizedContext"));
             assertEquals(content,f.object(authorized.get("currentUserMessage")).get("content"));
             var input=new ChatMessageDTO();input.setRequestId("followup");input.setContent("继续讨论");
-            var next=f.deliberation.admit("0",f.sender,"42",1,f.chatScope,InteractionRoute.CHAT,input,null);
+            var next=f.deliberation.admit("0",new ServerResolvedSender("user","Human","owner","client",DisplayNameSource.FALLBACK),"42",1,f.chatScope,InteractionRoute.CHAT,input,null);
             var history=f.object(next.dispatches().getFirst().factsManifest().get("authorizedContext"));
             assertTrue(((List<?>)history.get("sourceMessageIds")).contains("901"));
             f.user().setContent("正文被篡改");
@@ -263,7 +265,8 @@ class ChatActionContinuationTest {
                         new ChatTypedDeliberationContextService.Scope("0","owner","client","42",1),"task","agent",selectors("file").stream().map(s ->
                                 new cn.jia.chat.api.ChatTypedDeliberationWire.SourceSelector(s.kind(),s.fileId(),s.version(),s.purpose(),s.assetId(),s.assetRevision())).toList());
                 parentCatalog=chatContext.sourceCatalogJson();parentFacts=chatContext.facts();
-                admitted=deliberation.admit("0",sender,"42",1,chatScope,InteractionRoute.CHAT,input,null,parentFacts);
+                admitted=deliberation.admit("0",sender,"42",1,chatScope,InteractionRoute.CHAT,input,null,parentFacts,
+                        Map.of("sourceSelectors",ChatTypedDeliberationContextService.parseCatalog(parentCatalog).stream().map(source->source.get("selector")).toList()));
             } else admitted=deliberation.admitInspection("0",sender,"42",1,chatScope,input,null,parentContext.typedInspection(),null);
             var d=admitted.dispatches().getFirst(); parentTurn=turns.get(d.turnId());
             Map<String,Object> bound=new LinkedHashMap<>();bound.put("tenantId","0");bound.put("ownerJiacn","owner");bound.put("clientId","client");bound.put("conversationId","42");

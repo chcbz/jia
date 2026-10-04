@@ -40,6 +40,30 @@ class ChatTypedDiscussionAdmissionServiceTest {
         when(conversations.lockScopedById("owner","client","42")).thenReturn(conversation);when(scopes.parsePersistedTargetAgentIds("[\"agent\"]")).thenReturn(List.of("agent"));when(typed.store()).thenReturn(store);
     }
 
+    @Test void attachmentOnlyPreservesBodyAndResolvedSelectorsAndReplaysTheOriginalKey() {
+        var source=new ChatTypedDeliberationWire.SourceSelector("TASK_LINKED_WORKSPACE_VERSION","file","7","INPUT",null,null);
+        var command=new ChatTypedDeliberationWire.DiscussionCommand("DISCUSSION","task",3,"",null,null,null,null,List.of(source));
+        var facts=Map.<String,Object>of("schemaVersion",3,"availableActions",List.of(),"inspectedSourceRefIds",List.of(),
+                "availableSources",List.of(Map.of("sourceRefId","source-file","kind","TASK_WORKSPACE_FILE","mediaType","image")));
+        when(contexts.resolve(any(),eq("task"),eq("agent"),eq(List.of(source)))).thenReturn(
+                new ChatTypedDeliberationContextService.Context(facts,"[]",List.of(source),Map.of("schemaVersion",3,"state","READY")));
+        when(deliberation.admit(eq("0"),eq(sender),eq("42"),eq(1L),any(),any(),any(),isNull(),any(),any()))
+                .thenAnswer(i->admitted(((ChatMessageDTO)i.getArgument(6)).getRequestId()));
+        var durable=new java.util.concurrent.atomic.AtomicReference<ChatTypedDeliberationStore.Admission>();
+        when(store.findAdmissionByKey(storeScope,"attachment-key",true)).thenAnswer(i->durable.get());
+        when(store.insertAdmission(any())).thenAnswer(i->{durable.set(i.getArgument(0));return 1;});
+        var first=service.admit("0",sender,"42","attachment-key",command);
+        var replay=service.admit("0",sender,"42","attachment-key",command);
+        assertEquals(first.requestId(),replay.requestId());assertTrue(replay.replay());
+        verify(deliberation,times(1)).admit(eq("0"),eq(sender),eq("42"),eq(1L),any(),any(),
+                argThat(input->"".equals(input.getContent())),isNull(),eq(facts),
+                argThat(metadata->List.of(ChatTypedDeliberationWire.selectorMap(source)).equals(metadata.get("sourceSelectors"))));
+        var changed=new ChatTypedDeliberationWire.DiscussionCommand("DISCUSSION","task",3," ",null,null,null,null,List.of(source));
+        assertEquals(ChatDeliberationException.Reason.CONFLICT,assertThrows(ChatDeliberationException.class,
+                ()->service.admit("0",sender,"42","attachment-key",changed)).reason());
+        verify(contexts,times(1)).resolve(any(),eq("task"),eq("agent"),eq(List.of(source)));
+    }
+
     @Test void freshDiscussionCreatesOneOrdinaryChatAndTypedAdmissionWithoutAuthority() {
         when(contexts.resolve(any(),eq("task"),eq("agent"),eq(List.of()))).thenReturn(context());
         when(deliberation.admit(eq("0"),eq(sender),eq("42"),eq(1L),any(),eq(cn.jia.chat.deliberation.InteractionRoute.CHAT),any(),isNull(),any(),any()))

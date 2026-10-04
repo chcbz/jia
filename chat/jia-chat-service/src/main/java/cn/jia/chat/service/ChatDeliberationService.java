@@ -303,12 +303,19 @@ public class ChatDeliberationService {
         long now = System.currentTimeMillis();
         ChatMessageEntity userMessage = continuationUser;
         if (userMessage == null) {
+            Map<String, Object> userMetadata = trustedUserMetadata(
+                    input, scope, requestId, revision, route, trustedSender, taskMaterials);
+            if ("bounty".equals(scope.scopeType()) && route == InteractionRoute.CHAT
+                    && hasTypedSources(trustedTypedFacts) && trustedTypedAdmission != null
+                    && trustedTypedAdmission.get("sourceSelectors") instanceof List<?> selectors) {
+                // Resolved exact references only; no URL, bytes, or client-supplied authority.
+                userMetadata.put("typedSourceSelectors", selectors);
+            }
             userMessage = new ChatMessageEntity()
                 .setConversationId(conversationId)
                 .setMessageType("USER")
                 .setContent(content)
-                .setMetadata(JsonUtil.toJson(trustedUserMetadata(
-                        input, scope, requestId, revision, route, trustedSender, taskMaterials)))
+                .setMetadata(JsonUtil.toJson(userMetadata))
                 .setJiacn(ownerJiacn)
                 .setSyncStatus("PENDING")
                 .setConversationType(JuyitingConversationScopeService.CONVERSATION_TYPE_JUYITING)

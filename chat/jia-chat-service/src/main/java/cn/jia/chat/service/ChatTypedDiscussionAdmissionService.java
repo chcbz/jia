@@ -95,7 +95,7 @@ public class ChatTypedDiscussionAdmissionService {
             input.setTargetAgentId(targets.getFirst());input.setTargetAgentIds(List.copyOf(targets));
             var scope=new JuyitingConversationScope("bounty","task:"+command.taskId(),command.taskId(),targets.getFirst(),List.copyOf(targets),List.copyOf(targets));
             var admitted=deliberation.admit(tenantId,sender,conversationId,generation,scope,
-                    InteractionRoute.CHAT,input,null,context.facts(),admissionFacts(command));
+                    InteractionRoute.CHAT,input,null,context.facts(),admissionFacts(command,context.selectors()));
             List<String> turnIds=admitted.dispatches().stream().map(ChatDeliberationService.Dispatch::turnId).toList();
             if(turnIds.size()!=1)throw unavailable();
             long now=System.currentTimeMillis();
@@ -138,9 +138,11 @@ public class ChatTypedDiscussionAdmissionService {
                 Long.toString(row.userMessageId()),turns,row.state(),Long.toString(row.stateVersion()),Long.toString(row.eventCursor()),
                 "/chat/requests/"+row.requestId(),"/chat/conversations/"+row.scope().conversationId()+"/requests/"+row.requestId()+"/typed-outcome",replay,row.pendingQuestionId());
     }
-    private static Map<String,Object> admissionFacts(ChatTypedDeliberationWire.DiscussionCommand command) {
+    private static Map<String,Object> admissionFacts(ChatTypedDeliberationWire.DiscussionCommand command,
+            List<ChatTypedDeliberationWire.SourceSelector> selectors) {
         Map<String,Object> value=new LinkedHashMap<>();
         value.put("schemaVersion",1);value.put("intent",command.intent());
+        value.put("sourceSelectors",selectors.stream().map(ChatTypedDeliberationWire::selectorMap).toList());
         value.put("parentOutcomeId",command.parentOutcomeId());
         value.put("expectedParentStateVersion",command.expectedParentStateVersion()==null
                 ?null:Long.toString(command.expectedParentStateVersion()));
