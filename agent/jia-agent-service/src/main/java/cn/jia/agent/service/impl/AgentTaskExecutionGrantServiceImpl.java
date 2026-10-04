@@ -842,6 +842,29 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
         } catch (AgentTaskCollaborationException failure) { throw translate(failure); }
     }
 
+    @Override
+    public Admission resolveSelectedOutputPromotion(Scope scope,String taskId,long expectedAssignmentRevision,
+            String targetAgentId) {
+        validateScope(scope); exact(taskId,"taskId",100); exact(targetAgentId,"targetAgentId",100);
+        if (expectedAssignmentRevision < 0 || expectedAssignmentRevision > MAX_SAFE_INTEGER) throw bad("expectedAssignmentRevision is invalid");
+        try {
+            return transactions.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),
+                    scope.ownerJiacn(),taskId,root -> {
+                        AgentTaskExecutionGrantEntity observed=grants.findActiveByTask(scope.tenantId(),
+                                scope.clientId(),scope.ownerJiacn(),taskId);
+                        if (observed==null) throw notFound();
+                        lockTargetAndPersistedInputs(scope,taskId,targetAgentId,observed);
+                        AgentTaskExecutionGrantEntity locked=grants.findByGrantForUpdate(scope.tenantId(),
+                                scope.clientId(),scope.ownerJiacn(),taskId,observed.getGrantId());
+                        if (locked==null || !same(observed.getRequestHash(),locked.getRequestHash())) {
+                            throw conflict("Active grant changed during server-side resolution");
+                        }
+                        return verifyPromotionAdmission(scope,root,locked,locked.getGrantVersion(),expectedAssignmentRevision,
+                                targetAgentId);
+                    });
+        } catch (AgentTaskCollaborationException failure) { throw translate(failure); }
+    }
+
     private void lockTargetAndPersistedInputs(Scope scope,String taskId,String targetAgentId,
             AgentTaskExecutionGrantEntity observed) {
         List<String> locked=identities.lockActiveCanonicalAgentIdsInScope(scope.tenantId(),

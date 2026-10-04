@@ -57,13 +57,29 @@ CREATE TABLE IF NOT EXISTS chat_selected_output_finalization_item (
   operation_id VARCHAR(100) COLLATE utf8mb4_0900_bin NOT NULL,
   item_order INT NOT NULL,
   request_id VARCHAR(100) COLLATE utf8mb4_0900_bin NOT NULL,
-  step_id VARCHAR(100) COLLATE utf8mb4_0900_bin NOT NULL,
-  output_id VARCHAR(100) COLLATE utf8mb4_0900_bin NOT NULL,
+  step_id VARCHAR(100) COLLATE utf8mb4_0900_bin DEFAULT NULL,
+  output_id VARCHAR(100) COLLATE utf8mb4_0900_bin DEFAULT NULL,
   sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   title VARCHAR(255) COLLATE utf8mb4_0900_bin NOT NULL,
   purpose VARCHAR(255) COLLATE utf8mb4_0900_bin NOT NULL,
+  source_kind VARCHAR(24) COLLATE utf8mb4_0900_bin NOT NULL DEFAULT 'OUTPUT',
+  turn_id VARCHAR(100) COLLATE utf8mb4_0900_bin DEFAULT NULL,
+  message_id VARCHAR(19) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
+  snapshot_id VARCHAR(100) COLLATE utf8mb4_0900_bin DEFAULT NULL,
+  final_digest CHAR(71) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
   PRIMARY KEY (tenant_id,owner_jiacn,client_id,operation_id,item_order),
   UNIQUE KEY uk_csofi_source (tenant_id,owner_jiacn,client_id,operation_id,request_id,step_id,output_id),
+  UNIQUE KEY uk_csofi_message (tenant_id,owner_jiacn,client_id,operation_id,request_id,turn_id,message_id),
   CONSTRAINT chk_csofi_order CHECK (item_order>=0 AND item_order<99),
-  CONSTRAINT chk_csofi_hash CHECK (CHAR_LENGTH(sha256)=64)
+  CONSTRAINT chk_csofi_hash CHECK (CHAR_LENGTH(sha256)=64),
+CONSTRAINT chk_csofi_source CHECK (
+    (source_kind='OUTPUT' AND step_id IS NOT NULL AND output_id IS NOT NULL
+      AND turn_id IS NULL AND message_id IS NULL AND snapshot_id IS NULL AND final_digest IS NULL)
+    OR (source_kind='COMPLETED_MESSAGE' AND step_id IS NULL AND output_id IS NULL
+      AND turn_id IS NOT NULL AND message_id IS NOT NULL AND snapshot_id IS NOT NULL AND final_digest IS NOT NULL
+      AND REGEXP_LIKE(turn_id,'^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$','c')
+      AND REGEXP_LIKE(snapshot_id,'^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$','c')
+      AND REGEXP_LIKE(message_id,'^[1-9][0-9]{0,18}$','c')
+      AND (CHAR_LENGTH(message_id)<19 OR message_id<='9223372036854775807')
+      AND REGEXP_LIKE(final_digest,'^sha256:[0-9a-f]{64}$','c')))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;

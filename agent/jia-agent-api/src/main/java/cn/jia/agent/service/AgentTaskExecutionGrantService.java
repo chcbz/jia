@@ -63,6 +63,9 @@ public interface AgentTaskExecutionGrantService {
     Admission admitSelectedOutputPromotion(Scope scope, String taskId, String grantId,
             long expectedGrantVersion, long expectedAssignmentRevision, String targetAgentId);
 
+    /** Resolves the current owner-scoped grant for promotion, never grants tool execution. */
+    Admission resolveSelectedOutputPromotion(Scope scope,String taskId,long expectedAssignmentRevision,String targetAgentId);
+
     record Scope(String tenantId, String clientId, String ownerJiacn) { }
     /** Byte-free, fixed-version inputs verified under the same live root/grant admission. */
     record AuthorizedInput(String fileId, int version, String purpose, String contentMimeType,

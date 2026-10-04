@@ -1,6 +1,9 @@
 package cn.jia.chat.service;
 
 import cn.jia.agent.service.AgentSelectedOutputFinalizationException;
+import cn.jia.agent.service.AgentTaskExecutionGrantService;
+import cn.jia.agent.service.AgentTaskExecutionGrantException;
+import cn.jia.agent.service.SelectedOutputFinalizationDigest;
 import cn.jia.agent.service.AgentSelectedOutputFinalizationService;
 import cn.jia.agent.service.PersonalWorkspaceExecutionService;
 import cn.jia.chat.deliberation.ChatInteractionStepStore;
@@ -194,6 +197,81 @@ class ChatSelectedOutputFinalizationServiceTest {
         assertThrows(IllegalArgumentException.class,()->f.service.submit(f.scope,"task-1","key-0002",duplicate));
     }
 
+    private static ChatSelectedOutputFinalizationService.Selection textSelection(Fixture f,String id){
+        return new ChatSelectedOutputFinalizationService.Selection("text-request",null,null,f.hash,"Text","final",
+                new SelectedOutputFinalizationDigest.MessageSource("text-turn",id,"snapshot","sha256:"+"a".repeat(64)));
+    }
+    private static void textReady(Fixture f,ChatSelectedOutputFinalizationService.Selection text,long generation){
+        when(f.messages.resolve(eq(f.scope),any())).thenReturn(new ChatCompletedMessageSourceService.Resolved(generation,"agent-1",7,
+                AgentSelectedOutputFinalizationService.SourceOutput.completedMessage(text.requestId(),null,text.messageSource(),text.sha256(),
+                        text.title(),text.purpose(),f.bytes)));
+        when(f.grants.resolveSelectedOutputPromotion(any(),eq("task-1"),eq(7L),eq("agent-1"))).thenReturn(
+                new AgentTaskExecutionGrantService.Admission("grant-1",2,7,"agent-1","FINALIZE_SELECTED_OUTPUTS",false));
+    }
+    @Test void pureTextAndMixedTextMediaUseExistingPromotionWithExactPersistedReferences(){
+        for(boolean mixed:List.of(false,true)){
+            Fixture f=new Fixture();f.sourceReady();f.agentHappy();f.advanceByArguments();
+            var text=textSelection(f,"9223372036854775807");textReady(f,text,4);
+            var selected=mixed?List.of(text,f.selection):List.of(text);
+            var command=new ChatSelectedOutputFinalizationService.Command(7,7,"100","accept it",selected);
+            var receipt=f.service.submit(f.scope,"task-1",Fixture.KEY,command);
+            assertEquals("completed",receipt.state());assertEquals(selected,receipt.selectedOutputs());
+            verify(f.agent).prepare(any(),argThat(c->c.outputs().getFirst().messageSource().equals(text.messageSource())
+                    && c.outputs().getFirst().stepId()==null && c.outputs().getFirst().executionId()==null
+                    && c.outputs().getFirst().runId()==null && c.outputs().getFirst().outputId()==null));
+            verify(f.store).create(anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),
+                    anyLong(),anyLong(),anyString(),argThat(rows->rows.getFirst().messageSource().equals(text.messageSource())));
+            if(!mixed)verifyNoInteractions(f.executions,f.steps,f.deliberations);
+        }
+    }
+    @Test void textPromotionStillRejectsChangedGrantOrMixedConversationGeneration(){
+        Fixture f=new Fixture();f.sourceReady();f.advanceByArguments();var text=textSelection(f,"9");textReady(f,text,4);
+        when(f.grants.resolveSelectedOutputPromotion(any(),anyString(),anyLong(),anyString())).thenThrow(
+                new AgentTaskExecutionGrantException(AgentTaskExecutionGrantException.Reason.CONFLICT,"private"));
+        var command=new ChatSelectedOutputFinalizationService.Command(7,7,"100","accept it",List.of(text));
+        assertEquals("FINALIZATION_GRANT_CHANGED",f.service.submit(f.scope,"task-1",Fixture.KEY,command).errorCode());
+        verify(f.agent,never()).prepare(any(),any());
+        Fixture g=new Fixture();g.sourceReady();g.advanceByArguments();textReady(g,text,5);
+        var mixed=new ChatSelectedOutputFinalizationService.Command(7,7,"100","accept it",List.of(text,g.selection));
+        assertEquals("FINALIZATION_SOURCE_UNAVAILABLE",g.service.submit(g.scope,"task-1",Fixture.KEY,mixed).errorCode());
+        verify(g.agent,never()).prepare(any(),any());
+    }
+    @Test void textCommittedReplayAndReadonlyReadsNeverReloadSourcesOrCurrentGrants(){
+        Fixture f=new Fixture();f.advanceByArguments();var text=textSelection(f,"9");
+        when(f.agent.reconcile(any(),eq("task-1"),anyString(),anyString())).thenAnswer(i->
+                view(i.getArgument(2),"TASK_COMPLETED","delivery-1","accepted","completed",12));
+        var command=new ChatSelectedOutputFinalizationService.Command(7,7,"100","accept it",List.of(text));
+        var receipt=f.service.submit(f.scope,"task-1",Fixture.KEY,command);assertEquals(List.of(text),receipt.selectedOutputs());
+        verifyNoInteractions(f.messages,f.grants,f.executions,f.steps,f.deliberations);
+        var row=new ChatSelectedOutputFinalizationStore.Operation(receipt.operationId(),"task-1",Fixture.KEY,SelectedOutputFinalizationDigest.request("task-1",7,7,"100","accept it",List.of(
+                        new SelectedOutputFinalizationDigest.Selection(text.requestId(),null,null,text.sha256(),text.title(),text.purpose(),text.messageSource()))),"100",7,7,
+                "accept it","completed","TASK_COMPLETED",3,"delivery-1","accepted","completed",12,null,false,List.of(
+                new ChatSelectedOutputFinalizationStore.Selection(text.requestId(),null,null,text.sha256(),text.title(),text.purpose(),text.messageSource())));
+        when(f.store.findByKey("0","owner-1","client-1","task-1",Fixture.KEY)).thenReturn(row);
+        assertEquals(List.of(text),f.service.getByKey(f.scope,"task-1",Fixture.KEY).selectedOutputs());
+        verifyNoInteractions(f.messages,f.grants,f.executions,f.steps,f.deliberations);
+    }
+    @Test void invalidTextUnionCannotCarryOutputIdsOrChangeSameMessageIntoTwoSelections(){
+        Fixture f=new Fixture();var text=textSelection(f,"9");
+        var mixed=new ChatSelectedOutputFinalizationService.Selection(text.requestId(),"fake-step","fake-output",text.sha256(),text.title(),text.purpose(),text.messageSource());
+        for(var selected:List.of(List.of(mixed),List.of(text,text))){
+            var command=new ChatSelectedOutputFinalizationService.Command(7,7,"100","accept it",selected);
+            assertThrows(IllegalArgumentException.class,()->f.service.submit(f.scope,"task-1",Fixture.KEY,command));
+        }
+        verifyNoInteractions(f.store,f.agent,f.messages,f.grants);
+    }
+
+    @Test void corruptedPersistedSelectionDigestFailsBeforeReplayOrReadonlyRecoveryWrites(){
+        Fixture f=new Fixture();var text=textSelection(f,"9");
+        var corrupted=new ChatSelectedOutputFinalizationStore.Operation("op-1","task-1",Fixture.KEY,f.initial.digest(),"100",7,7,
+                "accept it","pending","PROMOTING",1,null,null,"assigned",7,null,false,List.of(new ChatSelectedOutputFinalizationStore.Selection(
+                text.requestId(),null,null,text.sha256(),text.title(),text.purpose(),text.messageSource())));
+        when(f.store.findByKey("0","owner-1","client-1","task-1",Fixture.KEY)).thenReturn(corrupted);
+        assertThrows(ChatSelectedOutputFinalizationStore.Persistence.class,()->f.service.getByKey(f.scope,"task-1",Fixture.KEY));
+        verifyNoInteractions(f.messages,f.grants,f.agent);verify(f.store,never()).advance(anyString(),anyString(),anyString(),any(),
+                anyString(),anyString(),any(),any(),anyString(),anyLong(),any(),anyBoolean());
+    }
+
     private static AgentSelectedOutputFinalizationService.PromotionView view(String operation,String stage,
             String delivery,String deliveryState,String taskState,long taskVersion){
         return new AgentSelectedOutputFinalizationService.PromotionView(
@@ -207,8 +285,10 @@ class ChatSelectedOutputFinalizationServiceTest {
         final ChatInteractionStepStore steps=mock(ChatInteractionStepStore.class);
         final PersonalWorkspaceExecutionService executions=mock(PersonalWorkspaceExecutionService.class);
         final AgentSelectedOutputFinalizationService agent=mock(AgentSelectedOutputFinalizationService.class);
+        final ChatCompletedMessageSourceService messages=mock(ChatCompletedMessageSourceService.class);
+        final AgentTaskExecutionGrantService grants=mock(AgentTaskExecutionGrantService.class);
         final ChatSelectedOutputFinalizationService service=
-                new ChatSelectedOutputFinalizationService(store,deliberations,steps,executions,agent);
+                new ChatSelectedOutputFinalizationService(store,deliberations,steps,executions,agent,messages,grants);
         final ChatSelectedOutputFinalizationService.Scope scope=
                 new ChatSelectedOutputFinalizationService.Scope("0","client-1","owner-1");
         final byte[] bytes="chosen".getBytes(StandardCharsets.UTF_8);final String hash=sha(bytes);
@@ -217,7 +297,8 @@ class ChatSelectedOutputFinalizationServiceTest {
         final List<ChatSelectedOutputFinalizationStore.Selection> selections=List.of(
                 new ChatSelectedOutputFinalizationStore.Selection("req-1","step-1","out-1",hash,"Chosen","final"));
         final ChatSelectedOutputFinalizationStore.Operation initial=new ChatSelectedOutputFinalizationStore.Operation(
-                "op-1","task-1",KEY,"b".repeat(64),"100",7,7,"accept it","pending","PROMOTING",1,
+                "op-1","task-1",KEY,SelectedOutputFinalizationDigest.request("task-1",7,7,"100","accept it",List.of(
+                        new SelectedOutputFinalizationDigest.Selection("req-1","step-1","out-1",hash,"Chosen","final"))),"100",7,7,"accept it","pending","PROMOTING",1,
                 null,null,"assigned",7,null,false,selections);
         Fixture(){
             when(store.create(anyString(),anyString(),anyString(),anyString(),eq("task-1"),eq(KEY),anyString(),

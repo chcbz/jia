@@ -115,6 +115,18 @@ class ChatSelectedOutputFinalizationSchemaInitializerTest {
         assertThrows(IllegalStateException.class,()->invokeChecks(rows));
     }
 
+    @Test void textSourceSqlUsesExistingItemTableAndExplicitExclusiveRealMessageReferences() throws Exception {
+        String ddl=String.join("\n",ChatSelectedOutputFinalizationSchemaInitializer.ddl());
+        for(String condition:List.of("source_kind='OUTPUT' AND step_id IS NOT NULL AND output_id IS NOT NULL",
+                "source_kind='COMPLETED_MESSAGE' AND step_id IS NULL AND output_id IS NULL",
+                "turn_id IS NOT NULL AND message_id IS NOT NULL AND snapshot_id IS NOT NULL AND final_digest IS NOT NULL",
+                "uk_csofi_message","9223372036854775807"))assertTrue(ddl.contains(condition),condition);
+        String upgrade=new org.springframework.core.io.ClassPathResource("db/chat-selected-output-finalization-completed-message-v1.sql")
+                .getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(upgrade.contains("ALTER TABLE chat_selected_output_finalization_item"));assertFalse(upgrade.contains("CREATE TABLE"));
+        assertFalse(upgrade.contains("UPDATE "));assertFalse(upgrade.contains("DROP "));
+    }
+
     private static String clause(int snapshot,String check) throws Exception {
         try(var in=new org.springframework.core.io.ClassPathResource("mmd-finalization-schema-checks-mysql8021.json").getInputStream()){
             return new tools.jackson.databind.ObjectMapper().readTree(in).get("snapshots").get(snapshot)
@@ -158,6 +170,7 @@ class ChatSelectedOutputFinalizationSchemaInitializerTest {
         }else{
             indexes.put("PRIMARY",List.of("tenant_id","owner_jiacn","client_id","operation_id","item_order"));
             indexes.put("uk_csofi_source",List.of("tenant_id","owner_jiacn","client_id","operation_id","request_id","step_id","output_id"));
+            indexes.put("uk_csofi_message",List.of("tenant_id","owner_jiacn","client_id","operation_id","request_id","turn_id","message_id"));
         }
         List<Map<String,Object>> rows=new ArrayList<>();
         indexes.forEach((name,columns)->{

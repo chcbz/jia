@@ -1,6 +1,9 @@
 package cn.jia.chat.service;
 
 import cn.jia.agent.service.AgentSelectedOutputFinalizationException;
+import cn.jia.agent.service.AgentTaskExecutionGrantService;
+import cn.jia.agent.service.AgentTaskExecutionGrantException;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import cn.jia.agent.service.AgentSelectedOutputFinalizationService;
 import cn.jia.agent.service.PersonalWorkspaceExecutionService;
 import cn.jia.agent.service.SelectedOutputFinalizationDigest;
@@ -29,17 +32,26 @@ public final class ChatSelectedOutputFinalizationService {
     private final ChatInteractionStepStore steps;
     private final PersonalWorkspaceExecutionService executions;
     private final AgentSelectedOutputFinalizationService agent;
+    private final ChatCompletedMessageSourceService messages;
+    private final AgentTaskExecutionGrantService grants;
 
     public ChatSelectedOutputFinalizationService(ChatSelectedOutputFinalizationStore store,
             ChatDeliberationService deliberations,ChatInteractionStepStore steps,
-            PersonalWorkspaceExecutionService executions,AgentSelectedOutputFinalizationService agent){
+            PersonalWorkspaceExecutionService executions,AgentSelectedOutputFinalizationService agent,
+            ChatCompletedMessageSourceService messages,AgentTaskExecutionGrantService grants){
         this.store=Objects.requireNonNull(store);this.deliberations=Objects.requireNonNull(deliberations);
         this.steps=Objects.requireNonNull(steps);this.executions=Objects.requireNonNull(executions);
-        this.agent=Objects.requireNonNull(agent);
+        this.agent=Objects.requireNonNull(agent);this.messages=Objects.requireNonNull(messages);this.grants=Objects.requireNonNull(grants);
     }
 
     public record Scope(String tenantId,String clientId,String ownerJiacn) { }
-    public record Selection(String requestId,String stepId,String outputId,String sha256,String title,String purpose) { }
+    public record Selection(String requestId,@JsonInclude(JsonInclude.Include.NON_NULL) String stepId,
+            @JsonInclude(JsonInclude.Include.NON_NULL) String outputId,String sha256,String title,String purpose,
+            @JsonInclude(JsonInclude.Include.NON_NULL) SelectedOutputFinalizationDigest.MessageSource messageSource) {
+        public Selection(String requestId,String stepId,String outputId,String sha256,String title,String purpose) {
+            this(requestId,stepId,outputId,sha256,title,purpose,null);
+        }
+    }
     public record Command(long expectedTaskVersion,long expectedAssignmentRevision,String conversationId,
             String summary,List<Selection> selectedOutputs) {
         public Command { selectedOutputs=selectedOutputs==null?null:List.copyOf(selectedOutputs); }
@@ -54,13 +66,14 @@ public final class ChatSelectedOutputFinalizationService {
         String immutable=SelectedOutputFinalizationDigest.request(taskId,command.expectedTaskVersion(),
                 command.expectedAssignmentRevision(),command.conversationId(),command.summary(),
                 command.selectedOutputs().stream().map(s->new SelectedOutputFinalizationDigest.Selection(
-                        s.requestId(),s.stepId(),s.outputId(),s.sha256(),s.title(),s.purpose())).toList());
+                        s.requestId(),s.stepId(),s.outputId(),s.sha256(),s.title(),s.purpose(),s.messageSource())).toList());
         List<ChatSelectedOutputFinalizationStore.Selection> rows=command.selectedOutputs().stream()
                 .map(s->new ChatSelectedOutputFinalizationStore.Selection(s.requestId(),s.stepId(),s.outputId(),
-                        s.sha256(),s.title(),s.purpose())).toList();
+                        s.sha256(),s.title(),s.purpose(),s.messageSource())).toList();
         ChatSelectedOutputFinalizationStore.Operation operation=store.create(scope.tenantId(),scope.ownerJiacn(),
                 scope.clientId(),operationId,taskId,key,immutable,command.conversationId(),
                 command.expectedTaskVersion(),command.expectedAssignmentRevision(),command.summary(),rows);
+        requirePersistedReceipt(operation);
         if("completed".equals(operation.state())||("failed".equals(operation.state())&&!operation.retryable()))
             return receipt(operation);
         try {
@@ -120,6 +133,26 @@ public final class ChatSelectedOutputFinalizationService {
         List<AgentSelectedOutputFinalizationService.SourceOutput> result=new ArrayList<>();
         String target=null,grant=null;long grantVersion=-1,generation=-1;
         for(Selection selected:valid.command().selectedOutputs()){
+            if(selected.messageSource()!=null) {
+                var text=messages.resolve(scope,new ChatCompletedMessageSourceService.Command(valid.taskId(),
+                        valid.command().conversationId(),valid.command().expectedAssignmentRevision(),selected.requestId(),
+                        selected.messageSource(),selected.sha256(),selected.title(),selected.purpose()));
+                if(text==null || text.generation()<1 || text.assignmentRevision()!=valid.command().expectedAssignmentRevision()
+                        || text.output()==null || !selected.messageSource().equals(text.output().messageSource())
+                        || !selected.requestId().equals(text.output().requestId()) || !selected.sha256().equals(text.output().sha256())
+                        || !selected.title().equals(text.output().title()) || !selected.purpose().equals(text.output().purpose()))throw sourceUnavailable();
+                var admitted=grants.resolveSelectedOutputPromotion(new AgentTaskExecutionGrantService.Scope(
+                        scope.tenantId(),scope.clientId(),scope.ownerJiacn()),valid.taskId(),
+                        valid.command().expectedAssignmentRevision(),text.targetAgentId());
+                if(admitted==null || admitted.grantId()==null || admitted.grantVersion()<1
+                        || admitted.assignmentRevision()!=valid.command().expectedAssignmentRevision()
+                        || !text.targetAgentId().equals(admitted.targetAgentId())
+                        || !"FINALIZE_SELECTED_OUTPUTS".equals(admitted.operation()) || admitted.paidExecutionAuthorized())throw sourceUnavailable();
+                if(target==null){target=text.targetAgentId();grant=admitted.grantId();grantVersion=admitted.grantVersion();generation=text.generation();}
+                else if(!target.equals(text.targetAgentId()) || !grant.equals(admitted.grantId())
+                        || grantVersion!=admitted.grantVersion() || generation!=text.generation())throw sourceUnavailable();
+                result.add(text.output());continue;
+            }
             ChatDeliberationService.RequestView request;
             try {
                 request=deliberations.getRequest(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),selected.requestId());
@@ -269,7 +302,7 @@ public final class ChatSelectedOutputFinalizationService {
         requirePersistedReceipt(row);
         return new Receipt(row.operationId(),row.taskId(),row.conversationId(),row.state(),Long.toString(row.stateVersion()),
                 row.stage(),Long.toString(row.expectedTaskVersion()),Long.toString(row.expectedAssignmentRevision()),
-                row.selections().stream().map(s->new Selection(s.requestId(),s.stepId(),s.outputId(),s.sha256(),s.title(),s.purpose())).toList(),
+                row.selections().stream().map(s->new Selection(s.requestId(),s.stepId(),s.outputId(),s.sha256(),s.title(),s.purpose(),s.messageSource())).toList(),
                 row.deliveryId(),row.deliveryState(),row.taskState(),Long.toString(row.taskVersion()),row.errorCode(),row.retryable());
     }
     private static void requirePersistedReceipt(ChatSelectedOutputFinalizationStore.Operation row) {
@@ -286,11 +319,16 @@ public final class ChatSelectedOutputFinalizationService {
         Set<String> sources=new LinkedHashSet<>();
         for(var selected:row.selections()) {
             if(selected==null)throw persistence();
-            persistedId(selected.requestId(),100);persistedId(selected.stepId(),100);persistedId(selected.outputId(),100);
+            persistedId(selected.requestId(),100);
+            try{sourceReference(selected.stepId(),selected.outputId(),selected.messageSource());}catch(IllegalArgumentException invalid){throw persistence();}
             if(selected.sha256()==null||!selected.sha256().matches("[0-9a-f]{64}"))throw persistence();
             persistedText(selected.title(),255);persistedText(selected.purpose(),255);
-            if(!sources.add(selected.requestId()+"\0"+selected.stepId()+"\0"+selected.outputId()))throw persistence();
+            if(!sources.add(sourceKey(selected.requestId(),selected.stepId(),selected.outputId(),selected.messageSource())))throw persistence();
         }
+        String expected=SelectedOutputFinalizationDigest.request(row.taskId(),row.expectedTaskVersion(),row.expectedAssignmentRevision(),
+                row.conversationId(),row.summary(),row.selections().stream().map(v->new SelectedOutputFinalizationDigest.Selection(
+                        v.requestId(),v.stepId(),v.outputId(),v.sha256(),v.title(),v.purpose(),v.messageSource())).toList());
+        if(!expected.equals(row.digest()))throw persistence();
         boolean terminal="completed".equals(row.state());
         if(terminal!=("TASK_COMPLETED".equals(row.stage())&&row.deliveryId()!=null
                 &&"accepted".equals(row.deliveryState())&&"completed".equals(row.taskState())
@@ -313,10 +351,21 @@ public final class ChatSelectedOutputFinalizationService {
         id(c.conversationId(),100);text(c.summary(),4000);
         if(c.selectedOutputs()==null||c.selectedOutputs().isEmpty()||c.selectedOutputs().size()>99)throw bad();
         Set<String> sources=new LinkedHashSet<>();
-        for(Selection s:c.selectedOutputs()){if(s==null)throw bad();id(s.requestId(),100);id(s.stepId(),100);id(s.outputId(),100);
+        for(Selection s:c.selectedOutputs()){if(s==null)throw bad();id(s.requestId(),100);sourceReference(s.stepId(),s.outputId(),s.messageSource());
             if(s.sha256()==null||!s.sha256().matches("[0-9a-f]{64}"))throw bad();text(s.title(),255);text(s.purpose(),255);
-            if(!sources.add(s.requestId()+"\0"+s.stepId()+"\0"+s.outputId()))throw bad();}
+            if(!sources.add(sourceKey(s.requestId(),s.stepId(),s.outputId(),s.messageSource())))throw bad();}
         return new Valid(taskId,c);
+    }
+    private static void sourceReference(String step,String output,SelectedOutputFinalizationDigest.MessageSource source){
+        if(source==null){id(step,100);id(output,100);return;}
+        if(step!=null || output!=null)throw bad();
+        id(source.turnId(),100);id(source.snapshotId(),100);
+        if(source.messageId()==null || !source.messageId().matches("[1-9][0-9]{0,18}")
+                || new java.math.BigInteger(source.messageId()).compareTo(java.math.BigInteger.valueOf(Long.MAX_VALUE))>0
+                || source.finalDigest()==null || !source.finalDigest().matches("sha256:[0-9a-f]{64}"))throw bad();
+    }
+    private static String sourceKey(String request,String step,String output,SelectedOutputFinalizationDigest.MessageSource source){
+        return source==null?request+"\0"+step+"\0"+output:"COMPLETED_MESSAGE\0"+request+"\0"+source.turnId()+"\0"+source.messageId();
     }
     private static boolean scopeExact(Scope scope,String tenant,String owner,String client){
         return scope.tenantId().equals(tenant)&&scope.ownerJiacn().equals(owner)&&scope.clientId().equals(client);
@@ -328,6 +377,8 @@ public final class ChatSelectedOutputFinalizationService {
     private static Failure classify(RuntimeException e){
         if(e instanceof AgentSelectedOutputFinalizationException a)
             return new Failure(a.reason().code(),a.reason().retryable());
+        if(e instanceof AgentTaskExecutionGrantException grant)
+            return new Failure("FINALIZATION_GRANT_CHANGED",false);
         if(e instanceof SourceUnavailable)return new Failure("FINALIZATION_SOURCE_UNAVAILABLE",false);
         if(e instanceof PersonalWorkspaceExecutionService.Failure f)
             return f.getReason()==PersonalWorkspaceExecutionService.Reason.STORAGE_UNAVAILABLE

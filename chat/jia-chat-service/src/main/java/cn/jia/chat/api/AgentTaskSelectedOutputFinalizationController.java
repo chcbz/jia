@@ -1,6 +1,7 @@
 package cn.jia.chat.api;
 
 import cn.jia.chat.service.ChatSelectedOutputFinalizationService;
+import cn.jia.agent.service.SelectedOutputFinalizationDigest;
 import cn.jia.chat.service.ChatSelectedOutputFinalizationStore;
 import cn.jia.chat.service.HumanSenderIdentityResolver;
 import cn.jia.chat.service.ServerResolvedSender;
@@ -46,6 +47,8 @@ public final class AgentTaskSelectedOutputFinalizationController {
     // Insignificant JSON whitespace is discarded while reading and therefore needs no invented cap.
     static final int MAX_BODY=derivedMaxBody();
     private static final Set<String> ROOT=Set.of("expectedTaskVersion","expectedAssignmentRevision","conversationId","summary","selectedOutputs");
+    private static final Set<String> TEXT_ITEM=Set.of("requestId","messageSource","sha256","title","purpose");
+    private static final Set<String> MESSAGE=Set.of("turnId","messageId","snapshotId","finalDigest");
     private static final Set<String> ITEM=Set.of("requestId","stepId","outputId","sha256","title","purpose");
     private static final ObjectMapper JSON=JsonMapper.builder().enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS).build();
@@ -102,10 +105,24 @@ public final class AgentTaskSelectedOutputFinalizationController {
             String conversation=bodyIdentifier(root,"conversationId"),summary=text(root,"summary",4000);
             JsonNode source=root.get("selectedOutputs");if(!source.isArray()||source.isEmpty()||source.size()>99)throw new RequestFailure();
             List<ChatSelectedOutputFinalizationService.Selection> selected=new ArrayList<>();Set<String> unique=new HashSet<>();
-            for(JsonNode item:source){if(!exactObject(item,ITEM))throw new RequestFailure();
-                var value=new ChatSelectedOutputFinalizationService.Selection(bodyIdentifier(item,"requestId"),bodyIdentifier(item,"stepId"),
-                        bodyIdentifier(item,"outputId"),sha(item,"sha256"),text(item,"title",255),text(item,"purpose",255));
-                if(!unique.add(value.requestId()+"\0"+value.stepId()+"\0"+value.outputId()))throw new RequestFailure();selected.add(value);}
+            for(JsonNode item:source){
+                ChatSelectedOutputFinalizationService.Selection value;
+                if(exactObject(item,ITEM)) {
+                    value=new ChatSelectedOutputFinalizationService.Selection(bodyIdentifier(item,"requestId"),bodyIdentifier(item,"stepId"),
+                            bodyIdentifier(item,"outputId"),sha(item,"sha256"),text(item,"title",255),text(item,"purpose",255));
+                } else if(exactObject(item,TEXT_ITEM) && exactObject(item.get("messageSource"),MESSAGE)) {
+                    JsonNode message=item.get("messageSource");String messageId=text(message,"messageId",19);
+                    if(!messageId.matches("[1-9][0-9]{0,18}") || new java.math.BigInteger(messageId).compareTo(java.math.BigInteger.valueOf(Long.MAX_VALUE))>0)throw new RequestFailure();
+                    String finalDigest=text(message,"finalDigest",71);if(!finalDigest.matches("sha256:[0-9a-f]{64}"))throw new RequestFailure();
+                    value=new ChatSelectedOutputFinalizationService.Selection(bodyIdentifier(item,"requestId"),null,null,
+                            sha(item,"sha256"),text(item,"title",255),text(item,"purpose",255),
+                            new SelectedOutputFinalizationDigest.MessageSource(bodyIdentifier(message,"turnId"),messageId,
+                                    bodyIdentifier(message,"snapshotId"),finalDigest));
+                } else throw new RequestFailure();
+                String reference=value.messageSource()==null?value.requestId()+"\0"+value.stepId()+"\0"+value.outputId():
+                        "COMPLETED_MESSAGE\0"+value.requestId()+"\0"+value.messageSource().turnId()+"\0"+value.messageSource().messageId();
+                if(!unique.add(reference))throw new RequestFailure();selected.add(value);
+            }
             return new ChatSelectedOutputFinalizationService.Command(taskVersion,assignment,conversation,summary,List.copyOf(selected));
         }catch(RequestFailure e){throw e;}catch(Exception e){throw new RequestFailure();}
     }
@@ -137,9 +154,13 @@ public final class AgentTaskSelectedOutputFinalizationController {
                 +"\"title\":\"\",\"purpose\":\"\"}";
         int rootValues=6*(100+4_000);
         int itemValues=6*(100+100+100+255+255)+64;
+        String textItem="{\"requestId\":\"\",\"messageSource\":{\"turnId\":\"\",\"messageId\":\"\",\"snapshotId\":\"\",\"finalDigest\":\"\"},"
+                +"\"sha256\":\"\",\"title\":\"\",\"purpose\":\"\"}";
+        int mediaMaximum=item.getBytes(java.nio.charset.StandardCharsets.UTF_8).length+itemValues;
+        int textMaximum=textItem.getBytes(java.nio.charset.StandardCharsets.UTF_8).length+6*(100+100+19+100+71+255+255)+64;
         // Empty [] already contributes two bytes; populated form adds each item and 98 commas.
         int significant=root.getBytes(java.nio.charset.StandardCharsets.UTF_8).length+rootValues-2
-                +99*(item.getBytes(java.nio.charset.StandardCharsets.UTF_8).length+itemValues)+98+2;
+                +99*Math.max(mediaMaximum,textMaximum)+98+2;
         // Normalization retains at most one external whitespace byte before each significant byte,
         // so legal pretty-printed JSON is accepted without retaining an unbounded whitespace run.
         return Math.addExact(Math.multiplyExact(significant,2),1);

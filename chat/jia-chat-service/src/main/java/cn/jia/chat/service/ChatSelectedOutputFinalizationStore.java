@@ -1,6 +1,7 @@
 package cn.jia.chat.service;
 
 import jakarta.inject.Named;
+import cn.jia.agent.service.SelectedOutputFinalizationDigest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -12,7 +13,12 @@ public class ChatSelectedOutputFinalizationStore {
     private final JdbcTemplate jdbc;
     public ChatSelectedOutputFinalizationStore(JdbcTemplate jdbc){this.jdbc=Objects.requireNonNull(jdbc);}
 
-    public record Selection(String requestId,String stepId,String outputId,String sha256,String title,String purpose) { }
+    public record Selection(String requestId,String stepId,String outputId,String sha256,String title,String purpose,
+            SelectedOutputFinalizationDigest.MessageSource messageSource) {
+        public Selection(String requestId,String stepId,String outputId,String sha256,String title,String purpose){
+            this(requestId,stepId,outputId,sha256,title,purpose,null);
+        }
+    }
     public record Operation(String operationId,String taskId,String key,String digest,String conversationId,
             long expectedTaskVersion,long expectedAssignmentRevision,String summary,String state,String stage,
             long stateVersion,String deliveryId,String deliveryState,String taskState,long taskVersion,
@@ -40,9 +46,12 @@ public class ChatSelectedOutputFinalizationStore {
             for(int i=0;i<selections.size();i++){Selection s=selections.get(i);
                 if(jdbc.update("""
                     INSERT INTO chat_selected_output_finalization_item
-                    (tenant_id,owner_jiacn,client_id,operation_id,item_order,request_id,step_id,output_id,sha256,title,purpose)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?)
-                    """,tenant,owner,client,operationId,i,s.requestId(),s.stepId(),s.outputId(),s.sha256(),s.title(),s.purpose())!=1)throw new Persistence();}
+                    (tenant_id,owner_jiacn,client_id,operation_id,item_order,request_id,step_id,output_id,sha256,title,purpose,
+                     source_kind,turn_id,message_id,snapshot_id,final_digest)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,tenant,owner,client,operationId,i,s.requestId(),s.stepId(),s.outputId(),s.sha256(),s.title(),s.purpose(),s.messageSource()==null?"OUTPUT":"COMPLETED_MESSAGE",
+                    s.messageSource()==null?null:s.messageSource().turnId(),s.messageSource()==null?null:s.messageSource().messageId(),
+                    s.messageSource()==null?null:s.messageSource().snapshotId(),s.messageSource()==null?null:s.messageSource().finalDigest())!=1)throw new Persistence();}
         } catch(org.springframework.dao.DuplicateKeyException race){
             Operation replay=findByKey(tenant,owner,client,taskId,key);
             if(replay==null||!digest.equals(replay.digest()))throw new Conflict();return replay;
@@ -131,14 +140,24 @@ public class ChatSelectedOutputFinalizationStore {
         String tenant=(String)scopeArgs[0],owner=(String)scopeArgs[1],client=(String)scopeArgs[2];
         record Ordered(int order,Selection selection) { }
         List<Ordered> rows=jdbc.query("""
-            SELECT item_order,request_id,step_id,output_id,sha256,title,purpose
+            SELECT item_order,request_id,step_id,output_id,sha256,title,purpose,source_kind,turn_id,message_id,snapshot_id,final_digest
             FROM chat_selected_output_finalization_item WHERE BINARY tenant_id=BINARY ?
              AND BINARY owner_jiacn=BINARY ? AND BINARY client_id=BINARY ? AND BINARY operation_id=BINARY ?
             ORDER BY item_order
             """,(rs,n)->new Ordered(rs.getInt(1),new Selection(rs.getString(2),rs.getString(3),rs.getString(4),
-                    rs.getString(5),rs.getString(6),rs.getString(7))),tenant,owner,client,operationId);
+                    rs.getString(5),rs.getString(6),rs.getString(7),messageSource(rs))),tenant,owner,client,operationId);
         for(int index=0;index<rows.size();index++)if(rows.get(index).order()!=index)throw new Persistence();
         return rows.stream().map(Ordered::selection).toList();
+    }
+    private static SelectedOutputFinalizationDigest.MessageSource messageSource(java.sql.ResultSet rs) throws java.sql.SQLException {
+        String kind=rs.getString(8),turn=rs.getString(9),message=rs.getString(10),snapshot=rs.getString(11),digest=rs.getString(12);
+        if("OUTPUT".equals(kind)) {
+            if(rs.getString(3)==null || rs.getString(4)==null || turn!=null || message!=null || snapshot!=null || digest!=null)throw new Persistence();
+            return null;
+        }
+        if(!"COMPLETED_MESSAGE".equals(kind) || rs.getString(3)!=null || rs.getString(4)!=null
+                || turn==null || message==null || snapshot==null || digest==null)throw new Persistence();
+        return new SelectedOutputFinalizationDigest.MessageSource(turn,message,snapshot,digest);
     }
     private static Operation one(List<Operation> rows){if(rows.size()>1)throw new Persistence();return rows.isEmpty()?null:rows.getFirst();}
     public static final class Missing extends RuntimeException { }

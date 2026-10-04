@@ -27,7 +27,9 @@ public final class ChatSelectedOutputFinalizationSchemaInitializer implements In
             "chat_conversation_asset",Set.of("tenant_id","owner_jiacn","client_id","conversation_id",
                     "conversation_generation","request_id","step_id","execution_id","run_id","output_id",
                     "content_mime_type","sha256","byte_length"),
-            "chat_conversation",Set.of("id","tenant_id","jiacn","client_id","deleted_at","lifecycle_generation"),
+            "chat_conversation",Set.of("id","tenant_id","jiacn","client_id","deleted_at","lifecycle_generation",
+                    "task_id","conversation_type","conversation_scope_type","conversation_scope_key"),
+            "chat_message",Set.of("id","tenant_id","jiacn","client_id","conversation_id","content","metadata","message_type","sender_type"),
             "agent_task_meta",Set.of("tenant_id","client_id","owner_jiacn","task_id","reward_status","task_version"));
     private static final Map<String,Set<String>> TABLE_COLUMNS=Map.of(
             "chat_selected_output_finalization",Set.of("operation_id","tenant_id","owner_jiacn","client_id",
@@ -35,7 +37,7 @@ public final class ChatSelectedOutputFinalizationSchemaInitializer implements In
                     "expected_assignment_revision","summary","state","stage","state_version","delivery_id",
                     "delivery_state","task_state","task_version","error_code","retryable","created_at","updated_at"),
             "chat_selected_output_finalization_item",Set.of("tenant_id","owner_jiacn","client_id","operation_id",
-                    "item_order","request_id","step_id","output_id","sha256","title","purpose"));
+                    "item_order","request_id","step_id","output_id","sha256","title","purpose","source_kind","turn_id","message_id","snapshot_id","final_digest"));
     private static final Map<String,Map<String,Index>> INDEXES=Map.of(
             "chat_selected_output_finalization",Map.of(
                     "PRIMARY",new Index(true,List.of("tenant_id","owner_jiacn","client_id","operation_id")),
@@ -44,19 +46,21 @@ public final class ChatSelectedOutputFinalizationSchemaInitializer implements In
             "chat_selected_output_finalization_item",Map.of(
                     "PRIMARY",new Index(true,List.of("tenant_id","owner_jiacn","client_id","operation_id","item_order")),
                     "uk_csofi_source",new Index(true,List.of("tenant_id","owner_jiacn","client_id","operation_id",
-                            "request_id","step_id","output_id"))));
+                            "request_id","step_id","output_id")),
+                    "uk_csofi_message",new Index(true,List.of("tenant_id","owner_jiacn","client_id","operation_id",
+                            "request_id","turn_id","message_id"))));
     private static final Map<String,Set<String>> CHECKS=Map.of(
             "chat_selected_output_finalization",Set.of("chk_csof_versions","chk_csof_key","chk_csof_delivery_state",
                     "chk_csof_state","chk_csof_stage","chk_csof_progress","chk_csof_outcome","chk_csof_terminal"),
-            "chat_selected_output_finalization_item",Set.of("chk_csofi_order","chk_csofi_hash"));
+            "chat_selected_output_finalization_item",Set.of("chk_csofi_order","chk_csofi_hash","chk_csofi_source"));
     private static final Map<String,Set<String>> ASCII_COLUMNS=Map.of(
             "chat_selected_output_finalization",Set.of("request_digest"),
-            "chat_selected_output_finalization_item",Set.of("sha256"));
+            "chat_selected_output_finalization_item",Set.of("sha256","message_id","final_digest"));
     private static final Map<String,Set<String>> BINARY_COLUMNS=Map.of(
             "chat_selected_output_finalization",Set.of("operation_id","tenant_id","owner_jiacn","client_id","task_id",
                     "idempotency_key","conversation_id","state","stage","delivery_id","delivery_state","task_state","error_code"),
             "chat_selected_output_finalization_item",Set.of("tenant_id","owner_jiacn","client_id","operation_id",
-                    "request_id","step_id","output_id","title","purpose"));
+                    "request_id","step_id","output_id","title","purpose","source_kind","turn_id","snapshot_id"));
 
     // Evidence: actual MySQL8.0.21 old/repaired finalization checks admitted/rejected NULL
     // differently while sharing constraint names and ENFORCED=YES. Compare only these
@@ -119,7 +123,17 @@ public final class ChatSelectedOutputFinalizationSchemaInitializer implements In
             if(!columns.containsAll(TABLE_COLUMNS.get(table)))throw new IllegalStateException(
                     "Finalization columns missing: "+table+" "+difference(TABLE_COLUMNS.get(table),columns));
             validateIndexes(jdbc,table);validateChecks(jdbc,table);validateBinary(jdbc,table);
+            if("chat_selected_output_finalization_item".equals(table))validateSourceNullability(jdbc);
         }
+    }
+
+    private static void validateSourceNullability(JdbcTemplate jdbc){
+        Map<String,String> columns=new LinkedHashMap<>();
+        for(var row:jdbc.queryForList("SELECT column_name,is_nullable FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=?",
+                "chat_selected_output_finalization_item"))columns.put(lower(row,"column_name"),text(row,"is_nullable"));
+        for(String field:List.of("step_id","output_id","turn_id","message_id","snapshot_id","final_digest"))
+            if(!"YES".equalsIgnoreCase(columns.get(field)))throw new IllegalStateException("Finalization text source nullability drift: "+field);
+        if(!"NO".equalsIgnoreCase(columns.get("source_kind")))throw new IllegalStateException("Finalization source kind nullability drift");
     }
 
     private static void validateIndexes(JdbcTemplate jdbc,String table) {
