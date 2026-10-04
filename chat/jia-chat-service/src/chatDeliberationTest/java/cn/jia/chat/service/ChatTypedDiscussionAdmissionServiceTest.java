@@ -45,8 +45,9 @@ class ChatTypedDiscussionAdmissionServiceTest {
         var actual=new ChatCompletedMessageSourceServiceTest.Fixture();var parent=actual.row.get();
         when(typed.requireParent(storeScope,parent.outcomeId())).thenReturn(parent);
         when(events.findTurn("0","owner","client",parent.turnId())).thenReturn(actual.turn.setState("FINAL_PERSISTED"));
+        var verifiedParent=actual.finals.readIfV3(actual.scope,parent.requestId(),parent.turnId(),1,"CHAT");
         when(finals.readIfV3(storeScope,parent.requestId(),parent.turnId(),parent.requestRevision(),"CHAT"))
-                .thenReturn(actual.finals.readIfV3(actual.scope,parent.requestId(),parent.turnId(),1,"CHAT"));
+                .thenReturn(verifiedParent);
         when(contexts.resolve(any(),eq("task"),eq("agent"),eq(List.of()))).thenReturn(new ChatTypedDeliberationContextService.Context(
                 ChatActionFinalValidator.factsMap(ChatActionOutcomeContract.factsJson(parent.factsJson())),"[]",List.of(),Map.of("schemaVersion",3,"state","READY")));
         when(deliberation.admit(eq("0"),eq(sender),eq("42"),eq(1L),any(),any(),any(),isNull(),any(),any()))
