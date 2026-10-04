@@ -921,7 +921,7 @@ class ArchiveMaintenanceServiceImplTest {
 
     @Test
     void publishesValidatedTwoChapterEditionWithoutPrefaceInOneTransactionShape() throws Exception {
-        ArchiveMaintenanceJobRecord job = job("DRAFT_ONLY");
+        ArchiveMaintenanceJobRecord job = jobState("AWAITING_PUBLISH", null, 1);
         ArchiveAppointmentRecord appointment = appointment("ACTIVE", 1);
         ArchiveDraftUpdateRequest body = body("第一回正文", "第二回正文");
         byte[] source = "第一回第一回正文第二回第二回正文"
@@ -940,14 +940,18 @@ class ArchiveMaintenanceServiceImplTest {
         ArchiveValidationRecord validation = new ArchiveValidationRecord("val_2", DRAFT, 2,
                 "PASSED", "c".repeat(64), "[]");
         allowManager("publish");
-        when(store.findJob(JOB, false)).thenReturn(job);
-        when(store.findJob(JOB, true)).thenReturn(job);
+        java.util.concurrent.atomic.AtomicReference<ArchiveMaintenanceJobRecord> currentJob =
+                new java.util.concurrent.atomic.AtomicReference<>(job);
+        when(store.findJob(JOB, false)).thenAnswer(call -> currentJob.get());
+        when(store.findJob(JOB, true)).thenAnswer(call -> currentJob.get());
         when(store.findCurrentAppointment(COLLECTION, false)).thenReturn(appointment);
         activeAppointment(appointment);
         when(identities.requireActiveIdentityForBinding("0", "client-a", "owner-a", 7L, AGENT))
                 .thenReturn(new AgentIdentityRegistryEntity().setCanonicalAgentId(AGENT));
-        when(store.findDraftByJob(JOB, false)).thenReturn(draft);
-        when(store.findDraftByJob(JOB, true)).thenReturn(draft);
+        java.util.concurrent.atomic.AtomicReference<ArchiveDraftRecord> currentDraft =
+                new java.util.concurrent.atomic.AtomicReference<>(draft);
+        when(store.findDraftByJob(JOB, false)).thenAnswer(call -> currentDraft.get());
+        when(store.findDraftByJob(JOB, true)).thenAnswer(call -> currentDraft.get());
         when(store.findValidation("val_2")).thenReturn(validation);
         operation("POST", "/archive/admin/v1/jobs/" + JOB + "/publish", "PUBLICATION", "pub_1");
         ArchiveMaintenanceStore.CollectionWork collectionWork =
@@ -955,12 +959,35 @@ class ArchiveMaintenanceServiceImplTest {
         when(store.lockCollectionWork(COLLECTION, "wrk_new")).thenReturn(null, collectionWork);
         ArchiveWorkRecord insertedWork = new ArchiveWorkRecord("wrk_new", "小书", null);
         when(content.lockWork("wrk_new")).thenReturn(null, insertedWork);
-        when(content.markReady(anyString())).thenReturn(1);
-        when(content.switchActiveEdition(eq("wrk_new"), anyString())).thenReturn(1);
+        java.util.concurrent.atomic.AtomicReference<ArchiveEditionRecord> storedEdition =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.Map<String, ArchiveBlockRecord> storedBlocks = new java.util.LinkedHashMap<>();
+        java.util.Map<String, ArchiveParagraphRecord> storedParagraphs = new java.util.LinkedHashMap<>();
+        doAnswer(call -> { storedEdition.set(call.getArgument(0)); return null; })
+                .when(content).insertEdition(any());
+        when(content.lockEdition(anyString())).thenAnswer(call -> storedEdition.get());
+        when(content.findEdition(anyString())).thenAnswer(call -> storedEdition.get());
+        doAnswer(call -> { ArchiveBlockRecord value = call.getArgument(0);
+            storedBlocks.put(value.blockId(), value); return null; }).when(content).insertBlock(any());
+        when(content.findBlock(anyString(), anyString())).thenAnswer(call -> storedBlocks.get(call.getArgument(1)));
+        doAnswer(call -> { ArchiveParagraphRecord value = call.getArgument(0);
+            storedParagraphs.put(value.paragraphId(), value); return null; }).when(content).insertParagraph(any());
+        when(content.findParagraph(anyString(), anyString(), anyString()))
+                .thenAnswer(call -> storedParagraphs.get(call.getArgument(2)));
+        when(content.listBlocks(anyString())).thenAnswer(call -> java.util.List.copyOf(storedBlocks.values()));
+        when(content.listAllParagraphs(anyString())).thenAnswer(call -> java.util.List.copyOf(storedParagraphs.values()));
+        when(content.markReady(anyString())).thenAnswer(call -> {
+            storedEdition.set(storedEdition.get().withImportState("READY")); return 1; });
+        when(content.switchActiveEdition(eq("wrk_new"), isNull(), anyString())).thenReturn(1);
         when(content.markActivated(anyString())).thenReturn(1);
         when(store.bumpCollectionWork(COLLECTION, "wrk_new", 1)).thenReturn(1);
-        when(store.updateDraft(DRAFT, 2, 2, "SEALED", json, bodySha, 2L, "val_2")).thenReturn(1);
-        when(store.updateJobState(JOB, 1, "PUBLISHED", null, "pub_1")).thenReturn(1);
+        when(store.updateDraft(DRAFT, 2, 2, "SEALED", json, bodySha, 2L, "val_2"))
+                .thenAnswer(call -> { currentDraft.set(new ArchiveDraftRecord(DRAFT, JOB, 2,
+                        "SEALED", json, bodySha, 2L, "val_2")); return 1; });
+        when(store.updateJobState(JOB, 1, "PUBLISHING", null, null)).thenAnswer(call -> {
+            currentJob.set(jobState("PUBLISHING", null, 2)); return 1; });
+        when(store.updateJobState(JOB, 2, "PUBLISHED", null, "pub_1")).thenAnswer(call -> {
+            currentJob.set(jobState("PUBLISHED", null, 3)); return 1; });
         java.util.concurrent.atomic.AtomicReference<ArchivePublicationReadbackRecord> readback =
                 new java.util.concurrent.atomic.AtomicReference<>();
         doAnswer(call -> {
@@ -986,7 +1013,7 @@ class ArchiveMaintenanceServiceImplTest {
         verify(content, times(2)).insertBlock(blocks.capture());
         assertTrue(blocks.getAllValues().stream().allMatch(block -> "CHAPTER".equals(block.blockType())));
         verify(store).insertPublication(any(ArchivePublicationRecord.class));
-        verify(store).appendJobEvent(eq(JOB), eq(2L), eq("PUBLICATION_COMMITTED"), anyString());
+        verify(store).appendJobEvent(eq(JOB), eq(3L), eq("PUBLICATION_COMMITTED"), anyString());
     }
 
     @Test
@@ -1020,7 +1047,7 @@ class ArchiveMaintenanceServiceImplTest {
     }
 
     @Test
-    void pendingIdempotencyRecordCannotBeReplayed() {
+    void pendingPublicationRecordResumesCandidatePreparation() {
         ArchiveMaintenanceJobRecord job = job("DRAFT_ONLY");
         allowManager("publish");
         activeAppointment(appointment("ACTIVE", 1));
@@ -1032,7 +1059,7 @@ class ArchiveMaintenanceServiceImplTest {
                 publicationRequestSha(2, body), "PUBLICATION", "pub_1", "PENDING"));
         ArchiveMaintenanceException failure = assertThrows(ArchiveMaintenanceException.class,
                 () -> service.publish(MANAGER, JOB, "pending-key", 2, body));
-        assertEquals("ARCHIVE_OPERATION_IN_PROGRESS", failure.code());
+        assertEquals("ARCHIVE_RESOURCE_NOT_FOUND", failure.code());
     }
 
     @Test

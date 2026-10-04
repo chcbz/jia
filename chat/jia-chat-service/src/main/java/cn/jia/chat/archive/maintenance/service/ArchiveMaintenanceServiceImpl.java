@@ -1549,24 +1549,19 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             ArchiveMaintenanceStore.Operation op = store.findOperation(actor, key);
             if (op == null) throw new IllegalStateException("Persisted archive operation receipt is orphaned");
             assertOperationMatches(op, "POST", path, requestSha, "PUBLICATION");
-            if (!"COMMITTED".equals(replay.state())) conflict("ARCHIVE_OPERATION_IN_PROGRESS",
-                    "Archive operation is not committed");
-            verifyPublicationForOperation(actor, key);
-            return accepted(replay);
+            if ("COMMITTED".equals(replay.state())) {
+                verifyPublicationForOperation(actor, key);
+                return accepted(replay);
+            }
         }
         ensureHumanDraftCheckpoints(actor, observed, HumanCheckpointAuthority.PUBLISH);
         PublicationCandidate candidate = preparePublicationCandidate(observed,
                 expectedDraftRevision, request);
+        publishRecoverably(actor, null, observed.jobId(), null, key,
+                expectedDraftRevision, request, path, candidate,
+                new AdminOperationSpec(candidate.draft(), "DRAFT_PUBLISH"));
         ArchiveOperationAcceptedDTO accepted = transactions.required(() -> {
-            ArchiveManagerGrantRecord manager = requireManager(actor, observed.collectionId(), "publish", true);
-            ArchiveMaintenanceJobRecord job = requireJobForActor(actor, observed.jobId(), true);
-            requireCheckpointJobScope(observed, job);
-            ArchiveDraftRecord draft = requireDraft(job.jobId(), true);
-            if (!same(draft.draftId(), draftId)) notFound();
-            ArchivePublicationDTO result = publishLocked(actor, job, manager, null, key,
-                    expectedDraftRevision, request, path, null, candidate,
-                    new AdminOperationSpec(draft, "DRAFT_PUBLISH"));
-            ArchiveAdminOperationRecord receipt = store.findAdminOperationByKey(actor, key, false);
+            ArchiveAdminOperationRecord receipt = store.findAdminOperationByKey(actor, key, true);
             if (receipt == null || !"COMMITTED".equals(receipt.state())) {
                 throw new IllegalStateException("Archive publication receipt was not committed");
             }
@@ -1839,31 +1834,101 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         ensureHumanDraftCheckpoints(actor, candidateJob, HumanCheckpointAuthority.PUBLISH);
         PublicationCandidate candidate = preparePublicationCandidate(
                 candidateJob, expectedDraftRevision, request);
-        ArchivePublicationDTO committed = transactions.required(() -> {
-            ArchiveManagerGrantRecord manager = requireManager(actor, candidateJob.collectionId(),
-                    "publish", true);
-            ArchiveMaintenanceJobRecord job = requireJobForActor(actor, jobId, true);
-            return publishLocked(actor, job, manager, null, key, expectedDraftRevision,
-                    request, path, null, candidate, null);
-        });
+        ArchivePublicationDTO committed = publishRecoverably(actor, null, jobId, null, key,
+                expectedDraftRevision, request, path, candidate, null);
         return verifyPublicationSafely(committed);
     }
 
-    private ArchivePublicationDTO publishLocked(ArchiveActorScope actor,
-            ArchiveMaintenanceJobRecord job, ArchiveManagerGrantRecord manager,
-            ArchiveAppointmentRecord appointment, String key, long expectedDraftRevision,
-            ArchivePublishRequest request, String path, RuntimeAuthorization runtimeAuthorization,
+    private ArchivePublicationDTO publishRecoverably(ArchiveActorScope actor,
+            ArchiveRuntimeScope runtime, String jobId, String runId, String key,
+            long expectedDraftRevision, ArchivePublishRequest request, String path,
             PublicationCandidate candidate, AdminOperationSpec adminOperation) {
-        ArchiveMaintenanceStore.Operation op = operation(actor, key, "POST", path,
-                publicationRequestSha(expectedDraftRevision, request),
-                "PUBLICATION", newId("pub"));
-        ArchiveAdminOperationRecord adminReceipt = adminOperation == null ? null
-                : ensureAdminReceipt(actor, op, key, job, adminOperation.draft(),
-                        adminOperation.action(), manager.revision());
-        if (!op.created()) {
-            if (adminReceipt != null) return blockSnapshot(adminReceipt, ArchivePublicationDTO.class);
-            return publicationForOperation(op, job.jobId());
+        PublicationStage stage = transactions.required(() -> beginPublicationStage(actor, runtime,
+                jobId, runId, key, expectedDraftRevision, request, path, candidate, adminOperation));
+        if (stage.committed() != null) return stage.committed();
+        persistPublicationMaterial(actor, runtime, jobId, runId, expectedDraftRevision,
+                request, candidate);
+        verifyAndReady(actor, runtime, jobId, runId, expectedDraftRevision, request, candidate);
+        return transactions.required(() -> commitPublication(actor, runtime, jobId, runId, key,
+                expectedDraftRevision, request, path, candidate, adminOperation));
+    }
+
+    private PublicationStage beginPublicationStage(ArchiveActorScope actor,
+            ArchiveRuntimeScope runtime, String jobId, String runId, String key,
+            long expectedDraftRevision, ArchivePublishRequest request, String path,
+            PublicationCandidate candidate, AdminOperationSpec adminOperation) {
+        PublicationAuthorization authorization = authorizePublication(actor, runtime, jobId, runId);
+        ArchiveMaintenanceJobRecord job = authorization.job();
+        ArchiveMaintenanceStore.Operation op = beginPublicationOperation(actor, key, path,
+                expectedDraftRevision, request);
+        if ("COMMITTED".equals(op.state())) {
+            return new PublicationStage(publicationForOperation(op, job.jobId()));
         }
+        requirePublishableJob(job, authorization.runtimeAuthorization());
+        requirePublicationCandidate(job, expectedDraftRevision, request, candidate);
+        ArchiveDraftRecord draft = requireDraft(job.jobId(), true);
+        if (!same(draft.draftId(), candidate.draft().draftId())) notFound();
+        requireStagingWork(job, request);
+        ArchiveEditionRecord existing = content.lockEdition(candidate.material().edition().editionId());
+        if (existing == null) {
+            content.insertEdition(candidate.material().edition());
+        } else {
+            requireEditionIdentity(existing, candidate.material().edition(), false);
+        }
+        if (!"SEALED".equals(draft.state())) {
+            if (!"VALIDATED".equals(draft.state()) || store.updateDraft(draft.draftId(), draft.revision(),
+                    draft.revision(), "SEALED", draft.contentJson(), draft.contentSha256(),
+                    draft.validatedRevision(), draft.validationId()) != 1) {
+                revisionConflict(draft.revision());
+            }
+        }
+        if (!"PUBLISHING".equals(job.state())) {
+            if (!"AWAITING_PUBLISH".equals(job.state())
+                    || store.updateJobState(job.jobId(), job.revision(), "PUBLISHING", null, null) != 1) {
+                conflict("ARCHIVE_JOB_CHANGED", "Archive job changed while publication staging began");
+            }
+        }
+        if (adminOperation != null) {
+            ensurePublicationAdminReceipt(actor, op, key, job, adminOperation.draft(),
+                    adminOperation.action(), authorization.manager().revision());
+        }
+        return new PublicationStage(null);
+    }
+
+    private PublicationAuthorization authorizePublication(ArchiveActorScope actor,
+            ArchiveRuntimeScope runtime, String jobId, String runId) {
+        ArchiveMaintenanceJobRecord observed = runtime == null
+                ? requireJobForActor(actor, jobId, false) : requireJob(jobId, false);
+        if (runtime == null) {
+            ArchiveManagerGrantRecord manager = requireManager(actor, observed.collectionId(), "publish", true);
+            ArchiveMaintenanceJobRecord job = requireJobForActor(actor, jobId, true);
+            return new PublicationAuthorization(job, manager, null);
+        }
+        requireExecutionCandidate(observed);
+        if (!same(observed.runId(), runId)) notFound();
+        requireRuntimeJobScope(runtime, observed);
+        ArchiveAgentExecutionPort.LockedTarget lockedTarget = lockControlledTarget(target(observed));
+        ArchiveManagerGrantRecord manager = requireManager(actor, observed.collectionId(), "publish", true);
+        requireManagerRevision(manager, observed);
+        ArchiveAppointmentRecord appointment = requireCurrentAppointmentForJob(observed, true);
+        ArchiveMaintenanceJobRecord job = requireJob(jobId, true);
+        requireManagerRevision(manager, job);
+        RuntimeAuthorization runtimeAuthorization = authorizeRuntimeLocked(
+                runtime, job, appointment, lockedTarget, true);
+        return new PublicationAuthorization(job, manager, runtimeAuthorization);
+    }
+
+    private ArchiveMaintenanceStore.Operation beginPublicationOperation(ArchiveActorScope actor,
+            String key, String path, long expectedDraftRevision, ArchivePublishRequest request) {
+        ArchiveMaintenanceStore.Operation op = store.beginOperation(actor, key, "POST", path,
+                publicationRequestSha(expectedDraftRevision, request), "PUBLICATION", newId("pub"));
+        assertOperationMatches(op, "POST", path, publicationRequestSha(expectedDraftRevision, request),
+                "PUBLICATION");
+        return op;
+    }
+
+    private void requirePublishableJob(ArchiveMaintenanceJobRecord job,
+            RuntimeAuthorization runtimeAuthorization) {
         if ("PUBLISHED".equals(job.state()) || "CANCELLED".equals(job.state())
                 || job.publicationId() != null) {
             throw error(422, "ARCHIVE_JOB_NOT_MUTABLE",
@@ -1877,73 +1942,210 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             }
             requireProducerRunning(runtimeAuthorization.run());
             if (!"ACTIVE".equals(runtimeAuthorization.grant().state())
-                    || !"AWAITING_PUBLISH".equals(job.state())) {
+                    || !("AWAITING_PUBLISH".equals(job.state()) || "PUBLISHING".equals(job.state()))) {
                 conflict("ARCHIVE_EXECUTION_NOT_RUNNING",
                         "Archive execution is not eligible for native publication");
             }
         }
-        if (runtimeAuthorization != null) requireCurrentBinding(appointment);
-        requirePublicationCandidate(job, expectedDraftRevision, request, candidate);
-        ArchiveDraftRecord draft = candidate.draft();
-        ArchiveMaintenanceStore.CollectionWork cw = store.lockCollectionWork(
-                job.collectionId(), job.workId());
+    }
+
+    private void requireStagingWork(ArchiveMaintenanceJobRecord job, ArchivePublishRequest request) {
         long expectedWork = parseNonNegative(request.expectedWorkRevision(), "expectedWorkRevision");
+        ArchiveMaintenanceStore.CollectionWork cw = store.lockCollectionWork(job.collectionId(), job.workId());
         ArchiveWorkRecord work = content.lockWork(job.workId());
-        boolean createdWork = work == null;
-        if (createdWork) {
-            if (expectedWork != 0 || request.expectedActiveEditionId() != null) {
+        if (work == null) {
+            if (expectedWork != 0 || request.expectedActiveEditionId() != null || cw != null) {
                 conflict("ACTIVE_EDITION_CHANGED", "Work state changed");
             }
             content.insertWork(new ArchiveWorkRecord(job.workId(), job.title(), null));
             store.insertCollectionWork(job.collectionId(), job.workId(), job.canonicalKey());
-            cw = store.lockCollectionWork(job.collectionId(), job.workId());
-            work = content.lockWork(job.workId());
+            return;
         }
-        if (cw == null || (!createdWork && cw.revision() != expectedWork)
-                || work == null
+        long requiredRevision = expectedWork == 0 && "ADD_WORK".equals(job.operation()) ? 1 : expectedWork;
+        if (cw == null || cw.revision() != requiredRevision
                 || !Objects.equals(work.activeEditionId(), request.expectedActiveEditionId())) {
             conflict("ACTIVE_EDITION_CHANGED", "Active archive edition changed");
         }
+    }
+
+    private void persistPublicationMaterial(ArchiveActorScope actor, ArchiveRuntimeScope runtime,
+            String jobId, String runId, long expectedDraftRevision, ArchivePublishRequest request,
+            PublicationCandidate candidate) {
         PublicationMaterial material = candidate.material();
-        String editionId = material.edition().editionId();
-        content.insertEdition(material.edition());
-        material.blocks().forEach(content::insertBlock);
-        material.paragraphs().forEach(content::insertParagraph);
-        if (content.markReady(editionId) != 1) {
-            conflict("ARCHIVE_PUBLICATION_CONFLICT", "Edition could not become ready");
+        Map<String, List<ArchiveParagraphRecord>> paragraphs = new LinkedHashMap<>();
+        for (ArchiveParagraphRecord paragraph : material.paragraphs()) {
+            paragraphs.computeIfAbsent(paragraph.blockId(), ignored -> new ArrayList<>()).add(paragraph);
         }
+        for (ArchiveBlockRecord expectedBlock : material.blocks()) {
+            transactions.required(() -> {
+                revalidatePublicationStage(actor, runtime, jobId, runId, expectedDraftRevision,
+                        request, candidate);
+                ArchiveEditionRecord edition = content.lockEdition(material.edition().editionId());
+                requireEditionIdentity(edition, material.edition(), false);
+                if ("READY".equals(edition.importState())) return null;
+                ArchiveBlockRecord block = content.findBlock(edition.editionId(), expectedBlock.blockId());
+                if (block == null) content.insertBlock(expectedBlock);
+                else if (!block.equals(expectedBlock)) stagingCorrupt();
+                for (ArchiveParagraphRecord expectedParagraph : paragraphs.getOrDefault(
+                        expectedBlock.blockId(), List.of())) {
+                    ArchiveParagraphRecord paragraph = content.findParagraph(edition.editionId(),
+                            expectedBlock.blockId(), expectedParagraph.paragraphId());
+                    if (paragraph == null) content.insertParagraph(expectedParagraph);
+                    else if (!paragraph.equals(expectedParagraph)) stagingCorrupt();
+                }
+                return null;
+            });
+        }
+    }
+
+    private void verifyAndReady(ArchiveActorScope actor, ArchiveRuntimeScope runtime,
+            String jobId, String runId, long expectedDraftRevision, ArchivePublishRequest request,
+            PublicationCandidate candidate) {
+        PublicationMaterial material = candidate.material();
+        ArchiveEditionRecord observed = content.findEdition(material.edition().editionId());
+        requireEditionIdentity(observed, material.edition(), false);
+        List<ArchiveBlockRecord> blocks = content.listBlocks(observed.editionId());
+        List<ArchiveParagraphRecord> paragraphs = content.listAllParagraphs(observed.editionId());
+        if (!sameRows(material.blocks(), blocks) || !sameRows(material.paragraphs(), paragraphs)) {
+            stagingCorrupt();
+        }
+        transactions.required(() -> {
+            revalidatePublicationStage(actor, runtime, jobId, runId, expectedDraftRevision,
+                    request, candidate);
+            ArchiveEditionRecord locked = content.lockEdition(observed.editionId());
+            requireEditionIdentity(locked, material.edition(), false);
+            if ("STAGING".equals(locked.importState()) && content.markReady(locked.editionId()) != 1) {
+                conflict("ARCHIVE_PUBLICATION_CONFLICT", "Edition could not become ready");
+            }
+            return null;
+        });
+    }
+
+
+    private void revalidatePublicationStage(ArchiveActorScope actor, ArchiveRuntimeScope runtime,
+            String jobId, String runId, long expectedDraftRevision, ArchivePublishRequest request,
+            PublicationCandidate candidate) {
+        PublicationAuthorization authorization = authorizePublication(actor, runtime, jobId, runId);
+        ArchiveMaintenanceJobRecord job = authorization.job();
+        requirePublishableJob(job, authorization.runtimeAuthorization());
+        if (!"PUBLISHING".equals(job.state())) {
+            conflict("ARCHIVE_JOB_CHANGED", "Archive job is no longer in publication staging");
+        }
+        requirePublicationCandidate(job, expectedDraftRevision, request, candidate);
+        ArchiveDraftRecord draft = requireDraft(job.jobId(), true);
+        if (!"SEALED".equals(draft.state())) {
+            conflict("ARCHIVE_PUBLICATION_CONFLICT", "Publication candidate is not sealed");
+        }
+        requireCurrentStagingWork(job, request);
+    }
+
+    private void requireCurrentStagingWork(ArchiveMaintenanceJobRecord job,
+            ArchivePublishRequest request) {
+        long expectedWork = parseNonNegative(request.expectedWorkRevision(), "expectedWorkRevision");
+        long requiredRevision = expectedWork == 0 && "ADD_WORK".equals(job.operation()) ? 1 : expectedWork;
+        ArchiveMaintenanceStore.CollectionWork cw = store.lockCollectionWork(job.collectionId(), job.workId());
+        ArchiveWorkRecord work = content.lockWork(job.workId());
+        if (cw == null || cw.revision() != requiredRevision || work == null
+                || !Objects.equals(work.activeEditionId(), request.expectedActiveEditionId())) {
+            conflict("ACTIVE_EDITION_CHANGED", "Active archive edition changed during publication staging");
+        }
+    }
+
+    private boolean sameRows(List<?> expected, List<?> actual) {
+        return actual != null && expected.size() == actual.size()
+                && new HashSet<>(expected).equals(new HashSet<>(actual));
+    }
+
+    private void requireEditionIdentity(ArchiveEditionRecord actual,
+            ArchiveEditionRecord expected, boolean readyRequired) {
+        if (actual == null || !same(actual.editionId(), expected.editionId())
+                || !same(actual.workId(), expected.workId())
+                || !("STAGING".equals(actual.importState()) || "READY".equals(actual.importState()))
+                || (readyRequired && !"READY".equals(actual.importState()))
+                || !actual.withImportState(expected.importState()).equals(expected)) {
+            stagingCorrupt();
+        }
+    }
+
+    private void stagingCorrupt() {
+        throw error(422, "ARCHIVE_STAGING_CONTENT_MISMATCH",
+                "Prepared archive edition does not match the sealed candidate");
+    }
+
+    private ArchivePublicationDTO commitPublication(ArchiveActorScope actor,
+            ArchiveRuntimeScope runtime, String jobId, String runId, String key,
+            long expectedDraftRevision, ArchivePublishRequest request, String path,
+            PublicationCandidate candidate, AdminOperationSpec adminOperation) {
+        PublicationAuthorization authorization = authorizePublication(actor, runtime, jobId, runId);
+        ArchiveMaintenanceJobRecord job = authorization.job();
+        ArchiveMaintenanceStore.Operation op = beginPublicationOperation(actor, key, path,
+                expectedDraftRevision, request);
+        if ("COMMITTED".equals(op.state())) return publicationForOperation(op, job.jobId());
+        requirePublishableJob(job, authorization.runtimeAuthorization());
+        if (!"PUBLISHING".equals(job.state())) {
+            conflict("ARCHIVE_JOB_CHANGED", "Archive job is no longer in publication staging");
+        }
+        requirePublicationCandidate(job, expectedDraftRevision, request, candidate);
+        ArchiveDraftRecord draft = requireDraft(job.jobId(), true);
+        if (!"SEALED".equals(draft.state())) {
+            conflict("ARCHIVE_PUBLICATION_CONFLICT", "Publication candidate is not sealed");
+        }
+        ArchiveMaintenanceStore.CollectionWork cw = store.lockCollectionWork(job.collectionId(), job.workId());
+        ArchiveWorkRecord work = content.lockWork(job.workId());
+        long expectedWork = parseNonNegative(request.expectedWorkRevision(), "expectedWorkRevision");
+        long requiredRevision = expectedWork == 0 && "ADD_WORK".equals(job.operation()) ? 1 : expectedWork;
+        if (cw == null || cw.revision() != requiredRevision || work == null
+                || !Objects.equals(work.activeEditionId(), request.expectedActiveEditionId())) {
+            conflict("ACTIVE_EDITION_CHANGED", "Active archive edition changed");
+        }
+        ArchiveEditionRecord edition = content.lockEdition(candidate.material().edition().editionId());
+        requireEditionIdentity(edition, candidate.material().edition(), true);
+        ArchiveAdminOperationRecord adminReceipt = adminOperation == null ? null
+                : ensurePublicationAdminReceipt(actor, op, key, job, adminOperation.draft(),
+                        adminOperation.action(), authorization.manager().revision());
         String publicationId = op.targetId();
         ArchivePublicationRecord publication = new ArchivePublicationRecord(publicationId,
-                job.jobId(), job.collectionId(), job.workId(), editionId, draft.revision(),
-                material.edition().manifestSha256(), job.sourceSha256(), "PUBLISHED",
-                runtimeAuthorization == null ? "HUMAN" : "AGENT",
-                runtimeAuthorization == null ? actor.ownerJiacn() : job.agentId(), manager.revision());
+                job.jobId(), job.collectionId(), job.workId(), edition.editionId(), draft.revision(),
+                edition.manifestSha256(), job.sourceSha256(), "PUBLISHED",
+                runtime == null ? "HUMAN" : "AGENT",
+                runtime == null ? actor.ownerJiacn() : job.agentId(), authorization.manager().revision());
         store.insertPublication(publication);
         store.insertPublicationReadback(new ArchivePublicationReadbackRecord(publicationId,
                 "PENDING", 1, null, "[]", null));
-        if (content.switchActiveEdition(job.workId(), editionId) != 1
-                || content.markActivated(editionId) != 1
+        if (content.switchActiveEdition(job.workId(), request.expectedActiveEditionId(), edition.editionId()) != 1
+                || content.markActivated(edition.editionId()) != 1
                 || store.bumpCollectionWork(job.collectionId(), job.workId(), cw.revision()) != 1) {
             conflict("ACTIVE_EDITION_CHANGED", "Active archive edition changed");
-        }
-        if (store.updateDraft(draft.draftId(), draft.revision(), draft.revision(),
-                "SEALED", draft.contentJson(), draft.contentSha256(),
-                draft.validatedRevision(), draft.validationId()) != 1) {
-            revisionConflict(draft.revision());
         }
         if (store.updateJobState(job.jobId(), job.revision(), "PUBLISHED", null, publicationId) != 1) {
             conflict("ARCHIVE_JOB_CHANGED", "Archive job changed");
         }
+        RuntimeAuthorization runtimeAuthorization = authorization.runtimeAuthorization();
         if (runtimeAuthorization != null
-                && (store.completeRun(runtimeAuthorization.run().runId(),
-                        runtimeAuthorization.run().revision()) != 1
+                && (store.completeRun(runtimeAuthorization.run().runId(), runtimeAuthorization.run().revision()) != 1
                 || store.releaseExecutionGrant(runtimeAuthorization.run().runId(),
                         runtimeAuthorization.grant().revision()) != 1)) {
             conflict("ARCHIVE_EXECUTION_CHANGED",
                     "Archive execution changed during publication completion");
         }
+        Map<String, String> publicationAudit;
+        if (adminReceipt == null) {
+            publicationAudit = Map.of("publicationId", publicationId, "editionId", edition.editionId());
+        } else {
+            LinkedHashMap<String, String> humanPublicationAudit = new LinkedHashMap<>();
+            humanPublicationAudit.put("publicationId", publicationId);
+            humanPublicationAudit.put("editionId", edition.editionId());
+            humanPublicationAudit.put("actorType", publication.actorType());
+            humanPublicationAudit.put("actorId", publication.actorId());
+            humanPublicationAudit.put("publicationAuthorizationRevision",
+                    Long.toString(publication.authorizationRevision()));
+            humanPublicationAudit.put("operationId", adminReceipt.operationId());
+            humanPublicationAudit.put("operationAuthorizationRevision",
+                    Long.toString(adminReceipt.authorizationRevision()));
+            publicationAudit = humanPublicationAudit;
+        }
         store.appendJobEvent(job.jobId(), job.revision() + 1, "PUBLICATION_COMMITTED",
-                json(Map.of("publicationId", publicationId, "editionId", editionId)));
+                json(publicationAudit));
         if (runtimeAuthorization != null) {
             store.appendJobEvent(job.jobId(), job.revision() + 1, "EXECUTION_COMPLETED",
                     json(Map.of("runId", job.runId(), "publicationId", publicationId,
@@ -1951,10 +2153,8 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         }
         ArchivePublicationDTO result = publicationDto(publication);
         store.commitOperation(actor, key, publicationId);
-        if (adminReceipt != null) {
-            if (store.commitAdminOperation(adminReceipt.operationId(), json(result)) != 1) {
-                throw new IllegalStateException("Archive admin publication receipt commit failed");
-            }
+        if (adminReceipt != null && store.commitAdminOperation(adminReceipt.operationId(), json(result)) != 1) {
+            throw new IllegalStateException("Archive admin publication receipt commit failed");
         }
         return result;
     }
@@ -1973,15 +2173,27 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         if (!findings.isEmpty()) {
             throw error(422, "CONTENT_VALIDATION_FAILED", String.join("; ", findings));
         }
+        String editionId = "aed_" + digest(job.jobId() + "\0" + draft.draftId() + "\0"
+                + draft.revision() + "\0" + validation.validationDigest() + "\0"
+                + draft.contentSha256()).substring(0, 48);
         return new PublicationCandidate(job, source, draft, validation,
-                material(job, body, newId("aed")));
+                material(job, body, editionId));
     }
 
     private void requirePublicationCandidate(ArchiveMaintenanceJobRecord job,
             long expectedDraftRevision, ArchivePublishRequest request,
             PublicationCandidate candidate) {
-        if (candidate == null || !candidate.job().equals(job)) {
+        if (candidate == null) {
             conflict("ARCHIVE_JOB_CHANGED", "Archive job changed while publication was prepared");
+        }
+        requireCheckpointJobScope(candidate.job(), job);
+        if (!same(candidate.job().sourceId(), job.sourceId())
+                || !same(candidate.job().sourceSha256(), job.sourceSha256())
+                || !same(candidate.job().workId(), job.workId())
+                || !same(candidate.job().canonicalKey(), job.canonicalKey())
+                || !same(candidate.job().operation(), job.operation())
+                || !same(candidate.job().runId(), job.runId())) {
+            conflict("ARCHIVE_JOB_CHANGED", "Archive publication candidate identity changed");
         }
         ArchiveSourceSnapshotRecord source = requireSourceRecord(job);
         if (!candidate.source().equals(source)) {
@@ -1989,7 +2201,13 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
                     "Source snapshot changed while publication was prepared");
         }
         ArchiveDraftRecord draft = requireDraft(job.jobId(), true);
-        if (draft.revision() != expectedDraftRevision || !candidate.draft().equals(draft)) {
+        if (draft.revision() != expectedDraftRevision
+                || !same(candidate.draft().draftId(), draft.draftId())
+                || !same(candidate.draft().jobId(), draft.jobId())
+                || !same(candidate.draft().contentJson(), draft.contentJson())
+                || !same(candidate.draft().contentSha256(), draft.contentSha256())
+                || !same(candidate.draft().validatedRevision(), draft.validatedRevision())
+                || !same(candidate.draft().validationId(), draft.validationId())) {
             revisionConflict(draft.revision());
         }
         requireCheckpointConsistency(draft);
@@ -2020,9 +2238,7 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         ArchiveMaintenanceStore.Operation existing = store.findOperation(actor, key);
         if (existing == null) return null;
         assertOperationMatches(existing, "POST", path, requestSha, "PUBLICATION");
-        if (!"COMMITTED".equals(existing.state())) {
-            conflict("ARCHIVE_OPERATION_IN_PROGRESS", "Archive operation is not committed");
-        }
+        if (!"COMMITTED".equals(existing.state())) return null;
         return publicationForOperation(existing, jobId);
     }
 
@@ -2507,19 +2723,8 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         ensureRuntimeDraftCheckpoints(runtime, candidateJob);
         PublicationCandidate candidate = preparePublicationCandidate(
                 candidateJob, expectedDraftRevision, request);
-        ArchivePublicationDTO committed = transactions.required(() -> {
-            ArchiveAgentExecutionPort.LockedTarget lockedTarget = lockControlledTarget(target(candidateJob));
-            ArchiveManagerGrantRecord manager = requireManager(actor(runtime), candidateJob.collectionId(),
-                    "publish", true);
-            requireManagerRevision(manager, candidateJob);
-            ArchiveAppointmentRecord appointment = requireCurrentAppointmentForJob(candidateJob, true);
-            ArchiveMaintenanceJobRecord job = requireJob(jobId, true);
-            requireManagerRevision(manager, job);
-            RuntimeAuthorization authorization = authorizeRuntimeLocked(
-                    runtime, job, appointment, lockedTarget, true);
-            return publishLocked(actor(runtime), job, manager, appointment, key,
-                    expectedDraftRevision, request, path, authorization, candidate, null);
-        });
+        ArchivePublicationDTO committed = publishRecoverably(actor(runtime), runtime, jobId, runId,
+                key, expectedDraftRevision, request, path, candidate, null);
         return verifyPublicationSafely(committed);
     }
 
@@ -3830,8 +4035,39 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         if (receipt == null) conflict("ARCHIVE_OPERATION_IN_PROGRESS",
                 "Admin operation receipt is unavailable");
         assertAdminReceipt(receipt, job, draft.draftId(), action);
+        if (receipt.authorizationRevision() != authorizationRevision) {
+            forbidden("ARCHIVE_MANAGER_AUTHORIZATION_CHANGED",
+                    "Archive publication operation requires a new authorization receipt");
+        }
+        if ("PENDING".equals(receipt.state()) && receipt.resultJson() == null) return receipt;
         if (!"COMMITTED".equals(receipt.state()) || receipt.resultJson() == null) {
-            conflict("ARCHIVE_OPERATION_IN_PROGRESS", "Archive operation is not committed");
+            throw new IllegalStateException("Persisted archive admin operation receipt is inconsistent");
+        }
+        return receipt;
+    }
+
+    private ArchiveAdminOperationRecord ensurePublicationAdminReceipt(ArchiveActorScope actor,
+            ArchiveMaintenanceStore.Operation operation, String key, ArchiveMaintenanceJobRecord job,
+            ArchiveDraftRecord draft, String action, long currentAuthorizationRevision) {
+        if (operation.created()) {
+            return ensureAdminReceipt(actor, operation, key, job, draft, action,
+                    currentAuthorizationRevision);
+        }
+        ArchiveAdminOperationRecord receipt = store.findAdminOperationByKey(actor, key, true);
+        if (receipt == null) conflict("ARCHIVE_OPERATION_IN_PROGRESS",
+                "Admin publication receipt is unavailable");
+        assertAdminReceipt(receipt, job, draft.draftId(), action);
+        if (!"DRAFT_PUBLISH".equals(action)) {
+            throw new IllegalStateException("Publication receipt action is invalid");
+        }
+        if ("PENDING".equals(receipt.state()) && receipt.resultJson() == null) {
+            // The receipt keeps the original operation authorization revision. The caller has
+            // already re-authorized current publish ACL/scope/candidate/work CAS in this short
+            // transaction; the final publication and audit record the current revision.
+            return receipt;
+        }
+        if (!"COMMITTED".equals(receipt.state()) || receipt.resultJson() == null) {
+            throw new IllegalStateException("Persisted archive publication receipt is inconsistent");
         }
         return receipt;
     }
@@ -5011,6 +5247,9 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
     private record PublicationMaterial(ArchiveEditionRecord edition,
             List<ArchiveBlockRecord> blocks, List<ArchiveParagraphRecord> paragraphs) { }
     private record AdminOperationSpec(ArchiveDraftRecord draft, String action) { }
+    private record PublicationStage(ArchivePublicationDTO committed) { }
+    private record PublicationAuthorization(ArchiveMaintenanceJobRecord job,
+            ArchiveManagerGrantRecord manager, RuntimeAuthorization runtimeAuthorization) { }
 
     private record EditionHistorySnapshot(long workRevision, String activeEditionId,
             List<ArchiveEditionVersionRecord> versions) { }

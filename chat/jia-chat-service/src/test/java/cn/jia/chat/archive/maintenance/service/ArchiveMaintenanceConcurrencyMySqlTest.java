@@ -990,6 +990,8 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         String frozenResult = jdbc.queryForObject("SELECT result_json FROM "
                 + "archive_admin_operation_receipt WHERE operation_id=?", String.class,
                 accepted.operationId());
+        assertFalse(frozenResult.contains("storageUri"));
+        assertFalse(frozenResult.contains("storageRef"));
         ArchiveAdminOperationDTO status = service.operation(ACTOR, accepted.operationId());
         ArchiveOperationAcceptedDTO replay = service.publishDraft(ACTOR, "draft-a",
                 "exact-human-publish", 1, request);
@@ -1012,6 +1014,231 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                 Integer.class));
         ArchiveEditionHistoryDTO history = service.editionHistory(ACTOR, "work-a");
         assertEquals("PASSED", history.editions().getFirst().verification().state());
+    }
+
+    @Test
+    void stagingCrashResumesSameEditionAndDoesNotPublishPartialContent() throws Exception {
+        seedExecutionCandidate();
+        jdbc.update("UPDATE archive_collection_manager SET permissions=? WHERE collection_id=?",
+                "job.manage,draft.write,validate,publish", COLLECTION);
+        seedValidatedDraft("validation-stage-resume");
+        JdbcArchiveMaintenanceStore store = new JdbcArchiveMaintenanceStore(jdbc);
+        ArchivePublishRequest request = new ArchivePublishRequest("validation-stage-resume", null, "0");
+        ArchiveMaintenanceServiceImpl crashing = service(store, new RootLockingPort(jdbc),
+                new CrashOnSecondBlockContentStore(jdbc));
+
+        assertThrows(InjectedStagingCrash.class,
+                () -> crashing.publish(ACTOR, JOB, "stage-resume", 1, request));
+        assertEquals("PUBLISHING:SEALED:PENDING:STAGING:1:0", jdbc.queryForObject("""
+                SELECT CONCAT(j.state,':',d.state,':',o.state,':',e.import_state,':',
+                              (SELECT COUNT(*) FROM archive_chapter c WHERE c.edition_id=e.edition_id),':',
+                              (SELECT COUNT(*) FROM archive_publication p WHERE p.job_id=j.job_id))
+                FROM archive_maintenance_job j
+                JOIN archive_draft d ON d.job_id=j.job_id
+                JOIN archive_operation o ON o.operation_key='stage-resume'
+                JOIN archive_edition e ON e.work_id=j.work_id
+                WHERE j.job_id=?
+                """, String.class, JOB));
+        String stagedEditionId = jdbc.queryForObject(
+                "SELECT edition_id FROM archive_edition WHERE work_id='work-a'", String.class);
+
+        ArchiveMaintenanceServiceImpl recovered = service(store, new RootLockingPort(jdbc),
+                new JdbcArchiveContentStore(jdbc));
+        ArchivePublicationDTO publication = recovered.publish(
+                ACTOR, JOB, "stage-resume", 1, request);
+
+        assertEquals("PUBLISHED", publication.state());
+        assertEquals(stagedEditionId, publication.editionId());
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM archive_edition WHERE work_id='work-a'",
+                Integer.class));
+        assertEquals("READY:2:2:1:COMMITTED", jdbc.queryForObject("""
+                SELECT CONCAT(e.import_state,':',COUNT(DISTINCT c.block_id),':',
+                              COUNT(DISTINCT p.paragraph_id),':',COUNT(DISTINCT pub.publication_id),':',o.state)
+                FROM archive_edition e
+                JOIN archive_chapter c ON c.edition_id=e.edition_id
+                JOIN archive_paragraph p ON p.edition_id=e.edition_id
+                JOIN archive_publication pub ON pub.edition_id=e.edition_id
+                JOIN archive_operation o ON o.target_id=pub.publication_id
+                WHERE pub.job_id=? GROUP BY e.import_state,o.state
+                """, String.class, JOB));
+    }
+
+    @Test
+    void pendingDraftPublicationResumesSameKeyUnderCurrentPublishAuthorization() throws Exception {
+        seedExecutionCandidate();
+        jdbc.update("UPDATE archive_collection_manager SET permissions=? WHERE collection_id=?",
+                "job.manage,draft.write,validate,publish", COLLECTION);
+        seedValidatedDraft("validation-admin-revision");
+        JdbcArchiveMaintenanceStore store = new JdbcArchiveMaintenanceStore(jdbc);
+        ArchivePublishRequest request = new ArchivePublishRequest("validation-admin-revision", null, "0");
+        ArchiveMaintenanceServiceImpl crashing = service(store, new RootLockingPort(jdbc),
+                new CrashOnSecondBlockContentStore(jdbc));
+
+        assertThrows(InjectedStagingCrash.class,
+                () -> crashing.publishDraft(ACTOR, "draft-a", "stage-admin-revision", 1, request));
+        assertEquals("PENDING:3", jdbc.queryForObject("SELECT CONCAT(state,':',authorization_revision) "
+                + "FROM archive_admin_operation_receipt WHERE operation_key='stage-admin-revision'",
+                String.class));
+        assertEquals(1, jdbc.update("UPDATE archive_collection_manager SET revision=4 "
+                + "WHERE collection_id=?", COLLECTION));
+
+        ArchiveMaintenanceServiceImpl recovered = service(store, new RootLockingPort(jdbc),
+                new JdbcArchiveContentStore(jdbc));
+        ArchiveOperationAcceptedDTO accepted = recovered.publishDraft(
+                ACTOR, "draft-a", "stage-admin-revision", 1, request);
+        ArchiveAdminOperationDTO status = recovered.operation(ACTOR, accepted.operationId());
+
+        assertEquals("COMMITTED", accepted.state());
+        assertEquals("PENDING", status.result().get("readbackState"));
+        assertFalse(status.result().containsKey("storageUri"));
+        assertFalse(status.result().containsKey("storageRef"));
+        assertEquals("COMMITTED:3:4", jdbc.queryForObject("""
+                SELECT CONCAT(r.state,':',r.authorization_revision,':',p.authorization_revision)
+                FROM archive_admin_operation_receipt r
+                JOIN archive_operation o ON o.tenant_id=r.tenant_id AND o.client_id=r.client_id
+                  AND o.owner_jiacn=r.owner_jiacn AND o.operation_key=r.operation_key
+                JOIN archive_publication p ON p.publication_id=o.target_id
+                WHERE r.operation_key='stage-admin-revision'
+                """, String.class));
+        String audit = jdbc.queryForObject("SELECT data_json FROM archive_event "
+                + "WHERE job_id=? AND event_type='PUBLICATION_COMMITTED'", String.class, JOB);
+        assertTrue(audit.contains("\"operationAuthorizationRevision\":\"3\""));
+        assertTrue(audit.contains("\"publicationAuthorizationRevision\":\"4\""));
+        assertTrue(audit.contains("\"actorType\":\"HUMAN\""));
+    }
+
+    @Test
+    void pendingDraftPublicationStillRejectsLostPublishPermission() throws Exception {
+        seedExecutionCandidate();
+        jdbc.update("UPDATE archive_collection_manager SET permissions=? WHERE collection_id=?",
+                "job.manage,draft.write,validate,publish", COLLECTION);
+        seedValidatedDraft("validation-admin-revoked");
+        JdbcArchiveMaintenanceStore store = new JdbcArchiveMaintenanceStore(jdbc);
+        ArchivePublishRequest request = new ArchivePublishRequest("validation-admin-revoked", null, "0");
+        ArchiveMaintenanceServiceImpl crashing = service(store, new RootLockingPort(jdbc),
+                new CrashOnSecondBlockContentStore(jdbc));
+
+        assertThrows(InjectedStagingCrash.class,
+                () -> crashing.publishDraft(ACTOR, "draft-a", "stage-admin-revoked", 1, request));
+        assertEquals(1, jdbc.update("UPDATE archive_collection_manager "
+                + "SET permissions='job.manage',revision=4 WHERE collection_id=?", COLLECTION));
+
+        ArchiveMaintenanceException failure = assertThrows(ArchiveMaintenanceException.class,
+                () -> service(store, new RootLockingPort(jdbc), new JdbcArchiveContentStore(jdbc))
+                        .publishDraft(ACTOR, "draft-a", "stage-admin-revoked", 1, request));
+        assertEquals("ARCHIVE_FORBIDDEN", failure.code());
+        assertEquals("PENDING:3:0", jdbc.queryForObject("""
+                SELECT CONCAT(r.state,':',r.authorization_revision,':',
+                              (SELECT COUNT(*) FROM archive_publication p WHERE p.job_id=r.job_id))
+                FROM archive_admin_operation_receipt r
+                WHERE r.operation_key='stage-admin-revoked'
+                """, String.class));
+    }
+
+    @Test
+    void concurrentSamePublicationKeyConvergesWithoutLosingStageCheckpoints() throws Exception {
+        seedExecutionCandidate();
+        jdbc.update("UPDATE archive_collection_manager SET permissions=? WHERE collection_id=?",
+                "job.manage,draft.write,validate,publish", COLLECTION);
+        seedValidatedDraft("validation-stage-concurrent");
+        JdbcArchiveMaintenanceStore store = new JdbcArchiveMaintenanceStore(jdbc);
+        ArchivePublishRequest request = new ArchivePublishRequest("validation-stage-concurrent", null, "0");
+        PauseAfterFirstBlockContentStore pausingContent = new PauseAfterFirstBlockContentStore(jdbc);
+        ArchiveMaintenanceServiceImpl firstService = service(store, new RootLockingPort(jdbc), pausingContent);
+        ArchiveMaintenanceServiceImpl replayService = service(store, new RootLockingPort(jdbc),
+                new JdbcArchiveContentStore(jdbc));
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<ArchivePublicationDTO> first = pool.submit(
+                    () -> firstService.publish(ACTOR, JOB, "stage-concurrent", 1, request));
+            assertTrue(pausingContent.firstBlockInserted.await(5, TimeUnit.SECONDS));
+            Future<ArchivePublicationDTO> replay = pool.submit(
+                    () -> replayService.publish(ACTOR, JOB, "stage-concurrent", 1, request));
+            pausingContent.releaseFirstBlock.countDown();
+
+            ArchivePublicationDTO firstResult = first.get(10, TimeUnit.SECONDS);
+            ArchivePublicationDTO replayResult = replay.get(10, TimeUnit.SECONDS);
+            assertEquals(firstResult.publicationId(), replayResult.publicationId());
+            assertEquals(firstResult.editionId(), replayResult.editionId());
+        } finally {
+            pausingContent.releaseFirstBlock.countDown();
+            pool.shutdownNow();
+            pool.awaitTermination(5, TimeUnit.SECONDS);
+        }
+        assertEquals("READY:2:2:1:COMMITTED", jdbc.queryForObject("""
+                SELECT CONCAT(e.import_state,':',COUNT(DISTINCT c.block_id),':',
+                              COUNT(DISTINCT p.paragraph_id),':',COUNT(DISTINCT pub.publication_id),':',o.state)
+                FROM archive_edition e
+                JOIN archive_chapter c ON c.edition_id=e.edition_id
+                JOIN archive_paragraph p ON p.edition_id=e.edition_id
+                JOIN archive_publication pub ON pub.edition_id=e.edition_id
+                JOIN archive_operation o ON o.target_id=pub.publication_id
+                WHERE pub.job_id=? GROUP BY e.import_state,o.state
+                """, String.class, JOB));
+    }
+
+    @Test
+    void corruptedStagingCheckpointNeverBecomesReadyOrPublished() throws Exception {
+        seedExecutionCandidate();
+        jdbc.update("UPDATE archive_collection_manager SET permissions=? WHERE collection_id=?",
+                "job.manage,draft.write,validate,publish", COLLECTION);
+        seedValidatedDraft("validation-stage-corrupt");
+        JdbcArchiveMaintenanceStore store = new JdbcArchiveMaintenanceStore(jdbc);
+        ArchivePublishRequest request = new ArchivePublishRequest("validation-stage-corrupt", null, "0");
+        ArchiveMaintenanceServiceImpl crashing = service(store, new RootLockingPort(jdbc),
+                new CrashOnSecondBlockContentStore(jdbc));
+
+        assertThrows(InjectedStagingCrash.class,
+                () -> crashing.publish(ACTOR, JOB, "stage-corrupt", 1, request));
+        assertEquals(1, jdbc.update("UPDATE archive_paragraph SET sha256=? "
+                + "WHERE edition_id=(SELECT edition_id FROM archive_edition WHERE work_id=?) LIMIT 1",
+                "f".repeat(64), "work-a"));
+
+        ArchiveMaintenanceException failure = assertThrows(ArchiveMaintenanceException.class,
+                () -> service(store, new RootLockingPort(jdbc), new JdbcArchiveContentStore(jdbc))
+                        .publish(ACTOR, JOB, "stage-corrupt", 1, request));
+        assertEquals("ARCHIVE_STAGING_CONTENT_MISMATCH", failure.code());
+        assertEquals("PUBLISHING:SEALED:PENDING:STAGING:0", jdbc.queryForObject("""
+                SELECT CONCAT(j.state,':',d.state,':',o.state,':',e.import_state,':',
+                              (SELECT COUNT(*) FROM archive_publication p WHERE p.job_id=j.job_id))
+                FROM archive_maintenance_job j
+                JOIN archive_draft d ON d.job_id=j.job_id
+                JOIN archive_operation o ON o.operation_key='stage-corrupt'
+                JOIN archive_edition e ON e.work_id=j.work_id
+                WHERE j.job_id=?
+                """, String.class, JOB));
+    }
+
+    @Test
+    void revokedPublisherCannotResumePersistedStagingCheckpoint() throws Exception {
+        seedExecutionCandidate();
+        jdbc.update("UPDATE archive_collection_manager SET permissions=? WHERE collection_id=?",
+                "job.manage,draft.write,validate,publish", COLLECTION);
+        seedValidatedDraft("validation-stage-revoked");
+        JdbcArchiveMaintenanceStore store = new JdbcArchiveMaintenanceStore(jdbc);
+        ArchivePublishRequest request = new ArchivePublishRequest("validation-stage-revoked", null, "0");
+        ArchiveMaintenanceServiceImpl crashing = service(store, new RootLockingPort(jdbc),
+                new CrashOnSecondBlockContentStore(jdbc));
+
+        assertThrows(InjectedStagingCrash.class,
+                () -> crashing.publish(ACTOR, JOB, "stage-revoked", 1, request));
+        assertEquals(1, jdbc.update("UPDATE archive_collection_manager "
+                + "SET permissions='job.manage',revision=revision+1 WHERE collection_id=?", COLLECTION));
+
+        ArchiveMaintenanceException failure = assertThrows(ArchiveMaintenanceException.class,
+                () -> service(store, new RootLockingPort(jdbc), new JdbcArchiveContentStore(jdbc))
+                        .publish(ACTOR, JOB, "stage-revoked", 1, request));
+        assertEquals("ARCHIVE_FORBIDDEN", failure.code());
+        assertEquals("PUBLISHING:SEALED:PENDING:STAGING:1:0", jdbc.queryForObject("""
+                SELECT CONCAT(j.state,':',d.state,':',o.state,':',e.import_state,':',
+                              (SELECT COUNT(*) FROM archive_chapter c WHERE c.edition_id=e.edition_id),':',
+                              (SELECT COUNT(*) FROM archive_publication p WHERE p.job_id=j.job_id))
+                FROM archive_maintenance_job j
+                JOIN archive_draft d ON d.job_id=j.job_id
+                JOIN archive_operation o ON o.operation_key='stage-revoked'
+                JOIN archive_edition e ON e.work_id=j.work_id
+                WHERE j.job_id=?
+                """, String.class, JOB));
     }
 
     @Test
@@ -3370,6 +3597,8 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         jdbc.update("INSERT INTO archive_validation(validation_id,draft_id,draft_revision,outcome,"
                 + "validation_digest,findings_json) VALUES (?,'draft-a',1,'PASSED',?,'[]')",
                 validationId, "e".repeat(64));
+        assertEquals(1, jdbc.update("UPDATE archive_maintenance_job SET state='AWAITING_PUBLISH',"
+                + "wait_reason=NULL WHERE job_id=?", JOB));
     }
 
     private ArchiveDraftUpdateRequest oneBlockRequest(String blockKey) {
@@ -3649,6 +3878,37 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("concurrency latch interrupted", interrupted);
+        }
+    }
+
+    private static final class InjectedStagingCrash extends RuntimeException { }
+
+    private static final class PauseAfterFirstBlockContentStore extends JdbcArchiveContentStore {
+        final CountDownLatch firstBlockInserted = new CountDownLatch(1);
+        final CountDownLatch releaseFirstBlock = new CountDownLatch(1);
+        private final AtomicBoolean paused = new AtomicBoolean();
+
+        PauseAfterFirstBlockContentStore(JdbcTemplate jdbc) { super(jdbc); }
+
+        @Override
+        public void insertBlock(cn.jia.chat.archive.model.ArchiveBlockRecord block) {
+            super.insertBlock(block);
+            if (paused.compareAndSet(false, true)) {
+                firstBlockInserted.countDown();
+                await(releaseFirstBlock);
+            }
+        }
+    }
+
+    private static final class CrashOnSecondBlockContentStore extends JdbcArchiveContentStore {
+        private int insertedBlocks;
+
+        CrashOnSecondBlockContentStore(JdbcTemplate jdbc) { super(jdbc); }
+
+        @Override
+        public void insertBlock(cn.jia.chat.archive.model.ArchiveBlockRecord block) {
+            if (++insertedBlocks == 2) throw new InjectedStagingCrash();
+            super.insertBlock(block);
         }
     }
 
