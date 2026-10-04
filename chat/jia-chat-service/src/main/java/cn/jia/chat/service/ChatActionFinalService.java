@@ -287,17 +287,86 @@ public class ChatActionFinalService {
         return Collections.unmodifiableMap(result);
     }
 
+    /** Follow only durable clarification admissions, not conversation order or the latest answer.
+     * Every question is re-read through its actual v3 final and every answered edge is scoped CAS. */
+    Map<String,Object> clarificationDeliveryParent(ChatTypedDeliberationStore.Scope scope,
+            ChatTypedDeliberationStore.Outcome clarification) {
+        var current=clarification;
+        Map<String,Object> basis=null;
+        var visited=new java.util.HashSet<String>();
+        while(true) {
+            if(current==null||!scope.equals(current.scope())||!"CLARIFY".equals(current.kind())
+                    ||!clarification.taskId().equals(current.taskId())
+                    ||clarification.assignmentRevision()!=current.assignmentRevision()
+                    ||!visited.add(current.outcomeId()))throw unavailable();
+            var turn=dao.findTurn(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),current.turnId());
+            if(turn==null)throw unavailable();
+            var view=read(scope,current.requestId(),current.turnId(),current.requestRevision(),turn.getRoute(),false);
+            if(view==null) {if(basis!=null)throw unavailable();return null;}
+            if(!"READY".equals(view.get("state"))
+                    ||!current.outcomeId().equals(map(view.get("outcome")).get("outcomeId"))
+                    ||!current.finalDigest().equals(map(view.get("outcome")).get("finalDigest")))throw unavailable();
+            if(!("FINAL_PERSISTED".equals(turn.getState())||"PUBLISHED".equals(turn.getState())))throw unavailable();
+            var snapshot=dao.findSnapshot(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),turn.getSnapshotId());
+            var snapshotFacts=parse(snapshot.getFactsManifestJson());
+            var facts=snapshotFacts.containsKey("typedDeliberationAdmission")
+                    ?map(snapshotFacts.get("typedDeliberationAdmission")):Map.<String,Object>of();
+            if(!facts.containsKey("deliveryParent")) {
+                if(basis!=null)throw unavailable();
+                return null; // Original unlinked clarification never acquires a delivery basis later.
+            }
+            if(!"CHAT".equals(turn.getRoute()))throw unavailable();
+            var inherited=map(facts.get("deliveryParent"));
+            if(!inherited.keySet().equals(Set.of("outcomeId","finalDigest"))
+                    ||!(inherited.get("outcomeId") instanceof String id)||id.isBlank()
+                    ||!(inherited.get("finalDigest") instanceof String digest)||!digest.matches("sha256:[0-9a-f]{64}")
+                    ||visited.contains(id)||basis!=null&&!basis.equals(inherited))throw unavailable();
+            basis=Map.copyOf(inherited);
+            var original=requireAdmission(scope,current.requestId(),current.turnId(),current.requestRevision());
+            if(!original.intent().equals(facts.get("intent"))
+                    ||!Objects.equals(original.parentOutcomeId(),facts.get("parentOutcomeId")))throw unavailable();
+            if("DISCUSSION".equals(original.intent())) {
+                if(!basis.get("outcomeId").equals(original.parentOutcomeId()))throw unavailable();
+                return basis;
+            }
+            if(!"CLARIFICATION_REPLY".equals(original.intent())
+                    ||!Objects.equals(original.pendingQuestionId(),facts.get("pendingQuestionId")))throw unavailable();
+            current=clarificationReplyParent(scope,original);
+        }
+    }
+
+    private ChatTypedDeliberationStore.Outcome clarificationReplyParent(ChatTypedDeliberationStore.Scope scope,
+            ChatTypedDeliberationStore.Admission admission) {
+        var parent=admission.parentOutcomeId()==null?null:store.findOutcome(scope,admission.parentOutcomeId(),false);
+        if(parent==null||!scope.equals(parent.scope())||!admission.taskId().equals(parent.taskId())
+                ||admission.assignmentRevision()!=parent.assignmentRevision()||!"CLARIFY".equals(parent.kind())
+                ||admission.requestId().equals(parent.requestId()))throw unavailable();
+        var pending=store.findPendingByOutcome(scope,parent.outcomeId(),false);
+        if(pending==null||!scope.equals(pending.scope())||!parent.outcomeId().equals(pending.outcomeId())
+                ||!Objects.equals(admission.pendingQuestionId(),pending.pendingQuestionId())
+                ||!"ANSWERED".equals(pending.state())||pending.stateVersion()!=1
+                ||!admission.requestId().equals(pending.replyRequestId()))throw unavailable();
+        return parent;
+    }
+
     private void verifyDeliveryRelation(ChatTypedDeliberationStore.Scope scope,
             ChatTypedDeliberationStore.Admission admission, Map<String,Object> snapshotFacts,
             ChatActionFinalValidator.ValidatedFinal validated) {
         var relation=validated.interactionOutcome().deliveryRelation(); if(relation==null)return;
         var facts=map(snapshotFacts.get("typedDeliberationAdmission"));
         var basis=map(facts.get("deliveryParent"));
-        if(!"DISCUSSION".equals(admission.intent())||!relation.parentOutcomeId().equals(admission.parentOutcomeId())
-                ||!relation.parentOutcomeId().equals(facts.get("parentOutcomeId"))
+        if(!admission.intent().equals(facts.get("intent"))
+                ||!Objects.equals(admission.parentOutcomeId(),facts.get("parentOutcomeId"))
                 ||!basis.keySet().equals(Set.of("outcomeId","finalDigest"))
                 ||!relation.parentOutcomeId().equals(basis.get("outcomeId"))
                 ||!relation.parentFinalDigest().equals(basis.get("finalDigest")))throw invalid("ACTION_DELIVERY_PARENT_INVALID");
+        if("DISCUSSION".equals(admission.intent())) {
+            if(!relation.parentOutcomeId().equals(admission.parentOutcomeId()))throw invalid("ACTION_DELIVERY_PARENT_INVALID");
+        } else if("CLARIFICATION_REPLY".equals(admission.intent())) {
+            var clarification=clarificationReplyParent(scope,admission);
+            if(!basis.equals(clarificationDeliveryParent(scope,clarification)))throw invalid("ACTION_DELIVERY_PARENT_INVALID");
+            if(!Objects.equals(admission.pendingQuestionId(),facts.get("pendingQuestionId")))throw invalid("ACTION_DELIVERY_PARENT_INVALID");
+        } else throw invalid("ACTION_DELIVERY_PARENT_INVALID");
         var parent=store.findOutcome(scope,relation.parentOutcomeId(),false);
         if(parent==null||!scope.equals(parent.scope())||!admission.taskId().equals(parent.taskId())
                 ||parent.assignmentRevision()!=admission.assignmentRevision()||!"ANSWER".equals(parent.kind())

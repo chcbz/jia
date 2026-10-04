@@ -61,6 +61,38 @@ class ChatTypedDiscussionAdmissionServiceTest {
         verify(finals).readIfV3(storeScope,parent.requestId(),parent.turnId(),1,"CHAT");
     }
 
+    @Test void clarificationAdmissionCopiesOriginalVerifiedTextBasisAndReplayNeverRebindsIt() {
+        var chain=new ChatClarificationDeliveryRelationTest.Chain();
+        var question=chain.add("question","DISCUSSION",chain.root,chain.basis,"CLARIFY",null);
+        var pending=chain.questions.get(question.outcomeId());
+        when(typed.requireParent(storeScope,question.outcomeId())).thenReturn(question);
+        when(typed.requireParent(storeScope,chain.root.outcomeId())).thenReturn(chain.root);
+        when(typed.requirePending(storeScope,pending.pendingQuestionId())).thenReturn(pending);
+        var inherited=chain.f.finals.clarificationDeliveryParent(storeScope,question);
+        when(finals.clarificationDeliveryParent(storeScope,question)).thenReturn(inherited);
+        var verified=chain.read(chain.root);
+        when(finals.readIfV3(storeScope,chain.root.requestId(),chain.root.turnId(),1,"CHAT")).thenReturn(verified);
+        when(events.findTurn("0","owner","client",chain.root.turnId())).thenReturn(chain.f.turn);
+        when(events.findTurn("0","owner","client","turn")).thenReturn(new ChatTurnEntity().setTurnId("turn"));
+        when(contexts.resolve(any(),eq("task"),eq("agent"),eq(List.of()))).thenReturn(context());
+        when(deliberation.admit(anyString(),eq(sender),eq("42"),eq(1L),any(),any(),any(),isNull(),any(),any()))
+                .thenAnswer(i->admitted(((ChatMessageDTO)i.getArgument(6)).getRequestId()));
+        when(store.answerPending(same(pending),eq(0L),anyString(),eq("clarified-key"),anyString(),anyLong())).thenReturn(1);
+        var durable=new java.util.concurrent.atomic.AtomicReference<ChatTypedDeliberationStore.Admission>();
+        when(store.findAdmissionByKey(storeScope,"clarified-key",true)).thenAnswer(i->durable.get());
+        when(store.insertAdmission(any())).thenAnswer(i->{durable.set(i.getArgument(0));return 1;});
+        var command=new ChatTypedDeliberationWire.DiscussionCommand("CLARIFICATION_REPLY","task",3,"替换原段落",question.outcomeId(),0L,pending.pendingQuestionId(),0L,List.of());
+        var first=service.admit("0",sender,"42","clarified-key",command);
+        var replay=service.admit("0",sender,"42","clarified-key",command);
+        assertTrue(replay.replay());assertEquals(first.requestId(),replay.requestId());
+        verify(deliberation,times(1)).admit(anyString(),eq(sender),eq("42"),eq(1L),any(),any(),any(),isNull(),any(),
+                argThat(facts->chain.basis.equals(facts.get("deliveryParent"))&&question.outcomeId().equals(facts.get("parentOutcomeId"))
+                        &&pending.pendingQuestionId().equals(facts.get("pendingQuestionId"))&&!facts.containsKey("deliveryRelation")));
+        verify(finals,times(1)).clarificationDeliveryParent(storeScope,question);
+        verify(finals,times(1)).readIfV3(storeScope,chain.root.requestId(),chain.root.turnId(),1,"CHAT");
+        verify(store,times(1)).answerPending(same(pending),eq(0L),eq(first.requestId()),eq("clarified-key"),anyString(),anyLong());
+    }
+
     @Test void attachmentOnlyPreservesBodyAndResolvedSelectorsAndReplaysTheOriginalKey() {
         var source=new ChatTypedDeliberationWire.SourceSelector("TASK_LINKED_WORKSPACE_VERSION","file","7","INPUT",null,null);
         var command=new ChatTypedDeliberationWire.DiscussionCommand("DISCUSSION","task",3,"",null,null,null,null,List.of(source));

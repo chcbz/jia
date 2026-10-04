@@ -118,8 +118,10 @@ public class ChatTypedDiscussionAdmissionService {
     private Parent parent(ChatTypedDeliberationStore.Scope scope,ChatTypedDeliberationWire.DiscussionCommand command){
         if(command.parentOutcomeId()==null)return new Parent(null,null);
         var outcome=typed.requireParent(scope,command.parentOutcomeId());
-        if(!command.taskId().equals(outcome.taskId()))throw unavailable();
+        if(!command.taskId().equals(outcome.taskId())||!scope.equals(outcome.scope())
+                ||outcome.assignmentRevision()!=command.expectedAssignmentRevision())throw unavailable();
         if("CLARIFICATION_REPLY".equals(command.intent())){
+            if(!"CLARIFY".equals(outcome.kind()))throw unavailable();
             var pending=typed.requirePending(scope,command.pendingQuestionId());
             if(!outcome.outcomeId().equals(pending.outcomeId())||!"OPEN".equals(pending.state())
                     ||pending.stateVersion()!=command.expectedPendingQuestionStateVersion()
@@ -144,7 +146,16 @@ public class ChatTypedDiscussionAdmissionService {
     private Map<String,Object> deliveryParent(ChatTypedDeliberationStore.Scope scope,
             ChatTypedDeliberationWire.DiscussionCommand command, Parent parent) {
         var row=parent.outcome();
-        if(!"DISCUSSION".equals(command.intent())||row==null||!"ANSWER".equals(row.kind()))return null;
+        if(row==null)return null;
+        Map<String,Object> inherited=null;
+        if("CLARIFICATION_REPLY".equals(command.intent())) {
+            inherited=finals.clarificationDeliveryParent(scope,row);
+            if(inherited==null)return null;
+            row=typed.requireParent(scope,(String)inherited.get("outcomeId"));
+            if(!command.taskId().equals(row.taskId())||!scope.equals(row.scope())
+                    ||!inherited.get("finalDigest").equals(row.finalDigest()))throw unavailable();
+        } else if(!"DISCUSSION".equals(command.intent()))return null;
+        if(!"ANSWER".equals(row.kind())){if(inherited!=null)throw unavailable();return null;}
         var turn=events.findTurn(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),row.turnId());
         if(turn==null||!"CHAT".equals(turn.getRoute())
                 ||!("FINAL_PERSISTED".equals(turn.getState())||"PUBLISHED".equals(turn.getState()))
@@ -153,6 +164,7 @@ public class ChatTypedDiscussionAdmissionService {
         if(projection==null)return null;
         if(!"READY".equals(projection.get("state"))||!(projection.get("outcome") instanceof Map<?,?> view)
                 ||!row.outcomeId().equals(view.get("outcomeId"))||!row.finalDigest().equals(view.get("finalDigest")))throw unavailable();
+        if(inherited!=null&&!Boolean.TRUE.equals(view.get("deliverable")))throw unavailable();
         return Boolean.TRUE.equals(view.get("deliverable"))?Map.of("outcomeId",row.outcomeId(),"finalDigest",row.finalDigest()):null;
     }
 
