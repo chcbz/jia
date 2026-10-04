@@ -419,6 +419,71 @@ class PersonalWorkspaceConversationExecutionTest {
                         OWNER,"task-1","run-1")).getReason());
     }
 
+    private ControlledImageExecutionSourceV3Entity committedEditFixture(boolean workspaceSource) throws Exception {
+        var bytes=png();var hash=sha(bytes);
+        execution.setExecutionProtocolVersion(3).setPermittedOperation("EDIT_IMAGE").setExecutionState("OUTPUT_COMMITTED");
+        output=new PersonalWorkspaceExecutionOutputEntity().setOutputId("output_1").setExecutionId("exec-1")
+                .setOwnerJiacn("owner").setOutputPurpose("CONVERSATION").setOutputState("COMMITTED")
+                .setContentMimeType("image/png").setContentHash(hash).setByteLength((long)bytes.length).setStorageUri("private/object");
+        when(rows.lockOutputs("0","client","owner","exec-1")).thenReturn(List.of(output));
+        when(storage.read(any(),eq("private/object"),eq(hash),eq((long)bytes.length),eq("image/png")))
+                .thenReturn(new PersonalWorkspaceStorage.StoredContent(bytes,hash,bytes.length,"image/png"));
+        var source=new ControlledImageExecutionSourceV3Entity().setExecutionId("exec-1").setOwnerJiacn("owner")
+                .setInputRef("input_1").setInputOrdinal(1).setContentMimeType("image/png")
+                .setByteLength(100L).setContentSha256("a".repeat(64)).setCreatedAt(1L);
+        source.setTenantId("0");source.setClientId("client");
+        java.util.Map<String,Object> descriptor;
+        if(workspaceSource) {
+            source.setSourceKind("TASK_LINKED_WORKSPACE_VERSION").setFileId("file-1").setFileVersion(1).setPurpose("INPUT");
+            descriptor=java.util.Map.of("kind",source.getSourceKind(),"fileId","file-1","version","1","purpose","INPUT");
+        } else {
+            source.setSourceKind("CURRENT_CONVERSATION_ASSET").setConversationId("42").setConversationGeneration(1L)
+                    .setAssetId("asset-1").setAssetRevision(1L).setProducerRequestId("prior-request").setProducerRequestRevision(1L)
+                    .setProducerStepId("prior-step").setProducerExecutionId("prior-exec").setProducerRunId("prior-run").setProducerOutputId("prior-output");
+            descriptor=java.util.Map.of("kind",source.getSourceKind(),"conversationId","42","conversationGeneration","1",
+                    "assetId","asset-1","assetRevision","1","producerRequestId","prior-request","producerStepId","prior-step",
+                    "producerExecutionId","prior-exec","producerRunId","prior-run","producerOutputId","prior-output");
+        }
+        var json=tools.jackson.databind.json.JsonMapper.builder().enable(tools.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS).build();
+        source.setSourceJson(json.writeValueAsString(descriptor));
+        var inputs=List.of(java.util.Map.of("byteLength","100","contentMimeType","image/png","inputRef","input_1",
+                "sha256",source.getContentSha256(),"source",descriptor));
+        var domain=java.util.Map.of("conversationId","42","executionId","exec-1","inputs",inputs,"noReferencedMaterials",false,
+                "operation","EDIT_IMAGE","runId","run-1","schemaVersion",1,"taskId","task-1");
+        execution.setRuntimeInputSnapshotDigest(sha(json.writeValueAsString(domain).getBytes(StandardCharsets.UTF_8)));
+        when(followupSources.list("0","client","owner","exec-1")).thenReturn(List.of(source));
+        when(followup.committedResultAuthority(any(),eq("task-1"),eq("run-1")))
+                .thenReturn(new ControlledImageFollowupAuthorityService.CommittedResultAuthority("exec-1","agent","EDIT_IMAGE",execution.getRuntimeInputSnapshotDigest()));
+        return source;
+    }
+
+    @Test void committedEditCatalogCarriesExactParentWithoutProviderOrPersonalSpace() throws Exception {
+        committedEditFixture(false);
+        var result=service.listConversationOutputs(OWNER,"task-1","run-1").getFirst();
+        assertEquals(new PersonalWorkspaceExecutionService.OutputReplacement("prior-request","prior-step","prior-output","a".repeat(64)),result.replaces());
+        verifyNoInteractions(writes,workspace,runtimes);
+        verify(followup,never()).runtimeAuthority(any(),anyString(),anyString(),anyString());
+        verify(storage,never()).store(any(),any(byte[].class),anyString());
+        assertFalse(result.toString().contains("prior-run"));
+    }
+    @Test void editFromWorkspaceDoesNotReplaceUnrelatedConversationResult() throws Exception {
+        committedEditFixture(true);
+        assertNull(service.listConversationOutputs(OWNER,"task-1","run-1").getFirst().replaces());
+        verifyNoInteractions(workspace,writes);
+    }
+    @Test void alteredOrForeignEditSourcesAndAmbiguousOutputCountFailBeforeReadingBytes() throws Exception {
+        var source=committedEditFixture(false);
+        source.setProducerOutputId("changed");
+        assertEquals(PersonalWorkspaceExecutionService.Reason.GRANT_REVOKED,assertThrows(
+                PersonalWorkspaceExecutionService.Failure.class,()->service.listConversationOutputs(OWNER,"task-1","run-1")).getReason());
+        source.setProducerOutputId("prior-output").setOwnerJiacn("foreign");
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class,()->service.listConversationOutputs(OWNER,"task-1","run-1"));
+        source.setOwnerJiacn("owner");
+        when(rows.lockOutputs("0","client","owner","exec-1")).thenReturn(List.of(output,output));
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class,()->service.listConversationOutputs(OWNER,"task-1","run-1"));
+        verify(storage,never()).read(any(),anyString(),anyString(),anyLong(),anyString());
+    }
+
     @Test void nativeConversationInboxSqlHasByteExactOwnerTargetModeAndStableOrder() throws Exception {
         var select=cn.jia.agent.mapper.PersonalWorkspaceExecutionMapper.class.getMethod(
                         "listQueuedConversationsByTarget",String.class,String.class,String.class,String.class,Long.class,String.class,int.class)

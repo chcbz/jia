@@ -82,8 +82,13 @@ public class ChatBountyMediaController {
     public void setBountyAssets(ChatBountyAssetProjector bountyAssets) { this.bountyAssets = bountyAssets; }
 
     public record AssetRef(String assetId, String revision) { }
+    public record OutputReplacement(String requestId, String stepId, String outputId, String sha256) { }
     public record OutputItem(String outputId, String contentMimeType, String sha256, long byteLength,
-            String previewUrl, String downloadUrl, AssetRef assetRef) {
+            String previewUrl, String downloadUrl, AssetRef assetRef, OutputReplacement replaces) {
+        public OutputItem(String outputId, String contentMimeType, String sha256, long byteLength,
+                String previewUrl, String downloadUrl, AssetRef assetRef) {
+            this(outputId,contentMimeType,sha256,byteLength,previewUrl,downloadUrl,assetRef,null);
+        }
         // Existing callers retain the media-only contract when asset projection is disabled.
         public OutputItem(String outputId, String contentMimeType, String sha256, long byteLength,
                 String previewUrl, String downloadUrl) {
@@ -112,10 +117,29 @@ public class ChatBountyMediaController {
                     + "/outputs/" + encode(item.outputId());
             body.add(new OutputItem(item.outputId(), item.contentMimeType(), item.sha256(),
                     item.byteLength(), SAFE_INLINE.containsKey(item.contentMimeType()) ? url : null,
-                    url + "?download=true", assetRef(allowed, item)));
+                    url + "?download=true", assetRef(allowed, item), replacement(allowed,item)));
         }
         return ResponseEntity.ok().cacheControl(CacheControl.noStore())
                 .header("X-Content-Type-Options", "nosniff").body(JsonResult.success(List.copyOf(body)));
+    }
+
+    /** Both sides of an edit stay in the same live owner/task/conversation generation. */
+    private OutputReplacement replacement(Authorized allowed,
+            PersonalWorkspaceExecutionService.ConversationOutputInfo output) {
+        var source=output.replaces();
+        if (source==null) return null;
+        if (!catalogId(source.requestId()) || !catalogId(source.stepId())
+                || !catalogId(source.outputId()) || !sha(source.sha256())
+                || allowed.request().requestId().equals(source.requestId())) throw unavailable();
+        var parent=requests.getRequest(allowed.scope().tenantId(),allowed.scope().ownerJiacn(),
+                allowed.scope().clientId(),source.requestId());
+        if (parent==null || !source.requestId().equals(parent.requestId())
+                || !allowed.request().conversationId().equals(parent.conversationId())
+                || !allowed.request().conversationGeneration().equals(parent.conversationGeneration())) throw unavailable();
+        var step=parent.steps().stream().filter(s->source.stepId().equals(s.stepId())).findFirst().orElseThrow(ChatBountyMediaController::unavailable);
+        if (!"EXECUTE".equals(step.kind()) || !allowed.step().taskId().equals(step.taskId())
+                || !allowed.step().targetAgentId().equals(step.targetAgentId())) throw unavailable();
+        return new OutputReplacement(source.requestId(),source.stepId(),source.outputId(),source.sha256());
     }
 
     /** Catalogue reads only locate an already persisted asset; never run its projector. */

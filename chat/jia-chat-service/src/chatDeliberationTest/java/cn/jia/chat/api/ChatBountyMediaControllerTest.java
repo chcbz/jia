@@ -291,4 +291,25 @@ class ChatBountyMediaControllerTest {
         verify(projector, never()).project(any());
     }
 
+    @Test void catalogExposesServerReplacementOnlyWithinSameTaskAndConversationGeneration() {
+        ready();
+        var replacement=new PersonalWorkspaceExecutionService.OutputReplacement("prior-request","prior-step","prior-output","a".repeat(64));
+        when(executions.listConversationOutputs(owner,"task-1","run-1")).thenReturn(List.of(
+                new PersonalWorkspaceExecutionService.ConversationOutputInfo("exec-1","out-1","image/png",sha(PHOTO),PHOTO.length,replacement)));
+        var parentStep=new ChatDeliberationService.StepView("prior-step","1","task-1","3","agent-1","EXECUTE","SUCCEEDED","4","prior-intent","prior-exec","OUTPUT_COMMITTED");
+        when(requests.getRequest("0","owner","client","prior-request")).thenReturn(new ChatDeliberationService.RequestView(
+                "prior-request","1","10","1","41","OUTPUT_COMMITTED","2",List.of(),List.of(parentStep)));
+        var item=controller.outputs("request-1","step-1",authentication).getBody().getData().getFirst();
+        assertEquals(new ChatBountyMediaController.OutputReplacement("prior-request","prior-step","prior-output","a".repeat(64)),item.replaces());
+        for(String generation:List.of("2","3")) {
+            when(requests.getRequest("0","owner","client","prior-request")).thenReturn(new ChatDeliberationService.RequestView(
+                    "prior-request","1","10",generation,"41","OUTPUT_COMMITTED","2",List.of(),List.of(parentStep)));
+            assertThrows(ChatDeliberationException.class,()->controller.outputs("request-1","step-1",authentication));
+        }
+        when(requests.getRequest("0","owner","client","prior-request")).thenThrow(new ChatDeliberationException(
+                ChatDeliberationException.Reason.NOT_FOUND_OR_FORBIDDEN,"unavailable"));
+        assertThrows(ChatDeliberationException.class,()->controller.outputs("request-1","step-1",authentication));
+        verify(executions,never()).createConversation(any(),any());
+    }
+
 }

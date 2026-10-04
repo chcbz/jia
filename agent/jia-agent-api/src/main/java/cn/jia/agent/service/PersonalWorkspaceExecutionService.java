@@ -11,8 +11,15 @@ public interface PersonalWorkspaceExecutionService {
     ConversationOutput readConversationOutput(OwnerScope scope, String taskId, String runId, String outputId);
     /** Committed conversation-only outputs whose bytes were checked under the same owner/grant fence. */
     List<ConversationOutputInfo> listConversationOutputs(OwnerScope scope, String taskId, String runId);
+    /** Exact earlier result replaced by this edit, never an input/reference used for generation. */
+    record OutputReplacement(String requestId, String stepId, String outputId, String sha256) { }
     record ConversationOutputInfo(String executionId, String outputId, String contentMimeType,
-            String sha256, long byteLength) { }
+            String sha256, long byteLength, OutputReplacement replaces) {
+        public ConversationOutputInfo(String executionId, String outputId, String contentMimeType,
+                String sha256, long byteLength) {
+            this(executionId, outputId, contentMimeType, sha256, byteLength, null);
+        }
+    }
     /** Native runtime inbox; intentionally separate from legacy unfenced commands. */
     List<ConversationRuntimeCommand> runtimeConversationCommands(RuntimeScope scope, int limit);
     List<? extends ConversationCommandView> runtimeConversationCommandViews(RuntimeScope scope,int limit);

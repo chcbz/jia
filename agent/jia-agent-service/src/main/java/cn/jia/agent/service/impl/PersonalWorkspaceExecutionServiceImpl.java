@@ -539,6 +539,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                             || !"OUTPUT_COMMITTED".equals(locked.getExecutionState())) throw failure(Reason.NOT_FOUND);
                     var outputs=executions.lockOutputs(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),row.getExecutionId());
                     if (outputs==null || outputs.isEmpty() || outputs.size()>128) throw failure(Reason.NOT_FOUND);
+                    var replacement=committedOutputReplacement(scope,locked,outputs.size());
                     var result=new java.util.ArrayList<ConversationOutputInfo>(outputs.size());
                     for (var output: outputs) {
                         if (output==null || !same(row.getExecutionId(),output.getExecutionId())
@@ -557,10 +558,30 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                         if (bytes==null || bytes.length!=output.getByteLength()
                                 || !same(plainSha(bytes),output.getContentHash())) throw failure(Reason.STORAGE_UNAVAILABLE);
                         result.add(new ConversationOutputInfo(row.getExecutionId(),output.getOutputId(),
-                                output.getContentMimeType(),output.getContentHash(),output.getByteLength()));
+                                output.getContentMimeType(),output.getContentHash(),output.getByteLength(),replacement));
                     }
                     return List.copyOf(result);
                 });
+    }
+
+    /** Read-only lineage from the admission's immutable input digest, beneath the existing owner root.
+     * No source bytes, runtime readiness, Provider or personal-file write is needed to read an edit. */
+    private OutputReplacement committedOutputReplacement(OwnerScope scope,
+            PersonalWorkspaceExecutionEntity execution,int outputCount) {
+        if (!Objects.equals(3,execution.getExecutionProtocolVersion())
+                || !"EDIT_IMAGE".equals(execution.getPermittedOperation())) return null;
+        if (followupSources==null || outputCount!=1) throw failure(Reason.GRANT_REVOKED);
+        var source=verifiedV3SourceRows(scope,execution).getFirst();
+        // Editing an uploaded workspace image does not replace any earlier conversation result.
+        if (!"CURRENT_CONVERSATION_ASSET".equals(source.getSourceKind())) return null;
+        if (!same(execution.getConversationId(),source.getConversationId())
+                || same(execution.getExecutionId(),source.getProducerExecutionId()))
+            throw failure(Reason.GRANT_REVOKED);
+        id(source.getProducerRequestId(),"requestId",100);
+        id(source.getProducerStepId(),"stepId",100);
+        id(source.getProducerOutputId(),"outputId",100);
+        return new OutputReplacement(source.getProducerRequestId(),source.getProducerStepId(),
+                source.getProducerOutputId(),source.getContentSha256());
     }
 
     private void requireOwnerCommittedConversationAuthority(OwnerScope scope,PersonalWorkspaceExecutionEntity row) {
@@ -1100,6 +1121,10 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     }
     private List<ControlledImageExecutionSourceV3Entity> verifiedV3SourceRows(
             RuntimeScope scope,PersonalWorkspaceExecutionEntity execution) {
+        return verifiedV3SourceRows(new OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),execution);
+    }
+    private List<ControlledImageExecutionSourceV3Entity> verifiedV3SourceRows(
+            OwnerScope scope,PersonalWorkspaceExecutionEntity execution) {
         var rows=followupSources.list(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
                 execution.getExecutionId());
         if(rows==null||rows.size()>16||!Objects.equals(3,execution.getExecutionProtocolVersion())
