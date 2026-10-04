@@ -54,6 +54,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -2403,6 +2404,86 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
     }
 
     @Test
+    void realJdbcKeysetsPageAppointmentsJobsManagedWorksAndPublishedReaderShelf() {
+        seedExecutionCandidate();
+        seedPublishedContent();
+        for (String suffix : List.of("b", "c")) {
+            jdbc.update("INSERT INTO archive_appointment(appointment_id,collection_id,role_code,"
+                    + "tenant_id,client_id,owner_jiacn,agent_id,binding_version,work_scope_mode,"
+                    + "work_ids,permission_profile,required_skill_key,required_skill_version,"
+                    + "required_skill_sha256,status,revision,revoked_at) VALUES (?,?,"
+                    + "'ARCHIVE_EDITOR','0','client-a','owner-a',?,'7','COLLECTION','',"
+                    + "'DRAFT_ONLY','archive-maintainer','1.0.0',?,'REVOKED',2,CURRENT_TIMESTAMP(6))",
+                    "appointment-" + suffix, COLLECTION, AGENT, SHA);
+        }
+        assertEquals(1, jdbc.update("UPDATE archive_maintenance_job SET state='FAILED',"
+                + "wait_reason='EXECUTION_FAILED' WHERE job_id=?", JOB));
+        for (String suffix : List.of("b", "c")) {
+            jdbc.update("INSERT INTO archive_maintenance_job(job_id,run_id,collection_id,tenant_id,"
+                    + "client_id,owner_jiacn,appointment_id,appointment_revision,agent_id,"
+                    + "binding_version,permission_profile,manager_authorization_revision,"
+                    + "publication_mode,operation_code,work_id,canonical_key,title,source_id,"
+                    + "source_sha256,source_summary,rights_basis,state,wait_reason,revision,draft_id,"
+                    + "request_intent_id,request_sha256) VALUES (?,NULL,?,'0','client-a','owner-a',"
+                    + "?,1,?,'7','DRAFT_ONLY',3,'MANUAL','ADD_WORK',?,?,?,'source-a',?,"
+                    + "'source / v1','authorized','FAILED','EXECUTION_FAILED',1,NULL,?,?)",
+                    "job-" + suffix, COLLECTION, APPOINTMENT, AGENT, "work-" + suffix,
+                    "key-" + suffix, "title-" + suffix, SHA, "intent-" + suffix,
+                    suffix.repeat(64));
+        }
+        for (String suffix : List.of("1", "2", "3")) {
+            jdbc.update("INSERT INTO archive_work(work_id,title,active_edition_id) VALUES (?, ?, NULL)",
+                    "managed-" + suffix, "managed " + suffix);
+            jdbc.update("INSERT INTO archive_collection_work(collection_id,work_id,canonical_key,revision) "
+                    + "VALUES (?,?,?,1)", COLLECTION, "managed-" + suffix, "managed-key-" + suffix);
+        }
+        seedReaderListWork("reader-a", "READY", true);
+        seedReaderListWork("reader-b", "READY", true);
+        seedReaderListWork("reader-draft", "READY", false);
+        seedReaderListWork("reader-staging", "STAGING", true);
+
+        JdbcArchiveMaintenanceStore store = new JdbcArchiveMaintenanceStore(jdbc);
+        List<cn.jia.chat.archive.maintenance.model.ArchiveAppointmentRecord> appointmentFirst =
+                store.listAppointmentsPage(ACTOR, COLLECTION, null, 2);
+        assertEquals(List.of("appointment-c", "appointment-b"), appointmentFirst.stream()
+                .map(cn.jia.chat.archive.maintenance.model.ArchiveAppointmentRecord::appointmentId)
+                .toList());
+        assertEquals(List.of(APPOINTMENT), store.listAppointmentsPage(ACTOR, COLLECTION,
+                appointmentFirst.getLast().appointmentId(), 2).stream()
+                .map(cn.jia.chat.archive.maintenance.model.ArchiveAppointmentRecord::appointmentId)
+                .toList());
+
+        List<cn.jia.chat.archive.maintenance.model.ArchiveMaintenanceJobRecord> jobFirst =
+                store.listJobsPage(ACTOR, COLLECTION, "FAILED", null, 2);
+        assertEquals(List.of("job-c", "job-b"), jobFirst.stream()
+                .map(cn.jia.chat.archive.maintenance.model.ArchiveMaintenanceJobRecord::jobId).toList());
+        jdbc.update("UPDATE archive_maintenance_job SET updated_at=CURRENT_TIMESTAMP(6) "
+                + "WHERE job_id='job-c'");
+        assertEquals(List.of(JOB), store.listJobsPage(ACTOR, COLLECTION, "FAILED",
+                jobFirst.getLast().jobId(), 2).stream()
+                .map(cn.jia.chat.archive.maintenance.model.ArchiveMaintenanceJobRecord::jobId).toList());
+
+        List<ArchiveMaintenanceStore.ManagedWork> managedFirst =
+                store.listManagedWorksPage(ACTOR, COLLECTION, null, 2);
+        assertEquals(List.of("managed-1", "managed-2"), managedFirst.stream()
+                .map(ArchiveMaintenanceStore.ManagedWork::workId).toList());
+        assertTrue(store.listManagedWorksPage(ACTOR, COLLECTION,
+                managedFirst.getLast().workId(), 10).stream()
+                .anyMatch(work -> "managed-3".equals(work.workId())));
+
+        JdbcArchiveContentStore readerStore = new JdbcArchiveContentStore(jdbc);
+        List<cn.jia.chat.archive.model.ArchiveWorkRecord> readerFirst =
+                readerStore.listActiveWorks(null, 2);
+        assertEquals(List.of("reader-a", "reader-b"), readerFirst.stream()
+                .map(cn.jia.chat.archive.model.ArchiveWorkRecord::workId).toList());
+        List<cn.jia.chat.archive.model.ArchiveWorkRecord> readerLast =
+                readerStore.listActiveWorks(readerFirst.getLast().workId(), 10);
+        assertTrue(readerLast.stream().anyMatch(work -> "work-withdraw".equals(work.workId())));
+        assertFalse(readerLast.stream().anyMatch(work -> Set.of("reader-draft", "reader-staging")
+                .contains(work.workId())));
+    }
+
+    @Test
     void managedWorksExcludeCancelledJobsButKeepFailedJobsAsExplicitRecoveryCandidates() {
         seedExecutionCandidate();
         JdbcArchiveMaintenanceStore store = new JdbcArchiveMaintenanceStore(jdbc);
@@ -3072,6 +3153,27 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
     private void seedPublishedVersions() {
         jdbc.update("INSERT INTO archive_collection_manager(collection_id,tenant_id,client_id,owner_jiacn,permissions,state,revision) VALUES (?,'0','client-a','owner-a','edition.withdraw,publish','ACTIVE',5)", COLLECTION);
         seedPublishedContent();
+    }
+
+    private void seedReaderListWork(String workId, String importState, boolean published) {
+        String editionId = workId + "-edition";
+        jdbc.update("INSERT INTO archive_work(work_id,title,active_edition_id) VALUES (?,?,NULL)",
+                workId, workId);
+        jdbc.update("INSERT INTO archive_edition(edition_id,work_id,import_state,source_sha256,"
+                + "manifest_sha256,manifest_file_sha256,source_utf8_byte_length,chapter_count,"
+                + "preface_paragraph_count,chapter_paragraph_count,reader_paragraph_count,"
+                + "preface_utf8_byte_length,chapter_utf8_byte_length,reader_utf8_byte_length) "
+                + "VALUES (?,?,?,?,?,?,1,0,0,0,0,0,0,0)", editionId, workId, importState,
+                "a".repeat(64), SHA, "c".repeat(64));
+        if (published) {
+            jdbc.update("INSERT INTO archive_publication(publication_id,job_id,collection_id,"
+                    + "work_id,edition_id,draft_revision,manifest_sha256,source_sha256,state,"
+                    + "actor_type,actor_id,authorization_revision) VALUES (?,NULL,?,?,?,1,?,?,"
+                    + "'PUBLISHED','HUMAN','owner-a',5)", "pub-" + workId, COLLECTION,
+                    workId, editionId, SHA, "a".repeat(64));
+        }
+        assertEquals(1, jdbc.update("UPDATE archive_work SET active_edition_id=? WHERE work_id=?",
+                editionId, workId));
     }
 
     private void seedPublishedContent() {

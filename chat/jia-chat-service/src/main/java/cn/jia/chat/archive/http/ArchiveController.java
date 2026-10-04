@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.nio.charset.StandardCharsets;
@@ -51,13 +52,24 @@ public class ArchiveController {
     @GetMapping("/works")
     public ResponseEntity<JsonResult<?>> works(
             @RequestHeader(value = HttpHeaders.IF_NONE_MATCH, required = false) String ifNoneMatch,
+            @RequestParam(required = false) String cursor,
+            @RequestParam(required = false) String limit,
             Authentication authentication) {
         Authorization authorization = authorize(authentication);
         if (authorization.error() != null) return authorization.error();
         ResponseEntity<JsonResult<?>> conditionalError = validateConditional(ifNoneMatch);
         if (conditionalError != null) return conditionalError;
         if (!accessPolicy.allows(authorization.tenantId(), authorization.clientId())) return notFound();
-        return render(ifNoneMatch, readerService.works(100));
+        Integer bounded = pageLimit(limit);
+        if (bounded == null) return error(HttpStatus.BAD_REQUEST, "INVALID_ARCHIVE_PAGE_LIMIT",
+                "Archive page limit must be between 1 and 100");
+        try {
+            return render(ifNoneMatch, readerService.works(authorization.tenantId(),
+                    authorization.clientId(), cursor, bounded));
+        } catch (IllegalArgumentException invalid) {
+            return error(HttpStatus.BAD_REQUEST, "INVALID_ARCHIVE_PAGE_CURSOR",
+                    "Archive page cursor is invalid for this reader scope");
+        }
     }
 
     @GetMapping("/works/{workId}/catalog")
@@ -134,6 +146,13 @@ public class ArchiveController {
         }
     }
 
+
+    private Integer pageLimit(String value) {
+        if (value == null) return 100;
+        if (!value.matches("[1-9][0-9]{0,2}")) return null;
+        int parsed = Integer.parseInt(value);
+        return parsed <= 100 ? parsed : null;
+    }
 
     private ResponseEntity<JsonResult<?>> validateConditional(String ifNoneMatch) {
         try {

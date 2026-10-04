@@ -234,6 +234,18 @@ public class JdbcArchiveMaintenanceStore implements ArchiveMaintenanceStore {
         return jdbc.query("SELECT * FROM archive_appointment WHERE collection_id=? AND tenant_id=? AND client_id=? AND owner_jiacn=? ORDER BY created_at DESC",
                 APPOINTMENT, collectionId, actor.tenantId(), actor.clientId(), actor.ownerJiacn());
     }
+    @Override public List<ArchiveAppointmentRecord> listAppointmentsPage(ArchiveActorScope actor,
+            String collectionId, String afterAppointmentId, int limit) {
+        String after = afterAppointmentId == null ? "" : " AND appointment_id < ?";
+        List<Object> args = new ArrayList<>(List.of(collectionId, actor.tenantId(),
+                actor.clientId(), actor.ownerJiacn()));
+        if (afterAppointmentId != null) args.add(afterAppointmentId);
+        args.add(limit);
+        return jdbc.query("SELECT * FROM archive_appointment WHERE collection_id=? AND tenant_id=? "
+                        + "AND client_id=? AND owner_jiacn=?" + after
+                        + " ORDER BY appointment_id DESC LIMIT ?",
+                APPOINTMENT, args.toArray());
+    }
     @Override public void insertAppointment(ArchiveAppointmentRecord a) {
         jdbc.update("""
                 INSERT INTO archive_appointment
@@ -368,6 +380,18 @@ public class JdbcArchiveMaintenanceStore implements ArchiveMaintenanceStore {
         return jdbc.query("SELECT * FROM archive_maintenance_job WHERE collection_id=? AND tenant_id=? AND client_id=? AND owner_jiacn=? ORDER BY updated_at DESC,job_id DESC LIMIT ?",
                 JOB, collectionId, actor.tenantId(), actor.clientId(), actor.ownerJiacn(), limit);
     }
+    @Override public List<ArchiveMaintenanceJobRecord> listJobsPage(ArchiveActorScope actor,
+            String collectionId, String state, String afterJobId, int limit) {
+        StringBuilder sql = new StringBuilder("SELECT * FROM archive_maintenance_job "
+                + "WHERE collection_id=? AND tenant_id=? AND client_id=? AND owner_jiacn=?");
+        List<Object> args = new ArrayList<>(List.of(collectionId, actor.tenantId(),
+                actor.clientId(), actor.ownerJiacn()));
+        if (state != null) { sql.append(" AND state=?"); args.add(state); }
+        if (afterJobId != null) { sql.append(" AND job_id < ?"); args.add(afterJobId); }
+        sql.append(" ORDER BY job_id DESC LIMIT ?");
+        args.add(limit);
+        return jdbc.query(sql.toString(), JOB, args.toArray());
+    }
     @Override public List<ManagedWork> listManagedWorks(ArchiveActorScope actor,String collectionId,int limit) {
         // FAILED remains an explicit recovery candidate for admin resume/reassign; published and
         // cancelled jobs are terminal and must never be projected as pending work.
@@ -399,6 +423,43 @@ public class JdbcArchiveMaintenanceStore implements ArchiveMaintenanceStore {
                         (Long)rs.getObject(4),rs.getBoolean(5),rs.getString(6)),
                 actor.tenantId(),actor.clientId(),actor.ownerJiacn(),collectionId,
                 collectionId,actor.tenantId(),actor.clientId(),actor.ownerJiacn(),limit);
+    }
+    @Override public List<ManagedWork> listManagedWorksPage(ArchiveActorScope actor,
+            String collectionId, String afterWorkId, int limit) {
+        String after = afterWorkId == null ? "" : " WHERE x.work_id > ?";
+        String sql = """
+                SELECT x.work_id,x.title,x.active_edition_id,x.work_revision,x.has_history,x.pending_job_id
+                FROM (
+                  SELECT cw.work_id,w.title,w.active_edition_id,cw.revision AS work_revision,
+                         EXISTS(SELECT 1 FROM archive_publication p WHERE p.work_id=cw.work_id) AS has_history,
+                         (SELECT j.job_id FROM archive_maintenance_job j
+                          WHERE j.collection_id=cw.collection_id AND j.work_id=cw.work_id
+                            AND j.tenant_id=? AND j.client_id=? AND j.owner_jiacn=?
+                            AND j.state IN ('WAITING_INPUT','WAITING_ASSIGNEE','WAITING_SKILL','EXECUTION_REQUESTED','RUNNING','NEEDS_CHANGES','AWAITING_PUBLISH','PUBLISHING','SUSPENDED_AUTH','FAILED')
+                          ORDER BY j.updated_at DESC,j.job_id DESC LIMIT 1) AS pending_job_id
+                  FROM archive_collection_work cw JOIN archive_work w ON w.work_id=cw.work_id
+                  WHERE cw.collection_id=?
+                  UNION ALL
+                  SELECT j.work_id,j.title,NULL,NULL,0,j.job_id
+                  FROM archive_maintenance_job j
+                  WHERE j.collection_id=? AND j.tenant_id=? AND j.client_id=? AND j.owner_jiacn=?
+                    AND j.work_id IS NOT NULL AND j.state IN ('WAITING_INPUT','WAITING_ASSIGNEE','WAITING_SKILL','EXECUTION_REQUESTED','RUNNING','NEEDS_CHANGES','AWAITING_PUBLISH','PUBLISHING','SUSPENDED_AUTH','FAILED')
+                    AND j.job_id=(SELECT j2.job_id FROM archive_maintenance_job j2
+                                  WHERE j2.collection_id=j.collection_id AND j2.work_id=j.work_id
+                                    AND j2.tenant_id=j.tenant_id AND j2.client_id=j.client_id
+                                    AND j2.owner_jiacn=j.owner_jiacn AND j2.state IN ('WAITING_INPUT','WAITING_ASSIGNEE','WAITING_SKILL','EXECUTION_REQUESTED','RUNNING','NEEDS_CHANGES','AWAITING_PUBLISH','PUBLISHING','SUSPENDED_AUTH','FAILED')
+                                  ORDER BY j2.updated_at DESC,j2.job_id DESC LIMIT 1)
+                    AND NOT EXISTS(SELECT 1 FROM archive_collection_work cw
+                                   WHERE cw.collection_id=j.collection_id AND cw.work_id=j.work_id)
+                ) x
+                """ + after + " ORDER BY x.work_id LIMIT ?";
+        List<Object> args = new ArrayList<>(List.of(actor.tenantId(), actor.clientId(),
+                actor.ownerJiacn(), collectionId, collectionId, actor.tenantId(),
+                actor.clientId(), actor.ownerJiacn()));
+        if (afterWorkId != null) args.add(afterWorkId);
+        args.add(limit);
+        return jdbc.query(sql, (rs,n)->new ManagedWork(rs.getString(1),rs.getString(2),rs.getString(3),
+                        (Long)rs.getObject(4),rs.getBoolean(5),rs.getString(6)), args.toArray());
     }
     @Override public void insertJob(ArchiveMaintenanceJobRecord j) {
         jdbc.update("""

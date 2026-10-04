@@ -16,6 +16,7 @@ import cn.jia.chat.archive.maintenance.store.ArchiveMaintenanceStore;
 import cn.jia.chat.archive.model.*;
 import cn.jia.chat.archive.service.ArchiveReaderService;
 import cn.jia.chat.archive.service.ArchiveReaderServiceImpl;
+import cn.jia.chat.archive.service.ArchivePageCursor;
 import cn.jia.chat.archive.service.ArchiveRepresentation;
 import cn.jia.chat.archive.service.ArchiveTransactions;
 import cn.jia.chat.archive.store.ArchiveContentStore;
@@ -46,6 +47,11 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             "RESULT_RECONCILIATION", "RUNNER");
     private static final Set<String> CONFIGURATION_REPAIR_PHASES = Set.of("DRAFT_READ",
             "DRAFT_WRITE", "VALIDATION");
+    private static final Set<String> JOB_LIST_STATES = Set.of("WAITING_INPUT",
+            "WAITING_ASSIGNEE", "WAITING_SKILL", "EXECUTION_REQUESTED", "RUNNING",
+            "NEEDS_CHANGES", "AWAITING_PUBLISH", "PUBLISHING", "PUBLISHED",
+            "SUSPENDED_AUTH", "FAILED", "CANCELLED");
+    private static final int MAX_PAGE_SIZE = 100;
     private static final int MAX_SOURCE_BYTES = 16 * 1024 * 1024;
     private final AgentTaskArtifactStorage sourceStorage;
     private final ArchiveMaintenanceStore store;
@@ -414,6 +420,44 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         ArchiveAppointmentRecord current = store.findCurrentAppointment(collectionId, false);
         return store.listAppointments(actor, collectionId).stream()
                 .map(value -> appointmentDto(actor, value, current)).toList();
+    }
+
+    @Override
+    public ArchivePageDTO<ArchiveAppointmentDTO> appointments(ArchiveActorScope actor,
+            String collectionId, String cursor, int limit) {
+        int bounded = requirePageLimit(limit);
+        AppointmentPageRows page = transactions.required(() -> {
+            requireManager(actor, collectionId, "appoint", true);
+            String binding = pageBinding("appointments", actor, collectionId, "");
+            String after = decodePageCursor(binding, cursor);
+            return new AppointmentPageRows(store.findCurrentAppointment(collectionId, false),
+                    store.listAppointmentsPage(actor, collectionId, after, bounded + 1), binding);
+        });
+        boolean more = page.rows().size() > bounded;
+        List<ArchiveAppointmentRecord> visible = List.copyOf(page.rows().subList(0,
+                Math.min(bounded, page.rows().size())));
+        List<ArchiveAppointmentDTO> observedItems = visible.stream()
+                .map(value -> appointmentDto(actor, value, page.current())).toList();
+        String next = more ? ArchivePageCursor.encode(page.binding(),
+                visible.getLast().appointmentId()) : null;
+        return transactions.required(() -> {
+            requireManager(actor, collectionId, "appoint", true);
+            store.lockSlot(collectionId, ROLE);
+            ArchiveAppointmentRecord current = store.findCurrentAppointment(collectionId, true);
+            if (!Objects.equals(page.current(), current)) {
+                conflict("ARCHIVE_APPOINTMENT_CHANGED",
+                        "Archive appointment changed during paged readiness read");
+            }
+            for (ArchiveAppointmentRecord observed : visible) {
+                ArchiveAppointmentRecord locked = store.findAppointment(
+                        observed.appointmentId(), true);
+                if (!Objects.equals(observed, locked)) {
+                    conflict("ARCHIVE_APPOINTMENT_CHANGED",
+                            "Archive appointment changed during paged readiness read");
+                }
+            }
+            return new ArchivePageDTO<>(observedItems, next);
+        });
     }
 
     @Override
@@ -1221,17 +1265,52 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
     }
 
     @Override
+    public ArchivePageDTO<ArchiveJobDTO> listJobs(ArchiveActorScope actor, String collectionId,
+            String state, String cursor, int limit) {
+        int bounded = requirePageLimit(limit);
+        return transactions.required(() -> {
+            requireJobReadManager(actor, collectionId, true);
+            String filter = requireJobListState(state);
+            String binding = pageBinding("jobs", actor, collectionId, filter == null ? "" : filter);
+            String after = decodePageCursor(binding, cursor);
+            List<ArchiveMaintenanceJobRecord> rows = store.listJobsPage(actor, collectionId,
+                    filter, after, bounded + 1);
+            boolean more = rows.size() > bounded;
+            List<ArchiveMaintenanceJobRecord> visible = rows.subList(0,
+                    Math.min(bounded, rows.size()));
+            List<ArchiveJobDTO> items = visible.stream().map(this::jobDto).toList();
+            String next = more ? ArchivePageCursor.encode(binding, visible.getLast().jobId()) : null;
+            return new ArchivePageDTO<>(items, next);
+        });
+    }
+
+    @Override
     public ArchiveWorksDTO listWorks(ArchiveActorScope actor, String collectionId, int limit) {
         int bounded = Math.max(1, Math.min(limit, 100));
         return transactions.required(() -> {
             requireJobReadManager(actor, collectionId, true);
             List<ArchiveWorkSummaryDTO> items = store.listManagedWorks(actor, collectionId, bounded).stream()
-                    .map(value -> new ArchiveWorkSummaryDTO(value.workId(), value.title(),
-                            value.activeEditionId(), value.workRevision() == null ? null
-                                    : Long.toString(value.workRevision()),
-                            value.hasEditionHistory(), value.pendingJobId()))
-                    .toList();
+                    .map(this::managedWorkDto).toList();
             return new ArchiveWorksDTO(items, null);
+        });
+    }
+
+    @Override
+    public ArchiveWorksDTO listWorks(ArchiveActorScope actor, String collectionId,
+            String cursor, int limit) {
+        int bounded = requirePageLimit(limit);
+        return transactions.required(() -> {
+            requireJobReadManager(actor, collectionId, true);
+            String binding = pageBinding("managed-works", actor, collectionId, "");
+            String after = decodePageCursor(binding, cursor);
+            List<ArchiveMaintenanceStore.ManagedWork> rows = store.listManagedWorksPage(
+                    actor, collectionId, after, bounded + 1);
+            boolean more = rows.size() > bounded;
+            List<ArchiveMaintenanceStore.ManagedWork> visible = rows.subList(0,
+                    Math.min(bounded, rows.size()));
+            List<ArchiveWorkSummaryDTO> items = visible.stream().map(this::managedWorkDto).toList();
+            String next = more ? ArchivePageCursor.encode(binding, visible.getLast().workId()) : null;
+            return new ArchiveWorksDTO(items, next);
         });
     }
 
@@ -3912,6 +3991,46 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
                 ? store.findCurrentAppointment(value.collectionId(), false) : null;
     }
 
+    private ArchiveWorkSummaryDTO managedWorkDto(ArchiveMaintenanceStore.ManagedWork value) {
+        return new ArchiveWorkSummaryDTO(value.workId(), value.title(), value.activeEditionId(),
+                value.workRevision() == null ? null : Long.toString(value.workRevision()),
+                value.hasEditionHistory(), value.pendingJobId());
+    }
+
+    private int requirePageLimit(int limit) {
+        if (limit < 1 || limit > MAX_PAGE_SIZE) {
+            throw error(400, "INVALID_ARCHIVE_PAGE_LIMIT",
+                    "Archive page limit must be between 1 and 100");
+        }
+        return limit;
+    }
+
+    private String requireJobListState(String state) {
+        if (state == null) return null;
+        if (!state.equals(state.strip()) || !JOB_LIST_STATES.contains(state)) {
+            throw error(400, "INVALID_ARCHIVE_JOB_STATE", "Archive job state filter is invalid");
+        }
+        return state;
+    }
+
+    private String pageBinding(String purpose, ArchiveActorScope actor,
+            String collectionId, String filter) {
+        requireScope(actor);
+        exactId(collectionId);
+        return ArchivePageCursor.binding(purpose, collectionId, actor.tenantId(),
+                actor.clientId(), actor.ownerJiacn(), filter);
+    }
+
+    private String decodePageCursor(String binding, String cursor) {
+        if (cursor == null) return null;
+        try {
+            return ArchivePageCursor.decode(binding, cursor);
+        } catch (IllegalArgumentException invalid) {
+            throw error(400, "INVALID_ARCHIVE_PAGE_CURSOR",
+                    "Archive page cursor is invalid for this list scope");
+        }
+    }
+
     private ArchiveAppointmentDTO appointmentDto(ArchiveActorScope actor, ArchiveAppointmentRecord value,
             ArchiveAppointmentRecord current) {
         AppointmentReadiness readiness = appointmentReadiness(actor, value, current);
@@ -4587,5 +4706,8 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             ArchiveSourceSnapshotRecord source, ArchiveDraftRecord draft,
             ArchiveValidationRecord validation, PublicationMaterial material) { }
     private record ExecutionAdmission(ArchiveExecutionDTO value, boolean expired) { }
+
+    private record AppointmentPageRows(ArchiveAppointmentRecord current,
+            List<ArchiveAppointmentRecord> rows, String binding) { }
 
 }

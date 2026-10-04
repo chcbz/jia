@@ -8,6 +8,7 @@ import cn.jia.chat.archive.dto.ArchiveBlockDTO;
 import cn.jia.chat.archive.dto.ArchiveBlockSummaryDTO;
 import cn.jia.chat.archive.dto.ArchiveCatalogDTO;
 import cn.jia.chat.archive.dto.ArchiveParagraphDTO;
+import cn.jia.chat.archive.dto.ArchivePageDTO;
 import cn.jia.chat.archive.http.ArchiveController;
 import cn.jia.chat.archive.maintenance.dto.ArchiveDraftBlockDTO;
 import cn.jia.chat.archive.maintenance.dto.ArchiveDraftBlockInput;
@@ -22,6 +23,7 @@ import cn.jia.chat.archive.maintenance.dto.ArchiveSourceSnapshotDTO;
 import cn.jia.chat.archive.maintenance.dto.ArchiveWorkSummaryDTO;
 import cn.jia.chat.archive.maintenance.dto.ArchiveWorksDTO;
 import cn.jia.chat.archive.maintenance.service.ArchiveMaintenanceService;
+import cn.jia.chat.archive.maintenance.service.ArchiveMaintenanceException;
 import cn.jia.chat.archive.service.ArchiveReaderService;
 import cn.jia.chat.archive.service.ArchiveRepresentation;
 import cn.jia.core.security.SensitiveResponseBodyAdvice;
@@ -48,6 +50,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -111,7 +114,7 @@ class ArchiveContentFidelityMvcTest {
         when(service.getDraft(any(), eq("job-a"))).thenReturn(draft);
         when(service.getDraftBlock(any(), eq("draft-a"), eq("chapter-1"))).thenReturn(
                 new ArchiveDraftBlockDTO("draft-a", "job-a", "8", "EDITABLE", block));
-        when(service.listWorks(any(), eq("platform-classics"), eq(100))).thenReturn(
+        when(service.listWorks(any(), eq("platform-classics"), isNull(), eq(100))).thenReturn(
                 new ArchiveWorksDTO(List.of(new ArchiveWorkSummaryDTO("work-a", TITLE, "edition-a")), null));
         when(service.source(any(), eq("source-a"))).thenReturn(new ArchiveSourceSnapshotDTO(
                 "source-a", "platform-classics", "来源 token=fixture_literal", "版本 secret=fixture_literal",
@@ -174,7 +177,7 @@ class ArchiveContentFidelityMvcTest {
                 prefaceSummary, List.of(chapterSummary));
         when(service.catalog()).thenReturn(new ArchiveRepresentation<>(catalogEtag,
                 new ArchiveCatalogDTO(1, "work-a", TITLE, active)));
-        when(service.works(100)).thenReturn(new ArchiveRepresentation<>(worksEtag,
+        when(service.works(eq("tenant-a"), eq("client-a"), isNull(), eq(100))).thenReturn(new ArchiveRepresentation<>(worksEtag,
                 new ArchiveWorksDTO(List.of(new ArchiveWorkSummaryDTO("work-a", TITLE, "edition-a")), null)));
         when(service.preface("edition-a")).thenReturn(new ArchiveRepresentation<>(prefaceEtag,
                 block("PREFACE", "preface", null, manifestSha, prefaceSha)));
@@ -207,6 +210,53 @@ class ArchiveContentFidelityMvcTest {
         assertReaderBlock(mvc, authentication,
                 "/archive/v1/editions/edition-a/chapters/chapter-1",
                 chapterEtag, manifestSha, chapterSha);
+    }
+
+    @Test
+    void pageQueryContractsPassExactScopeFilterCursorAndRejectMalformedLimits() throws Exception {
+        ArchiveMaintenanceService admin = mock(ArchiveMaintenanceService.class);
+        when(admin.appointments(any(), eq("platform-classics"), eq("cursor-a"), eq(7)))
+                .thenReturn(new ArchivePageDTO<>(List.of(), null));
+        when(admin.listJobs(any(), eq("platform-classics"), eq("FAILED"), eq("cursor-j"), eq(8)))
+                .thenReturn(new ArchivePageDTO<>(List.of(), null));
+        when(admin.listWorks(any(), eq("platform-classics"), eq("cursor-w"), eq(9)))
+                .thenReturn(new ArchiveWorksDTO(List.of(), null));
+        MockMvc adminMvc = mvc(new ArchiveAdminController(admin, new ObjectMapper()));
+        JwtAuthenticationToken manager = managerAuthentication();
+
+        responseJson(adminMvc, get("/archive/admin/v1/collections/platform-classics/appointments")
+                .param("cursor", "cursor-a").param("limit", "7").principal(manager));
+        responseJson(adminMvc, get("/archive/admin/v1/collections/platform-classics/jobs")
+                .param("state", "FAILED").param("cursor", "cursor-j").param("limit", "8")
+                .principal(manager));
+        responseJson(adminMvc, get("/archive/admin/v1/collections/platform-classics/works")
+                .param("cursor", "cursor-w").param("limit", "9").principal(manager));
+        JsonNode invalidAdmin = responseJson(adminMvc,
+                get("/archive/admin/v1/collections/platform-classics/jobs")
+                        .param("limit", "01").principal(manager), 400);
+        assertEquals("INVALID_ARCHIVE_PAGE_LIMIT", invalidAdmin.path("code").asText());
+        when(admin.listJobs(any(), eq("platform-classics"), isNull(), eq("bad-admin"), eq(50)))
+                .thenThrow(new ArchiveMaintenanceException(400, "INVALID_ARCHIVE_PAGE_CURSOR",
+                        "Archive page cursor is invalid for this list scope"));
+        JsonNode invalidAdminCursor = responseJson(adminMvc,
+                get("/archive/admin/v1/collections/platform-classics/jobs")
+                        .param("cursor", "bad-admin").principal(manager), 400);
+        assertEquals("INVALID_ARCHIVE_PAGE_CURSOR", invalidAdminCursor.path("code").asText());
+
+        ArchiveReaderService reader = mock(ArchiveReaderService.class);
+        when(reader.works("tenant-a", "client-a", "cursor-r", 6)).thenReturn(
+                new ArchiveRepresentation<>("W/\"page\"", new ArchiveWorksDTO(List.of(), null)));
+        MockMvc readerMvc = mvc(new ArchiveController(reader, enabledReaderPolicy()));
+        responseJson(readerMvc, get("/archive/v1/works").param("cursor", "cursor-r")
+                .param("limit", "6").principal(readerAuthentication()));
+        JsonNode invalidReader = responseJson(readerMvc, get("/archive/v1/works")
+                .param("limit", "0").principal(readerAuthentication()), 400);
+        assertEquals("INVALID_ARCHIVE_PAGE_LIMIT", invalidReader.path("code").asText());
+        when(reader.works("tenant-a", "client-a", "bad-reader", 100))
+                .thenThrow(new IllegalArgumentException("Invalid archive page cursor"));
+        JsonNode invalidReaderCursor = responseJson(readerMvc, get("/archive/v1/works")
+                .param("cursor", "bad-reader").principal(readerAuthentication()), 400);
+        assertEquals("INVALID_ARCHIVE_PAGE_CURSOR", invalidReaderCursor.path("code").asText());
     }
 
     private static ArchiveDraftDTO draft() {
@@ -242,13 +292,19 @@ class ArchiveContentFidelityMvcTest {
     }
 
     private static JsonNode responseJson(MockMvc mvc, MockHttpServletRequestBuilder request) throws Exception {
-        return JSON.readTree(mvc.perform(request).andExpect(status().isOk())
+        return responseJson(mvc, request, 200);
+    }
+
+    private static JsonNode responseJson(MockMvc mvc, MockHttpServletRequestBuilder request,
+            int expectedStatus) throws Exception {
+        return JSON.readTree(mvc.perform(request).andExpect(status().is(expectedStatus))
                 .andReturn().getResponse().getContentAsByteArray());
     }
 
     private static MockMvc mvc(Object... controllers) {
         return org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controllers)
-                .setControllerAdvice(new SensitiveResponseBodyAdvice(new SensitiveResponseProperties()))
+                .setControllerAdvice(new SensitiveResponseBodyAdvice(new SensitiveResponseProperties()),
+                        new ArchiveMaintenanceExceptionHandler())
                 .setMessageConverters(
                         new ByteArrayHttpMessageConverter(),
                         new JacksonJsonHttpMessageConverter(

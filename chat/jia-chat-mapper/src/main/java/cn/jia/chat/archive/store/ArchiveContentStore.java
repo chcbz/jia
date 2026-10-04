@@ -13,6 +13,12 @@ public interface ArchiveContentStore {
     ActiveContent findActiveContent(String workId);
     default ActiveContent findPublishedContent(String editionId) { return null; }
     default List<ArchiveWorkRecord> listActiveWorks(int limit) { return List.of(); }
+    default List<ArchiveWorkRecord> listActiveWorks(String afterWorkId, int limit) {
+        if (afterWorkId != null) {
+            throw new UnsupportedOperationException("active-work pagination is not supported by this store");
+        }
+        return listActiveWorks(limit);
+    }
     default boolean isPublished(String editionId) { return true; }
     default String publicationState(String editionId) { return isPublished(editionId) ? "PUBLISHED" : null; }
     default void ensureLegacyPublication(String collectionId, String canonicalKey,

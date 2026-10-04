@@ -19,6 +19,10 @@ public interface ArchiveMaintenanceStore {
     ArchiveAppointmentRecord findAppointment(String appointmentId, boolean lock);
     ArchiveAppointmentRecord findCurrentAppointment(String collectionId, boolean lock);
     List<ArchiveAppointmentRecord> listAppointments(ArchiveActorScope actor, String collectionId);
+    default List<ArchiveAppointmentRecord> listAppointmentsPage(ArchiveActorScope actor, String collectionId,
+                                                                 String afterAppointmentId, int limit) {
+        throw new UnsupportedOperationException("appointment pagination is not supported by this store");
+    }
     void insertAppointment(ArchiveAppointmentRecord appointment);
     int activateSlot(String collectionId, String roleCode, long expectedRevision, String appointmentId);
     int revokeAppointment(String appointmentId, long expectedRevision);
@@ -38,7 +42,15 @@ public interface ArchiveMaintenanceStore {
     ArchiveMaintenanceJobRecord findJob(String jobId, boolean lock);
     ArchiveMaintenanceJobRecord findJobByIntent(ArchiveActorScope actor, String requestIntentId, boolean lock);
     List<ArchiveMaintenanceJobRecord> listJobs(ArchiveActorScope actor, String collectionId, int limit);
+    default List<ArchiveMaintenanceJobRecord> listJobsPage(ArchiveActorScope actor, String collectionId,
+                                                            String state, String afterJobId, int limit) {
+        throw new UnsupportedOperationException("job pagination is not supported by this store");
+    }
     List<ManagedWork> listManagedWorks(ArchiveActorScope actor, String collectionId, int limit);
+    default List<ManagedWork> listManagedWorksPage(ArchiveActorScope actor, String collectionId,
+                                                    String afterWorkId, int limit) {
+        throw new UnsupportedOperationException("managed-work pagination is not supported by this store");
+    }
     void insertJob(ArchiveMaintenanceJobRecord job);
     int bindWaitingJobTarget(String jobId, long expectedRevision, String targetAgentId);
     int resolveWaitingJob(ArchiveMaintenanceJobRecord job, long expectedRevision);

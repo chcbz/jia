@@ -23,10 +23,28 @@ public class ArchiveReaderServiceImpl implements ArchiveReaderService {
 
     @Override @Transactional(readOnly=true)
     public ArchiveRepresentation<ArchiveWorksDTO> works(int limit){
-        List<ArchiveWorkSummaryDTO> items=store.listActiveWorks(Math.max(1,Math.min(limit,100))).stream()
+        int bounded=Math.max(1,Math.min(limit,100));
+        return worksPage(null,bounded,ArchivePageCursor.binding("reader-works-legacy","legacy"));
+    }
+
+    @Override @Transactional(readOnly=true)
+    public ArchiveRepresentation<ArchiveWorksDTO> works(String tenantId,String clientId,
+            String cursor,int limit){
+        if(limit<1||limit>100)throw new IllegalArgumentException("Invalid archive page limit");
+        String binding=ArchivePageCursor.binding("reader-works",tenantId,clientId);
+        String after=cursor==null?null:ArchivePageCursor.decode(binding,cursor);
+        return worksPage(after,limit,binding);
+    }
+
+    private ArchiveRepresentation<ArchiveWorksDTO> worksPage(String after,int limit,String binding){
+        List<ArchiveWorkRecord> rows=store.listActiveWorks(after,limit+1);
+        boolean more=rows.size()>limit;
+        List<ArchiveWorkSummaryDTO> items=rows.subList(0,Math.min(limit,rows.size())).stream()
                 .map(w->new ArchiveWorkSummaryDTO(w.workId(),w.title(),w.activeEditionId())).toList();
-        String digest=ArchiveEtags.sha256(items.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        return new ArchiveRepresentation<>(ArchiveEtags.catalog(digest),new ArchiveWorksDTO(items,null));
+        String next=more?ArchivePageCursor.encode(binding,items.getLast().workId()):null;
+        ArchiveWorksDTO page=new ArchiveWorksDTO(items,next);
+        String digest=ArchiveEtags.sha256(page.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        return new ArchiveRepresentation<>(ArchiveEtags.catalog(digest),page);
     }
 
     @Override @Transactional(readOnly=true)

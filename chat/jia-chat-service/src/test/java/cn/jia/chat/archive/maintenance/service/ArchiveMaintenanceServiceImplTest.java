@@ -5,6 +5,7 @@ import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.ArchiveAgentExecutionPort;
 import cn.jia.agent.service.InstalledSkillResolver;
 import cn.jia.agent.service.AgentTaskArtifactStorage;
+import cn.jia.chat.archive.dto.ArchivePageDTO;
 import cn.jia.chat.archive.maintenance.dto.*;
 import cn.jia.chat.archive.maintenance.config.ArchiveMaintenanceProperties;
 import cn.jia.chat.archive.maintenance.model.*;
@@ -61,6 +62,115 @@ class ArchiveMaintenanceServiceImplTest {
         };
         service = new ArchiveMaintenanceServiceImpl(store, content, transactions, identities,
                 new ObjectMapper(), sourceStorage, Clock.fixed(Instant.parse("2026-09-28T00:00:00Z"), ZoneOffset.UTC));
+    }
+
+    @Test
+    void boundedPagesUseStableKeysBindScopeAndReauthorizeEveryPage() {
+        allowManager("appoint,job.manage");
+        ArchiveAppointmentRecord a3 = appointmentRecord("apt-003", "ACTIVE", 3);
+        ArchiveAppointmentRecord a2 = appointmentRecord("apt-002", "REVOKED", 2);
+        ArchiveAppointmentRecord a1 = appointmentRecord("apt-001", "REVOKED", 1);
+        when(store.findCurrentAppointment(COLLECTION, false)).thenReturn(a3);
+        when(store.findCurrentAppointment(COLLECTION, true)).thenReturn(a3);
+        when(store.listAppointmentsPage(MANAGER, COLLECTION, null, 3))
+                .thenReturn(List.of(a3, a2, a1));
+        when(store.listAppointmentsPage(MANAGER, COLLECTION, "apt-002", 3))
+                .thenReturn(List.of(a1));
+        when(store.findAppointment("apt-003", true)).thenReturn(a3);
+        when(store.findAppointment("apt-002", true)).thenReturn(a2);
+        when(store.findAppointment("apt-001", true)).thenReturn(a1);
+
+        ArchivePageDTO<ArchiveAppointmentDTO> appointmentFirst =
+                service.appointments(MANAGER, COLLECTION, null, 2);
+        assertEquals(List.of("apt-003", "apt-002"), appointmentFirst.items().stream()
+                .map(ArchiveAppointmentDTO::appointmentId).toList());
+        assertNotNull(appointmentFirst.nextCursor());
+        ArchivePageDTO<ArchiveAppointmentDTO> appointmentLast =
+                service.appointments(MANAGER, COLLECTION, appointmentFirst.nextCursor(), 2);
+        assertEquals(List.of("apt-001"), appointmentLast.items().stream()
+                .map(ArchiveAppointmentDTO::appointmentId).toList());
+        assertNull(appointmentLast.nextCursor());
+
+        ArchiveMaintenanceJobRecord j3 = jobRecord("job-003", "FAILED");
+        ArchiveMaintenanceJobRecord j2 = jobRecord("job-002", "FAILED");
+        ArchiveMaintenanceJobRecord j1 = jobRecord("job-001", "FAILED");
+        when(store.listJobsPage(MANAGER, COLLECTION, "FAILED", null, 3))
+                .thenReturn(List.of(j3, j2, j1));
+        when(store.listJobsPage(MANAGER, COLLECTION, "FAILED", "job-002", 3))
+                .thenReturn(List.of(j1));
+        ArchivePageDTO<ArchiveJobDTO> jobFirst =
+                service.listJobs(MANAGER, COLLECTION, "FAILED", null, 2);
+        assertEquals(List.of("job-003", "job-002"), jobFirst.items().stream()
+                .map(ArchiveJobDTO::jobId).toList());
+        assertEquals("job-001", service.listJobs(MANAGER, COLLECTION, "FAILED",
+                jobFirst.nextCursor(), 2).items().getFirst().jobId());
+        ArchiveMaintenanceException wrongFilter = assertThrows(ArchiveMaintenanceException.class,
+                () -> service.listJobs(MANAGER, COLLECTION, "RUNNING",
+                        jobFirst.nextCursor(), 2));
+        assertEquals("INVALID_ARCHIVE_PAGE_CURSOR", wrongFilter.code());
+        ArchiveActorScope otherActor = new ArchiveActorScope("0", "client-a", "owner-b");
+        when(store.findManagerGrant(eq(otherActor), eq(COLLECTION), anyBoolean())).thenReturn(
+                new ArchiveManagerGrantRecord(COLLECTION, "0", "client-a", "owner-b",
+                        "job.manage", 1, "ACTIVE"));
+        assertEquals("INVALID_ARCHIVE_PAGE_CURSOR", assertThrows(ArchiveMaintenanceException.class,
+                () -> service.listJobs(otherActor, COLLECTION, "FAILED",
+                        jobFirst.nextCursor(), 2)).code());
+        ArchiveMaintenanceException invalidState = assertThrows(ArchiveMaintenanceException.class,
+                () -> service.listJobs(MANAGER, COLLECTION, " failed ", null, 2));
+        assertEquals("INVALID_ARCHIVE_JOB_STATE", invalidState.code());
+
+        var w1 = new ArchiveMaintenanceStore.ManagedWork("work-001", "一", "edition-1",
+                1L, true, null);
+        var w2 = new ArchiveMaintenanceStore.ManagedWork("work-002", "二", "edition-2",
+                2L, true, null);
+        var w3 = new ArchiveMaintenanceStore.ManagedWork("work-003", "三", null,
+                null, false, "job-003");
+        when(store.listManagedWorksPage(MANAGER, COLLECTION, null, 3))
+                .thenReturn(List.of(w1, w2, w3));
+        when(store.listManagedWorksPage(MANAGER, COLLECTION, "work-002", 3))
+                .thenReturn(List.of(w3));
+        ArchiveWorksDTO workFirst = service.listWorks(MANAGER, COLLECTION, null, 2);
+        assertEquals(List.of("work-001", "work-002"), workFirst.items().stream()
+                .map(ArchiveWorkSummaryDTO::workId).toList());
+        assertEquals("work-003", service.listWorks(MANAGER, COLLECTION,
+                workFirst.nextCursor(), 2).items().getFirst().workId());
+        assertEquals("INVALID_ARCHIVE_PAGE_CURSOR", assertThrows(ArchiveMaintenanceException.class,
+                () -> service.appointments(MANAGER, COLLECTION, workFirst.nextCursor(), 2)).code());
+        assertEquals("INVALID_ARCHIVE_PAGE_LIMIT", assertThrows(ArchiveMaintenanceException.class,
+                () -> service.listWorks(MANAGER, COLLECTION, null, 101)).code());
+
+        when(store.findManagerGrant(eq(MANAGER), eq(COLLECTION), anyBoolean()))
+                .thenReturn(new ArchiveManagerGrantRecord(COLLECTION, "0", "client-a", "owner-a",
+                        "appoint,job.manage", 4, "REVOKED"));
+        assertEquals("ARCHIVE_FORBIDDEN", assertThrows(ArchiveMaintenanceException.class,
+                () -> service.listJobs(MANAGER, COLLECTION, "FAILED",
+                        jobFirst.nextCursor(), 2)).code());
+    }
+
+    @Test
+    void appointmentPageRejectsAuthorityOrSlotChangeAfterReadinessObservation() {
+        allowManager("appoint");
+        ArchiveAppointmentRecord observed = appointmentRecord("apt-003", "ACTIVE", 3);
+        ArchiveAppointmentRecord changed = appointmentRecord("apt-004", "ACTIVE", 4);
+        when(store.findCurrentAppointment(COLLECTION, false)).thenReturn(observed);
+        when(store.findCurrentAppointment(COLLECTION, true)).thenReturn(changed);
+        when(store.listAppointmentsPage(MANAGER, COLLECTION, null, 2))
+                .thenReturn(List.of(observed));
+
+        ArchiveMaintenanceException changedFailure = assertThrows(ArchiveMaintenanceException.class,
+                () -> service.appointments(MANAGER, COLLECTION, null, 1));
+        assertEquals("ARCHIVE_APPOINTMENT_CHANGED", changedFailure.code());
+
+        when(store.findCurrentAppointment(COLLECTION, true)).thenReturn(observed);
+        when(store.findAppointment("apt-003", true)).thenReturn(observed);
+        ArchiveManagerGrantRecord activeGrant = new ArchiveManagerGrantRecord(COLLECTION, "0",
+                "client-a", "owner-a", "appoint", 3, "ACTIVE");
+        ArchiveManagerGrantRecord revokedGrant = new ArchiveManagerGrantRecord(COLLECTION, "0",
+                "client-a", "owner-a", "appoint", 4, "REVOKED");
+        when(store.findManagerGrant(eq(MANAGER), eq(COLLECTION), eq(true)))
+                .thenReturn(activeGrant, revokedGrant);
+        assertEquals("ARCHIVE_FORBIDDEN", assertThrows(ArchiveMaintenanceException.class,
+                () -> service.appointments(MANAGER, COLLECTION, null, 1)).code());
     }
 
     @Test
@@ -2423,6 +2533,27 @@ class ArchiveMaintenanceServiceImplTest {
                 "psi_verified", 4, "archive-maintainer", "1.0.0", SHA, "execute-key",
                 "e".repeat(64), "/internal/archive/v1/jobs/" + JOB + "/runs/" + RUN + "/context",
                 2_000_000_000_000L, state, 1);
+    }
+
+    private ArchiveAppointmentRecord appointmentRecord(String id, String status, long revision) {
+        return new ArchiveAppointmentRecord(id, COLLECTION, "ARCHIVE_EDITOR", "0", "client-a",
+                "owner-a", AGENT, "7", "COLLECTION", "", "DRAFT_ONLY",
+                "archive-maintainer", "1.0.0", SHA, status, revision,
+                Instant.parse("2026-09-28T00:00:00Z"),
+                "REVOKED".equals(status) ? Instant.parse("2026-09-28T00:00:01Z") : null);
+    }
+
+    private ArchiveMaintenanceJobRecord jobRecord(String id, String state) {
+        ArchiveMaintenanceJobRecord base = job("DRAFT_ONLY");
+        return new ArchiveMaintenanceJobRecord(id, base.runId(), base.collectionId(),
+                base.tenantId(), base.clientId(), base.ownerJiacn(), base.appointmentId(),
+                base.appointmentRevision(), base.agentId(), base.bindingVersion(),
+                base.permissionProfile(), base.managerAuthorizationRevision(),
+                base.publicationMode(), base.operation(), base.workId(), base.canonicalKey(),
+                base.title(), base.sourceId(), base.sourceSha256(), base.sourceSummary(),
+                base.rightsBasis(), state, base.waitReason(), base.revision(), base.draftId(),
+                base.publicationId(), base.requestIntentId(), base.requestSha256(),
+                base.targetAgentId());
     }
 
     private ArchiveMaintenanceJobRecord job(String profile) {

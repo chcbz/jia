@@ -1,5 +1,6 @@
 package cn.jia.chat.archive.maintenance.service;
 
+import cn.jia.chat.archive.dto.ArchivePageDTO;
 import cn.jia.chat.archive.maintenance.dto.*;
 import cn.jia.chat.archive.maintenance.model.ArchiveActorScope;
 import cn.jia.chat.archive.maintenance.model.ArchiveRuntimeScope;
@@ -18,6 +19,7 @@ public interface ArchiveMaintenanceService {
     ArchiveEditionVersionDTO edition(ArchiveActorScope actor,String workId,String editionId);
     ArchiveWithdrawalDTO withdraw(ArchiveActorScope actor,String workId,String editionId,String operationKey,long expectedWorkRevision,ArchiveWithdrawRequest request);
     List<ArchiveAppointmentDTO> appointments(ArchiveActorScope actor,String collectionId);
+    ArchivePageDTO<ArchiveAppointmentDTO> appointments(ArchiveActorScope actor,String collectionId,String cursor,int limit);
     ArchiveAppointmentDTO createAppointment(ArchiveActorScope actor,String collectionId,String operationKey,long expectedSlotRevision,ArchiveAppointmentCreateRequest request);
     ArchiveAppointmentDTO revokeAppointment(ArchiveActorScope actor,String appointmentId,String operationKey,long expectedRevision,ArchiveAppointmentRevokeRequest request);
     ArchiveOperationDTO revokeManagerAuthorization(ArchiveActorScope actor,String collectionId,String operationKey,long expectedRevision,ArchiveManagerRevokeRequest request);
@@ -36,7 +38,9 @@ public interface ArchiveMaintenanceService {
     ArchiveExecutionRecoveryDTO reassign(ArchiveActorScope actor,String jobId,String operationKey,long expectedJobRevision,ArchiveReassignRequest request);
     List<ArchiveJobEventDTO> jobEvents(ArchiveActorScope actor,String jobId,long afterSequence,int limit);
     List<ArchiveJobDTO> listJobs(ArchiveActorScope actor,String collectionId,int limit);
+    ArchivePageDTO<ArchiveJobDTO> listJobs(ArchiveActorScope actor,String collectionId,String state,String cursor,int limit);
     ArchiveWorksDTO listWorks(ArchiveActorScope actor,String collectionId,int limit);
+    ArchiveWorksDTO listWorks(ArchiveActorScope actor,String collectionId,String cursor,int limit);
     ArchiveDraftDTO getDraft(ArchiveActorScope actor,String jobId);
     ArchiveDraftBlockDTO getDraftBlock(ArchiveActorScope actor,String draftId,String blockId);
     ArchiveDraftBlockDTO putDraftBlock(ArchiveActorScope actor,String draftId,String blockId,String operationKey,long expectedRevision,ArchiveDraftBlockInput request);

@@ -7,6 +7,7 @@ import cn.jia.chat.archive.maintenance.dto.ArchiveWorksDTO;
 public interface ArchiveReaderService {
     ArchiveRepresentation<ArchiveCatalogDTO> catalog();
     ArchiveRepresentation<ArchiveWorksDTO> works(int limit);
+    ArchiveRepresentation<ArchiveWorksDTO> works(String tenantId,String clientId,String cursor,int limit);
     ArchiveRepresentation<ArchiveCatalogDTO> workCatalog(String workId);
     ArchiveRepresentation<ArchiveCatalogDTO> editionCatalog(String editionId);
     ArchiveRepresentation<ArchiveBlockDTO> preface(String editionId);

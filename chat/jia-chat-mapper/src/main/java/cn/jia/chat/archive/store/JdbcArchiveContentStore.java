@@ -105,11 +105,21 @@ public class JdbcArchiveContentStore implements ArchiveContentStore {
 
     @Override
     public List<ArchiveWorkRecord> listActiveWorks(int limit) {
-        return jdbc.query("""
+        return listActiveWorks(null, limit);
+    }
+
+    @Override
+    public List<ArchiveWorkRecord> listActiveWorks(String afterWorkId, int limit) {
+        String after = afterWorkId == null ? "" : " AND w.work_id > ?";
+        String sql = """
                 SELECT DISTINCT w.work_id,w.title,w.active_edition_id FROM archive_work w
                 JOIN archive_publication p ON p.edition_id=w.active_edition_id AND p.work_id=w.work_id
-                WHERE p.state='PUBLISHED' ORDER BY w.work_id LIMIT ?
-                """, WORK_MAPPER, limit);
+                JOIN archive_edition e ON e.edition_id=w.active_edition_id AND e.work_id=w.work_id
+                WHERE p.state='PUBLISHED' AND e.import_state='READY'
+                """ + after + " ORDER BY w.work_id LIMIT ?";
+        return afterWorkId == null
+                ? jdbc.query(sql, WORK_MAPPER, limit)
+                : jdbc.query(sql, WORK_MAPPER, afterWorkId, limit);
     }
 
     @Override

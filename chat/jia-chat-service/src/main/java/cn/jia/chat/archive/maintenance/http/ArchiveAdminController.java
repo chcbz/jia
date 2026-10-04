@@ -1,6 +1,7 @@
 package cn.jia.chat.archive.maintenance.http;
 
 import cn.jia.chat.archive.content.ArchiveEtags;
+import cn.jia.chat.archive.dto.ArchivePageDTO;
 import cn.jia.chat.archive.maintenance.dto.*;
 import cn.jia.chat.archive.maintenance.model.ArchiveActorScope;
 import cn.jia.chat.archive.maintenance.service.ArchiveMaintenanceException;
@@ -91,9 +92,13 @@ public class ArchiveAdminController {
     }
 
     @GetMapping("/collections/{collectionId}/appointments")
-    public JsonResult<List<ArchiveAppointmentDTO>> appointments(@PathVariable String collectionId,
-                                                                  Authentication authentication) {
-        return JsonResult.success(service.appointments(actor(authentication), collectionId));
+    public JsonResult<ArchivePageDTO<ArchiveAppointmentDTO>> appointments(
+            @PathVariable String collectionId,
+            @RequestParam(required = false) String cursor,
+            @RequestParam(required = false) String limit,
+            Authentication authentication) {
+        return JsonResult.success(service.appointments(actor(authentication), collectionId,
+                cursor, pageLimit(limit, 50)));
     }
 
     @PostMapping("/collections/{collectionId}/appointments")
@@ -267,18 +272,24 @@ public class ArchiveAdminController {
         return JsonResult.success(service.jobEvents(actor(authentication), jobId, cursor, limit));
     }
     @GetMapping("/collections/{collectionId}/jobs")
-    public JsonResult<List<ArchiveJobDTO>> jobs(@PathVariable String collectionId,
-            @RequestParam(defaultValue = "50") int limit, Authentication authentication) {
-        return JsonResult.success(service.listJobs(actor(authentication), collectionId, limit));
+    public JsonResult<ArchivePageDTO<ArchiveJobDTO>> jobs(@PathVariable String collectionId,
+            @RequestParam(required = false) String state,
+            @RequestParam(required = false) String cursor,
+            @RequestParam(required = false) String limit,
+            Authentication authentication) {
+        return JsonResult.success(service.listJobs(actor(authentication), collectionId,
+                state, cursor, pageLimit(limit, 50)));
     }
 
     @GetMapping("/collections/{collectionId}/works")
     public ResponseEntity<JsonResult<ArchiveWorksDTO>> works(
             @PathVariable String collectionId,
-            @RequestParam(defaultValue = "100") int limit,
+            @RequestParam(required = false) String cursor,
+            @RequestParam(required = false) String limit,
             Authentication authentication) {
         return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, "private, no-store")
-                .body(JsonResult.success(service.listWorks(actor(authentication), collectionId, limit)));
+                .body(JsonResult.success(service.listWorks(actor(authentication), collectionId,
+                        cursor, pageLimit(limit, 100))));
     }
 
     @GetMapping("/drafts/{draftId}/blocks/{blockId}")
@@ -433,6 +444,20 @@ public class ArchiveAdminController {
                 .header(HttpHeaders.LOCATION, "/archive/admin/v1/operations/" + result.operationId())
                 .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
                 .body(JsonResult.success(result));
+    }
+
+    private int pageLimit(String value, int defaultValue) {
+        if (value == null) return defaultValue;
+        if (!value.matches("[1-9][0-9]{0,2}")) {
+            throw new ArchiveMaintenanceException(400, "INVALID_ARCHIVE_PAGE_LIMIT",
+                    "Archive page limit must be between 1 and 100");
+        }
+        int parsed = Integer.parseInt(value);
+        if (parsed > 100) {
+            throw new ArchiveMaintenanceException(400, "INVALID_ARCHIVE_PAGE_LIMIT",
+                    "Archive page limit must be between 1 and 100");
+        }
+        return parsed;
     }
 
     static ArchiveActorScope actor(Authentication authentication) {
