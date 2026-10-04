@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.LinkedHashMap;
+import java.util.ArrayList;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -57,10 +58,12 @@ class ChatActionFinalServiceTest {
         var prepared=prepare(raw); var view=service.persist(prepared,9,12);
         turn.setFinalMessageId(9L).setFinalDigest(prepared.validated().finalDigest()); return view;
     }
-    @Test void explicitRelationsBindTheAdmittedParentAndFrozenDigestAndPersistOnRead() {
+    @Test void explicitRelationsBindTheAdmittedParentAndFrozenDigestAndPersistOnRead() throws Exception {
+        List<Map<String,Object>> projections=new ArrayList<>();
         for(String mode:List.of("APPEND","REPLACE","RESET")) {
             var f=new ChatCompletedMessageSourceServiceTest.Fixture();var parent=f.row.get();
             String parentId=parent.outcomeId();String digest=parent.finalDigest();
+            var initial=f.finals.readIfV3(f.scope,parent.requestId(),parent.turnId(),1,"CHAT");
             var facts=new LinkedHashMap<String,Object>();facts.put("task",Map.of("id","task"));
             facts.put("typedDeliberation",ChatActionFinalValidator.factsMap(ChatActionOutcomeContract.factsJson(parent.factsJson())));
             facts.put("typedDeliberationAdmission",Map.of("intent","DISCUSSION","parentOutcomeId",parentId,
@@ -86,6 +89,7 @@ class ChatActionFinalServiceTest {
             var prepared=f.finals.prepare(childTurn,childSnapshot,"修改原文  ",3,CanonicalContextJson.write(raw),null);
             var view=f.finals.persist(prepared,11,20);childTurn.setFinalMessageId(11L).setFinalDigest(prepared.validated().finalDigest());
             assertEquals(relation,view.get("deliveryRelation"));assertEquals(view,f.finals.readIfV3(f.scope,"child","child-turn",1,"CHAT").get("outcome"));
+            projections.add(Map.of("mode",mode,"initial",initial,"updated",f.finals.readIfV3(f.scope,"child","child-turn",1,"CHAT")));
             assertEquals("修改原文  ",view.get("text"));verifyNoInteractions(f.messages,f.sessions);
             raw.put("deliveryRelation",Map.of("mode",mode,"parentOutcomeId",parentId,"parentFinalDigest","sha256:"+"0".repeat(64)));
             assertThrows(ChatDeliberationException.class,()->f.finals.prepare(childTurn,childSnapshot,"修改原文  ",3,CanonicalContextJson.write(raw),null));
@@ -94,6 +98,9 @@ class ChatActionFinalServiceTest {
             childSnapshot.setFactsManifestJson(CanonicalContextJson.write(changed));
             assertThrows(ChatDeliberationException.class,()->f.finals.readIfV3(f.scope,"child","child-turn",1,"CHAT"));
         }
+        String output=System.getenv("CYF_TEXT_RELATION_PROJECTION_OUTPUT");
+        if(output!=null)java.nio.file.Files.writeString(java.nio.file.Path.of(output),
+                cn.jia.core.util.JsonUtil.toJson(projections),java.nio.charset.StandardCharsets.UTF_8);
     }
     @Test void relationWithoutServerAdvertisedCompletedDeliveryParentCannotPublish() {
         ready();String raw=ANSWER.replace("\"action\":null}","\"action\":null,\"deliverable\":true,\"deliveryRelation\":{\"mode\":\"REPLACE\",\"parentOutcomeId\":\"parent\",\"parentFinalDigest\":\"sha256:"+"a".repeat(64)+"\"}}");
