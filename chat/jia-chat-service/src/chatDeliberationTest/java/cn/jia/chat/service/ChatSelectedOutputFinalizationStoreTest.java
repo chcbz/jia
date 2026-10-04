@@ -20,6 +20,11 @@ class ChatSelectedOutputFinalizationStoreTest {
                 operation=new Object[]{args[0],args[4],args[5],args[6],args[7],args[8],args[9],args[10],"pending","PROMOTING",1L,
                         null,null,args[11],args[12],null,false};return 1;
             }
+            if(sql.contains("UPDATE chat_selected_output_finalization SET")){
+                operation[8]=args[0];operation[9]=args[1];operation[10]=((Number)operation[10]).longValue()+1;
+                operation[11]=args[2];operation[12]=args[3];operation[13]=args[4];operation[14]=args[5];operation[15]=args[6];operation[16]=args[7];
+                return 1;
+            }
             throw new AssertionError(sql);
         }
         @Override public <T> List<T> query(String sql,RowMapper<T> mapper,Object...args){

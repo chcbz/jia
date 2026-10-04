@@ -272,6 +272,51 @@ class ChatSelectedOutputFinalizationServiceTest {
                 anyString(),anyString(),any(),any(),anyString(),anyLong(),any(),anyBoolean());
     }
 
+    @Test void actualHttpStoreFinalReaderAndTextSourceComposeAndRecoverWithoutReloadOrToolExecution(){
+        var source=new ChatCompletedMessageSourceServiceTest.Fixture();
+        var jdbc=new ChatSelectedOutputFinalizationStoreTest.MemoryJdbc();var store=new ChatSelectedOutputFinalizationStore(jdbc);
+        var agent=mock(AgentSelectedOutputFinalizationService.class);var grants=mock(AgentTaskExecutionGrantService.class);
+        var execution=mock(PersonalWorkspaceExecutionService.class);var steps=mock(ChatInteractionStepStore.class);
+        var service=new ChatSelectedOutputFinalizationService(store,source.deliberations,steps,execution,agent,source.service,grants);
+        when(grants.resolveSelectedOutputPromotion(any(),eq("task"),eq(3L),eq("agent"))).thenReturn(
+                new AgentTaskExecutionGrantService.Admission("grant",2,3,"agent","FINALIZE_SELECTED_OUTPUTS",false));
+        when(agent.reconcile(any(),eq("task"),anyString(),anyString())).thenThrow(
+                new AgentSelectedOutputFinalizationException(AgentSelectedOutputFinalizationException.Reason.NOT_FOUND,"absent"));
+        when(agent.prepare(any(),any())).thenAnswer(i->{var c=(AgentSelectedOutputFinalizationService.PrepareCommand)i.getArgument(1);
+            assertArrayEquals(ChatCompletedMessageSourceServiceTest.TEXT.getBytes(StandardCharsets.UTF_8),c.outputs().getFirst().bytes());
+            assertNull(c.outputs().getFirst().executionId());assertNull(c.outputs().getFirst().stepId());
+            return new AgentSelectedOutputFinalizationService.PromotionView(c.operationId(),"task","READY_TO_SUBMIT",null,null,"running",8);
+        });
+        when(agent.submit(any(),eq("task"),anyString(),anyString())).thenAnswer(i->
+                new AgentSelectedOutputFinalizationService.PromotionView(i.getArgument(2),"task","SUBMITTED","delivery","submitted","reviewing",9));
+        when(agent.accept(any(),eq("task"),anyString(),anyString())).thenAnswer(i->
+                new AgentSelectedOutputFinalizationService.PromotionView(i.getArgument(2),"task","TASK_COMPLETED","delivery","accepted","completed",10));
+        var identities=mock(HumanSenderIdentityResolver.class);var tenants=mock(TenantScopeResolver.class);
+        var authentication=mock(org.springframework.security.core.Authentication.class);
+        when(tenants.resolve(authentication)).thenReturn("0");
+        when(identities.resolve(nullable(cn.jia.core.context.EsContext.class))).thenReturn(
+                new ServerResolvedSender("user","Owner","owner","client",DisplayNameSource.JIACN));
+        var controller=new cn.jia.chat.api.AgentTaskSelectedOutputFinalizationController(service,identities,tenants);
+        String json=cn.jia.core.util.JsonUtil.toJson(java.util.Map.of("expectedTaskVersion",7,"expectedAssignmentRevision",3,
+                "conversationId","42","summary","accept","selectedOutputs",List.of(java.util.Map.of("requestId","request",
+                        "sha256",source.command.sha256(),"title","Text","purpose","final","messageSource",source.command.messageSource()))));
+        var request=new org.springframework.mock.web.MockHttpServletRequest("POST","/agent/tasks/task/finalizations");
+        request.setContentType("application/json");request.setContent(json.getBytes(StandardCharsets.UTF_8));
+        var response=controller.submit("task","original-key",request,authentication);
+        assertEquals(org.springframework.http.HttpStatus.OK,response.getStatusCode());
+        assertEquals("TASK_COMPLETED",response.getBody().getData().stage());
+        assertEquals(source.command.messageSource(),response.getBody().getData().selectedOutputs().getFirst().messageSource());
+        int writes=jdbc.writes;
+        var recovered=controller.byRequest("task","original-key",new org.springframework.mock.web.MockHttpServletRequest(),authentication);
+        assertEquals(response.getBody().getData(),recovered.getBody().getData());
+        var replayRequest=new org.springframework.mock.web.MockHttpServletRequest("POST","/agent/tasks/task/finalizations");
+        replayRequest.setContentType("application/json");replayRequest.setContent(json.getBytes(StandardCharsets.UTF_8));
+        assertEquals(response.getBody().getData(),controller.submit("task","original-key",replayRequest,authentication).getBody().getData());
+        assertEquals(writes,jdbc.writes);
+        verify(source.messages,times(1)).find("0","owner","client","task","42",1,9);
+        verify(agent,times(1)).prepare(any(),any());verifyNoInteractions(steps,execution,source.sessions);
+    }
+
     private static AgentSelectedOutputFinalizationService.PromotionView view(String operation,String stage,
             String delivery,String deliveryState,String taskState,long taskVersion){
         return new AgentSelectedOutputFinalizationService.PromotionView(
