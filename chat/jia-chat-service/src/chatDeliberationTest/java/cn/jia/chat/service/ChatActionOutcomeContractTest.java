@@ -26,6 +26,25 @@ class ChatActionOutcomeContractTest {
         }
         assertThrows(UnsupportedOperationException.class, () -> facts.availableActions().getFirst().inputMediaTypes().add("shell"));
     }
+    @Test void explicitDeliveryRelationsAreStrictMarkedAnswerMetadataNotParentInference() throws Exception {
+        var facts=ChatActionOutcomeContract.facts(facts());
+        var answer=new LinkedHashMap<String,Object>();answer.put("schemaVersion",3);answer.put("kind","ANSWER");
+        answer.put("text","原文改稿");answer.put("clarification",null);answer.put("action",null);answer.put("deliverable",true);
+        assertNull(ChatActionOutcomeContract.outcome(answer,facts).deliveryRelation());
+        for(String mode:List.of("APPEND","REPLACE","RESET")) {
+            answer.put("deliveryRelation",Map.of("mode",mode,"parentOutcomeId","parent","parentFinalDigest","sha256:"+"a".repeat(64)));
+            assertEquals(mode,ChatActionOutcomeContract.outcome(answer,facts).deliveryRelation().mode());
+        }
+        for(var relation:List.of(Map.of("mode","LATEST","parentOutcomeId","parent","parentFinalDigest","sha256:"+"a".repeat(64)),
+                Map.of("mode","APPEND","parentOutcomeId","parent","parentFinalDigest","bad"),
+                Map.of("mode","APPEND","parentOutcomeId","parent","parentFinalDigest","sha256:"+"a".repeat(64),"grant","fake"))) {
+            answer.put("deliveryRelation",relation);assertThrows(IllegalArgumentException.class,()->ChatActionOutcomeContract.outcome(answer,facts));
+        }
+        answer.put("deliveryRelation",Map.of("mode","REPLACE","parentOutcomeId","parent","parentFinalDigest","sha256:"+"a".repeat(64)));
+        answer.put("deliverable",false);assertThrows(IllegalArgumentException.class,()->ChatActionOutcomeContract.outcome(answer,facts));
+        answer.remove("deliverable");assertThrows(IllegalArgumentException.class,()->ChatActionOutcomeContract.outcome(answer,facts));
+    }
+
     @Test void explicitDeliverableMarkerIsBooleanAnswerOnlyAndAbsenceIsNotInferred() throws Exception {
         var f = ChatActionOutcomeContract.facts(facts());
         var answer = new LinkedHashMap<String,Object>(); answer.put("schemaVersion",3); answer.put("kind","ANSWER");

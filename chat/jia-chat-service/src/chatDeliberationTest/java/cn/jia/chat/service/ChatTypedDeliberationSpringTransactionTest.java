@@ -176,7 +176,7 @@ class ChatTypedDeliberationSpringTransactionTest {
                 context.registerBean(JuyitingConversationScopeService.class,()->scopes);context.registerBean(ChatDeliberationService.class,()->deliberation);
                 context.registerBean(ChatDeliberationDao.class,()->events);context.registerBean(ChatTypedDeliberationContextService.class,()->contexts);
                 context.registerBean(ChatInteractionStepStore.class,()->interactionSteps);context.registerBean(ChatTypedDeliberationService.class,()->typed);context.registerBean(ChatTypedDiscussionAdmissionService.class,
-                        ()->new ChatTypedDiscussionAdmissionService(mutations,bindings,conversations,scopes,deliberation,events,contexts,typed));
+                        ()->new ChatTypedDiscussionAdmissionService(mutations,bindings,conversations,scopes,deliberation,events,contexts,typed,mock(ChatActionFinalService.class)));
                 context.refresh();var service=context.getBean(ChatTypedDiscussionAdmissionService.class);
                 assertTrue(org.springframework.aop.support.AopUtils.isCglibProxy(service));
                 var command=new ChatTypedDeliberationWire.DiscussionCommand("CLARIFICATION_REPLY","task",3,

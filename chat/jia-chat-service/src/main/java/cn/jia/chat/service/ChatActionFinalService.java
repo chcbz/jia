@@ -75,6 +75,7 @@ public class ChatActionFinalService {
                     content, version, rawOutcome, rawReceipt);
         } catch (IllegalArgumentException bad) { throw invalid(bad.getMessage()); }
         if ("CHAT".equals(turn.getRoute())) verifyCatalog(scope, admission.sourceCatalogJson(), validated.dispatchFacts());
+        verifyDeliveryRelation(scope,admission,facts,validated);
         var existing = store.findOutcomeByTurn(scope, turn.getTurnId(), true);
         if ((turn.getFinalDigest() == null) != (existing == null)) throw persistence("Action final transaction is incomplete");
         if (existing != null) {
@@ -210,6 +211,7 @@ public class ChatActionFinalService {
                     || !row.bindingJson().equals(canonical(validated.binding()))
                     || !row.factsJson().equals(canonical(ChatActionFinalValidator.factsMap(validated.dispatchFacts())))
                     || !row.sourceCatalogJson().equals(admission.sourceCatalogJson())) throw persistence("Stored action final differs");
+            verifyDeliveryRelation(scope,admission,facts,validated);
             outcome = projection(row, validated);
         } else if (turn.getFinalDigest() != null) throw persistence("Action final transaction is incomplete");
         var view = new LinkedHashMap<String, Object>(); view.put("schemaVersion", 3); view.put("route", expectedRoute);
@@ -285,6 +287,26 @@ public class ChatActionFinalService {
         return Collections.unmodifiableMap(result);
     }
 
+    private void verifyDeliveryRelation(ChatTypedDeliberationStore.Scope scope,
+            ChatTypedDeliberationStore.Admission admission, Map<String,Object> snapshotFacts,
+            ChatActionFinalValidator.ValidatedFinal validated) {
+        var relation=validated.interactionOutcome().deliveryRelation(); if(relation==null)return;
+        var facts=map(snapshotFacts.get("typedDeliberationAdmission"));
+        var basis=map(facts.get("deliveryParent"));
+        if(!"DISCUSSION".equals(admission.intent())||!relation.parentOutcomeId().equals(admission.parentOutcomeId())
+                ||!relation.parentOutcomeId().equals(facts.get("parentOutcomeId"))
+                ||!basis.keySet().equals(Set.of("outcomeId","finalDigest"))
+                ||!relation.parentOutcomeId().equals(basis.get("outcomeId"))
+                ||!relation.parentFinalDigest().equals(basis.get("finalDigest")))throw invalid("ACTION_DELIVERY_PARENT_INVALID");
+        var parent=store.findOutcome(scope,relation.parentOutcomeId(),false);
+        if(parent==null||!scope.equals(parent.scope())||!admission.taskId().equals(parent.taskId())
+                ||parent.assignmentRevision()!=admission.assignmentRevision()||!"ANSWER".equals(parent.kind())
+                ||!relation.parentFinalDigest().equals(parent.finalDigest())
+                ||admission.requestId().equals(parent.requestId()))throw unavailable();
+        var stored=parse(parent.outcomeJson());
+        if(!Boolean.TRUE.equals(map(stored.get("interactionOutcome")).get("deliverable")))throw unavailable();
+    }
+
     private Map<String, Object> projection(ChatTypedDeliberationStore.Outcome row, ChatActionFinalValidator.ValidatedFinal v) {
         var view = new LinkedHashMap<String, Object>(); view.put("outcomeContractVersion", 3);
         view.put("outcomeId", row.outcomeId()); view.put("taskId", row.taskId());
@@ -296,6 +318,8 @@ public class ChatActionFinalService {
         if (Boolean.TRUE.equals(deliverable)) view.put("messageSource", Map.of(
                 "turnId", row.turnId(), "messageId", Long.toString(row.assistantMessageId()),
                 "snapshotId", v.binding().get("snapshotId"), "finalDigest", row.finalDigest()));
+        if (v.interactionOutcome().deliveryRelation() != null)
+            view.put("deliveryRelation",ChatActionFinalValidator.relationMap(v.interactionOutcome().deliveryRelation()));
         Map<String, Object> clarification = null, action = null;
         if ("CLARIFY".equals(row.kind())) {
             var pending = store.findPendingByOutcome(row.scope(), row.outcomeId(), false);

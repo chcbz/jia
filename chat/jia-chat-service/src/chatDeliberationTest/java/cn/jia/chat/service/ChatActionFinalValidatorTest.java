@@ -28,6 +28,21 @@ class ChatActionFinalValidatorTest {
         }
     }
 
+    @Test void relationModeAndExactParentDigestAreIncludedWithoutChangingUnlinkedFinals() throws Exception {
+        var fixture=fixture("/unified-action-outcome-v3.json");var outcome=new LinkedHashMap<>(map(list(fixture.get("outcomes")).getFirst()));
+        outcome.put("deliverable",true);String original=chat(binding("CHAT"),fixture.get("facts"),outcome).finalDigest();
+        List<String> digests=new ArrayList<>();
+        for(String mode:List.of("APPEND","REPLACE","RESET")) {
+            outcome.put("deliveryRelation",Map.of("mode",mode,"parentOutcomeId","parent","parentFinalDigest",digest('a')));
+            var result=chat(binding("CHAT"),fixture.get("facts"),outcome);
+            assertEquals(outcome,ChatActionFinalValidator.outcomeMap(result.interactionOutcome()));
+            assertNotEquals(original,result.finalDigest());assertFalse(digests.contains(result.finalDigest()));digests.add(result.finalDigest());
+        }
+        outcome.put("deliveryRelation",Map.of("mode","RESET","parentOutcomeId","parent","parentFinalDigest",digest('b')));
+        assertNotEquals(digests.getLast(),chat(binding("CHAT"),fixture.get("facts"),outcome).finalDigest());
+        outcome.remove("deliveryRelation");assertEquals(original,chat(binding("CHAT"),fixture.get("facts"),outcome).finalDigest());
+    }
+
     @Test void deliveryMarkerIsPartOfImmutableDigestAndCannotMarkInspectionAsDelivery() throws Exception {
         var fixture=fixture("/unified-action-outcome-v3.json"); var outcome=new LinkedHashMap<>(map(list(fixture.get("outcomes")).getFirst()));
         var old=chat(binding("CHAT"),fixture.get("facts"),outcome);

@@ -38,16 +38,17 @@ public class ChatTypedDiscussionAdmissionService {
     private final ChatDeliberationDao events;
     private final ChatTypedDeliberationContextService contexts;
     private final ChatTypedDeliberationService typed;
+    private final ChatActionFinalService finals;
 
     public ChatTypedDiscussionAdmissionService(AgentTaskMutationTransaction taskMutations,
             ChatBountyBindingStore bindings, ChatConversationDao conversations,
             JuyitingConversationScopeService scopes, ChatDeliberationService deliberation,
             ChatDeliberationDao events, ChatTypedDeliberationContextService contexts,
-            ChatTypedDeliberationService typed) {
+            ChatTypedDeliberationService typed, ChatActionFinalService finals) {
         this.taskMutations=Objects.requireNonNull(taskMutations);this.bindings=Objects.requireNonNull(bindings);
         this.conversations=Objects.requireNonNull(conversations);this.scopes=Objects.requireNonNull(scopes);
         this.deliberation=Objects.requireNonNull(deliberation);this.events=Objects.requireNonNull(events);
-        this.contexts=Objects.requireNonNull(contexts);this.typed=Objects.requireNonNull(typed);
+        this.contexts=Objects.requireNonNull(contexts);this.typed=Objects.requireNonNull(typed);this.finals=Objects.requireNonNull(finals);
     }
 
     @Transactional(rollbackFor=Exception.class)
@@ -95,7 +96,7 @@ public class ChatTypedDiscussionAdmissionService {
             input.setTargetAgentId(targets.getFirst());input.setTargetAgentIds(List.copyOf(targets));
             var scope=new JuyitingConversationScope("bounty","task:"+command.taskId(),command.taskId(),targets.getFirst(),List.copyOf(targets),List.copyOf(targets));
             var admitted=deliberation.admit(tenantId,sender,conversationId,generation,scope,
-                    InteractionRoute.CHAT,input,null,context.facts(),admissionFacts(command,context.selectors()));
+                    InteractionRoute.CHAT,input,null,context.facts(),admissionFacts(command,context.selectors(),deliveryParent(storeScope,command,parent)));
             List<String> turnIds=admitted.dispatches().stream().map(ChatDeliberationService.Dispatch::turnId).toList();
             if(turnIds.size()!=1)throw unavailable();
             long now=System.currentTimeMillis();
@@ -138,10 +139,28 @@ public class ChatTypedDiscussionAdmissionService {
                 Long.toString(row.userMessageId()),turns,row.state(),Long.toString(row.stateVersion()),Long.toString(row.eventCursor()),
                 "/chat/requests/"+row.requestId(),"/chat/conversations/"+row.scope().conversationId()+"/requests/"+row.requestId()+"/typed-outcome",replay,row.pendingQuestionId());
     }
+    /** Parent linkage alone is not replacement intent. Advertise only an actual completed
+     * marked text final; the new Agent reply must explicitly choose a relation. */
+    private Map<String,Object> deliveryParent(ChatTypedDeliberationStore.Scope scope,
+            ChatTypedDeliberationWire.DiscussionCommand command, Parent parent) {
+        var row=parent.outcome();
+        if(!"DISCUSSION".equals(command.intent())||row==null||!"ANSWER".equals(row.kind()))return null;
+        var turn=events.findTurn(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),row.turnId());
+        if(turn==null||!"CHAT".equals(turn.getRoute())
+                ||!("FINAL_PERSISTED".equals(turn.getState())||"PUBLISHED".equals(turn.getState()))
+                ||row.assignmentRevision()!=command.expectedAssignmentRevision())throw unavailable();
+        var projection=finals.readIfV3(scope,row.requestId(),row.turnId(),row.requestRevision(),"CHAT");
+        if(projection==null)return null;
+        if(!"READY".equals(projection.get("state"))||!(projection.get("outcome") instanceof Map<?,?> view)
+                ||!row.outcomeId().equals(view.get("outcomeId"))||!row.finalDigest().equals(view.get("finalDigest")))throw unavailable();
+        return Boolean.TRUE.equals(view.get("deliverable"))?Map.of("outcomeId",row.outcomeId(),"finalDigest",row.finalDigest()):null;
+    }
+
     private static Map<String,Object> admissionFacts(ChatTypedDeliberationWire.DiscussionCommand command,
-            List<ChatTypedDeliberationWire.SourceSelector> selectors) {
+            List<ChatTypedDeliberationWire.SourceSelector> selectors, Map<String,Object> deliveryParent) {
         Map<String,Object> value=new LinkedHashMap<>();
         value.put("schemaVersion",1);value.put("intent",command.intent());
+        if(deliveryParent!=null)value.put("deliveryParent",deliveryParent);
         value.put("sourceSelectors",selectors.stream().map(ChatTypedDeliberationWire::selectorMap).toList());
         value.put("parentOutcomeId",command.parentOutcomeId());
         value.put("expectedParentStateVersion",command.expectedParentStateVersion()==null

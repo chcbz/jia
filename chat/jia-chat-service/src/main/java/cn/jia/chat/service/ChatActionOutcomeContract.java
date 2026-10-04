@@ -39,10 +39,15 @@ public final class ChatActionOutcomeContract {
     public record Action(String actionId, String instruction, List<String> sourceRefIds) {
         public Action { sourceRefIds = List.copyOf(sourceRefIds); }
     }
+    public record DeliveryRelation(String mode, String parentOutcomeId, String parentFinalDigest) { }
     public record Outcome(int schemaVersion, String kind, String text, Clarification clarification, Action action,
-            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) Boolean deliverable) {
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) Boolean deliverable,
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) DeliveryRelation deliveryRelation) {
         public Outcome(int schemaVersion, String kind, String text, Clarification clarification, Action action) {
-            this(schemaVersion,kind,text,clarification,action,null);
+            this(schemaVersion,kind,text,clarification,action,null,null);
+        }
+        public Outcome(int schemaVersion, String kind, String text, Clarification clarification, Action action, Boolean deliverable) {
+            this(schemaVersion,kind,text,clarification,action,deliverable,null);
         }
     }
 
@@ -89,12 +94,27 @@ public final class ChatActionOutcomeContract {
     private static Outcome outcomeNode(JsonNode value, Facts suppliedFacts) {
         // Do not trust a caller-constructed record more than a parsed JSON fact set.
         Facts facts = facts(suppliedFacts);
-        Boolean deliverable = null;
+        List<String> keys = new ArrayList<>(List.of("schemaVersion","kind","text","clarification","action"));
+        Boolean deliverable = null; DeliveryRelation relation = null;
         if (value != null && value.isObject() && value.has("deliverable")) {
-            exact(value, "ACTION_OUTCOME_INVALID", "schemaVersion", "kind", "text", "clarification", "action", "deliverable");
+            keys.add("deliverable");
             if (!value.get("deliverable").isBoolean()) throw invalid("ACTION_OUTCOME_INVALID");
             deliverable = value.get("deliverable").booleanValue();
-        } else exact(value, "ACTION_OUTCOME_INVALID", "schemaVersion", "kind", "text", "clarification", "action");
+        }
+        if (value != null && value.isObject() && value.has("deliveryRelation")) {
+            keys.add("deliveryRelation"); var raw = value.get("deliveryRelation");
+            if (!raw.isNull()) {
+                exact(raw,"ACTION_DELIVERY_RELATION_INVALID","mode","parentOutcomeId","parentFinalDigest");
+                String mode=string(raw.get("mode"),true,"ACTION_DELIVERY_RELATION_INVALID");
+                String parent=string(raw.get("parentOutcomeId"),true,"ACTION_DELIVERY_RELATION_INVALID");
+                String digest=string(raw.get("parentFinalDigest"),true,"ACTION_DELIVERY_RELATION_INVALID");
+                if (!Set.of("APPEND","REPLACE","RESET").contains(mode)
+                        || !parent.matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}")
+                        || !digest.matches("sha256:[0-9a-f]{64}")) throw invalid("ACTION_DELIVERY_RELATION_INVALID");
+                relation=new DeliveryRelation(mode,parent,digest);
+            }
+        }
+        exact(value,"ACTION_OUTCOME_INVALID",keys.toArray(String[]::new));
         if (integer(value.get("schemaVersion"), "ACTION_OUTCOME_INVALID") != VERSION) throw invalid("ACTION_OUTCOME_INVALID");
         String kind = string(value.get("kind"), true, "ACTION_OUTCOME_INVALID");
         String text = string(value.get("text"), false, "ACTION_OUTCOME_INVALID");
@@ -129,7 +149,8 @@ public final class ChatActionOutcomeContract {
             default -> throw invalid("ACTION_OUTCOME_KIND_INVALID");
         }
         if (Boolean.TRUE.equals(deliverable) && !"ANSWER".equals(kind)) throw invalid("ACTION_OUTCOME_UNION_INVALID");
-        return new Outcome(VERSION, kind, text, clarification, action, deliverable);
+        if (relation != null && !Boolean.TRUE.equals(deliverable)) throw invalid("ACTION_DELIVERY_RELATION_INVALID");
+        return new Outcome(VERSION, kind, text, clarification, action, deliverable, relation);
     }
 
     private static JsonNode parse(String value) {

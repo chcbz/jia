@@ -29,7 +29,8 @@ class ChatTypedDiscussionAdmissionServiceTest {
     private final ChatTypedDeliberationContextService contexts=mock(ChatTypedDeliberationContextService.class);
     private final ChatTypedDeliberationService typed=mock(ChatTypedDeliberationService.class);
     private final ChatTypedDeliberationStore store=mock(ChatTypedDeliberationStore.class);
-    private final ChatTypedDiscussionAdmissionService service=new ChatTypedDiscussionAdmissionService(tasks,bindings,conversations,scopes,deliberation,events,contexts,typed);
+    private final ChatActionFinalService finals=mock(ChatActionFinalService.class);
+    private final ChatTypedDiscussionAdmissionService service=new ChatTypedDiscussionAdmissionService(tasks,bindings,conversations,scopes,deliberation,events,contexts,typed,finals);
     private final ServerResolvedSender sender=new ServerResolvedSender("user","Human","owner","client",DisplayNameSource.JIACN);
     private final ChatTypedDeliberationStore.Scope storeScope=new ChatTypedDeliberationStore.Scope("0","owner","client","42",1);
 
@@ -38,6 +39,25 @@ class ChatTypedDiscussionAdmissionServiceTest {
         when(bindings.lock(new ChatBountyBindingStore.Scope("0","owner","client"),"task")).thenReturn(new ChatBountyBindingStore.Binding(3,42L));
         ChatConversationEntity conversation=new ChatConversationEntity().setId(42L).setJiacn("owner").setConversationType("juyiting").setConversationScopeType("bounty").setConversationScopeKey("task:task").setTaskId("task").setTargetAgentIds("[\"agent\"]").setLifecycleGeneration(1L);conversation.setTenantId("0");conversation.setClientId("client");
         when(conversations.lockScopedById("owner","client","42")).thenReturn(conversation);when(scopes.parsePersistedTargetAgentIds("[\"agent\"]")).thenReturn(List.of("agent"));when(typed.store()).thenReturn(store);
+    }
+
+    @Test void onlyReadVerifiedMarkedParentIsAdvertisedWithoutInferringReplacementFromLinkage() {
+        var actual=new ChatCompletedMessageSourceServiceTest.Fixture();var parent=actual.row.get();
+        when(typed.requireParent(storeScope,parent.outcomeId())).thenReturn(parent);
+        when(events.findTurn("0","owner","client",parent.turnId())).thenReturn(actual.turn.setState("FINAL_PERSISTED"));
+        when(finals.readIfV3(storeScope,parent.requestId(),parent.turnId(),parent.requestRevision(),"CHAT"))
+                .thenReturn(actual.finals.readIfV3(actual.scope,parent.requestId(),parent.turnId(),1,"CHAT"));
+        when(contexts.resolve(any(),eq("task"),eq("agent"),eq(List.of()))).thenReturn(new ChatTypedDeliberationContextService.Context(
+                ChatActionFinalValidator.factsMap(ChatActionOutcomeContract.factsJson(parent.factsJson())),"[]",List.of(),Map.of("schemaVersion",3,"state","READY")));
+        when(deliberation.admit(eq("0"),eq(sender),eq("42"),eq(1L),any(),any(),any(),isNull(),any(),any()))
+                .thenAnswer(i->admitted(((ChatMessageDTO)i.getArgument(6)).getRequestId()));
+        when(store.insertAdmission(any())).thenReturn(1);
+        var command=new ChatTypedDeliberationWire.DiscussionCommand("DISCUSSION","task",3,"再补一段",parent.outcomeId(),0L,null,null,List.of());
+        service.admit("0",sender,"42","append-key",command);
+        verify(deliberation).admit(eq("0"),eq(sender),eq("42"),eq(1L),any(),any(),any(),isNull(),any(),
+                argThat(facts->Map.of("outcomeId",parent.outcomeId(),"finalDigest",parent.finalDigest()).equals(facts.get("deliveryParent"))
+                        &&!facts.containsKey("deliveryRelation")));
+        verify(finals).readIfV3(storeScope,parent.requestId(),parent.turnId(),1,"CHAT");
     }
 
     @Test void attachmentOnlyPreservesBodyAndResolvedSelectorsAndReplaysTheOriginalKey() {

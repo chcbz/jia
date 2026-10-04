@@ -56,6 +56,49 @@ class ChatActionFinalServiceTest {
         var prepared=prepare(raw); var view=service.persist(prepared,9,12);
         turn.setFinalMessageId(9L).setFinalDigest(prepared.validated().finalDigest()); return view;
     }
+    @Test void explicitRelationsBindTheAdmittedParentAndFrozenDigestAndPersistOnRead() {
+        for(String mode:List.of("APPEND","REPLACE","RESET")) {
+            var f=new ChatCompletedMessageSourceServiceTest.Fixture();var parent=f.row.get();
+            String parentId=parent.outcomeId();String digest=parent.finalDigest();
+            var facts=new LinkedHashMap<String,Object>();facts.put("task",Map.of("id","task"));
+            facts.put("typedDeliberation",ChatActionFinalValidator.factsMap(ChatActionOutcomeContract.factsJson(parent.factsJson())));
+            facts.put("typedDeliberationAdmission",Map.of("intent","DISCUSSION","parentOutcomeId",parentId,
+                    "deliveryParent",Map.of("outcomeId",parentId,"finalDigest",digest)));
+            var childTurn=new ChatTurnEntity().setTenantId("0").setOwnerJiacn("owner").setClientId("client")
+                    .setConversationId("42").setConversationGeneration(1L).setRequestId("child").setRequestRevision(1L)
+                    .setTurnId("child-turn").setDispatchId("child-dispatch").setSnapshotId("child-snapshot")
+                    .setContextDigest("sha256:"+"f".repeat(64)).setTargetAgentId("agent").setRoute("CHAT");
+            var childSnapshot=new ChatContextSnapshotEntity().setTenantId("0").setOwnerJiacn("owner").setClientId("client")
+                    .setConversationId("42").setConversationGeneration(1L).setRequestId("child").setRequestRevision(1L)
+                    .setSnapshotId("child-snapshot").setContextDigest(childTurn.getContextDigest()).setTargetAgentId("agent")
+                    .setRoute("CHAT").setFactsManifestJson(CanonicalContextJson.write(facts));
+            when(f.dao.findTurn("0","owner","client","child-turn")).thenReturn(childTurn);
+            when(f.dao.findSnapshot("0","owner","client","child-snapshot")).thenReturn(childSnapshot);
+            when(f.store.findAdmissionByRequest(f.scope,"child")).thenReturn(new ChatTypedDeliberationStore.Admission("child-admission",f.scope,"child-key",
+                    "sha256:"+"b".repeat(64),"sha256:"+"c".repeat(64),"DISCUSSION","task",3,parentId,null,"child",1,10,
+                    "[\"child-turn\"]","[]","ADMITTED",0,1,1));
+            when(f.store.findOutcome(f.scope,parentId,false)).thenReturn(parent);
+            when(f.store.findOutcomeByRequest(f.scope,"child")).thenAnswer(i->f.row.get());
+            var relation=Map.of("mode",mode,"parentOutcomeId",parentId,"parentFinalDigest",digest);
+            var raw=new LinkedHashMap<String,Object>();raw.put("schemaVersion",3);raw.put("kind","ANSWER");raw.put("text","修改原文  ");
+            raw.put("clarification",null);raw.put("action",null);raw.put("deliverable",true);raw.put("deliveryRelation",relation);
+            var prepared=f.finals.prepare(childTurn,childSnapshot,"修改原文  ",3,CanonicalContextJson.write(raw),null);
+            var view=f.finals.persist(prepared,11,20);childTurn.setFinalMessageId(11L).setFinalDigest(prepared.validated().finalDigest());
+            assertEquals(relation,view.get("deliveryRelation"));assertEquals(view,f.finals.readIfV3(f.scope,"child","child-turn",1,"CHAT").get("outcome"));
+            assertEquals("修改原文  ",view.get("text"));verifyNoInteractions(f.messages,f.sessions);
+            raw.put("deliveryRelation",Map.of("mode",mode,"parentOutcomeId",parentId,"parentFinalDigest","sha256:"+"0".repeat(64)));
+            assertThrows(ChatDeliberationException.class,()->f.finals.prepare(childTurn,childSnapshot,"修改原文  ",3,CanonicalContextJson.write(raw),null));
+            var changed=new LinkedHashMap<>(facts);changed.put("typedDeliberationAdmission",Map.of("parentOutcomeId","another",
+                    "deliveryParent",Map.of("outcomeId","another","finalDigest",digest)));
+            childSnapshot.setFactsManifestJson(CanonicalContextJson.write(changed));
+            assertThrows(ChatDeliberationException.class,()->f.finals.readIfV3(f.scope,"child","child-turn",1,"CHAT"));
+        }
+    }
+    @Test void relationWithoutServerAdvertisedCompletedDeliveryParentCannotPublish() {
+        ready();String raw=ANSWER.replace("\"action\":null}","\"action\":null,\"deliverable\":true,\"deliveryRelation\":{\"mode\":\"REPLACE\",\"parentOutcomeId\":\"parent\",\"parentFinalDigest\":\"sha256:"+"a".repeat(64)+"\"}}");
+        assertThrows(ChatDeliberationException.class,()->prepare(raw));verify(store,never()).insertOutcome(any());
+    }
+
     @Test void onlyExplicitTextDeliveryProjectsActualMessageSnapshotRefsAndReadRevalidatesMarker() throws Exception {
         ready(); var view=persist(ANSWER.replace("\"action\":null}","\"action\":null,\"deliverable\":true}"));
         assertEquals(true,view.get("deliverable"));

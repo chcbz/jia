@@ -65,11 +65,16 @@ public final class ChatActionFinalValidator {
         value.put("text", outcome.text());
         // Absence remains absence: legacy immutable finals retain their exact digest preimage.
         if (outcome.deliverable() != null) value.put("deliverable", outcome.deliverable());
+        if (outcome.deliveryRelation() != null) value.put("deliveryRelation", relationMap(outcome.deliveryRelation()));
         value.put("clarification", outcome.clarification() == null ? null : Map.of(
                 "question", outcome.clarification().question(), "requiredFacts", outcome.clarification().requiredFacts()));
         value.put("action", outcome.action() == null ? null : Map.of("actionId", outcome.action().actionId(),
                 "instruction", outcome.action().instruction(), "sourceRefIds", outcome.action().sourceRefIds()));
         return java.util.Collections.unmodifiableMap(value);
+    }
+
+    public static Map<String,Object> relationMap(ChatActionOutcomeContract.DeliveryRelation relation) {
+        return Map.of("mode",relation.mode(),"parentOutcomeId",relation.parentOutcomeId(),"parentFinalDigest",relation.parentFinalDigest());
     }
 
     public static Map<String, Object> factsMap(ChatActionOutcomeContract.Facts facts) {
