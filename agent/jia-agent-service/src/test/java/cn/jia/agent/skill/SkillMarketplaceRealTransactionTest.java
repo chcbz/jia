@@ -111,6 +111,7 @@ class SkillMarketplaceRealTransactionTest {
         var posting=new EconomyPostingServiceImpl(ledger,manager,gate);
         var agents=mock(AgentService.class); var owner=mock(HostingRentOwnerResolver.class); var runtimes=mock(AgentRuntimeDao.class);
         runtime=new AgentRuntimeEntity().setAgentId(AGENT).setOwnerJiacn(ACTOR.ownerJiacn()).setBindingId(7L).setTokenHash("registration-1").setStatus("online");
+        runtime.setTenantId(ACTOR.tenantId());
         runtime.setClientId(ACTOR.clientId());
         when(runtimes.findByAgentIdForUpdate(AGENT)).thenAnswer(i->runtime);
         when(owner.requireOwner(any())).thenAnswer(inv -> {
