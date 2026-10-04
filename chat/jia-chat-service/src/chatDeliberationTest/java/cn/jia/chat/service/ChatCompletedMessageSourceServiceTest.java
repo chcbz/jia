@@ -39,7 +39,8 @@ class ChatCompletedMessageSourceServiceTest {
         final ChatCompletedMessageSourceService service=new ChatCompletedMessageSourceService(deliberations,store,finals,messages);
         ChatCompletedMessageSourceService.Command command;
         Fixture(){this("ANSWER");}
-        Fixture(String kind) {
+        Fixture(String kind) { this(kind,"ANSWER".equals(kind)); }
+        Fixture(String kind, Boolean deliverable) {
             when(store.findAdmissionByRequest(scope,"request")).thenReturn(new ChatTypedDeliberationStore.Admission("admission",scope,"key",
                     "sha256:"+"b".repeat(64),"sha256:"+"c".repeat(64),"DISCUSSION","task",3,null,null,"request",1,8,"[\"turn\"]","[]","ADMITTED",0,1,1));
             when(store.findOutcomeByTurn(eq(scope),eq("turn"),anyBoolean())).thenAnswer(i->row.get());
@@ -52,6 +53,7 @@ class ChatCompletedMessageSourceServiceTest {
             when(dao.findTurn("0","owner","client","turn")).thenReturn(turn);
             when(dao.findSnapshot("0","owner","client","snapshot")).thenReturn(snapshot);
             var raw=new LinkedHashMap<String,Object>();raw.put("schemaVersion",3);raw.put("kind",kind);raw.put("text",TEXT);
+            if(deliverable!=null) raw.put("deliverable",deliverable);
             raw.put("clarification","CLARIFY".equals(kind)?Map.of("question","用途？","requiredFacts",List.of("用途")):null);
             raw.put("action","ACTION_REQUEST".equals(kind)?Map.of("actionId","write-document","instruction","整理","sourceRefIds",List.of()):null);
             var prepared=finals.prepare(turn,snapshot,TEXT,3,CanonicalContextJson.write(raw),null);
@@ -89,6 +91,15 @@ class ChatCompletedMessageSourceServiceTest {
     @Test void clarificationAndActionAreNotDeliverableEvenWithCompletedMessage() {
         for(String kind:List.of("CLARIFY","ACTION_REQUEST")) {
             Fixture f=new Fixture(kind);assertEquals("READY",f.finals.readIfV3(f.scope,"request","turn",1,"CHAT").get("state"));assertThrows(ChatDeliberationException.class,()->f.service.resolve(f.owner,f.command));
+            verifyNoInteractions(f.messages,f.sessions);verify(f.store,never()).insertOutcome(any());
+        }
+    }
+    @Test void unmarkedHistoricalAnswerAndExplicitNonDeliveryCannotBePromotedEvenWithExactRefs() {
+        for(Boolean marker:Arrays.asList(null,Boolean.FALSE)) {
+            Fixture f=new Fixture("ANSWER",marker);
+            assertEquals("READY",f.finals.readIfV3(f.scope,"request","turn",1,"CHAT").get("state"));
+            var failure=assertThrows(ChatDeliberationException.class,()->f.service.resolve(f.owner,f.command));
+            assertEquals(ChatDeliberationException.Reason.NOT_FOUND_OR_FORBIDDEN,failure.reason());
             verifyNoInteractions(f.messages,f.sessions);verify(f.store,never()).insertOutcome(any());
         }
     }

@@ -15,7 +15,8 @@ import java.util.Map;
 import java.util.Objects;
 
 /** Trusted source boundary only. A completed ANSWER is not automatically a deliverable:
- * callers must supply explicit displayed references; this service never lists/selects replies.
+ * it must carry the persisted explicit delivery marker and callers must supply displayed
+ * references; this service never lists/selects replies or infers historical delivery intent.
  * Ordinary v3 snapshot validation is reused. CLARIFY/ACTION_REQUEST/streaming prose are rejected. */
 @Service
 public class ChatCompletedMessageSourceService {
@@ -60,7 +61,7 @@ public class ChatCompletedMessageSourceService {
             var projection=finals.readIfV3(scope,command.requestId(),source.turnId(),revision,"CHAT");
             var outcome=outcomes.findOutcomeByTurn(scope,source.turnId(),false);
             if(projection==null || !"READY".equals(projection.get("state")) || !(projection.get("outcome") instanceof Map<?,?> view)
-                    || !"ANSWER".equals(view.get("kind")) || outcome==null || !scope.equals(outcome.scope())
+                    || !"ANSWER".equals(view.get("kind")) || !Boolean.TRUE.equals(view.get("deliverable")) || outcome==null || !scope.equals(outcome.scope())
                     || !command.requestId().equals(outcome.requestId()) || revision!=outcome.requestRevision()
                     || !command.taskId().equals(outcome.taskId()) || command.expectedAssignmentRevision()!=outcome.assignmentRevision()
                     || !source.turnId().equals(outcome.turnId()) || positive(source.messageId())!=outcome.assistantMessageId()
