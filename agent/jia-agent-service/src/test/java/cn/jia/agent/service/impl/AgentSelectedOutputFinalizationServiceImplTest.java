@@ -115,18 +115,18 @@ class AgentSelectedOutputFinalizationServiceImplTest {
         return new SelectedOutputFinalizationDigest.MessageSource("turn-1",id,"snapshot-1","sha256:"+"a".repeat(64));
     }
     private static AgentSelectedOutputFinalizationService.SourceOutput text(String id,byte[] bytes) {
-        return AgentSelectedOutputFinalizationService.SourceOutput.completedMessage("req-1","chat-step",message(id),
+        return AgentSelectedOutputFinalizationService.SourceOutput.completedMessage("req-1",null,message(id),
                 sha(bytes),"Text","final",bytes);
     }
     @Test void completedMessageUsesActualSnapshotAndExistingFormalDeliveryWithoutSourceExecution() {
-        Fixture f=new Fixture(); byte[] bytes="Ô­Ê¼ÕýÎÄ\nµÚ¶þÐÐ  \n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        Fixture f=new Fixture(); byte[] bytes="åŽŸå§‹æ­£æ–‡\nç¬¬äºŒè¡Œ  \n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
         var output=text("9",bytes); var command=selected(f,List.of(output));
         bytes[0]=0; assertNotEquals(0,output.bytes()[0]);
-        assertNull(output.executionId());assertNull(output.runId());assertNull(output.outputId());
+        assertNull(output.stepId());assertNull(output.executionId());assertNull(output.runId());assertNull(output.outputId());
         assertEquals("READY_TO_SUBMIT",f.service.prepare(f.scope,command).stage());
-        assertTrue(f.jdbc.manifest.contains("COMPLETED_MESSAGE"));assertTrue(f.jdbc.manifest.contains("snapshot-1"));
-        assertFalse(f.jdbc.manifest.contains("executionId"));assertFalse(f.jdbc.manifest.contains("outputId"));
-        assertFalse(f.jdbc.manifest.contains("\"runId\""));
+        assertTrue(f.publishedManifest.get().contains("COMPLETED_MESSAGE"));assertTrue(f.publishedManifest.get().contains("snapshot-1"));
+        assertFalse(f.publishedManifest.get().contains("stepId"));assertFalse(f.publishedManifest.get().contains("executionId"));assertFalse(f.publishedManifest.get().contains("outputId"));
+        assertFalse(f.publishedManifest.get().contains("\"runId\""));
         assertEquals("SUBMITTED",f.service.submit(f.scope,"task-1","op-1",command.immutableDigest()).stage());
         assertEquals("TASK_COMPLETED",f.service.accept(f.scope,"task-1","op-1",command.immutableDigest()).stage());
         verify(f.leases).claim(anyString(),anyString(),anyString(),anyString(),eq("work-1"),any());
@@ -158,7 +158,7 @@ class AgentSelectedOutputFinalizationServiceImplTest {
         verifyNoInteractions(f.grants,f.leases,f.artifacts);
         var mixed=selected(f,List.of(output,f.command("run-1").outputs().getFirst()));
         assertEquals("READY_TO_SUBMIT",f.service.prepare(f.scope,mixed).stage());
-        assertTrue(f.jdbc.manifest.contains("COMPLETED_MESSAGE"));assertTrue(f.jdbc.manifest.contains("out-1"));
+        assertTrue(f.publishedManifest.get().contains("COMPLETED_MESSAGE"));assertTrue(f.publishedManifest.get().contains("out-1"));
         verify(f.artifacts,times(3)).publish(anyString(),anyString(),anyString(),anyString(),anyString(),any());
     }
     @Test void messageReferenceDriftCannotReplaceExistingOperation() {
@@ -169,6 +169,17 @@ class AgentSelectedOutputFinalizationServiceImplTest {
     }
     @Test void originalMediaDigestRemainsByteExact() {
         assertEquals("491dfdc59d2609557394df265ad68a3570138d8156c5dff016701a2ea199d601",new Fixture().digest);
+    }
+
+    @Test void textMimeHashAndLengthAreNotBrowserAuthority() {
+        for(String changed:List.of("mime","hash","length","step")) {
+            Fixture f=new Fixture();var real=text("9",f.bytes);
+            var forged=new AgentSelectedOutputFinalizationService.SourceOutput(real.requestId(),"step".equals(changed)?"made-up-step":null,
+                    null,null,null,"hash".equals(changed)?"0".repeat(64):real.sha256(),"mime".equals(changed)?"image/png":real.contentMimeType(),
+                    "length".equals(changed)?real.byteLength()+1:real.byteLength(),real.title(),real.purpose(),real.bytes(),real.messageSource());
+            assertThrows(AgentSelectedOutputFinalizationException.class,()->f.service.prepare(f.scope,selected(f,List.of(forged))));
+            verifyNoInteractions(f.grants,f.leases,f.artifacts);
+        }
     }
 
     static final class Fixture {
@@ -190,6 +201,7 @@ class AgentSelectedOutputFinalizationServiceImplTest {
                 "Owner selected this output",List.of(new SelectedOutputFinalizationDigest.Selection(
                         "req-1","step-1","out-1",hash,"Hero","final")));
         final AtomicReference<AgentTaskFormalDeliveryViewDTO> delivery=new AtomicReference<>();
+        final AtomicReference<String> publishedManifest=new AtomicReference<>();
         Fixture(){
             var admission=new AgentTaskExecutionGrantService.Admission(
                     "grant-1",2,7,"agent-1","FINALIZE_SELECTED_OUTPUTS",false,List.of());
@@ -208,6 +220,7 @@ class AgentSelectedOutputFinalizationServiceImplTest {
                     .thenThrow(new AgentTaskCollaborationException(AgentTaskCollaborationException.Reason.NOT_FOUND,"absent"));
             when(artifacts.publish(anyString(),anyString(),anyString(),eq("task-1"),eq("agent-1"),any())).thenAnswer(i->{
                 var c=(cn.jia.agent.entity.AgentTaskArtifactPublishDTO)i.getArgument(5);
+                if ("application/json".equals(c.getContentMimeType())) publishedManifest.set(new String(c.getContentBytes(),java.nio.charset.StandardCharsets.UTF_8));
                 AgentTaskArtifactViewDTO v=new AgentTaskArtifactViewDTO();v.setArtifactId(c.getArtifactId());
                 v.setTaskId("task-1");v.setWorkItemId("work-1");v.setProducerAgentId("agent-1");
                 v.setArtifactType(c.getArtifactType());v.setTitle(c.getTitle());v.setVisibility("task_members");

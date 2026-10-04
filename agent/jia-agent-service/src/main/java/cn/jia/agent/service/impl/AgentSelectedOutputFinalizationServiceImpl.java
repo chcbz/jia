@@ -370,8 +370,9 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
             List<Map<String,Object>> selected=new ArrayList<>();
             for (SourceOutput output:valid.outputs()) {
                 Map<String,Object> item=new LinkedHashMap<>();
-                item.put("requestId",output.requestId()); item.put("stepId",output.stepId());
+                item.put("requestId",output.requestId());
                 if (output.messageSource() == null) {
+                    item.put("stepId",output.stepId());
                     item.put("executionId",output.executionId()); item.put("runId",output.runId());
                     item.put("outputId",output.outputId());
                 } else {
@@ -413,18 +414,18 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
         var seen=new java.util.HashSet<String>();
         for (SourceOutput output:command.outputs()) {
             if (output==null) throw bad("Output is required");
-            id(output.requestId(),100); id(output.stepId(),100);
+            id(output.requestId(),100);
             text(output.title(),255); text(output.purpose(),255);
             String sourceKey;
             if (output.messageSource() == null) {
-                id(output.executionId(),100); id(output.runId(),100); id(output.outputId(),100);
+                id(output.stepId(),100); id(output.executionId(),100); id(output.runId(),100); id(output.outputId(),100);
                 sourceKey=output.requestId()+"\0"+output.stepId()+"\0"+output.outputId();
             } else {
                 var message=output.messageSource(); id(message.turnId(),100); id(message.snapshotId(),100);
                 if (message.messageId()==null || !message.messageId().matches("[1-9][0-9]{0,18}")
                         || new java.math.BigInteger(message.messageId()).compareTo(java.math.BigInteger.valueOf(Long.MAX_VALUE))>0
                         || message.finalDigest()==null || !message.finalDigest().matches("sha256:[0-9a-f]{64}")
-                        || output.executionId()!=null || output.runId()!=null || output.outputId()!=null
+                        || output.stepId()!=null || output.executionId()!=null || output.runId()!=null || output.outputId()!=null
                         || !"text/plain".equals(output.contentMimeType()) || output.bytes()==null)
                     throw bad("Invalid completed message source");
                 String content=new String(output.bytes(),StandardCharsets.UTF_8);

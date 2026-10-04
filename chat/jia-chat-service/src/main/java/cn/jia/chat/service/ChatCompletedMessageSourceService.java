@@ -2,7 +2,6 @@ package cn.jia.chat.service;
 
 import cn.jia.agent.service.AgentSelectedOutputFinalizationService;
 import cn.jia.agent.service.SelectedOutputFinalizationDigest;
-import cn.jia.chat.deliberation.ChatInteractionStepStore;
 import cn.jia.chat.deliberation.ChatTypedDeliberationStore;
 import cn.jia.core.util.JsonUtil;
 import org.springframework.stereotype.Service;
@@ -21,21 +20,19 @@ import java.util.Objects;
 @Service
 public class ChatCompletedMessageSourceService {
     private final ChatDeliberationService deliberations;
-    private final ChatInteractionStepStore steps;
     private final ChatTypedDeliberationStore outcomes;
     private final ChatActionFinalService finals;
     private final ChatCompletedMessageSourceStore messages;
     public ChatCompletedMessageSourceService(ChatDeliberationService deliberations,
-            ChatInteractionStepStore steps, ChatTypedDeliberationStore outcomes,
+            ChatTypedDeliberationStore outcomes,
             ChatActionFinalService finals, ChatCompletedMessageSourceStore messages) {
-        this.deliberations=Objects.requireNonNull(deliberations); this.steps=Objects.requireNonNull(steps);
-        this.outcomes=Objects.requireNonNull(outcomes); this.finals=Objects.requireNonNull(finals);
+        this.deliberations=Objects.requireNonNull(deliberations); this.outcomes=Objects.requireNonNull(outcomes); this.finals=Objects.requireNonNull(finals);
         this.messages=Objects.requireNonNull(messages);
     }
     public record Command(String taskId, String conversationId, long expectedAssignmentRevision,
-            String requestId, String stepId, SelectedOutputFinalizationDigest.MessageSource messageSource,
+            String requestId, SelectedOutputFinalizationDigest.MessageSource messageSource,
             String sha256, String title, String purpose) { }
-    public record Resolved(long generation, String targetAgentId, String grantId, long grantVersion,
+    public record Resolved(long generation, String targetAgentId, long assignmentRevision,
             AgentSelectedOutputFinalizationService.SourceOutput output) { }
 
     @Transactional(readOnly=true)
@@ -45,30 +42,18 @@ public class ChatCompletedMessageSourceService {
             var request=deliberations.getRequest(owner.tenantId(),owner.ownerJiacn(),owner.clientId(),command.requestId());
             if(request==null || !command.requestId().equals(request.requestId())
                     || !command.conversationId().equals(request.conversationId()) || !"COMPLETED".equals(request.state())
-                    || request.steps()==null || request.turns()==null) throw unavailable();
+                    || request.turns()==null || request.turns().size()!=1) throw unavailable();
             long generation=positive(request.conversationGeneration()), revision=positive(request.requestRevision());
             var source=command.messageSource();
-            var step=request.steps().stream().filter(v->v!=null && command.stepId().equals(v.stepId())).findFirst().orElseThrow(ChatCompletedMessageSourceService::unavailable);
             var turn=request.turns().stream().filter(v->v!=null && source.turnId().equals(v.turnId())).findFirst().orElseThrow(ChatCompletedMessageSourceService::unavailable);
-            if(!command.taskId().equals(step.taskId()) || !"CHAT".equals(step.kind())
-                    || command.expectedAssignmentRevision()!=decimal(step.assignmentRevision())
-                    || step.executionId()!=null || step.executionIntentId()!=null || step.executionState()!=null
-                    || !command.requestId().equals(turn.requestId()) || !request.requestRevision().equals(turn.requestRevision())
+            if(!command.requestId().equals(turn.requestId()) || !request.requestRevision().equals(turn.requestRevision())
                     || !command.conversationId().equals(turn.conversationId()) || !request.conversationGeneration().equals(turn.conversationGeneration())
-                    || !Objects.equals(step.targetAgentId(),turn.targetAgentId()) || !"CHAT".equals(turn.route())
+                    || !"CHAT".equals(turn.route())
                     || !("FINAL_PERSISTED".equals(turn.state()) || "PUBLISHED".equals(turn.state()))
                     || !source.messageId().equals(turn.finalMessageId()) || !source.snapshotId().equals(turn.contextSnapshotId())) throw unavailable();
-            id(step.targetAgentId(),100); id(turn.dispatchId(),100);
-            var persisted=steps.findSteps(owner.tenantId(),owner.ownerJiacn(),owner.clientId(),command.requestId(),revision);
-            if(persisted==null) throw unavailable();
-            var row=persisted.stream().filter(v->v!=null && command.stepId().equals(v.stepId())).findFirst().orElseThrow(ChatCompletedMessageSourceService::unavailable);
-            if(!owner.tenantId().equals(row.tenantId()) || !owner.ownerJiacn().equals(row.ownerJiacn()) || !owner.clientId().equals(row.clientId())
-                    || !command.requestId().equals(row.requestId()) || revision!=row.requestRevision()
-                    || !command.conversationId().equals(row.conversationId()) || generation!=row.conversationGeneration()
-                    || !command.taskId().equals(row.taskId()) || command.expectedAssignmentRevision()!=row.assignmentRevision()
-                    || positive(step.stepNumber())!=row.stepNumber() || !Objects.equals(step.targetAgentId(),row.targetAgentId())
-                    || !"CHAT".equals(row.kind()) || !Objects.equals(step.state(),row.state())
-                    || row.grantId()==null || row.grantVersion()<1) throw unavailable();
+            id(turn.targetAgentId(),100); id(turn.dispatchId(),100);
+            // Natural discussion has a persisted typed admission/turn, not an execution step.
+            // Current assignment/grant authorization is rechecked by existing promotion when wired.
             var scope=new ChatTypedDeliberationStore.Scope(owner.tenantId(),owner.ownerJiacn(),owner.clientId(),command.conversationId(),generation);
             // Reuses the normal reader that rebuilds the final digest from actual snapshot binding,
             // outcome union, admission and source catalogue. No copied hash is ownership authority.
@@ -87,13 +72,13 @@ public class ChatCompletedMessageSourceService {
             var metadata=metadata(message.metadata());
             if(!command.requestId().equals(metadata.get("requestId")) || !source.turnId().equals(metadata.get("turnId"))
                     || !source.snapshotId().equals(metadata.get("contextSnapshotId")) || !source.finalDigest().equals(metadata.get("finalDigest"))
-                    || !turn.dispatchId().equals(metadata.get("dispatchId")) || !step.targetAgentId().equals(metadata.get("targetAgentId"))
-                    || !step.targetAgentId().equals(metadata.get("agentId")) || !"CHAT".equals(metadata.get("route"))
+                    || !turn.dispatchId().equals(metadata.get("dispatchId")) || !turn.targetAgentId().equals(metadata.get("targetAgentId"))
+                    || !turn.targetAgentId().equals(metadata.get("agentId")) || !"CHAT".equals(metadata.get("route"))
                     || !outcome.outcomeId().equals(metadata.get("outcomeId"))) throw unavailable();
             byte[] bytes=message.content().getBytes(StandardCharsets.UTF_8);
             if(!command.sha256().equals(sha256(bytes))) throw unavailable();
-            return new Resolved(generation,row.targetAgentId(),row.grantId(),row.grantVersion(),
-                    AgentSelectedOutputFinalizationService.SourceOutput.completedMessage(command.requestId(),command.stepId(),
+            return new Resolved(generation,turn.targetAgentId(),outcome.assignmentRevision(),
+                    AgentSelectedOutputFinalizationService.SourceOutput.completedMessage(command.requestId(),null,
                             source,command.sha256(),command.title(),command.purpose(),bytes));
         } catch(ChatDeliberationException failure) {
             if(failure.reason()==ChatDeliberationException.Reason.PERSISTENCE_ERROR) throw failure;
@@ -105,7 +90,7 @@ public class ChatCompletedMessageSourceService {
         id(owner.ownerJiacn(),50); id(owner.clientId(),50);
         if("0".equals(owner.ownerJiacn()) || c==null || c.messageSource()==null || c.expectedAssignmentRevision()<0
                 || c.expectedAssignmentRevision()>9_007_199_254_740_991L) throw unavailable();
-        id(c.taskId(),100); id(c.conversationId(),100); id(c.requestId(),100); id(c.stepId(),100);
+        id(c.taskId(),100); id(c.conversationId(),100); id(c.requestId(),100);
         id(c.messageSource().turnId(),100); id(c.messageSource().snapshotId(),100); positive(c.messageSource().messageId());
         if(c.sha256()==null || !c.sha256().matches("[0-9a-f]{64}") || c.messageSource().finalDigest()==null
                 || !c.messageSource().finalDigest().matches("sha256:[0-9a-f]{64}")) throw unavailable();

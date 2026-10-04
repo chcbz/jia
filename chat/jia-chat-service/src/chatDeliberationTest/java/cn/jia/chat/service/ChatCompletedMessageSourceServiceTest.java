@@ -12,10 +12,9 @@ import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.*;
 
 class ChatCompletedMessageSourceServiceTest {
-    static final String TEXT="Ô­Ê¼ÎÄ×Ö\nµÚ¶þÐÐ  \n";
+    static final String TEXT="åŽŸå§‹æ–‡å­—\nç¬¬äºŒè¡Œ  \n";
     static final class Fixture {
         final ChatDeliberationService deliberations=mock(ChatDeliberationService.class);
-        final ChatInteractionStepStore steps=mock(ChatInteractionStepStore.class);
         final ChatTypedDeliberationStore store=mock(ChatTypedDeliberationStore.class);
         final ChatDeliberationDao dao=mock(ChatDeliberationDao.class);
         final TypedInspectionSessionRegistry sessions=mock(TypedInspectionSessionRegistry.class);
@@ -23,6 +22,8 @@ class ChatCompletedMessageSourceServiceTest {
         final ChatTypedDeliberationStore.Scope scope=new ChatTypedDeliberationStore.Scope("0","owner","client","42",1);
         final ChatSelectedOutputFinalizationService.Scope owner=new ChatSelectedOutputFinalizationService.Scope("0","client","owner");
         final AtomicReference<ChatTypedDeliberationStore.Outcome> row=new AtomicReference<>();
+        final AtomicReference<ChatTypedDeliberationStore.PendingQuestion> pending=new AtomicReference<>();
+        final AtomicReference<ChatDispatchOutboxEntity> event=new AtomicReference<>();
         final ChatTurnEntity turn=new ChatTurnEntity().setTenantId("0").setOwnerJiacn("owner").setClientId("client")
                 .setConversationId("42").setConversationGeneration(1L).setRequestId("request").setRequestRevision(1L)
                 .setTurnId("turn").setDispatchId("dispatch").setSnapshotId("snapshot").setContextDigest("sha256:"+"a".repeat(64))
@@ -35,7 +36,7 @@ class ChatCompletedMessageSourceServiceTest {
                                 "availableActions",List.of(Map.of("actionId","write-document","kind","EXECUTE","operation","WRITE_DOCUMENT",
                                         "inputMediaTypes",List.of("text","file"),"minSources",0,"maxSources",32))))));
         final ChatActionFinalService finals=new ChatActionFinalService(store,dao,sessions);
-        final ChatCompletedMessageSourceService service=new ChatCompletedMessageSourceService(deliberations,steps,store,finals,messages);
+        final ChatCompletedMessageSourceService service=new ChatCompletedMessageSourceService(deliberations,store,finals,messages);
         ChatCompletedMessageSourceService.Command command;
         Fixture(){this("ANSWER");}
         Fixture(String kind) {
@@ -44,39 +45,38 @@ class ChatCompletedMessageSourceServiceTest {
             when(store.findOutcomeByTurn(eq(scope),eq("turn"),anyBoolean())).thenAnswer(i->row.get());
             when(store.findOutcomeByRequest(scope,"request")).thenAnswer(i->row.get());
             when(store.insertOutcome(any())).thenAnswer(i->{row.set(i.getArgument(0));return 1;});
-            when(store.insertPending(any())).thenReturn(1);
-            when(dao.insertOutbox(any())).thenReturn(1);
+            when(store.insertPending(any())).thenAnswer(i->{pending.set(i.getArgument(0));return 1;});
+            when(store.findPendingByOutcome(eq(scope),anyString(),eq(false))).thenAnswer(i->pending.get());
+            when(dao.insertOutbox(any())).thenAnswer(i->{event.set(i.getArgument(0));return 1;});
+            when(dao.findOutboxById(eq("0"),eq("owner"),eq("client"),anyString())).thenAnswer(i->event.get());
             when(dao.findTurn("0","owner","client","turn")).thenReturn(turn);
             when(dao.findSnapshot("0","owner","client","snapshot")).thenReturn(snapshot);
             var raw=new LinkedHashMap<String,Object>();raw.put("schemaVersion",3);raw.put("kind",kind);raw.put("text",TEXT);
-            raw.put("clarification","CLARIFY".equals(kind)?Map.of("question","ÓÃÍ¾£¿","requiredFacts",List.of("ÓÃÍ¾")):null);
-            raw.put("action","ACTION_REQUEST".equals(kind)?Map.of("actionId","write-document","instruction","ÕûÀí","sourceRefIds",List.of()):null);
+            raw.put("clarification","CLARIFY".equals(kind)?Map.of("question","ç”¨é€”ï¼Ÿ","requiredFacts",List.of("ç”¨é€”")):null);
+            raw.put("action","ACTION_REQUEST".equals(kind)?Map.of("actionId","write-document","instruction","æ•´ç†","sourceRefIds",List.of()):null);
             var prepared=finals.prepare(turn,snapshot,TEXT,3,CanonicalContextJson.write(raw),null);
             finals.persist(prepared,9,12);turn.setFinalMessageId(9L).setFinalDigest(prepared.validated().finalDigest());
             when(deliberations.getRequest("0","owner","client","request")).thenReturn(request("COMPLETED","FINAL_PERSISTED","9"));
-            when(steps.findSteps("0","owner","client","request",1)).thenReturn(List.of(new ChatInteractionStepStore.Step(
-                    "step","0","owner","client","request",1,1,"42",1,"task",3,"grant",2,"agent","CHAT","COMPLETED",1,"digest",1,2)));
             var metadata=Map.of("requestId","request","turnId","turn","contextSnapshotId","snapshot","finalDigest",row.get().finalDigest(),
                     "dispatchId","dispatch","targetAgentId","agent","agentId","agent","route","CHAT","outcomeId",row.get().outcomeId());
             when(messages.find("0","owner","client","task","42",1,9)).thenReturn(new ChatCompletedMessageSourceStore.Message(TEXT,
                     CanonicalContextJson.write(metadata),"ASSISTANT","agent"));
-            command=new ChatCompletedMessageSourceService.Command("task","42",3,"request","step",
+            command=new ChatCompletedMessageSourceService.Command("task","42",3,"request",
                     new SelectedOutputFinalizationDigest.MessageSource("turn","9","snapshot",row.get().finalDigest()),sha(TEXT),"Text","final");
-            clearInvocations(store,dao,sessions,steps,messages,deliberations);
+            clearInvocations(store,dao,sessions,messages,deliberations);
         }
         ChatDeliberationService.RequestView request(String state,String turnState,String messageId) {
             return new ChatDeliberationService.RequestView("request","1","42","1","8",state,"1",List.of(
                     new ChatDeliberationService.TurnView("turn","request","1","42","1","agent","snapshot","dispatch","CHAT",turnState,
-                            "1","0",null,messageId,"1","2")),List.of(new ChatDeliberationService.StepView("step","1","task","3","agent",
-                    "CHAT","COMPLETED","1",null,null,null)));
+                            "1","0",null,messageId,"1","2")),List.of());
         }
     }
     @Test void actualFinalReaderAuthenticatesSnapshotAndPreservesOriginalUtf8WithoutExecutionOrWrites() {
         Fixture f=new Fixture();var resolved=f.service.resolve(f.owner,f.command);
-        assertEquals(1,resolved.generation());assertEquals("agent",resolved.targetAgentId());assertEquals("grant",resolved.grantId());
+        assertEquals(1,resolved.generation());assertEquals("agent",resolved.targetAgentId());assertEquals(3,resolved.assignmentRevision());
         assertArrayEquals(TEXT.getBytes(StandardCharsets.UTF_8),resolved.output().bytes());
-        assertNull(resolved.output().executionId());assertNull(resolved.output().runId());assertNull(resolved.output().outputId());
-        verify(f.store,never()).insertOutcome(any());verify(f.steps,never()).insertStep(any());verify(f.dao,never()).insertOutbox(any());
+        assertNull(resolved.output().stepId());assertNull(resolved.output().executionId());assertNull(resolved.output().runId());assertNull(resolved.output().outputId());
+        verify(f.store,never()).insertOutcome(any());verify(f.dao,never()).insertOutbox(any());
         verifyNoInteractions(f.sessions);
     }
     @Test void incompleteRequestsTurnsAndDifferentMessageCannotBePromoted() {
@@ -88,7 +88,7 @@ class ChatCompletedMessageSourceServiceTest {
     }
     @Test void clarificationAndActionAreNotDeliverableEvenWithCompletedMessage() {
         for(String kind:List.of("CLARIFY","ACTION_REQUEST")) {
-            Fixture f=new Fixture(kind);assertThrows(ChatDeliberationException.class,()->f.service.resolve(f.owner,f.command));
+            Fixture f=new Fixture(kind);assertEquals("READY",f.finals.readIfV3(f.scope,"request","turn",1,"CHAT").get("state"));assertThrows(ChatDeliberationException.class,()->f.service.resolve(f.owner,f.command));
             verifyNoInteractions(f.messages,f.sessions);verify(f.store,never()).insertOutcome(any());
         }
     }
@@ -111,8 +111,18 @@ class ChatCompletedMessageSourceServiceTest {
         }
         Fixture h=new Fixture();var c=h.command;
         var changed=new ChatCompletedMessageSourceService.Command(c.taskId(),c.conversationId(),c.expectedAssignmentRevision(),c.requestId(),
-                c.stepId(),c.messageSource(),"0".repeat(64),c.title(),c.purpose());
+                c.messageSource(),"0".repeat(64),c.title(),c.purpose());
         assertThrows(ChatDeliberationException.class,()->h.service.resolve(h.owner,changed));
+    }
+    @Test void taskAssignmentSnapshotAndSourceDigestMustMatchActualAdmission() {
+        for(String changed:List.of("task","assignment","snapshot","digest")) {
+            Fixture f=new Fixture();var c=f.command;var source=c.messageSource();
+            if ("snapshot".equals(changed)) source=new SelectedOutputFinalizationDigest.MessageSource("turn","9","another",source.finalDigest());
+            if ("digest".equals(changed)) source=new SelectedOutputFinalizationDigest.MessageSource("turn","9","snapshot","sha256:"+"f".repeat(64));
+            var forged=new ChatCompletedMessageSourceService.Command("task".equals(changed)?"another":c.taskId(),c.conversationId(),
+                    "assignment".equals(changed)?4:c.expectedAssignmentRevision(),c.requestId(),source,c.sha256(),c.title(),c.purpose());
+            assertThrows(ChatDeliberationException.class,()->f.service.resolve(f.owner,forged));verifyNoInteractions(f.messages);
+        }
     }
     private static String sha(String text) {try{return HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
             .digest(text.getBytes(StandardCharsets.UTF_8)));}catch(Exception e){throw new AssertionError(e);}}
