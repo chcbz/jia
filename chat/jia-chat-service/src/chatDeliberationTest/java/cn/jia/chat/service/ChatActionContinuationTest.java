@@ -27,6 +27,26 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class ChatActionContinuationTest {
+    @Test void attachmentOnlyChatKeepsBlankUserThroughNativeInspectionReplayAndHistory() {
+        for (String content:List.of("", "  ", " \t\n")) {
+            var f=new Fixture(true,false,content);
+            assertEquals(content,f.deliberation.requireActionUser(f.action).getContent());
+            var context=f.childContext();
+            var child=f.deliberation.admitInspectionContinuation(f.action,context,f.chatScope);
+            assertTrue(f.deliberation.admitInspectionContinuation(f.action,context,f.chatScope).replay());
+            assertEquals("901",child.userMessageId());assertEquals(1,f.messages.size());
+            assertEquals(content,f.user().getContent());
+            var authorized=f.object(child.dispatches().getFirst().factsManifest().get("authorizedContext"));
+            assertEquals(content,f.object(authorized.get("currentUserMessage")).get("content"));
+            var input=new ChatMessageDTO();input.setRequestId("followup");input.setContent("继续讨论");
+            var next=f.deliberation.admit("0",f.sender,"42",1,f.chatScope,InteractionRoute.CHAT,input,null);
+            var history=f.object(next.dispatches().getFirst().factsManifest().get("authorizedContext"));
+            assertTrue(((List<?>)history.get("sourceMessageIds")).contains("901"));
+            f.user().setContent("正文被篡改");
+            assertThrows(ChatDeliberationException.class,()->f.deliberation.requireActionUser(f.action));
+        }
+    }
+
     @Test void automaticInspectionReusesRealUserAndKeepsAgentInstructionSeparateAndReplayStable() {
         var f=new Fixture(); String originalMetadata=f.user().getMetadata();
         var context=f.childContext();
@@ -184,7 +204,8 @@ class ChatActionContinuationTest {
 
         Fixture() { this(false); }
         Fixture(boolean chatParent) { this(chatParent,false); }
-        Fixture(boolean chatParent,boolean mixedMaterials) {
+        Fixture(boolean chatParent,boolean mixedMaterials) { this(chatParent,mixedMaterials,"请整理资料"); }
+        Fixture(boolean chatParent,boolean mixedMaterials,String originalContent) {
             this.mixedMaterials=mixedMaterials;
             conversation.setTenantId("0"); conversation.setClientId("client");
             root.setAssignedAgentId("agent");root.setTaskVersion(3L);
@@ -227,7 +248,7 @@ class ChatActionContinuationTest {
                     "inputMediaTypes",mixedMaterials?List.of("text","image","audio","file"):List.of("text"),"minSources",1,"maxSources",32)));
             inspections=new ChatTypedInspectionContextService(jdbc,mock(ChatConversationArchiveStore.class),registry,capabilities,true);
             var parentContext=context("parent","file");
-            var input=new ChatMessageDTO();input.setRequestId("parent");input.setContent("请整理资料");
+            var input=new ChatMessageDTO();input.setRequestId("parent");input.setContent(originalContent);
             var sender=new ServerResolvedSender("user","用户","owner","client",DisplayNameSource.NICKNAME);
             String parentCatalog=parentContext.admissionEnvelopeJson();
             Map<String,Object> parentFacts=object(parentContext.typedInspection().get("discussionFacts"));

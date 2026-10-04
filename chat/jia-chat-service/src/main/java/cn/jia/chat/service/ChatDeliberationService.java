@@ -175,7 +175,7 @@ public class ChatDeliberationService {
                 "originalUserMessageId", Long.toString(user.getId()),
                 "instruction", action.validated().interactionOutcome().action().instruction());
         ChatMessageDTO input = new ChatMessageDTO(); input.setRequestId(requestId); input.setRequestRevision(1L);
-        input.setContent(requireContent(user.getContent())); input.setConversationId(owner.conversationId());
+        input.setContent(user.getContent()); input.setConversationId(owner.conversationId());
         var sender = new ServerResolvedSender("user", user.getSenderName(), owner.ownerJiacn(), owner.clientId(), DisplayNameSource.FALLBACK);
         return admitTrusted(owner.tenantId(), sender, owner.conversationId(), owner.conversationGeneration(), scope,
                 InteractionRoute.INSPECT, input, null, null, null, inspection, user, lineage);
@@ -220,7 +220,8 @@ public class ChatDeliberationService {
         if (!contextDigest(parseJsonMap(snapshot.getSourceVectorJson()), facts).equals(snapshot.getContextDigest())) throw unavailable();
         var current = castContextMap(castContextMap(facts.get("authorizedContext")).get("currentUserMessage"));
         if (!Long.toString(user.getId()).equals(current.get("messageId")) || !"USER".equals(current.get("role"))
-                || !("sha256:" + sha256(requireContent(user.getContent()))).equals(current.get("contentHash"))) throw unavailable();
+                || !("sha256:" + sha256(requireContent(user.getContent(), hasTypedSources(facts.get("typedDeliberation"))
+                        || hasInspectionSources(facts.get("typedInspection"))))).equals(current.get("contentHash"))) throw unavailable();
         return user;
     }
 
@@ -242,7 +243,12 @@ public class ChatDeliberationService {
         if (expectedGeneration < 1 || scope == null || route == null || route == InteractionRoute.EXECUTE) {
             throw invalid("Invalid chat admission scope");
         }
-        String content = requireContent(input == null ? null : input.getContent());
+        // Only server-resolved typed catalogues can admit an empty USER body. Browser metadata
+        // and generic chat/inspection callers do not acquire this capability.
+        boolean attachmentOnly = "bounty".equals(scope.scopeType()) && scope.targetAgentIds().size() == 1
+                && ((route == InteractionRoute.CHAT && hasTypedSources(trustedTypedFacts))
+                    || (route == InteractionRoute.INSPECT && hasInspectionSources(trustedTypedInspection)));
+        String content = requireContent(input == null ? null : input.getContent(), attachmentOnly);
         String requestId = input == null ? null : input.getRequestId();
         if (requestId == null || requestId.isBlank()) {
             requestId = UUID.randomUUID().toString();
@@ -1268,9 +1274,16 @@ public class ChatDeliberationService {
                 || !Objects.equals(ownerJiacn, message.getJiacn())
                 || !Objects.equals(clientId, message.getClientId())
                 || !Objects.equals(conversationId, message.getConversationId())
-                || message.getContent() == null || message.getContent().isBlank()
+                || message.getContent() == null
                 || message.getContent().length() > MAX_HISTORY_CONTENT) return null;
-        if ("USER".equals(message.getMessageType())) return messageView(message, "USER");
+        if ("USER".equals(message.getMessageType())) {
+            // Blank historical USER content is data, not an instruction or source authority.
+            // Keep its original hash/ID; never pull attachments from untrusted message metadata.
+            if (message.getContent().isBlank() && (!"user".equals(message.getSenderType())
+                    || !"juyiting".equals(message.getConversationType()))) return null;
+            return messageView(message, "USER");
+        }
+        if (message.getContent().isBlank()) return null;
         if (!"ASSISTANT".equals(message.getMessageType())
                 || !assistantTargets(message.getMetadata(), targetAgentId)) return null;
         return messageView(message, "ASSISTANT");
@@ -1644,8 +1657,24 @@ public class ChatDeliberationService {
         }
     }
 
-    private String requireContent(String content) {
-        if (content == null || content.isBlank() || content.length() > 200_000) {
+    private boolean hasTypedSources(Object facts) {
+        if (facts == null) return false;
+        try { return !ChatActionOutcomeContract.facts(facts).availableSources().isEmpty(); }
+        catch (RuntimeException malformed) { return false; }
+    }
+
+    private boolean hasInspectionSources(Object facts) {
+        if (!(facts instanceof Map<?, ?>)) return false;
+        try {
+            var inspection = ChatTypedInspectionContextService.validateTypedInspection(castContextMap(facts));
+            return hasTypedSources(inspection.get("discussionFacts"));
+        } catch (RuntimeException malformed) { return false; }
+    }
+
+    private String requireContent(String content) { return requireContent(content, false); }
+
+    private String requireContent(String content, boolean hasTrustedAttachments) {
+        if (content == null || (content.isBlank() && !hasTrustedAttachments) || content.length() > 200_000) {
             throw invalid("Chat content is required and bounded");
         }
         return content;

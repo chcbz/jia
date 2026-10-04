@@ -24,6 +24,23 @@ class ChatTypedDeliberationControllerTest {
     private final ChatTypedDeliberationController controller=new ChatTypedDeliberationController(admissions,typed,deliberation,identities,tenants);
     @AfterEach void clear(){cn.jia.core.context.EsContextHolder.clearContext();}
 
+    @Test void attachmentOnlyPreservesOriginalBodyAndRejectsDoubleEmptyOrMalformedSelectors() {
+        for (String content : List.of("", "  ", " \t\n")) {
+            var command=body();command.put("content",content);
+            assertThrows(ChatDeliberationException.class,()->ChatTypedDeliberationWire.parse(command));
+            command.put("sourceSelectors",List.of(selector("1")));
+            assertEquals(content,ChatTypedDeliberationWire.parse(command).content());
+            command.put("intent","CLARIFICATION_REPLY");command.put("parentOutcomeId","parent");
+            command.put("expectedParentStateVersion","0");command.put("pendingQuestionId","pending");
+            command.put("expectedPendingQuestionStateVersion","0");
+            assertEquals(content,ChatTypedDeliberationWire.parse(command).content());
+            command.put("sourceSelectors",List.of());
+            assertThrows(ChatDeliberationException.class,()->ChatTypedDeliberationWire.parse(command));
+            command.put("sourceSelectors",List.of(selector("01")));
+            assertThrows(ChatDeliberationException.class,()->ChatTypedDeliberationWire.parse(command));
+        }
+    }
+
     @Test void postRequiresExactTenKeysAndReturnsNoStore202ForFreshOrReplay() {
         when(tenants.resolve(authentication)).thenReturn("0");when(identities.resolve(any())).thenReturn(sender);
         var accepted=new ChatTypedDeliberationWire.Accepted(1,"DISCUSSION","request","8",List.of("turn"),"RUNNING","0","7","/chat/requests/request","/chat/conversations/42/requests/request/typed-outcome",false,null);

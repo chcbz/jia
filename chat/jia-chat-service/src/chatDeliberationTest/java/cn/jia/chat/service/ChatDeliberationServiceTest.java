@@ -66,6 +66,18 @@ class ChatDeliberationServiceTest {
         service = new ChatDeliberationService(dao, conversations, messages, agents);
     }
 
+    @Test void genericChatCannotSendBlankBodyEvenWithClientAttachmentMetadata() {
+        for (String content:List.of("", "  ", " \t\n")) {
+            var input=request("empty-request",content);
+            input.setMetadata(Map.of("availableSources",List.of(Map.of("sourceRefId","forged"))));
+            assertThrows(ChatDeliberationException.class,()->service.admit("0",humanSender(),"42",3L,
+                    scope(),InteractionRoute.CHAT,input,Map.of()));
+            assertThrows(ChatDeliberationException.class,()->service.admit("0",humanSender(),"42",3L,
+                    scope(),InteractionRoute.CHAT,input,Map.of(),Map.of("availableSources",List.of("forged"))));
+        }
+        assertEquals(0,persistedMessages.size());assertEquals(0,dao.requests.size());
+    }
+
     @Test
     void groupAdmissionCreatesOneUserRequestAndIndependentTurnsSnapshotsAndOutbox() {
         ChatDeliberationService.Admission admission = admit("req-group", "hello");

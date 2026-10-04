@@ -77,7 +77,7 @@ public final class ChatTypedDeliberationWire {
         String taskId = text(body.get("taskId"), 100);
         long assignment = decimal(body.get("expectedAssignmentRevision"), false);
         Object rawContent = body.get("content");
-        if (!(rawContent instanceof String content) || content.isBlank() || content.length() > 200_000
+        if (!(rawContent instanceof String content) || content.length() > 200_000
                 || !validScalar(content)) throw invalid();
         String parent = nullableText(body.get("parentOutcomeId"), 64);
         Long parentVersion = nullableDecimal(body.get("expectedParentStateVersion"));
@@ -91,6 +91,7 @@ public final class ChatTypedDeliberationWire {
             if (!uniqueSelectors.add(value)) throw invalid();
             selectors.add(value);
         }
+        if (content.isBlank() && selectors.isEmpty()) throw invalid();
         if ("DISCUSSION".equals(intent)) {
             if (pending != null || pendingVersion != null || (parent == null) != (parentVersion == null)) throw invalid();
         } else if (parent == null || parentVersion == null || pending == null || pendingVersion == null) {
