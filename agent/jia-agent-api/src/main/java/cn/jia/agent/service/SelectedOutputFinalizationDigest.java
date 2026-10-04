@@ -11,8 +11,15 @@ import java.util.List;
 public final class SelectedOutputFinalizationDigest {
     private SelectedOutputFinalizationDigest() { }
 
+    /** An actual persisted final message and its immutable server snapshot, never an execution alias. */
+    public record MessageSource(String turnId, String messageId, String snapshotId, String finalDigest) { }
+
     public record Selection(String requestId, String stepId, String outputId,
-            String sha256, String title, String purpose) { }
+            String sha256, String title, String purpose, MessageSource messageSource) {
+        public Selection(String requestId, String stepId, String outputId, String sha256, String title, String purpose) {
+            this(requestId, stepId, outputId, sha256, title, purpose, null);
+        }
+    }
 
     public static String request(String taskId, long expectedTaskVersion,
             long expectedAssignmentRevision, String conversationId, String summary,
@@ -38,6 +45,13 @@ public final class SelectedOutputFinalizationDigest {
                     put(digest, selection.sha256());
                     put(digest, selection.title());
                     put(digest, selection.purpose());
+                    if (selection.messageSource() != null) {
+                        put(digest, "COMPLETED_MESSAGE");
+                        put(digest, selection.messageSource().turnId());
+                        put(digest, selection.messageSource().messageId());
+                        put(digest, selection.messageSource().snapshotId());
+                        put(digest, selection.messageSource().finalDigest());
+                    }
                 }
             }
             return HexFormat.of().formatHex(digest.digest());

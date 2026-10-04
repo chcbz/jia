@@ -371,8 +371,17 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
             for (SourceOutput output:valid.outputs()) {
                 Map<String,Object> item=new LinkedHashMap<>();
                 item.put("requestId",output.requestId()); item.put("stepId",output.stepId());
-                item.put("executionId",output.executionId()); item.put("runId",output.runId());
-                item.put("outputId",output.outputId()); item.put("sha256",output.sha256());
+                if (output.messageSource() == null) {
+                    item.put("executionId",output.executionId()); item.put("runId",output.runId());
+                    item.put("outputId",output.outputId());
+                } else {
+                    item.put("sourceKind","COMPLETED_MESSAGE");
+                    item.put("turnId",output.messageSource().turnId());
+                    item.put("messageId",output.messageSource().messageId());
+                    item.put("snapshotId",output.messageSource().snapshotId());
+                    item.put("finalDigest",output.messageSource().finalDigest());
+                }
+                item.put("sha256",output.sha256());
                 item.put("contentMimeType",output.contentMimeType()); item.put("byteLength",output.byteLength());
                 item.put("title",output.title()); item.put("purpose",output.purpose()); selected.add(item);
             }
@@ -404,20 +413,37 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
         var seen=new java.util.HashSet<String>();
         for (SourceOutput output:command.outputs()) {
             if (output==null) throw bad("Output is required");
-            id(output.requestId(),100); id(output.stepId(),100); id(output.executionId(),100);
-            id(output.runId(),100); id(output.outputId(),100); text(output.title(),255); text(output.purpose(),255);
+            id(output.requestId(),100); id(output.stepId(),100);
+            text(output.title(),255); text(output.purpose(),255);
+            String sourceKey;
+            if (output.messageSource() == null) {
+                id(output.executionId(),100); id(output.runId(),100); id(output.outputId(),100);
+                sourceKey=output.requestId()+"\0"+output.stepId()+"\0"+output.outputId();
+            } else {
+                var message=output.messageSource(); id(message.turnId(),100); id(message.snapshotId(),100);
+                if (message.messageId()==null || !message.messageId().matches("[1-9][0-9]{0,18}")
+                        || new java.math.BigInteger(message.messageId()).compareTo(java.math.BigInteger.valueOf(Long.MAX_VALUE))>0
+                        || message.finalDigest()==null || !message.finalDigest().matches("sha256:[0-9a-f]{64}")
+                        || output.executionId()!=null || output.runId()!=null || output.outputId()!=null
+                        || !"text/plain".equals(output.contentMimeType()) || output.bytes()==null)
+                    throw bad("Invalid completed message source");
+                String content=new String(output.bytes(),StandardCharsets.UTF_8);
+                if (content.isBlank() || !java.util.Arrays.equals(output.bytes(),content.getBytes(StandardCharsets.UTF_8)))
+                    throw bad("Invalid completed message bytes");
+                sourceKey="COMPLETED_MESSAGE\0"+output.requestId()+"\0"+output.stepId()+"\0"+message.turnId()+"\0"+message.messageId();
+            }
             if (output.sha256()==null || !output.sha256().matches("[0-9a-f]{64}")
                     || output.byteLength()<0 || output.byteLength()>MAX_SAFE_INTEGER || output.bytes()==null
                     || output.bytes().length!=output.byteLength() || !output.sha256().equals(sha256(output.bytes()))
                     || output.contentMimeType()==null
                     || !output.contentMimeType().matches("[a-z0-9][a-z0-9.+-]*/[a-z0-9][a-z0-9.+-]*")
-                    || !seen.add(output.requestId()+"\0"+output.stepId()+"\0"+output.outputId()))
+                    || !seen.add(sourceKey))
                 throw bad("Invalid selected output");
         }
         String expectedDigest=SelectedOutputFinalizationDigest.request(command.taskId(),command.expectedTaskVersion(),
                 command.expectedAssignmentRevision(),command.conversationId(),command.summary(),command.outputs().stream()
                 .map(o->new SelectedOutputFinalizationDigest.Selection(o.requestId(),o.stepId(),o.outputId(),
-                        o.sha256(),o.title(),o.purpose())).toList());
+                        o.sha256(),o.title(),o.purpose(),o.messageSource())).toList());
         if (!expectedDigest.equals(command.immutableDigest())) throw bad("Immutable digest mismatch");
         String sourceDigest=sourceDigest(command.outputs());
         String suffix=sha256((scope.tenantId()+"\n"+scope.clientId()+"\n"+scope.ownerJiacn()+"\n"+command.operationId())
@@ -600,6 +626,11 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
                 put(digest,output.runId()); put(digest,output.outputId()); put(digest,output.sha256());
                 put(digest,output.contentMimeType()); put(digest,output.byteLength());
                 put(digest,output.title()); put(digest,output.purpose());
+                if (output.messageSource()!=null) {
+                    put(digest,"COMPLETED_MESSAGE"); put(digest,output.messageSource().turnId());
+                    put(digest,output.messageSource().messageId()); put(digest,output.messageSource().snapshotId());
+                    put(digest,output.messageSource().finalDigest());
+                }
             }
             return HexFormat.of().formatHex(digest.digest());
         } catch (NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
@@ -608,6 +639,7 @@ public final class AgentSelectedOutputFinalizationServiceImpl implements AgentSe
         digest.update(ByteBuffer.allocate(Long.BYTES).putLong(value).array());
     }
     private static void put(MessageDigest digest,String value) {
+        if (value==null) { put(digest,-1L); return; }
         byte[] bytes=value.getBytes(StandardCharsets.UTF_8); put(digest,bytes.length); digest.update(bytes);
     }
     private static String sha256(byte[] value) {

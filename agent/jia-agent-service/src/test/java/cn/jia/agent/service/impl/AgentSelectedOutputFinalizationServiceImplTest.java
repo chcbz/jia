@@ -102,6 +102,75 @@ class AgentSelectedOutputFinalizationServiceImplTest {
         verify(f.leases,times(1)).claim(anyString(),anyString(),anyString(),anyString(),anyString(),any());
     }
 
+
+    private static AgentSelectedOutputFinalizationService.PrepareCommand selected(Fixture f,
+            List<AgentSelectedOutputFinalizationService.SourceOutput> outputs) {
+        String digest=SelectedOutputFinalizationDigest.request("task-1",7,7,"100","Owner selected this output",
+                outputs.stream().map(o->new SelectedOutputFinalizationDigest.Selection(o.requestId(),o.stepId(),o.outputId(),
+                        o.sha256(),o.title(),o.purpose(),o.messageSource())).toList());
+        return new AgentSelectedOutputFinalizationService.PrepareCommand("op-1","task-1",7,7,"100",3,
+                "agent-1","grant-1",2,"Owner selected this output",digest,outputs);
+    }
+    private static SelectedOutputFinalizationDigest.MessageSource message(String id) {
+        return new SelectedOutputFinalizationDigest.MessageSource("turn-1",id,"snapshot-1","sha256:"+"a".repeat(64));
+    }
+    private static AgentSelectedOutputFinalizationService.SourceOutput text(String id,byte[] bytes) {
+        return AgentSelectedOutputFinalizationService.SourceOutput.completedMessage("req-1","chat-step",message(id),
+                sha(bytes),"Text","final",bytes);
+    }
+    @Test void completedMessageUsesActualSnapshotAndExistingFormalDeliveryWithoutSourceExecution() {
+        Fixture f=new Fixture(); byte[] bytes="原始正文\n第二行  \n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        var output=text("9",bytes); var command=selected(f,List.of(output));
+        bytes[0]=0; assertNotEquals(0,output.bytes()[0]);
+        assertNull(output.executionId());assertNull(output.runId());assertNull(output.outputId());
+        assertEquals("READY_TO_SUBMIT",f.service.prepare(f.scope,command).stage());
+        assertTrue(f.jdbc.manifest.contains("COMPLETED_MESSAGE"));assertTrue(f.jdbc.manifest.contains("snapshot-1"));
+        assertFalse(f.jdbc.manifest.contains("executionId"));assertFalse(f.jdbc.manifest.contains("outputId"));
+        assertFalse(f.jdbc.manifest.contains("\"runId\""));
+        assertEquals("SUBMITTED",f.service.submit(f.scope,"task-1","op-1",command.immutableDigest()).stage());
+        assertEquals("TASK_COMPLETED",f.service.accept(f.scope,"task-1","op-1",command.immutableDigest()).stage());
+        verify(f.leases).claim(anyString(),anyString(),anyString(),anyString(),eq("work-1"),any());
+        verify(f.decisions).decide(eq("0"),eq("client-1"),eq("task-1"),eq("owner-1"),any());
+    }
+    @Test void completedMessageCannotCarryFabricatedExecutionAuthority() {
+        Fixture f=new Fixture(); var real=text("9",f.bytes);
+        var forged=new AgentSelectedOutputFinalizationService.SourceOutput(real.requestId(),real.stepId(),"fake-execution",
+                "fake-run","fake-output",real.sha256(),real.contentMimeType(),real.byteLength(),real.title(),real.purpose(),
+                real.bytes(),real.messageSource());
+        assertThrows(AgentSelectedOutputFinalizationException.class,()->f.service.prepare(f.scope,selected(f,List.of(forged))));
+        verifyNoInteractions(f.grants,f.leases,f.artifacts);assertNull(f.jdbc.phase);
+    }
+    @Test void invalidTextReferencesAndUtf8FailBeforeAnyPromotion() {
+        for(String id:List.of("0","09","-1","9223372036854775808","99999999999999999999")) {
+            Fixture f=new Fixture();var output=text(id,f.bytes);
+            assertThrows(AgentSelectedOutputFinalizationException.class,()->f.service.prepare(f.scope,selected(f,List.of(output))));
+            verifyNoInteractions(f.grants,f.leases,f.artifacts);
+        }
+        for(byte[] bytes:List.of(new byte[]{(byte)0xc3,0x28},"  \n".getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
+            Fixture f=new Fixture();var output=text("9",bytes);
+            assertThrows(AgentSelectedOutputFinalizationException.class,()->f.service.prepare(f.scope,selected(f,List.of(output))));
+            verifyNoInteractions(f.grants,f.leases,f.artifacts);
+        }
+    }
+    @Test void duplicateTextSourcesFailAndMixedTextAndMediaRetainBothSources() {
+        Fixture f=new Fixture();var output=text("9",f.bytes);
+        assertThrows(AgentSelectedOutputFinalizationException.class,()->f.service.prepare(f.scope,selected(f,List.of(output,output))));
+        verifyNoInteractions(f.grants,f.leases,f.artifacts);
+        var mixed=selected(f,List.of(output,f.command("run-1").outputs().getFirst()));
+        assertEquals("READY_TO_SUBMIT",f.service.prepare(f.scope,mixed).stage());
+        assertTrue(f.jdbc.manifest.contains("COMPLETED_MESSAGE"));assertTrue(f.jdbc.manifest.contains("out-1"));
+        verify(f.artifacts,times(3)).publish(anyString(),anyString(),anyString(),anyString(),anyString(),any());
+    }
+    @Test void messageReferenceDriftCannotReplaceExistingOperation() {
+        Fixture f=new Fixture();var first=selected(f,List.of(text("9",f.bytes)));
+        f.service.prepare(f.scope,first);
+        assertThrows(AgentSelectedOutputFinalizationException.class,()->f.service.prepare(f.scope,selected(f,List.of(text("10",f.bytes)))));
+        verify(f.leases,times(1)).claim(anyString(),anyString(),anyString(),anyString(),anyString(),any());
+    }
+    @Test void originalMediaDigestRemainsByteExact() {
+        assertEquals("491dfdc59d2609557394df265ad68a3570138d8156c5dff016701a2ea199d601",new Fixture().digest);
+    }
+
     static final class Fixture {
         final FakeJdbc jdbc=new FakeJdbc();
         final DirectTransactions transactions=new DirectTransactions(jdbc);
