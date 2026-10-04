@@ -110,12 +110,17 @@ class SkillMarketplaceRealTransactionTest {
         var gate=new EconomyPreviewGate(new EconomyPreviewProperties(true,List.of(new EconomyPreviewProperties.AllowedScope(ACTOR.tenantId(),ACTOR.clientId()))));
         var posting=new EconomyPostingServiceImpl(ledger,manager,gate);
         var agents=mock(AgentService.class); var owner=mock(HostingRentOwnerResolver.class); var runtimes=mock(AgentRuntimeDao.class);
-        runtime=new AgentRuntimeEntity().setAgentId(AGENT).setOwnerJiacn(ACTOR.tenantId()).setBindingId(7L).setTokenHash("registration-1").setStatus("online");
+        runtime=new AgentRuntimeEntity().setAgentId(AGENT).setOwnerJiacn(ACTOR.ownerJiacn()).setBindingId(7L).setTokenHash("registration-1").setStatus("online");
         runtime.setClientId(ACTOR.clientId());
         when(runtimes.findByAgentIdForUpdate(AGENT)).thenAnswer(i->runtime);
-        when(owner.requireOwner(ACTOR)).thenReturn(ACTOR.tenantId());
+        when(owner.requireOwner(any())).thenAnswer(inv -> {
+            HostingRentHttp.Actor requested = inv.getArgument(0);
+            if (!ACTOR.equals(requested)) throw new cn.jia.agent.hosting.HostingRentApplicationException(
+                    403, "HOSTING_RENT_OWNER_UNPROVEN");
+            return ACTOR.ownerJiacn();
+        });
         var dto=new AgentRuntimeDTO();dto.setAgentId(AGENT);dto.setStatus("online");dto.setSystemAgent(false);
-        when(agents.requireApiKeyOwnedAgentForUpdate(ACTOR.clientId(),ACTOR.tenantId(),AGENT)).thenReturn(dto);
+        when(agents.requireApiKeyOwnedAgentForUpdate(ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
         versions=new SkillAgentVersions(app,runtimes,provider(agents),owner,manager,true);
         var transport=mock(AgentRabbitSafetyGate.class);
         when(transport.state()).thenReturn(AgentRabbitActivationState.DISPATCH_CANARY);
@@ -332,7 +337,9 @@ class SkillMarketplaceRealTransactionTest {
         runtime.setTokenHash("registration-2");versions.observe(runtime);
         assertThrows(SkillMarketplaceException.class,()->service.purchase(ACTOR,uuid(),body,false));
         assertThrows(SkillMarketplaceException.class,()->service.quote(ACTOR,uuid(),Map.of("targetAgentId",AGENT,"productVersionId","spv_deploy_runner_1_0_0","expectedAgentVersion","2"),false));
-        assertThrows(SkillMarketplaceException.class,()->service.purchase(new HostingRentHttp.Actor(ACTOR.actorId(),"0",ACTOR.clientId(),"tenant-a"),uuid(),body,false));
+        var denied=assertThrows(cn.jia.agent.hosting.HostingRentApplicationException.class,
+                ()->service.purchase(new HostingRentHttp.Actor(ACTOR.actorId(),"0",ACTOR.clientId(),"tenant-a"),uuid(),body,false));
+        assertEquals(403,denied.status());
         assertEquals(0,count("economy_transaction"));assertEquals(0,count("agent_command_delivery"));
     }
     @Test void concurrentSameKeyHasOneReserveOneDeliveryAndImmutableReceipt() throws Exception {

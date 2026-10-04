@@ -167,11 +167,11 @@ class AgentWorkItemReassignmentServiceTest {
                 });
         PersistedIdentityAuthority authority = new PersistedIdentityAuthority();
         authority.addDirect(LEGACY_PREVIOUS, AgentConstants.IDENTITY_TYPE_LEGACY_CANONICAL,
-                AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, OWNER, CLIENT);
+                AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, TENANT, CLIENT);
         authority.addDirect(LEGACY_TARGET, AgentConstants.IDENTITY_TYPE_LEGACY_CANONICAL,
-                AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, OWNER, CLIENT);
+                AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, TENANT, CLIENT);
         authority.addDirect(LEGACY_COORDINATOR, AgentConstants.IDENTITY_TYPE_LEGACY_CANONICAL,
-                AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, OWNER, CLIENT);
+                AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, TENANT, CLIENT);
         AgentWorkItemLeaseServiceImpl actualLease = actualLease(authority.service());
         leaseService = actualLease; // Real delegate, never mock away the active lease compatibility boundary.
         when(memberDao.findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK, LEGACY_TARGET))

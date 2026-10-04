@@ -1635,7 +1635,7 @@ public class AgentServiceImpl implements AgentService {
                     request.getCurrentTaskTitle(), request.getFailureReason(), false));
         }
         publishLegacyReportSideEffectsAfterCommit(
-                "task_" + meta.getRewardStatus(), task, updatedAgents);
+                ownerJiacn, "task_" + meta.getRewardStatus(), task, updatedAgents);
         if (outcome.terminalTransition()) {
             publishReturnHomeSceneStates(meta.getTaskId(), updatedAgents);
         }
@@ -3024,10 +3024,9 @@ public class AgentServiceImpl implements AgentService {
     }
 
     private void publishLegacyReportSideEffectsAfterCommit(
-            String eventType, AgentTaskDTO task, List<AgentRuntimeDTO> updatedAgents) {
+            String ownerJiacn, String eventType, AgentTaskDTO task, List<AgentRuntimeDTO> updatedAgents) {
         List<AgentRuntimeDTO> agents = List.copyOf(updatedAgents);
         String clientId = task.getClientId();
-        String ownerJiacn = task.getTenantId();
         publishOptionalAfterCommit("legacy-task-report", () -> {
             publishScopedAgentSnapshots(clientId, ownerJiacn, agents);
             publishTaskEvent(eventType, task);

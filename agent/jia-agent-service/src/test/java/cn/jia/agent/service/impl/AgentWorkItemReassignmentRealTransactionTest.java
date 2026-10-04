@@ -395,6 +395,7 @@ class AgentWorkItemReassignmentRealTransactionTest {
                 CREATE TABLE agent_task_meta (
                     id BIGINT AUTO_INCREMENT PRIMARY KEY, owner_jiacn VARCHAR(50) NOT NULL, task_id VARCHAR(100) NOT NULL,
                     reward_status VARCHAR(20) NOT NULL, coordinator_agent_id VARCHAR(100),
+                    risk_level VARCHAR(20), review_required BOOLEAN,
                     task_version BIGINT NOT NULL, current_event_version BIGINT NOT NULL,
                     tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL,
                     create_time BIGINT, update_time BIGINT,

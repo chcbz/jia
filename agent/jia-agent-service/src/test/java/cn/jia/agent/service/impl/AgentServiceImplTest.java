@@ -1373,6 +1373,7 @@ class AgentServiceImplTest extends BaseMockTest {
         AgentRuntimeEntity runtime = runtimeAgent(
                 identity.getCanonicalAgentId(), "卢俊义", AgentConstants.STATUS_ONLINE,
                 "[\"runtime-skill\"]");
+        runtime.setId(20L);
         runtime.setTenantId("0"); runtime.setOwnerJiacn("jiacn");
         runtime.setClientId("jia_client");
         runtime.setOwnerJiacn("jiacn");
@@ -1387,7 +1388,7 @@ class AgentServiceImplTest extends BaseMockTest {
                 "0", "jia_client", "jiacn").getFirst();
 
         assertEquals(identity.getCanonicalAgentId(), dto.getAgentId());
-        assertEquals("jiacn", dto.getOwnerJiacn());
+        assertNull(dto.getOwnerJiacn(), "catalog discloses binding capability, not owner identity");
         assertTrue(dto.getBound());
         assertTrue(dto.getBoundToMe());
         assertFalse(dto.getCanBind());
@@ -1490,8 +1491,9 @@ class AgentServiceImplTest extends BaseMockTest {
         assertTrue(!result.getAgentId().startsWith("jyt-"));
         ArgumentCaptor<AgentPersonaBindingEntity> bindingCaptor =
                 ArgumentCaptor.forClass(AgentPersonaBindingEntity.class);
-        verify(agentPersonaBindingDao).findExactActiveByScopeAndPersonaForUpdate(
-                "0", "jia_client", "jiacn", "wuyong");
+        // Active persona uniqueness is tenant/client/persona, not owner/persona.
+        verify(agentPersonaBindingDao).findActiveByTenantClientAndPersonaForUpdate(
+                "0", "jia_client", "wuyong");
         verify(agentPersonaBindingDao).insert(bindingCaptor.capture());
         AgentPersonaBindingEntity binding = bindingCaptor.getValue();
         assertEquals("0", binding.getTenantId());
@@ -2685,7 +2687,7 @@ class AgentServiceImplTest extends BaseMockTest {
             runtime.setPersonaCode(personaCode);
             runtime.setPersonaName("Roster Persona " + index);
             runtime.setClientId("jia_client");
-            runtime.setOwnerJiacn("juyiting");
+            runtime.setOwnerJiacn("jiacn");
             runtime.setBindingId((long) index + 1);
             runtimes.add(runtime);
             personas.add(persona(personaCode,
@@ -2717,7 +2719,7 @@ class AgentServiceImplTest extends BaseMockTest {
             verify(agentTaskMetaDao, times(1)).findStatsByAgents(scopes.capture());
             assertEquals(100, scopes.getValue().size());
             assertTrue(scopes.getValue().stream().allMatch(scope ->
-                    "juyiting".equals(scope.getTenantId())
+                    "jiacn".equals(scope.getTenantId())
                             && "jia_client".equals(scope.getClientId())));
             verify(agentPersonaDao, never()).findByCode(any());
             verify(agentPersonaDao, never()).findByName(any());
@@ -2909,6 +2911,10 @@ class AgentServiceImplTest extends BaseMockTest {
         foreign.setClientId("other-client");
         foreign.setOwnerJiacn("other-owner");
         when(agentRuntimeDao.findByAgentId(foreign.getAgentId())).thenReturn(foreign);
+        AgentTaskMetaEntity ownedTask = scopedTaskRow("task-001", "0", "jia_client");
+        ownedTask.setOwnerJiacn("jiacn");
+        when(agentTaskMetaDao.findByTaskIdInOwnerScope("0", "jia_client", "jiacn", "task-001"))
+                .thenReturn(ownedTask);
         AgentTaskReportDTO request = new AgentTaskReportDTO();
         request.setAgentId(foreign.getAgentId());
         request.setStatus(AgentConstants.TASK_STATUS_RUNNING);
@@ -3424,11 +3430,17 @@ class AgentServiceImplTest extends BaseMockTest {
                     "jia_client", "jiacn", null, null);
             verify(eventPublisher, never()).publishAgentStatus(any(), any(), any());
             verify(eventPublisher, never()).publishTaskEvent(any(), any());
+            // The callback must retain the authenticated owner, not shared tenant 0
+            // or a later request's thread-local identity.
+            EsContext switched = new EsContext();
+            switched.setClientId("other-client"); switched.setJiacn("other-owner");
+            EsContextHolder.setContext(switched);
             TransactionSynchronizationManager.getSynchronizations()
                     .forEach(TransactionSynchronization::afterCommit);
             verify(agentRuntimeDao).findRosterByOwner(
                     "jia_client", "jiacn", null, null);
-            verify(eventPublisher).publishAgentStatus(any(), any(), any());
+            verify(eventPublisher).publishAgentStatus(eq("jia_client"), eq("jiacn"), any());
+            verify(eventPublisher, never()).publishAgentStatus(any(), eq("0"), any());
             verify(eventPublisher).publishTaskEvent(eq("task_running"), any());
         } finally {
             TransactionSynchronizationManager.clearSynchronization();
