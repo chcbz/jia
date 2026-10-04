@@ -35,6 +35,7 @@ class ChatTypedDiscussionAdmissionServiceTest {
     private final ChatTypedDeliberationStore.Scope storeScope=new ChatTypedDeliberationStore.Scope("0","owner","client","42",1);
 
     @BeforeEach void ready(){
+        when(finals.clarificationDeliveryParent(any(),any())).thenReturn(null);
         when(tasks.executeWithLockedTaskRootInOwnerScope(eq("0"),eq("client"),eq("owner"),eq("task"),any())).thenAnswer(inv->{AgentTaskMutationTransaction.LockedTaskMutation<?> callback=inv.getArgument(4);return callback.apply(new AgentTaskMetaEntity().setTaskVersion(4L).setAssignedAgentId("agent"));});
         when(bindings.lock(new ChatBountyBindingStore.Scope("0","owner","client"),"task")).thenReturn(new ChatBountyBindingStore.Binding(3,42L));
         ChatConversationEntity conversation=new ChatConversationEntity().setId(42L).setJiacn("owner").setConversationType("juyiting").setConversationScopeType("bounty").setConversationScopeKey("task:task").setTaskId("task").setTargetAgentIds("[\"agent\"]").setLifecycleGeneration(1L);conversation.setTenantId("0");conversation.setClientId("client");
@@ -73,7 +74,6 @@ class ChatTypedDiscussionAdmissionServiceTest {
         var verified=chain.read(chain.root);
         when(finals.readIfV3(storeScope,chain.root.requestId(),chain.root.turnId(),1,"CHAT")).thenReturn(verified);
         when(events.findTurn("0","owner","client",chain.root.turnId())).thenReturn(chain.f.turn);
-        when(events.findTurn("0","owner","client","turn")).thenReturn(new ChatTurnEntity().setTurnId("turn"));
         when(contexts.resolve(any(),eq("task"),eq("agent"),eq(List.of()))).thenReturn(context());
         when(deliberation.admit(anyString(),eq(sender),eq("42"),eq(1L),any(),any(),any(),isNull(),any(),any()))
                 .thenAnswer(i->admitted(((ChatMessageDTO)i.getArgument(6)).getRequestId()));
