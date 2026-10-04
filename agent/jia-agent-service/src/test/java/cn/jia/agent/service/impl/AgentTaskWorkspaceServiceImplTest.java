@@ -40,7 +40,8 @@ import static org.mockito.Mockito.when;
 
 @MockitoSettings(strictness = Strictness.LENIENT)
 class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
-    private static final String TENANT = "tenant-a";
+    private static final String TENANT = "0";
+    private static final String OWNER = "owner-a";
     private static final String CLIENT = "client-a";
     private static final String TASK = "task-1";
     private static final String ACTOR = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -59,25 +60,25 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
         task = task(0L);
         actor = member(ACTOR, "worker", "accepted", 0L);
         when(agentIdentityService.requireCanonicalAgentIdInScope(
-                TENANT, CLIENT, TENANT, ACTOR)).thenReturn(ACTOR);
-        when(dao.findTask(TENANT, CLIENT, TASK)).thenReturn(task);
-        when(dao.findActorMember(TENANT, CLIENT, TASK, ACTOR)).thenReturn(actor);
-        when(dao.findMembers(TENANT, CLIENT, TASK)).thenReturn(List.of(actor));
-        when(dao.findWorkItems(TENANT, CLIENT, TASK)).thenReturn(List.of());
-        when(dao.findOpenRequests(TENANT, CLIENT, TASK)).thenReturn(List.of());
+                TENANT, CLIENT, OWNER, ACTOR)).thenReturn(ACTOR);
+        when(dao.findTask(TENANT, CLIENT, OWNER, TASK)).thenReturn(task);
+        when(dao.findActorMember(TENANT, CLIENT, OWNER, TASK, ACTOR)).thenReturn(actor);
+        when(dao.findMembers(TENANT, CLIENT, OWNER, TASK)).thenReturn(List.of(actor));
+        when(dao.findWorkItems(TENANT, CLIENT, OWNER, TASK)).thenReturn(List.of());
+        when(dao.findOpenRequests(TENANT, CLIENT, OWNER, TASK)).thenReturn(List.of());
         when(dao.findVisibleArtifacts(
                 org.mockito.ArgumentMatchers.eq(TENANT),
                 org.mockito.ArgumentMatchers.eq(CLIENT),
-                org.mockito.ArgumentMatchers.eq(TASK),
+                org.mockito.ArgumentMatchers.eq(OWNER), org.mockito.ArgumentMatchers.eq(TASK),
                 org.mockito.ArgumentMatchers.eq(ACTOR), anyBoolean(), anyBoolean()))
                 .thenReturn(List.of());
-        when(dao.findLatestEvents(TENANT, CLIENT, TASK)).thenReturn(List.of());
+        when(dao.findLatestEvents(TENANT, CLIENT, OWNER, TASK)).thenReturn(List.of());
     }
 
     @Test
     void transactionContractIsSingleRequiredRepeatableReadOnlyBoundary() throws Exception {
         Method method = AgentTaskWorkspaceServiceImpl.class.getMethod(
-                "snapshot", String.class, String.class, String.class, String.class);
+                "snapshot", String.class, String.class, String.class, String.class, String.class);
         Transactional tx = method.getAnnotation(Transactional.class);
         assertEquals(Propagation.REQUIRED, tx.propagation());
         assertEquals(Isolation.REPEATABLE_READ, tx.isolation());
@@ -99,7 +100,7 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
     @ValueSource(strings = {"accepted", "working", "blocked", "done", "failed"})
     void allFrozenReadableActorStatusesAreAccepted(String status) {
         actor.setMemberStatus(status);
-        AgentTaskWorkspaceDTO result = service.snapshot(TENANT, CLIENT, TASK, ACTOR);
+        AgentTaskWorkspaceDTO result = service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR);
         assertEquals(status, result.getMembers().get(0).getStatus());
         assertNull(result.getConversationId());
         assertEquals("0", result.getCurrentVersion());
@@ -111,30 +112,30 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
     void nonReadableOrUnknownActorStatusesUseSameNotFound(String status) {
         actor.setMemberStatus(status);
         AgentTaskWorkspaceException error = assertThrows(AgentTaskWorkspaceException.class,
-                () -> service.snapshot(TENANT, CLIENT, TASK, ACTOR));
+                () -> service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR));
         assertEquals(AgentTaskWorkspaceException.Reason.NOT_FOUND_OR_FORBIDDEN,
                 error.getReason());
-        verify(dao, never()).findWorkItems(TENANT, CLIENT, TASK);
+        verify(dao, never()).findWorkItems(TENANT, CLIENT, OWNER, TASK);
     }
 
     @Test
     void foreignInactiveOrAbsentOwnedIdentityUsesGenericNotFound() {
         when(agentIdentityService.requireCanonicalAgentIdInScope(
-                TENANT, CLIENT, TENANT, ACTOR)).thenThrow(
+                TENANT, CLIENT, OWNER, ACTOR)).thenThrow(
                 new AgentServiceImpl.AgentBizException("AGENT_FORBIDDEN", "internal detail"));
         AgentTaskWorkspaceException error = assertThrows(AgentTaskWorkspaceException.class,
-                () -> service.snapshot(TENANT, CLIENT, TASK, ACTOR));
+                () -> service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR));
         assertEquals(AgentTaskWorkspaceException.Reason.NOT_FOUND_OR_FORBIDDEN,
                 error.getReason());
-        verify(dao, never()).findTask(TENANT, CLIENT, TASK);
+        verify(dao, never()).findTask(TENANT, CLIENT, OWNER, TASK);
     }
 
     @Test
     void coordinatorMetadataWithoutExactMemberCannotBypassGate() {
         task.setCoordinatorAgentId(ACTOR);
-        when(dao.findActorMember(TENANT, CLIENT, TASK, ACTOR)).thenReturn(null);
+        when(dao.findActorMember(TENANT, CLIENT, OWNER, TASK, ACTOR)).thenReturn(null);
         AgentTaskWorkspaceException error = assertThrows(AgentTaskWorkspaceException.class,
-                () -> service.snapshot(TENANT, CLIENT, TASK, ACTOR));
+                () -> service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR));
         assertEquals(AgentTaskWorkspaceException.Reason.NOT_FOUND_OR_FORBIDDEN,
                 error.getReason());
     }
@@ -142,34 +143,34 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
     @Test
     void completeCollectionAccepts499AndRejects500() {
         List<MemberRow> rows = members(499);
-        when(dao.findMembers(TENANT, CLIENT, TASK)).thenReturn(rows);
-        assertEquals(499, service.snapshot(TENANT, CLIENT, TASK, ACTOR).getMembers().size());
+        when(dao.findMembers(TENANT, CLIENT, OWNER, TASK)).thenReturn(rows);
+        assertEquals(499, service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR).getMembers().size());
 
-        when(dao.findMembers(TENANT, CLIENT, TASK)).thenReturn(members(500));
+        when(dao.findMembers(TENANT, CLIENT, OWNER, TASK)).thenReturn(members(500));
         AgentTaskWorkspaceException error = assertThrows(AgentTaskWorkspaceException.class,
-                () -> service.snapshot(TENANT, CLIENT, TASK, ACTOR));
+                () -> service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR));
         assertEquals(AgentTaskWorkspaceException.Reason.SNAPSHOT_UNAVAILABLE,
                 error.getReason());
     }
 
     @Test
     void workItemCollectionAccepts499AndRejects500() {
-        when(dao.findWorkItems(TENANT, CLIENT, TASK)).thenReturn(workItems(499));
-        assertEquals(499, service.snapshot(TENANT, CLIENT, TASK, ACTOR).getWorkItems().size());
-        when(dao.findWorkItems(TENANT, CLIENT, TASK)).thenReturn(workItems(500));
+        when(dao.findWorkItems(TENANT, CLIENT, OWNER, TASK)).thenReturn(workItems(499));
+        assertEquals(499, service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR).getWorkItems().size());
+        when(dao.findWorkItems(TENANT, CLIENT, OWNER, TASK)).thenReturn(workItems(500));
         assertEquals(AgentTaskWorkspaceException.Reason.SNAPSHOT_UNAVAILABLE,
                 assertThrows(AgentTaskWorkspaceException.class,
-                        () -> service.snapshot(TENANT, CLIENT, TASK, ACTOR)).getReason());
+                        () -> service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR)).getReason());
     }
 
     @Test
     void openRequestCollectionAccepts499AndRejects500() {
-        when(dao.findOpenRequests(TENANT, CLIENT, TASK)).thenReturn(requests(499));
-        assertEquals(499, service.snapshot(TENANT, CLIENT, TASK, ACTOR).getOpenRequests().size());
-        when(dao.findOpenRequests(TENANT, CLIENT, TASK)).thenReturn(requests(500));
+        when(dao.findOpenRequests(TENANT, CLIENT, OWNER, TASK)).thenReturn(requests(499));
+        assertEquals(499, service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR).getOpenRequests().size());
+        when(dao.findOpenRequests(TENANT, CLIENT, OWNER, TASK)).thenReturn(requests(500));
         assertEquals(AgentTaskWorkspaceException.Reason.SNAPSHOT_UNAVAILABLE,
                 assertThrows(AgentTaskWorkspaceException.class,
-                        () -> service.snapshot(TENANT, CLIENT, TASK, ACTOR)).getReason());
+                        () -> service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR)).getReason());
     }
 
     @Test
@@ -181,13 +182,13 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
         when(dao.findVisibleArtifacts(
                 org.mockito.ArgumentMatchers.eq(TENANT),
                 org.mockito.ArgumentMatchers.eq(CLIENT),
-                org.mockito.ArgumentMatchers.eq(TASK),
+                org.mockito.ArgumentMatchers.eq(OWNER), org.mockito.ArgumentMatchers.eq(TASK),
                 org.mockito.ArgumentMatchers.eq(ACTOR), anyBoolean(), anyBoolean()))
                 .thenReturn(artifacts.subList(0, 100), artifacts);
-        AgentTaskWorkspaceDTO exactlyHundred = service.snapshot(TENANT, CLIENT, TASK, ACTOR);
+        AgentTaskWorkspaceDTO exactlyHundred = service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR);
         assertEquals(100, exactlyHundred.getRecentArtifacts().size());
         assertFalse(exactlyHundred.isRecentArtifactsTruncated());
-        AgentTaskWorkspaceDTO result = service.snapshot(TENANT, CLIENT, TASK, ACTOR);
+        AgentTaskWorkspaceDTO result = service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR);
         assertEquals(100, result.getRecentArtifacts().size());
         assertTrue(result.isRecentArtifactsTruncated());
         assertEquals("1", result.getRecentArtifacts().get(0).getArtifactVersion());
@@ -209,13 +210,13 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
         task.setCurrentEventVersion(1L);
         ArtifactRow privateArtifact = artifact("artifact-private", 1, OTHER, "private");
         privateArtifact.setCreatedAt(999L);
-        when(dao.findArtifactVersion(TENANT, CLIENT, TASK, "artifact-private", 1))
+        when(dao.findArtifactVersion(TENANT, CLIENT, OWNER, TASK, "artifact-private", 1))
                 .thenReturn(privateArtifact);
-        when(dao.findLatestEvents(TENANT, CLIENT, TASK)).thenReturn(List.of(
+        when(dao.findLatestEvents(TENANT, CLIENT, OWNER, TASK)).thenReturn(List.of(
                 artifactEvent(1L, "artifact-private", 1)));
 
         AgentTaskWorkspaceDTO.Event event = service.snapshot(
-                TENANT, CLIENT, TASK, ACTOR).getRecentEvents().get(0);
+                TENANT, CLIENT, OWNER, TASK, ACTOR).getRecentEvents().get(0);
         assertEquals("1", event.getVersion());
         assertEquals(Boolean.TRUE, event.getRedacted());
         assertNull(event.getEventType());
@@ -231,8 +232,8 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
         long version = 9_007_199_254_740_993L;
         task.setTaskVersion(version);
         task.setCurrentEventVersion(version);
-        when(dao.findLatestEvents(TENANT, CLIENT, TASK)).thenReturn(List.of(event(version)));
-        AgentTaskWorkspaceDTO result = service.snapshot(TENANT, CLIENT, TASK, ACTOR);
+        when(dao.findLatestEvents(TENANT, CLIENT, OWNER, TASK)).thenReturn(List.of(event(version)));
+        AgentTaskWorkspaceDTO result = service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR);
         assertEquals("9007199254740993", result.getTask().getVersion());
         assertEquals("9007199254740993", result.getCurrentVersion());
         assertEquals("9007199254740993", result.getRecentEvents().get(0).getVersion());
@@ -240,24 +241,24 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
 
     @Test
     void timelineBoundariesZeroOneHundredAndHundredOneAreDeterministic() {
-        AgentTaskWorkspaceDTO zero = service.snapshot(TENANT, CLIENT, TASK, ACTOR);
+        AgentTaskWorkspaceDTO zero = service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR);
         assertTrue(zero.getRecentEvents().isEmpty());
         assertFalse(zero.isTimelineTruncated());
 
         task.setCurrentEventVersion(1L);
-        when(dao.findLatestEvents(TENANT, CLIENT, TASK)).thenReturn(eventsDescending(1));
-        assertFalse(service.snapshot(TENANT, CLIENT, TASK, ACTOR).isTimelineTruncated());
+        when(dao.findLatestEvents(TENANT, CLIENT, OWNER, TASK)).thenReturn(eventsDescending(1));
+        assertFalse(service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR).isTimelineTruncated());
 
         task.setCurrentEventVersion(100L);
-        when(dao.findLatestEvents(TENANT, CLIENT, TASK)).thenReturn(eventsDescending(100));
-        AgentTaskWorkspaceDTO hundred = service.snapshot(TENANT, CLIENT, TASK, ACTOR);
+        when(dao.findLatestEvents(TENANT, CLIENT, OWNER, TASK)).thenReturn(eventsDescending(100));
+        AgentTaskWorkspaceDTO hundred = service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR);
         assertEquals(100, hundred.getRecentEvents().size());
         assertEquals("1", hundred.getRecentEvents().get(0).getVersion());
         assertFalse(hundred.isTimelineTruncated());
 
         task.setCurrentEventVersion(101L);
-        when(dao.findLatestEvents(TENANT, CLIENT, TASK)).thenReturn(eventsDescending(101));
-        AgentTaskWorkspaceDTO hundredOne = service.snapshot(TENANT, CLIENT, TASK, ACTOR);
+        when(dao.findLatestEvents(TENANT, CLIENT, OWNER, TASK)).thenReturn(eventsDescending(101));
+        AgentTaskWorkspaceDTO hundredOne = service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR);
         assertEquals(100, hundredOne.getRecentEvents().size());
         assertEquals("2", hundredOne.getRecentEvents().get(0).getVersion());
         assertEquals("101", hundredOne.getRecentEvents().get(99).getVersion());
@@ -271,47 +272,53 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
         EventRow sentinel = rows.get(100);
         sentinel.setAggregateType(TaskEventType.Aggregate.ARTIFACT);
         sentinel.setAggregateId("hidden-corrupt-artifact");
-        when(dao.findLatestEvents(TENANT, CLIENT, TASK)).thenReturn(rows);
+        when(dao.findLatestEvents(TENANT, CLIENT, OWNER, TASK)).thenReturn(rows);
         assertSnapshotUnavailable();
     }
 
     @Test
     void middleGapAndMissingFinalVersionFailClosed() {
         task.setCurrentEventVersion(3L);
-        when(dao.findLatestEvents(TENANT, CLIENT, TASK))
+        when(dao.findLatestEvents(TENANT, CLIENT, OWNER, TASK))
                 .thenReturn(List.of(event(3L), event(1L)));
         assertEquals(AgentTaskWorkspaceException.Reason.SNAPSHOT_UNAVAILABLE,
                 assertThrows(AgentTaskWorkspaceException.class,
-                        () -> service.snapshot(TENANT, CLIENT, TASK, ACTOR)).getReason());
+                        () -> service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR)).getReason());
 
-        when(dao.findLatestEvents(TENANT, CLIENT, TASK))
+        when(dao.findLatestEvents(TENANT, CLIENT, OWNER, TASK))
                 .thenReturn(List.of(event(2L), event(1L)));
         assertEquals(AgentTaskWorkspaceException.Reason.SNAPSHOT_UNAVAILABLE,
                 assertThrows(AgentTaskWorkspaceException.class,
-                        () -> service.snapshot(TENANT, CLIENT, TASK, ACTOR)).getReason());
+                        () -> service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR)).getReason());
     }
 
 
     @Test
     void taskAbsenceOrNonExactScopeIs404ButAuthorizedTaskCorruptionIs503() {
-        when(dao.findTask(TENANT, CLIENT, TASK)).thenReturn(null);
+        when(dao.findTask(TENANT, CLIENT, OWNER, TASK)).thenReturn(null);
         assertEquals(AgentTaskWorkspaceException.Reason.NOT_FOUND_OR_FORBIDDEN,
                 assertThrows(AgentTaskWorkspaceException.class,
-                        () -> service.snapshot(TENANT, CLIENT, TASK, ACTOR)).getReason());
+                        () -> service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR)).getReason());
 
         TaskRow wrongScope = task(0L);
         wrongScope.setClientId("CLIENT-A");
-        when(dao.findTask(TENANT, CLIENT, TASK)).thenReturn(wrongScope);
+        when(dao.findTask(TENANT, CLIENT, OWNER, TASK)).thenReturn(wrongScope);
         assertEquals(AgentTaskWorkspaceException.Reason.NOT_FOUND_OR_FORBIDDEN,
                 assertThrows(AgentTaskWorkspaceException.class,
-                        () -> service.snapshot(TENANT, CLIENT, TASK, ACTOR)).getReason());
+                        () -> service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR)).getReason());
+
+        wrongScope.setClientId(CLIENT);
+        wrongScope.setOwnerJiacn("owner-b");
+        assertEquals(AgentTaskWorkspaceException.Reason.NOT_FOUND_OR_FORBIDDEN,
+                assertThrows(AgentTaskWorkspaceException.class,
+                        () -> service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR)).getReason());
 
         task.setRewardStatus("RUNNING");
-        when(dao.findTask(TENANT, CLIENT, TASK)).thenReturn(task);
+        when(dao.findTask(TENANT, CLIENT, OWNER, TASK)).thenReturn(task);
         assertEquals(AgentTaskWorkspaceException.Reason.SNAPSHOT_UNAVAILABLE,
                 assertThrows(AgentTaskWorkspaceException.class,
-                        () -> service.snapshot(TENANT, CLIENT, TASK, ACTOR)).getReason());
-        verify(dao).findActorMember(TENANT, CLIENT, TASK, ACTOR);
+                        () -> service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR)).getReason());
+        verify(dao).findActorMember(TENANT, CLIENT, OWNER, TASK, ACTOR);
     }
 
     @Test
@@ -319,24 +326,24 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
         task.setTaskVersion(null);
         assertEquals(AgentTaskWorkspaceException.Reason.SNAPSHOT_UNAVAILABLE,
                 assertThrows(AgentTaskWorkspaceException.class,
-                        () -> service.snapshot(TENANT, CLIENT, TASK, ACTOR)).getReason());
+                        () -> service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR)).getReason());
 
         task.setTaskVersion(0L);
         task.setCurrentEventVersion(-1L);
         assertEquals(AgentTaskWorkspaceException.Reason.SNAPSHOT_UNAVAILABLE,
                 assertThrows(AgentTaskWorkspaceException.class,
-                        () -> service.snapshot(TENANT, CLIENT, TASK, ACTOR)).getReason());
+                        () -> service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR)).getReason());
 
         task.setCurrentEventVersion(0L);
         task.setMaxAgents(0);
         assertEquals(AgentTaskWorkspaceException.Reason.SNAPSHOT_UNAVAILABLE,
                 assertThrows(AgentTaskWorkspaceException.class,
-                        () -> service.snapshot(TENANT, CLIENT, TASK, ACTOR)).getReason());
+                        () -> service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR)).getReason());
 
-        when(dao.findActorMember(TENANT, CLIENT, TASK, ACTOR)).thenReturn(null);
+        when(dao.findActorMember(TENANT, CLIENT, OWNER, TASK, ACTOR)).thenReturn(null);
         assertEquals(AgentTaskWorkspaceException.Reason.NOT_FOUND_OR_FORBIDDEN,
                 assertThrows(AgentTaskWorkspaceException.class,
-                        () -> service.snapshot(TENANT, CLIENT, TASK, ACTOR)).getReason());
+                        () -> service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR)).getReason());
     }
 
     @Test
@@ -362,21 +369,21 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
                 .put(TaskEventPayload.Key.WORK_ITEM_COUNT, 0L).toJson());
 
         when(agentIdentityService.requireCanonicalAgentIdInScope(
-                TENANT, CLIENT, TENANT, ACTOR)).thenReturn(ACTOR);
-        when(dao.findTask(TENANT, CLIENT, supplementaryTask)).thenReturn(unicodeTask);
-        when(dao.findActorMember(TENANT, CLIENT, supplementaryTask, ACTOR))
+                TENANT, CLIENT, OWNER, ACTOR)).thenReturn(ACTOR);
+        when(dao.findTask(TENANT, CLIENT, OWNER, supplementaryTask)).thenReturn(unicodeTask);
+        when(dao.findActorMember(TENANT, CLIENT, OWNER, supplementaryTask, ACTOR))
                 .thenReturn(unicodeActor);
-        when(dao.findMembers(TENANT, CLIENT, supplementaryTask))
+        when(dao.findMembers(TENANT, CLIENT, OWNER, supplementaryTask))
                 .thenReturn(List.of(unicodeActor));
-        when(dao.findWorkItems(TENANT, CLIENT, supplementaryTask)).thenReturn(List.of());
-        when(dao.findOpenRequests(TENANT, CLIENT, supplementaryTask)).thenReturn(List.of());
-        when(dao.findVisibleArtifacts(TENANT, CLIENT, supplementaryTask, ACTOR, false, false))
+        when(dao.findWorkItems(TENANT, CLIENT, OWNER, supplementaryTask)).thenReturn(List.of());
+        when(dao.findOpenRequests(TENANT, CLIENT, OWNER, supplementaryTask)).thenReturn(List.of());
+        when(dao.findVisibleArtifacts(TENANT, CLIENT, OWNER, supplementaryTask, ACTOR, false, false))
                 .thenReturn(List.of());
-        when(dao.findLatestEvents(TENANT, CLIENT, supplementaryTask))
+        when(dao.findLatestEvents(TENANT, CLIENT, OWNER, supplementaryTask))
                 .thenReturn(List.of(baseline));
 
         AgentTaskWorkspaceDTO snapshot = service.snapshot(
-                TENANT, CLIENT, supplementaryTask, ACTOR);
+                TENANT, CLIENT, OWNER, supplementaryTask, ACTOR);
         assertEquals(supplementaryTask, snapshot.getTask().getTaskId());
         assertEquals(TaskEventType.HISTORICAL_BASELINE_IMPORTED,
                 snapshot.getRecentEvents().get(0).getEventType());
@@ -387,9 +394,9 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
         String supplementary = new String(Character.toChars(0x1f642));
         assertThrows(IllegalArgumentException.class,
                 () -> service.snapshot(TENANT, CLIENT,
-                        "t" + supplementary.repeat(100), ACTOR));
+                        OWNER, "t" + supplementary.repeat(100), ACTOR));
         assertThrows(IllegalArgumentException.class,
-                () -> service.snapshot(TENANT, CLIENT, "task-\ud800", ACTOR));
+                () -> service.snapshot(TENANT, CLIENT, OWNER, "task-\ud800", ACTOR));
     }
 
     @Test
@@ -402,9 +409,9 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
                 .put(TaskEventPayload.Key.TO_STATUS, "assigned")
                 .put(TaskEventPayload.Key.EXPECTED_VERSION, 0L)
                 .put(TaskEventPayload.Key.RESULT_VERSION, 1L).toJson());
-        when(dao.findLatestEvents(TENANT, CLIENT, TASK)).thenReturn(List.of(assigned));
+        when(dao.findLatestEvents(TENANT, CLIENT, OWNER, TASK)).thenReturn(List.of(assigned));
         assertEquals(TaskEventType.TASK_ASSIGNED,
-                service.snapshot(TENANT, CLIENT, TASK, ACTOR)
+                service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR)
                         .getRecentEvents().get(0).getEventType());
 
         EventRow submitted = event(1L);
@@ -417,9 +424,9 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
                 .put(TaskEventPayload.Key.TO_STATUS, "submitted")
                 .put(TaskEventPayload.Key.EXPECTED_VERSION, 0L)
                 .put(TaskEventPayload.Key.RESULT_VERSION, 1L).toJson());
-        when(dao.findLatestEvents(TENANT, CLIENT, TASK)).thenReturn(List.of(submitted));
+        when(dao.findLatestEvents(TENANT, CLIENT, OWNER, TASK)).thenReturn(List.of(submitted));
         assertEquals(TaskEventType.WORK_ITEM_SUBMITTED,
-                service.snapshot(TENANT, CLIENT, TASK, ACTOR)
+                service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR)
                         .getRecentEvents().get(0).getEventType());
     }
 
@@ -454,7 +461,7 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
     @Test
     void duplicateVersionWrongScopeAndArtifactDisguisedAsTaskEventFailClosed() {
         task.setCurrentEventVersion(2L);
-        when(dao.findLatestEvents(TENANT, CLIENT, TASK))
+        when(dao.findLatestEvents(TENANT, CLIENT, OWNER, TASK))
                 .thenReturn(List.of(event(2L), event(2L)));
         assertSnapshotUnavailable();
 
@@ -509,9 +516,9 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
         scope.setTaskId("TASK-1");
         corruptRows.add(scope);
 
-        when(dao.findLatestEvents(TENANT, CLIENT, TASK)).thenReturn(List.of(event));
+        when(dao.findLatestEvents(TENANT, CLIENT, OWNER, TASK)).thenReturn(List.of(event));
         for (ArtifactRow corrupt : corruptRows) {
-            when(dao.findArtifactVersion(TENANT, CLIENT, TASK, "artifact-private", 1))
+            when(dao.findArtifactVersion(TENANT, CLIENT, OWNER, TASK, "artifact-private", 1))
                     .thenReturn(corrupt);
             assertSnapshotUnavailable();
         }
@@ -527,29 +534,30 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
 
         ArtifactRow privateArtifact = artifact("artifact-private", 1, OTHER, "private");
         EventRow canonical = artifactEvent(1L, privateArtifact);
-        when(dao.findArtifactVersion(TENANT, CLIENT, TASK, "artifact-private", 1))
+        when(dao.findArtifactVersion(TENANT, CLIENT, OWNER, TASK, "artifact-private", 1))
                 .thenReturn(privateArtifact);
-        when(dao.findLatestEvents(TENANT, CLIENT, TASK)).thenReturn(List.of(canonical));
+        when(dao.findLatestEvents(TENANT, CLIENT, OWNER, TASK)).thenReturn(List.of(canonical));
         AgentTaskWorkspaceDTO.Event projected = service.snapshot(
-                TENANT, CLIENT, TASK, ACTOR).getRecentEvents().get(0);
+                TENANT, CLIENT, OWNER, TASK, ACTOR).getRecentEvents().get(0);
         assertEquals(Boolean.TRUE, projected.getRedacted());
     }
 
 
     private void assertEventUnavailable(EventRow row) {
-        when(dao.findLatestEvents(TENANT, CLIENT, TASK)).thenReturn(List.of(row));
+        when(dao.findLatestEvents(TENANT, CLIENT, OWNER, TASK)).thenReturn(List.of(row));
         assertSnapshotUnavailable();
     }
 
     private void assertSnapshotUnavailable() {
         assertEquals(AgentTaskWorkspaceException.Reason.SNAPSHOT_UNAVAILABLE,
                 assertThrows(AgentTaskWorkspaceException.class,
-                        () -> service.snapshot(TENANT, CLIENT, TASK, ACTOR)).getReason());
+                        () -> service.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR)).getReason());
     }
 
     private static TaskRow task(long currentVersion) {
         TaskRow row = new TaskRow();
         row.setTenantId(TENANT);
+        row.setOwnerJiacn(OWNER);
         row.setClientId(CLIENT);
         row.setTaskId(TASK);
         row.setRewardStatus("running");
@@ -565,6 +573,7 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
     private static MemberRow member(String id, String role, String status, long version) {
         MemberRow row = new MemberRow();
         row.setTenantId(TENANT);
+        row.setOwnerJiacn(OWNER);
         row.setClientId(CLIENT);
         row.setTaskId(TASK);
         row.setAgentId(id);
@@ -589,6 +598,7 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
         for (int i = 0; i < count; i++) {
             WorkItemRow row = new WorkItemRow();
             row.setTenantId(TENANT);
+            row.setOwnerJiacn(OWNER);
             row.setClientId(CLIENT);
             row.setTaskId(TASK);
             row.setWorkItemId("work-" + i);
@@ -610,6 +620,7 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
         for (int i = 0; i < count; i++) {
             RequestRow row = new RequestRow();
             row.setTenantId(TENANT);
+            row.setOwnerJiacn(OWNER);
             row.setClientId(CLIENT);
             row.setTaskId(TASK);
             row.setRequestId("request-" + i);
@@ -631,6 +642,7 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
             String id, int version, String producer, String visibility) {
         ArtifactRow row = new ArtifactRow();
         row.setTenantId(TENANT);
+        row.setOwnerJiacn(OWNER);
         row.setClientId(CLIENT);
         row.setTaskId(TASK);
         row.setArtifactId(id);
@@ -646,6 +658,7 @@ class AgentTaskWorkspaceServiceImplTest extends BaseMockTest {
     private static EventRow event(long version) {
         EventRow row = new EventRow();
         row.setTenantId(TENANT);
+        row.setOwnerJiacn(OWNER);
         row.setClientId(CLIENT);
         row.setTaskId(TASK);
         row.setEventVersion(version);

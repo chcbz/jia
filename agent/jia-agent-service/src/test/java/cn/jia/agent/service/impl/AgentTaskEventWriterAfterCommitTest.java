@@ -34,7 +34,7 @@ class AgentTaskEventWriterAfterCommitTest {
         subscription = fixture.eventBroker.stream(new TaskScope(
                         AgentTaskEventTestFixture.TENANT,
                         AgentTaskEventTestFixture.CLIENT,
-                        AgentTaskEventTestFixture.TASK))
+                        AgentTaskEventTestFixture.OWNER, AgentTaskEventTestFixture.TASK))
                 .subscribe(wakeup -> received.add(wakeup.eventVersion()));
     }
 
@@ -73,7 +73,7 @@ class AgentTaskEventWriterAfterCommitTest {
         subscription = fixture.eventBroker.stream(new TaskScope(
                         AgentTaskEventTestFixture.TENANT,
                         AgentTaskEventTestFixture.CLIENT,
-                        AgentTaskEventTestFixture.TASK))
+                        AgentTaskEventTestFixture.OWNER, AgentTaskEventTestFixture.TASK))
                 .subscribe(wakeup -> {
                     callbackEntered.countDown();
                     try {

@@ -58,18 +58,18 @@ class C01BTaskEventContractTest {
             "completedAt", "acknowledgedAt", "resolvedAt", "cancelledAt", "publishedAt",
             "previousLeaseExpiresAt", "leaseExpiresAt");
 
-    private static final Map<String, Integer> PRODUCTION_APPEND_COUNTS = Map.of(
-            "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskStateServiceImpl.java", 1,
-            "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentWorkItemLeaseServiceImpl.java", 1,
-            "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskAggregationServiceImpl.java", 1,
-            "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskCollaborationServiceImpl.java", 2,
-            "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskArtifactOutcomeServiceImpl.java", 1,
-            "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentWorkItemResultCommitServiceImpl.java", 1,
-            "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskFormalDeliveryServiceImpl.java", 3,
-            "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskFormalDeliveryDecisionServiceImpl.java", 3,
-            "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentLegacyTaskCompatibilityService.java", 5,
-            "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentServiceImpl.java", 3,
-            "chat/jia-chat-service/src/main/java/cn/jia/chat/service/impl/AgentTaskThreadCreationTransaction.java", 2);
+    private static final Map<String, Integer> PRODUCTION_APPEND_COUNTS = Map.ofEntries(
+            Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskStateServiceImpl.java", 1),
+            Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentWorkItemLeaseServiceImpl.java", 1),
+            Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskAggregationServiceImpl.java", 1),
+            Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskCollaborationServiceImpl.java", 2),
+            Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskArtifactOutcomeServiceImpl.java", 1),
+            Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentWorkItemResultCommitServiceImpl.java", 1),
+            Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskFormalDeliveryServiceImpl.java", 3),
+            Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskFormalDeliveryDecisionServiceImpl.java", 3),
+            Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentLegacyTaskCompatibilityService.java", 5),
+            Map.entry("agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentServiceImpl.java", 3),
+            Map.entry("chat/jia-chat-service/src/main/java/cn/jia/chat/service/impl/AgentTaskThreadCreationTransaction.java", 2));
 
     private static final Set<String> ALLOWED_WRITER_IMPORTS = Set.of(
             "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentTaskStateServiceImpl.java",

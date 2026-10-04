@@ -180,21 +180,22 @@ class AgentWorkItemReassignmentServiceTest {
         when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, OWNER, TASK, WORK))
                 .thenAnswer(inv -> workItem);
         when(workItemDao.updateActiveLeaseByVersion(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), any(), anyString(), anyString(), anyString(), anyString(),
                 anyString(), org.mockito.ArgumentMatchers.anyLong(),
                 org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyLong(), any()))
                 .thenAnswer(inv -> {
                     // Persist only on an exact scoped/version/status/token/time CAS. Replacing the
                     // row preserves the pre-mutation snapshot used by both real service layers.
                     if (!TENANT.equals(inv.getArgument(0)) || !CLIENT.equals(inv.getArgument(1))
-                            || !TASK.equals(inv.getArgument(2)) || !WORK.equals(inv.getArgument(3))
-                            || !workItem.getAssigneeAgentId().equals(inv.getArgument(4))
-                            || !workItem.getLeaseToken().equals(inv.getArgument(5))
-                            || !workItem.getStatus().equals(inv.getArgument(6))
-                            || !workItem.getLeaseUntil().equals(inv.getArgument(7))
-                            || !workItem.getVersion().equals(inv.getArgument(8))
-                            || workItem.getLeaseUntil() <= (Long) inv.getArgument(9)) return 0;
-                    AgentTaskWorkItemDTO update = inv.getArgument(10);
+                            || !OWNER.equals(inv.getArgument(2))
+                            || !TASK.equals(inv.getArgument(3)) || !WORK.equals(inv.getArgument(4))
+                            || !workItem.getAssigneeAgentId().equals(inv.getArgument(5))
+                            || !workItem.getLeaseToken().equals(inv.getArgument(6))
+                            || !workItem.getStatus().equals(inv.getArgument(7))
+                            || !workItem.getLeaseUntil().equals(inv.getArgument(8))
+                            || !workItem.getVersion().equals(inv.getArgument(9))
+                            || workItem.getLeaseUntil() <= (Long) inv.getArgument(10)) return 0;
+                    AgentTaskWorkItemDTO update = inv.getArgument(11);
                     AgentTaskWorkItemEntity persisted = new AgentTaskWorkItemEntity()
                             .setTaskId(update.getTaskId()).setWorkItemId(update.getWorkItemId())
                             .setTitle(update.getTitle()).setDescription(update.getDescription())
@@ -205,7 +206,7 @@ class AgentWorkItemReassignmentServiceTest {
                             .setLeaseUntil(update.getLeaseUntil()).setAttemptCount(update.getAttemptCount())
                             .setMaxAttempts(update.getMaxAttempts()).setResultArtifactId(update.getResultArtifactId())
                             .setSubmittedAt(update.getSubmittedAt()).setCompletedAt(update.getCompletedAt());
-                    persisted.setTenantId(TENANT); persisted.setClientId(CLIENT);
+                    persisted.setOwnerJiacn(OWNER); persisted.setTenantId(TENANT); persisted.setClientId(CLIENT);
                     persisted.setVersion(workItem.getVersion() + 1);
                     workItem = persisted;
                     return 1;
@@ -272,11 +273,11 @@ class AgentWorkItemReassignmentServiceTest {
         // ACTIVE is required for execution, not system cleanup: revoked direct-canonical
         // references still pass historical validation and can have their expired lease reclaimed.
         workItem.setLeaseUntil(NOW - 1);
-        when(workItemDao.listExpiredLeases(TENANT, CLIENT, NOW, 1)).thenReturn(List.of(workItem));
+        when(workItemDao.listExpiredLeases(TENANT, CLIENT, OWNER, NOW, 1)).thenReturn(List.of(workItem));
         when(workItemDao.expireLeaseByVersion(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK),
                 eq(LEGACY_TARGET), eq(NEW_TOKEN), eq("running"), eq(NOW - 1), eq(VERSION + 3), eq(NOW), any()))
                 .thenReturn(1);
-        var expired = actualLease.expireLeases(TENANT, CLIENT, 1);
+        var expired = actualLease.expireLeases(TENANT, CLIENT, OWNER, 1);
         assertEquals(1, expired.getExpiredCount());
         assertEquals(1, expired.getRequeuedCount());
         verify(workItemDao).expireLeaseByVersion(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq(WORK),
@@ -309,7 +310,7 @@ class AgentWorkItemReassignmentServiceTest {
                             () -> actual.start(TENANT, CLIENT, OWNER, TASK, WORK, command)).getReason(), kind);
         }
         verify(workItemDao, never()).updateActiveLeaseByVersion(
-                any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(), any(), any(),
                 org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyLong(),
                 org.mockito.ArgumentMatchers.anyLong(), any());
     }
@@ -322,13 +323,13 @@ class AgentWorkItemReassignmentServiceTest {
             if (!CLIENT.equals(scope)) authority.addDirect(unknown, AgentConstants.IDENTITY_TYPE_LEGACY_CANONICAL,
                     AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE, TENANT, scope);
             workItem.setAssigneeAgentId(unknown);
-            when(workItemDao.listExpiredLeases(TENANT, CLIENT, NOW, 1)).thenReturn(List.of(workItem));
+            when(workItemDao.listExpiredLeases(TENANT, CLIENT, OWNER, NOW, 1)).thenReturn(List.of(workItem));
             when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, OWNER, TASK, WORK)).thenReturn(workItem);
             assertEquals(cn.jia.agent.exception.AgentTaskStateException.Reason.INVALID_PERSISTED_STATE,
                     assertThrows(cn.jia.agent.exception.AgentTaskStateException.class,
-                            () -> actualLease(authority.service()).expireLeases(TENANT, CLIENT, 1)).getReason());
+                            () -> actualLease(authority.service()).expireLeases(TENANT, CLIENT, OWNER, 1)).getReason());
         }
-        verify(workItemDao, never()).expireLeaseByVersion(any(), any(), any(), any(), any(), any(), any(),
+        verify(workItemDao, never()).expireLeaseByVersion(any(), any(), any(), any(), any(), any(), any(), any(),
                 org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyLong(),
                 org.mockito.ArgumentMatchers.anyLong(), any());
     }
@@ -453,13 +454,13 @@ class AgentWorkItemReassignmentServiceTest {
 
         AgentWorkItemReassignmentException failure = assertThrows(
                 AgentWorkItemReassignmentException.class,
-                () -> service.reassign(TENANT, CLIENT, "operator-1", COORDINATOR,
+                () -> service.reassign(TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                         TASK, WORK, "reassign-key-0001", request(TARGET)));
 
         assertEquals(AgentWorkItemReassignmentException.Reason.INVALID_PERSISTED_STATE,
                 failure.getReason());
         verify(workItemDao, never()).reassignExpiredLeaseByVersion(
-                anyString(), anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), any(), anyString(), anyString(), anyString(), anyString(),
                 anyString(), anyLong(), anyLong(), anyLong(), any());
         verify(commandWriter, never()).writeAuthorizedHall(any(), anyString());
     }
@@ -475,7 +476,7 @@ class AgentWorkItemReassignmentServiceTest {
         assertEquals(AgentWorkItemReassignmentException.Reason.LEASE_NOT_EXPIRED,
                 failure.getReason());
         verify(workItemDao, never()).reassignExpiredLeaseByVersion(
-                any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(), any(), any(),
                 org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyLong(),
                 org.mockito.ArgumentMatchers.anyLong(), any());
         verifyNoInteractions(eventWriter, commandWriter);
@@ -491,7 +492,7 @@ class AgentWorkItemReassignmentServiceTest {
         assertEquals(AgentWorkItemReassignmentException.Reason.DOMAIN_ATTEMPTS_EXHAUSTED,
                 failure.getReason());
         verify(workItemDao, never()).reassignExpiredLeaseByVersion(
-                any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(), any(), any(),
                 org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyLong(),
                 org.mockito.ArgumentMatchers.anyLong(), any());
         verifyNoInteractions(eventWriter, commandWriter);
@@ -568,7 +569,7 @@ class AgentWorkItemReassignmentServiceTest {
                         () -> service.reassign(TENANT, CLIENT, OWNER, "operator-1", COORDINATOR,
                                 TASK, WORK, "reassign-key-0002", request(TARGET))).getReason());
         verify(workItemDao, never()).reassignExpiredLeaseByVersion(
-                any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(), any(), any(),
                 org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyLong(),
                 org.mockito.ArgumentMatchers.anyLong(), any());
     }
@@ -601,7 +602,7 @@ class AgentWorkItemReassignmentServiceTest {
                                 TASK, WORK, "reassign-key-hosting", request(TARGET))).getReason());
 
         verify(workItemDao, never()).reassignExpiredLeaseByVersion(
-                any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(), any(), any(),
                 org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyLong(),
                 org.mockito.ArgumentMatchers.anyLong(), any());
     }

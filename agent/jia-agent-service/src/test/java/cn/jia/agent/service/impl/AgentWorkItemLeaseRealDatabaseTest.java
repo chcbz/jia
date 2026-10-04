@@ -70,7 +70,8 @@ class AgentWorkItemLeaseRealDatabaseTest {
     private static final String JDBC_URL =
             "jdbc:h2:mem:cyf_b04_lease;MODE=MYSQL;DB_CLOSE_DELAY=-1;"
                     + "CASE_INSENSITIVE_IDENTIFIERS=TRUE;LOCK_TIMEOUT=10000";
-    private static final String TENANT = "tenant-a";
+    private static final String TENANT = "0";
+    private static final String OWNER = "owner-a";
     private static final String OTHER_TENANT = "tenant-b";
     private static final String CLIENT = "client-a";
     private static final String TASK = "task-1";
@@ -134,10 +135,10 @@ class AgentWorkItemLeaseRealDatabaseTest {
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
             Future<Object> first = executor.submit(capture(
-                    () -> service.claim(TENANT, CLIENT, TASK, WORK,
+                    () -> service.claim(TENANT, CLIENT, OWNER, TASK, WORK,
                             claimCommand(AGENT_A, 0L, 500L))));
             Future<Object> second = executor.submit(capture(
-                    () -> service.claim(TENANT, CLIENT, TASK, WORK,
+                    () -> service.claim(TENANT, CLIENT, OWNER, TASK, WORK,
                             claimCommand(AGENT_B, 0L, 500L))));
 
             List<Object> results = List.of(first.get(20, TimeUnit.SECONDS),
@@ -173,10 +174,10 @@ class AgentWorkItemLeaseRealDatabaseTest {
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
             Future<Object> heartbeat = executor.submit(capture(
-                    () -> heartbeatService.heartbeat(TENANT, CLIENT, TASK, WORK,
+                    () -> heartbeatService.heartbeat(TENANT, CLIENT, OWNER, TASK, WORK,
                             heartbeatCommand(AGENT_A, "lease-old", 5L, 500L))));
             Future<Object> expiry = executor.submit(capture(
-                    () -> expiryService.expireLeases(TENANT, CLIENT, 10)));
+                    () -> expiryService.expireLeases(TENANT, CLIENT, OWNER, 10)));
 
             Object heartbeatResult = heartbeat.get(20, TimeUnit.SECONDS);
             Object expiryResult = expiry.get(20, TimeUnit.SECONDS);
@@ -214,8 +215,8 @@ class AgentWorkItemLeaseRealDatabaseTest {
         AgentWorkItemLeaseService service = service(
                 realWorkItemDao, () -> 1_000L, () -> "unused", 1_000L);
 
-        AgentWorkItemLeaseScanDTO first = service.expireLeases(TENANT, CLIENT, 10);
-        AgentWorkItemLeaseScanDTO second = service.expireLeases(TENANT, CLIENT, 10);
+        AgentWorkItemLeaseScanDTO first = service.expireLeases(TENANT, CLIENT, OWNER, 10);
+        AgentWorkItemLeaseScanDTO second = service.expireLeases(TENANT, CLIENT, OWNER, 10);
 
         assertEquals(1, first.getExpiredCount());
         assertEquals(1, first.getRequeuedCount());
@@ -234,7 +235,7 @@ class AgentWorkItemLeaseRealDatabaseTest {
         AgentWorkItemLeaseService service = service(
                 realWorkItemDao, () -> 1_000L, () -> "unused", 1_000L);
 
-        AgentWorkItemLeaseScanDTO scan = service.expireLeases(TENANT, CLIENT, 10);
+        AgentWorkItemLeaseScanDTO scan = service.expireLeases(TENANT, CLIENT, OWNER, 10);
 
         assertEquals(1, scan.getFailedCount());
         Map<String, Object> row = workItemRow(TENANT);
@@ -252,24 +253,24 @@ class AgentWorkItemLeaseRealDatabaseTest {
         insertWorkItem(TENANT, "running", 7L, AGENT_A, "lease-old", 900L, 0, 3);
         AgentWorkItemLeaseService expiryService = service(
                 realWorkItemDao, () -> 1_000L, () -> "unused", 1_000L);
-        expiryService.expireLeases(TENANT, CLIENT, 10);
+        expiryService.expireLeases(TENANT, CLIENT, OWNER, 10);
 
         AgentWorkItemLeaseService claimant = service(
                 realWorkItemDao, () -> 1_100L, () -> "lease-new", 1_000L);
         AgentWorkItemLeaseDTO claimed = claimant.claim(
-                TENANT, CLIENT, TASK, WORK, claimCommand(AGENT_A, 8L, 500L));
+                TENANT, CLIENT, OWNER, TASK, WORK, claimCommand(AGENT_A, 8L, 500L));
         AgentWorkItemLeaseDTO running = claimant.start(
-                TENANT, CLIENT, TASK, WORK,
+                TENANT, CLIENT, OWNER, TASK, WORK,
                 actionCommand(AGENT_A, "lease-new", claimed.getVersion()));
 
         AgentTaskStateException late = assertThrows(AgentTaskStateException.class,
                 () -> claimant.validateLeaseForResult(
-                        TENANT, CLIENT, TASK, WORK,
+                        TENANT, CLIENT, OWNER, TASK, WORK,
                         actionCommand(AGENT_A, "lease-old", running.getVersion())));
         assertEquals(Reason.LEASE_INVALID, late.getReason());
 
         AgentWorkItemLeaseDTO valid = claimant.validateLeaseForResult(
-                TENANT, CLIENT, TASK, WORK,
+                TENANT, CLIENT, OWNER, TASK, WORK,
                 actionCommand(AGENT_A, "lease-new", running.getVersion()));
         assertEquals("running", valid.getStatus());
         assertEquals("lease-new", valid.getLeaseToken());
@@ -287,7 +288,7 @@ class AgentWorkItemLeaseRealDatabaseTest {
                 realWorkItemDao, () -> 1_000L, () -> "unused", 1_000L);
 
         AgentTaskStateException error = assertThrows(AgentTaskStateException.class,
-                () -> service.heartbeat(TENANT, CLIENT, TASK, WORK,
+                () -> service.heartbeat(TENANT, CLIENT, OWNER, TASK, WORK,
                         heartbeatCommand(AGENT_A, "lease-old", 3L, 500L)));
         assertEquals(Reason.LEASE_INVALID, error.getReason());
         Map<String, Object> row = workItemRow(TENANT);
@@ -304,7 +305,7 @@ class AgentWorkItemLeaseRealDatabaseTest {
                 realWorkItemDao, () -> 1_000L, () -> "unused", 1_000L, realEventWriter);
 
         AgentWorkItemLeaseDTO result = service.release(
-                TENANT, CLIENT, TASK, WORK,
+                TENANT, CLIENT, OWNER, TASK, WORK,
                 actionCommand(AGENT_A, "lease-current", 5L));
 
         assertEquals("ready", result.getStatus());
@@ -330,7 +331,7 @@ class AgentWorkItemLeaseRealDatabaseTest {
                 realWorkItemDao, () -> 1_000L, () -> "unused", 1_000L, realEventWriter);
 
         AgentWorkItemLeaseDTO result = service.release(
-                TENANT, CLIENT, TASK, WORK,
+                TENANT, CLIENT, OWNER, TASK, WORK,
                 actionCommand(AGENT_A, "lease-current", 5L));
 
         assertEquals("failed", result.getStatus());
@@ -357,7 +358,7 @@ class AgentWorkItemLeaseRealDatabaseTest {
                 failAfterRealAppend());
 
         assertThrows(IllegalStateException.class, () -> service.claim(
-                TENANT, CLIENT, TASK, WORK, claimCommand(AGENT_A, 0L, 500L)));
+                TENANT, CLIENT, OWNER, TASK, WORK, claimCommand(AGENT_A, 0L, 500L)));
 
         Map<String, Object> row = workItemRow(TENANT);
         assertEquals("ready", row.get("STATUS"));
@@ -376,7 +377,7 @@ class AgentWorkItemLeaseRealDatabaseTest {
                 failAfterRealAppend());
 
         assertThrows(IllegalStateException.class, () -> service.release(
-                TENANT, CLIENT, TASK, WORK,
+                TENANT, CLIENT, OWNER, TASK, WORK,
                 actionCommand(AGENT_A, "lease-current", 5L)));
 
         Map<String, Object> row = workItemRow(TENANT);
@@ -396,7 +397,7 @@ class AgentWorkItemLeaseRealDatabaseTest {
                 failAfterRealAppend());
 
         assertThrows(IllegalStateException.class,
-                () -> service.expireLeases(TENANT, CLIENT, 10));
+                () -> service.expireLeases(TENANT, CLIENT, OWNER, 10));
 
         Map<String, Object> row = workItemRow(TENANT);
         assertEquals("claimed", row.get("STATUS"));
@@ -431,9 +432,9 @@ class AgentWorkItemLeaseRealDatabaseTest {
                 realWorkItemDao, () -> 1_000L, () -> "lease-new", 1_000L);
 
         AgentTaskStateException error = assertThrows(AgentTaskStateException.class,
-                () -> service.claim(OTHER_TENANT, CLIENT, TASK, WORK,
+                () -> service.claim(OTHER_TENANT, CLIENT, OWNER, TASK, WORK,
                         claimCommand(AGENT_A, 0L, 500L)));
-        assertEquals(Reason.NOT_FOUND, error.getReason());
+        assertEquals(Reason.INVALID_REQUEST, error.getReason());
         Map<String, Object> row = workItemRow(TENANT);
         assertEquals("ready", row.get("STATUS"));
         assertEquals(0L, longValue(row.get("VERSION")));
@@ -462,9 +463,9 @@ class AgentWorkItemLeaseRealDatabaseTest {
         var identityAuthority = org.mockito.Mockito.mock(cn.jia.agent.service.AgentIdentityService.class);
         for (String canonical : List.of(AGENT_A, AGENT_B)) {
             org.mockito.Mockito.lenient().when(identityAuthority.requireCanonicalAgentIdInScope(
-                    TENANT, CLIENT, TENANT, canonical)).thenReturn(canonical);
+                    TENANT, CLIENT, OWNER, canonical)).thenReturn(canonical);
             org.mockito.Mockito.lenient().when(identityAuthority.requirePersistedCanonicalAgentIdInScope(
-                    TENANT, CLIENT, TENANT, canonical)).thenReturn(canonical);
+                    TENANT, CLIENT, OWNER, canonical)).thenReturn(canonical);
         }
         raw.setIdentityService(identityAuthority);
         TransactionInterceptor interceptor = new TransactionInterceptor();
@@ -496,6 +497,7 @@ class AgentWorkItemLeaseRealDatabaseTest {
         jdbc.execute("""
                 CREATE TABLE agent_task_meta (
                     id BIGINT NOT NULL AUTO_INCREMENT,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     task_id VARCHAR(100) NOT NULL,
                     reward_status VARCHAR(20) NOT NULL,
                     collaboration_mode VARCHAR(20) NOT NULL,
@@ -513,6 +515,7 @@ class AgentWorkItemLeaseRealDatabaseTest {
         jdbc.execute("""
                 CREATE TABLE agent_task_event (
                     id BIGINT NOT NULL AUTO_INCREMENT,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     task_id VARCHAR(100) NOT NULL,
                     event_version BIGINT NOT NULL,
                     event_id VARCHAR(100) NOT NULL,
@@ -534,6 +537,7 @@ class AgentWorkItemLeaseRealDatabaseTest {
         jdbc.execute("""
                 CREATE TABLE agent_task_member (
                     id BIGINT NOT NULL AUTO_INCREMENT,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     task_id VARCHAR(100) NOT NULL,
                     agent_id VARCHAR(100) NOT NULL,
                     member_role VARCHAR(20) NOT NULL,
@@ -556,6 +560,7 @@ class AgentWorkItemLeaseRealDatabaseTest {
         jdbc.execute("""
                 CREATE TABLE agent_task_work_item (
                     id BIGINT NOT NULL AUTO_INCREMENT,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     work_item_id VARCHAR(100) NOT NULL,
                     task_id VARCHAR(100) NOT NULL,
                     title VARCHAR(255) NOT NULL,
@@ -589,18 +594,18 @@ class AgentWorkItemLeaseRealDatabaseTest {
                 INSERT INTO agent_task_meta
                 (task_id, reward_status, collaboration_mode, risk_level, max_agents,
                  review_required, task_version, current_event_version,
-                 tenant_id, client_id, create_time, update_time)
-                VALUES (?, 'running', 'single', 'low', 1, 0, 0, 0, ?, ?, 1, 1)
-                """, TASK, TENANT, CLIENT);
+                 tenant_id, client_id, owner_jiacn, create_time, update_time)
+                VALUES (?, 'running', 'single', 'low', 1, 0, 0, 0, ?, ?, ?, 1, 1)
+                """, TASK, TENANT, CLIENT, OWNER);
     }
 
     private void insertMember(String tenant, String agentId, String status) {
         jdbc.update("""
                 INSERT INTO agent_task_member
                 (task_id, agent_id, member_role, member_status, assignment_source,
-                 version, tenant_id, client_id, create_time, update_time)
-                VALUES (?, ?, 'worker', ?, 'manual', 0, ?, ?, 1, 1)
-                """, TASK, agentId, status, tenant, CLIENT);
+                 version, tenant_id, client_id, owner_jiacn, create_time, update_time)
+                VALUES (?, ?, 'worker', ?, 'manual', 0, ?, ?, ?, 1, 1)
+                """, TASK, agentId, status, tenant, CLIENT, OWNER);
     }
 
     private void insertWorkItem(
@@ -621,11 +626,11 @@ class AgentWorkItemLeaseRealDatabaseTest {
                  assignee_agent_id, status, priority, required_item, dependency_json,
                  lease_token, lease_until, attempt_count, max_attempts,
                  result_artifact_id, submitted_at, completed_at, version,
-                 tenant_id, client_id, create_time, update_time)
+                 tenant_id, client_id, owner_jiacn, create_time, update_time)
                 VALUES (?, ?, 'B04 real DB', 'preserve me', 'implementation', '[]',
-                        ?, ?, 10, 1, '[]', ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, 1, 1)
+                        ?, ?, 10, 1, '[]', ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?, 1, 1)
                 """, workItemId, TASK, assignee, status, token, leaseUntil,
-                attempts, maxAttempts, version, tenant, CLIENT);
+                attempts, maxAttempts, version, tenant, CLIENT, OWNER);
     }
 
     private AgentTaskEventWriter failAfterRealAppend() {
@@ -742,118 +747,118 @@ class AgentWorkItemLeaseRealDatabaseTest {
         }
 
         @Override
-        public int insert(String tenantId, String clientId, AgentTaskWorkItemDTO item) {
-            return delegate.insert(tenantId, clientId, item);
+        public int insert(String tenantId, String clientId, String ownerJiacn, AgentTaskWorkItemDTO item) {
+            return delegate.insert(tenantId, clientId, ownerJiacn, item);
         }
 
         @Override
         public AgentTaskWorkItemEntity findByWorkItemId(
-                String tenantId, String clientId, String workItemId) {
-            return delegate.findByWorkItemId(tenantId, clientId, workItemId);
+                String tenantId, String clientId, String ownerJiacn, String workItemId) {
+            return delegate.findByWorkItemId(tenantId, clientId, ownerJiacn, workItemId);
         }
 
         @Override
         public AgentTaskWorkItemEntity findByTaskAndWorkItemId(
-                String tenantId, String clientId, String taskId, String workItemId) {
-            return delegate.findByTaskAndWorkItemId(tenantId, clientId, taskId, workItemId);
+                String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId) {
+            return delegate.findByTaskAndWorkItemId(tenantId, clientId, ownerJiacn, taskId, workItemId);
         }
 
         @Override
         public List<AgentTaskWorkItemEntity> listByTask(
-                String tenantId, String clientId, String taskId, String status, int limit) {
-            return delegate.listByTask(tenantId, clientId, taskId, status, limit);
+                String tenantId, String clientId, String ownerJiacn, String taskId, String status, int limit) {
+            return delegate.listByTask(tenantId, clientId, ownerJiacn, taskId, status, limit);
         }
 
         @Override
         public List<AgentTaskWorkItemEntity> listByTaskForUpdate(
-                String tenantId, String clientId, String taskId, int limit) {
-            return delegate.listByTaskForUpdate(tenantId, clientId, taskId, limit);
+                String tenantId, String clientId, String ownerJiacn, String taskId, int limit) {
+            return delegate.listByTaskForUpdate(tenantId, clientId, ownerJiacn, taskId, limit);
         }
 
         @Override
         public List<AgentTaskWorkItemEntity> listByAssignee(
-                String tenantId, String clientId, String assigneeAgentId, String status, int limit) {
-            return delegate.listByAssignee(tenantId, clientId, assigneeAgentId, status, limit);
+                String tenantId, String clientId, String ownerJiacn, String assigneeAgentId, String status, int limit) {
+            return delegate.listByAssignee(tenantId, clientId, ownerJiacn, assigneeAgentId, status, limit);
         }
 
         @Override
         public List<AgentTaskWorkItemEntity> listByTaskAndAssignee(
-                String tenantId, String clientId, String taskId, String assigneeAgentId, int limit) {
+                String tenantId, String clientId, String ownerJiacn, String taskId, String assigneeAgentId, int limit) {
             return delegate.listByTaskAndAssignee(
-                    tenantId, clientId, taskId, assigneeAgentId, limit);
+                    tenantId, clientId, ownerJiacn, taskId, assigneeAgentId, limit);
         }
 
         @Override
         public List<AgentTaskWorkItemEntity> listByTaskAssigneeAndType(
-                String tenantId, String clientId, String taskId, String assigneeAgentId,
+                String tenantId, String clientId, String ownerJiacn, String taskId, String assigneeAgentId,
                 String workType, int limit) {
             return delegate.listByTaskAssigneeAndType(
-                    tenantId, clientId, taskId, assigneeAgentId, workType, limit);
+                    tenantId, clientId, ownerJiacn, taskId, assigneeAgentId, workType, limit);
         }
 
         @Override
         public List<AgentTaskWorkItemEntity> listExpiredLeases(
-                String tenantId, String clientId, long expiredAtOrBefore, int limit) {
-            return delegate.listExpiredLeases(tenantId, clientId, expiredAtOrBefore, limit);
+                String tenantId, String clientId, String ownerJiacn, long expiredAtOrBefore, int limit) {
+            return delegate.listExpiredLeases(tenantId, clientId, ownerJiacn, expiredAtOrBefore, limit);
         }
 
         @Override
         public int updateByVersion(
-                String tenantId, String clientId, String workItemId,
+                String tenantId, String clientId, String ownerJiacn, String workItemId,
                 long expectedVersion, AgentTaskWorkItemDTO item) {
-            return delegate.updateByVersion(tenantId, clientId, workItemId, expectedVersion, item);
+            return delegate.updateByVersion(tenantId, clientId, ownerJiacn, workItemId, expectedVersion, item);
         }
 
         @Override
         public int claimReadyByVersion(
-                String tenantId, String clientId, String taskId, String workItemId,
+                String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
                 String expectedAssigneeAgentId, long expectedVersion, AgentTaskWorkItemDTO item) {
             return delegate.claimReadyByVersion(
-                    tenantId, clientId, taskId, workItemId,
+                    tenantId, clientId, ownerJiacn, taskId, workItemId,
                     expectedAssigneeAgentId, expectedVersion, item);
         }
 
         @Override
         public int readyPendingByVersion(
-                String tenantId, String clientId, String taskId, String workItemId,
+                String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
                 long expectedVersion, long changedAt, AgentTaskWorkItemDTO item) {
             return delegate.readyPendingByVersion(
-                    tenantId, clientId, taskId, workItemId, expectedVersion, changedAt, item);
+                    tenantId, clientId, ownerJiacn, taskId, workItemId, expectedVersion, changedAt, item);
         }
 
         @Override
         public int updateActiveLeaseByVersion(
-                String tenantId, String clientId, String taskId, String workItemId,
+                String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
                 String assigneeAgentId, String leaseToken, String expectedStatus,
                 long expectedLeaseUntil, long expectedVersion, long operationTime,
                 AgentTaskWorkItemDTO item) {
             beforeCompetingCas();
             return delegate.updateActiveLeaseByVersion(
-                    tenantId, clientId, taskId, workItemId, assigneeAgentId, leaseToken,
+                    tenantId, clientId, ownerJiacn, taskId, workItemId, assigneeAgentId, leaseToken,
                     expectedStatus, expectedLeaseUntil, expectedVersion, operationTime, item);
         }
 
         @Override
         public int reassignExpiredLeaseByVersion(
-                String tenantId, String clientId, String taskId, String workItemId,
+                String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
                 String previousAgentId, String previousLeaseToken, String expectedStatus,
                 long expectedLeaseUntil, long expectedVersion, long expiredAtOrBefore,
                 AgentTaskWorkItemDTO item) {
             beforeCompetingCas();
             return delegate.reassignExpiredLeaseByVersion(
-                    tenantId, clientId, taskId, workItemId, previousAgentId, previousLeaseToken,
+                    tenantId, clientId, ownerJiacn, taskId, workItemId, previousAgentId, previousLeaseToken,
                     expectedStatus, expectedLeaseUntil, expectedVersion, expiredAtOrBefore, item);
         }
 
         @Override
         public int expireLeaseByVersion(
-                String tenantId, String clientId, String taskId, String workItemId,
+                String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
                 String assigneeAgentId, String leaseToken, String expectedStatus,
                 long expectedLeaseUntil, long expectedVersion, long expiredAtOrBefore,
                 AgentTaskWorkItemDTO item) {
             beforeCompetingCas();
             return delegate.expireLeaseByVersion(
-                    tenantId, clientId, taskId, workItemId, assigneeAgentId, leaseToken,
+                    tenantId, clientId, ownerJiacn, taskId, workItemId, assigneeAgentId, leaseToken,
                     expectedStatus, expectedLeaseUntil, expectedVersion, expiredAtOrBefore, item);
         }
     }

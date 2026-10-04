@@ -356,7 +356,7 @@ class SkillMarketplaceRealTransactionTest {
     @Test void fundingLookupUsesOnlyPersistedInstalledActiveExactAgentSkills() {
         var lookup=new InstalledSkillEntitlementLookup(market,app,versions,service);
         var requirement=new cn.jia.agent.entity.funding.AgentSkillRequirementDTO();requirement.setSkillKey("repo-test");requirement.setVersionRange(">=1.0.0");
-        var actor=new cn.jia.agent.service.funding.FundedBountyActor(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.actorId());
+        var actor=new cn.jia.agent.service.funding.FundedBountyActor(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(), ACTOR.actorId());
         service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);var i=installation();sent(i);
         assertFalse(lookup.lookup(actor,AGENT,List.of(requirement)).allRequirementsMatched());
         results.accept(ACTOR.tenantId(),ACTOR.clientId(),AGENT,"key-1",result(i,"SUCCEEDED",null));
@@ -404,9 +404,9 @@ class SkillMarketplaceRealTransactionTest {
         when(sessions.dispatch(eq(ACTOR.tenantId()),eq(ACTOR.clientId()),eq(AGENT),eq("key-1"),any(),any())).thenAnswer(x->{
             assertFalse(TransactionSynchronizationManager.isActualTransactionActive());return AgentRawCommandDispatchResult.sent(1,1);
         });
-        assertEquals(AgentRawCommandDispatchResult.Status.SENT,dispatch.dispatch(ACTOR.tenantId(),ACTOR.clientId(),i.getOrderId(),AGENT,i.getCommandId(),wire).status());
+        assertEquals(AgentRawCommandDispatchResult.Status.SENT,dispatch.dispatch(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(), i.getOrderId(),AGENT,i.getCommandId(),wire).status());
         byte[] tampered=wire.clone();tampered[0]='[';
-        assertThrows(SkillMarketplaceException.class,()->dispatch.dispatch(ACTOR.tenantId(),ACTOR.clientId(),i.getOrderId(),AGENT,i.getCommandId(),tampered));
+        assertThrows(SkillMarketplaceException.class,()->dispatch.dispatch(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(), i.getOrderId(),AGENT,i.getCommandId(),tampered));
         verify(sessions,times(1)).dispatch(anyString(),anyString(),anyString(),anyString(),any(),any());
     }
     private Map<String,String> purchaseBody(String product) {

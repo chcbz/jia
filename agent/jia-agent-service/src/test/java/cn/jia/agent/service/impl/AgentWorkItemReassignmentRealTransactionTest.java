@@ -190,7 +190,7 @@ class AgentWorkItemReassignmentRealTransactionTest {
                 AgentTaskWorkItemDTO update = originalWorkItemUpdate();
                 update.setLeaseUntil(NOW + 300_000);
                 return workItemDao.updateActiveLeaseByVersion(
-                        TENANT, CLIENT, TASK, WORK, PREVIOUS, "old-secret-token",
+                        TENANT, CLIENT, OWNER, TASK, WORK, PREVIOUS, "old-secret-token",
                         "claimed", NOW - 1, 0, NOW - 2, update);
             });
             assertTrue(ready.await(5, TimeUnit.SECONDS));
