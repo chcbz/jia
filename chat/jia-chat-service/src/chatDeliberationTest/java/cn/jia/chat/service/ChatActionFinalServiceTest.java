@@ -56,6 +56,27 @@ class ChatActionFinalServiceTest {
         var prepared=prepare(raw); var view=service.persist(prepared,9,12);
         turn.setFinalMessageId(9L).setFinalDigest(prepared.validated().finalDigest()); return view;
     }
+    @Test void onlyExplicitTextDeliveryProjectsActualMessageSnapshotRefsAndReadRevalidatesMarker() throws Exception {
+        ready(); var view=persist(ANSWER.replace("\"action\":null}","\"action\":null,\"deliverable\":true}"));
+        assertEquals(true,view.get("deliverable"));
+        assertEquals(Map.of("turnId","turn","messageId","9","snapshotId","snapshot","finalDigest",row.get().finalDigest()),view.get("messageSource"));
+        assertEquals(view,service.readIfV3(scope,"request","turn",1,"CHAT").get("outcome"));
+        String output=System.getenv("CYF_TEXT_DELIVERABLE_PROJECTION_OUTPUT");
+        if(output!=null) java.nio.file.Files.writeString(java.nio.file.Path.of(output),
+                cn.jia.core.util.JsonUtil.toJson(service.readIfV3(scope,"request","turn",1,"CHAT")), java.nio.charset.StandardCharsets.UTF_8);
+        verify(store,never()).insertProposal(any()); verify(dao,never()).insertOutbox(any());
+        var original=row.get(); row.set(new ChatTypedDeliberationStore.Outcome(original.outcomeId(),original.scope(),original.requestId(),
+                original.requestRevision(),original.turnId(),original.taskId(),original.assignmentRevision(),original.assistantMessageId(),
+                original.finalDigest(),original.kind(),original.text(),original.bindingJson(),original.factsJson(),
+                original.outcomeJson().replace("\"deliverable\":true","\"deliverable\":false"),original.sourceCatalogJson(),original.createdAt()));
+        assertThrows(ChatDeliberationException.class,()->service.readIfV3(scope,"request","turn",1,"CHAT"));
+    }
+    @Test void ordinaryAnswerOrExplicitFalseDoesNotExposeTextDeliverySource() {
+        ready(); var view=persist(ANSWER); assertFalse(view.containsKey("deliverable")); assertFalse(view.containsKey("messageSource"));
+        row.set(null);turn.setFinalMessageId(null).setFinalDigest(null);
+        view=persist(ANSWER.replace("\"action\":null}","\"action\":null,\"deliverable\":false}"));
+        assertEquals(false,view.get("deliverable")); assertFalse(view.containsKey("messageSource"));
+    }
     @Test void actionPersistsItsOwnKindAndIndependentStableOutboxWithoutConsentOrProposal() throws Exception {
         ready(); var view=persist(ACTION);
         assertEquals("ACTION_REQUEST",row.get().kind()); assertEquals("ACTION_REQUESTED",event.get().getEventType());

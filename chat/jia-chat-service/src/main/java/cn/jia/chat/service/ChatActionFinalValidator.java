@@ -33,6 +33,8 @@ public final class ChatActionFinalValidator {
             throw invalid("ACTION_FINAL_VERSION_INVALID");
         var facts = ChatActionOutcomeContract.facts(rawFacts);
         var outcome = ChatActionOutcomeContract.outcomeJson(rawOutcome, facts);
+        if (Boolean.TRUE.equals(outcome.deliverable()) && !"CHAT".equals(binding.get("route")))
+            throw invalid("ACTION_FINAL_DELIVERABLE_ROUTE_INVALID");
         if (content == null || content.length() > 200_000 || !content.equals(outcome.text()))
             throw invalid("ACTION_FINAL_CONTENT_MISMATCH");
         TypedInspectionFinalValidator.InspectionInputReceipt receipt = null;
@@ -61,6 +63,8 @@ public final class ChatActionFinalValidator {
         value.put("schemaVersion", 3);
         value.put("kind", outcome.kind());
         value.put("text", outcome.text());
+        // Absence remains absence: legacy immutable finals retain their exact digest preimage.
+        if (outcome.deliverable() != null) value.put("deliverable", outcome.deliverable());
         value.put("clarification", outcome.clarification() == null ? null : Map.of(
                 "question", outcome.clarification().question(), "requiredFacts", outcome.clarification().requiredFacts()));
         value.put("action", outcome.action() == null ? null : Map.of("actionId", outcome.action().actionId(),

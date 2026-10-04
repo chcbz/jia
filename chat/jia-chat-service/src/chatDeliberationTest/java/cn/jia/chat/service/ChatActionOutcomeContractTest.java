@@ -26,6 +26,22 @@ class ChatActionOutcomeContractTest {
         }
         assertThrows(UnsupportedOperationException.class, () -> facts.availableActions().getFirst().inputMediaTypes().add("shell"));
     }
+    @Test void explicitDeliverableMarkerIsBooleanAnswerOnlyAndAbsenceIsNotInferred() throws Exception {
+        var f = ChatActionOutcomeContract.facts(facts());
+        var answer = new LinkedHashMap<String,Object>(); answer.put("schemaVersion",3); answer.put("kind","ANSWER");
+        answer.put("text","你好"); answer.put("clarification",null); answer.put("action",null);
+        assertNull(ChatActionOutcomeContract.outcome(answer,f).deliverable());
+        for (boolean flag : List.of(false,true)) {
+            answer.put("deliverable",flag); assertEquals(flag,ChatActionOutcomeContract.outcome(answer,f).deliverable());
+            assertEquals(answer,ChatActionFinalValidator.outcomeMap(ChatActionOutcomeContract.outcome(answer,f)));
+        }
+        for (Object bad : List.of("true",1,Map.of("grant",true))) {
+            answer.put("deliverable",bad); assertThrows(IllegalArgumentException.class,()->ChatActionOutcomeContract.outcome(answer,f));
+        }
+        answer.put("deliverable",null); assertThrows(IllegalArgumentException.class,()->ChatActionOutcomeContract.outcome(answer,f));
+        var a=action(); a.put("deliverable",true); assertThrows(IllegalArgumentException.class,()->ChatActionOutcomeContract.outcome(a,f));
+        a.put("deliverable",false); assertFalse(ChatActionOutcomeContract.outcome(a,f).deliverable());
+    }
     @Test void neverAcceptsUnknownActionOrInjectedAuthority() throws Exception {
         var facts = ChatActionOutcomeContract.facts(facts()); var raw = action();
         @SuppressWarnings("unchecked") var action = (Map<String,Object>)raw.get("action");

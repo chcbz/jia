@@ -39,7 +39,12 @@ public final class ChatActionOutcomeContract {
     public record Action(String actionId, String instruction, List<String> sourceRefIds) {
         public Action { sourceRefIds = List.copyOf(sourceRefIds); }
     }
-    public record Outcome(int schemaVersion, String kind, String text, Clarification clarification, Action action) { }
+    public record Outcome(int schemaVersion, String kind, String text, Clarification clarification, Action action,
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) Boolean deliverable) {
+        public Outcome(int schemaVersion, String kind, String text, Clarification clarification, Action action) {
+            this(schemaVersion,kind,text,clarification,action,null);
+        }
+    }
 
     public static Facts facts(Object value) { return factsNode(JSON.valueToTree(value)); }
     public static Facts factsJson(String value) { return factsNode(parse(value)); }
@@ -84,7 +89,12 @@ public final class ChatActionOutcomeContract {
     private static Outcome outcomeNode(JsonNode value, Facts suppliedFacts) {
         // Do not trust a caller-constructed record more than a parsed JSON fact set.
         Facts facts = facts(suppliedFacts);
-        exact(value, "ACTION_OUTCOME_INVALID", "schemaVersion", "kind", "text", "clarification", "action");
+        Boolean deliverable = null;
+        if (value != null && value.isObject() && value.has("deliverable")) {
+            exact(value, "ACTION_OUTCOME_INVALID", "schemaVersion", "kind", "text", "clarification", "action", "deliverable");
+            if (!value.get("deliverable").isBoolean()) throw invalid("ACTION_OUTCOME_INVALID");
+            deliverable = value.get("deliverable").booleanValue();
+        } else exact(value, "ACTION_OUTCOME_INVALID", "schemaVersion", "kind", "text", "clarification", "action");
         if (integer(value.get("schemaVersion"), "ACTION_OUTCOME_INVALID") != VERSION) throw invalid("ACTION_OUTCOME_INVALID");
         String kind = string(value.get("kind"), true, "ACTION_OUTCOME_INVALID");
         String text = string(value.get("text"), false, "ACTION_OUTCOME_INVALID");
@@ -118,7 +128,8 @@ public final class ChatActionOutcomeContract {
             }
             default -> throw invalid("ACTION_OUTCOME_KIND_INVALID");
         }
-        return new Outcome(VERSION, kind, text, clarification, action);
+        if (Boolean.TRUE.equals(deliverable) && !"ANSWER".equals(kind)) throw invalid("ACTION_OUTCOME_UNION_INVALID");
+        return new Outcome(VERSION, kind, text, clarification, action, deliverable);
     }
 
     private static JsonNode parse(String value) {

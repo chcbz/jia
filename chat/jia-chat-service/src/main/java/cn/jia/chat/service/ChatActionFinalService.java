@@ -291,6 +291,11 @@ public class ChatActionFinalService {
         view.put("assignmentRevision", Long.toString(row.assignmentRevision()));
         view.put("assistantMessageId", Long.toString(row.assistantMessageId())); view.put("finalDigest", row.finalDigest());
         view.put("kind", row.kind()); view.put("text", row.text());
+        var deliverable = v.interactionOutcome().deliverable();
+        if (deliverable != null) view.put("deliverable", deliverable);
+        if (Boolean.TRUE.equals(deliverable)) view.put("messageSource", Map.of(
+                "turnId", row.turnId(), "messageId", Long.toString(row.assistantMessageId()),
+                "snapshotId", v.binding().get("snapshotId"), "finalDigest", row.finalDigest()));
         Map<String, Object> clarification = null, action = null;
         if ("CLARIFY".equals(row.kind())) {
             var pending = store.findPendingByOutcome(row.scope(), row.outcomeId(), false);

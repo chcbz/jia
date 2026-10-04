@@ -28,6 +28,16 @@ class ChatActionFinalValidatorTest {
         }
     }
 
+    @Test void deliveryMarkerIsPartOfImmutableDigestAndCannotMarkInspectionAsDelivery() throws Exception {
+        var fixture=fixture("/unified-action-outcome-v3.json"); var outcome=new LinkedHashMap<>(map(list(fixture.get("outcomes")).getFirst()));
+        var old=chat(binding("CHAT"),fixture.get("facts"),outcome);
+        assertFalse(old.canonicalDigestInput().contains("deliverable"));
+        outcome.put("deliverable",false); var discussion=chat(binding("CHAT"),fixture.get("facts"),outcome);
+        outcome.put("deliverable",true); var work=chat(binding("CHAT"),fixture.get("facts"),outcome);
+        assertNotEquals(old.finalDigest(),discussion.finalDigest()); assertNotEquals(discussion.finalDigest(),work.finalDigest());
+        assertEquals("ACTION_FINAL_DELIVERABLE_ROUTE_INVALID",assertThrows(IllegalArgumentException.class,()->
+                chat(binding("INSPECT"),fixture.get("facts"),outcome)).getMessage());
+    }
     @Test void canonicalFinalAndActionIdentityMatchIndependentNodeVector() throws Exception {
         var fixture = fixture("/contracts/action-final-digest-v3.json");
         var result = chat(map(fixture.get("binding")), fixture.get("facts"), map(fixture.get("outcome")));
