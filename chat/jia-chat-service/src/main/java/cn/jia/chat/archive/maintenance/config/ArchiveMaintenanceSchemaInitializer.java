@@ -63,10 +63,13 @@ public class ArchiveMaintenanceSchemaInitializer {
         // without archive_business_outbox. Older accepted predecessors remove readback, exact-admin,
         // and withdrawal in that order; arbitrary partial sets remain fail-closed.
         Set<String> currentTables = expected.tables().keySet();
+        // The checkpoint predecessor is byte-bound in tests to the exact 0d2a6e6 Git blob.
+        // Pagination added no DDL. A schema that contains only part of this additive table
+        // remains fail-closed instead of being treated as an interrupted compatible upgrade.
+        Set<String> checkpointPredecessorTables = new LinkedHashSet<>(currentTables);
+        checkpointPredecessorTables.remove("archive_draft_block_checkpoint");
         // RECOVERY-13 predecessor is byte-bound in tests to the exact 659b66c Git blob.
-        // All older supported shapes branch from that nineteen-table schema; accepting a
-        // shape that already contains only part of RECOVERY-13 would hide interrupted DDL.
-        Set<String> recovery13PredecessorTables = new LinkedHashSet<>(currentTables);
+        Set<String> recovery13PredecessorTables = new LinkedHashSet<>(checkpointPredecessorTables);
         recovery13PredecessorTables.remove("archive_execution_failure");
         Set<String> businessOutboxPredecessorTables = new LinkedHashSet<>(recovery13PredecessorTables);
         businessOutboxPredecessorTables.remove("archive_business_outbox");
@@ -77,6 +80,7 @@ public class ArchiveMaintenanceSchemaInitializer {
         Set<String> legacyPredecessorTables = new LinkedHashSet<>(exactAdminPredecessorTables);
         legacyPredecessorTables.remove("archive_edition_withdrawal");
         if (!existing.isEmpty() && !existing.equals(currentTables)
+                && !existing.equals(checkpointPredecessorTables)
                 && !existing.equals(recovery13PredecessorTables)
                 && !existing.equals(businessOutboxPredecessorTables)
                 && !existing.equals(predecessorTables)

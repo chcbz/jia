@@ -98,6 +98,18 @@ public class JdbcArchiveMaintenanceStore implements ArchiveMaintenanceStore {
                 rs.getLong("revision"), rs.getString("state"), rs.getString("content_json"),
                 rs.getString("content_sha256"), nullable, rs.getString("validation_id"));
     };
+    private static final RowMapper<ArchiveDraftBlockCheckpointRecord> DRAFT_CHECKPOINT = (rs, n) -> {
+        long epoch = rs.getLong("execution_epoch");
+        Long nullableEpoch = rs.wasNull() ? null : epoch;
+        return new ArchiveDraftBlockCheckpointRecord(rs.getString("draft_id"),
+                rs.getLong("draft_revision"), rs.getLong("block_index"),
+                rs.getString("block_key"), rs.getString("block_sha256"),
+                rs.getLong("byte_length"), rs.getString("storage_uri"),
+                rs.getString("draft_content_sha256"), rs.getString("tenant_id"),
+                rs.getString("client_id"), rs.getString("owner_jiacn"),
+                rs.getString("actor_type"), rs.getString("run_id"), nullableEpoch,
+                rs.getString("operation_key"));
+    };
     private static final RowMapper<ArchiveValidationRecord> VALIDATION = (rs, n) ->
             new ArchiveValidationRecord(rs.getString("validation_id"), rs.getString("draft_id"),
                     rs.getLong("draft_revision"), rs.getString("outcome"),
@@ -655,6 +667,17 @@ public class JdbcArchiveMaintenanceStore implements ArchiveMaintenanceStore {
     @Override public int updateDraft(String id,long expected,long next,String state,String json,String sha,Long validated,String validationId) {
         return jdbc.update("UPDATE archive_draft SET revision=?,state=?,content_json=?,content_sha256=?,validated_revision=?,validation_id=? WHERE draft_id=? AND revision=?",
                 next,state,json,sha,validated,validationId,id,expected);
+    }
+    @Override public List<ArchiveDraftBlockCheckpointRecord> listDraftBlockCheckpoints(
+            String draftId,long draftRevision,boolean lock) {
+        return jdbc.query("SELECT * FROM archive_draft_block_checkpoint WHERE draft_id=? AND draft_revision=? ORDER BY block_index"+(lock?" FOR UPDATE":""),
+                DRAFT_CHECKPOINT,draftId,draftRevision);
+    }
+    @Override public void insertDraftBlockCheckpoint(ArchiveDraftBlockCheckpointRecord c) {
+        jdbc.update("INSERT INTO archive_draft_block_checkpoint(draft_id,draft_revision,block_index,block_key,block_sha256,byte_length,storage_uri,draft_content_sha256,tenant_id,client_id,owner_jiacn,actor_type,run_id,execution_epoch,operation_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                c.draftId(),c.draftRevision(),c.blockIndex(),c.blockKey(),c.blockSha256(),
+                c.byteLength(),c.storageUri(),c.draftContentSha256(),c.tenantId(),c.clientId(),
+                c.ownerJiacn(),c.actorType(),c.runId(),c.executionEpoch(),c.operationKey());
     }
     @Override public void insertValidation(ArchiveValidationRecord v) {
         jdbc.update("INSERT INTO archive_validation(validation_id,draft_id,draft_revision,outcome,validation_digest,findings_json) VALUES (?,?,?,?,?,?)",

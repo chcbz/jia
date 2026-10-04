@@ -303,32 +303,6 @@ CREATE TABLE IF NOT EXISTS archive_draft (
     CONSTRAINT chk_archive_draft_state CHECK (state IN ('EDITABLE','VALIDATED','SEALED','CHANGES_REQUIRED'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
-CREATE TABLE IF NOT EXISTS archive_draft_block_checkpoint (
-    draft_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-    draft_revision BIGINT NOT NULL,
-    block_index BIGINT NOT NULL,
-    block_key VARCHAR(1000) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
-    block_sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-    byte_length BIGINT NOT NULL,
-    storage_uri VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-    draft_content_sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-    tenant_id VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
-    client_id VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
-    owner_jiacn VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
-    actor_type VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-    run_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
-    execution_epoch BIGINT NULL,
-    operation_key VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
-    created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-    PRIMARY KEY (draft_id,draft_revision,block_index),
-    KEY idx_archive_checkpoint_digest (block_sha256,draft_id,draft_revision),
-    KEY fk_archive_checkpoint_run (run_id),
-    CONSTRAINT fk_archive_checkpoint_draft FOREIGN KEY (draft_id) REFERENCES archive_draft(draft_id),
-    CONSTRAINT fk_archive_checkpoint_run FOREIGN KEY (run_id) REFERENCES archive_job_run(run_id),
-    CONSTRAINT chk_archive_checkpoint_numbers CHECK ((draft_revision >= 0) AND (block_index >= 0) AND (byte_length >= 0)),
-    CONSTRAINT chk_archive_checkpoint_actor CHECK (((actor_type='HUMAN') AND (run_id IS NULL) AND (execution_epoch IS NULL)) OR ((actor_type='RUNTIME') AND (run_id IS NOT NULL) AND (execution_epoch >= 1)))
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
-
 CREATE TABLE IF NOT EXISTS archive_validation (
     validation_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
     draft_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,

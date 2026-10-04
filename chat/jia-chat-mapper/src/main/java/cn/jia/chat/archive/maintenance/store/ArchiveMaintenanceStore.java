@@ -85,6 +85,9 @@ public interface ArchiveMaintenanceStore {
     void insertDraft(ArchiveDraftRecord draft);
     int updateDraft(String draftId, long expectedRevision, long newRevision, String state,
                     String contentJson, String contentSha256, Long validatedRevision, String validationId);
+    List<ArchiveDraftBlockCheckpointRecord> listDraftBlockCheckpoints(
+            String draftId, long draftRevision, boolean lock);
+    void insertDraftBlockCheckpoint(ArchiveDraftBlockCheckpointRecord checkpoint);
     void insertValidation(ArchiveValidationRecord validation);
     ArchiveValidationRecord findValidation(String validationId);
     ArchiveValidationRecord findCurrentValidation(String draftId, long draftRevision);

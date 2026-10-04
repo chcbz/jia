@@ -53,6 +53,22 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             "SUSPENDED_AUTH", "FAILED", "CANCELLED");
     private static final int MAX_PAGE_SIZE = 100;
     private static final int MAX_SOURCE_BYTES = 16 * 1024 * 1024;
+
+    private enum HumanCheckpointAuthority {
+        DRAFT_WRITE("draft.write"),
+        VALIDATE("validate"),
+        PUBLISH("publish");
+
+        private final String permission;
+
+        HumanCheckpointAuthority(String permission) {
+            this.permission = permission;
+        }
+
+        String permission() {
+            return permission;
+        }
+    }
     private final AgentTaskArtifactStorage sourceStorage;
     private final ArchiveMaintenanceStore store;
     private final ArchiveContentStore content;
@@ -1315,23 +1331,25 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
     }
 
     @Override
-    public ArchiveDraftBlockDTO getDraftBlock(ArchiveActorScope actor, String draftId, String blockId) {
+    public ArchiveDraftBlockDTO getDraftBlock(ArchiveActorScope actor, String draftId,
+            String blockId) {
         exactId(draftId);
         exactId(blockId);
         ArchiveDraftRecord observedDraft = store.findDraft(draftId, false);
         if (observedDraft == null) notFound();
         ArchiveMaintenanceJobRecord observed = requireJobForActor(actor, observedDraft.jobId(), false);
-        return transactions.required(() -> {
-            requireManager(actor, observed.collectionId(), "draft.write", true);
-            ArchiveMaintenanceJobRecord job = requireJobForActor(actor, observed.jobId(), true);
-            ArchiveDraftRecord draft = requireDraft(job.jobId(), true);
-            if (!same(job.draftId(), draftId) || !same(draft.draftId(), draftId)) notFound();
-            ArchiveDraftBlockInput block = parseDraft(draft.contentJson()).blocks().stream()
-                    .filter(value -> blockId.equals(value.blockKey())).findFirst().orElse(null);
-            if (block == null) notFound();
-            return new ArchiveDraftBlockDTO(draftId, job.jobId(), Long.toString(draft.revision()),
-                    draft.state(), block);
-        });
+        requireManager(actor, observed.collectionId(), "draft.write", false);
+        ArchiveDraftDTO draft = ensureHumanDraftCheckpoints(actor, observed,
+                HumanCheckpointAuthority.DRAFT_WRITE);
+        for (int i = 0; i < draft.content().blocks().size(); i++) {
+            ArchiveDraftBlockInput block = draft.content().blocks().get(i);
+            if (blockId.equals(block.blockKey())) {
+                return new ArchiveDraftBlockDTO(draftId, draft.jobId(), draft.revision(),
+                        draft.state(), block, draft.checkpoints().get(i));
+            }
+        }
+        notFound();
+        throw new IllegalStateException("unreachable");
     }
 
     @Override
@@ -1347,11 +1365,22 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         if (observedDraft == null) notFound();
         ArchiveMaintenanceJobRecord observed = requireJobForActor(actor, observedDraft.jobId(), false);
         requireManager(actor, observed.collectionId(), "draft.write", false);
+        ArchiveDraftUpdateRequest current = parseDraft(observedDraft.contentJson());
+        ArrayList<ArchiveDraftBlockInput> blocks = new ArrayList<>(current.blocks());
+        blocks.removeIf(block -> blockId.equals(block.blockKey()));
+        blocks.add(request);
+        blocks.sort(Comparator.comparingInt(block -> block.ordinal() == null
+                ? Integer.MAX_VALUE : block.ordinal()));
+        ArchiveDraftUpdateRequest updated = new ArchiveDraftUpdateRequest(
+                blocks, current.excludedSourceRanges());
+        PreparedDraftCheckpoints prepared = prepareDraftCheckpoints(observed, draftId,
+                expectedRevision + 1, updated, "HUMAN", null, null, key);
         String path = "/archive/admin/v1/drafts/" + draftId + "/blocks/" + blockId;
         String requestSha = digest(expectedRevision + "\0" + sha(request));
         return transactions.required(() -> {
             ArchiveManagerGrantRecord manager = requireManager(actor, observed.collectionId(), "draft.write", true);
             ArchiveMaintenanceJobRecord job = requireJobForActor(actor, observed.jobId(), true);
+            requireCheckpointJobScope(observed, job);
             ArchiveDraftRecord draft = requireDraft(job.jobId(), true);
             if (!same(draft.draftId(), draftId)) notFound();
             ArchiveMaintenanceStore.Operation op = operation(actor, key, "PUT", path, requestSha,
@@ -1361,18 +1390,13 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             if (!op.created()) return blockSnapshot(receipt, ArchiveDraftBlockDTO.class);
             requireDraftMutable(job, draft);
             if (draft.revision() != expectedRevision) revisionConflict(draft.revision());
-            ArchiveDraftUpdateRequest current = parseDraft(draft.contentJson());
-            ArrayList<ArchiveDraftBlockInput> blocks = new ArrayList<>(current.blocks());
-            blocks.removeIf(block -> blockId.equals(block.blockKey()));
-            blocks.add(request);
-            blocks.sort(Comparator.comparingInt(block -> block.ordinal() == null
-                    ? Integer.MAX_VALUE : block.ordinal()));
-            ArchiveDraftUpdateRequest updated = new ArchiveDraftUpdateRequest(
-                    blocks, current.excludedSourceRanges());
+            requireSameDraftSnapshot(observedDraft, draft);
             ArchiveDraftDTO changed = persistHumanDraftUpdate(actor, manager, job, draft, updated,
-                    "BLOCK_PUT");
+                    prepared, "BLOCK_PUT");
+            ArchiveDraftBlockCheckpointDTO checkpoint = changed.checkpoints().stream()
+                    .filter(value -> blockId.equals(value.blockKey())).findFirst().orElseThrow();
             ArchiveDraftBlockDTO result = new ArchiveDraftBlockDTO(draftId, job.jobId(),
-                    changed.revision(), changed.state(), request);
+                    changed.revision(), changed.state(), request, checkpoint);
             commitAdminReceipt(actor, key, op.targetId(), receipt, result);
             return result;
         });
@@ -1390,11 +1414,39 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         if (observedDraft == null) notFound();
         ArchiveMaintenanceJobRecord observed = requireJobForActor(actor, observedDraft.jobId(), false);
         requireManager(actor, observed.collectionId(), "draft.write", false);
+        ArchiveDraftUpdateRequest current = parseDraft(observedDraft.contentJson());
+        Map<String, ArchiveDraftBlockMetadataPatch> patches = new LinkedHashMap<>();
+        if (request.blocks() != null) {
+            for (ArchiveDraftBlockMetadataPatch patch : request.blocks()) {
+                if (patch == null || !exact(patch.blockKey(), 100) || patch.ordinal() == null
+                        || patch.ordinal() < 0 || !exact(patch.title(), 255)
+                        || patch.titleSourceRanges() == null
+                        || patches.putIfAbsent(patch.blockKey(), patch) != null) {
+                    invalid("Draft catalog patch is invalid");
+                }
+            }
+        }
+        ArrayList<ArchiveDraftBlockInput> blocks = new ArrayList<>();
+        for (ArchiveDraftBlockInput block : current.blocks()) {
+            ArchiveDraftBlockMetadataPatch patch = patches.remove(block.blockKey());
+            blocks.add(patch == null ? block : new ArchiveDraftBlockInput(block.blockType(),
+                    block.blockKey(), patch.ordinal(), patch.title(), patch.titleSourceRanges(),
+                    block.paragraphs()));
+        }
+        if (!patches.isEmpty()) notFound();
+        blocks.sort(Comparator.comparingInt(block -> block.ordinal() == null
+                ? Integer.MAX_VALUE : block.ordinal()));
+        ArchiveDraftUpdateRequest updated = new ArchiveDraftUpdateRequest(blocks,
+                request.excludedSourceRanges() == null ? current.excludedSourceRanges()
+                        : request.excludedSourceRanges());
+        PreparedDraftCheckpoints prepared = prepareDraftCheckpoints(observed, draftId,
+                expectedRevision + 1, updated, "HUMAN", null, null, key);
         String path = "/archive/admin/v1/drafts/" + draftId;
         String requestSha = digest(expectedRevision + "\0" + sha(request));
         return transactions.required(() -> {
             ArchiveManagerGrantRecord manager = requireManager(actor, observed.collectionId(), "draft.write", true);
             ArchiveMaintenanceJobRecord job = requireJobForActor(actor, observed.jobId(), true);
+            requireCheckpointJobScope(observed, job);
             ArchiveDraftRecord draft = requireDraft(job.jobId(), true);
             if (!same(draft.draftId(), draftId)) notFound();
             ArchiveMaintenanceStore.Operation op = operation(actor, key, "PATCH", path,
@@ -1404,33 +1456,9 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             if (!op.created()) return blockSnapshot(receipt, ArchiveDraftDTO.class);
             requireDraftMutable(job, draft);
             if (draft.revision() != expectedRevision) revisionConflict(draft.revision());
-            ArchiveDraftUpdateRequest current = parseDraft(draft.contentJson());
-            Map<String, ArchiveDraftBlockMetadataPatch> patches = new LinkedHashMap<>();
-            if (request.blocks() != null) {
-                for (ArchiveDraftBlockMetadataPatch patch : request.blocks()) {
-                    if (patch == null || !exact(patch.blockKey(), 100) || patch.ordinal() == null
-                            || patch.ordinal() < 0 || !exact(patch.title(), 255)
-                            || patch.titleSourceRanges() == null
-                            || patches.putIfAbsent(patch.blockKey(), patch) != null) {
-                        invalid("Draft catalog patch is invalid");
-                    }
-                }
-            }
-            ArrayList<ArchiveDraftBlockInput> blocks = new ArrayList<>();
-            for (ArchiveDraftBlockInput block : current.blocks()) {
-                ArchiveDraftBlockMetadataPatch patch = patches.remove(block.blockKey());
-                blocks.add(patch == null ? block : new ArchiveDraftBlockInput(block.blockType(),
-                        block.blockKey(), patch.ordinal(), patch.title(), patch.titleSourceRanges(),
-                        block.paragraphs()));
-            }
-            if (!patches.isEmpty()) notFound();
-            blocks.sort(Comparator.comparingInt(block -> block.ordinal() == null
-                    ? Integer.MAX_VALUE : block.ordinal()));
-            ArchiveDraftUpdateRequest updated = new ArchiveDraftUpdateRequest(blocks,
-                    request.excludedSourceRanges() == null ? current.excludedSourceRanges()
-                            : request.excludedSourceRanges());
+            requireSameDraftSnapshot(observedDraft, draft);
             ArchiveDraftDTO result = persistHumanDraftUpdate(actor, manager, job, draft, updated,
-                    "DRAFT_PATCH");
+                    prepared, "DRAFT_PATCH");
             commitAdminReceipt(actor, key, op.targetId(), receipt, result);
             return result;
         });
@@ -1458,10 +1486,12 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             }
             return accepted(replay);
         }
+        ensureHumanDraftCheckpoints(actor, observed, HumanCheckpointAuthority.VALIDATE);
         byte[] sourceBytes = requireSource(observed);
         return transactions.required(() -> {
             ArchiveManagerGrantRecord manager = requireManager(actor, observed.collectionId(), "validate", true);
             ArchiveMaintenanceJobRecord job = requireJobForActor(actor, observed.jobId(), true);
+            requireCheckpointJobScope(observed, job);
             ArchiveDraftRecord draft = requireDraft(job.jobId(), true);
             if (!same(draft.draftId(), draftId)) notFound();
             ArchiveMaintenanceStore.Operation op = operation(actor, key, "POST", path, requestSha,
@@ -1471,6 +1501,7 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             if (!op.created()) return accepted(receipt);
             requireDraftMutable(job, draft);
             if (draft.revision() != expectedRevision) revisionConflict(draft.revision());
+            requireCheckpointConsistency(draft);
             ArchiveDraftUpdateRequest body = parseDraft(draft.contentJson());
             List<String> findings = new ArrayList<>(validateContent(body));
             findings.addAll(ArchiveSourceMappingValidator.validate(sourceBytes, body));
@@ -1523,11 +1554,13 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             verifyPublicationForOperation(actor, key);
             return accepted(replay);
         }
+        ensureHumanDraftCheckpoints(actor, observed, HumanCheckpointAuthority.PUBLISH);
         PublicationCandidate candidate = preparePublicationCandidate(observed,
                 expectedDraftRevision, request);
         ArchiveOperationAcceptedDTO accepted = transactions.required(() -> {
             ArchiveManagerGrantRecord manager = requireManager(actor, observed.collectionId(), "publish", true);
             ArchiveMaintenanceJobRecord job = requireJobForActor(actor, observed.jobId(), true);
+            requireCheckpointJobScope(observed, job);
             ArchiveDraftRecord draft = requireDraft(job.jobId(), true);
             if (!same(draft.draftId(), draftId)) notFound();
             ArchivePublicationDTO result = publishLocked(actor, job, manager, null, key,
@@ -1638,7 +1671,7 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
     public ArchiveDraftDTO getDraft(ArchiveActorScope actor, String jobId) {
         ArchiveMaintenanceJobRecord job = requireJobForActor(actor, jobId, false);
         requireManager(actor, job.collectionId(), "draft.write", false);
-        return draftDto(requireDraft(jobId, false));
+        return ensureHumanDraftCheckpoints(actor, job, HumanCheckpointAuthority.DRAFT_WRITE);
     }
 
     @Override
@@ -1803,6 +1836,7 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
 
         ArchiveMaintenanceJobRecord candidateJob = requireJobForActor(actor, jobId, false);
         requireManager(actor, candidateJob.collectionId(), "publish", false);
+        ensureHumanDraftCheckpoints(actor, candidateJob, HumanCheckpointAuthority.PUBLISH);
         PublicationCandidate candidate = preparePublicationCandidate(
                 candidateJob, expectedDraftRevision, request);
         ArchivePublicationDTO committed = transactions.required(() -> {
@@ -1929,6 +1963,7 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             long expectedDraftRevision, ArchivePublishRequest request) {
         ArchiveDraftRecord draft = requireDraft(job.jobId(), false);
         if (draft.revision() != expectedDraftRevision) revisionConflict(draft.revision());
+        requireCheckpointConsistency(draft);
         ArchiveValidationRecord validation = requirePublicationValidation(draft, request);
         ArchiveSourceSnapshotRecord source = requireSourceRecord(job);
         byte[] sourceBytes = readSource(source);
@@ -1957,6 +1992,7 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         if (draft.revision() != expectedDraftRevision || !candidate.draft().equals(draft)) {
             revisionConflict(draft.revision());
         }
+        requireCheckpointConsistency(draft);
         ArchiveValidationRecord validation = requirePublicationValidation(draft, request);
         if (!candidate.validation().equals(validation)) {
             conflict("ARCHIVE_VALIDATION_REQUIRED",
@@ -2389,8 +2425,8 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
 
     @Override
     public ArchiveDraftDTO runtimeDraft(ArchiveRuntimeScope runtime, String jobId, String runId) {
-        authorizeRuntime(runtime, jobId, runId);
-        return draftDto(requireDraft(jobId, false));
+        ArchiveMaintenanceJobRecord job = authorizeRuntime(runtime, jobId, runId);
+        return ensureRuntimeDraftCheckpoints(runtime, job);
     }
 
     @Override
@@ -2468,6 +2504,7 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         requireExecutionCandidate(candidateJob);
         if (!same(candidateJob.runId(), runId)) notFound();
         requireRuntimeJobScope(runtime, candidateJob);
+        ensureRuntimeDraftCheckpoints(runtime, candidateJob);
         PublicationCandidate candidate = preparePublicationCandidate(
                 candidateJob, expectedDraftRevision, request);
         ArchivePublicationDTO committed = transactions.required(() -> {
@@ -2490,6 +2527,18 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             ArchiveMaintenanceJobRecord observed, String blockKey, String key,
             long expectedRevision, ArchiveDraftUpdateRequest request) {
         requireKey(key);
+        ArchiveDraftRecord observedDraft = requireDraft(observed.jobId(), false);
+        ArchiveDraftUpdateRequest current = parseDraft(observedDraft.contentJson());
+        ArrayList<ArchiveDraftBlockInput> blocks = new ArrayList<>(current.blocks());
+        blocks.removeIf(block -> blockKey.equals(block.blockKey()));
+        blocks.add(request.blocks().getFirst());
+        blocks.sort(Comparator.comparingInt(block -> block.ordinal() == null
+                ? Integer.MAX_VALUE : block.ordinal()));
+        ArchiveDraftUpdateRequest merged = new ArchiveDraftUpdateRequest(
+                blocks, request.excludedSourceRanges());
+        PreparedDraftCheckpoints prepared = prepareDraftCheckpoints(observed,
+                observedDraft.draftId(), expectedRevision + 1, merged, "RUNTIME",
+                observed.runId(), runtime.executionEpoch(), key);
         String requestSha = digest(expectedRevision + ":" + sha(request));
         return transactions.required(() -> {
             ArchiveAgentExecutionPort.LockedTarget lockedTarget = lockControlledTarget(target(observed));
@@ -2498,6 +2547,7 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             requireManagerRevision(manager, observed);
             ArchiveAppointmentRecord appointment = requireCurrentAppointmentForJob(observed, true);
             ArchiveMaintenanceJobRecord job = requireJobForActor(actor(runtime), observed.jobId(), true);
+            requireCheckpointJobScope(observed, job);
             requireManagerRevision(manager, job);
             RuntimeAuthorization authorization = authorizeRuntimeLocked(
                     runtime, job, appointment, lockedTarget);
@@ -2513,27 +2563,22 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
                 conflict("IDEMPOTENCY_CONFLICT", "Native block receipt resource changed");
             }
             if (!op.created()) return draftDto(requireDraft(job.jobId(), false));
-            if (draft.revision() != expectedRevision) revisionConflict(draft.revision());
-
-            ArchiveDraftUpdateRequest current = parseDraft(draft.contentJson());
-            ArrayList<ArchiveDraftBlockInput> blocks = new ArrayList<>(current.blocks());
-            blocks.removeIf(block -> blockKey.equals(block.blockKey()));
-            blocks.add(request.blocks().getFirst());
-            blocks.sort(Comparator.comparingInt(block -> block.ordinal() == null
-                    ? Integer.MAX_VALUE : block.ordinal()));
-            ArchiveDraftUpdateRequest merged = new ArchiveDraftUpdateRequest(
-                    blocks, request.excludedSourceRanges());
+            requireSameDraftSnapshot(observedDraft, draft);
             String json = json(merged);
             long next = draft.revision() + 1;
-            if (store.updateDraft(draft.draftId(), expectedRevision, next, "EDITABLE",
-                    json, digest(json), null, null) != 1) {
+            if (!prepared.draftContentSha256().equals(digest(json))
+                    || store.updateDraft(draft.draftId(), expectedRevision, next, "EDITABLE",
+                    json, prepared.draftContentSha256(), null, null) != 1) {
                 revisionConflict(draft.revision());
             }
+            ArchiveDraftRecord changed = requireDraft(job.jobId(), true);
+            insertPreparedCheckpoints(job, changed, prepared);
             store.appendJobEvent(job.jobId(), job.revision(), "DRAFT_UPDATED",
                     json(Map.of("draftId", draft.draftId(), "draftRevision", Long.toString(next),
-                            "blockKey", blockKey)));
+                            "blockKey", blockKey, "checkpointCount",
+                            Integer.toString(prepared.rows().size()))));
             store.commitOperation(actor(runtime), key, draft.draftId());
-            return draftDto(requireDraft(job.jobId(), false));
+            return draftDto(changed);
         });
     }
 
@@ -2542,30 +2587,39 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             ArchiveDraftUpdateRequest request) {
         requireKey(key);
         Objects.requireNonNull(request, "request");
+        ArchiveDraftRecord observedDraft = requireDraft(observed.jobId(), false);
+        PreparedDraftCheckpoints prepared = prepareDraftCheckpoints(observed,
+                observedDraft.draftId(), expectedRevision + 1, request, "HUMAN",
+                null, null, key);
         String requestSha = sha(request);
         return transactions.required(() -> {
             ArchiveManagerGrantRecord manager = requireManager(actor, observed.collectionId(),
                     "draft.write", true);
             ArchiveMaintenanceJobRecord job = requireJobForActor(actor, observed.jobId(), true);
+            requireCheckpointJobScope(observed, job);
             ArchiveDraftRecord draft = requireDraft(job.jobId(), true);
             requireDraftMutable(job, draft);
             String path = "/archive/admin/v1/jobs/" + job.jobId() + "/draft";
             ArchiveMaintenanceStore.Operation op = operation(actor, key, "PUT", path,
                     requestSha, "DRAFT", draft.draftId());
             if (!op.created()) return draftDto(requireDraft(job.jobId(), false));
-            if (draft.revision() != expectedRevision) revisionConflict(draft.revision());
+            requireSameDraftSnapshot(observedDraft, draft);
             String json = json(request);
             long next = draft.revision() + 1;
-            if (store.updateDraft(draft.draftId(), expectedRevision, next, "EDITABLE",
-                    json, digest(json), null, null) != 1) {
+            if (!prepared.draftContentSha256().equals(digest(json))
+                    || store.updateDraft(draft.draftId(), expectedRevision, next, "EDITABLE",
+                    json, prepared.draftContentSha256(), null, null) != 1) {
                 revisionConflict(draft.revision());
             }
+            ArchiveDraftRecord changed = requireDraft(job.jobId(), true);
+            insertPreparedCheckpoints(job, changed, prepared);
             Map<String, String> updateFacts = Map.of("draftId", draft.draftId(),
-                    "draftRevision", Long.toString(next));
+                    "draftRevision", Long.toString(next), "checkpointCount",
+                    Integer.toString(prepared.rows().size()));
             store.appendJobEvent(job.jobId(), job.revision(), "DRAFT_UPDATED",
                     humanAudit(actor, manager, updateFacts));
             store.commitOperation(actor, key, draft.draftId());
-            return draftDto(requireDraft(job.jobId(), false));
+            return draftDto(changed);
         });
     }
 
@@ -2573,6 +2627,8 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             ArchiveMaintenanceJobRecord observed, String key, long expectedRevision,
             boolean runtime, ArchiveRuntimeScope runtimeScope) {
         requireKey(key);
+        if (runtime) ensureRuntimeDraftCheckpoints(runtimeScope, observed);
+        else ensureHumanDraftCheckpoints(actor, observed, HumanCheckpointAuthority.VALIDATE);
         byte[] observedSource = null;
         String observedSourceFailure = null;
         try {
@@ -2627,6 +2683,7 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
             }
             requireDraftMutable(job, draft);
             if (draft.revision() != expectedRevision) revisionConflict(draft.revision());
+            requireCheckpointConsistency(draft);
             List<String> findings = new ArrayList<>();
             try {
                 ArchiveDraftUpdateRequest body = parseDraft(draft.contentJson());
@@ -3739,17 +3796,22 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
 
     private ArchiveDraftDTO persistHumanDraftUpdate(ArchiveActorScope actor,
             ArchiveManagerGrantRecord manager, ArchiveMaintenanceJobRecord job,
-            ArchiveDraftRecord draft, ArchiveDraftUpdateRequest request, String action) {
+            ArchiveDraftRecord draft, ArchiveDraftUpdateRequest request,
+            PreparedDraftCheckpoints prepared, String action) {
         String body = json(request);
         long next = draft.revision() + 1;
-        if (store.updateDraft(draft.draftId(), draft.revision(), next, "EDITABLE",
-                body, digest(body), null, null) != 1) {
+        if (!prepared.draftContentSha256().equals(digest(body))
+                || store.updateDraft(draft.draftId(), draft.revision(), next, "EDITABLE",
+                body, prepared.draftContentSha256(), null, null) != 1) {
             revisionConflict(draft.revision());
         }
+        ArchiveDraftRecord changed = requireDraft(job.jobId(), true);
+        insertPreparedCheckpoints(job, changed, prepared);
         store.appendJobEvent(job.jobId(), job.revision(), "HUMAN_DRAFT_UPDATED",
                 humanAudit(actor, manager, Map.of("draftId", draft.draftId(),
-                        "draftRevision", Long.toString(next), "action", action)));
-        return draftDto(requireDraft(job.jobId(), false));
+                        "draftRevision", Long.toString(next), "action", action,
+                        "checkpointCount", Integer.toString(prepared.rows().size()))));
+        return draftDto(changed);
     }
 
     private ArchiveAdminOperationRecord ensureAdminReceipt(ArchiveActorScope actor,
@@ -4397,12 +4459,265 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
         return true;
     }
 
+    private ArchiveDraftDTO ensureHumanDraftCheckpoints(ArchiveActorScope actor,
+            ArchiveMaintenanceJobRecord observedJob, HumanCheckpointAuthority authority) {
+        Objects.requireNonNull(authority);
+        ArchiveDraftRecord observedDraft = requireDraft(observedJob.jobId(), false);
+        List<ArchiveDraftBlockCheckpointRecord> observedRows = store.listDraftBlockCheckpoints(
+                observedDraft.draftId(), observedDraft.revision(), false);
+        boolean complete = checkpointSetComplete(observedJob, observedDraft, observedRows);
+        if (complete) verifyCheckpointObjects(observedJob, observedDraft, observedRows);
+        String operationKey = checkpointBackfillKey(observedDraft);
+        PreparedDraftCheckpoints prepared = complete ? null : prepareDraftCheckpoints(observedJob,
+                observedDraft.draftId(), observedDraft.revision(), parseDraft(observedDraft.contentJson()),
+                "HUMAN", null, null, operationKey);
+        return transactions.required(() -> {
+            requireManager(actor, observedJob.collectionId(), authority.permission(), true);
+            ArchiveMaintenanceJobRecord job = requireJobForActor(actor, observedJob.jobId(), true);
+            requireCheckpointJobScope(observedJob, job);
+            ArchiveDraftRecord draft = requireDraft(job.jobId(), true);
+            requireSameDraftSnapshot(observedDraft, draft);
+            if (prepared == null) requireCheckpointConsistency(job, draft);
+            else insertPreparedCheckpoints(job, draft, prepared);
+            return draftDto(draft);
+        });
+    }
+
+    private ArchiveDraftDTO ensureRuntimeDraftCheckpoints(ArchiveRuntimeScope runtime,
+            ArchiveMaintenanceJobRecord observedJob) {
+        ArchiveDraftRecord observedDraft = requireDraft(observedJob.jobId(), false);
+        List<ArchiveDraftBlockCheckpointRecord> observedRows = store.listDraftBlockCheckpoints(
+                observedDraft.draftId(), observedDraft.revision(), false);
+        boolean complete = checkpointSetComplete(observedJob, observedDraft, observedRows);
+        if (complete) verifyCheckpointObjects(observedJob, observedDraft, observedRows);
+        String operationKey = checkpointBackfillKey(observedDraft);
+        PreparedDraftCheckpoints prepared = complete ? null : prepareDraftCheckpoints(observedJob,
+                observedDraft.draftId(), observedDraft.revision(), parseDraft(observedDraft.contentJson()),
+                "RUNTIME", observedJob.runId(), runtime.executionEpoch(), operationKey);
+        return transactions.required(() -> {
+            ArchiveAgentExecutionPort.LockedTarget lockedTarget = lockControlledTarget(target(observedJob));
+            ArchiveManagerGrantRecord manager = requireManager(actor(runtime),
+                    observedJob.collectionId(), "draft.write", true);
+            requireManagerRevision(manager, observedJob);
+            ArchiveAppointmentRecord appointment = requireCurrentAppointmentForJob(observedJob, true);
+            ArchiveMaintenanceJobRecord job = requireJobForActor(actor(runtime), observedJob.jobId(), true);
+            requireCheckpointJobScope(observedJob, job);
+            requireManagerRevision(manager, job);
+            RuntimeAuthorization authorization = authorizeRuntimeLocked(
+                    runtime, job, appointment, lockedTarget);
+            requireProducerRunning(authorization.run());
+            ArchiveDraftRecord draft = requireDraft(job.jobId(), true);
+            requireSameDraftSnapshot(observedDraft, draft);
+            if (prepared == null) requireCheckpointConsistency(job, draft);
+            else insertPreparedCheckpoints(job, draft, prepared);
+            return draftDto(draft);
+        });
+    }
+
+    private boolean checkpointSetComplete(ArchiveMaintenanceJobRecord job,
+            ArchiveDraftRecord draft, List<ArchiveDraftBlockCheckpointRecord> rows) {
+        int expected = parseDraft(draft.contentJson()).blocks().size();
+        if (rows == null || rows.isEmpty()) return expected == 0;
+        requireCheckpointConsistency(job, draft, rows);
+        return true;
+    }
+
+    private String checkpointBackfillKey(ArchiveDraftRecord draft) {
+        return "checkpoint-backfill-" + digest(draft.draftId() + "\0" + draft.revision()
+                + "\0" + draft.contentSha256()).substring(0, 64);
+    }
+
+    private void requireSameDraftSnapshot(ArchiveDraftRecord expected, ArchiveDraftRecord actual) {
+        if (!same(expected.draftId(), actual.draftId()) || expected.revision() != actual.revision()
+                || !same(expected.contentSha256(), actual.contentSha256())
+                || !same(expected.contentJson(), actual.contentJson())) {
+            revisionConflict(actual.revision());
+        }
+    }
+
+    private AgentTaskArtifactStorage.Scope checkpointScope(ArchiveMaintenanceJobRecord job,
+            String draftId, long blockIndex, String blockKey) {
+        String scopeId = "archive-checkpoint-" + digest(draftId + "\0" + blockIndex + "\0"
+                + Objects.toString(blockKey, ""));
+        return new AgentTaskArtifactStorage.Scope(job.tenantId(), job.clientId(),
+                job.ownerJiacn(), scopeId);
+    }
+
+    private void verifyCheckpointObjects(ArchiveMaintenanceJobRecord job,
+            ArchiveDraftRecord draft, List<ArchiveDraftBlockCheckpointRecord> rows) {
+        requireCheckpointConsistency(job, draft, rows);
+        ArchiveDraftUpdateRequest body = parseDraft(draft.contentJson());
+        for (int i = 0; i < rows.size(); i++) {
+            ArchiveDraftBlockCheckpointRecord row = rows.get(i);
+            byte[] expected = json(body.blocks().get(i)).getBytes(StandardCharsets.UTF_8);
+            try {
+                AgentTaskArtifactStorage.StoredContent actual = sourceStorage.read(
+                        checkpointScope(job, draft.draftId(), i, row.blockKey()),
+                        row.storageUri(), row.blockSha256(), row.byteLength(), "application/json");
+                if (!Arrays.equals(expected, actual.content())
+                        || !same(actual.sha256(), row.blockSha256())
+                        || actual.byteLength() != row.byteLength()) {
+                    throw new AgentTaskArtifactStorageException(
+                            AgentTaskArtifactStorageException.Reason.CORRUPT_CONTENT,
+                            "Archive checkpoint object changed");
+                }
+            } catch (AgentTaskArtifactStorageException failure) {
+                throw error(503, "DEPENDENCY_UNAVAILABLE",
+                        "Private archive checkpoint storage is unavailable");
+            }
+        }
+    }
+
+    private PreparedDraftCheckpoints prepareDraftCheckpoints(ArchiveMaintenanceJobRecord job,
+            String draftId, long draftRevision, ArchiveDraftUpdateRequest body, String actorType,
+            String runId, Long executionEpoch, String operationKey) {
+        String draftJson = json(body);
+        String draftSha = digest(draftJson);
+        ArrayList<ArchiveDraftBlockCheckpointRecord> rows = new ArrayList<>();
+        long index = 0;
+        for (ArchiveDraftBlockInput block : body.blocks()) {
+            String blockKey = block == null ? null : block.blockKey();
+            if (blockKey != null && blockKey.codePointCount(0, blockKey.length()) > 1000) {
+                invalid("Draft block key exceeds checkpoint limits");
+            }
+            byte[] bytes = json(block).getBytes(StandardCharsets.UTF_8);
+            String expectedSha = digestBytes(bytes);
+            AgentTaskArtifactStorage.Scope scope = checkpointScope(job, draftId, index, blockKey);
+            try {
+                AgentTaskArtifactStorage.StoredObject stored = sourceStorage.store(
+                        scope, bytes, "application/json");
+                AgentTaskArtifactStorage.StoredContent verified = sourceStorage.read(scope,
+                        stored.storageUri(), expectedSha, bytes.length, "application/json");
+                if (!expectedSha.equals(stored.sha256()) || stored.byteLength() != bytes.length
+                        || !expectedSha.equals(verified.sha256())
+                        || verified.byteLength() != bytes.length
+                        || !Arrays.equals(bytes, verified.content())
+                        || !sourceStorage.matches(scope, stored.storageUri(), expectedSha)) {
+                    throw new AgentTaskArtifactStorageException(
+                            AgentTaskArtifactStorageException.Reason.CORRUPT_CONTENT,
+                            "Archive checkpoint proof did not match");
+                }
+                rows.add(new ArchiveDraftBlockCheckpointRecord(draftId, draftRevision, index,
+                        blockKey, expectedSha, bytes.length, stored.storageUri(), draftSha,
+                        job.tenantId(), job.clientId(), job.ownerJiacn(), actorType, runId,
+                        executionEpoch, operationKey));
+            } catch (AgentTaskArtifactStorageException failure) {
+                throw error(503, "DEPENDENCY_UNAVAILABLE",
+                        "Private archive checkpoint storage is unavailable");
+            }
+            index++;
+        }
+        return new PreparedDraftCheckpoints(draftSha, List.copyOf(rows));
+    }
+
+    private void insertPreparedCheckpoints(ArchiveMaintenanceJobRecord job,
+            ArchiveDraftRecord draft, PreparedDraftCheckpoints prepared) {
+        if (!prepared.draftContentSha256().equals(draft.contentSha256())) {
+            throw new IllegalStateException("Prepared archive checkpoint draft digest changed");
+        }
+        requireCheckpointConsistency(job, draft, prepared.rows());
+        List<ArchiveDraftBlockCheckpointRecord> existing = store.listDraftBlockCheckpoints(
+                draft.draftId(), draft.revision(), true);
+        if (!existing.isEmpty()) {
+            requireCheckpointConsistency(job, draft, existing);
+            return;
+        }
+        for (ArchiveDraftBlockCheckpointRecord row : prepared.rows()) {
+            store.insertDraftBlockCheckpoint(row);
+        }
+    }
+
+    private void requireCheckpointConsistency(ArchiveDraftRecord draft) {
+        ArchiveMaintenanceJobRecord job = store.findJob(draft.jobId(), false);
+        if (job == null) throw new IllegalStateException("Archive checkpoint job is unavailable");
+        requireCheckpointConsistency(job, draft);
+    }
+
+    private void requireCheckpointConsistency(ArchiveMaintenanceJobRecord job,
+            ArchiveDraftRecord draft) {
+        List<ArchiveDraftBlockCheckpointRecord> rows = store.listDraftBlockCheckpoints(
+                draft.draftId(), draft.revision(), false);
+        requireCheckpointConsistency(job, draft, rows);
+    }
+
+    private void requireCheckpointConsistency(ArchiveMaintenanceJobRecord job,
+            ArchiveDraftRecord draft, List<ArchiveDraftBlockCheckpointRecord> rows) {
+        requireCheckpointJobScope(job, draft);
+        ArchiveDraftUpdateRequest body = parseDraft(draft.contentJson());
+        if (rows == null || rows.size() != body.blocks().size()) {
+            conflict("ARCHIVE_CHECKPOINT_REQUIRED",
+                    "Draft chapter checkpoints are incomplete; read the draft to perform controlled backfill");
+        }
+        for (int i = 0; i < rows.size(); i++) {
+            ArchiveDraftBlockCheckpointRecord row = rows.get(i);
+            ArchiveDraftBlockInput block = body.blocks().get(i);
+            byte[] bytes = json(block).getBytes(StandardCharsets.UTF_8);
+            if (row.blockIndex() != i || row.draftRevision() != draft.revision()
+                    || !same(row.draftId(), draft.draftId())
+                    || !same(row.blockKey(), block == null ? null : block.blockKey())
+                    || !same(row.blockSha256(), digestBytes(bytes))
+                    || row.byteLength() != bytes.length
+                    || !same(row.draftContentSha256(), draft.contentSha256())
+                    || !same(row.tenantId(), job.tenantId())
+                    || !same(row.clientId(), job.clientId())
+                    || !same(row.ownerJiacn(), job.ownerJiacn())
+                    || !validCheckpointActor(row)
+                    || !ID.matcher(Objects.toString(row.operationKey(), "")).matches()
+                    || !sourceStorage.owns(row.storageUri())) {
+                throw new IllegalStateException("Persisted archive checkpoint set is inconsistent");
+            }
+        }
+    }
+
+    private void requireCheckpointJobScope(ArchiveMaintenanceJobRecord expected,
+            ArchiveMaintenanceJobRecord actual) {
+        if (!same(expected.jobId(), actual.jobId())
+                || !same(expected.collectionId(), actual.collectionId())
+                || !same(expected.tenantId(), actual.tenantId())
+                || !same(expected.clientId(), actual.clientId())
+                || !same(expected.ownerJiacn(), actual.ownerJiacn())
+                || !same(expected.draftId(), actual.draftId())) {
+            conflict("ARCHIVE_JOB_CHANGED",
+                    "Archive job scope changed while chapter checkpoints were prepared");
+        }
+    }
+
+    private void requireCheckpointJobScope(ArchiveMaintenanceJobRecord job,
+            ArchiveDraftRecord draft) {
+        if (!same(job.jobId(), draft.jobId()) || !same(job.draftId(), draft.draftId())) {
+            throw new IllegalStateException("Persisted archive checkpoint job scope is invalid");
+        }
+    }
+
+    private boolean validCheckpointActor(ArchiveDraftBlockCheckpointRecord row) {
+        return "HUMAN".equals(row.actorType()) && row.runId() == null
+                && row.executionEpoch() == null
+                || "RUNTIME".equals(row.actorType()) && row.runId() != null
+                && ID.matcher(row.runId()).matches() && row.executionEpoch() != null
+                && row.executionEpoch() >= 1;
+    }
+
+    private List<ArchiveDraftBlockCheckpointDTO> checkpointDtos(ArchiveDraftRecord draft) {
+        List<ArchiveDraftBlockCheckpointRecord> rows = store.listDraftBlockCheckpoints(
+                draft.draftId(), draft.revision(), false);
+        if (rows == null || rows.isEmpty()) return List.of();
+        ArchiveMaintenanceJobRecord job = store.findJob(draft.jobId(), false);
+        if (job == null) throw new IllegalStateException("Archive checkpoint job is unavailable");
+        requireCheckpointConsistency(job, draft, rows);
+        return rows.stream().map(row -> new ArchiveDraftBlockCheckpointDTO(row.blockKey(),
+                Long.toString(row.draftRevision()), row.blockSha256(),
+                Long.toString(row.byteLength()))).toList();
+    }
+
     private ArchiveDraftDTO draftDto(ArchiveDraftRecord value) {
         return new ArchiveDraftDTO(value.draftId(), value.jobId(), Long.toString(value.revision()),
                 value.state(), parseDraft(value.contentJson()), value.contentSha256(),
                 value.validatedRevision() == null ? null : Long.toString(value.validatedRevision()),
-                value.validationId());
+                value.validationId(), checkpointDtos(value));
     }
+
+    private record PreparedDraftCheckpoints(String draftContentSha256,
+            List<ArchiveDraftBlockCheckpointRecord> rows) { }
 
     private String exactVersionCollection(List<ArchiveEditionVersionRecord> versions, String workId) {
         String collectionId = versions.getFirst().collectionId();

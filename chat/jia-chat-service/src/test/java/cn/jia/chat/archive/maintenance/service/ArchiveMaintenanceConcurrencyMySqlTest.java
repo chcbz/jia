@@ -22,6 +22,7 @@ import cn.jia.chat.archive.maintenance.model.ArchiveActorScope;
 import cn.jia.chat.archive.maintenance.model.ArchiveConfirmedPolicyRef;
 import cn.jia.chat.archive.maintenance.model.ArchiveRequestContext;
 import cn.jia.chat.archive.maintenance.model.ArchiveExecutionGrantRecord;
+import cn.jia.chat.archive.maintenance.model.ArchiveDraftBlockCheckpointRecord;
 import cn.jia.chat.archive.maintenance.model.ArchiveRuntimeScope;
 import cn.jia.chat.archive.maintenance.store.ArchiveMaintenanceStore;
 import cn.jia.chat.archive.maintenance.store.JdbcArchiveMaintenanceStore;
@@ -717,6 +718,15 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         ArchiveDraftDTO second = service.runtimePutBlock(scope, JOB, RUN, "two",
                 "block-two", 1, blockRequest("two", 2));
         assertEquals("2", second.revision());
+        assertEquals(1, first.checkpoints().size());
+        assertEquals(2, second.checkpoints().size());
+        assertEquals(3, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM archive_draft_block_checkpoint WHERE draft_id='draft-a'",
+                Integer.class));
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(DISTINCT storage_uri) FROM archive_draft_block_checkpoint "
+                        + "WHERE draft_id='draft-a' AND block_key='one'",
+                Integer.class), "unchanged chapter bytes must reuse the immutable scoped object");
 
         ArchiveDraftDTO replay = service.runtimePutBlock(scope, JOB, RUN, "one",
                 "block-one", 0, firstBody);
@@ -729,6 +739,53 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         assertEquals("ARCHIVE_REVISION_CONFLICT", assertThrows(ArchiveMaintenanceException.class,
                 () -> service.runtimePutBlock(scope, JOB, RUN, "three", "block-three", 0,
                         blockRequest("three", 3))).code());
+    }
+
+    @Test
+    void checkpointObjectFailureRollbackAndLateAclLeaveNoReferencedChapter() {
+        seedExecutionCandidate();
+        JdbcArchiveMaintenanceStore base = new JdbcArchiveMaintenanceStore(jdbc);
+        RootLockingPort port = new RootLockingPort(jdbc);
+        TestSourceStorage corrupt = new TestSourceStorage(true);
+        corrupt.corruptCheckpointRead = true;
+        ArchiveMaintenanceServiceImpl corruptService = service(base, port,
+                mock(ArchiveContentStore.class), transactions, corrupt);
+        corruptService.ensureExecution(ACTOR, JOB, "ensure-checkpoint-corrupt", 1);
+        ArchiveRuntimeScope scope = runtime();
+        start(corruptService, RUN, scope, "message-checkpoint-corrupt");
+        assertEquals("DEPENDENCY_UNAVAILABLE", assertThrows(ArchiveMaintenanceException.class,
+                () -> corruptService.runtimePutBlock(scope, JOB, RUN, "one",
+                        "checkpoint-corrupt", 0, blockRequest("one", 1))).code());
+        assertEquals(0, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM archive_draft_block_checkpoint", Integer.class));
+        assertEquals(0L, jdbc.queryForObject(
+                "SELECT revision FROM archive_draft WHERE draft_id='draft-a'", Long.class));
+
+        TestSourceStorage rollbackStorage = new TestSourceStorage(true);
+        ArchiveMaintenanceServiceImpl rollbackService = service(
+                new LateFailingCheckpointStore(jdbc), port, mock(ArchiveContentStore.class),
+                transactions, rollbackStorage);
+        assertThrows(IllegalStateException.class, () -> rollbackService.runtimePutBlock(scope,
+                JOB, RUN, "one", "checkpoint-rollback", 0, blockRequest("one", 1)));
+        assertTrue(rollbackStorage.objects.size() > 0, "immutable orphan should remain reusable");
+        assertEquals(0, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM archive_draft_block_checkpoint", Integer.class));
+        assertEquals(0L, jdbc.queryForObject(
+                "SELECT revision FROM archive_draft WHERE draft_id='draft-a'", Long.class));
+
+        TestSourceStorage lateAclStorage = new TestSourceStorage(true);
+        lateAclStorage.afterCheckpointRead = () -> jdbc.update(
+                "UPDATE archive_collection_manager SET state='REVOKED',revision=revision+1 "
+                        + "WHERE collection_id=?", COLLECTION);
+        ArchiveMaintenanceServiceImpl lateAclService = service(base, port,
+                mock(ArchiveContentStore.class), transactions, lateAclStorage);
+        assertEquals("ARCHIVE_ACTION_FORBIDDEN", assertThrows(ArchiveMaintenanceException.class,
+                () -> lateAclService.runtimePutBlock(scope, JOB, RUN, "one",
+                        "checkpoint-late-acl", 0, blockRequest("one", 1))).code());
+        assertEquals(0, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM archive_draft_block_checkpoint", Integer.class));
+        assertEquals(0L, jdbc.queryForObject(
+                "SELECT revision FROM archive_draft WHERE draft_id='draft-a'", Long.class));
     }
 
     @Test
@@ -1595,6 +1652,45 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                 "SELECT COUNT(*) FROM archive_execution_grant g JOIN archive_job_run r "
                         + "ON r.run_id=g.run_id WHERE r.job_id=? AND g.state='ACTIVE'",
                 Integer.class, JOB));
+    }
+
+    @Test
+    void exact0d2a6e6CheckpointPredecessorUpgradesOnceAndPartialTableIsRejected()
+            throws Exception {
+        clean();
+        new ArchiveSchemaInitializer(jdbc).initialize();
+        byte[] predecessor;
+        try (var input = new ClassPathResource(
+                "db/archive-maintenance-schema-0d2a6e6.sql").getInputStream()) {
+            predecessor = input.readAllBytes();
+        }
+        assertEquals(38408, predecessor.length);
+        assertEquals("b17881687dd423d15fd3f73156a991f4c176ae4c0b71f87b8d515b69790832ce",
+                cn.jia.chat.archive.content.ArchiveEtags.sha256(predecessor));
+        assertEquals(20, java.util.regex.Pattern.compile("CREATE TABLE IF NOT EXISTS")
+                .matcher(new String(predecessor, StandardCharsets.UTF_8)).results().count());
+        new ResourceDatabasePopulator(new ByteArrayResource(predecessor)).execute(dataSource);
+        new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
+                new ArchiveMaintenanceProperties()).initialize();
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables "
+                + "WHERE table_schema=DATABASE() AND table_name='archive_draft_block_checkpoint'",
+                Integer.class));
+        new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
+                new ArchiveMaintenanceProperties()).initialize();
+
+        clean();
+        new ArchiveSchemaInitializer(jdbc).initialize();
+        new ResourceDatabasePopulator(new ByteArrayResource(predecessor)).execute(dataSource);
+        jdbc.execute("CREATE TABLE archive_draft_block_checkpoint ("
+                + "draft_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,"
+                + "PRIMARY KEY(draft_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 "
+                + "COLLATE=utf8mb4_0900_bin");
+        IllegalStateException partial = assertThrows(IllegalStateException.class,
+                () -> new ArchiveMaintenanceSchemaInitializer(jdbc,
+                        new JdbcArchiveMaintenanceStore(jdbc),
+                        new ArchiveMaintenanceProperties()).initialize());
+        assertTrue(partial.getMessage().contains("archive_draft_block_checkpoint.columns"),
+                partial.getMessage());
     }
 
     @Test
@@ -3532,7 +3628,7 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                             "archive_idempotency", "archive_note", "archive_bookmark",
                             "archive_reader_progress", "archive_admin_operation_receipt", "archive_operation", "archive_business_outbox", "archive_event",
                             "archive_edition_withdrawal", "archive_publication_readback", "archive_publication",
-                            "archive_validation", "archive_draft", "archive_execution_failure", "archive_execution_grant", "archive_job_run",
+                            "archive_validation", "archive_draft_block_checkpoint", "archive_draft", "archive_execution_failure", "archive_execution_grant", "archive_job_run",
                             "archive_maintenance_job", "archive_confirmed_request", "archive_source_snapshot", "archive_appointment",
                             "archive_appointment_slot", "archive_collection_work", "archive_collection_manager",
                             "archive_collection", "archive_paragraph", "archive_chapter", "archive_edition",
@@ -3593,29 +3689,53 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         volatile boolean available;
         final AtomicInteger reads = new AtomicInteger();
         volatile Runnable afterRead;
+        volatile Runnable afterCheckpointRead;
+        volatile boolean corruptCheckpointRead;
+        final java.util.concurrent.ConcurrentMap<String, byte[]> objects =
+                new java.util.concurrent.ConcurrentHashMap<>();
 
         TestSourceStorage(boolean available) { this.available = available; }
 
         @Override public StoredObject store(Scope scope, byte[] content, String mimeType) {
-            return new StoredObject("cyf-artifact://" + scope.taskId(),
-                    cn.jia.chat.archive.content.ArchiveEtags.sha256(content),
-                    content.length, mimeType, true);
+            String hash = cn.jia.chat.archive.content.ArchiveEtags.sha256(content);
+            String uri = "cyf-artifact://" + scope.taskId() + "/" + hash;
+            objects.putIfAbsent(uri, content.clone());
+            return new StoredObject(uri, hash, content.length, mimeType, true);
         }
         @Override public StoredContent read(Scope scope, String storageUri, String expectedSha256,
                 long expectedByteLength, String expectedMimeType) {
             assertFalse(TransactionSynchronizationManager.isActualTransactionActive(),
-                    "source storage must be read outside the database transaction");
+                    "artifact storage must be read outside the database transaction");
             reads.incrementAndGet();
             if (!available) throw new AgentTaskArtifactStorageException(
                     AgentTaskArtifactStorageException.Reason.IO_FAILURE, "test unavailable");
-            Runnable callback = afterRead;
-            afterRead = null;
-            if (callback != null) callback.run();
+            byte[] stored = objects.get(storageUri);
+            if (stored != null) {
+                Runnable callback = afterCheckpointRead;
+                afterCheckpointRead = null;
+                if (callback != null) callback.run();
+                byte[] result = corruptCheckpointRead ? "corrupt".getBytes(StandardCharsets.UTF_8) : stored;
+                return new StoredContent(result, expectedSha256, result.length, expectedMimeType);
+            }
+            if ("text/plain".equals(expectedMimeType)) {
+                Runnable callback = afterRead;
+                afterRead = null;
+                if (callback != null) callback.run();
+            }
             return new StoredContent(SOURCE, SHA, SOURCE.length, "text/plain");
         }
         @Override public boolean owns(String storageUri) { return true; }
         @Override public boolean matches(Scope scope, String storageUri, String expectedSha256) {
             return available;
+        }
+    }
+
+    private static final class LateFailingCheckpointStore extends JdbcArchiveMaintenanceStore {
+        private boolean failed;
+        LateFailingCheckpointStore(JdbcTemplate jdbc) { super(jdbc); }
+        @Override public void insertDraftBlockCheckpoint(ArchiveDraftBlockCheckpointRecord checkpoint) {
+            super.insertDraftBlockCheckpoint(checkpoint);
+            if (!failed) { failed = true; throw new IllegalStateException("injected checkpoint DB rollback"); }
         }
     }
 

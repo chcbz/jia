@@ -558,9 +558,11 @@ class ArchiveNativeControllerContractTest {
                         "sourceSha256", "sourceSummary", "state", "waitReason", "workId"),
                 fields(ArchiveRuntimeContextDTO.class));
         assertEquals(Set.of("key", "packageSha256", "version"), fields(ArchiveSkillRef.class));
-        assertEquals(Set.of("content", "contentSha256", "draftId", "jobId", "revision", "state",
+        assertEquals(Set.of("checkpoints", "content", "contentSha256", "draftId", "jobId", "revision", "state",
                         "validatedRevision", "validationId"),
                 fields(cn.jia.chat.archive.maintenance.dto.ArchiveDraftDTO.class));
+        assertEquals(Set.of("blockKey", "draftRevision", "digest", "byteLength"),
+                fields(cn.jia.chat.archive.maintenance.dto.ArchiveDraftBlockCheckpointDTO.class));
         assertEquals(Set.of("draftId", "draftRevision", "findings", "outcome",
                         "validationDigest", "validationId"),
                 fields(cn.jia.chat.archive.maintenance.dto.ArchiveValidationDTO.class));
@@ -581,7 +583,9 @@ class ArchiveNativeControllerContractTest {
         var content = new ArchiveDraftUpdateRequest(List.of(block), List.of());
         var draft = new cn.jia.chat.archive.maintenance.dto.ArchiveDraftDTO(
                 "draft-a", "job-a", "1", "EDITABLE", content,
-                "a".repeat(64), null, null);
+                "a".repeat(64), null, null, List.of(
+                new cn.jia.chat.archive.maintenance.dto.ArchiveDraftBlockCheckpointDTO(
+                        "chapter-1", "1", "c".repeat(64), "96")));
         when(service.runtimePutBlock(any(), eq("job-a"), eq("run-a"), eq("chapter-1"),
                 eq("block-key"), eq(0L), eq(content))).thenReturn(draft);
         when(service.runtimeValidate(any(), eq("job-a"), eq("run-a"),

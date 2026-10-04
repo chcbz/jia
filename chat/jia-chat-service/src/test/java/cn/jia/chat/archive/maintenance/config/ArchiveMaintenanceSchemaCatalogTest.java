@@ -21,6 +21,17 @@ class ArchiveMaintenanceSchemaCatalogTest {
         assertEquals("0:job_id", draft.indexes().get("uk_archive_draft_job"));
         assertEquals("job_id>archive_maintenance_job.job_id", draft.foreignKeys().get("fk_archive_draft_job"));
         assertTrue(draft.checks().get("chk_archive_draft_state").startsWith("YES:"));
+        var checkpoint = expected.tables().get("archive_draft_block_checkpoint");
+        assertEquals(new ArchiveMaintenanceSchemaCatalog.Column("char(64)", false, "ascii_bin"),
+                checkpoint.columns().get("block_sha256"));
+        assertEquals(new ArchiveMaintenanceSchemaCatalog.Column("varchar(255)", false, "ascii_bin"),
+                checkpoint.columns().get("storage_uri"));
+        assertEquals("0:draft_id,draft_revision,block_index",
+                checkpoint.indexes().get("PRIMARY"));
+        assertEquals("draft_id>archive_draft.draft_id",
+                checkpoint.foreignKeys().get("fk_archive_checkpoint_draft"));
+        assertTrue(checkpoint.checks().get("chk_archive_checkpoint_actor")
+                .contains("RUNTIME"));
         var withdrawal = expected.tables().get("archive_edition_withdrawal");
         assertEquals(new ArchiveMaintenanceSchemaCatalog.Column("varchar(1000)", false,
                 "utf8mb4_0900_bin"), withdrawal.columns().get("reason"));
@@ -157,6 +168,22 @@ class ArchiveMaintenanceSchemaCatalogTest {
             ArchiveMaintenanceSchemaCatalog.verify(table, expected.tables().get(table),
                     expected.tables().get(table), "InnoDB:utf8mb4_0900_bin");
         }
+    }
+
+    @Test
+    void checkpointPredecessorFixtureIsExact0d2a6e6GitBlob() throws Exception {
+        byte[] bytes;
+        try (var input = getClass().getClassLoader().getResourceAsStream(
+                "db/archive-maintenance-schema-0d2a6e6.sql")) {
+            org.junit.jupiter.api.Assertions.assertNotNull(input);
+            bytes = input.readAllBytes();
+        }
+        assertEquals(38408, bytes.length);
+        assertEquals("b17881687dd423d15fd3f73156a991f4c176ae4c0b71f87b8d515b69790832ce",
+                cn.jia.chat.archive.content.ArchiveEtags.sha256(bytes));
+        String sql = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+        assertEquals(20, sql.split("CREATE TABLE IF NOT EXISTS ", -1).length - 1);
+        assertTrue(!sql.contains("archive_draft_block_checkpoint"));
     }
 
     @Test

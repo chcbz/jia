@@ -22,6 +22,8 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -51,8 +53,42 @@ class ArchiveMaintenanceServiceImplTest {
         when(store.findSource("src_1")).thenReturn(new ArchiveSourceSnapshotRecord(
                 "src_1", COLLECTION, "0", "client-a", "owner-a", "cyf-artifact://source",
                 SHA, 1, "固定来源", "摘要", "已授权公开用途", "UTF8_EXACT_V1", "READY"));
+        Map<String, byte[]> artifactBytes = new ConcurrentHashMap<>();
+        when(sourceStorage.store(any(), any(byte[].class), anyString())).thenAnswer(invocation -> {
+            byte[] bytes = invocation.getArgument(1);
+            String mime = invocation.getArgument(2);
+            String hash = java.util.HexFormat.of().formatHex(
+                    java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+            String uri = "cyf-artifact://test/" + hash;
+            artifactBytes.put(uri, bytes.clone());
+            return new AgentTaskArtifactStorage.StoredObject(uri, hash, bytes.length, mime, true);
+        });
         when(sourceStorage.read(any(), anyString(), anyString(), anyLong(), anyString()))
-                .thenReturn(new AgentTaskArtifactStorage.StoredContent(new byte[] { 1 }, SHA, 1, "text/plain"));
+                .thenAnswer(invocation -> {
+                    String uri = invocation.getArgument(1);
+                    byte[] bytes = artifactBytes.get(uri);
+                    if (bytes == null) return new AgentTaskArtifactStorage.StoredContent(
+                            new byte[] { 1 }, SHA, 1, invocation.getArgument(4));
+                    return new AgentTaskArtifactStorage.StoredContent(bytes, invocation.getArgument(2),
+                            bytes.length, invocation.getArgument(4));
+                });
+        when(sourceStorage.matches(any(), anyString(), anyString())).thenReturn(true);
+        when(sourceStorage.owns(anyString())).thenReturn(true);
+        Map<String, List<ArchiveDraftBlockCheckpointRecord>> checkpoints = new ConcurrentHashMap<>();
+        when(store.listDraftBlockCheckpoints(anyString(), anyLong(), anyBoolean()))
+                .thenAnswer(invocation -> checkpoints.getOrDefault(
+                        invocation.getArgument(0) + ":" + invocation.getArgument(1), List.of()));
+        doAnswer(invocation -> {
+            ArchiveDraftBlockCheckpointRecord row = invocation.getArgument(0);
+            String checkpointKey = row.draftId() + ":" + row.draftRevision();
+            checkpoints.compute(checkpointKey, (ignored, rows) -> {
+                java.util.ArrayList<ArchiveDraftBlockCheckpointRecord> copy = new java.util.ArrayList<>(
+                        rows == null ? List.of() : rows);
+                copy.add(row);
+                return List.copyOf(copy);
+            });
+            return null;
+        }).when(store).insertDraftBlockCheckpoint(any());
         content = mock(ArchiveContentStore.class);
         identities = mock(AgentIdentityService.class);
         when(identities.lockBindingAuthority(anyString(), anyString(), anyString(),
@@ -382,13 +418,16 @@ class ArchiveMaintenanceServiceImplTest {
         when(identities.requireActiveIdentityForBinding("0", "client-a", "owner-a", 7L, AGENT))
                 .thenReturn(new AgentIdentityRegistryEntity().setCanonicalAgentId(AGENT));
         ArchiveDraftUpdateRequest body = body("甲", "乙");
+        String bodyJson = new ObjectMapper().writeValueAsString(body);
+        String bodySha = cn.jia.chat.archive.content.ArchiveEtags.sha256(
+                bodyJson.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         ArchiveDraftRecord draft = new ArchiveDraftRecord(DRAFT, JOB, 1,
-                "VALIDATED", new ObjectMapper().writeValueAsString(body), SHA, 1L, "val_1");
+                "VALIDATED", bodyJson, bodySha, 1L, "val_1");
         when(store.findDraftByJob(JOB, false)).thenReturn(draft);
         when(store.findDraftByJob(JOB, true)).thenReturn(draft);
         when(store.findValidation("val_1")).thenReturn(new ArchiveValidationRecord("val_1", DRAFT,
                 1, "PASSED", SHA, "[]"));
-        when(sourceStorage.read(any(), anyString(), anyString(), anyLong(), anyString()))
+        when(sourceStorage.read(any(), eq("cyf-artifact://source"), eq(SHA), eq(1L), eq("text/plain")))
                 .thenThrow(new cn.jia.agent.exception.AgentTaskArtifactStorageException(
                         cn.jia.agent.exception.AgentTaskArtifactStorageException.Reason.CORRUPT_CONTENT,
                         "stored bytes changed"));
@@ -407,8 +446,13 @@ class ArchiveMaintenanceServiceImplTest {
         when(store.findJob(JOB, false)).thenReturn(job);
         when(store.findJob(JOB, true)).thenReturn(job);
         ArchiveDraftUpdateRequest body = body("甲", "乙");
-        when(store.findDraftByJob(JOB, true)).thenReturn(new ArchiveDraftRecord(DRAFT, JOB, 1,
-                "EDITABLE", new ObjectMapper().writeValueAsString(body), SHA, null, null));
+        String bodyJson = new ObjectMapper().writeValueAsString(body);
+        String bodySha = cn.jia.chat.archive.content.ArchiveEtags.sha256(
+                bodyJson.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        ArchiveDraftRecord draft = new ArchiveDraftRecord(DRAFT, JOB, 1,
+                "EDITABLE", bodyJson, bodySha, null, null);
+        when(store.findDraftByJob(JOB, false)).thenReturn(draft);
+        when(store.findDraftByJob(JOB, true)).thenReturn(draft);
         operation("POST", "/archive/admin/v1/jobs/" + JOB + "/validate", "VALIDATION", "val_claim");
         when(store.updateDraft(eq(DRAFT), eq(1L), eq(1L), eq("CHANGES_REQUIRED"),
                 anyString(), anyString(), isNull(), isNull())).thenReturn(1);
@@ -811,16 +855,19 @@ class ArchiveMaintenanceServiceImplTest {
     void draftCasRejectsStaleRevisionAndSuccessfulWriteInvalidatesValidation() throws Exception {
         ArchiveMaintenanceJobRecord job = job("DRAFT_ONLY");
         ArchiveDraftUpdateRequest body = body("甲", "乙");
+        String bodyJson = new ObjectMapper().writeValueAsString(body);
+        String bodySha = cn.jia.chat.archive.content.ArchiveEtags.sha256(
+                bodyJson.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         ArchiveDraftRecord current = new ArchiveDraftRecord(DRAFT, JOB, 4, "VALIDATED",
-                new ObjectMapper().writeValueAsString(body), SHA, 4L, "val_old");
+                bodyJson, bodySha, 4L, "val_old");
         ArchiveDraftRecord updated = new ArchiveDraftRecord(DRAFT, JOB, 5, "EDITABLE",
-                new ObjectMapper().writeValueAsString(body), "b".repeat(64), null, null);
+                bodyJson, bodySha, null, null);
         allowManager("draft.write");
         activeAppointment(appointment("ACTIVE", 1));
         when(store.findJob(JOB, false)).thenReturn(job);
         when(store.findJob(JOB, true)).thenReturn(job);
-        when(store.findDraftByJob(JOB, true)).thenReturn(current);
-        when(store.findDraftByJob(JOB, false)).thenReturn(updated);
+        when(store.findDraftByJob(JOB, true)).thenReturn(current, current, updated);
+        when(store.findDraftByJob(JOB, false)).thenReturn(current);
         when(store.updateDraft(eq(DRAFT), eq(4L), eq(5L), eq("EDITABLE"), anyString(), anyString(),
                 isNull(), isNull())).thenReturn(1);
         operation("PUT", "/archive/admin/v1/jobs/" + JOB + "/draft", "DRAFT", DRAFT);
@@ -879,11 +926,17 @@ class ArchiveMaintenanceServiceImplTest {
         ArchiveDraftUpdateRequest body = body("第一回正文", "第二回正文");
         byte[] source = "第一回第一回正文第二回第二回正文"
                 .getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        when(sourceStorage.read(any(), anyString(), anyString(), anyLong(), anyString()))
-                .thenReturn(new AgentTaskArtifactStorage.StoredContent(source, SHA, source.length, "text/plain"));
+        when(store.findSource("src_1")).thenReturn(new ArchiveSourceSnapshotRecord(
+                "src_1", COLLECTION, "0", "client-a", "owner-a", "cyf-artifact://source",
+                SHA, source.length, "固定来源", "摘要", "已授权公开用途", "UTF8_EXACT_V1", "READY"));
+        when(sourceStorage.read(any(), eq("cyf-artifact://source"), eq(SHA), eq((long) source.length),
+                eq("text/plain"))).thenReturn(
+                new AgentTaskArtifactStorage.StoredContent(source, SHA, source.length, "text/plain"));
         String json = new ObjectMapper().writeValueAsString(body);
+        String bodySha = cn.jia.chat.archive.content.ArchiveEtags.sha256(
+                json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         ArchiveDraftRecord draft = new ArchiveDraftRecord(DRAFT, JOB, 2, "VALIDATED", json,
-                "b".repeat(64), 2L, "val_2");
+                bodySha, 2L, "val_2");
         ArchiveValidationRecord validation = new ArchiveValidationRecord("val_2", DRAFT, 2,
                 "PASSED", "c".repeat(64), "[]");
         allowManager("publish");
@@ -906,7 +959,7 @@ class ArchiveMaintenanceServiceImplTest {
         when(content.switchActiveEdition(eq("wrk_new"), anyString())).thenReturn(1);
         when(content.markActivated(anyString())).thenReturn(1);
         when(store.bumpCollectionWork(COLLECTION, "wrk_new", 1)).thenReturn(1);
-        when(store.updateDraft(DRAFT, 2, 2, "SEALED", json, "b".repeat(64), 2L, "val_2")).thenReturn(1);
+        when(store.updateDraft(DRAFT, 2, 2, "SEALED", json, bodySha, 2L, "val_2")).thenReturn(1);
         when(store.updateJobState(JOB, 1, "PUBLISHED", null, "pub_1")).thenReturn(1);
         java.util.concurrent.atomic.AtomicReference<ArchivePublicationReadbackRecord> readback =
                 new java.util.concurrent.atomic.AtomicReference<>();
@@ -1379,8 +1432,10 @@ class ArchiveMaintenanceServiceImplTest {
         ArchiveDraftUpdateRequest body = body("甲", "乙");
         byte[] source = "第一回甲第二回乙".getBytes(java.nio.charset.StandardCharsets.UTF_8);
         String bodyJson = new ObjectMapper().writeValueAsString(body);
+        String bodySha = cn.jia.chat.archive.content.ArchiveEtags.sha256(
+                bodyJson.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         ArchiveDraftRecord draft = new ArchiveDraftRecord(DRAFT, JOB, 1, "EDITABLE",
-                bodyJson, "b".repeat(64), null, null);
+                bodyJson, bodySha, null, null);
         allowManager("draft.write,validate");
         activeAppointment(appointment("ACTIVE", 1));
         allowCurrentBinding();
@@ -1388,18 +1443,20 @@ class ArchiveMaintenanceServiceImplTest {
         when(store.findJob(JOB, true)).thenReturn(runningJob);
         when(store.findRun(RUN, true)).thenReturn(running);
         when(store.findExecutionGrant(RUN, true)).thenReturn(executionGrant("ACTIVE", 1));
+        when(store.findDraftByJob(JOB, false)).thenReturn(draft);
         when(store.findDraftByJob(JOB, true)).thenReturn(draft);
         when(store.findSource("src_1")).thenReturn(new ArchiveSourceSnapshotRecord(
                 "src_1", COLLECTION, "0", "client-a", "owner-a", "cyf-artifact://source",
                 SHA, source.length, "固定来源", "摘要", "已授权公开用途", "UTF8_EXACT_V1", "READY"));
-        when(sourceStorage.read(any(), anyString(), anyString(), anyLong(), anyString()))
-                .thenReturn(new AgentTaskArtifactStorage.StoredContent(source, SHA, source.length, "text/plain"));
+        when(sourceStorage.read(any(), eq("cyf-artifact://source"), eq(SHA), eq((long) source.length),
+                eq("text/plain"))).thenReturn(
+                new AgentTaskArtifactStorage.StoredContent(source, SHA, source.length, "text/plain"));
         when(port.inspectExecution(any(), any())).thenReturn(
                 new ArchiveAgentExecutionPort.Inspection(true, "STARTED", "message-a"));
         operation("POST", "/internal/archive/v1/jobs/" + JOB + "/runs/" + RUN + "/validate",
                 "VALIDATION", "val_native");
         when(store.updateDraft(eq(DRAFT), eq(1L), eq(1L), eq("VALIDATED"),
-                eq(bodyJson), eq("b".repeat(64)), eq(1L), eq("val_native"))).thenReturn(1);
+                eq(bodyJson), eq(bodySha), eq(1L), eq("val_native"))).thenReturn(1);
         when(store.updateJobState(JOB, 3, "AWAITING_PUBLISH", null, null)).thenReturn(1);
         when(store.completeRun(RUN, 3)).thenReturn(1);
         when(store.releaseExecutionGrant(RUN, 1)).thenReturn(1);
@@ -1440,8 +1497,10 @@ class ArchiveMaintenanceServiceImplTest {
         ArchiveDraftUpdateRequest body = body("甲", "乙");
         byte[] source = "第一回甲第二回乙".getBytes(java.nio.charset.StandardCharsets.UTF_8);
         String bodyJson = new ObjectMapper().writeValueAsString(body);
+        String bodySha = cn.jia.chat.archive.content.ArchiveEtags.sha256(
+                bodyJson.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         ArchiveDraftRecord draft = new ArchiveDraftRecord(DRAFT, JOB, 1, "EDITABLE",
-                bodyJson, "b".repeat(64), null, null);
+                bodyJson, bodySha, null, null);
         allowManager("draft.write,validate,publish");
         activeAppointment(appointment(permissionProfile, "ACTIVE", 1));
         allowCurrentBinding();
@@ -1449,18 +1508,20 @@ class ArchiveMaintenanceServiceImplTest {
         when(store.findJob(JOB, true)).thenReturn(runningJob);
         when(store.findRun(RUN, true)).thenReturn(running);
         when(store.findExecutionGrant(RUN, true)).thenReturn(executionGrant("ACTIVE", 1));
+        when(store.findDraftByJob(JOB, false)).thenReturn(draft);
         when(store.findDraftByJob(JOB, true)).thenReturn(draft);
         when(store.findSource("src_1")).thenReturn(new ArchiveSourceSnapshotRecord(
                 "src_1", COLLECTION, "0", "client-a", "owner-a", "cyf-artifact://source",
                 SHA, source.length, "固定来源", "摘要", "已授权公开用途", "UTF8_EXACT_V1", "READY"));
-        when(sourceStorage.read(any(), anyString(), anyString(), anyLong(), anyString()))
-                .thenReturn(new AgentTaskArtifactStorage.StoredContent(source, SHA, source.length, "text/plain"));
+        when(sourceStorage.read(any(), eq("cyf-artifact://source"), eq(SHA), eq((long) source.length),
+                eq("text/plain"))).thenReturn(
+                new AgentTaskArtifactStorage.StoredContent(source, SHA, source.length, "text/plain"));
         when(port.inspectExecution(any(), any())).thenReturn(
                 new ArchiveAgentExecutionPort.Inspection(true, "STARTED", "message-a"));
         operation("POST", "/internal/archive/v1/jobs/" + JOB + "/runs/" + RUN + "/validate",
                 "VALIDATION", "val_mode");
         when(store.updateDraft(eq(DRAFT), eq(1L), eq(1L), eq("VALIDATED"),
-                eq(bodyJson), eq("b".repeat(64)), eq(1L), eq("val_mode"))).thenReturn(1);
+                eq(bodyJson), eq(bodySha), eq(1L), eq("val_mode"))).thenReturn(1);
         when(store.updateJobState(JOB, 3, "AWAITING_PUBLISH", null, null)).thenReturn(1);
         when(store.completeRun(RUN, 3)).thenReturn(1);
         when(store.releaseExecutionGrant(RUN, 1)).thenReturn(1);
@@ -1495,12 +1556,13 @@ class ArchiveMaintenanceServiceImplTest {
         ArchiveMaintenanceJobRecord job = job("DRAFT_ONLY");
         ArchiveDraftUpdateRequest initial = body("甲", "乙");
         String initialJson = new ObjectMapper().writeValueAsString(initial);
+        String initialSha = cn.jia.chat.archive.content.ArchiveEtags.sha256(
+                initialJson.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         ArchiveDraftRecord revision4 = new ArchiveDraftRecord(DRAFT, JOB, 4, "CHANGES_REQUIRED",
-                initialJson, "b".repeat(64), null, null);
+                initialJson, initialSha, null, null);
         when(store.findDraft(DRAFT, false)).thenReturn(revision4);
         when(store.findJob(JOB, false)).thenReturn(job);
         when(store.findJob(JOB, true)).thenReturn(job);
-        when(store.findDraftByJob(JOB, true)).thenReturn(revision4);
         ArchiveDraftBlockInput replacement = new ArchiveDraftBlockInput("CHAPTER", "one", 1,
                 "第一回", initial.blocks().getFirst().titleSourceRanges(),
                 initial.blocks().getFirst().paragraphs());
@@ -1513,7 +1575,8 @@ class ArchiveMaintenanceServiceImplTest {
         when(store.updateDraft(eq(DRAFT), eq(4L), eq(5L), eq("EDITABLE"), anyString(),
                 anyString(), isNull(), isNull())).thenReturn(1);
         ArchiveDraftRecord revision5 = new ArchiveDraftRecord(DRAFT, JOB, 5, "EDITABLE",
-                initialJson, "c".repeat(64), null, null);
+                initialJson, initialSha, null, null);
+        when(store.findDraftByJob(JOB, true)).thenReturn(revision4, revision5);
         when(store.findDraftByJob(JOB, false)).thenReturn(revision5);
         when(store.commitAdminOperation(anyString(), anyString())).thenReturn(1);
         ArgumentCaptor<ArchiveAdminOperationRecord> receipts =
@@ -1535,7 +1598,6 @@ class ArchiveMaintenanceServiceImplTest {
         when(store.findDraft(DRAFT, false)).thenReturn(revision5);
         when(store.findJob(JOB, false)).thenReturn(job);
         when(store.findJob(JOB, true)).thenReturn(job);
-        when(store.findDraftByJob(JOB, true)).thenReturn(revision5);
         String patchPath = "/archive/admin/v1/drafts/" + DRAFT;
         when(store.beginOperation(eq(MANAGER), eq("patch-key"), eq("PATCH"), eq(patchPath),
                 anyString(), eq("DRAFT"), eq(DRAFT))).thenAnswer(call ->
@@ -1545,7 +1607,8 @@ class ArchiveMaintenanceServiceImplTest {
         when(store.updateDraft(eq(DRAFT), eq(5L), eq(6L), eq("EDITABLE"), anyString(),
                 anyString(), isNull(), isNull())).thenReturn(1);
         ArchiveDraftRecord revision6 = new ArchiveDraftRecord(DRAFT, JOB, 6, "EDITABLE",
-                initialJson, "d".repeat(64), null, null);
+                initialJson, initialSha, null, null);
+        when(store.findDraftByJob(JOB, true)).thenReturn(revision5, revision6);
         when(store.findDraftByJob(JOB, false)).thenReturn(revision6);
         when(store.commitAdminOperation(anyString(), anyString())).thenReturn(1);
         ArchiveDraftPatchRequest patch = new ArchiveDraftPatchRequest(List.of(
