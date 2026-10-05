@@ -269,6 +269,36 @@ class ChatTypedDiscussionAdmissionServiceTest {
         verify(deliberation,never()).getRequest(anyString(),anyString(),anyString(),anyString());
     }
 
+
+    @Test void completedExecuteMediaBasisAndMixedTargetsEnterOriginalFrozenAdmission() {
+        var mixed=new ChatMixedDeliveryBasisTest.Mixed();var parent=mixed.addMedia("media-parent",mixed.c.root,"APPEND");
+        var basis=mixed.basis(parent);var targets=mixed.retained(parent);
+        when(typed.requireParent(storeScope,parent.outcomeId())).thenReturn(parent);
+        when(events.findTurn("0","owner","client",parent.turnId())).thenReturn(mixed.c.turns.get(parent.turnId()));
+        when(finals.readIfV3(storeScope,parent.requestId(),parent.turnId(),1,"CHAT")).thenReturn(mixed.c.read(parent));
+        when(finals.deliveryTargets(storeScope,basis)).thenReturn(targets);
+        when(contexts.resolve(any(),eq("task"),eq("agent"),eq(List.of()))).thenReturn(new ChatTypedDeliberationContextService.Context(
+                ChatActionFinalValidator.factsMap(ChatActionOutcomeContract.factsJson(parent.factsJson())),"[]",List.of(),Map.of("schemaVersion",3,"state","READY")));
+        when(deliberation.admit(eq("0"),eq(sender),eq("42"),eq(1L),any(),any(),any(),isNull(),any(),any())).thenAnswer(i->admitted(((ChatMessageDTO)i.getArgument(6)).getRequestId()));
+        when(store.insertAdmission(any())).thenReturn(1);
+        var command=new ChatTypedDeliberationWire.DiscussionCommand("DISCUSSION","task",3,"修改文章但保留两张图片",parent.outcomeId(),0L,null,null,List.of());
+        service.admit("0",sender,"42","mixed-key",command);
+        assertEquals(3,targets.size());assertEquals(2,targets.stream().filter(x->x.containsKey("outputSource")).count());
+        verify(deliberation).admit(eq("0"),eq(sender),eq("42"),eq(1L),any(),any(),any(),isNull(),any(),argThat(facts->basis.equals(facts.get("deliveryParent"))&&targets.equals(facts.get("deliveryTargets"))));
+    }
+    @Test void stillAllowsOrdinaryDiscussionOfPendingActionWithoutAdvertisingAnyDeliverableBasis() {
+        var mixed=new ChatMixedDeliveryBasisTest.Mixed();var parent=mixed.c.add("media-pending","DISCUSSION",mixed.c.root,mixed.c.basis,"ACTION_REQUEST","APPEND");
+        when(typed.requireParent(storeScope,parent.outcomeId())).thenReturn(parent);
+        when(events.findTurn("0","owner","client",parent.turnId())).thenReturn(mixed.c.turns.get(parent.turnId()));
+        when(finals.readIfV3(storeScope,parent.requestId(),parent.turnId(),1,"CHAT")).thenReturn(mixed.c.read(parent));
+        when(contexts.resolve(any(),eq("task"),eq("agent"),eq(List.of()))).thenReturn(context());
+        when(deliberation.admit(eq("0"),eq(sender),eq("42"),eq(1L),any(),any(),any(),isNull(),any(),any())).thenAnswer(i->admitted(((ChatMessageDTO)i.getArgument(6)).getRequestId()));
+        when(store.insertAdmission(any())).thenReturn(1);
+        service.admit("0",sender,"42","pending-chat",new ChatTypedDeliberationWire.DiscussionCommand("DISCUSSION","task",3,"还有多久？",parent.outcomeId(),0L,null,null,List.of()));
+        verify(finals,never()).deliveryTargets(any(),any());
+        verify(deliberation).admit(eq("0"),eq(sender),eq("42"),eq(1L),any(),any(),any(),isNull(),any(),argThat(facts->!facts.containsKey("deliveryParent")&&!facts.containsKey("deliveryTargets")));
+    }
+
     private static ChatTypedDeliberationWire.DiscussionCommand discussion(){return new ChatTypedDeliberationWire.DiscussionCommand("DISCUSSION","task",3,"继续讨论",null,null,null,null,List.of());}
     private static String bodyDigest(ChatTypedDeliberationWire.DiscussionCommand c){Map<String,Object> m=new java.util.LinkedHashMap<>();m.put("schemaVersion",1);m.put("intent",c.intent());m.put("taskId",c.taskId());m.put("expectedAssignmentRevision","3");m.put("content",c.content());m.put("parentOutcomeId",null);m.put("expectedParentStateVersion",null);m.put("pendingQuestionId",null);m.put("expectedPendingQuestionStateVersion",null);m.put("sourceSelectors",List.of());return ChatDeliberationService.digest(m);}
     private static ChatTypedDeliberationContextService.Context context(){return new ChatTypedDeliberationContextService.Context(Map.of("schemaVersion",1,"referenceMode","NONE","supportedOperations",List.of("GENERATE_IMAGE","EDIT_IMAGE"),"availableSources",List.of()),"[]",List.of(),Map.of("schemaVersion",1,"state","READY"));}
