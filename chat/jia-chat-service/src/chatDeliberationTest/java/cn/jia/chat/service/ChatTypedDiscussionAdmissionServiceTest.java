@@ -56,6 +56,7 @@ class ChatTypedDiscussionAdmissionServiceTest {
         when(store.insertAdmission(any())).thenReturn(1);
         var command=new ChatTypedDeliberationWire.DiscussionCommand("DISCUSSION","task",3,"再补一段",parent.outcomeId(),0L,null,null,List.of());
         var basis=Map.<String,Object>of("outcomeId",parent.outcomeId(),"finalDigest",parent.finalDigest());
+        when(actual.store.findOutcome(actual.scope,parent.outcomeId(),false)).thenReturn(parent);
         var targets=actual.finals.deliveryTargets(actual.scope,basis);
         when(finals.deliveryTargets(storeScope,basis)).thenReturn(targets);
         service.admit("0",sender,"42","append-key",command);
