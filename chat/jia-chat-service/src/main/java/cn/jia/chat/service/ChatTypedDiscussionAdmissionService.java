@@ -157,7 +157,7 @@ public class ChatTypedDiscussionAdmissionService {
             if(!command.taskId().equals(row.taskId())||!scope.equals(row.scope())
                     ||!inherited.get("finalDigest").equals(row.finalDigest()))throw unavailable();
         } else if(!"DISCUSSION".equals(command.intent()))return null;
-        if(!"ANSWER".equals(row.kind())){if(inherited!=null)throw unavailable();return null;}
+        if(!java.util.Set.of("ANSWER","ACTION_REQUEST").contains(row.kind())){if(inherited!=null)throw unavailable();return null;}
         var turn=events.findTurn(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),row.turnId());
         if(turn==null||!"CHAT".equals(turn.getRoute())
                 ||!("FINAL_PERSISTED".equals(turn.getState())||"PUBLISHED".equals(turn.getState()))
@@ -166,8 +166,17 @@ public class ChatTypedDiscussionAdmissionService {
         if(projection==null)return null;
         if(!"READY".equals(projection.get("state"))||!(projection.get("outcome") instanceof Map<?,?> view)
                 ||!row.outcomeId().equals(view.get("outcomeId"))||!row.finalDigest().equals(view.get("finalDigest")))throw unavailable();
+        var basis=Map.<String,Object>of("outcomeId",row.outcomeId(),"finalDigest",row.finalDigest());
+        if("ACTION_REQUEST".equals(row.kind())) {
+            // Only an actual completed EXECUTE can advertise a media basis, never INSPECT/planning prose.
+            var progress=projection.get("actionProgress");
+            if(!(progress instanceof Map<?,?> p)||!"COMPLETED".equals(p.get("state"))||!"EXECUTE".equals(p.get("childRoute"))) {
+                if(inherited!=null)throw unavailable();return null;
+            }
+            finals.deliveryTargets(scope,basis);return basis;
+        }
         if(inherited!=null&&!Boolean.TRUE.equals(view.get("deliverable")))throw unavailable();
-        return Boolean.TRUE.equals(view.get("deliverable"))?Map.of("outcomeId",row.outcomeId(),"finalDigest",row.finalDigest()):null;
+        return Boolean.TRUE.equals(view.get("deliverable"))?basis:null;
     }
 
     private static Map<String,Object> admissionFacts(ChatTypedDeliberationWire.DiscussionCommand command,
