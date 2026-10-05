@@ -178,6 +178,12 @@ public class ChatActionFinalService {
 
     private Map<String, Object> read(ChatTypedDeliberationStore.Scope scope, String requestId,
             String turnId, long revision, String expectedRoute, boolean includeProgress) {
+        return read(scope,requestId,turnId,revision,expectedRoute,includeProgress,true);
+    }
+
+    // Chain replay validates each immutable final once, then validates retained targets iteratively.
+    private Map<String,Object> read(ChatTypedDeliberationStore.Scope scope,String requestId,
+            String turnId,long revision,String expectedRoute,boolean includeProgress,boolean verifyTargets) {
         var turn = dao.findTurn(scope.tenantId(), scope.ownerJiacn(), scope.clientId(), turnId);
         if (turn == null || !scope.equals(scope(turn)) || !requestId.equals(turn.getRequestId())
                 || !Objects.equals(revision, turn.getRequestRevision()) || !expectedRoute.equals(turn.getRoute())) throw unavailable();
@@ -211,7 +217,7 @@ public class ChatActionFinalService {
                     || !row.bindingJson().equals(canonical(validated.binding()))
                     || !row.factsJson().equals(canonical(ChatActionFinalValidator.factsMap(validated.dispatchFacts())))
                     || !row.sourceCatalogJson().equals(admission.sourceCatalogJson())) throw persistence("Stored action final differs");
-            verifyDeliveryRelation(scope,admission,facts,validated);
+            verifyDeliveryRelation(scope,admission,facts,validated,verifyTargets);
             outcome = projection(row, validated);
         } else if (turn.getFinalDigest() != null) throw persistence("Action final transaction is incomplete");
         var view = new LinkedHashMap<String, Object>(); view.put("schemaVersion", 3); view.put("route", expectedRoute);
@@ -352,6 +358,12 @@ public class ChatActionFinalService {
     private void verifyDeliveryRelation(ChatTypedDeliberationStore.Scope scope,
             ChatTypedDeliberationStore.Admission admission, Map<String,Object> snapshotFacts,
             ChatActionFinalValidator.ValidatedFinal validated) {
+        verifyDeliveryRelation(scope,admission,snapshotFacts,validated,true);
+    }
+
+    private void verifyDeliveryRelation(ChatTypedDeliberationStore.Scope scope,
+            ChatTypedDeliberationStore.Admission admission,Map<String,Object> snapshotFacts,
+            ChatActionFinalValidator.ValidatedFinal validated,boolean verifyTargets) {
         var relation=validated.interactionOutcome().deliveryRelation(); if(relation==null)return;
         var facts=map(snapshotFacts.get("typedDeliberationAdmission"));
         var basis=map(facts.get("deliveryParent"));
@@ -374,6 +386,71 @@ public class ChatActionFinalService {
                 ||admission.requestId().equals(parent.requestId()))throw unavailable();
         var stored=parse(parent.outcomeJson());
         if(!Boolean.TRUE.equals(map(stored.get("interactionOutcome")).get("deliverable")))throw unavailable();
+        if(verifyTargets&&relation.targetOutcomeId()!=null) {
+            var retained=deliveryTargets(scope,basis);
+            verifyTargetAdvertisement(facts,relation,retained);
+        }
+    }
+
+    /** Original causal parent remains the CAS basis; only retained exact texts are replacement targets.
+     * No history query, latest-answer inference or independent delivery-set state is introduced. */
+    List<Map<String,Object>> deliveryTargets(ChatTypedDeliberationStore.Scope scope,Map<String,Object> basis) {
+        if(basis==null||!basis.keySet().equals(Set.of("outcomeId","finalDigest")))throw unavailable();
+        String id=(String)basis.get("outcomeId"),digest=(String)basis.get("finalDigest");
+        var chain=new java.util.ArrayList<Map<String,Object>>();
+        var visited=new java.util.HashSet<String>();
+        String task=null;long assignment=-1;
+        while(true) {
+            if(!visited.add(id))throw unavailable();
+            var row=store.findOutcome(scope,id,false);
+            if(row==null||!scope.equals(row.scope())||!digest.equals(row.finalDigest())||!"ANSWER".equals(row.kind()))throw unavailable();
+            if(task==null){task=row.taskId();assignment=row.assignmentRevision();}
+            if(!task.equals(row.taskId())||assignment!=row.assignmentRevision())throw unavailable();
+            var turn=dao.findTurn(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),row.turnId());
+            if(turn==null||!"CHAT".equals(turn.getRoute())||!("FINAL_PERSISTED".equals(turn.getState())||"PUBLISHED".equals(turn.getState())))throw unavailable();
+            var view=read(scope,row.requestId(),row.turnId(),row.requestRevision(),"CHAT",false,false);
+            var text=map(view.get("outcome"));
+            if(!"READY".equals(view.get("state"))||!Boolean.TRUE.equals(text.get("deliverable")))throw unavailable();
+            chain.add(text);
+            if(!text.containsKey("deliveryRelation"))break;
+            var relation=map(text.get("deliveryRelation"));
+            id=(String)relation.get("parentOutcomeId");digest=(String)relation.get("parentFinalDigest");
+        }
+        java.util.Collections.reverse(chain);
+        var retained=new java.util.ArrayList<Map<String,Object>>();
+        for(var text:chain) {
+            var item=Map.<String,Object>of("outcomeId",text.get("outcomeId"),"finalDigest",text.get("finalDigest"),"text",text.get("text"));
+            if(!text.containsKey("deliveryRelation")){retained.add(item);continue;}
+            var relation=map(text.get("deliveryRelation"));
+            switch((String)relation.get("mode")) {
+                case "APPEND" -> retained.add(item);
+                case "RESET" -> {retained.clear();retained.add(item);}
+                case "REPLACE" -> {
+                    String target=(String)relation.getOrDefault("targetOutcomeId",relation.get("parentOutcomeId"));
+                    String targetDigest=(String)relation.getOrDefault("targetFinalDigest",relation.get("parentFinalDigest"));
+                    int index=-1;
+                    for(int n=0;n<retained.size();n++)if(target.equals(retained.get(n).get("outcomeId"))&&targetDigest.equals(retained.get(n).get("finalDigest")))index=n;
+                    if(index<0)throw unavailable();
+                    if(relation.containsKey("targetOutcomeId")) {
+                        var row=store.findOutcome(scope,(String)text.get("outcomeId"),false);
+                        var turn=dao.findTurn(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),row.turnId());
+                        var snapshot=dao.findSnapshot(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),turn.getSnapshotId());
+                        verifyTargetAdvertisement(map(parse(snapshot.getFactsManifestJson()).get("typedDeliberationAdmission")),
+                                new ChatActionOutcomeContract.DeliveryRelation("REPLACE",(String)relation.get("parentOutcomeId"),(String)relation.get("parentFinalDigest"),target,targetDigest),retained);
+                    }
+                    retained.set(index,item);
+                }
+                default -> throw unavailable();
+            }
+        }
+        return List.copyOf(retained);
+    }
+
+    private static void verifyTargetAdvertisement(Map<String,Object> facts,
+            ChatActionOutcomeContract.DeliveryRelation relation,List<Map<String,Object>> retained) {
+        if(!canonical(retained).equals(canonical(facts.get("deliveryTargets")))
+                ||retained.stream().noneMatch(item->relation.targetOutcomeId().equals(item.get("outcomeId"))
+                    &&relation.targetFinalDigest().equals(item.get("finalDigest"))))throw invalid("ACTION_DELIVERY_TARGET_INVALID");
     }
 
     private Map<String, Object> projection(ChatTypedDeliberationStore.Outcome row, ChatActionFinalValidator.ValidatedFinal v) {

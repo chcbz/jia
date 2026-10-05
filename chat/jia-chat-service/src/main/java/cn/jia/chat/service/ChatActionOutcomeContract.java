@@ -39,7 +39,13 @@ public final class ChatActionOutcomeContract {
     public record Action(String actionId, String instruction, List<String> sourceRefIds) {
         public Action { sourceRefIds = List.copyOf(sourceRefIds); }
     }
-    public record DeliveryRelation(String mode, String parentOutcomeId, String parentFinalDigest) { }
+    public record DeliveryRelation(String mode, String parentOutcomeId, String parentFinalDigest,
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) String targetOutcomeId,
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) String targetFinalDigest) {
+        public DeliveryRelation(String mode,String parentOutcomeId,String parentFinalDigest) {
+            this(mode,parentOutcomeId,parentFinalDigest,null,null);
+        }
+    }
     public record Outcome(int schemaVersion, String kind, String text, Clarification clarification, Action action,
             @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) Boolean deliverable,
             @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) DeliveryRelation deliveryRelation) {
@@ -104,14 +110,23 @@ public final class ChatActionOutcomeContract {
         if (value != null && value.isObject() && value.has("deliveryRelation")) {
             keys.add("deliveryRelation"); var raw = value.get("deliveryRelation");
             if (!raw.isNull()) {
-                exact(raw,"ACTION_DELIVERY_RELATION_INVALID","mode","parentOutcomeId","parentFinalDigest");
+                boolean targeted=raw.has("targetOutcomeId")||raw.has("targetFinalDigest");
+                if(targeted)exact(raw,"ACTION_DELIVERY_RELATION_INVALID","mode","parentOutcomeId","parentFinalDigest","targetOutcomeId","targetFinalDigest");
+                else exact(raw,"ACTION_DELIVERY_RELATION_INVALID","mode","parentOutcomeId","parentFinalDigest");
                 String mode=string(raw.get("mode"),true,"ACTION_DELIVERY_RELATION_INVALID");
                 String parent=string(raw.get("parentOutcomeId"),true,"ACTION_DELIVERY_RELATION_INVALID");
                 String digest=string(raw.get("parentFinalDigest"),true,"ACTION_DELIVERY_RELATION_INVALID");
                 if (!Set.of("APPEND","REPLACE","RESET").contains(mode)
                         || !parent.matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}")
                         || !digest.matches("sha256:[0-9a-f]{64}")) throw invalid("ACTION_DELIVERY_RELATION_INVALID");
-                relation=new DeliveryRelation(mode,parent,digest);
+                String target=null,targetDigest=null;
+                if(targeted) {
+                    target=string(raw.get("targetOutcomeId"),true,"ACTION_DELIVERY_RELATION_INVALID");
+                    targetDigest=string(raw.get("targetFinalDigest"),true,"ACTION_DELIVERY_RELATION_INVALID");
+                    if(!"REPLACE".equals(mode)||!target.matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}")
+                            ||!targetDigest.matches("sha256:[0-9a-f]{64}"))throw invalid("ACTION_DELIVERY_RELATION_INVALID");
+                }
+                relation=new DeliveryRelation(mode,parent,digest,target,targetDigest);
             }
         }
         exact(value,"ACTION_OUTCOME_INVALID",keys.toArray(String[]::new));

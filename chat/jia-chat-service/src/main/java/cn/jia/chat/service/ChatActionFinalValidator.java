@@ -74,7 +74,12 @@ public final class ChatActionFinalValidator {
     }
 
     public static Map<String,Object> relationMap(ChatActionOutcomeContract.DeliveryRelation relation) {
-        return Map.of("mode",relation.mode(),"parentOutcomeId",relation.parentOutcomeId(),"parentFinalDigest",relation.parentFinalDigest());
+        var value=new LinkedHashMap<String,Object>();value.put("mode",relation.mode());
+        value.put("parentOutcomeId",relation.parentOutcomeId());value.put("parentFinalDigest",relation.parentFinalDigest());
+        if(relation.targetOutcomeId()!=null) {
+            value.put("targetOutcomeId",relation.targetOutcomeId());value.put("targetFinalDigest",relation.targetFinalDigest());
+        }
+        return java.util.Collections.unmodifiableMap(value);
     }
 
     public static Map<String, Object> factsMap(ChatActionOutcomeContract.Facts facts) {

@@ -34,6 +34,10 @@ class ChatClarificationDeliveryRelationTest {
         }
         ChatTypedDeliberationStore.Outcome add(String request,String intent,ChatTypedDeliberationStore.Outcome parent,
                 Map<String,Object> deliveryBasis,String kind,String mode) {
+            return add(request,intent,parent,deliveryBasis,kind,mode,null);
+        }
+        ChatTypedDeliberationStore.Outcome add(String request,String intent,ChatTypedDeliberationStore.Outcome parent,
+                Map<String,Object> deliveryBasis,String kind,String mode,Map<String,Object> target) {
             String pendingId=null;
             if("CLARIFICATION_REPLY".equals(intent)) {
                 var q=questions.get(parent.outcomeId()); pendingId=q.pendingQuestionId();
@@ -42,6 +46,7 @@ class ChatClarificationDeliveryRelationTest {
             }
             var metadata=new LinkedHashMap<String,Object>();metadata.put("intent",intent);metadata.put("parentOutcomeId",parent.outcomeId());
             metadata.put("pendingQuestionId",pendingId);if(deliveryBasis!=null)metadata.put("deliveryParent",deliveryBasis);
+            if(deliveryBasis!=null)metadata.put("deliveryTargets",f.finals.deliveryTargets(f.scope,deliveryBasis));
             var facts=new LinkedHashMap<String,Object>();facts.put("task",Map.of("id","task"));
             facts.put("typedDeliberation",ChatActionFinalValidator.factsMap(ChatActionOutcomeContract.factsJson(root.factsJson())));
             facts.put("typedDeliberationAdmission",metadata);
@@ -59,7 +64,12 @@ class ChatClarificationDeliveryRelationTest {
             var raw=new LinkedHashMap<String,Object>();raw.put("schemaVersion",3);raw.put("kind",kind);raw.put("text",text);
             raw.put("clarification","CLARIFY".equals(kind)?Map.of("question",text,"requiredFacts",List.of("修改方式")):null);
             raw.put("action",null);raw.put("deliverable","ANSWER".equals(kind));
-            if(mode!=null)raw.put("deliveryRelation",Map.of("mode",mode,"parentOutcomeId",deliveryBasis.get("outcomeId"),"parentFinalDigest",deliveryBasis.get("finalDigest")));
+            if(mode!=null) {
+                var relation=new LinkedHashMap<String,Object>();relation.put("mode",mode);
+                relation.put("parentOutcomeId",deliveryBasis.get("outcomeId"));relation.put("parentFinalDigest",deliveryBasis.get("finalDigest"));
+                if(target!=null){relation.put("targetOutcomeId",target.get("outcomeId"));relation.put("targetFinalDigest",target.get("finalDigest"));}
+                raw.put("deliveryRelation",relation);
+            }
             var prepared=f.finals.prepare(turn,snapshot,text,3,CanonicalContextJson.write(raw),null);
             f.finals.persist(prepared,11+rows.size(),20);turn.setFinalMessageId(11L+rows.size()-1).setFinalDigest(prepared.validated().finalDigest());
             return rows.get(request);
@@ -136,4 +146,45 @@ class ChatClarificationDeliveryRelationTest {
         c.metadata(q1,Map.of("intent","CLARIFICATION_REPLY","parentOutcomeId",q2.outcomeId(),"pendingQuestionId",p.pendingQuestionId(),"deliveryParent",c.basis));
         assertThrows(ChatDeliberationException.class,()->c.f.finals.clarificationDeliveryParent(c.f.scope,q2));
     }
+    static Map<String,Object> basis(ChatTypedDeliberationStore.Outcome row) {return Map.of("outcomeId",row.outcomeId(),"finalDigest",row.finalDigest());}
+    @Test void earlierRetainedTextCanBeReplacedWhileAppendAndCausalParentRemainExact() throws Exception {
+        var c=new Chain();var appended=c.add("append","DISCUSSION",c.root,c.basis,"ANSWER","APPEND");
+        var advertised=c.f.finals.deliveryTargets(c.f.scope,basis(appended));
+        assertEquals(List.of(c.root.outcomeId(),appended.outcomeId()),advertised.stream().map(i->i.get("outcomeId")).toList());
+        var question=c.add("target-question","DISCUSSION",appended,basis(appended),"CLARIFY",null);
+        var changed=c.add("earlier-edit","CLARIFICATION_REPLY",question,basis(appended),"ANSWER","REPLACE",c.basis);
+        var retained=c.f.finals.deliveryTargets(c.f.scope,basis(changed));
+        assertEquals(List.of(changed.outcomeId(),appended.outcomeId()),retained.stream().map(i->i.get("outcomeId")).toList());
+        var changedView=c.read(changed);var relation=(Map<?,?>)((Map<?,?>)changedView.get("outcome")).get("deliveryRelation");
+        assertEquals(appended.outcomeId(),relation.get("parentOutcomeId"));assertEquals(c.root.outcomeId(),relation.get("targetOutcomeId"));
+        var next=c.add("append-after-earlier","DISCUSSION",changed,basis(changed),"ANSWER","APPEND");
+        assertEquals(List.of(changed.outcomeId(),appended.outcomeId(),next.outcomeId()),c.f.finals.deliveryTargets(c.f.scope,basis(next)).stream().map(i->i.get("outcomeId")).toList());
+        String output=System.getenv("CYF_RETAINED_TEXT_OUTPUT");
+        if(output!=null)java.nio.file.Files.writeString(java.nio.file.Path.of(output),cn.jia.core.util.JsonUtil.toJson(Map.of(
+            "initial",c.read(c.root),"appended",c.read(appended),"question",c.read(question),"updated",changedView,"later",c.read(next),
+            "admissionFacts",Map.of("intent","CLARIFICATION_REPLY","parentOutcomeId",question.outcomeId(),"deliveryParent",basis(appended),"deliveryTargets",advertised))),java.nio.charset.StandardCharsets.UTF_8);
+        verifyNoInteractions(c.f.messages,c.f.sessions);verify(c.f.dao,never()).insertOutbox(any());
+    }
+    @Test void discardedTargetsWrongDigestsAndNonReplacementModesCannotBecomeDeliverables() {
+        for(String damage:List.of("discarded","digest","unknown","append","reset")) {
+            var c=new Chain();var parent=c.add("parent","DISCUSSION",c.root,c.basis,"ANSWER","discarded".equals(damage)?"RESET":"APPEND");
+            var target="digest".equals(damage)?Map.<String,Object>of("outcomeId",c.root.outcomeId(),"finalDigest","sha256:"+"0".repeat(64)):
+                "unknown".equals(damage)?Map.<String,Object>of("outcomeId","unknown","finalDigest",c.root.finalDigest()):c.basis;
+            String mode="append".equals(damage)?"APPEND":"reset".equals(damage)?"RESET":"REPLACE";
+            assertThrows(ChatDeliberationException.class,()->c.add("bad","DISCUSSION",parent,basis(parent),"ANSWER",mode,target),damage);
+            assertFalse(c.rows.containsKey("bad"));
+        }
+    }
+    @Test void retainedTargetsRevalidateOriginalSnapshotMessageScopeAndFrozenAdvertisementOnRead() {
+        for(String damage:List.of("snapshot","final","scope","advertisement")) {
+            var c=new Chain();var parent=c.add("parent","DISCUSSION",c.root,c.basis,"ANSWER","APPEND");
+            var changed=c.add("changed","DISCUSSION",parent,basis(parent),"ANSWER","REPLACE",c.basis);
+            if("snapshot".equals(damage))c.f.snapshot.setContextDigest("sha256:"+"0".repeat(64));
+            if("final".equals(damage))c.f.turn.setFinalDigest("sha256:"+"0".repeat(64));
+            if("scope".equals(damage))c.f.turn.setOwnerJiacn("foreign");
+            if("advertisement".equals(damage))c.metadata(changed,Map.of("intent","DISCUSSION","parentOutcomeId",parent.outcomeId(),"deliveryParent",basis(parent),"deliveryTargets",List.of()));
+            assertThrows(ChatDeliberationException.class,()->c.read(changed),damage);
+        }
+    }
+
 }

@@ -95,8 +95,10 @@ public class ChatTypedDiscussionAdmissionService {
             input.setContent(command.content());input.setRequestId(requestId);input.setRequestRevision(1L);
             input.setTargetAgentId(targets.getFirst());input.setTargetAgentIds(List.copyOf(targets));
             var scope=new JuyitingConversationScope("bounty","task:"+command.taskId(),command.taskId(),targets.getFirst(),List.copyOf(targets),List.copyOf(targets));
+            var deliveryBasis=deliveryParent(storeScope,command,parent);
+            var deliveryTargets=deliveryBasis==null?List.<Map<String,Object>>of():finals.deliveryTargets(storeScope,deliveryBasis);
             var admitted=deliberation.admit(tenantId,sender,conversationId,generation,scope,
-                    InteractionRoute.CHAT,input,null,context.facts(),admissionFacts(command,context.selectors(),deliveryParent(storeScope,command,parent)));
+                    InteractionRoute.CHAT,input,null,context.facts(),admissionFacts(command,context.selectors(),deliveryBasis,deliveryTargets));
             List<String> turnIds=admitted.dispatches().stream().map(ChatDeliberationService.Dispatch::turnId).toList();
             if(turnIds.size()!=1)throw unavailable();
             long now=System.currentTimeMillis();
@@ -169,10 +171,11 @@ public class ChatTypedDiscussionAdmissionService {
     }
 
     private static Map<String,Object> admissionFacts(ChatTypedDeliberationWire.DiscussionCommand command,
-            List<ChatTypedDeliberationWire.SourceSelector> selectors, Map<String,Object> deliveryParent) {
+            List<ChatTypedDeliberationWire.SourceSelector> selectors, Map<String,Object> deliveryParent,List<Map<String,Object>> deliveryTargets) {
         Map<String,Object> value=new LinkedHashMap<>();
         value.put("schemaVersion",1);value.put("intent",command.intent());
         if(deliveryParent!=null)value.put("deliveryParent",deliveryParent);
+        if(!deliveryTargets.isEmpty())value.put("deliveryTargets",deliveryTargets);
         value.put("sourceSelectors",selectors.stream().map(ChatTypedDeliberationWire::selectorMap).toList());
         value.put("parentOutcomeId",command.parentOutcomeId());
         value.put("expectedParentStateVersion",command.expectedParentStateVersion()==null
