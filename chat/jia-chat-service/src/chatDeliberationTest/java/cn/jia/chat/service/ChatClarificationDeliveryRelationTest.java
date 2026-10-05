@@ -63,7 +63,7 @@ class ChatClarificationDeliveryRelationTest {
             String text="CLARIFY".equals(kind)?"要追加还是替换？":"澄清后的文字  \n";
             var raw=new LinkedHashMap<String,Object>();raw.put("schemaVersion",3);raw.put("kind",kind);raw.put("text",text);
             raw.put("clarification","CLARIFY".equals(kind)?Map.of("question",text,"requiredFacts",List.of("修改方式")):null);
-            raw.put("action",null);raw.put("deliverable","ANSWER".equals(kind));
+            raw.put("action","ACTION_REQUEST".equals(kind)?Map.of("actionId","write-document","instruction","另加文件","sourceRefIds",List.of()):null);raw.put("deliverable","ANSWER".equals(kind));
             if(mode!=null) {
                 var relation=new LinkedHashMap<String,Object>();relation.put("mode",mode);
                 relation.put("parentOutcomeId",deliveryBasis.get("outcomeId"));relation.put("parentFinalDigest",deliveryBasis.get("finalDigest"));
@@ -185,6 +185,44 @@ class ChatClarificationDeliveryRelationTest {
             if("advertisement".equals(damage))c.metadata(changed,Map.of("intent","DISCUSSION","parentOutcomeId",parent.outcomeId(),"deliveryParent",basis(parent),"deliveryTargets",List.of()));
             assertThrows(ChatDeliberationException.class,()->c.read(changed),damage);
         }
+    }
+
+    @Test void explicitBatchIntentPersistsOnOriginalActionAndOnlyExactCommittedChildBecomesReady() throws Exception {
+        var exports=new ArrayList<Map<String,Object>>();
+        for(String mode:List.of("APPEND","RESET")) {
+            var c=new Chain();var initial=c.read(c.root);
+            var action=c.add("batch-action","DISCUSSION",c.root,c.basis,"ACTION_REQUEST",mode);
+            var queued=c.read(action);var q=(Map<?,?>)queued.get("actionProgress");
+            assertEquals("QUEUED",q.get("state"));assertFalse((Boolean)((Map<?,?>)queued.get("outcome")).get("deliverable"));
+            assertFalse(((Map<?,?>)queued.get("outcome")).containsKey("messageSource"));
+            String actionId=(String)q.get("actionRequestId");
+            String childId=cn.jia.chat.api.ChatBountyInteractionV3Wire.shaText("action-execute\n"+actionId);
+            var a=c.admissions.get(action.requestId());
+            var childAdmission=new ChatTypedDeliberationStore.Admission("execution-admission",c.f.scope,actionId,
+                    "sha256:"+"e".repeat(64),"sha256:"+"e".repeat(64),"DISCUSSION","task",3,action.outcomeId(),null,
+                    childId,1,a.userMessageId(),"[]","[]","ADMITTED",0,1,20);
+            when(c.f.store.findAdmissionByKey(c.f.scope,actionId,false)).thenReturn(childAdmission);
+            c.f.event.get().setStatus("SENT").setVersion(1L);
+            var child=new ChatRequestEntity().setTenantId("0").setOwnerJiacn("owner").setClientId("client")
+                    .setRequestId(childId).setRequestRevision(1L).setConversationId("42").setConversationGeneration(1L)
+                    .setUserMessageId(a.userMessageId()).setAggregateState("OUTPUT_COMMITTED").setStateVersion(2L);
+            when(c.f.dao.findRequest("0","owner","client",childId)).thenReturn(child);
+            var ready=c.read(action);var progress=(Map<?,?>)ready.get("actionProgress");
+            assertEquals("COMPLETED",progress.get("state"));assertEquals(childId,progress.get("childRequestId"));assertEquals("EXECUTE",progress.get("childRoute"));
+            assertEquals(((Map<?,?>)queued.get("outcome")).get("finalDigest"),((Map<?,?>)ready.get("outcome")).get("finalDigest"));
+            exports.add(Map.of("mode",mode,"initial",initial,"queued",queued,"completed",ready));
+            child.setOwnerJiacn("foreign");assertThrows(ChatDeliberationException.class,()->c.read(action));
+            child.setOwnerJiacn("owner").setAggregateState("COMPLETED");assertThrows(ChatDeliberationException.class,()->c.read(action));
+            verifyNoInteractions(c.f.messages,c.f.sessions);
+        }
+        String output=System.getenv("CYF_EXECUTION_BATCH_OUTPUT");
+        if(output!=null)java.nio.file.Files.writeString(java.nio.file.Path.of(output),cn.jia.core.util.JsonUtil.toJson(exports),java.nio.charset.StandardCharsets.UTF_8);
+    }
+    @Test void batchRelationMustStillMatchFrozenAdmissionParentAndNeverRebindOnRead() {
+        var c=new Chain();var action=c.add("batch-action","DISCUSSION",c.root,c.basis,"ACTION_REQUEST","APPEND");
+        c.metadata(action,Map.of("intent","DISCUSSION","parentOutcomeId",c.root.outcomeId(),"deliveryParent",
+                Map.of("outcomeId",c.root.outcomeId(),"finalDigest","sha256:"+"0".repeat(64))));
+        assertThrows(ChatDeliberationException.class,()->c.read(action));
     }
 
 }

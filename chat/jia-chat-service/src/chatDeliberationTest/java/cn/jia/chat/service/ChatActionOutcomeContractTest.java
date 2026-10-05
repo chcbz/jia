@@ -132,4 +132,23 @@ class ChatActionOutcomeContractTest {
         assertThrows(IllegalArgumentException.class,()->ChatActionOutcomeContract.outcome(answer,facts));
     }
 
+    @Test void onlyAdvertisedExecuteCanRelateItsFutureBatchWithoutMarkingPlanningProseAsDelivery() throws Exception {
+        var f=ChatActionOutcomeContract.facts(facts());
+        var raw=new LinkedHashMap<String,Object>();raw.put("schemaVersion",3);raw.put("kind","ACTION_REQUEST");
+        raw.put("text","接下来制作文件，不是成果正文");raw.put("clarification",null);raw.put("deliverable",false);
+        raw.put("action",Map.of("actionId","write-document","instruction","另加一份文件","sourceRefIds",List.of()));
+        for(String mode:List.of("APPEND","RESET")) {
+            raw.put("deliveryRelation",Map.of("mode",mode,"parentOutcomeId","text-parent","parentFinalDigest","sha256:"+"a".repeat(64)));
+            var parsed=ChatActionOutcomeContract.outcome(raw,f);
+            assertFalse(parsed.deliverable());assertEquals(raw,ChatActionFinalValidator.outcomeMap(parsed));
+        }
+        raw.put("deliveryRelation",Map.of("mode","REPLACE","parentOutcomeId","text-parent","parentFinalDigest","sha256:"+"a".repeat(64)));
+        assertThrows(IllegalArgumentException.class,()->ChatActionOutcomeContract.outcome(raw,f));
+        raw.put("deliveryRelation",Map.of("mode","APPEND","parentOutcomeId","text-parent","parentFinalDigest","sha256:"+"a".repeat(64)));
+        raw.put("action",Map.of("actionId","inspect-materials","instruction","查阅资料","sourceRefIds",List.of("source-file")));
+        assertThrows(IllegalArgumentException.class,()->ChatActionOutcomeContract.outcome(raw,f));
+        raw.put("action",Map.of("actionId","write-document","instruction","另加文件","sourceRefIds",List.of()));raw.put("deliverable",true);
+        assertThrows(IllegalArgumentException.class,()->ChatActionOutcomeContract.outcome(raw,f));
+    }
+
 }

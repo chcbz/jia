@@ -164,7 +164,16 @@ public final class ChatActionOutcomeContract {
             default -> throw invalid("ACTION_OUTCOME_KIND_INVALID");
         }
         if (Boolean.TRUE.equals(deliverable) && !"ANSWER".equals(kind)) throw invalid("ACTION_OUTCOME_UNION_INVALID");
-        if (relation != null && !Boolean.TRUE.equals(deliverable)) throw invalid("ACTION_DELIVERY_RELATION_INVALID");
+        // EXECUTE intent relates its future byte-backed batch, never ACTION_REQUEST prose.
+        // Batch replacement still uses the existing exact output edit lineage, not this relation.
+        if (relation != null && !Boolean.TRUE.equals(deliverable)) {
+            String selectedAction=action==null?null:action.actionId();
+            var descriptor=facts.availableActions().stream()
+                    .filter(item->item.actionId().equals(selectedAction)).findFirst().orElse(null);
+            if (!"ACTION_REQUEST".equals(kind) || descriptor==null || !"EXECUTE".equals(descriptor.kind())
+                    || !Set.of("APPEND","RESET").contains(relation.mode()) || relation.targetOutcomeId()!=null)
+                throw invalid("ACTION_DELIVERY_RELATION_INVALID");
+        }
         return new Outcome(VERSION, kind, text, clarification, action, deliverable, relation);
     }
 

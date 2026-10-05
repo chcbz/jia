@@ -35,6 +35,8 @@ public final class ChatActionFinalValidator {
         var outcome = ChatActionOutcomeContract.outcomeJson(rawOutcome, facts);
         if (Boolean.TRUE.equals(outcome.deliverable()) && !"CHAT".equals(binding.get("route")))
             throw invalid("ACTION_FINAL_DELIVERABLE_ROUTE_INVALID");
+        if (outcome.deliveryRelation()!=null && !"CHAT".equals(binding.get("route")))
+            throw invalid("ACTION_DELIVERY_PARENT_INVALID");
         if (content == null || content.length() > 200_000 || !content.equals(outcome.text()))
             throw invalid("ACTION_FINAL_CONTENT_MISMATCH");
         TypedInspectionFinalValidator.InspectionInputReceipt receipt = null;
