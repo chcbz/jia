@@ -440,11 +440,11 @@ public class ChatActionFinalService {
         var retained=new java.util.ArrayList<Map<String,Object>>();
         for(var text:chain) {
             var additions=items.get((String)text.get("outcomeId"));
-            if(!text.containsKey("deliveryRelation")){retained.addAll(additions);continue;}
+            if(!text.containsKey("deliveryRelation")){if(additions.stream().anyMatch(x->x.containsKey("replaces")))throw unavailable();retained.addAll(additions);continue;}
             var relation=map(text.get("deliveryRelation"));
             switch((String)relation.get("mode")) {
-                case "APPEND" -> retained.addAll(additions);
-                case "RESET" -> {retained.clear();retained.addAll(additions);}
+                case "APPEND" -> applyExecutionReplacements(retained,additions,false);
+                case "RESET" -> applyExecutionReplacements(retained,additions,true);
                 case "REPLACE" -> {
                     String target=(String)relation.getOrDefault("targetOutcomeId",relation.get("parentOutcomeId"));
                     String targetDigest=(String)relation.getOrDefault("targetFinalDigest",relation.get("parentFinalDigest"));
@@ -498,11 +498,46 @@ public class ChatActionFinalService {
             if(output==null||!execution.executionId().equals(output.executionId())||output.outputId()==null
                     ||!output.outputId().matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}")||!seen.add(output.outputId())
                     ||output.sha256()==null||!output.sha256().matches("[0-9a-f]{64}")||output.byteLength()<0
-                    ||output.contentMimeType()==null||output.replaces()!=null)throw unavailable();
-            result.add(Map.of("outcomeId",row.outcomeId(),"finalDigest",row.finalDigest(),"outputSource",
-                    Map.of("requestId",requestId,"stepId",step.stepId(),"outputId",output.outputId(),"sha256",output.sha256())));
+                    ||output.contentMimeType()==null)throw unavailable();
+            var item=new LinkedHashMap<String,Object>();item.put("outcomeId",row.outcomeId());item.put("finalDigest",row.finalDigest());
+            item.put("outputSource",Map.of("requestId",requestId,"stepId",step.stepId(),"outputId",output.outputId(),"sha256",output.sha256()));
+            var replacement=output.replaces();
+            if(replacement!=null) {
+                if(replacement.requestId()==null||replacement.stepId()==null||replacement.outputId()==null||replacement.sha256()==null
+                        ||!replacement.requestId().matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}")||requestId.equals(replacement.requestId())
+                        ||!replacement.stepId().matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}")||!replacement.outputId().matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}")
+                        ||!replacement.sha256().matches("[0-9a-f]{64}"))throw unavailable();
+                item.put("replaces",Map.of("requestId",replacement.requestId(),"stepId",replacement.stepId(),"outputId",replacement.outputId(),"sha256",replacement.sha256()));
+            }
+            result.add(Collections.unmodifiableMap(item));
         }
         return List.copyOf(result);
+    }
+
+    /** Replay original output replacement metadata only against the preceding retained list.
+     * Validate a whole batch before applying it: duplicate/discarded/stale and same-batch parents fail closed.
+     * The transient replaces field is never included in the frozen advertised deliveryTargets wire. */
+    private static void applyExecutionReplacements(java.util.ArrayList<Map<String,Object>> retained,
+            List<Map<String,Object>> additions,boolean reset) {
+        var slots=new java.util.HashMap<Integer,Map<String,Object>>();
+        var appended=new java.util.ArrayList<Map<String,Object>>();
+        for(var addition:additions) {
+            var clean=new LinkedHashMap<String,Object>(addition);clean.remove("replaces");
+            Map<String,Object> frozen=Collections.unmodifiableMap(clean);
+            if(!addition.containsKey("replaces")){appended.add(frozen);continue;}
+            var replacement=map(addition.get("replaces"));int index=-1;
+            for(int n=0;n<retained.size();n++)if(replacement.equals(retained.get(n).get("outputSource"))) {
+                if(index>=0)throw unavailable();index=n;
+            }
+            if(index<0||slots.putIfAbsent(index,frozen)!=null)throw unavailable();
+        }
+        if(reset) {
+            retained.clear();
+            for(var addition:additions){var clean=new LinkedHashMap<String,Object>(addition);clean.remove("replaces");retained.add(Collections.unmodifiableMap(clean));}
+        } else {
+            for(var entry:slots.entrySet())retained.set(entry.getKey(),entry.getValue());
+            retained.addAll(appended);
+        }
     }
 
     private static void verifyTargetAdvertisement(Map<String,Object> facts,
