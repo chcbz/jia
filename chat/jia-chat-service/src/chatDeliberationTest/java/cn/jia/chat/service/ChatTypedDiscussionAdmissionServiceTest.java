@@ -275,7 +275,8 @@ class ChatTypedDiscussionAdmissionServiceTest {
         var basis=mixed.basis(parent);var targets=mixed.retained(parent);
         when(typed.requireParent(storeScope,parent.outcomeId())).thenReturn(parent);
         when(events.findTurn("0","owner","client",parent.turnId())).thenReturn(mixed.c.turns.get(parent.turnId()));
-        when(finals.readIfV3(storeScope,parent.requestId(),parent.turnId(),1,"CHAT")).thenReturn(mixed.c.read(parent));
+        var actualProjection=mixed.c.read(parent);
+        when(finals.readIfV3(storeScope,parent.requestId(),parent.turnId(),1,"CHAT")).thenReturn(actualProjection);
         when(finals.deliveryTargets(storeScope,basis)).thenReturn(targets);
         when(contexts.resolve(any(),eq("task"),eq("agent"),eq(List.of()))).thenReturn(new ChatTypedDeliberationContextService.Context(
                 ChatActionFinalValidator.factsMap(ChatActionOutcomeContract.factsJson(parent.factsJson())),"[]",List.of(),Map.of("schemaVersion",3,"state","READY")));
@@ -290,7 +291,8 @@ class ChatTypedDiscussionAdmissionServiceTest {
         var mixed=new ChatMixedDeliveryBasisTest.Mixed();var parent=mixed.c.add("media-pending","DISCUSSION",mixed.c.root,mixed.c.basis,"ACTION_REQUEST","APPEND");
         when(typed.requireParent(storeScope,parent.outcomeId())).thenReturn(parent);
         when(events.findTurn("0","owner","client",parent.turnId())).thenReturn(mixed.c.turns.get(parent.turnId()));
-        when(finals.readIfV3(storeScope,parent.requestId(),parent.turnId(),1,"CHAT")).thenReturn(mixed.c.read(parent));
+        var actualProjection=mixed.c.read(parent);
+        when(finals.readIfV3(storeScope,parent.requestId(),parent.turnId(),1,"CHAT")).thenReturn(actualProjection);
         when(contexts.resolve(any(),eq("task"),eq("agent"),eq(List.of()))).thenReturn(context());
         when(deliberation.admit(eq("0"),eq(sender),eq("42"),eq(1L),any(),any(),any(),isNull(),any(),any())).thenAnswer(i->admitted(((ChatMessageDTO)i.getArgument(6)).getRequestId()));
         when(store.insertAdmission(any())).thenReturn(1);
