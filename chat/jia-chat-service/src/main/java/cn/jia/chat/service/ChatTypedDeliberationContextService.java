@@ -66,7 +66,7 @@ public final class ChatTypedDeliberationContextService {
         for (var raw:requested) {
             var selector=ChatTypedDeliberationWire.validateSelector(raw);
             Map<String,Object> entry="TASK_LINKED_WORKSPACE_VERSION".equals(selector.kind())
-                    ? workspace(scope,taskId,selector) : asset(scope,selector);
+                    ? workspace(scope,taskId,selector) : asset(scope,taskId,targetAgentId,selector);
             String sourceRef=sourceRefId(scope,entry);
             if (!sourceRefs.add(sourceRef)) throw invalid();
             Map<String,Object> stored=new LinkedHashMap<>(entry); stored.put("sourceRefId",sourceRef);
@@ -125,7 +125,7 @@ public final class ChatTypedDeliberationContextService {
                 text(row,"content_mime_type"),text(row,"content_hash"),number(row,"byte_length"),null,null);
     }
 
-    private Map<String,Object> asset(Scope s,ChatTypedDeliberationWire.SourceSelector x) {
+    private Map<String,Object> asset(Scope s,String taskId,String targetAgentId,ChatTypedDeliberationWire.SourceSelector x) {
         List<Map<String,Object>> rows=jdbc.queryForList("""
                 SELECT a.content_mime_type,a.sha256,a.byte_length,a.request_id,a.step_id
                 FROM chat_conversation_asset a JOIN chat_conversation c
@@ -134,12 +134,25 @@ public final class ChatTypedDeliberationContextService {
                   AND c.tenant_id=a.tenant_id AND BINARY c.tenant_id=BINARY a.tenant_id
                   AND c.client_id=a.client_id AND BINARY c.client_id=BINARY a.client_id
                   AND c.jiacn=a.owner_jiacn AND BINARY c.jiacn=BINARY a.owner_jiacn
-                WHERE a.tenant_id=? AND BINARY a.tenant_id=BINARY ?
+                JOIN chat_interaction_step step ON step.step_id=a.step_id
+                  AND BINARY step.step_id=BINARY a.step_id AND step.request_id=a.request_id
+                  AND BINARY step.request_id=BINARY a.request_id AND step.tenant_id=a.tenant_id
+                  AND BINARY step.tenant_id=BINARY a.tenant_id AND step.owner_jiacn=a.owner_jiacn
+                  AND BINARY step.owner_jiacn=BINARY a.owner_jiacn AND step.client_id=a.client_id
+                  AND BINARY step.client_id=BINARY a.client_id AND step.conversation_id=a.conversation_id
+                  AND BINARY step.conversation_id=BINARY a.conversation_id
+                  AND step.conversation_generation=a.conversation_generation
+                  AND step.kind='EXECUTE' AND step.state='OUTPUT_COMMITTED'
+                WHERE c.task_id=? AND BINARY c.task_id=BINARY ?
+                  AND step.task_id=? AND BINARY step.task_id=BINARY ?
+                  AND step.target_agent_id=? AND BINARY step.target_agent_id=BINARY ?
+                  AND a.tenant_id=? AND BINARY a.tenant_id=BINARY ?
                   AND a.owner_jiacn=? AND BINARY a.owner_jiacn=BINARY ?
                   AND a.client_id=? AND BINARY a.client_id=BINARY ?
                   AND a.conversation_id=? AND BINARY a.conversation_id=BINARY ?
                   AND a.conversation_generation=? AND a.asset_id=? AND BINARY a.asset_id=BINARY ? AND a.revision=?
-                """,s.tenantId(),s.tenantId(),s.ownerJiacn(),s.ownerJiacn(),s.clientId(),s.clientId(),
+                """,taskId,taskId,taskId,taskId,targetAgentId,targetAgentId,
+                s.tenantId(),s.tenantId(),s.ownerJiacn(),s.ownerJiacn(),s.clientId(),s.clientId(),
                 s.conversationId(),s.conversationId(),s.conversationGeneration(),x.assetId(),x.assetId(),Long.parseLong(x.assetRevision()));
         if(rows.size()!=1)throw missing(); Map<String,Object> row=rows.getFirst();
         return source("CURRENT_CONVERSATION_ASSET","CURRENT_CONVERSATION_ASSET",x,

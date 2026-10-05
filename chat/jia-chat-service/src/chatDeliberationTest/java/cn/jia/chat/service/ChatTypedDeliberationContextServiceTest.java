@@ -40,6 +40,34 @@ class ChatTypedDeliberationContextServiceTest {
         assertTrue(context.sourceCatalogJson().contains("\"parentRequestId\":\"r0\""));
         assertFalse(context.sourceCatalogJson().contains("path"));assertFalse(context.sourceCatalogJson().contains("url"));
     }
+    @Test void persistedOutputAssetsUseExactTaskTargetAndCompletedProducerWithoutWorkspaceSave() throws Exception {
+        ready();
+        when(jdbc.queryForList(contains("chat_conversation_asset"),any(Object[].class))).thenAnswer(inv->{
+            String sql=inv.getArgument(0);
+            assertTrue(sql.contains("step.kind='EXECUTE' AND step.state='OUTPUT_COMMITTED'"));
+            assertTrue(sql.contains("step.task_id=? AND BINARY step.task_id=BINARY ?"));
+            assertTrue(sql.contains("step.target_agent_id=? AND BINARY step.target_agent_id=BINARY ?"));
+            assertTrue(sql.contains("step.conversation_generation=a.conversation_generation"));
+            Object[] args=java.util.Arrays.copyOfRange(inv.getArguments(),1,inv.getArguments().length);
+            assertEquals(List.of("task","task","task","task","agent","agent"),java.util.Arrays.asList(args).subList(0,6));
+            assertEquals("asset-original",args[args.length-3]);assertEquals("asset-original",args[args.length-2]);assertEquals(1L,args[args.length-1]);
+            return List.of(Map.of("content_mime_type","image/png","sha256","a".repeat(64),"byte_length",12L,"request_id","media-original","step_id","step-original"));
+        });
+        when(capabilities.available(any(),anyList())).thenReturn(List.of(Map.of("actionId","edit-image","kind","EXECUTE","operation","EDIT_IMAGE",
+                "inputMediaTypes",List.of("image"),"minSources",1,"maxSources",1)));
+        var selector=new ChatTypedDeliberationWire.SourceSelector("CURRENT_CONVERSATION_ASSET",null,null,null,"asset-original","1");
+        var context=service().resolve(scope,"task","agent",List.of(selector));
+        var catalog=ChatTypedDeliberationContextService.parseCatalog(context.sourceCatalogJson());
+        assertEquals(List.of(selector),context.selectors());assertEquals("media-original",catalog.getFirst().get("parentRequestId"));
+        assertEquals("step-original",catalog.getFirst().get("parentStepId"));
+        assertEquals(List.of(),context.facts().get("inspectedSourceRefIds"));
+        String output=System.getenv("CYF_MEDIA_CONTEXT_OUTPUT");
+        if(output!=null)java.nio.file.Files.writeString(java.nio.file.Path.of(output),cn.jia.core.util.JsonUtil.toJson(Map.of(
+                "selector",ChatTypedDeliberationWire.selectorMap(selector),"facts",context.facts(),"sourceCatalog",catalog)),java.nio.charset.StandardCharsets.UTF_8);
+        verify(jdbc,never()).update(anyString(),any(Object[].class));
+        verify(jdbc,never()).queryForList(contains("agent_personal_workspace"),any(Object[].class));
+    }
+
     @Test void missingScopedSourceIsOpaque404AndDuplicateSelectionsAreInvalid() {
         ready();
         var selector=new ChatTypedDeliberationWire.SourceSelector(
