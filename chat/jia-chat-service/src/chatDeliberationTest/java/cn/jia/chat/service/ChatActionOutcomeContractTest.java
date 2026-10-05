@@ -113,4 +113,23 @@ class ChatActionOutcomeContractTest {
         assertDoesNotThrow(() -> ChatActionOutcomeContract.outcome(raw,facts));
         action.put("actionId","inspect-materials"); assertThrows(IllegalArgumentException.class, () -> ChatActionOutcomeContract.outcome(raw,facts));
     }
+    @Test void targetedTextReplacementIsPairedStrictMetadataAndLegacyRelationPreimageStaysUnchanged() {
+        var facts=ChatActionOutcomeContract.facts(facts());
+        var relation=new LinkedHashMap<String,Object>();relation.put("mode","REPLACE");relation.put("parentOutcomeId","causal");relation.put("parentFinalDigest","sha256:"+"a".repeat(64));
+        var answer=new LinkedHashMap<String,Object>();answer.put("schemaVersion",3);answer.put("kind","ANSWER");answer.put("text","修改较早段落");
+        answer.put("clarification",null);answer.put("action",null);answer.put("deliverable",true);answer.put("deliveryRelation",relation);
+        var legacy=ChatActionOutcomeContract.outcome(answer,facts);
+        assertEquals(answer,ChatActionFinalValidator.outcomeMap(legacy));
+        assertEquals(legacy,ChatActionOutcomeContract.outcome(legacy,facts));
+        relation.put("targetOutcomeId","retained");relation.put("targetFinalDigest","sha256:"+"b".repeat(64));
+        assertEquals(answer,ChatActionFinalValidator.outcomeMap(ChatActionOutcomeContract.outcome(answer,facts)));
+        for(Object bad:List.of(12,"unknown/target")) {
+            relation.put("targetOutcomeId",bad);assertThrows(IllegalArgumentException.class,()->ChatActionOutcomeContract.outcome(answer,facts));
+        }
+        relation.put("targetOutcomeId","retained");relation.remove("targetFinalDigest");
+        assertThrows(IllegalArgumentException.class,()->ChatActionOutcomeContract.outcome(answer,facts));
+        relation.put("targetFinalDigest","sha256:"+"b".repeat(64));relation.put("mode","APPEND");
+        assertThrows(IllegalArgumentException.class,()->ChatActionOutcomeContract.outcome(answer,facts));
+    }
+
 }

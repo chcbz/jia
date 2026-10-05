@@ -55,10 +55,13 @@ class ChatTypedDiscussionAdmissionServiceTest {
                 .thenAnswer(i->admitted(((ChatMessageDTO)i.getArgument(6)).getRequestId()));
         when(store.insertAdmission(any())).thenReturn(1);
         var command=new ChatTypedDeliberationWire.DiscussionCommand("DISCUSSION","task",3,"再补一段",parent.outcomeId(),0L,null,null,List.of());
+        var basis=Map.<String,Object>of("outcomeId",parent.outcomeId(),"finalDigest",parent.finalDigest());
+        var targets=actual.finals.deliveryTargets(actual.scope,basis);
+        when(finals.deliveryTargets(storeScope,basis)).thenReturn(targets);
         service.admit("0",sender,"42","append-key",command);
         verify(deliberation).admit(eq("0"),eq(sender),eq("42"),eq(1L),any(),any(),any(),isNull(),any(),
                 argThat(facts->Map.of("outcomeId",parent.outcomeId(),"finalDigest",parent.finalDigest()).equals(facts.get("deliveryParent"))
-                        &&!facts.containsKey("deliveryRelation")));
+                        &&targets.equals(facts.get("deliveryTargets"))&&!facts.containsKey("deliveryRelation")));
         verify(finals).readIfV3(storeScope,parent.requestId(),parent.turnId(),1,"CHAT");
     }
 
@@ -82,12 +85,15 @@ class ChatTypedDiscussionAdmissionServiceTest {
         when(store.findAdmissionByKey(storeScope,"clarified-key",true)).thenAnswer(i->durable.get());
         when(store.insertAdmission(any())).thenAnswer(i->{durable.set(i.getArgument(0));return 1;});
         var command=new ChatTypedDeliberationWire.DiscussionCommand("CLARIFICATION_REPLY","task",3,"替换原段落",question.outcomeId(),0L,pending.pendingQuestionId(),0L,List.of());
+        var targets=chain.f.finals.deliveryTargets(storeScope,chain.basis);
+        when(finals.deliveryTargets(storeScope,chain.basis)).thenReturn(targets);
         var first=service.admit("0",sender,"42","clarified-key",command);
         var replay=service.admit("0",sender,"42","clarified-key",command);
         assertTrue(replay.replay());assertEquals(first.requestId(),replay.requestId());
         verify(deliberation,times(1)).admit(anyString(),eq(sender),eq("42"),eq(1L),any(),any(),any(),isNull(),any(),
                 argThat(facts->chain.basis.equals(facts.get("deliveryParent"))&&question.outcomeId().equals(facts.get("parentOutcomeId"))
-                        &&pending.pendingQuestionId().equals(facts.get("pendingQuestionId"))&&!facts.containsKey("deliveryRelation")));
+                        &&pending.pendingQuestionId().equals(facts.get("pendingQuestionId"))&&targets.equals(facts.get("deliveryTargets"))&&!facts.containsKey("deliveryRelation")));
+        verify(finals,times(1)).deliveryTargets(storeScope,chain.basis);
         verify(finals,times(1)).clarificationDeliveryParent(storeScope,question);
         verify(finals,times(1)).readIfV3(storeScope,chain.root.requestId(),chain.root.turnId(),1,"CHAT");
         verify(store,times(1)).answerPending(same(pending),eq(0L),eq(first.requestId()),eq("clarified-key"),anyString(),anyLong());
