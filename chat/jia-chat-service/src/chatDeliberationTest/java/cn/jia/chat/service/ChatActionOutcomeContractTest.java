@@ -113,7 +113,7 @@ class ChatActionOutcomeContractTest {
         assertDoesNotThrow(() -> ChatActionOutcomeContract.outcome(raw,facts));
         action.put("actionId","inspect-materials"); assertThrows(IllegalArgumentException.class, () -> ChatActionOutcomeContract.outcome(raw,facts));
     }
-    @Test void targetedTextReplacementIsPairedStrictMetadataAndLegacyRelationPreimageStaysUnchanged() {
+    @Test void targetedTextReplacementIsPairedStrictMetadataAndLegacyRelationPreimageStaysUnchanged() throws Exception {
         var facts=ChatActionOutcomeContract.facts(facts());
         var relation=new LinkedHashMap<String,Object>();relation.put("mode","REPLACE");relation.put("parentOutcomeId","causal");relation.put("parentFinalDigest","sha256:"+"a".repeat(64));
         var answer=new LinkedHashMap<String,Object>();answer.put("schemaVersion",3);answer.put("kind","ANSWER");answer.put("text","修改较早段落");
