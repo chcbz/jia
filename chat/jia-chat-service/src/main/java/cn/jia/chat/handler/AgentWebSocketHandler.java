@@ -1807,6 +1807,11 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     }
 
     private boolean sendEvent(WebSocketSession session, String type, Map<String, ?> payload) {
+        return sendEvent(session, type, payload, false);
+    }
+
+    private boolean sendEvent(WebSocketSession session, String type, Map<String, ?> payload,
+            boolean preserveAuthenticatedInspectionContext) {
         if (!session.isOpen()) {
             return false;
         }
@@ -1823,7 +1828,12 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         }
         try {
             synchronized (session) {
-                session.sendMessage(new TextMessage(JsonUtil.toSafeJson(event)));
+                // Authenticated INSPECT facts and selectors are integrity-bound protocol data.
+                // The logging sanitizer truncates deep maps and redacts DATA strings, which
+                // changes contextHash and makes root/payload copies conflict. Never log this wire.
+                String wireJson = preserveAuthenticatedInspectionContext
+                        ? JsonUtil.toJson(event) : JsonUtil.toSafeJson(event);
+                session.sendMessage(new TextMessage(wireJson));
             }
             return true;
         } catch (Exception e) {
@@ -2545,7 +2555,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 "capabilityContractVersion", 1, "policy", ready.frozenDeclaration());
         Map<String, Object> wire = new LinkedHashMap<>(outbound);
         wire.put("targetCapability", negotiated);
-        boolean delivered = sendEvent(selected, AgentProtocolConstants.LEGACY_AGENT_DIRECT_MESSAGE, wire);
+        boolean delivered = sendEvent(selected, AgentProtocolConstants.LEGACY_AGENT_DIRECT_MESSAGE, wire, true);
         return new CapabilityDispatchResult(CapabilityDispatchStatus.READY, delivered, negotiated);
     }
 

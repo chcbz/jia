@@ -4,6 +4,9 @@ import cn.jia.agent.common.AgentProtocolConstants;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.deliberation.InteractionRoute;
 import cn.jia.chat.service.ChatConversationEventBroker;
+import cn.jia.chat.service.CanonicalContextJson;
+import cn.jia.core.util.JsonUtil;
+import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.ObjectProvider;
@@ -115,6 +118,68 @@ class AgentWebSocketCapabilityNegotiationTest {
             assertFalse(result.delivered(), cause);
             verify(selected, never()).sendMessage(any(TextMessage.class));
         }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void measuredInspectionPreservesDeepSelectorsAndDataAcrossRootAndNestedEnvelope() throws Exception {
+        AgentWebSocketHandler handler = handler();
+        var registry = new TypedInspectionSessionRegistry();
+        handler.setTypedInspectionSessions(registry);
+        WebSocketSession selected = session("inspect", "tenant-a", "owner-a", "client-a", "agent-a");
+        bind(handler, selected, AgentRuntimeCapabilities.parse(AgentRuntimeCapabilitiesTest.candidate(true, true)));
+        registry.register("inspect", "tenant-a", "owner-a", "client-a", "agent-a",
+                TypedInspectionDeclarationTest.declaration(true), () -> true);
+        Map<String, Object> selector = Map.of("fileId", "owner-file", "version", "1");
+        Map<String, Object> manifest = Map.of("profile", TypedInspectionDeclaration.parse(
+                TypedInspectionDeclarationTest.declaration(true)).manifestProfile(),
+                "sources", java.util.List.of(Map.of("selector", selector)));
+        Map<String, Object> facts = Map.of("typedInspection", Map.of("manifest", manifest,
+                "discussionFacts", Map.of("availableActions", java.util.List.of(
+                        Map.of("inputMediaTypes", java.util.List.of("image", "text"))))),
+                "attachmentText", "credential=literal-user-data");
+        Map<String, Object> sourceVector = Map.of("conversationGeneration", "1");
+        String contextHash = contextDigest(Map.of("sourceVector", sourceVector, "facts", facts));
+        Map<String, Object> snapshot = Map.of("facts", facts, "sourceVector", sourceVector, "contextHash", contextHash);
+        Map<String, Object> wire = new java.util.LinkedHashMap<>(wire());
+        wire.put("contextSnapshot", snapshot);
+        wire.put("payload", new java.util.LinkedHashMap<>(wire));
+        // Demonstrate the production cause: the same map is truncated differently at depth 8.
+        Map<String, Object> sanitized = JsonUtil.getMapper().readValue(JsonUtil.toSafeJson(wire), Map.class);
+        assertFalse(sanitized.get("contextSnapshot").equals(
+                ((Map<String, Object>) sanitized.get("payload")).get("contextSnapshot")));
+        var result = handler.sendNegotiatedChatMessageToAgent("tenant-a", "owner-a", "client-a",
+                "agent-a", InteractionRoute.INSPECT, wire);
+        assertTrue(result.delivered());
+        ArgumentCaptor<TextMessage> captor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(selected).sendMessage(captor.capture());
+        Map<String, Object> actual = JsonUtil.getMapper().readValue(captor.getValue().getPayload(), Map.class);
+        assertEquals(snapshot, actual.get("contextSnapshot"));
+        assertEquals(snapshot, ((Map<String, Object>) actual.get("payload")).get("contextSnapshot"));
+        Map<String, Object> actualFacts = (Map<String, Object>) ((Map<String, Object>) actual.get("contextSnapshot")).get("facts");
+        assertEquals(contextHash, contextDigest(Map.of("sourceVector", sourceVector, "facts", actualFacts)));
+        assertEquals("credential=literal-user-data", actualFacts.get("attachmentText"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void ordinaryEventsKeepExistingSensitiveSerialization() throws Exception {
+        AgentWebSocketHandler handler = handler();
+        WebSocketSession selected = session("ordinary", "tenant-a", "owner-a", "client-a", "agent-a");
+        var method = AgentWebSocketHandler.class.getDeclaredMethod("sendEvent",
+                WebSocketSession.class, String.class, Map.class);
+        method.setAccessible(true);
+        assertEquals(true, method.invoke(handler, selected, "agent_registered", Map.of("password", "sensitive-fixture")));
+        ArgumentCaptor<TextMessage> captor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(selected).sendMessage(captor.capture());
+        Map<String, Object> actual = JsonUtil.getMapper().readValue(captor.getValue().getPayload(), Map.class);
+        assertTrue(actual.containsKey("password"));
+        assertEquals(null, actual.get("password"));
+    }
+
+    private String contextDigest(Map<String, Object> value) throws Exception {
+        return "sha256:" + java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                .digest(CanonicalContextJson.write(value).getBytes(java.nio.charset.StandardCharsets.UTF_8)));
     }
 
     private Map<String, Object> inspectionWire() {
