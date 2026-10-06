@@ -71,6 +71,60 @@ class AgentWebSocketCapabilityNegotiationTest {
         verify(legacy).sendMessage(any(TextMessage.class));
     }
 
+    @Test
+    void measuredTypedInspectionUsesExactSessionDespiteLegacyInspectUnavailable() throws Exception {
+        AgentWebSocketHandler handler = handler();
+        var registry = new TypedInspectionSessionRegistry();
+        handler.setTypedInspectionSessions(registry);
+        WebSocketSession selected = session("inspect", "tenant-a", "owner-a", "client-a", "agent-a");
+        WebSocketSession foreign = session("foreign", "tenant-a", "owner-b", "client-a", "agent-a");
+        var capabilities = AgentRuntimeCapabilities.parse(AgentRuntimeCapabilitiesTest.candidate(true, true));
+        bind(handler, selected, capabilities); bind(handler, foreign, capabilities);
+        registry.register("inspect", "tenant-a", "owner-a", "client-a", "agent-a",
+                TypedInspectionDeclarationTest.declaration(true), () -> true);
+        registry.register("foreign", "tenant-a", "owner-b", "client-a", "agent-a",
+                TypedInspectionDeclarationTest.declaration(true), () -> true);
+        var result = handler.sendNegotiatedChatMessageToAgent("tenant-a", "owner-a", "client-a",
+                "agent-a", InteractionRoute.INSPECT, inspectionWire());
+        assertEquals(AgentWebSocketHandler.CapabilityDispatchStatus.READY, result.status());
+        assertTrue(result.delivered());
+        assertEquals("INSPECT", result.negotiatedProfile().get("profile"));
+        verify(selected).sendMessage(any(TextMessage.class));
+        verify(foreign, never()).sendMessage(any(TextMessage.class));
+    }
+
+    @Test
+    void typedInspectionDisabledStaleAmbiguousAndPolicyDriftNeverDispatch() throws Exception {
+        for (String cause : java.util.List.of("missing", "disabled", "stale", "ambiguous", "policy-drift", "unregistered")) {
+            AgentWebSocketHandler handler = handler();
+            var registry = new TypedInspectionSessionRegistry();
+            handler.setTypedInspectionSessions(registry);
+            WebSocketSession selected = session("inspect", "tenant-a", "owner-a", "client-a", "agent-a");
+            bind(handler, selected, AgentRuntimeCapabilities.parse(AgentRuntimeCapabilitiesTest.candidate(true, true)));
+            if (!cause.equals("missing")) {
+                var declaration = TypedInspectionDeclarationTest.declaration(!cause.equals("disabled"));
+                if (cause.equals("policy-drift")) declaration.put("enginePolicyDigest", TypedInspectionDeclarationTest.digest('e'));
+                registry.register(cause.equals("unregistered") ? "other" : "inspect", "tenant-a", "owner-a", "client-a",
+                        "agent-a", declaration, () -> !cause.equals("stale"));
+                if (cause.equals("ambiguous")) registry.register("duplicate", "tenant-a", "owner-a", "client-a",
+                        "agent-a", declaration, () -> true);
+            }
+            var result = handler.sendNegotiatedChatMessageToAgent("tenant-a", "owner-a", "client-a",
+                    "agent-a", InteractionRoute.INSPECT, inspectionWire());
+            assertEquals(AgentWebSocketHandler.CapabilityDispatchStatus.UNSUPPORTED, result.status(), cause);
+            assertFalse(result.delivered(), cause);
+            verify(selected, never()).sendMessage(any(TextMessage.class));
+        }
+    }
+
+    private Map<String, Object> inspectionWire() {
+        Map<String, Object> wire = new java.util.LinkedHashMap<>(wire());
+        wire.put("contextSnapshot", Map.of("facts", Map.of("typedInspection", Map.of("manifest",
+                Map.of("profile", TypedInspectionDeclaration.parse(
+                        TypedInspectionDeclarationTest.declaration(true)).manifestProfile())))));
+        return wire;
+    }
+
     private AgentWebSocketHandler handler() {
         return new AgentWebSocketHandler(mock(ChatClient.class), mock(ObjectProvider.class),
                 mock(ChatMessageDao.class), new ChatConversationEventBroker());

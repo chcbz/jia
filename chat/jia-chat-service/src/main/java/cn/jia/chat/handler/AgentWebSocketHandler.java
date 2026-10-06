@@ -2459,6 +2459,13 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             return new CapabilityDispatchResult(CapabilityDispatchStatus.OFFLINE, false, Map.of());
         }
 
+        // INSPECT has its own measured declaration and exact-session registry. The frozen
+        // CHAT transport capability contract deliberately declares legacy INSPECT unavailable.
+        if (route == InteractionRoute.INSPECT) {
+            return sendTypedInspectionToExactSession(tenantId, ownerJiacn, clientId, agentId,
+                    payload, exact.keySet());
+        }
+
         boolean hasModern = exact.values().stream().anyMatch(AgentRuntimeCapabilities::modern);
         Map<String, AgentRuntimeCapabilities> eligible = new LinkedHashMap<>();
         AgentRuntimeCapabilities.Decision blocked = AgentRuntimeCapabilities.Decision.UNSUPPORTED;
@@ -2500,6 +2507,46 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         CapabilityDispatchStatus status = eligible.values().stream().allMatch(AgentRuntimeCapabilities::modern)
                 ? CapabilityDispatchStatus.READY : CapabilityDispatchStatus.LEGACY_COMPATIBLE;
         return new CapabilityDispatchResult(status, delivered, negotiated);
+    }
+
+    private CapabilityDispatchResult sendTypedInspectionToExactSession(
+            String tenantId, String ownerJiacn, String clientId, String agentId,
+            Map<String, ?> payload, Set<String> exactSessionIds) {
+        if (typedInspectionSessions == null) {
+            return new CapabilityDispatchResult(CapabilityDispatchStatus.UNSUPPORTED, false, Map.of());
+        }
+        TypedInspectionSessionRegistry.Ready ready;
+        try {
+            ready = typedInspectionSessions.requireSingleReady(
+                    new TypedInspectionSessionRegistry.Scope(tenantId, ownerJiacn, clientId), agentId);
+        } catch (IllegalStateException unavailable) {
+            return new CapabilityDispatchResult(CapabilityDispatchStatus.UNSUPPORTED, false, Map.of());
+        }
+        if (!exactSessionIds.contains(ready.sessionId())) {
+            return new CapabilityDispatchResult(CapabilityDispatchStatus.UNSUPPORTED, false, Map.of());
+        }
+        // Never send an admitted manifest to a replacement runtime with different policies.
+        if (!(payload.get("contextSnapshot") instanceof Map<?, ?> snapshot)
+                || !(snapshot.get("facts") instanceof Map<?, ?> facts)
+                || !(facts.get("typedInspection") instanceof Map<?, ?> inspection)
+                || !(inspection.get("manifest") instanceof Map<?, ?> manifest)
+                || !ready.manifestProfile().equals(manifest.get("profile"))) {
+            return new CapabilityDispatchResult(CapabilityDispatchStatus.UNSUPPORTED, false, Map.of());
+        }
+        Map<String, Object> outbound = prepareDirectOutboundPayload(agentId, payload);
+        if (outbound == null || !AgentProtocolConstants.TYPE_CHAT_MESSAGE.equals(outbound.get("messageType"))) {
+            return new CapabilityDispatchResult(CapabilityDispatchStatus.UNSUPPORTED, false, Map.of());
+        }
+        WebSocketSession selected = sessions.get(ready.sessionId());
+        if (selected == null || !selected.isOpen()) {
+            return new CapabilityDispatchResult(CapabilityDispatchStatus.OFFLINE, false, Map.of());
+        }
+        Map<String, Object> negotiated = Map.of("decision", "READY", "profile", "INSPECT",
+                "capabilityContractVersion", 1, "policy", ready.frozenDeclaration());
+        Map<String, Object> wire = new LinkedHashMap<>(outbound);
+        wire.put("targetCapability", negotiated);
+        boolean delivered = sendEvent(selected, AgentProtocolConstants.LEGACY_AGENT_DIRECT_MESSAGE, wire);
+        return new CapabilityDispatchResult(CapabilityDispatchStatus.READY, delivered, negotiated);
     }
 
     public enum CapabilityDispatchStatus {
