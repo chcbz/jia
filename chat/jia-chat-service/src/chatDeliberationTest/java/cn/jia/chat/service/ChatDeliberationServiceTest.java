@@ -1,6 +1,9 @@
 package cn.jia.chat.service;
 
 import cn.jia.agent.service.AgentService;
+import cn.jia.agent.entity.AgentTaskDTO;
+import cn.jia.core.context.EsContext;
+import cn.jia.core.context.EsContextHolder;
 import cn.jia.chat.dao.ChatConversationDao;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.deliberation.ChatContextSnapshotEntity;
@@ -29,6 +32,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.reset;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -64,6 +70,86 @@ class ChatDeliberationServiceTest {
             return 1;
         });
         service = new ChatDeliberationService(dao, conversations, messages, agents);
+    }
+
+    @Test void backgroundBountyAdmissionUsesTrustedOwnerAndRestoresEmptyOrForeignAmbientContext() {
+        try {
+            for (boolean foreign : List.of(false, true)) {
+                setUp();
+                reset(agents);
+                EsContextHolder.clearContext();
+                EsContext previous = EsContextHolder.getContext();
+                if (foreign) {
+                    previous.setTenantId("foreign-tenant");
+                    previous.setClientId("foreign-client");
+                    previous.setJiacn("foreign-owner");
+                }
+                AgentTaskDTO task = bountyTask();
+                when(agents.getTask("task-a")).thenAnswer(ignored -> {
+                    EsContext actual = EsContextHolder.getContext();
+                    assertEquals("0", actual.getTenantId());
+                    assertEquals("client-a", actual.getClientId());
+                    assertEquals("owner-a", actual.getJiacn());
+                    return task;
+                });
+                var admitted = service.admit("0", humanSender(), "42", 3L, bountyScope(),
+                        InteractionRoute.CHAT, request("background-" + foreign, "Welcome"), Map.of());
+                assertEquals(2, admitted.dispatches().size());
+                assertSame(previous, EsContextHolder.getContext());
+                assertEquals(foreign ? "foreign-owner" : null, previous.getJiacn());
+            }
+        } finally { EsContextHolder.clearContext(); }
+    }
+
+    @Test void bountyTaskReadFailureOrForeignProjectionCannotLeakScopeOrCreateRequest() {
+        try {
+            for (String failure : List.of("throw", "foreign-tenant", "foreign-client", "foreign-task")) {
+                setUp();
+                reset(agents);
+                EsContext previous = new EsContext(); previous.setJiacn("prior-owner");
+                EsContextHolder.setContext(previous);
+                AgentTaskDTO task = bountyTask();
+                if (failure.equals("foreign-tenant")) task.setTenantId("foreign-tenant");
+                if (failure.equals("foreign-client")) task.setClientId("foreign-client");
+                if (failure.equals("foreign-task")) task.setId("foreign-task");
+                when(agents.getTask("task-a")).thenAnswer(ignored -> {
+                    assertEquals("owner-a", EsContextHolder.getContext().getJiacn());
+                    if (failure.equals("throw")) throw new IllegalStateException("read unavailable");
+                    return task;
+                });
+                assertThrows(ChatDeliberationException.class, () -> service.admit("0", humanSender(),
+                        "42", 3L, bountyScope(), InteractionRoute.CHAT, request("failure-" + failure, "hello"), Map.of()));
+                assertSame(previous, EsContextHolder.getContext());
+                assertEquals("prior-owner", previous.getJiacn());
+                assertEquals(0, persistedMessages.size()); assertEquals(0, dao.requests.size());
+            }
+        } finally { EsContextHolder.clearContext(); }
+    }
+
+    @Test void foreignAuthenticatedSenderCannotAcquireOwnerTaskContext() {
+        try {
+            EsContext previous = new EsContext(); previous.setJiacn("prior-owner");
+            EsContextHolder.setContext(previous);
+            var foreignSender = new ServerResolvedSender(ServerResolvedSender.USER_TYPE,
+                    "Foreign", "foreign-owner", "client-a", DisplayNameSource.JIACN);
+            assertThrows(ChatDeliberationException.class, () -> service.admit("0", foreignSender,
+                    "42", 3L, bountyScope(), InteractionRoute.CHAT, request("foreign-owner", "hello"), Map.of()));
+            verifyNoInteractions(agents);
+            assertSame(previous, EsContextHolder.getContext());
+            assertEquals(0, dao.requests.size());
+        } finally { EsContextHolder.clearContext(); }
+    }
+
+    private AgentTaskDTO bountyTask() {
+        AgentTaskDTO task = new AgentTaskDTO(); task.setId("task-a"); task.setTenantId("0");
+        task.setClientId("client-a"); task.setTitle("Background bounty");
+        return task;
+    }
+
+    private JuyitingConversationScope bountyScope() {
+        conversation.setConversationScopeType("bounty").setConversationScopeKey("task:task-a").setTaskId("task-a");
+        return new JuyitingConversationScope("bounty", "task:task-a", "task-a", "agent-a",
+                List.of("agent-a", "agent-b"), List.of("agent-a", "agent-b"));
     }
 
     @Test void genericChatCannotSendBlankBodyEvenWithClientAttachmentMetadata() {

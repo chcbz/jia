@@ -17,6 +17,8 @@ import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
 import cn.jia.core.util.JsonUtil;
+import cn.jia.core.context.EsContext;
+import cn.jia.core.context.EsContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
@@ -268,7 +270,7 @@ public class ChatDeliberationService {
         List<Map<String, Object>> inputRefs = authorizeInputRefs(
                 input.getInputRefs(), route, conversation, scope, existingMessages,
                 trustedTypedInspection != null);
-        AgentTaskDTO task = taskFacts(scope, tenantId, clientId);
+        AgentTaskDTO task = taskFacts(scope, tenantId, ownerJiacn, clientId);
         Map<String, Object> requestDigestInput = new LinkedHashMap<>();
         requestDigestInput.put("schemaVersion", "1");
         requestDigestInput.put("conversationId", conversationId);
@@ -1032,8 +1034,18 @@ public class ChatDeliberationService {
         return metadata;
     }
 
-    private AgentTaskDTO taskFacts(JuyitingConversationScope scope, String tenantId, String clientId) {
+    private AgentTaskDTO taskFacts(JuyitingConversationScope scope, String tenantId,
+            String ownerJiacn, String clientId) {
         if (scope.taskId() == null) return null;
+        // Background bootstrap/continuation threads have no browser identity context.
+        // The sender and locked conversation above are the authority, never the ambient thread.
+        // Bridge only the existing owner-scoped Agent task read (including its nested reads).
+        EsContext previous = EsContextHolder.getContext();
+        EsContext trusted = new EsContext();
+        trusted.setTenantId(tenantId);
+        trusted.setClientId(clientId);
+        trusted.setJiacn(ownerJiacn);
+        EsContextHolder.setContext(trusted);
         try {
             AgentTaskDTO task = agentService.getTask(scope.taskId());
             if (task == null || !scope.taskId().equals(task.getId())
@@ -1045,6 +1057,8 @@ public class ChatDeliberationService {
             throw e;
         } catch (RuntimeException e) {
             throw unavailable();
+        } finally {
+            EsContextHolder.setContext(previous);
         }
     }
 
