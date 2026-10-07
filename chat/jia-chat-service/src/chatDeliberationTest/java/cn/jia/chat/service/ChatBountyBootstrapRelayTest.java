@@ -17,6 +17,9 @@ import org.springframework.context.support.GenericApplicationContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -32,8 +35,9 @@ class ChatBountyBootstrapRelayTest {
     private final AgentTaskBountyBootstrapOutboxService outbox = mock(AgentTaskBountyBootstrapOutboxService.class);
     private final ChatBountyBootstrapAdmissionService admission = mock(ChatBountyBootstrapAdmissionService.class);
     private final ChatTypedDeliberationSchemaInitializer schema = mock(ChatTypedDeliberationSchemaInitializer.class);
+    private final TypedDeliberationSessionRegistry sessions = new TypedDeliberationSessionRegistry();
     private final ChatTypedDeliberationContextService contexts = new ChatTypedDeliberationContextService(
-            mock(JdbcTemplate.class), new TypedDeliberationSessionRegistry(), schema,
+            mock(JdbcTemplate.class), sessions, schema,
             mock(ChatActionCapabilityService.class), true);
     private final ScheduledExecutorService scheduler = mock(ScheduledExecutorService.class);
     private final ChatBountyBootstrapRelay relay = new ChatBountyBootstrapRelay(outbox, admission, contexts,
@@ -142,6 +146,288 @@ class ChatBountyBootstrapRelayTest {
         }
         assertFalse(relay.isRunning());
         verify(scheduler).shutdown();
+    }
+
+    @Test void schemaReadyBeforeSessionWaitsBeyondTwoPollsThenAdmitsOriginalIntentOnce() {
+        when(schema.readiness()).thenReturn(Readiness.INITIALIZING);
+        Runnable tick = startTick();
+        for (int i = 0; i < 3; i++) tick.run();
+        verifyNoInteractions(outbox, admission);
+        when(schema.readiness()).thenReturn(Readiness.READY);
+        when(schema.ready()).thenReturn(true);
+        stubRuntimeAdmission();
+        stubReconcile();
+        var committed = new AtomicBoolean();
+        var attempt = new AtomicInteger();
+        when(outbox.claimNextAvailable(anyString(), anyLong())).thenAnswer(ignored -> committed.get() ? null
+                : pending("original", "agent-original", attempt.incrementAndGet(), attempt.get() * 2L));
+        doAnswer(invocation -> {
+            var command = invocation.<AgentTaskBountyBootstrapReconcileDTO>getArgument(1);
+            if (command.outcome() == AgentTaskBountyBootstrapReconcileDTO.Outcome.ADMITTED) committed.set(true);
+            return reconciliation(command);
+        }).when(outbox).reconcile(any(), any(), anyLong());
+        for (int i = 0; i < 4; i++) { tick.run(); assertTrue(relay.isRunning()); }
+        registerRuntime("original-session", "agent-original", "READY");
+        for (int i = 0; i < 3; i++) tick.run();
+        assertTrue(relay.isRunning());
+        var receipts = org.mockito.ArgumentCaptor.forClass(AgentTaskBountyBootstrapReconcileDTO.class);
+        verify(outbox, times(5)).reconcile(eq(new AgentTaskExecutionGrantService.Scope("0", "client", "owner")),
+                receipts.capture(), anyLong());
+        for (int i = 0; i < 5; i++) {
+            var receipt = receipts.getAllValues().get(i);
+            assertEquals("original", receipt.bootstrapId());
+            assertEquals((i + 1) * 2L, receipt.expectedOutboxVersion());
+            assertEquals(i + 1, receipt.claimAttempt());
+            assertEquals("lease-" + (i + 1), receipt.leaseOwner());
+            if (i < 4) {
+                assertEquals(AgentTaskBountyBootstrapReconcileDTO.Outcome.RETRYABLE_FAILURE, receipt.outcome());
+                assertEquals("BOUNTY_RUNTIME_AWAITING", receipt.errorCode());
+                assertNull(receipt.conversationId()); assertNull(receipt.initialRequestId());
+            } else {
+                assertEquals(AgentTaskBountyBootstrapReconcileDTO.Outcome.ADMITTED, receipt.outcome());
+                assertEquals("request-original", receipt.initialRequestId());
+            }
+        }
+        var claims = org.mockito.ArgumentCaptor.forClass(AgentTaskBountyBootstrapClaimDTO.class);
+        verify(admission, times(5)).admit(claims.capture());
+        for (var original : claims.getAllValues()) {
+            assertEquals("task-original", original.taskId()); assertEquals("action-original", original.sourceBusinessActionId());
+            assertEquals(1L, original.requirementRevision()); assertEquals("grant-original", original.grantId());
+        }
+        verify(scheduler, never()).shutdown();
+    }
+
+    @Test void realTransactionalBootstrapRollsBackWaitingWritesAndRetainsOriginalTypedKey() throws Exception {
+        when(schema.ready()).thenReturn(true);
+        var dataSource = new org.springframework.jdbc.datasource.DriverManagerDataSource(
+                "jdbc:h2:mem:bootstrap_runtime_" + java.util.UUID.randomUUID() + ";DB_CLOSE_DELAY=-1", "sa", "");
+        var probe = new JdbcTemplate(dataSource);
+        probe.execute("CREATE TABLE admission_probe (id VARCHAR(100) PRIMARY KEY)");
+        try {
+            var requirements = mock(cn.jia.agent.service.AgentTaskRequirementSnapshotService.class);
+            var discussions = mock(ChatBountyConversationService.class);
+            var typed = mock(ChatTypedDiscussionAdmissionService.class);
+            when(requirements.read(eq(new AgentTaskExecutionGrantService.Scope("0", "client", "owner")),
+                    eq("task-original"), eq(1L))).thenReturn(new cn.jia.agent.service.AgentTaskRequirementSnapshotService.Snapshot(
+                            "0", "client", "owner", "task-original", 1, "original demand", "original demand", "a".repeat(64), "CREATE"));
+            when(discussions.ensure(any(), anyString(), anyString(), anyLong(), anyLong(), anyString(), anyString(), anyString()))
+                    .thenAnswer(ignored -> {
+                        assertTrue(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive());
+                        probe.update("INSERT INTO admission_probe SELECT 'discussion' WHERE NOT EXISTS (SELECT 1 FROM admission_probe WHERE id='discussion')");
+                        return new ChatBountyConversationService.Discussion("10", 1, true);
+                    });
+            var keys = new java.util.ArrayList<String>();
+            when(typed.admit(eq("0"), any(), eq("10"), anyString(), any())).thenAnswer(invocation -> {
+                String key = invocation.getArgument(3); keys.add(key);
+                var command = invocation.<cn.jia.chat.api.ChatTypedDeliberationWire.DiscussionCommand>getArgument(4);
+                assertEquals("original demand", command.content());
+                assertEquals("task-original", command.taskId()); assertEquals(3L, command.expectedAssignmentRevision());
+                boolean replay = probe.queryForObject("SELECT COUNT(*) FROM admission_probe WHERE id=?", Integer.class, key) == 1;
+                if (!replay) {
+                    contexts.resolve(new ChatTypedDeliberationContextService.Scope("0", "owner", "client", "10", 1),
+                            command.taskId(), "agent-original", command.sourceSelectors());
+                    probe.update("INSERT INTO admission_probe VALUES (?)", key);
+                }
+                return new cn.jia.chat.api.ChatTypedDeliberationWire.Accepted(1, "DISCUSSION", "request-original", "42",
+                        List.of("turn-original"), "ADMITTED", "0", "7", "/chat/requests/request-original",
+                        "/chat/conversations/10/requests/request-original/typed-outcome", replay, null);
+            });
+            var target = new ChatBountyBootstrapAdmissionService(requirements, discussions,
+                    mock(cn.jia.chat.dao.ChatConversationDao.class), mock(cn.jia.chat.dao.ChatMessageDao.class),
+                    mock(cn.jia.chat.deliberation.ChatDeliberationDao.class), mock(cn.jia.chat.deliberation.ChatInteractionStepStore.class),
+                    mock(ChatConversationEventBroker.class), cn.jia.core.util.JsonUtil.getMapper(), typed);
+            var interceptor = new org.springframework.transaction.interceptor.TransactionInterceptor();
+            interceptor.setTransactionManager(new org.springframework.jdbc.datasource.DataSourceTransactionManager(dataSource));
+            interceptor.setTransactionAttributeSource(new org.springframework.transaction.annotation.AnnotationTransactionAttributeSource());
+            interceptor.afterPropertiesSet();
+            var factory = new org.springframework.aop.framework.ProxyFactory(target);
+            factory.setProxyTargetClass(true); factory.addAdvice(interceptor);
+            var transactional = (ChatBountyBootstrapAdmissionService) factory.getProxy();
+            String summaryHash = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest("[]".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+            var original = pending("original", "agent-original", 1, 2);
+            var reclaimed = pending("original", "agent-original", 2, 4);
+            var resumed = pending("original", "agent-original", 3, 6);
+            assertEquals(summaryHash, original.referenceSummarySha256());
+            when(outbox.claimNextAvailable(anyString(), anyLong())).thenReturn(original, reclaimed, resumed, null);
+            when(outbox.reconcile(any(), any(), anyLong())).thenAnswer(invocation -> {
+                assertFalse(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive());
+                var command = invocation.<AgentTaskBountyBootstrapReconcileDTO>getArgument(1);
+                assertEquals(command.outcome() == AgentTaskBountyBootstrapReconcileDTO.Outcome.ADMITTED ? 2 : 0,
+                        probe.queryForObject("SELECT COUNT(*) FROM admission_probe", Integer.class));
+                return reconciliation(command);
+            });
+            var transactionalRelay = new ChatBountyBootstrapRelay(outbox, transactional, contexts, () -> scheduler);
+            transactionalRelay.pollOnce(); transactionalRelay.pollOnce();
+            assertEquals(0, probe.queryForObject("SELECT COUNT(*) FROM admission_probe", Integer.class));
+            registerRuntime("ready", "agent-original", "READY");
+            transactionalRelay.pollOnce(); transactionalRelay.pollOnce();
+            sessions.remove("ready"); // durable replay must not require a newly connected runtime
+            assertTrue(transactional.admit(resumed).replay());
+            assertEquals(2, probe.queryForObject("SELECT COUNT(*) FROM admission_probe", Integer.class));
+            assertEquals(4, keys.size()); assertEquals(1L, keys.stream().distinct().count());
+            var receipts = org.mockito.ArgumentCaptor.forClass(AgentTaskBountyBootstrapReconcileDTO.class);
+            verify(outbox, times(3)).reconcile(any(), receipts.capture(), anyLong());
+            assertEquals(1L, receipts.getAllValues().stream()
+                    .filter(value -> value.outcome() == AgentTaskBountyBootstrapReconcileDTO.Outcome.ADMITTED).count());
+        } finally { probe.execute("SHUTDOWN"); }
+    }
+
+    @Test void unreadyTargetUsesDurableRetryWithoutStarvingReadyTarget() {
+        when(schema.ready()).thenReturn(true);
+        registerRuntime("session-a", "agent-a", "UNAVAILABLE");
+        registerRuntime("session-b", "agent-b", "READY");
+        var first = pending("original-a", "agent-a", 1, 2);
+        var other = pending("original-b", "agent-b", 1, 2);
+        var resumed = pending("original-a", "agent-a", 2, 4);
+        when(outbox.claimNextAvailable(anyString(), anyLong())).thenReturn(first, other, resumed, null);
+        stubRuntimeAdmission(); stubReconcile();
+        Runnable tick = startTick();
+        tick.run(); assertTrue(relay.isRunning());
+        tick.run(); assertTrue(relay.isRunning());
+        registerRuntime("session-a", "agent-a", "READY");
+        tick.run(); tick.run();
+        var receipts = org.mockito.ArgumentCaptor.forClass(AgentTaskBountyBootstrapReconcileDTO.class);
+        verify(outbox, times(3)).reconcile(any(), receipts.capture(), anyLong());
+        assertEquals(List.of(AgentTaskBountyBootstrapReconcileDTO.Outcome.RETRYABLE_FAILURE,
+                AgentTaskBountyBootstrapReconcileDTO.Outcome.ADMITTED, AgentTaskBountyBootstrapReconcileDTO.Outcome.ADMITTED),
+                receipts.getAllValues().stream().map(AgentTaskBountyBootstrapReconcileDTO::outcome).toList());
+        assertEquals("request-original-b", receipts.getAllValues().get(1).initialRequestId());
+        assertEquals("request-original-a", receipts.getAllValues().get(2).initialRequestId());
+        verify(admission).admit(same(first)); verify(admission).admit(same(other)); verify(admission).admit(same(resumed));
+        assertTrue(relay.isRunning());
+    }
+
+    @Test void disconnectWaitsAndExactReconnectionResumesOriginalIntent() {
+        when(schema.ready()).thenReturn(true);
+        var current = new AtomicBoolean(true);
+        sessions.register("old", "0", "owner", "client", "agent-original", runtimeDeclaration("READY"), current::get);
+        current.set(false);
+        var original = pending("original", "agent-original", 1, 2);
+        var resumed = pending("original", "agent-original", 2, 4);
+        when(outbox.claimNextAvailable(anyString(), anyLong())).thenReturn(original, resumed, null);
+        stubRuntimeAdmission(); stubReconcile();
+        Runnable tick = startTick();
+        tick.run(); assertTrue(relay.isRunning());
+        registerRuntime("new", "agent-original", "READY");
+        tick.run(); tick.run();
+        var receipts = org.mockito.ArgumentCaptor.forClass(AgentTaskBountyBootstrapReconcileDTO.class);
+        verify(outbox, times(2)).reconcile(any(), receipts.capture(), anyLong());
+        assertEquals("BOUNTY_RUNTIME_AWAITING", receipts.getAllValues().getFirst().errorCode());
+        assertEquals("request-original", receipts.getAllValues().getLast().initialRequestId());
+        assertTrue(relay.isRunning());
+    }
+
+    @Test void runtimeWaitDoesNotEraseAPreviouslyObservedPermanentFailure() {
+        when(schema.ready()).thenReturn(true);
+        when(outbox.claimNextAvailable(anyString(), anyLong())).thenReturn(claim);
+        var calls = new AtomicInteger();
+        when(admission.admit(claim)).thenAnswer(ignored -> {
+            if (calls.incrementAndGet() == 2) contexts.resolve(new ChatTypedDeliberationContextService.Scope(
+                    "0", "owner", "client", "10", 1), "task-1", "agent-1", List.of());
+            throw new IllegalStateException("Missing exact revision");
+        });
+        stubReconcile();
+        Runnable tick = startTick();
+        tick.run(); assertTrue(relay.isRunning());
+        tick.run(); assertTrue(relay.isRunning());
+        tick.run(); assertFalse(relay.isRunning());
+        tick.run(); verify(admission, times(3)).admit(same(claim));
+    }
+
+    @Test void runtimeWaitCannotMaskUnconfirmedRetryOrReconciliationFailure() {
+        when(schema.ready()).thenReturn(true);
+        var original = pending("original", "agent-original", 1, 2);
+        when(outbox.claimNextAvailable(anyString(), anyLong())).thenReturn(original);
+        stubRuntimeAdmission();
+        when(outbox.reconcile(any(), any(), anyLong())).thenReturn(
+                new AgentTaskBountyBootstrapReconcileResultDTO("original", "ADMITTED", 3, "10", "wrong-request"));
+        Runnable tick = startTick();
+        tick.run(); assertTrue(relay.isRunning());
+        tick.run(); assertFalse(relay.isRunning());
+        verify(outbox, times(2)).reconcile(any(), any(), anyLong());
+    }
+
+    @Test void staleRetryFenceDuringRuntimeWaitStillStopsAfterTwoFailures() {
+        when(schema.ready()).thenReturn(true);
+        when(outbox.claimNextAvailable(anyString(), anyLong())).thenReturn(pending("original", "agent-original", 1, 2));
+        stubRuntimeAdmission();
+        when(outbox.reconcile(any(), any(), anyLong())).thenThrow(new IllegalStateException("Bootstrap claim fence is stale"));
+        Runnable tick = startTick();
+        tick.run(); assertTrue(relay.isRunning());
+        tick.run(); assertFalse(relay.isRunning());
+    }
+
+    @Test void invalidLiveDeclarationStillStopsAfterTwoRealFailures() {
+        sessions.register("invalid", "0", "owner", "client", "agent-original", Map.of("schemaVersion", 1));
+        permanentRuntimeFailure();
+    }
+
+    @Test void ambiguousLiveDeclarationsStillStopAfterTwoRealFailures() {
+        registerRuntime("s1", "agent-original", "READY");
+        registerRuntime("s2", "agent-original", "UNAVAILABLE");
+        permanentRuntimeFailure();
+    }
+
+    @Test void genericPersistenceErrorWithSameRuntimeMessageIsNotClassifiedByText() {
+        when(outbox.claimNextAvailable(anyString(), anyLong())).thenReturn(claim);
+        when(admission.admit(claim)).thenThrow(new ChatDeliberationException(
+                ChatDeliberationException.Reason.PERSISTENCE_ERROR, "Typed deliberation runtime is unavailable"));
+        stubReconcile();
+        Runnable tick = startTick();
+        tick.run(); assertTrue(relay.isRunning());
+        tick.run(); assertFalse(relay.isRunning());
+        var receipts = org.mockito.ArgumentCaptor.forClass(AgentTaskBountyBootstrapReconcileDTO.class);
+        verify(outbox, times(2)).reconcile(any(), receipts.capture(), anyLong());
+        assertTrue(receipts.getAllValues().stream().allMatch(value -> "BOUNTY_ADMISSION_UNAVAILABLE".equals(value.errorCode())));
+    }
+
+    private void permanentRuntimeFailure() {
+        when(schema.ready()).thenReturn(true);
+        when(outbox.claimNextAvailable(anyString(), anyLong())).thenReturn(pending("original", "agent-original", 1, 2));
+        stubRuntimeAdmission(); stubReconcile();
+        Runnable tick = startTick();
+        tick.run(); assertTrue(relay.isRunning());
+        tick.run(); assertFalse(relay.isRunning());
+        var receipts = org.mockito.ArgumentCaptor.forClass(AgentTaskBountyBootstrapReconcileDTO.class);
+        verify(outbox, times(2)).reconcile(any(), receipts.capture(), anyLong());
+        assertTrue(receipts.getAllValues().stream().allMatch(value -> "BOUNTY_ADMISSION_UNAVAILABLE".equals(value.errorCode())));
+    }
+
+    private void stubRuntimeAdmission() {
+        when(admission.admit(any())).thenAnswer(invocation -> {
+            var intent = invocation.<AgentTaskBountyBootstrapClaimDTO>getArgument(0);
+            contexts.resolve(new ChatTypedDeliberationContextService.Scope(intent.tenantId(), intent.ownerJiacn(),
+                    intent.clientId(), "10", 1), intent.taskId(), intent.targetAgentId(), List.of());
+            return new ChatBountyBootstrapAdmissionService.Admission("10", 1, "request-" + intent.bootstrapId(), "42", null, false);
+        });
+    }
+
+    private void stubReconcile() {
+        when(outbox.reconcile(any(), any(), anyLong())).thenAnswer(invocation -> reconciliation(invocation.getArgument(1)));
+    }
+
+    private static AgentTaskBountyBootstrapReconcileResultDTO reconciliation(AgentTaskBountyBootstrapReconcileDTO command) {
+        return new AgentTaskBountyBootstrapReconcileResultDTO(command.bootstrapId(),
+                command.outcome() == AgentTaskBountyBootstrapReconcileDTO.Outcome.ADMITTED ? "ADMITTED" : "RETRY",
+                command.expectedOutboxVersion() + 1, command.conversationId(), command.initialRequestId());
+    }
+
+    private static AgentTaskBountyBootstrapClaimDTO pending(String bootstrap, String target, int attempt, long version) {
+        return new AgentTaskBountyBootstrapClaimDTO(bootstrap, "0", "client", "owner", "task-" + bootstrap,
+                "action-" + bootstrap, 1, "TASK_REQUIREMENT_REVISION_V1", 3, target, "grant-" + bootstrap, 1,
+                "DELIBERATE", List.of(), "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+                "lease-" + attempt, Long.MAX_VALUE, attempt, version);
+    }
+
+    private void registerRuntime(String session, String agent, String state) {
+        sessions.register(session, "0", "owner", "client", agent, runtimeDeclaration(state));
+    }
+
+    private static Map<String,Object> runtimeDeclaration(String state) {
+        return Map.of("schemaVersion", 3, "state", state, "carrier", "CHAT_MESSAGE_FINAL_SIDECAR_V3",
+                "referenceModes", List.of("NONE", "AVAILABLE"), "outcomeKinds", List.of("ANSWER", "CLARIFY", "ACTION_REQUEST"),
+                "engine", "CODEX_APP_SERVER_NATIVE_OUTPUT_SCHEMA", "strictNoToolsVerified", false, "toolPolicy", "read-only-constrained");
     }
 
     @Test void disabledTypedModeNeverStartsASchedulerOrClaimsAnIntent() {

@@ -32,6 +32,13 @@ public final class ChatTypedDeliberationContextService {
         public Context { facts=Map.copyOf(facts); selectors=List.copyOf(selectors); frozenDeclaration=Map.copyOf(frozenDeclaration); }
     }
 
+    /** Internal classification only; the HTTP reason/message and payload remain unchanged. */
+    public static final class RuntimeNotReadyException extends ChatDeliberationException {
+        private RuntimeNotReadyException(TypedDeliberationSessionRegistry.RuntimeNotReadyException cause) {
+            super(Reason.PERSISTENCE_ERROR, "Typed deliberation runtime is unavailable", cause);
+        }
+    }
+
     private final JdbcTemplate jdbc;
     private final TypedDeliberationSessionRegistry sessions;
     private final ChatTypedDeliberationSchemaInitializer schema;
@@ -61,6 +68,8 @@ public final class ChatTypedDeliberationContextService {
         try {
             ready=sessions.requireSingleReady(new TypedDeliberationSessionRegistry.Scope(
                     scope.tenantId(),scope.ownerJiacn(),scope.clientId()),targetAgentId);
+        } catch (TypedDeliberationSessionRegistry.RuntimeNotReadyException awaiting) {
+            throw new RuntimeNotReadyException(awaiting);
         } catch (IllegalStateException unavailable) {
             throw unavailable("Typed deliberation runtime is unavailable");
         }

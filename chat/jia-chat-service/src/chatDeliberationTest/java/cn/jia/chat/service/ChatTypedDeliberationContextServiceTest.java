@@ -52,6 +52,46 @@ class ChatTypedDeliberationContextServiceTest {
         verifyNoInteractions(jdbc,capabilities);
     }
 
+    @Test void missingRuntimeHasInternalAwaitingTypeButUnchangedPublicErrorAndNoSourceAccess() {
+        when(schema.ready()).thenReturn(true);
+        var failure=assertThrows(ChatTypedDeliberationContextService.RuntimeNotReadyException.class,
+                ()->service().resolve(scope,"task","agent",List.of()));
+        assertEquals(ChatDeliberationException.Reason.PERSISTENCE_ERROR,failure.reason());
+        assertEquals("Typed deliberation runtime is unavailable",failure.getMessage());
+        assertInstanceOf(TypedDeliberationSessionRegistry.RuntimeNotReadyException.class,failure.getCause());
+        verifyNoInteractions(jdbc,capabilities);
+    }
+
+    @Test void explicitlyUnavailableDeclarationWaitsUntilSameExactRuntimeIsReady() {
+        when(schema.ready()).thenReturn(true);
+        var unavailable=new java.util.LinkedHashMap<>(declaration());unavailable.put("state","UNAVAILABLE");
+        sessions.register("s1","0","owner","client","agent",unavailable);
+        assertThrows(ChatTypedDeliberationContextService.RuntimeNotReadyException.class,
+                ()->service().resolve(scope,"task","agent",List.of()));
+        verifyNoInteractions(jdbc,capabilities);
+        sessions.register("s1","0","owner","client","agent",declaration());
+        assertEquals("READY",service().resolve(scope,"task","agent",List.of()).frozenDeclaration().get("state"));
+        verifyNoInteractions(jdbc);
+    }
+
+    @Test void invalidDeclarationAmbiguityAndSchemaFailureNeverBecomeAwaitingRuntime() {
+        when(schema.ready()).thenReturn(true);
+        for(Object raw:new Object[]{null,Map.of("schemaVersion",1)}) {
+            sessions.register("s1","0","owner","client","agent",raw);
+            var failure=assertThrows(ChatDeliberationException.class,()->service().resolve(scope,"task","agent",List.of()));
+            assertFalse(failure instanceof ChatTypedDeliberationContextService.RuntimeNotReadyException);
+        }
+        sessions.register("s1","0","owner","client","agent",declaration());
+        sessions.register("s2","0","owner","client","agent",declaration());
+        var ambiguous=assertThrows(ChatDeliberationException.class,()->service().resolve(scope,"task","agent",List.of()));
+        assertFalse(ambiguous instanceof ChatTypedDeliberationContextService.RuntimeNotReadyException);
+        sessions.remove("s1");sessions.remove("s2");
+        when(schema.ready()).thenReturn(false);
+        var schemaFailure=assertThrows(ChatDeliberationException.class,()->service().resolve(scope,"task","agent",List.of()));
+        assertFalse(schemaFailure instanceof ChatTypedDeliberationContextService.RuntimeNotReadyException);
+        verifyNoInteractions(jdbc,capabilities);
+    }
+
     @Test void noneUsesLiveDeclarationAndNeverReadsBytes() {
         ready();var context=service().resolve(scope,"task","agent",List.of());
         assertEquals(3,context.facts().get("schemaVersion"));assertEquals(List.of(),context.facts().get("availableActions"));assertFalse(context.facts().containsKey("supportedOperations"));assertEquals(List.of(),context.facts().get("availableSources"));

@@ -101,6 +101,13 @@ public class ChatBountyBootstrapRelay implements SmartLifecycle, AutoCloseable {
         ChatBountyBootstrapAdmissionService.Admission result;
         try {
             result = admission.admit(claim); // transactional commit before the acknowledgement below
+        } catch (ChatTypedDeliberationContextService.RuntimeNotReadyException awaiting) {
+            // Admission has rolled back. Release this exact lease through the existing durable
+            // retry/backoff, allowing other targets to progress without replaying the demand.
+            // This wait is neither success nor an unchanged permanent failure.
+            reconcile(scope, claim, Outcome.RETRYABLE_FAILURE, null, null,
+                    "BOUNTY_RUNTIME_AWAITING");
+            return false;
         } catch (RuntimeException failure) {
             // A missing owner-scoped revision or a revoked grant must never be replaced by a
             // truncated task-plan projection or a text CHAT dispatch. Retain for reconciliation.
@@ -120,6 +127,8 @@ public class ChatBountyBootstrapRelay implements SmartLifecycle, AutoCloseable {
                 claim.bootstrapId(), claim.outboxVersion(), claim.leaseOwner(), claim.claimAttempt(),
                 outcome, conversationId, requestId, errorCode), System.currentTimeMillis());
         if (response == null || !claim.bootstrapId().equals(response.bootstrapId())
+                || outcome == Outcome.RETRYABLE_FAILURE && (!"RETRY".equals(response.status())
+                || response.conversationId() != null || response.initialRequestId() != null)
                 || outcome == Outcome.ADMITTED && (!"ADMITTED".equals(response.status())
                 || !Objects.equals(conversationId, response.conversationId())
                 || !Objects.equals(requestId, response.initialRequestId()))) {

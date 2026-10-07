@@ -20,6 +20,14 @@ public final class TypedDeliberationSessionRegistry {
     public record Ready(String sessionId, String agentId, List<String> supportedOperations,
             Map<String, Object> frozenDeclaration) { }
 
+    /** Only absence/reconnect or an explicit valid UNAVAILABLE declaration is awaitable.
+     * Ambiguity and invalid/absent declarations retain the permanent fail-closed path. */
+    public static final class RuntimeNotReadyException extends IllegalStateException {
+        private RuntimeNotReadyException() {
+            super("Typed deliberation runtime is unavailable");
+        }
+    }
+
     private final ConcurrentHashMap<String, Session> sessions = new ConcurrentHashMap<>();
 
     public void register(String sessionId, String tenantId, String ownerJiacn, String clientId,
@@ -50,11 +58,17 @@ public final class TypedDeliberationSessionRegistry {
             }
         }
         matching.sort(Comparator.comparing(Session::sessionId));
-        if (matching.size() != 1 || matching.getFirst().declaration().state()
-                != TypedDeliberationDeclaration.State.READY) {
+        if (matching.isEmpty()) throw new RuntimeNotReadyException();
+        if (matching.size() != 1) {
             throw new IllegalStateException("Typed deliberation runtime is unavailable");
         }
         Session selected = matching.getFirst();
+        if (selected.declaration().state() == TypedDeliberationDeclaration.State.UNAVAILABLE) {
+            throw new RuntimeNotReadyException();
+        }
+        if (selected.declaration().state() != TypedDeliberationDeclaration.State.READY) {
+            throw new IllegalStateException("Typed deliberation runtime is unavailable");
+        }
         return new Ready(selected.sessionId(), selected.agentId(),
                 selected.declaration().supportedOperations(), selected.declaration().frozenReceipt());
     }

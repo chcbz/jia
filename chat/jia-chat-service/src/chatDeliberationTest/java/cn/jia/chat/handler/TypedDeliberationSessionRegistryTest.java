@@ -26,6 +26,42 @@ class TypedDeliberationSessionRegistryTest {
         registry.remove("s1");registry.register("s2","0","owner","client","agent",TypedDeliberationDeclarationTest.declaration("UNAVAILABLE"));
         assertThrows(IllegalStateException.class,()->registry.requireSingleReady(scope,"agent"));
     }
+    @Test void onlyAbsentOrExplicitlyUnavailableRuntimeIsAwaitable() {
+        assertThrows(TypedDeliberationSessionRegistry.RuntimeNotReadyException.class,
+                ()->registry.requireSingleReady(scope,"agent"));
+        registry.register("s1","0","owner","client","agent",TypedDeliberationDeclarationTest.declaration("UNAVAILABLE"));
+        assertThrows(TypedDeliberationSessionRegistry.RuntimeNotReadyException.class,
+                ()->registry.requireSingleReady(scope,"agent"));
+        registry.register("s1","0","owner","client","agent",TypedDeliberationDeclarationTest.declaration("READY"));
+        assertEquals("s1",registry.requireSingleReady(scope,"agent").sessionId());
+    }
+    @Test void undeclaredAndMalformedRuntimeArePermanentNotAwaitable() {
+        for(Object declaration:new Object[]{null, java.util.Map.of("schemaVersion",1)}) {
+            registry.register("s1","0","owner","client","agent",declaration);
+            var failure=assertThrows(IllegalStateException.class,()->registry.requireSingleReady(scope,"agent"));
+            assertFalse(failure instanceof TypedDeliberationSessionRegistry.RuntimeNotReadyException);
+        }
+    }
+    @Test void ambiguityIsPermanentEvenWhenOneDeclarationIsUnavailable() {
+        registry.register("s1","0","owner","client","agent",TypedDeliberationDeclarationTest.declaration("UNAVAILABLE"));
+        registry.register("s2","0","owner","client","agent",TypedDeliberationDeclarationTest.declaration("READY"));
+        var failure=assertThrows(IllegalStateException.class,()->registry.requireSingleReady(scope,"agent"));
+        assertFalse(failure instanceof TypedDeliberationSessionRegistry.RuntimeNotReadyException);
+    }
+    @Test void revokedSessionCannotWinButExactReconnectedSessionCanResume() {
+        AtomicBoolean current=new AtomicBoolean(true);
+        registry.register("old","0","owner","client","agent",TypedDeliberationDeclarationTest.declaration("READY"),current::get);
+        current.set(false);
+        assertThrows(TypedDeliberationSessionRegistry.RuntimeNotReadyException.class,
+                ()->registry.requireSingleReady(scope,"agent"));
+        registry.register("foreign","0","other-owner","client","agent",TypedDeliberationDeclarationTest.declaration("READY"));
+        assertThrows(TypedDeliberationSessionRegistry.RuntimeNotReadyException.class,
+                ()->registry.requireSingleReady(scope,"agent"));
+        registry.register("new","0","owner","client","agent",TypedDeliberationDeclarationTest.declaration("READY"));
+        assertEquals("new",registry.requireSingleReady(scope,"agent").sessionId());
+        registry.remove("old");
+        assertEquals("new",registry.requireSingleReady(scope,"agent").sessionId());
+    }
     @Test void oneSocketMayHoldDistinctAgentDeclarationsWithoutOverwrite() {
         registry.register("s1","0","owner","client","agent-a",TypedDeliberationDeclarationTest.declaration("READY"));
         registry.register("s1","0","owner","client","agent-b",TypedDeliberationDeclarationTest.declaration("READY"));
