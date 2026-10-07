@@ -147,6 +147,36 @@ class ChatBountyBootstrapAdmissionServiceTest {
         verifyNoInteractions(steps,messages,deliberation,broker);
     }
 
+    @Test void identicalRequirementFieldsAreSentOnceWithoutRewritingTheSnapshot() throws Exception {
+        assertGenericRequirementContent("画一只鸟", "画一只鸟", "画一只鸟");
+    }
+
+    @Test void repeatedParagraphsWithinOneRequirementFieldArePreserved() throws Exception {
+        String repeated = "画一只鸟\n\n画一只鸟";
+        assertGenericRequirementContent(repeated, repeated, repeated);
+    }
+
+    @Test void distinctDescriptionIsPreservedEvenWhenItStartsWithTheTitle() throws Exception {
+        assertGenericRequirementContent("画一只鸟", "画一只鸟，蓝色羽毛", "画一只鸟\n\n画一只鸟，蓝色羽毛");
+    }
+
+    private void assertGenericRequirementContent(String title, String description, String expected) throws Exception {
+        authorized();
+        when(requirements.read(scope, "task-1", 1L)).thenReturn(
+                new AgentTaskRequirementSnapshotService.Snapshot("0", "client", "owner",
+                        "task-1", 1L, title, description, snapshotHash, "CREATE"));
+        when(discussions.ensure(scope, "task-1", "grant-1", 1L, 3L, "agent-1", "DELIBERATE", title))
+                .thenReturn(new ChatBountyConversationService.Discussion("10", 1L, true));
+        when(typedDiscussion.admit(eq("0"), any(), eq("10"), anyString(), any()))
+                .thenReturn(typedReceipt(false));
+        service.admit(genericClaim(List.of()));
+        var command = org.mockito.ArgumentCaptor.forClass(cn.jia.chat.api.ChatTypedDeliberationWire.DiscussionCommand.class);
+        verify(typedDiscussion).admit(eq("0"), any(), eq("10"), anyString(), command.capture());
+        assertEquals(expected, command.getValue().content());
+        verify(requirements).read(scope, "task-1", 1L);
+        verifyNoInteractions(messages, steps, deliberation, broker);
+    }
+
     @Test void genericBootstrapDoesNotFallbackToImageIfTypedRuntimeIsUnavailable() throws Exception {
         authorized();
         when(discussions.ensure(scope,"task-1","grant-1",1,3,"agent-1","DELIBERATE","画一只鸟"))

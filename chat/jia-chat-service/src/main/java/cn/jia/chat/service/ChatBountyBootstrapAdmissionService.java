@@ -100,8 +100,11 @@ public class ChatBountyBootstrapAdmissionService {
         }
         // Only immutable source text goes into the initial request. Task-plan descriptions can
         // be truncated and must not silently replace the confirmed revision.
+        // Quick intake may store the same exact demand in both fields; do not repeat it.
+        // Never deduplicate inside either field or normalize the immutable snapshot.
         String content = requirement.title() +
                 (requirement.description() == null || requirement.description().isEmpty()
+                        || requirement.description().equals(requirement.title())
                         ? "" : "\n\n" + requirement.description());
         List<Map<String, Object>> references = claim.references().stream().map(reference -> {
             if (reference == null || !exact(reference.fileId(), 100)

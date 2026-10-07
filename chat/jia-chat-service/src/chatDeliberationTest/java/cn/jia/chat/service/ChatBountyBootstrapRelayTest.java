@@ -125,7 +125,8 @@ class ChatBountyBootstrapRelayTest {
             beans.registerBean("typedSchema", ChatTypedDeliberationSchemaInitializer.class, () -> schema);
             beans.registerBean("bootstrapRelay", ChatBountyBootstrapRelay.class, () -> relay);
         });
-        try (var ignored = application.run("--spring.main.banner-mode=off")) {
+        try (var ignored = application.run("--spring.main.banner-mode=off",
+                "--chat.bounty-bootstrap.enabled=true", "--chat.typed-deliberation.enabled=true")) {
             verify(schema).run(any());
             for (int i = 0; i < 3; i++) tick.get().run();
             verify(admission, times(1)).admit(same(pending));
