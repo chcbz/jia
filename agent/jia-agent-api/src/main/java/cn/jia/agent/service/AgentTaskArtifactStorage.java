@@ -11,6 +11,16 @@ public interface AgentTaskArtifactStorage {
     StoredContent read(Scope scope, String storageUri, String expectedSha256,
             long expectedByteLength, String expectedMimeType);
 
+    /** Deterministic owned URI for a scoped digest; performs no filesystem I/O. */
+    default String reference(Scope scope, String sha256) {
+        throw new UnsupportedOperationException("Managed artifact references are not supported");
+    }
+
+    /** Deletes only the exact scoped immutable object after caller-provided durable no-reference proof. */
+    default boolean delete(Scope scope, String storageUri, String expectedSha256) {
+        throw new UnsupportedOperationException("Managed artifact deletion is not supported");
+    }
+
     boolean owns(String storageUri);
 
     boolean matches(Scope scope, String storageUri, String expectedSha256);

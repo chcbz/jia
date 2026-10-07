@@ -37,7 +37,8 @@ public final class PlatformSkillInstallationService implements AgentControlledCo
     public record Result(Integer schemaVersion,String installationId,String commandId,Integer attempt,
             String executionEpoch,String challengeId,String packageSha256,String outcome,String errorCode) { }
     public record View(String installationId,String agentId,String bindingVersion,String skillKey,String skillVersion,
-            String packageSha256,String origin,String state,String errorCode,String revision) { }
+            String packageSha256,String origin,String state,String errorCode,String revision,
+            List<String> reclaimableInstallationIds) { }
     private final PlatformInstallationStore store;
     private final PlatformSkillCatalog catalog;
     private final AgentIdentityService identities;
@@ -154,14 +155,21 @@ public final class PlatformSkillInstallationService implements AgentControlledCo
             String resultSha=hash(result.installationId()+"\0"+result.commandId()+"\0"+result.attempt()+"\0"+result.executionEpoch()
                     +"\0"+result.challengeId()+"\0"+result.packageSha256()+"\0"+result.outcome()+"\0"+result.errorCode());
             if(i.resultSha()!=null) {
-                require(resultSha.equals(i.resultSha()),409,"PLATFORM_SKILL_RESULT_CONFLICT");return view(i);
+                require(resultSha.equals(i.resultSha()),409,"PLATFORM_SKILL_RESULT_CONFLICT");
+                return view(i, reclaimable(i));
             }
             require(result.attempt().equals(delivery.getActiveAttempt()),409,"PLATFORM_SKILL_RESULT_CONFLICT");
             require("REQUESTED".equals(i.state()) && delivery.getStatus()!=null && RESULT_DELIVERY.contains(delivery.getStatus())
                     && delivery.getExpiresAt()!=null && delivery.getExpiresAt()>now.getAsLong(),403,"PLATFORM_SKILL_DELIVERY_FENCED");
             require(store.finish(scope,i.id(),i.revision(),result.outcome(),resultSha,result.errorCode())==1,409,"PLATFORM_SKILL_RESULT_CONFLICT");
-            return view(found(scope,installation,false));
+            var completed=found(scope,installation,false);
+            return view(completed, reclaimable(completed));
         });
+    }
+    private List<String> reclaimable(Installation current) {
+        return "SUCCEEDED".equals(current.state())
+                ? List.copyOf(store.reclaimableInstallationIds(current,32))
+                : List.of();
     }
     @Override public AgentRawCommandDispatchResult dispatch(String tenant,String client,String owner,String resource,
             String agent,String commandId,byte[] wire) {
@@ -302,8 +310,9 @@ public final class PlatformSkillInstallationService implements AgentControlledCo
     private Installation found(Scope scope,String id,boolean lock) {
         var i=store.find(scope,id,lock);require(i!=null,404,"PLATFORM_SKILL_INSTALLATION_NOT_FOUND");return i;
     }
-    private static View view(Installation i) { return new View(i.id(),i.agentId(),Long.toString(i.bindingId()),i.skillKey(),i.skillVersion(),
-            i.packageSha(),"PLATFORM_PROVISIONED",i.state(),i.errorCode(),Long.toString(i.revision())); }
+    private static View view(Installation i) { return view(i,List.of()); }
+    private static View view(Installation i,List<String> reclaimable) { return new View(i.id(),i.agentId(),Long.toString(i.bindingId()),i.skillKey(),i.skillVersion(),
+            i.packageSha(),"PLATFORM_PROVISIONED",i.state(),i.errorCode(),Long.toString(i.revision()),List.copyOf(reclaimable)); }
     static void validateResultShape(Result r) {
         require(r!=null && Integer.valueOf(1).equals(r.schemaVersion()) && r.attempt()!=null && r.attempt()>0,400,"PLATFORM_SKILL_RESULT_INVALID");
         id(r.installationId());id(r.commandId());id(r.challengeId());positive(r.executionEpoch());

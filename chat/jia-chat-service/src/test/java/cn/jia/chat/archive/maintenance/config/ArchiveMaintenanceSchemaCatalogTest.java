@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -154,6 +155,16 @@ class ArchiveMaintenanceSchemaCatalogTest {
                 .contains("RUNTIME_REPAIRED"));
         assertTrue(failure.checks().get("chk_archive_failure_source_verification")
                 .contains("READABLE"));
+        var sourceArtifact = expected.tables().get("archive_source_artifact_object");
+        assertEquals(new ArchiveMaintenanceSchemaCatalog.Column("varchar(255)", false, "ascii_bin"),
+                sourceArtifact.columns().get("storage_uri"));
+        assertEquals("1:state,touched_at,source_id", sourceArtifact.indexes().get("idx_archive_source_artifact_cleanup"));
+        assertEquals("1:tenant_id,client_id,owner_jiacn,operation_key",
+                sourceArtifact.indexes().get("idx_archive_source_artifact_operation"));
+        assertFalse(sourceArtifact.indexes().containsKey("uk_archive_source_artifact_operation"));
+        assertEquals("tenant_id>archive_operation.tenant_id,client_id>archive_operation.client_id,owner_jiacn>archive_operation.owner_jiacn,operation_key>archive_operation.operation_key",
+                sourceArtifact.foreignKeys().get("fk_archive_source_artifact_operation"));
+        assertTrue(sourceArtifact.checks().get("chk_archive_source_artifact_state").contains("DELETE_PENDING"));
         var execution = expected.tables().get("archive_execution_grant");
         assertEquals(new ArchiveMaintenanceSchemaCatalog.Column("bigint", false, null),
                 execution.columns().get("manager_authorization_revision"));
@@ -162,12 +173,38 @@ class ArchiveMaintenanceSchemaCatalogTest {
                 execution.columns().get("registration_hash"));
         assertEquals("0:tenant_id,client_id,owner_jiacn,dispatch_key",
                 execution.indexes().get("uk_archive_execution_dispatch"));
+        assertEquals("1:tenant_id,client_id,owner_jiacn,agent_id,installation_ref,state,grant_ref",
+                execution.indexes().get("idx_archive_execution_installation"));
         assertEquals("run_id>archive_job_run.run_id",
                 execution.foreignKeys().get("fk_archive_execution_run"));
         for (String table : expected.tables().keySet()) {
             ArchiveMaintenanceSchemaCatalog.verify(table, expected.tables().get(table),
                     expected.tables().get(table), "InnoDB:utf8mb4_0900_bin");
         }
+    }
+
+    @Test
+    void reclaimIndexPredecessorDiffersOnlyByTheExactIndexAndDriftIsRejected() {
+        var expected = ArchiveMaintenanceSchemaCatalog.expected();
+        var current = expected.tables().get("archive_execution_grant");
+        var previous = ArchiveMaintenanceSchemaCatalog.predecessorExecutionGrantTable(expected);
+        assertEquals(current.columns(), previous.columns());
+        assertEquals(current.foreignKeys(), previous.foreignKeys());
+        assertEquals(current.checks(), previous.checks());
+        assertEquals(current.indexes().size() - 1, previous.indexes().size());
+        assertTrue(!previous.indexes().containsKey("idx_archive_execution_installation"));
+        var missing = assertThrows(IllegalStateException.class, () ->
+                ArchiveMaintenanceSchemaCatalog.verify("archive_execution_grant", current, previous,
+                        "InnoDB:utf8mb4_0900_bin"));
+        assertTrue(missing.getMessage().endsWith(".indexes"));
+        var wrongIndexes = new LinkedHashMap<>(current.indexes());
+        wrongIndexes.put("idx_archive_execution_installation", "1:installation_ref,state,grant_ref");
+        var wrong = new ArchiveMaintenanceSchemaCatalog.Table(current.columns(), wrongIndexes,
+                current.foreignKeys(), current.checks());
+        var drift = assertThrows(IllegalStateException.class, () ->
+                ArchiveMaintenanceSchemaCatalog.verify("archive_execution_grant", current, wrong,
+                        "InnoDB:utf8mb4_0900_bin"));
+        assertTrue(drift.getMessage().endsWith(".indexes"));
     }
 
     @Test
@@ -184,6 +221,38 @@ class ArchiveMaintenanceSchemaCatalogTest {
         String sql = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
         assertEquals(20, sql.split("CREATE TABLE IF NOT EXISTS ", -1).length - 1);
         assertTrue(!sql.contains("archive_draft_block_checkpoint"));
+    }
+
+    @Test
+    void platformReclaimPredecessorFixtureIsExactF7811daGitBlob() throws Exception {
+        byte[] bytes;
+        try(var input=getClass().getClassLoader().getResourceAsStream("db/agent-platform-skills-schema-f7811da.sql")) {
+            org.junit.jupiter.api.Assertions.assertNotNull(input);bytes=input.readAllBytes();
+        }
+        assertEquals(2775,bytes.length);
+        assertEquals("c86b77b0047b772cc8d1b49cf773c6ce9568ab4dc69ba67e40b33938e9542e42",
+                cn.jia.chat.archive.content.ArchiveEtags.sha256(bytes));
+        String sql=new String(bytes,java.nio.charset.StandardCharsets.UTF_8);
+        assertEquals(2,sql.split("CREATE TABLE IF NOT EXISTS ",-1).length-1);
+        assertFalse(sql.contains("reclaim_batch_json"));assertFalse(sql.contains("RECLAIMABLE"));
+    }
+
+    @Test
+    void sourceLifecyclePredecessorFixtureIsExactF7811daGitBlob() throws Exception {
+        byte[] bytes;
+        try (var input = getClass().getClassLoader().getResourceAsStream(
+                "db/archive-maintenance-schema-f7811da.sql")) {
+            org.junit.jupiter.api.Assertions.assertNotNull(input);
+            bytes = input.readAllBytes();
+        }
+        assertEquals(40311, bytes.length);
+        assertEquals("f814993101130aa9185c89ccba1ba134378a2c1139c098df8fd70782f54e3e6b",
+                cn.jia.chat.archive.content.ArchiveEtags.sha256(bytes));
+        String sql = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+        assertEquals(21, sql.split("CREATE TABLE IF NOT EXISTS ", -1).length - 1);
+        assertTrue(!sql.contains("archive_source_artifact_object"));
+        assertTrue(sql.contains("archive_draft_block_checkpoint"));
+        assertTrue(!sql.contains("idx_archive_execution_installation"));
     }
 
     @Test

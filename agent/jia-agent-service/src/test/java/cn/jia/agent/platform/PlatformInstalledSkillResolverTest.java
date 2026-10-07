@@ -11,6 +11,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -76,6 +77,22 @@ class PlatformInstalledSkillResolverTest {
         verify(store,times(1)).verifiedCandidate(any());
         verify(store,never()).pendingCandidate(any(),anyLong());
         verify(store,never()).latestHistorical(any());
+    }
+
+    @Test void writeTransactionLocksVerifiedInstallationUntilGrantAdmissionCompletes() {
+        Installation success=row("psi_locked",7,"runtime-a",HASH,packageSha,"SUCCEEDED","b".repeat(64),null,2,NOW-1);
+        when(store.verifiedCandidateForUpdate(any())).thenReturn(candidate(success,"SUCCEEDED",NOW+1));
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        TransactionSynchronizationManager.setCurrentTransactionReadOnly(false);
+        try {
+            assertEquals(InstalledSkillResolver.State.VERIFIED,
+                    adapter.resolve(request(InstalledSkillResolver.Origin.PLATFORM_PROVISIONED)).state());
+            verify(store).verifiedCandidateForUpdate(any());
+            verify(store,never()).verifiedCandidate(any());
+        } finally {
+            TransactionSynchronizationManager.setCurrentTransactionReadOnly(false);
+            TransactionSynchronizationManager.setActualTransactionActive(false);
+        }
     }
 
     @Test void requestedIsPendingOnlyBeforeExpiryAndWithNoCommittedResult() {

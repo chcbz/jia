@@ -66,7 +66,9 @@ public class ArchiveMaintenanceSchemaInitializer {
         // The checkpoint predecessor is byte-bound in tests to the exact 0d2a6e6 Git blob.
         // Pagination added no DDL. A schema that contains only part of this additive table
         // remains fail-closed instead of being treated as an interrupted compatible upgrade.
-        Set<String> checkpointPredecessorTables = new LinkedHashSet<>(currentTables);
+        Set<String> sourceCleanupPredecessorTables = new LinkedHashSet<>(currentTables);
+        sourceCleanupPredecessorTables.remove("archive_source_artifact_object");
+        Set<String> checkpointPredecessorTables = new LinkedHashSet<>(sourceCleanupPredecessorTables);
         checkpointPredecessorTables.remove("archive_draft_block_checkpoint");
         // RECOVERY-13 predecessor is byte-bound in tests to the exact 659b66c Git blob.
         Set<String> recovery13PredecessorTables = new LinkedHashSet<>(checkpointPredecessorTables);
@@ -80,6 +82,7 @@ public class ArchiveMaintenanceSchemaInitializer {
         Set<String> legacyPredecessorTables = new LinkedHashSet<>(exactAdminPredecessorTables);
         legacyPredecessorTables.remove("archive_edition_withdrawal");
         if (!existing.isEmpty() && !existing.equals(currentTables)
+                && !existing.equals(sourceCleanupPredecessorTables)
                 && !existing.equals(checkpointPredecessorTables)
                 && !existing.equals(recovery13PredecessorTables)
                 && !existing.equals(businessOutboxPredecessorTables)
@@ -90,12 +93,41 @@ public class ArchiveMaintenanceSchemaInitializer {
         }
         boolean needsBusinessOutboxUpgrade = !existing.isEmpty()
                 && !existing.contains("archive_business_outbox");
+        // The exact 21-table Git predecessor lacks the reclaim-reference index.
+        // Add the index before the new table, so an interrupted upgrade remains an
+        // exact supported predecessor with the current index. A 22-table schema
+        // missing the index is drift, not a separately accepted prototype.
+        boolean needsReclaimIndexUpgrade = false;
+        Map<String, ArchiveMaintenanceSchemaCatalog.Table> reclaimOverrides = Map.of();
+        if (!existing.isEmpty() && !existing.equals(currentTables)) {
+            Integer indexColumns = jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM information_schema.statistics
+                    WHERE table_schema=DATABASE() AND table_name='archive_execution_grant'
+                      AND index_name='idx_archive_execution_installation'
+                    """, Integer.class);
+            if (indexColumns == null) throw new IllegalStateException("Archive reclaim index metadata unavailable");
+            needsReclaimIndexUpgrade = indexColumns == 0;
+            if (needsReclaimIndexUpgrade) {
+                reclaimOverrides = Map.of("archive_execution_grant",
+                        ArchiveMaintenanceSchemaCatalog.predecessorExecutionGrantTable(expected));
+            }
+        }
         if (!existing.isEmpty()) {
             if (needsBusinessOutboxUpgrade) {
-                validateAndUpgradeBusinessOutboxPredecessor(existing, expected);
+                validateAndUpgradeBusinessOutboxPredecessor(existing, expected, reclaimOverrides);
             } else {
-                WaitingShape waiting = validateWaitingShape(existing, expected, Map.of());
+                WaitingShape waiting = validateWaitingShape(existing, expected, reclaimOverrides);
                 upgradeWaitingShape(waiting);
+            }
+            // Every existing table was verified against its exact old shape before
+            // any additive index mutation. Same-name/wrong-column and extra indexes
+            // are rejected by the ordinary catalog validation, never overwritten.
+            if (needsReclaimIndexUpgrade) {
+                jdbc.execute("""
+                        ALTER TABLE archive_execution_grant
+                          ADD KEY idx_archive_execution_installation
+                            (tenant_id,client_id,owner_jiacn,agent_id,installation_ref,state,grant_ref)
+                        """);
             }
             validate(existing, expected);
         }
@@ -110,7 +142,8 @@ public class ArchiveMaintenanceSchemaInitializer {
     }
 
     private void validateAndUpgradeBusinessOutboxPredecessor(Set<String> existing,
-            ArchiveMaintenanceSchemaCatalog.Definition expected) {
+            ArchiveMaintenanceSchemaCatalog.Definition expected,
+            Map<String, ArchiveMaintenanceSchemaCatalog.Table> reclaimOverrides) {
         List<OutboxPredecessorShape> shapes = new ArrayList<>();
         Map<String, ArchiveMaintenanceSchemaCatalog.Table> allOld = new LinkedHashMap<>();
         allOld.put("archive_event",
@@ -132,7 +165,10 @@ public class ArchiveMaintenanceSchemaInitializer {
         IllegalStateException rejected = null;
         for (OutboxPredecessorShape shape : shapes) {
             try {
-                WaitingShape waiting = validateWaitingShape(existing, expected, shape.overrides());
+                Map<String, ArchiveMaintenanceSchemaCatalog.Table> overrides =
+                        new LinkedHashMap<>(reclaimOverrides);
+                overrides.putAll(shape.overrides());
+                WaitingShape waiting = validateWaitingShape(existing, expected, overrides);
                 upgradeWaitingShape(waiting);
                 upgradeBusinessOutboxSources(existing, shape.upgradeEvent(),
                         shape.upgradeWithdrawal());

@@ -14,6 +14,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.OpenOption;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
@@ -153,6 +154,55 @@ public final class FileSystemAgentTaskArtifactStorage implements AgentTaskArtifa
     }
 
     @Override
+    public String reference(Scope scope, String sha256) {
+        return referenceFor(scope, sha256);
+    }
+
+    public static String referenceFor(Scope scope, String sha256) {
+        requireScope(scope);
+        if (!SHA256.matcher(Objects.requireNonNullElse(sha256, "")).matches()) {
+            throw invalid("Managed artifact digest is invalid");
+        }
+        return storageUri(scopeKey(scope), sha256);
+    }
+
+    @Override
+    public boolean delete(Scope scope, String storageUri, String expectedSha256) {
+        requireScope(scope);
+        if (!matchesReference(scope, storageUri, expectedSha256)) {
+            throw corrupt("Managed artifact delete reference does not match its exact scope and digest");
+        }
+        verifyRootIdentity();
+        UriParts parts = parseOwnedUri(storageUri);
+        Path directory = findObjectDirectoryForDelete(parts.scopeKey(), parts.contentHash());
+        if (directory == null) { verifyRootIdentity(); return false; }
+        Path target = objectPath(directory, parts.contentHash());
+        BasicFileAttributes before;
+        try {
+            before = Files.readAttributes(target, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        } catch (NoSuchFileException absent) {
+            verifyRootIdentity();
+            return false;
+        } catch (IOException failure) {
+            throw ioFailure(failure);
+        }
+        if (before.isSymbolicLink() || !before.isRegularFile()) {
+            throw corrupt("Managed artifact delete target is not an immutable regular file");
+        }
+        byte[] content = readBounded(target);
+        if (!constantTimeEquals(sha256(content), expectedSha256)) {
+            throw corrupt("Managed artifact delete target failed integrity verification");
+        }
+        try {
+            Files.delete(target);
+        } catch (IOException failure) {
+            throw ioFailure(failure);
+        }
+        verifyRootIdentity();
+        return true;
+    }
+
+    @Override
     public boolean owns(String storageUri) {
         return isOwnedUri(storageUri);
     }
@@ -201,6 +251,26 @@ public final class FileSystemAgentTaskArtifactStorage implements AgentTaskArtifa
             current = current.resolve(component);
             BasicFileAttributes currentAttributes = attributes(current);
             if (currentAttributes.isSymbolicLink() || !currentAttributes.isDirectory()) {
+                throw corrupt("Managed artifact directory is not a private directory");
+            }
+        }
+        return directory;
+    }
+
+    private Path findObjectDirectoryForDelete(String scopeKey, String contentHash) {
+        Path directory = objectDirectory(scopeKey, contentHash);
+        Path current = root;
+        for (Path component : root.relativize(directory)) {
+            current = current.resolve(component);
+            BasicFileAttributes found;
+            try {
+                found = Files.readAttributes(current, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            } catch (NoSuchFileException absent) {
+                return null; // An explicitly absent component, not an unreadable path or dangling link.
+            } catch (IOException failure) {
+                throw ioFailure(failure);
+            }
+            if (found.isSymbolicLink() || !found.isDirectory()) {
                 throw corrupt("Managed artifact directory is not a private directory");
             }
         }

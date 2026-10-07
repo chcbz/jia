@@ -316,6 +316,73 @@ public class JdbcArchiveMaintenanceStore implements ArchiveMaintenanceStore {
                 rs.getString("target_agent_id"), rs.getLong("revision"));
     };
 
+    @Override public Operation lockSourceArtifactOperation(SourceArtifact a) {
+        return first(jdbc.query("SELECT http_method,canonical_path,request_sha256,target_type,target_id,state "
+                + "FROM archive_operation WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND operation_key=? FOR UPDATE",
+                (rs,n)->new Operation(false,rs.getString(1),rs.getString(2),rs.getString(3),
+                        rs.getString(4),rs.getString(5),rs.getString(6)),
+                a.tenantId(),a.clientId(),a.ownerJiacn(),a.operationKey()));
+    }
+    @Override public SourceArtifact findSourceArtifact(String sourceId, boolean lock) {
+        return first(jdbc.query("SELECT * FROM archive_source_artifact_object WHERE source_id=?"+(lock?" FOR UPDATE":""),
+                (rs,n)->new SourceArtifact(rs.getString("source_id"),rs.getString("tenant_id"),
+                        rs.getString("client_id"),rs.getString("owner_jiacn"),rs.getString("operation_key"),
+                        rs.getString("storage_uri"),rs.getString("sha256"),rs.getLong("byte_length"),
+                        rs.getString("mime_type"),rs.getString("state"),rs.getLong("revision"),
+                        instant(rs.getTimestamp("created_at")),instant(rs.getTimestamp("touched_at"))),sourceId));
+    }
+    @Override public void insertSourceArtifact(SourceArtifact a) {
+        if(jdbc.update("""
+                INSERT INTO archive_source_artifact_object(source_id,tenant_id,client_id,owner_jiacn,
+                    operation_key,storage_uri,sha256,byte_length,mime_type,state,revision)
+                VALUES (?,?,?,?,?,?,?,?,?,'PENDING',1)
+                """,a.sourceId(),a.tenantId(),a.clientId(),a.ownerJiacn(),a.operationKey(),
+                a.storageUri(),a.sha256(),a.byteLength(),a.mimeType())!=1)
+            throw new IllegalStateException("Archive source artifact insert failed");
+    }
+    @Override public int touchSourceArtifact(String id,long revision) {
+        return jdbc.update("UPDATE archive_source_artifact_object SET revision=revision+1,touched_at=CURRENT_TIMESTAMP(6) WHERE source_id=? AND revision=? AND state='PENDING'",id,revision);
+    }
+    @Override public int replacePendingSourceGeneration(ArchiveActorScope actor,String key,
+            String oldId,String newId) {
+        return jdbc.update("UPDATE archive_operation SET target_id=? WHERE tenant_id=? AND client_id=? "
+                + "AND owner_jiacn=? AND operation_key=? AND state='PENDING' AND target_type='SOURCE' AND target_id=?",
+                newId,actor.tenantId(),actor.clientId(),actor.ownerJiacn(),key,oldId);
+    }
+    @Override public int referenceSourceArtifact(String id,long revision) {
+        return jdbc.update("UPDATE archive_source_artifact_object SET state='REFERENCED',revision=revision+1,touched_at=CURRENT_TIMESTAMP(6) WHERE source_id=? AND revision=? AND state='PENDING'",id,revision);
+    }
+    @Override public List<SourceArtifact> listStaleSourceArtifacts(Instant before,String after,int limit) {
+        String keyset=after==null?"":" AND source_id>?";
+        Object[] args=after==null?new Object[]{Timestamp.from(before),limit}:new Object[]{Timestamp.from(before),after,limit};
+        return jdbc.query("SELECT * FROM archive_source_artifact_object WHERE state IN ('PENDING','DELETE_PENDING','DELETED') AND touched_at<=?"+keyset+" ORDER BY source_id LIMIT ?",
+                (rs,n)->new SourceArtifact(rs.getString("source_id"),rs.getString("tenant_id"),rs.getString("client_id"),
+                        rs.getString("owner_jiacn"),rs.getString("operation_key"),rs.getString("storage_uri"),
+                        rs.getString("sha256"),rs.getLong("byte_length"),rs.getString("mime_type"),
+                        rs.getString("state"),rs.getLong("revision"),instant(rs.getTimestamp("created_at")),
+                        instant(rs.getTimestamp("touched_at"))),args);
+    }
+    @Override public int claimSourceArtifactDeletion(String id,long revision,Instant before) {
+        return jdbc.update("""
+                UPDATE archive_source_artifact_object a
+                LEFT JOIN archive_source_snapshot s ON s.source_id=a.source_id
+                JOIN archive_operation o ON o.tenant_id=a.tenant_id AND o.client_id=a.client_id
+                  AND o.owner_jiacn=a.owner_jiacn AND o.operation_key=a.operation_key
+                SET a.state='DELETE_PENDING',a.revision=a.revision+1,a.touched_at=CURRENT_TIMESTAMP(6)
+                WHERE a.source_id=? AND a.revision=? AND ((a.state='PENDING' AND a.touched_at<=?) OR a.state='DELETED')
+                  AND s.source_id IS NULL AND o.target_type='SOURCE'
+                  AND ((o.state='PENDING' AND o.target_id=a.source_id) OR o.target_id<>a.source_id)
+                """,id,revision,Timestamp.from(before));
+    }
+    @Override public int completeSourceArtifactDeletion(String id,long revision) {
+        return jdbc.update("""
+                UPDATE archive_source_artifact_object a
+                LEFT JOIN archive_source_snapshot s ON s.source_id=a.source_id
+                SET a.state='DELETED',a.revision=a.revision+1,a.touched_at=CURRENT_TIMESTAMP(6)
+                WHERE a.source_id=? AND a.revision=? AND a.state='DELETE_PENDING' AND s.source_id IS NULL
+                """,id,revision);
+    }
+
     @Override
     public ArchiveConfirmedRequestRecord findConfirmedRequest(ArchiveActorScope actor,
             String confirmationRef, boolean lock) {

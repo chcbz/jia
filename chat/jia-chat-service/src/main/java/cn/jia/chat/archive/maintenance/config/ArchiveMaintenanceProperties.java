@@ -7,9 +7,18 @@ import java.util.List;
 @ConfigurationProperties(prefix="archive.maintenance")
 public class ArchiveMaintenanceProperties {
     private boolean executionEnabled=false;
+    private boolean sourceCleanupEnabled=false;
+    private long sourceCleanupStaleMillis=24L*60L*60L*1000L;
+    private int sourceCleanupBatchSize=32;
     private List<ManagerGrant> managerGrants=new ArrayList<>();
     public boolean isExecutionEnabled(){ return executionEnabled; }
     public void setExecutionEnabled(boolean value){ executionEnabled=value; }
+    public boolean isSourceCleanupEnabled(){ return sourceCleanupEnabled; }
+    public void setSourceCleanupEnabled(boolean value){ sourceCleanupEnabled=value; }
+    public long getSourceCleanupStaleMillis(){ return sourceCleanupStaleMillis; }
+    public void setSourceCleanupStaleMillis(long value){ sourceCleanupStaleMillis=value; }
+    public int getSourceCleanupBatchSize(){ return sourceCleanupBatchSize; }
+    public void setSourceCleanupBatchSize(int value){ sourceCleanupBatchSize=value; }
     public List<ManagerGrant> getManagerGrants(){ return managerGrants; }
     public void setManagerGrants(List<ManagerGrant> value){ managerGrants=value==null?new ArrayList<>():value; }
     public static class ManagerGrant {

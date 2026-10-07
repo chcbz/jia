@@ -151,14 +151,46 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
                 + request.rightsBasis() + "\0" + request.declaredSha256());
         String path = "/archive/admin/v1/collections/" + collectionId + "/source-snapshots";
         // Reserve the source identity before external storage I/O. A crash or lost response leaves
-        // a durable PENDING operation whose exact key/content can be retried without a new object.
-        ArchiveMaintenanceStore.Operation reserved = transactions.required(() -> {
+        // a durable PENDING operation: exact key/content reuse the live generation; cleanup requires a new one.
+        SourceReservation reservation = transactions.required(() -> {
             requireManager(actor, collectionId, "source.prepare", true);
             ArchiveMaintenanceStore.Operation op = store.beginOperation(actor, key, "POST", path,
                     requestSha, "SOURCE", newId("src"));
             assertOperationMatches(op, "POST", path, requestSha, "SOURCE");
-            return op;
+            if ("COMMITTED".equals(op.state())) return new SourceReservation(op, 0);
+            ArchiveMaintenanceStore.SourceArtifact tracked = store.findSourceArtifact(op.targetId(), true);
+            if (tracked != null) {
+                var oldScope = new AgentTaskArtifactStorage.Scope(actor.tenantId(), actor.clientId(),
+                        actor.ownerJiacn(), tracked.sourceId());
+                requireSourceArtifactMatch(tracked, actor, key,
+                        sourceStorage.reference(oldScope, request.declaredSha256()),
+                        request.declaredSha256(), bytes.length);
+                if ("DELETED".equals(tracked.state())) {
+                    // Never reuse a deleted generation's URI: another reconciler or old upload
+                    // may still be outside the DB transaction with that immutable reference.
+                    String nextId = newId("src");
+                    if (store.replacePendingSourceGeneration(actor, key, op.targetId(), nextId) != 1) {
+                        conflict("SOURCE_RECOVERY_IN_PROGRESS", "Source generation changed");
+                    }
+                    op = new ArchiveMaintenanceStore.Operation(false, op.httpMethod(), op.canonicalPath(),
+                            op.requestSha256(), op.targetType(), nextId, op.state());
+                    tracked = null; // Old tombstone remains durable and re-scanable.
+                } else if (!"PENDING".equals(tracked.state())
+                        || store.touchSourceArtifact(tracked.sourceId(), tracked.revision()) != 1) {
+                    conflict("SOURCE_RECOVERY_IN_PROGRESS", "Source object cleanup is in progress; retry the same key");
+                } else {
+                    return new SourceReservation(op, tracked.revision() + 1);
+                }
+            }
+            var scope = new AgentTaskArtifactStorage.Scope(actor.tenantId(), actor.clientId(),
+                    actor.ownerJiacn(), op.targetId());
+            store.insertSourceArtifact(new ArchiveMaintenanceStore.SourceArtifact(op.targetId(),
+                    actor.tenantId(), actor.clientId(), actor.ownerJiacn(), key,
+                    sourceStorage.reference(scope, request.declaredSha256()), request.declaredSha256(),
+                    bytes.length, "text/plain", "PENDING", 1, clock.instant(), clock.instant()));
+            return new SourceReservation(op, 1);
         });
+        ArchiveMaintenanceStore.Operation reserved = reservation.operation();
         if ("COMMITTED".equals(reserved.state())) {
             requireSourceSnapshot(reserved.targetId(), actor, collectionId);
             return new ArchiveOperationAcceptedDTO(reserved.targetId(), null, "COMMITTED");
@@ -190,12 +222,35 @@ public class ArchiveMaintenanceServiceImpl implements ArchiveMaintenanceService 
                 return new ArchiveOperationAcceptedDTO(op.targetId(), null, "COMMITTED");
             }
             if (!sourceId.equals(op.targetId())) {
-                conflict("IDEMPOTENCY_CONFLICT", "Source reservation changed");
+                conflict("SOURCE_RECOVERY_IN_PROGRESS", "Source reservation generation changed");
+            }
+            ArchiveMaintenanceStore.SourceArtifact tracked = store.findSourceArtifact(sourceId, true);
+            requireSourceArtifactMatch(tracked, actor, key, object.storageUri(),
+                    object.sha256(), object.byteLength());
+            if (!"PENDING".equals(tracked.state()) || tracked.revision() != reservation.revision()) {
+                conflict("SOURCE_RECOVERY_IN_PROGRESS", "Source object reservation changed during upload");
             }
             store.insertSource(prepared);
+            if (store.referenceSourceArtifact(sourceId, reservation.revision()) != 1) {
+                conflict("SOURCE_RECOVERY_IN_PROGRESS", "Source object reference changed");
+            }
             store.commitOperation(actor, key, sourceId);
             return new ArchiveOperationAcceptedDTO(sourceId, null, "COMMITTED");
         });
+    }
+
+    private record SourceReservation(ArchiveMaintenanceStore.Operation operation, long revision) { }
+
+    private void requireSourceArtifactMatch(ArchiveMaintenanceStore.SourceArtifact tracked,
+            ArchiveActorScope actor, String key, String uri, String sha256, long byteLength) {
+        if (tracked == null || !same(tracked.tenantId(), actor.tenantId())
+                || !same(tracked.clientId(), actor.clientId())
+                || !same(tracked.ownerJiacn(), actor.ownerJiacn())
+                || !same(tracked.operationKey(), key) || !same(tracked.storageUri(), uri)
+                || !same(tracked.sha256(), sha256) || tracked.byteLength() != byteLength
+                || !"text/plain".equals(tracked.mimeType())) {
+            conflict("IDEMPOTENCY_CONFLICT", "Source object tracking does not match the request");
+        }
     }
 
     @Override

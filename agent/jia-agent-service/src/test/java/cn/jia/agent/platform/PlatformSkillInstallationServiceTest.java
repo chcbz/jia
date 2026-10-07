@@ -121,8 +121,11 @@ class PlatformSkillInstallationServiceTest {
             assertEquals(404,assertThrows(PlatformSkillException.class,()->service.packageBytes(scope,installed.get().id())).status());
     }
     @Test void authenticatedReceiptCommitsOnceAndExactReplayIsIdempotent() {
-        request();sent();var result=result("SUCCEEDED",null);var first=service.result(NATIVE,installed.get().id(),result);
-        assertEquals("SUCCEEDED",first.state());assertEquals("2",first.revision());assertEquals(first,service.result(NATIVE,installed.get().id(),result));
+        request();sent();when(store.reclaimableInstallationIds(any(),eq(32))).thenReturn(List.of("psi-old"));
+        var result=result("SUCCEEDED",null);var first=service.result(NATIVE,installed.get().id(),result);
+        assertEquals("SUCCEEDED",first.state());assertEquals("2",first.revision());
+        assertEquals(List.of("psi-old"),first.reclaimableInstallationIds());
+        assertEquals(first,service.result(NATIVE,installed.get().id(),result));
         verify(store,times(1)).finish(any(),anyString(),anyLong(),anyString(),anyString(),nullable(String.class));
         assertThrows(PlatformSkillException.class,()->service.result(NATIVE,installed.get().id(),result("FAILED","PLATFORM_SKILL_PACKAGE_INVALID")));
     }

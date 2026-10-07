@@ -18,6 +18,16 @@ public final class DisabledAgentTaskArtifactStorage implements AgentTaskArtifact
     }
 
     @Override
+    public String reference(Scope scope, String sha256) {
+        return FileSystemAgentTaskArtifactStorage.referenceFor(scope, sha256);
+    }
+
+    @Override
+    public boolean delete(Scope scope, String storageUri, String expectedSha256) {
+        throw disabled();
+    }
+
+    @Override
     public boolean owns(String storageUri) {
         return FileSystemAgentTaskArtifactStorage.isOwnedUri(storageUri);
     }

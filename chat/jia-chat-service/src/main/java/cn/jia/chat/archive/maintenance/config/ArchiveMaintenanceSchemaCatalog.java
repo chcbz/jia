@@ -17,7 +17,7 @@ public final class ArchiveMaintenanceSchemaCatalog {
     public static final List<String> TABLE_ORDER = List.of("archive_collection", "archive_collection_manager",
             "archive_collection_work", "archive_appointment_slot", "archive_appointment",
             "archive_source_snapshot", "archive_confirmed_request", "archive_maintenance_job", "archive_job_run", "archive_execution_grant", "archive_execution_failure", "archive_draft", "archive_draft_block_checkpoint", "archive_validation",
-            "archive_publication", "archive_publication_readback", "archive_edition_withdrawal", "archive_event", "archive_business_outbox", "archive_operation",
+            "archive_publication", "archive_publication_readback", "archive_edition_withdrawal", "archive_event", "archive_business_outbox", "archive_operation", "archive_source_artifact_object",
             "archive_admin_operation_receipt");
     private static final Pattern TABLE = Pattern.compile(
             "CREATE TABLE IF NOT EXISTS (\\w+) \\(\\s*(.*?)\\s*\\) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;",
@@ -108,6 +108,15 @@ public final class ArchiveMaintenanceSchemaCatalog {
         return new Definition(Map.copyOf(tables));
     }
 
+
+    static Table predecessorExecutionGrantTable(Definition current) {
+        Table table = current.tables().get("archive_execution_grant");
+        Map<String, String> indexes = new LinkedHashMap<>(table.indexes());
+        if (indexes.remove("idx_archive_execution_installation") == null) {
+            throw new IllegalStateException("Archive reclaim index contract unavailable");
+        }
+        return new Table(table.columns(), Map.copyOf(indexes), table.foreignKeys(), table.checks());
+    }
 
     static Table predecessorOutboxSourceTable(Definition current, String tableName) {
         Table table = current.tables().get(tableName);

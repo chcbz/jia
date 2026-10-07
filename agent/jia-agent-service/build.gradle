@@ -484,6 +484,7 @@ def archivePlatformContractsSourceSet = sourceSets.create('archivePlatformContra
         include 'cn/jia/agent/platform/*.java'
         include 'cn/jia/agent/archive/*.java'
         include 'cn/jia/agent/service/impl/AgentIdentityBindingAuthorityTest.java'
+        include 'cn/jia/agent/service/impl/AgentTaskArtifactStorageF02Test.java'
     }
     resources.srcDir 'src/test/resources'
     compileClasspath += sourceSets.main.output

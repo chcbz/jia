@@ -11,7 +11,7 @@ class PlatformSkillSchemaContractTest {
         PlatformSkillSchemaContract.columns(TABLE).forEach((name,column)->{
             var row=new HashMap<String,Object>();row.put("COLUMN_NAME",name);row.put("COLUMN_TYPE",column.type());row.put("IS_NULLABLE",column.nullable()?"YES":"NO");
             row.put("COLUMN_DEFAULT",null);row.put("EXTRA","");row.put("GENERATION_EXPRESSION","");
-            row.put("COLLATION_NAME",column.type().startsWith("varchar")||column.type().startsWith("char")?"utf8mb4_0900_bin":null);rows.add(row);
+            row.put("COLLATION_NAME",column.type().startsWith("varchar")||column.type().startsWith("char")||column.type().equals("longtext")?"utf8mb4_0900_bin":null);rows.add(row);
         });return rows;
     }
     static List<Map<String,Object>> indexes() {
@@ -38,6 +38,29 @@ class PlatformSkillSchemaContractTest {
         assertEquals("STATEIN('REQUESTED','SUCCEEDED','FAILED')",
                 PlatformSkillSchemaContract.normalize("((`state` IN (_utf8mb4\\'REQUESTED\\', _utf8mb4\\'SUCCEEDED\\', _utf8mb4\\'FAILED\\')))"));
     }
+    @Test void exactPreReclamationStateCheckIsAcceptedOnlyByTheBoundedUpgradeContract() {
+        var predecessor=checks();
+        predecessor.stream().filter(row -> row.get("CONSTRAINT_NAME").equals("ck_platform_install_state"))
+                .findFirst().orElseThrow().put("CHECK_CLAUSE","state IN ('REQUESTED','SUCCEEDED','FAILED')");
+        var oldColumns=columns(); oldColumns.removeIf(row -> "reclaim_batch_json".equals(row.get("COLUMN_NAME")));
+        PlatformSkillSchemaContract.validatePreReclamation(TABLE,properties(),oldColumns,indexes(),predecessor);
+        assertThrows(IllegalStateException.class,()->validate(columns(),indexes(),predecessor));
+        var drift=new ArrayList<>(predecessor);
+        drift.add(new HashMap<>(Map.of("CONSTRAINT_NAME","ck_extra","CHECK_CLAUSE","revision<99","ENFORCED","YES")));
+        assertThrows(IllegalStateException.class,()->PlatformSkillSchemaContract.validatePreReclamation(
+                TABLE,properties(),oldColumns,indexes(),drift));
+    }
+
+    @Test void partialReclaimColumnAndOldCheckCannotMasqueradeAsExactPredecessor() {
+        var oldChecks=checks();
+        oldChecks.stream().filter(row -> row.get("CONSTRAINT_NAME").equals("ck_platform_install_state"))
+                .findFirst().orElseThrow().put("CHECK_CLAUSE","state IN ('REQUESTED','SUCCEEDED','FAILED')");
+        assertThrows(IllegalStateException.class,()->PlatformSkillSchemaContract.validatePreReclamation(
+                TABLE,properties(),columns(),indexes(),oldChecks));
+        var missing=columns(); missing.removeIf(row -> "reclaim_batch_json".equals(row.get("COLUMN_NAME")));
+        assertThrows(IllegalStateException.class,()->validate(missing,indexes(),checks()));
+    }
+
     @Test void lengthsNullabilityUnsignedAndGeneratedValuesAreRejected() {
         for(var mutation:List.of(Map.of("COLUMN_TYPE","binary(16)"),Map.of("IS_NULLABLE","YES"),Map.of("COLUMN_DEFAULT","x"),Map.of("EXTRA","STORED GENERATED"))) {
             var columns=columns();columns.stream().filter(c->c.get("COLUMN_NAME").equals("registration_hash")).findFirst().orElseThrow().putAll(mutation);

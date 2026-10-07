@@ -134,6 +134,7 @@ def archiveMaintenanceMvpSourceSet = sourceSets.create('archiveMaintenanceMvp') 
     java {
         srcDir 'src/test/java'
         include 'cn/jia/chat/archive/maintenance/service/ArchiveMaintenanceServiceImplTest.java'
+        include 'cn/jia/chat/archive/maintenance/service/ArchiveSourceArtifactReconcilerTest.java'
         include 'cn/jia/chat/archive/maintenance/entry/ArchiveRestrictedChatClientFactoryTest.java'
         include 'cn/jia/chat/archive/maintenance/entry/ArchiveMaintenanceChatCoordinatorTest.java'
         include 'cn/jia/chat/archive/maintenance/service/ArchiveMaintenanceServiceWiringContextTest.java'

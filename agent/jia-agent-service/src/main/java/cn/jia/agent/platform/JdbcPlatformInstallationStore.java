@@ -4,6 +4,9 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
+import tools.jackson.core.StreamReadFeature;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.json.JsonMapper;
 import java.util.List;
 
 @Repository
@@ -37,12 +40,13 @@ public class JdbcPlatformInstallationStore implements PlatformInstallationStore 
                 ?new CandidateQuery(sql,new Object[]{now,limit})
                 :new CandidateQuery(sql,new Object[]{now,after.createdAt(),after.createdAt(),after.installationId(),limit});
     }
-    static CandidateQuery verifiedCandidateQuery(ResolutionKey key) {
+    static CandidateQuery verifiedCandidateQuery(ResolutionKey key) { return verifiedCandidateQuery(key,false); }
+    static CandidateQuery verifiedCandidateQuery(ResolutionKey key,boolean lock) {
         return resolutionQuery(key,"""
                 AND i.state='SUCCEEDED' AND i.result_sha256 REGEXP '^[0-9a-f]{64}$'
                 AND i.error_code IS NULL AND d.command_type='PLATFORM_SKILL_INSTALL'
             ORDER BY i.created_at DESC,i.installation_id DESC LIMIT 1
-            """,new Object[0]);
+            """+(lock?" FOR UPDATE":""),new Object[0]);
     }
     static CandidateQuery pendingCandidateQuery(ResolutionKey key,long now) {
         if(now<0) throw new IllegalArgumentException("Resolution time must be non-negative");
@@ -82,6 +86,9 @@ public class JdbcPlatformInstallationStore implements PlatformInstallationStore 
     @Override public ResolutionCandidate verifiedCandidate(ResolutionKey key) {
         return oneCandidate(verifiedCandidateQuery(key));
     }
+    @Override public ResolutionCandidate verifiedCandidateForUpdate(ResolutionKey key) {
+        return oneCandidate(verifiedCandidateQuery(key,true));
+    }
     @Override public ResolutionCandidate pendingCandidate(ResolutionKey key,long now) {
         return oneCandidate(pendingCandidateQuery(key,now));
     }
@@ -106,6 +113,138 @@ public class JdbcPlatformInstallationStore implements PlatformInstallationStore 
     @Override public Installation latestHistorical(ResolutionKey key) {
         var query=historicalCandidateQuery(key);
         return one(jdbc.query(query.sql(),ROW,query.arguments()));
+    }
+    static CandidateQuery currentGrantReferenceQuery(Installation current,String installationId) {
+        Scope s=current.scope();
+        return new CandidateQuery("""
+                SELECT grant_ref FROM archive_execution_grant
+                WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND agent_id=?
+                  AND installation_ref=? AND state IN ('ACTIVE','READ_ONLY')
+                LIMIT 1 FOR SHARE
+                """,new Object[]{s.tenant(),s.client(),s.owner(),current.agentId(),installationId});
+    }
+    record ReclaimBatch(int formatVersion, ScanCursor cursor, List<String> items) { }
+    private static final JsonMapper RECLAIM_JSON = JsonMapper.builder()
+            .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+            .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).build();
+    static ReclaimBatch decodeReclaimBatch(String json) {
+        try {
+            var tree=RECLAIM_JSON.readTree(json);
+            if (tree==null || !tree.isObject() || tree.size()!=3 || !tree.has("formatVersion")
+                    || !tree.has("cursor") || !tree.has("items")) throw new IllegalStateException("Invalid reclaim journal shape");
+            if (!tree.get("formatVersion").isIntegralNumber() || !tree.get("formatVersion").canConvertToInt()
+                    || !tree.get("items").isArray()) throw new IllegalStateException("Invalid reclaim journal types");
+            for(var item:tree.get("items")) if(!item.isTextual()) throw new IllegalStateException("Invalid reclaim journal item type");
+            var cursor=tree.get("cursor");
+            if (!cursor.isNull() && (!cursor.isObject() || cursor.size()!=2
+                    || !cursor.has("createdAt") || !cursor.has("installationId")
+                    || !cursor.get("createdAt").isIntegralNumber() || !cursor.get("createdAt").canConvertToLong()
+                    || !cursor.get("installationId").isTextual()))
+                throw new IllegalStateException("Invalid reclaim journal cursor shape");
+            var batch=RECLAIM_JSON.treeToValue(tree,ReclaimBatch.class);
+            if(batch.formatVersion()!=1 || batch.items()==null || batch.items().size()>32
+                    || new java.util.HashSet<>(batch.items()).size()!=batch.items().size())
+                throw new IllegalStateException("Invalid reclaim journal batch");
+            for(String id:batch.items()) if(id==null || !id.matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}"))
+                throw new IllegalStateException("Invalid reclaim journal identity");
+            if(batch.cursor()!=null && (batch.cursor().createdAt()<0 || batch.cursor().installationId()==null
+                    || !batch.cursor().installationId().matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}")))
+                throw new IllegalStateException("Invalid reclaim journal cursor");
+            return new ReclaimBatch(1,batch.cursor(),List.copyOf(batch.items()));
+        } catch(Exception failure) { throw new IllegalStateException("Invalid durable reclaim journal",failure); }
+    }
+    static String encodeReclaimBatch(ReclaimBatch batch) {
+        try { return RECLAIM_JSON.writeValueAsString(batch); }
+        catch(Exception failure) { throw new IllegalStateException("Cannot persist reclaim journal",failure); }
+    }
+    static CandidateQuery reclaimCandidatesQuery(Installation current,String state,ScanCursor after,int limit) {
+        if(current==null || limit<1 || limit>32 || !("SUCCEEDED".equals(state)||"RECLAIMABLE".equals(state)))
+            throw new IllegalArgumentException("Platform reclaim batch is invalid");
+        Scope s=current.scope();
+        var args=new java.util.ArrayList<Object>(java.util.Arrays.asList(s.tenant(),s.client(),s.owner(),
+                current.agentId(),current.bindingId(),current.runtimeInstanceId(),current.registrationHash(),
+                current.skillKey(),current.skillVersion(),current.packageSha(),state,current.id()));
+        String keyset="";
+        if(after!=null) {
+            keyset=" AND (i.created_at>? OR (i.created_at=? AND i.installation_id>?))";
+            args.add(after.createdAt());args.add(after.createdAt());args.add(after.installationId());
+        }
+        args.add(limit);
+        return new CandidateQuery("""
+                SELECT i.* FROM agent_platform_skill_installation i
+                LEFT JOIN archive_execution_grant g ON g.tenant_id=i.tenant_id
+                  AND g.client_id=i.client_id AND g.owner_jiacn=i.owner_jiacn AND g.agent_id=i.agent_id
+                  AND g.installation_ref=i.installation_id AND g.state IN ('ACTIVE','READ_ONLY')
+                WHERE i.tenant_id=? AND i.client_id=? AND i.owner_jiacn=?
+                  AND i.origin='PLATFORM_PROVISIONED' AND i.agent_id=?
+                  AND i.binding_id=? AND i.runtime_instance_id=? AND i.registration_hash=?
+                  AND i.skill_key=? AND i.skill_version=? AND i.package_sha256=?
+                  AND i.state=? AND i.result_sha256 REGEXP '^[0-9a-f]{64}$'
+                  AND i.error_code IS NULL AND i.installation_id<>?
+                  AND g.grant_ref IS NULL
+                """+keyset+" ORDER BY i.created_at,i.installation_id LIMIT ? FOR UPDATE",args.toArray());
+    }
+    private List<Installation> reclaimCandidates(Installation current,String state,ScanCursor after,int limit) {
+        var query=reclaimCandidatesQuery(current,state,after,limit);
+        return jdbc.query(query.sql(),ROW,query.arguments());
+    }
+    @Override public List<String> reclaimableInstallationIds(Installation current,int limit) {
+        if(current==null || limit<1 || limit>32) throw new IllegalArgumentException("Platform reclaim batch is invalid");
+        Scope s=current.scope();
+        // The result transaction owns scope/current installation locks. Persist one exact
+        // bounded receipt batch so response loss or replay cannot skip its authorization.
+        String saved=jdbc.queryForObject("SELECT reclaim_batch_json FROM agent_platform_skill_installation "
+                + "WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND installation_id=? FOR UPDATE",
+                String.class,s.tenant(),s.client(),s.owner(),current.id());
+        if(saved!=null) {
+            var batch=decodeReclaimBatch(saved);
+            if(batch.items().size()>limit) throw new IllegalStateException("Reclaim replay batch limit changed");
+            return batch.items();
+        }
+        Integer grants=jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='archive_execution_grant'",Integer.class);
+        if(grants==null || grants!=1) return List.of();
+        // Previous receipt progress is scoped to this exact stable runtime/package proof.
+        List<String> previous=jdbc.queryForList("""
+                SELECT reclaim_batch_json FROM agent_platform_skill_installation
+                WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND origin='PLATFORM_PROVISIONED'
+                  AND agent_id=? AND binding_id=? AND runtime_instance_id=? AND registration_hash=?
+                  AND skill_key=? AND skill_version=? AND package_sha256=? AND installation_id<>?
+                  AND reclaim_batch_json IS NOT NULL
+                ORDER BY created_at DESC,installation_id DESC LIMIT 1 FOR SHARE
+                """,String.class,s.tenant(),s.client(),s.owner(),current.agentId(),current.bindingId(),
+                current.runtimeInstanceId(),current.registrationHash(),current.skillKey(),current.skillVersion(),
+                current.packageSha(),current.id());
+        ScanCursor cursor=previous.isEmpty()?null:decodeReclaimBatch(previous.getFirst()).cursor();
+        // Never-offered successful objects have priority. Old permanently fenced tombstones
+        // cannot consume all 32 slots and strand a live unreferenced copy before the next install.
+        var candidates=new java.util.ArrayList<>(reclaimCandidates(current,"SUCCEEDED",null,limit));
+        if(candidates.size()<limit) {
+            var older=reclaimCandidates(current,"RECLAIMABLE",cursor,limit-candidates.size());
+            if(older.isEmpty() && cursor!=null) older=reclaimCandidates(current,"RECLAIMABLE",null,limit-candidates.size());
+            if(!older.isEmpty()) { var last=older.getLast(); cursor=new ScanCursor(last.createdAt(),last.id()); }
+            candidates.addAll(older);
+        }
+        java.util.ArrayList<String> fencedCandidates=new java.util.ArrayList<>(candidates.size());
+        for(Installation candidate:candidates) {
+            String id=candidate.id();
+            // Only the current locking grant read proves no protected reference after an
+            // admission committed while this RR transaction waited for the installation lock.
+            CandidateQuery references=currentGrantReferenceQuery(current,id);
+            if(!jdbc.queryForList(references.sql(),String.class,references.arguments()).isEmpty()) continue;
+            int fenced=jdbc.update("UPDATE agent_platform_skill_installation SET state='RECLAIMABLE',revision=revision+1 WHERE installation_id=? AND state='SUCCEEDED'",id);
+            if(fenced==0) {
+                String state=jdbc.queryForObject("SELECT state FROM agent_platform_skill_installation WHERE installation_id=? FOR UPDATE",String.class,id);
+                if(!"RECLAIMABLE".equals(state)) throw new IllegalStateException("Platform installation reclaim fence raced");
+            }
+            fencedCandidates.add(id);
+        }
+        var batch=new ReclaimBatch(1,cursor,List.copyOf(fencedCandidates));
+        if(jdbc.update("UPDATE agent_platform_skill_installation SET reclaim_batch_json=? WHERE tenant_id=? "
+                + "AND client_id=? AND owner_jiacn=? AND installation_id=? AND state='SUCCEEDED' AND reclaim_batch_json IS NULL",
+                encodeReclaimBatch(batch),s.tenant(),s.client(),s.owner(),current.id())!=1)
+            throw new IllegalStateException("Platform installation reclaim journal raced");
+        return batch.items();
     }
     @Override public void lockScope(Scope s) {
         jdbc.update("INSERT IGNORE INTO agent_platform_skill_scope (tenant_id,client_id,owner_jiacn) VALUES (?,?,?)",s.tenant(),s.client(),s.owner());

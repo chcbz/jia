@@ -36,6 +36,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.dao.DataAccessException;
@@ -63,6 +65,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -1879,6 +1882,564 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                 "SELECT COUNT(*) FROM archive_execution_grant g JOIN archive_job_run r "
                         + "ON r.run_id=g.run_id WHERE r.job_id=? AND g.state='ACTIVE'",
                 Integer.class, JOB));
+    }
+
+    @Test
+    void pausedUploadCannotReferenceDeletedGenerationAfterSameKeyRetryReservesBeforeStore() throws Exception {
+        jdbc.update("INSERT INTO archive_collection_manager(collection_id,tenant_id,client_id,owner_jiacn,permissions,state,revision) "
+                + "VALUES (?,'0','client-a','owner-a','source.prepare','ACTIVE',1)",COLLECTION);
+        var firstStored=new CountDownLatch(1);var secondReserved=new CountDownLatch(1);
+        var allowFirst=new CountDownLatch(1);var allowSecond=new CountDownLatch(1);
+        var uploads=new AtomicInteger();
+        TestSourceStorage storage=new TestSourceStorage(true) {
+            @Override public StoredObject store(Scope scope,byte[] bytes,String mime) {
+                assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
+                int number=uploads.incrementAndGet();
+                if(number==2) { secondReserved.countDown();await(allowSecond); }
+                StoredObject result=super.store(scope,bytes,mime);
+                if(number==1) { firstStored.countDown();await(allowFirst); }
+                return result;
+            }
+        };
+        var store=new JdbcArchiveMaintenanceStore(jdbc);
+        var service=service(store,new RootLockingPort(jdbc),mock(ArchiveContentStore.class),transactions,storage);
+        byte[] bytes="ABA bound source".getBytes(StandardCharsets.UTF_8);
+        String sha=cn.jia.chat.archive.content.ArchiveEtags.sha256(bytes);
+        var request=new ArchiveSourcePrepareRequest("aba","v1","public permission",sha,
+                java.util.Base64.getEncoder().encodeToString(bytes));
+        var properties=new ArchiveMaintenanceProperties();properties.setSourceCleanupEnabled(true);
+        properties.setSourceCleanupStaleMillis(1);properties.setSourceCleanupBatchSize(10);
+        var reconciler=new ArchiveSourceArtifactReconciler(store,transactions,storage,properties,
+                Clock.fixed(Instant.now().plusSeconds(3600),ZoneOffset.UTC));
+        ExecutorService pool=Executors.newFixedThreadPool(2);
+        try {
+            Future<ArchiveMaintenanceException> first=pool.submit(() -> assertThrows(ArchiveMaintenanceException.class,
+                    () -> service.prepareSource(ACTOR,COLLECTION,"aba-key",request)));
+            assertTrue(firstStored.await(5,TimeUnit.SECONDS));
+            String oldId=store.findOperation(ACTOR,"aba-key").targetId();
+            String oldUri=store.findSourceArtifact(oldId,false).storageUri();
+            reconciler.reconcile();
+            assertEquals("DELETED",store.findSourceArtifact(oldId,false).state());assertFalse(storage.objects.containsKey(oldUri));
+            Future<ArchiveOperationAcceptedDTO> second=pool.submit(() -> service.prepareSource(ACTOR,COLLECTION,"aba-key",request));
+            assertTrue(secondReserved.await(5,TimeUnit.SECONDS));
+            String nextId=store.findOperation(ACTOR,"aba-key").targetId();
+            assertFalse(oldId.equals(nextId));assertEquals("PENDING",store.findSourceArtifact(nextId,false).state());
+            assertFalse(storage.objects.containsKey(store.findSourceArtifact(nextId,false).storageUri()));
+            allowFirst.countDown();assertEquals("SOURCE_RECOVERY_IN_PROGRESS",first.get(10,TimeUnit.SECONDS).code());
+            assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM archive_source_snapshot WHERE source_id IN (?,?)",Integer.class,oldId,nextId));
+            allowSecond.countDown();assertEquals(nextId,second.get(10,TimeUnit.SECONDS).operationId());
+            assertEquals("REFERENCED",store.findSourceArtifact(nextId,false).state());
+            assertEquals("DELETED",store.findSourceArtifact(oldId,false).state());
+            assertTrue(storage.objects.containsKey(store.findSourceArtifact(nextId,false).storageUri()));
+            assertEquals(2,jdbc.queryForObject("SELECT COUNT(*) FROM archive_source_artifact_object WHERE operation_key='aba-key'",Integer.class));
+        } finally { allowFirst.countDown();allowSecond.countDown();pool.shutdownNow();pool.awaitTermination(5,TimeUnit.SECONDS); }
+    }
+
+    @Test
+    void twoSourceReconcilerInstancesCannotDeleteNewReferencedGenerationAndOldLateUploadRemainsTracked()
+            throws Exception {
+        jdbc.update("INSERT INTO archive_collection_manager(collection_id,tenant_id,client_id,owner_jiacn,permissions,state,revision) "
+                + "VALUES (?,'0','client-a','owner-a','source.prepare','ACTIVE',1)",COLLECTION);
+        AtomicBoolean interrupted=new AtomicBoolean(true);
+        AtomicInteger deletions=new AtomicInteger();
+        CountDownLatch aDeleting=new CountDownLatch(1), bDeleting=new CountDownLatch(1);
+        CountDownLatch allowA=new CountDownLatch(1), allowB=new CountDownLatch(1);
+        AtomicLong aConnection=new AtomicLong(), bConnection=new AtomicLong();
+        TestSourceStorage storage=new TestSourceStorage(true) {
+            @Override public StoredObject store(Scope scope,byte[] bytes,String mime) {
+                assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
+                StoredObject result=super.store(scope,bytes,mime);
+                if(interrupted.compareAndSet(true,false)) throw new AgentTaskArtifactStorageException(
+                        AgentTaskArtifactStorageException.Reason.IO_FAILURE,"crash after object landed before reference");
+                return result;
+            }
+            @Override public boolean delete(Scope scope,String uri,String sha) {
+                assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
+                int number=deletions.incrementAndGet();
+                if(number==1) { aDeleting.countDown(); await(allowA); }
+                if(number==2) { bDeleting.countDown(); await(allowB); }
+                return super.delete(scope,uri,sha);
+            }
+        };
+        var store=new JdbcArchiveMaintenanceStore(jdbc);
+        var service=service(store,new RootLockingPort(jdbc),mock(ArchiveContentStore.class),transactions,storage);
+        byte[] bytes="isolated source generations".getBytes(StandardCharsets.UTF_8);
+        String sha=cn.jia.chat.archive.content.ArchiveEtags.sha256(bytes);
+        var request=new ArchiveSourcePrepareRequest("generation","v1","public permission",sha,
+                java.util.Base64.getEncoder().encodeToString(bytes));
+        assertEquals("DEPENDENCY_UNAVAILABLE",assertThrows(ArchiveMaintenanceException.class,
+                () -> service.prepareSource(ACTOR,COLLECTION,"generation-key",request)).code());
+        String oldId=jdbc.queryForObject("SELECT target_id FROM archive_operation WHERE operation_key='generation-key'",String.class);
+        var old=store.findSourceArtifact(oldId,false);
+        assertEquals("PENDING",old.state());assertTrue(storage.objects.containsKey(old.storageUri()));
+        var properties=new ArchiveMaintenanceProperties();properties.setSourceCleanupEnabled(true);
+        properties.setSourceCleanupStaleMillis(1);properties.setSourceCleanupBatchSize(10);
+        Clock scanClock=Clock.fixed(Instant.now().plusSeconds(3600),ZoneOffset.UTC);
+        ArchiveTransactions txA=new ArchiveTransactions() {
+            @Override public <T> T required(java.util.function.Supplier<T> action) {
+                return transactions.required(() -> {
+                    aConnection.compareAndSet(0,jdbc.queryForObject("SELECT CONNECTION_ID()",Long.class));
+                    return action.get();
+                });
+            }
+        };
+        ArchiveTransactions txB=new ArchiveTransactions() {
+            @Override public <T> T required(java.util.function.Supplier<T> action) {
+                return transactions.required(() -> {
+                    bConnection.compareAndSet(0,jdbc.queryForObject("SELECT CONNECTION_ID()",Long.class));
+                    return action.get();
+                });
+            }
+        };
+        var a=new ArchiveSourceArtifactReconciler(store,txA,storage,properties,scanClock);
+        var b=new ArchiveSourceArtifactReconciler(store,txB,storage,properties,scanClock);
+        ExecutorService pool=Executors.newFixedThreadPool(2);
+        try {
+            Future<?> first=pool.submit(a::reconcile);
+            assertTrue(aDeleting.await(5,TimeUnit.SECONDS));
+            Future<?> late=pool.submit(b::reconcile);
+            assertTrue(bDeleting.await(5,TimeUnit.SECONDS),"second instance must reach the same old DELETE_PENDING generation");
+            allowA.countDown();first.get(10,TimeUnit.SECONDS);
+            assertEquals("DELETED",store.findSourceArtifact(oldId,false).state());
+            var prepared=service.prepareSource(ACTOR,COLLECTION,"generation-key",request);
+            String newId=prepared.operationId();
+            assertFalse(oldId.equals(newId));
+            var current=store.findSourceArtifact(newId,false);
+            assertEquals("REFERENCED",current.state());assertFalse(old.storageUri().equals(current.storageUri()));
+            // A new process sees the late old physical delete, never a URI shared with the new object.
+            allowB.countDown();late.get(10,TimeUnit.SECONDS);
+            assertTrue(storage.objects.containsKey(current.storageUri()));
+            assertEquals("REFERENCED",store.findSourceArtifact(newId,false).state());
+            assertEquals("COMMITTED",store.findOperation(ACTOR,"generation-key").state());
+            // An even later U1 upload is still in the OLD generation's durable tombstone namespace.
+            storage.store(new AgentTaskArtifactStorage.Scope("0","client-a","owner-a",oldId),bytes,"text/plain");
+            assertTrue(storage.objects.containsKey(old.storageUri()));
+            new ArchiveSourceArtifactReconciler(store,transactions,storage,properties,scanClock).reconcile();
+            assertFalse(storage.objects.containsKey(old.storageUri()));
+            assertTrue(storage.objects.containsKey(current.storageUri()));
+            assertEquals("DELETED",store.findSourceArtifact(oldId,false).state());
+            assertEquals(2,jdbc.queryForObject("SELECT COUNT(*) FROM archive_source_artifact_object WHERE operation_key='generation-key'",Integer.class));
+            assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM archive_source_snapshot WHERE source_id=?",Integer.class,newId));
+            assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM archive_source_snapshot WHERE source_id=?",Integer.class,oldId));
+        } finally {
+            allowA.countDown();allowB.countDown();pool.shutdownNow();pool.awaitTermination(5,TimeUnit.SECONDS);
+        }
+        assertTrue(aConnection.get()>0 && bConnection.get()>0 && aConnection.get()!=bConnection.get(),
+                "the two reconciler instances must use separate physical MySQL connections");
+    }
+
+    @Test
+    void exactPlatformPredecessorAddsReclaimJournalAtomicallyAndRejectsPartialDrift() throws Exception {
+        byte[] predecessor;
+        try(var input=new ClassPathResource("db/agent-platform-skills-schema-f7811da.sql").getInputStream()) {
+            predecessor=input.readAllBytes();
+        }
+        assertEquals(2775,predecessor.length);
+        assertEquals("c86b77b0047b772cc8d1b49cf773c6ce9568ab4dc69ba67e40b33938e9542e42",cn.jia.chat.archive.content.ArchiveEtags.sha256(predecessor));
+        new ResourceDatabasePopulator(new ByteArrayResource(predecessor)).execute(dataSource);
+        new cn.jia.agent.platform.PlatformSkillSchemaInitializer(jdbc).afterPropertiesSet();
+        new cn.jia.agent.platform.PlatformSkillSchemaInitializer(jdbc).afterPropertiesSet();
+        assertEquals("longtext:YES",jdbc.queryForObject("SELECT CONCAT(column_type,':',is_nullable) "
+                + "FROM information_schema.columns WHERE table_schema=DATABASE() "
+                + "AND table_name='agent_platform_skill_installation' AND column_name='reclaim_batch_json'",String.class));
+        jdbc.execute("ALTER TABLE agent_platform_skill_installation DROP COLUMN reclaim_batch_json");
+        assertThrows(IllegalStateException.class,
+                () -> new cn.jia.agent.platform.PlatformSkillSchemaInitializer(jdbc).afterPropertiesSet());
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() "
+                + "AND table_name='agent_platform_skill_installation' AND column_name='reclaim_batch_json'",Integer.class));
+    }
+
+    @Test
+    void fortyInstallationsPersistReclaimProgressWithoutStarvingLiveCopiesAndReplayExactBatch() {
+        var fixture=seedPlatformReclaimFixture();
+        var platform=new cn.jia.agent.platform.JdbcPlatformInstallationStore(jdbc);
+        // A live grant protects this installation through every result and replay.
+        transactions.required(() -> {
+            platform.find(fixture.oldInstallation().scope(),fixture.oldInstallation().id(),true);
+            new JdbcArchiveMaintenanceStore(jdbc).insertExecutionGrant(executionGrantForInstallation(fixture.oldInstallation()));
+            return null;
+        });
+        String copySql="INSERT INTO agent_platform_skill_installation "
+                + "(installation_id,tenant_id,client_id,owner_jiacn,actor_id,request_key,request_sha256,agent_id,binding_id,"
+                + "runtime_instance_id,registration_hash,skill_key,skill_version,package_sha256,challenge_id,command_id,"
+                + "origin,state,result_sha256,error_code,revision,created_at) "
+                + "SELECT ?,tenant_id,client_id,owner_jiacn,actor_id,?,request_sha256,agent_id,binding_id,"
+                + "runtime_instance_id,registration_hash,skill_key,skill_version,package_sha256,?,?,"
+                + "origin,'SUCCEEDED',result_sha256,NULL,1,? FROM agent_platform_skill_installation WHERE installation_id='psi-current'";
+        java.util.Set<String> retained=new java.util.HashSet<>(List.of("psi-old","psi-current"));
+        for(int index=1;index<=40;index++) {
+            String id="psi-cycle-"+String.format(java.util.Locale.ROOT,"%03d",index);
+            jdbc.update(copySql,id,"key-"+id,"challenge-"+id,"command-"+id,10L+index);
+            var current=platform.find(fixture.current().scope(),id,false);
+            List<String> batch=transactions.required(() -> {
+                platform.lockScope(current.scope());platform.find(current.scope(),id,true);
+                return platform.reclaimableInstallationIds(current,32);
+            });
+            assertTrue(batch.size()<=32);
+            assertFalse(batch.contains("psi-old"));
+            // The new never-offered unreferenced copy must be in this receipt even
+            // after the earliest 32 durable tombstones have accumulated.
+            String preceding=index==1?"psi-current":"psi-cycle-"+String.format(java.util.Locale.ROOT,"%03d",index-1);
+            assertTrue(batch.contains(preceding),"receipt must reach the still-present copy before another install");
+            retained.add(id);
+            for(String authorized:batch) if(retained.size()>2) retained.remove(authorized);
+            assertEquals(2,retained.size());assertTrue(retained.contains("psi-old"));assertTrue(retained.contains(id));
+            String journal=jdbc.queryForObject("SELECT reclaim_batch_json FROM agent_platform_skill_installation WHERE installation_id=?",String.class,id);
+            // A fresh store stands for receipt response loss / service restart.
+            assertEquals(batch,transactions.required(() -> new cn.jia.agent.platform.JdbcPlatformInstallationStore(jdbc)
+                    .reclaimableInstallationIds(current,32)));
+            assertEquals(journal,jdbc.queryForObject("SELECT reclaim_batch_json FROM agent_platform_skill_installation WHERE installation_id=?",String.class,id));
+        }
+        assertEquals(42,jdbc.queryForObject("SELECT COUNT(*) FROM agent_platform_skill_installation",Integer.class));
+        assertEquals("SUCCEEDED",platform.find(fixture.oldInstallation().scope(),"psi-old",false).state());
+        assertEquals(40,jdbc.queryForObject("SELECT COUNT(*) FROM agent_platform_skill_installation WHERE state='RECLAIMABLE'",Integer.class));
+        assertEquals("ACTIVE:psi-old",jdbc.queryForObject("SELECT CONCAT(state,':',installation_ref) FROM archive_execution_grant WHERE run_id=?",String.class,RUN));
+    }
+
+    @Test
+    void reclaimReceiptPrioritizesLiveCopiesAheadOfThirtyTwoPermanentTombstones() {
+        var fixture=seedPlatformReclaimFixture();
+        var platform=new cn.jia.agent.platform.JdbcPlatformInstallationStore(jdbc);
+        String copySql="INSERT INTO agent_platform_skill_installation "
+                + "(installation_id,tenant_id,client_id,owner_jiacn,actor_id,request_key,request_sha256,agent_id,binding_id,"
+                + "runtime_instance_id,registration_hash,skill_key,skill_version,package_sha256,challenge_id,command_id,"
+                + "origin,state,result_sha256,error_code,revision,created_at) "
+                + "SELECT ?,tenant_id,client_id,owner_jiacn,actor_id,?,request_sha256,agent_id,binding_id,"
+                + "runtime_instance_id,registration_hash,skill_key,skill_version,package_sha256,?,?,"
+                + "origin,?,result_sha256,NULL,1,? FROM agent_platform_skill_installation WHERE installation_id='psi-current'";
+        for(int index=1;index<=35;index++) {
+            String id="psi-batch-"+String.format(java.util.Locale.ROOT,"%03d",index);
+            jdbc.update(copySql,id,"key-"+id,"challenge-"+id,"command-"+id,
+                    index<=32?"RECLAIMABLE":"SUCCEEDED",10L+index);
+        }
+        jdbc.update("UPDATE agent_platform_skill_installation SET state='RECLAIMABLE' WHERE installation_id IN ('psi-old','psi-current')");
+        var current=platform.find(fixture.current().scope(),"psi-batch-035",false);
+        var batch=transactions.required(() -> {
+            platform.lockScope(current.scope());platform.find(current.scope(),current.id(),true);
+            return platform.reclaimableInstallationIds(current,32);
+        });
+        assertEquals(32,batch.size());
+        assertEquals(List.of("psi-batch-033","psi-batch-034"),batch.subList(0,2));
+        assertFalse(batch.contains(current.id()));
+        assertEquals(batch,transactions.required(() -> new cn.jia.agent.platform.JdbcPlatformInstallationStore(jdbc)
+                .reclaimableInstallationIds(current,32)));
+        assertEquals(37,jdbc.queryForObject("SELECT COUNT(*) FROM agent_platform_skill_installation",Integer.class));
+        assertEquals(34,jdbc.queryForObject("SELECT COUNT(*) FROM agent_platform_skill_installation WHERE installation_id LIKE 'psi-batch-%' AND state='RECLAIMABLE'",Integer.class));
+    }
+
+    @Test
+    void platformInstallationReclaimFenceIsDurableAndExactReplayReturnsTheSameCandidate() {
+        clean();
+        new ArchiveSchemaInitializer(jdbc).initialize();
+        new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
+                new ArchiveMaintenanceProperties()).initialize();
+        new ResourceDatabasePopulator(new ClassPathResource("db/agent-platform-skills-schema.sql"))
+                .execute(dataSource);
+        jdbc.update("DELETE FROM agent_platform_skill_installation");
+        jdbc.update("DELETE FROM agent_platform_skill_scope");
+        String insert = "INSERT INTO agent_platform_skill_installation "
+                + "(installation_id,tenant_id,client_id,owner_jiacn,actor_id,request_key,request_sha256,"
+                + "agent_id,binding_id,runtime_instance_id,registration_hash,skill_key,skill_version,"
+                + "package_sha256,challenge_id,command_id,origin,state,result_sha256,error_code,revision,created_at) "
+                + "VALUES (?,'0','client-a','owner-a','actor-a',?,REPEAT('a',64),'agent-a',7,"
+                + "'runtime-a',?, 'archive-maintainer','1.0.0',REPEAT('b',64),?,?,'PLATFORM_PROVISIONED',"
+                + "'SUCCEEDED',REPEAT('c',64),NULL,1,?)";
+        byte[] registration = new byte[32];
+        jdbc.update(insert,"psi-old","key-old",registration,"challenge-old","command-old",1L);
+        jdbc.update(insert,"psi-current","key-current",registration,"challenge-current","command-current",2L);
+        var current = new cn.jia.agent.platform.PlatformInstallationStore.Installation("psi-current",
+                new cn.jia.agent.platform.PlatformInstallationStore.Scope("0","client-a","owner-a"),
+                "actor-a","key-current","a".repeat(64),"agent-a",7,"runtime-a",registration,
+                "archive-maintainer","1.0.0","b".repeat(64),"challenge-current","command-current",
+                "SUCCEEDED","c".repeat(64),null,1,2);
+        var platform = new cn.jia.agent.platform.JdbcPlatformInstallationStore(jdbc);
+        assertEquals(List.of("psi-old"), platform.reclaimableInstallationIds(current,32));
+        assertEquals("RECLAIMABLE:2", jdbc.queryForObject(
+                "SELECT CONCAT(state,':',revision) FROM agent_platform_skill_installation WHERE installation_id='psi-old'",
+                String.class));
+        assertEquals(List.of("psi-old"), platform.reclaimableInstallationIds(current,32));
+        assertEquals("RECLAIMABLE:2", jdbc.queryForObject(
+                "SELECT CONCAT(state,':',revision) FROM agent_platform_skill_installation WHERE installation_id='psi-old'",
+                String.class));
+    }
+
+    @Test
+    void grantAdmissionLockBeforeReclaimCommitProtectsTheReferencedInstallation() throws Exception {
+        PlatformReclaimFixture fixture = seedPlatformReclaimFixture();
+        var platform = new cn.jia.agent.platform.JdbcPlatformInstallationStore(jdbc);
+        var archive = new JdbcArchiveMaintenanceStore(jdbc);
+        CountDownLatch admissionLocked = new CountDownLatch(1);
+        CountDownLatch allowAdmissionCommit = new CountDownLatch(1);
+        CountDownLatch reclaimAttempted = new CountDownLatch(1);
+        AtomicLong admissionConnection = new AtomicLong();
+        AtomicLong reclaimConnection = new AtomicLong();
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> admission = pool.submit(() -> transactions.required(() -> {
+                admissionConnection.set(jdbc.queryForObject("SELECT CONNECTION_ID()", Long.class));
+                var candidate = platform.verifiedCandidateForUpdate(fixture.oldKey());
+                assertTrue(candidate != null, "grant admission did not lock the verified installation");
+                assertEquals("psi-old", candidate.installation().id());
+                admissionLocked.countDown();
+                await(allowAdmissionCommit);
+                archive.insertExecutionGrant(executionGrantForInstallation(fixture.oldInstallation()));
+                return null;
+            }));
+            assertTrue(admissionLocked.await(5, TimeUnit.SECONDS),
+                    "grant admission did not acquire the installation lock");
+            Future<List<String>> reclaim = pool.submit(() -> transactions.required(() -> {
+                reclaimConnection.set(jdbc.queryForObject("SELECT CONNECTION_ID()", Long.class));
+                reclaimAttempted.countDown();
+                return platform.reclaimableInstallationIds(fixture.current(), 32);
+            }));
+            assertTrue(reclaimAttempted.await(5, TimeUnit.SECONDS),
+                    "reclaim did not reach its independent connection");
+            Thread.sleep(200L);
+            assertFalse(reclaim.isDone(), "reclaim must wait for grant admission's installation lock");
+            allowAdmissionCommit.countDown();
+            admission.get(10, TimeUnit.SECONDS);
+            assertEquals(List.of(), reclaim.get(10, TimeUnit.SECONDS));
+        } finally {
+            allowAdmissionCommit.countDown();
+            pool.shutdownNow();
+            pool.awaitTermination(5, TimeUnit.SECONDS);
+        }
+        assertTrue(admissionConnection.get() > 0 && reclaimConnection.get() > 0);
+        assertTrue(admissionConnection.get() != reclaimConnection.get(),
+                "race selector must use two physical MySQL connections");
+        assertEquals("SUCCEEDED:1", jdbc.queryForObject(
+                "SELECT CONCAT(state,':',revision) FROM agent_platform_skill_installation WHERE installation_id='psi-old'",
+                String.class));
+        assertEquals("ACTIVE:psi-old", jdbc.queryForObject(
+                "SELECT CONCAT(state,':',installation_ref) FROM archive_execution_grant WHERE run_id=?",
+                String.class, RUN));
+    }
+
+    @Test
+    void reclaimFenceCommitBeforeGrantAdmissionMakesTheInstallationIneligible() throws Exception {
+        PlatformReclaimFixture fixture = seedPlatformReclaimFixture();
+        var platform = new cn.jia.agent.platform.JdbcPlatformInstallationStore(jdbc);
+        var archive = new JdbcArchiveMaintenanceStore(jdbc);
+        CountDownLatch reclaimFenced = new CountDownLatch(1);
+        CountDownLatch allowReclaimCommit = new CountDownLatch(1);
+        CountDownLatch admissionAttempted = new CountDownLatch(1);
+        AtomicLong reclaimConnection = new AtomicLong();
+        AtomicLong admissionConnection = new AtomicLong();
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<List<String>> reclaim = pool.submit(() -> transactions.required(() -> {
+                reclaimConnection.set(jdbc.queryForObject("SELECT CONNECTION_ID()", Long.class));
+                List<String> candidates = platform.reclaimableInstallationIds(fixture.current(), 32);
+                reclaimFenced.countDown();
+                await(allowReclaimCommit);
+                return candidates;
+            }));
+            assertTrue(reclaimFenced.await(5, TimeUnit.SECONDS),
+                    "reclaim did not persist its installation fence");
+            Future<Boolean> admission = pool.submit(() -> transactions.required(() -> {
+                admissionConnection.set(jdbc.queryForObject("SELECT CONNECTION_ID()", Long.class));
+                admissionAttempted.countDown();
+                // This admission is pinned to the observed psi-old proof, not free
+                // to substitute a different success returned after it is fenced.
+                var pinned = platform.find(fixture.oldInstallation().scope(),
+                        fixture.oldInstallation().id(), true);
+                if (!"SUCCEEDED".equals(pinned.state())) return false;
+                var candidate = platform.verifiedCandidateForUpdate(fixture.oldKey());
+                assertTrue(candidate != null);
+                assertEquals("psi-old", candidate.installation().id());
+                archive.insertExecutionGrant(executionGrantForInstallation(candidate.installation()));
+                return true;
+            }));
+            assertTrue(admissionAttempted.await(5, TimeUnit.SECONDS),
+                    "grant admission did not reach its independent connection");
+            Thread.sleep(200L);
+            assertFalse(admission.isDone(), "grant admission must wait for the reclaim installation lock");
+            allowReclaimCommit.countDown();
+            assertEquals(List.of("psi-old"), reclaim.get(10, TimeUnit.SECONDS));
+            assertFalse(admission.get(10, TimeUnit.SECONDS),
+                    "a persistently fenced installation must not admit a new execution grant");
+        } finally {
+            allowReclaimCommit.countDown();
+            pool.shutdownNow();
+            pool.awaitTermination(5, TimeUnit.SECONDS);
+        }
+        assertTrue(admissionConnection.get() > 0 && reclaimConnection.get() > 0);
+        assertTrue(admissionConnection.get() != reclaimConnection.get(),
+                "race selector must use two physical MySQL connections");
+        assertEquals("RECLAIMABLE:2", jdbc.queryForObject(
+                "SELECT CONCAT(state,':',revision) FROM agent_platform_skill_installation WHERE installation_id='psi-old'",
+                String.class));
+        assertEquals(0, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM archive_execution_grant WHERE installation_ref='psi-old'",
+                Integer.class));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"ACTIVE", "READ_ONLY"})
+    void reclaimerWithOldRepeatableReadSnapshotSeesCommittedGrantBeforeFencing(String grantState)
+            throws Exception {
+        PlatformReclaimFixture fixture = seedPlatformReclaimFixture();
+        var platform = new cn.jia.agent.platform.JdbcPlatformInstallationStore(jdbc);
+        var archive = new JdbcArchiveMaintenanceStore(jdbc);
+        CountDownLatch snapshotEstablished = new CountDownLatch(1);
+        CountDownLatch admissionLocked = new CountDownLatch(1);
+        CountDownLatch allowReclaim = new CountDownLatch(1);
+        CountDownLatch reclaimAttempted = new CountDownLatch(1);
+        CountDownLatch allowAdmissionCommit = new CountDownLatch(1);
+        AtomicLong reclaimConnection = new AtomicLong();
+        AtomicLong admissionConnection = new AtomicLong();
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<List<String>> reclaim = pool.submit(() -> transactions.required(() -> {
+                reclaimConnection.set(jdbc.queryForObject("SELECT CONNECTION_ID()", Long.class));
+                assertEquals("REPEATABLE-READ", jdbc.queryForObject(
+                        "SELECT @@transaction_isolation", String.class));
+                // Mirrors result()'s first ordinary found(..., false): this read of
+                // an InnoDB row establishes the transaction's consistent RR snapshot.
+                assertEquals("SUCCEEDED", platform.find(fixture.current().scope(),
+                        fixture.current().id(), false).state());
+                assertEquals(0, jdbc.queryForObject(
+                        "SELECT COUNT(*) FROM archive_execution_grant WHERE installation_ref='psi-old'",
+                        Integer.class));
+                snapshotEstablished.countDown();
+                await(allowReclaim);
+                reclaimAttempted.countDown();
+                List<String> candidates = platform.reclaimableInstallationIds(fixture.current(), 32);
+                // A normal read still cannot see the now-committed grant. The empty
+                // reclaim result must therefore come from the final current locking read.
+                assertEquals(0, jdbc.queryForObject(
+                        "SELECT COUNT(*) FROM archive_execution_grant WHERE installation_ref='psi-old'",
+                        Integer.class));
+                return candidates;
+            }));
+            assertTrue(snapshotEstablished.await(5, TimeUnit.SECONDS),
+                    "reclaimer did not establish its old RR snapshot");
+            Future<?> admission = pool.submit(() -> transactions.required(() -> {
+                admissionConnection.set(jdbc.queryForObject("SELECT CONNECTION_ID()", Long.class));
+                assertEquals("REPEATABLE-READ", jdbc.queryForObject(
+                        "SELECT @@transaction_isolation", String.class));
+                var candidate = platform.verifiedCandidateForUpdate(fixture.oldKey());
+                assertTrue(candidate != null);
+                assertEquals("psi-old", candidate.installation().id());
+                archive.insertExecutionGrant(executionGrantForInstallation(candidate.installation()));
+                if ("READ_ONLY".equals(grantState)) assertEquals(1, archive.releaseExecutionGrant(RUN, 1));
+                admissionLocked.countDown();
+                await(allowAdmissionCommit);
+                return null;
+            }));
+            assertTrue(admissionLocked.await(5, TimeUnit.SECONDS));
+            allowReclaim.countDown();
+            assertTrue(reclaimAttempted.await(5, TimeUnit.SECONDS));
+            Thread.sleep(200L);
+            assertFalse(reclaim.isDone(), "reclaimer must wait for the installation admission lock");
+            allowAdmissionCommit.countDown();
+            admission.get(10, TimeUnit.SECONDS);
+            assertEquals(List.of(), reclaim.get(10, TimeUnit.SECONDS));
+        } finally {
+            allowReclaim.countDown();
+            allowAdmissionCommit.countDown();
+            pool.shutdownNow();
+            pool.awaitTermination(5, TimeUnit.SECONDS);
+        }
+        assertTrue(reclaimConnection.get() > 0 && admissionConnection.get() > 0);
+        assertTrue(reclaimConnection.get() != admissionConnection.get(),
+                "snapshot race selector must use two physical MySQL connections");
+        assertEquals("SUCCEEDED:1", jdbc.queryForObject(
+                "SELECT CONCAT(state,':',revision) FROM agent_platform_skill_installation WHERE installation_id='psi-old'",
+                String.class));
+        assertEquals(grantState + ":psi-old", jdbc.queryForObject(
+                "SELECT CONCAT(state,':',installation_ref) FROM archive_execution_grant WHERE run_id=?",
+                String.class, RUN));
+    }
+
+    @Test
+    void exactF7811daSourceLifecyclePredecessorUpgradesOnceAndRejectsDrift() throws Exception {
+        clean();
+        new ArchiveSchemaInitializer(jdbc).initialize();
+        byte[] predecessor;
+        try (var input = new ClassPathResource(
+                "db/archive-maintenance-schema-f7811da.sql").getInputStream()) {
+            predecessor = input.readAllBytes();
+        }
+        assertEquals(40311, predecessor.length);
+        assertEquals("f814993101130aa9185c89ccba1ba134378a2c1139c098df8fd70782f54e3e6b",
+                cn.jia.chat.archive.content.ArchiveEtags.sha256(predecessor));
+        assertEquals(21, java.util.regex.Pattern.compile("CREATE TABLE IF NOT EXISTS")
+                .matcher(new String(predecessor, StandardCharsets.UTF_8)).results().count());
+        new ResourceDatabasePopulator(new ByteArrayResource(predecessor)).execute(dataSource);
+        new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
+                new ArchiveMaintenanceProperties()).initialize();
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables "
+                + "WHERE table_schema=DATABASE() AND table_name='archive_source_artifact_object'",
+                Integer.class));
+        assertEquals("tenant_id,client_id,owner_jiacn,agent_id,installation_ref,state,grant_ref",
+                jdbc.queryForObject("SELECT GROUP_CONCAT(column_name ORDER BY seq_in_index) "
+                        + "FROM information_schema.statistics WHERE table_schema=DATABASE() "
+                        + "AND table_name='archive_execution_grant' "
+                        + "AND index_name='idx_archive_execution_installation'", String.class));
+        new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
+                new ArchiveMaintenanceProperties()).initialize();
+
+        clean();
+        new ArchiveSchemaInitializer(jdbc).initialize();
+        new ResourceDatabasePopulator(new ByteArrayResource(predecessor)).execute(dataSource);
+        jdbc.execute("ALTER TABLE archive_operation ADD COLUMN unsupported_drift BIGINT NULL");
+        IllegalStateException drift = assertThrows(IllegalStateException.class,
+                () -> new ArchiveMaintenanceSchemaInitializer(jdbc,
+                        new JdbcArchiveMaintenanceStore(jdbc),
+                        new ArchiveMaintenanceProperties()).initialize());
+        assertTrue(drift.getMessage().contains("archive_operation.columns"), drift.getMessage());
+    }
+
+    @Test
+    void reclaimIndexUpgradeResumesExact21TablePredecessorAndRejectsIndexDrift() {
+        clean();
+        new ArchiveSchemaInitializer(jdbc).initialize();
+        new ResourceDatabasePopulator(new ClassPathResource("db/archive-maintenance-schema-f7811da.sql"))
+                .execute(dataSource);
+        // Simulate interruption after the atomic index DDL committed, before the
+        // additive source registry table was created. The old fixture is untouched.
+        jdbc.execute("ALTER TABLE archive_execution_grant ADD KEY idx_archive_execution_installation "
+                + "(tenant_id,client_id,owner_jiacn,agent_id,installation_ref,state,grant_ref)");
+        new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
+                new ArchiveMaintenanceProperties()).initialize();
+        new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
+                new ArchiveMaintenanceProperties()).initialize();
+        assertEquals(7, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.statistics "
+                + "WHERE table_schema=DATABASE() AND table_name='archive_execution_grant' "
+                + "AND index_name='idx_archive_execution_installation'", Integer.class));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables "
+                + "WHERE table_schema=DATABASE() AND table_name='archive_source_artifact_object'", Integer.class));
+
+        clean();
+        new ArchiveSchemaInitializer(jdbc).initialize();
+        new ResourceDatabasePopulator(new ClassPathResource("db/archive-maintenance-schema-f7811da.sql"))
+                .execute(dataSource);
+        jdbc.execute("ALTER TABLE archive_execution_grant ADD KEY idx_archive_execution_installation "
+                + "(installation_ref,state)");
+        IllegalStateException wrongIndex = assertThrows(IllegalStateException.class, () ->
+                new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
+                        new ArchiveMaintenanceProperties()).initialize());
+        assertTrue(wrongIndex.getMessage().contains("archive_execution_grant.indexes"));
+        assertEquals("installation_ref,state", jdbc.queryForObject(
+                "SELECT GROUP_CONCAT(column_name ORDER BY seq_in_index) FROM information_schema.statistics "
+                        + "WHERE table_schema=DATABASE() AND table_name='archive_execution_grant' "
+                        + "AND index_name='idx_archive_execution_installation'", String.class));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables "
+                + "WHERE table_schema=DATABASE() AND table_name='archive_source_artifact_object'", Integer.class));
+
+        clean();
+        new ArchiveSchemaInitializer(jdbc).initialize();
+        new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
+                new ArchiveMaintenanceProperties()).initialize();
+        jdbc.execute("ALTER TABLE archive_execution_grant DROP INDEX idx_archive_execution_installation");
+        IllegalStateException partialCurrent = assertThrows(IllegalStateException.class, () ->
+                new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
+                        new ArchiveMaintenanceProperties()).initialize());
+        assertTrue(partialCurrent.getMessage().contains("archive_execution_grant.indexes"));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.statistics "
+                + "WHERE table_schema=DATABASE() AND table_name='archive_execution_grant' "
+                + "AND index_name='idx_archive_execution_installation'", Integer.class));
     }
 
     @Test
@@ -3803,6 +4364,66 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         }
     }
 
+    private PlatformReclaimFixture seedPlatformReclaimFixture() {
+        seedExecutionCandidate();
+        new cn.jia.agent.config.AgentCommandTransportSchemaInitializer(jdbc).afterPropertiesSet();
+        new ResourceDatabasePopulator(new ClassPathResource("db/agent-platform-skills-schema.sql"))
+                .execute(dataSource);
+        byte[] registration = new byte[32];
+        registration[0] = 7;
+        String installationInsert = "INSERT INTO agent_platform_skill_installation "
+                + "(installation_id,tenant_id,client_id,owner_jiacn,actor_id,request_key,request_sha256,"
+                + "agent_id,binding_id,runtime_instance_id,registration_hash,skill_key,skill_version,"
+                + "package_sha256,challenge_id,command_id,origin,state,result_sha256,error_code,revision,created_at) "
+                + "VALUES (?,'0','client-a','owner-a','actor-a',?,REPEAT('a',64),'agent-a',7,"
+                + "'runtime-a',?,'archive-maintainer','1.0.0',REPEAT('b',64),?,?,"
+                + "'PLATFORM_PROVISIONED','SUCCEEDED',REPEAT('c',64),NULL,1,?)";
+        // The receipt being handled may belong to an earlier request whose result
+        // arrived late. The admission resolver must select psi-old (the newer
+        // verified success), so both transactions contend on that exact row.
+        jdbc.update(installationInsert, "psi-old", "key-old", registration,
+                "challenge-old", "command-old", 3L);
+        jdbc.update(installationInsert, "psi-current", "key-current", registration,
+                "challenge-current", "command-current", 2L);
+        String deliveryInsert = "INSERT INTO agent_command_delivery "
+                + "(command_id,owner_jiacn,task_id,target_agent_id,command_type,command_payload,"
+                + "command_payload_hash,status,expires_at,tenant_id,client_id,create_time,update_time) "
+                + "VALUES (?,'owner-a',?,'agent-a','PLATFORM_SKILL_INSTALL',X'00',"
+                + "UNHEX(SHA2(X'00',256)),'SUCCEEDED',2000000000000,'0','client-a',1,1)";
+        jdbc.update(deliveryInsert, "command-old", "psi-old");
+        jdbc.update(deliveryInsert, "command-current", "psi-current");
+        var scope = new cn.jia.agent.platform.PlatformInstallationStore.Scope(
+                "0", "client-a", "owner-a");
+        var oldInstallation = new cn.jia.agent.platform.PlatformInstallationStore.Installation(
+                "psi-old", scope, "actor-a", "key-old", "a".repeat(64), "agent-a", 7,
+                "runtime-a", registration, "archive-maintainer", "1.0.0", "b".repeat(64),
+                "challenge-old", "command-old", "SUCCEEDED", "c".repeat(64), null, 1, 3);
+        var current = new cn.jia.agent.platform.PlatformInstallationStore.Installation(
+                "psi-current", scope, "actor-a", "key-current", "a".repeat(64), "agent-a", 7,
+                "runtime-a", registration, "archive-maintainer", "1.0.0", "b".repeat(64),
+                "challenge-current", "command-current", "SUCCEEDED", "c".repeat(64), null, 1, 2);
+        var oldKey = new cn.jia.agent.platform.PlatformInstallationStore.ResolutionKey(
+                scope, "PLATFORM_PROVISIONED", "agent-a", "archive-maintainer", "1.0.0",
+                "b".repeat(64), 7, "runtime-a", registration);
+        return new PlatformReclaimFixture(oldInstallation, current, oldKey);
+    }
+
+    private ArchiveExecutionGrantRecord executionGrantForInstallation(
+            cn.jia.agent.platform.PlatformInstallationStore.Installation installation) {
+        return new ArchiveExecutionGrantRecord("grant-reclaim-race", RUN, "0", "client-a", "owner-a",
+                APPOINTMENT, 1, 3, AGENT, 7, "execution-reclaim-race", "archive-command-reclaim-race",
+                1, 1, "runtime-a", installation.registrationHash(), "PLATFORM_PROVISIONED",
+                installation.id(), installation.revision(), "archive-maintainer", "1.0.0",
+                "b".repeat(64), "dispatch-reclaim-race", "e".repeat(64),
+                "/internal/archive/v1/jobs/" + JOB + "/runs/" + RUN + "/context",
+                2_000_000_000_000L, "ACTIVE", 1);
+    }
+
+    private record PlatformReclaimFixture(
+            cn.jia.agent.platform.PlatformInstallationStore.Installation oldInstallation,
+            cn.jia.agent.platform.PlatformInstallationStore.Installation current,
+            cn.jia.agent.platform.PlatformInstallationStore.ResolutionKey oldKey) { }
+
     private void seedExecutionCandidate() {
         jdbc.update("INSERT INTO aam_test_agent_root(agent_id) VALUES (?)", AGENT);
         assertEquals(1, jdbc.queryForObject(
@@ -3853,9 +4474,12 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                 statement.execute("SET FOREIGN_KEY_CHECKS=0");
                 try {
                     statement.execute("DROP TABLE IF EXISTS aam_test_agent_root");
-                    for (String table : new String[]{"agent_identity_registry", "agent_persona_binding",
+                    for (String table : new String[]{"agent_platform_skill_installation",
+                            "agent_platform_skill_scope", "agent_command_redrive_operation",
+                            "agent_command_operation_audit", "agent_consumer_inbox", "agent_outbox_event",
+                            "agent_command_delivery", "agent_identity_registry", "agent_persona_binding",
                             "archive_idempotency", "archive_note", "archive_bookmark",
-                            "archive_reader_progress", "archive_admin_operation_receipt", "archive_operation", "archive_business_outbox", "archive_event",
+                            "archive_reader_progress", "archive_admin_operation_receipt", "archive_source_artifact_object", "archive_operation", "archive_business_outbox", "archive_event",
                             "archive_edition_withdrawal", "archive_publication_readback", "archive_publication",
                             "archive_validation", "archive_draft_block_checkpoint", "archive_draft", "archive_execution_failure", "archive_execution_grant", "archive_job_run",
                             "archive_maintenance_job", "archive_confirmed_request", "archive_source_snapshot", "archive_appointment",
@@ -3945,7 +4569,7 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         }
     }
 
-    private static final class TestSourceStorage implements AgentTaskArtifactStorage {
+    private static class TestSourceStorage implements AgentTaskArtifactStorage {
         volatile boolean available;
         final AtomicInteger reads = new AtomicInteger();
         volatile Runnable afterRead;
@@ -3961,6 +4585,17 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
             String uri = "cyf-artifact://" + scope.taskId() + "/" + hash;
             objects.putIfAbsent(uri, content.clone());
             return new StoredObject(uri, hash, content.length, mimeType, true);
+        }
+        @Override public String reference(Scope scope, String sha256) {
+            return "cyf-artifact://" + scope.taskId() + "/" + sha256;
+        }
+        @Override public boolean delete(Scope scope, String storageUri, String expectedSha256) {
+            if (!storageUri.equals(reference(scope, expectedSha256))) {
+                throw new AgentTaskArtifactStorageException(
+                        AgentTaskArtifactStorageException.Reason.CORRUPT_CONTENT,
+                        "test source reference mismatch");
+            }
+            return objects.remove(storageUri) != null;
         }
         @Override public StoredContent read(Scope scope, String storageUri, String expectedSha256,
                 long expectedByteLength, String expectedMimeType) {

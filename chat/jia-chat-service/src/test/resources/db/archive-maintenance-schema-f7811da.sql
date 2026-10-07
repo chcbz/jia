@@ -236,7 +236,6 @@ CREATE TABLE IF NOT EXISTS archive_execution_grant (
     UNIQUE KEY uk_archive_execution_command (tenant_id, client_id, owner_jiacn, command_id),
     UNIQUE KEY uk_archive_execution_dispatch (tenant_id, client_id, owner_jiacn, dispatch_key),
     KEY idx_archive_execution_appointment (appointment_id, state, run_id),
-    KEY idx_archive_execution_installation (tenant_id, client_id, owner_jiacn, agent_id, installation_ref, state, grant_ref),
     CONSTRAINT fk_archive_execution_run FOREIGN KEY (run_id) REFERENCES archive_job_run(run_id),
     CONSTRAINT fk_archive_execution_appointment FOREIGN KEY (appointment_id) REFERENCES archive_appointment(appointment_id),
     CONSTRAINT chk_archive_execution_state CHECK (state IN ('ACTIVE','READ_ONLY','FENCED')),
@@ -476,30 +475,6 @@ CREATE TABLE IF NOT EXISTS archive_operation (
     created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     PRIMARY KEY (tenant_id, client_id, owner_jiacn, operation_key),
     CONSTRAINT chk_archive_operation_state CHECK (state IN ('PENDING','COMMITTED'))
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
-
-CREATE TABLE IF NOT EXISTS archive_source_artifact_object (
-    source_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-    tenant_id VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
-    client_id VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
-    owner_jiacn VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
-    operation_key VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
-    storage_uri VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-    sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-    byte_length BIGINT NOT NULL,
-    mime_type VARCHAR(100) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-    state VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-    revision BIGINT NOT NULL,
-    created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-    touched_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-    PRIMARY KEY (source_id),
-    KEY idx_archive_source_artifact_operation (tenant_id,client_id,owner_jiacn,operation_key),
-    KEY idx_archive_source_artifact_cleanup (state,touched_at,source_id),
-    CONSTRAINT fk_archive_source_artifact_operation FOREIGN KEY (tenant_id,client_id,owner_jiacn,operation_key) REFERENCES archive_operation(tenant_id,client_id,owner_jiacn,operation_key),
-    CONSTRAINT chk_archive_source_artifact_sha CHECK (sha256 REGEXP '^[0-9a-f]{64}$'),
-    CONSTRAINT chk_archive_source_artifact_bytes CHECK ((byte_length >= 1) AND (revision >= 1)),
-    CONSTRAINT chk_archive_source_artifact_mime CHECK (mime_type='text/plain'),
-    CONSTRAINT chk_archive_source_artifact_state CHECK (state IN ('PENDING','DELETE_PENDING','REFERENCED','DELETED'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
 CREATE TABLE IF NOT EXISTS archive_admin_operation_receipt (

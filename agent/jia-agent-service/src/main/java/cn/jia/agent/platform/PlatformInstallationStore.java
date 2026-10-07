@@ -26,8 +26,10 @@ public interface PlatformInstallationStore {
             Long deliveryExpiresAt) { }
     java.util.List<Installation> terminalDeliveryCandidates(ScanCursor after,long now,int limit);
     ResolutionCandidate verifiedCandidate(ResolutionKey key);
+    default ResolutionCandidate verifiedCandidateForUpdate(ResolutionKey key) { return verifiedCandidate(key); }
     ResolutionCandidate pendingCandidate(ResolutionKey key,long now);
     Installation latestHistorical(ResolutionKey key);
+    default java.util.List<String> reclaimableInstallationIds(Installation current, int limit) { return java.util.List.of(); }
     void lockScope(Scope scope);
     Installation byKey(Scope scope,String actorId,String key);
     Installation find(Scope scope,String id,boolean lock);

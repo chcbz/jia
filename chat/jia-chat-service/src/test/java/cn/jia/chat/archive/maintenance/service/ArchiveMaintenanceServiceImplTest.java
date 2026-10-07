@@ -45,6 +45,7 @@ class ArchiveMaintenanceServiceImplTest {
     private ArchiveContentStore content;
     private AgentIdentityService identities;
     private ArchiveMaintenanceServiceImpl service;
+    private Map<String, ArchiveMaintenanceStore.SourceArtifact> sourceArtifacts;
 
     @BeforeEach
     void setUp() {
@@ -54,6 +55,21 @@ class ArchiveMaintenanceServiceImplTest {
                 "src_1", COLLECTION, "0", "client-a", "owner-a", "cyf-artifact://source",
                 SHA, 1, "固定来源", "摘要", "已授权公开用途", "UTF8_EXACT_V1", "READY"));
         Map<String, byte[]> artifactBytes = new ConcurrentHashMap<>();
+        sourceArtifacts = new ConcurrentHashMap<>();
+        when(sourceStorage.reference(any(), anyString())).thenAnswer(invocation ->
+                "cyf-artifact://test/" + invocation.getArgument(1));
+        when(store.findSourceArtifact(anyString(), anyBoolean())).thenAnswer(invocation ->
+                sourceArtifacts.get(invocation.getArgument(0)));
+        doAnswer(invocation -> { ArchiveMaintenanceStore.SourceArtifact row=invocation.getArgument(0);
+            sourceArtifacts.put(row.sourceId(), row); return null; }).when(store).insertSourceArtifact(any());
+        when(store.touchSourceArtifact(anyString(), anyLong())).thenAnswer(invocation -> {
+            String id=invocation.getArgument(0); long revision=invocation.getArgument(1);
+            var row=sourceArtifacts.get(id); if(row==null || row.revision()!=revision || !"PENDING".equals(row.state())) return 0;
+            sourceArtifacts.put(id,new ArchiveMaintenanceStore.SourceArtifact(row.sourceId(),row.tenantId(),row.clientId(),row.ownerJiacn(),row.operationKey(),row.storageUri(),row.sha256(),row.byteLength(),row.mimeType(),row.state(),revision+1,row.createdAt(),row.touchedAt())); return 1; });
+        when(store.referenceSourceArtifact(anyString(), anyLong())).thenAnswer(invocation -> {
+            String id=invocation.getArgument(0); long revision=invocation.getArgument(1); var row=sourceArtifacts.get(id);
+            if(row==null || row.revision()!=revision || !"PENDING".equals(row.state())) return 0;
+            sourceArtifacts.put(id,new ArchiveMaintenanceStore.SourceArtifact(row.sourceId(),row.tenantId(),row.clientId(),row.ownerJiacn(),row.operationKey(),row.storageUri(),row.sha256(),row.byteLength(),row.mimeType(),"REFERENCED",revision+1,row.createdAt(),row.touchedAt())); return 1; });
         when(sourceStorage.store(any(), any(byte[].class), anyString())).thenAnswer(invocation -> {
             byte[] bytes = invocation.getArgument(1);
             String mime = invocation.getArgument(2);
@@ -302,6 +318,8 @@ class ArchiveMaintenanceServiceImplTest {
         allowManager("source.prepare");
         byte[] bytes = "第一回\n正文".getBytes(java.nio.charset.StandardCharsets.UTF_8);
         String hash = cn.jia.chat.archive.content.ArchiveEtags.sha256(bytes);
+        when(sourceStorage.reference(any(AgentTaskArtifactStorage.Scope.class), eq(hash)))
+                .thenReturn("cyf-artifact://stored");
         when(sourceStorage.store(any(AgentTaskArtifactStorage.Scope.class), any(byte[].class), eq("text/plain")))
                 .thenReturn(new AgentTaskArtifactStorage.StoredObject("cyf-artifact://stored", hash,
                         bytes.length, "text/plain", true));
@@ -330,6 +348,122 @@ class ArchiveMaintenanceServiceImplTest {
     }
 
     @Test
+    void lateUploadAfterCleanupTombstoneCannotCommitOrCreateAReferencedSource() {
+        allowManager("source.prepare");
+        byte[] bytes = "late upload".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        String hash = cn.jia.chat.archive.content.ArchiveEtags.sha256(bytes);
+        operation("POST", "/archive/admin/v1/collections/" + COLLECTION + "/source-snapshots",
+                "SOURCE", "src_late");
+        var tracked = new java.util.concurrent.atomic.AtomicReference<ArchiveMaintenanceStore.SourceArtifact>();
+        doAnswer(invocation -> { tracked.set(invocation.getArgument(0)); return null; })
+                .when(store).insertSourceArtifact(any());
+        when(store.findSourceArtifact(eq("src_late"), eq(true))).thenAnswer(invocation -> tracked.get());
+        when(sourceStorage.reference(any(), eq(hash))).thenReturn("cyf-artifact://late");
+        when(sourceStorage.store(any(), eq(bytes), eq("text/plain"))).thenAnswer(invocation -> {
+            var row = tracked.get();
+            tracked.set(new ArchiveMaintenanceStore.SourceArtifact(row.sourceId(), row.tenantId(),
+                    row.clientId(), row.ownerJiacn(), row.operationKey(), row.storageUri(), row.sha256(),
+                    row.byteLength(), row.mimeType(), "DELETED", row.revision() + 2, row.createdAt(),
+                    row.touchedAt()));
+            return new AgentTaskArtifactStorage.StoredObject("cyf-artifact://late", hash,
+                    bytes.length, "text/plain", true);
+        });
+        when(sourceStorage.matches(any(), eq("cyf-artifact://late"), eq(hash))).thenReturn(true);
+        var request = new ArchiveSourcePrepareRequest("late", "v1", "许可公开", hash,
+                java.util.Base64.getEncoder().encodeToString(bytes));
+        ArchiveMaintenanceException failure = assertThrows(ArchiveMaintenanceException.class,
+                () -> service.prepareSource(MANAGER, COLLECTION, "late-key", request));
+        assertEquals("SOURCE_RECOVERY_IN_PROGRESS", failure.code());
+        verify(store, never()).insertSource(any());
+        verify(store, never()).commitOperation(eq(MANAGER), eq("late-key"), anyString());
+    }
+
+    @Test
+    void sourceUploadCannotBorrowAReactivatedPendingRevisionAfterDeletedAba() {
+        allowManager("source.prepare");
+        byte[] bytes = "paused generation".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        String hash = cn.jia.chat.archive.content.ArchiveEtags.sha256(bytes);
+        operation("POST", "/archive/admin/v1/collections/" + COLLECTION + "/source-snapshots",
+                "SOURCE", "src_aba");
+        var tracked = new java.util.concurrent.atomic.AtomicReference<ArchiveMaintenanceStore.SourceArtifact>();
+        doAnswer(invocation -> { tracked.set(invocation.getArgument(0)); return null; })
+                .when(store).insertSourceArtifact(any());
+        when(store.findSourceArtifact(eq("src_aba"), eq(true))).thenAnswer(invocation -> tracked.get());
+        when(sourceStorage.reference(any(), eq(hash))).thenReturn("cyf-artifact://aba");
+        when(sourceStorage.store(any(), eq(bytes), eq("text/plain"))).thenAnswer(invocation -> {
+            var row = tracked.get();
+            // Old writer resumes after cleanup and another writer has reserved PENDING.
+            tracked.set(new ArchiveMaintenanceStore.SourceArtifact(row.sourceId(), row.tenantId(),
+                    row.clientId(), row.ownerJiacn(), row.operationKey(), row.storageUri(), row.sha256(),
+                    row.byteLength(), row.mimeType(), "PENDING", row.revision() + 3,
+                    row.createdAt(), row.touchedAt()));
+            return new AgentTaskArtifactStorage.StoredObject(row.storageUri(), hash, bytes.length, "text/plain", true);
+        });
+        var request = new ArchiveSourcePrepareRequest("aba", "v1", "public permission", hash,
+                java.util.Base64.getEncoder().encodeToString(bytes));
+        assertEquals("SOURCE_RECOVERY_IN_PROGRESS", assertThrows(ArchiveMaintenanceException.class,
+                () -> service.prepareSource(MANAGER, COLLECTION, "aba-key", request)).code());
+        verify(store, never()).insertSource(any());
+        verify(store, never()).referenceSourceArtifact(anyString(), anyLong());
+        verify(store, never()).commitOperation(eq(MANAGER), eq("aba-key"), anyString());
+    }
+
+    @Test
+    void deletedRetryAllocatesDistinctPhysicalGenerationAndPreservesLateUploadTombstone() {
+        allowManager("source.prepare");
+        byte[] bytes = "generation-bound source".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        String hash = cn.jia.chat.archive.content.ArchiveEtags.sha256(bytes);
+        var request = new ArchiveSourcePrepareRequest("generation", "v1", "public permission", hash,
+                java.util.Base64.getEncoder().encodeToString(bytes));
+        var target = new java.util.concurrent.atomic.AtomicReference<String>();
+        var firstTarget = new java.util.concurrent.atomic.AtomicReference<String>();
+        var operationState = new java.util.concurrent.atomic.AtomicReference<>("PENDING");
+        var uploadCalls = new java.util.concurrent.atomic.AtomicInteger();
+        when(store.beginOperation(eq(MANAGER), eq("generation-key"), eq("POST"), anyString(),
+                anyString(), eq("SOURCE"), anyString())).thenAnswer(call -> {
+            target.compareAndSet(null, call.getArgument(6));
+            return new ArchiveMaintenanceStore.Operation(false,"POST",call.getArgument(3),
+                    call.getArgument(4),"SOURCE",target.get(),operationState.get());
+        });
+        when(store.replacePendingSourceGeneration(eq(MANAGER),eq("generation-key"),anyString(),anyString()))
+                .thenAnswer(call -> target.compareAndSet(call.getArgument(2),call.getArgument(3)) ? 1 : 0);
+        when(sourceStorage.reference(any(),eq(hash))).thenAnswer(call ->
+                "cyf-artifact://" + ((AgentTaskArtifactStorage.Scope)call.getArgument(0)).taskId() + "/" + hash);
+        when(sourceStorage.store(any(),eq(bytes),eq("text/plain"))).thenAnswer(call -> {
+            var scope = (AgentTaskArtifactStorage.Scope)call.getArgument(0);
+            String uri = sourceStorage.reference(scope,hash);
+            int number=uploadCalls.incrementAndGet();
+            if(number==1) {
+                firstTarget.set(scope.taskId());
+                var row=sourceArtifacts.get(scope.taskId());
+                sourceArtifacts.put(row.sourceId(),new ArchiveMaintenanceStore.SourceArtifact(row.sourceId(),
+                        row.tenantId(),row.clientId(),row.ownerJiacn(),row.operationKey(),row.storageUri(),row.sha256(),
+                        row.byteLength(),row.mimeType(),"DELETED",row.revision()+2,row.createdAt(),row.touchedAt()));
+                // U2 reserves its new generation, but crashes before any object lands.
+                assertEquals("DEPENDENCY_UNAVAILABLE",assertThrows(ArchiveMaintenanceException.class,
+                        () -> service.prepareSource(MANAGER,COLLECTION,"generation-key",request)).code());
+                assertNotEquals(firstTarget.get(),target.get());
+                assertEquals("PENDING",sourceArtifacts.get(target.get()).state());
+            } else if(number==2) throw new cn.jia.agent.exception.AgentTaskArtifactStorageException(
+                    cn.jia.agent.exception.AgentTaskArtifactStorageException.Reason.IO_FAILURE,"upload interrupted");
+            return new AgentTaskArtifactStorage.StoredObject(uri,hash,bytes.length,"text/plain",true);
+        });
+        assertEquals("SOURCE_RECOVERY_IN_PROGRESS",assertThrows(ArchiveMaintenanceException.class,
+                () -> service.prepareSource(MANAGER,COLLECTION,"generation-key",request)).code());
+        verify(store,never()).insertSource(any());
+        doAnswer(call -> { operationState.set("COMMITTED"); return null; })
+                .when(store).commitOperation(eq(MANAGER),eq("generation-key"),anyString());
+        var accepted=service.prepareSource(MANAGER,COLLECTION,"generation-key",request);
+        assertEquals(target.get(),accepted.operationId());
+        assertEquals("COMMITTED",accepted.state());
+        assertEquals(2,sourceArtifacts.size());
+        assertEquals("DELETED",sourceArtifacts.get(firstTarget.get()).state());
+        assertEquals("REFERENCED",sourceArtifacts.get(target.get()).state());
+        assertNotEquals(sourceArtifacts.get(firstTarget.get()).storageUri(),sourceArtifacts.get(target.get()).storageUri());
+        assertEquals(3,uploadCalls.get());
+    }
+
+    @Test
     void sourceReservationSurvivesRetryAndCommittedReplayDoesNotStoreAgain() {
         allowManager("source.prepare");
         byte[] bytes = "固定来源".getBytes(java.nio.charset.StandardCharsets.UTF_8);
@@ -347,6 +481,7 @@ class ArchiveMaintenanceServiceImplTest {
             return new ArchiveMaintenanceStore.Operation(created, "POST", invocation.getArgument(3),
                     originalDigest.get(), "SOURCE", id.get(), state.get());
         });
+        when(sourceStorage.reference(any(), eq(hash))).thenReturn("cyf-artifact://reserved");
         when(sourceStorage.store(any(), eq(bytes), eq("text/plain"))).thenAnswer(invocation ->
                 new AgentTaskArtifactStorage.StoredObject("cyf-artifact://reserved", hash,
                         bytes.length, "text/plain", true));

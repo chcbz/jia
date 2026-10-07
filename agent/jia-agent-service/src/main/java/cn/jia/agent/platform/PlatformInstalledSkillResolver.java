@@ -9,6 +9,7 @@ import cn.jia.agent.skill.InstalledSkillSourceResolver;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Clock;
 import java.util.Arrays;
@@ -66,7 +67,10 @@ public final class PlatformInstalledSkillResolver implements InstalledSkillSourc
 
         ResolutionKey key=new ResolutionKey(scope,origin().name(),request.canonicalAgent(),request.key(),request.version(),
                 request.packageDigest(),request.binding(),target.runtimeInstanceId(),target.registrationHash());
-        ResolutionCandidate success=store.verifiedCandidate(key);
+        boolean writeTransaction=TransactionSynchronizationManager.isActualTransactionActive()
+                && !TransactionSynchronizationManager.isCurrentTransactionReadOnly();
+        ResolutionCandidate success=writeTransaction
+                ? store.verifiedCandidateForUpdate(key) : store.verifiedCandidate(key);
         if(success!=null) {
             if(!current(success.installation(),key) || !exactBusiness(success.installation(),request)
                     || !validSuccess(success.installation(),success))

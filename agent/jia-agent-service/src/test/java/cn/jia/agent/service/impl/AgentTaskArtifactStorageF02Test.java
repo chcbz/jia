@@ -140,6 +140,65 @@ class AgentTaskArtifactStorageF02Test {
     }
 
     @Test
+    void exactReferenceCanBeDeletedOnlyByMatchingScopeAndDigest() throws Exception {
+        FileSystemAgentTaskArtifactStorage storage = storage(1024 * 1024);
+        AgentTaskArtifactStorage.Scope scope = new AgentTaskArtifactStorage.Scope(TENANT, CLIENT, OWNER, TASK);
+        byte[] content = "reclaimable".getBytes(StandardCharsets.UTF_8);
+        String digest = sha256(content);
+        assertEquals(storage.reference(scope, digest), storage.store(scope, content, "text/plain").storageUri());
+        String uri = storage.reference(scope, digest);
+        assertEquals(AgentTaskArtifactStorageException.Reason.CORRUPT_CONTENT,
+                assertThrows(AgentTaskArtifactStorageException.class, () -> storage.delete(
+                        new AgentTaskArtifactStorage.Scope(TENANT, CLIENT, OWNER, "task-b"), uri, digest)).getReason());
+        assertTrue(storage.delete(scope, uri, digest));
+        assertFalse(storage.delete(scope, uri, digest));
+        assertEquals(0, managedObjectCount());
+    }
+
+    @Test
+    void deletingReservedObjectBeforeAnyStoreTreatsMissingDirectoriesAsAbsent() throws Exception {
+        FileSystemAgentTaskArtifactStorage storage = storage(1024 * 1024);
+        var scope = new AgentTaskArtifactStorage.Scope(TENANT, CLIENT, OWNER, "src-never-stored");
+        String digest = sha256("reserved".getBytes(StandardCharsets.UTF_8));
+        assertFalse(storage.delete(scope, storage.reference(scope, digest), digest));
+        assertFalse(Files.exists(temporaryDirectory.resolve("objects/v1")));
+        // A dangling symlink is not an absent directory and must never be followed.
+        Files.createSymbolicLink(temporaryDirectory.resolve("objects/v1"),
+                temporaryDirectory.resolve("missing-outside"));
+        assertEquals(AgentTaskArtifactStorageException.Reason.CORRUPT_CONTENT,
+                assertThrows(AgentTaskArtifactStorageException.class,
+                        () -> storage.delete(scope, storage.reference(scope, digest), digest)).getReason());
+    }
+
+    @Test
+    void neverStoredScopeWithExistingOtherObjectsIsAbsentAndPreservesThem() throws Exception {
+        FileSystemAgentTaskArtifactStorage storage = storage(1024 * 1024);
+        var keptScope = new AgentTaskArtifactStorage.Scope(TENANT,CLIENT,OWNER,"kept-source");
+        byte[] bytes="kept".getBytes(StandardCharsets.UTF_8);
+        var kept=storage.store(keptScope,bytes,"text/plain");
+        var missingScope=new AgentTaskArtifactStorage.Scope(TENANT,CLIENT,OWNER,"never-stored-source");
+        assertFalse(storage.delete(missingScope,storage.reference(missingScope,kept.sha256()),kept.sha256()));
+        assertArrayEquals(bytes,storage.read(keptScope,kept.storageUri(),kept.sha256(),bytes.length,"text/plain").content());
+        assertEquals(1,managedObjectCount());
+    }
+
+    @Test
+    void deleteRejectsSymlinkOrDigestTamperingWithoutFollowingIt() throws Exception {
+        FileSystemAgentTaskArtifactStorage storage = storage(1024 * 1024);
+        AgentTaskArtifactStorage.Scope scope = new AgentTaskArtifactStorage.Scope(TENANT, CLIENT, OWNER, TASK);
+        byte[] content = "protected".getBytes(StandardCharsets.UTF_8);
+        var stored = storage.store(scope, content, "text/plain");
+        Path object = Files.walk(temporaryDirectory.resolve("objects"))
+                .filter(path -> path.getFileName().toString().equals(stored.sha256())).findFirst().orElseThrow();
+        Path outside = temporaryDirectory.resolve("outside-delete"); Files.writeString(outside, "outside");
+        Files.delete(object); Files.createSymbolicLink(object, outside);
+        assertEquals(AgentTaskArtifactStorageException.Reason.CORRUPT_CONTENT,
+                assertThrows(AgentTaskArtifactStorageException.class,
+                        () -> storage.delete(scope, stored.storageUri(), stored.sha256())).getReason());
+        assertEquals("outside", Files.readString(outside));
+    }
+
+    @Test
     void concurrentSameDigestPublicationCreatesExactlyOneImmutableObject() throws Exception {
         FileSystemAgentTaskArtifactStorage storage = storage(1024 * 1024);
         AgentTaskArtifactStorage.Scope scope =

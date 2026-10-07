@@ -32,10 +32,30 @@ public final class PlatformSkillSchemaInitializer implements InitializingBean {
                 ON cc.CONSTRAINT_SCHEMA=tc.CONSTRAINT_SCHEMA AND cc.CONSTRAINT_NAME=tc.CONSTRAINT_NAME
                 WHERE tc.CONSTRAINT_SCHEMA=DATABASE() AND tc.TABLE_NAME=? AND tc.CONSTRAINT_TYPE='CHECK'
                 """,table);
-            PlatformSkillSchemaContract.validate(table,properties,columns,indexes,checks);
             var foreignKeys=jdbc.queryForList("SELECT CONSTRAINT_NAME FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME=?",table);
             var triggers=jdbc.queryForList("SELECT TRIGGER_NAME FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND EVENT_OBJECT_TABLE=?",table);
             if(!foreignKeys.isEmpty() || !triggers.isEmpty())throw new IllegalStateException("Unexpected platform installation foreign key/trigger: "+table);
+            try {
+                PlatformSkillSchemaContract.validate(table,properties,columns,indexes,checks);
+            } catch (IllegalStateException currentDrift) {
+                if(!"agent_platform_skill_installation".equals(table)) throw currentDrift;
+                PlatformSkillSchemaContract.validatePreReclamation(table,properties,columns,indexes,checks);
+                // One atomic ALTER from the exact deployed predecessor: an interruption
+                // cannot leave a partly upgraded reclamation contract.
+                jdbc.execute("ALTER TABLE agent_platform_skill_installation "
+                        + "ADD COLUMN reclaim_batch_json LONGTEXT COLLATE utf8mb4_0900_bin NULL, "
+                        + "DROP CHECK ck_platform_install_state, ADD CONSTRAINT ck_platform_install_state "
+                        + "CHECK (state IN ('REQUESTED','SUCCEEDED','FAILED','RECLAIMABLE'))");
+                columns=jdbc.queryForList("SELECT COLUMN_NAME,COLUMN_TYPE,COLLATION_NAME,IS_NULLABLE,COLUMN_DEFAULT,EXTRA,GENERATION_EXPRESSION FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?",table);
+                checks=jdbc.queryForList("""
+                    SELECT tc.CONSTRAINT_NAME,tc.ENFORCED,cc.CHECK_CLAUSE
+                    FROM information_schema.TABLE_CONSTRAINTS tc
+                    JOIN information_schema.CHECK_CONSTRAINTS cc
+                    ON cc.CONSTRAINT_SCHEMA=tc.CONSTRAINT_SCHEMA AND cc.CONSTRAINT_NAME=tc.CONSTRAINT_NAME
+                    WHERE tc.CONSTRAINT_SCHEMA=DATABASE() AND tc.TABLE_NAME=? AND tc.CONSTRAINT_TYPE='CHECK'
+                    """,table);
+                PlatformSkillSchemaContract.validate(table,properties,columns,indexes,checks);
+            }
         }
     }
 }

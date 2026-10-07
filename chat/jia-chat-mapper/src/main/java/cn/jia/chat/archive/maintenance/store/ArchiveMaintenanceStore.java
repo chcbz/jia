@@ -30,6 +30,20 @@ public interface ArchiveMaintenanceStore {
 
     ArchiveSourceSnapshotRecord findSource(String sourceId);
     void insertSource(ArchiveSourceSnapshotRecord source);
+    SourceArtifact findSourceArtifact(String sourceId, boolean lock);
+    default Operation lockSourceArtifactOperation(SourceArtifact artifact) {
+        throw new UnsupportedOperationException("source cleanup operation locking is not supported by this store");
+    }
+    void insertSourceArtifact(SourceArtifact artifact);
+    int touchSourceArtifact(String sourceId, long expectedRevision);
+    default int replacePendingSourceGeneration(ArchiveActorScope actor, String key,
+            String expectedSourceId, String newSourceId) {
+        throw new UnsupportedOperationException("source generations are not supported by this store");
+    }
+    int referenceSourceArtifact(String sourceId, long expectedRevision);
+    List<SourceArtifact> listStaleSourceArtifacts(Instant before, String afterSourceId, int limit);
+    int claimSourceArtifactDeletion(String sourceId, long expectedRevision, Instant before);
+    int completeSourceArtifactDeletion(String sourceId, long expectedRevision);
 
     ArchiveConfirmedRequestRecord findConfirmedRequest(ArchiveActorScope actor,
                                                         String confirmationRef, boolean lock);
@@ -141,6 +155,10 @@ public interface ArchiveMaintenanceStore {
     record ManagerRunTarget(String runId, String agentId, String bindingVersion) { }
     record ManagedWork(String workId, String title, String activeEditionId, Long workRevision,
                        boolean hasEditionHistory, String pendingJobId) { }
+    record SourceArtifact(String sourceId, String tenantId, String clientId, String ownerJiacn,
+                          String operationKey, String storageUri, String sha256, long byteLength,
+                          String mimeType, String state, long revision, Instant createdAt,
+                          Instant touchedAt) { }
     record Operation(boolean created, String httpMethod, String canonicalPath, String requestSha256,
                      String targetType, String targetId, String state) { }
     record TargetOperation(String operationKey, String httpMethod, String canonicalPath,

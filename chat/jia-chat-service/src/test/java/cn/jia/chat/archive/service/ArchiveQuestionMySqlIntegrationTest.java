@@ -321,7 +321,7 @@ class ArchiveQuestionMySqlIntegrationTest {
     private int count(String table) { return jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Integer.class); }
 
     private static String[] maintenanceTablesInDropOrder() {
-        return new String[]{"archive_admin_operation_receipt", "archive_operation", "archive_business_outbox", "archive_event", "archive_edition_withdrawal", "archive_publication_readback", "archive_publication",
+        return new String[]{"archive_admin_operation_receipt", "archive_source_artifact_object", "archive_operation", "archive_business_outbox", "archive_event", "archive_edition_withdrawal", "archive_publication_readback", "archive_publication",
                 "archive_validation", "archive_draft_block_checkpoint", "archive_draft", "archive_execution_grant", "archive_job_run",
                 "archive_maintenance_job", "archive_confirmed_request", "archive_source_snapshot", "archive_appointment",
                 "archive_appointment_slot", "archive_collection_work", "archive_collection_manager",

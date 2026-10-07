@@ -26,7 +26,6 @@ CREATE TABLE IF NOT EXISTS agent_platform_skill_installation (
   state VARCHAR(32) COLLATE utf8mb4_0900_bin NOT NULL,
   result_sha256 CHAR(64) COLLATE utf8mb4_0900_bin NULL,
   error_code VARCHAR(100) COLLATE utf8mb4_0900_bin NULL,
-  reclaim_batch_json LONGTEXT COLLATE utf8mb4_0900_bin NULL,
   revision BIGINT NOT NULL,
   created_at BIGINT NOT NULL,
   PRIMARY KEY (installation_id),
@@ -37,7 +36,7 @@ CREATE TABLE IF NOT EXISTS agent_platform_skill_installation (
   KEY ix_platform_install_resolve (tenant_id,client_id,owner_jiacn,origin,agent_id,skill_key,skill_version,package_sha256,binding_id,runtime_instance_id,registration_hash,state,created_at,installation_id),
   KEY ix_platform_install_resolve_history (tenant_id,client_id,owner_jiacn,origin,agent_id,skill_key,skill_version,package_sha256,binding_id,runtime_instance_id,registration_hash,created_at,installation_id),
   CONSTRAINT ck_platform_install_origin CHECK (origin='PLATFORM_PROVISIONED'),
-  CONSTRAINT ck_platform_install_state CHECK (state IN ('REQUESTED','SUCCEEDED','FAILED','RECLAIMABLE')),
+  CONSTRAINT ck_platform_install_state CHECK (state IN ('REQUESTED','SUCCEEDED','FAILED')),
   CONSTRAINT ck_platform_install_revision CHECK (revision>0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 

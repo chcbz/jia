@@ -770,7 +770,7 @@ class ArchiveBusinessOutboxMySqlTest {
                 try {
                     for (String table : new String[]{"chat_message", "chat_conversation",
                             "archive_idempotency", "archive_note", "archive_bookmark",
-                            "archive_reader_progress", "archive_admin_operation_receipt", "archive_operation",
+                            "archive_reader_progress", "archive_admin_operation_receipt", "archive_source_artifact_object", "archive_operation",
                             "archive_business_outbox", "archive_event", "archive_edition_withdrawal",
                             "archive_publication_readback", "archive_publication", "archive_validation",
                             "archive_draft_block_checkpoint", "archive_draft", "archive_execution_grant", "archive_job_run",
