@@ -2,6 +2,7 @@ package cn.jia.chat.service;
 
 import cn.jia.chat.api.ChatTypedDeliberationWire;
 import cn.jia.chat.config.ChatTypedDeliberationSchemaInitializer;
+import cn.jia.chat.config.ChatTypedDeliberationSchemaInitializer.Readiness;
 import cn.jia.chat.handler.TypedDeliberationSessionRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -18,6 +19,38 @@ class ChatTypedDeliberationContextServiceTest {
     private final ChatTypedDeliberationSchemaInitializer schema=mock(ChatTypedDeliberationSchemaInitializer.class);
     private final ChatTypedDeliberationContextService.Scope scope=
             new ChatTypedDeliberationContextService.Scope("0","owner","client","42",1);
+
+    @Test void bootstrapReadinessPreservesInitializingAndTerminalSchemaStatesWithoutSourceAccess() {
+        for(var state:Readiness.values()) {
+            when(schema.readiness()).thenReturn(state);
+            assertEquals(state,service().bootstrapReadiness());
+        }
+        verifyNoInteractions(jdbc,capabilities);
+    }
+
+    @Test void disabledContextIsDisabledEvenWhenSchemaIsReadyAndAdmissionStaysFailClosed() {
+        when(schema.ready()).thenReturn(true);
+        when(schema.readiness()).thenReturn(Readiness.READY);
+        var disabled=new ChatTypedDeliberationContextService(jdbc,sessions,schema,capabilities,false);
+        assertEquals(Readiness.DISABLED,disabled.bootstrapReadiness());
+        var failure=assertThrows(ChatDeliberationException.class,
+                ()->disabled.resolve(scope,"task","agent",List.of()));
+        assertEquals(ChatDeliberationException.Reason.PERSISTENCE_ERROR,failure.reason());
+        verifyNoInteractions(schema,jdbc,capabilities);
+    }
+
+    @Test void readinessDoesNotSubstituteForExactAgentOwnerClientOrLiveDeclaration() {
+        ready();
+        assertEquals(ChatDeliberationException.Reason.PERSISTENCE_ERROR,assertThrows(ChatDeliberationException.class,
+                ()->service().resolve(scope,"task","different-agent",List.of())).reason());
+        var foreignOwner=new ChatTypedDeliberationContextService.Scope("0","different-owner","client","42",1);
+        var foreignClient=new ChatTypedDeliberationContextService.Scope("0","owner","different-client","42",1);
+        for(var foreign:List.of(foreignOwner,foreignClient)) {
+            assertEquals(ChatDeliberationException.Reason.PERSISTENCE_ERROR,assertThrows(ChatDeliberationException.class,
+                    ()->service().resolve(foreign,"task","agent",List.of())).reason());
+        }
+        verifyNoInteractions(jdbc,capabilities);
+    }
 
     @Test void noneUsesLiveDeclarationAndNeverReadsBytes() {
         ready();var context=service().resolve(scope,"task","agent",List.of());

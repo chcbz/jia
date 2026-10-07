@@ -23,6 +23,9 @@ import java.util.Set;
 /** Default-off, additive-only MySQL8 readiness gate for typed deliberation v3. */
 @Component
 public final class ChatTypedDeliberationSchemaInitializer implements ApplicationRunner {
+    /** INITIALIZING includes the interval before ApplicationRunner is invoked. */
+    public enum Readiness { INITIALIZING, READY, DISABLED, UNAVAILABLE, FAILED }
+
     static final String LOCK = "cyf:chat-deliberation:v2";
     static final String RESOURCE = "db/chat-typed-deliberation-schema-v1.sql";
     static final List<String> TABLES = List.of("chat_typed_outcome", "chat_typed_pending_question",
@@ -40,7 +43,7 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
     private final ChatDeliberationSchemaInitializer deliberationSchema;
     private final boolean enabled;
     private final boolean allowMigration;
-    private volatile boolean ready;
+    private volatile Readiness readiness;
 
     @Autowired
     public ChatTypedDeliberationSchemaInitializer(JdbcTemplate jdbc,
@@ -51,6 +54,7 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
         this.deliberationSchema = Objects.requireNonNull(deliberationSchema);
         this.enabled = enabled;
         this.allowMigration = allowMigration;
+        this.readiness = enabled ? Readiness.INITIALIZING : Readiness.DISABLED;
     }
 
     public ChatTypedDeliberationSchemaInitializer(JdbcTemplate jdbc,
@@ -59,14 +63,26 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
         this.deliberationSchema = null;
         this.enabled = enabled;
         this.allowMigration = allowMigration;
+        this.readiness = enabled ? Readiness.INITIALIZING : Readiness.DISABLED;
     }
 
     @Override public void run(ApplicationArguments args) throws Exception { initialize(); }
-    public boolean ready() { return enabled && ready; }
+    public boolean ready() { return readiness == Readiness.READY; }
+    public Readiness readiness() { return readiness; }
 
     public synchronized void initialize() throws Exception {
-        ready = false;
+        readiness = enabled ? Readiness.INITIALIZING : Readiness.DISABLED;
         if (!enabled) return;
+        try {
+            // Publish READY only after validation, lock release and connection close succeed.
+            readiness = initializeSchema() ? Readiness.READY : Readiness.UNAVAILABLE;
+        } catch (Exception | Error failure) {
+            readiness = Readiness.FAILED;
+            throw failure;
+        }
+    }
+
+    private boolean initializeSchema() throws Exception {
         if (deliberationSchema != null) deliberationSchema.ensureInitialized();
         DataSource source = jdbc.getDataSource();
         if (source == null) throw new IllegalStateException("Typed deliberation DataSource unavailable");
@@ -78,10 +94,10 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
                 int existing = countTables(locked);
                 if (existing != TABLES.size()) {
                     if (existing != 0) throw drift("partial tables");
-                    if (!allowMigration) return;
+                    if (!allowMigration) return false;
                     for (String statement : ddl()) locked.execute(statement);
                 }
-                if (!ensureActionCatalog(locked, allowMigration)) return;
+                if (!ensureActionCatalog(locked, allowMigration)) return false;
                 if (allowMigration) {
                     locked.update("""
                             INSERT INTO chat_deliberation_schema_version(version,stage,updated_at)
@@ -89,12 +105,12 @@ public final class ChatTypedDeliberationSchemaInitializer implements Application
                             ON DUPLICATE KEY UPDATE stage=VALUES(stage),updated_at=VALUES(updated_at)
                             """, System.currentTimeMillis());
                 }
-                if (!versionThreeApplied(locked)) return;
-                ready = true;
+                if (!versionThreeApplied(locked)) return false;
             } finally {
                 release(locked);
             }
         }
+        return true;
     }
 
     static List<String> ddl() {

@@ -46,6 +46,11 @@ public final class ChatTypedDeliberationContextService {
         this.capabilities=Objects.requireNonNull(capabilities);
     }
 
+    /** A pre-claim lifecycle gate, not an alternative to resolve's identity/source checks. */
+    public ChatTypedDeliberationSchemaInitializer.Readiness bootstrapReadiness() {
+        return enabled ? schema.readiness() : ChatTypedDeliberationSchemaInitializer.Readiness.DISABLED;
+    }
+
     public Context resolve(Scope scope, String taskId, String targetAgentId,
             List<ChatTypedDeliberationWire.SourceSelector> requested) {
         if (!enabled || !schema.ready()) throw unavailable("Typed deliberation schema is unavailable");

@@ -5,7 +5,9 @@ import cn.jia.agent.entity.AgentTaskBountyBootstrapReconcileDTO;
 import cn.jia.agent.entity.AgentTaskBountyBootstrapReconcileDTO.Outcome;
 import cn.jia.agent.service.AgentTaskBountyBootstrapOutboxService;
 import cn.jia.agent.service.AgentTaskExecutionGrantService;
+import cn.jia.chat.config.ChatTypedDeliberationSchemaInitializer.Readiness;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Component;
@@ -16,6 +18,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 
 /**
  * Claims task-transaction intents without a browser session. Acknowledges only the committed
@@ -28,33 +31,71 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class ChatBountyBootstrapRelay implements SmartLifecycle, AutoCloseable {
     private final AgentTaskBountyBootstrapOutboxService outbox;
     private final ChatBountyBootstrapAdmissionService admission;
+    private final ChatTypedDeliberationContextService contexts;
+    private final Supplier<ScheduledExecutorService> schedulerFactory;
     private final String consumerId = "mmd-chat-" + UUID.randomUUID();
     private final AtomicBoolean running = new AtomicBoolean();
+    private final AtomicBoolean polling = new AtomicBoolean();
     private volatile ScheduledExecutorService scheduler;
     private volatile String previousFailure;
     private volatile int sameFailureCount;
 
+    @Autowired
     public ChatBountyBootstrapRelay(AgentTaskBountyBootstrapOutboxService outbox,
-            ChatBountyBootstrapAdmissionService admission) {
-        this.outbox = Objects.requireNonNull(outbox);
-        this.admission = Objects.requireNonNull(admission);
-    }
-
-    @Override public synchronized void start() {
-        if (!running.compareAndSet(false, true)) return;
-        scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+            ChatBountyBootstrapAdmissionService admission, ChatTypedDeliberationContextService contexts) {
+        this(outbox, admission, contexts, () -> Executors.newSingleThreadScheduledExecutor(r -> {
             Thread thread = new Thread(r, "chat-bounty-bootstrap");
             thread.setDaemon(true);
             return thread;
-        });
-        scheduler.scheduleWithFixedDelay(this::safePoll, 0, 500, TimeUnit.MILLISECONDS);
+        }));
+    }
+
+    ChatBountyBootstrapRelay(AgentTaskBountyBootstrapOutboxService outbox,
+            ChatBountyBootstrapAdmissionService admission, ChatTypedDeliberationContextService contexts,
+            Supplier<ScheduledExecutorService> schedulerFactory) {
+        this.outbox = Objects.requireNonNull(outbox);
+        this.admission = Objects.requireNonNull(admission);
+        this.contexts = Objects.requireNonNull(contexts);
+        this.schedulerFactory = Objects.requireNonNull(schedulerFactory);
+    }
+
+    @Override public synchronized void start() {
+        if (contexts.bootstrapReadiness() == Readiness.DISABLED
+                || !running.compareAndSet(false, true)) return;
+        previousFailure = null;
+        sameFailureCount = 0;
+        try {
+            ScheduledExecutorService active = Objects.requireNonNull(schedulerFactory.get());
+            scheduler = active;
+            active.scheduleWithFixedDelay(() -> safePoll(active), 0, 500, TimeUnit.MILLISECONDS);
+        } catch (RuntimeException | Error failure) {
+            stop();
+            throw failure;
+        }
     }
 
     /** One persistent claim per poll, so a retry never spins on the same row in one loop. */
     void pollOnce() {
+        if (!polling.compareAndSet(false, true)) return;
+        try { pollWhenReady(); }
+        finally { polling.set(false); }
+    }
+
+    private boolean pollWhenReady() {
+        Readiness readiness = contexts.bootstrapReadiness();
+        if (readiness == Readiness.INITIALIZING) return false;
+        if (readiness == Readiness.DISABLED) {
+            stop();
+            return false;
+        }
+        if (readiness != Readiness.READY) {
+            throw new IllegalStateException("Typed deliberation schema is unavailable");
+        }
+        // SmartLifecycle starts before ApplicationRunner: do not acquire a lease or consume
+        // an attempt until typed admission is ready. Terminal unavailability is a real failure.
         long now = System.currentTimeMillis();
         AgentTaskBountyBootstrapClaimDTO claim = outbox.claimNextAvailable(consumerId, now);
-        if (claim == null) return;
+        if (claim == null) return true;
         AgentTaskExecutionGrantService.Scope scope = new AgentTaskExecutionGrantService.Scope(
                 claim.tenantId(), claim.clientId(), claim.ownerJiacn());
         ChatBountyBootstrapAdmissionService.Admission result;
@@ -69,6 +110,7 @@ public class ChatBountyBootstrapRelay implements SmartLifecycle, AutoCloseable {
             throw new IllegalStateException("BOUNTY_ADMISSION_UNAVAILABLE", failure);
         }
         reconcile(scope, claim, Outcome.ADMITTED, result.conversationId(), result.requestId(), null);
+        return true;
     }
 
     private void reconcile(AgentTaskExecutionGrantService.Scope scope,
@@ -85,23 +127,33 @@ public class ChatBountyBootstrapRelay implements SmartLifecycle, AutoCloseable {
         }
     }
 
-    private void safePoll() {
-        if (!running.get()) return;
+    private void safePoll(ScheduledExecutorService owner) {
+        if (!running.get() || scheduler != owner || !polling.compareAndSet(false, true)) return;
         try {
-            pollOnce();
-            previousFailure = null;
-            sameFailureCount = 0;
+            if (!running.get() || scheduler != owner) return;
+            if (pollWhenReady()) {
+                synchronized (this) {
+                    if (scheduler != owner) return;
+                    previousFailure = null;
+                    sameFailureCount = 0;
+                }
+            }
         } catch (RuntimeException failure) {
             // Never silently busy-loop an unchanged DB/schema/fence failure. The claim lease
             // remains authoritative and can be safely reclaimed after an operator fixes it.
-            String signature = failure.getClass().getName() + ":" + failure.getMessage();
-            sameFailureCount = Objects.equals(signature, previousFailure) ? sameFailureCount + 1 : 1;
-            previousFailure = signature;
-            log.warn("Bounty bootstrap relay cannot progress", failure);
-            if (sameFailureCount >= 2) {
-                log.error("Bounty bootstrap relay stopped after repeated unchanged failure");
-                stop();
+            synchronized (this) {
+                if (scheduler != owner) return; // an old lifecycle cannot stop its replacement
+                String signature = failure.getClass().getName() + ":" + failure.getMessage();
+                sameFailureCount = Objects.equals(signature, previousFailure) ? sameFailureCount + 1 : 1;
+                previousFailure = signature;
+                log.warn("Bounty bootstrap relay cannot progress", failure);
+                if (sameFailureCount >= 2) {
+                    log.error("Bounty bootstrap relay stopped after repeated unchanged failure");
+                    stop();
+                }
             }
+        } finally {
+            polling.set(false);
         }
     }
 
