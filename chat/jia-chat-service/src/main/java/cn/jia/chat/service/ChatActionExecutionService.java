@@ -48,7 +48,10 @@ public class ChatActionExecutionService implements ChatActionDispatchService.Exe
         String target=(String)action.validated().binding().get("targetAgentId");
         String actionId=ChatActionFinalValidator.actionEventId(action.validated());
         String requestId=stable("action-execute",actionId), stepId=stable("action-step",actionId);
-        String intentId=stable("action-execution",actionId), executionId="pwe_"+intentId;
+        String intentId=stable("action-execution",actionId);
+        // chat_step_execution_link.execution_id is VARCHAR(64): preserve the pwe_ namespace
+        // with a 240-bit deterministic suffix, while retaining the full intent identity.
+        String executionId="pwe_"+intentId.substring(0,60);
         String runId="pwe_run_"+ChatBountyInteractionV3Wire.shaText("run\n"+intentId);
         var user=deliberation.requireActionUser(action);
         String userHash=ChatBountyInteractionV3Wire.shaText(user.getContent());

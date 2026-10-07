@@ -7,6 +7,9 @@ import cn.jia.chat.deliberation.*;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -42,6 +45,45 @@ class ChatActionExecutionServiceTest {
         verify(f.authority).admitOrdinaryAction(eq(new ControlledImageFollowupAuthorityService.Scope("0","client","owner")),any(),any());
         verify(f.authority,never()).issue(any(),any(),any());
         verify(f.base.messageDao,times(2)).insertScoped(anyString(),anyString(),any());
+    }
+
+    @Test void executionIdentityFitsDurableSqlColumnWithoutChangingFullIntentOrReplay() {
+        var f=new Fixture(false); var id=f.service.admit(f.action);
+        var reservation=f.reservations.getFirst(); var link=f.links.values().iterator().next();
+        String intent=ChatBountyInteractionV3Wire.shaText("action-execution\n"
+                +ChatActionFinalValidator.actionEventId(f.action.validated()));
+        assertEquals(intent,link.executionIntentId());
+        assertEquals("pwe_"+intent.substring(0,60),link.executionId());
+        assertEquals(64,link.executionId().length());
+        assertEquals(link.executionId(),reservation.executionId());
+        assertEquals("pwe_run_"+ChatBountyInteractionV3Wire.shaText("run\n"+intent),reservation.runId());
+        reset(f.grants,f.sources,f.authority);
+        assertEquals(id,f.service.admit(f.action));
+        verifyNoInteractions(f.grants,f.sources,f.authority);
+        assertEquals(1,f.links.size()); assertEquals(1,f.reservations.size());
+    }
+
+    @Test void actualJdbcLinkRejectsOldOversizedIdentityAndPersistsNewIdentity() {
+        var f=new Fixture(false); f.service.admit(f.action);
+        var link=f.links.values().iterator().next();
+        var jdbc=new JdbcTemplate(new DriverManagerDataSource("jdbc:h2:mem:action_link_"
+                +java.util.UUID.randomUUID()+";MODE=MySQL;DB_CLOSE_DELAY=-1","sa",""));
+        jdbc.execute("""
+                CREATE TABLE chat_step_execution_link (
+                  execution_intent_id VARCHAR(64) PRIMARY KEY,tenant_id VARCHAR(50) NOT NULL,
+                  owner_jiacn VARCHAR(50) NOT NULL,client_id VARCHAR(50) NOT NULL,
+                  step_id VARCHAR(64) NOT NULL UNIQUE,execution_id VARCHAR(64) UNIQUE,
+                  state VARCHAR(30) NOT NULL,state_version BIGINT NOT NULL,
+                  created_at BIGINT NOT NULL,updated_at BIGINT NOT NULL)
+                """);
+        var store=new ChatInteractionStepStore(jdbc);
+        var oversized=new ChatInteractionStepStore.ExecutionLink(link.executionIntentId(),link.tenantId(),
+                link.ownerJiacn(),link.clientId(),link.stepId(),"pwe_"+link.executionIntentId(),
+                link.state(),link.stateVersion(),link.createdAt(),link.updatedAt());
+        assertThrows(DataIntegrityViolationException.class,()->store.insertLink(oversized));
+        assertNull(store.findLink(link.tenantId(),link.ownerJiacn(),link.clientId(),link.stepId()));
+        assertEquals(1,store.insertLink(link));
+        assertEquals(link,store.findLink(link.tenantId(),link.ownerJiacn(),link.clientId(),link.stepId()));
     }
 
     @Test void recoveredChildDoesNotNeedRuntimePolicySourcesOrASecondReservation() {
