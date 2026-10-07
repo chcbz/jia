@@ -71,7 +71,8 @@ public class ChatBountyAssetProjector {
                 JOIN agent_personal_workspace_execution e ON e.execution_id=l.execution_id
                   AND e.tenant_id=s.tenant_id AND e.client_id=s.client_id AND e.owner_jiacn=s.owner_jiacn
                   AND e.execution_state IN ('OUTPUT_COMMITTED','FAILED','INPUTS_REVOKED') AND e.execution_mode='CONVERSATION'
-                WHERE s.kind='EXECUTE' AND s.state='RUNNING' AND l.state='RUNNING'
+                WHERE s.kind='EXECUTE' AND l.state='RUNNING'
+                  AND (s.state='RUNNING' OR (s.state='OUTPUT_COMMITTED' AND e.execution_state='OUTPUT_COMMITTED'))
                   AND (? IS NULL OR s.step_id > ?)
                 ORDER BY s.step_id LIMIT ?
                 """, (rs, n) -> new Candidate(rs.getString(1), rs.getString(2), rs.getString(3),
@@ -89,9 +90,11 @@ public class ChatBountyAssetProjector {
         if (request == null || request.steps() == null) return 0;
         var step = request.steps().stream().filter(value -> candidate.stepId().equals(value.stepId()))
                 .findFirst().orElse(null);
-        if (request == null || !candidate.requestId().equals(request.requestId())
-                || !"RUNNING".equals(request.state())
-                || step == null || !"EXECUTE".equals(step.kind()) || !"RUNNING".equals(step.state())
+        boolean repairLink = "OUTPUT_COMMITTED".equals(request.state()) && step != null
+                && "OUTPUT_COMMITTED".equals(step.state()) && "RUNNING".equals(step.executionState());
+        if (!candidate.requestId().equals(request.requestId())
+                || !("RUNNING".equals(request.state()) || repairLink)
+                || step == null || !"EXECUTE".equals(step.kind()) || !("RUNNING".equals(step.state()) || repairLink)
                 || !candidate.executionId().equals(step.executionId()) || step.taskId() == null
                 || step.targetAgentId() == null) return 0;
         var scope = new PersonalWorkspaceExecutionService.OwnerScope(candidate.tenantId(),
@@ -104,6 +107,7 @@ public class ChatBountyAssetProjector {
                 || !request.conversationId().equals(execution.conversationId())
                 || !step.targetAgentId().equals(execution.targetAgentId())
                 || execution.runId() == null) return 0;
+        if (repairLink && !"OUTPUT_COMMITTED".equals(execution.state())) return 0;
         if (!"OUTPUT_COMMITTED".equals(execution.state())) return projectFailure(candidate, request, step, execution.state());
         List<PersonalWorkspaceExecutionService.ConversationOutputInfo> outputs = executions.listConversationOutputs(
                 scope, step.taskId(), execution.runId());
@@ -130,7 +134,9 @@ public class ChatBountyAssetProjector {
             String assetId = "ast_" + suffix;
             Asset prior = findCurrent(scope, request.conversationId(), assetId, true);
             if (prior != null) {
-                if (!candidate.stepId().equals(prior.stepId())
+                if (!candidate.tenantId().equals(prior.tenantId()) || !candidate.ownerJiacn().equals(prior.ownerJiacn())
+                        || !candidate.clientId().equals(prior.clientId()) || !request.conversationId().equals(prior.conversationId())
+                        || !assetId.equals(prior.assetId()) || !candidate.stepId().equals(prior.stepId())
                         || !output.outputId().equals(prior.outputId())
                         || !candidate.executionId().equals(prior.executionId())
                         || !candidate.requestId().equals(prior.requestId())
@@ -142,6 +148,9 @@ public class ChatBountyAssetProjector {
                     throw new IllegalStateException("Previously published output differs from committed bytes");
                 continue;
             }
+            // A previously terminal projection is repaired only after every existing
+            // asset matches the native committed bytes. Never republish a missing asset.
+            if (repairLink) throw new IllegalStateException("Committed projection asset is unavailable");
             long now = System.currentTimeMillis();
             String messageText = "已生成成果；可预览或下载。";
             ChatMessageEntity message = new ChatMessageEntity().setConversationId(request.conversationId())
@@ -203,7 +212,12 @@ public class ChatBountyAssetProjector {
             }
             count++;
         }
+        if (repairLink) {
+            finalizeExecutionLink(candidate, "OUTPUT_COMMITTED", System.currentTimeMillis());
+            return 1; // Progress only; no new message, asset, event or provider request.
+        }
         if (count > 0) {
+            finalizeExecutionLink(candidate, "OUTPUT_COMMITTED", System.currentTimeMillis());
             // The source catalogue was checked against committed bytes and an immutable intent.
             // A later GET or SSE replay only reads this projection; it never starts execution.
             var stored = jdbc.update("""
@@ -225,6 +239,18 @@ public class ChatBountyAssetProjector {
                 throw new IllegalStateException("Unable to finalize request projection");
         }
         return count;
+    }
+
+    /** Exact monotone link CAS follows the existing owner/root/conversation locks.
+     * Native execution, immutable catalogue and assets have already been verified. */
+    private void finalizeExecutionLink(Candidate candidate, String state, long now) {
+        if (jdbc.update("""
+                UPDATE chat_step_execution_link SET state=?,state_version=state_version+1,updated_at=?
+                WHERE step_id=? AND tenant_id=? AND owner_jiacn=? AND client_id=?
+                  AND execution_id=? AND state='RUNNING'
+                """, state, now, candidate.stepId(), candidate.tenantId(), candidate.ownerJiacn(),
+                candidate.clientId(), candidate.executionId()) != 1)
+            throw new IllegalStateException("Unable to finalize exact execution link");
     }
 
     /** A confirmed execution terminal state is also a durable conversation fact, not an endless spinner.
@@ -249,6 +275,7 @@ public class ChatBountyAssetProjector {
             throw new IllegalStateException("Failure request scope changed");
         String state = "INPUTS_REVOKED".equals(executionState) ? "CANCELLED" : "FAILED";
         long now = System.currentTimeMillis();
+        finalizeExecutionLink(candidate, executionState, now);
         if (jdbc.update("""
                 UPDATE chat_interaction_step SET state=?,state_version=state_version+1,updated_at=?
                 WHERE step_id=? AND tenant_id=? AND owner_jiacn=? AND client_id=? AND state='RUNNING' AND state_version=?

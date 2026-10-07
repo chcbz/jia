@@ -80,6 +80,9 @@ class ChatBountyAssetProjectorTest {
                 && event.getPayloadJson().contains("image/png") && event.getPayloadJson().contains("ready")));
         verify(jdbc).update(contains("INSERT INTO chat_conversation_asset"), any(Object[].class));
         verify(jdbc).update(contains("state_version=?"), any(Object[].class));
+        verify(jdbc).update(argThat(sql -> sql.contains("UPDATE chat_step_execution_link")
+                && sql.contains("execution_id=? AND state='RUNNING'")), eq("OUTPUT_COMMITTED"), anyLong(),
+                eq("step"), eq("0"), eq("owner"), eq("client"), eq("exec"));
         verifyNoInteractions(broker); // No signal before a real transaction commits.
     }
 
@@ -108,7 +111,7 @@ class ChatBountyAssetProjectorTest {
     }
 
     @Test void failureRequestStepEventAndVersionRollbackTogetherAndPublishOnlyAfterCommit() {
-        for (String failAt:List.of("step","request","event","version","none")) {
+        for (String failAt:List.of("link","step","request","event","version","none")) {
             var f=new ChatBountyAssetProjectorTest(); f.ready();
             var source=new org.springframework.jdbc.datasource.DriverManagerDataSource(
                     "jdbc:h2:mem:terminal_"+java.util.UUID.randomUUID(),"sa","");
@@ -124,6 +127,7 @@ class ChatBountyAssetProjectorTest {
             when(f.executions.get(f.scope,"exec")).thenReturn(new PersonalWorkspaceExecutionService.ExecutionView(
                     "exec","task","run","42","agent","FAILED",null,null,1,"image/png",List.of(),null,"CONVERSATION",null,null,null));
             f.events.findRequest("0","owner","client","req").setRequestRevision(1L).setConversationGeneration(1L);
+            doAnswer(i->write.apply("link")).when(f.jdbc).update(contains("UPDATE chat_step_execution_link"),any(Object[].class));
             doAnswer(i->write.apply("step")).when(f.jdbc).update(contains("UPDATE chat_interaction_step"),any(Object[].class));
             doAnswer(i->write.apply("request")).when(f.events).updateRequestState(any(),eq("FAILED"),anyLong());
             doAnswer(i->{cn.jia.chat.deliberation.ChatConversationEventEntity event=i.getArgument(0);
@@ -140,7 +144,7 @@ class ChatBountyAssetProjectorTest {
                 assertTrue(org.springframework.aop.support.AopUtils.isCglibProxy(actual));
                 if("none".equals(failAt)) {
                     assertEquals(1,actual.project(f.candidate));
-                    assertEquals(4,evidence.queryForObject("SELECT COUNT(*) FROM writes",Integer.class));
+                    assertEquals(5,evidence.queryForObject("SELECT COUNT(*) FROM writes",Integer.class));
                     verify(f.broker).publishIfSubscribed(eq("42"),eq(1L),any(),argThat(frame->"FAILED".equals(frame.get("state"))));
                 } else {
                     assertEquals("injected-"+failAt,assertThrows(RuntimeException.class,()->actual.project(f.candidate)).getMessage());
@@ -174,6 +178,53 @@ class ChatBountyAssetProjectorTest {
         verify(jdbc).query(contains("FOR UPDATE"), org.mockito.ArgumentMatchers.<RowMapper<Object>>any(), any(Object[].class));
         verifyNoInteractions(messages, events, broker);
         verify(jdbc, never()).update(anyString(), any(Object[].class));
+    }
+
+    @Test void repairsOnlyExactAlreadyPublishedCommittedLinkWithoutRepublishing() throws Exception {
+        ready();
+        when(requests.getRequest("0", "owner", "client", "req"))
+                .thenReturn(new ChatDeliberationService.RequestView("req", "1", "42", "1", "7",
+                        "OUTPUT_COMMITTED", "2", List.of(), List.of(new ChatDeliberationService.StepView(
+                        "step", "1", "task", "3", "agent", "EXECUTE", "OUTPUT_COMMITTED", "2", "intent", "exec", "RUNNING"))));
+        String source = "0\nowner\nclient\nstep\noutput_1";
+        String suffix = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                .digest(source.getBytes(java.nio.charset.StandardCharsets.UTF_8))).substring(0, 32);
+        var existing = new ChatBountyAssetProjector.Asset("ast_" + suffix, "0", "owner", "client",
+                "42", 1, "req", "step", "exec", "run", "output_1", "100", "part_" + suffix,
+                "image", "image/png", "a".repeat(64), 20, 1);
+        when(jdbc.query(anyString(), org.mockito.ArgumentMatchers.<RowMapper<Object>>any(), any(Object[].class)))
+                .thenReturn(List.of(existing));
+        assertEquals(1, projector.project(candidate));
+        verify(jdbc).update(contains("UPDATE chat_step_execution_link"), eq("OUTPUT_COMMITTED"), anyLong(),
+                eq("step"), eq("0"), eq("owner"), eq("client"), eq("exec"));
+        verifyNoInteractions(messages, events, broker);
+        verify(jdbc, never()).update(contains("chat_interaction_step"), any(Object[].class));
+        var foreign = new ChatBountyAssetProjector.Asset(existing.assetId(), "0", "other-owner", "client", "42", 1,
+                "req", "step", "exec", "run", "output_1", "100", existing.partId(), "image", "image/png", "b".repeat(64), 20, 1);
+        when(jdbc.query(anyString(), org.mockito.ArgumentMatchers.<RowMapper<Object>>any(), any(Object[].class)))
+                .thenReturn(List.of(foreign));
+        clearInvocations(jdbc);
+        assertThrows(IllegalStateException.class, () -> projector.project(candidate));
+        verify(jdbc, never()).update(anyString(), any(Object[].class));
+        when(requests.getRequest("0", "owner", "client", "req"))
+                .thenReturn(new ChatDeliberationService.RequestView("req", "1", "42", "1", "7",
+                        "OUTPUT_COMMITTED", "2", List.of(), List.of(new ChatDeliberationService.StepView(
+                        "step", "1", "task", "3", "agent", "EXECUTE", "OUTPUT_COMMITTED", "2", "intent", "exec", "OUTPUT_COMMITTED"))));
+        assertEquals(0, projector.project(candidate));
+    }
+
+    @Test void nativeUnknownOutcomeCannotRepairAPreviouslyCommittedProjection() {
+        ready();
+        when(requests.getRequest("0", "owner", "client", "req"))
+                .thenReturn(new ChatDeliberationService.RequestView("req", "1", "42", "1", "7",
+                        "OUTPUT_COMMITTED", "2", List.of(), List.of(new ChatDeliberationService.StepView(
+                        "step", "1", "task", "3", "agent", "EXECUTE", "OUTPUT_COMMITTED", "2", "intent", "exec", "RUNNING"))));
+        when(executions.get(scope,"exec")).thenReturn(new PersonalWorkspaceExecutionService.ExecutionView(
+                "exec","task","run","42","agent","OUTPUT_STAGED",null,null,1,
+                "image/png",List.of(),null,"CONVERSATION",null,null,null));
+        assertEquals(0,projector.project(candidate));
+        verifyNoInteractions(messages, events, broker);
+        verify(jdbc,never()).update(anyString(),any(Object[].class));
     }
 
     @Test void publicationIsRegisteredOnlyForAfterCommit() {
