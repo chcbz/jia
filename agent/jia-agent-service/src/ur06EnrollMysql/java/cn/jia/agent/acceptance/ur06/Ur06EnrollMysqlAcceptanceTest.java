@@ -608,7 +608,7 @@ class Ur06EnrollMysqlAcceptanceTest {
                 return children(s, index) == 1;
             }); trackChildren(entered);
             for (;;) {
-                JsonNode s = serverSnapshot(); if (http(s).stream().anyMatch(r -> "HEARTBEAT".equals(optional(r, "category")) && integer(r, "index") == index && integer(r, "status") == 200)) break;
+                JsonNode s = serverSnapshot(); if (Ur06EnrollMysqlAcceptanceTest.http(s).stream().anyMatch(r -> "HEARTBEAT".equals(optional(r, "category")) && integer(r, "index") == index && integer(r, "status") == 200)) break;
                 // No performance gate/deadline: require actual business heartbeat, or actual terminal failure.
                 JsonNode n = nodeSnapshot(); if (hasInbox(n, index, "recovery_required", false)) throw new SafeFailure("REAL_HEARTBEAT_FAILED"); Thread.sleep(25);
             }
@@ -667,7 +667,7 @@ class Ur06EnrollMysqlAcceptanceTest {
             if (java != null) receipt.put("javaPid", java.process.pid()); if (node != null) receipt.put("nodePid", node.process.pid());
             if (lastServer != null) {
                 for (String key : List.of("ackUpdates", "workUpdates", "artifactInserts", "submittedAttempts", "artifacts", "submittedEvents", "events", "eventVersion")) receipt.put(key, integer(lastServer, key));
-                receipt.put("businessSha256", text(lastServer, "businessSha256")); receipt.put("http", http(lastServer));
+                receipt.put("businessSha256", text(lastServer, "businessSha256")); receipt.put("http", Ur06EnrollMysqlAcceptanceTest.http(lastServer));
                 receipt.put("work", array(lastServer, "work")); receipt.put("deliveries", array(lastServer, "deliveries"));
                 receipt.put("generations", array(lastServer, "runtimes").stream().map(r -> integer(r, "generation")).toList());
             }
