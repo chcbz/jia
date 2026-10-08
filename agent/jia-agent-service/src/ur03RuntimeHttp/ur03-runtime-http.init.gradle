@@ -9,7 +9,27 @@
 // NOT enrollment/WS/Rabbit/Provider/TASK-execution/MySQL or production verification.
 import org.gradle.api.tasks.testing.Test
 
+// --init-script is also applied to composite plugin/build-logic and buildSrc builds.
+// Bind to this checked-in script's API settings directory, not Gradle.parent/currentDir
+// or the presence of the agent project (which must still fail closed in the API build).
+// cold-init.gradle includes <API>/plugin; its settings root is not the API settings root.
+def apiBuildRoot = initscript.sourceFile?.canonicalFile
+for (String segment : ['ur03-runtime-http.init.gradle', 'ur03RuntimeHttp', 'src', 'jia-agent-service', 'agent']) {
+    if (apiBuildRoot == null || apiBuildRoot.name != segment) {
+        throw new GradleException('UR03_INIT_SOURCE_PATH_REQUIRED')
+    }
+    apiBuildRoot = apiBuildRoot.parentFile
+}
+def isApiBuild = false
+gradle.settingsEvaluated { settings ->
+    isApiBuild = settings.settingsDir.canonicalFile == apiBuildRoot
+    if (isApiBuild && settings.rootProject.name != 'jia') {
+        throw new GradleException('UR03_API_SETTINGS_ROOT_REQUIRED')
+    }
+}
+
 gradle.projectsEvaluated {
+    if (!isApiBuild) return // No source set/task/project lookup in included builds or buildSrc.
     def p = gradle.rootProject.findProject(':agent:jia-agent-service')
     if (p == null) throw new GradleException('UR03_AGENT_PROJECT_REQUIRED')
     if (p.sourceSets.findByName('ur03RuntimeHttp') != null) {
