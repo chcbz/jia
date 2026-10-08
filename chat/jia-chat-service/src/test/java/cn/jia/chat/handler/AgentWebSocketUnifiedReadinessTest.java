@@ -7,6 +7,7 @@ import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.service.ChatConversationEventBroker;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.web.socket.*;
@@ -147,12 +148,30 @@ class AgentWebSocketUnifiedReadinessTest {
     }
     @Test void staleFencedBusinessCallbackNeverMutatesEvenIfChannelWasSelected() throws Exception {
         var f = new Fixture(); var a = f.session("a", "agent-a"); f.register(a, true, true);
-        when(f.auth.withFence(any(), eq(false), any())).thenThrow(new IllegalArgumentException("stale generation"));
+        var proof = UnifiedRuntimeTestSupport.install(a);
+        assertTrue(f.handler.isExactAgentConnected("0", "client", "agent-a"));
+        doThrow(new IllegalArgumentException("stale generation"))
+                .when(f.auth).withFence(eq(proof), eq(false), any());
 
         f.handler.handleTextMessage(a, new TextMessage("{\"type\":\"agent.presence\",\"agentId\":\"agent-a\","
                 + "\"runtimeInstanceId\":\"boot\",\"status\":\"online\"}"));
 
+        verify(f.auth).withFence(eq(proof), eq(false), any());
         verify(f.service, never()).updateStatus(any(), any());
+        ArgumentCaptor<TextMessage> rejected = ArgumentCaptor.forClass(TextMessage.class);
+        verify(a, atLeastOnce()).sendMessage(rejected.capture());
+        assertTrue(rejected.getAllValues().stream().map(TextMessage::getPayload)
+                .anyMatch(wire -> wire.contains("stale generation")));
+
+        // The targeted stale generation must not disable a current sibling's callbacks.
+        var b = f.session("b", "agent-b"); f.register(b, true, true);
+        var runtime = new AgentRuntimeDTO(); runtime.setAgentId("agent-b"); runtime.setStatus("online");
+        when(f.service.updateStatus(eq("agent-b"), any())).thenReturn(runtime);
+        f.handler.handleTextMessage(b, new TextMessage("{\"type\":\"agent.presence\",\"agentId\":\"agent-b\","
+                + "\"runtimeInstanceId\":\"boot\",\"status\":\"online\"}"));
+        verify(f.service).updateStatus(eq("agent-b"), any());
+        verify(f.service, never()).updateStatus(eq("agent-a"), any());
+        assertTrue(f.handler.isExactAgentConnected("0", "client", "agent-b"));
     }
     @Test void cancellationMustKeepOriginalConversationAndRetainHandleUntilExactMatch() throws Exception {
         var f = new Fixture(); var a = f.session("a", "agent-a"); f.register(a, true, true);

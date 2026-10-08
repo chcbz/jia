@@ -349,6 +349,35 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                  "tenantId":"tenant-malicious","clientId":"client-malicious"}
                 """));
 
+        ArgumentCaptor<TextMessage> rejectedCaptor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(firstSession).sendMessage(rejectedCaptor.capture());
+        assertTrue(rejectedCaptor.getValue().getPayload().contains("SESSION_PROOF_MISMATCH"));
+        assertFalse(rejectedCaptor.getValue().getPayload().contains("tenant-malicious"));
+        assertFalse(rejectedCaptor.getValue().getPayload().contains("client-malicious"));
+        verify(secondSession, never()).sendMessage(any(TextMessage.class));
+        verify(crossTenantSession, never()).sendMessage(any(TextMessage.class));
+        verify(crossClientSession, never()).sendMessage(any(TextMessage.class));
+        verify(agentService, never()).assignTask(any(String.class), any(AgentTaskAssignDTO.class));
+        verify(agentService, never()).listTaskWritableMemberAgentIds(
+                any(String.class), any(String.class), any(String.class));
+        // Proof rejection disconnects the binding: explicitly re-register the original
+        // authenticated proof before sending a legitimate follow-up assignment.
+        UnifiedRuntimeTestSupport.deliver(handler, firstSession, new TextMessage(
+                "{\"type\":\"agent.register\",\"agentId\":\"agent-legacy\",\"name\":\"Agent\"}"));
+        org.mockito.Mockito.clearInvocations(firstSession, secondSession, crossTenantSession, crossClientSession);
+
+        // Authenticated transport scope is not the task DTO's historical owner field.
+        // The body target remains untrusted; the assignment still uses the session Agent.
+        UnifiedRuntimeTestSupport.deliver(handler, firstSession, new TextMessage("""
+                {"type":"task.assign","requestId":"legacy-assign","taskId":"task-legacy",
+                 "agentId":"agent-legacy","targetAgentId":"agent-malicious",
+                 "tenantId":"0","clientId":"client-a"}
+                """));
+        ArgumentCaptor<AgentTaskAssignDTO> assignment = ArgumentCaptor.forClass(AgentTaskAssignDTO.class);
+        verify(agentService).assignTask(eq("task-legacy"), assignment.capture());
+        assertEquals("agent-legacy", assignment.getValue().getAgentId());
+        verify(agentService).listTaskWritableMemberAgentIds("tenant-a", "client-a", "task-legacy");
+
         ArgumentCaptor<TextMessage> firstCaptor = ArgumentCaptor.forClass(TextMessage.class);
         ArgumentCaptor<TextMessage> secondCaptor = ArgumentCaptor.forClass(TextMessage.class);
         verify(firstSession, org.mockito.Mockito.times(1)).sendMessage(firstCaptor.capture());
@@ -481,8 +510,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
 
     @Test
     void supportsSpecChatTypeAliases() throws Exception {
-        when(session.getId()).thenReturn("session-chat");
-        when(session.isOpen()).thenReturn(true);
+        stubAgentSession("session-chat", "agent-001", "runtime-chat");
 
         AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
                 chatMessageDao, chatConversationEventBroker));
@@ -521,8 +549,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
 
     @Test
     void extractsConversationTypeFromPayload() throws Exception {
-        when(session.getId()).thenReturn("session-juyi");
-        when(session.isOpen()).thenReturn(true);
+        stubAgentSession("session-juyi", "agent-001", "runtime-juyi");
 
         AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
                 chatMessageDao, chatConversationEventBroker));
@@ -1108,7 +1135,9 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 .setTurnId("turn-1");
         when(deliberation.persistFinal(anyString(), anyString(), anyString(), anyString(),
                 org.mockito.ArgumentMatchers.anyLong(), anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), any(ServerResolvedAgentSender.class)))
+                anyString(), anyString(), anyString(), org.mockito.ArgumentMatchers.<Integer>isNull(),
+                org.mockito.ArgumentMatchers.<String>isNull(), org.mockito.ArgumentMatchers.<String>isNull(),
+                any(ServerResolvedAgentSender.class)))
                 .thenReturn(new ChatDeliberationService.FinalResult(
                         ChatDeliberationService.FinalStatus.PERSISTED, 501L, "401", "evt-final", turn, null));
 
@@ -1136,7 +1165,22 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 ArgumentCaptor.forClass(ServerResolvedAgentSender.class);
         verify(deliberation).persistFinal(eq("0"), eq("juyiting"), eq("jia_client"), eq("1001"),
                 eq(1L), eq("agent-001"), eq("req-1"), eq("turn-1"), eq("dispatch-1"),
-                eq("snapshot-1"), eq("sha256:ctx"), eq("final"), finalSender.capture());
+                eq("snapshot-1"), eq("sha256:ctx"), eq("final"),
+                org.mockito.ArgumentMatchers.<Integer>isNull(), org.mockito.ArgumentMatchers.<String>isNull(),
+                org.mockito.ArgumentMatchers.<String>isNull(), finalSender.capture());
+        ArgumentCaptor<TextMessage> finalReceipt = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, org.mockito.Mockito.atLeastOnce()).sendMessage(finalReceipt.capture());
+        Map<String, Object> saved = finalReceipt.getAllValues().stream()
+                .map(TextMessage::getPayload)
+                .map(wire -> new ObjectMapper().readValue(wire, new TypeReference<Map<String, Object>>() { }))
+                .filter(event -> "agent_message_saved".equals(event.get("type")))
+                .findFirst().orElseThrow(() -> new AssertionError("Missing persisted final receipt"));
+        assertEquals("turn-1", saved.get("turnId"));
+        assertEquals("501", saved.get("messageId"));
+        assertEquals("evt-final", saved.get("eventId"));
+        assertEquals(false, saved.get("duplicate"));
+        verify(chatConversationService, never()).appendOwnedMessage(any(), any(), any(),
+                org.mockito.ArgumentMatchers.anyLong());
         for (ServerResolvedAgentSender sender : List.of(deltaSender.getValue(), finalSender.getValue())) {
             assertEquals("agent", sender.type());
             assertEquals("Wu Yong", sender.displayName());
@@ -1741,7 +1785,6 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
     @Test
     void rejectsRegistrationRuntimeConflictWithAuthenticatedSession() throws Exception {
         stubAgentSession("session-runtime-auth", "agent-001", "runtime-auth");
-        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
         AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
                 chatMessageDao, chatConversationEventBroker));
         handler.afterConnectionEstablished(session);
@@ -1754,6 +1797,10 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         verify(session, org.mockito.Mockito.atLeast(2)).sendMessage(messageCaptor.capture());
         String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
         assertTrue(messages.contains("\"code\":\"RUNTIME_INSTANCE_ID_MISMATCH\""));
+        // The proof mismatch is rejected before resolving a business service, not by a
+        // weakened register implementation or a permissive authentication fallback.
+        verify(agentServiceProvider, never()).getIfAvailable();
+        org.mockito.Mockito.verifyNoInteractions(agentService);
     }
 
     @Test

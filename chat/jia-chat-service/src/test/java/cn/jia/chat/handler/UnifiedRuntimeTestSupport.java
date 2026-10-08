@@ -17,7 +17,10 @@ import static org.mockito.Mockito.*;
 final class UnifiedRuntimeTestSupport {
     static final String INSTALLATION = "rti_" + "1".repeat(32);
     static void stub(AgentRuntimeAuthenticationService auth) {
-        lenient().when(auth.withFence(any(), anyBoolean(), any())).thenAnswer(inv -> ((Supplier<?>) inv.getArgument(2)).get());
+        // Match actual proof/callback values only. Stubbing an override must not run
+        // the previous answer with Mockito's null matcher placeholders.
+        lenient().doAnswer(inv -> ((Supplier<?>) inv.getArgument(2)).get())
+                .when(auth).withFence(any(AgentRuntimeAuthenticationService.Proof.class), anyBoolean(), notNull());
     }
     static AgentWebSocketHandler authorize(AgentWebSocketHandler handler) {
         var auth = mock(AgentRuntimeAuthenticationService.class); stub(auth);

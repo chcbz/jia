@@ -123,6 +123,10 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
         UnifiedRuntimeTestSupport.deliver(handler, session, registerMessage());
         UnifiedRuntimeTestSupport.deliver(handler, session, ackMessage("ack-1", "dispatch-1", "RECEIVED"));
         verify(ackService, never()).acknowledge(any(), anyLong());
+        ArgumentCaptor<TextMessage> outbound = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, org.mockito.Mockito.atLeastOnce()).sendMessage(outbound.capture());
+        assertTrue(outbound.getAllValues().stream().map(TextMessage::getPayload)
+                .anyMatch(wire -> wire.contains("COMMAND_ACK_HTTP_REQUIRED")));
     }
 
     @Test
@@ -191,23 +195,39 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
         when(agentService.register(any(AgentRegisterDTO.class))).thenReturn(
                 new AgentRegisterResultDTO("agent-a", "token", AgentConstants.STATUS_ONLINE));
         UnifiedRuntimeTestSupport.deliver(handler, session, registerMessage());
-        org.mockito.Mockito.clearInvocations(ackService, session);
+        org.mockito.Mockito.clearInvocations(agentService, ackService, session);
 
-        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
-                {"schemaVersion":1,"messageType":"command.ack","messageId":"ack-x",
-                 "correlationId":"dispatch-1","commandId":"cmd-1","taskId":"task-1",
-                 "agentId":"agent-a","sourceAgentId":"agent-a","runtimeInstanceId":"runtime-a",
-                 "tenantId":"tenant-other","receiverAgentId":"agent-other",
-                 "ackStatus":"RECEIVED","ackAt":1700000000000,
-                 "payload":{"targetAgentId":"agent-other"}}
-                """));
+        for (String selector : java.util.List.of("other", "missing")) {
+            UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
+                    {"schemaVersion":1,"messageType":"command.ack","messageId":"ack-x",
+                     "correlationId":"dispatch-1","commandId":"cmd-1","taskId":"task-1",
+                     "agentId":"agent-a","sourceAgentId":"agent-a","runtimeInstanceId":"runtime-a",
+                     "tenantId":"tenant-%s","receiverAgentId":"agent-%s",
+                     "ackStatus":"RECEIVED","ackAt":1700000000000,
+                     "payload":{"targetAgentId":"agent-%s"}}
+                    """.formatted(selector, selector, selector)));
+        }
         verify(ackService, never()).acknowledge(any(), anyLong());
         ArgumentCaptor<TextMessage> outbound = ArgumentCaptor.forClass(TextMessage.class);
-        verify(session, org.mockito.Mockito.atLeastOnce()).sendMessage(outbound.capture());
-        String combined = outbound.getAllValues().stream().map(TextMessage::getPayload)
-                .reduce("", String::concat);
-        assertTrue(combined.contains("COMMAND_ACK_HTTP_REQUIRED"));
-        assertTrue(!combined.contains("tenant-other") && !combined.contains("agent-other"));
+        verify(session, org.mockito.Mockito.times(2)).sendMessage(outbound.capture());
+        org.mockito.Mockito.verifyNoInteractions(agentService, ackService);
+        java.util.List<Map<String, Object>> rejections = new java.util.ArrayList<>();
+        for (TextMessage message : outbound.getAllValues()) {
+            String wire = message.getPayload();
+            assertFalse(wire.contains("tenant-other") || wire.contains("agent-other")
+                    || wire.contains("tenant-missing") || wire.contains("agent-missing"));
+            Map<String, Object> rejected = new tools.jackson.databind.ObjectMapper().readValue(
+                    wire, new tools.jackson.core.type.TypeReference<Map<String, Object>>() { });
+            // Transport proof is checked before WS ACK routing or durable lookup.
+            assertEquals("SESSION_PROOF_MISMATCH", rejected.get("code"));
+            assertEquals("Runtime message proof rejected", rejected.get("message"));
+            assertEquals("protocol.error", rejected.get("messageType"));
+            assertFalse(rejected.containsKey("tenantId") || rejected.containsKey("receiverAgentId")
+                    || rejected.containsKey("payload"));
+            rejected.remove("timestamp");
+            rejections.add(rejected);
+        }
+        assertEquals(rejections.get(0), rejections.get(1));
     }
 
     private TextMessage registerMessage() {
