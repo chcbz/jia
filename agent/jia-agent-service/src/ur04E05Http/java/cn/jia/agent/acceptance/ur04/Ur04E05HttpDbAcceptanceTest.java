@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class Ur04E05HttpDbAcceptanceTest {
     @TempDir(cleanup = CleanupMode.ALWAYS) Path temporaryDirectory;
     private static final String BASELINE = "4c5875b5bed143c793d7812143d60deab8d65674";
-    private static final String CLIENT = "5666fd2c990e4577cd4e16d5a32924ea0f3a8b7b";
+    private static final String CLIENT = "c8be411be9819e6139628ac3cd12f040eeb171d9";
     private String stage = "SOURCE_PREPARE";
 
     @Test void e05ActualClientHttpCommitsOriginalResultAndTerminalAck() throws Exception {
@@ -153,7 +153,11 @@ class Ur04E05HttpDbAcceptanceTest {
     @Test void e05UnknownStartedNeverRerunsAndSiblingRemainsReady() throws Exception {
         safe(() -> { try (Lane f = new Lane("NONE")) {
             JsonNode original = f.seed(0); f.dispatch(0);
-            JsonNode running = f.waitNode(s -> children(s, 0) == 1); f.trackChildren(running);
+            JsonNode running = f.waitNode(s -> {
+                if (hasInbox(s, 0, "recovery_required", false) || hasTerminalFailure(s, 0))
+                    throw new SafeFailure("ORIGINAL_EXECUTION_FAILED_BEFORE_CHILD");
+                return children(s, 0) == 1;
+            }); f.trackChildren(running);
             JsonNode before = f.serverSnapshot(); assertEquals("STARTED", text(before.get("deliveries").get(0), "status"));
             assertFalse(hasInbox(running, 0, "processing", true)); f.node.crash(); f.java.stop("STOPPED");
             JsonNode durable = f.persisted(); assertEquals(0, integer(durable, "artifacts")); assertEquals(0, integer(durable, "submittedEvents"));
@@ -336,7 +340,7 @@ class Ur04E05HttpDbAcceptanceTest {
             assertEquals(java.process.pid(), integer(ready, "pid")); long port = integer(ready, "port"); if (port <= 0 || port > 65535) throw new SafeFailure("LOOPBACK_PORT_REQUIRED");
             commands = array(ready, "commands"); node = nodeChild(); nodeParents.add(node.process.pid()); Map<String, Object> input = baseInput(); input.put("op", "INIT"); input.put("apiOrigin", "http://127.0.0.1:" + port);
             if (fresh) input.put("authorizations", authorizations); JsonNode boot = node.exchange(input, "NODE_BOOT"); assertEquals(node.process.pid(), integer(boot, "pid"));
-            assertEquals(CLIENT, text(boot, "sourceCommit")); assertEquals("d3cdc69da62bddc48af0bc86b4f32dbfa9429b60", text(boot, "sourceTree"));
+            assertEquals(CLIENT, text(boot, "sourceCommit")); assertEquals("324128ac043d1a7db5d1140b04b0482073f648c4", text(boot, "sourceTree"));
             provenance = Map.of("archiveSha256", text(boot, "archiveSha256"), "sourceManifestSha256", text(boot, "sourceManifestSha256"),
                 "artifactManifestSha256", text(boot, "artifactManifestSha256"), "nodeSha256", text(boot, "nodeSha256"), "cleanRun", text(boot, "cleanRun"));
             for (String key : List.of("archiveSha256", "sourceManifestSha256", "artifactManifestSha256", "nodeSha256"))

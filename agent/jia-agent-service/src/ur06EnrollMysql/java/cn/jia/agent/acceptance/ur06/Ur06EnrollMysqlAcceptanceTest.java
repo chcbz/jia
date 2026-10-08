@@ -25,7 +25,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * Source existence/compilation does not close UR06; Main owns actual seven+six execution. */
 class Ur06EnrollMysqlAcceptanceTest {
     private static final String BASELINE="fcac494a5103a7bc1175c96e9df50d2fcc35c182";
-    private static final String CLIENT="5666fd2c990e4577cd4e16d5a32924ea0f3a8b7b";
+    private static final String CLIENT="c8be411be9819e6139628ac3cd12f040eeb171d9";
     private String stage="SOURCE";
     private interface Checked { void run() throws Exception; }
     private void safe(Checked work) throws Exception {
@@ -353,7 +353,11 @@ class Ur06EnrollMysqlAcceptanceTest {
     @Test void e05UnknownStartedNeverRerunsAndSiblingRemainsReady() throws Exception {
         safe(() -> { try (Lane f = new Lane("NONE")) {
             JsonNode original = f.seed(0); f.dispatch(0);
-            JsonNode running = f.waitNode(s -> children(s, 0) == 1); f.trackChildren(running);
+            JsonNode running = f.waitNode(s -> {
+                if (hasInbox(s, 0, "recovery_required", false) || hasTerminalFailure(s, 0))
+                    throw new SafeFailure("ORIGINAL_EXECUTION_FAILED_BEFORE_CHILD");
+                return children(s, 0) == 1;
+            }); f.trackChildren(running);
             JsonNode before = f.serverSnapshot(); assertEquals("STARTED", text(before.get("deliveries").get(0), "status"));
             assertFalse(hasInbox(running, 0, "processing", true)); f.node.crash(); f.java.stop("STOPPED");
             JsonNode durable = f.persisted(); assertEquals(0, integer(durable, "artifacts")); assertEquals(0, integer(durable, "submittedEvents"));
