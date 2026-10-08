@@ -18,9 +18,9 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
     public AgentRuntimeAuthenticationFilter(AgentRuntimeAuthenticationService service) { this.service = service; }
 
     public static boolean selectsRuntimeCredentialLane(HttpServletRequest request) {
-        // One X-Agent-Id is also the established API-key websocket identity header. It is not,
-        // by itself, proof that the caller is presenting an AgentRuntime credential. Ambiguous
-        // duplicates remain fail-closed instead of falling through to a first-value consumer.
+        // WS and Runtime ACK/package endpoints are exclusive native lanes, even when legacy
+        // API-key headers are presented: they must fail here, never fall through to old auth.
+        // Elsewhere X-Agent-Id alone grants no Runtime authority; ambiguous duplicates fail closed.
         return request.getRequestURI().matches(request.getContextPath() + "/internal/agent/skill-installations/[^/]+/package")
                 || request.getRequestURI().equals(request.getContextPath() + "/ws/agent/channel")
                 || request.getRequestURI().startsWith(request.getContextPath() + "/agent/runtime/v1/commands/")

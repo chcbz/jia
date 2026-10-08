@@ -93,6 +93,8 @@ class SkillMarketplaceRealTransactionTest {
     private EconomySkillCredentialMapper credentialMapper;
     private ApiKeyService keys;
     private AgentManagedSessionLookup sessions;
+    private AgentService agents;
+    private HostingRentOwnerResolver owner;
     private SkillInstallDispatchService dispatch;
     private EconomyLedgerMapper ledger;
 
@@ -112,7 +114,7 @@ class SkillMarketplaceRealTransactionTest {
         ledger=sql.getMapper(EconomyLedgerMapper.class);
         var gate=new EconomyPreviewGate(new EconomyPreviewProperties(true,List.of(new EconomyPreviewProperties.AllowedScope(ACTOR.tenantId(),ACTOR.clientId()))));
         var posting=new EconomyPostingServiceImpl(ledger,manager,gate);
-        var agents=mock(AgentService.class); var owner=mock(HostingRentOwnerResolver.class); var runtimes=mock(AgentRuntimeDao.class);
+        agents=mock(AgentService.class); owner=mock(HostingRentOwnerResolver.class); var runtimes=mock(AgentRuntimeDao.class);
         runtime=new AgentRuntimeEntity().setAgentId(AGENT).setOwnerJiacn(ACTOR.ownerJiacn()).setBindingId(7L).setTokenHash("registration-1").setStatus("online");
         runtime.setTenantId(ACTOR.tenantId());
         runtime.setClientId(ACTOR.clientId());
@@ -354,10 +356,41 @@ class SkillMarketplaceRealTransactionTest {
         runtime.setTokenHash("registration-2");versions.observe(runtime);
         assertThrows(SkillMarketplaceException.class,()->service.purchase(ACTOR,uuid(),body,false));
         assertThrows(SkillMarketplaceException.class,()->service.quote(ACTOR,uuid(),Map.of("targetAgentId",AGENT,"productVersionId","spv_deploy_runner_1_0_0","expectedAgentVersion","2"),false));
-        var denied=assertThrows(cn.jia.agent.hosting.HostingRentApplicationException.class,
+        // Runtime exact owner denial now precedes the hosting owner resolver; still 403,
+        // and no funds/escrow/installation/command may be reserved by this different scope.
+        var denied=assertThrows(SkillMarketplaceException.class,
                 ()->service.purchase(new HostingRentHttp.Actor(ACTOR.actorId(),"0",ACTOR.clientId(),"tenant-a"),uuid(),body,false));
-        assertEquals(403,denied.status());
-        assertEquals(0,count("economy_transaction"));assertEquals(0,count("agent_command_delivery"));
+        assertEquals(403,denied.status());assertEquals("AGENT_FORBIDDEN",denied.code());
+        assertNoPurchaseSideEffects();
+    }
+    @Test void exactRuntimeProofNeverBypassesHostingOwnerRejectionOrChangesWalletAndVersion() {
+        var body=purchaseBody("spv_repo_test_1_0_0");
+        long version=versions.requireOwned(ACTOR,AGENT,null,false);
+        when(owner.requireOwner(ACTOR)).thenThrow(new cn.jia.agent.hosting.HostingRentApplicationException(403,"HOSTING_RENT_OWNER_UNPROVEN"));
+        var denied=assertThrows(cn.jia.agent.hosting.HostingRentApplicationException.class,()->service.purchase(ACTOR,uuid(),body,false));
+        assertEquals(403,denied.status());assertEquals("HOSTING_RENT_OWNER_UNPROVEN",denied.code());
+        assertNoPurchaseSideEffects();assertEquals(version,jdbc.queryForObject("SELECT version FROM economy_skill_agent_version",Long.class));
+    }
+    @Test void exactRuntimeProofNeverBypassesRealHostingRentAdmissionOrConsumesVersion() {
+        var body=purchaseBody("spv_repo_test_1_0_0");long version=versions.requireOwned(ACTOR,AGENT,null,false);
+        var rentMapper=mock(EconomyHostingRentMapper.class);
+        var lease=new EconomyHostingLeaseEntity().setStatus("ACTIVE").setPaidThrough(1L);
+        when(rentMapper.selectLatestLease(ACTOR.tenantId(),ACTOR.clientId(),AGENT)).thenReturn(lease);
+        var rentAdmission=new cn.jia.agent.hosting.HostingRentWorkAdmission(rentMapper,true);
+        doAnswer(call->{rentAdmission.requireNewWork(call.getArgument(0),call.getArgument(1),call.getArgument(2));return null;})
+                .when(agents).requireHostingNewWork(ACTOR.tenantId(),ACTOR.clientId(),AGENT);
+        var overdue=assertThrows(cn.jia.agent.hosting.HostingRentApplicationException.class,()->service.purchase(ACTOR,uuid(),body,false));
+        assertEquals(409,overdue.status());assertEquals("HOSTING_RENT_RENEWAL_REQUIRED",overdue.code());assertNoPurchaseSideEffects();
+        lease.setStatus("SUSPENDED");
+        var suspended=assertThrows(cn.jia.agent.hosting.HostingRentApplicationException.class,()->service.purchase(ACTOR,uuid(),body,false));
+        assertEquals(409,suspended.status());assertEquals("HOSTING_RENT_NOT_ACTIVE",suspended.code());assertNoPurchaseSideEffects();
+        assertEquals(version,versions.requireOwned(ACTOR,AGENT,null,false));
+    }
+    private void assertNoPurchaseSideEffects() {
+        assertEquals(100000000L,wallet());
+        for(String table:List.of("economy_transaction","economy_escrow","economy_skill_order","economy_skill_order_receipt",
+                "economy_skill_installation","economy_skill_entitlement","economy_skill_delivery_binding",
+                "agent_command_delivery","agent_outbox_event")) assertEquals(0,count(table),table);
     }
     @Test void concurrentSameKeyHasOneReserveOneDeliveryAndImmutableReceipt() throws Exception {
         var body=purchaseBody("spv_repo_test_1_0_0");String idem=uuid();var start=new CountDownLatch(1);var pool=Executors.newFixedThreadPool(2);

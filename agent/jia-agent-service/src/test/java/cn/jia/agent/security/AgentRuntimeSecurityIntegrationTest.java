@@ -409,7 +409,7 @@ class AgentRuntimeSecurityIntegrationTest {
                 .contentType("application/json").content(body)).andExpect(status().isBadRequest());
         conversationMvc.perform(headers(post(claim),A,"runtime-a",TOKEN_A)
                 .queryParam("token",lease.token()).contentType("application/json").content(body))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("AGENT_RUNTIME_UNAUTHENTICATED"));
         verify(workspaceExecutions).runtimeConversationCommandViews(scope,16);
         verify(workspaceExecutions,times(1)).claimConversationStart(scope,"task-a","run-a","cmd-a","msg-a");
         verifyNoMoreInteractions(workspaceExecutions);
@@ -435,7 +435,8 @@ class AgentRuntimeSecurityIntegrationTest {
         conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A).header("Origin","https://browser.invalid")
                 .contentType("application/json").content(json)).andExpect(status().isForbidden());
         conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A).queryParam("token",fence.token())
-                .contentType("application/json").content(json)).andExpect(status().isBadRequest());
+                .contentType("application/json").content(json)).andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AGENT_RUNTIME_UNAUTHENTICATED"));
         conversationMvc.perform(headers(post(path+"/extra"),A,"runtime-a",TOKEN_A)
                 .contentType("application/json").content(json)).andExpect(status().isForbidden());
         verify(workspaceExecutions,times(1)).conversationInputs(scope,"task-a","run-a",fence);
@@ -478,7 +479,8 @@ class AgentRuntimeSecurityIntegrationTest {
                 .andExpect(content().bytes(new byte[]{1,2,3}));
         conversationMvc.perform(headers(get(path),A,"runtime-a",TOKEN_A)).andExpect(status().isForbidden());
         conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A).queryParam("token",fence.token())
-                .contentType("application/json").content(body)).andExpect(status().isBadRequest());
+                .contentType("application/json").content(body)).andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("AGENT_RUNTIME_UNAUTHENTICATED"));
         conversationMvc.perform(headers(post(path),A,"runtime-a",TOKEN_A)
                 .header("Origin","https://browser.invalid").contentType("application/json").content(body))
                 .andExpect(status().isForbidden());
@@ -1063,12 +1065,12 @@ class AgentRuntimeSecurityIntegrationTest {
     }
 
     @Test
-    void selectorClaimsRuntimeCredentialsButNotEstablishedApiKeyWebSocketAgentHeader() throws Exception {
+    void selectorClaimsExclusiveRuntimeWebSocketLaneAndRejectsLegacyApiKeyCredentials() throws Exception {
         var servletContext = new MockServletContext();
-        assertFalse(AgentRuntimeAuthenticationFilter.selectsRuntimeCredentialLane(
+        assertTrue(AgentRuntimeAuthenticationFilter.selectsRuntimeCredentialLane(
                 get("/ws/agent/channel").header("X-API-Key", "api-key")
                         .header("X-Agent-Id", A).buildRequest(servletContext)));
-        assertFalse(AgentRuntimeAuthenticationFilter.selectsRuntimeCredentialLane(
+        assertTrue(AgentRuntimeAuthenticationFilter.selectsRuntimeCredentialLane(
                 get("/ws/agent/channel").queryParam("api_key", "api-key")
                         .queryParam("agentId", A).buildRequest(servletContext)));
         assertTrue(AgentRuntimeAuthenticationFilter.selectsRuntimeCredentialLane(
@@ -1083,6 +1085,12 @@ class AgentRuntimeSecurityIntegrationTest {
         assertTrue(AgentRuntimeAuthenticationFilter.selectsRuntimeCredentialLane(
                 get("/ws/agent/channel").header("Authorization", "AgentRuntimeMalformed")
                         .buildRequest(servletContext)));
+
+        mvc.perform(get("/ws/agent/channel").header("X-API-Key","api-key").header("X-Agent-Id",A))
+                .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("AGENT_RUNTIME_UNAUTHENTICATED"));
+        mvc.perform(get("/ws/agent/channel").queryParam("api_key","api-key").queryParam("agentId",A))
+                .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("AGENT_RUNTIME_UNAUTHENTICATED"));
+        verifyNoInteractions(keys);
 
         mvc.perform(get("/agent/tasks/task-a/context-pack")
                         .header("Authorization", "AgentRuntimeMalformed")

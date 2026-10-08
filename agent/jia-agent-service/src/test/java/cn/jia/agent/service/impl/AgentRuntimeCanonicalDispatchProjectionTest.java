@@ -65,7 +65,7 @@ class AgentRuntimeCanonicalDispatchProjectionTest {
         assertEquals(c.path("rawSha256").asText(), HexFormat.of().formatHex(AgentCommandCanonicalCodec.sha256(bytes)));
         assertArrayEquals(bytes, AgentCommandCanonicalCodec.wireBytes(draft(raw),raw.path("messageId").asText(),1));
         var request = project(raw,c.path("trustedManifest"),c.path("currentTransport"));
-        assertEquals(c.path("projectedFirstAck"),json.valueToTree(request));
+        assertWireEquals(c.path("projectedFirstAck"),json.valueToTree(request));
         assertNull(request.payloadReference()); assertNull(request.deliveryVersion());
         assertEquals("1970-01-01T01:00:01.000Z",request.expiresAt());
         assertEquals("e05-reassignment-v1",raw.at("/payload/context/bindingVersion").asText());
@@ -174,4 +174,28 @@ class AgentRuntimeCanonicalDispatchProjectionTest {
             verify(f.dao,never()).advanceAck(any(),anyString(),any(),anyLong()); verify(f.manager).rollback(any());
         }
     }
+    /** Compare every wire field and JSON kind; integer width (IntNode/LongNode) is not wire
+     * semantics. Never coerce strings, null/missing fields, fractional values or credentials. */
+    private static void assertWireEquals(JsonNode expected,JsonNode actual) {
+        assertWireEquals(expected,actual,"$");
+    }
+    private static void assertWireEquals(JsonNode expected,JsonNode actual,String path) {
+        assertNotNull(actual,path);
+        if(expected.isObject()) {
+            assertTrue(actual.isObject(),path+": object required");
+            var expectedFields=new java.util.HashSet<String>();expected.propertyNames().forEach(expectedFields::add);
+            var actualFields=new java.util.HashSet<String>();actual.propertyNames().forEach(actualFields::add);
+            assertEquals(expectedFields,actualFields,path+": exact field set");
+            for(String field:expectedFields) assertWireEquals(expected.get(field),actual.get(field),path+"/"+field);
+        } else if(expected.isArray()) {
+            assertTrue(actual.isArray(),path+": array required");assertEquals(expected.size(),actual.size(),path);
+            for(int i=0;i<expected.size();i++) assertWireEquals(expected.get(i),actual.get(i),path+"/"+i);
+        } else if(expected.isIntegralNumber()) {
+            assertTrue(actual.isIntegralNumber(),path+": integer required");
+            assertEquals(expected.bigIntegerValue(),actual.bigIntegerValue(),path+": exact integer value");
+        } else {
+            assertEquals(expected,actual,path);
+        }
+    }
+
 }

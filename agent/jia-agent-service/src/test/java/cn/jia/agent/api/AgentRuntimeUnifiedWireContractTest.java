@@ -20,14 +20,14 @@ class AgentRuntimeUnifiedWireContractTest {
     @Test void sessionRequestRoundTripsWithExactFieldSet() throws Exception {
         var node = fixture().path("session").path("request");
         var value = mapper.treeToValue(node, AgentRuntimeV1SessionRequest.class);
-        assertEquals(node, mapper.valueToTree(value));
+        assertWireEquals(node, mapper.valueToTree(value));
         assertEquals(Set.of("installationId", "tenantId", "clientId", "canonicalAgentId",
                 "manifestVersion", "manifestSha256", "hostId", "runtimeInstanceId"), fields(node));
     }
     @Test void sessionCredentialsHaveIndependentResponseAndRedactedDiagnosticString() throws Exception {
         var node = fixture().path("session").path("response");
         var value = mapper.treeToValue(node, AgentRuntimeV1SessionResponse.class);
-        assertEquals(node, mapper.valueToTree(value));
+        assertWireEquals(node, mapper.valueToTree(value));
         assertFalse(value.toString().contains(value.sessionToken()));
         assertTrue(value.toString().contains("REDACTED"));
         for (var component : AgentRuntimeV1InstallationView.class.getRecordComponents()) {
@@ -42,7 +42,7 @@ class AgentRuntimeUnifiedWireContractTest {
         assertEquals("/ws/agent/channel", f.path("websocket").path("path").asText());
         assertFalse(f.path("websocket").path("headers").has("X-API-Key"));
         var request = mapper.treeToValue(f.path("ack").path("request"), AgentRuntimeV1AckRequest.class);
-        assertEquals(f.path("ack").path("request"), mapper.valueToTree(request));
+        assertWireEquals(f.path("ack").path("request"), mapper.valueToTree(request));
         assertNull(request.payloadReference());
         assertEquals("1970-01-01T01:00:01.000Z",request.expiresAt());
         assertEquals(7, request.sessionGeneration());
@@ -60,7 +60,44 @@ class AgentRuntimeUnifiedWireContractTest {
         var node = fixture().path("ack").path("firstRequest");
         var request = mapper.treeToValue(node, AgentRuntimeV1AckRequest.class);
         assertNull(request.deliveryVersion());
-        assertEquals(node, mapper.valueToTree(request));
+        assertWireEquals(node, mapper.valueToTree(request));
+    }
+    @Test void numericWidthComparisonStillRejectsMissingExtraOrChangedCredentialAndNumericTypes() throws Exception {
+        var expected=mapper.readTree("{\"sessionGeneration\":7,\"sessionToken\":\"REDACTED_SESSION_TOKEN\",\"deliveryVersion\":null}");
+        var same=((tools.jackson.databind.node.ObjectNode)expected).deepCopy();same.put("sessionGeneration",7L);
+        assertWireEquals(expected,same);
+        for(String key:new String[]{"sessionToken","deliveryVersion"}) {
+            var missing=same.deepCopy();missing.remove(key);assertThrows(AssertionError.class,()->assertWireEquals(expected,missing));
+        }
+        var extra=same.deepCopy();extra.put("unknown",true);assertThrows(AssertionError.class,()->assertWireEquals(expected,extra));
+        var wrongSecret=same.deepCopy();wrongSecret.put("sessionToken","DIFFERENT_TOKEN");assertThrows(AssertionError.class,()->assertWireEquals(expected,wrongSecret));
+        for(String number:new String[]{"8","\"7\"","7.0","7.5","true","null"}) {
+            var changed=same.deepCopy();changed.set("sessionGeneration",mapper.readTree(number));
+            assertThrows(AssertionError.class,()->assertWireEquals(expected,changed));
+        }
+    }
+    /** Compare every wire field and JSON kind; integer width (IntNode/LongNode) is not wire
+     * semantics. Never coerce strings, null/missing fields, fractional values or credentials. */
+    private static void assertWireEquals(JsonNode expected,JsonNode actual) {
+        assertWireEquals(expected,actual,"$");
+    }
+    private static void assertWireEquals(JsonNode expected,JsonNode actual,String path) {
+        assertNotNull(actual,path);
+        if(expected.isObject()) {
+            assertTrue(actual.isObject(),path+": object required");
+            var expectedFields=new java.util.HashSet<String>();expected.propertyNames().forEach(expectedFields::add);
+            var actualFields=new java.util.HashSet<String>();actual.propertyNames().forEach(actualFields::add);
+            assertEquals(expectedFields,actualFields,path+": exact field set");
+            for(String field:expectedFields) assertWireEquals(expected.get(field),actual.get(field),path+"/"+field);
+        } else if(expected.isArray()) {
+            assertTrue(actual.isArray(),path+": array required");assertEquals(expected.size(),actual.size(),path);
+            for(int i=0;i<expected.size();i++) assertWireEquals(expected.get(i),actual.get(i),path+"/"+i);
+        } else if(expected.isIntegralNumber()) {
+            assertTrue(actual.isIntegralNumber(),path+": integer required");
+            assertEquals(expected.bigIntegerValue(),actual.bigIntegerValue(),path+": exact integer value");
+        } else {
+            assertEquals(expected,actual,path);
+        }
     }
     private static Set<String> fields(JsonNode node) {
         Set<String> fields = new HashSet<>(); node.propertyNames().forEach(fields::add); return fields;
