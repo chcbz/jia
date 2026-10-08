@@ -15,7 +15,6 @@ import cn.jia.agent.service.impl.AgentCommandAckServiceImpl;
 import cn.jia.agent.service.impl.AgentCommandCanonicalCodec;
 import cn.jia.agent.service.impl.AgentIdentityServiceImpl;
 import cn.jia.agent.service.impl.AgentRuntimeV1ServiceImpl;
-import cn.jia.common.dao.BaseDaoImpl;
 import cn.jia.core.security.SensitiveResponseBodyAdvice;
 import cn.jia.core.security.SensitiveResponseProperties;
 import cn.jia.user.dao.UserInfoDao;
@@ -58,7 +57,6 @@ import tools.jackson.databind.json.JsonMapper;
 
 import javax.sql.DataSource;
 import java.io.*;
-import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -80,6 +78,7 @@ import cn.jia.agent.skill.SkillAgentVersions;
 import cn.jia.economy.mapper.*;
 import cn.jia.chat.config.AgentRuntimeHandshakeInterceptor;
 import cn.jia.chat.handler.AgentWebSocketHandler;
+import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.dao.impl.ChatMessageDaoImpl;
 import cn.jia.chat.mapper.ChatMessageMapper;
 import cn.jia.chat.service.ChatConversationEventBroker;
@@ -482,7 +481,10 @@ public final class Ur04E05HttpFixture {
             "org.mybatis.spring.MyBatisSystemException", "org.springframework.aop.framework.AopConfigException",
             "cn.jia.agent.acceptance.ur04.Ur04E05HttpFixture$FixtureFailure");
     static final Set<String> DIAGNOSTIC_BEANS = Set.of("dataSource", "transactionManager", "sqlSessionFactory",
-            "sqlSessionTemplate", "installations", "runtimes", "registry", "aliases", "bindings", "users", "identity",
+            "sqlSessionTemplate", "agentRuntimeV1InstallationMapper", "agentRuntimeMapper", "agentIdentityRegistryMapper",
+            "agentIdentityAliasMapper", "agentPersonaBindingMapper", "infoMapper", "agentPersonaMapper", "agentTaskMetaMapper",
+            "agentTaskEventMapper", "agentTaskNoteMapper", "dialogueTemplateMapper", "chatMessageMapper", "chatMessages",
+            "installations", "runtimes", "registry", "aliases", "bindings", "users", "identity",
             "accounts", "taskGate", "authentication", "ackGate", "commandAcks", "runtime", "controller",
             "sensitiveProperties", "sensitiveAdvice", "springSecurityFilterChain", "mvcHandlerMappingIntrospector",
             "requestMappingHandlerAdapter", "requestMappingHandlerMapping", "mvcContentNegotiationManager", "mvcConversionService",
@@ -603,7 +605,7 @@ public final class Ur04E05HttpFixture {
             try {
                 // Actual native handler; unrelated CHAT/skill/Provider beans intentionally not assembled.
                 nativeHandler = new AgentWebSocketHandler(null, beans.getBeanProvider(AgentService.class),
-                    wire(new ChatMessageDaoImpl(), beans.getBean(SqlSessionTemplate.class).getMapper(ChatMessageMapper.class)),
+                    beans.getBean(ChatMessageDao.class),
                     new ChatConversationEventBroker());
                 nativeHandler.setRuntimeAuthentication(beans.getBean(AgentRuntimeAuthenticationService.class));
                 registry.addHandler(nativeHandler, "/ws/agent/channel")
@@ -634,24 +636,28 @@ public final class Ur04E05HttpFixture {
             return factory;
         }
         @Bean SqlSessionTemplate sqlSessionTemplate(SqlSessionFactory factory) { return new SqlSessionTemplate(factory); }
-        @Bean AgentRuntimeV1InstallationDao installations(SqlSessionTemplate session) throws Exception {
-            return wire(new AgentRuntimeV1InstallationDaoImpl(), session.getMapper(AgentRuntimeV1InstallationMapper.class));
-        }
-        @Bean AgentRuntimeDao runtimes(SqlSessionTemplate session) throws Exception {
-            return wire(new AgentRuntimeDaoImpl(), session.getMapper(AgentRuntimeMapper.class));
-        }
-        @Bean AgentIdentityRegistryDao registry(SqlSessionTemplate session) throws Exception {
-            return wire(new AgentIdentityRegistryDaoImpl(), session.getMapper(AgentIdentityRegistryMapper.class));
-        }
-        @Bean AgentIdentityAliasDao aliases(SqlSessionTemplate session) throws Exception {
-            return wire(new AgentIdentityAliasDaoImpl(), session.getMapper(AgentIdentityAliasMapper.class));
-        }
-        @Bean AgentPersonaBindingDao bindings(SqlSessionTemplate session) throws Exception {
-            return wire(new AgentPersonaBindingDaoImpl(), session.getMapper(AgentPersonaBindingMapper.class));
-        }
-        @Bean UserInfoDao users(SqlSessionTemplate session) throws Exception {
-            return wire(new UserInfoDaoImpl(), session.getMapper(InfoMapper.class));
-        }
+        // BaseDaoImpl declares inherited @Inject baseMapper: registering it only in MyBatis
+        // is insufficient for Spring. Expose exact real template proxies, with no mapper scan
+        // or reflective field assignment. DAO and catalog injection remain normal Spring work.
+        @Bean AgentRuntimeV1InstallationMapper agentRuntimeV1InstallationMapper(SqlSessionTemplate session) { return session.getMapper(AgentRuntimeV1InstallationMapper.class); }
+        @Bean AgentRuntimeMapper agentRuntimeMapper(SqlSessionTemplate session) { return session.getMapper(AgentRuntimeMapper.class); }
+        @Bean AgentIdentityRegistryMapper agentIdentityRegistryMapper(SqlSessionTemplate session) { return session.getMapper(AgentIdentityRegistryMapper.class); }
+        @Bean AgentIdentityAliasMapper agentIdentityAliasMapper(SqlSessionTemplate session) { return session.getMapper(AgentIdentityAliasMapper.class); }
+        @Bean AgentPersonaBindingMapper agentPersonaBindingMapper(SqlSessionTemplate session) { return session.getMapper(AgentPersonaBindingMapper.class); }
+        @Bean InfoMapper infoMapper(SqlSessionTemplate session) { return session.getMapper(InfoMapper.class); }
+        @Bean AgentPersonaMapper agentPersonaMapper(SqlSessionTemplate session) { return session.getMapper(AgentPersonaMapper.class); }
+        @Bean AgentTaskMetaMapper agentTaskMetaMapper(SqlSessionTemplate session) { return session.getMapper(AgentTaskMetaMapper.class); }
+        @Bean AgentTaskEventMapper agentTaskEventMapper(SqlSessionTemplate session) { return session.getMapper(AgentTaskEventMapper.class); }
+        @Bean AgentTaskNoteMapper agentTaskNoteMapper(SqlSessionTemplate session) { return session.getMapper(AgentTaskNoteMapper.class); }
+        @Bean DialogueTemplateMapper dialogueTemplateMapper(SqlSessionTemplate session) { return session.getMapper(DialogueTemplateMapper.class); }
+        @Bean ChatMessageMapper chatMessageMapper(SqlSessionTemplate session) { return session.getMapper(ChatMessageMapper.class); }
+        @Bean ChatMessageDao chatMessages() { return new ChatMessageDaoImpl(); }
+        @Bean AgentRuntimeV1InstallationDao installations() { return new AgentRuntimeV1InstallationDaoImpl(); }
+        @Bean AgentRuntimeDao runtimes() { return new AgentRuntimeDaoImpl(); }
+        @Bean AgentIdentityRegistryDao registry() { return new AgentIdentityRegistryDaoImpl(); }
+        @Bean AgentIdentityAliasDao aliases() { return new AgentIdentityAliasDaoImpl(); }
+        @Bean AgentPersonaBindingDao bindings() { return new AgentPersonaBindingDaoImpl(); }
+        @Bean UserInfoDao users() { return new UserInfoDaoImpl(); }
         @Bean AgentIdentityService identity(AgentIdentityRegistryDao registry, AgentIdentityAliasDao aliases, AgentPersonaBindingDao bindings) {
             return new AgentIdentityServiceImpl(registry, aliases, bindings);
         }
@@ -683,17 +689,15 @@ public final class Ur04E05HttpFixture {
         @Bean AgentRuntimeV1Controller controller(AgentRuntimeV1Service runtime) { return new AgentRuntimeV1Controller(runtime); }
         @Bean JdbcTemplate jdbc(DataSource source) { return new JdbcTemplate(source); }
         @Bean AgentPersonaCatalogCache catalog() { return new AgentPersonaCatalogCache(); }
-        @Bean AgentPersonaDao personas(SqlSessionTemplate s, AgentPersonaCatalogCache cache) throws Exception {
-            var dao = wire(new AgentPersonaDaoImpl(), s.getMapper(AgentPersonaMapper.class)); dao.setCatalogCache(cache); return dao;
-        }
-        @Bean AgentTaskMetaDao meta(SqlSessionTemplate s) throws Exception { return wire(new AgentTaskMetaDaoImpl(), s.getMapper(AgentTaskMetaMapper.class)); }
+        @Bean AgentPersonaDao personas() { return new AgentPersonaDaoImpl(); }
+        @Bean AgentTaskMetaDao meta() { return new AgentTaskMetaDaoImpl(); }
         @Bean AgentTaskMemberDao members(SqlSessionTemplate s) { return new AgentTaskMemberDaoImpl(s.getMapper(AgentTaskMemberMapper.class)); }
         @Bean AgentTaskWorkItemDao workItems(SqlSessionTemplate s) { return new AgentTaskWorkItemDaoImpl(s.getMapper(AgentTaskWorkItemMapper.class)); }
         @Bean AgentTaskRequestDao requests(SqlSessionTemplate s) { return new AgentTaskRequestDaoImpl(s.getMapper(AgentTaskRequestMapper.class)); }
         @Bean AgentTaskArtifactDao artifacts(SqlSessionTemplate s) { return new AgentTaskArtifactDaoImpl(s.getMapper(AgentTaskArtifactMapper.class)); }
-        @Bean AgentTaskEventDao events(SqlSessionTemplate s) throws Exception { return wire(new AgentTaskEventDaoImpl(), s.getMapper(AgentTaskEventMapper.class)); }
-        @Bean AgentTaskNoteDao notes(SqlSessionTemplate s) throws Exception { return wire(new AgentTaskNoteDaoImpl(), s.getMapper(AgentTaskNoteMapper.class)); }
-        @Bean DialogueTemplateDao dialogues(SqlSessionTemplate s) throws Exception { return wire(new DialogueTemplateDaoImpl(), s.getMapper(DialogueTemplateMapper.class)); }
+        @Bean AgentTaskEventDao events() { return new AgentTaskEventDaoImpl(); }
+        @Bean AgentTaskNoteDao notes() { return new AgentTaskNoteDaoImpl(); }
+        @Bean DialogueTemplateDao dialogues() { return new DialogueTemplateDaoImpl(); }
         @Bean AgentTaskMutationTransaction mutation(AgentTaskMetaDao meta, DataSourceTransactionManager manager) { return new AgentTaskMutationTransactionImpl(meta, manager); }
         @Bean AgentTaskEventBroker broker() { return new AgentTaskEventBroker(); }
         @Bean AgentTaskEventAfterCommitPublisher afterCommit(AgentTaskEventBroker broker, DataSourceTransactionManager manager) { return new AgentTaskEventAfterCommitPublisher(broker, manager); }
@@ -764,9 +768,5 @@ public final class Ur04E05HttpFixture {
         }
         @Bean SensitiveResponseProperties sensitiveProperties() { return new SensitiveResponseProperties(); }
         @Bean SensitiveResponseBodyAdvice sensitiveAdvice(SensitiveResponseProperties properties) { return new SensitiveResponseBodyAdvice(properties); }
-    }
-
-    private static <T extends BaseDaoImpl<?, ?>> T wire(T dao, Object mapper) throws Exception {
-        Field field = BaseDaoImpl.class.getDeclaredField("baseMapper"); field.setAccessible(true); field.set(dao, mapper); return dao;
     }
 }

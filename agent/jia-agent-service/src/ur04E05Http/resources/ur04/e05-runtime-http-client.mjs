@@ -8,12 +8,12 @@ import { createInterface } from 'node:readline';
 import { chmod, lstat, mkdir, readFile, readdir, readlink, realpath, writeFile } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
-export const SOURCE = Object.freeze({ commit: '3746043947888a6b727be88527695d1edf3587c3',
-  tree: 'ddc3c0b3355eb77cd0be080f8fc4b734c901cab7', count: 285,
-  tarSha256: '55ffef55075cf802a1a090114c5a3be6dd933dc8925b80d3403f9404e5fe9781', tarBytes: 3573760 });
+export const SOURCE = Object.freeze({ commit: '7594fd72251d38b6e1d23a1a3cca184ae0d085e7',
+  tree: '0827ce904179862ab55648fe99b780cea94faf98', count: 285,
+  tarSha256: 'f4dcd014e409b5a0e32f7419cd9500bf1f3e0022492f533736b366cd325f0106', tarBytes: 3594240 });
 const PREFIX = 'UR04_PIPE ';
 let phase = 'PRIVATE_INPUT';
-const SAFE_CODES = new Set(['ARTIFACT_ALIAS_FORBIDDEN', 'ARTIFACT_FULL_INVENTORY_REQUIRED', 'ARTIFACT_LINK_PROOF_REQUIRED', 'ARTIFACT_MEMBER_MISMATCH', 'CHILD_INTERPRETER_PATH_UNSAFE', 'CLEAN_ARTIFACT_EVIDENCE_REQUIRED', 'CLIENT_COMMIT_REQUIRED', 'CLOUD_CHILD_ONLY', 'CURRENT_TRANSPORT_REQUIRED', 'ENGINE_SOURCE_BINDING_REQUIRED', 'EXACT_AGENT_INDEX_REQUIRED', 'EXPLICIT_STOP_REQUIRED', 'MEMBER_UNSAFE', 'NEGATIVE_ALLOWLIST_REQUIRED', 'NEGATIVE_COMMAND_BINDING_REQUIRED', 'NODE_20_20_2_REQUIRED', 'NODE_ARTIFACT_BINARY_BINDING_REQUIRED', 'ORIGINAL_CONFLICT_AUDIT_REQUIRED', 'ONE_ORIGINAL_CHECKPOINT_REQUIRED', 'ONE_ORIGINAL_MATERIAL_REQUIRED', 'ORIGINAL_MATERIAL_REQUIRED', 'OWNED_SUBJECT_SOCKET_REQUIRED', 'PATH_ALIAS_FORBIDDEN', 'PATH_CANONICAL_REQUIRED', 'PATH_TYPE_REQUIRED', 'PIPE_REQUEST_REQUIRED', 'PRIOR_TERMINAL_REQUIRED', 'PRIVATE_INIT_REQUIRED', 'PRIVATE_THREE_SUBJECTS_REQUIRED', 'REAL_LEASE_FOR_NEGATIVE_REQUIRED', 'RUNTIME_SOURCE_BINDING_REQUIRED', 'SOURCE_ALIAS_FORBIDDEN', 'SOURCE_ARCHIVE_MISMATCH', 'SOURCE_FULL_TREE_MISMATCH', 'SOURCE_IDENTITY_REQUIRED', 'SOURCE_MEMBER_HASH_REQUIRED', 'SOURCE_MEMBER_MISMATCH', 'SOURCE_UNEXPECTED_MEMBER', 'SYNTHETIC_AUTH_REQUIRED', 'TRACKED_SYNTHETIC_MODULE_REQUIRED', 'UNKNOWN_PRIVATE_OPERATION']);
+const SAFE_CODES = new Set(['ARTIFACT_ALIAS_FORBIDDEN', 'ARTIFACT_FULL_INVENTORY_REQUIRED', 'ARTIFACT_LINK_PROOF_REQUIRED', 'ARTIFACT_MEMBER_MISMATCH', 'CHILD_INTERPRETER_PATH_UNSAFE', 'CLEAN_ARTIFACT_EVIDENCE_REQUIRED', 'CLIENT_COMMIT_REQUIRED', 'PRIVATE_CHILD_ONLY', 'CURRENT_TRANSPORT_REQUIRED', 'ENGINE_SOURCE_BINDING_REQUIRED', 'EXACT_AGENT_INDEX_REQUIRED', 'EXPLICIT_STOP_REQUIRED', 'MEMBER_UNSAFE', 'NEGATIVE_ALLOWLIST_REQUIRED', 'NEGATIVE_COMMAND_BINDING_REQUIRED', 'NODE_20_20_2_REQUIRED', 'NODE_ARTIFACT_BINARY_BINDING_REQUIRED', 'ORIGINAL_CONFLICT_AUDIT_REQUIRED', 'ONE_ORIGINAL_CHECKPOINT_REQUIRED', 'ONE_ORIGINAL_MATERIAL_REQUIRED', 'ORIGINAL_MATERIAL_REQUIRED', 'OWNED_SUBJECT_SOCKET_REQUIRED', 'PATH_ALIAS_FORBIDDEN', 'PATH_CANONICAL_REQUIRED', 'PATH_TYPE_REQUIRED', 'PIPE_REQUEST_REQUIRED', 'PRIOR_TERMINAL_REQUIRED', 'PRIVATE_INIT_REQUIRED', 'PRIVATE_THREE_SUBJECTS_REQUIRED', 'REAL_LEASE_FOR_NEGATIVE_REQUIRED', 'RUNTIME_SOURCE_BINDING_REQUIRED', 'SOURCE_ALIAS_FORBIDDEN', 'SOURCE_ARCHIVE_MISMATCH', 'SOURCE_FULL_TREE_MISMATCH', 'SOURCE_IDENTITY_REQUIRED', 'SOURCE_MEMBER_HASH_REQUIRED', 'SOURCE_MEMBER_MISMATCH', 'SOURCE_UNEXPECTED_MEMBER', 'SYNTHETIC_AUTH_REQUIRED', 'TRACKED_SYNTHETIC_MODULE_REQUIRED', 'UNKNOWN_PRIVATE_OPERATION']);
 const sha = b => createHash('sha256').update(b).digest('hex');
 const object = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 const fail = code => Object.assign(new Error(code), { code });
@@ -289,7 +289,17 @@ export function selfcheck() {
   assert.equal(member('conf/codex-ws-agent/agent-client.mjs'), 'conf/codex-ws-agent/agent-client.mjs');
   assert.throws(() => validateSourceIdentity({})); assert.throws(() => validateSourceIdentity({ ...SOURCE, format: 'ur03-git-archive-v1', files: {} }));
   assert.equal(treeDigest([]), '4b825dc642cb6eb9a060e54bf8d69288fbee4904');
-  process.stdout.write('UR04_STATIC_SELF_CHECK_PASS assertions=7 business=NOT_RUN\n');
+  // Synthetic identity only, not archive/artifact acceptance: each exact provenance
+  // component must reject a mismatch independently (no secondary source accepted).
+  const proof = { format: 'ur04-full-git-archive-v1', commit: SOURCE.commit, tree: SOURCE.tree,
+    archiveSha256: SOURCE.tarSha256, archiveBytes: SOURCE.tarBytes,
+    files: Object.fromEntries(Array.from({ length: SOURCE.count }, (_, i) => [`synthetic-${i}`, '0'.repeat(64)])) };
+  validateSourceIdentity(proof);
+  for (const [key, value] of [['commit', '0'.repeat(40)], ['tree', '0'.repeat(40)],
+    ['archiveSha256', '0'.repeat(64)], ['archiveBytes', SOURCE.tarBytes - 1], ['files', {}]]) {
+    assert.throws(() => validateSourceIdentity({ ...proof, [key]: value }), { code: 'SOURCE_IDENTITY_REQUIRED' });
+  }
+  process.stdout.write('UR04_STATIC_SELF_CHECK_PASS assertions=13 business=NOT_RUN\n');
 }
 async function main() {
   if (process.argv.includes('--selfcheck')) { selfcheck(); return; }
@@ -299,7 +309,7 @@ async function main() {
       artifactProof: 'ur04-clean-artifact.json {format:ur04-clean-artifact-v1,sourceCommit,sourceTree,archiveSha256,cleanRun,checks:{C1:PASS,C2:PASS,C3:PASS,C4:PASS},files:{path:sha256|{type:symlink,target,sha256_of_link_text}}}',
       business: 'NOT_RUN', model: 'SYNTHETIC_EXECUTOR_NOT_PROVIDER' }) + '\n'); return;
   }
-  requireInput(process.env.UR04_CLOUD_CHILD === '1', 'CLOUD_CHILD_ONLY');
+  requireInput(process.env.UR04_PRIVATE_CHILD === '1', 'PRIVATE_CHILD_ONLY');
   for (const key of ['log','warn','error','info','debug']) console[key] = () => {}; // private protocol is the only exported output
   const lines = createInterface({ input: process.stdin, crlfDelay: Infinity })[Symbol.asyncIterator]();
   const first = await lines.next(); requireInput(!first.done, 'PRIVATE_INIT_REQUIRED'); const input = JSON.parse(first.value);
