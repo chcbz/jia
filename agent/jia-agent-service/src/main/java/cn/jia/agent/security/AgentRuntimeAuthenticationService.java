@@ -136,6 +136,8 @@ public class AgentRuntimeAuthenticationService {
         return proof;
     }
 
+    // Filter entry point must own the transaction: its call to verify() is a self-invocation.
+    @Transactional(rollbackFor = Exception.class)
     public AgentRuntimeAuthentication authenticate(AgentRuntimeAuthenticationFilter.SessionHeaders headers, boolean requireChannel) {
         Proof proof = verify(headers);
         if (requireChannel && !hasChannel(proof)) throw denied();

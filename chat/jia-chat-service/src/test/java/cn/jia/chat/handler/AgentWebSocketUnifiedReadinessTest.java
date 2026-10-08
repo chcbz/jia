@@ -120,6 +120,73 @@ class AgentWebSocketUnifiedReadinessTest {
         assertFalse(f.handler.isExactAgentConnected("0", "client", "agent-a"));
         assertTrue(f.handler.isExactAgentConnected("0", "client", "agent-b"));
     }
+    @Test void replacedSocketCannotMutatePresenceButCurrentSocketStillCan() throws Exception {
+        var f = new Fixture(); var old = f.session("old", "agent-a"); var current = f.session("new", "agent-a");
+        f.register(old, true, true); f.register(current, true, true); f.current.remove("old");
+        var runtime = new AgentRuntimeDTO(); runtime.setAgentId("agent-a"); runtime.setStatus("online");
+        when(f.service.updateStatus(eq("agent-a"), any())).thenReturn(runtime);
+        var presence = new TextMessage("{\"type\":\"agent.presence\",\"agentId\":\"agent-a\","
+                + "\"runtimeInstanceId\":\"boot\",\"status\":\"online\"}");
+
+        f.handler.handleTextMessage(old, presence);
+        verify(f.service, never()).updateStatus(any(), any());
+        f.handler.handleTextMessage(current, presence);
+        verify(f.service).updateStatus(eq("agent-a"), any());
+        assertTrue(f.handler.isExactAgentConnected("0", "client", "agent-a"));
+    }
+    @Test void queueHealthLossDoesNotRejectExistingTerminalTaskReport() throws Exception {
+        var f = new Fixture(); var a = f.session("a", "agent-a"); f.register(a, false, true);
+        var task = new AgentTaskDTO(); task.setId("original-task"); task.setStatus("completed");
+        when(f.service.reportTask(eq("original-task"), any())).thenReturn(task);
+
+        f.handler.handleTextMessage(a, new TextMessage("{\"type\":\"task.report\",\"agentId\":\"agent-a\","
+                + "\"runtimeInstanceId\":\"boot\",\"taskId\":\"original-task\",\"status\":\"completed\"}"));
+
+        verify(f.service).reportTask(eq("original-task"), any());
+        assertFalse(f.handler.isExactAgentConnected("0", "client", "agent-a"));
+    }
+    @Test void staleFencedBusinessCallbackNeverMutatesEvenIfChannelWasSelected() throws Exception {
+        var f = new Fixture(); var a = f.session("a", "agent-a"); f.register(a, true, true);
+        when(f.auth.withFence(any(), eq(false), any())).thenThrow(new IllegalArgumentException("stale generation"));
+
+        f.handler.handleTextMessage(a, new TextMessage("{\"type\":\"agent.presence\",\"agentId\":\"agent-a\","
+                + "\"runtimeInstanceId\":\"boot\",\"status\":\"online\"}"));
+
+        verify(f.service, never()).updateStatus(any(), any());
+    }
+    @Test void cancellationMustKeepOriginalConversationAndRetainHandleUntilExactMatch() throws Exception {
+        var f = new Fixture(); var a = f.session("a", "agent-a"); f.register(a, true, true);
+        var disposable = trackStream(f.handler, "a", "original-request", "original-conversation");
+        f.stop(a, "original-request", "wrong-conversation");
+        verify(disposable, never()).dispose();
+        f.stop(a, "original-request", "original-conversation");
+        verify(disposable).dispose();
+        f.stop(a, "original-request", "original-conversation");
+        verify(disposable, times(1)).dispose();
+    }
+    @Test void replacementSocketAndUnboundCancellationCannotDisposeOriginalHandle() throws Exception {
+        var f = new Fixture(); var old = f.session("old", "agent-a"); var current = f.session("new", "agent-a");
+        f.register(old, true, true); f.register(current, true, true); f.current.remove("old");
+        var disposable = trackStream(f.handler, "old", "original-request", "original-conversation");
+        f.stop(old, "original-request", "original-conversation");
+        f.stop(current, "original-request", "original-conversation");
+        f.handler.handleTextMessage(old, new TextMessage("{\"type\":\"chat.stop\",\"requestId\":\"original-request\"}"));
+        verify(disposable, never()).dispose();
+    }
+    // Seed only the existing private stream recovery handle; no network/provider execution.
+    @SuppressWarnings("unchecked")
+    private static reactor.core.Disposable trackStream(AgentWebSocketHandler handler, String sessionId,
+            String requestId, String conversationId) throws Exception {
+        var disposable = mock(reactor.core.Disposable.class);
+        var type = Class.forName(AgentWebSocketHandler.class.getName() + "$StreamState");
+        var constructor = type.getDeclaredConstructor(String.class, String.class, String.class, reactor.core.Disposable.class);
+        constructor.setAccessible(true);
+        var field = AgentWebSocketHandler.class.getDeclaredField("runningStreams"); field.setAccessible(true);
+        var streams = (Map<String, Object>) field.get(handler);
+        streams.put(sessionId + ":" + requestId, constructor.newInstance(sessionId, requestId, conversationId, disposable));
+        return disposable;
+    }
+
     private static class Fixture {
         final AgentService service = mock(AgentService.class);
         final AgentRuntimeAuthenticationService auth = mock(AgentRuntimeAuthenticationService.class);
@@ -148,6 +215,10 @@ class AgentWebSocketUnifiedReadinessTest {
             UnifiedRuntimeTestSupport.registrationProof(s, payload);
             payload.put("runtimeInstanceId", "boot"); payload.put("durableStateHealthy", durable); payload.put("readyCommandTypes", execute ? List.of("TASK_INVITE") : List.of());
             handler.handleTextMessage(s, new TextMessage(new ObjectMapper().writeValueAsString(payload)));
+        }
+        void stop(WebSocketSession session, String requestId, String conversationId) throws Exception {
+            handler.handleTextMessage(session, new TextMessage(new ObjectMapper().writeValueAsString(Map.of(
+                    "type", "chat.stop", "requestId", requestId, "conversationId", conversationId))));
         }
         AgentRawCommandDispatchResult dispatch(String agent) { return handler.dispatchExactRawCommand("0", "client", "task", agent, wire(agent)); }
         byte[] wire(String agent) {

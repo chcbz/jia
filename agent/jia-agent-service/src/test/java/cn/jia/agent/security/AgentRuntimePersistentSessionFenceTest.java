@@ -62,6 +62,49 @@ class AgentRuntimePersistentSessionFenceTest {
                 session.sessionGeneration(), session.sessionToken());
     }
 
+    @Test void filterAuthenticationEntryActuallyKeepsInstallationReadInsideProxyTransaction() {
+        var session = auth.issue(installation, request("host", "boot"), 1000);
+        var manager = mock(org.springframework.transaction.PlatformTransactionManager.class);
+        var transaction = mock(org.springframework.transaction.TransactionStatus.class);
+        when(manager.getTransaction(any())).thenReturn(transaction);
+        var interceptor = new org.springframework.transaction.interceptor.TransactionInterceptor();
+        interceptor.setTransactionManager(manager);
+        interceptor.setTransactionAttributeSource(new org.springframework.transaction.annotation.AnnotationTransactionAttributeSource());
+        var factory = new org.springframework.aop.framework.ProxyFactory(auth);
+        factory.setProxyTargetClass(true); factory.addAdvice(interceptor);
+        var proxy = (AgentRuntimeAuthenticationService) factory.getProxy();
+        clearInvocations(installations, rows);
+
+        assertEquals(AGENT, proxy.authenticate(headers(session), false).getName());
+
+        var order = inOrder(manager, installations, rows);
+        order.verify(manager).getTransaction(any());
+        order.verify(installations).lock(ID);
+        order.verify(rows).findInScope("0", "client", AGENT);
+        order.verify(manager).commit(transaction);
+        verify(manager, times(1)).getTransaction(any());
+        verify(manager, never()).rollback(any());
+    }
+    @Test void staleFencedCallbackRollsBackThroughProxyRatherThanReturningACommit() {
+        var first = auth.issue(installation, request("host", "boot"), 1000);
+        var proof = auth.verify(headers(first));
+        auth.issue(installation, request("host", "replacement"), 1001);
+        var manager = mock(org.springframework.transaction.PlatformTransactionManager.class);
+        var transaction = mock(org.springframework.transaction.TransactionStatus.class);
+        when(manager.getTransaction(any())).thenReturn(transaction);
+        var interceptor = new org.springframework.transaction.interceptor.TransactionInterceptor();
+        interceptor.setTransactionManager(manager);
+        interceptor.setTransactionAttributeSource(new org.springframework.transaction.annotation.AnnotationTransactionAttributeSource());
+        var factory = new org.springframework.aop.framework.ProxyFactory(auth);
+        factory.setProxyTargetClass(true); factory.addAdvice(interceptor);
+        var proxy = (AgentRuntimeAuthenticationService) factory.getProxy();
+        AtomicBoolean entered = new AtomicBoolean();
+
+        assertThrows(RuntimeException.class, () -> proxy.withFence(proof, false, () -> entered.compareAndSet(false, true)));
+
+        assertFalse(entered.get()); verify(manager).rollback(transaction); verify(manager, never()).commit(any());
+    }
+
     @Test void coldProvisionedIdentityIssuesIndependentDigestOnlyPendingSession() {
         var session = auth.issue(installation, request("host", "boot"), 1000);
         assertEquals("CHANNEL_PENDING", session.status()); assertEquals(1, session.sessionGeneration());

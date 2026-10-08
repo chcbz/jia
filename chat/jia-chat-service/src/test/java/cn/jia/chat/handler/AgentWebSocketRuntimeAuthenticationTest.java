@@ -117,6 +117,7 @@ class AgentWebSocketRuntimeAuthenticationTest {
             doAnswer(inv -> { frames.add(((TextMessage)inv.getArgument(0)).getPayload()); return null; }).when(session).sendMessage(any());
             handler = new AgentWebSocketHandler(mock(ChatClient.class),provider,mock(ChatMessageDao.class),mock(ChatConversationEventBroker.class));
             UnifiedRuntimeTestSupport.stub(auth);
+            when(auth.isCurrentBinding(any(), any(), any(), any(), any(), any())).thenReturn(true);
             UnifiedRuntimeTestSupport.install(session);
             handler.setRuntimeAuthentication(auth);
         }

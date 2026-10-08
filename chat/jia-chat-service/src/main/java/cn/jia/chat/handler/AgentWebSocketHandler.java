@@ -494,7 +494,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             return;
         }
         try {
-            AgentExecutionReportService.ReportReceipt receipt = runtimeAuthentication.withFence(sessionProof(session), false, () -> service.accept(
+            AgentExecutionReportService.ReportReceipt receipt = withSessionMutationFence(session, () -> service.accept(
                     new AgentExecutionReportService.RuntimeScope(
                             "0", clientId, ownerJiacn, agentId, runtimeInstanceId),
                     new AgentExecutionReportService.ReportCommand(messageType, reportMessageId, reportId,
@@ -739,16 +739,34 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
 
     private void stopStream(WebSocketSession session, Map<String, Object> payload) {
         String requestId = asString(payload.get("requestId"));
-        String conversationId = Optional.ofNullable(asString(payload.get("conversationId")))
-                .orElse(session.getId());
+        String conversationId = asString(payload.get("conversationId"));
         AtomicInteger stoppedCount = new AtomicInteger();
 
-        if (requestId == null || requestId.isBlank()) {
-            sendProtocolError(session, payload, "CHAT_STOP_BINDING_REQUIRED", "Cancellation requires the original requestId");
+        if (!validExactDispatchId(requestId, 100) || !validExactDispatchId(conversationId, 100)) {
+            sendProtocolError(session, payload, "CHAT_STOP_BINDING_REQUIRED",
+                    "Cancellation requires the original requestId and conversationId");
             return;
         }
-        Optional.ofNullable(runningStreams.remove(streamKey(session, requestId, conversationId)))
-                .ifPresent(stream -> { stream.dispose(); stoppedCount.incrementAndGet(); });
+        String key = streamKey(session, requestId, conversationId);
+        StreamState retired;
+        try {
+            retired = withSessionMutationFence(session, () -> {
+                StreamState stream = runningStreams.get(key);
+                // The existing map key uses requestId. It does not prove the original conversation,
+                // and a mismatched cancellation must not remove another stream's recovery handle.
+                return stream != null && session.getId().equals(stream.sessionId())
+                        && requestId.equals(stream.requestId()) && conversationId.equals(stream.conversationId())
+                        && runningStreams.remove(key, stream) ? stream : null;
+            });
+        } catch (RuntimeException rejected) {
+            sendProtocolError(session, payload, "CHAT_STOP_BINDING_REJECTED", "Cancellation proof rejected");
+            return;
+        }
+        // Transport/subscriber effects stay outside the persistent business fence.
+        if (retired != null) {
+            retired.dispose();
+            stoppedCount.incrementAndGet();
+        }
 
         Map<String, Object> stopped = copyTrace(payload);
         stopped.put("conversationId", conversationId);
@@ -997,7 +1015,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             if (payload.containsKey("durableStateHealthy") && !(payload.get("durableStateHealthy") instanceof Boolean)) {
                 throw new IllegalArgumentException("Invalid durable-state health declaration");
             }
-            AgentRuntimeDTO agent = withSessionContext(session, () -> runtimeAuthentication.withFence(sessionProof(session), false, () -> agentService.updateStatus(agentId, request)));
+            AgentRuntimeDTO agent = withSessionContext(session, () -> withSessionMutationFence(session, () -> agentService.updateStatus(agentId, request)));
             if (payload.containsKey("durableStateHealthy")) {
                 sessionDurableStateHealthy.put(session.getId(), Boolean.TRUE.equals(payload.get("durableStateHealthy")));
             }
@@ -1044,7 +1062,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             AgentTaskAssignDTO request = new AgentTaskAssignDTO();
             request.setAgentId(agentId);
             request.setAllowQueue(asBoolean(payload.get("allowQueue")));
-            AgentTaskDTO task = withSessionContext(session, () -> runtimeAuthentication.withFence(sessionProof(session), false, () -> agentService.assignTask(taskId, request)));
+            AgentTaskDTO task = withSessionContext(session, () -> withSessionMutationFence(session, () -> agentService.assignTask(taskId, request)));
             String tenantId = sessionJiacn(session);
             String clientId = sessionClientId(session);
             if (!isTrustedTaskAssignmentConfirmation(task, taskId, tenantId, clientId, agentId)) {
@@ -1110,7 +1128,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             request.setStatus(asString(payload.get("status")));
             request.setCurrentTaskTitle(asString(payload.get("currentTaskTitle")));
             request.setFailureReason(asString(payload.get("failureReason")));
-            AgentTaskDTO task = withSessionContext(session, () -> runtimeAuthentication.withFence(sessionProof(session), false, () -> agentService.reportTask(taskId, request)));
+            AgentTaskDTO task = withSessionContext(session, () -> withSessionMutationFence(session, () -> agentService.reportTask(taskId, request)));
             Map<String, Object> event = copyTrace(payload);
             event.put("taskId", task.getId());
             event.put("status", task.getStatus());
@@ -1125,7 +1143,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     private void acknowledgeHostedReceipt(WebSocketSession session, String agentId, String dispatchId) {
         if (chatDeliberationOutboxService == null) return;
         try {
-            runtimeAuthentication.withFence(sessionProof(session), false, () -> {
+            withSessionMutationFence(session, () -> {
                 chatDeliberationOutboxService.acknowledgeHostedReceipt(sessionTenantId(session),
                         sessionJiacn(session), sessionClientId(session), agentId, dispatchId, System.currentTimeMillis());
                 return null;
@@ -1145,7 +1163,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         String dispatchId = strictString(payload.get("dispatchId"));
         String messageId = strictString(payload.get("messageId"));
         try {
-            boolean acknowledged = runtimeAuthentication.withFence(sessionProof(session), false, () -> chatDeliberationOutboxService.acknowledgeHostedDispatch(
+            boolean acknowledged = withSessionMutationFence(session, () -> chatDeliberationOutboxService.acknowledgeHostedDispatch(
                     sessionTenantId(session), sessionJiacn(session), sessionClientId(session),
                     agentId, dispatchId, messageId, System.currentTimeMillis()));
             if (!acknowledged) {
@@ -1218,7 +1236,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             }
             ChatDeliberationService.FinalResult finalResult;
             try {
-                finalResult = runtimeAuthentication.withFence(sessionProof(session), false, () -> chatDeliberationService.persistFinal(
+                finalResult = withSessionMutationFence(session, () -> chatDeliberationService.persistFinal(
                         sessionTenantId(session), jiacn, clientId, conversationId, generation, agentId,
                         asString(payload.get("requestId")), asString(payload.get("turnId")),
                         asString(payload.get("dispatchId")), contextValue(payload, "contextSnapshotId"),
@@ -1267,7 +1285,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         entity.setMetadata(JsonUtil.toJson(metadata));
         try {
             ChatMessageEntity proposed = entity;
-            entity = runtimeAuthentication.withFence(sessionProof(session), false,
+            entity = withSessionMutationFence(session,
                     () -> chatConversationService.appendOwnedMessage(jiacn, clientId, proposed, generation));
         } catch (RuntimeException denied) {
             sendError(session, payload, "CONVERSATION_NOT_AVAILABLE",
@@ -1342,7 +1360,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             }
             ChatDeliberationService.DeltaResult result;
             try {
-                result = runtimeAuthentication.withFence(sessionProof(session), false, () -> chatDeliberationService.acceptDelta(
+                result = withSessionMutationFence(session, () -> chatDeliberationService.acceptDelta(
                         sessionTenantId(session), sessionJiacn(session), sessionClientId(session),
                         conversationId, generation, agentId,
                         asString(payload.get("requestId")), asString(payload.get("turnId")),
@@ -3127,6 +3145,24 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             return;
         }
         sessionRuntimeInstanceIds.putIfAbsent(session.getId(), runtimeInstanceId);
+    }
+
+    /** Join the persistent generation fence, then reject a replaced registered socket before
+     * entering the original business transaction. Queue health is deliberately not checked:
+     * valid existing terminal reports remain admissible when new execution is not ready.
+     * Initial presence may be reported before registration, but cannot establish readiness.
+     */
+    private <T> T withSessionMutationFence(WebSocketSession session, Supplier<T> action) {
+        var proof = sessionProof(session);
+        var scope = proof.scope();
+        return runtimeAuthentication.withFence(proof, false, () -> {
+            if (!session.isOpen() || successfullyRegisteredAgentIds(session.getId()).contains(scope.agentId())
+                    && !runtimeAuthentication.isCurrentBinding(session.getId(), scope.tenantId(), scope.clientId(),
+                            scope.ownerJiacn(), scope.agentId(), scope.runtimeInstanceId())) {
+                throw new IllegalArgumentException("Runtime channel is no longer current");
+            }
+            return action.get();
+        });
     }
 
     private <T> T withSessionContext(WebSocketSession session, Supplier<T> action) {
