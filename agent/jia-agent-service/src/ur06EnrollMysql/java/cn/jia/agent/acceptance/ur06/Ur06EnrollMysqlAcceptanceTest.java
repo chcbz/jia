@@ -807,7 +807,7 @@ class Ur06EnrollMysqlAcceptanceTest {
             if(r.get("bean")!=null&&Set.of("sqlSessionFactory","runtimes","installations","agents","catalog","runtime","authentication","springSecurityFilterChain").contains(r.get("bean").asText()))result+=" bean="+r.get("bean").asText();return new SafeFailure(result);}
         void own(){if(process.isAlive()&&!process.info().startInstant().map(Object::toString).filter(start::equals).isPresent())throw new SafeFailure("CHILD_IDENTITY_CHANGED");}
         void stop(String expected)throws Exception{if(process.isAlive()){own();exchange(Map.of("op","STOP"),expected);exitZero();}}
-        void exitZero()throws Exception{if(process.waitFor()!=0)throw new SafeFailure("CHILD_EXIT_NOT_ZERO");}
+        void exitZero()throws Exception{input.close();if(process.waitFor()!=0)throw new SafeFailure("CHILD_EXIT_NOT_ZERO");}
         void crash()throws Exception{
             own();List<OwnedChild> descendants=process.descendants().filter(ProcessHandle::isAlive)
                 .map(h->new OwnedChild(h.pid(),h.info().startInstant().orElseThrow(()->new SafeFailure("OWNED_DESCENDANT_START_REQUIRED")))).toList();

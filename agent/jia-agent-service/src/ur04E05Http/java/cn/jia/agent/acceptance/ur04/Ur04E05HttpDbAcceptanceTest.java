@@ -522,7 +522,7 @@ class Ur04E05HttpDbAcceptanceTest {
             return new SafeFailure(result);
         }
         void stop(String receipt) throws Exception { if (process.isAlive()) { exchange(Map.of("op", "STOP"), receipt); exitZero(); } }
-        void exitZero() throws Exception { if (process.waitFor() != 0) throw new SafeFailure("CHILD_EXIT_NOT_ZERO"); }
+        void exitZero() throws Exception { input.close(); if (process.waitFor() != 0) throw new SafeFailure("CHILD_EXIT_NOT_ZERO"); }
         void crash() throws Exception {
             // Capture exact descendants while this owned parent is alive; no PID search/global service control.
             List<OwnedChild> descendants = process.descendants().filter(ProcessHandle::isAlive)
