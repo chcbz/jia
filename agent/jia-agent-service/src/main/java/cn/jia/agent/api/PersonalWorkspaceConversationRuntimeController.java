@@ -100,7 +100,10 @@ public final class PersonalWorkspaceConversationRuntimeController {
             @PathVariable String runId,@RequestBody FenceRequest request,
             HttpServletRequest servletRequest,Authentication authentication) {
         noQuery(servletRequest);
-        executions.beginConversationProviderStart(scope(authentication),taskId,runId,fence(request));
+        runtimeAuthentication.withNativeFence(authentication,()->{
+            executions.beginConversationProviderStart(scope(authentication),taskId,runId,fence(request));
+            return null;
+        });
         return ok(new ProviderStartReceipt(true));
     }
 

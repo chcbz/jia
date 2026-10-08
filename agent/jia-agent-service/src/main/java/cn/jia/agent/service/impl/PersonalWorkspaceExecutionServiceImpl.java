@@ -1313,7 +1313,47 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             throw failure(Reason.NOT_FOUND);
         requireStartCommand(candidate,command.commandId(),command.messageId());
         if(taskMutations==null||conversationGrants==null||controlledConsents==null)throw failure(Reason.CAPABILITY_UNAVAILABLE);
-        return taskMutations.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,root->{
+        nativeAuthentication(scope);
+        var prepared=taskMutations.executeWithLockedTaskRootInOwnerScope(
+                scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,
+                root->prepareControlledStartLocked(scope,taskId,runId,command,candidate,root));
+        // Immutable source tuples were authorized under the original task-root/grant/consent
+        // transaction above. Release it before storage I/O; the final phase repeats every
+        // business check and requires the exact tuple set verified here before consuming cost.
+        readControlledInputBytes(scope,prepared.inputs());
+        return nativeMutation(scope,()->taskMutations.executeWithLockedTaskRootInOwnerScope(
+                scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,root->{
+            var current=prepareControlledStartLocked(scope,taskId,runId,command,candidate,root);
+            if(!prepared.inputs().equals(current.inputs()))throw failure(Reason.GRANT_REVOKED);
+            var execution=current.execution();
+            long leaseVersion=command.fence().version();
+            var consentScope=new cn.jia.agent.service.AgentTaskProviderCostConsentService.Scope(
+                    scope.tenantId(),scope.clientId(),scope.ownerJiacn());
+            controlledConsents.consumeWithinLockedRoot(consentScope,taskId,current.consent(),
+                    current.costAuthorizationVersion(),execution.getExecutionId(),execution.getRunId(),
+                    "pwe_lease_"+plainSha("controlled-provider-start\n"+execution.getExecutionId()+"\n"
+                            +scope.runtimeInstanceId()+"\n"+leaseVersion));
+            long startedAt=System.currentTimeMillis();
+            if(!executions.markControlledProviderStarted(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                    taskId,runId,execution.getExecutionId(),execution.getControlledConsentId(),
+                    leaseVersion,startedAt))throw failure(Reason.TASK_CONFLICT);
+            execution.setConversationProviderStartedAt(startedAt).setConversationProviderLeaseVersion(leaseVersion);
+            return new ControlledProviderStartReceipt(2,true,taskId,runId,execution.getExecutionId(),
+                    command.commandId(),command.messageId(),current.provider(),leaseVersion);
+        }));
+    }
+
+    private record PreparedControlledInput(String inputRef,String fileId,int fileVersion,
+            String originalFilename,String contentMimeType,long byteLength,String contentHash,String storageUri) { }
+    private record ControlledStartPreparation(ProviderExecution provider,
+            cn.jia.agent.entity.AgentTaskProviderCostConsentEntity consent,
+            PersonalWorkspaceExecutionEntity execution,long costAuthorizationVersion,
+            List<PreparedControlledInput> inputs) { }
+
+    /** Original root -> grant -> consent -> execution checks, with no external storage I/O. */
+    private ControlledStartPreparation prepareControlledStartLocked(RuntimeScope scope,String taskId,
+            String runId,ControlledProviderStart command,PersonalWorkspaceExecutionEntity candidate,
+            AgentTaskMetaEntity root) {
             var grantScope=new AgentTaskExecutionGrantService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());
             var admission=conversationGrants.admitControlled(grantScope,taskId,candidate.getTaskGrantId(),
                     candidate.getTaskGrantVersion(),candidate.getAssignmentRevision(),candidate.getTargetAgentId(),
@@ -1340,24 +1380,12 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                     new OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),execution);
             if(execution.getConversationProviderStartedAt()!=null||execution.getConversationProviderLeaseVersion()!=null)
                 throw failure(Reason.TASK_CONFLICT);
-            verifiedConversationInputsAgainst(scope,execution,admission.inputs());
-            long leaseVersion=command.fence().version();
-            controlledConsents.consumeWithinLockedRoot(consentScope,taskId,consent,
-                    Objects.requireNonNull(admission.costAuthorizationVersion()),execution.getExecutionId(),
-                    execution.getRunId(),"pwe_lease_"+plainSha("controlled-provider-start\n"
-                            +execution.getExecutionId()+"\n"+scope.runtimeInstanceId()+"\n"+leaseVersion));
-            long startedAt=System.currentTimeMillis();
-            if(!executions.markControlledProviderStarted(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
-                    taskId,runId,execution.getExecutionId(),execution.getControlledConsentId(),
-                    leaseVersion,startedAt))throw failure(Reason.TASK_CONFLICT);
-            execution.setConversationProviderStartedAt(startedAt)
-                    .setConversationProviderLeaseVersion(leaseVersion);
-            return new ControlledProviderStartReceipt(2,true,taskId,runId,execution.getExecutionId(),
-                    command.commandId(),command.messageId(),expected,leaseVersion);
-        });
+            var inputs=verifiedConversationInputRowsAgainst(scope,execution,admission.inputs());
+            return new ControlledStartPreparation(expected,consent,execution,
+                    Objects.requireNonNull(admission.costAuthorizationVersion()),inputs);
     }
 
-    private List<RuntimeInput> verifiedConversationInputsAgainst(RuntimeScope scope,
+    private List<PreparedControlledInput> verifiedConversationInputRowsAgainst(RuntimeScope scope,
             PersonalWorkspaceExecutionEntity execution,
             List<AgentTaskExecutionGrantService.AuthorizedInput> authorized) {
         OwnerScope owner=new OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());
@@ -1371,7 +1399,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                     || indexed.putIfAbsent(input.getInputRef(),input)!=null)
                 throw failure(Reason.GRANT_REVOKED);
         }
-        var result=new ArrayList<RuntimeInput>();
+        var result=new ArrayList<PreparedControlledInput>();
         for (int index=0;index<authorized.size();index++) {
             String inputRef="input_"+(index+1);
             var input=indexed.get(inputRef);
@@ -1394,23 +1422,25 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                     || !same(version.getContentHash(),input.getContentHash())
                     || !same(version.getStorageUri(),input.getStorageUri()))
                 throw failure(Reason.GRANT_REVOKED);
-            PersonalWorkspaceStorage.StoredContent stored;
-            try {
-                stored=storage.read(storageScope(scope),input.getStorageUri(),input.getContentHash(),
-                        input.getByteLength(),input.getContentMimeType());
-            } catch (RuntimeException unavailable) {
-                throw failure(Reason.STORAGE_UNAVAILABLE);
-            }
-            byte[] bytes=stored==null?null:stored.content();
-            if (stored==null || bytes==null || bytes.length!=input.getByteLength()
-                    || stored.byteLength()!=input.getByteLength()
-                    || !same(stored.mimeType(),input.getContentMimeType())
-                    || !same(stored.sha256(),input.getContentHash())
-                    || !same(plainSha(bytes),input.getContentHash()))
-                throw failure(Reason.STORAGE_UNAVAILABLE);
-            result.add(runtimeInput(input));
+            result.add(new PreparedControlledInput(input.getInputRef(),input.getFileId(),input.getFileVersion(),
+                    input.getOriginalFilename(),input.getContentMimeType(),input.getByteLength(),
+                    input.getContentHash(),input.getStorageUri()));
         }
         return List.copyOf(result);
+    }
+
+    private void readControlledInputBytes(RuntimeScope scope,List<PreparedControlledInput> inputs) {
+        for(var input:inputs) {
+            PersonalWorkspaceStorage.StoredContent stored;
+            try { stored=storage.read(storageScope(scope),input.storageUri(),input.contentHash(),
+                    input.byteLength(),input.contentMimeType()); }
+            catch(RuntimeException unavailable) { throw failure(Reason.STORAGE_UNAVAILABLE); }
+            byte[] bytes=stored==null?null:stored.content();
+            if(stored==null||bytes==null||bytes.length!=input.byteLength()
+                    ||stored.byteLength()!=input.byteLength()||!same(stored.mimeType(),input.contentMimeType())
+                    ||!same(stored.sha256(),input.contentHash())||!same(plainSha(bytes),input.contentHash()))
+                throw failure(Reason.STORAGE_UNAVAILABLE);
+        }
     }
 
     private static boolean exactControlledInput(OwnerScope scope,String executionId,String inputRef,

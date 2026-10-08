@@ -25,6 +25,10 @@ import cn.jia.agent.service.ControlledImageFollowupAuthorityService;
 import cn.jia.agent.service.PersonalWorkspaceExecutionService;
 import cn.jia.agent.service.PersonalWorkspaceStorage;
 import cn.jia.chat.service.WorkspaceConversationAccessService;
+import cn.jia.agent.security.AgentRuntimeAuthentication;
+import cn.jia.agent.security.AgentRuntimeAuthenticationService;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -58,12 +62,22 @@ class ControlledImageConversationStartTest {
             new PersonalWorkspaceExecutionService.RuntimeScope("0","client","owner","agent","runtime");
     private PersonalWorkspaceExecutionServiceImpl service;
     private PersonalWorkspaceExecutionEntity execution;
+    private final java.util.concurrent.atomic.AtomicBoolean rootPhase=new java.util.concurrent.atomic.AtomicBoolean();
+
+    @AfterEach void clearRuntimePrincipal() { SecurityContextHolder.clearContext(); }
 
     @BeforeEach void setUp() throws Exception {
         when(storage.maxContentBytes()).thenReturn(10_000_000L);
         service=new PersonalWorkspaceExecutionServiceImpl(executions,workspace,taskLinks,runtimes,storage,writes,
                 new PersonalWorkspaceExecutionProperties(List.of("image/png")));
         service.setConversationAdmission(grants,transactions);
+        var principal=new AgentRuntimeAuthentication(new AgentRuntimeAuthentication.Scope("0","client","owner","agent","runtime"));
+        principal.setDetails(new AgentRuntimeAuthenticationService.Proof(principal.getPrincipal(),
+                "rti_"+"1".repeat(32),"host",1,"b".repeat(64),7,2));
+        SecurityContextHolder.getContext().setAuthentication(principal);
+        var auth=mock(AgentRuntimeAuthenticationService.class);
+        when(auth.withNativeFence(any(),any())).thenAnswer(call->((java.util.function.Supplier<?>)call.getArgument(1)).get());
+        service.setRuntimeAuthentication(auth);
         service.setControlledConsentLifecycle(consents);
         service.setControlledImageFollowupV3(followupAuthority,followupSources);
         service.setInitialControlledImageV3(initialOperations);
@@ -76,7 +90,9 @@ class ControlledImageConversationStartTest {
         enabled.setAccessible(true);enabled.setBoolean(service,true);
         doAnswer(invocation -> {
             AgentTaskMutationTransaction.LockedTaskMutation<?> callback=invocation.getArgument(4);
-            return callback.apply(root());
+            assertFalse(rootPhase.get());rootPhase.set(true);
+            try { return callback.apply(root()); }
+            finally { rootPhase.set(false); }
         }).when(transactions).executeWithLockedTaskRootInOwnerScope(
                 anyString(),anyString(),anyString(),anyString(),any());
         execution=execution();
@@ -345,6 +361,87 @@ class ControlledImageConversationStartTest {
                 anyString(),anyString(),anyString());
         verify(storage,never()).read(any(),anyString(),anyString(),anyLong(),anyString());
     }
+
+    @Test void byteReadIsOutsideRootAndGenerationRotationPreventsCostConsumption() throws Exception {
+        var fence=installRealNativeFence();
+        byte[] bytes="reference".getBytes(StandardCharsets.UTF_8);String hash=sha(bytes);
+        oneInput(bytes,hash);
+        when(storage.read(any(),eq("memory://file-1"),eq(hash),eq((long)bytes.length),eq("image/png")))
+                .thenAnswer(call->{
+                    assertFalse(rootPhase.get());assertFalse(fence.transactionActive().get());
+                    fence.row().setRuntimeSessionGeneration(2L).setRuntimeInstanceId("replacement");
+                    return new PersonalWorkspaceStorage.StoredContent(bytes,hash,bytes.length,"image/png");
+                });
+        assertThrows(RuntimeException.class,()->service.beginControlledConversationProviderStart(runtime,"task","run",command()));
+        verify(consents,never()).consumeWithinLockedRoot(any(),anyString(),any(),anyLong(),anyString(),anyString(),anyString());
+        verify(executions,never()).markControlledProviderStarted(anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),anyLong(),anyLong());
+        verify(fence.manager()).rollback(fence.status());verify(fence.manager(),never()).commit(any());
+    }
+
+    @Test void changedSourceTupleAfterByteReadRejectsUnderCurrentFenceWithoutReReadingStorage() throws Exception {
+        var fence=installRealNativeFence();
+        byte[] bytes="reference".getBytes(StandardCharsets.UTF_8);String hash=sha(bytes);
+        oneInput(bytes,hash);
+        when(storage.read(any(),eq("memory://file-1"),eq(hash),eq((long)bytes.length),eq("image/png")))
+                .thenAnswer(call->{
+                    assertFalse(rootPhase.get());assertFalse(fence.transactionActive().get());
+                    var changed=input(1,"file-1",bytes.length,hash).setStorageUri("memory://replacement");
+                    when(executions.listInputs("0","client","owner",execution.getExecutionId())).thenReturn(List.of(changed));
+                    when(workspace.findVersion("0","client","owner","file-1",1))
+                            .thenReturn(version("file-1",bytes.length,hash).setStorageUri("memory://replacement"));
+                    return new PersonalWorkspaceStorage.StoredContent(bytes,hash,bytes.length,"image/png");
+                });
+        var failure=assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                ()->service.beginControlledConversationProviderStart(runtime,"task","run",command()));
+        assertEquals(PersonalWorkspaceExecutionService.Reason.GRANT_REVOKED,failure.getReason());
+        verify(storage,times(1)).read(any(),anyString(),anyString(),anyLong(),anyString());
+        verify(consents,never()).consumeWithinLockedRoot(any(),anyString(),any(),anyLong(),anyString(),anyString(),anyString());
+        verify(fence.manager()).rollback(fence.status());
+    }
+
+    private void oneInput(byte[] bytes,String hash) {
+        admit(List.of(new AgentTaskExecutionGrantService.AuthorizedInput("file-1",1,"REFERENCE","image/png",bytes.length,hash)));
+        when(executions.listInputs("0","client","owner",execution.getExecutionId()))
+                .thenReturn(List.of(input(1,"file-1",bytes.length,hash)));
+        when(workspace.findFile("0","client","owner","file-1")).thenReturn(file("file-1"));
+        when(workspace.findVersion("0","client","owner","file-1",1)).thenReturn(version("file-1",bytes.length,hash));
+    }
+
+    /** Real auth + transaction advice; root/persistence collaborators are deliberately mocked. */
+    private NativeFence installRealNativeFence() {
+        String id="rti_"+"1".repeat(32);
+        var installations=mock(cn.jia.agent.dao.AgentRuntimeV1InstallationDao.class);
+        var installation=new cn.jia.agent.entity.AgentRuntimeV1InstallationEntity()
+                .setInstallationId(id).setCanonicalAgentId("agent").setStatus("ACTIVE");
+        installation.setTenantId("0");installation.setClientId("client");
+        when(installations.lock(id)).thenReturn(installation);
+        var row=new AgentRuntimeEntity().setAgentId("agent").setOwnerJiacn("owner").setBindingId(3L)
+                .setRuntimeInstallationId(id).setRuntimeHostId("host").setRuntimeInstanceId("runtime")
+                .setRuntimeSessionGeneration(1L).setTokenHash("urs1:"+"b".repeat(64)+":7:2");
+        row.setTenantId("0");row.setClientId("client");when(runtimes.lockInScope("0","client","agent")).thenReturn(row);
+        var identities=mock(cn.jia.agent.service.AgentIdentityService.class);
+        var identity=new cn.jia.agent.entity.AgentIdentityRegistryEntity().setCanonicalAgentId("agent").setBindingId(3L);
+        when(identities.requireRegistrationIdentityInScope("0","client","owner","agent")).thenReturn(identity);
+        when(identities.requireActiveBinding(identity,null)).thenReturn(new cn.jia.agent.entity.AgentPersonaBindingEntity().setId(3L));
+        var accounts=mock(cn.jia.user.security.AccountSecurityService.class);
+        when(accounts.findUniqueByExactJiacn("owner")).thenReturn(java.util.Optional.of(new cn.jia.user.security.AccountSecuritySnapshot(
+                7,"owner",cn.jia.user.security.AccountState.ACTIVE,2)));
+        var auth=new AgentRuntimeAuthenticationService(runtimes,installations,mock(cn.jia.agent.dao.AgentIdentityRegistryDao.class),
+                identities,accounts,mock(cn.jia.agent.config.AgentTaskEventsGate.class));
+        var manager=mock(org.springframework.transaction.PlatformTransactionManager.class);
+        var status=mock(org.springframework.transaction.TransactionStatus.class);
+        var active=new java.util.concurrent.atomic.AtomicBoolean();
+        when(manager.getTransaction(any())).thenAnswer(call->{active.set(true);return status;});
+        doAnswer(call->{active.set(false);return null;}).when(manager).commit(status);
+        doAnswer(call->{active.set(false);return null;}).when(manager).rollback(status);
+        var advice=new org.springframework.transaction.interceptor.TransactionInterceptor();advice.setTransactionManager(manager);
+        advice.setTransactionAttributeSource(new org.springframework.transaction.annotation.AnnotationTransactionAttributeSource());
+        var factory=new org.springframework.aop.framework.ProxyFactory(auth);factory.setProxyTargetClass(true);factory.addAdvice(advice);
+        service.setRuntimeAuthentication((AgentRuntimeAuthenticationService)factory.getProxy());
+        return new NativeFence(row,manager,status,active);
+    }
+    private record NativeFence(AgentRuntimeEntity row,org.springframework.transaction.PlatformTransactionManager manager,
+            org.springframework.transaction.TransactionStatus status,java.util.concurrent.atomic.AtomicBoolean transactionActive) { }
 
     @Test void controlledCreateUsesAdmissionLockedFilesWithoutTakingPostConsentFileLocks() {
         byte[] bytes="reference".getBytes(StandardCharsets.UTF_8);String hash=sha(bytes);

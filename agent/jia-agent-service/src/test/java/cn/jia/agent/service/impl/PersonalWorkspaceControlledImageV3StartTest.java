@@ -9,7 +9,7 @@ import cn.jia.agent.entity.*;
 import cn.jia.agent.security.*;
 import cn.jia.agent.service.*;
 import cn.jia.user.security.*;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.*;
