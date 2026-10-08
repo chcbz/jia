@@ -347,6 +347,32 @@ class AgentRuntimeSecurityIntegrationTest {
     }
 
     @Test
+    void e05InternalPathsRequireActualCurrentNativeChannelAndNeverApiKeyOrJwtFallback() throws Exception {
+        var results=mock(cn.jia.agent.service.AgentWorkItemResultCommitService.class);
+        var reassignments=mock(cn.jia.agent.service.AgentWorkItemReassignmentService.class);
+        var view=new cn.jia.agent.entity.AgentWorkItemResultCommitViewDTO();view.setTaskId("task-a");view.setWorkItemId("work-a");view.setStatus("submitted");view.setWorkItemVersion(7L);
+        when(results.readRuntimeResult(TENANT,CLIENT_A,OWNER_A,"task-a","work-a",A,"receipt-a","command-a")).thenReturn(view);
+        var e05=MockMvcBuilders.standaloneSetup(new cn.jia.agent.api.AgentWorkItemRuntimeResultController(results,reassignments,auth))
+                .addFilters(context.getBean(FilterChainProxy.class)).build();
+        String path="/internal/agent/tasks/task-a/work-items/work-a/reassignments/receipt-a/commands/command-a/result-commit";
+        e05.perform(headers(get(path),A,"runtime-a",TOKEN_A)).andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control","private, no-store")).andExpect(jsonPath("$.status").value("submitted"));
+        verify(results).readRuntimeResult(TENANT,CLIENT_A,OWNER_A,"task-a","work-a",A,"receipt-a","command-a");
+        clearInvocations(results,reassignments,keys);
+        e05.perform(get(path).principal(browserJwt())).andExpect(status().isUnauthorized());
+        e05.perform(get(path).header("X-API-Key","fixture-api-key-key-a")).andExpect(status().isUnauthorized());
+        e05.perform(headers(get(path),A,"runtime-a",TOKEN_A).header("X-API-Key","fixture-api-key-key-a")).andExpect(status().isUnauthorized());
+        e05.perform(headers(get(path),B,"runtime-a",TOKEN_A)).andExpect(status().isUnauthorized());
+        e05.perform(headers(get(path),A,"runtime-a",TOKEN_A).header("Origin","https://browser.invalid")).andExpect(status().isForbidden());
+        e05.perform(headers(get(path),A,"runtime-a",TOKEN_A).queryParam("actorAgentId",A)).andExpect(status().isForbidden());
+        e05.perform(headers(post(path.replace("/result-commit","/lease")),A,"runtime-a",TOKEN_A)).andExpect(status().isForbidden());
+        e05.perform(headers(get(path+"/extra"),A,"runtime-a",TOKEN_A)).andExpect(status().isForbidden());
+        openA.set(false);
+        e05.perform(headers(get(path),A,"runtime-a",TOKEN_A)).andExpect(status().isUnauthorized());
+        verifyNoInteractions(results,reassignments,keys);
+    }
+
+    @Test
     void nativeStartUsesAuthenticatedScopeAndRejectsBrowserWrongRuntimeAndAlternatePaths() throws Exception {
         var scope = new PersonalWorkspaceExecutionService.RuntimeScope(TENANT, CLIENT_A, OWNER_A, A, "runtime-a");
         when(workspaceExecutions.start(scope, "task-a", "run-a", "cmd-a", "msg-a"))
