@@ -209,6 +209,37 @@ class ArchiveMaintenanceSchemaCatalogTest {
     }
 
     @Test
+    void outboxAndReadbackPredecessorsAreExactGitBytes() throws Exception {
+        assertHistoricalPredecessor("18d66419", 32034, 18,
+                "5f358f3cd71f5cd8c7ecc0c633ae3aa0770305e913fc1f0d711c5245847213c2");
+        assertHistoricalPredecessor("eb31260f", 30916, 17,
+                "c398de55270b8a7dd0467e796ae7a8dd0444458c51f0b437e7ac90f11a9c4118");
+    }
+
+    private void assertHistoricalPredecessor(String revision, int byteLength, int tableCount,
+            String sha256) throws Exception {
+        byte[] bytes;
+        try (var input = getClass().getClassLoader().getResourceAsStream(
+                "db/archive-maintenance-schema-" + revision + ".sql")) {
+            org.junit.jupiter.api.Assertions.assertNotNull(input);
+            bytes = input.readAllBytes();
+        }
+        assertEquals(byteLength, bytes.length);
+        assertEquals(sha256, cn.jia.chat.archive.content.ArchiveEtags.sha256(bytes));
+        String sql = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+        assertFalse(sql.contains("\r"), "Immutable predecessor must retain exact LF Git bytes");
+        assertEquals(tableCount, sql.split("CREATE TABLE IF NOT EXISTS ", -1).length - 1);
+        assertFalse(sql.contains("CREATE TABLE IF NOT EXISTS archive_business_outbox ("));
+        assertFalse(sql.contains("CREATE TABLE IF NOT EXISTS archive_source_artifact_object ("));
+        assertFalse(sql.contains("CREATE TABLE IF NOT EXISTS archive_execution_failure ("));
+        assertFalse(sql.contains("CREATE TABLE IF NOT EXISTS archive_draft_block_checkpoint ("));
+        assertEquals("18d66419".equals(revision),
+                sql.contains("CREATE TABLE IF NOT EXISTS archive_publication_readback ("));
+        // The real MySQL selectors initialize these exact bytes and verify the entire
+        // supported catalog. parse() intentionally accepts only the full current table set.
+    }
+
+    @Test
     void checkpointPredecessorFixtureIsExact0d2a6e6GitBlob() throws Exception {
         byte[] bytes;
         try (var input = getClass().getClassLoader().getResourceAsStream(
@@ -316,6 +347,18 @@ class ArchiveMaintenanceSchemaCatalogTest {
                 new ArchiveMaintenanceSchemaCatalog.Table(expected.columns(), expected.indexes(),
                         expected.foreignKeys(), actualChecks), "InnoDB:utf8mb4_0900_bin"));
         assertEquals("Archive maintenance schema drift at archive_source_artifact_object.checks", failure.getMessage());
+    }
+
+    @Test
+    void sourceArtifactExtraColumnIsStillSchemaDrift() {
+        var expected = ArchiveMaintenanceSchemaCatalog.expected().tables().get("archive_source_artifact_object");
+        var columns = new LinkedHashMap<>(expected.columns());
+        columns.put("unsupported_drift", new ArchiveMaintenanceSchemaCatalog.Column("bigint", true, null));
+        var failure = assertThrows(IllegalStateException.class, () -> ArchiveMaintenanceSchemaCatalog.verify(
+                "archive_source_artifact_object", expected,
+                new ArchiveMaintenanceSchemaCatalog.Table(columns, expected.indexes(),
+                        expected.foreignKeys(), expected.checks()), "InnoDB:utf8mb4_0900_bin"));
+        assertEquals("Archive maintenance schema drift at archive_source_artifact_object.columns", failure.getMessage());
     }
 
     @Test

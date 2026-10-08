@@ -99,6 +99,7 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
     private DriverManagerDataSource dataSource;
     private DataSourceTransactionManager transactionManager;
     private ArchiveTransactions transactions;
+    private TestSourceStorage defaultSourceStorage;
 
     @BeforeEach
     void setUp() {
@@ -113,6 +114,7 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         jdbc = new JdbcTemplate(dataSource);
         transactionManager = new DataSourceTransactionManager(dataSource);
         transactions = new SpringArchiveTransactions(transactionManager);
+        defaultSourceStorage = new TestSourceStorage(true);
         clean();
         new ArchiveSchemaInitializer(jdbc).initialize();
         new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
@@ -167,6 +169,35 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                     rejected.getMostSpecificCause().getMessage());
         }
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM archive_source_artifact_object", Integer.class));
+    }
+
+    @Test
+    void sourceArtifactHistoricalInfixShaCheckUsesTheSameStrictMySqlCatalog() {
+        // The pre-hotfix 22-table DDL used infix REGEXP. MySQL persists that CHECK
+        // as REGEXP_LIKE, so existing installations match the current canonical catalog.
+        // No historical fixture bytes or generic schema normalizer are changed.
+        jdbc.execute("ALTER TABLE archive_source_artifact_object DROP CHECK chk_archive_source_artifact_sha, "
+                + "ADD CONSTRAINT chk_archive_source_artifact_sha CHECK (sha256 REGEXP '^[0-9a-f]{64}$')");
+        String metadata = jdbc.queryForObject("SELECT c.check_clause "
+                + "FROM information_schema.table_constraints t JOIN information_schema.check_constraints c "
+                + "ON c.constraint_schema=t.constraint_schema AND c.constraint_name=t.constraint_name "
+                + "WHERE t.table_schema=DATABASE() AND t.table_name='archive_source_artifact_object' "
+                + "AND t.constraint_name='chk_archive_source_artifact_sha' AND t.enforced='YES'",
+                String.class);
+        assertEquals(ArchiveMaintenanceSchemaCatalog.expected().tables().get("archive_source_artifact_object")
+                        .checks().get("chk_archive_source_artifact_sha"),
+                "YES:" + ArchiveSchemaCatalog.normalizeCheck(metadata));
+        new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
+                new ArchiveMaintenanceProperties()).initialize();
+    }
+
+    @Test
+    void sourceArtifactExtraColumnFailsClosedOnMySql() {
+        jdbc.execute("ALTER TABLE archive_source_artifact_object ADD COLUMN unsupported_drift BIGINT NULL");
+        var failure = assertThrows(IllegalStateException.class, () ->
+                new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
+                        new ArchiveMaintenanceProperties()).initialize());
+        assertEquals("Archive maintenance schema drift at archive_source_artifact_object.columns", failure.getMessage());
     }
 
     @Test
@@ -427,6 +458,7 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         fixture.service().ensureExecution(ACTOR, JOB, "ensure-after-real-runtime-repair",
                 jobRevision());
         ArchiveRuntimeScope thirdScope = runtime(afterRepair.runId());
+        fixture.port().messageId = "message-after-repair";
         start(fixture.service(), afterRepair.runId(), thirdScope, "message-after-repair");
         ArchiveRuntimeFailureRequest sameCause = new ArchiveRuntimeFailureRequest(
                 "RUNNER", "RUNNER_CRASH", true);
@@ -440,6 +472,7 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                 new ArchiveResumeRequest("one bounded retry after repair", APPOINTMENT, "1", skill));
         fixture.service().ensureExecution(ACTOR, JOB, "ensure-new-bounded-pair", jobRevision());
         ArchiveRuntimeScope fourthScope = runtime(boundedRetry.runId());
+        fixture.port().messageId = "message-new-bounded-pair";
         start(fixture.service(), boundedRetry.runId(), fourthScope, "message-new-bounded-pair");
         ArchiveRuntimeResultDTO fourthFailure = fixture.service().runtimeFailure(fourthScope, JOB,
                 boundedRetry.runId(), sameCause);
@@ -602,10 +635,11 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                 + "work_ids='work-z,work-a,work-z' WHERE appointment_id=?", APPOINTMENT));
         assertEquals(1, jdbc.update("UPDATE archive_maintenance_job SET operation_code='REVISE_WORK' "
                 + "WHERE job_id=?", JOB));
-        ArchiveMaintenanceServiceImpl service = service(new JdbcArchiveMaintenanceStore(jdbc),
-                new RootLockingPort(jdbc));
+        RootLockingPort port = new RootLockingPort(jdbc);
+        ArchiveMaintenanceServiceImpl service = service(new JdbcArchiveMaintenanceStore(jdbc), port);
         service.ensureExecution(ACTOR, JOB, "ensure-explicit-first", 1);
         ArchiveRuntimeScope firstScope = runtime(RUN);
+        port.messageId = "message-explicit-first";
         start(service, RUN, firstScope, "message-explicit-first");
         ArchiveRuntimeFailureRequest failure = new ArchiveRuntimeFailureRequest(
                 "RUNNER", "RUNNER_CRASH", true);
@@ -619,6 +653,7 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                         "1", skill));
         service.ensureExecution(ACTOR, JOB, "ensure-explicit-second", jobRevision());
         ArchiveRuntimeScope secondScope = runtime(resumed.runId());
+        port.messageId = "message-explicit-second";
         start(service, resumed.runId(), secondScope, "message-explicit-second");
         ArchiveRuntimeResultDTO second = service.runtimeFailure(secondScope, JOB, resumed.runId(),
                 failure);
@@ -808,6 +843,7 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                 mock(ArchiveContentStore.class), transactions, corrupt);
         corruptService.ensureExecution(ACTOR, JOB, "ensure-checkpoint-corrupt", 1);
         ArchiveRuntimeScope scope = runtime();
+        port.messageId = "message-checkpoint-corrupt";
         start(corruptService, RUN, scope, "message-checkpoint-corrupt");
         assertEquals("DEPENDENCY_UNAVAILABLE", assertThrows(ArchiveMaintenanceException.class,
                 () -> corruptService.runtimePutBlock(scope, JOB, RUN, "one",
@@ -917,7 +953,8 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                 new ArchiveRuntimeStartRequest("command-a", "message-a", "1", "1"));
         String draftJson = new ObjectMapper().writeValueAsString(validDraft());
         jdbc.update("UPDATE archive_draft SET revision=1,content_json=?,content_sha256=? WHERE draft_id='draft-a'",
-                draftJson, "c".repeat(64));
+                draftJson, cn.jia.chat.archive.content.ArchiveEtags.sha256(
+                        draftJson.getBytes(StandardCharsets.UTF_8)));
 
         ArchiveOperationAcceptedDTO accepted = service.runtimeValidate(originalRuntime, JOB, RUN,
                 "validate-complete", 1);
@@ -993,7 +1030,8 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         assertEquals(null, context.expectedActiveEditionId());
         String draftJson = new ObjectMapper().writeValueAsString(validDraft());
         jdbc.update("UPDATE archive_draft SET revision=1,content_json=?,content_sha256=? WHERE draft_id='draft-a'",
-                draftJson, "c".repeat(64));
+                draftJson, cn.jia.chat.archive.content.ArchiveEtags.sha256(
+                        draftJson.getBytes(StandardCharsets.UTF_8)));
         ArchiveOperationAcceptedDTO accepted = service.runtimeValidate(scope, JOB, RUN, "validate-auto", 1);
         ArchiveValidationDTO validation = service.runtimeValidation(scope, JOB, RUN, accepted.operationId());
         assertEquals("PASSED", validation.outcome());
@@ -1488,7 +1526,8 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
 
         String draftJson = new ObjectMapper().writeValueAsString(validDraft());
         jdbc.update("UPDATE archive_draft SET revision=1,content_json=?,content_sha256=? WHERE draft_id='draft-a'",
-                draftJson, "c".repeat(64));
+                draftJson, cn.jia.chat.archive.content.ArchiveEtags.sha256(
+                        draftJson.getBytes(StandardCharsets.UTF_8)));
         ArchiveOperationAcceptedDTO accepted = service.runtimeValidate(scope, JOB, RUN, "validate-revise", 1);
         ArchiveValidationDTO validation = service.runtimeValidation(scope, JOB, RUN, accepted.operationId());
         assertEquals("PASSED", validation.outcome());
@@ -2615,12 +2654,8 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         clean();
         new ArchiveSchemaInitializer(jdbc).initialize();
         new ArchiveReaderDataSchemaInitializer(jdbc).initialize();
-        String ddl;
-        try (var input = new ClassPathResource("db/archive-maintenance-schema.sql").getInputStream()) {
-            ddl = new String(input.readAllBytes(), StandardCharsets.UTF_8);
-        }
         new ResourceDatabasePopulator(new ByteArrayResource(
-                businessOutboxPredecessorSchema(ddl).getBytes(StandardCharsets.UTF_8)))
+                businessOutboxPredecessorSchema().getBytes(StandardCharsets.UTF_8)))
                 .execute(dataSource);
         jdbc.update("INSERT INTO archive_collection_manager(collection_id,tenant_id,client_id,owner_jiacn,"
                 + "permissions,state,revision) VALUES (?,'0','client-a','owner-a','job.manage','ACTIVE',1)",
@@ -2732,12 +2767,8 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
     void completePreviousMaintenanceSchemaUpgradesAdditivelyAndMalformedBreakpointFailsClosed() throws Exception {
         clean();
         new ArchiveSchemaInitializer(jdbc).initialize();
-        String ddl;
-        try (var input = new ClassPathResource("db/archive-maintenance-schema.sql").getInputStream()) {
-            ddl = new String(input.readAllBytes(), StandardCharsets.UTF_8);
-        }
         new ResourceDatabasePopulator(new ByteArrayResource(
-                legacyWaitingSchema(ddl, false).getBytes(StandardCharsets.UTF_8)))
+                legacyWaitingSchema(false).getBytes(StandardCharsets.UTF_8)))
                 .execute(dataSource);
         assertEquals(0, jdbc.queryForObject(
                 "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() "
@@ -2794,7 +2825,7 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         clean();
         new ArchiveSchemaInitializer(jdbc).initialize();
         new ResourceDatabasePopulator(new ByteArrayResource(
-                legacyWaitingSchema(ddl, true).getBytes(StandardCharsets.UTF_8)))
+                legacyWaitingSchema(true).getBytes(StandardCharsets.UTF_8)))
                 .execute(dataSource);
         assertEquals(1, jdbc.queryForObject(
                 "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() "
@@ -2815,7 +2846,7 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         clean();
         new ArchiveSchemaInitializer(jdbc).initialize();
         new ResourceDatabasePopulator(new ByteArrayResource(
-                legacyWaitingSchema(ddl, false).getBytes(StandardCharsets.UTF_8)))
+                legacyWaitingSchema(false).getBytes(StandardCharsets.UTF_8)))
                 .execute(dataSource);
         jdbc.execute("ALTER TABLE archive_maintenance_job ADD COLUMN target_agent_id "
                 + "VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL AFTER owner_jiacn");
@@ -2829,12 +2860,8 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
 
         clean();
         new ArchiveSchemaInitializer(jdbc).initialize();
-        String ddl;
-        try (var input = new ClassPathResource("db/archive-maintenance-schema.sql").getInputStream()) {
-            ddl = new String(input.readAllBytes(), StandardCharsets.UTF_8);
-        }
         new ResourceDatabasePopulator(new ByteArrayResource(
-                previousWaitingShapeSchema(ddl).getBytes(StandardCharsets.UTF_8)))
+                previousWaitingShapeSchema().getBytes(StandardCharsets.UTF_8)))
                 .execute(dataSource);
         new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
                 new ArchiveMaintenanceProperties()).initialize();
@@ -3159,8 +3186,16 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
 
     @Test
     void exactEb31260SchemaAddsReadbackWithoutChangingPrivateOrOperationFactsAndDriftFailsClosed() {
+        clean();
+        new ArchiveSchemaInitializer(jdbc).initialize();
+        new ResourceDatabasePopulator(new ByteArrayResource(
+                withoutPublicationReadback().getBytes(StandardCharsets.UTF_8))).execute(dataSource);
+        jdbc.execute("CREATE TABLE aam_test_agent_root (agent_id VARCHAR(100) CHARACTER SET utf8mb4 "
+                + "COLLATE utf8mb4_0900_bin NOT NULL, PRIMARY KEY(agent_id)) ENGINE=InnoDB");
         seedExecutionCandidate();
-        seedPublishedContent();
+        seedPublishedContent(false);
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables "
+                + "WHERE table_schema=DATABASE() AND table_name='archive_publication_readback'", Integer.class));
         new ArchiveReaderDataSchemaInitializer(jdbc).initialize();
         jdbc.update("INSERT INTO archive_note(tenant_id,client_id,owner_jiacn,note_id,edition_id,state,"
                 + "text,block_id,anchor_json,version) VALUES ('0','private-client','private-owner',"
@@ -3182,16 +3217,6 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                         + "(SELECT text FROM archive_note WHERE note_id='423e4567-e89b-82d3-a456-426614174000'),':',"
                         + "(SELECT result_json FROM archive_admin_operation_receipt WHERE operation_id='admin-upgrade')),256)",
                 String.class);
-        jdbc.execute("DROP TABLE archive_business_outbox");
-        jdbc.execute("DROP TABLE archive_publication_readback");
-        jdbc.execute("ALTER TABLE archive_event DROP CHECK chk_archive_event_outbox, "
-                + "ADD CONSTRAINT chk_archive_event_outbox CHECK "
-                + "(outbox_state IN ('PENDING','DELIVERED'))");
-        jdbc.execute("ALTER TABLE archive_edition_withdrawal "
-                + "DROP CHECK chk_archive_withdrawal_outbox, "
-                + "ADD CONSTRAINT chk_archive_withdrawal_outbox CHECK "
-                + "(outbox_state IN ('PENDING','DELIVERED'))");
-
         new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
                 new ArchiveMaintenanceProperties()).initialize();
 
@@ -3279,7 +3304,8 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         seedExecutionCandidate();
         String draftJson = new ObjectMapper().writeValueAsString(validDraft());
         jdbc.update("UPDATE archive_draft SET content_json=?,content_sha256=? WHERE draft_id='draft-a'",
-                draftJson, "c".repeat(64));
+                draftJson, cn.jia.chat.archive.content.ArchiveEtags.sha256(
+                        draftJson.getBytes(StandardCharsets.UTF_8)));
         JdbcArchiveMaintenanceStore store = new JdbcArchiveMaintenanceStore(jdbc);
         ArchiveMaintenanceServiceImpl service = service(store, new RootLockingPort(jdbc));
 
@@ -3361,12 +3387,20 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                     + "binding_version,permission_profile,manager_authorization_revision,"
                     + "publication_mode,operation_code,work_id,canonical_key,title,source_id,"
                     + "source_sha256,source_summary,rights_basis,state,wait_reason,revision,draft_id,"
-                    + "request_intent_id,request_sha256) VALUES (?,NULL,?,'0','client-a','owner-a',"
+                    + "request_intent_id,request_sha256) VALUES (?,?,?,'0','client-a','owner-a',"
                     + "?,1,?,'7','DRAFT_ONLY',3,'MANUAL','ADD_WORK',?,?,?,'source-a',?,"
-                    + "'source / v1','authorized','FAILED','EXECUTION_FAILED',1,NULL,?,?)",
-                    "job-" + suffix, COLLECTION, APPOINTMENT, AGENT, "work-" + suffix,
-                    "key-" + suffix, "title-" + suffix, SHA, "intent-" + suffix,
+                    + "'source / v1','authorized','FAILED','EXECUTION_FAILED',1,?,?,?)",
+                    "job-" + suffix, "run-" + suffix, COLLECTION, APPOINTMENT, AGENT, "work-" + suffix,
+                    "key-" + suffix, "title-" + suffix, SHA, "draft-" + suffix, "intent-" + suffix,
                     suffix.repeat(64));
+            jdbc.update("INSERT INTO archive_job_run(run_id,job_id,execution_epoch,grant_revision,"
+                    + "started_message_id,failure_phase,failure_code,failure_retryable,state,revision) "
+                    + "VALUES (?,?,1,1,?,'RUNNER','RUNNER_CRASH',1,'FAILED',1)",
+                    "run-" + suffix, "job-" + suffix, "message-" + suffix);
+            String emptyDraft = "{\"blocks\":[],\"excludedSourceRanges\":[]}";
+            jdbc.update("INSERT INTO archive_draft(draft_id,job_id,revision,state,content_json,content_sha256) "
+                    + "VALUES (?,?,0,'EDITABLE',?,?)", "draft-" + suffix, "job-" + suffix, emptyDraft,
+                    cn.jia.chat.archive.content.ArchiveEtags.sha256(emptyDraft.getBytes(StandardCharsets.UTF_8)));
         }
         for (String suffix : List.of("1", "2", "3")) {
             jdbc.update("INSERT INTO archive_work(work_id,title,active_edition_id) VALUES (?, ?, NULL)",
@@ -3462,7 +3496,8 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         String draftJson = new ObjectMapper().writeValueAsString(validDraft());
         jdbc.update("UPDATE archive_draft SET revision=1,state='VALIDATED',content_json=?,content_sha256=?,"
                 + "validated_revision=1,validation_id='validation-race' WHERE draft_id='draft-a'",
-                draftJson, "c".repeat(64));
+                draftJson, cn.jia.chat.archive.content.ArchiveEtags.sha256(
+                        draftJson.getBytes(StandardCharsets.UTF_8)));
         jdbc.update("INSERT INTO archive_validation(validation_id,draft_id,draft_revision,outcome,"
                 + "validation_digest,findings_json) VALUES ('validation-race','draft-a',1,'PASSED',?,'[]')",
                 "e".repeat(64));
@@ -3988,15 +4023,16 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                 .contains("chk_archive_job_waiting_shape"), cancelledShape.getMessage());
     }
 
-    private static String previousWaitingShapeSchema(String ddl) {
+    private static String previousWaitingShapeSchema() {
         String current = "    CONSTRAINT chk_archive_job_waiting_shape CHECK (((state='WAITING_INPUT') AND (run_id IS NULL) AND (draft_id IS NULL) AND (appointment_id IS NULL) AND (publication_id IS NULL) AND ((source_id IS NULL) OR (work_id IS NULL))) OR ((state='WAITING_ASSIGNEE') AND (run_id IS NULL) AND (draft_id IS NULL) AND (appointment_id IS NULL) AND (source_id IS NOT NULL) AND (work_id IS NOT NULL) AND (publication_id IS NULL)) OR ((state='CANCELLED') AND (publication_id IS NULL) AND (((run_id IS NULL) AND (draft_id IS NULL) AND (appointment_id IS NULL)) OR ((run_id IS NOT NULL) AND (draft_id IS NOT NULL) AND (appointment_id IS NOT NULL) AND (source_id IS NOT NULL) AND (work_id IS NOT NULL)))) OR ((state NOT IN ('WAITING_INPUT','WAITING_ASSIGNEE','CANCELLED')) AND (run_id IS NOT NULL) AND (draft_id IS NOT NULL) AND (appointment_id IS NOT NULL) AND (source_id IS NOT NULL) AND (work_id IS NOT NULL)))";
         String previous = "    CONSTRAINT chk_archive_job_waiting_shape CHECK (((state='WAITING_INPUT') AND (run_id IS NULL) AND (draft_id IS NULL) AND (appointment_id IS NULL) AND (publication_id IS NULL)) OR ((state='WAITING_ASSIGNEE') AND (run_id IS NULL) AND (draft_id IS NULL) AND (appointment_id IS NULL) AND (source_id IS NOT NULL) AND (work_id IS NOT NULL) AND (publication_id IS NULL)) OR (state='CANCELLED') OR ((state NOT IN ('WAITING_INPUT','WAITING_ASSIGNEE','CANCELLED')) AND (run_id IS NOT NULL) AND (draft_id IS NOT NULL) AND (appointment_id IS NOT NULL) AND (source_id IS NOT NULL) AND (work_id IS NOT NULL)))";
-        if (!ddl.contains(current)) throw new IllegalStateException("Current waiting CHECK unavailable");
-        return withoutPublicationReadback(ddl).replace(current, previous);
+        String predecessor = withoutPublicationReadback();
+        if (!predecessor.contains(current)) throw new IllegalStateException("Predecessor waiting CHECK unavailable");
+        return predecessor.replace(current, previous);
     }
 
-    private static String legacyWaitingSchema(String ddl, boolean includeWithdrawal) {
-        String result = withoutPublicationReadback(ddl).replaceFirst(
+    private static String legacyWaitingSchema(boolean includeWithdrawal) {
+        String result = withoutPublicationReadback().replaceFirst(
                 "(?s)CREATE TABLE IF NOT EXISTS archive_maintenance_job \\(.*?\\) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;",
                 java.util.regex.Matcher.quoteReplacement(legacyWaitingJobDdl()));
         result = result.replaceFirst(
@@ -4008,27 +4044,25 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         return result;
     }
 
-    private static String businessOutboxPredecessorSchema(String ddl) {
-        String predecessor = ddl.replace(
-                "outbox_state IN ('PENDING','DELIVERED','NO_TARGET')",
-                "outbox_state IN ('PENDING','DELIVERED')")
-                .replaceFirst("(?s)CREATE TABLE IF NOT EXISTS archive_business_outbox \\(.*?\\) "
-                        + "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;\\s*", "");
-        assertEquals("5f358f3cd71f5cd8c7ecc0c633ae3aa0770305e913fc1f0d711c5245847213c2",
-                cn.jia.chat.archive.content.ArchiveEtags.sha256(
-                        predecessor.replace("\r\n", "\n").getBytes(StandardCharsets.UTF_8)),
-                "the outbox predecessor must remain byte-bound to 18d66419 after LF normalization");
-        return predecessor;
+    private static String businessOutboxPredecessorSchema() {
+        return immutablePredecessorSchema("db/archive-maintenance-schema-18d66419.sql", 32034,
+                "5f358f3cd71f5cd8c7ecc0c633ae3aa0770305e913fc1f0d711c5245847213c2");
     }
 
-    private static String withoutPublicationReadback(String ddl) {
-        String predecessor = businessOutboxPredecessorSchema(ddl).replaceFirst(
-                "(?s)CREATE TABLE IF NOT EXISTS archive_publication_readback \\(.*?\\) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;\\s*", "");
-        assertEquals("c398de55270b8a7dd0467e796ae7a8dd0444458c51f0b437e7ac90f11a9c4118",
-                cn.jia.chat.archive.content.ArchiveEtags.sha256(
-                        predecessor.replace("\r\n", "\n").getBytes(StandardCharsets.UTF_8)),
-                "the additive predecessor must remain byte-bound to eb31260f after LF normalization");
-        return predecessor;
+    private static String withoutPublicationReadback() {
+        return immutablePredecessorSchema("db/archive-maintenance-schema-eb31260f.sql", 30916,
+                "c398de55270b8a7dd0467e796ae7a8dd0444458c51f0b437e7ac90f11a9c4118");
+    }
+
+    private static String immutablePredecessorSchema(String resource, int byteLength, String sha256) {
+        try (var input = new ClassPathResource(resource).getInputStream()) {
+            byte[] bytes = input.readAllBytes();
+            assertEquals(byteLength, bytes.length, resource);
+            assertEquals(sha256, cn.jia.chat.archive.content.ArchiveEtags.sha256(bytes), resource);
+            return new String(bytes, StandardCharsets.UTF_8);
+        } catch (java.io.IOException failure) {
+            throw new IllegalStateException("Immutable archive predecessor unavailable", failure);
+        }
     }
 
     private static String exceptionMessages(Throwable failure) {
@@ -4114,6 +4148,10 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
     }
 
     private void seedPublishedContent() {
+        seedPublishedContent(true);
+    }
+
+    private void seedPublishedContent(boolean includeReadback) {
         jdbc.update("INSERT INTO archive_work(work_id,title,active_edition_id) VALUES ('work-withdraw','title',NULL)");
         jdbc.update("INSERT INTO archive_collection_work(collection_id,work_id,canonical_key,revision) VALUES (?,'work-withdraw','withdraw-key',1)", COLLECTION);
         for (String edition : List.of("edition-a", "edition-b", "edition-c")) {
@@ -4121,9 +4159,11 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
             jdbc.update("INSERT INTO archive_chapter(edition_id,block_id,block_type,reader_ordinal,chapter_number,title,paragraph_count,utf8_byte_length,block_content_sha256) VALUES (?,?,'CHAPTER',1,1,'chapter',1,1,?)", edition, edition + "-c001", "d".repeat(64));
             jdbc.update("INSERT INTO archive_paragraph(edition_id,block_id,paragraph_id,ordinal,text,utf8_byte_length,sha256) VALUES (?,?,?,1,'x',1,?)", edition, edition + "-c001", edition + "-c001-p0001", "b".repeat(64));
             jdbc.update("INSERT INTO archive_publication(publication_id,job_id,collection_id,work_id,edition_id,draft_revision,manifest_sha256,source_sha256,state,actor_type,actor_id,authorization_revision) VALUES (?,NULL,?,'work-withdraw',?,1,?,?,'PUBLISHED','HUMAN','owner-a',5)", "pub-" + edition, COLLECTION, edition, SHA, "a".repeat(64));
-            jdbc.update("INSERT INTO archive_publication_readback(publication_id,state,revision,"
-                    + "verification_digest,findings_json,checked_at) VALUES (?,'PENDING',1,NULL,'[]',NULL)",
-                    "pub-" + edition);
+            if (includeReadback) {
+                jdbc.update("INSERT INTO archive_publication_readback(publication_id,state,revision,"
+                        + "verification_digest,findings_json,checked_at) VALUES (?,'PENDING',1,NULL,'[]',NULL)",
+                        "pub-" + edition);
+            }
         }
         assertEquals(1, jdbc.update("UPDATE archive_work SET active_edition_id='edition-a' "
                 + "WHERE work_id='work-withdraw' AND active_edition_id IS NULL"));
@@ -4263,7 +4303,7 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
     private ArchiveMaintenanceServiceImpl service(JdbcArchiveMaintenanceStore store,
             ArchiveAgentExecutionPort port, ArchiveContentStore contentStore,
             ArchiveTransactions archiveTransactions, AgentIdentityService identities) {
-        AgentTaskArtifactStorage sourceStorage = new TestSourceStorage(true);
+        AgentTaskArtifactStorage sourceStorage = defaultSourceStorage;
         return service(store, port, contentStore, archiveTransactions, identities, sourceStorage);
     }
 
@@ -4665,6 +4705,10 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
                 byte[] result = corruptCheckpointRead ? "corrupt".getBytes(StandardCharsets.UTF_8) : stored;
                 return new StoredContent(result, expectedSha256, result.length, expectedMimeType);
             }
+            if (!"text/plain".equals(expectedMimeType)) {
+                throw new AgentTaskArtifactStorageException(
+                        AgentTaskArtifactStorageException.Reason.IO_FAILURE, "test checkpoint object missing");
+            }
             if ("text/plain".equals(expectedMimeType)) {
                 Runnable callback = afterRead;
                 afterRead = null;
@@ -4693,6 +4737,7 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
         final CountDownLatch firstRootAttempted = new CountDownLatch(1);
         final CountDownLatch secondRootAttempted = new CountDownLatch(1);
         volatile boolean expired;
+        volatile String messageId = "message-a";
         volatile String runtimeInstanceId = "runtime-a";
         volatile byte[] registrationHash = new byte[32];
         volatile String installationRef = "installation-a";
@@ -4743,17 +4788,18 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
 
         @Override
         public Grant ensureExecution(Request request, LockedTarget lockedTarget) {
-            return new Grant(request.grantRef(), request.executionRef(), "command-a", 1,
+            String commandId = RUN.equals(request.runId()) ? "command-a" : "command-" + request.runId();
+            return new Grant(request.grantRef(), request.executionRef(), commandId, 1,
                     request.executionEpoch(), 2_000_000_000_000L, runtimeInstanceId,
                     registrationHash, skillProof(), false);
         }
 
         @Override public Inspection inspectExecution(Expected expected, LockedTarget lockedTarget) {
             if (expired) throw new Denied("ARCHIVE_EXECUTION_EXPIRED");
-            return new Inspection(true, "STARTED", "message-a");
+            return new Inspection(true, "STARTED", messageId);
         }
         @Override public Inspection inspectResult(Expected expected, LockedTarget lockedTarget) {
-            return new Inspection(true, "SUCCEEDED", "message-a");
+            return new Inspection(true, "SUCCEEDED", messageId);
         }
         @Override public AgentRawCommandDispatchResult dispatch(Expected expected, byte[] exactWire) {
             return AgentRawCommandDispatchResult.rejected();

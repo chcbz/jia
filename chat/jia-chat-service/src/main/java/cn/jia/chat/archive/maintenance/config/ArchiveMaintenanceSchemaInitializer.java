@@ -174,7 +174,8 @@ public class ArchiveMaintenanceSchemaInitializer {
                         shape.upgradeWithdrawal());
                 return;
             } catch (IllegalStateException drift) {
-                rejected = drift;
+                if (rejected == null) rejected = drift;
+                else rejected.addSuppressed(drift);
             }
         }
         throw Objects.requireNonNull(rejected,
@@ -201,8 +202,15 @@ public class ArchiveMaintenanceSchemaInitializer {
                         new LinkedHashMap<>(baseOverrides);
                 legacy.put("archive_maintenance_job",
                         ArchiveMaintenanceSchemaCatalog.legacyWaitingJobTable(expected));
-                validate(existing, expected, legacy);
-                return WaitingShape.LEGACY;
+                try {
+                    validate(existing, expected, legacy);
+                    return WaitingShape.LEGACY;
+                } catch (IllegalStateException legacyWaitingDrift) {
+                    // Alternate exact job shapes must not obscure the original catalog drift.
+                    currentDrift.addSuppressed(previousWaitingDrift);
+                    currentDrift.addSuppressed(legacyWaitingDrift);
+                    throw currentDrift;
+                }
             }
         }
     }

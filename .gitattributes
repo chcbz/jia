@@ -3,3 +3,5 @@ chat/jia-chat-service/src/main/resources/archive/** -text
 agent/jia-agent-service/src/main/resources/platform-skills/archive-maintainer/** -text
 chat/jia-chat-service/src/test/resources/db/archive-maintenance-schema-f7811da.sql -text
 chat/jia-chat-service/src/test/resources/db/agent-platform-skills-schema-f7811da.sql -text
+chat/jia-chat-service/src/test/resources/db/archive-maintenance-schema-18d66419.sql -text
+chat/jia-chat-service/src/test/resources/db/archive-maintenance-schema-eb31260f.sql -text
