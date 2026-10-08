@@ -21,7 +21,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /** UR-03 real paired-source socket + production Spring/MyBatis + H2-file acceptance.
  * One serial test owns only its private DB and child Process handles. No Gradle/build/server
- * launches outside Flow, no production credentials, no enrollment/WS/E05/business execution.
+ * launches except its owned fixture children after explicit local opt-in; no production credentials,
+ * no enrollment/WS/E05/business execution.
  */
 class Ur03RuntimeHttpDbAcceptanceTest {
     @TempDir(cleanup = CleanupMode.ALWAYS) Path temporaryDirectory;
@@ -175,9 +176,59 @@ class Ur03RuntimeHttpDbAcceptanceTest {
                     "bean", "UR03_REDACTION_PROBE", "type", "UR03_REDACTION_PROBE/raw",
                     "errno", "UR03_REDACTION_PROBE", "status", "UR03_REDACTION_PROBE"));
             assertFalse(Child.errorFailure(untrusted).safe.contains("UR03_REDACTION_PROBE"));
+            for (Class<?> mapper : inheritedDaoMapperTypes()) {
+                var cause = new org.springframework.beans.factory.NoSuchBeanDefinitionException(mapper);
+                var failure = new org.springframework.beans.factory.BeanCreationException("runtimes", "UR03_REDACTION_PROBE", cause);
+                Map<String, Object> safe = Ur03RuntimeHttpFixture.safeFailure(failure);
+                assertEquals(mapper.getName(), safe.get("missingBeanType"));
+                assertEquals("NoSuchBeanDefinitionException", safe.get("rootType"));
+                assertEquals("runtimes", safe.get("bean"));
+                assertFalse(safe.toString().contains("UR03_REDACTION_PROBE"));
+                assertTrue(Child.errorFailure(Ur03RuntimeHttpFixture.JSON.valueToTree(safe)).safe
+                        .contains("missingBeanType=" + mapper.getName()));
+            }
+            assertFalse(Ur03RuntimeHttpFixture.safeFailure(
+                    new org.springframework.beans.factory.NoSuchBeanDefinitionException(String.class)).containsKey("missingBeanType"));
+            assertFalse(Child.errorFailure(Ur03RuntimeHttpFixture.JSON.valueToTree(
+                    Map.of("missingBeanType", "UR03_REDACTION_PROBE"))).safe.contains("UR03_REDACTION_PROBE"));
         } catch (Throwable ignored) {
             // Never export failed assertion operands/diagnostic inputs from this regression either.
             throw new AssertionError("UR03_ERROR_RECEIPT_DIAGNOSTIC_REGRESSION_FAILED");
+        }
+    }
+
+    private static Set<Class<?>> inheritedDaoMapperTypes() throws Exception {
+        Set<Class<?>> types = new HashSet<>();
+        var field = cn.jia.common.dao.BaseDaoImpl.class.getDeclaredField("baseMapper");
+        assertNotNull(field.getAnnotation(jakarta.inject.Inject.class));
+        for (Class<?> dao : List.of(cn.jia.agent.dao.impl.AgentRuntimeV1InstallationDaoImpl.class,
+                cn.jia.agent.dao.impl.AgentRuntimeDaoImpl.class, cn.jia.agent.dao.impl.AgentIdentityRegistryDaoImpl.class,
+                cn.jia.agent.dao.impl.AgentIdentityAliasDaoImpl.class, cn.jia.agent.dao.impl.AgentPersonaBindingDaoImpl.class,
+                cn.jia.user.dao.impl.UserInfoDaoImpl.class)) {
+            var parent = (java.lang.reflect.ParameterizedType) dao.getGenericSuperclass();
+            assertEquals(cn.jia.common.dao.BaseDaoImpl.class, parent.getRawType());
+            types.add((Class<?>) parent.getActualTypeArguments()[0]);
+        }
+        assertEquals(6, types.size());
+        return types;
+    }
+
+    @Test
+    void inheritedDaoInjectionHasExactlyItsRealMapperBeanDefinitions() {
+        try {
+            // Wiring metadata regression only; not real HTTP/DB acceptance or a mock DAO boot.
+            Set<Class<?>> expected = inheritedDaoMapperTypes();
+            Set<Class<?>> declared = new HashSet<>();
+            for (var method : Ur03RuntimeHttpFixture.HttpConfiguration.class.getDeclaredMethods()) {
+                if (method.getAnnotation(org.springframework.context.annotation.Bean.class) != null
+                        && com.baomidou.mybatisplus.core.mapper.BaseMapper.class.isAssignableFrom(method.getReturnType())) {
+                    assertArrayEquals(new Class<?>[] { org.mybatis.spring.SqlSessionTemplate.class }, method.getParameterTypes());
+                    assertTrue(declared.add(method.getReturnType()));
+                }
+            }
+            assertEquals(expected, declared);
+        } catch (Throwable ignored) {
+            throw new AssertionError("UR03_REAL_MAPPER_BEAN_DEFINITION_REGRESSION_FAILED");
         }
     }
 
@@ -455,6 +506,8 @@ class Ur03RuntimeHttpDbAcceptanceTest {
             }
             String missing = Ur03RuntimeHttpFixture.allowedMissingClass(receipt.path("missingClass").asText(""));
             if (missing != null) diagnostic.append("missingClass=").append(missing).append(' ');
+            String missingBean = Ur03RuntimeHttpFixture.allowedMissingBeanType(receipt.path("missingBeanType").asText(""));
+            if (missingBean != null) diagnostic.append("missingBeanType=").append(missingBean).append(' ');
             String bean = receipt.path("bean").asText("");
             if (Ur03RuntimeHttpFixture.DIAGNOSTIC_BEANS.contains(bean)) diagnostic.append("bean=").append(bean).append(' ');
             int errno = receipt.path("errno").asInt(0);
