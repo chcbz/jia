@@ -16,13 +16,13 @@ import java.util.concurrent.*;
 import java.util.function.Predicate;
 import static org.junit.jupiter.api.Assertions.*;
 
-/** Opt-in CLOUD ONLY. Six complete E05 original-engine/real-HTTP/native-WS/DB selectors.
+/** Explicit local opt-in only. Six complete E05 original-engine/real-HTTP/native-WS/DB selectors.
  * No mocks, Provider, production services, installer or shared DB. Synthetic historical
  * assignment/transport + nonpaid child are explicitly NOT actual model/MySQL/enroll proof. */
 class Ur04E05HttpDbAcceptanceTest {
     @TempDir(cleanup = CleanupMode.ALWAYS) Path temporaryDirectory;
     private static final String BASELINE = "4c5875b5bed143c793d7812143d60deab8d65674";
-    private static final String CLIENT = "3746043947888a6b727be88527695d1edf3587c3";
+    private static final String CLIENT = "7594fd72251d38b6e1d23a1a3cca184ae0d085e7";
     private String stage = "SOURCE_PREPARE";
 
     @Test void e05ActualClientHttpCommitsOriginalResultAndTerminalAck() throws Exception {
@@ -184,7 +184,7 @@ class Ur04E05HttpDbAcceptanceTest {
         catch (Throwable e) { throw new AssertionError("UR04_" + stage + " " + Ur04E05HttpFixture.safeFailure(e)); }
     }
     private static void verifyOptionalDiagnostics() {
-        // Same six cloud selectors run this small safety guard before child startup.
+        // Same six acceptance selectors run this small safety guard before child startup.
         // It is not evidence of Java Boot or business HTTP success.
         JsonNode absent = Ur04E05HttpFixture.JSON.valueToTree(Map.of("stage", "ERROR", "code", "UR04_JAVA_FAILURE", "at", "BOOT_SCHEMA"));
         String minimal = Child.errorFailure(absent).code;
@@ -283,7 +283,7 @@ class Ur04E05HttpDbAcceptanceTest {
         return new Source(api, apiCommit, tree, client, artifact, node, path);
     }
     private static Path canonical(Path p) throws Exception { if (!p.isAbsolute() || !p.normalize().equals(p) || !p.toRealPath().equals(p)) throw new SafeFailure("CANONICAL_INPUT_REQUIRED"); return p; }
-    private static String required(String key) { String v = System.getenv(key); if (v == null || v.isBlank()) throw new SafeFailure("FIVE_CLOUD_INPUTS_REQUIRED"); return v; }
+    private static String required(String key) { String v = System.getenv(key); if (v == null || v.isBlank()) throw new SafeFailure("FIVE_PAIRED_INPUTS_REQUIRED"); return v; }
     private static String git(Path root, String path, String... args) throws Exception {
         List<String> command = new ArrayList<>(List.of("/usr/bin/git", "-C", root.toString())); command.addAll(List.of(args));
         ProcessBuilder builder = new ProcessBuilder(command); builder.environment().clear(); builder.environment().putAll(Map.of("PATH", path, "LANG", "C.UTF-8"));
@@ -319,7 +319,7 @@ class Ur04E05HttpDbAcceptanceTest {
             Files.setPosixFilePermissions(p, PosixFilePermissions.fromString("rw-------")); return p;
         }
         Child nodeChild() throws Exception {
-            ProcessBuilder p = isolated(List.of(source.node().toString(), nodeScript.toString())); p.environment().put("UR04_CLOUD_CHILD", "1"); return new Child(p.start());
+            ProcessBuilder p = isolated(List.of(source.node().toString(), nodeScript.toString())); p.environment().put("UR04_PRIVATE_CHILD", "1"); return new Child(p.start());
         }
         Child javaChild() throws Exception {
             String cp = System.getProperty("ur04.fixture.classpath"); if (cp == null || cp.isBlank()) throw new SafeFailure("FIXTURE_CLASSPATH_REQUIRED");
@@ -336,7 +336,7 @@ class Ur04E05HttpDbAcceptanceTest {
             assertEquals(java.process.pid(), integer(ready, "pid")); long port = integer(ready, "port"); if (port <= 0 || port > 65535) throw new SafeFailure("LOOPBACK_PORT_REQUIRED");
             commands = array(ready, "commands"); node = nodeChild(); nodeParents.add(node.process.pid()); Map<String, Object> input = baseInput(); input.put("op", "INIT"); input.put("apiOrigin", "http://127.0.0.1:" + port);
             if (fresh) input.put("authorizations", authorizations); JsonNode boot = node.exchange(input, "NODE_BOOT"); assertEquals(node.process.pid(), integer(boot, "pid"));
-            assertEquals(CLIENT, text(boot, "sourceCommit")); assertEquals("ddc3c0b3355eb77cd0be080f8fc4b734c901cab7", text(boot, "sourceTree"));
+            assertEquals(CLIENT, text(boot, "sourceCommit")); assertEquals("0827ce904179862ab55648fe99b780cea94faf98", text(boot, "sourceTree"));
             provenance = Map.of("archiveSha256", text(boot, "archiveSha256"), "sourceManifestSha256", text(boot, "sourceManifestSha256"),
                 "artifactManifestSha256", text(boot, "artifactManifestSha256"), "nodeSha256", text(boot, "nodeSha256"), "cleanRun", text(boot, "cleanRun"));
             for (String key : List.of("archiveSha256", "sourceManifestSha256", "artifactManifestSha256", "nodeSha256"))
@@ -516,7 +516,7 @@ class Ur04E05HttpDbAcceptanceTest {
             if (Ur04E05HttpFixture.DIAGNOSTIC_BEANS.contains(bean)) result += " bean=" + bean;
             if (Ur04E05HttpFixture.DIAGNOSTIC_CLASSES.contains(missing)) result += " missingClass=" + missing;
             String inputFailure = optional(n, "failureCode");
-            if (Set.of("ARTIFACT_ALIAS_FORBIDDEN", "ARTIFACT_FULL_INVENTORY_REQUIRED", "ARTIFACT_LINK_PROOF_REQUIRED", "ARTIFACT_MEMBER_MISMATCH", "CHILD_INTERPRETER_PATH_UNSAFE", "CLEAN_ARTIFACT_EVIDENCE_REQUIRED", "CLIENT_COMMIT_REQUIRED", "CLOUD_CHILD_ONLY", "CURRENT_TRANSPORT_REQUIRED", "ENGINE_SOURCE_BINDING_REQUIRED", "EXACT_AGENT_INDEX_REQUIRED", "EXPLICIT_STOP_REQUIRED", "MEMBER_UNSAFE", "NEGATIVE_ALLOWLIST_REQUIRED", "NEGATIVE_COMMAND_BINDING_REQUIRED", "NODE_20_20_2_REQUIRED", "NODE_ARTIFACT_BINARY_BINDING_REQUIRED", "ORIGINAL_CONFLICT_AUDIT_REQUIRED", "ONE_ORIGINAL_CHECKPOINT_REQUIRED", "ONE_ORIGINAL_MATERIAL_REQUIRED", "ORIGINAL_MATERIAL_REQUIRED", "OWNED_SUBJECT_SOCKET_REQUIRED", "PATH_ALIAS_FORBIDDEN", "PATH_CANONICAL_REQUIRED", "PATH_TYPE_REQUIRED", "PIPE_REQUEST_REQUIRED", "PRIOR_TERMINAL_REQUIRED", "PRIVATE_INIT_REQUIRED", "PRIVATE_THREE_SUBJECTS_REQUIRED", "REAL_LEASE_FOR_NEGATIVE_REQUIRED", "RUNTIME_SOURCE_BINDING_REQUIRED", "SOURCE_ALIAS_FORBIDDEN", "SOURCE_ARCHIVE_MISMATCH", "SOURCE_FULL_TREE_MISMATCH", "SOURCE_IDENTITY_REQUIRED", "SOURCE_MEMBER_HASH_REQUIRED", "SOURCE_MEMBER_MISMATCH", "SOURCE_UNEXPECTED_MEMBER", "SYNTHETIC_AUTH_REQUIRED", "TRACKED_SYNTHETIC_MODULE_REQUIRED", "UNKNOWN_PRIVATE_OPERATION").contains(inputFailure)) result += " failureCode=" + inputFailure;
+            if (Set.of("ARTIFACT_ALIAS_FORBIDDEN", "ARTIFACT_FULL_INVENTORY_REQUIRED", "ARTIFACT_LINK_PROOF_REQUIRED", "ARTIFACT_MEMBER_MISMATCH", "CHILD_INTERPRETER_PATH_UNSAFE", "CLEAN_ARTIFACT_EVIDENCE_REQUIRED", "CLIENT_COMMIT_REQUIRED", "PRIVATE_CHILD_ONLY", "CURRENT_TRANSPORT_REQUIRED", "ENGINE_SOURCE_BINDING_REQUIRED", "EXACT_AGENT_INDEX_REQUIRED", "EXPLICIT_STOP_REQUIRED", "MEMBER_UNSAFE", "NEGATIVE_ALLOWLIST_REQUIRED", "NEGATIVE_COMMAND_BINDING_REQUIRED", "NODE_20_20_2_REQUIRED", "NODE_ARTIFACT_BINARY_BINDING_REQUIRED", "ORIGINAL_CONFLICT_AUDIT_REQUIRED", "ONE_ORIGINAL_CHECKPOINT_REQUIRED", "ONE_ORIGINAL_MATERIAL_REQUIRED", "ORIGINAL_MATERIAL_REQUIRED", "OWNED_SUBJECT_SOCKET_REQUIRED", "PATH_ALIAS_FORBIDDEN", "PATH_CANONICAL_REQUIRED", "PATH_TYPE_REQUIRED", "PIPE_REQUEST_REQUIRED", "PRIOR_TERMINAL_REQUIRED", "PRIVATE_INIT_REQUIRED", "PRIVATE_THREE_SUBJECTS_REQUIRED", "REAL_LEASE_FOR_NEGATIVE_REQUIRED", "RUNTIME_SOURCE_BINDING_REQUIRED", "SOURCE_ALIAS_FORBIDDEN", "SOURCE_ARCHIVE_MISMATCH", "SOURCE_FULL_TREE_MISMATCH", "SOURCE_IDENTITY_REQUIRED", "SOURCE_MEMBER_HASH_REQUIRED", "SOURCE_MEMBER_MISMATCH", "SOURCE_UNEXPECTED_MEMBER", "SYNTHETIC_AUTH_REQUIRED", "TRACKED_SYNTHETIC_MODULE_REQUIRED", "UNKNOWN_PRIVATE_OPERATION").contains(inputFailure)) result += " failureCode=" + inputFailure;
             if (sql.matches("[A-Z0-9]{5}")) result += " sqlState=" + sql;
             JsonNode errno = n.get("errno"); if (errno != null && errno.isIntegralNumber() && errno.canConvertToLong() && errno.longValue() > 0 && errno.longValue() <= 4095) result += " errno=" + errno.longValue();
             return new SafeFailure(result);

@@ -1,9 +1,9 @@
 // UR-04 opt-in fixture only. Does not change main/default/Owner test source sets.
-// In Flow, pass this AFTER ops/ci/aliyun-flow/cold-init.gradle.
-// Requires full pinned 3746043 source + proven clean artifact + Node 20.20.2, not host dependencies.
+// Run only through the project orchestrator against fixed clean API source/settings.
+// Requires full pinned 7594fd7 source + proven clean artifact + Node 20.20.2, not host dependencies.
 // Controller verifies archiveSHA + manifestSHA before extraction; fixture verifies manifest/bytes.
 // External non-sensitive inputs: UR04_API_COMMIT, UR04_CLIENT_ROOT, UR04_CLIENT_COMMIT, UR04_NODE_BIN, UR04_ARTIFACT_ROOT.
-// Task additionally requires existing Flow launcher control CYF_FLOW_GRADLE_ACTIVE=1.
+// Task requires the explicit local fixture opt-in UR04_LOCAL_ACCEPTANCE=1.
 // Node needs outbound localhost socket access, Java needs 127.0.0.1 ephemeral bind; no Internet.
 // Java A -> STOP/exit -> parent JDBC -> fresh Java B on SAME private H2-file, never reseed.
 // Real native WS/E05/synthetic original engine execution; NOT Provider/enroll/MySQL/production.
@@ -76,7 +76,7 @@ gradle.projectsEvaluated {
         outputs.upToDateWhen { false }
         outputs.cacheIf { false }
         filter { includeTestsMatching 'cn.jia.agent.acceptance.ur04.Ur04E05HttpDbAcceptanceTest' }
-        // Do not pass Flow credentials or external datasource configuration to tests.
+        // Do not pass launcher credentials, opt-in control or external datasource configuration to tests.
         def inputs = [:]
         ['UR04_API_COMMIT', 'UR04_CLIENT_ROOT', 'UR04_CLIENT_COMMIT', 'UR04_NODE_BIN', 'UR04_ARTIFACT_ROOT'].each { key ->
             def value = System.getenv(key)
@@ -84,8 +84,8 @@ gradle.projectsEvaluated {
         }
         setEnvironment(inputs)
         doFirst {
-            if (System.getenv('CYF_FLOW_GRADLE_ACTIVE') != '1') {
-                throw new GradleException('UR04_FLOW_ONLY_NOT_RUN_LOCALLY')
+            if (System.getenv('UR04_LOCAL_ACCEPTANCE') != '1') {
+                throw new GradleException('UR04_LOCAL_ACCEPTANCE_REQUIRED')
             }
             if (inputs.size() != 5) throw new GradleException('UR04_PAIRED_SOURCE_INPUTS_REQUIRED')
             systemProperty 'ur04.fixture.classpath', s.runtimeClasspath.asPath
