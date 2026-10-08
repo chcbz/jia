@@ -143,9 +143,10 @@ class Ur03RuntimeHttpDbAcceptanceTest {
             recordStage("FINAL_INDEPENDENT_JDBC_H2_FILE", 2);
         } catch (SafeFailure failure) {
             throw new AssertionError("UR03_" + stage + " " + failure.safe);
-        } catch (Throwable ignored) {
-            // Assertion/driver/framework messages may contain source paths, SQL parameters or tokens.
-            throw new AssertionError("UR03_" + stage + " UR03_ASSERTION_OR_HARNESS_FAILURE");
+        } catch (Throwable failure) {
+            // Only allowlisted types/identifiers and numeric OS/SQL codes, never original messages.
+            throw new AssertionError("UR03_" + stage + " UR03_ASSERTION_OR_HARNESS_FAILURE "
+                    + Ur03RuntimeHttpFixture.safeFailure(failure));
         } finally {
             if (node != null) node.close();
             if (javaB != null) javaB.close();
@@ -310,10 +311,36 @@ class Ur03RuntimeHttpDbAcceptanceTest {
         } finally { if (process.isAlive()) { process.destroyForcibly(); process.waitFor(10, TimeUnit.SECONDS); } }
     }
     private static Child javaChild(Path root) throws Exception {
-        Path java = Path.of(System.getProperty("java.home"), "bin", "java").toRealPath();
-        return new Child(isolated(root, List.of(java.toString(), "-Djava.io.tmpdir=" + root.resolve("tmp"),
-                "-Duser.home=" + root.resolve("home"), "-Duser.timezone=UTC", "-cp", requiredProperty("ur03.fixture.classpath"),
-                Ur03RuntimeHttpFixture.class.getName())).start(), true);
+        Path java;
+        try { java = Path.of(System.getProperty("java.home"), "bin", "java").toRealPath(); }
+        catch (Throwable failure) {
+            throw new SafeFailure("UR03_JAVA_EXECUTABLE_FAILED " + Ur03RuntimeHttpFixture.safeFailure(failure));
+        }
+        // Use the init task's complete source-set runtime, not the Gradle worker launcher classpath.
+        String classpath = requiredProperty("ur03.fixture.classpath");
+        Child child;
+        try {
+            ProcessBuilder builder = isolated(root, List.of(java.toString(), "-Djava.io.tmpdir=" + root.resolve("tmp"),
+                    "-Duser.home=" + root.resolve("home"), "-Duser.timezone=UTC", "-cp", classpath,
+                    Ur03RuntimeHttpFixture.class.getName()));
+            // Read pre-main launcher stderr privately. Only a fixed classifier can leave the pipe.
+            builder.redirectError(ProcessBuilder.Redirect.PIPE);
+            child = new Child(builder.start(), true);
+        } catch (Throwable failure) {
+            throw new SafeFailure("UR03_JAVA_PROCESS_START_FAILED " + Ur03RuntimeHttpFixture.safeFailure(failure)
+                    + " classpathEntries=" + classpath.split(File.pathSeparator).length
+                    + " classpathBytes=" + classpath.getBytes(StandardCharsets.UTF_8).length);
+        }
+        try {
+            JsonNode boot = child.receipt("JAVA_BOOT");
+            if (boot.path("pid").asLong() != child.process.pid()) throw new SafeFailure("UR03_JAVA_BOOT_PID_MISMATCH");
+            // No input (including the synthetic authorization) is written before main has entered.
+            recordStage("JAVA_MAIN_ENTERED", 1);
+            return child;
+        } catch (Throwable failure) {
+            child.close();
+            throw failure;
+        }
     }
     private static Child nodeChild(Path node, Path root) throws Exception {
         Path script = root.resolve("runtime-v1-http-client.mjs");
@@ -330,16 +357,39 @@ class Ur03RuntimeHttpDbAcceptanceTest {
         final boolean java;
         final BufferedReader output;
         final BufferedWriter input;
-        final ExecutorService reader = Executors.newSingleThreadExecutor(r -> {
+        final Future<String> launcherDiagnostic;
+        final ExecutorService reader = Executors.newFixedThreadPool(2, r -> {
             Thread thread = new Thread(r, "ur03-owned-pipe"); thread.setDaemon(true); return thread;
         });
         Child(Process process, boolean java) {
             this.process = process; this.java = java;
             output = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
             input = new BufferedWriter(new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8));
+            launcherDiagnostic = reader.submit(() -> {
+                String diagnostic = "UR03_NO_ALLOWLISTED_LAUNCHER_DIAGNOSTIC";
+                try (BufferedReader error = new BufferedReader(new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = error.readLine()) != null) {
+                        String safe = Ur03RuntimeHttpFixture.safeLauncherLine(line);
+                        if (safe != null) diagnostic = safe;
+                    }
+                } catch (IOException ignored) { /* No original stderr or read exception is exported. */ }
+                return diagnostic;
+            });
         }
         JsonNode exchange(Object request, String expectedStage) throws Exception {
-            input.write(Ur03RuntimeHttpFixture.JSON.writeValueAsString(request)); input.newLine(); input.flush();
+            try {
+                input.write(Ur03RuntimeHttpFixture.JSON.writeValueAsString(request)); input.newLine(); input.flush();
+            } catch (IOException failure) {
+                throw new SafeFailure("UR03_CHILD_INPUT_WRITE_FAILED " + Ur03RuntimeHttpFixture.safeFailure(failure)
+                        + exitDiagnostic());
+            }
+            return receipt(expectedStage);
+        }
+        private String exitDiagnostic() {
+            return process.isAlive() ? " childAlive=1" : " childAlive=0 exit=" + process.exitValue();
+        }
+        JsonNode receipt(String expectedStage) throws Exception {
             Future<JsonNode> next = reader.submit(() -> {
                 String line;
                 while ((line = output.readLine()) != null) {
@@ -349,18 +399,32 @@ class Ur03RuntimeHttpDbAcceptanceTest {
                     }
                     return Ur03RuntimeHttpFixture.JSON.readTree(line);
                 }
-                throw new SafeFailure("UR03_CHILD_EXIT_WITHOUT_RECEIPT");
+                // stdout EOF also covers pre-main failure, before the fixture can emit JSON.
+                String diagnostic = java ? launcherDiagnostic.get() : "UR03_NODE_EXIT";
+                process.waitFor(); // Covered by the existing receipt control wait; adds no new deadline.
+                throw new SafeFailure("UR03_CHILD_EXIT_WITHOUT_RECEIPT at=" + expectedStage + " "
+                        + diagnostic + exitDiagnostic());
             });
             JsonNode receipt;
             try { receipt = next.get(120, TimeUnit.SECONDS); }
             catch (TimeoutException timeout) { next.cancel(true); throw new SafeFailure("UR03_FIXTURE_CONTROL_WAIT_EXPIRED"); }
-            catch (ExecutionException ignored) { throw new SafeFailure("UR03_CHILD_PROTOCOL_FAILURE"); }
+            catch (ExecutionException failure) {
+                if (failure.getCause() instanceof SafeFailure safe) throw safe;
+                throw new SafeFailure("UR03_CHILD_PROTOCOL_FAILURE at=" + expectedStage + " "
+                        + Ur03RuntimeHttpFixture.safeFailure(failure.getCause()) + exitDiagnostic());
+            }
             if ("ERROR".equals(receipt.path("stage").asText())) {
                 StringBuilder diagnostic = new StringBuilder();
-                for (String key : List.of("at", "code", "runtimeCode", "type", "sqlState")) {
+                for (String key : List.of("at", "code", "runtimeCode", "type", "rootType", "sqlState")) {
                     String safe = receipt.path(key).asText();
                     if (safe.matches("[A-Za-z0-9_]{1,80}")) diagnostic.append(key).append('=').append(safe).append(' ');
                 }
+                String missing = Ur03RuntimeHttpFixture.allowedMissingClass(receipt.path("missingClass").asText());
+                if (missing != null) diagnostic.append("missingClass=").append(missing).append(' ');
+                String bean = receipt.path("bean").asText();
+                if (Ur03RuntimeHttpFixture.DIAGNOSTIC_BEANS.contains(bean)) diagnostic.append("bean=").append(bean).append(' ');
+                int errno = receipt.path("errno").asInt();
+                if (errno > 0 && errno <= 4095) diagnostic.append("errno=").append(errno).append(' ');
                 int status = receipt.path("status").asInt();
                 if (status >= 100 && status <= 599) diagnostic.append("status=").append(status);
                 throw new SafeFailure("UR03_CHILD_REJECTED " + diagnostic);

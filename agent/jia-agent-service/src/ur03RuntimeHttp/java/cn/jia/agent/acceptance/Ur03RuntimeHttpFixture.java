@@ -35,6 +35,7 @@ import org.h2.api.Trigger;
 import org.h2.jdbcx.JdbcDataSource;
 import org.mybatis.spring.SqlSessionTemplate;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.BeanCreationException;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
@@ -68,6 +69,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.regex.Pattern;
 
 /** Test-only real HTTP child JVM. No auto-configuration, mock DAO or fake business callback.
  * Synthetic SENT rows model prior delivery, not Rabbit/WS/business-execution evidence.
@@ -92,6 +94,7 @@ public final class Ur03RuntimeHttpFixture {
         System.setErr(new PrintStream(OutputStream.nullOutputStream()));
         java.util.logging.LogManager.getLogManager().reset();
         try (BufferedReader input = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
+            emit(protocol, Map.of("stage", "JAVA_BOOT", "pid", ProcessHandle.current().pid()));
             JsonNode init = JSON.readTree(input.readLine());
             require("INIT".equals(init.path("op").asText()), "UR03_INIT_REQUIRED");
             Path root = privateRoot(Path.of(init.path("root").asText()));
@@ -139,18 +142,105 @@ public final class Ur03RuntimeHttpFixture {
             Map<String, Object> safe = new LinkedHashMap<>();
             safe.put("stage", "ERROR"); safe.put("at", bootStage);
             safe.put("code", failure instanceof FixtureFailure f ? f.code : "UR03_JAVA_FAILURE");
-            Throwable cause = failure;
-            Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
-            while (cause != null && seen.add(cause)) {
-                if (cause instanceof SQLException sql && sql.getSQLState() != null
-                        && sql.getSQLState().matches("[A-Z0-9]{5}")) safe.put("sqlState", sql.getSQLState());
-                String type = cause.getClass().getSimpleName();
-                if (type.matches("[A-Za-z0-9]{1,80}")) safe.put("type", type);
-                cause = cause.getCause();
-            }
+            safe.putAll(safeFailure(failure));
             emit(protocol, safe);
             System.exit(1);
         }
+    }
+
+    // Exact allowlists: never stringify Throwable, SQL, bean definitions or arbitrary identifiers.
+    private static final Set<String> DIAGNOSTIC_TYPES = Set.of(
+            "java.io.IOException", "java.io.FileNotFoundException", "java.lang.AssertionError",
+            "java.lang.IllegalArgumentException", "java.lang.IllegalStateException", "java.lang.NullPointerException",
+            "java.lang.ClassNotFoundException", "java.lang.NoClassDefFoundError", "java.lang.NoSuchMethodError",
+            "java.lang.ExceptionInInitializerError", "java.lang.UnsatisfiedLinkError", "java.lang.IllegalAccessError",
+            "java.lang.reflect.InvocationTargetException", "java.nio.file.NoSuchFileException",
+            "java.nio.file.AccessDeniedException", "java.nio.file.FileAlreadyExistsException",
+            "java.sql.SQLException", "org.h2.jdbc.JdbcSQLSyntaxErrorException", "org.h2.jdbc.JdbcSQLNonTransientException",
+            "org.h2.jdbc.JdbcSQLIntegrityConstraintViolationException", "org.h2.jdbc.JdbcSQLNonTransientConnectionException",
+            "org.springframework.beans.factory.BeanCreationException", "org.springframework.beans.factory.UnsatisfiedDependencyException",
+            "org.springframework.beans.factory.NoSuchBeanDefinitionException", "org.springframework.beans.factory.BeanDefinitionStoreException",
+            "org.springframework.beans.BeanInstantiationException", "org.springframework.jdbc.datasource.init.ScriptStatementFailedException",
+            "org.springframework.jdbc.BadSqlGrammarException", "org.springframework.jdbc.UncategorizedSQLException",
+            "org.springframework.context.ApplicationContextException", "org.apache.catalina.LifecycleException",
+            "org.apache.ibatis.exceptions.PersistenceException", "org.apache.ibatis.binding.BindingException",
+            "org.mybatis.spring.MyBatisSystemException", "org.springframework.aop.framework.AopConfigException",
+            "cn.jia.agent.acceptance.Ur03RuntimeHttpFixture$FixtureFailure");
+    static final Set<String> DIAGNOSTIC_BEANS = Set.of("dataSource", "transactionManager", "sqlSessionFactory",
+            "sqlSessionTemplate", "installations", "runtimes", "registry", "aliases", "bindings", "users", "identity",
+            "accounts", "taskGate", "authentication", "ackGate", "commandAcks", "runtime", "controller",
+            "sensitiveProperties", "sensitiveAdvice", "springSecurityFilterChain", "mvcHandlerMappingIntrospector",
+            "requestMappingHandlerAdapter", "requestMappingHandlerMapping", "mvcContentNegotiationManager", "mvcConversionService");
+    private static final Set<String> DIAGNOSTIC_CLASSES = Set.of(
+            "cn.jia.agent.acceptance.Ur03RuntimeHttpFixture", "cn.jia.agent.acceptance.Ur03RuntimeHttpFixture$AckAdvanceProbe",
+            "cn.jia.agent.api.AgentRuntimeV1Controller", "cn.jia.agent.security.AgentRuntimeAuthenticationService",
+            "cn.jia.agent.service.impl.AgentRuntimeV1ServiceImpl", "cn.jia.agent.mapper.AgentCommandRecoveryMapper",
+            "cn.jia.user.security.AccountSecurityServiceImpl", "cn.jia.user.mapper.InfoMapper", "cn.jia.common.dao.BaseDaoImpl",
+            "tools.jackson.databind.json.JsonMapper", "tools.jackson.databind.JsonNode", "tools.jackson.core.JsonFactory",
+            "org.h2.jdbcx.JdbcDataSource", "org.h2.api.Trigger", "org.apache.catalina.startup.Tomcat",
+            "org.springframework.web.servlet.DispatcherServlet", "org.springframework.web.context.support.AnnotationConfigWebApplicationContext",
+            "org.springframework.security.config.annotation.web.configuration.EnableWebSecurity",
+            "org.springframework.jdbc.core.JdbcTemplate", "org.springframework.jdbc.datasource.DataSourceTransactionManager",
+            "org.apache.ibatis.session.SqlSessionFactory", "org.mybatis.spring.SqlSessionTemplate",
+            "com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean",
+            "jakarta.servlet.Servlet", "jakarta.servlet.http.HttpServlet", "org.slf4j.LoggerFactory",
+            "org.slf4j.Logger", "org.apache.commons.logging.LogFactory");
+    private static final Pattern OS_ERROR = Pattern.compile("\\berror=([0-9]{1,4})(?:,|\\b)");
+
+    static String allowedMissingClass(String name) {
+        // JVM linkage errors use slash-separated class names; emit only known runtime anchors.
+        if (name == null) return null;
+        String normalized = name.replace('/', '.');
+        return DIAGNOSTIC_CLASSES.contains(normalized) ? normalized : null;
+    }
+    private static String diagnosticType(Throwable failure) {
+        return DIAGNOSTIC_TYPES.contains(failure.getClass().getName()) ? failure.getClass().getSimpleName() : "OTHER";
+    }
+    static Map<String, Object> safeFailure(Throwable failure) {
+        Map<String, Object> safe = new LinkedHashMap<>();
+        if (failure == null) { safe.put("type", "OTHER"); safe.put("rootType", "OTHER"); return safe; }
+        safe.put("type", diagnosticType(failure));
+        Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (Throwable cause = failure; cause != null && seen.add(cause); cause = cause.getCause()) {
+            safe.put("rootType", diagnosticType(cause));
+            if (cause instanceof SQLException sql && sql.getSQLState() != null
+                    && sql.getSQLState().matches("[A-Z0-9]{5}")) safe.put("sqlState", sql.getSQLState());
+            if (cause instanceof BeanCreationException bean && bean.getBeanName() != null
+                    && DIAGNOSTIC_BEANS.contains(bean.getBeanName())) {
+                safe.put("bean", bean.getBeanName());
+            }
+            if (cause instanceof ClassNotFoundException || cause instanceof NoClassDefFoundError) {
+                String missing = cause.getMessage() == null ? null : allowedMissingClass(cause.getMessage());
+                if (missing != null) safe.put("missingClass", missing);
+            }
+            if (cause instanceof IOException && cause.getMessage() != null) {
+                // The private message can contain executable paths; only Linux's numeric errno leaves here.
+                var match = OS_ERROR.matcher(cause.getMessage());
+                if (match.find()) {
+                    int errno = Integer.parseInt(match.group(1));
+                    if (errno > 0 && errno <= 4095) safe.put("errno", errno);
+                }
+            }
+        }
+        return safe;
+    }
+    static String safeLauncherLine(String line) {
+        // Pre-main JVM errors cannot use the child's JSON handler. Do not retain/export stderr.
+        for (String prefix : List.of("Error: Could not find or load main class ",
+                "Caused by: java.lang.ClassNotFoundException: ", "Caused by: java.lang.NoClassDefFoundError: ",
+                "Exception in thread \"main\" java.lang.NoClassDefFoundError: ")) {
+            if (line.startsWith(prefix)) {
+                String missing = allowedMissingClass(line.substring(prefix.length()));
+                return missing == null ? "UR03_JVM_LINKAGE_FAILURE" : "UR03_JVM_LINKAGE_FAILURE missingClass=" + missing;
+            }
+        }
+        if (line.equals("Error: Unable to initialize main class cn.jia.agent.acceptance.Ur03RuntimeHttpFixture")) {
+            return "UR03_JVM_MAIN_INITIALIZATION_FAILED";
+        }
+        if (line.startsWith("Exception in thread \"main\" java.lang.ExceptionInInitializerError")) {
+            return "UR03_JVM_STATIC_INITIALIZATION_FAILED";
+        }
+        return null;
     }
 
     static Path privateRoot(Path root) throws IOException {
