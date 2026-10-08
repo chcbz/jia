@@ -154,6 +154,33 @@ class Ur03RuntimeHttpDbAcceptanceTest {
         }
     }
 
+    @Test
+    void errorReceiptDiagnosticsTolerateAbsentOptionalFieldsWithoutHidingChildStage() {
+        try {
+            // Harness-only regression, not a substitute for the real paired HTTP/H2 test above.
+            JsonNode error = Ur03RuntimeHttpFixture.JSON.valueToTree(Map.of("stage", "ERROR", "at", "BOOT_SCHEMA",
+                    "code", "UR03_JAVA_FAILURE", "type", "IllegalStateException", "rootType", "IllegalStateException"));
+            String diagnostic = Child.errorFailure(error).safe;
+            assertEquals("UR03_CHILD_REJECTED at=BOOT_SCHEMA code=UR03_JAVA_FAILURE type=IllegalStateException "
+                    + "rootType=IllegalStateException ", diagnostic);
+            JsonNode withOptional = Ur03RuntimeHttpFixture.JSON.valueToTree(Map.of("stage", "ERROR", "at", "BOOT_HTTP",
+                    "code", "UR03_JAVA_FAILURE", "missingClass", "org/h2/jdbcx/JdbcDataSource",
+                    "bean", "sqlSessionFactory", "errno", 2, "status", 403));
+            String optional = Child.errorFailure(withOptional).safe;
+            assertTrue(optional.contains("missingClass=org.h2.jdbcx.JdbcDataSource"));
+            assertTrue(optional.contains("bean=sqlSessionFactory"));
+            assertTrue(optional.contains("errno=2")); assertTrue(optional.contains("status=403"));
+            JsonNode untrusted = Ur03RuntimeHttpFixture.JSON.valueToTree(Map.of("stage", "ERROR", "at", "BOOT_HTTP",
+                    "code", "UR03_JAVA_FAILURE", "missingClass", "UR03_REDACTION_PROBE",
+                    "bean", "UR03_REDACTION_PROBE", "type", "UR03_REDACTION_PROBE/raw",
+                    "errno", "UR03_REDACTION_PROBE", "status", "UR03_REDACTION_PROBE"));
+            assertFalse(Child.errorFailure(untrusted).safe.contains("UR03_REDACTION_PROBE"));
+        } catch (Throwable ignored) {
+            // Never export failed assertion operands/diagnostic inputs from this regression either.
+            throw new AssertionError("UR03_ERROR_RECEIPT_DIAGNOSTIC_REGRESSION_FAILED");
+        }
+    }
+
     private static JsonNode inspect(Child java, String digest, long generation, String boot,
             String firstStatus, long firstVersion, String secondStatus, long secondVersion, long updates) throws Exception {
         JsonNode snapshot = java.exchange(Map.of("op", "SNAPSHOT", "tokenDigest", digest), "SNAPSHOT");
@@ -413,24 +440,28 @@ class Ur03RuntimeHttpDbAcceptanceTest {
                 throw new SafeFailure("UR03_CHILD_PROTOCOL_FAILURE at=" + expectedStage + " "
                         + Ur03RuntimeHttpFixture.safeFailure(failure.getCause()) + exitDiagnostic());
             }
-            if ("ERROR".equals(receipt.path("stage").asText())) {
-                StringBuilder diagnostic = new StringBuilder();
-                for (String key : List.of("at", "code", "runtimeCode", "type", "rootType", "sqlState")) {
-                    String safe = receipt.path(key).asText();
-                    if (safe.matches("[A-Za-z0-9_]{1,80}")) diagnostic.append(key).append('=').append(safe).append(' ');
-                }
-                String missing = Ur03RuntimeHttpFixture.allowedMissingClass(receipt.path("missingClass").asText());
-                if (missing != null) diagnostic.append("missingClass=").append(missing).append(' ');
-                String bean = receipt.path("bean").asText();
-                if (Ur03RuntimeHttpFixture.DIAGNOSTIC_BEANS.contains(bean)) diagnostic.append("bean=").append(bean).append(' ');
-                int errno = receipt.path("errno").asInt();
-                if (errno > 0 && errno <= 4095) diagnostic.append("errno=").append(errno).append(' ');
-                int status = receipt.path("status").asInt();
-                if (status >= 100 && status <= 599) diagnostic.append("status=").append(status);
-                throw new SafeFailure("UR03_CHILD_REJECTED " + diagnostic);
-            }
+            if ("ERROR".equals(receipt.path("stage").asText())) throw errorFailure(receipt);
             if (!expectedStage.equals(receipt.path("stage").asText())) throw new SafeFailure("UR03_CHILD_STAGE_MISMATCH");
             return receipt;
+        }
+        private static SafeFailure errorFailure(JsonNode receipt) {
+            StringBuilder diagnostic = new StringBuilder();
+            for (String key : List.of("at", "code", "runtimeCode", "type", "rootType", "sqlState")) {
+                // Jackson 3 MissingNode.asText()/asInt() throw JsonNodeException. These are
+                // optional diagnostics, not required business results: never mask the child error.
+                JsonNode value = receipt.path(key);
+                String safe = value.isTextual() ? value.asText() : "";
+                if (safe.matches("[A-Za-z0-9_]{1,80}")) diagnostic.append(key).append('=').append(safe).append(' ');
+            }
+            String missing = Ur03RuntimeHttpFixture.allowedMissingClass(receipt.path("missingClass").asText(""));
+            if (missing != null) diagnostic.append("missingClass=").append(missing).append(' ');
+            String bean = receipt.path("bean").asText("");
+            if (Ur03RuntimeHttpFixture.DIAGNOSTIC_BEANS.contains(bean)) diagnostic.append("bean=").append(bean).append(' ');
+            int errno = receipt.path("errno").asInt(0);
+            if (errno > 0 && errno <= 4095) diagnostic.append("errno=").append(errno).append(' ');
+            int status = receipt.path("status").asInt(0);
+            if (status >= 100 && status <= 599) diagnostic.append("status=").append(status);
+            return new SafeFailure("UR03_CHILD_REJECTED " + diagnostic);
         }
         void stop() throws Exception {
             exchange(Map.of("op", "STOP"), "STOPPED"); input.close();
