@@ -4,6 +4,7 @@ import cn.jia.agent.api.AgentRuntimeV1Controller;
 import cn.jia.agent.config.*;
 import cn.jia.agent.dao.*;
 import cn.jia.agent.dao.impl.*;
+import cn.jia.agent.event.AgentEventPublisher;
 import cn.jia.agent.entity.AgentCommandDraft;
 import cn.jia.agent.entity.AgentTaskInvitePayload;
 import cn.jia.agent.mapper.*;
@@ -367,7 +368,9 @@ public final class Ur04E05HttpFixture {
         @Override public void doFilter(ServletRequest req, ServletResponse res, FilterChain chain) throws IOException, ServletException {
             HttpServletRequest raw = (HttpServletRequest) req;
             if (raw.getRequestURI().equals("/ws/agent/channel")) { chain.doFilter(req, res); return; }
-            ContentCachingRequestWrapper request = new ContentCachingRequestWrapper(raw);
+            // Spring 7's explicit cacheLimit=0 keeps all consumed synthetic request bytes:
+            // observation only, no size rejection/truncation or eager body read.
+            ContentCachingRequestWrapper request = new ContentCachingRequestWrapper(raw, 0);
             ContentCachingResponseWrapper response = new ContentCachingResponseWrapper((HttpServletResponse) res);
             String path = request.getRequestURI(), category = category(path), before = "";
             if ("GET".equals(request.getMethod()) && Set.of("RESULT", "LEASE").contains(category)) before = businessFingerprint(new JdbcTemplate(activeDataSource));
