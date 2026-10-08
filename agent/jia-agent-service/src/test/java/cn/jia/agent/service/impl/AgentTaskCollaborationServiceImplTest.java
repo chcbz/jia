@@ -788,7 +788,10 @@ class AgentTaskCollaborationServiceImplTest {
     void ordinaryArtifactContractDoesNotExposeWorkItemResultMutation() {
         assertTrue(java.util.Arrays.stream(cn.jia.agent.service.AgentTaskArtifactService.class.getMethods())
                 .noneMatch(method -> method.getName().toLowerCase().contains("result")));
-        assertEquals(1, cn.jia.agent.service.AgentWorkItemResultCommitService.class.getDeclaredMethods().length);
+        assertEquals(java.util.Set.of("commitResult", "preflightRuntimeResult", "prepareRuntimeResult",
+                "commitPreparedRuntimeResult", "readRuntimeResult"), java.util.Arrays.stream(
+                cn.jia.agent.service.AgentWorkItemResultCommitService.class.getDeclaredMethods())
+                .map(java.lang.reflect.Method::getName).collect(java.util.stream.Collectors.toSet()));
     }
 
 

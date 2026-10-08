@@ -21,7 +21,8 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
         // WS and Runtime ACK/package endpoints are exclusive native lanes, even when legacy
         // API-key headers are presented: they must fail here, never fall through to old auth.
         // Elsewhere X-Agent-Id alone grants no Runtime authority; ambiguous duplicates fail closed.
-        return request.getRequestURI().matches(request.getContextPath() + "/internal/agent/skill-installations/[^/]+/package")
+        return request.getRequestURI().matches(request.getContextPath() + "/internal/agent/tasks/[^/]+/work-items/[^/]+/reassignments/[^/]+/commands/[^/]+/(?:result-commit|lease)")
+                || request.getRequestURI().matches(request.getContextPath() + "/internal/agent/skill-installations/[^/]+/package")
                 || request.getRequestURI().equals(request.getContextPath() + "/ws/agent/channel")
                 || request.getRequestURI().startsWith(request.getContextPath() + "/agent/runtime/v1/commands/")
                 || request.getHeader("X-Agent-Runtime-Id") != null
@@ -34,7 +35,12 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
         String path = request.getRequestURI().substring(request.getContextPath().length());
         // No matrix parameters, encoded separators, dot-segments or alternate dispatch paths.
         String id = "[A-Za-z0-9][A-Za-z0-9._:-]{0,99}";
-        return "GET".equals(request.getMethod()) && path.matches("/internal/agent/skill-installations/" + id + "/package")
+        return ("GET".equals(request.getMethod()) || "POST".equals(request.getMethod()))
+                && path.matches("/internal/agent/tasks/" + id + "/work-items/" + id + "/reassignments/" + id
+                + "/commands/" + id + "/result-commit")
+                || "GET".equals(request.getMethod()) && path.matches("/internal/agent/tasks/" + id
+                + "/work-items/" + id + "/reassignments/" + id + "/commands/" + id + "/lease")
+                || "GET".equals(request.getMethod()) && path.matches("/internal/agent/skill-installations/" + id + "/package")
                 || "GET".equals(request.getMethod()) && path.equals("/ws/agent/channel")
                 || "POST".equals(request.getMethod()) && path.matches("/agent/runtime/v1/commands/" + id + "/acks")
                 || "GET".equals(request.getMethod()) && (path.equals("/internal/agent/tasks/conversation-executions/commands")

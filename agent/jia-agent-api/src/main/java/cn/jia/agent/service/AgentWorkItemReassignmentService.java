@@ -26,4 +26,19 @@ public interface AgentWorkItemReassignmentService {
             String tenantId, String clientId, String ownerJiacn, String targetAgentId,
             String taskId, String workItemId, String reassignmentId,
             AgentWorkItemReassignmentLeaseRequestDTO request);
+    /** Internal source capability, not a new HTTP/body contract. Callback executes under
+     * the original task-root/receipt/member/identity locks; it must never do external I/O. */
+    record RuntimeResultSource(String reassignmentId, String commandId, String sourceCommandId,
+            String messageId, long claimedVersion, String leaseFenceSha256,
+            int attemptCount, int maxAttempts) { }
+
+    <T> T withRuntimeResultSource(String tenantId, String clientId, String ownerJiacn,
+            String targetAgentId, String taskId, String workItemId, String reassignmentId,
+            String commandId, boolean allowSubmitted,
+            java.util.function.Function<RuntimeResultSource, T> operation);
+
+    /** Current version readback for a lost lease response; never claims/starts/extends a lease. */
+    AgentWorkItemReassignmentLeaseDTO readCurrentRuntimeLease(String tenantId, String clientId,
+            String ownerJiacn, String targetAgentId, String taskId, String workItemId,
+            String reassignmentId, String commandId);
 }
