@@ -40,6 +40,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -284,9 +285,9 @@ public final class Ur03RuntimeHttpFixture {
                     SELECT id,owner_jiacn,command_id,task_id,work_item_id,target_agent_id,command_type,
                         command_payload,command_payload_hash,attempt_count,active_message_id,active_attempt,
                         expires_at,tenant_id,client_id FROM agent_command_delivery ORDER BY id
-                    """, rs -> fingerprintRow(hash, rs));
-            jdbc.query("SELECT * FROM agent_outbox_event ORDER BY id", rs -> fingerprintRow(hash, rs));
-            jdbc.query("SELECT * FROM agent_consumer_inbox ORDER BY id", rs -> fingerprintRow(hash, rs));
+                    """, (RowCallbackHandler) rs -> fingerprintRow(hash, rs));
+            jdbc.query("SELECT * FROM agent_outbox_event ORDER BY id", (RowCallbackHandler) rs -> fingerprintRow(hash, rs));
+            jdbc.query("SELECT * FROM agent_consumer_inbox ORDER BY id", (RowCallbackHandler) rs -> fingerprintRow(hash, rs));
             snapshot.put("sourceFingerprint", HexFormat.of().formatHex(hash.digest()));
         } catch (java.security.NoSuchAlgorithmException impossible) { throw new FixtureFailure("UR03_DIGEST_UNAVAILABLE"); }
         return snapshot;
