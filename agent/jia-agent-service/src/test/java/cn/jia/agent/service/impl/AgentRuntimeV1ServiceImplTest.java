@@ -24,6 +24,7 @@ class AgentRuntimeV1ServiceImplTest {
     private AgentCommandAckService acks;
     private AgentRuntimeV1ServiceImpl service;
     private cn.jia.agent.dao.AgentIdentityRegistryDao registry;
+    private cn.jia.agent.security.AgentRuntimeAuthenticationService sessions;
 
     @BeforeEach void setUp() {
         installations = mock(AgentRuntimeV1InstallationDao.class);
@@ -32,7 +33,8 @@ class AgentRuntimeV1ServiceImplTest {
         @SuppressWarnings("unchecked") ObjectProvider<AgentCommandAckService> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(acks);
         registry = mock(cn.jia.agent.dao.AgentIdentityRegistryDao.class);
-        service = new AgentRuntimeV1ServiceImpl(installations, identities, registry, provider);
+        sessions = mock(cn.jia.agent.security.AgentRuntimeAuthenticationService.class);
+        service = new AgentRuntimeV1ServiceImpl(installations, identities, registry, provider, sessions);
     }
 
     @Test void webCreationStoresOnlyProvidedDigestAndReturnsRedactedView() {
@@ -103,7 +105,8 @@ class AgentRuntimeV1ServiceImplTest {
         when(installations.findActiveByAuthorizationHash(any())).thenReturn(null);
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> service.heartbeat("revoked", runtime("tenant-a", AGENT), NOW));
-        assertThrows(AgentServiceImpl.AgentBizException.class,
+        when(sessions.verify(any())).thenThrow(new IllegalArgumentException("rejected"));
+        assertThrows(IllegalArgumentException.class,
                 () -> service.acknowledge("revoked", "msg-1", ack("tenant-a", AGENT), NOW));
         verifyNoInteractions(acks);
     }
@@ -111,9 +114,15 @@ class AgentRuntimeV1ServiceImplTest {
     @Test void manifestMismatchRequiresRebindAndValidAckIsBoundToInstallationIdentity() {
         AgentRuntimeV1InstallationEntity active = installation("ACTIVE").setRuntimeAuthorizationHash(sha("auth"));
         when(installations.findActiveByAuthorizationHash(any())).thenReturn(active);
-        assertEquals("REBINDS_REQUIRED", service.session("auth",
-                new cn.jia.agent.entity.AgentRuntimeV1RuntimeRequest("rti-1", "tenant-a", "client-a", AGENT,
-                        "wrong", HASH, "ok"), NOW).status());
+        when(installations.lock("rti-1")).thenReturn(active);
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.session("auth",
+                new cn.jia.agent.entity.AgentRuntimeV1SessionRequest("rti-1", "tenant-a", "client-a", AGENT,
+                        "wrong", HASH, "host-1", "boot-1"), NOW));
+        var proof = new cn.jia.agent.security.AgentRuntimeAuthenticationService.Proof(
+                new cn.jia.agent.security.AgentRuntimeAuthentication.Scope("tenant-a", "client-a", "owner-a", AGENT, "boot-1"),
+                "rti-1", "host-1", 1, "a".repeat(64), 1, 0);
+        when(sessions.verify(any())).thenReturn(proof);
+        when(sessions.withFence(eq(proof), eq(false), any())).thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(2)).get());
         when(acks.acknowledge(any(AgentCommandAck.class), eq(NOW)))
                 .thenReturn(new AgentCommandAckResult(AgentCommandAckResult.Kind.ADVANCED, "RECEIVED", 2));
         var result = service.acknowledge("auth", "msg-1", ack("tenant-a", AGENT), NOW);
@@ -134,6 +143,20 @@ class AgentRuntimeV1ServiceImplTest {
                 () -> service.acknowledge("auth", "msg-1", ack("tenant-b", AGENT), NOW));
     }
 
+    @Test void wrongStatusOrNonMonotonicD06ReceiptCannotBeClaimedAsCommit() {
+        var proof = new cn.jia.agent.security.AgentRuntimeAuthenticationService.Proof(
+                new cn.jia.agent.security.AgentRuntimeAuthentication.Scope("tenant-a", "client-a", "owner-a", AGENT, "boot-1"),
+                "rti-1", "host-1", 1, "a".repeat(64), 1, 0);
+        when(sessions.verify(any())).thenReturn(proof);
+        when(sessions.withFence(eq(proof), eq(false), any())).thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(2)).get());
+        for (var result : java.util.List.of(
+                new AgentCommandAckResult(AgentCommandAckResult.Kind.ADVANCED, "STARTED", 2),
+                new AgentCommandAckResult(AgentCommandAckResult.Kind.ADVANCED, "RECEIVED", 1),
+                new AgentCommandAckResult(AgentCommandAckResult.Kind.PRIOR, "RECEIVED", 0))) {
+            when(acks.acknowledge(any(), eq(NOW))).thenReturn(result);
+            assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.acknowledge("auth", "msg-1", ack("tenant-a", AGENT), NOW));
+        }
+    }
     @Test void managementRequiresExactOwnerWithinSharedTenantBeforeReturningOrRevoking() {
         AgentRuntimeV1InstallationEntity row = installation("ACTIVE");
         row.setTenantId("0");

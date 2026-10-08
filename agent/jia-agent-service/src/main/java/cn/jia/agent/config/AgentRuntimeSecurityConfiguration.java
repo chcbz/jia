@@ -51,6 +51,6 @@ public class AgentRuntimeSecurityConfiguration {
         if ("/agent/runtime/v1/enroll".equals(path)
                 || "/agent/runtime/v1/session".equals(path)
                 || "/agent/runtime/v1/heartbeat".equals(path)) return true;
-        return path.matches("/agent/runtime/v1/commands/[A-Za-z0-9][A-Za-z0-9._:-]{0,99}/acks");
+        return false;
     }
 }

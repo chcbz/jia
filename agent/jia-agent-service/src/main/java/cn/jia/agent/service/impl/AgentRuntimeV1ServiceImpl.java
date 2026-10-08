@@ -11,6 +11,10 @@ import cn.jia.agent.entity.AgentRuntimeV1InstallationEntity;
 import cn.jia.agent.entity.AgentRuntimeV1InstallationRequest;
 import cn.jia.agent.entity.AgentRuntimeV1InstallationView;
 import cn.jia.agent.entity.AgentRuntimeV1RuntimeRequest;
+import cn.jia.agent.entity.AgentRuntimeV1SessionRequest;
+import cn.jia.agent.entity.AgentRuntimeV1SessionResponse;
+import cn.jia.agent.security.AgentRuntimeAuthenticationService;
+import cn.jia.agent.security.AgentRuntimeAuthenticationFilter;
 import cn.jia.agent.service.AgentCommandAckService;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.agent.service.AgentRuntimeV1Service;
@@ -45,6 +49,7 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
     private final AgentIdentityService identityService;
     private final AgentIdentityRegistryDao identityRegistry;
     private final ObjectProvider<AgentCommandAckService> commandAcks;
+    private final AgentRuntimeAuthenticationService sessions;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -121,9 +126,19 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
     }
 
     @Override
-    public AgentRuntimeV1InstallationView session(String authorization, AgentRuntimeV1RuntimeRequest request, long now) {
-        AgentRuntimeV1InstallationEntity installation = authenticate(authorization);
-        return runtimeView(installation, request);
+    @Transactional(rollbackFor = Exception.class)
+    public AgentRuntimeV1SessionResponse session(String authorization, AgentRuntimeV1SessionRequest request, long now) {
+        AgentRuntimeV1InstallationEntity found = authenticate(authorization);
+        AgentRuntimeV1InstallationEntity installation = installations.lock(found.getInstallationId());
+        if (installation == null || !"ACTIVE".equals(installation.getStatus())
+                || !MessageDigest.isEqual(digest(authorization), installation.getRuntimeAuthorizationHash())
+                || request == null || !sameRuntimeIdentity(installation, request.tenantId(), request.clientId(), request.canonicalAgentId())
+                || !Objects.equals(installation.getInstallationId(), request.installationId())
+                || !Objects.equals(installation.getManifestVersion(), request.manifestVersion())
+                || !Objects.equals(installation.getManifestSha256(), request.manifestSha256())) {
+            throw forbidden("Runtime session rejected");
+        }
+        return sessions.issue(installation, request, now);
     }
 
     @Override
@@ -141,25 +156,38 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
     @Override
     public AgentCommandAckResult acknowledge(String authorization, String pathMessageId,
             AgentRuntimeV1AckRequest request, long now) {
-        AgentRuntimeV1InstallationEntity installation = authenticate(authorization);
         if (request == null || !exact(pathMessageId, 100) || !pathMessageId.equals(request.messageId())
                 || !exact(request.correlationId(), 100) || !exact(request.commandId(), 100)
                 || !exact(request.taskId(), 100)
                 || (request.workItemId() != null && !exact(request.workItemId(), 100))
                 || !ACK_STATUSES.contains(request.status())
-                || !sameRuntimeIdentity(installation, request.tenantId(), request.clientId(), request.canonicalAgentId())) {
+                || !exact(request.installationId(), 100) || !exact(request.hostId(), 100)
+                || !exact(request.runtimeInstanceId(), 100) || request.sessionGeneration() <= 0
+                || request.deliveryVersion() != null && request.deliveryVersion() <= 0) {
             throw forbidden("Runtime v1 ACK rejected");
         }
-        AgentCommandAckService ackService = commandAcks.getIfAvailable();
-        if (ackService == null) throw forbidden("Runtime v1 command ACK is unavailable");
-        // D06 has a distinct ACK sender id. Runtime v1 deterministically derives one, never trusting it from wire.
-        String senderMessageId = "rta_" + HexFormat.of().formatHex(digest(
-                installation.getInstallationId() + "|" + pathMessageId + "|" + request.correlationId()
-                        + "|" + request.status())).substring(0, 32);
-        return ackService.acknowledge(new AgentCommandAck(
-                installation.getTenantId(), installation.getClientId(), installation.getCanonicalAgentId(),
-                senderMessageId, pathMessageId, request.commandId(), request.taskId(), request.workItemId(),
-                request.status(), now), now);
+        var proof = sessions.verify(new AgentRuntimeAuthenticationFilter.SessionHeaders(request.canonicalAgentId(),
+                request.installationId(), request.hostId(), request.runtimeInstanceId(), request.sessionGeneration(), authorization));
+        if (!Objects.equals(proof.scope().tenantId(), request.tenantId())
+                || !Objects.equals(proof.scope().clientId(), request.clientId())) throw forbidden("Runtime ACK rejected");
+        return sessions.withFence(proof, false, () -> {
+            AgentCommandAckService ackService = commandAcks.getIfAvailable();
+            if (ackService == null) throw forbidden("Runtime v1 command ACK is unavailable");
+            String senderMessageId = "rta_" + HexFormat.of().formatHex(digest(
+                    proof.installationId() + "|" + pathMessageId + "|" + request.correlationId()
+                            + "|" + request.status())).substring(0, 32);
+            AgentCommandAckResult result = ackService.acknowledge(new AgentCommandAck(
+                    proof.scope().tenantId(), proof.scope().clientId(), proof.scope().agentId(),
+                    senderMessageId, pathMessageId, request.commandId(), request.taskId(), request.workItemId(),
+                    request.status(), now), now);
+            if (result == null || result.kind() == null || !request.status().equals(result.status())
+                    || result.deliveryVersion() <= 0
+                    || request.deliveryVersion() != null && (result.deliveryVersion() < request.deliveryVersion()
+                        || result.kind() == AgentCommandAckResult.Kind.ADVANCED && result.deliveryVersion() <= request.deliveryVersion())) {
+                throw forbidden("Runtime command commit receipt rejected");
+            }
+            return result;
+        });
     }
 
     private AgentRuntimeV1InstallationEntity authenticate(String authorization) {

@@ -1,220 +1,92 @@
 package cn.jia.chat.config;
 
-import cn.jia.agent.hosting.ManagedHostingCredentials;
-import cn.jia.agent.security.AgentRuntimeAuthenticationService;
 import cn.jia.agent.config.AgentRuntimeSecurityConfiguration;
-import cn.jia.agent.service.AgentService;
-import cn.jia.oauth.entity.OauthApiKeyEntity;
-import cn.jia.oauth.service.ApiKeyService;
+import cn.jia.agent.security.*;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Import;
+import org.junit.jupiter.api.*;
+import org.springframework.context.annotation.*;
 import org.springframework.core.annotation.Order;
-import org.springframework.http.server.ServletServerHttpRequest;
-import org.springframework.http.server.ServletServerHttpResponse;
+import org.springframework.http.server.*;
 import org.springframework.mock.web.MockServletContext;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
-import org.springframework.security.web.FilterChainProxy;
-import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.web.*;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 import org.springframework.web.context.support.AnnotationConfigWebApplicationContext;
 import org.springframework.web.socket.WebSocketHandler;
+import java.util.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
-import java.util.HashMap;
-import java.util.concurrent.atomic.AtomicInteger;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
-import static org.mockito.Mockito.when;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
-
-/** FilterChainProxy regression for the API-key websocket contract beside the runtime chain. */
+/** Actual chain routing: WS is native-only; neither API keys nor Runtime credentials reach ordinary APIs. */
 class AgentRuntimeWebSocketSecurityChainRegressionTest {
-    private static final String AGENT_ID = "agt_" + "a".repeat(32);
-    private static final String RUNTIME_TOKEN = "1".repeat(32);
-
-    private AnnotationConfigWebApplicationContext context;
-    private ApiKeyService keys;
-    private AgentService agents;
-    private RouteProbe routes;
-    private MockMvc mvc;
-
-    @Configuration(proxyBeanMethods = false)
-    @EnableWebSecurity
-    @Import(AgentRuntimeSecurityConfiguration.class)
+    AnnotationConfigWebApplicationContext context;
+    MockMvc mvc;
+    @Configuration(proxyBeanMethods = false) @EnableWebSecurity @Import(AgentRuntimeSecurityConfiguration.class)
     static class Wiring {
-        @Bean AgentRuntimeAuthenticationService runtimeAuthenticationService() {
-            return mock(AgentRuntimeAuthenticationService.class);
-        }
-        @Bean ApiKeyService apiKeyService() { return mock(ApiKeyService.class); }
-        @Bean AgentService agentService() { return mock(AgentService.class); }
-
-        @Bean
-        @SuppressWarnings("unchecked")
-        ApiKeyHandshakeInterceptor apiKeyHandshakeInterceptor(ApiKeyService keys, AgentService agents) {
-            ObjectProvider<ApiKeyService> keyProvider = mock(ObjectProvider.class);
-            ObjectProvider<AgentService> agentProvider = mock(ObjectProvider.class);
-            ObjectProvider<ManagedHostingCredentials> managedProvider = mock(ObjectProvider.class);
-            when(keyProvider.getIfAvailable()).thenReturn(keys);
-            when(agentProvider.getIfAvailable()).thenReturn(agents);
-            return new ApiKeyHandshakeInterceptor(keyProvider, agentProvider, managedProvider);
-        }
-
-        @Bean RouteProbe routeProbe(ApiKeyHandshakeInterceptor interceptor) {
-            return new RouteProbe(interceptor);
-        }
-
-        @Bean
-        @Order(100)
-        SecurityFilterChain ordinaryApplicationSecurityFilterChain(HttpSecurity http) throws Exception {
-            http.authorizeHttpRequests(authorize -> authorize.anyRequest().permitAll())
-                    .csrf(AbstractHttpConfigurer::disable);
-            return http.build();
+        @Bean AgentRuntimeAuthenticationService auth() { return mock(AgentRuntimeAuthenticationService.class); }
+        @Bean AgentRuntimeHandshakeInterceptor interceptor(AgentRuntimeAuthenticationService auth) { return new AgentRuntimeHandshakeInterceptor(auth); }
+        @Bean Probe probe(AgentRuntimeHandshakeInterceptor interceptor) { return new Probe(interceptor); }
+        @Bean @Order(100) SecurityFilterChain ordinary(HttpSecurity http) throws Exception {
+            http.authorizeHttpRequests(a -> a.anyRequest().permitAll()).csrf(AbstractHttpConfigurer::disable); return http.build();
         }
     }
-
-    @RestController
-    static class RouteProbe {
-        private final ApiKeyHandshakeInterceptor interceptor;
-        private final WebSocketHandler webSocketHandler = mock(WebSocketHandler.class);
-        private final AtomicInteger ordinaryRouteHits = new AtomicInteger();
-
-        RouteProbe(ApiKeyHandshakeInterceptor interceptor) { this.interceptor = interceptor; }
-
-        @GetMapping("/ws/agent/channel")
-        void websocket(HttpServletRequest request, HttpServletResponse response) {
-            ordinaryRouteHits.incrementAndGet();
-            var serverRequest = new ServletServerHttpRequest(request);
-            var serverResponse = new ServletServerHttpResponse(response);
-            var attributes = new HashMap<String, Object>();
-            boolean accepted = interceptor.beforeHandshake(
-                    serverRequest, serverResponse, webSocketHandler, attributes);
-            if (accepted) {
-                response.setStatus(HttpServletResponse.SC_NO_CONTENT);
-                interceptor.afterHandshake(serverRequest, serverResponse, webSocketHandler, null);
-            }
+    @RestController static class Probe {
+        final AgentRuntimeHandshakeInterceptor interceptor;
+        Probe(AgentRuntimeHandshakeInterceptor interceptor) { this.interceptor = interceptor; }
+        @GetMapping("/ws/agent/channel") void websocket(HttpServletRequest request, HttpServletResponse response) {
+            if (interceptor.beforeHandshake(new ServletServerHttpRequest(request), new ServletServerHttpResponse(response),
+                    mock(WebSocketHandler.class), new HashMap<>())) response.setStatus(204);
         }
-
         @RequestMapping({"/oauth/token", "/resource", "/operator/reassign", "/general/ping"})
-        void ordinary(HttpServletResponse response) {
-            ordinaryRouteHits.incrementAndGet();
-            response.setStatus(HttpServletResponse.SC_NO_CONTENT);
+        void ordinary(HttpServletResponse response) { response.setStatus(204); }
+    }
+    @BeforeEach void setup() {
+        context = new AnnotationConfigWebApplicationContext(); context.setServletContext(new MockServletContext());
+        context.register(Wiring.class); context.refresh();
+        var service = context.getBean(AgentRuntimeAuthenticationService.class);
+        var scope = new AgentRuntimeAuthentication.Scope("0", "client", "owner", AgentRuntimeHandshakeInterceptorTest.AGENT, "boot");
+        var proof = new AgentRuntimeAuthenticationService.Proof(scope, AgentRuntimeHandshakeInterceptorTest.INSTALLATION, "host", 3, "d".repeat(64), 7, 2);
+        var principal = mock(AgentRuntimeAuthentication.class);
+        when(principal.getPrincipal()).thenReturn(scope); when(principal.isAuthenticated()).thenReturn(true);
+        when(principal.getAuthorities()).thenReturn(List.of(new SimpleGrantedAuthority("AGENT_RUNTIME_NARROW")));
+        when(principal.getDetails()).thenReturn(proof);
+        when(service.authenticate(any(AgentRuntimeAuthenticationFilter.SessionHeaders.class), eq(false))).thenReturn(principal);
+        when(service.verify(any())).thenReturn(proof);
+        mvc = MockMvcBuilders.standaloneSetup(context.getBean(Probe.class)).addFilters(context.getBean(FilterChainProxy.class)).build();
+    }
+    @AfterEach void close() { context.close(); }
+    org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder nativeRequest(String path) {
+        return get(path).header("Authorization", "AgentRuntime rts1_" + "b".repeat(64))
+                .header("X-Agent-Id", AgentRuntimeHandshakeInterceptorTest.AGENT)
+                .header("X-Agent-Installation-Id", AgentRuntimeHandshakeInterceptorTest.INSTALLATION)
+                .header("X-Agent-Host-Id", "host").header("X-Agent-Runtime-Id", "boot").header("X-Agent-Session-Generation", "3");
+    }
+    @Test void nativePendingSessionCanReachHandshakeWithoutOldRegisteredSocket() throws Exception {
+        mvc.perform(nativeRequest("/ws/agent/channel")).andExpect(status().isNoContent());
+    }
+    @Test void oldApiKeyWsAndUrlCredentialFallbackAreGone() throws Exception {
+        mvc.perform(get("/ws/agent/channel").header("X-API-Key", "legacy-secret").header("X-Agent-Id", AgentRuntimeHandshakeInterceptorTest.AGENT))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(get("/ws/agent/channel").queryParam("api_key", "legacy-secret").queryParam("agentId", AgentRuntimeHandshakeInterceptorTest.AGENT))
+                .andExpect(status().isUnauthorized());
+    }
+    @Test void runtimeCredentialCannotReachOrdinaryMethodsOrRoutes() throws Exception {
+        for (String path : List.of("/oauth/token", "/resource", "/operator/reassign", "/general/ping")) {
+            mvc.perform(nativeRequest(path)).andExpect(status().isForbidden());
+            mvc.perform(post(path).header("Authorization", "AgentRuntime rts1_" + "b".repeat(64))).andExpect(status().isForbidden());
         }
+        mvc.perform(nativeRequest("/ws/agent/channel").header("Origin", "https://browser.invalid")).andExpect(status().isForbidden());
     }
-
-    @BeforeEach
-    void setUp() {
-        context = new AnnotationConfigWebApplicationContext();
-        context.setServletContext(new MockServletContext());
-        context.register(Wiring.class);
-        context.refresh();
-        keys = context.getBean(ApiKeyService.class);
-        agents = context.getBean(AgentService.class);
-        routes = context.getBean(RouteProbe.class);
-        mvc = MockMvcBuilders.standaloneSetup(routes)
-                .addFilters(context.getBean(FilterChainProxy.class))
-                .build();
-
-        var key = new OauthApiKeyEntity().setId("key-a").setApiKey("valid-api-key")
-                .setKeyName("native").setStatus(1).setClientId("client-a").setJiacn("tenant-a");
-        key.setTenantId("0");
-        when(keys.findByApiKey("valid-api-key")).thenReturn(key);
-    }
-
-    @AfterEach
-    void close() {
-        context.close();
-    }
-
-    @Test
-    void apiKeyWebSocketHeaderAndQueryAgentIdsReachTheActualHandshakeInterceptor() throws Exception {
-        mvc.perform(get("/ws/agent/channel")
-                        .header("X-API-Key", "valid-api-key")
-                        .header("X-Agent-Id", AGENT_ID))
-                .andExpect(status().isNoContent());
-        mvc.perform(get("/ws/agent/channel")
-                        .queryParam("api_key", "valid-api-key")
-                        .queryParam("agentId", AGENT_ID))
-                .andExpect(status().isNoContent());
-
-        assertEquals(2, routes.ordinaryRouteHits.get());
-        verify(keys, org.mockito.Mockito.times(2)).findByApiKey("valid-api-key");
-        verify(agents, org.mockito.Mockito.times(2))
-                .requireApiKeyOwnedAgent("client-a", "tenant-a", AGENT_ID);
-    }
-
-    @Test
-    void apiKeyWithoutAuthenticatedTenantIsRejectedBeforeAgentOwnershipCheck() throws Exception {
-        keys.findByApiKey("valid-api-key").setTenantId(null);
-
-        mvc.perform(get("/ws/agent/channel")
-                        .header("X-API-Key", "valid-api-key")
-                        .header("X-Agent-Id", AGENT_ID))
-                .andExpect(status().isForbidden());
-
-        assertEquals(1, routes.ordinaryRouteHits.get());
-        verifyNoInteractions(agents);
-    }
-
-    @Test
-    void runtimeCredentialSignalsCannotReachWebSocketOauthOperatorOrGeneralRoutes() throws Exception {
-        for (String path : new String[] {
-                "/ws/agent/channel", "/oauth/token", "/resource", "/operator/reassign", "/general/ping"
-        }) {
-            mvc.perform(get(path)
-                            .header("X-API-Key", "valid-api-key")
-                            .header("X-Agent-Id", AGENT_ID)
-                            .header("X-Agent-Runtime-Id", "runtime-a")
-                            .header("Authorization", "AgentRuntime " + RUNTIME_TOKEN))
-                    .andExpect(status().isForbidden());
-        }
-        mvc.perform(post("/oauth/token")
-                        .header("X-Agent-Id", AGENT_ID)
-                        .header("X-Agent-Runtime-Id", "runtime-a"))
-                .andExpect(status().isForbidden());
-
-        assertEquals(0, routes.ordinaryRouteHits.get());
-        verifyNoInteractions(keys, agents);
-    }
-
-    @Test
-    void runtimeIdAndMalformedRuntimeAuthorizationStillSelectFailClosedLane() throws Exception {
-        mvc.perform(get("/ws/agent/channel")
-                        .header("X-API-Key", "valid-api-key")
-                        .header("X-Agent-Id", AGENT_ID)
-                        .header("X-Agent-Id", "agt_" + "b".repeat(32)))
-                .andExpect(status().isForbidden());
-        mvc.perform(get("/ws/agent/channel")
-                        .header("X-API-Key", "valid-api-key")
-                        .header("X-Agent-Id", AGENT_ID)
-                        .header("X-Agent-Runtime-Id", "runtime-a"))
-                .andExpect(status().isForbidden());
-        mvc.perform(get("/ws/agent/channel")
-                        .header("X-API-Key", "valid-api-key")
-                        .header("X-Agent-Id", AGENT_ID)
-                        .header("Authorization", "AgentRuntimeMalformed"))
-                .andExpect(status().isForbidden());
-
-        assertEquals(0, routes.ordinaryRouteHits.get());
-        verify(keys, never()).findByApiKey(any());
-        verifyNoInteractions(agents);
+    @Test void malformedOrDuplicateSessionProofIsClosedBeforeHandshake() throws Exception {
+        mvc.perform(nativeRequest("/ws/agent/channel").header("X-Agent-Session-Generation", "4")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/ws/agent/channel").header("Authorization", "AgentRuntime " + "b".repeat(32))).andExpect(status().isUnauthorized());
     }
 }

@@ -132,17 +132,20 @@ class AgentWebSocketUnifiedReadinessTest {
                     ((AgentRegisterDTO) inv.getArgument(0)).getAgentId(), "fixture-token", "online"));
             when(auth.isCurrentBinding(any(), any(), any(), any(), any(), any())).thenAnswer(inv -> current.contains(inv.getArgument(0)));
             handler = new AgentWebSocketHandler(mock(ChatClient.class), provider, mock(ChatMessageDao.class), mock(ChatConversationEventBroker.class));
+            UnifiedRuntimeTestSupport.stub(auth);
             handler.setRuntimeAuthentication(auth);
         }
         WebSocketSession session(String id, String agent) {
             var s = mock(WebSocketSession.class);
             when(s.getId()).thenReturn(id); when(s.isOpen()).thenReturn(true);
             when(s.getAttributes()).thenReturn(new HashMap<>(Map.of("tenantId", "0", "clientId", "client", "jiacn", "owner", "agentId", agent, "runtimeInstanceId", "boot")));
+            UnifiedRuntimeTestSupport.install(s);
             return s;
         }
         void register(WebSocketSession s, boolean durable, boolean execute) throws Exception {
             current.add(s.getId()); handler.afterConnectionEstablished(s);
             var payload = new HashMap<String, Object>(); payload.put("type", "agent.register"); payload.put("agentId", s.getAttributes().get("agentId"));
+            UnifiedRuntimeTestSupport.registrationProof(s, payload);
             payload.put("runtimeInstanceId", "boot"); payload.put("durableStateHealthy", durable); payload.put("readyCommandTypes", execute ? List.of("TASK_INVITE") : List.of());
             handler.handleTextMessage(s, new TextMessage(new ObjectMapper().writeValueAsString(payload)));
         }

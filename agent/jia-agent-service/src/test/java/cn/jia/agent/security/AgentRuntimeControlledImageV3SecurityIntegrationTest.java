@@ -42,7 +42,7 @@ class AgentRuntimeControlledImageV3SecurityIntegrationTest {
         var executions=org.mockito.Mockito.mock(cn.jia.agent.service.PersonalWorkspaceExecutionService.class);
         var authentication=org.mockito.Mockito.mock(AgentRuntimeAuthenticationService.class);
         var principal=new AgentRuntimeAuthentication(new AgentRuntimeAuthentication.Scope("0","client","owner","agent","runtime"));
-        org.mockito.Mockito.when(authentication.authenticate("agent","runtime","a".repeat(32))).thenReturn(principal);
+        org.mockito.Mockito.when(authentication.authenticate(org.mockito.ArgumentMatchers.any(AgentRuntimeAuthenticationFilter.SessionHeaders.class), org.mockito.ArgumentMatchers.eq(true))).thenReturn(principal);
         var aware=new org.springframework.security.web.servletapi.SecurityContextHolderAwareRequestFilter();
         aware.afterPropertiesSet();
         var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(
@@ -102,7 +102,7 @@ class AgentRuntimeControlledImageV3SecurityIntegrationTest {
         var executions=org.mockito.Mockito.mock(cn.jia.agent.service.PersonalWorkspaceExecutionService.class);
         var authentication=org.mockito.Mockito.mock(AgentRuntimeAuthenticationService.class);
         var principal=new AgentRuntimeAuthentication(new AgentRuntimeAuthentication.Scope("0","client","owner","agent","runtime"));
-        org.mockito.Mockito.when(authentication.authenticate("agent","runtime","a".repeat(32))).thenReturn(principal);
+        org.mockito.Mockito.when(authentication.authenticate(org.mockito.ArgumentMatchers.any(AgentRuntimeAuthenticationFilter.SessionHeaders.class), org.mockito.ArgumentMatchers.eq(true))).thenReturn(principal);
         var aware=new org.springframework.security.web.servletapi.SecurityContextHolderAwareRequestFilter();aware.afterPropertiesSet();
         var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(
             new cn.jia.agent.api.PersonalWorkspaceConversationRuntimeController(executions))
@@ -148,15 +148,19 @@ class AgentRuntimeControlledImageV3SecurityIntegrationTest {
             String path,String proof,byte[] bytes) {
         return org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart(path)
             .file(new org.springframework.mock.web.MockMultipartFile("file","bird.png","image/png",bytes))
-            .param("proof",proof).header("Authorization","AgentRuntime "+"a".repeat(32))
-            .header("X-Agent-Id","agent").header("X-Agent-Runtime-Id","runtime");
+            .param("proof",proof).header("Authorization","AgentRuntime rts1_"+"a".repeat(64))
+            .header("X-Agent-Id","agent").header("X-Agent-Runtime-Id","runtime")
+            .header("X-Agent-Installation-Id","rti_"+"a".repeat(32)).header("X-Agent-Host-Id","host")
+            .header("X-Agent-Session-Generation","1");
     }
 
     private static org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder nativeInputsRequest() {
         return org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(
           "/internal/agent/tasks/task-1/runs/run-1/conversation/inputs-v3")
-          .header("Authorization","AgentRuntime "+"a".repeat(32)).header("X-Agent-Id","agent")
-          .header("X-Agent-Runtime-Id","runtime").contentType("application/json")
+          .header("Authorization","AgentRuntime rts1_"+"a".repeat(64)).header("X-Agent-Id","agent")
+          .header("X-Agent-Runtime-Id","runtime")
+            .header("X-Agent-Installation-Id","rti_"+"a".repeat(32)).header("X-Agent-Host-Id","host")
+            .header("X-Agent-Session-Generation","1").contentType("application/json")
           .content("{\"version\":1,\"token\":\"11111111-1111-1111-1111-111111111111\"}");
     }
 

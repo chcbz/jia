@@ -53,6 +53,14 @@ class AgentRuntimeUnifiedSessionHeadersTest {
             assertThrows(IllegalArgumentException.class, () -> AgentRuntimeAuthenticationFilter.sessionHeaders(request));
         }
     }
+    @Test void existingMultipartConversationLeaseTokenIsNotMistakenForRuntimeCredential() {
+        var request = request(); request.setMethod("POST");
+        request.setRequestURI("/internal/agent/tasks/task/runs/run/conversation/outputs/output/content");
+        request.addParameter("token", "11111111-1111-1111-1111-111111111111");
+        assertEquals(TOKEN, AgentRuntimeAuthenticationFilter.sessionHeaders(request).token());
+        request.setParameter("token", TOKEN);
+        assertThrows(IllegalArgumentException.class, () -> AgentRuntimeAuthenticationFilter.sessionHeaders(request));
+    }
     @Test void legacyAndBearerTokensAreNotExecutionSessionCredentials() {
         for (var token : new String[]{"AgentRuntime " + "a".repeat(32), "Bearer rta1_fixture", "AgentRuntime rts1_" + "A".repeat(64)}) {
             var request = request(); request.removeHeader("Authorization"); request.addHeader("Authorization", token);

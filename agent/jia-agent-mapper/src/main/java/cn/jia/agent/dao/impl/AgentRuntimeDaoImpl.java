@@ -14,6 +14,18 @@ import java.util.List;
 @Named
 public class AgentRuntimeDaoImpl extends BaseDaoImpl<AgentRuntimeMapper, AgentRuntimeEntity> implements AgentRuntimeDao {
     @Override
+    public AgentRuntimeEntity findInScope(String tenantId, String clientId, String agentId) {
+        requireExactId(tenantId, "tenantId"); requireExactId(clientId, "clientId"); requireExactId(agentId, "agentId");
+        return baseMapper.findInScope(tenantId, clientId, agentId);
+    }
+
+    @Override
+    public AgentRuntimeEntity lockInScope(String tenantId, String clientId, String agentId) {
+        requireExactId(tenantId, "tenantId"); requireExactId(clientId, "clientId"); requireExactId(agentId, "agentId");
+        return baseMapper.lockInScope(tenantId, clientId, agentId);
+    }
+
+    @Override
     public AgentRuntimeEntity findByAgentId(String agentId) {
         requireExactId(agentId, "agentId");
         return baseMapper.findExactByAgentId(agentId);

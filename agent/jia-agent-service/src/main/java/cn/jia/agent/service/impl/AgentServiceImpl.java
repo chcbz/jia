@@ -356,10 +356,9 @@ public class AgentServiceImpl implements AgentService {
         identity = agentIdentityService.activateForFirstRegistration(identity);
         String canonicalAgentId = identity.getCanonicalAgentId();
 
-        String token = UUID.randomUUID().toString().replace("-", "");
-        AgentRuntimeEntity entity = Optional.ofNullable(agentRuntimeDao.findByAgentIdForUpdate(canonicalAgentId))
+        AgentRuntimeEntity entity = Optional.ofNullable(agentRuntimeDao.lockInScope(SINGLE_TENANT_ID, clientId, canonicalAgentId))
                 .map(existing -> requireExactRuntime(existing, canonicalAgentId, clientId, jiacn, binding.getId()))
-                .orElseGet(AgentRuntimeEntity::new);
+                .orElseThrow(() -> new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN, "Unified runtime session is required"));
         entity.setAgentId(canonicalAgentId);
         entity.setName(persona.getName());
         entity.setAvatar(StringUtil.isBlank(request.getAvatar()) ? persona.getAvatar() : request.getAvatar());
@@ -370,7 +369,10 @@ public class AgentServiceImpl implements AgentService {
         entity.setClientId(clientId);
         entity.setAbilities(resolveRuntimeAbilities(request.getAbilities(), entity.getAbilities(), persona.getAbilities()));
         entity.setEndpoint(request.getEndpoint());
-        entity.setTokenHash(token);
+        require(entity.getRuntimeInstallationId() != null && entity.getRuntimeHostId() != null
+                && entity.getRuntimeInstanceId() != null && entity.getRuntimeSessionGeneration() != null
+                && entity.getRuntimeSessionGeneration() > 0 && entity.getTokenHash() != null
+                && entity.getTokenHash().startsWith("urs1:"), "Unified runtime session is required");
         entity.setStatus(AgentConstants.STATUS_ONLINE);
         entity.setLastSeenAt(System.currentTimeMillis());
         entity.setErrorMessage(null);
@@ -384,7 +386,7 @@ public class AgentServiceImpl implements AgentService {
         }
         publishAgentSnapshotAfterCommit("agent-register", SINGLE_TENANT_ID, clientId, jiacn,
                 entity.getAgentId(), requireBindingId(entity));
-        return new AgentRegisterResultDTO(entity.getAgentId(), token, entity.getStatus());
+        return new AgentRegisterResultDTO(entity.getAgentId(), null, entity.getStatus());
     }
 
     @Override

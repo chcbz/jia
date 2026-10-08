@@ -31,7 +31,13 @@ public class AgentRuntimeEntity extends BaseEntity {
     private Long bindingId;
     private String abilities;
     private String endpoint;
+    /** Digest and account-epoch proof only; never a raw execution credential. */
+    @lombok.ToString.Exclude
     private String tokenHash;
+    private String runtimeInstallationId;
+    private String runtimeHostId;
+    private String runtimeInstanceId;
+    private Long runtimeSessionGeneration;
     private String status;
     private String currentTaskId;
     private String currentTaskTitle;

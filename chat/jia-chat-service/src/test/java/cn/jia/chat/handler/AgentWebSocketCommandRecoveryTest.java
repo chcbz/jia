@@ -76,6 +76,7 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
         handler = new AgentWebSocketHandler(
                 chatClient, agentServiceProvider, chatMessageDao, eventBroker,
                 null, new AgentProtocolMessageNormalizer(), reconnectSignal);
+        UnifiedRuntimeTestSupport.authorize(handler);
     }
 
     @Test
@@ -87,7 +88,7 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
         presence.setAgentId("agent-a");
         presence.setStatus(AgentConstants.STATUS_ONLINE);
         when(agentService.updateStatus(any(), any())).thenReturn(presence);
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"schemaVersion":1,"messageType":"agent.presence","messageId":"presence-1",
                  "agentId":"agent-a","sourceAgentId":"agent-a","runtimeInstanceId":"runtime-a",
                  "status":"online"}
@@ -96,13 +97,13 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
 
         when(agentService.register(any(AgentRegisterDTO.class))).thenReturn(
                 new AgentRegisterResultDTO("agent-other", "token", AgentConstants.STATUS_ONLINE));
-        handler.handleTextMessage(session, registerMessage());
+        UnifiedRuntimeTestSupport.deliver(handler, session, registerMessage());
         verify(reconnectSignal, never()).signalReconnect(any());
 
         when(agentService.register(any(AgentRegisterDTO.class))).thenReturn(
                 new AgentRegisterResultDTO("agent-a", "token", AgentConstants.STATUS_ONLINE));
         when(reconnectSignal.signalReconnect(any())).thenReturn(true);
-        handler.handleTextMessage(session, registerMessage());
+        UnifiedRuntimeTestSupport.deliver(handler, session, registerMessage());
 
         ArgumentCaptor<AgentCommandReconnectScope> scope =
                 ArgumentCaptor.forClass(AgentCommandReconnectScope.class);
@@ -116,11 +117,11 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
 
     @Test
     void wsAckNeverCommitsEvenAfterSuccessfulRegistration() throws Exception {
-        handler.handleTextMessage(session, ackMessage("ack-before", "dispatch-1", "RECEIVED"));
+        UnifiedRuntimeTestSupport.deliver(handler, session, ackMessage("ack-before", "dispatch-1", "RECEIVED"));
         when(agentService.register(any(AgentRegisterDTO.class))).thenReturn(
                 new AgentRegisterResultDTO("agent-a", "token", AgentConstants.STATUS_ONLINE));
-        handler.handleTextMessage(session, registerMessage());
-        handler.handleTextMessage(session, ackMessage("ack-1", "dispatch-1", "RECEIVED"));
+        UnifiedRuntimeTestSupport.deliver(handler, session, registerMessage());
+        UnifiedRuntimeTestSupport.deliver(handler, session, ackMessage("ack-1", "dispatch-1", "RECEIVED"));
         verify(ackService, never()).acknowledge(any(), anyLong());
     }
 
@@ -132,7 +133,7 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
         presence.setStatus(AgentConstants.STATUS_ONLINE);
         when(agentService.updateStatus(any(), any())).thenReturn(presence);
 
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"schemaVersion":1,"messageType":"agent.presence","messageId":"presence-only",
                  "agentId":"agent-a","sourceAgentId":"agent-a","runtimeInstanceId":"runtime-a",
                  "status":"online"}
@@ -145,8 +146,8 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
     void wsTerminalAckAlsoRequiresHttpAndNeverMutatesD06() throws Exception {
         when(agentService.register(any(AgentRegisterDTO.class))).thenReturn(
                 new AgentRegisterResultDTO("agent-a", "token", AgentConstants.STATUS_ONLINE));
-        handler.handleTextMessage(session, registerMessage());
-        handler.handleTextMessage(session, ackMessage("ack-rejected", "dispatch-1", "REJECTED"));
+        UnifiedRuntimeTestSupport.deliver(handler, session, registerMessage());
+        UnifiedRuntimeTestSupport.deliver(handler, session, ackMessage("ack-rejected", "dispatch-1", "REJECTED"));
         verify(ackService, never()).acknowledge(any(), anyLong());
     }
 
@@ -189,10 +190,10 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
     void ackHiddenScopeConflictIsRejectedWithoutDurableCallOrExistenceLeak() throws Exception {
         when(agentService.register(any(AgentRegisterDTO.class))).thenReturn(
                 new AgentRegisterResultDTO("agent-a", "token", AgentConstants.STATUS_ONLINE));
-        handler.handleTextMessage(session, registerMessage());
+        UnifiedRuntimeTestSupport.deliver(handler, session, registerMessage());
         org.mockito.Mockito.clearInvocations(ackService, session);
 
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"schemaVersion":1,"messageType":"command.ack","messageId":"ack-x",
                  "correlationId":"dispatch-1","commandId":"cmd-1","taskId":"task-1",
                  "agentId":"agent-a","sourceAgentId":"agent-a","runtimeInstanceId":"runtime-a",

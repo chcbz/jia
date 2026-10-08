@@ -149,7 +149,7 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
         when(agentService.updateStatus(any(), any())).thenReturn(presence);
         AgentWebSocketHandler handler = handler();
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"schemaVersion":1,"messageType":"agent.presence","messageId":"presence-1",
                  "agentId":"agent-1","sourceAgentId":"agent-1",
                  "runtimeInstanceId":"runtime-1","status":"online"}
@@ -187,7 +187,7 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
                 .thenReturn(List.of("agent-1"));
         AgentWebSocketHandler handler = handler();
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"schemaVersion":1,"messageType":"agent.presence","messageId":"presence-direct",
                  "agentId":"agent-1","sourceAgentId":"agent-1",
                  "runtimeInstanceId":"runtime-1","status":"online"}
@@ -274,21 +274,21 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
     }
 
     @Test
-    void skillDispatchRequiresExactDedicatedKeyAndCurrentRegistrationNotOwnerWidePresence() throws Exception {
+    void legacyManagedKeyCannotAuthorizeUnifiedRuntimeSkillDispatch() throws Exception {
         var exact=session("skill-exact","0","client-a","agent-1");
         var shared=session("skill-shared","0","client-a","agent-1");
         exact.getAttributes().put("managedApiKeyId","dedicated-key");shared.getAttributes().put("managedApiKeyId","shared-key");
         var handler=handler();register(handler,exact,"agent-1");register(handler,shared,"agent-1");
         org.mockito.Mockito.clearInvocations(exact,shared);
         byte[] hash=cn.jia.agent.skill.SkillMarketplaceService.sessionRegistrationHash("agent-1","token");
-        assertTrue(handler.isManagedSkillSessionReady("0","client-a","agent-1","dedicated-key",hash));
+        assertFalse(handler.isManagedSkillSessionReady("0","client-a","agent-1","dedicated-key",hash));
         assertFalse(handler.isManagedSkillSessionReady("0","client-a","agent-1","dedicated-key",new byte[32]));
         var payload=new cn.jia.agent.entity.AgentSkillInstallPayload("order-1","install-1","version-1","repo-test","1.0.0","500","sha256:"+"a".repeat(64),"/internal/agent/skill-installations/install-1/package");
         String commandId=AgentCommandCanonicalCodec.skillInstallCommandId("0","client-a","owner-a","install-1");
         var draft=new AgentCommandDraft(1,commandId,"order-1","install-1","0","client-a","owner-a","order-1",null,"agent-1","SKILL_INSTALL",1L,3600001L,payload);
         byte[] raw=AgentCommandCanonicalCodec.wireBytes(draft,"message-1",1);
-        assertEquals(AgentRawCommandDispatchResult.Status.SENT,handler.dispatchManagedSkill("0","client-a","agent-1","dedicated-key",hash,raw).status());
-        verify(exact).sendMessage(any(TextMessage.class));verify(shared,never()).sendMessage(any(TextMessage.class));
+        assertEquals(AgentRawCommandDispatchResult.Status.OFFLINE,handler.dispatchManagedSkill("0","client-a","agent-1","dedicated-key",hash,raw).status());
+        verify(exact,never()).sendMessage(any(TextMessage.class));verify(shared,never()).sendMessage(any(TextMessage.class));
     }
 
     private AgentWebSocketHandler handler() {
@@ -303,6 +303,7 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
                 any(), any(), any(), any(), any(), any())).thenAnswer(inv ->
                 inv.getArgument(0).equals(currentChannels.get(
                         inv.getArgument(1) + "|" + inv.getArgument(2) + "|" + inv.getArgument(4))));
+        UnifiedRuntimeTestSupport.stub(runtimeAuthentication);
         handler.setRuntimeAuthentication(runtimeAuthentication);
         return handler;
     }
@@ -312,7 +313,7 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
         handler.afterConnectionEstablished(session);
         currentChannels.put(session.getAttributes().get("tenantId") + "|"
                 + session.getAttributes().get("clientId") + "|" + agentId, session.getId());
-        handler.handleTextMessage(session, new TextMessage(
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(
                 "{\"type\":\"agent.register\",\"agentId\":\"" + agentId
                         + "\",\"name\":\"Agent\",\"durableStateHealthy\":true,\"readyCommandTypes\":[\"TASK_INVITE\"]}"));
     }

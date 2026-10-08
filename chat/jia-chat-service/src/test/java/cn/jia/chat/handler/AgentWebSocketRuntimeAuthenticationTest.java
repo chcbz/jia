@@ -24,13 +24,13 @@ class AgentWebSocketRuntimeAuthenticationTest {
 
     @Test void realRegistrationWireCarriesOnlyServerBoundScopeAndCloseRevokes() throws Exception {
         Fixture f = new Fixture(false);
-        when(f.auth.bind(eq("socket-a"), eq(CLIENT), eq(OWNER), eq(AGENT), eq("runtime-a"),
-                eq("key-a"), eq(TOKEN), any())).thenReturn(new AgentRuntimeAuthenticationService.Receipt(
-                "native-runtime-v1", TENANT, CLIENT, OWNER, AGENT, "runtime-a", true));
+        when(f.auth.bind(eq("socket-a"), any(AgentRuntimeAuthenticationService.Proof.class), any())).thenReturn(new AgentRuntimeAuthenticationService.Receipt(
+                "native-runtime-v1", TENANT, CLIENT, OWNER, AGENT, "runtime-a", UnifiedRuntimeTestSupport.INSTALLATION, "host-1", 1, true));
         f.register();
         var receipt = f.frames.stream().map(text -> JsonUtil.getMapper().readTree(text))
                 .filter(node -> "agent_registered".equals(node.path("type").textValue())).findFirst().orElseThrow();
-        assertEquals(TOKEN, receipt.path("token").textValue());
+        assertFalse(receipt.has("token"));
+        assertFalse(receipt.has("sessionToken"));
         assertEquals("reg-a", receipt.path("messageId").textValue());
         assertEquals("runtime-a", receipt.path("runtimeInstanceId").textValue());
         assertEquals(TENANT, receipt.path("runtimeAuth").path("tenantId").textValue());
@@ -38,15 +38,14 @@ class AgentWebSocketRuntimeAuthenticationTest {
         assertEquals(OWNER, receipt.path("runtimeAuth").path("ownerJiacn").textValue());
         assertEquals(AGENT, receipt.path("runtimeAuth").path("agentId").textValue());
         assertFalse(receipt.toString().contains("key-a"));
-        verify(f.auth).bind(eq("socket-a"), eq(CLIENT), eq(OWNER), eq(AGENT), eq("runtime-a"),
-                eq("key-a"), eq(TOKEN), any());
+        verify(f.auth).bind(eq("socket-a"), any(AgentRuntimeAuthenticationService.Proof.class), any());
         f.handler.afterConnectionClosed(f.session, CloseStatus.NORMAL);
         verify(f.auth, atLeastOnce()).disconnect("socket-a");
     }
 
     @Test void failedBindingCannotEmitCredentialsOrSuccessfulReconnect() throws Exception {
         Fixture f = new Fixture(false);
-        when(f.auth.bind(anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),any()))
+        when(f.auth.bind(anyString(),any(AgentRuntimeAuthenticationService.Proof.class),any()))
                 .thenThrow(new IllegalArgumentException("secret-raw-auth-detail"));
         f.register();
         assertFalse(String.join("", f.frames).contains(TOKEN));
@@ -58,26 +57,24 @@ class AgentWebSocketRuntimeAuthenticationTest {
 
     @Test void failedReceiptDeliveryRevokesTheNewBinding() throws Exception {
         Fixture f = new Fixture(false);
-        when(f.auth.bind(anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),any()))
+        when(f.auth.bind(anyString(),any(AgentRuntimeAuthenticationService.Proof.class),any()))
                 .thenReturn(new AgentRuntimeAuthenticationService.Receipt(
-                        "native-runtime-v1", TENANT, CLIENT, OWNER, AGENT, "runtime-a", true));
+                        "native-runtime-v1", TENANT, CLIENT, OWNER, AGENT, "runtime-a", UnifiedRuntimeTestSupport.INSTALLATION, "host-1", 1, true));
         doThrow(new java.io.IOException("untrusted transport detail")).when(f.session).sendMessage(any());
         f.register();
         verify(f.auth, times(2)).disconnect("socket-a"); // prior-generation invalidation and failed delivery
         assertTrue(f.frames.isEmpty());
     }
 
-    @Test void authenticatedNativeRegistrationAcceptsAnOriginHeader() throws Exception {
+    @Test void registrationUsesAlreadyVerifiedNonSecretProof() throws Exception {
         Fixture f = new Fixture(true);
-        when(f.auth.bind(eq("socket-a"), eq(CLIENT), eq(OWNER), eq(AGENT), eq("runtime-a"),
-                eq("key-a"), eq(TOKEN), any())).thenReturn(new AgentRuntimeAuthenticationService.Receipt(
-                "native-runtime-v1", TENANT, CLIENT, OWNER, AGENT, "runtime-a", true));
+        when(f.auth.bind(eq("socket-a"), any(AgentRuntimeAuthenticationService.Proof.class), any())).thenReturn(new AgentRuntimeAuthenticationService.Receipt(
+                "native-runtime-v1", TENANT, CLIENT, OWNER, AGENT, "runtime-a", UnifiedRuntimeTestSupport.INSTALLATION, "host-1", 1, true));
 
         f.register();
 
         verify(f.service).register(any(AgentRegisterDTO.class));
-        verify(f.auth).bind(eq("socket-a"), eq(CLIENT), eq(OWNER), eq(AGENT), eq("runtime-a"),
-                eq("key-a"), eq(TOKEN), any());
+        verify(f.auth).bind(eq("socket-a"), any(AgentRuntimeAuthenticationService.Proof.class), any());
         assertTrue(String.join("", f.frames).contains("agent_registered"));
         assertTrue(String.join("", f.frames).contains("runtimeAuth"));
     }
@@ -96,7 +93,6 @@ class AgentWebSocketRuntimeAuthenticationTest {
     @Test void wrongRuntimeIdentityInvalidatesSessionAndNeverRegisters() throws Exception {
         Fixture f = new Fixture(false);
         f.handler.handleTextMessage(f.session,new TextMessage(f.command().replace("runtime-a","runtime-foreign")));
-        verify(f.auth).disconnect("socket-a");
         verify(f.service, never()).register(any());
         assertFalse(String.join("", f.frames).contains(TOKEN));
     }
@@ -113,17 +109,19 @@ class AgentWebSocketRuntimeAuthenticationTest {
             when(service.register(any(AgentRegisterDTO.class))).thenReturn(new AgentRegisterResultDTO(AGENT,TOKEN,AgentConstants.STATUS_ONLINE));
             var attributes = new HashMap<String,Object>(); attributes.put("agentId",AGENT);
             attributes.put("jiacn",OWNER); attributes.put("clientId",CLIENT);
-            attributes.put("runtimeInstanceId","runtime-a"); attributes.put("managedApiKeyId","key-a");
+            attributes.put("runtimeInstanceId","runtime-a"); attributes.put("tenantId",TENANT);
             when(session.getAttributes()).thenReturn(attributes); when(session.getId()).thenReturn("socket-a");
             when(session.isOpen()).thenReturn(true);
             var headers = new HttpHeaders(); if (browser) headers.setOrigin("https://browser.invalid");
             when(session.getHandshakeHeaders()).thenReturn(headers);
             doAnswer(inv -> { frames.add(((TextMessage)inv.getArgument(0)).getPayload()); return null; }).when(session).sendMessage(any());
             handler = new AgentWebSocketHandler(mock(ChatClient.class),provider,mock(ChatMessageDao.class),mock(ChatConversationEventBroker.class));
+            UnifiedRuntimeTestSupport.stub(auth);
+            UnifiedRuntimeTestSupport.install(session);
             handler.setRuntimeAuthentication(auth);
         }
         String command() { return "{\"schemaVersion\":1,\"messageType\":\"agent.register\",\"messageId\":\"reg-a\",\"agentId\":\""
                 + AGENT + "\",\"runtimeInstanceId\":\"runtime-a\",\"name\":\"Native\"}"; }
-        void register() throws Exception { handler.handleTextMessage(session,new TextMessage(command())); }
+        void register() throws Exception { UnifiedRuntimeTestSupport.deliver(handler,session,new TextMessage(command())); }
     }
 }

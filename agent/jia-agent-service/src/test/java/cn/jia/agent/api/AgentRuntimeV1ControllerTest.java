@@ -34,15 +34,20 @@ class AgentRuntimeV1ControllerTest {
 
     @BeforeEach void setUp() {
         runtime = mock(AgentRuntimeV1Service.class);
-        mvc = MockMvcBuilders.standaloneSetup(new AgentRuntimeV1Controller(runtime)).build();
+        mvc = MockMvcBuilders.standaloneSetup(new AgentRuntimeV1Controller(runtime))
+                .setControllerAdvice(new cn.jia.core.security.SensitiveResponseBodyAdvice(new cn.jia.core.security.SensitiveResponseProperties()))
+                .build();
     }
 
     @Test void installerRuntimeAndAckUseExactJsonResultDataEnvelope() throws Exception {
         AgentRuntimeV1InstallationView view = view("ACTIVE");
         when(runtime.enroll(any(), anyLong())).thenReturn(new AgentRuntimeV1EnrollmentResult(view, "rta1_secret"));
-        when(runtime.session(eq("rta1_secret"), any(), anyLong())).thenReturn(view);
+        var session = new cn.jia.agent.entity.AgentRuntimeV1SessionResponse("rti_" + "1".repeat(32), "0", "client-a",
+                "agt_0123456789abcdef0123456789abcdef", "host-1", "boot-1", 1,
+                "AgentRuntime", "rts1_" + "a".repeat(64), "/ws/agent/channel", "CHANNEL_PENDING");
+        when(runtime.session(eq("rta1_secret"), any(), anyLong())).thenReturn(session);
         when(runtime.heartbeat(eq("rta1_secret"), any(), anyLong())).thenReturn(view);
-        when(runtime.acknowledge(eq("rta1_secret"), eq("msg-1"), any(), anyLong())).thenReturn(
+        when(runtime.acknowledge(eq("rts1_" + "a".repeat(64)), eq("msg-1"), any(), anyLong())).thenReturn(
                 new AgentCommandAckResult(AgentCommandAckResult.Kind.ADVANCED, "RECEIVED", 1));
 
         mvc.perform(post("/agent/runtime/v1/enroll").contentType("application/json").content(enrollmentJson()))
@@ -53,21 +58,33 @@ class AgentRuntimeV1ControllerTest {
         mvc.perform(post("/agent/runtime/v1/session").header(HttpHeaders.AUTHORIZATION, "Bearer rta1_secret")
                         .contentType("application/json").content(runtimeJson()))
                 .andExpect(status().isOk()).andExpect(content().string(org.hamcrest.Matchers.containsString("\"data\":{")))
-                .andExpect(content().string(org.hamcrest.Matchers.containsString("\"status\":\"ACTIVE\"")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("\"status\":\"CHANNEL_PENDING\"")))
                 .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("runtimeAuthorization"))));
         mvc.perform(post("/agent/runtime/v1/heartbeat").header(HttpHeaders.AUTHORIZATION, "Bearer rta1_secret")
                         .contentType("application/json").content(runtimeJson()))
                 .andExpect(status().isOk()).andExpect(content().string(org.hamcrest.Matchers.containsString("\"data\":{")))
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("\"status\":\"ACTIVE\"")))
                 .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("rta1_secret"))));
-        mvc.perform(post("/agent/runtime/v1/commands/msg-1/acks").header(HttpHeaders.AUTHORIZATION, "Bearer rta1_secret")
+        mvc.perform(post("/agent/runtime/v1/commands/msg-1/acks").header(HttpHeaders.AUTHORIZATION, "AgentRuntime rts1_" + "a".repeat(64))
+                        .header("X-Agent-Id", "agt_0123456789abcdef0123456789abcdef")
+                        .header("X-Agent-Installation-Id", "rti_" + "1".repeat(32)).header("X-Agent-Host-Id", "host-1")
+                        .header("X-Agent-Runtime-Id", "boot-1").header("X-Agent-Session-Generation", "1")
                         .contentType("application/json").content(ackJson()))
                 .andExpect(status().isOk()).andExpect(content().string(org.hamcrest.Matchers.containsString("\"data\":{")))
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("\"kind\":\"ADVANCED\"")))
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("\"status\":\"RECEIVED\"")));
-        verify(runtime).acknowledge(eq("rta1_secret"), eq("msg-1"), any(), anyLong());
+        verify(runtime).acknowledge(eq("rts1_" + "a".repeat(64)), eq("msg-1"), any(), anyLong());
     }
 
+    @Test void installationBearerCannotCommitCommandAckAndSessionRejectsBrowserOrigin() throws Exception {
+        mvc.perform(post("/agent/runtime/v1/commands/msg-1/acks").header(HttpHeaders.AUTHORIZATION, "Bearer rta1_secret")
+                .contentType("application/json").content(ackJson())).andExpect(status().isBadRequest());
+        org.mockito.Mockito.verifyNoInteractions(runtime);
+        mvc.perform(post("/agent/runtime/v1/session").header(HttpHeaders.AUTHORIZATION, "Bearer rta1_secret")
+                .header("Origin", "https://browser.invalid").contentType("application/json").content(runtimeJson()))
+                .andExpect(status().isForbidden());
+        org.mockito.Mockito.verifyNoInteractions(runtime);
+    }
     @Test void statusIsRedactedAndLegacyUrlCredentialsAreRejected() throws Exception {
         when(runtime.status("0", "client-a", "tenant-a", "rti-1")).thenReturn(view("ACTIVE"));
         mvc.perform(get("/agent/runtime/v1/installations/rti-1").principal(jwt()))
@@ -106,11 +123,13 @@ class AgentRuntimeV1ControllerTest {
     private static String runtimeJson() { return """
             {"installationId":"rti-1","tenantId":"tenant-a","clientId":"client-a",
              "canonicalAgentId":"agt_0123456789abcdef0123456789abcdef","manifestVersion":"1",
-             "manifestSha256":"%s","health":"ok"}
+             "manifestSha256":"%s","health":"ok","hostId":"host-1","runtimeInstanceId":"boot-1"}
             """.formatted("b".repeat(64)); }
     private static String ackJson() { return """
             {"messageId":"msg-1","correlationId":"corr-1","commandId":"cmd-1","taskId":"task-1",
              "tenantId":"tenant-a","clientId":"client-a",
-             "canonicalAgentId":"agt_0123456789abcdef0123456789abcdef","status":"RECEIVED"}
+             "canonicalAgentId":"agt_0123456789abcdef0123456789abcdef","status":"RECEIVED",
+             "installationId":"rti_11111111111111111111111111111111","hostId":"host-1",
+             "runtimeInstanceId":"boot-1","sessionGeneration":1,"deliveryVersion":null}
             """; }
 }
