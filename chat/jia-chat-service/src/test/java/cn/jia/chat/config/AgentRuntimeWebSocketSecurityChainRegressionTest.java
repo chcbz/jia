@@ -135,6 +135,7 @@ class AgentRuntimeWebSocketSecurityChainRegressionTest {
 
         var key = new OauthApiKeyEntity().setId("key-a").setApiKey("valid-api-key")
                 .setKeyName("native").setStatus(1).setClientId("client-a").setJiacn("tenant-a");
+        key.setTenantId("0");
         when(keys.findByApiKey("valid-api-key")).thenReturn(key);
     }
 
@@ -158,6 +159,19 @@ class AgentRuntimeWebSocketSecurityChainRegressionTest {
         verify(keys, org.mockito.Mockito.times(2)).findByApiKey("valid-api-key");
         verify(agents, org.mockito.Mockito.times(2))
                 .requireApiKeyOwnedAgent("client-a", "tenant-a", AGENT_ID);
+    }
+
+    @Test
+    void apiKeyWithoutAuthenticatedTenantIsRejectedBeforeAgentOwnershipCheck() throws Exception {
+        keys.findByApiKey("valid-api-key").setTenantId(null);
+
+        mvc.perform(get("/ws/agent/channel")
+                        .header("X-API-Key", "valid-api-key")
+                        .header("X-Agent-Id", AGENT_ID))
+                .andExpect(status().isForbidden());
+
+        assertEquals(1, routes.ordinaryRouteHits.get());
+        verifyNoInteractions(agents);
     }
 
     @Test

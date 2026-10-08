@@ -136,6 +136,7 @@ class AgentServiceTaskEventRealTransactionTest {
                 new AgentScopePublicationCoordinator(),
                 new AgentSceneFeatureFlags(false, false),
                 mutationTransaction, eventWriter);
+        raw.setRequirementSnapshots(new AgentTaskRequirementSnapshotServiceImpl(jdbc,mutationTransaction));
         service = transactionalProxy(raw);
     }
 
@@ -158,6 +159,7 @@ class AgentServiceTaskEventRealTransactionTest {
         assertEquals(0, count("agent_task_meta"));
         assertEquals(0, count("task_plan_fixture"));
         assertEquals(0, count("task_item_fixture"));
+        assertEquals(0, count("agent_task_requirement_snapshot"));
         verify(eventPublisher, never()).publishTaskEvent(any(), any());
 
         reset(eventWriter, eventPublisher);
@@ -169,6 +171,7 @@ class AgentServiceTaskEventRealTransactionTest {
         assertEquals(0, count("agent_task_meta"));
         assertEquals(0, count("task_plan_fixture"));
         assertEquals(0, count("task_item_fixture"));
+        assertEquals(0, count("agent_task_requirement_snapshot"));
         verify(eventPublisher, never()).publishTaskEvent(any(), any());
     }
 
@@ -178,7 +181,7 @@ class AgentServiceTaskEventRealTransactionTest {
         jdbc.update("""
                 INSERT INTO agent_task_event
                 (task_id,event_version,event_id,event_type,event_json,tenant_id,client_id)
-                VALUES ('42',7,'evt-existing','TASK_CREATED','{}','juyiting','jia_client')
+                VALUES ('42',7,'evt-existing','TASK_CREATED','{}','0','jia_client')
                 """);
 
         assertThrows(IllegalStateException.class, () -> service.createTask(createRequest()));
@@ -193,6 +196,7 @@ class AgentServiceTaskEventRealTransactionTest {
                 "SELECT event_id FROM agent_task_event", String.class));
         assertEquals(0, count("task_plan_fixture"));
         assertEquals(0, count("task_item_fixture"));
+        assertEquals(0, count("agent_task_requirement_snapshot"));
         verify(eventWriter, never()).append(any());
         verify(eventPublisher, never()).publishTaskEvent(any(), any());
     }
@@ -206,7 +210,24 @@ class AgentServiceTaskEventRealTransactionTest {
                 "SELECT task_id FROM agent_task_meta", String.class));
         assertEquals(1, count("task_plan_fixture"));
         assertEquals(1, count("task_item_fixture"));
+        assertEquals(1, count("agent_task_requirement_snapshot"));
+        assertEquals("42",jdbc.queryForObject(
+                "SELECT task_id FROM agent_task_requirement_snapshot",String.class));
         verify(eventPublisher).publishTaskEvent("task_created", created);
+    }
+
+    @Test
+    void creationPreservesFullUnicodeSourceAcrossFinalPlanIdRekey() {
+        AgentTaskCreateDTO request=createRequest();
+        request.setTitle("a".repeat(29)+"🚀"+" untruncated title");
+        request.setDescription("b".repeat(199)+"🚀"+" complete original body");
+        assertEquals("42",service.createTask(request).getId());
+        assertEquals(request.getTitle(),jdbc.queryForObject(
+                "SELECT title FROM agent_task_requirement_snapshot WHERE task_id='42'",String.class));
+        assertEquals(request.getDescription(),jdbc.queryForObject(
+                "SELECT description FROM agent_task_requirement_snapshot WHERE task_id='42'",String.class));
+        assertEquals("a".repeat(29),jdbc.queryForObject(
+                "SELECT name FROM task_plan_fixture",String.class));
     }
 
     @Test
@@ -325,8 +346,8 @@ class AgentServiceTaskEventRealTransactionTest {
                 INSERT INTO agent_task_meta
                 (task_id,reward_status,collaboration_mode,risk_level,max_agents,
                  review_required,task_version,current_event_version,
-                 tenant_id,client_id,create_time,update_time)
-                VALUES (?,?,'single','low',1,0,?,?,'juyiting','jia_client',1,1)
+                 tenant_id,client_id,owner_jiacn,create_time,update_time)
+                VALUES (?,?,'single','low',1,0,?,?,'0','jia_client','juyiting',1,1)
                 """, taskId, status, taskVersion, eventVersion);
     }
 
@@ -367,6 +388,7 @@ class AgentServiceTaskEventRealTransactionTest {
                 CREATE TABLE agent_task_meta (
                     id BIGINT NOT NULL AUTO_INCREMENT,
                     task_id VARCHAR(100) NOT NULL,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     reward_status VARCHAR(20) NOT NULL,
                     assigned_agent_id VARCHAR(100),
                     required_abilities TEXT,
@@ -387,7 +409,24 @@ class AgentServiceTaskEventRealTransactionTest {
                     tenant_id VARCHAR(50) NOT NULL,
                     client_id VARCHAR(50) NOT NULL,
                     PRIMARY KEY (id),
-                    UNIQUE (tenant_id, client_id, task_id)
+                    UNIQUE (tenant_id, client_id, owner_jiacn, task_id)
+                )""");
+        jdbc.execute("""
+                CREATE TABLE agent_task_requirement_snapshot (
+                    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    tenant_id VARCHAR(50) NOT NULL,
+                    client_id VARCHAR(50) NOT NULL,
+                    owner_jiacn VARCHAR(50) NOT NULL,
+                    task_id VARCHAR(100) NOT NULL,
+                    revision BIGINT NOT NULL,
+                    confirmation_id VARCHAR(100) NOT NULL,
+                    task_version_at_confirmation BIGINT NOT NULL,
+                    title CLOB NOT NULL,
+                    description CLOB,
+                    content_sha256 VARCHAR(64) NOT NULL,
+                    source VARCHAR(20) NOT NULL,
+                    created_at BIGINT NOT NULL,
+                    UNIQUE (tenant_id,client_id,owner_jiacn,task_id,revision)
                 )""");
         jdbc.execute("""
                 CREATE TABLE task_plan_fixture (
@@ -423,6 +462,7 @@ class AgentServiceTaskEventRealTransactionTest {
                     author_type VARCHAR(20),
                     note_type VARCHAR(20),
                     content TEXT,
+                    owner_jiacn VARCHAR(50),
                     created_at BIGINT,
                     create_time BIGINT,
                     update_time BIGINT,

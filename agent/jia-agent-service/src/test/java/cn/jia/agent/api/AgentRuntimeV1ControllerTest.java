@@ -69,12 +69,16 @@ class AgentRuntimeV1ControllerTest {
     }
 
     @Test void statusIsRedactedAndLegacyUrlCredentialsAreRejected() throws Exception {
-        when(runtime.status("tenant-a", "client-a", "rti-1")).thenReturn(view("ACTIVE"));
+        when(runtime.status("0", "client-a", "tenant-a", "rti-1")).thenReturn(view("ACTIVE"));
         mvc.perform(get("/agent/runtime/v1/installations/rti-1").principal(jwt()))
                 .andExpect(status().isOk()).andExpect(content().string(org.hamcrest.Matchers.containsString("\"data\":{")))
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("\"status\":\"ACTIVE\"")))
                 .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("runtimeAuthorization"))))
                 .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("enrollmentSecret"))));
+        verify(runtime).status("0", "client-a", "tenant-a", "rti-1");
+        mvc.perform(post("/agent/runtime/v1/installations/rti-1/revoke").principal(jwt()))
+                .andExpect(status().isOk());
+        verify(runtime).revoke(eq("0"), eq("client-a"), eq("tenant-a"), eq("rti-1"), anyLong());
         mvc.perform(post("/agent/runtime/v1/session?api_key=legacy").header(HttpHeaders.AUTHORIZATION, "Bearer rta1_secret")
                         .contentType("application/json").content(runtimeJson()))
                 .andExpect(status().isForbidden())

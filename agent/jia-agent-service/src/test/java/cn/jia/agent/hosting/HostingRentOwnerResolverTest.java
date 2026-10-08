@@ -24,12 +24,14 @@ class HostingRentOwnerResolverTest {
         when(accountProvider.getIfAvailable()).thenReturn(accounts);
         when(userProvider.getIfAvailable()).thenReturn(users);
         var resolver = new HostingRentOwnerResolver(accountProvider, userProvider);
-        var actor = new HostingRentHttp.Actor("Login-A", "Jia-A", "Client-A");
+        var actor = new HostingRentHttp.Actor("Login-A", "0", "Client-A", "Jia-A");
         assertEquals("Jia-A", resolver.requireOwner(actor));
         assertEquals("Login-A", actor.principal().id());
+        assertEquals("0", actor.tenantId());
+        assertEquals("Jia-A", actor.ownerJiacn());
         for (String impostor : new String[]{"login-a", "Jia-A", "other-user"}) {
             assertThrows(HostingRentApplicationException.class,
-                    () -> resolver.requireOwner(new HostingRentHttp.Actor(impostor, "Jia-A", "Client-A")));
+                    () -> resolver.requireOwner(new HostingRentHttp.Actor(impostor, "0", "Client-A", "Jia-A")));
         }
         when(accounts.findUniqueByExactJiacn("Jia-A")).thenReturn(Optional.empty());
         assertThrows(HostingRentApplicationException.class, () -> resolver.requireOwner(actor));

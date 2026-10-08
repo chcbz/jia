@@ -228,6 +228,15 @@ public class AgentLegacyTaskCompatibilityService {
             throw invalid("Task cannot be assigned in its current status");
         }
 
+        if (expectedTaskVersion != null) {
+            if (!expectedTaskVersion.equals(task.getTaskVersion())) {
+                throw invalid("Task version changed before assignment");
+            }
+            // Strict callers validate their grant inputs while the root and canonical identities
+            // are locked, including an already-persisted idempotent assignment.
+            precommitValidator.validate(task, agentIds);
+        }
+
         List<AgentTaskMemberEntity> members = requireSnapshot(
                 memberDao.listByTask(tenantId, clientId, ownerJiacn, taskId), "task member");
         List<AgentTaskWorkItemEntity> defaultItems = requireSnapshot(
@@ -243,10 +252,9 @@ public class AgentLegacyTaskCompatibilityService {
             return new AssignOutcome(persistedAgentIds, false, null, null);
         }
 
-        if (expectedTaskVersion != null && !expectedTaskVersion.equals(task.getTaskVersion())) {
-            throw invalid("Task version changed before assignment");
+        if (expectedTaskVersion == null) {
+            precommitValidator.validate(task, agentIds);
         }
-        precommitValidator.validate(task, agentIds);
         String fromStatus = taskStatus.value();
         applyAssignmentMeta(task, agentIds, changedAt);
         if (expectedTaskVersion == null) {
@@ -270,6 +278,24 @@ public class AgentLegacyTaskCompatibilityService {
         String taskAssignedEventId = appendAssignmentEvents(
                 tenantId, clientId, ownerJiacn, taskId, task, agentIds, source, fromStatus, changedAt);
         return new AssignOutcome(agentIds, true, taskAssignedEventId, changedAt);
+    }
+
+    /**
+     * Strict v2 adapter used only while the caller already holds this exact owner-scoped task root.
+     * The caller owns the surrounding REQUIRED transaction and must preserve task -> identity -> input -> grant order.
+     */
+    public AssignOutcome assignResolvedVersionedWithLockedTask(String tenantId, String clientId,
+            String ownerJiacn, String taskId, List<String> canonicalAgentIds, boolean automatic,
+            long expectedTaskVersion, AssignmentPrecommitValidator precommitValidator,
+            AgentTaskMetaEntity lockedTask) {
+        requireScope(tenantId, clientId, ownerJiacn);
+        requireExactText(taskId, "taskId", 100);
+        if (expectedTaskVersion < 0 || expectedTaskVersion == Long.MAX_VALUE) {
+            throw invalid("Expected task version is invalid");
+        }
+        return assignResolvedLocked(tenantId, clientId, ownerJiacn, taskId,
+                requireResolvedAgentIds(canonicalAgentIds), automatic, now(), lockedTask,
+                expectedTaskVersion, Objects.requireNonNull(precommitValidator, "precommitValidator"));
     }
 
     @Transactional(rollbackFor = Exception.class)

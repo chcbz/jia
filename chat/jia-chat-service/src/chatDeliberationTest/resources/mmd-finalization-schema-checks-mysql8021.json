@@ -1,0 +1,25 @@
+{
+  "scope": "read-only same-thread actual mysql check expressions; experimental old/new fixture distinction; no shared/production DML",
+  "snapshots": [
+    {
+      "database": "mmd_final_939d9121_20260930_184124",
+      "candidate_tree": "939d9121c1548c7eee78ae48bbdf556893377335",
+      "case_evidence_sha256": "a4471e7daae923c43c79fd0f6b5f4ad5f9897e3a037b01487a1a5489abc8450c",
+      "check_clauses": {
+        "chk_asof_lease": "(((`phase` = _utf8mb4\\'CLAIMING\\') and (`lease_token` is null) and (`lease_work_item_version` is null)) or ((`phase` in (_utf8mb4\\'LEASED\\',_utf8mb4\\'READY\\')) and (`lease_token` is not null) and (`lease_work_item_version` >= 0)) or ((`phase` in (_utf8mb4\\'SUBMITTED\\',_utf8mb4\\'ACCEPTED\\')) and (`lease_token` is null) and (`lease_work_item_version` is not null)))",
+        "chk_csof_progress": "(((`stage` in (_utf8mb4\\'PROMOTING\\',_utf8mb4\\'READY_TO_SUBMIT\\')) and (`delivery_id` is null) and (`delivery_state` is null)) or ((`stage` = _utf8mb4\\'SUBMITTED\\') and (`delivery_id` is not null) and (`delivery_state` in (_utf8mb4\\'submitted\\',_utf8mb4\\'changes_requested\\'))) or ((`stage` = _utf8mb4\\'ACCEPTING\\') and (`delivery_id` is not null) and (`delivery_state` in (_utf8mb4\\'submitted\\',_utf8mb4\\'changes_requested\\'))) or ((`stage` = _utf8mb4\\'TASK_COMPLETED\\') and (`delivery_id` is not null) and (`delivery_state` = _utf8mb4\\'accepted\\')))",
+        "chk_csof_terminal": "(((`state` = _utf8mb4\\'completed\\') and (`stage` = _utf8mb4\\'TASK_COMPLETED\\') and (`delivery_id` is not null) and (`delivery_state` = _utf8mb4\\'accepted\\') and (`task_state` = _utf8mb4\\'completed\\') and (`error_code` is null) and (`retryable` = 0)) or ((`state` <> _utf8mb4\\'completed\\') and (`stage` <> _utf8mb4\\'TASK_COMPLETED\\')))"
+      }
+    },
+    {
+      "database": "mmd_final_8289c1a3_20260930_184353",
+      "candidate_tree": "8289c1a364df862427715e31cb71e3d318e593de",
+      "case_evidence_sha256": "8c4071a73d3c0592769a117216de3fec124bfac40eb59301ce32a3fa91d70b34",
+      "check_clauses": {
+        "chk_asof_lease": "(((`phase` = _utf8mb4\\'CLAIMING\\') and (`lease_token` is null) and (`lease_work_item_version` is null)) or ((`phase` in (_utf8mb4\\'LEASED\\',_utf8mb4\\'READY\\')) and (`lease_token` is not null) and (`lease_work_item_version` is not null) and (`lease_work_item_version` >= 0)) or ((`phase` in (_utf8mb4\\'SUBMITTED\\',_utf8mb4\\'ACCEPTED\\')) and (`lease_token` is null) and (`lease_work_item_version` is not null)))",
+        "chk_csof_progress": "(((`stage` in (_utf8mb4\\'PROMOTING\\',_utf8mb4\\'READY_TO_SUBMIT\\')) and (`delivery_id` is null) and (`delivery_state` is null)) or ((`stage` = _utf8mb4\\'SUBMITTED\\') and (`delivery_id` is not null) and (`delivery_state` is not null) and (`delivery_state` in (_utf8mb4\\'submitted\\',_utf8mb4\\'changes_requested\\'))) or ((`stage` = _utf8mb4\\'ACCEPTING\\') and (`delivery_id` is not null) and (`delivery_state` is not null) and (`delivery_state` in (_utf8mb4\\'submitted\\',_utf8mb4\\'changes_requested\\'))) or ((`stage` = _utf8mb4\\'TASK_COMPLETED\\') and (`delivery_id` is not null) and (`delivery_state` is not null) and (`delivery_state` = _utf8mb4\\'accepted\\')))",
+        "chk_csof_terminal": "(((`state` = _utf8mb4\\'completed\\') and (`stage` = _utf8mb4\\'TASK_COMPLETED\\') and (`delivery_id` is not null) and (`delivery_state` is not null) and (`delivery_state` = _utf8mb4\\'accepted\\') and (`task_state` = _utf8mb4\\'completed\\') and (`error_code` is null) and (`retryable` = 0)) or ((`state` <> _utf8mb4\\'completed\\') and (`stage` <> _utf8mb4\\'TASK_COMPLETED\\')))"
+      }
+    }
+  ]
+}

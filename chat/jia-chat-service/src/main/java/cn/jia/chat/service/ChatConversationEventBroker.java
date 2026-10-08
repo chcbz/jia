@@ -4,203 +4,161 @@ import cn.jia.core.util.JsonUtil;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
-import reactor.core.Disposable;
-import reactor.core.publisher.FluxSink;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BooleanSupplier;
 
-/**
- * In-process conversation event broker with a monotonic deletion fence.
- *
- * <p>The stripe lock is acquired by both publication and deletion. Production deletion keeps its
- * stripe locked until transaction completion, so a callback can publish entirely before deletion
- * starts or observe the committed tombstone; it cannot publish in the commit/invalidation gap.</p>
- */
+/** In-process live optimization layered over the durable conversation event journal. */
 @Component
 public class ChatConversationEventBroker {
     private static final int STRIPE_COUNT = 64;
+    private static final int LIVE_BUFFER_SIZE = 1024;
 
     private final Map<String, EventSink> sinks = new ConcurrentHashMap<>();
     private final ReentrantLock[] stripes = new ReentrantLock[STRIPE_COUNT];
+    private final AtomicLong subscriberIds = new AtomicLong();
 
     public ChatConversationEventBroker() {
-        for (int i = 0; i < stripes.length; i++) {
-            stripes[i] = new ReentrantLock();
-        }
+        for (int i = 0; i < stripes.length; i++) stripes[i] = new ReentrantLock();
     }
 
-    /** Legacy test/helper entrypoint. Production paths must pass a persisted generation and live check. */
-    public Flux<String> stream(String conversationId) {
-        return stream(conversationId, 1L, () -> true);
-    }
-
-    public Flux<String> stream(
-            String conversationId, long generation, BooleanSupplier persistentLiveCheck) {
+    public Flux<String> stream(String conversationId) { return stream(conversationId, 1L, () -> true); }
+    public Flux<String> stream(String conversationId, long generation, BooleanSupplier persistentLiveCheck) {
         return stream(conversationId, generation, persistentLiveCheck, null);
     }
 
-    /**
-     * Registers the live subscriber before emitting an optional transport control frame. This keeps
-     * the subscription window closed without introducing replay or changing durable event order.
-     */
-    public Flux<String> stream(
-            String conversationId, long generation, BooleanSupplier persistentLiveCheck,
-            String initialFrame) {
+    public Flux<String> stream(String conversationId, long generation,
+            BooleanSupplier persistentLiveCheck, String initialFrame) {
         return Flux.defer(() -> {
-            EventSink eventSink = retain(
-                    conversationId, generation, false, persistentLiveCheck);
-            if (eventSink == null) {
-                return Flux.empty();
-            }
-            AtomicBoolean released = new AtomicBoolean();
-            Runnable cleanup = () -> {
-                if (released.compareAndSet(false, true)) {
-                    release(conversationId, eventSink, false);
-                }
-            };
-            Flux<String> live = ChatStreamPolicy.bounded(
-                    eventSink.events.asFlux(), ignored -> cleanup.run());
-            if (initialFrame == null) {
-                return live.doFinally(ignored -> cleanup.run());
-            }
-            return Flux.<String>create(emitter -> {
-                Disposable subscription = live.subscribe(
-                        emitter::next, emitter::error, emitter::complete);
-                emitter.onDispose(subscription);
-                emitter.next(initialFrame);
-            }, FluxSink.OverflowStrategy.ERROR)
-                    .doFinally(ignored -> cleanup.run());
+            LiveSubscription subscription = subscribeBuffered(conversationId, generation, persistentLiveCheck);
+            if (subscription == null) return Flux.empty();
+            Flux<String> live = subscription.flux();
+            Flux<String> result = initialFrame == null ? live : Flux.just(initialFrame).concatWith(live);
+            return ChatStreamPolicy.bounded(result, ignored -> subscription.close())
+                    .doFinally(ignored -> subscription.close());
         });
     }
 
-    /** Emits once when deletion commits, allowing HTTP/relay pipelines to dispose their source. */
-    public Flux<Boolean> deletionSignal(
-            String conversationId, long generation, BooleanSupplier persistentLiveCheck) {
+    /** Registers a bounded per-client live buffer immediately, before callers read a DB watermark/replay. */
+    public LiveSubscription subscribeBuffered(String conversationId, long generation,
+            BooleanSupplier persistentLiveCheck) {
+        if (!validKey(conversationId, generation) || persistentLiveCheck == null) return null;
+        ReentrantLock lock = stripe(conversationId);
+        lock.lock();
+        try {
+            try { if (!persistentLiveCheck.getAsBoolean()) return null; }
+            catch (RuntimeException unavailable) { return null; }
+            EventSink eventSink = sinks.computeIfAbsent(conversationId, ignored -> new EventSink(generation));
+            if (eventSink.invalidated || eventSink.generation != generation) return null;
+            long id = subscriberIds.incrementAndGet();
+            Sinks.Many<String> buffer = Sinks.many().replay().limit(LIVE_BUFFER_SIZE);
+            eventSink.subscribers.put(id, buffer);
+            return new LiveSubscription(conversationId, eventSink, id, buffer);
+        } finally { lock.unlock(); }
+    }
+
+    public Flux<Boolean> deletionSignal(String conversationId, long generation,
+            BooleanSupplier persistentLiveCheck) {
         return Flux.defer(() -> {
-            EventSink eventSink = retain(
-                    conversationId, generation, true, persistentLiveCheck);
-            if (eventSink == null) {
-                return Flux.just(Boolean.TRUE);
-            }
+            EventSink eventSink = retainWatcher(conversationId, generation, persistentLiveCheck);
+            if (eventSink == null) return Flux.just(Boolean.TRUE);
             return eventSink.deleted.asMono().flux()
-                    .doFinally(ignored -> release(conversationId, eventSink, true));
+                    .doFinally(ignored -> releaseWatcher(conversationId, eventSink));
         });
     }
 
-    /** Legacy helper retained for non-conversation tests. */
     public void publish(String conversationId, Map<String, ?> event) {
         publishIfLive(conversationId, 1L, () -> true, event);
     }
 
-    public boolean publishIfLive(
-            String conversationId,
-            long generation,
-            BooleanSupplier persistentLiveCheck,
-            Map<String, ?> event) {
-        return runIfLive(conversationId, generation, persistentLiveCheck, () -> {
-            EventSink eventSink = sinks.get(conversationId);
-            if (eventSink != null && eventSink.generation == generation && !eventSink.invalidated) {
-                eventSink.events.tryEmitNext(JsonUtil.toSafeJson(event));
-            }
-        });
+    public boolean publishIfLive(String conversationId, long generation,
+            BooleanSupplier persistentLiveCheck, Map<String, ?> event) {
+        return runIfLive(conversationId, generation, persistentLiveCheck, () -> publishLocked(conversationId, event));
     }
 
-    /** Atomically validates persistent state and performs one outbound publication action. */
-    public boolean runIfLive(
-            String conversationId,
-            long generation,
-            BooleanSupplier persistentLiveCheck,
-            Runnable publication) {
-        if (!validKey(conversationId, generation)
-                || persistentLiveCheck == null || publication == null) {
-            return false;
-        }
+    public boolean publishIfSubscribed(String conversationId, long generation,
+            BooleanSupplier persistentLiveCheck, Map<String, ?> event) {
+        AtomicBoolean delivered = new AtomicBoolean();
+        boolean live = runIfLive(conversationId, generation, persistentLiveCheck, () -> {
+            EventSink eventSink = sinks.get(conversationId);
+            if (eventSink == null || eventSink.generation != generation || eventSink.invalidated) return;
+            String json = JsonUtil.toSafeJson(event);
+            for (Sinks.Many<String> subscriber : eventSink.subscribers.values()) {
+                delivered.compareAndSet(false, subscriber.tryEmitNext(json).isSuccess());
+            }
+        });
+        return live && delivered.get();
+    }
+
+    private void publishLocked(String conversationId, Map<String, ?> event) {
+        EventSink eventSink = sinks.get(conversationId);
+        if (eventSink == null || eventSink.invalidated) return;
+        String json = JsonUtil.toSafeJson(event);
+        for (Sinks.Many<String> subscriber : eventSink.subscribers.values()) subscriber.tryEmitNext(json);
+    }
+
+    public boolean runIfLive(String conversationId, long generation,
+            BooleanSupplier persistentLiveCheck, Runnable publication) {
+        if (!validKey(conversationId, generation) || persistentLiveCheck == null || publication == null) return false;
         ReentrantLock lock = stripe(conversationId);
         lock.lock();
         try {
-            if (!persistentLiveCheck.getAsBoolean()) {
-                return false;
-            }
+            if (!persistentLiveCheck.getAsBoolean()) return false;
             publication.run();
             return true;
         } catch (RuntimeException unavailable) {
             return false;
-        } finally {
-            lock.unlock();
-        }
+        } finally { lock.unlock(); }
     }
 
-    /**
-     * Acquires the same fence used by publishers. The caller must hold this guard through DB
-     * transaction completion and call {@link DeletionFence#commitDeleted(long)} only after commit.
-     */
     public DeletionFence beginDeletion(String conversationId) {
-        if (conversationId == null || conversationId.isBlank()) {
-            throw new IllegalArgumentException("conversationId is required");
-        }
-        ReentrantLock lock = stripe(conversationId);
-        lock.lock();
+        if (conversationId == null || conversationId.isBlank()) throw new IllegalArgumentException("conversationId is required");
+        ReentrantLock lock = stripe(conversationId); lock.lock();
         return new DeletionFence(conversationId, lock);
     }
 
     int subscriberCount(String conversationId) {
-        EventSink sink = sinks.get(conversationId);
-        return sink == null ? 0 : sink.subscribers.get();
+        EventSink sink = sinks.get(conversationId); return sink == null ? 0 : sink.subscribers.size();
     }
-
     int watcherCount(String conversationId) {
-        EventSink sink = sinks.get(conversationId);
-        return sink == null ? 0 : sink.watchers.get();
+        EventSink sink = sinks.get(conversationId); return sink == null ? 0 : sink.watchers.get();
     }
 
-    private EventSink retain(
-            String conversationId, long generation, boolean watcher,
-            BooleanSupplier persistentLiveCheck) {
-        if (!validKey(conversationId, generation) || persistentLiveCheck == null) {
-            return null;
-        }
-        ReentrantLock lock = stripe(conversationId);
-        lock.lock();
+    private EventSink retainWatcher(String conversationId, long generation, BooleanSupplier liveCheck) {
+        if (!validKey(conversationId, generation) || liveCheck == null) return null;
+        ReentrantLock lock = stripe(conversationId); lock.lock();
         try {
-            try {
-                if (!persistentLiveCheck.getAsBoolean()) {
-                    return null;
-                }
-            } catch (RuntimeException unavailable) {
-                return null;
-            }
-            EventSink existing = sinks.get(conversationId);
-            if (existing == null) {
-                existing = new EventSink(generation);
-                sinks.put(conversationId, existing);
-            }
-            if (existing.invalidated || existing.generation != generation) {
-                return null;
-            }
-            (watcher ? existing.watchers : existing.subscribers).incrementAndGet();
-            return existing;
-        } finally {
-            lock.unlock();
-        }
+            try { if (!liveCheck.getAsBoolean()) return null; } catch (RuntimeException unavailable) { return null; }
+            EventSink sink = sinks.computeIfAbsent(conversationId, ignored -> new EventSink(generation));
+            if (sink.invalidated || sink.generation != generation) return null;
+            sink.watchers.incrementAndGet(); return sink;
+        } finally { lock.unlock(); }
     }
 
-    private void release(String conversationId, EventSink eventSink, boolean watcher) {
-        ReentrantLock lock = stripe(conversationId);
-        lock.lock();
+    private void releaseWatcher(String conversationId, EventSink sink) {
+        ReentrantLock lock = stripe(conversationId); lock.lock();
         try {
-            AtomicInteger counter = watcher ? eventSink.watchers : eventSink.subscribers;
-            counter.updateAndGet(value -> Math.max(0, value - 1));
-            if (eventSink.subscribers.get() == 0 && eventSink.watchers.get() == 0) {
-                sinks.remove(conversationId, eventSink);
-            }
-        } finally {
-            lock.unlock();
-        }
+            sink.watchers.updateAndGet(value -> Math.max(0, value - 1));
+            removeUnused(conversationId, sink);
+        } finally { lock.unlock(); }
+    }
+
+    private void releaseSubscriber(String conversationId, EventSink sink, long id) {
+        ReentrantLock lock = stripe(conversationId); lock.lock();
+        try {
+            Sinks.Many<String> removed = sink.subscribers.remove(id);
+            if (removed != null) removed.tryEmitComplete();
+            removeUnused(conversationId, sink);
+        } finally { lock.unlock(); }
+    }
+
+    private void removeUnused(String conversationId, EventSink sink) {
+        if (sink.subscribers.isEmpty() && sink.watchers.get() == 0) sinks.remove(conversationId, sink);
     }
 
     private void invalidateLocked(String conversationId, long generation) {
@@ -208,54 +166,48 @@ public class ChatConversationEventBroker {
         if (eventSink != null) {
             eventSink.invalidated = true;
             eventSink.deleted.tryEmitValue(Boolean.TRUE);
-            eventSink.events.tryEmitComplete();
+            java.util.List<Sinks.Many<String>> subscribers = java.util.List.copyOf(eventSink.subscribers.values());
+            eventSink.subscribers.clear();
+            subscribers.forEach(Sinks.Many::tryEmitComplete);
         }
     }
 
     private ReentrantLock stripe(String conversationId) {
         return stripes[(conversationId.hashCode() & Integer.MAX_VALUE) % stripes.length];
     }
-
     private boolean validKey(String conversationId, long generation) {
         return conversationId != null && !conversationId.isBlank() && generation >= 1;
     }
 
     private static final class EventSink {
         private final long generation;
-        private final Sinks.Many<String> events = Sinks.many().multicast().directBestEffort();
+        private final Map<Long,Sinks.Many<String>> subscribers = new ConcurrentHashMap<>();
         private final Sinks.One<Boolean> deleted = Sinks.one();
-        private final AtomicInteger subscribers = new AtomicInteger();
         private final AtomicInteger watchers = new AtomicInteger();
         private volatile boolean invalidated;
+        private EventSink(long generation) { this.generation = generation; }
+    }
 
-        private EventSink(long generation) {
-            this.generation = generation;
+    public final class LiveSubscription implements AutoCloseable {
+        private final String conversationId;
+        private final EventSink sink;
+        private final long id;
+        private final Sinks.Many<String> buffer;
+        private final AtomicBoolean closed = new AtomicBoolean();
+        private LiveSubscription(String conversationId, EventSink sink, long id, Sinks.Many<String> buffer) {
+            this.conversationId=conversationId; this.sink=sink; this.id=id; this.buffer=buffer;
         }
+        public Flux<String> flux() { return buffer.asFlux().doFinally(ignored -> close()); }
+        @Override public void close() { if (closed.compareAndSet(false,true)) releaseSubscriber(conversationId,sink,id); }
     }
 
     public final class DeletionFence implements AutoCloseable {
-        private final String conversationId;
-        private final ReentrantLock lock;
-        private boolean closed;
-
-        private DeletionFence(String conversationId, ReentrantLock lock) {
-            this.conversationId = conversationId;
-            this.lock = lock;
-        }
-
+        private final String conversationId; private final ReentrantLock lock; private boolean closed;
+        private DeletionFence(String conversationId, ReentrantLock lock) { this.conversationId=conversationId;this.lock=lock; }
         public void commitDeleted(long deletedGeneration) {
-            if (closed || deletedGeneration < 1) {
-                throw new IllegalStateException("Deletion fence is not active");
-            }
+            if (closed || deletedGeneration < 1) throw new IllegalStateException("Deletion fence is not active");
             invalidateLocked(conversationId, deletedGeneration);
         }
-
-        @Override
-        public void close() {
-            if (!closed) {
-                closed = true;
-                lock.unlock();
-            }
-        }
+        @Override public void close(){if(!closed){closed=true;lock.unlock();}}
     }
 }

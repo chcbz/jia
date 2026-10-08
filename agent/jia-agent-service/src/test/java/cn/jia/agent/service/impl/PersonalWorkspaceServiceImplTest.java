@@ -83,6 +83,126 @@ class PersonalWorkspaceServiceImplTest {
     }
 
     @Test
+    void conversationAssetArchiveIsDurableScopedAndCannotReuseKeyForAnotherRevision() {
+        Fixture fixture = new Fixture();
+        byte[] bird = bytes("immutable bird image bytes");
+        var source = new PersonalWorkspaceService.ConversationArchiveCommand(
+                new PersonalWorkspaceService.Idempotency("save-bird-1"), "asset_bird", 1,
+                sha256(bird), "鸟的照片", "bird.png", "image/png", bird);
+        var saved = fixture.service.archiveConversationAsset(OWNER_A, source);
+        var replay = fixture.service.archiveConversationAsset(OWNER_A, source);
+        assertEquals(saved.operation().operationId(), replay.operation().operationId());
+        assertEquals(saved.file().fileId(), replay.file().fileId());
+        assertEquals("AGENT_DELIVERY", saved.file().originKind());
+        assertEquals("COMMITTED", fixture.service.operation(OWNER_A, saved.operation().operationId()).state());
+        assertArrayEquals(bird, fixture.service.readContent(OWNER_A, saved.file().fileId(), 1).bytes());
+        assertEquals(1, fixture.storage.storeCount, "replaying an archive cannot create a second file");
+        assertReason(PersonalWorkspaceException.Reason.NOT_FOUND,
+                () -> fixture.service.operation(OWNER_B, saved.operation().operationId()));
+        assertReason(PersonalWorkspaceException.Reason.NOT_FOUND,
+                () -> fixture.service.readContent(OWNER_A_OTHER_CLIENT, saved.file().fileId(), 1));
+        assertReason(PersonalWorkspaceException.Reason.IDEMPOTENCY_CONFLICT,
+                () -> fixture.service.archiveConversationAsset(OWNER_A,
+                        new PersonalWorkspaceService.ConversationArchiveCommand(
+                                source.idempotency(), source.assetId(), 2, source.sha256(),
+                                source.displayName(), source.filename(), source.contentMimeType(), bird)));
+        assertReason(PersonalWorkspaceException.Reason.BAD_REQUEST,
+                () -> fixture.service.archiveConversationAsset(OWNER_A,
+                        new PersonalWorkspaceService.ConversationArchiveCommand(
+                                new PersonalWorkspaceService.Idempotency("save-bird-bad"), "asset_bird", 1,
+                                "0".repeat(64), "bird", "bird.png", "image/png", bird)));
+        assertEquals(1, fixture.storage.storeCount, "invalid source cannot write into private storage");
+    }
+
+    @Test
+    void conversationTextArchivePersistsExactUtf8TextPlainAndScopesReplay() {
+        Fixture fixture = new Fixture();
+        byte[] bird = bytes("画一只鸟");
+        var command = new PersonalWorkspaceService.ConversationTextArchiveCommand(
+                new PersonalWorkspaceService.Idempotency("save-bird-text"), "a".repeat(64),
+                sha256(bird), "画一只鸟", "conversation-text-1675335-0-4.txt", bird);
+        var saved = fixture.service.archiveConversationText(OWNER_A, command);
+        var replay = fixture.service.archiveConversationText(OWNER_A, command);
+
+        assertEquals(saved.operation().operationId(), replay.operation().operationId());
+        assertEquals(saved.file().fileId(), replay.file().fileId());
+        assertEquals("TEXT", saved.file().mediaFamily());
+        assertEquals("text/plain", saved.version().contentMimeType());
+        assertEquals("AGENT_DELIVERY", saved.file().originKind());
+        assertArrayEquals(bird,
+                fixture.service.readContent(OWNER_A, saved.file().fileId(), 1).bytes());
+        assertEquals(1, fixture.storage.storeCount);
+        assertReason(PersonalWorkspaceException.Reason.NOT_FOUND,
+                () -> fixture.service.readContent(OWNER_B, saved.file().fileId(), 1));
+        assertReason(PersonalWorkspaceException.Reason.IDEMPOTENCY_CONFLICT,
+                () -> fixture.service.archiveConversationText(OWNER_A,
+                        new PersonalWorkspaceService.ConversationTextArchiveCommand(
+                                command.idempotency(), "b".repeat(64), command.sha256(),
+                                command.displayName(), command.filename(), bird)));
+        assertEquals(1, fixture.storage.storeCount);
+    }
+
+    @Test
+    void conversationTextArchiveRejectsMalformedUtf8AndWrongHashBeforeStorage() {
+        Fixture fixture = new Fixture();
+        byte[] malformed = {(byte) 0xc3, 0x28};
+        assertReason(PersonalWorkspaceException.Reason.BAD_REQUEST,
+                () -> fixture.service.archiveConversationText(OWNER_A,
+                        new PersonalWorkspaceService.ConversationTextArchiveCommand(
+                                new PersonalWorkspaceService.Idempotency("save-malformed-text"),
+                                "a".repeat(64), sha256(malformed), "bad", "bad.txt", malformed)));
+        byte[] bird = bytes("画一只鸟");
+        assertReason(PersonalWorkspaceException.Reason.BAD_REQUEST,
+                () -> fixture.service.archiveConversationText(OWNER_A,
+                        new PersonalWorkspaceService.ConversationTextArchiveCommand(
+                                new PersonalWorkspaceService.Idempotency("save-wrong-hash"),
+                                "a".repeat(64), "0".repeat(64), "bird", "bird.txt", bird)));
+        assertEquals(0, fixture.storage.storeCount);
+    }
+
+    @Test
+    void ownerCanArchiveAndPreviewConfiguredAudioAndRasterConversationAssets() {
+        Fixture fixture = new Fixture();
+        Map<String, String> formats = Map.of(
+                "audio/mpeg", "mp3", "audio/ogg", "ogg", "audio/wav", "wav",
+                "audio/mp4", "m4a", "audio/webm", "webm", "image/webp", "webp",
+                "image/gif", "gif");
+        int index = 0;
+        for (var format : formats.entrySet()) {
+            String assetId = "asset_media_" + (++index);
+            byte[] content = bytes("isolated preview fixture " + format.getKey());
+            String filename = "deliverable." + format.getValue();
+            var command = new PersonalWorkspaceService.ConversationArchiveCommand(
+                    new PersonalWorkspaceService.Idempotency("save-media-" + index), assetId, 1,
+                    sha256(content), "deliverable", filename, format.getKey(), content);
+            var saved = fixture.service.archiveConversationAsset(OWNER_A, command);
+            assertEquals("AGENT_DELIVERY", saved.file().originKind());
+            assertEquals(format.getKey().startsWith("audio/") ? "AUDIO" : "IMAGE", saved.file().mediaFamily());
+            assertEquals("AVAILABLE", saved.file().capabilities().preview());
+            assertEquals("READY", saved.version().previewState());
+            var preview = fixture.service.preview(OWNER_A, saved.file().fileId(), 1);
+            assertEquals("READY", preview.state());
+            assertEquals(format.getKey(), preview.parts().getFirst().contentMimeType());
+            assertArrayEquals(content, fixture.service.readPreviewPart(OWNER_A, saved.file().fileId(), 1,
+                    PersonalWorkspacePreviewRenderer.CONTENT_PART_ID).bytes());
+            assertArrayEquals(content, fixture.service.readContent(OWNER_A, saved.file().fileId(), 1).bytes());
+            assertReason(PersonalWorkspaceException.Reason.NOT_FOUND,
+                    () -> fixture.service.readPreviewPart(OWNER_B, saved.file().fileId(), 1,
+                            PersonalWorkspacePreviewRenderer.CONTENT_PART_ID));
+            assertEquals(saved.file().fileId(), fixture.service.archiveConversationAsset(OWNER_A, command).file().fileId());
+        }
+        assertEquals(7, fixture.storage.storeCount, "archive replay must not allocate another file");
+        assertEquals(5, fixture.service.list(OWNER_A,
+                new PersonalWorkspaceService.ListQuery(null, "AUDIO", null, null)).items().size());
+        assertReason(PersonalWorkspaceException.Reason.UNSUPPORTED,
+                () -> fixture.service.archiveConversationAsset(OWNER_A,
+                        new PersonalWorkspaceService.ConversationArchiveCommand(
+                                new PersonalWorkspaceService.Idempotency("save-media-mismatch"), "asset_bad", 1,
+                                sha256(bytes("unsafe")), "unsafe", "unsafe.html", "audio/mpeg", bytes("unsafe"))));
+        assertEquals(7, fixture.storage.storeCount, "mismatched extension must not reach storage");
+    }
+
+    @Test
     void multipartPreviewKeepsContentCompatibilityAndChecksAclBeforeExactPartLookup() throws Exception {
         Fixture fixture = new Fixture();
         byte[] workbook = xlsxWithTwoSheetsAndFormula();

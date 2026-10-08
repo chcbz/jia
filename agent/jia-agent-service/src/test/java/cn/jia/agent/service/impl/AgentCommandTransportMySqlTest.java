@@ -45,7 +45,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** D02 transaction, failure, idempotency, and lock-order evidence on isolated MySQL 8.0.21. */
 @EnabledIfEnvironmentVariable(named = "D02_MYSQL_URL", matches = ".+")
 class AgentCommandTransportMySqlTest {
-    private static final String TENANT = "tenant-a";
+    private static final String OWNER = "owner-a";
+    private static final String TENANT = "0";
     private static final String CLIENT = "client-a";
     private static final String TASK = "task-1";
     private static final String TARGET = "agent-1";
@@ -87,6 +88,9 @@ class AgentCommandTransportMySqlTest {
         jdbc = new JdbcTemplate(source);
         executeResource("d02/task-domain-fixture.sql");
         executeResource("db/task-event-schema.sql");
+        // Minimal isolated fixture: owner columns from single-tenant-task-owner-ddl.sql.
+        jdbc.execute("ALTER TABLE agent_task_meta ADD COLUMN owner_jiacn VARCHAR(50) NULL");
+        jdbc.execute("ALTER TABLE agent_task_event ADD COLUMN owner_jiacn VARCHAR(50) NULL");
         new AgentCommandTransportSchemaInitializer(jdbc).afterPropertiesSet();
 
         MybatisConfiguration configuration = new MybatisConfiguration();
@@ -245,9 +249,11 @@ class AgentCommandTransportMySqlTest {
     private String lockTaskRoot() {
         return jdbc.queryForObject("""
                 SELECT reward_status FROM agent_task_meta
-                WHERE tenant_id=? AND client_id=? AND task_id=?
+                WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND task_id=?
+                  AND CAST(owner_jiacn AS BINARY)=CAST(? AS BINARY)
+                  AND OCTET_LENGTH(owner_jiacn)=OCTET_LENGTH(?)
                 FOR UPDATE
-                """, String.class, TENANT, CLIENT, TASK);
+                """, String.class, TENANT, CLIENT, OWNER, TASK, OWNER, OWNER);
     }
 
     private void mutateDomainAndAppendRealEvent() {
@@ -256,17 +262,19 @@ class AgentCommandTransportMySqlTest {
                 SET reward_status='assigned', assigned_agent_id=?, assigned_at=?,
                     task_version=task_version+1, current_event_version=current_event_version+1,
                     update_time=?
-                WHERE tenant_id=? AND client_id=? AND task_id=? AND reward_status='open'
-                """, TARGET, OCCURRED_AT, OCCURRED_AT, TENANT, CLIENT, TASK));
+                WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND task_id=?
+                  AND CAST(owner_jiacn AS BINARY)=CAST(? AS BINARY)
+                  AND OCTET_LENGTH(owner_jiacn)=OCTET_LENGTH(?) AND reward_status='open'
+                """, TARGET, OCCURRED_AT, OCCURRED_AT, TENANT, CLIENT, OWNER, TASK, OWNER, OWNER));
         assertEquals(1, jdbc.update("""
                 INSERT INTO agent_task_event(
                     task_id,event_version,event_id,event_type,actor_type,actor_id,
                     aggregate_type,aggregate_id,event_json,occurred_at,
-                    tenant_id,client_id,create_time,update_time)
+                    tenant_id,client_id,owner_jiacn,create_time,update_time)
                 VALUES (?,1,?,'TASK_ASSIGNED','agent',?,'task',?,
-                    '{"targetAgentIds":["agent-1"]}',?,?,?,?,?)
+                    '{"targetAgentIds":["agent-1"]}',?,?,?,?,?,?)
                 """, TASK, EVENT, TARGET, TASK, OCCURRED_AT,
-                TENANT, CLIENT, OCCURRED_AT, OCCURRED_AT));
+                TENANT, CLIENT, OWNER, OCCURRED_AT, OCCURRED_AT));
     }
 
     private void insertOpenTask() {
@@ -274,9 +282,9 @@ class AgentCommandTransportMySqlTest {
                 INSERT INTO agent_task_meta(
                     task_id,reward_status,collaboration_mode,risk_level,max_agents,
                     review_required,task_version,current_event_version,
-                    tenant_id,client_id,create_time,update_time)
-                VALUES (?,'open','single','low',1,0,0,0,?,?,?,?)
-                """, TASK, TENANT, CLIENT, OCCURRED_AT - 1, OCCURRED_AT - 1));
+                    tenant_id,client_id,owner_jiacn,create_time,update_time)
+                VALUES (?,'open','single','low',1,0,0,0,?,?,?,?,?)
+                """, TASK, TENANT, CLIENT, OWNER, OCCURRED_AT - 1, OCCURRED_AT - 1));
     }
 
     private void failBeforeInsert(String trigger, String table, String message) {
@@ -296,6 +304,10 @@ class AgentCommandTransportMySqlTest {
         assertEquals(1, count("agent_task_meta"));
         assertEquals(1, count("agent_task_event"));
         assertEquals(1, count("agent_command_delivery"));
+        for (String table : List.of("agent_task_meta", "agent_task_event", "agent_command_delivery")) {
+            assertEquals(OWNER, jdbc.queryForObject(
+                    "SELECT owner_jiacn FROM " + table, String.class));
+        }
         assertEquals(1, count("agent_outbox_event"));
         assertEquals(0, count("agent_consumer_inbox"));
     }
@@ -320,10 +332,10 @@ class AgentCommandTransportMySqlTest {
 
     private AgentCommandDraft draft(String title) {
         String commandId = AgentCommandCanonicalCodec.taskInviteCommandId(
-                TENANT, CLIENT, TASK, TARGET);
+                TENANT, CLIENT, OWNER, TASK, TARGET);
         return new AgentCommandDraft(
                 AgentCommandCanonicalCodec.SCHEMA_VERSION, commandId, TASK, EVENT,
-                TENANT, CLIENT, TASK, null, TARGET,
+                TENANT, CLIENT, OWNER, TASK, null, TARGET,
                 AgentProtocolConstants.COMMAND_TASK_INVITE,
                 OCCURRED_AT, OCCURRED_AT + AgentCommandCanonicalCodec.TASK_INVITE_TTL_MILLIS,
                 new AgentTaskInvitePayload(

@@ -12,9 +12,11 @@ import java.util.Set;
 /** Fail-fast trust-boundary validation for any attempted voice activation. */
 public final class VoiceActivationConfigurationValidator {
     public static final String PROVIDER = "openai-compatible";
+    public static final String REALTIME_PROVIDER = "cliproxy-realtime";
     public static final String OPENAI_BASE_URL = "https://api.openai.com/v1";
     public static final String TRANSCRIPTION_MODEL = "whisper-1";
     public static final String SYNTHESIS_MODEL = "gpt-4o-mini-tts";
+    public static final String REALTIME_MODEL = "gpt-realtime";
     public static final String SYNTHESIS_VOICE = "alloy";
     private static final int MIN_HMAC_BYTES = 32;
     private static final int AES_256_BYTES = 32;
@@ -33,14 +35,24 @@ public final class VoiceActivationConfigurationValidator {
         VoiceSpeechProperties.Transcription transcription = properties.getTranscription();
         VoiceSpeechProperties.Synthesis synthesis = properties.getSynthesis();
 
-        requireExact(failures, "transcription.provider", transcription.getProvider(), PROVIDER);
-        requireExact(failures, "transcription.model", transcription.getModel(), TRANSCRIPTION_MODEL);
+        validateProviderModel(failures, "transcription",
+                transcription.getProvider(), transcription.getModel());
         validateConnection(failures, "transcription", openAi == null ? null : openAi.transcription(),
                 properties.getCompatibilityGatewayAllowlist());
 
-        requireExact(failures, "synthesis.provider", synthesis.getProvider(), PROVIDER);
-        requireExact(failures, "synthesis.model", synthesis.getModel(), SYNTHESIS_MODEL);
-        requireExact(failures, "synthesis.provider-voice", synthesis.getProviderVoice(), SYNTHESIS_VOICE);
+        validateProviderModel(failures, "synthesis",
+                synthesis.getProvider(), synthesis.getModel());
+        if (!java.util.Objects.equals(
+                transcription.getProvider(), synthesis.getProvider())) {
+            failures.add("transcription.provider and synthesis.provider must match");
+        }
+        requireExact(failures, "synthesis.provider-voice",
+                synthesis.getProviderVoice(), SYNTHESIS_VOICE);
+        Set<String> requiredFormats = REALTIME_PROVIDER.equals(synthesis.getProvider())
+                ? Set.of("wav") : Set.of("mp3");
+        if (synthesis.getFormats() == null || !requiredFormats.equals(synthesis.getFormats())) {
+            failures.add("synthesis.formats must equal " + requiredFormats);
+        }
         validateConnection(failures, "synthesis", openAi == null ? null : openAi.synthesis(),
                 properties.getCompatibilityGatewayAllowlist());
 
@@ -86,6 +98,21 @@ public final class VoiceActivationConfigurationValidator {
         } catch (IllegalArgumentException exception) {
             return null;
         }
+    }
+
+
+    private static void validateProviderModel(
+            List<String> failures, String name, String provider, String model) {
+        if (PROVIDER.equals(provider)) {
+            requireExact(failures, name + ".model", model,
+                    "transcription".equals(name) ? TRANSCRIPTION_MODEL : SYNTHESIS_MODEL);
+            return;
+        }
+        if (REALTIME_PROVIDER.equals(provider)) {
+            requireExact(failures, name + ".model", model, REALTIME_MODEL);
+            return;
+        }
+        failures.add(name + ".provider must equal " + PROVIDER + " or " + REALTIME_PROVIDER);
     }
 
     private static void validateConnection(

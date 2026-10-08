@@ -33,13 +33,17 @@ public final class VoiceAudioUploadFactory {
     }
 
     public VoiceAudioUpload create(MultipartFile file, String requestId) {
+        return create(file, requestId, "openai-compatible");
+    }
+
+    public VoiceAudioUpload create(MultipartFile file, String requestId, String providerAlias) {
         if (file == null || file.isEmpty()) {
             throw VoiceException.of(VoiceErrorCode.INVALID_AUDIO, requestId);
         }
         if (file.getSize() > MAX_AUDIO_BYTES) {
             throw VoiceException.of(VoiceErrorCode.TOO_LARGE, requestId);
         }
-        String mediaType = canonicalMediaType(file.getContentType(), requestId);
+        String mediaType = canonicalMediaType(file.getContentType(), providerAlias, requestId);
         FileChannel channel = null;
         try {
             channel = unlinkedFileCreator.create();
@@ -57,10 +61,25 @@ public final class VoiceAudioUploadFactory {
     }
 
     static String canonicalMediaType(String declared, String requestId) {
-        if (declared == null) {
+        return canonicalMediaType(declared, "openai-compatible", requestId);
+    }
+
+    static String canonicalMediaType(
+            String declared, String providerAlias, String requestId) {
+        if (declared == null || providerAlias == null) {
             throw VoiceException.of(VoiceErrorCode.UNSUPPORTED_MEDIA, requestId);
         }
-        String[] parts = declared.toLowerCase(Locale.ROOT).split(";", -1);
+        String normalized = declared.toLowerCase(Locale.ROOT).strip();
+        if ("cliproxy-realtime".equals(providerAlias)) {
+            if (!Pcm16Wav.MEDIA_TYPE.equals(normalized)) {
+                throw VoiceException.of(VoiceErrorCode.UNSUPPORTED_MEDIA, requestId);
+            }
+            return Pcm16Wav.MEDIA_TYPE;
+        }
+        if (!"openai-compatible".equals(providerAlias)) {
+            throw VoiceException.of(VoiceErrorCode.UNSUPPORTED_MEDIA, requestId);
+        }
+        String[] parts = normalized.split(";", -1);
         String base = parts[0].strip();
         if (!base.equals("audio/webm") || parts.length != 2) {
             throw VoiceException.of(VoiceErrorCode.UNSUPPORTED_MEDIA, requestId);

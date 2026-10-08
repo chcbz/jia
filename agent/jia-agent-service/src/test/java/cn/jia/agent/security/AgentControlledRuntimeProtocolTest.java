@@ -97,6 +97,28 @@ class AgentControlledRuntimeProtocolTest {
                         ArchiveAgentExecutionPort.REQUIRED_PROTOCOL)));
     }
 
+    @Test void identityReadinessProjectionDoesNotExposeLifecycleDetailsToNativeAuthentication() {
+        var suspended = new cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException(
+                cn.jia.agent.common.AgentErrorConstants.AGENT_FORBIDDEN, "binding suspended");
+        var invariant = new IllegalStateException("identity invariant failed");
+        for (RuntimeException failure : List.of(suspended, invariant)) {
+            doThrow(failure).when(identities)
+                    .requireActiveIdentityForBinding("0", "client-a", "owner-a", 17L, AGENT);
+            var denied = assertThrows(IllegalArgumentException.class,
+                    () -> auth.authenticate(AGENT, "runtime-a", TOKEN));
+            assertEquals("AGENT_RUNTIME_UNAUTHENTICATED", denied.getMessage());
+            if (failure == suspended) {
+                assertEquals(AgentRuntimeAuthenticationService.ControlledReadinessState.BINDING_CHANGED,
+                        auth.inspectControlledTarget("0", "client-a", "owner-a", AGENT, 17,
+                                ArchiveAgentExecutionPort.REQUIRED_PROTOCOL).state());
+            } else {
+                assertSame(failure, assertThrows(IllegalStateException.class,
+                        () -> auth.inspectControlledTarget("0", "client-a", "owner-a", AGENT, 17,
+                                ArchiveAgentExecutionPort.REQUIRED_PROTOCOL)));
+            }
+        }
+    }
+
     @Test void exactControlledSessionProofRejectsSupersededSocket() {
         auth.registerCommandProtocols("socket-a",AGENT,List.of(PROTOCOL));
         assertEquals("runtime-a",auth.requireControlledSession("socket-a","0","client-a",

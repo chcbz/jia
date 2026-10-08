@@ -5,6 +5,138 @@ import java.util.List;
 /** Owner-scoped private file execution and narrow runtime bridge contract. */
 public interface PersonalWorkspaceExecutionService {
     ExecutionView create(OwnerScope scope, CreateCommand command, String idempotencyKey);
+    /** Trusted Agent/Chat application entry only: no browser-provided authority, no Provider invocation. */
+    ExecutionView createConversation(OwnerScope scope, ConversationCreate command);
+    /** Trusted Chat consumer obtains exact bytes only after owner/grant re-admission; not a public URL. */
+    ConversationOutput readConversationOutput(OwnerScope scope, String taskId, String runId, String outputId);
+    /** Committed conversation-only outputs whose bytes were checked under the same owner/grant fence. */
+    List<ConversationOutputInfo> listConversationOutputs(OwnerScope scope, String taskId, String runId);
+    /** Exact earlier result replaced by this edit, never an input/reference used for generation. */
+    record OutputReplacement(String requestId, String stepId, String outputId, String sha256) { }
+    record ConversationOutputInfo(String executionId, String outputId, String contentMimeType,
+            String sha256, long byteLength, OutputReplacement replaces) {
+        public ConversationOutputInfo(String executionId, String outputId, String contentMimeType,
+                String sha256, long byteLength) {
+            this(executionId, outputId, contentMimeType, sha256, byteLength, null);
+        }
+    }
+    /** Native runtime inbox; intentionally separate from legacy unfenced commands. */
+    List<ConversationRuntimeCommand> runtimeConversationCommands(RuntimeScope scope, int limit);
+    List<? extends ConversationCommandView> runtimeConversationCommandViews(RuntimeScope scope,int limit);
+    sealed interface ConversationCommandView permits ConversationRuntimeCommand,ControlledConversationRuntimeCommand,ControlledConversationRuntimeCommandV3 { }
+    record ConversationRuntimeCommand(int schemaVersion, String taskId, String runId,
+            String conversationId, String commandId, String messageId, String instruction,
+            String outputContentMimeType, String outputId) implements ConversationCommandView { }
+    record ProviderExecution(String providerLane,String consentId,String bindingId,String bindingEpoch,
+            String modelId,int maxInputItems,int maxOutboundRequestAttempts,int precallFenceVersion) { }
+    record ControlledConversationRuntimeCommand(int schemaVersion,String taskId,String runId,
+            String conversationId,String commandId,String messageId,String instruction,
+            String outputContentMimeType,String outputId,ProviderExecution providerExecution)
+            implements ConversationCommandView { }
+    record ControlledConversationRuntimeCommandV3(int schemaVersion,String executionId,String taskId,
+            String runId,String conversationId,String commandId,String messageId,String operation,
+            String instruction,String inputSnapshotDigest,String outputContentMimeType,String outputId,
+            ProviderExecution providerExecution) implements ConversationCommandView { }
+    record ControlledProviderStart(int schemaVersion,String commandId,String messageId,String executionId,
+            ProviderExecution providerExecution,ConversationFence fence) { }
+    record ControlledProviderStartReceipt(int schemaVersion,boolean started,String taskId,String runId,
+            String executionId,String commandId,String messageId,ProviderExecution providerExecution,
+            long leaseVersion) { }
+    record ControlledProviderStartV3(int schemaVersion,String commandId,String messageId,
+            String executionId,String operation,String inputSnapshotDigest,
+            ProviderExecution providerExecution,ConversationFence fence) { }
+    record ControlledProviderStartReceiptV3(int schemaVersion,boolean started,String taskId,String runId,
+            String conversationId,String executionId,String commandId,String messageId,String operation,
+            String inputSnapshotDigest,ProviderExecution providerExecution,long leaseVersion) { }
+    /** Trusted native runtime only; lease token is never sent to browsers or legacy inbox. */
+    ConversationLease claimConversationStart(RuntimeScope scope, String taskId, String runId,
+            String commandId, String messageId);
+    ConversationLease renewConversationLease(RuntimeScope scope, String taskId, String runId, ConversationFence fence);
+    /** Irreversible one-shot Provider admission; an uncertain result must be reconciled, not re-generated. */
+    void beginConversationProviderStart(RuntimeScope scope, String taskId, String runId, ConversationFence fence);
+    ControlledProviderStartReceipt beginControlledConversationProviderStart(RuntimeScope scope,
+            String taskId,String runId,ControlledProviderStart command);
+    List<ControlledConversationRuntimeCommandV3> runtimeControlledImageV3Commands(RuntimeScope scope,int limit);
+    ControlledProviderStartReceiptV3 beginControlledConversationProviderStartV3(RuntimeScope scope,
+            String taskId,String runId,ControlledProviderStartV3 command);
+    /** Server-verified source manifest under live task/grant and exact lease. No legacy /inputs fallback. */
+    ConversationInputSnapshot conversationInputs(RuntimeScope scope, String taskId, String runId, ConversationFence fence);
+    /** Runtime byte read; exact input ref must belong to this fenced execution and grant. */
+    RuntimeContent conversationInputContent(RuntimeScope scope, String taskId, String runId,
+            ConversationFence fence, String inputRef);
+    record ConversationInputSnapshot(String executionId, long leaseVersion, boolean noReferencedMaterials,
+            List<RuntimeInput> inputs) {
+        public ConversationInputSnapshot { inputs = List.copyOf(inputs); }
+    }
+    record ConversationInputSnapshotV3(int schemaVersion,String executionId,long leaseVersion,
+            String operation,String inputSnapshotDigest,boolean noReferencedMaterials,
+            List<RuntimeInputV3> inputs) { public ConversationInputSnapshotV3 { inputs=List.copyOf(inputs); } }
+    record RuntimeInputV3(String inputRef,RuntimeSource source,String contentMimeType,
+            String byteLength,String sha256) { }
+    // Each source kind has an exact wire field set; absent union arms must not become JSON nulls.
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    record RuntimeSource(String kind,String fileId,String version,String purpose,String conversationId,
+            String conversationGeneration,String assetId,String assetRevision,String producerRequestId,
+            String producerStepId,String producerExecutionId,String producerRunId,String producerOutputId) { }
+    ConversationInputSnapshotV3 conversationInputsV3(RuntimeScope scope,String taskId,String runId,ConversationFence fence);
+    StagedOutput stageConversationOutput(RuntimeScope scope, String taskId, String runId, ConversationFence fence,
+            String outputId, String filename, String contentMimeType, byte[] content);
+    CommitView commitConversationOutput(RuntimeScope scope, String taskId, String runId, ConversationFence fence,
+            String manifestId, List<OutputDeclaration> outputs);
+    /** Result-only reconciliation of already staged bytes. Never issues a lease or starts a Provider. */
+    CommitView recoverStagedConversationOutput(RuntimeScope scope, String taskId, String runId,
+            String manifestId, ConversationResultRecovery command);
+    /** Recover locally retained bytes under the original consumed START; never renews a lease. */
+    CommitView recoverConversationOutput(RuntimeScope scope, String taskId, String runId,
+            String manifestId, ConversationResultRecovery command, String filename,
+            String contentMimeType, byte[] content);
+    record ConversationResultRecovery(String executionId, String commandId, String messageId,
+            String inputSnapshotDigest, List<OutputDeclaration> outputs) { }
+    ExecutionView failConversation(RuntimeScope scope, String taskId, String runId, ConversationFence fence,
+            String code);
+    /** Never put these values in a browser response, ordinary queue payload or logs. */
+    record ConversationFence(long version, String token) { }
+    record ConversationLease(String executionId, long version, String token, long expiresAt) {
+        public ConversationFence fence() { return new ConversationFence(version, token); }
+    }
+    /** Trusted coordinator's expected material list, checked byte-for-byte against the grant. */
+    record ReferenceSelection(String fileId, int version, String purpose, String contentMimeType,
+            long byteLength, String contentHash) { }
+    record ConversationCreate(String conversationId, String taskId, String targetAgentId,
+            String intentId, String grantId, long grantVersion, long assignmentRevision,
+            String permittedOperation, String instruction, String outputContentMimeType,
+            List<ReferenceSelection> references, boolean controlledImage,
+            int controlledImageProtocolVersion) {
+        public ConversationCreate { references = List.copyOf(references); }
+        /** Legacy constructor preserves protocol-v2 behavior byte-for-byte. */
+        public ConversationCreate(String conversationId,String taskId,String targetAgentId,String intentId,
+                String grantId,long grantVersion,long assignmentRevision,String permittedOperation,
+                String instruction,String outputContentMimeType,List<ReferenceSelection> references,
+                boolean controlledImage) {
+            this(conversationId,taskId,targetAgentId,intentId,grantId,grantVersion,assignmentRevision,
+                    permittedOperation,instruction,outputContentMimeType,references,controlledImage,
+                    controlledImage?2:1);
+        }
+        public ConversationCreate(String conversationId,String taskId,String targetAgentId,String intentId,
+                String grantId,long grantVersion,long assignmentRevision,String permittedOperation,
+                String instruction,String outputContentMimeType,List<ReferenceSelection> references) {
+            this(conversationId,taskId,targetAgentId,intentId,grantId,grantVersion,assignmentRevision,
+                    permittedOperation,instruction,outputContentMimeType,references,false,1);
+        }
+        public ConversationCreate(String conversationId, String taskId, String targetAgentId,
+                String intentId, String grantId, long grantVersion, long assignmentRevision,
+                String permittedOperation, String instruction, String outputContentMimeType) {
+            this(conversationId, taskId, targetAgentId, intentId, grantId, grantVersion,
+                    assignmentRevision, permittedOperation, instruction, outputContentMimeType,
+                    List.of(),false,1);
+        }
+    }
+    record ConversationOutput(String executionId, String outputId, String originalFilename,
+            String contentMimeType, String sha256, long byteLength, byte[] bytes) {
+        public ConversationOutput { bytes = bytes == null ? null : bytes.clone(); }
+        @Override public byte[] bytes() { return bytes == null ? null : bytes.clone(); }
+    }
+
     /**
      * Browser-safe MIME matrix. Output formats remain explicitly enabled by the execution
      * allow-list; input formats describe only fixed-version materials the bridge can expose to an
@@ -95,7 +227,8 @@ public interface PersonalWorkspaceExecutionService {
     }
     record StagedOutput(String outputId, String sha256, long byteLength, String state) { }
     record OutputDeclaration(String outputId, String sha256, long byteLength) { }
-    record CommitItem(String outputId, String fileId, int fileVersion, String sha256,
+    /** File reference is absent for CONVERSATION output; version must not unbox null. */
+    record CommitItem(String outputId, String fileId, Integer fileVersion, String sha256,
                       String contentMimeType, long byteLength) { }
     record CommitView(String manifestId, String state, List<CommitItem> items) { }
 

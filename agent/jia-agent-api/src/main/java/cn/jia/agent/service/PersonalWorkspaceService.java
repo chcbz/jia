@@ -17,6 +17,13 @@ public interface PersonalWorkspaceService {
     FileDetailView get(Scope scope, String fileId);
     List<VersionView> versions(Scope scope, String fileId);
     UploadView create(Scope scope, UploadCommand command);
+    /** Trusted server-side archive of an already authorized, immutable conversation asset.
+     * Callers must verify the source's owner/conversation and committed bytes before invoking.
+     * This is not a browser upload endpoint and cannot grant access to the source asset.
+     */
+    UploadView archiveConversationAsset(Scope scope, ConversationArchiveCommand command);
+    /** Trusted server-side archive of an immutable persisted Chat text selection. */
+    UploadView archiveConversationText(Scope scope, ConversationTextArchiveCommand command);
     UploadView appendVersion(Scope scope, String fileId, UploadCommand command, int expectedPreviousVersion);
     FileView rename(Scope scope, String fileId, String displayName, String ifMatch, Idempotency idempotency);
     FileView trash(Scope scope, String fileId, long impactRevision, boolean acknowledgeExistingReferences,
@@ -31,6 +38,16 @@ public interface PersonalWorkspaceService {
     record Scope(String tenantId, String clientId, String ownerJiacn) { }
     record ListQuery(String q, String mediaFamily, String state, String cursor) { }
     record Idempotency(String key) { }
+    record ConversationArchiveCommand(Idempotency idempotency, String assetId, long revision,
+            String sha256, String displayName, String filename, String contentMimeType, byte[] content) {
+        public ConversationArchiveCommand { content = content == null ? null : content.clone(); }
+        @Override public byte[] content() { return content == null ? null : content.clone(); }
+    }
+    record ConversationTextArchiveCommand(Idempotency idempotency, String sourceSnapshotKey,
+            String sha256, String displayName, String filename, byte[] content) {
+        public ConversationTextArchiveCommand { content = content == null ? null : content.clone(); }
+        @Override public byte[] content() { return content == null ? null : content.clone(); }
+    }
     record UploadCommand(Idempotency idempotency, String displayName, String originalFilename,
             String contentMimeType, byte[] content) {
         public UploadCommand { content = content == null ? null : content.clone(); }

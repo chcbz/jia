@@ -36,6 +36,20 @@ class ArchiveMaintenanceRuntimeAllowlistTest {
     }
 
     @Test
+    void mergedPlatformAndConversationRuntimeLanesRemainExactAlongsideArchive() {
+        assertTrue(allowed("GET", "/internal/agent/platform-skills/installations/psi-a/package"));
+        assertTrue(allowed("POST", "/internal/agent/platform-skills/installations/psi-a/result"));
+        assertTrue(allowed("GET", "/internal/agent/tasks/conversation-executions/commands"));
+        assertTrue(allowed("GET", "/internal/agent/tasks/conversation-executions/controlled-image-v3-commands"));
+        assertTrue(allowed("POST", "/internal/agent/tasks/task-a/runs/run-a/conversation/inputs-v3"));
+        assertTrue(allowed("POST", "/internal/agent/tasks/task-a/runs/run-a/conversation/provider-start-controlled-image-v3"));
+        assertFalse(allowed("POST", "/internal/agent/platform-skills/installations/psi-a/package"));
+        assertFalse(allowed("GET", "/internal/agent/tasks/task-a/runs/run-a/conversation/inputs-v3"));
+        assertFalse(allowed("POST", "/internal/agent/tasks/task-a/runs/run-a/conversation/inputs-v3/extra"));
+        assertFalse(allowed("GET", "/archive/admin/v1/collections/platform-classics/jobs"));
+    }
+
+    @Test
     void originAndDuplicateIdentityHeadersFailClosed() throws Exception {
         AgentRuntimeAuthenticationService service = mock(AgentRuntimeAuthenticationService.class);
         AgentRuntimeAuthenticationFilter filter = new AgentRuntimeAuthenticationFilter(service);

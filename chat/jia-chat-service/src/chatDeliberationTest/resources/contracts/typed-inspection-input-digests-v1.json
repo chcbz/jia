@@ -1,0 +1,138 @@
+{
+  "status": "DESIGN_VECTORS_NOT_NATIVE_MEDIA_EVIDENCE",
+  "schemaVersion": 1,
+  "authorizationId": "inspection_digest_fixture",
+  "manifestDigest": "sha256:bb191b08e95cbfa1949a45211cccc6cb81983eeebc5ff775f56138db7b30d487",
+  "vectors": [
+    {
+      "sourceContentUtf8Fixture": "bird\r\n",
+      "nativeText": "UNTRUSTED INSPECTION MATERIAL (source_0000000000000000000000000000000000000001):\nbird\r\n",
+      "contributionPreimage": {
+        "schemaVersion": 1,
+        "sourceRefId": "source_0000000000000000000000000000000000000001",
+        "sha256": "ba817b93308378bb2cb81298381c465ab05d5c7628dac2eb6ab5cb3e25f4de46",
+        "byteLength": "6",
+        "mimeType": "text/plain",
+        "carrier": "DIRECT_TEXT",
+        "carrierContractDigest": "sha256:555de9f5c38422fe114546b3fc048086f86777328a1753b67fb9041a187268a9",
+        "sourceByteDigest": "sha256:ba817b93308378bb2cb81298381c465ab05d5c7628dac2eb6ab5cb3e25f4de46",
+        "textDigest": "sha256:8b9662d67192d9d4590cdae17ec89bde9c3ca46bfa31defa084dffbcb4295691"
+      },
+      "canonicalContribution": "{\"byteLength\":\"6\",\"carrier\":\"DIRECT_TEXT\",\"carrierContractDigest\":\"sha256:555de9f5c38422fe114546b3fc048086f86777328a1753b67fb9041a187268a9\",\"mimeType\":\"text/plain\",\"schemaVersion\":1,\"sha256\":\"ba817b93308378bb2cb81298381c465ab05d5c7628dac2eb6ab5cb3e25f4de46\",\"sourceByteDigest\":\"sha256:ba817b93308378bb2cb81298381c465ab05d5c7628dac2eb6ab5cb3e25f4de46\",\"sourceRefId\":\"source_0000000000000000000000000000000000000001\",\"textDigest\":\"sha256:8b9662d67192d9d4590cdae17ec89bde9c3ca46bfa31defa084dffbcb4295691\"}",
+      "contributionDigest": "sha256:2323041a54d2ef81c5c752ba95be594c4ddd08855f2a18588bd30803ba0197f2",
+      "receiptSource": {
+        "sourceRefId": "source_0000000000000000000000000000000000000001",
+        "sha256": "ba817b93308378bb2cb81298381c465ab05d5c7628dac2eb6ab5cb3e25f4de46",
+        "byteLength": "6",
+        "carrier": "DIRECT_TEXT",
+        "contributionDigest": "sha256:2323041a54d2ef81c5c752ba95be594c4ddd08855f2a18588bd30803ba0197f2"
+      }
+    },
+    {
+      "sourceContentUtf8Fixture": "synthetic-not-real-image",
+      "contributionPreimage": {
+        "schemaVersion": 1,
+        "sourceRefId": "source_0000000000000000000000000000000000000002",
+        "sha256": "70ea031e967714eb7f1ba24dd5fcd7cc91850528a3cfdaf04a267da4b7407985",
+        "byteLength": "24",
+        "mimeType": "image/png",
+        "carrier": "LOCAL_IMAGE",
+        "carrierContractDigest": "sha256:fb699e707ec0bef6f874c285276f6cec324406f34a2a75620ba235cf36d0244e"
+      },
+      "canonicalContribution": "{\"byteLength\":\"24\",\"carrier\":\"LOCAL_IMAGE\",\"carrierContractDigest\":\"sha256:fb699e707ec0bef6f874c285276f6cec324406f34a2a75620ba235cf36d0244e\",\"mimeType\":\"image/png\",\"schemaVersion\":1,\"sha256\":\"70ea031e967714eb7f1ba24dd5fcd7cc91850528a3cfdaf04a267da4b7407985\",\"sourceRefId\":\"source_0000000000000000000000000000000000000002\"}",
+      "contributionDigest": "sha256:c73fe1f33355041ff2fba83b3734a426ef1bf85b4369747a03c56276c4873593",
+      "receiptSource": {
+        "sourceRefId": "source_0000000000000000000000000000000000000002",
+        "sha256": "70ea031e967714eb7f1ba24dd5fcd7cc91850528a3cfdaf04a267da4b7407985",
+        "byteLength": "24",
+        "carrier": "LOCAL_IMAGE",
+        "contributionDigest": "sha256:c73fe1f33355041ff2fba83b3734a426ef1bf85b4369747a03c56276c4873593"
+      }
+    },
+    {
+      "sourceContentUtf8Fixture": "synthetic-not-real-audio",
+      "contributionPreimage": {
+        "schemaVersion": 1,
+        "sourceRefId": "source_0000000000000000000000000000000000000003",
+        "sha256": "ffd1426f7ca484474ed07e8b9462c3f20b0fdb44815472debbc6406bd5ddaa21",
+        "byteLength": "24",
+        "mimeType": "audio/wav",
+        "carrier": "LOCAL_AUDIO",
+        "carrierContractDigest": "sha256:93452748dcf6eb00cb920e9497b8086c70f03f2427d3162ac0d75fec15b42b3d"
+      },
+      "canonicalContribution": "{\"byteLength\":\"24\",\"carrier\":\"LOCAL_AUDIO\",\"carrierContractDigest\":\"sha256:93452748dcf6eb00cb920e9497b8086c70f03f2427d3162ac0d75fec15b42b3d\",\"mimeType\":\"audio/wav\",\"schemaVersion\":1,\"sha256\":\"ffd1426f7ca484474ed07e8b9462c3f20b0fdb44815472debbc6406bd5ddaa21\",\"sourceRefId\":\"source_0000000000000000000000000000000000000003\"}",
+      "contributionDigest": "sha256:3ee9e70d42bd5209abfeffecce3ac4588991c6a2e33118d0f0d66f1629ba367b",
+      "receiptSource": {
+        "sourceRefId": "source_0000000000000000000000000000000000000003",
+        "sha256": "ffd1426f7ca484474ed07e8b9462c3f20b0fdb44815472debbc6406bd5ddaa21",
+        "byteLength": "24",
+        "carrier": "LOCAL_AUDIO",
+        "contributionDigest": "sha256:3ee9e70d42bd5209abfeffecce3ac4588991c6a2e33118d0f0d66f1629ba367b"
+      }
+    },
+    {
+      "sourceContentUtf8Fixture": "synthetic-not-real-pdf",
+      "nativeText": "UNTRUSTED INSPECTION MATERIAL (source_0000000000000000000000000000000000000004):\nparsed bird\n",
+      "extractedText": "parsed bird\n",
+      "contributionPreimage": {
+        "schemaVersion": 1,
+        "sourceRefId": "source_0000000000000000000000000000000000000004",
+        "sha256": "9a675e8257aac85bb10f73fa7e01b9141035863bfbfde040cac2b02e83e55c71",
+        "byteLength": "22",
+        "mimeType": "application/pdf",
+        "carrier": "PARSED_TEXT",
+        "carrierContractDigest": "sha256:c29292bbfc41c8a83e21c42dbd6a2fcaee1d30cc415adf7b87e5607d3e23d288",
+        "sourceByteDigest": "sha256:9a675e8257aac85bb10f73fa7e01b9141035863bfbfde040cac2b02e83e55c71",
+        "textDigest": "sha256:b4d08ff85dc003db90ee348678496792c0b00bff8dd7bb7780be7822a2e0f7e1",
+        "parserConfigDigest": "sha256:0c338cb5545c06bccadedb79e0050842851e15fa5471872a852ad5f94ef3d93c",
+        "extractedTextDigest": "sha256:a82008a82e6830105c8fa4cbc57fbda73441fa32e8c2c208d2ebd05d619b5393"
+      },
+      "canonicalContribution": "{\"byteLength\":\"22\",\"carrier\":\"PARSED_TEXT\",\"carrierContractDigest\":\"sha256:c29292bbfc41c8a83e21c42dbd6a2fcaee1d30cc415adf7b87e5607d3e23d288\",\"extractedTextDigest\":\"sha256:a82008a82e6830105c8fa4cbc57fbda73441fa32e8c2c208d2ebd05d619b5393\",\"mimeType\":\"application/pdf\",\"parserConfigDigest\":\"sha256:0c338cb5545c06bccadedb79e0050842851e15fa5471872a852ad5f94ef3d93c\",\"schemaVersion\":1,\"sha256\":\"9a675e8257aac85bb10f73fa7e01b9141035863bfbfde040cac2b02e83e55c71\",\"sourceByteDigest\":\"sha256:9a675e8257aac85bb10f73fa7e01b9141035863bfbfde040cac2b02e83e55c71\",\"sourceRefId\":\"source_0000000000000000000000000000000000000004\",\"textDigest\":\"sha256:b4d08ff85dc003db90ee348678496792c0b00bff8dd7bb7780be7822a2e0f7e1\"}",
+      "contributionDigest": "sha256:a1628740b6db50f08a88aeaf7931f304acfa0a03d812b9a9475875cb05908575",
+      "receiptSource": {
+        "sourceRefId": "source_0000000000000000000000000000000000000004",
+        "sha256": "9a675e8257aac85bb10f73fa7e01b9141035863bfbfde040cac2b02e83e55c71",
+        "byteLength": "22",
+        "carrier": "PARSED_TEXT",
+        "contributionDigest": "sha256:a1628740b6db50f08a88aeaf7931f304acfa0a03d812b9a9475875cb05908575"
+      }
+    }
+  ],
+  "inputPreimage": {
+    "schemaVersion": 1,
+    "authorizationId": "inspection_digest_fixture",
+    "manifestDigest": "sha256:bb191b08e95cbfa1949a45211cccc6cb81983eeebc5ff775f56138db7b30d487",
+    "sources": [
+      {
+        "sourceRefId": "source_0000000000000000000000000000000000000001",
+        "sha256": "ba817b93308378bb2cb81298381c465ab05d5c7628dac2eb6ab5cb3e25f4de46",
+        "byteLength": "6",
+        "carrier": "DIRECT_TEXT",
+        "contributionDigest": "sha256:2323041a54d2ef81c5c752ba95be594c4ddd08855f2a18588bd30803ba0197f2"
+      },
+      {
+        "sourceRefId": "source_0000000000000000000000000000000000000002",
+        "sha256": "70ea031e967714eb7f1ba24dd5fcd7cc91850528a3cfdaf04a267da4b7407985",
+        "byteLength": "24",
+        "carrier": "LOCAL_IMAGE",
+        "contributionDigest": "sha256:c73fe1f33355041ff2fba83b3734a426ef1bf85b4369747a03c56276c4873593"
+      },
+      {
+        "sourceRefId": "source_0000000000000000000000000000000000000003",
+        "sha256": "ffd1426f7ca484474ed07e8b9462c3f20b0fdb44815472debbc6406bd5ddaa21",
+        "byteLength": "24",
+        "carrier": "LOCAL_AUDIO",
+        "contributionDigest": "sha256:3ee9e70d42bd5209abfeffecce3ac4588991c6a2e33118d0f0d66f1629ba367b"
+      },
+      {
+        "sourceRefId": "source_0000000000000000000000000000000000000004",
+        "sha256": "9a675e8257aac85bb10f73fa7e01b9141035863bfbfde040cac2b02e83e55c71",
+        "byteLength": "22",
+        "carrier": "PARSED_TEXT",
+        "contributionDigest": "sha256:a1628740b6db50f08a88aeaf7931f304acfa0a03d812b9a9475875cb05908575"
+      }
+    ]
+  },
+  "canonicalInput": "{\"authorizationId\":\"inspection_digest_fixture\",\"manifestDigest\":\"sha256:bb191b08e95cbfa1949a45211cccc6cb81983eeebc5ff775f56138db7b30d487\",\"schemaVersion\":1,\"sources\":[{\"byteLength\":\"6\",\"carrier\":\"DIRECT_TEXT\",\"contributionDigest\":\"sha256:2323041a54d2ef81c5c752ba95be594c4ddd08855f2a18588bd30803ba0197f2\",\"sha256\":\"ba817b93308378bb2cb81298381c465ab05d5c7628dac2eb6ab5cb3e25f4de46\",\"sourceRefId\":\"source_0000000000000000000000000000000000000001\"},{\"byteLength\":\"24\",\"carrier\":\"LOCAL_IMAGE\",\"contributionDigest\":\"sha256:c73fe1f33355041ff2fba83b3734a426ef1bf85b4369747a03c56276c4873593\",\"sha256\":\"70ea031e967714eb7f1ba24dd5fcd7cc91850528a3cfdaf04a267da4b7407985\",\"sourceRefId\":\"source_0000000000000000000000000000000000000002\"},{\"byteLength\":\"24\",\"carrier\":\"LOCAL_AUDIO\",\"contributionDigest\":\"sha256:3ee9e70d42bd5209abfeffecce3ac4588991c6a2e33118d0f0d66f1629ba367b\",\"sha256\":\"ffd1426f7ca484474ed07e8b9462c3f20b0fdb44815472debbc6406bd5ddaa21\",\"sourceRefId\":\"source_0000000000000000000000000000000000000003\"},{\"byteLength\":\"22\",\"carrier\":\"PARSED_TEXT\",\"contributionDigest\":\"sha256:a1628740b6db50f08a88aeaf7931f304acfa0a03d812b9a9475875cb05908575\",\"sha256\":\"9a675e8257aac85bb10f73fa7e01b9141035863bfbfde040cac2b02e83e55c71\",\"sourceRefId\":\"source_0000000000000000000000000000000000000004\"}]}",
+  "inputDigest": "sha256:30cfa0774cf9ce83975ef46b1720639f04bc78c5b2458c7188b2ba3bde4c53b9"
+}

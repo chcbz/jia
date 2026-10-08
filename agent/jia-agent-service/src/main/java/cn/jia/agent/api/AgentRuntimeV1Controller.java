@@ -47,7 +47,7 @@ public class AgentRuntimeV1Controller {
             @PathVariable String installationId, Authentication authentication, HttpServletRequest servletRequest) {
         rejectLegacyApiKey(servletRequest);
         var scope = AgentController.requireJwtScope(authentication);
-        return ok(runtime.status(scope.tenantId(), scope.clientId(), installationId));
+        return ok(runtime.status(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), installationId));
     }
 
     @PostMapping("/installations/{installationId}/revoke")
@@ -55,7 +55,7 @@ public class AgentRuntimeV1Controller {
             Authentication authentication, HttpServletRequest servletRequest) {
         rejectLegacyApiKey(servletRequest);
         var scope = AgentController.requireJwtScope(authentication);
-        runtime.revoke(scope.tenantId(), scope.clientId(), installationId, now());
+        runtime.revoke(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), installationId, now());
         return ok(null);
     }
 

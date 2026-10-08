@@ -20,6 +20,7 @@ import cn.jia.chat.archive.service.ArchiveTransactions;
 import cn.jia.chat.archive.service.SpringArchiveTransactions;
 import cn.jia.chat.archive.store.JdbcArchiveContentStore;
 import cn.jia.chat.dao.AgentTaskThreadDao;
+import cn.jia.chat.deliberation.ChatBountyBindingStore;
 import cn.jia.chat.dao.ChatConversationDao;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.dao.impl.ChatConversationDaoImpl;
@@ -118,7 +119,8 @@ class ArchiveBusinessOutboxMySqlTest {
 
         broker = new ChatConversationEventBroker();
         conversationService = new ChatConversationServiceImpl(conversationDao, messageDao,
-                mock(AgentTaskThreadDao.class), broker);
+                mock(AgentTaskThreadDao.class), broker,
+                mock(ChatBountyBindingStore.class), mock(AgentService.class));
         builtin = new BuiltinHallAgentSupport(mock(AgentService.class));
         scopes = new JuyitingConversationScopeService(builtin, mock(AgentService.class));
         transactions = new SpringArchiveTransactions(new DataSourceTransactionManager(dataSource));

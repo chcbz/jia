@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "contract": "typed-deliberation-atomic-followup-v1",
+  "contractSha256": "cb1cafa7b96238a7fa2a3ff3a89d0eb639aee6aabdfa3c57d1c460f54d2cc3c5",
+  "featureDefault": "OFF",
+  "routes": {
+    "admit": "POST /chat/conversations/{conversationId}/interactions/discussion",
+    "read": "GET /chat/conversations/{conversationId}/requests/{requestId}/typed-outcome"
+  },
+  "atomicFinal": [
+    "assistantMessage",
+    "typedOutcome",
+    "pendingQuestionOrProposal",
+    "turnFinalCas",
+    "agentMessageEvent",
+    "finalPersistedOutbox",
+    "requestAggregate"
+  ],
+  "clarificationResume": [
+    "ordinaryChatRequestRevision1",
+    "pendingQuestionCasAnswered",
+    "typedQuestionAnsweredEvent",
+    "typedAdmissionReceipt"
+  ],
+  "authority": {
+    "proposalIsAuthority": false,
+    "createsGrant": false,
+    "createsExecutionStep": false,
+    "startsProvider": false
+  },
+  "schema": {
+    "version": 3,
+    "additiveTables": [
+      "chat_typed_outcome",
+      "chat_typed_pending_question",
+      "chat_typed_proposal",
+      "chat_typed_admission"
+    ],
+    "mysqlFixture": "NOT_RUN"
+  },
+  "normalGraph": {
+    "junit": "NOT_RUN",
+    "selectors": [
+      "cn.jia.chat.service.ChatTypedDeliberationServiceTest",
+      "cn.jia.chat.service.ChatTypedDeliberationSpringTransactionTest",
+      "cn.jia.chat.service.ChatTypedDiscussionAdmissionServiceTest",
+      "cn.jia.chat.service.ChatTypedDeliberationContextServiceTest",
+      "cn.jia.chat.api.ChatTypedDeliberationControllerTest",
+      "cn.jia.chat.config.ChatTypedDeliberationSchemaInitializerTest",
+      "cn.jia.chat.deliberation.ChatTypedDeliberationMySqlTest",
+      "cn.jia.chat.handler.TypedDeliberationDeclarationTest",
+      "cn.jia.chat.handler.TypedDeliberationSessionRegistryTest",
+      "cn.jia.chat.handler.AgentWebSocketTypedDeliberationTest",
+      "cn.jia.chat.service.ChatDeliberationServiceTest"
+    ]
+  },
+  "acceptance": "NOT_RUN"
+}

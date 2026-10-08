@@ -15,7 +15,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
-/** Bounded metadata-only WebM/Opus and MP4/AAC duration and codec inspector. */
+/** Bounded strict WAV/PCM plus legacy WebM/Opus and MP4/AAC duration inspector. */
 public final class AudioDurationInspector {
     public static final long MAX_DURATION_MS = 45_000;
     private static final long MAX_FRAGMENT_INITIALIZATION_DURATION_MS = 86_400_000;
@@ -89,6 +89,7 @@ public final class AudioDurationInspector {
             double durationMs = switch (mediaType) {
                 case "audio/webm", "audio/webm;codecs=opus" -> inspectWebm(channel, budget);
                 case "audio/mp4" -> inspectMp4(channel, budget);
+                case Pcm16Wav.MEDIA_TYPE -> Pcm16Wav.inspect(channel).durationMs();
                 default -> throw VoiceException.of(VoiceErrorCode.UNSUPPORTED_MEDIA, requestId);
             };
             if (!Double.isFinite(durationMs) || durationMs <= 0) {

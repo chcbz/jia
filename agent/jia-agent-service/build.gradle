@@ -445,6 +445,327 @@ tasks.register('managedHostingRegression', Test) {
     useJUnitPlatform()
 }
 
+// MMD-U1-AGENT-GRANT isolated authorization/ACL/idempotency/schema verification slice.
+def mmdU1GrantSourceSet = sourceSets.create('mmdU1Grant') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/service/impl/AgentTaskExecutionGrantServiceImplTest.java'
+        include 'cn/jia/agent/api/AgentTaskExecutionGrantControllerTest.java'
+        include 'cn/jia/agent/config/AgentTaskExecutionGrantSchemaContractTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(mmdU1GrantSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(mmdU1GrantSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('mmdU1Grant', Test) {
+    group = 'verification'
+    description = 'Runs MMD U1 task grant JWT, ACL, idempotency, revoke, admission and DDL tests.'
+    dependsOn tasks.named(mmdU1GrantSourceSet.classesTaskName)
+    testClassesDirs = mmdU1GrantSourceSet.output.classesDirs
+    classpath = mmdU1GrantSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
+
+
+// MMD-U1-BOOTSTRAP-OUTBOX isolated assignment/grant/bootstrap transaction and claim contract.
+def mmdU1BootstrapOutboxSourceSet = sourceSets.create('mmdU1BootstrapOutbox') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/service/impl/AgentTaskExecutionGrantServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/AgentTaskBountyBootstrapOutboxServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/AgentTaskRequirementSnapshotServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/AgentServiceTaskEventRealTransactionTest.java'
+        include 'cn/jia/agent/config/AgentTaskExecutionGrantSchemaContractTest.java'
+        include 'cn/jia/agent/config/AgentTaskBountyBootstrapOutboxSchemaContractTest.java'
+        include 'cn/jia/agent/config/AgentTaskRequirementSnapshotSchemaContractTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(mmdU1BootstrapOutboxSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(mmdU1BootstrapOutboxSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('mmdU1BootstrapOutbox', Test) {
+    group = 'verification'
+    description = 'Runs MMD U1 atomic bounty bootstrap outbox, owner claim/reconcile and DDL tests.'
+    dependsOn tasks.named(mmdU1BootstrapOutboxSourceSet.classesTaskName)
+    testClassesDirs = mmdU1BootstrapOutboxSourceSet.output.classesDirs
+    classpath = mmdU1BootstrapOutboxSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
+
+// U2 Agent-only no-Provider regression; keep legacy test source compilation isolated.
+def mmdU2ConversationOutputSourceSet = sourceSets.create('mmdU2ConversationOutput') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/service/impl/PersonalWorkspaceConversationExecutionTest.java'
+        include 'cn/jia/agent/security/AgentRuntimeSecurityIntegrationTest.java'
+        include 'cn/jia/agent/config/PersonalWorkspaceExecutionSchemaInitializerTest.java'
+        include 'cn/jia/agent/config/PersonalWorkspaceProviderStartMySqlTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(mmdU2ConversationOutputSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(mmdU2ConversationOutputSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('mmdU2ConversationOutput', Test) {
+    group = 'verification'
+    dependsOn tasks.named(mmdU2ConversationOutputSourceSet.classesTaskName)
+    testClassesDirs = mmdU2ConversationOutputSourceSet.output.classesDirs
+    classpath = mmdU2ConversationOutputSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
+
+// MMD-U3 selected-output finalization: no Provider, real lease/artifact/formal-decision chain.
+def mmdU3FinalizationSourceSet = sourceSets.create('mmdU3Finalization') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/service/impl/AgentSelectedOutputFinalizationServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/AgentTaskExecutionGrantServiceImplTest.java'
+        include 'cn/jia/agent/config/AgentSelectedOutputFinalizationSchemaInitializerTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(mmdU3FinalizationSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(mmdU3FinalizationSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('mmdU3Finalization', Test) {
+    group = 'verification'
+    description = 'Runs MMD U3 server-owned lease promotion, formal acceptance and private schema tests.'
+    dependsOn tasks.named(mmdU3FinalizationSourceSet.classesTaskName)
+    testClassesDirs = mmdU3FinalizationSourceSet.output.classesDirs
+    classpath = mmdU3FinalizationSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
+
+// MMD-U1-API-REFERENCE-INTAKE isolated raw-HTTP, ACL, transaction and additive-schema slice.
+def mmdU1ReferenceIntakeSourceSet = sourceSets.create('mmdU1ReferenceIntake') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/api/AgentTaskCreationOperationControllerTest.java'
+        include 'cn/jia/agent/service/impl/AgentTaskCreationOperationServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/AgentTaskCreationOperationRealTransactionTest.java'
+        include 'cn/jia/agent/service/impl/AgentTaskCreationOperationMySqlTest.java'
+        include 'cn/jia/agent/config/AgentTaskCreationOperationSchemaInitializerTest.java'
+        include 'cn/jia/agent/mapper/AgentTaskCreationOperationMapperContractTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(mmdU1ReferenceIntakeSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(mmdU1ReferenceIntakeSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('mmdU1ReferenceIntake', Test) {
+    maxParallelForks = 1
+    maxHeapSize = '384m'
+    jvmArgs '-XX:MaxMetaspaceSize=192m', '-Xss256k'
+    group = 'verification'
+    description = 'Runs MMD U1 atomic ordinary-task reference intake HTTP, ACL, rollback and schema tests.'
+    dependsOn tasks.named(mmdU1ReferenceIntakeSourceSet.classesTaskName)
+    testClassesDirs = mmdU1ReferenceIntakeSourceSet.output.classesDirs
+    classpath = mmdU1ReferenceIntakeSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
+
+// MMD-U1 controlled provider consent core; no grant paid wiring or Provider calls.
+def mmdU1ProviderConsentCoreSourceSet = sourceSets.create('mmdU1ProviderConsentCore') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/service/impl/AgentTaskProviderCostConsentServiceImplTest.java'
+        include 'cn/jia/agent/api/AgentTaskProviderCostConsentControllerTest.java'
+        include 'cn/jia/agent/config/AgentTaskProviderCostConsentSchemaInitializerTest.java'
+        include 'cn/jia/agent/service/impl/AgentTaskProviderCostConsentMySqlTest.java'
+        include 'cn/jia/agent/service/impl/AgentTaskExecutionGrantServiceImplTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+// The five bounded fixtures import only production code plus JUnit/Mockito/Spring test HTTP.
+// Do not inherit testImplementation: it pulls common:jia-common-test and its Testable annotation
+// processor into this source-only graph even though none of these fixtures imports that helper.
+configurations.named(mmdU1ProviderConsentCoreSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.implementation
+}
+configurations.named(mmdU1ProviderConsentCoreSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.runtimeOnly
+}
+dependencies {
+    add(mmdU1ProviderConsentCoreSourceSet.implementationConfigurationName,
+            platform("org.springframework.boot:spring-boot-dependencies:${libs.versions.spring.boot.asProvider().get()}"))
+    add(mmdU1ProviderConsentCoreSourceSet.implementationConfigurationName, libs.junit.jupiter)
+    add(mmdU1ProviderConsentCoreSourceSet.implementationConfigurationName, 'org.mockito:mockito-core')
+    add(mmdU1ProviderConsentCoreSourceSet.implementationConfigurationName, 'org.springframework:spring-test')
+    // MockMvc result matchers expose org.hamcrest.Matcher in their compile-time signatures.
+    add(mmdU1ProviderConsentCoreSourceSet.implementationConfigurationName, 'org.hamcrest:hamcrest')
+    add(mmdU1ProviderConsentCoreSourceSet.implementationConfigurationName,
+            'org.springframework.security:spring-security-oauth2-resource-server')
+    add(mmdU1ProviderConsentCoreSourceSet.implementationConfigurationName,
+            'org.springframework.security:spring-security-oauth2-jose')
+    add(mmdU1ProviderConsentCoreSourceSet.runtimeOnlyConfigurationName,
+            'org.junit.platform:junit-platform-launcher:6.0.1')
+    add(mmdU1ProviderConsentCoreSourceSet.runtimeOnlyConfigurationName, libs.mysql)
+    add(mmdU1ProviderConsentCoreSourceSet.runtimeOnlyConfigurationName, 'com.jayway.jsonpath:json-path')
+    add(mmdU1ProviderConsentCoreSourceSet.runtimeOnlyConfigurationName, 'com.h2database:h2')
+}
+tasks.register('mmdU1ProviderConsentCore', Test) {
+    maxParallelForks = 1
+    maxHeapSize = '256m'
+    jvmArgs '-XX:+UseSerialGC', '-XX:ActiveProcessorCount=2',
+            '-XX:MaxMetaspaceSize=192m', '-Xss256k'
+    group = 'verification'
+    description = 'Runs controlled provider binding policy, consent lifecycle, owner HTTP and additive DDL tests.'
+    dependsOn tasks.named(mmdU1ProviderConsentCoreSourceSet.classesTaskName)
+    testClassesDirs = mmdU1ProviderConsentCoreSourceSet.output.classesDirs
+    classpath = mmdU1ProviderConsentCoreSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
+
+// MMD-BRIDGE-A controlled assignment/reserve/START-v2; no Provider or production database.
+def mmdControlledImageBridgeSourceSet = sourceSets.create('mmdControlledImageBridge') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/service/impl/ControlledImageGrantAuthorityTest.java'
+        include 'cn/jia/agent/service/impl/ControlledImagePointAndStartServiceImplTest.java'
+        include 'cn/jia/agent/service/impl/ControlledImageConversationStartTest.java'
+        include 'cn/jia/agent/service/impl/ControlledImageBridgeAtomicitySpringTest.java'
+        include 'cn/jia/agent/service/impl/ControlledImageBridgeMySqlTest.java'
+        include 'cn/jia/agent/api/ControlledImagePointAndStartControllerTest.java'
+        include 'cn/jia/agent/config/ControlledImageBridgeSchemaInitializerTest.java'
+        include 'cn/jia/agent/security/AgentRuntimeSecurityIntegrationTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(mmdControlledImageBridgeSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.implementation
+}
+configurations.named(mmdControlledImageBridgeSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.runtimeOnly
+}
+dependencies {
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName,
+            platform("org.springframework.boot:spring-boot-dependencies:${libs.versions.spring.boot.asProvider().get()}"))
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName, libs.junit.jupiter)
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName, 'org.mockito:mockito-core')
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName, 'org.springframework:spring-test')
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName, 'org.hamcrest:hamcrest')
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName,
+            'org.springframework.security:spring-security-config')
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName,
+            'org.springframework.security:spring-security-web')
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName,
+            'org.springframework.security:spring-security-oauth2-resource-server')
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName,
+            'org.springframework.security:spring-security-oauth2-jose')
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName,
+            project(':oauth:jia-oauth-api'))
+    add(mmdControlledImageBridgeSourceSet.runtimeOnlyConfigurationName,
+            'org.junit.platform:junit-platform-launcher:6.0.1')
+    add(mmdControlledImageBridgeSourceSet.runtimeOnlyConfigurationName, libs.mysql)
+    add(mmdControlledImageBridgeSourceSet.runtimeOnlyConfigurationName, 'com.h2database:h2')
+    add(mmdControlledImageBridgeSourceSet.runtimeOnlyConfigurationName, 'com.jayway.jsonpath:json-path')
+    add(mmdControlledImageBridgeSourceSet.runtimeOnlyConfigurationName, 'org.skyscreamer:jsonassert')
+}
+tasks.register('mmdControlledImageBridge', Test) {
+    maxParallelForks = 1
+    maxHeapSize = '256m'
+    jvmArgs '-XX:+UseSerialGC', '-XX:ActiveProcessorCount=2',
+            '-XX:MaxMetaspaceSize=192m', '-Xss256k'
+    group = 'verification'
+    description = 'Runs controlled image assignment, authority, reserve, START-v2, schema and isolated MySQL races.'
+    dependsOn tasks.named(mmdControlledImageBridgeSourceSet.classesTaskName)
+    testClassesDirs = mmdControlledImageBridgeSourceSet.output.classesDirs
+    classpath = mmdControlledImageBridgeSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
+
+// MMD-U2 schema-3 per-intent controlled-image follow-up source slice.
+def mmdControlledImageFollowupV3SourceSet = sourceSets.create('mmdControlledImageFollowupV3') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/service/impl/ControlledImageIntentOperationGrantServiceTest.java'
+        include 'cn/jia/agent/service/impl/ControlledImageIntentOperationGrantSpringTransactionTest.java'
+        include 'cn/jia/agent/service/impl/ControlledImageIntentOperationGrantMySqlTest.java'
+        include 'cn/jia/agent/service/impl/PersonalWorkspaceControlledImageV3ResultMySqlTest.java'
+        include 'cn/jia/agent/service/impl/PersonalWorkspaceControlledImageV3ExecutionTest.java'
+        include 'cn/jia/agent/service/impl/PersonalWorkspaceConversationExecutionTest.java'
+        include 'cn/jia/agent/service/impl/PersonalWorkspaceControlledImageV3StartTest.java'
+        include 'cn/jia/agent/config/ControlledImageFollowupV3SchemaInitializerTest.java'
+        include 'cn/jia/agent/config/AgentTaskProviderCostConsentSchemaInitializerTest.java'
+        include 'cn/jia/agent/security/AgentRuntimeControlledImageV3SecurityIntegrationTest.java'
+        include 'cn/jia/agent/service/impl/AgentTaskProviderCostConsentServiceImplTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName) {
+    extendsFrom configurations.implementation
+}
+configurations.named(mmdControlledImageFollowupV3SourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.runtimeOnly
+}
+dependencies {
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName,
+            platform("org.springframework.boot:spring-boot-dependencies:${libs.versions.spring.boot.asProvider().get()}"))
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName, libs.junit.jupiter)
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName, 'org.mockito:mockito-core')
+    // Real DAO fixture must participate in Spring-managed transactions through SqlSessionTemplate.
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName, 'org.mybatis:mybatis-spring:4.0.0')
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName, 'org.springframework:spring-test')
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName, 'org.hamcrest:hamcrest')
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName,
+            'org.springframework.security:spring-security-oauth2-resource-server')
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName,
+            'org.springframework.security:spring-security-oauth2-jose')
+    add(mmdControlledImageFollowupV3SourceSet.runtimeOnlyConfigurationName,
+            'org.junit.platform:junit-platform-launcher:6.0.1')
+    // Composed native HTTP filter test loads the production authentication service.
+    add(mmdControlledImageFollowupV3SourceSet.runtimeOnlyConfigurationName, project(':oauth:jia-oauth-api'))
+    add(mmdControlledImageFollowupV3SourceSet.runtimeOnlyConfigurationName, libs.mysql)
+    add(mmdControlledImageFollowupV3SourceSet.runtimeOnlyConfigurationName, 'com.h2database:h2')
+    add(mmdControlledImageFollowupV3SourceSet.runtimeOnlyConfigurationName, 'com.jayway.jsonpath:json-path')
+    add(mmdControlledImageFollowupV3SourceSet.runtimeOnlyConfigurationName, 'org.skyscreamer:jsonassert')
+}
+tasks.register('mmdControlledImageFollowupV3', Test) {
+    maxParallelForks = 1
+    maxHeapSize = '256m'
+    jvmArgs '-XX:+UseSerialGC', '-XX:ActiveProcessorCount=2',
+            '-XX:MaxMetaspaceSize=192m', '-Xss256k'
+    group = 'verification'
+    description = 'Runs schema-3 per-intent grant, source, runtime START, security and exact MySQL catalog regressions.'
+    dependsOn tasks.named(mmdControlledImageFollowupV3SourceSet.classesTaskName)
+    testClassesDirs = mmdControlledImageFollowupV3SourceSet.output.classesDirs
+    classpath = mmdControlledImageFollowupV3SourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
+
 
 // AAM native route allowlist security slice.
 def archiveMaintenanceSecuritySourceSet = sourceSets.create('archiveMaintenanceSecurity') {

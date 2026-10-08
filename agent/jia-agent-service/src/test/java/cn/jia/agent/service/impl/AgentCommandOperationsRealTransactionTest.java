@@ -43,6 +43,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Production mapper plus real read-only transaction evidence on H2 MySQL mode. */
 class AgentCommandOperationsRealTransactionTest {
+    private static final String OWNER = "owner-a";
     private static final long NOW = 1_700_000_000_000L;
     private static final long ISSUED = NOW - 1_000L;
     private static final long EXPIRES = ISSUED + AgentCommandCanonicalCodec.HALL_COMMAND_TTL_MILLIS;
@@ -79,12 +80,12 @@ class AgentCommandOperationsRealTransactionTest {
     void broadRowsArePolicyFilteredWithStableCursorLimitAndNoApproximation() {
         AgentCommandOperationsServiceImpl service = service();
 
-        var first = service.listDlq("tenant-a", "client-a", 0, 1);
+        var first = service.listDlq("0", "client-a", 0, 1);
         assertEquals(List.of(1L), first.items().stream().map(row -> row.deliveryId()).toList());
         assertEquals(1L, first.nextAfterDeliveryId());
         assertTrue(first.hasMore());
 
-        var second = service.listDlq("tenant-a", "client-a", 1, 10);
+        var second = service.listDlq("0", "client-a", 1, 10);
         assertEquals(List.of(3L), second.items().stream().map(row -> row.deliveryId()).toList());
         assertEquals(3L, second.nextAfterDeliveryId());
         assertFalse(second.hasMore());
@@ -109,7 +110,7 @@ class AgentCommandOperationsRealTransactionTest {
                 "SELECT operation_id FROM agent_command_redrive_operation", String.class));
         var pending = new TransactionTemplate(manager).execute(status ->
                 dao.lockPendingRedriveOperations(
-                        "tenant-a", "client-a", NOW, 0, 10));
+                        "0", "client-a", NOW, 0, 10));
         assertEquals(List.of(accepted.operationId()), pending.stream()
                 .map(row -> row.getOperationId()).toList());
 
@@ -265,7 +266,7 @@ class AgentCommandOperationsRealTransactionTest {
     private AgentCommandOperationRequest request(
             long deliveryId, String messageId, String reason) {
         return new AgentCommandOperationRequest(
-                "tenant-a", "client-a", deliveryId, "task-" + deliveryId,
+                "0", "client-a", deliveryId, "task-" + deliveryId,
                 "agent-a", messageId, "operator-a", null, reason, "INC-42");
     }
 
@@ -280,12 +281,12 @@ class AgentCommandOperationsRealTransactionTest {
                     command_payload,command_payload_hash,status,attempt_count,next_retry_at,
                     lease_owner,lease_until,active_message_id,active_attempt,expires_at,last_error,
                     version,replay_parent_message_id,replay_requester_id,replay_approver_id,
-                    replay_reason,tenant_id,client_id,create_time,update_time)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    replay_reason,tenant_id,client_id,owner_jiacn,create_time,update_time)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, id, draft.commandId(), draft.taskId(), draft.workItemId(), draft.targetAgentId(),
                 draft.commandType(), business, AgentCommandCanonicalCodec.sha256(business),
                 "PUBLISHED", 1, null, null, null, messageId, 1, EXPIRES, null, 1,
-                null, null, null, null, "tenant-a", "client-a", NOW - 20, NOW - 5);
+                null, null, null, null, "0", "client-a", OWNER, NOW - 20, NOW - 5);
         jdbc.update("""
                 INSERT INTO agent_outbox_event(
                     id,event_id,message_id,command_id,delivery_id,aggregate_type,aggregate_id,
@@ -301,17 +302,17 @@ class AgentCommandOperationsRealTransactionTest {
                 wire, AgentCommandCanonicalCodec.sha256(wire), "PUBLISHED", 1,
                 null, null, null, 1, EXPIRES, "ACK", NOW - 10, null, "NOT_RETURNED",
                 null, null, null, NOW - 9, null, 1, null, null, null, null,
-                "tenant-a", "client-a", NOW - 20, NOW - 4);
+                "0", "client-a", NOW - 20, NOW - 4);
     }
 
     private AgentCommandDraft draft(long id) {
         String taskId = "task-" + id;
         String intentId = "intent-" + id;
         String commandId = AgentCommandCanonicalCodec.hallCommandId(
-                "tenant-a", "client-a", taskId, "agent-a", intentId,
+                "0", "client-a", OWNER, taskId, "agent-a", intentId,
                 AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE);
         return new AgentCommandDraft(
-                1, commandId, taskId, intentId, "tenant-a", "client-a", taskId,
+                1, commandId, taskId, intentId, "0", "client-a", OWNER, taskId,
                 "work-" + id, "agent-a", AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE,
                 ISSUED, EXPIRES, intentId, new AgentHallCommandPayload(
                         "execute", "Execute bounded work", "juyiting",
@@ -321,7 +322,7 @@ class AgentCommandOperationsRealTransactionTest {
     private void createSchema() {
         jdbc.execute("""
                 CREATE TABLE agent_command_delivery(
-                  id BIGINT PRIMARY KEY, command_id VARCHAR(100), task_id VARCHAR(100),
+                  id BIGINT PRIMARY KEY, owner_jiacn VARCHAR(50) NOT NULL, command_id VARCHAR(100), task_id VARCHAR(100),
                   work_item_id VARCHAR(100), target_agent_id VARCHAR(100), command_type VARCHAR(64),
                   command_payload BLOB, command_payload_hash BINARY(32), status VARCHAR(32),
                   attempt_count INT, next_retry_at BIGINT, lease_owner VARCHAR(100), lease_until BIGINT,
@@ -407,6 +408,6 @@ class AgentCommandOperationsRealTransactionTest {
                         "isolated.invalid", 35672, "user", "secret", "/isolated")),
                 new AgentRabbitDispatchScopeProperties(List.of(
                         new AgentRabbitDispatchScopeProperties.AllowedScope(
-                                "tenant-a", "client-a"))));
+                                "0", "client-a"))));
     }
 }

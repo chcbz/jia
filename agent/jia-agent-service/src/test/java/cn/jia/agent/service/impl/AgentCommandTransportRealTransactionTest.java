@@ -27,6 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class AgentCommandTransportRealTransactionTest {
+    private static final String OWNER = "owner-a";
     private JdbcTemplate jdbc;
     private TransactionTemplate transactions;
     private JdbcTransportDao dao;
@@ -50,8 +51,8 @@ class AgentCommandTransportRealTransactionTest {
                   status VARCHAR(32) NOT NULL, attempt_count INT NOT NULL, next_retry_at BIGINT, lease_owner VARCHAR(100),
                   lease_until BIGINT, active_message_id VARCHAR(100), active_attempt INT NOT NULL, expires_at BIGINT NOT NULL,
                   last_error VARCHAR(2000), version BIGINT NOT NULL, tenant_id VARCHAR(50) NOT NULL,
-                  client_id VARCHAR(50) NOT NULL, create_time BIGINT, update_time BIGINT,
-                  UNIQUE(tenant_id,client_id,command_id))
+                  client_id VARCHAR(50) NOT NULL, owner_jiacn VARCHAR(50) NOT NULL, create_time BIGINT, update_time BIGINT,
+                  UNIQUE(tenant_id,client_id,owner_jiacn,command_id))
                 """);
         jdbc.execute("""
                 CREATE TABLE agent_outbox_event(
@@ -126,9 +127,9 @@ class AgentCommandTransportRealTransactionTest {
 
     private AgentCommandDraft draft(String title) {
         String commandId = AgentCommandCanonicalCodec.taskInviteCommandId(
-                "tenant-a", "client-a", "task-1", "agent-1");
-        return new AgentCommandDraft(1, commandId, "task-1", "evt-real", "tenant-a", "client-a",
-                "task-1", null, "agent-1", AgentProtocolConstants.COMMAND_TASK_INVITE,
+                "0", "client-a", OWNER, "task-1", "agent-1");
+        return new AgentCommandDraft(1, commandId, "task-1", "evt-real", "0", "client-a",
+                OWNER, "task-1", null, "agent-1", AgentProtocolConstants.COMMAND_TASK_INVITE,
                 1000L, 3601000L, new AgentTaskInvitePayload(
                 "task_briefing", "宋江首领已完成悬赏分派，请按职责协作推进。",
                 "阅读悬赏任务，确认自己的职责；如需协助，优先参考协作名册中的好汉能力并回报下一步计划。",
@@ -154,11 +155,11 @@ class AgentCommandTransportRealTransactionTest {
         JdbcTransportDao(JdbcTemplate jdbc) { this.jdbc = jdbc; }
 
         @Override
-        public AgentCommandDeliveryEntity lockDelivery(String tenantId, String clientId, String commandId) {
+        public AgentCommandDeliveryEntity lockDelivery(String tenantId, String clientId, String ownerJiacn, String commandId) {
             List<AgentCommandDeliveryEntity> rows = jdbc.query("""
                     SELECT id,command_id,task_id,work_item_id,target_agent_id,command_type,
-                           command_payload,command_payload_hash,expires_at,active_message_id,tenant_id,client_id
-                    FROM agent_command_delivery WHERE tenant_id=? AND client_id=? AND command_id=? FOR UPDATE
+                           command_payload,command_payload_hash,expires_at,active_message_id,tenant_id,client_id,owner_jiacn
+                    FROM agent_command_delivery WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND command_id=? FOR UPDATE
                     """, (rs, row) -> {
                 AgentCommandDeliveryEntity entity = new AgentCommandDeliveryEntity()
                         .setId(rs.getLong("id")).setCommandId(rs.getString("command_id"))
@@ -167,9 +168,10 @@ class AgentCommandTransportRealTransactionTest {
                         .setCommandPayload(rs.getBytes("command_payload"))
                         .setCommandPayloadHash(rs.getBytes("command_payload_hash"))
                         .setExpiresAt(rs.getLong("expires_at")).setActiveMessageId(rs.getString("active_message_id"));
+                entity.setOwnerJiacn(rs.getString("owner_jiacn"));
                 entity.setTenantId(rs.getString("tenant_id")); entity.setClientId(rs.getString("client_id"));
                 return entity;
-            }, tenantId, clientId, commandId);
+            }, tenantId, clientId, ownerJiacn, commandId);
             return rows.isEmpty() ? null : rows.getFirst();
         }
 
@@ -181,15 +183,15 @@ class AgentCommandTransportRealTransactionTest {
                 PreparedStatement ps = connection.prepareStatement("""
                         INSERT INTO agent_command_delivery(command_id,task_id,work_item_id,target_agent_id,command_type,
                         command_payload,command_payload_hash,status,attempt_count,active_message_id,active_attempt,
-                        expires_at,last_error,version,tenant_id,client_id,create_time,update_time)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        expires_at,last_error,version,tenant_id,client_id,owner_jiacn,create_time,update_time)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                         """, Statement.RETURN_GENERATED_KEYS);
                 int i=1; ps.setString(i++,d.getCommandId()); ps.setString(i++,d.getTaskId()); ps.setString(i++,d.getWorkItemId());
                 ps.setString(i++,d.getTargetAgentId()); ps.setString(i++,d.getCommandType()); ps.setBytes(i++,d.getCommandPayload());
                 ps.setBytes(i++,d.getCommandPayloadHash()); ps.setString(i++,d.getStatus()); ps.setInt(i++,d.getAttemptCount());
                 ps.setString(i++,d.getActiveMessageId()); ps.setInt(i++,d.getActiveAttempt()); ps.setLong(i++,d.getExpiresAt());
                 ps.setString(i++,d.getLastError()); ps.setLong(i++,d.getVersion()); ps.setString(i++,d.getTenantId());
-                ps.setString(i++,d.getClientId()); ps.setLong(i++,d.getCreateTime()); ps.setLong(i,d.getUpdateTime()); return ps;
+                ps.setString(i++,d.getClientId()); ps.setString(i++,d.getOwnerJiacn()); ps.setLong(i++,d.getCreateTime()); ps.setLong(i,d.getUpdateTime()); return ps;
             }, keys);
             d.setId(keys.getKey().longValue()); return rows;
         }

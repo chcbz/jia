@@ -4,6 +4,7 @@ import cn.jia.chat.serialization.ExactWireIds;
 
 import cn.jia.chat.advisor.DatabaseChatMemoryAdvisor;
 import cn.jia.chat.archive.maintenance.entry.ArchiveMaintenanceChatCoordinator;
+import cn.jia.chat.deliberation.InteractionRoute;
 import cn.jia.chat.entity.AgentTaskThreadConstants;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
@@ -20,7 +21,14 @@ import cn.jia.chat.memory.MemoryDocument;
 import cn.jia.chat.memory.MemoryRepository;
 import cn.jia.chat.service.ChatConversationService;
 import cn.jia.chat.service.ChatStreamPolicy;
+import cn.jia.chat.service.ChatDeliberationException;
+import cn.jia.chat.service.ChatDeliberationService;
+import cn.jia.chat.service.ChatBountyAssetProjector;
+import cn.jia.agent.service.PersonalWorkspaceExecutionService;
+import cn.jia.chat.service.InteractionRouter;
+import cn.jia.chat.service.TenantScopeResolver;
 import cn.jia.chat.service.ChatConversationEventBroker;
+import cn.jia.chat.service.ChatConversationReplayPager;
 import cn.jia.chat.service.BuiltinHallAgentSupport;
 import cn.jia.chat.service.JuyitingAgentRelayResult;
 import cn.jia.chat.service.JuyitingAgentRelayService;
@@ -43,8 +51,13 @@ import org.springframework.ai.chat.prompt.PromptTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.codec.ServerSentEvent;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -54,12 +67,14 @@ import reactor.core.scheduler.Schedulers;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import cn.jia.chat.handler.dto.ChatCancelDTO;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
 
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Agent聊天控制器
@@ -89,6 +104,28 @@ public class ChatController {
     private final AgentTaskThreadMemoryGuard taskThreadMemoryGuard;
     private final HumanSenderIdentityResolver humanSenderIdentityResolver;
     private ArchiveMaintenanceChatCoordinator archiveMaintenanceChatCoordinator;
+    private InteractionRouter interactionRouter = new InteractionRouter();
+    private ChatDeliberationService chatDeliberationService;
+    private TenantScopeResolver tenantScopeResolver = TenantScopeResolver.legacySingleTenant();
+    private ChatBountyAssetProjector bountyAssets;
+
+    @Autowired(required = false)
+    public void setBountyAssets(ChatBountyAssetProjector bountyAssets) { this.bountyAssets = bountyAssets; }
+
+    @Autowired
+    public void setInteractionRouter(InteractionRouter interactionRouter) {
+        this.interactionRouter = interactionRouter;
+    }
+
+    @Autowired
+    public void setChatDeliberationService(ChatDeliberationService chatDeliberationService) {
+        this.chatDeliberationService = chatDeliberationService;
+    }
+
+    @Autowired
+    public void setTenantScopeResolver(TenantScopeResolver tenantScopeResolver) {
+        this.tenantScopeResolver = tenantScopeResolver;
+    }
     public ChatController(@Lazy ChatClient chatClient, ChatConversationService chatConversationService,
             RedisService redisService, ChatClient.Builder chatClientBuilder,
             ChatConversationEventBroker chatConversationEventBroker, BuiltinHallAgentSupport builtinHallAgentSupport,
@@ -135,7 +172,15 @@ public class ChatController {
      * @return 返回包含AI回复内容的流
      */
     @RequestMapping(value = "/stream", method = RequestMethod.POST, produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<String> handleChat(@RequestBody ChatMessageDTO chatMessage) {
+    public Flux<String> handleChat(@RequestBody ChatMessageDTO chatMessage,
+            @RequestHeader(name = "Idempotency-Key", required = false) String idempotencyKey) {
+        bindIdempotencyKey(chatMessage, idempotencyKey);
+        // Reject execute/unknown hints before creating or mutating any conversation.
+        InteractionRoute route = interactionRouter.routeStream(chatMessage);
+        if (chatMessage.getArchiveMaintenanceIntent() != null && route != InteractionRoute.CHAT) {
+            throw new ChatDeliberationException(ChatDeliberationException.Reason.INVALID_ROUTE,
+                    "Archive maintenance confirmation cannot be combined with an inspection route");
+        }
         EsContext context = EsContextHolder.getContext();
         ServerResolvedSender sender = humanSenderIdentityResolver.resolve(context);
         ChatConversationEntity conversation = getOrCreateConversation(chatMessage, sender);
@@ -151,14 +196,7 @@ public class ChatController {
                 && archiveMaintenanceChatCoordinator.supports(chatMessage)
                 ? archiveMaintenanceChatCoordinator.relay(
                         chatMessage, conversationId, conversation, sender)
-                : juyitingAgentRelayService.relay(
-                        chatMessage,
-                        conversationId,
-                        sender,
-                        taskMaterials -> createBuiltinSongJiangStream(
-                                chatMessage, conversationId, sender, taskMaterials,
-                                generation, needSummary, summary)
-                );
+                : juyitingAgentRelayService.relay(chatMessage, conversationId, sender, route);
         boolean skipAdvisorUserPersistence = agentDelivery.attempted();
         Flux<String> aiStream = agentDelivery.delivered().flatMapMany(delivered -> delivered
                 ? Flux.empty()
@@ -386,81 +424,6 @@ public class ChatController {
                 .map(content -> processContent(content, needSummary, summary));
     }
 
-    private Flux<String> createBuiltinSongJiangStream(
-            ChatMessageDTO chatMessage, String conversationId,
-            ServerResolvedSender sender, Map<String, Object> taskMaterials,
-            long generation, boolean needSummary, StringBuilder summary) {
-        String ownerJiacn = sender.jiacn();
-        String ownerClientId = sender.clientId();
-        StringBuilder answer = new StringBuilder();
-        Flux<String> deliveryEvent = Flux.just(buildAgentDeliveryEventJson(conversationId, builtinHallAgentSupport.defaultAgentId(), true));
-
-        Flux<String> deltaStream = chatClient.prompt(
-                        buildBuiltinSongJiangPrompt(chatMessage, taskMaterials))
-                .advisors(advisor -> advisor
-                        .param(ChatMemory.CONVERSATION_ID, conversationId)
-                        .param("jiacn", ownerJiacn)
-                        .param("clientId", ownerClientId)
-                        .param("conversationType", CONVERSATION_TYPE_JUYITING)
-                        .param(DatabaseChatMemoryAdvisor.SERVER_RESOLVED_SENDER, sender)
-                        .param("selectedAgentId", builtinHallAgentSupport.defaultAgentId())
-                        .param(DatabaseChatMemoryAdvisor.SKIP_USER_MESSAGE_PERSISTENCE, true)
-                        .param(DatabaseChatMemoryAdvisor.SKIP_ASSISTANT_MESSAGE_PERSISTENCE, true)
-                        .param(QuestionAnswerAdvisor.FILTER_EXPRESSION,
-                                "metadata.jiacn == '" + ownerJiacn + "' AND role == 'ASSISTANT'"))
-                .messages()
-                .stream().content()
-                .map(chunk -> {
-                    if (!chatConversationService.isLiveGeneration(
-                            ownerJiacn, ownerClientId, conversationId, generation)) {
-                        throw new IllegalStateException("Conversation is no longer available");
-                    }
-                    if (needSummary) {
-                        summary.append(chunk);
-                    }
-                    answer.append(chunk);
-                    Map<String, Object> event = buildAgentEvent("agent_message_delta", conversationId, chunk, null);
-                    chatConversationEventBroker.publishIfLive(
-                            conversationId, generation,
-                            () -> chatConversationService.isLiveGeneration(
-                                    ownerJiacn, ownerClientId, conversationId, generation),
-                            event);
-                    return JsonUtil.toSafeJson(event);
-                });
-
-        Flux<String> finalEvent = Flux.defer(() -> {
-            String content = answer.toString();
-            ChatMessageEntity entity = saveBuiltinAgentMessage(
-                    conversationId, ownerJiacn, ownerClientId, generation, content);
-            Map<String, Object> event = buildAgentEvent("agent_message", conversationId, content, entity.getId());
-            String eventJson = JsonUtil.toSafeJson(event);
-            chatConversationEventBroker.publishIfLive(
-                    conversationId, generation,
-                    () -> chatConversationService.isLiveGeneration(
-                            ownerJiacn, ownerClientId, conversationId, generation),
-                    event);
-            return Flux.just(eventJson);
-        });
-        Flux<String> agentStream = deltaStream.concatWith(finalEvent)
-                .onErrorResume(error -> {
-                    log.warn("Builtin SongJiang stream failed, using fallback reply", error);
-                    String content = "诸位稍安，宋江已收到传令。此事先记入议程，待诸位好汉回报后再作定夺。";
-                    if (needSummary) {
-                        summary.append(content);
-                    }
-                    ChatMessageEntity entity = saveBuiltinAgentMessage(
-                            conversationId, ownerJiacn, ownerClientId, generation, content);
-                    Map<String, Object> event = buildAgentEvent("agent_message", conversationId, content, entity.getId());
-                    chatConversationEventBroker.publishIfLive(
-                            conversationId, generation,
-                            () -> chatConversationService.isLiveGeneration(
-                                    ownerJiacn, ownerClientId, conversationId, generation),
-                            event);
-                    return Flux.just(JsonUtil.toSafeJson(event));
-                });
-        return deliveryEvent.concatWith(agentStream);
-    }
-
     Prompt buildBuiltinSongJiangPrompt(
             ChatMessageDTO chatMessage, Map<String, Object> taskMaterials) {
         UserMessage userMessage = UserMessage.builder()
@@ -482,57 +445,26 @@ public class ChatController {
                 SystemMessage.builder().text(trustedMaterialContext).build(),
                 userMessage).build();
     }
-
     private String buildAgentDeliveryEventJson(String conversationId, String agentId, boolean delivered) {
-        return "{\"agentDelivery\":{\"agentId\":\"" + escapeJson(agentId)
-                + "\",\"delivered\":" + delivered + "},\"conversationId\":\""
-                + escapeJson(conversationId) + "\",\"conversationType\":\""
-                + CONVERSATION_TYPE_JUYITING + "\"}";
+        return JsonUtil.toSafeJson(Map.of(
+                "agentDelivery", Map.of("agentId", agentId, "delivered", delivered),
+                "conversationId", conversationId,
+                "conversationType", CONVERSATION_TYPE_JUYITING,
+                "eventId", java.util.UUID.randomUUID().toString(),
+                "eventVersion", "1",
+                "occurredAt", Long.toString(System.currentTimeMillis())));
     }
 
-    private String buildAgentEventJson(String type, String conversationId, String content, Object messageId) {
-        return JsonUtil.toSafeJson(buildAgentEvent(type, conversationId, content, messageId));
-    }
-
-    private Map<String, Object> buildAgentEvent(String type, String conversationId, String content, Object messageId) {
+    private Map<String, Object> buildAgentEvent(
+            String type, String conversationId, String content, Object messageId) {
         Map<String, Object> event = new HashMap<>();
-        event.put("type", type);
-        event.put("conversationId", conversationId);
+        event.put("type", type); event.put("conversationId", conversationId);
         event.put("conversationType", CONVERSATION_TYPE_JUYITING);
         event.put("agentId", builtinHallAgentSupport.defaultAgentId());
-        event.put("senderType", "agent");
-        event.put("senderName", BuiltinHallAgentSupport.SONGJIANG_NAME);
-        event.put("content", content);
-        event.put("timestamp", System.currentTimeMillis());
-        if (messageId != null) {
-            event.put("messageId", ExactWireIds.decimal(messageId));
-        }
+        event.put("senderType", "agent"); event.put("senderName", BuiltinHallAgentSupport.SONGJIANG_NAME);
+        event.put("content", content); event.put("timestamp", System.currentTimeMillis());
+        if (messageId != null) event.put("messageId", ExactWireIds.decimal(messageId));
         return event;
-    }
-
-    private ChatMessageEntity saveBuiltinAgentMessage(
-            String conversationId, String ownerJiacn, String ownerClientId,
-            long generation, String content) {
-        ChatMessageEntity entity = new ChatMessageEntity();
-        entity.setJiacn(ownerJiacn);
-        entity.setClientId(ownerClientId);
-        entity.setConversationId(conversationId);
-        entity.setMessageType("ASSISTANT");
-        entity.setContent(content);
-        entity.setSyncStatus("PENDING");
-        entity.setConversationType(CONVERSATION_TYPE_JUYITING);
-        entity.setSenderType("agent");
-        entity.setSenderName(BuiltinHallAgentSupport.SONGJIANG_NAME);
-
-        Map<String, Object> metadata = new HashMap<>();
-        metadata.put("agentId", builtinHallAgentSupport.defaultAgentId());
-        metadata.put("senderType", "agent");
-        metadata.put("senderName", BuiltinHallAgentSupport.SONGJIANG_NAME);
-        metadata.put("conversationId", conversationId);
-        metadata.put("conversationType", CONVERSATION_TYPE_JUYITING);
-        entity.setMetadata(JsonUtil.toJson(metadata));
-        return chatConversationService.appendOwnedMessage(
-                ownerJiacn, ownerClientId, entity, generation);
     }
 
     private String escapeJson(String value) {
@@ -583,6 +515,81 @@ public class ChatController {
         return generation;
     }
 
+    @RequestMapping(value = "/capabilities", method = RequestMethod.GET)
+    public Object chatCapabilities() {
+        return JsonResult.success(Map.ofEntries(
+                Map.entry("schemaVersion", "2"),
+                Map.entry("interactionHints", List.of("chat", "inspect")),
+                Map.entry("routeVocabulary", List.of("CHAT", "CHAT_STATUS", "INSPECT")),
+                Map.entry("targetCapabilityScope", "authenticated-agent-connection"),
+                Map.entry("targetSupportImplied", false),
+                Map.entry("capabilityContractVersion", 1),
+                Map.entry("executeViaChat", false),
+                Map.entry("inspectRequiresMaterializedRefs", true),
+                Map.entry("requestId", true),
+                Map.entry("requestRevision", true),
+                Map.entry("contextSnapshot", true),
+                Map.entry("durableTurns", true),
+                Map.entry("deltaSequence", true),
+                Map.entry("cancel", true)));
+    }
+
+    @RequestMapping(value = "/requests/{requestId}", method = RequestMethod.GET)
+    public Object getChatRequest(@org.springframework.web.bind.annotation.PathVariable String requestId,
+            Authentication authentication) {
+        return JsonResult.success(requireDeliberationService().getRequest(
+                requireAuthenticatedTenant(authentication), requireIdentityPart(EsContextHolder.getContext().getJiacn()),
+                requireIdentityPart(EsContextHolder.getContext().getClientId()), requestId));
+    }
+
+    @RequestMapping(value = "/turns/{turnId}", method = RequestMethod.GET)
+    public Object getChatTurn(@org.springframework.web.bind.annotation.PathVariable String turnId,
+            Authentication authentication) {
+        return JsonResult.success(requireDeliberationService().getTurn(
+                requireAuthenticatedTenant(authentication), requireIdentityPart(EsContextHolder.getContext().getJiacn()),
+                requireIdentityPart(EsContextHolder.getContext().getClientId()), turnId));
+    }
+
+    @RequestMapping(value = "/turns/{turnId}/cancel", method = RequestMethod.POST)
+    public Object cancelChatTurn(@org.springframework.web.bind.annotation.PathVariable String turnId,
+            @RequestBody(required = false) ChatCancelDTO cancellation, Authentication authentication) {
+        return JsonResult.success(requireDeliberationService().cancelTurn(
+                requireAuthenticatedTenant(authentication), requireIdentityPart(EsContextHolder.getContext().getJiacn()),
+                requireIdentityPart(EsContextHolder.getContext().getClientId()), turnId,
+                cancellation == null ? null : cancellation.getExpectedStateVersion(),
+                cancellation == null ? null : cancellation.getReason()));
+    }
+
+    @RequestMapping(value = "/requests/{requestId}/cancel", method = RequestMethod.POST)
+    public Object cancelPendingChatTurns(
+            @org.springframework.web.bind.annotation.PathVariable String requestId,
+            @RequestParam(name = "allPending", required = false) Boolean allPending,
+            @RequestBody(required = false) ChatCancelDTO cancellation, Authentication authentication) {
+        boolean cancelAll = Boolean.TRUE.equals(allPending)
+                || cancellation != null && Boolean.TRUE.equals(cancellation.getAllPending());
+        List<String> selected = cancellation == null ? null : cancellation.getTurnIds();
+        if (cancelAll == (selected != null && !selected.isEmpty())) {
+            throw new ChatDeliberationException(ChatDeliberationException.Reason.INVALID_REQUEST,
+                    "Specify exactly one of allPending=true or non-empty turnIds");
+        }
+        return JsonResult.success(requireDeliberationService().cancelPending(
+                requireAuthenticatedTenant(authentication), requireIdentityPart(EsContextHolder.getContext().getJiacn()),
+                requireIdentityPart(EsContextHolder.getContext().getClientId()), requestId,
+                cancelAll ? null : selected, cancellation == null ? null : cancellation.getReason()));
+    }
+
+    private String requireAuthenticatedTenant(Authentication authentication) {
+        return tenantScopeResolver.resolve(authentication);
+    }
+
+    private ChatDeliberationService requireDeliberationService() {
+        if (chatDeliberationService == null) {
+            throw new ChatDeliberationException(ChatDeliberationException.Reason.PERSISTENCE_ERROR,
+                    "Chat deliberation service is unavailable");
+        }
+        return chatDeliberationService;
+    }
+
     @RequestMapping(value = "/stop_stream", method = RequestMethod.POST)
     public Object stopStream(@RequestBody ChatMessageDTO chatMessage) {
         requireGenericConversationAccess(chatMessage.getConversationId());
@@ -598,8 +605,15 @@ public class ChatController {
 
     @RequestMapping(value = "/conversation/content", method = RequestMethod.GET)
     public Object getConversationContent(@RequestParam(name = "id") String id) {
-        List<ConversationMessageResponse> messages = chatConversationService.findByConversationId(id).stream()
-                .map(ConversationMessageResponse::from)
+        List<ChatMessageEntity> owned = chatConversationService.findByConversationId(id);
+        var parts = owned.isEmpty() || bountyAssets == null ?
+                Map.<String, List<ChatBountyAssetProjector.Part>>of() :
+                bountyAssets.partsFor(new PersonalWorkspaceExecutionService.OwnerScope(
+                        owned.getFirst().getTenantId(), owned.getFirst().getClientId(),
+                        owned.getFirst().getJiacn()), id);
+        List<ConversationMessageResponse> messages = owned.stream()
+                .map(message -> ConversationMessageResponse.from(message,
+                        parts.getOrDefault(ExactWireIds.decimal(message.getId()), List.of())))
                 .toList();
         return JsonResult.success(messages);
     }
@@ -619,8 +633,10 @@ public class ChatController {
             Long createTime,
             Long updateTime,
             String tenantId,
-            String clientId) {
-        private static ConversationMessageResponse from(ChatMessageEntity message) {
+            String clientId,
+            List<ChatBountyAssetProjector.Part> parts) {
+        private static ConversationMessageResponse from(ChatMessageEntity message,
+                List<ChatBountyAssetProjector.Part> parts) {
             return new ConversationMessageResponse(
                     ExactWireIds.decimal(message.getId()),
                     message.getConversationId(),
@@ -635,22 +651,183 @@ public class ChatController {
                     message.getCreateTime(),
                     message.getUpdateTime(),
                     message.getTenantId(),
-                    message.getClientId());
+                    message.getClientId(), parts);
         }
     }
 
+    /** Direct-call compatibility for focused unit tests and internal callers without HTTP headers. */
+    public Flux<String> handleChat(ChatMessageDTO chatMessage) {
+        return handleChat(chatMessage, null);
+    }
+
+    private void bindIdempotencyKey(ChatMessageDTO message, String headerValue) {
+        if (message == null || headerValue == null || headerValue.isBlank()) return;
+        String key = headerValue.strip();
+        if (key.length() > 100 || key.chars().anyMatch(Character::isISOControl)) {
+            throw new ChatDeliberationException(ChatDeliberationException.Reason.INVALID_REQUEST,
+                    "Invalid Idempotency-Key");
+        }
+        if (message.getRequestId() != null && !message.getRequestId().equals(key)) {
+            throw new ChatDeliberationException(ChatDeliberationException.Reason.CONFLICT,
+                    "Idempotency-Key and requestId must match");
+        }
+        message.setRequestId(key);
+    }
+
     @RequestMapping(value = "/conversation/events", method = RequestMethod.GET, produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<String> conversationEvents(@RequestParam(name = "id") String id) {
+    public Flux<ServerSentEvent<String>> conversationEvents(@RequestParam(name = "id") String id,
+            @RequestParam(name = "cursor", required = false) String cursor,
+            @RequestHeader(name = "Last-Event-ID", required = false) String lastEventId,
+            Authentication authentication) {
         ChatConversationEntity conversation = chatConversationService.get(id);
         long generation = lifecycleGeneration(conversation);
         String ownerJiacn = requireIdentityPart(EsContextHolder.getContext().getJiacn());
         String ownerClientId = requireIdentityPart(EsContextHolder.getContext().getClientId());
-        Flux<String> events = chatConversationEventBroker.stream(
+        String tenantId = requireAuthenticatedTenant(authentication);
+        if (!tenantId.equals(conversation.getTenantId())) {
+            throw new ChatDeliberationException(ChatDeliberationException.Reason.NOT_FOUND_OR_FORBIDDEN,
+                    "Chat request is unavailable");
+        }
+        long queryCursor = parseEventCursor(cursor);
+        long headerCursor = parseEventCursor(lastEventId);
+        if (cursor != null && !cursor.isBlank() && lastEventId != null && !lastEventId.isBlank()
+                && queryCursor != headerCursor) {
+            throw new ChatDeliberationException(ChatDeliberationException.Reason.INVALID_REQUEST,
+                    "Conflicting event cursors");
+        }
+        long after = cursor != null && !cursor.isBlank() ? queryCursor : headerCursor;
+        ChatConversationEventBroker.LiveSubscription liveSubscription =
+                chatConversationEventBroker.subscribeBuffered(id, generation,
+                        () -> chatConversationService.isLiveGeneration(
+                                ownerJiacn, ownerClientId, id, generation));
+        if (liveSubscription == null) return Flux.empty();
+        try {
+            ChatDeliberationService service = requireDeliberationService();
+            long watermark = service.eventHighWatermark(tenantId, ownerJiacn, ownerClientId, id, generation);
+            if (after > watermark) {
+                throw new ChatDeliberationException(ChatDeliberationException.Reason.INVALID_REQUEST,
+                        "Event cursor is ahead of the conversation watermark");
+            }
+            List<ServerSentEvent<String>> replay = loadReplayThrough(service, tenantId, ownerJiacn, ownerClientId,
+                    id, generation, after, watermark);
+            // The pager certifies the captured endpoint before advertising or remembering it.
+            AtomicLong deliveredSequence = new AtomicLong(watermark);
+            Flux<ServerSentEvent<String>> catchUpThenLive = liveSubscription.flux()
+                    .concatMap(json -> durableCatchUp(service, tenantId, ownerJiacn, ownerClientId,
+                            id, generation, deliveredSequence, json));
+            // MVC owns SSE framing; preframed Strings are encoded again as data:data:/data:id:.
+            ServerSentEvent<String> ready = ServerSentEvent.builder(JsonUtil.toSafeJson(Map.of(
+                    "type", "stream_ready", "cursor", Long.toString(watermark),
+                    "nextCursor", Long.toString(watermark)))).build();
+            Flux<ServerSentEvent<String>> stream = Flux.fromIterable(replay).concatWithValues(ready).concatWith(catchUpThenLive)
+                    .doFinally(ignored -> liveSubscription.close());
+            return ChatStreamPolicy.firstFrame(ChatStreamPolicy.bounded(stream));
+        } catch (RuntimeException failure) {
+            liveSubscription.close();
+            throw failure;
+        }
+    }
+
+    /** Direct-call compatibility for legacy focused tests; not an HTTP mapping. */
+    public Flux<String> conversationEvents(String id) {
+        ChatConversationEntity conversation = chatConversationService.get(id);
+        long generation = lifecycleGeneration(conversation);
+        String ownerJiacn = requireIdentityPart(EsContextHolder.getContext().getJiacn());
+        String ownerClientId = requireIdentityPart(EsContextHolder.getContext().getClientId());
+        return ChatStreamPolicy.firstFrame(ChatStreamPolicy.bounded(chatConversationEventBroker.stream(
                         id, generation, () -> chatConversationService.isLiveGeneration(
                                 ownerJiacn, ownerClientId, id, generation),
                         "{\"type\":\"stream_ready\"}")
-                .map(event -> "data: " + event + "\n\n");
-        return ChatStreamPolicy.firstFrame(ChatStreamPolicy.bounded(events));
+                .map(event -> "data: " + event + "\n\n")));
+    }
+
+    private List<ServerSentEvent<String>> loadReplayThrough(ChatDeliberationService service, String tenantId,
+            String ownerJiacn, String clientId, String conversationId, long generation,
+            long after, long watermark) {
+        try {
+            return ChatConversationReplayPager.load(after, watermark, 500,
+                            (pageCursor, through, limit) -> service.replayEventsThrough(tenantId, ownerJiacn,
+                                    clientId, conversationId, generation, pageCursor, through, limit),
+                            cn.jia.chat.deliberation.ChatConversationEventEntity::getEventSequence)
+                    .stream().map(this::sseStoredEvent).toList();
+        } catch (IllegalArgumentException | IllegalStateException invalid) {
+            throw new ChatDeliberationException(ChatDeliberationException.Reason.PERSISTENCE_ERROR,
+                    "Stored chat event replay is invalid");
+        }
+    }
+
+    private Flux<ServerSentEvent<String>> durableCatchUp(ChatDeliberationService service, String tenantId,
+            String ownerJiacn, String clientId, String conversationId, long generation,
+            AtomicLong deliveredSequence, String liveJson) {
+        long signalled = eventSequence(liveJson);
+        long current = deliveredSequence.get();
+        if (signalled <= current) return Flux.empty();
+        List<ServerSentEvent<String>> recovered = loadReplayThrough(service, tenantId, ownerJiacn, clientId,
+                conversationId, generation, current, signalled);
+        if (recovered.isEmpty() || !Long.toString(signalled).equals(recovered.getLast().id())) {
+            throw new ChatDeliberationException(ChatDeliberationException.Reason.PERSISTENCE_ERROR,
+                    "Stored chat event catch-up is incomplete");
+        }
+        deliveredSequence.set(signalled);
+        return Flux.fromIterable(recovered);
+    }
+
+    @SuppressWarnings("unchecked")
+    private long eventSequence(String json) {
+        try {
+            Map<String,Object> event = JsonUtil.getMapper().readValue(json, Map.class);
+            String value = String.valueOf(event.get("eventSequence"));
+            if (!value.matches("[1-9][0-9]*")) throw new IllegalArgumentException();
+            return Long.parseLong(value);
+        } catch (Exception invalid) {
+            throw new ChatDeliberationException(ChatDeliberationException.Reason.PERSISTENCE_ERROR,
+                    "Live chat event sequence is invalid");
+        }
+    }
+
+    private long parseEventCursor(String value) {
+        if (value == null || value.isBlank()) return 0L;
+        if (!value.matches("0|[1-9][0-9]*")) throw new ChatDeliberationException(
+                ChatDeliberationException.Reason.INVALID_REQUEST, "Invalid event cursor");
+        try { return Long.parseLong(value); }
+        catch (NumberFormatException overflow) { throw new ChatDeliberationException(
+                ChatDeliberationException.Reason.INVALID_REQUEST, "Invalid event cursor"); }
+    }
+
+    @SuppressWarnings("unchecked")
+    private String sseLiveEvent(String json) {
+        try {
+            Map<String,Object> event = JsonUtil.getMapper().readValue(json, Map.class);
+            Object sequence = event.get("eventSequence");
+            if (sequence == null) return "data: " + json + "\n\n";
+            String canonical = String.valueOf(sequence);
+            if (!canonical.matches("[1-9][0-9]*")) throw new IllegalArgumentException("invalid event sequence");
+            Long.parseLong(canonical);
+            return "id: " + canonical + "\ndata: " + json + "\n\n";
+        } catch (Exception invalid) {
+            throw new ChatDeliberationException(ChatDeliberationException.Reason.PERSISTENCE_ERROR,
+                    "Live chat event is invalid");
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private ServerSentEvent<String> sseStoredEvent(cn.jia.chat.deliberation.ChatConversationEventEntity stored) {
+        try {
+            Map<String,Object> event = JsonUtil.getMapper().readValue(stored.getPayloadJson(), Map.class);
+            // Routing metadata is authoritative from the owner-scoped journal row, not its payload.
+            event.put("type", stored.getEventType());
+            event.put("conversationId", stored.getConversationId());
+            event.put("conversationGeneration", Long.toString(stored.getConversationGeneration()));
+            event.put("eventId", stored.getEventId());
+            event.put("eventSequence", Long.toString(stored.getEventSequence()));
+            event.put("eventVersion", Long.toString(stored.getEventVersion()));
+            event.put("occurredAt", Long.toString(stored.getOccurredAt()));
+            return ServerSentEvent.builder(JsonUtil.toSafeJson(event))
+                    .id(Long.toString(stored.getEventSequence())).build();
+        } catch (Exception invalid) {
+            throw new ChatDeliberationException(ChatDeliberationException.Reason.PERSISTENCE_ERROR,
+                    "Stored chat event is invalid");
+        }
     }
 
     @RequestMapping(value = "/conversation/list", method = RequestMethod.POST)
@@ -771,6 +948,29 @@ public class ChatController {
         result.setTimestamp(document.getTimestamp());
         result.setScore(document.getScore());
         return result;
+    }
+
+    @ExceptionHandler(ChatDeliberationException.class)
+    public ResponseEntity<JsonResult<Void>> handleChatDeliberationFailure(ChatDeliberationException failure) {
+        HttpStatus status = switch (failure.reason()) {
+            case INVALID_REQUEST, INVALID_ROUTE, GAP -> HttpStatus.BAD_REQUEST;
+            case NOT_FOUND_OR_FORBIDDEN -> HttpStatus.NOT_FOUND;
+            case CONFLICT -> HttpStatus.CONFLICT;
+            case PERSISTENCE_ERROR -> HttpStatus.SERVICE_UNAVAILABLE;
+        };
+        String code = switch (failure.reason()) {
+            case INVALID_REQUEST -> "CHAT_REQUEST_INVALID";
+            case INVALID_ROUTE -> "CHAT_ROUTE_REJECTED";
+            case NOT_FOUND_OR_FORBIDDEN -> "CHAT_NOT_FOUND";
+            case CONFLICT -> "CHAT_REQUEST_CONFLICT";
+            case GAP -> "CHAT_DELTA_GAP";
+            case PERSISTENCE_ERROR -> "CHAT_STATE_UNAVAILABLE";
+        };
+        JsonResult<Void> result = JsonResult.failure(code,
+                failure.reason() == ChatDeliberationException.Reason.NOT_FOUND_OR_FORBIDDEN
+                        ? "Chat request is unavailable" : failure.getMessage());
+        result.setStatus(status.value());
+        return ResponseEntity.status(status).contentType(MediaType.APPLICATION_JSON).body(result);
     }
 
     @ExceptionHandler(AgentTaskThreadException.class)

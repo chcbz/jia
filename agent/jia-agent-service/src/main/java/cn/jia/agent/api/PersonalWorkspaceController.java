@@ -38,12 +38,15 @@ import java.util.Objects;
 public class PersonalWorkspaceController {
     static final String CACHE_CONTROL = "private, no-store";
     static final String NOSNIFF = "nosniff";
-    private static final Map<String, String> FILENAME_MIME_TYPES = Map.of(
-            "png", "image/png", "jpg", "image/jpeg", "jpeg", "image/jpeg", "txt", "text/plain",
-            "pdf", "application/pdf",
-            "docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation");
+    private static final Map<String, String> FILENAME_MIME_TYPES = Map.ofEntries(
+            Map.entry("png", "image/png"), Map.entry("jpg", "image/jpeg"), Map.entry("jpeg", "image/jpeg"),
+            Map.entry("webp", "image/webp"), Map.entry("gif", "image/gif"),
+            Map.entry("mp3", "audio/mpeg"), Map.entry("ogg", "audio/ogg"), Map.entry("oga", "audio/ogg"),
+            Map.entry("wav", "audio/wav"), Map.entry("m4a", "audio/mp4"), Map.entry("mp4", "audio/mp4"),
+            Map.entry("webm", "audio/webm"), Map.entry("txt", "text/plain"), Map.entry("pdf", "application/pdf"),
+            Map.entry("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+            Map.entry("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+            Map.entry("pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"));
     private final PersonalWorkspaceService service;
 
     public PersonalWorkspaceController(PersonalWorkspaceService service) { this.service = Objects.requireNonNull(service, "service"); }

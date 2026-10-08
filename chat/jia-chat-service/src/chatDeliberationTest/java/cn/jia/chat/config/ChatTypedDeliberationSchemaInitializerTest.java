@@ -1,0 +1,337 @@
+package cn.jia.chat.config;
+
+import org.junit.jupiter.api.Test;
+import cn.jia.chat.config.ChatTypedDeliberationSchemaInitializer.Readiness;
+import org.mockito.MockedStatic;
+import org.springframework.jdbc.core.JdbcTemplate;
+
+import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.DatabaseMetaData;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
+import java.sql.SQLException;
+import java.sql.Statement;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.*;
+
+class ChatTypedDeliberationSchemaInitializerTest {
+    @Test void defaultOffPerformsNoDatabaseAccess() throws Exception {
+        JdbcTemplate jdbc=mock(JdbcTemplate.class);
+        var initializer=new ChatTypedDeliberationSchemaInitializer(jdbc,false,false);
+        assertEquals(Readiness.DISABLED,initializer.readiness());
+        initializer.initialize();assertFalse(initializer.ready());verifyNoInteractions(jdbc);
+        assertEquals(Readiness.DISABLED,initializer.readiness());
+    }
+
+    @Test void enabledBeforeRunnerIsInitializingWithoutAnyDatabaseRead() {
+        JdbcTemplate jdbc=mock(JdbcTemplate.class);
+        var initializer=new ChatTypedDeliberationSchemaInitializer(jdbc,true,false);
+        assertFalse(initializer.ready());
+        assertEquals(Readiness.INITIALIZING,initializer.readiness());
+        verifyNoInteractions(jdbc);
+    }
+
+    @Test void missingDataSourceAndPrerequisiteFailureBecomeTerminalNotStartupWaiting() throws Exception {
+        JdbcTemplate jdbc=mock(JdbcTemplate.class);
+        var initializer=new ChatTypedDeliberationSchemaInitializer(jdbc,true,false);
+        assertThrows(IllegalStateException.class,()->initializer.run(null));
+        assertFalse(initializer.ready());assertEquals(Readiness.FAILED,initializer.readiness());
+        var prerequisite=mock(ChatDeliberationSchemaInitializer.class);
+        doThrow(new IllegalStateException("prerequisite drift")).when(prerequisite).ensureInitialized();
+        var dependent=new ChatTypedDeliberationSchemaInitializer(jdbc,prerequisite,true,false);
+        clearInvocations(jdbc);
+        assertThrows(IllegalStateException.class,dependent::initialize);
+        assertFalse(dependent.ready());assertEquals(Readiness.FAILED,dependent.readiness());
+        verifyNoInteractions(jdbc);
+    }
+
+    @Test void absentTablesWithoutMigrationPermissionAreUnavailableAndNeverWritten() throws Exception {
+        var database=new SchemaDatabase(0,1,true);
+        var initializer=new ChatTypedDeliberationSchemaInitializer(database.jdbc,true,false);
+        initializer.run(null);
+        assertFalse(initializer.ready());assertEquals(Readiness.UNAVAILABLE,initializer.readiness());
+        assertTrue(database.preparedSql.stream().anyMatch(sql->sql.contains("RELEASE_LOCK")));
+        verify(database.connection).close();
+        verify(database.statement,never()).executeQuery(anyString());
+        assertEquals(3,database.preparedSql.size(),"only acquire, table count, release are permitted");
+    }
+
+    @Test void readyIsPublishedOnlyAfterValidationLockReleaseAndConnectionClose() throws Exception {
+        var database=new SchemaDatabase(4,1,true);
+        var prerequisite=mock(ChatDeliberationSchemaInitializer.class);
+        var initializer=new ChatTypedDeliberationSchemaInitializer(database.jdbc,prerequisite,true,false);
+        database.beforeRelease=()->assertInitializing(initializer);
+        doAnswer(ignored->{assertInitializing(initializer);return null;}).when(database.connection).close();
+        try(var catalog=validatedCatalog()) {
+            initializer.run(null);
+            catalog.verify(()->ChatTypedDeliberationSchemaInitializer.ensureActionCatalog(any(),eq(false)));
+        }
+        assertTrue(initializer.ready());assertEquals(Readiness.READY,initializer.readiness());
+        var order=inOrder(prerequisite,database.source,database.connection);
+        order.verify(prerequisite).ensureInitialized();
+        order.verify(database.source).getConnection();
+        order.verify(database.connection).close();
+    }
+
+    @Test void validatedTablesWithoutAppliedV3StayTerminallyUnavailable() throws Exception {
+        var database=new SchemaDatabase(4,1,false);
+        var initializer=new ChatTypedDeliberationSchemaInitializer(database.jdbc,true,false);
+        try(var ignored=validatedCatalog()) { initializer.initialize(); }
+        assertFalse(initializer.ready());assertEquals(Readiness.UNAVAILABLE,initializer.readiness());
+        verify(database.connection).close();
+    }
+
+    @Test void releaseFailureCannotLeakReadyEvenAfterSuccessfulValidation() throws Exception {
+        var database=new SchemaDatabase(4,0,true);
+        var initializer=new ChatTypedDeliberationSchemaInitializer(database.jdbc,true,false);
+        try(var ignored=validatedCatalog()) {
+            assertThrows(IllegalStateException.class,initializer::initialize);
+        }
+        assertFalse(initializer.ready());assertEquals(Readiness.FAILED,initializer.readiness());
+        verify(database.connection).close();
+    }
+
+    @Test void connectionCloseFailureCannotLeakReadyEvenAfterSuccessfulValidation() throws Exception {
+        var database=new SchemaDatabase(4,1,true);
+        var initializer=new ChatTypedDeliberationSchemaInitializer(database.jdbc,true,false);
+        doThrow(new SQLException("close failed")).when(database.connection).close();
+        try(var ignored=validatedCatalog()) { assertThrows(SQLException.class,initializer::initialize); }
+        assertFalse(initializer.ready());assertEquals(Readiness.FAILED,initializer.readiness());
+    }
+
+    @Test void catalogDriftReleasesOriginalLockAndFailsClosedWithoutMigration() throws Exception {
+        var database=new SchemaDatabase(4,1,true);
+        var initializer=new ChatTypedDeliberationSchemaInitializer(database.jdbc,true,false);
+        // These lifecycle tests stub only full-catalog validation; the catalog adversarial
+        // tests below exercise the real validators with independent MySQL capture fixtures.
+        try(var ignored=mockStatic(ChatTypedDeliberationSchemaInitializer.class,invocation->{
+            if(invocation.getMethod().getName().equals("ensureActionCatalog"))
+                throw new IllegalStateException("Typed deliberation schema drift: checks");
+            return invocation.callRealMethod();
+        })) { assertThrows(IllegalStateException.class,initializer::initialize); }
+        assertEquals(Readiness.FAILED,initializer.readiness());assertFalse(initializer.ready());
+        assertTrue(database.preparedSql.stream().anyMatch(sql->sql.contains("RELEASE_LOCK")));
+        verify(database.statement,never()).executeQuery(anyString());
+        verify(database.connection).close();
+    }
+
+    private static void assertInitializing(ChatTypedDeliberationSchemaInitializer initializer) {
+        assertEquals(Readiness.INITIALIZING,initializer.readiness());assertFalse(initializer.ready());
+    }
+
+    private static MockedStatic<ChatTypedDeliberationSchemaInitializer> validatedCatalog() {
+        return mockStatic(ChatTypedDeliberationSchemaInitializer.class,invocation->{
+            if(invocation.getMethod().getName().equals("ensureActionCatalog")) return true;
+            return invocation.callRealMethod();
+        });
+    }
+
+    /** JDBC-only lifecycle fixture: no real database, DDL, threads or application startup. */
+    private static final class SchemaDatabase {
+        final JdbcTemplate jdbc=mock(JdbcTemplate.class);
+        final DataSource source=mock(DataSource.class);
+        final Connection connection=mock(Connection.class);
+        final Statement statement=mock(Statement.class);
+        final List<String> preparedSql=new ArrayList<>();
+        Runnable beforeRelease=()->{};
+
+        SchemaDatabase(int tables,int released,boolean versionApplied) throws Exception {
+            when(jdbc.getDataSource()).thenReturn(source);
+            when(source.getConnection()).thenReturn(connection);
+            var metadata=mock(DatabaseMetaData.class);
+            when(connection.getMetaData()).thenReturn(metadata);
+            when(metadata.getDatabaseProductName()).thenReturn("MySQL");
+            when(metadata.getDatabaseMajorVersion()).thenReturn(8);
+            when(connection.prepareStatement(anyString())).thenAnswer(invocation->{
+                String sql=invocation.getArgument(0);preparedSql.add(sql);
+                var prepared=mock(PreparedStatement.class);
+                Object value=sql.contains("COUNT(*)")?tables:sql.contains("RELEASE_LOCK")?released:1;
+                when(prepared.executeQuery()).thenAnswer(ignored->{
+                    if(sql.contains("RELEASE_LOCK")) beforeRelease.run();
+                    return singleRow(value,true);
+                });
+                return prepared;
+            });
+            when(connection.createStatement()).thenReturn(statement);
+            when(statement.executeQuery(contains("WHERE version=3")))
+                    .thenAnswer(ignored->singleRow("APPLIED",versionApplied));
+        }
+
+        private static ResultSet singleRow(Object value,boolean present) throws Exception {
+            var result=mock(ResultSet.class);var metadata=mock(ResultSetMetaData.class);
+            when(result.getMetaData()).thenReturn(metadata);when(metadata.getColumnCount()).thenReturn(1);
+            when(result.next()).thenReturn(present,false);
+            if(value instanceof Integer number) when(result.getInt(1)).thenReturn(number);
+            if(value instanceof String text) when(result.getString(1)).thenReturn(text);
+            return result;
+        }
+    }
+
+    @Test void ddlIsExactlyFourAdditiveTablesWithExplicitForeignKeyActions() {
+        List<String> ddl=ChatTypedDeliberationSchemaInitializer.ddl();
+        assertEquals(4,ddl.size());
+        assertTrue(ddl.get(0).startsWith("CREATE TABLE IF NOT EXISTS chat_typed_outcome "));
+        assertTrue(ddl.get(1).startsWith("CREATE TABLE IF NOT EXISTS chat_typed_pending_question "));
+        assertTrue(ddl.get(2).startsWith("CREATE TABLE IF NOT EXISTS chat_typed_proposal "));
+        assertTrue(ddl.get(3).startsWith("CREATE TABLE IF NOT EXISTS chat_typed_admission "));
+        String all=String.join("\n",ddl).toLowerCase();
+        assertFalse(all.contains("alter table"));assertFalse(all.contains("drop table"));
+        assertEquals(4,count(all,"on update restrict on delete restrict"));
+        assertTrue(all.contains("idx_chat_typed_outcome_turn_fk"));
+        assertTrue(all.contains("idx_chat_typed_admission_request_fk"));
+        String pendingPredicate="((state='OPEN' AND state_version=0 AND reply_request_id IS NULL\n"
+                +"      AND reply_idempotency_key IS NULL AND reply_body_digest IS NULL)\n"
+                +"     OR (state='ANSWERED' AND state_version=1 AND reply_request_id IS NOT NULL\n"
+                +"      AND reply_idempotency_key IS NOT NULL\n"
+                +"      AND reply_body_digest REGEXP BINARY '^sha256:[0-9a-f]{64}$')),";
+        assertTrue(ddl.get(1).contains(pendingPredicate));
+        assertFalse(ddl.get(1).contains("reply_body_digest REGEXP BINARY '^sha256:[0-9a-f]{64}$'))),"));
+    }
+
+    @Test void parserAcceptsOnlyTheApprovedForeignKeyActionAndFourTableCatalog() {
+        List<String> approved=ChatTypedDeliberationSchemaInitializer.ddl();
+        String outcome=approved.getFirst();
+        assertTrue(ChatTypedDeliberationSchemaInitializer.approvedDdlStatement(outcome,"chat_typed_outcome"));
+        assertFalse(ChatTypedDeliberationSchemaInitializer.approvedDdlStatement(
+                outcome.replace("ON DELETE RESTRICT","ON DELETE CASCADE"),"chat_typed_outcome"));
+        assertFalse(ChatTypedDeliberationSchemaInitializer.approvedDdlStatement(
+                outcome+" DELETE FROM chat_typed_outcome","chat_typed_outcome"));
+        assertFalse(ChatTypedDeliberationSchemaInitializer.approvedDdlStatement(outcome,"foreign_table"));
+        assertThrows(IllegalStateException.class,()->ChatTypedDeliberationSchemaInitializer.parseDdl(
+                String.join(";\n",approved)+";\nCREATE TABLE IF NOT EXISTS foreign_table (id BIGINT)"));
+    }
+
+    @Test void catalogQuoteNormalizationAcceptsOnlyPlainOrOneRawEscapeAndPreservesLiteralData() {
+        String plain="kind IN ('ANSWER','CLARIFY')";
+        assertEquals(ChatTypedDeliberationSchemaInitializer.canonicalCheck(plain),
+                ChatTypedDeliberationSchemaInitializer.canonicalCheck("kind IN (\\'ANSWER\\',\\'CLARIFY\\')"));
+        assertThrows(IllegalStateException.class,()->ChatTypedDeliberationSchemaInitializer.canonicalCheck(
+                "kind IN (\\\\'ANSWER\\\\',\\\\'CLARIFY\\\\')"));
+        assertThrows(IllegalStateException.class,()->ChatTypedDeliberationSchemaInitializer.canonicalCheck(
+                "kind IN ('ANSWER',\\'CLARIFY\\')"));
+        assertTrue(ChatTypedDeliberationSchemaInitializer.canonicalCheck(
+                "value='literal_utf8mb4\\\\tail'").contains("literal_utf8mb4\\\\tail"));
+        assertTrue(ChatTypedDeliberationSchemaInitializer.canonicalCheck(
+                "_utf8mb4value='x'").startsWith("_utf8mb4value"));
+    }
+
+    @Test void changedOperatorsParenthesesNullClausesAndUnenforcedChecksFailClosed() {
+        String exact=ChatTypedDeliberationSchemaInitializer.canonicalCheck("(state='OPEN' AND state_version=0)");
+        assertNotEquals(exact,ChatTypedDeliberationSchemaInitializer.canonicalCheck("(state='OPEN' OR state_version=0)"));
+        JdbcTemplate empty=mock(JdbcTemplate.class);
+        when(empty.queryForList(anyString(),any(Object[].class))).thenReturn(List.of());
+        assertThrows(IllegalStateException.class,()->ChatTypedDeliberationSchemaInitializer.validateChecks(empty));
+        JdbcTemplate nullClause=mock(JdbcTemplate.class);
+        when(nullClause.queryForList(anyString(),any(Object[].class))).thenReturn(List.of(row(
+                "constraint_name","chk_chat_typed_outcome_generation","enforced","YES","check_clause",null)));
+        assertThrows(IllegalStateException.class,()->ChatTypedDeliberationSchemaInitializer.validateChecks(nullClause));
+        JdbcTemplate unenforced=mock(JdbcTemplate.class);
+        when(unenforced.queryForList(anyString(),any(Object[].class))).thenReturn(List.of(row(
+                "constraint_name","chk_chat_typed_outcome_generation","enforced","NO","check_clause","conversation_generation>=1")));
+        assertThrows(IllegalStateException.class,()->ChatTypedDeliberationSchemaInitializer.validateChecks(unenforced));
+    }
+
+    @Test void capturedMysql8021CheckCatalogAcceptsAllRowsAndRejectsEachCorrectedConjunctionWeakened() throws Exception {
+        Map<String,Object> fixture=capturedCheckCatalog();
+        assertEquals("98af3d88d5a1212e52764e308b2361e99dbffbb7595d1196123465a0481a41a4",fixture.get("sourceSqlSha256"));
+        List<Map<String,Object>> actual=capturedCheckRows(fixture);
+        assertEquals(18,actual.size());
+        JdbcTemplate accepted=mock(JdbcTemplate.class);
+        when(accepted.queryForList(anyString(),any(Object[].class))).thenReturn(actual);
+        assertTrue(ChatTypedDeliberationSchemaInitializer.validateChecks(accepted, true));
+        assertThrows(IllegalStateException.class, () -> ChatTypedDeliberationSchemaInitializer.validateChecks(accepted));
+        for(String corrected:List.of("chk_chat_typed_admission_digest","chk_chat_typed_admission_reply",
+                "chk_chat_typed_admission_turns","chk_chat_typed_outcome_json","chk_chat_typed_pending_version",
+                "chk_chat_typed_proposal_parent","chk_chat_typed_proposal_sources")) {
+            List<Map<String,Object>> weakened=actual.stream().<Map<String,Object>>map(LinkedHashMap::new).toList();
+            Map<String,Object> row=weakened.stream().filter(value->corrected.equals(value.get("constraint_name"))).findFirst().orElseThrow();
+            String clause=(String)row.get("check_clause");String changed=clause.replaceFirst("(?i) and "," or ");
+            assertNotEquals(clause,changed,corrected);row.put("check_clause",changed);
+            JdbcTemplate rejected=mock(JdbcTemplate.class);
+            when(rejected.queryForList(anyString(),any(Object[].class))).thenReturn(weakened);
+            assertThrows(IllegalStateException.class,()->ChatTypedDeliberationSchemaInitializer.validateChecks(rejected, true),corrected);
+        }
+    }
+
+    @Test void exactWidenedKindIsReadyAndUnknownWeakenedKindsAreNotMigrated() throws Exception {
+        List<Map<String,Object>> rows=capturedCheckRows(capturedCheckCatalog());
+        var kind=rows.stream().filter(row -> "chk_chat_typed_outcome_kind".equals(row.get("constraint_name")))
+                .findFirst().orElseThrow();
+        JdbcTemplate jdbc=mock(JdbcTemplate.class);
+        when(jdbc.queryForList(anyString(),any(Object[].class))).thenReturn(rows);
+        kind.put("check_clause", "kind IN ('ANSWER','CLARIFY','EXECUTION_PROPOSAL','ACTION_REQUEST')");
+        assertFalse(ChatTypedDeliberationSchemaInitializer.validateChecks(jdbc, true));
+        assertDoesNotThrow(() -> ChatTypedDeliberationSchemaInitializer.validateChecks(jdbc));
+        for (String changed : List.of("kind IN ('ANSWER','CLARIFY','EXECUTION_PROPOSAL','SHELL')",
+                "kind IS NOT NULL", "kind IN ('ANSWER','CLARIFY')")) {
+            kind.put("check_clause",changed);
+            assertThrows(IllegalStateException.class, () -> ChatTypedDeliberationSchemaInitializer.validateChecks(jdbc,true));
+        }
+        verify(jdbc,never()).execute(anyString());
+    }
+
+    @Test void indexOrderPrefixExpressionAndUnexpectedIndexesFailClosed() {
+        JdbcTemplate jdbc=mock(JdbcTemplate.class);
+        List<Map<String,Object>> rows=indexRows();
+        when(jdbc.queryForList(anyString(),any(Object[].class))).thenReturn(rows);
+        ChatTypedDeliberationSchemaInitializer.validateIndexes(jdbc,"chat_typed_outcome");
+        rows.get(0).put("SUB_PART",16);
+        assertThrows(IllegalStateException.class,
+                ()->ChatTypedDeliberationSchemaInitializer.validateIndexes(jdbc,"chat_typed_outcome"));
+        rows.get(0).put("SUB_PART",null);rows.get(0).put("COLUMN_NAME","foreign");
+        assertThrows(IllegalStateException.class,
+                ()->ChatTypedDeliberationSchemaInitializer.validateIndexes(jdbc,"chat_typed_outcome"));
+    }
+
+    @Test void missingOrChangedForeignKeyCatalogFailsClosed() {
+        JdbcTemplate jdbc=mock(JdbcTemplate.class);
+        when(jdbc.queryForList(anyString(),any(Object[].class))).thenReturn(List.of());
+        assertThrows(IllegalStateException.class,()->ChatTypedDeliberationSchemaInitializer.validateForeignKeys(jdbc));
+    }
+
+
+    @SuppressWarnings("unchecked") private static Map<String,Object> capturedCheckCatalog() throws Exception {
+        try(var stream=ChatTypedDeliberationSchemaInitializerTest.class.getResourceAsStream(
+                "/contracts/typed-check-catalog-mysql8021.json")) {
+            assertNotNull(stream);
+            return new tools.jackson.databind.ObjectMapper().readValue(stream,Map.class);
+        }
+    }
+    @SuppressWarnings("unchecked") private static List<Map<String,Object>> capturedCheckRows(Map<String,Object> fixture) {
+        List<String> rows=(List<String>)fixture.get("capturedRawRows");
+        assertEquals(18,rows.size());assertEquals(18,fixture.get("rowCount"));
+        return rows.stream().map(value->{String[] fields=value.split("\\t",3);assertEquals(3,fields.length);
+            return row("constraint_name",fields[0],"enforced",fields[1],"check_clause",fields[2]);}).toList();
+    }
+
+    private static List<Map<String,Object>> indexRows() {
+        Map<String,List<String>> indexes=new LinkedHashMap<>();
+        indexes.put("PRIMARY",List.of("outcome_id"));
+        indexes.put("idx_chat_typed_outcome_message",List.of("tenant_id","owner_jiacn","client_id","conversation_id","conversation_generation","assistant_message_id"));
+        indexes.put("idx_chat_typed_outcome_turn_fk",List.of("turn_id"));
+        indexes.put("uk_chat_typed_outcome_scope_id",List.of("tenant_id","owner_jiacn","client_id","conversation_id","conversation_generation","outcome_id"));
+        indexes.put("uk_chat_typed_outcome_scope_request",List.of("tenant_id","owner_jiacn","client_id","conversation_id","conversation_generation","request_id","request_revision"));
+        indexes.put("uk_chat_typed_outcome_scope_turn",List.of("tenant_id","owner_jiacn","client_id","conversation_id","conversation_generation","turn_id"));
+        List<Map<String,Object>> rows=new ArrayList<>();
+        indexes.forEach((name,columns)->{for(int i=0;i<columns.size();i++)rows.add(row(
+                "INDEX_NAME",name,"NON_UNIQUE",name.startsWith("idx_")?1:0,"SEQ_IN_INDEX",i+1,
+                "COLUMN_NAME",columns.get(i),"SUB_PART",null,"EXPRESSION",null));});
+        return rows;
+    }
+    private static Map<String,Object> row(Object... values) {
+        Map<String,Object> row=new LinkedHashMap<>();for(int i=0;i<values.length;i+=2)row.put((String)values[i],values[i+1]);return row;
+    }
+    private static int count(String value,String token){int count=0,index=0;while((index=value.indexOf(token,index))>=0){count++;index+=token.length();}return count;}
+}

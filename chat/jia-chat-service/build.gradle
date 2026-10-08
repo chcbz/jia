@@ -97,7 +97,6 @@ tasks.register('bf08FormalFlow', Test) {
     useJUnitPlatform()
 }
 
-
 // Managed onboarding websocket authorization slice. It proves that only the exact
 // paid managed key may bridge a PROVISIONED identity into its first registration.
 def managedHostingHandshakeSourceSet = sourceSets.create('managedHostingHandshake') {
@@ -106,7 +105,6 @@ def managedHostingHandshakeSourceSet = sourceSets.create('managedHostingHandshak
         include 'cn/jia/chat/config/ApiKeyHandshakeInterceptorManagedOnboardingTest.java'
         include 'cn/jia/chat/config/ApiKeyHandshakeInterceptorManagedRefundTest.java'
     }
-    resources.srcDir 'src/test/resources'
     compileClasspath += sourceSets.main.output
     runtimeClasspath += output + compileClasspath
 }
@@ -128,6 +126,351 @@ tasks.register('managedHostingHandshake', Test) {
     useJUnitPlatform()
 }
 
+// T10/T11/T15 focused P0 slice; avoids compiling unrelated historical chat tests on low-disk hosts.
+def chatDeliberationSourceSet = sourceSets.create('chatDeliberation') {
+    java.srcDir 'src/chatDeliberationTest/java'
+    resources.srcDir 'src/chatDeliberationTest/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(chatDeliberationSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(chatDeliberationSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('chatDeliberation', Test) {
+    group = 'verification'
+    description = 'Runs T10/T11/T15 route, snapshot, durable turn and protocol compatibility tests.'
+    dependsOn tasks.named(chatDeliberationSourceSet.classesTaskName)
+    testClassesDirs = chatDeliberationSourceSet.output.classesDirs
+    classpath = chatDeliberationSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
+
+// MMD-U3 finalization HTTP/orchestration slice; owner reads remain side-effect free.
+def mmdU3FinalizationSourceSet = sourceSets.create('mmdU3Finalization') {
+    java {
+        srcDir 'src/chatDeliberationTest/java'
+        include 'cn/jia/chat/service/ChatSelectedOutputFinalizationServiceTest.java'
+        include 'cn/jia/chat/api/AgentTaskSelectedOutputFinalizationControllerTest.java'
+        include 'cn/jia/chat/config/ChatSelectedOutputFinalizationSchemaInitializerTest.java'
+    }
+    resources.srcDir 'src/chatDeliberationTest/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(mmdU3FinalizationSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(mmdU3FinalizationSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('mmdU3Finalization', Test) {
+    group = 'verification'
+    description = 'Runs MMD U3 exact selection, recovery, owner scope, read-only lookup and schema tests.'
+    dependsOn tasks.named(mmdU3FinalizationSourceSet.classesTaskName)
+    testClassesDirs = mmdU3FinalizationSourceSet.output.classesDirs
+    classpath = mmdU3FinalizationSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
+
+// MMD-U1 controlled-provider registration sibling; independent of immutable fast-v1/native-v1.
+def mmdU1ProviderCredentialBindingSourceSet = sourceSets.create('mmdU1ProviderCredentialBinding') {
+    java {
+        srcDir 'src/chatDeliberationTest/java'
+        include 'cn/jia/chat/handler/NativeProviderCredentialBindingDeclarationTest.java'
+        include 'cn/jia/chat/handler/AgentWebSocketNativeProviderCredentialBindingTest.java'
+        include 'cn/jia/chat/handler/NativeBountyExecutionDeclarationTest.java'
+        include 'cn/jia/chat/handler/AgentWebSocketNativeBountyExecutionTest.java'
+        include 'cn/jia/agent/security/NativeBountyCurrentBindingTest.java'
+        include 'cn/jia/chat/handler/AgentRuntimeCapabilitiesTest.java'
+    }
+    resources.srcDir 'src/chatDeliberationTest/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+// These six fixtures use production WebSocket/runtime identity classes plus JUnit/Mockito.
+// They do not import common:jia-common-test, BaseTest or Testable, so keep that annotation
+// processor and unrelated service-test graph outside this bounded source set.
+configurations.named(mmdU1ProviderCredentialBindingSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.implementation
+}
+configurations.named(mmdU1ProviderCredentialBindingSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.runtimeOnly
+}
+dependencies {
+    add(mmdU1ProviderCredentialBindingSourceSet.implementationConfigurationName,
+            platform("org.springframework.boot:spring-boot-dependencies:${libs.versions.spring.boot.asProvider().get()}"))
+    add(mmdU1ProviderCredentialBindingSourceSet.implementationConfigurationName, libs.junit.jupiter)
+    add(mmdU1ProviderCredentialBindingSourceSet.implementationConfigurationName, 'org.mockito:mockito-core')
+    add(mmdU1ProviderCredentialBindingSourceSet.implementationConfigurationName,
+            libs.spring.boot.starter.websocket)
+    add(mmdU1ProviderCredentialBindingSourceSet.implementationConfigurationName,
+            project(':oauth:jia-oauth-api'))
+    add(mmdU1ProviderCredentialBindingSourceSet.implementationConfigurationName,
+            project(':agent:jia-agent-mapper'))
+    add(mmdU1ProviderCredentialBindingSourceSet.runtimeOnlyConfigurationName,
+            'org.junit.platform:junit-platform-launcher:6.0.1')
+}
+tasks.register('mmdU1ProviderCredentialBinding', Test) {
+    maxParallelForks = 1
+    maxHeapSize = '256m'
+    jvmArgs '-XX:+UseSerialGC', '-XX:ActiveProcessorCount=2',
+            '-XX:MaxMetaspaceSize=192m', '-Xss256k'
+    group = 'verification'
+    description = 'Runs exact controlled-provider declaration and current authenticated-session lookup regressions.'
+    dependsOn tasks.named(mmdU1ProviderCredentialBindingSourceSet.classesTaskName)
+    testClassesDirs = mmdU1ProviderCredentialBindingSourceSet.output.classesDirs
+    classpath = mmdU1ProviderCredentialBindingSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
+
+// MMD-BRIDGE-A same-session declaration, capability and Agent-before-Chat transaction slice.
+def mmdControlledImageBridgeSourceSet = sourceSets.create('mmdControlledImageBridge') {
+    java {
+        srcDir 'src/chatDeliberationTest/java'
+        include 'cn/jia/chat/handler/ControlledImageBountyExecutionDeclarationTest.java'
+        include 'cn/jia/chat/handler/AgentWebSocketControlledImageExecutionTest.java'
+        include 'cn/jia/chat/handler/NativeProviderCredentialBindingDeclarationTest.java'
+        include 'cn/jia/chat/handler/NativeBountyExecutionDeclarationTest.java'
+        include 'cn/jia/chat/handler/AgentRuntimeCapabilitiesTest.java'
+        include 'cn/jia/chat/service/ControlledImagePointAndStartCapabilityServiceTest.java'
+        include 'cn/jia/chat/api/AgentTaskControlledImageCapabilityControllerTest.java'
+        include 'cn/jia/chat/service/ChatBountyExecutionCoordinatorTest.java'
+        include 'cn/jia/chat/service/ChatBountyExecutionCoordinatorSpringTransactionTest.java'
+    }
+    resources.srcDir 'src/chatDeliberationTest/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(mmdControlledImageBridgeSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.implementation
+}
+configurations.named(mmdControlledImageBridgeSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.runtimeOnly
+}
+dependencies {
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName,
+            platform("org.springframework.boot:spring-boot-dependencies:${libs.versions.spring.boot.asProvider().get()}"))
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName, libs.junit.jupiter)
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName, 'org.mockito:mockito-core')
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName, 'org.springframework:spring-test')
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName, 'org.hamcrest:hamcrest')
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName,
+            libs.spring.boot.starter.websocket)
+    // Chat transaction fixture imports the production owner-scoped task-root DAO directly.
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName,
+            project(':agent:jia-agent-mapper'))
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName,
+            'org.springframework.security:spring-security-oauth2-resource-server')
+    add(mmdControlledImageBridgeSourceSet.implementationConfigurationName,
+            'org.springframework.security:spring-security-oauth2-jose')
+    add(mmdControlledImageBridgeSourceSet.runtimeOnlyConfigurationName,
+            'org.junit.platform:junit-platform-launcher:6.0.1')
+    add(mmdControlledImageBridgeSourceSet.runtimeOnlyConfigurationName,
+            project(':oauth:jia-oauth-api'))
+    add(mmdControlledImageBridgeSourceSet.runtimeOnlyConfigurationName, 'com.h2database:h2')
+    add(mmdControlledImageBridgeSourceSet.runtimeOnlyConfigurationName, 'com.jayway.jsonpath:json-path')
+}
+tasks.register('mmdControlledImageBridge', Test) {
+    maxParallelForks = 1
+    maxHeapSize = '256m'
+    jvmArgs '-XX:+UseSerialGC', '-XX:ActiveProcessorCount=2',
+            '-XX:MaxMetaspaceSize=192m', '-Xss256k'
+    group = 'verification'
+    description = 'Runs controlled image declaration, capability, owner HTTP and cross-module transaction regressions.'
+    dependsOn tasks.named(mmdControlledImageBridgeSourceSet.classesTaskName)
+    testClassesDirs = mmdControlledImageBridgeSourceSet.output.classesDirs
+    classpath = mmdControlledImageBridgeSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
+
+// MMD-U2 schema-3 owner preview/issue/admit and runtime declaration slice.
+def mmdControlledImageFollowupV3SourceSet = sourceSets.create('mmdControlledImageFollowupV3') {
+    java {
+        srcDir 'src/chatDeliberationTest/java'
+        include 'cn/jia/chat/api/ChatBountyInteractionV3ControllerTest.java'
+        include 'cn/jia/chat/service/ChatBountyInteractionV3PreviewServiceTest.java'
+        include 'cn/jia/chat/service/ChatBountyInteractionV3AuthorityServiceTest.java'
+        include 'cn/jia/chat/service/ChatBountyInteractionV3AdmissionServiceTest.java'
+        include 'cn/jia/chat/service/ChatConversationAssetSourceResolverTest.java'
+        include 'cn/jia/chat/service/ChatBountyExecutionCoordinatorV3Test.java'
+        include 'cn/jia/chat/service/ChatBountyExecutionCoordinatorV3SpringTransactionTest.java'
+        include 'cn/jia/chat/handler/AgentWebSocketControlledImageV3ExecutionTest.java'
+        include 'cn/jia/chat/handler/NativeProviderCredentialBindingDeclarationTest.java'
+        include 'cn/jia/chat/handler/AgentRuntimeCapabilitiesTest.java'
+        include 'cn/jia/chat/handler/ControlledImageBountyExecutionV3DeclarationTest.java'
+    }
+    resources.srcDir 'src/chatDeliberationTest/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName) {
+    extendsFrom configurations.implementation
+}
+configurations.named(mmdControlledImageFollowupV3SourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.runtimeOnly
+}
+dependencies {
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName,
+            platform("org.springframework.boot:spring-boot-dependencies:${libs.versions.spring.boot.asProvider().get()}"))
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName, libs.junit.jupiter)
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName, 'org.mockito:mockito-core')
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName, 'org.springframework:spring-test')
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName, 'org.hamcrest:hamcrest')
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName, libs.spring.boot.starter.websocket)
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName, project(':agent:jia-agent-mapper'))
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName,
+            'org.springframework.security:spring-security-oauth2-resource-server')
+    add(mmdControlledImageFollowupV3SourceSet.implementationConfigurationName,
+            'org.springframework.security:spring-security-oauth2-jose')
+    add(mmdControlledImageFollowupV3SourceSet.runtimeOnlyConfigurationName,
+            'org.junit.platform:junit-platform-launcher:6.0.1')
+    add(mmdControlledImageFollowupV3SourceSet.runtimeOnlyConfigurationName, project(':oauth:jia-oauth-api'))
+    add(mmdControlledImageFollowupV3SourceSet.runtimeOnlyConfigurationName, 'com.h2database:h2')
+    add(mmdControlledImageFollowupV3SourceSet.runtimeOnlyConfigurationName, 'com.jayway.jsonpath:json-path')
+}
+tasks.register('mmdControlledImageFollowupV3', Test) {
+    maxParallelForks = 1
+    maxHeapSize = '256m'
+    jvmArgs '-XX:+UseSerialGC', '-XX:ActiveProcessorCount=2',
+            '-XX:MaxMetaspaceSize=192m', '-Xss256k'
+    group = 'verification'
+    description = 'Runs schema-3 owner context, preview, issue, admit, asset lineage and live-session declaration regressions.'
+    dependsOn tasks.named(mmdControlledImageFollowupV3SourceSet.classesTaskName)
+    testClassesDirs = mmdControlledImageFollowupV3SourceSet.output.classesDirs
+    classpath = mmdControlledImageFollowupV3SourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
+
+// MMD-U2 IA typed INSPECT authority slice; preserves CHAT v1 and compiles only affected tests.
+def mmdU2TypedInspectionSourceSet = sourceSets.create('mmdU2TypedInspection') {
+    java {
+        srcDir 'src/chatDeliberationTest/java'
+        include 'cn/jia/agent/security/AgentRuntimeInspectionRouteTest.java'
+        include 'cn/jia/chat/api/ChatTypedInspectionWireTest.java'
+        include 'cn/jia/chat/api/AgentInspectionInputControllerTest.java'
+        include 'cn/jia/chat/handler/TypedInspectionDeclarationTest.java'
+        include 'cn/jia/chat/handler/TypedInspectionSessionRegistryTest.java'
+        include 'cn/jia/chat/service/TypedInspectionFinalValidatorTest.java'
+        include 'cn/jia/chat/service/ChatTypedInspectionContextContractTest.java'
+        include 'cn/jia/chat/service/ChatInspectionAuthorityServiceTest.java'
+        include 'cn/jia/chat/service/ChatTypedInspectionAdmissionServiceTest.java'
+        include 'cn/jia/chat/service/ChatTypedInspectionSpringTransactionTest.java'
+        include 'cn/jia/chat/service/TypedDeliberationFinalValidatorTest.java'
+        include 'cn/jia/chat/handler/TypedDeliberationDeclarationTest.java'
+        include 'cn/jia/chat/handler/TypedDeliberationSessionRegistryTest.java'
+        include 'cn/jia/chat/service/ChatTypedDeliberationServiceTest.java'
+        include 'cn/jia/chat/handler/AgentWebSocketTypedDeliberationTest.java'
+    }
+    resources.srcDir 'src/chatDeliberationTest/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(mmdU2TypedInspectionSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.implementation
+}
+configurations.named(mmdU2TypedInspectionSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.runtimeOnly
+}
+dependencies {
+    add(mmdU2TypedInspectionSourceSet.implementationConfigurationName,
+            platform("org.springframework.boot:spring-boot-dependencies:${libs.versions.spring.boot.asProvider().get()}"))
+    add(mmdU2TypedInspectionSourceSet.implementationConfigurationName, libs.junit.jupiter)
+    add(mmdU2TypedInspectionSourceSet.implementationConfigurationName, 'org.mockito:mockito-core')
+    add(mmdU2TypedInspectionSourceSet.implementationConfigurationName, 'org.springframework:spring-test')
+    add(mmdU2TypedInspectionSourceSet.implementationConfigurationName, 'org.hamcrest:hamcrest')
+    add(mmdU2TypedInspectionSourceSet.implementationConfigurationName, libs.spring.boot.starter.websocket)
+    add(mmdU2TypedInspectionSourceSet.implementationConfigurationName, project(':agent:jia-agent-mapper'))
+    add(mmdU2TypedInspectionSourceSet.implementationConfigurationName,
+            'org.springframework.security:spring-security-oauth2-resource-server')
+    add(mmdU2TypedInspectionSourceSet.implementationConfigurationName,
+            'org.springframework.security:spring-security-oauth2-jose')
+    add(mmdU2TypedInspectionSourceSet.runtimeOnlyConfigurationName,
+            'org.junit.platform:junit-platform-launcher:6.0.1')
+    add(mmdU2TypedInspectionSourceSet.runtimeOnlyConfigurationName, project(':oauth:jia-oauth-api'))
+    add(mmdU2TypedInspectionSourceSet.runtimeOnlyConfigurationName, 'com.h2database:h2')
+}
+tasks.register('mmdU2TypedInspection', Test) {
+    maxParallelForks = 1
+    maxHeapSize = '256m'
+    jvmArgs '-XX:+UseSerialGC', '-XX:ActiveProcessorCount=2',
+            '-XX:MaxMetaspaceSize=192m', '-Xss256k'
+    group = 'verification'
+    description = 'Runs typed INSPECT admission, authority, digest, v2 final and CHAT v1 compatibility regressions.'
+    dependsOn tasks.named(mmdU2TypedInspectionSourceSet.classesTaskName)
+    testClassesDirs = mmdU2TypedInspectionSourceSet.output.classesDirs
+    classpath = mmdU2TypedInspectionSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
+
+// AC12 text-selection archive closed loop. MySQL evidence remains opt-in and guarded.
+def mmdU3ConversationArchiveSourceSet = sourceSets.create('mmdU3ConversationArchive') {
+    java {
+        srcDir 'src/chatDeliberationTest/java'
+        include 'cn/jia/chat/archive/conversation/ChatConversationArchiveServiceTest.java'
+        include 'cn/jia/chat/archive/conversation/ChatConversationArchiveMySqlTestGuard.java'
+        include 'cn/jia/chat/archive/conversation/ChatConversationArchiveMySqlTestGuardTest.java'
+        include 'cn/jia/chat/archive/conversation/ChatConversationArchiveMySqlIntegrationTest.java'
+        include 'cn/jia/chat/api/ChatConversationArchiveControllerTest.java'
+        include 'cn/jia/chat/config/ChatConversationArchiveContractTest.java'
+        include 'cn/jia/chat/config/ChatSchemaReadinessLifecycleTest.java'
+    }
+    resources.srcDir 'src/chatDeliberationTest/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(mmdU3ConversationArchiveSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(mmdU3ConversationArchiveSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('mmdU3ConversationArchive', Test) {
+    maxParallelForks = 1
+    maxHeapSize = '256m'
+    jvmArgs '-XX:+UseSerialGC', '-XX:ActiveProcessorCount=2',
+            '-XX:MaxMetaspaceSize=192m', '-Xss256k'
+    group = 'verification'
+    description = 'Runs AC12 canonical archive wire, frozen text snapshot, ACL, recovery and schema tests.'
+    dependsOn tasks.named(mmdU3ConversationArchiveSourceSet.classesTaskName)
+    testClassesDirs = mmdU3ConversationArchiveSourceSet.output.classesDirs
+    classpath = mmdU3ConversationArchiveSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
+
+// Started-but-undelivered owner termination: strict wire and real isolated MySQL transactions.
+def mmdExecutionTerminationSourceSet = sourceSets.create('mmdExecutionTermination') {
+    java {
+        srcDir 'src/chatDeliberationTest/java'
+        include 'cn/jia/chat/archive/conversation/ChatConversationArchiveMySqlTestGuard.java'
+        include 'cn/jia/chat/archive/conversation/ChatBountyExecutionTerminationMySqlTest.java'
+        include 'cn/jia/chat/api/ChatBountyExecutionTerminationControllerTest.java'
+    }
+    resources.srcDir 'src/chatDeliberationTest/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(mmdExecutionTerminationSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(mmdExecutionTerminationSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('mmdExecutionTermination', Test) {
+    maxParallelForks = 1
+    maxHeapSize = '256m'
+    jvmArgs '-XX:+UseSerialGC', '-XX:ActiveProcessorCount=2',
+            '-XX:MaxMetaspaceSize=192m', '-Xss256k'
+    group = 'verification'
+    description = 'Runs exact owner abandonment, paid-fact preservation, replay, ACL and SQL race tests.'
+    dependsOn tasks.named(mmdExecutionTerminationSourceSet.classesTaskName)
+    testClassesDirs = mmdExecutionTerminationSourceSet.output.classesDirs
+    classpath = mmdExecutionTerminationSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
+
 
 // AAM-M1-M4 focused source slice; avoids unrelated historical chat test compilation debt.
 def archiveMaintenanceMvpSourceSet = sourceSets.create('archiveMaintenanceMvp') {
@@ -137,6 +480,7 @@ def archiveMaintenanceMvpSourceSet = sourceSets.create('archiveMaintenanceMvp') 
         include 'cn/jia/chat/archive/maintenance/service/ArchiveSourceArtifactReconcilerTest.java'
         include 'cn/jia/chat/archive/maintenance/entry/ArchiveRestrictedChatClientFactoryTest.java'
         include 'cn/jia/chat/archive/maintenance/entry/ArchiveMaintenanceChatCoordinatorTest.java'
+        include 'cn/jia/chat/api/ArchiveMaintenanceChatMergeRoutingTest.java'
         include 'cn/jia/chat/archive/maintenance/service/ArchiveMaintenanceServiceWiringContextTest.java'
         include 'cn/jia/chat/archive/maintenance/service/ArchiveExecutionCommandDispatcherTest.java'
         include 'cn/jia/chat/archive/maintenance/service/ArchiveBusinessOutboxDispatcherTest.java'
@@ -216,4 +560,34 @@ tasks.register('archiveCrossComponentFixtureServer', JavaExec) {
     mainClass = 'cn.jia.chat.archive.maintenance.integration.ArchiveCrossComponentFixtureServer'
     maxHeapSize = '256m'
     jvmArgs '-XX:MaxMetaspaceSize=160m', '-Xss256k'
+}
+
+// Exact replay endpoint regression slice; no unrelated deliberation tests are compiled here.
+def chatConversationReplaySourceSet = sourceSets.create('chatConversationReplay') {
+    java {
+        srcDir 'src/chatDeliberationTest/java'
+        include 'cn/jia/chat/service/ChatConversationReplayPagerTest.java'
+        include 'cn/jia/chat/api/ChatConversationEventsHttpTest.java'
+    }
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(chatConversationReplaySourceSet.implementationConfigurationName) {
+    extendsFrom configurations.named(mmdU2TypedInspectionSourceSet.implementationConfigurationName).get()
+}
+configurations.named(chatConversationReplaySourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.named(mmdU2TypedInspectionSourceSet.runtimeOnlyConfigurationName).get()
+}
+dependencies {
+    add(chatConversationReplaySourceSet.runtimeOnlyConfigurationName, libs.spring.redis)
+    add(chatConversationReplaySourceSet.runtimeOnlyConfigurationName, 'com.jayway.jsonpath:json-path')
+}
+tasks.register('chatConversationReplay', Test) {
+    group = 'verification'
+    description = 'Runs bounded replay completeness and actual SSE watermark/catch-up regressions.'
+    maxParallelForks = 1
+    dependsOn tasks.named(chatConversationReplaySourceSet.classesTaskName)
+    testClassesDirs = chatConversationReplaySourceSet.output.classesDirs
+    classpath = chatConversationReplaySourceSet.runtimeClasspath
+    useJUnitPlatform()
 }

@@ -12,6 +12,7 @@ import cn.jia.agent.entity.AgentRuntimeDTO;
 import cn.jia.agent.entity.AgentStatusDTO;
 import cn.jia.agent.entity.AgentTaskAssignDTO;
 import cn.jia.agent.entity.AgentTaskCreateDTO;
+import cn.jia.agent.entity.AgentTaskExecutionGrantRevokeDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskNoteDTO;
 import cn.jia.agent.entity.AgentTaskRecommendationDTO;
@@ -31,6 +32,8 @@ import cn.jia.agent.service.AbilityEvaluationService;
 import cn.jia.agent.service.AgentHostedBindingTransaction;
 import cn.jia.agent.service.AgentPersonaProvisioningService;
 import cn.jia.agent.service.AgentService;
+import cn.jia.agent.service.AgentTaskExecutionGrantException;
+import cn.jia.agent.service.AgentTaskExecutionGrantService;
 import cn.jia.agent.service.HostingRentAdmissionException;
 import cn.jia.agent.service.funding.FundedBountyActor;
 import cn.jia.agent.service.funding.FundedBountyException;
@@ -82,6 +85,7 @@ public class AgentController {
     private final FundedBountyQuoteClaimService fundedBountyQuoteClaimService;
     private cn.jia.agent.skill.SkillRosterProjection skillRoster;
     private HostingRentApplicationService hostingRent;
+    private AgentTaskExecutionGrantService taskExecutionGrants;
 
     public AgentController(AgentService agentService, AbilityEvaluationService abilityEvaluationService) {
         this(agentService, abilityEvaluationService, null, (FundedBountyService) null,
@@ -138,6 +142,11 @@ public class AgentController {
     @Autowired
     public void setHostingRent(HostingRentApplicationService hostingRent) {
         this.hostingRent = Objects.requireNonNull(hostingRent, "hostingRent");
+    }
+
+    @Autowired
+    public void setTaskExecutionGrants(AgentTaskExecutionGrantService taskExecutionGrants) {
+        this.taskExecutionGrants = Objects.requireNonNull(taskExecutionGrants, "taskExecutionGrants");
     }
 
     @PostMapping("/register")
@@ -386,8 +395,31 @@ public class AgentController {
     }
 
     @PostMapping("/tasks/{taskId}/assign")
-    public Object assignTask(@PathVariable String taskId, @RequestBody AgentTaskAssignDTO request) {
-        return JsonResult.success(agentService.assignTask(taskId, request));
+    public Object assignTask(@PathVariable String taskId, @RequestBody AgentTaskAssignDTO request,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            Authentication authentication) {
+        if (!hasV2GrantFields(request)) {
+            return JsonResult.success(agentService.assignTask(taskId, request));
+        }
+        AgentTaskExecutionGrantService.Scope scope = requireTaskGrantScope(authentication);
+        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                .body(JsonResult.success(requireTaskExecutionGrants().assignAndGrant(
+                        scope, taskId, idempotencyKey, request)));
+    }
+
+    @PostMapping("/tasks/{taskId}/execution-authorizations/{grantId}/revoke")
+    public Object revokeTaskExecutionGrant(@PathVariable String taskId, @PathVariable String grantId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            @RequestBody AgentTaskExecutionGrantRevokeDTO request, Authentication authentication) {
+        if (request == null || request.getExpectedVersion() == null) {
+            throw new AgentTaskExecutionGrantException(
+                    AgentTaskExecutionGrantException.Reason.BAD_REQUEST,
+                    "expectedVersion is required");
+        }
+        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+                .body(JsonResult.success(requireTaskExecutionGrants().revoke(
+                        requireTaskGrantScope(authentication), taskId, grantId, idempotencyKey,
+                        request.getExpectedVersion())));
     }
 
     @PostMapping("/tasks/{taskId}/recommend")
@@ -489,6 +521,17 @@ public class AgentController {
                 .body(result);
     }
 
+    @ExceptionHandler(AgentTaskExecutionGrantException.class)
+    public ResponseEntity<JsonResult<Void>> handleTaskExecutionGrantException(
+            AgentTaskExecutionGrantException exception, HttpServletRequest request) {
+        log.warn("Task execution grant request rejected: uri={}, code={}",
+                request.getRequestURI(), exception.code());
+        JsonResult<Void> result = JsonResult.failure(exception.code(), exception.getMessage());
+        result.setStatus(exception.status());
+        return ResponseEntity.status(exception.status())
+                .header(HttpHeaders.CACHE_CONTROL, "private, no-store").body(result);
+    }
+
     @ExceptionHandler(AgentBizException.class)
     public JsonResult<Void> handleAgentBizException(AgentBizException e, HttpServletRequest request) {
         log.warn("Agent API request rejected: uri={}, code={}, message={}",
@@ -512,6 +555,44 @@ public class AgentController {
         JsonResult<Void> result = JsonResult.failure("AGENT_ERROR", e.getMessage());
         result.setStatus(500);
         return result;
+    }
+
+    private static boolean hasV2GrantFields(AgentTaskAssignDTO request) {
+        return request != null && (request.getWorkflowVersion() != null
+                || request.getBusinessAction() != null
+                || request.getExpectedTaskVersion() != null
+                || request.getRequirementRevision() != null
+                || request.getRequestedOperations() != null
+                || request.getInitialOperation() != null
+                || request.getInputRefs() != null
+                || request.getExistingCostAuthorizationRef() != null
+                || request.getCostAuthorizationRef() != null
+                || request.getPermittedToolPolicyRef() != null
+                || request.getTools() != null
+                || request.getAuthorized() != null
+                || request.getPaidExecutionAuthorized() != null);
+    }
+
+    private static AgentTaskExecutionGrantService.Scope requireTaskGrantScope(
+            Authentication authentication) {
+        try {
+            AgentHostedBindingTransaction.Scope scope = requireJwtScope(authentication);
+            return new AgentTaskExecutionGrantService.Scope(
+                    scope.tenantId(), scope.clientId(), scope.ownerJiacn());
+        } catch (AgentBizException invalidJwt) {
+            throw new AgentTaskExecutionGrantException(
+                    AgentTaskExecutionGrantException.Reason.UNAUTHENTICATED,
+                    "Authenticated JWT scope is required");
+        }
+    }
+
+    private AgentTaskExecutionGrantService requireTaskExecutionGrants() {
+        if (taskExecutionGrants == null) {
+            throw new AgentTaskExecutionGrantException(
+                    AgentTaskExecutionGrantException.Reason.INVALID_PERSISTED_STATE,
+                    "Task execution authorization service is unavailable");
+        }
+        return taskExecutionGrants;
     }
 
     private FundedBountyService requireFundedBountyService() {

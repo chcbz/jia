@@ -23,6 +23,7 @@ class AgentRuntimeV1ServiceImplTest {
     private AgentIdentityService identities;
     private AgentCommandAckService acks;
     private AgentRuntimeV1ServiceImpl service;
+    private cn.jia.agent.dao.AgentIdentityRegistryDao registry;
 
     @BeforeEach void setUp() {
         installations = mock(AgentRuntimeV1InstallationDao.class);
@@ -30,7 +31,8 @@ class AgentRuntimeV1ServiceImplTest {
         acks = mock(AgentCommandAckService.class);
         @SuppressWarnings("unchecked") ObjectProvider<AgentCommandAckService> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(acks);
-        service = new AgentRuntimeV1ServiceImpl(installations, identities, provider);
+        registry = mock(cn.jia.agent.dao.AgentIdentityRegistryDao.class);
+        service = new AgentRuntimeV1ServiceImpl(installations, identities, registry, provider);
     }
 
     @Test void webCreationStoresOnlyProvidedDigestAndReturnsRedactedView() {
@@ -130,6 +132,54 @@ class AgentRuntimeV1ServiceImplTest {
 
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> service.acknowledge("auth", "msg-1", ack("tenant-b", AGENT), NOW));
+    }
+
+    @Test void managementRequiresExactOwnerWithinSharedTenantBeforeReturningOrRevoking() {
+        AgentRuntimeV1InstallationEntity row = installation("ACTIVE");
+        row.setTenantId("0");
+        when(installations.findInScope("0", "client-a", "rti-1")).thenReturn(row);
+        when(installations.lock("rti-1")).thenReturn(row);
+        for (String owner : java.util.List.of("owner-b", "OWNER-A", "owner-a ")) {
+            assertThrows(AgentServiceImpl.AgentBizException.class,
+                    () -> service.status("0", "client-a", owner, "rti-1"));
+            assertThrows(AgentServiceImpl.AgentBizException.class,
+                    () -> service.revoke("0", "client-a", owner, "rti-1", NOW));
+        }
+        verify(installations, never()).revoke(any(), anyLong());
+        verifyNoInteractions(identities, acks);
+    }
+
+    @Test void ownerCanInspectPendingAndRevokeWithoutReactivatingIdentity() {
+        AgentRuntimeV1InstallationEntity row = installation("PENDING");
+        row.setTenantId("0");
+        var identity = new cn.jia.agent.entity.AgentIdentityRegistryEntity()
+                .setCanonicalAgentId(AGENT).setOwnerJiacn("owner-a").setLifecycleStatus("PROVISIONED");
+        identity.setTenantId("0"); identity.setClientId("client-a");
+        when(registry.findExactByCanonicalInScope("0", "client-a", "owner-a", AGENT)).thenReturn(identity);
+        when(installations.findInScope("0", "client-a", "rti-1")).thenReturn(row);
+        when(installations.lock("rti-1")).thenReturn(row);
+        when(installations.revoke(row, NOW)).thenReturn(1);
+        assertEquals("PENDING", service.status("0", "client-a", "owner-a", "rti-1").status());
+        identity.setLifecycleStatus("SUSPENDED");
+        service.revoke("0", "client-a", "owner-a", "rti-1", NOW);
+        verify(installations).revoke(row, NOW);
+        verifyNoInteractions(identities, acks);
+    }
+
+    @Test void corruptScopedIdentityCannotAuthorizeManagement() {
+        AgentRuntimeV1InstallationEntity row = installation("REVOKED");
+        row.setTenantId("0");
+        var foreign = new cn.jia.agent.entity.AgentIdentityRegistryEntity()
+                .setCanonicalAgentId(AGENT).setOwnerJiacn("owner-b");
+        foreign.setTenantId("0"); foreign.setClientId("client-a");
+        when(registry.findExactByCanonicalInScope("0", "client-a", "owner-a", AGENT)).thenReturn(foreign);
+        when(installations.findInScope("0", "client-a", "rti-1")).thenReturn(row);
+        when(installations.lock("rti-1")).thenReturn(row);
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> service.status("0", "client-a", "owner-a", "rti-1"));
+        assertThrows(AgentServiceImpl.AgentBizException.class,
+                () -> service.revoke("0", "client-a", "owner-a", "rti-1", NOW));
+        verify(installations, never()).revoke(any(), anyLong());
     }
 
     private static final String AGENT = "agt_0123456789abcdef0123456789abcdef";

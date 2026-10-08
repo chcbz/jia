@@ -190,7 +190,7 @@ class AgentWorkItemReassignmentRealTransactionTest {
                 AgentTaskWorkItemDTO update = originalWorkItemUpdate();
                 update.setLeaseUntil(NOW + 300_000);
                 return workItemDao.updateActiveLeaseByVersion(
-                        TENANT, CLIENT, TASK, WORK, PREVIOUS, "old-secret-token",
+                        TENANT, CLIENT, OWNER, TASK, WORK, PREVIOUS, "old-secret-token",
                         "claimed", NOW - 1, 0, NOW - 2, update);
             });
             assertTrue(ready.await(5, TimeUnit.SECONDS));
@@ -325,34 +325,34 @@ class AgentWorkItemReassignmentRealTransactionTest {
     private void insertFixture() {
         jdbc.update("""
                 INSERT INTO agent_task_meta
-                (task_id,reward_status,coordinator_agent_id,task_version,current_event_version,
-                 tenant_id,client_id,create_time,update_time)
-                VALUES (?, 'running', ?, 7, 0, ?, ?, 1, 1)
-                """, TASK, COORDINATOR, TENANT, CLIENT);
+                (task_id,reward_status,coordinator_agent_id,task_version,current_event_version,risk_level,
+                 tenant_id,client_id,owner_jiacn,create_time,update_time)
+                VALUES (?, 'running', ?, 7, 0, 'low', ?, ?, ?, 1, 1)
+                """, TASK, COORDINATOR, TENANT, CLIENT, OWNER);
         for (String[] member : new String[][] {
                 {PREVIOUS, "worker"}, {TARGET, "worker"}, {COORDINATOR, "coordinator"}}) {
             jdbc.update("""
                     INSERT INTO agent_task_member
                     (task_id,agent_id,member_role,member_status,assignment_source,version,
-                     tenant_id,client_id,create_time,update_time)
-                    VALUES (?, ?, ?, 'working', 'manual', 0, ?, ?, 1, 1)
-                    """, TASK, member[0], member[1], TENANT, CLIENT);
+                     tenant_id,client_id,owner_jiacn,create_time,update_time)
+                    VALUES (?, ?, ?, 'working', 'manual', 0, ?, ?, ?, 1, 1)
+                    """, TASK, member[0], member[1], TENANT, CLIENT, OWNER);
         }
         jdbc.update("""
                 INSERT INTO agent_task_work_item
                 (work_item_id,task_id,title,description,work_type,assignee_agent_id,status,
                  priority,required_item,lease_token,lease_until,attempt_count,max_attempts,version,
-                 tenant_id,client_id,create_time,update_time)
+                 tenant_id,client_id,owner_jiacn,create_time,update_time)
                 VALUES (?, ?, 'Implement E05', 'One CAS', 'implementation', ?, 'claimed',
-                        0, TRUE, 'old-secret-token', ?, 0, 3, 0, ?, ?, 1, 1)
-                """, WORK, TASK, PREVIOUS, NOW - 1, TENANT, CLIENT);
+                        0, TRUE, 'old-secret-token', ?, 0, 3, 0, ?, ?, ?, 1, 1)
+                """, WORK, TASK, PREVIOUS, NOW - 1, TENANT, CLIENT, OWNER);
         long issued = NOW - 600_000;
         String intent = "source-intent";
         sourceCommandId = AgentCommandCanonicalCodec.hallCommandId(
-                TENANT, CLIENT, TASK, PREVIOUS, intent,
+                TENANT, CLIENT, OWNER, TASK, PREVIOUS, intent,
                 AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE);
         AgentCommandDraft source = new AgentCommandDraft(
-                1, sourceCommandId, TASK, intent, TENANT, CLIENT, TASK, WORK, PREVIOUS,
+                1, sourceCommandId, TASK, intent, TENANT, CLIENT, OWNER, TASK, WORK, PREVIOUS,
                 AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE, issued,
                 issued + AgentCommandCanonicalCodec.HALL_COMMAND_TTL_MILLIS, intent,
                 new AgentHallCommandPayload("work_item_execute", "Execute original work item",
@@ -362,11 +362,11 @@ class AgentWorkItemReassignmentRealTransactionTest {
                 INSERT INTO agent_command_delivery
                 (command_id,task_id,work_item_id,target_agent_id,command_type,
                  command_payload,command_payload_hash,status,attempt_count,version,
-                 tenant_id,client_id,create_time,update_time)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'DEAD', 2147483647, 0, ?, ?, ?, ?)
+                 tenant_id,client_id,owner_jiacn,create_time,update_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'DEAD', 2147483647, 0, ?, ?, ?, ?, ?)
                 """, sourceCommandId, TASK, WORK, PREVIOUS,
                 AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE,
-                bytes, AgentCommandCanonicalCodec.sha256(bytes), TENANT, CLIENT, issued, issued);
+                bytes, AgentCommandCanonicalCodec.sha256(bytes), TENANT, CLIENT, OWNER, issued, issued);
     }
 
     private int count(String table) {
@@ -393,16 +393,17 @@ class AgentWorkItemReassignmentRealTransactionTest {
     private void createTables() {
         jdbc.execute("""
                 CREATE TABLE agent_task_meta (
-                    id BIGINT AUTO_INCREMENT PRIMARY KEY, task_id VARCHAR(100) NOT NULL,
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY, owner_jiacn VARCHAR(50) NOT NULL, task_id VARCHAR(100) NOT NULL,
                     reward_status VARCHAR(20) NOT NULL, coordinator_agent_id VARCHAR(100),
+                    risk_level VARCHAR(20), review_required BOOLEAN,
                     task_version BIGINT NOT NULL, current_event_version BIGINT NOT NULL,
                     tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL,
                     create_time BIGINT, update_time BIGINT,
-                    UNIQUE (tenant_id,client_id,task_id))
+                    UNIQUE (tenant_id,client_id,owner_jiacn,task_id))
                 """);
         jdbc.execute("""
                 CREATE TABLE agent_task_member (
-                    id BIGINT AUTO_INCREMENT PRIMARY KEY, task_id VARCHAR(100) NOT NULL,
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY, owner_jiacn VARCHAR(50) NOT NULL, task_id VARCHAR(100) NOT NULL,
                     agent_id VARCHAR(100) NOT NULL, member_role VARCHAR(20) NOT NULL,
                     member_status VARCHAR(20) NOT NULL, assignment_source VARCHAR(20),
                     version BIGINT NOT NULL, tenant_id VARCHAR(50) NOT NULL,
@@ -410,7 +411,7 @@ class AgentWorkItemReassignmentRealTransactionTest {
                 """);
         jdbc.execute("""
                 CREATE TABLE agent_task_work_item (
-                    id BIGINT AUTO_INCREMENT PRIMARY KEY, work_item_id VARCHAR(100) NOT NULL,
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY, owner_jiacn VARCHAR(50) NOT NULL, work_item_id VARCHAR(100) NOT NULL,
                     task_id VARCHAR(100) NOT NULL, title VARCHAR(500) NOT NULL,
                     description VARCHAR(2000), work_type VARCHAR(100) NOT NULL,
                     required_abilities VARCHAR(2000), assignee_agent_id VARCHAR(100),
@@ -420,23 +421,23 @@ class AgentWorkItemReassignmentRealTransactionTest {
                     result_artifact_id VARCHAR(100), submitted_at BIGINT, completed_at BIGINT,
                     version BIGINT NOT NULL, tenant_id VARCHAR(50) NOT NULL,
                     client_id VARCHAR(50) NOT NULL, create_time BIGINT, update_time BIGINT,
-                    UNIQUE (tenant_id,client_id,work_item_id))
+                    UNIQUE (tenant_id,client_id,owner_jiacn,work_item_id))
                 """);
         jdbc.execute("""
                 CREATE TABLE agent_task_event (
-                    id BIGINT AUTO_INCREMENT PRIMARY KEY, task_id VARCHAR(100) NOT NULL,
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY, owner_jiacn VARCHAR(50) NOT NULL, task_id VARCHAR(100) NOT NULL,
                     event_version BIGINT NOT NULL, event_id VARCHAR(100) NOT NULL,
                     event_type VARCHAR(64) NOT NULL, actor_type VARCHAR(20) NOT NULL,
                     actor_id VARCHAR(100), aggregate_type VARCHAR(30) NOT NULL,
                     aggregate_id VARCHAR(100) NOT NULL, event_json CLOB NOT NULL,
                     occurred_at BIGINT NOT NULL, tenant_id VARCHAR(50) NOT NULL,
                     client_id VARCHAR(50) NOT NULL, create_time BIGINT, update_time BIGINT,
-                    UNIQUE (tenant_id,client_id,task_id,event_version),
-                    UNIQUE (tenant_id,client_id,event_id))
+                    UNIQUE (tenant_id,client_id,owner_jiacn,task_id,event_version),
+                    UNIQUE (tenant_id,client_id,owner_jiacn,event_id))
                 """);
         jdbc.execute("""
                 CREATE TABLE agent_command_delivery (
-                    id BIGINT AUTO_INCREMENT PRIMARY KEY, command_id VARCHAR(100) NOT NULL,
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY, owner_jiacn VARCHAR(50) NOT NULL, command_id VARCHAR(100) NOT NULL,
                     task_id VARCHAR(100), work_item_id VARCHAR(100), target_agent_id VARCHAR(100),
                     command_type VARCHAR(64), command_payload BLOB, command_payload_hash BINARY(32),
                     status VARCHAR(30), attempt_count INT, next_retry_at BIGINT,
@@ -445,7 +446,7 @@ class AgentWorkItemReassignmentRealTransactionTest {
                     replay_parent_message_id VARCHAR(100), replay_requester_id VARCHAR(100),
                     replay_approver_id VARCHAR(100), replay_reason VARCHAR(2000),
                     tenant_id VARCHAR(50), client_id VARCHAR(50), create_time BIGINT, update_time BIGINT,
-                    UNIQUE (tenant_id,client_id,command_id))
+                    UNIQUE (tenant_id,client_id,owner_jiacn,command_id))
                 """);
         jdbc.execute("""
                 CREATE TABLE agent_outbox_event (
@@ -455,7 +456,7 @@ class AgentWorkItemReassignmentRealTransactionTest {
                 """);
         jdbc.execute("""
                 CREATE TABLE agent_work_item_reassignment (
-                    id BIGINT AUTO_INCREMENT PRIMARY KEY, reassignment_id VARCHAR(100) NOT NULL,
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY, owner_jiacn VARCHAR(50) NOT NULL, reassignment_id VARCHAR(100) NOT NULL,
                     request_sha256 CHAR(64) NOT NULL, task_id VARCHAR(100) NOT NULL,
                     work_item_id VARCHAR(100) NOT NULL, operator_subject VARCHAR(100) NOT NULL,
                     coordinator_agent_id VARCHAR(100) NOT NULL, previous_agent_id VARCHAR(100) NOT NULL,
@@ -467,8 +468,8 @@ class AgentWorkItemReassignmentRealTransactionTest {
                     lease_until BIGINT NOT NULL, attempt_count INT NOT NULL, max_attempts INT NOT NULL,
                     tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL,
                     create_time BIGINT NOT NULL, update_time BIGINT NOT NULL,
-                    UNIQUE (tenant_id,client_id,reassignment_id),
-                    UNIQUE (tenant_id,client_id,command_id))
+                    UNIQUE (tenant_id,client_id,owner_jiacn,reassignment_id),
+                    UNIQUE (tenant_id,client_id,owner_jiacn,command_id))
                 """);
     }
 
@@ -495,12 +496,12 @@ class AgentWorkItemReassignmentRealTransactionTest {
                     INSERT INTO agent_command_delivery
                     (command_id,task_id,work_item_id,target_agent_id,command_type,
                      command_payload,command_payload_hash,status,attempt_count,version,
-                     tenant_id,client_id,create_time,update_time)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', 1, 0, ?, ?, ?, ?)
+                     tenant_id,client_id,owner_jiacn,create_time,update_time)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', 1, 0, ?, ?, ?, ?, ?)
                     """, draft.commandId(), draft.taskId(), draft.workItemId(),
                     draft.targetAgentId(), draft.commandType(), bytes,
                     AgentCommandCanonicalCodec.sha256(bytes), draft.tenantId(), draft.clientId(),
-                    draft.issuedAt(), draft.issuedAt());
+                    draft.ownerJiacn(), draft.issuedAt(), draft.issuedAt());
             if (failOutbox.get()) throw new IllegalStateException("synthetic outbox failure");
             Long delivery = jdbc.queryForObject(
                     "SELECT id FROM agent_command_delivery WHERE command_id=?", Long.class,

@@ -147,7 +147,7 @@ class AgentSceneScopedDaoTest {
         assertEquals(Propagation.MANDATORY, reserveTransaction.propagation());
         Transactional finalizeTransaction = AgentScenePhaseReportDaoImpl.class.getMethod(
                 "finalizePendingResult", String.class, String.class, String.class, String.class,
-                String.class, String.class, String.class, String.class, long.class)
+                String.class, String.class, String.class, long.class)
                 .getAnnotation(Transactional.class);
         assertEquals(Propagation.MANDATORY, finalizeTransaction.propagation());
     }
@@ -451,6 +451,43 @@ class AgentSceneScopedDaoTest {
                 () -> dao.tryReserve("0", "client-a", "owner-a", "juyiting-main", oversized));
 
         verify(mapper, never()).reserveIgnore(any());
+    }
+
+    @Test
+    void phaseReservationChecksEveryInsertedVarcharBeforeInsertIgnore() {
+        AgentScenePhaseReportMapper mapper = mock(AgentScenePhaseReportMapper.class);
+        AgentScenePhaseReportDao dao = new AgentScenePhaseReportDaoImpl(mapper);
+        List<java.util.function.Consumer<AgentScenePhaseReportEntity>> oversized = List.of(
+                e -> e.setReportId("r".repeat(101)), e -> e.setAgentId("a".repeat(101)),
+                e -> e.setPhase("p".repeat(21)), e -> e.setRegionId("r".repeat(101)),
+                e -> e.setResult("r".repeat(31)));
+        for (var mutate : oversized) {
+            AgentScenePhaseReportEntity entity = validPhaseReservation("report-1");
+            mutate.accept(entity);
+            assertThrows(IllegalArgumentException.class,
+                    () -> dao.tryReserve("0", "client-a", "owner-a", "juyiting-main", entity));
+        }
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.tryReserve("0", "c".repeat(51), "owner-a", "scene", validPhaseReservation("report-1")));
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.tryReserve("0", "client-a", "o".repeat(51), "scene", validPhaseReservation("report-1")));
+        assertThrows(IllegalArgumentException.class,
+                () -> dao.tryReserve("0", "client-a", "owner-a", "s".repeat(101), validPhaseReservation("report-1")));
+        verify(mapper, never()).reserveIgnore(any());
+    }
+
+    @Test
+    void phaseReservationAcceptsExactColumnLimitsIncludingSupplementaryCharacters() {
+        AgentScenePhaseReportMapper mapper = mock(AgentScenePhaseReportMapper.class);
+        AgentScenePhaseReportDao dao = new AgentScenePhaseReportDaoImpl(mapper);
+        AgentScenePhaseReportEntity entity = validPhaseReservation("\uD83D\uDC26".repeat(100));
+        entity.setAgentId("a".repeat(100));
+        entity.setPhase("p".repeat(20));
+        entity.setRegionId("r".repeat(100));
+        entity.setResult("r".repeat(30));
+        when(mapper.reserveIgnore(entity)).thenReturn(1);
+        assertTrue(dao.tryReserve("0", "c".repeat(50), "o".repeat(50), "s".repeat(100), entity));
+        verify(mapper).reserveIgnore(entity);
     }
 
     @Test

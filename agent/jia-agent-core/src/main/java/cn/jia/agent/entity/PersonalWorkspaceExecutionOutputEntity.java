@@ -26,6 +26,8 @@ public class PersonalWorkspaceExecutionOutputEntity extends BaseEntity {
     private Long byteLength;
     private String contentHash;
     private String storageUri;
+    /** FILE legacy mapping or CONVERSATION byte-only result; never inferred from a missing file id. */
+    private String outputPurpose;
     private String outputState;
     private String workspaceFileId;
     private Integer workspaceFileVersion;

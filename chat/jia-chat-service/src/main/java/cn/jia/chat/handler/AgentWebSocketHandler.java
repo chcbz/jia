@@ -28,13 +28,20 @@ import cn.jia.agent.service.AgentExecutionReportService;
 import cn.jia.agent.service.AgentRawCommandDispatcher;
 import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.impl.AgentCommandCanonicalCodec;
+import cn.jia.agent.service.NativeBountyExecutionSessionLookup;
+import cn.jia.agent.service.NativeProviderCredentialBindingLookup;
+import cn.jia.agent.service.ControlledImageExecutionSessionLookup;
+import cn.jia.agent.service.ControlledImageFollowupAuthorityService;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.ChatConversationEntity;
+import cn.jia.chat.deliberation.InteractionRoute;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.service.ChatConversationEventBroker;
 import cn.jia.chat.service.ChatConversationService;
 import cn.jia.chat.service.AgentSenderIdentityResolver;
 import cn.jia.chat.service.ServerResolvedAgentSender;
+import cn.jia.chat.service.ChatDeliberationService;
+import cn.jia.chat.service.ChatDeliberationOutboxService;
 import cn.jia.chat.service.ConversationMetadataPolicy;
 import cn.jia.chat.service.HallAnnouncementService;
 import cn.jia.core.context.EsContext;
@@ -70,9 +77,11 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -92,7 +101,9 @@ import java.util.function.Supplier;
 @Slf4j
 @Component
 public class AgentWebSocketHandler extends TextWebSocketHandler
-        implements AgentEventPublisher, AgentRawCommandDispatcher {
+        implements AgentEventPublisher, AgentRawCommandDispatcher,
+        NativeBountyExecutionSessionLookup, NativeProviderCredentialBindingLookup, ControlledImageExecutionSessionLookup,
+        ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup {
     private static final String CHANNEL = "agent";
     private static final TypeReference<Map<String, Object>> MESSAGE_TYPE = new TypeReference<>() {
     };
@@ -140,6 +151,26 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     public void setChatConversationService(ChatConversationService service) {
         this.chatConversationService = service;
     }
+    private ChatDeliberationService chatDeliberationService;
+    @Autowired(required = false)
+    public void setChatDeliberationService(ChatDeliberationService service) {
+        this.chatDeliberationService = service;
+    }
+    private ChatDeliberationOutboxService chatDeliberationOutboxService;
+    private TypedDeliberationSessionRegistry typedDeliberationSessions;
+    private TypedInspectionSessionRegistry typedInspectionSessions;
+    @Autowired(required = false)
+    public void setChatDeliberationOutboxService(ChatDeliberationOutboxService service) {
+        this.chatDeliberationOutboxService = service;
+    }
+    @Autowired(required = false)
+    public void setTypedDeliberationSessions(TypedDeliberationSessionRegistry sessions) {
+        this.typedDeliberationSessions = sessions;
+    }
+    @Autowired(required = false)
+    public void setTypedInspectionSessions(TypedInspectionSessionRegistry sessions) {
+        this.typedInspectionSessions = sessions;
+    }
     private final ChatClient chatClient;
     private final ObjectProvider<AgentService> agentServiceProvider;
     private final ChatMessageDao chatMessageDao;
@@ -153,6 +184,14 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     private final Map<String, Set<String>> sessionAgentIds = new ConcurrentHashMap<>();
     private final Map<String, Set<String>> successfullyRegisteredAgentIds = new ConcurrentHashMap<>();
     private final Map<String, String> sessionRuntimeInstanceIds = new ConcurrentHashMap<>();
+    private final Map<String, AgentRuntimeCapabilities> sessionRuntimeCapabilities = new ConcurrentHashMap<>();
+    private final Map<String, NativeBountyExecutionDeclaration> sessionNativeBountyExecution =
+            new ConcurrentHashMap<>();
+    private final Map<String, NativeProviderCredentialBindingDeclaration>
+            sessionNativeProviderCredentialBinding = new ConcurrentHashMap<>();
+    private final Map<String, ControlledImageBountyExecutionDeclaration>
+            sessionControlledImageBountyExecution = new ConcurrentHashMap<>();
+    private final Map<String, ControlledImageV3Declaration> sessionControlledImageV3 = new ConcurrentHashMap<>();
     private final Map<String, StreamState> runningStreams = new ConcurrentHashMap<>();
 
     public AgentWebSocketHandler(ChatClient chatClient, ObjectProvider<AgentService> agentServiceProvider,
@@ -231,7 +270,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 AgentProtocolConstants.TYPE_CHAT_STREAM, AgentProtocolConstants.TYPE_CHAT_STOP,
                 AgentProtocolConstants.TYPE_PING, AgentProtocolConstants.TYPE_AGENT_REGISTER,
                 AgentProtocolConstants.TYPE_AGENT_PRESENCE, AgentProtocolConstants.TYPE_CHAT_MESSAGE,
-                AgentProtocolConstants.TYPE_CHAT_MESSAGE_DELTA, AgentProtocolConstants.TYPE_COMMAND_DISPATCH,
+                AgentProtocolConstants.TYPE_CHAT_MESSAGE_DELTA, AgentProtocolConstants.TYPE_CHAT_DISPATCH_ACK,
+                AgentProtocolConstants.TYPE_COMMAND_DISPATCH,
                 AgentProtocolConstants.TYPE_COMMAND_ACK, AgentProtocolConstants.TYPE_WORK_PROGRESS,
                 AgentProtocolConstants.TYPE_WORK_HEARTBEAT, AgentProtocolConstants.TYPE_WORK_RESULT,
                 AgentProtocolConstants.TYPE_HELP_REQUEST, AgentProtocolConstants.TYPE_ARTIFACT_PUBLISH,
@@ -260,6 +300,40 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             return;
         }
         String declaredMessageType = strictString(payload.get("messageType"));
+        String declaredLegacyType = strictString(payload.get("type"));
+        Map<?, ?> declaredBody = payload.get("payload") instanceof Map<?, ?> body
+                ? body : Map.of();
+        boolean declaredRegistration = AgentProtocolConstants.TYPE_AGENT_REGISTER.equals(declaredMessageType)
+                || AgentProtocolConstants.TYPE_AGENT_REGISTER.equals(declaredLegacyType)
+                || AgentProtocolConstants.TYPE_AGENT_REGISTER.equals(
+                        strictString(declaredBody.get("messageType")))
+                || AgentProtocolConstants.TYPE_AGENT_REGISTER.equals(
+                        strictString(declaredBody.get("type")));
+        if (declaredRegistration) {
+            try {
+                // Registration declarations are authority inputs. Preserve strict duplicate-key
+                // detection before the generic normalizer can collapse them into a Map.
+                payload = STRICT_RAW_COMMAND_JSON.readValue(message.getPayload(), MESSAGE_TYPE);
+            } catch (Exception malformed) {
+                sendProtocolError(session, Map.of(), "AGENT_REGISTRATION_INVALID",
+                        "Agent registration payload is invalid");
+                return;
+            }
+        }
+        boolean declaredDurableFinal = (AgentProtocolConstants.TYPE_CHAT_MESSAGE.equals(declaredMessageType)
+                || AgentProtocolConstants.TYPE_CHAT_MESSAGE.equals(declaredLegacyType)
+                || AgentProtocolConstants.TYPE_CHAT_MESSAGE.equals(strictString(declaredBody.get("messageType")))
+                || AgentProtocolConstants.TYPE_CHAT_MESSAGE.equals(strictString(declaredBody.get("type"))))
+                && (hasDurableTurnBinding(payload) || hasDurableTurnBinding(declaredBody));
+        if (declaredDurableFinal) {
+            try {
+                payload = strictDurableFinalPayload(message.getPayload());
+            } catch (Exception malformed) {
+                sendProtocolError(session, Map.of(), "CHAT_TURN_FINAL_REJECTED",
+                        "Durable chat final was rejected");
+                return;
+            }
+        }
         if (declaredMessageType != null && EXECUTION_REPORT_TYPES.contains(declaredMessageType)) {
             try {
                 Map<String, Object> strict = STRICT_RAW_COMMAND_JSON.readValue(
@@ -291,6 +365,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             case AgentProtocolConstants.TYPE_AGENT_PRESENCE -> updateAgentStatus(session, payload);
             case AgentProtocolConstants.TYPE_CHAT_MESSAGE -> saveAgentMessage(session, payload);
             case AgentProtocolConstants.TYPE_CHAT_MESSAGE_DELTA -> publishAgentMessageDelta(session, payload);
+            case AgentProtocolConstants.TYPE_CHAT_DISPATCH_ACK -> acknowledgeChatDispatch(session, payload);
             case AgentProtocolConstants.TYPE_TASK_ASSIGN_LEGACY -> assignTask(session, payload);
             case AgentProtocolConstants.TYPE_WORK_RESULT -> {
                 if (normalized.legacyTaskReport()) {
@@ -325,6 +400,13 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         sessionAgentIds.remove(session.getId());
         successfullyRegisteredAgentIds.remove(session.getId());
         sessionRuntimeInstanceIds.remove(session.getId());
+        sessionRuntimeCapabilities.remove(session.getId());
+        sessionNativeBountyExecution.remove(session.getId());
+        sessionNativeProviderCredentialBinding.remove(session.getId());
+        sessionControlledImageBountyExecution.remove(session.getId());
+        sessionControlledImageV3.remove(session.getId());
+        removeTypedDeliberationSession(session.getId());
+        removeTypedInspectionSession(session.getId());
         runningStreams.entrySet().removeIf(entry -> {
             StreamState stream = entry.getValue();
             if (session.getId().equals(stream.sessionId())) {
@@ -704,7 +786,34 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             // above are the authority for native registration.
             stage = "runtime_disconnect";
             if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
+            // A re-registration on the same socket must first retire its old declaration. The
+            // replacement is not observable until register, auth bind and receipt delivery all
+            // succeed below.
+            successfullyRegisteredAgentIds.remove(session.getId());
+            sessionRuntimeCapabilities.remove(session.getId());
+            sessionNativeBountyExecution.remove(session.getId());
+            sessionNativeProviderCredentialBinding.remove(session.getId());
+            sessionControlledImageBountyExecution.remove(session.getId());
+            sessionControlledImageV3.remove(session.getId());
+            removeTypedDeliberationSession(session.getId());
+            removeTypedInspectionSession(session.getId());
             stage = "registration_payload";
+            AgentRuntimeCapabilities runtimeCapabilities = AgentRuntimeCapabilities.parse(
+                    payload.get("runtimeCapabilities"));
+            NativeBountyExecutionDeclaration nativeBountyExecution =
+                    NativeBountyExecutionDeclaration.parse(payload.get("nativeBountyExecution"));
+            NativeProviderCredentialBindingDeclaration nativeProviderCredentialBinding =
+                    NativeProviderCredentialBindingDeclaration.parse(
+                            payload.get("nativeProviderCredentialBinding"));
+            ControlledImageBountyExecutionDeclaration controlledImageBountyExecution =
+                    ControlledImageBountyExecutionDeclaration.parse(
+                            payload.get("controlledImageBountyExecution"));
+            ControlledImageV3Declaration controlledImageV3 =
+                    ControlledImageV3Declaration.parse(payload.get("controlledImageBountyExecutionV3"));
+            TypedDeliberationDeclaration typedDeliberation =
+                    TypedDeliberationDeclaration.parse(payload.get("typedDeliberation"));
+            TypedInspectionDeclaration typedInspection =
+                    TypedInspectionDeclaration.parse(payload.get("typedInspection"));
             AgentRegisterDTO request = new AgentRegisterDTO();
             request.setAgentId(agentId);
             request.setName(asString(payload.get("name")));
@@ -722,12 +831,24 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             }
             rememberSessionAgent(session.getId(), result.getAgentId());
             session.getAttributes().put("skillRegistrationHash", cn.jia.agent.skill.SkillMarketplaceService.sessionRegistrationHash(result.getAgentId(),result.getToken()));
-            rememberSuccessfulRegistration(session.getId(), result.getAgentId());
             Map<String, Object> event = copyTrace(payload);
             event.put("agentId", result.getAgentId());
             putIfPresent(event, "runtimeInstanceId", sessionRuntimeInstanceId(session));
             event.put("status", result.getStatus());
             event.put("token", result.getToken());
+            event.put("runtimeCapabilities", runtimeCapabilities.normalizedForReceipt());
+            event.put("nativeBountyExecution", nativeBountyExecution.normalizedForReceipt());
+            event.put("nativeProviderCredentialBinding",
+                    nativeProviderCredentialBinding.normalizedForReceipt());
+            event.put("controlledImageBountyExecution",
+                    controlledImageBountyExecution.normalizedForReceipt());
+            event.put("controlledImageBountyExecutionV3",controlledImageV3.normalizedForReceipt());
+            if (payload.containsKey("typedDeliberation")) {
+                event.put("typedDeliberation", typedDeliberation.frozenReceipt());
+            }
+            if (payload.containsKey("typedInspection")) {
+                event.put("typedInspection", typedInspection.frozenReceipt());
+            }
             // Scope comes only from the authenticated session and is rechecked against persisted
             // identity/current registration token. This receipt is sent only on this native socket.
             if (runtimeAuthentication != null && sessionRuntimeInstanceId(session) != null) {
@@ -741,7 +862,34 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             if (!sendEvent(session, "agent_registered", event)) {
                 if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
                 successfullyRegisteredAgentIds.remove(session.getId());
+                sessionRuntimeCapabilities.remove(session.getId());
+                sessionNativeBountyExecution.remove(session.getId());
+                sessionNativeProviderCredentialBinding.remove(session.getId());
+                sessionControlledImageBountyExecution.remove(session.getId());
+                sessionControlledImageV3.remove(session.getId());
+                removeTypedDeliberationSession(session.getId());
+                removeTypedInspectionSession(session.getId());
                 return;
+            }
+            // Activate all successful-registration evidence only after the authenticated
+            // registration receipt was actually delivered.
+            rememberSuccessfulRegistration(session.getId(), result.getAgentId());
+            sessionRuntimeCapabilities.put(session.getId(), runtimeCapabilities);
+            sessionNativeBountyExecution.put(session.getId(), nativeBountyExecution);
+            sessionNativeProviderCredentialBinding.put(session.getId(), nativeProviderCredentialBinding);
+            sessionControlledImageBountyExecution.put(session.getId(), controlledImageBountyExecution);
+            sessionControlledImageV3.put(session.getId(),controlledImageV3);
+            if (typedDeliberationSessions != null) {
+                typedDeliberationSessions.register(session.getId(), sessionTenantId(session),
+                        sessionJiacn(session), sessionClientId(session), result.getAgentId(),
+                        payload.get("typedDeliberation"),
+                        () -> typedDeliberationSessionCurrent(session, result.getAgentId()));
+            }
+            if (typedInspectionSessions != null) {
+                typedInspectionSessions.register(session.getId(), sessionTenantId(session),
+                        sessionJiacn(session), sessionClientId(session), result.getAgentId(),
+                        payload.get("typedInspection"),
+                        () -> typedDeliberationSessionCurrent(session, result.getAgentId()));
             }
             signalRegisteredReconnect(session, result.getAgentId());
             sendCapabilityIndex(session, payload);
@@ -751,6 +899,13 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                     e.getClass().getSimpleName());
             if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
             successfullyRegisteredAgentIds.remove(session.getId());
+            sessionRuntimeCapabilities.remove(session.getId());
+            sessionNativeBountyExecution.remove(session.getId());
+            sessionNativeProviderCredentialBinding.remove(session.getId());
+            sessionControlledImageBountyExecution.remove(session.getId());
+            sessionControlledImageV3.remove(session.getId());
+            removeTypedDeliberationSession(session.getId());
+            removeTypedInspectionSession(session.getId());
             sendError(session, payload, "AGENT_REGISTRATION_UNAVAILABLE", "Agent registration is unavailable");
         }
     }
@@ -896,10 +1051,17 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 request.setAbilities(asStringList(payload.get("abilities")));
             }
             AgentRuntimeDTO agent = withSessionContext(session, () -> agentService.updateStatus(agentId, request));
-            if (runtimeAuthentication != null && (AgentConstants.STATUS_OFFLINE.equals(agent.getStatus())
-                    || AgentConstants.STATUS_ERROR.equals(agent.getStatus()))) {
-                runtimeAuthentication.disconnect(session.getId());
+            if (AgentConstants.STATUS_OFFLINE.equals(agent.getStatus())
+                    || AgentConstants.STATUS_ERROR.equals(agent.getStatus())) {
+                if (runtimeAuthentication != null) runtimeAuthentication.disconnect(session.getId());
                 successfullyRegisteredAgentIds.remove(session.getId());
+                sessionRuntimeCapabilities.remove(session.getId());
+                sessionNativeBountyExecution.remove(session.getId());
+                sessionNativeProviderCredentialBinding.remove(session.getId());
+                sessionControlledImageBountyExecution.remove(session.getId());
+                sessionControlledImageV3.remove(session.getId());
+                removeTypedDeliberationSession(session.getId());
+                removeTypedInspectionSession(session.getId());
             }
             if (agent.getAgentId() != null) {
                 rememberSessionAgent(session.getId(), agent.getAgentId());
@@ -1008,6 +1170,42 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         }
     }
 
+    private void acknowledgeHostedReceipt(WebSocketSession session, String agentId, String dispatchId) {
+        if (chatDeliberationOutboxService == null) return;
+        try {
+            chatDeliberationOutboxService.acknowledgeHostedReceipt(sessionTenantId(session),
+                    sessionJiacn(session), sessionClientId(session), agentId, dispatchId, System.currentTimeMillis());
+        } catch (RuntimeException ignored) {
+            // The durable final/delta remains authoritative; explicit chat.dispatch.ack can be retried.
+        }
+    }
+
+    private void acknowledgeChatDispatch(WebSocketSession session, Map<String, Object> payload) {
+        String agentId = requireAllowedSessionAgentId(session, payload);
+        if (agentId == null || chatDeliberationOutboxService == null) {
+            sendProtocolError(session, payload, "CHAT_DISPATCH_ACK_UNAVAILABLE",
+                    "Durable chat dispatch acknowledgement is unavailable");
+            return;
+        }
+        String dispatchId = strictString(payload.get("dispatchId"));
+        String messageId = strictString(payload.get("messageId"));
+        try {
+            boolean acknowledged = chatDeliberationOutboxService.acknowledgeHostedDispatch(
+                    sessionTenantId(session), sessionJiacn(session), sessionClientId(session),
+                    agentId, dispatchId, messageId, System.currentTimeMillis());
+            if (!acknowledged) {
+                sendProtocolError(session, payload, "CHAT_DISPATCH_ACK_REJECTED",
+                        "Durable chat dispatch acknowledgement was rejected");
+                return;
+            }
+            sendEvent(session, "chat_dispatch_acknowledged", Map.of(
+                    "messageId", messageId, "dispatchId", dispatchId, "duplicateSafe", true));
+        } catch (RuntimeException rejected) {
+            sendProtocolError(session, payload, "CHAT_DISPATCH_ACK_REJECTED",
+                    "Durable chat dispatch acknowledgement was rejected");
+        }
+    }
+
     private void saveAgentMessage(WebSocketSession session, Map<String, Object> payload) {
         String conversationId = asString(payload.get("conversationId"));
         String content = asString(payload.get("content"));
@@ -1053,6 +1251,47 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         }
         String senderName = sender.displayName();
 
+        if (hasDurableTurnBinding(payload)) {
+            if (chatDeliberationService == null) {
+                sendError(session, payload, "CHAT_TURN_STATE_UNAVAILABLE", "Durable chat turn service is unavailable");
+                return;
+            }
+            Long declaredGeneration = exactPositiveLong(payload.get("conversationGeneration"));
+            if (declaredGeneration == null || declaredGeneration != generation) {
+                sendError(session, payload, "CHAT_TURN_FINAL_REJECTED", "Durable chat generation was rejected");
+                return;
+            }
+            ChatDeliberationService.FinalResult finalResult;
+            try {
+                finalResult = chatDeliberationService.persistFinal(
+                        sessionTenantId(session), jiacn, clientId, conversationId, generation, agentId,
+                        asString(payload.get("requestId")), asString(payload.get("turnId")),
+                        asString(payload.get("dispatchId")), contextValue(payload, "contextSnapshotId"),
+                        contextValue(payload, "contextHash"), content,
+                        typedOutcomeContractVersion(payload),
+                        strictString(payload.get("__typedRawInteractionOutcomeJson")),
+                        strictString(payload.get("__typedRawInspectionInputReceiptJson")), sender);
+            } catch (RuntimeException rejected) {
+                sendError(session, payload, "CHAT_TURN_FINAL_REJECTED", "Durable chat final was rejected");
+                return;
+            }
+            acknowledgeHostedReceipt(session, agentId, asString(payload.get("dispatchId")));
+            if (finalResult.status() == ChatDeliberationService.FinalStatus.DUPLICATE) {
+                sendEvent(session, "agent_message_saved", Map.of(
+                        "turnId", finalResult.turn().getTurnId(),
+                        "messageId", ExactWireIds.decimal(finalResult.messageId()),
+                        "duplicate", true));
+                return;
+            }
+            // The FINAL_PERSISTED outbox is the sole conversation-delivery authority.
+            // This socket receipt is after the final transaction committed and does not mark the outbox SENT.
+            sendEvent(session, "agent_message_saved", Map.of(
+                    "turnId", finalResult.turn().getTurnId(),
+                    "messageId", ExactWireIds.decimal(finalResult.messageId()),
+                    "eventId", finalResult.eventId(), "duplicate", false));
+            return;
+        }
+
         ChatMessageEntity entity = new ChatMessageEntity();
         entity.init4Creation();
         entity.setJiacn(jiacn);
@@ -1089,6 +1328,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         event.put("senderType", "agent");
         event.put("senderName", senderName);
         event.put("content", content);
+        addEventMetadata(event);
         chatConversationEventBroker.runIfLive(
                 conversationId, generation,
                 () -> chatConversationService.isLiveGeneration(
@@ -1132,6 +1372,41 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         }
         String senderName = sender.displayName();
 
+        if (hasDurableTurnBinding(payload)) {
+            if (chatDeliberationService == null) return;
+            Long declaredGeneration = exactPositiveLong(payload.get("conversationGeneration"));
+            if (declaredGeneration == null || declaredGeneration != generation) {
+                sendError(session, payload, "CHAT_DELTA_REJECTED", "Durable chat generation was rejected");
+                return;
+            }
+            Long deltaSeq = exactPositiveLong(payload.get("deltaSeq"));
+            if (deltaSeq == null) {
+                sendError(session, payload, "CHAT_DELTA_SEQUENCE_REQUIRED", "deltaSeq is required");
+                return;
+            }
+            ChatDeliberationService.DeltaResult result;
+            try {
+                result = chatDeliberationService.acceptDelta(
+                        sessionTenantId(session), sessionJiacn(session), sessionClientId(session),
+                        conversationId, generation, agentId,
+                        asString(payload.get("requestId")), asString(payload.get("turnId")),
+                        asString(payload.get("dispatchId")), contextValue(payload, "contextSnapshotId"),
+                        contextValue(payload, "contextHash"), deltaSeq, content, sender);
+            } catch (RuntimeException rejected) {
+                sendError(session, payload, "CHAT_DELTA_REJECTED", "Durable chat delta was rejected");
+                return;
+            }
+            acknowledgeHostedReceipt(session, agentId, asString(payload.get("dispatchId")));
+            if (result.status() == ChatDeliberationService.DeltaStatus.GAP) {
+                publishStoredConversationEvent(result.event());
+                sendError(session, payload, "CHAT_DELTA_GAP", "deltaSeq is not contiguous");
+                return;
+            }
+            if (result.status() != ChatDeliberationService.DeltaStatus.ACCEPTED) return;
+            publishStoredConversationEvent(result.event());
+            return;
+        }
+
         Map<String, Object> event = copyTrace(payload);
         event.put("type", "agent_message_delta");
         event.put("conversationId", conversationId);
@@ -1143,12 +1418,157 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         putIfPresent(event, "phase", payload.get("phase"));
         putIfPresent(event, "chunkIndex", payload.get("chunkIndex"));
         putIfPresent(event, "chunkCount", payload.get("chunkCount"));
+        addEventMetadata(event);
         chatConversationEventBroker.publishIfLive(
                 conversationId, generation,
                 () -> chatConversationService.isLiveGeneration(
                         sessionJiacn(session), sessionClientId(session),
                         conversationId, generation),
                 event);
+    }
+
+    private Map<String, Object> strictDurableFinalPayload(String wire) throws Exception {
+        JsonNode root = STRICT_RAW_COMMAND_JSON.readTree(wire);
+        if (root == null || !root.isObject()) throw new IllegalArgumentException("object required");
+        Map<String, Object> strict = STRICT_RAW_COMMAND_JSON.readValue(wire, MESSAGE_TYPE);
+        if (strict.containsKey("__typedRawInteractionOutcomeJson")
+                || strict.containsKey("__typedRawInspectionInputReceiptJson")) {
+            throw new IllegalArgumentException("reserved field");
+        }
+        JsonNode nested = root.get("payload");
+        if (nested != null && nested.isObject()
+                && (nested.has("__typedRawInteractionOutcomeJson")
+                        || nested.has("__typedRawInspectionInputReceiptJson")
+                        || nested.has("interactionOutcome")
+                        || nested.has("outcomeContractVersion")
+                        || nested.has("inspectionInputReceipt"))) {
+            throw new IllegalArgumentException("typed sidecar must be top-level");
+        }
+        JsonNode outcome = root.get("interactionOutcome");
+        JsonNode version = root.get("outcomeContractVersion");
+        JsonNode receipt = root.get("inspectionInputReceipt");
+        if (outcome == null && version == null && receipt == null) return strict;
+        if (outcome == null || version == null || !outcome.isObject()) {
+            throw new IllegalArgumentException("incomplete typed sidecar");
+        }
+        if (semanticInteger(version, 1)) {
+            if (receipt != null) throw new IllegalArgumentException("inspection receipt is forbidden for v1");
+            strict.put("outcomeContractVersion", 1);
+        } else if (semanticInteger(version, 2)) {
+            if (receipt == null || !receipt.isObject()) {
+                throw new IllegalArgumentException("inspection receipt is required for v2");
+            }
+            strict.put("outcomeContractVersion", 2);
+            strict.put("__typedRawInspectionInputReceiptJson", receipt.toString());
+        } else if (semanticInteger(version, 3)) {
+            if (receipt != null && !receipt.isObject()) throw new IllegalArgumentException("invalid inspection receipt");
+            strict.put("outcomeContractVersion", 3);
+            if (receipt != null) strict.put("__typedRawInspectionInputReceiptJson", receipt.toString());
+        } else {
+            throw new IllegalArgumentException("invalid typed sidecar version");
+        }
+        strict.put("__typedRawInteractionOutcomeJson", outcome.toString());
+        return strict;
+    }
+
+    private Integer typedOutcomeContractVersion(Map<String, Object> payload) {
+        Object value = payload.get("outcomeContractVersion");
+        if (value instanceof Byte || value instanceof Short
+                || value instanceof Integer || value instanceof Long) {
+            int version = ((Number) value).intValue();
+            return version == 1 || version == 2 || version == 3 ? version : null;
+        }
+        return null;
+    }
+
+    private boolean semanticInteger(JsonNode value, int expected) {
+        if (value == null || !value.isNumber()) return false;
+        try {
+            return value.decimalValue().compareTo(java.math.BigDecimal.valueOf(expected)) == 0;
+        } catch (RuntimeException invalid) {
+            return false;
+        }
+    }
+
+    private void removeTypedDeliberationSession(String sessionId) {
+        if (typedDeliberationSessions != null) typedDeliberationSessions.remove(sessionId);
+    }
+
+    private void removeTypedInspectionSession(String sessionId) {
+        if (typedInspectionSessions != null) typedInspectionSessions.remove(sessionId);
+    }
+
+    private boolean typedDeliberationSessionCurrent(WebSocketSession session, String agentId) {
+        if (runtimeAuthentication == null || session == null || !session.isOpen()
+                || !successfullyRegisteredAgentIds(session.getId()).contains(agentId)) return false;
+        String runtime = sessionRuntimeInstanceId(session);
+        if (runtime == null) return false;
+        try {
+            return runtimeAuthentication.isCurrentBinding(session.getId(), sessionTenantId(session),
+                    sessionClientId(session), sessionJiacn(session), agentId, runtime);
+        } catch (RuntimeException unavailable) { return false; }
+    }
+
+    private boolean hasDurableTurnBinding(Map<?, ?> payload) {
+        return payload != null && (payload.containsKey("turnId")
+                || payload.containsKey("dispatchId") || payload.containsKey("contextSnapshotId")
+                || payload.containsKey("contextHash") || payload.containsKey("deltaSeq"));
+    }
+
+    @SuppressWarnings("unchecked")
+    private String contextValue(Map<String, Object> payload, String key) {
+        String direct = asString(payload.get(key));
+        if (direct != null) return direct;
+        Object nested = payload.get("contextSnapshot");
+        return nested instanceof Map<?, ?> map ? asString(((Map<String, Object>) map).get(key)) : null;
+    }
+
+    private Long exactPositiveLong(Object value) {
+        long result;
+        if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) {
+            result = ((Number) value).longValue();
+        } else if (value instanceof String text && text.matches("[1-9][0-9]*")) {
+            try { result = Long.parseLong(text); } catch (NumberFormatException invalid) { return null; }
+        } else return null;
+        return result > 0 ? result : null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private void publishStoredConversationEvent(cn.jia.chat.deliberation.ChatConversationEventEntity stored) {
+        if (stored == null) return;
+        try {
+            Map<String,Object> event = JsonUtil.getMapper().readValue(stored.getPayloadJson(), Map.class);
+            event.put("eventId", stored.getEventId());
+            event.put("eventSequence", Long.toString(stored.getEventSequence()));
+            event.put("eventVersion", Long.toString(stored.getEventVersion()));
+            event.put("occurredAt", Long.toString(stored.getOccurredAt()));
+            requireNoActiveTransactionForChatDelivery();
+            chatConversationEventBroker.publishIfSubscribed(stored.getConversationId(), stored.getConversationGeneration(),
+                    () -> chatConversationService.isLiveGeneration(stored.getOwnerJiacn(), stored.getClientId(),
+                            stored.getConversationId(), stored.getConversationGeneration()), event);
+        } catch (Exception ignored) {
+            // Durable DB replay remains available; a best-effort live publication never changes persisted state.
+        }
+    }
+
+    private Map<String, Object> durableEvent(Map<String, Object> payload, String type,
+            cn.jia.chat.deliberation.ChatTurnEntity turn) {
+        Map<String, Object> event = copyTrace(payload);
+        event.put("type", type);
+        event.put("requestId", turn.getRequestId());
+        event.put("turnId", turn.getTurnId());
+        event.put("dispatchId", turn.getDispatchId());
+        event.put("targetAgentId", turn.getTargetAgentId());
+        event.put("contextSnapshotId", turn.getSnapshotId());
+        event.put("route", turn.getRoute());
+        addEventMetadata(event);
+        return event;
+    }
+
+    private void addEventMetadata(Map<String, Object> event) {
+        event.putIfAbsent("eventId", UUID.randomUUID().toString());
+        event.putIfAbsent("eventVersion", 1);
+        event.putIfAbsent("occurredAt", System.currentTimeMillis());
     }
 
     private boolean requireConversationAgentScope(
@@ -1317,7 +1737,12 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             return null;
         }
         try {
-            return chatConversationService.getOwned(jiacn, clientId, conversationId);
+            ChatConversationEntity conversation = chatConversationService.getOwned(jiacn, clientId, conversationId);
+            if (!isExactConversationIdentity(sessionTenantId(session))
+                    || !sessionTenantId(session).equals(conversation.getTenantId())) {
+                throw new IllegalStateException("tenant mismatch");
+            }
+            return conversation;
         } catch (RuntimeException denied) {
             sendError(session, payload, "CONVERSATION_NOT_AVAILABLE",
                     "Conversation is not available to this agent session");
@@ -1387,6 +1812,11 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     }
 
     private boolean sendEvent(WebSocketSession session, String type, Map<String, ?> payload) {
+        return sendEvent(session, type, payload, false);
+    }
+
+    private boolean sendEvent(WebSocketSession session, String type, Map<String, ?> payload,
+            boolean preserveAuthenticatedInspectionContext) {
         if (!session.isOpen()) {
             return false;
         }
@@ -1403,7 +1833,12 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         }
         try {
             synchronized (session) {
-                session.sendMessage(new TextMessage(JsonUtil.toSafeJson(event)));
+                // Authenticated INSPECT facts and selectors are integrity-bound protocol data.
+                // The logging sanitizer truncates deep maps and redacts DATA strings, which
+                // changes contextHash and makes root/payload copies conflict. Never log this wire.
+                String wireJson = preserveAuthenticatedInspectionContext
+                        ? JsonUtil.toJson(event) : JsonUtil.toSafeJson(event);
+                session.sendMessage(new TextMessage(wireJson));
             }
             return true;
         } catch (Exception e) {
@@ -1778,28 +2213,391 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                 && value.codePoints().noneMatch(Character::isISOControl);
     }
 
-    public boolean sendDirectMessageToAgent(String agentId, Map<String, ?> payload) {
-        return sendDirectMessageToAgent(agentId, payload, null, null, null);
+    @Override
+    public NativeBountyExecutionSessionLookup.Snapshot current(
+            NativeBountyExecutionSessionLookup.Scope scope) {
+        if (scope == null || !validExactDispatchId(scope.tenantId(), 50)
+                || !validExactDispatchId(scope.clientId(), 50)
+                || !validExactDispatchId(scope.ownerJiacn(), 50)
+                || !validExactDispatchId(scope.canonicalAgentId(), 100)) {
+            return new NativeBountyExecutionSessionLookup.Snapshot(
+                    NativeBountyExecutionSessionLookup.State.OFFLINE, null, null, List.of());
+        }
+        if (runtimeAuthentication == null) {
+            throw new NativeBountyExecutionSessionLookup.SourceUnavailable(
+                    new IllegalStateException("Agent runtime authentication is unavailable"));
+        }
+        List<NativeBountyExecutionDeclaration> current = new ArrayList<>();
+        try {
+            for (Map.Entry<String, Set<String>> entry : successfullyRegisteredAgentIds.entrySet()) {
+                String sessionId = entry.getKey();
+                if (!entry.getValue().contains(scope.canonicalAgentId())
+                        || !registeredAgentIds(sessionId).contains(scope.canonicalAgentId())) continue;
+                WebSocketSession session = sessions.get(sessionId);
+                String runtimeInstanceId = session == null ? null : sessionRuntimeInstanceId(session);
+                if (session == null || !session.isOpen()
+                        || !scope.tenantId().equals(sessionTenantId(session))
+                        || !scope.clientId().equals(sessionClientId(session))
+                        || !scope.ownerJiacn().equals(sessionJiacn(session))
+                        || !scope.canonicalAgentId().equals(sessionAgentId(session))
+                        || runtimeInstanceId == null) continue;
+                boolean bound;
+                try {
+                    bound = runtimeAuthentication.isCurrentBinding(sessionId, scope.tenantId(),
+                            scope.clientId(), scope.ownerJiacn(), scope.canonicalAgentId(),
+                            runtimeInstanceId);
+                } catch (IllegalArgumentException invalidBinding) {
+                    bound = false;
+                }
+                if (bound) current.add(sessionNativeBountyExecution.getOrDefault(sessionId,
+                        NativeBountyExecutionDeclaration.parse(null)));
+            }
+        } catch (NativeBountyExecutionSessionLookup.SourceUnavailable failure) {
+            throw failure;
+        } catch (RuntimeException unavailable) {
+            throw new NativeBountyExecutionSessionLookup.SourceUnavailable(unavailable);
+        }
+        if (current.isEmpty()) return new NativeBountyExecutionSessionLookup.Snapshot(
+                NativeBountyExecutionSessionLookup.State.OFFLINE, null, null, List.of());
+        if (current.size() != 1) return new NativeBountyExecutionSessionLookup.Snapshot(
+                NativeBountyExecutionSessionLookup.State.AMBIGUOUS, null, null, List.of());
+        return current.getFirst().snapshot();
     }
 
-    /** Exact owner/client-scoped delivery for generic conversation traffic. */
+    @Override
+    public NativeProviderCredentialBindingLookup.Snapshot current(
+            NativeProviderCredentialBindingLookup.Scope scope) {
+        if (scope == null || !validExactDispatchId(scope.tenantId(), 50)
+                || !validExactDispatchId(scope.clientId(), 50)
+                || !validExactDispatchId(scope.ownerJiacn(), 50)
+                || !validExactDispatchId(scope.canonicalAgentId(), 100)) {
+            return emptyProviderBinding(NativeProviderCredentialBindingLookup.State.OFFLINE);
+        }
+        if (runtimeAuthentication == null) {
+            throw new NativeProviderCredentialBindingLookup.SourceUnavailable(
+                    new IllegalStateException("Agent runtime authentication is unavailable"));
+        }
+        List<NativeProviderCredentialBindingDeclaration> current = new ArrayList<>();
+        try {
+            for (Map.Entry<String, Set<String>> entry : successfullyRegisteredAgentIds.entrySet()) {
+                String sessionId = entry.getKey();
+                if (!entry.getValue().contains(scope.canonicalAgentId())
+                        || !registeredAgentIds(sessionId).contains(scope.canonicalAgentId())) continue;
+                WebSocketSession session = sessions.get(sessionId);
+                String runtimeInstanceId = session == null ? null : sessionRuntimeInstanceId(session);
+                if (session == null || !session.isOpen()
+                        || !scope.tenantId().equals(sessionTenantId(session))
+                        || !scope.clientId().equals(sessionClientId(session))
+                        || !scope.ownerJiacn().equals(sessionJiacn(session))
+                        || !scope.canonicalAgentId().equals(sessionAgentId(session))
+                        || runtimeInstanceId == null) continue;
+                boolean bound;
+                try {
+                    bound = runtimeAuthentication.isCurrentBinding(sessionId, scope.tenantId(),
+                            scope.clientId(), scope.ownerJiacn(), scope.canonicalAgentId(),
+                            runtimeInstanceId);
+                } catch (IllegalArgumentException invalidBinding) { bound = false; }
+                if (bound) current.add(sessionNativeProviderCredentialBinding.getOrDefault(sessionId,
+                        NativeProviderCredentialBindingDeclaration.parse(null)));
+            }
+        } catch (NativeProviderCredentialBindingLookup.SourceUnavailable failure) {
+            throw failure;
+        } catch (RuntimeException unavailable) {
+            throw new NativeProviderCredentialBindingLookup.SourceUnavailable(unavailable);
+        }
+        if (current.isEmpty()) return emptyProviderBinding(
+                NativeProviderCredentialBindingLookup.State.OFFLINE);
+        if (current.size()!=1) return emptyProviderBinding(
+                NativeProviderCredentialBindingLookup.State.AMBIGUOUS);
+        return current.getFirst().snapshot();
+    }
+
+    @Override
+    public ControlledImageExecutionSessionLookup.Snapshot current(
+            ControlledImageExecutionSessionLookup.Scope scope) {
+        if (scope == null || !validExactDispatchId(scope.tenantId(),50)
+                || !validExactDispatchId(scope.clientId(),50)
+                || !validExactDispatchId(scope.ownerJiacn(),50)
+                || !validExactDispatchId(scope.canonicalAgentId(),100)) {
+            return emptyControlled(ControlledImageExecutionSessionLookup.State.OFFLINE);
+        }
+        if (runtimeAuthentication == null) throw new ControlledImageExecutionSessionLookup.SourceUnavailable(
+                new IllegalStateException("Agent runtime authentication is unavailable"));
+        List<ControlledImageExecutionSessionLookup.Snapshot> current=new ArrayList<>();
+        try {
+            for (Map.Entry<String,Set<String>> entry:successfullyRegisteredAgentIds.entrySet()) {
+                String sessionId=entry.getKey();
+                if (!entry.getValue().contains(scope.canonicalAgentId())
+                        || !registeredAgentIds(sessionId).contains(scope.canonicalAgentId())) continue;
+                WebSocketSession session=sessions.get(sessionId);
+                String runtimeId=session==null?null:sessionRuntimeInstanceId(session);
+                if (session==null || !session.isOpen() || runtimeId==null
+                        || !scope.tenantId().equals(sessionTenantId(session))
+                        || !scope.clientId().equals(sessionClientId(session))
+                        || !scope.ownerJiacn().equals(sessionJiacn(session))
+                        || !scope.canonicalAgentId().equals(sessionAgentId(session))) continue;
+                boolean bound;
+                try { bound=runtimeAuthentication.isCurrentBinding(sessionId,scope.tenantId(),
+                        scope.clientId(),scope.ownerJiacn(),scope.canonicalAgentId(),runtimeId); }
+                catch (IllegalArgumentException invalid) { bound=false; }
+                if (!bound) continue;
+                var execution=sessionControlledImageBountyExecution.getOrDefault(sessionId,
+                        ControlledImageBountyExecutionDeclaration.parse(null));
+                var binding=sessionNativeProviderCredentialBinding.getOrDefault(sessionId,
+                        NativeProviderCredentialBindingDeclaration.parse(null)).snapshot();
+                ControlledImageExecutionSessionLookup.State state=execution.state();
+                if (state==ControlledImageExecutionSessionLookup.State.READY) {
+                    state=switch(binding.state()) {
+                        case READY -> ControlledImageExecutionSessionLookup.State.READY;
+                        case OFFLINE -> ControlledImageExecutionSessionLookup.State.OFFLINE;
+                        case UNDECLARED -> ControlledImageExecutionSessionLookup.State.UNDECLARED;
+                        case DISABLED -> ControlledImageExecutionSessionLookup.State.DISABLED;
+                        case UNSUPPORTED -> ControlledImageExecutionSessionLookup.State.UNSUPPORTED;
+                        case AMBIGUOUS -> ControlledImageExecutionSessionLookup.State.AMBIGUOUS;
+                    };
+                }
+                current.add(state==ControlledImageExecutionSessionLookup.State.READY
+                        ? new ControlledImageExecutionSessionLookup.Snapshot(state,runtimeId,1,
+                            ControlledImageBountyExecutionDeclaration.TRANSPORT,List.of("GENERATE_IMAGE"),
+                            binding.providerLane(),binding.bindingId(),binding.bindingEpoch(),binding.modelId(),
+                            binding.maxInputItems(),binding.maxOutboundRequestAttempts(),binding.precallFenceVersion())
+                        : emptyControlled(state));
+            }
+        } catch (ControlledImageExecutionSessionLookup.SourceUnavailable failure) { throw failure; }
+        catch (RuntimeException unavailable) { throw new ControlledImageExecutionSessionLookup.SourceUnavailable(unavailable); }
+        if (current.isEmpty()) return emptyControlled(ControlledImageExecutionSessionLookup.State.OFFLINE);
+        if (current.size()!=1) return emptyControlled(ControlledImageExecutionSessionLookup.State.AMBIGUOUS);
+        return current.getFirst();
+    }
+
+    @Override
+    public ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.SessionDeclaration currentSession(
+            ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.DeclarationScope scope) {
+        if(scope==null||!validExactDispatchId(scope.tenantId(),50)||!validExactDispatchId(scope.clientId(),50)
+                ||!validExactDispatchId(scope.ownerJiacn(),50)||!validExactDispatchId(scope.targetAgentId(),100)
+                ||runtimeAuthentication==null) {
+            return new ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.SessionDeclaration(
+                    ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State.OFFLINE,null,List.of());
+        }
+        List<ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.SessionDeclaration> found=new ArrayList<>();
+        for(var entry:successfullyRegisteredAgentIds.entrySet()) {
+            String sessionId=entry.getKey();
+            if(!entry.getValue().contains(scope.targetAgentId())
+                    ||!registeredAgentIds(sessionId).contains(scope.targetAgentId())) continue;
+            WebSocketSession session=sessions.get(sessionId);
+            String runtime=session==null?null:sessionRuntimeInstanceId(session);
+            if(session==null||!session.isOpen()||runtime==null
+                    ||!scope.tenantId().equals(sessionTenantId(session))
+                    ||!scope.clientId().equals(sessionClientId(session))
+                    ||!scope.ownerJiacn().equals(sessionJiacn(session))
+                    ||!scope.targetAgentId().equals(sessionAgentId(session))) continue;
+            boolean bound;
+            try { bound=runtimeAuthentication.isCurrentBinding(sessionId,scope.tenantId(),scope.clientId(),
+                    scope.ownerJiacn(),scope.targetAgentId(),runtime); }
+            catch(RuntimeException invalid) { bound=false; }
+            if(!bound) continue;
+            ControlledImageV3Declaration declaration=sessionControlledImageV3.getOrDefault(
+                    sessionId,ControlledImageV3Declaration.parse(null));
+            found.add(declaration.session(runtime));
+        }
+        if(found.isEmpty()) return new ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.SessionDeclaration(
+                ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State.OFFLINE,null,List.of());
+        if(found.size()!=1) return new ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.SessionDeclaration(
+                ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State.AMBIGUOUS,null,List.of());
+        return found.getFirst();
+    }
+
+    @Override
+    public ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.Declaration current(
+            ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.DeclarationScope scope) {
+        if(scope==null||!validExactDispatchId(scope.tenantId(),50)||!validExactDispatchId(scope.clientId(),50)
+                ||!validExactDispatchId(scope.ownerJiacn(),50)||!validExactDispatchId(scope.targetAgentId(),100))
+            return ControlledImageV3Declaration.empty(ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State.OFFLINE);
+        if(runtimeAuthentication==null) return ControlledImageV3Declaration.empty(ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State.OFFLINE);
+        List<ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.Declaration> found=new ArrayList<>();
+        for(var entry:successfullyRegisteredAgentIds.entrySet()){
+            String sessionId=entry.getKey();if(!entry.getValue().contains(scope.targetAgentId())||!registeredAgentIds(sessionId).contains(scope.targetAgentId()))continue;
+            WebSocketSession session=sessions.get(sessionId);String runtime=session==null?null:sessionRuntimeInstanceId(session);
+            if(session==null||!session.isOpen()||runtime==null||!scope.tenantId().equals(sessionTenantId(session))
+                    ||!scope.clientId().equals(sessionClientId(session))||!scope.ownerJiacn().equals(sessionJiacn(session))
+                    ||!scope.targetAgentId().equals(sessionAgentId(session)))continue;
+            boolean bound;try{bound=runtimeAuthentication.isCurrentBinding(sessionId,scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.targetAgentId(),runtime);}catch(RuntimeException invalid){bound=false;}
+            if(!bound)continue;
+            var declared=sessionControlledImageV3.getOrDefault(sessionId,ControlledImageV3Declaration.parse(null));
+            var binding=sessionNativeProviderCredentialBinding.getOrDefault(sessionId,NativeProviderCredentialBindingDeclaration.parse(null)).snapshot();
+            found.add(declared.combine(runtime,binding));
+        }
+        if(found.isEmpty())return ControlledImageV3Declaration.empty(ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State.OFFLINE);
+        if(found.size()!=1)return ControlledImageV3Declaration.empty(ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State.AMBIGUOUS);
+        return found.getFirst();
+    }
+
+    private static ControlledImageExecutionSessionLookup.Snapshot emptyControlled(
+            ControlledImageExecutionSessionLookup.State state) {
+        return new ControlledImageExecutionSessionLookup.Snapshot(state,null,null,null,List.of(),
+                null,null,null,null,null,null,null);
+    }
+
+    private static NativeProviderCredentialBindingLookup.Snapshot emptyProviderBinding(
+            NativeProviderCredentialBindingLookup.State state) {
+        return new NativeProviderCredentialBindingLookup.Snapshot(
+                state,null,null,null,null,null,null,null,null);
+    }
+
+    /**
+     * Sends durable deliberation chat only to exact authenticated connections that advertised the
+     * requested profile. A modern declaration is authoritative and is never downgraded to legacy.
+     */
+    public CapabilityDispatchResult sendNegotiatedChatMessageToAgent(
+            String tenantId, String ownerJiacn, String clientId, String agentId,
+            InteractionRoute route, Map<String, ?> payload) {
+        requireNoActiveTransactionForChatDelivery();
+        if (!validExactDispatchId(tenantId, 50) || !validExactDispatchId(ownerJiacn, 50)
+                || !validExactDispatchId(clientId, 50) || !validExactDispatchId(agentId, 100)
+                || route == null || route == InteractionRoute.EXECUTE) {
+            return new CapabilityDispatchResult(CapabilityDispatchStatus.UNSUPPORTED, false, Map.of());
+        }
+        Map<String, AgentRuntimeCapabilities> exact = new LinkedHashMap<>();
+        for (Map.Entry<String, Set<String>> entry : successfullyRegisteredAgentIds.entrySet()) {
+            String sessionId = entry.getKey();
+            if (!entry.getValue().contains(agentId) || !registeredAgentIds(sessionId).contains(agentId)) continue;
+            WebSocketSession session = sessions.get(sessionId);
+            if (session == null || !session.isOpen()
+                    || !agentId.equals(sessionAgentId(session))
+                    || !tenantId.equals(sessionTenantId(session))
+                    || !ownerJiacn.equals(sessionJiacn(session))
+                    || !clientId.equals(sessionClientId(session))) continue;
+            exact.put(sessionId, sessionRuntimeCapabilities.getOrDefault(
+                    sessionId, AgentRuntimeCapabilities.legacy()));
+        }
+        if (exact.isEmpty()) {
+            return new CapabilityDispatchResult(CapabilityDispatchStatus.OFFLINE, false, Map.of());
+        }
+
+        // INSPECT has its own measured declaration and exact-session registry. The frozen
+        // CHAT transport capability contract deliberately declares legacy INSPECT unavailable.
+        if (route == InteractionRoute.INSPECT) {
+            return sendTypedInspectionToExactSession(tenantId, ownerJiacn, clientId, agentId,
+                    payload, exact.keySet());
+        }
+
+        boolean hasModern = exact.values().stream().anyMatch(AgentRuntimeCapabilities::modern);
+        Map<String, AgentRuntimeCapabilities> eligible = new LinkedHashMap<>();
+        AgentRuntimeCapabilities.Decision blocked = AgentRuntimeCapabilities.Decision.UNSUPPORTED;
+        for (Map.Entry<String, AgentRuntimeCapabilities> entry : exact.entrySet()) {
+            AgentRuntimeCapabilities capabilities = entry.getValue();
+            if (hasModern && !capabilities.modern()) continue;
+            AgentRuntimeCapabilities.Decision decision = capabilities.decision(route);
+            if (decision == AgentRuntimeCapabilities.Decision.READY
+                    || decision == AgentRuntimeCapabilities.Decision.LEGACY_COMPATIBLE) {
+                eligible.put(entry.getKey(), capabilities);
+            } else if (decision == AgentRuntimeCapabilities.Decision.WAITING_DISABLED) {
+                blocked = decision;
+            }
+        }
+        if (eligible.isEmpty()) {
+            CapabilityDispatchStatus status = blocked == AgentRuntimeCapabilities.Decision.WAITING_DISABLED
+                    ? CapabilityDispatchStatus.WAITING_DISABLED : CapabilityDispatchStatus.UNSUPPORTED;
+            AgentRuntimeCapabilities sample = exact.values().stream()
+                    .filter(capability -> !hasModern || capability.modern()).findFirst().orElse(exact.values().iterator().next());
+            return new CapabilityDispatchResult(status, false,
+                    sample.negotiatedProfile(route, sample.decision(route)));
+        }
+
+        Map<String, Object> outbound = prepareDirectOutboundPayload(agentId, payload);
+        if (outbound == null || !AgentProtocolConstants.TYPE_CHAT_MESSAGE.equals(outbound.get("messageType"))) {
+            return new CapabilityDispatchResult(CapabilityDispatchStatus.UNSUPPORTED, false, Map.of());
+        }
+        boolean delivered = false;
+        Map<String, Object> negotiated = Map.of();
+        for (Map.Entry<String, AgentRuntimeCapabilities> entry : eligible.entrySet()) {
+            WebSocketSession session = sessions.get(entry.getKey());
+            if (session == null || !session.isOpen()) continue;
+            AgentRuntimeCapabilities.Decision decision = entry.getValue().decision(route);
+            Map<String, Object> wire = new LinkedHashMap<>(outbound);
+            negotiated = entry.getValue().negotiatedProfile(route, decision);
+            wire.put("targetCapability", negotiated);
+            delivered = sendEvent(session, AgentProtocolConstants.LEGACY_AGENT_DIRECT_MESSAGE, wire) || delivered;
+        }
+        CapabilityDispatchStatus status = eligible.values().stream().allMatch(AgentRuntimeCapabilities::modern)
+                ? CapabilityDispatchStatus.READY : CapabilityDispatchStatus.LEGACY_COMPATIBLE;
+        return new CapabilityDispatchResult(status, delivered, negotiated);
+    }
+
+    private CapabilityDispatchResult sendTypedInspectionToExactSession(
+            String tenantId, String ownerJiacn, String clientId, String agentId,
+            Map<String, ?> payload, Set<String> exactSessionIds) {
+        if (typedInspectionSessions == null) {
+            return new CapabilityDispatchResult(CapabilityDispatchStatus.UNSUPPORTED, false, Map.of());
+        }
+        TypedInspectionSessionRegistry.Ready ready;
+        try {
+            ready = typedInspectionSessions.requireSingleReady(
+                    new TypedInspectionSessionRegistry.Scope(tenantId, ownerJiacn, clientId), agentId);
+        } catch (IllegalStateException unavailable) {
+            return new CapabilityDispatchResult(CapabilityDispatchStatus.UNSUPPORTED, false, Map.of());
+        }
+        if (!exactSessionIds.contains(ready.sessionId())) {
+            return new CapabilityDispatchResult(CapabilityDispatchStatus.UNSUPPORTED, false, Map.of());
+        }
+        // Never send an admitted manifest to a replacement runtime with different policies.
+        if (!(payload.get("contextSnapshot") instanceof Map<?, ?> snapshot)
+                || !(snapshot.get("facts") instanceof Map<?, ?> facts)
+                || !(facts.get("typedInspection") instanceof Map<?, ?> inspection)
+                || !(inspection.get("manifest") instanceof Map<?, ?> manifest)
+                || !ready.manifestProfile().equals(manifest.get("profile"))) {
+            return new CapabilityDispatchResult(CapabilityDispatchStatus.UNSUPPORTED, false, Map.of());
+        }
+        Map<String, Object> outbound = prepareDirectOutboundPayload(agentId, payload);
+        if (outbound == null || !AgentProtocolConstants.TYPE_CHAT_MESSAGE.equals(outbound.get("messageType"))) {
+            return new CapabilityDispatchResult(CapabilityDispatchStatus.UNSUPPORTED, false, Map.of());
+        }
+        WebSocketSession selected = sessions.get(ready.sessionId());
+        if (selected == null || !selected.isOpen()) {
+            return new CapabilityDispatchResult(CapabilityDispatchStatus.OFFLINE, false, Map.of());
+        }
+        Map<String, Object> negotiated = Map.of("decision", "READY", "profile", "INSPECT",
+                "capabilityContractVersion", 1, "policy", ready.frozenDeclaration());
+        Map<String, Object> wire = new LinkedHashMap<>(outbound);
+        wire.put("targetCapability", negotiated);
+        boolean delivered = sendEvent(selected, AgentProtocolConstants.LEGACY_AGENT_DIRECT_MESSAGE, wire, true);
+        return new CapabilityDispatchResult(CapabilityDispatchStatus.READY, delivered, negotiated);
+    }
+
+    public enum CapabilityDispatchStatus {
+        READY, LEGACY_COMPATIBLE, WAITING_DISABLED, UNSUPPORTED, OFFLINE
+    }
+
+    public record CapabilityDispatchResult(CapabilityDispatchStatus status, boolean delivered,
+            Map<String, Object> negotiatedProfile) { }
+
+    public boolean sendDirectMessageToAgent(String agentId, Map<String, ?> payload) {
+        return sendDirectMessageToAgent(agentId, payload, null, null, null, null);
+    }
+
+    /** Exact tenant/owner/client-scoped delivery for generic conversation traffic. */
+    public boolean sendDirectMessageToAgent(String tenantId, String ownerJiacn, String clientId,
+            String agentId, Map<String, ?> payload) {
+        if (!validExactDispatchId(tenantId, 50) || !validExactDispatchId(ownerJiacn, 50)
+                || !validExactDispatchId(clientId, 50)) return false;
+        return sendDirectMessageToAgent(agentId, payload, null, tenantId, ownerJiacn, clientId);
+    }
+
+    /** Legacy exact owner/client overload; retained for non-deliberation callers. */
     public boolean sendDirectMessageToAgent(
             String ownerJiacn, String clientId, String agentId, Map<String, ?> payload) {
-        if (!validExactDispatchId(ownerJiacn, 50)
-                || !validExactDispatchId(clientId, 50)) {
-            return false;
-        }
-        return sendDirectMessageToAgent(agentId, payload, null, ownerJiacn, clientId);
+        if (!validExactDispatchId(ownerJiacn, 50) || !validExactDispatchId(clientId, 50)) return false;
+        return sendDirectMessageToAgent(agentId, payload, null, null, ownerJiacn, clientId);
     }
 
     private boolean sendDirectMessageToAgent(String agentId, Map<String, ?> payload,
             Set<String> trustedTaskMemberAgentIds) {
-        return sendDirectMessageToAgent(agentId, payload, trustedTaskMemberAgentIds, null, null);
+        return sendDirectMessageToAgent(agentId, payload, trustedTaskMemberAgentIds, null, null, null);
     }
 
     private boolean sendDirectMessageToAgent(
             String agentId, Map<String, ?> payload, Set<String> trustedTaskMemberAgentIds,
-            String requiredOwnerJiacn, String requiredClientId) {
+            String requiredTenantId, String requiredOwnerJiacn, String requiredClientId) {
         if (isBlank(agentId)) {
             return false;
         }
@@ -1841,6 +2639,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             }
             WebSocketSession session = sessions.get(sessionId);
             if (session == null || !session.isOpen() || !agentId.equals(sessionAgentId(session))) {
+                continue;
+            }
+            if (requiredTenantId != null && !requiredTenantId.equals(sessionTenantId(session))) {
                 continue;
             }
             if (requiredOwnerJiacn != null
@@ -2360,6 +3161,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
 
     private <T> T withSessionContext(WebSocketSession session, Supplier<T> action) {
         EsContext context = new EsContext();
+        context.setTenantId(sessionTenantId(session));
         context.setClientId(sessionClientId(session));
         context.setJiacn(sessionJiacn(session));
         EsContextHolder.setContext(context);
@@ -2382,6 +3184,16 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         String handshakeRuntimeInstanceId = sessionAttribute(session, "runtimeInstanceId");
         rememberSessionRuntimeInstance(session, handshakeRuntimeInstanceId);
         return handshakeRuntimeInstanceId;
+    }
+
+    private void requireNoActiveTransactionForChatDelivery() {
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new IllegalStateException("Chat delivery attempted before transaction commit");
+        }
+    }
+
+    private String sessionTenantId(WebSocketSession session) {
+        return sessionAttribute(session, "tenantId");
     }
 
     private String sessionClientId(WebSocketSession session) {
@@ -2432,6 +3244,23 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             abilities.add(ability);
         }
         return java.util.List.copyOf(abilities);
+    }
+
+    private static final class ControlledImageV3Declaration {
+        private static final String TRANSPORT="PERSONAL_WORKSPACE_CONTROLLED_IMAGE_HTTP_V3";
+        private final ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State state;
+        private final List<String> operations;
+        private ControlledImageV3Declaration(ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State state,List<String> operations){this.state=state;this.operations=List.copyOf(operations);}
+        static ControlledImageV3Declaration parse(Object raw){
+            if(raw==null)return new ControlledImageV3Declaration(ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State.UNDECLARED,List.of());
+            try{if(!(raw instanceof Map<?,?> m)||!m.keySet().equals(Set.of("schemaVersion","enabled","transport","commandSchemaVersions","leaseProtocolVersions","providerStartFenceVersions","resultCommitProtocolVersions","operations"))||!Integer.valueOf(1).equals(m.get("schemaVersion"))||!(m.get("enabled") instanceof Boolean enabled)||!TRANSPORT.equals(m.get("transport"))||!List.of(3).equals(m.get("commandSchemaVersions"))||!List.of(1).equals(m.get("leaseProtocolVersions"))||!List.of(3).equals(m.get("providerStartFenceVersions"))||!List.of(1).equals(m.get("resultCommitProtocolVersions"))||!(m.get("operations") instanceof List<?> list))throw new IllegalArgumentException();
+                if(!enabled){if(!list.isEmpty())throw new IllegalArgumentException();return new ControlledImageV3Declaration(ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State.DISABLED,List.of());}
+                List<String> ops=new ArrayList<>();for(Object item:list){if(!(item instanceof Map<?,?> op)||!op.keySet().equals(Set.of("operation","inputManifest","resultManifest")))throw new IllegalArgumentException();String operation=Objects.toString(op.get("operation"),"");if(!Set.of("GENERATE_IMAGE","EDIT_IMAGE").contains(operation)||ops.contains(operation))throw new IllegalArgumentException();if(!(op.get("inputManifest") instanceof Map<?,?> input)||!input.keySet().equals(Set.of("schemaVersion","minItems","maxItems","mimeTypes","sourceKinds"))||!Integer.valueOf(3).equals(input.get("schemaVersion"))||!Integer.valueOf("EDIT_IMAGE".equals(operation)?1:0).equals(input.get("minItems"))||!Integer.valueOf("EDIT_IMAGE".equals(operation)?1:16).equals(input.get("maxItems"))||!List.of("image/jpeg","image/png").equals(input.get("mimeTypes"))||!List.of("TASK_LINKED_WORKSPACE_VERSION","CURRENT_CONVERSATION_ASSET").equals(input.get("sourceKinds")))throw new IllegalArgumentException();if(!(op.get("resultManifest") instanceof Map<?,?> result)||!result.keySet().equals(Set.of("schemaVersion","minItems","maxItems","outputId","mimeTypes"))||!Integer.valueOf(1).equals(result.get("schemaVersion"))||!Integer.valueOf(1).equals(result.get("minItems"))||!Integer.valueOf(1).equals(result.get("maxItems"))||!"output_1".equals(result.get("outputId"))||!List.of("image/png").equals(result.get("mimeTypes")))throw new IllegalArgumentException();ops.add(operation);}if(!Set.copyOf(ops).equals(Set.of("GENERATE_IMAGE","EDIT_IMAGE")))throw new IllegalArgumentException();return new ControlledImageV3Declaration(ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State.READY,ops);
+            }catch(RuntimeException invalid){return new ControlledImageV3Declaration(ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State.UNSUPPORTED,List.of());}}
+        Map<String,Object> normalizedForReceipt(){return state==ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State.READY?Map.of("state",state.name(),"schemaVersion",1,"transport",TRANSPORT,"supportedOperations",operations):Map.of("state",state.name());}
+        ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.SessionDeclaration session(String runtime){return new ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.SessionDeclaration(state,state==ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State.READY?runtime:null,operations);}
+        ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.Declaration combine(String runtime,NativeProviderCredentialBindingLookup.Snapshot b){if(state!=ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State.READY)return empty(state);if(b==null||b.state()!=NativeProviderCredentialBindingLookup.State.READY)return empty(ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State.MISMATCHED);return new ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.Declaration(state,runtime,operations,b.providerLane(),b.bindingId(),b.bindingEpoch(),b.modelId(),b.maxInputItems(),b.maxOutboundRequestAttempts(),b.precallFenceVersion());}
+        static ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.Declaration empty(ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State s){return new ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.Declaration(s,null,List.of(),null,null,null,null,null,null,null);}
     }
 
     private record TaskDeliveryScope(String tenantId, String clientId, String taskId) {

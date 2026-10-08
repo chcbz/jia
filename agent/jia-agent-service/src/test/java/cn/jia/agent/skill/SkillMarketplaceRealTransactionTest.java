@@ -39,7 +39,7 @@ import static org.mockito.ArgumentMatchers.*;
  * No sockets, broker, runner, or provisioning. Runtime/owner/key adapters are explicit trusted fixtures.
  * Paid terminal selectors require W06's centralized CAPTURE_SKILL/REFUND_SKILL primitive integration. */
 class SkillMarketplaceRealTransactionTest {
-    private static final HostingRentHttp.Actor ACTOR=new HostingRentHttp.Actor("payer-sub","Tenant-A","Client-A");
+    private static final HostingRentHttp.Actor ACTOR=new HostingRentHttp.Actor("payer-sub","0","Client-A","Tenant-A");
     private static final String AGENT="agt_00000000000000000000000000000001";
     private static final String TRANSPORT_SCHEMA="db/agent-command-transport-schema.sql";
     private static final String MYSQL_AUDIT_UPDATE_TRIGGER="""
@@ -110,12 +110,18 @@ class SkillMarketplaceRealTransactionTest {
         var gate=new EconomyPreviewGate(new EconomyPreviewProperties(true,List.of(new EconomyPreviewProperties.AllowedScope(ACTOR.tenantId(),ACTOR.clientId()))));
         var posting=new EconomyPostingServiceImpl(ledger,manager,gate);
         var agents=mock(AgentService.class); var owner=mock(HostingRentOwnerResolver.class); var runtimes=mock(AgentRuntimeDao.class);
-        runtime=new AgentRuntimeEntity().setAgentId(AGENT).setOwnerJiacn(ACTOR.tenantId()).setBindingId(7L).setTokenHash("registration-1").setStatus("online");
+        runtime=new AgentRuntimeEntity().setAgentId(AGENT).setOwnerJiacn(ACTOR.ownerJiacn()).setBindingId(7L).setTokenHash("registration-1").setStatus("online");
+        runtime.setTenantId(ACTOR.tenantId());
         runtime.setClientId(ACTOR.clientId());
         when(runtimes.findByAgentIdForUpdate(AGENT)).thenAnswer(i->runtime);
-        when(owner.requireOwner(ACTOR)).thenReturn(ACTOR.tenantId());
+        when(owner.requireOwner(any())).thenAnswer(inv -> {
+            HostingRentHttp.Actor requested = inv.getArgument(0);
+            if (!ACTOR.equals(requested)) throw new cn.jia.agent.hosting.HostingRentApplicationException(
+                    403, "HOSTING_RENT_OWNER_UNPROVEN");
+            return ACTOR.ownerJiacn();
+        });
         var dto=new AgentRuntimeDTO();dto.setAgentId(AGENT);dto.setStatus("online");dto.setSystemAgent(false);
-        when(agents.requireApiKeyOwnedAgentForUpdate(ACTOR.clientId(),ACTOR.tenantId(),AGENT)).thenReturn(dto);
+        when(agents.requireApiKeyOwnedAgentForUpdate(ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT)).thenReturn(dto);
         versions=new SkillAgentVersions(app,runtimes,provider(agents),owner,manager,true);
         var transport=mock(AgentRabbitSafetyGate.class);
         when(transport.state()).thenReturn(AgentRabbitActivationState.DISPATCH_CANARY);
@@ -124,7 +130,7 @@ class SkillMarketplaceRealTransactionTest {
         var commands=new AgentCommandTransportDaoImpl(sql.getMapper(AgentCommandTransportMapper.class));
         AgentCommandTransportWriter writer=new AgentCommandTransportWriterImpl(commands,transport,agents,mock(AgentTaskCollaborationAccessService.class),manager);
         var packages=new SkillPackages(); keys=mock(ApiKeyService.class);
-        key=new OauthApiKeyEntity();key.setId("key-1");key.setJiacn(ACTOR.tenantId());key.setClientId(ACTOR.clientId());key.setTenantId(ACTOR.tenantId());key.setStatus(1);
+        key=new OauthApiKeyEntity();key.setId("key-1");key.setJiacn(ACTOR.ownerJiacn());key.setClientId(ACTOR.clientId());key.setTenantId(ACTOR.tenantId());key.setStatus(1);
         when(keys.get("key-1")).thenReturn(key);
         credentialMapper=spy(sql.getMapper(EconomySkillCredentialMapper.class));
         doReturn(List.of()).when(credentialMapper).hostingCandidates(anyString(),anyString(),anyString());
@@ -332,7 +338,9 @@ class SkillMarketplaceRealTransactionTest {
         runtime.setTokenHash("registration-2");versions.observe(runtime);
         assertThrows(SkillMarketplaceException.class,()->service.purchase(ACTOR,uuid(),body,false));
         assertThrows(SkillMarketplaceException.class,()->service.quote(ACTOR,uuid(),Map.of("targetAgentId",AGENT,"productVersionId","spv_deploy_runner_1_0_0","expectedAgentVersion","2"),false));
-        assertThrows(SkillMarketplaceException.class,()->service.purchase(new HostingRentHttp.Actor(ACTOR.actorId(),"tenant-a",ACTOR.clientId()),uuid(),body,false));
+        var denied=assertThrows(cn.jia.agent.hosting.HostingRentApplicationException.class,
+                ()->service.purchase(new HostingRentHttp.Actor(ACTOR.actorId(),"0",ACTOR.clientId(),"tenant-a"),uuid(),body,false));
+        assertEquals(403,denied.status());
         assertEquals(0,count("economy_transaction"));assertEquals(0,count("agent_command_delivery"));
     }
     @Test void concurrentSameKeyHasOneReserveOneDeliveryAndImmutableReceipt() throws Exception {
@@ -345,7 +353,7 @@ class SkillMarketplaceRealTransactionTest {
     }
     @Test void foreignAgentKeyOrStaleDeliveryCannotDownloadOrSettle() {
         service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_inspector_1_0_0"),false);var i=installation();sent(i);
-        var foreign=new OauthApiKeyEntity();foreign.setId("other-key");foreign.setTenantId(ACTOR.tenantId());foreign.setJiacn(ACTOR.tenantId());foreign.setClientId(ACTOR.clientId());foreign.setStatus(1);
+        var foreign=new OauthApiKeyEntity();foreign.setId("other-key");foreign.setTenantId(ACTOR.tenantId());foreign.setJiacn(ACTOR.ownerJiacn());foreign.setClientId(ACTOR.clientId());foreign.setStatus(1);
         assertThrows(SkillMarketplaceException.class,()->results.packageBytes(foreign,i.getInstallationId()));
         assertThrows(SkillMarketplaceException.class,()->results.accept(ACTOR.tenantId(),ACTOR.clientId(),"other-agent","key-1",result(i,"SUCCEEDED",null)));
         jdbc.update("UPDATE agent_command_delivery SET active_attempt=2");
@@ -356,7 +364,7 @@ class SkillMarketplaceRealTransactionTest {
     @Test void fundingLookupUsesOnlyPersistedInstalledActiveExactAgentSkills() {
         var lookup=new InstalledSkillEntitlementLookup(market,app,versions,service);
         var requirement=new cn.jia.agent.entity.funding.AgentSkillRequirementDTO();requirement.setSkillKey("repo-test");requirement.setVersionRange(">=1.0.0");
-        var actor=new cn.jia.agent.service.funding.FundedBountyActor(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.actorId());
+        var actor=new cn.jia.agent.service.funding.FundedBountyActor(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(), ACTOR.actorId());
         service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);var i=installation();sent(i);
         assertFalse(lookup.lookup(actor,AGENT,List.of(requirement)).allRequirementsMatched());
         results.accept(ACTOR.tenantId(),ACTOR.clientId(),AGENT,"key-1",result(i,"SUCCEEDED",null));
@@ -404,9 +412,9 @@ class SkillMarketplaceRealTransactionTest {
         when(sessions.dispatch(eq(ACTOR.tenantId()),eq(ACTOR.clientId()),eq(AGENT),eq("key-1"),any(),any())).thenAnswer(x->{
             assertFalse(TransactionSynchronizationManager.isActualTransactionActive());return AgentRawCommandDispatchResult.sent(1,1);
         });
-        assertEquals(AgentRawCommandDispatchResult.Status.SENT,dispatch.dispatch(ACTOR.tenantId(),ACTOR.clientId(),i.getOrderId(),AGENT,i.getCommandId(),wire).status());
+        assertEquals(AgentRawCommandDispatchResult.Status.SENT,dispatch.dispatch(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(), i.getOrderId(),AGENT,i.getCommandId(),wire).status());
         byte[] tampered=wire.clone();tampered[0]='[';
-        assertThrows(SkillMarketplaceException.class,()->dispatch.dispatch(ACTOR.tenantId(),ACTOR.clientId(),i.getOrderId(),AGENT,i.getCommandId(),tampered));
+        assertThrows(SkillMarketplaceException.class,()->dispatch.dispatch(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(), i.getOrderId(),AGENT,i.getCommandId(),tampered));
         verify(sessions,times(1)).dispatch(anyString(),anyString(),anyString(),anyString(),any(),any());
     }
     private Map<String,String> purchaseBody(String product) {

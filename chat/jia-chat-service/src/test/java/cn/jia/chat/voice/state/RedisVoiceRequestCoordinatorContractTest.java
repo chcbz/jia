@@ -71,6 +71,19 @@ class RedisVoiceRequestCoordinatorContractTest {
     }
 
     @Test
+    void timeBasedWriteLuaEnablesRedis4CommandReplicationBeforeServerTime() throws Exception {
+        for (String fieldName : List.of(
+                "ADMIT_SCRIPT", "BEGIN_ADMITTED_SCRIPT", "BEGIN_SCRIPT", "RENEW_SCRIPT")) {
+            String lua = script(fieldName);
+            assertTrue(lua.startsWith("redis.replicate_commands()\nlocal time = redis.call('TIME')"),
+                    fieldName + " must enable Redis 4 command replication before TIME");
+            assertEquals(1, count(lua, "redis.replicate_commands()"));
+        }
+        assertTrue(!script("TERMINAL_SCRIPT").contains("redis.replicate_commands()"));
+        assertTrue(!script("RELEASE_SCRIPT").contains("redis.replicate_commands()"));
+    }
+
+    @Test
     void beginLuaChecksExactExistingStateBeforeAtomicQuotaAndLeaseReservation() throws Exception {
         String script = script("BEGIN_SCRIPT");
         assertTrue(script.indexOf("HGET', KEYS[1], 'digest'") < script.indexOf("INCR', KEYS[2]"));
@@ -89,10 +102,15 @@ class RedisVoiceRequestCoordinatorContractTest {
     @Test
     void terminalAndReleaseLuaAreCompareAndSetByDigestAndMatchingLeaseToken() throws Exception {
         String terminal = script("TERMINAL_SCRIPT");
+        String renew = script("RENEW_SCRIPT");
         String release = script("RELEASE_SCRIPT");
         assertTrue(terminal.contains("state') ~= 'IN_PROGRESS'"));
         assertTrue(terminal.contains("digest') ~= ARGV[1]"));
         assertTrue(terminal.contains("lease') ~= ARGV[2]"));
+        assertTrue(renew.contains("digest') ~= ARGV[1]"));
+        assertTrue(renew.contains("lease') ~= ARGV[2]"));
+        assertTrue(renew.contains("tonumber(identityExpiry) <= now"));
+        assertTrue(renew.contains("tonumber(globalExpiry) <= now"));
         assertTrue(release.contains("state') == 'IN_PROGRESS'"));
         assertTrue(release.contains("state', 'FAILED_UNKNOWN'"));
         assertTrue(release.indexOf("state', 'FAILED_UNKNOWN'")
@@ -119,6 +137,54 @@ class RedisVoiceRequestCoordinatorContractTest {
     }
 
     @Test
+    void exactExternalRedis406ExecutesAllServerTimeWritePaths() throws Exception {
+        String configuredBinary = System.getProperty("cyf.voice.redis4.binary", "");
+        org.junit.jupiter.api.Assumptions.assumeTrue(!configuredBinary.isBlank(),
+                "set -Dcyf.voice.redis4.binary for the exact Redis 4.0.6 regression");
+        try (OwnedRedisServer server = OwnedRedisServer.startExternal(
+                Path.of(configuredBinary))) {
+            LettuceConnectionFactory factory = new LettuceConnectionFactory(server.host(), server.port());
+            factory.afterPropertiesSet();
+            factory.start();
+            try {
+                assertRedisVersion(factory, "4.0.6");
+                VoiceSpeechProperties properties = new VoiceSpeechProperties();
+                properties.setCacheEncryptionKey(
+                        "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=");
+                RedisVoiceRequestCoordinator coordinator = new RedisVoiceRequestCoordinator(
+                        factory, properties, new VoicePayloadCipher(properties));
+
+                VoiceAdmission admission = admitted(coordinator.admit(
+                        VoiceOperation.TRANSCRIPTION, "redis4-admitted", "redis4-request"));
+                VoiceBeginResult admittedBegin = coordinator.begin(admission, "redis4-digest");
+                assertEquals(VoiceBeginResult.Outcome.RESERVED, admittedBegin.outcome());
+                coordinator.renew(admittedBegin.reservation());
+                coordinator.succeed(admittedBegin.reservation(),
+                        new VoiceCachedResult(new byte[]{4, 0, 6}, "application/json"));
+                coordinator.release(admission);
+                assertEquals(VoiceBeginResult.Outcome.REPLAY, coordinator.begin(
+                        VoiceOperation.TRANSCRIPTION, "redis4-admitted",
+                        "redis4-request", "redis4-digest").outcome());
+
+                VoiceBeginResult directBegin = coordinator.begin(
+                        VoiceOperation.SYNTHESIS, "redis4-direct",
+                        "redis4-direct-request", "redis4-direct-digest");
+                assertEquals(VoiceBeginResult.Outcome.RESERVED, directBegin.outcome());
+                coordinator.renew(directBegin.reservation());
+                coordinator.failKnown(directBegin.reservation());
+                coordinator.release(directBegin.reservation());
+
+                assertScriptLoaded(factory, "ADMIT_SCRIPT");
+                assertScriptLoaded(factory, "BEGIN_ADMITTED_SCRIPT");
+                assertScriptLoaded(factory, "BEGIN_SCRIPT");
+                assertScriptLoaded(factory, "RENEW_SCRIPT");
+            } finally {
+                factory.destroy();
+            }
+        }
+    }
+
+    @Test
     void realRedisExecutesAtomicTerminalReplayAndTokenMismatchContracts() throws Exception {
         try (OwnedRedisServer server = OwnedRedisServer.start()) {
             LettuceConnectionFactory factory = new LettuceConnectionFactory(server.host(), server.port());
@@ -136,6 +202,7 @@ class RedisVoiceRequestCoordinatorContractTest {
                 assertFailedKnownReplay(coordinator);
                 assertFailedUnknownReplay(coordinator);
                 assertTokenMismatchCannotTerminateOrRelease(coordinator);
+                assertRenewRequiresLiveExactOwnership(coordinator);
                 assertConcurrentBeginIsAtomic(coordinator);
                 assertRedisReplayRejectsCiphertextTupleTransplants(factory, coordinator);
                 assertPreAdmissionIsBilledAndReleased(factory);
@@ -146,6 +213,7 @@ class RedisVoiceRequestCoordinatorContractTest {
                 assertScriptLoaded(factory, "BEGIN_ADMITTED_SCRIPT");
                 assertScriptLoaded(factory, "BEGIN_SCRIPT");
                 assertScriptLoaded(factory, "TERMINAL_SCRIPT");
+                assertScriptLoaded(factory, "RENEW_SCRIPT");
                 assertScriptLoaded(factory, "RELEASE_SCRIPT");
             } finally {
                 factory.destroy();
@@ -357,6 +425,22 @@ class RedisVoiceRequestCoordinatorContractTest {
                         "token-scope", "token-request", "token-digest").outcome());
     }
 
+    private static void assertRenewRequiresLiveExactOwnership(
+            RedisVoiceRequestCoordinator coordinator) {
+        VoiceBeginResult first = coordinator.begin(VoiceOperation.SYNTHESIS,
+                "renew-scope", "renew-request", "renew-digest");
+        VoiceReservation original = first.reservation();
+        coordinator.renew(original);
+        assertThrows(VoiceStateUnavailableException.class, () -> coordinator.renew(
+                new VoiceReservation(original.operation(), original.identityScope(),
+                        original.requestId(), "forged-digest", original.leaseToken())));
+        assertThrows(VoiceStateUnavailableException.class, () -> coordinator.renew(
+                new VoiceReservation(original.operation(), original.identityScope(),
+                        original.requestId(), original.digest(), "forged-lease")));
+        coordinator.release(original);
+        assertThrows(VoiceStateUnavailableException.class, () -> coordinator.renew(original));
+    }
+
     @Test
     void encryptedPayloadBindsEveryReplayTupleFieldAndRejectsLegacyV1() throws Exception {
         VoiceSpeechProperties properties = new VoiceSpeechProperties();
@@ -519,6 +603,24 @@ class RedisVoiceRequestCoordinatorContractTest {
         }
     }
 
+    private static void assertRedisVersion(
+            LettuceConnectionFactory factory, String expected) {
+        try (RedisConnection connection = factory.getConnection()) {
+            Properties info = connection.serverCommands().info("server");
+            assertEquals(expected, info == null ? null : info.getProperty("redis_version"));
+        }
+    }
+
+    private static int count(String value, String needle) {
+        int matches = 0;
+        int offset = 0;
+        while ((offset = value.indexOf(needle, offset)) >= 0) {
+            matches++;
+            offset += needle.length();
+        }
+        return matches;
+    }
+
     private static byte[] bytes(String value) {
         return value.getBytes(StandardCharsets.UTF_8);
     }
@@ -638,15 +740,33 @@ class RedisVoiceRequestCoordinatorContractTest {
         }
 
         static OwnedRedisServer start() throws Exception {
+            Path root = createOwnedRoot();
+            Path binary = extractVerifiedBinary(root);
+            requireCompatibleVersion(binary);
+            return start(root, binary);
+        }
+
+        static OwnedRedisServer startExternal(Path configuredBinary) throws Exception {
+            Path binary = configuredBinary.toRealPath();
+            if (!Files.isRegularFile(binary) || !Files.isExecutable(binary)) {
+                throw new IOException("External Redis binary is not an executable regular file");
+            }
+            requireExactVersion(binary, "4.0.6");
+            return start(createOwnedRoot(), binary);
+        }
+
+        private static Path createOwnedRoot() throws IOException {
             Path root = Files.createTempDirectory("jvc-api-redis-");
             Files.writeString(root.resolve(OWNER_MARKER), "owned\n",
                     StandardCharsets.US_ASCII, StandardOpenOption.CREATE_NEW);
             Files.createDirectory(root.resolve("tmp"));
+            return root;
+        }
+
+        private static OwnedRedisServer start(Path root, Path binary) throws Exception {
             Process process = null;
             OwnedRedisServer server = null;
             try {
-                Path binary = extractVerifiedBinary(root);
-                requireCompatibleVersion(binary);
                 int port = freePort();
                 Path config = root.resolve("redis.conf");
                 Files.writeString(config, String.format(Locale.ROOT, """
@@ -821,25 +941,36 @@ class RedisVoiceRequestCoordinatorContractTest {
             return HexFormat.of().formatHex(digest.digest());
         }
 
+        private static void requireExactVersion(Path binary, String expected) throws Exception {
+            String actual = probeVersion(binary);
+            if (!expected.equals(actual)) {
+                throw new IOException("Expected Redis " + expected + " but found " + actual);
+            }
+        }
+
         private static void requireCompatibleVersion(Path binary) throws Exception {
+            requireRedis72(probeVersion(binary));
+        }
+
+        private static String probeVersion(Path binary) throws Exception {
             Process probe = new ProcessBuilder(binary.toString(), "--version")
                     .redirectErrorStream(true).start();
             if (!probe.waitFor(5, TimeUnit.SECONDS)) {
                 probe.destroyForcibly();
                 probe.waitFor(5, TimeUnit.SECONDS);
-                throw new IOException("Embedded Redis version probe timed out");
+                throw new IOException("Redis version probe timed out");
             }
             String output = new String(
                     probe.getInputStream().readAllBytes(), StandardCharsets.US_ASCII);
             if (probe.exitValue() != 0) {
-                throw new IOException("Embedded Redis version probe failed");
+                throw new IOException("Redis version probe failed");
             }
             Matcher matcher = Pattern.compile("(?:v=)?(\\d+\\.\\d+(?:\\.\\d+)?)")
                     .matcher(output);
             if (!matcher.find()) {
-                throw new IOException("Embedded Redis version probe returned no version");
+                throw new IOException("Redis version probe returned no version");
             }
-            requireRedis72(matcher.group(1));
+            return matcher.group(1);
         }
 
         private static int freePort() throws IOException {

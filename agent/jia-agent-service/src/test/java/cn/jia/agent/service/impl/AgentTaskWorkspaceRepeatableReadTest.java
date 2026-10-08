@@ -61,7 +61,8 @@ import static org.mockito.Mockito.when;
 
 /** H2 SNAPSHOT equivalent of MySQL REPEATABLE READ plus a deterministic RC negative control. */
 class AgentTaskWorkspaceRepeatableReadTest {
-    private static final String TENANT = "tenant-a";
+    private static final String TENANT = "0";
+    private static final String OWNER = "owner-a";
     private static final String CLIENT = "client-a";
     private static final String TASK = "task-1";
     private static final String ACTOR = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -106,7 +107,7 @@ class AgentTaskWorkspaceRepeatableReadTest {
         new TransactionTemplate(writerTransactionManager).executeWithoutResult(status -> mutate());
         TransactionProof proof = new TransactionProof(source);
         AgentTaskWorkspaceDTO snapshot = transactional(service(new ProofDao(realDao, proof), proof),
-                snapshotTransactionManager).snapshot(TENANT, CLIENT, TASK, ACTOR);
+                snapshotTransactionManager).snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR);
 
         assertAfter(snapshot);
         proof.assertSingleBoundConnectionUsed();
@@ -125,7 +126,7 @@ class AgentTaskWorkspaceRepeatableReadTest {
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
             Future<AgentTaskWorkspaceDTO> during = executor.submit(
-                    () -> snapshotService.snapshot(TENANT, CLIENT, TASK, ACTOR));
+                    () -> snapshotService.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR));
             assertTrue(firstReadCompleted.await(10, TimeUnit.SECONDS));
             Future<?> writer = executor.submit(() -> {
                 new TransactionTemplate(writerTransactionManager)
@@ -140,7 +141,7 @@ class AgentTaskWorkspaceRepeatableReadTest {
             TransactionProof afterProof = new TransactionProof(source);
             AgentTaskWorkspaceDTO after = transactional(
                     service(new ProofDao(realDao, afterProof), afterProof),
-                    snapshotTransactionManager).snapshot(TENANT, CLIENT, TASK, ACTOR);
+                    snapshotTransactionManager).snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR);
             assertAfter(after);
             afterProof.assertSingleBoundConnectionUsed();
         } finally {
@@ -163,7 +164,7 @@ class AgentTaskWorkspaceRepeatableReadTest {
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
             Future<AgentTaskWorkspaceDTO> mixed = executor.submit(() ->
-                    readCommitted.execute(status -> target.snapshot(TENANT, CLIENT, TASK, ACTOR)));
+                    readCommitted.execute(status -> target.snapshot(TENANT, CLIENT, OWNER, TASK, ACTOR)));
             assertTrue(firstReadCompleted.await(10, TimeUnit.SECONDS));
             Future<?> writer = executor.submit(() -> {
                 new TransactionTemplate(writerTransactionManager)
@@ -189,7 +190,7 @@ class AgentTaskWorkspaceRepeatableReadTest {
             AgentTaskWorkspaceDao dao, TransactionProof proof) {
         AgentIdentityService identity = mock(AgentIdentityService.class);
         when(identity.requireCanonicalAgentIdInScope(
-                TENANT, CLIENT, TENANT, ACTOR)).thenAnswer(invocation -> {
+                TENANT, CLIENT, OWNER, ACTOR)).thenAnswer(invocation -> {
             proof.recordBoundConnection();
             return ACTOR;
         });
@@ -228,43 +229,43 @@ class AgentTaskWorkspaceRepeatableReadTest {
 
     private void mutate() {
         jdbc.update("UPDATE agent_task_member SET member_status='working', version=1 "
-                + "WHERE tenant_id=? AND client_id=? AND task_id=? AND agent_id=?",
-                TENANT, CLIENT, TASK, ACTOR);
+                + "WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND task_id=? AND agent_id=?",
+                TENANT, CLIENT, OWNER, TASK, ACTOR);
         jdbc.update("INSERT INTO agent_task_work_item "
                         + "(work_item_id,task_id,title,work_type,status,priority,required_item,"
-                        + "attempt_count,max_attempts,version,create_time,tenant_id,client_id) "
-                        + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        + "attempt_count,max_attempts,version,create_time,tenant_id,client_id,owner_jiacn) "
+                        + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 "work-1", TASK, "work", "analysis", "running", 5, true,
-                1, 3, 1L, 1000L, TENANT, CLIENT);
+                1, 3, 1L, 1000L, TENANT, CLIENT, OWNER);
         jdbc.update("INSERT INTO agent_task_artifact "
                         + "(artifact_id,task_id,producer_agent_id,artifact_type,title,content_hash,"
-                        + "artifact_version,visibility,created_at,tenant_id,client_id) "
-                        + "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                        + "artifact_version,visibility,created_at,tenant_id,client_id,owner_jiacn) "
+                        + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 "artifact-1", TASK, ACTOR, "document", "artifact", "a".repeat(64),
-                1, "task_members", 1001L, TENANT, CLIENT);
+                1, "task_members", 1001L, TENANT, CLIENT, OWNER);
         jdbc.update("INSERT INTO agent_task_event "
                         + "(task_id,event_version,event_type,actor_type,actor_id,aggregate_type,"
-                        + "aggregate_id,event_json,occurred_at,tenant_id,client_id) "
-                        + "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                        + "aggregate_id,event_json,occurred_at,tenant_id,client_id,owner_jiacn) "
+                        + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 TASK, 1L, "ARTIFACT_PUBLISHED", "agent", ACTOR, "artifact", "artifact-1",
                 "{\"artifactId\":\"artifact-1\",\"artifactType\":\"document\","
                         + "\"artifactVersion\":1,\"contentSha256\":\"" + "a".repeat(64)
                         + "\",\"visibility\":\"task_members\"}",
-                1001L, TENANT, CLIENT);
+                1001L, TENANT, CLIENT, OWNER);
         jdbc.update("UPDATE agent_task_meta SET task_version=1,current_event_version=1 "
-                + "WHERE tenant_id=? AND client_id=? AND task_id=?", TENANT, CLIENT, TASK);
+                + "WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND task_id=?", TENANT, CLIENT, OWNER, TASK);
     }
 
     private void insertBeforeState() {
         jdbc.update("INSERT INTO agent_task_meta "
                         + "(task_id,reward_status,collaboration_mode,risk_level,max_agents,"
-                        + "review_required,task_version,current_event_version,tenant_id,client_id) "
-                        + "VALUES (?,?,?,?,?,?,?,?,?,?)",
-                TASK, "running", "team", "low", 5, false, 0L, 0L, TENANT, CLIENT);
+                        + "review_required,task_version,current_event_version,tenant_id,client_id,owner_jiacn) "
+                        + "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                TASK, "running", "team", "low", 5, false, 0L, 0L, TENANT, CLIENT, OWNER);
         jdbc.update("INSERT INTO agent_task_member "
                         + "(task_id,agent_id,member_role,member_status,assignment_source,version,"
-                        + "tenant_id,client_id) VALUES (?,?,?,?,?,?,?,?)",
-                TASK, ACTOR, "worker", "accepted", "manual", 0L, TENANT, CLIENT);
+                        + "tenant_id,client_id,owner_jiacn) VALUES (?,?,?,?,?,?,?,?,?)",
+                TASK, ACTOR, "worker", "accepted", "manual", 0L, TENANT, CLIENT, OWNER);
     }
 
     private void createTables() {
@@ -273,34 +274,34 @@ class AgentTaskWorkspaceRepeatableReadTest {
                 + "required_abilities CLOB,reward INT,assigned_at BIGINT,started_at BIGINT,"
                 + "completed_at BIGINT,collaboration_mode VARCHAR(20),risk_level VARCHAR(20),"
                 + "max_agents INT,coordinator_agent_id VARCHAR(100),review_required BOOLEAN,"
-                + "task_version BIGINT,current_event_version BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50))");
+                + "task_version BIGINT,current_event_version BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50) NOT NULL)");
         jdbc.execute("CREATE TABLE agent_task_member (id BIGINT AUTO_INCREMENT PRIMARY KEY,"
                 + "task_id VARCHAR(100),agent_id VARCHAR(100),member_role VARCHAR(20),"
                 + "member_status VARCHAR(20),assignment_source VARCHAR(20),joined_at BIGINT,"
                 + "accepted_at BIGINT,started_at BIGINT,completed_at BIGINT,last_heartbeat_at BIGINT,"
-                + "version BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50))");
+                + "version BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50) NOT NULL)");
         jdbc.execute("CREATE TABLE agent_task_work_item (id BIGINT AUTO_INCREMENT PRIMARY KEY,"
                 + "work_item_id VARCHAR(100),task_id VARCHAR(100),title VARCHAR(255),description CLOB,"
                 + "work_type VARCHAR(30),required_abilities CLOB,assignee_agent_id VARCHAR(100),"
                 + "status VARCHAR(20),priority INT,required_item BOOLEAN,dependency_json CLOB,"
                 + "lease_until BIGINT,attempt_count INT,max_attempts INT,result_artifact_id VARCHAR(100),"
                 + "submitted_at BIGINT,completed_at BIGINT,version BIGINT,create_time BIGINT,"
-                + "tenant_id VARCHAR(50),client_id VARCHAR(50))");
+                + "tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50) NOT NULL)");
         jdbc.execute("CREATE TABLE agent_task_request (id BIGINT AUTO_INCREMENT PRIMARY KEY,"
                 + "request_id VARCHAR(100),task_id VARCHAR(100),work_item_id VARCHAR(100),"
                 + "requester_agent_id VARCHAR(100),target_type VARCHAR(20),target_id VARCHAR(100),"
                 + "request_type VARCHAR(30),status VARCHAR(20),priority INT,title VARCHAR(255),"
                 + "description CLOB,due_at BIGINT,acknowledged_at BIGINT,version BIGINT,create_time BIGINT,"
-                + "tenant_id VARCHAR(50),client_id VARCHAR(50))");
+                + "tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50) NOT NULL)");
         jdbc.execute("CREATE TABLE agent_task_artifact (id BIGINT AUTO_INCREMENT PRIMARY KEY,"
                 + "artifact_id VARCHAR(100),task_id VARCHAR(100),work_item_id VARCHAR(100),"
                 + "producer_agent_id VARCHAR(100),artifact_type VARCHAR(30),title VARCHAR(255),"
                 + "content_hash VARCHAR(128),artifact_version INT,visibility VARCHAR(20),created_at BIGINT,"
-                + "tenant_id VARCHAR(50),client_id VARCHAR(50))");
+                + "tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50) NOT NULL)");
         jdbc.execute("CREATE TABLE agent_task_event (id BIGINT AUTO_INCREMENT PRIMARY KEY,"
                 + "task_id VARCHAR(100),event_version BIGINT,event_type VARCHAR(64),actor_type VARCHAR(20),"
                 + "actor_id VARCHAR(100),aggregate_type VARCHAR(30),aggregate_id VARCHAR(100),"
-                + "event_json CLOB,occurred_at BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50))");
+                + "event_json CLOB,occurred_at BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50) NOT NULL)");
     }
 
     /** Maps the service's MySQL REPEATABLE READ contract to H2's equivalent MVCC SNAPSHOT. */
@@ -336,14 +337,14 @@ class AgentTaskWorkspaceRepeatableReadTest {
             this.proof = proof;
         }
 
-        @Override public TaskRow findTask(String t, String c, String task) { proof.recordBoundConnection(); return delegate.findTask(t, c, task); }
-        @Override public MemberRow findActorMember(String t, String c, String task, String actor) { proof.recordBoundConnection(); return delegate.findActorMember(t, c, task, actor); }
-        @Override public List<MemberRow> findMembers(String t, String c, String task) { proof.recordBoundConnection(); return delegate.findMembers(t, c, task); }
-        @Override public List<WorkItemRow> findWorkItems(String t, String c, String task) { proof.recordBoundConnection(); return delegate.findWorkItems(t, c, task); }
-        @Override public List<RequestRow> findOpenRequests(String t, String c, String task) { proof.recordBoundConnection(); return delegate.findOpenRequests(t, c, task); }
-        @Override public List<ArtifactRow> findVisibleArtifacts(String t, String c, String task, String actor, boolean reviewer, boolean coordinator) { proof.recordBoundConnection(); return delegate.findVisibleArtifacts(t, c, task, actor, reviewer, coordinator); }
-        @Override public ArtifactRow findArtifactVersion(String t, String c, String task, String artifact, int version) { proof.recordBoundConnection(); return delegate.findArtifactVersion(t, c, task, artifact, version); }
-        @Override public List<EventRow> findLatestEvents(String t, String c, String task) { proof.recordBoundConnection(); return delegate.findLatestEvents(t, c, task); }
+        @Override public TaskRow findTask(String t, String c, String owner, String task) { proof.recordBoundConnection(); return delegate.findTask(t, c, owner, task); }
+        @Override public MemberRow findActorMember(String t, String c, String owner, String task, String actor) { proof.recordBoundConnection(); return delegate.findActorMember(t, c, owner, task, actor); }
+        @Override public List<MemberRow> findMembers(String t, String c, String owner, String task) { proof.recordBoundConnection(); return delegate.findMembers(t, c, owner, task); }
+        @Override public List<WorkItemRow> findWorkItems(String t, String c, String owner, String task) { proof.recordBoundConnection(); return delegate.findWorkItems(t, c, owner, task); }
+        @Override public List<RequestRow> findOpenRequests(String t, String c, String owner, String task) { proof.recordBoundConnection(); return delegate.findOpenRequests(t, c, owner, task); }
+        @Override public List<ArtifactRow> findVisibleArtifacts(String t, String c, String owner, String task, String actor, boolean reviewer, boolean coordinator) { proof.recordBoundConnection(); return delegate.findVisibleArtifacts(t, c, owner, task, actor, reviewer, coordinator); }
+        @Override public ArtifactRow findArtifactVersion(String t, String c, String owner, String task, String artifact, int version) { proof.recordBoundConnection(); return delegate.findArtifactVersion(t, c, owner, task, artifact, version); }
+        @Override public List<EventRow> findLatestEvents(String t, String c, String owner, String task) { proof.recordBoundConnection(); return delegate.findLatestEvents(t, c, owner, task); }
     }
 
     /** Releases the concurrent writer immediately after the first consistent task read. */
@@ -360,8 +361,8 @@ class AgentTaskWorkspaceRepeatableReadTest {
         }
 
         @Override
-        public TaskRow findTask(String tenantId, String clientId, String taskId) {
-            TaskRow row = super.findTask(tenantId, clientId, taskId);
+        public TaskRow findTask(String tenantId, String clientId, String ownerJiacn, String taskId) {
+            TaskRow row = super.findTask(tenantId, clientId, ownerJiacn, taskId);
             if (pause.compareAndSet(true, false)) {
                 firstReadCompleted.countDown();
                 try {

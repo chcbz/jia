@@ -28,8 +28,18 @@ public interface PersonalWorkspaceExecutionDao {
             String taskId, String runId);
     List<PersonalWorkspaceExecutionEntity> listQueuedByTarget(String tenantId, String clientId,
             String ownerJiacn, String targetAgentId, int limit);
+    List<PersonalWorkspaceExecutionEntity> listQueuedConversationsByTarget(String tenantId,
+            String clientId, String ownerJiacn, String targetAgentId,
+            Long afterCreatedAt, String afterExecutionId, int limit);
+    /** True only when the follow-up-v3 execution protocol column is present in the current catalog. */
+    boolean hasExecutionProtocolVersionColumn();
     void insert(PersonalWorkspaceExecutionEntity execution);
     void update(PersonalWorkspaceExecutionEntity execution);
+    boolean markControlledProviderStarted(String tenantId,String clientId,String ownerJiacn,
+            String taskId,String runId,String executionId,String consentId,long leaseVersion,long startedAt);
+    boolean markControlledProviderStartedV3(String tenantId,String clientId,String ownerJiacn,
+            String taskId,String runId,String executionId,String consentId,String operationGrantId,
+            long leaseVersion,long startedAt);
     void insertInput(PersonalWorkspaceExecutionInputEntity input);
     List<PersonalWorkspaceExecutionInputEntity> listInputs(String tenantId, String clientId,
             String ownerJiacn, String executionId);

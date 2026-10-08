@@ -1,0 +1,108 @@
+{
+  "contract": "juyiting-action-outcome-v3",
+  "facts": {
+    "schemaVersion": 3,
+    "availableActions": [
+      {
+        "actionId": "inspect-materials",
+        "kind": "INSPECT_INPUTS",
+        "operation": "INSPECT_INPUTS",
+        "inputMediaTypes": [
+          "text",
+          "image",
+          "audio",
+          "file"
+        ],
+        "minSources": 1,
+        "maxSources": 32
+      },
+      {
+        "actionId": "write-document",
+        "kind": "EXECUTE",
+        "operation": "CREATE_DOCUMENT",
+        "inputMediaTypes": [
+          "text",
+          "image",
+          "audio",
+          "file"
+        ],
+        "minSources": 0,
+        "maxSources": 32
+      }
+    ],
+    "availableSources": [
+      {
+        "sourceRefId": "source-text",
+        "kind": "TASK_WORKSPACE_FILE",
+        "mediaType": "text"
+      },
+      {
+        "sourceRefId": "source-image",
+        "kind": "TASK_WORKSPACE_FILE",
+        "mediaType": "image"
+      },
+      {
+        "sourceRefId": "source-audio",
+        "kind": "TASK_WORKSPACE_FILE",
+        "mediaType": "audio"
+      },
+      {
+        "sourceRefId": "source-file",
+        "kind": "TASK_WORKSPACE_FILE",
+        "mediaType": "file"
+      }
+    ],
+    "inspectedSourceRefIds": []
+  },
+  "outcomes": [
+    {
+      "schemaVersion": 3,
+      "kind": "ANSWER",
+      "text": "已整理。",
+      "clarification": null,
+      "action": null
+    },
+    {
+      "schemaVersion": 3,
+      "kind": "CLARIFY",
+      "text": "请补充交付格式。",
+      "clarification": {
+        "question": "需要 PDF 还是纯文本？",
+        "requiredFacts": [
+          "交付格式"
+        ]
+      },
+      "action": null
+    },
+    {
+      "schemaVersion": 3,
+      "kind": "ACTION_REQUEST",
+      "text": "先查阅已添加的资料。",
+      "clarification": null,
+      "action": {
+        "actionId": "inspect-materials",
+        "instruction": "了解文档、音频与图片中的需求。",
+        "sourceRefIds": [
+          "source-text",
+          "source-image",
+          "source-audio",
+          "source-file"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 3,
+      "kind": "ACTION_REQUEST",
+      "text": "根据资料生成文档。",
+      "clarification": null,
+      "action": {
+        "actionId": "write-document",
+        "instruction": "整理为报告，不需要用户再点执行。",
+        "sourceRefIds": [
+          "source-file",
+          "source-audio"
+        ]
+      }
+    }
+  ]
+}

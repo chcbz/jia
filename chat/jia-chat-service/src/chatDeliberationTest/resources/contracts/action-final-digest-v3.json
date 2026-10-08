@@ -1,0 +1,90 @@
+{
+  "generator": "Node crypto SHA-256 + lexical-key canonical JSON; final-digest v3 vector",
+  "binding": {
+    "tenantId": "0",
+    "ownerJiacn": "owner",
+    "clientId": "client",
+    "conversationId": "42",
+    "conversationGeneration": "1",
+    "requestId": "request-1",
+    "requestRevision": "1",
+    "turnId": "turn-1",
+    "dispatchId": "dispatch-1",
+    "snapshotId": "snapshot-1",
+    "contextDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "targetAgentId": "agent-1",
+    "route": "CHAT",
+    "taskId": "task-1"
+  },
+  "facts": {
+    "schemaVersion": 3,
+    "availableActions": [
+      {
+        "actionId": "inspect-materials",
+        "kind": "INSPECT_INPUTS",
+        "operation": "INSPECT_INPUTS",
+        "inputMediaTypes": [
+          "text",
+          "image",
+          "audio",
+          "file"
+        ],
+        "minSources": 1,
+        "maxSources": 32
+      },
+      {
+        "actionId": "write-document",
+        "kind": "EXECUTE",
+        "operation": "CREATE_DOCUMENT",
+        "inputMediaTypes": [
+          "text",
+          "image",
+          "audio",
+          "file"
+        ],
+        "minSources": 0,
+        "maxSources": 32
+      }
+    ],
+    "availableSources": [
+      {
+        "sourceRefId": "source-text",
+        "kind": "TASK_WORKSPACE_FILE",
+        "mediaType": "text"
+      },
+      {
+        "sourceRefId": "source-image",
+        "kind": "TASK_WORKSPACE_FILE",
+        "mediaType": "image"
+      },
+      {
+        "sourceRefId": "source-audio",
+        "kind": "TASK_WORKSPACE_FILE",
+        "mediaType": "audio"
+      },
+      {
+        "sourceRefId": "source-file",
+        "kind": "TASK_WORKSPACE_FILE",
+        "mediaType": "file"
+      }
+    ],
+    "inspectedSourceRefIds": []
+  },
+  "outcome": {
+    "schemaVersion": 3,
+    "kind": "ACTION_REQUEST",
+    "text": "根据资料生成文档。",
+    "clarification": null,
+    "action": {
+      "actionId": "write-document",
+      "instruction": "整理为报告，不需要用户再点执行。",
+      "sourceRefIds": [
+        "source-file",
+        "source-audio"
+      ]
+    }
+  },
+  "canonicalDigestInput": "{\"binding\":{\"clientId\":\"client\",\"contextDigest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"conversationGeneration\":\"1\",\"conversationId\":\"42\",\"dispatchId\":\"dispatch-1\",\"ownerJiacn\":\"owner\",\"requestId\":\"request-1\",\"requestRevision\":\"1\",\"route\":\"CHAT\",\"snapshotId\":\"snapshot-1\",\"targetAgentId\":\"agent-1\",\"taskId\":\"task-1\",\"tenantId\":\"0\",\"turnId\":\"turn-1\"},\"content\":\"根据资料生成文档。\",\"digestSchemaVersion\":1,\"domain\":\"juyiting.action-final\",\"inspectionInputReceipt\":null,\"interactionOutcome\":{\"action\":{\"actionId\":\"write-document\",\"instruction\":\"整理为报告，不需要用户再点执行。\",\"sourceRefIds\":[\"source-file\",\"source-audio\"]},\"clarification\":null,\"kind\":\"ACTION_REQUEST\",\"schemaVersion\":3,\"text\":\"根据资料生成文档。\"},\"outcomeContractVersion\":3}",
+  "finalDigest": "sha256:a5ba1edd1504483b97c29d2f820cd024fe57332ee56c89996af8cf38eb962952",
+  "actionEventId": "act_b07f0eab1142f27efaf24ef636b5888d97386fcf"
+}

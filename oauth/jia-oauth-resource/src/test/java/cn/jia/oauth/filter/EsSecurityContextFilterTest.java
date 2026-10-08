@@ -15,6 +15,7 @@ import java.time.Instant;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 class EsSecurityContextFilterTest {
     @AfterEach
@@ -51,7 +52,8 @@ class EsSecurityContextFilterTest {
         cookie.setAppcn("cookie-app");
         cookie.setClientId("cookie-client");
         SecurityContextHolder.getContext().setAuthentication(auth(Map.of(
-                "token_kind", "machine", "sub", "agent", "client_id", "agent")));
+                "token_kind", "machine", "sub", "agent", "client_id", "agent",
+                "tenant_id", "0", "tenant_claim_version", "1")));
 
         new EsSecurityContextFilter().doFilter(new MockHttpServletRequest(), new MockHttpServletResponse(),
                 (request, response) -> {
@@ -63,6 +65,28 @@ class EsSecurityContextFilterTest {
                 });
     }
 
+
+    @Test
+    void conflictingTenantClaimsFailClosedThroughSharedPolicy() {
+        SecurityContextHolder.getContext().setAuthentication(auth(Map.of(
+                "token_kind", "user", "jiacn", "Jia-A", "client_id", "web",
+                "tenant_id", "tenant-a", "tenantId", "tenant-b")));
+        var chain = mock(jakarta.servlet.FilterChain.class);
+        assertThrows(jakarta.servlet.ServletException.class,
+                () -> new EsSecurityContextFilter().doFilter(
+                        new MockHttpServletRequest(), new MockHttpServletResponse(), chain));
+        assertNull(EsContextHolder.getContext().getTenantId());
+        verifyNoInteractions(chain);
+    }
+
+    @Test
+    void matchingAliasAndCanonicalTenantAreAccepted() throws Exception {
+        SecurityContextHolder.getContext().setAuthentication(auth(Map.of(
+                "token_kind", "user", "jiacn", "Jia-A", "client_id", "web",
+                "tenant_id", "tenant-a", "tenantId", "tenant-a", "tenant_claim_version", "1")));
+        new EsSecurityContextFilter().doFilter(new MockHttpServletRequest(), new MockHttpServletResponse(),
+                (request, response) -> assertEquals("tenant-a", EsContextHolder.getContext().getTenantId()));
+    }
     private static JwtAuthenticationToken auth(Map<String, Object> claims) {
         Jwt.Builder builder = Jwt.withTokenValue("token").header("alg", "RS256")
                 .issuedAt(Instant.now().minusSeconds(5)).expiresAt(Instant.now().plusSeconds(300));
