@@ -102,6 +102,19 @@ class PersonalWorkspaceControlledImageV3StartTest {
   verify(fixture.authority,never()).consumeForStart(any(),any(),any());
  }
 
+ @Test void assetSourcePreparationUsesNonLockingExactOutputBeforeRuntimeFence() throws Exception {
+  var fixture=new StartFixture();fixture.useAssetSource();
+  when(fixture.storage.read(any(),anyString(),anyString(),anyLong(),anyString())).thenAnswer(call->{
+   assertFalse(fixture.transactionActive.get());
+   verify(fixture.executions).findOutput("0","client","owner","producer","output_1");
+   verify(fixture.executions,never()).lockOutput(anyString(),anyString(),anyString(),anyString(),anyString());
+   fixture.row.setRuntimeSessionGeneration(2L).setRuntimeInstanceId("replacement");
+   return fixture.stored;
+  });
+  assertThrows(RuntimeException.class,fixture::start);
+  verify(fixture.authority,never()).consumeForStart(any(),any(),any());
+ }
+
  /** Real native service + real transaction-advised auth; DAO/storage/authority are explicit
   * collaborators. Cloud DB/root/paid-side-effect integration remains separate evidence. */
  private static final class StartFixture {
@@ -120,7 +133,9 @@ class PersonalWorkspaceControlledImageV3StartTest {
     "0","client","owner",AGENT,"boot");
   final AgentRuntimeEntity row;
   final PersonalWorkspaceStorage.StoredContent stored;
-  final PersonalWorkspaceExecutionService.ControlledProviderStartV3 command;
+  PersonalWorkspaceExecutionService.ControlledProviderStartV3 command;
+  final PersonalWorkspaceExecutionEntity execution;
+  final ControlledImageExecutionSourceV3Dao sources;
   final PersonalWorkspaceExecutionServiceImpl service;
 
   StartFixture() throws Exception {
@@ -167,11 +182,11 @@ class PersonalWorkspaceControlledImageV3StartTest {
    domain.put("inputs",List.of(input));domain.put("noReferencedMaterials",false);domain.put("operation","GENERATE_IMAGE");
    domain.put("runId","run");domain.put("schemaVersion",1);domain.put("taskId","task");
    String digest=sha(json.writeValueAsBytes(domain));
-   var execution=new PersonalWorkspaceExecutionEntity().setExecutionId("execution").setTaskId("task").setRunId("run")
+   execution=new PersonalWorkspaceExecutionEntity().setExecutionId("execution").setTaskId("task").setRunId("run")
      .setConversationId("conversation").setTargetAgentId(AGENT).setExecutionMode("CONVERSATION").setExecutionState("QUEUED")
      .setExecutionProtocolVersion(3).setPermittedOperation("GENERATE_IMAGE").setRuntimeInputSnapshotDigest(digest);
    when(executions.findByTaskRun("0","client","owner","task","run")).thenReturn(execution);
-   var sources=mock(ControlledImageExecutionSourceV3Dao.class);
+   sources=mock(ControlledImageExecutionSourceV3Dao.class);
    when(sources.list("0","client","owner","execution")).thenReturn(List.of(source));
    when(workspace.findFile("0","client","owner","file")).thenReturn(new PersonalWorkspaceFileEntity().setState("ACTIVE"));
    when(workspace.findVersion("0","client","owner","file",1)).thenReturn(new PersonalWorkspaceVersionEntity()
@@ -190,6 +205,34 @@ class PersonalWorkspaceControlledImageV3StartTest {
    command=new PersonalWorkspaceExecutionService.ControlledProviderStartV3(3,"pwe_cmd_"+sha("command\nexecution".getBytes(StandardCharsets.UTF_8)),
      "pwe_msg_"+sha("message\nexecution".getBytes(StandardCharsets.UTF_8)),"execution","GENERATE_IMAGE",digest,provider,
      new PersonalWorkspaceExecutionService.ConversationFence(1,"original-fence"));
+  }
+  void useAssetSource() throws Exception {
+   var source=new ControlledImageExecutionSourceV3Entity().setExecutionId("execution").setOwnerJiacn("owner")
+     .setInputOrdinal(1).setInputRef("input_1").setSourceKind("CURRENT_CONVERSATION_ASSET").setCreatedAt(1L)
+     .setConversationId("conversation").setConversationGeneration(1L).setAssetId("asset").setAssetRevision(1L)
+     .setProducerRequestId("request").setProducerRequestRevision(1L).setProducerStepId("step")
+     .setProducerExecutionId("producer").setProducerRunId("producer-run").setProducerOutputId("output_1")
+     .setContentMimeType("image/png").setByteLength(stored.byteLength()).setContentSha256(stored.sha256());
+   source.setTenantId("0");source.setClientId("client");
+   var descriptor=new LinkedHashMap<String,Object>();descriptor.put("assetId","asset");descriptor.put("assetRevision","1");
+   descriptor.put("conversationGeneration","1");descriptor.put("conversationId","conversation");
+   descriptor.put("kind","CURRENT_CONVERSATION_ASSET");descriptor.put("producerExecutionId","producer");
+   descriptor.put("producerOutputId","output_1");descriptor.put("producerRequestId","request");
+   descriptor.put("producerRunId","producer-run");descriptor.put("producerStepId","step");
+   var json=new ObjectMapper();source.setSourceJson(json.writeValueAsString(descriptor));
+   var input=new LinkedHashMap<String,Object>();input.put("byteLength",Long.toString(stored.byteLength()));
+   input.put("contentMimeType","image/png");input.put("inputRef","input_1");input.put("sha256",stored.sha256());input.put("source",descriptor);
+   var domain=new LinkedHashMap<String,Object>();domain.put("conversationId","conversation");domain.put("executionId","execution");
+   domain.put("inputs",List.of(input));domain.put("noReferencedMaterials",false);domain.put("operation","GENERATE_IMAGE");
+   domain.put("runId","run");domain.put("schemaVersion",1);domain.put("taskId","task");
+   String digest=sha(json.writeValueAsBytes(domain));execution.setRuntimeInputSnapshotDigest(digest);
+   when(sources.list("0","client","owner","execution")).thenReturn(List.of(source));
+   var output=new PersonalWorkspaceExecutionOutputEntity().setExecutionId("producer").setOutputId("output_1")
+     .setOutputState("COMMITTED").setOutputPurpose("CONVERSATION").setContentHash(stored.sha256())
+     .setByteLength(stored.byteLength()).setContentMimeType("image/png").setStorageUri("asset-source");
+   when(executions.findOutput("0","client","owner","producer","output_1")).thenReturn(output);
+   command=new PersonalWorkspaceExecutionService.ControlledProviderStartV3(3,command.commandId(),command.messageId(),command.executionId(),
+     command.operation(),digest,command.providerExecution(),command.fence());
   }
   PersonalWorkspaceExecutionService.ControlledProviderStartReceiptV3 start() {
    return service.beginControlledConversationProviderStartV3(scope,"task","run",command);

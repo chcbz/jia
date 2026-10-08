@@ -6,6 +6,12 @@ import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
 import java.util.Locale;
+import cn.jia.agent.dao.impl.PersonalWorkspaceExecutionDaoImpl;
+import cn.jia.agent.entity.PersonalWorkspaceExecutionOutputEntity;
+import cn.jia.agent.mapper.PersonalWorkspaceExecutionMapper;
+import cn.jia.agent.mapper.PersonalWorkspaceExecutionInputMapper;
+import static org.mockito.Mockito.*;
+import static org.junit.jupiter.api.Assertions.*;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -38,5 +44,30 @@ class PersonalWorkspaceExecutionOutputMapperContractTest {
         assertFalse(sql.contains("max("));
         assertFalse(sql.contains("order by"));
         assertFalse(sql.contains("latest_version"));
+    }
+    @Test void preparedOutputReadIsNonLockingAndByteExactInEveryScopedKey() throws Exception {
+        var method=PersonalWorkspaceExecutionOutputMapper.class.getDeclaredMethod("findByOutputId",
+                String.class,String.class,String.class,String.class,String.class);
+        String sql=String.join(" ",method.getAnnotation(Select.class).value()).toLowerCase(Locale.ROOT);
+        assertFalse(sql.contains("for update"));assertFalse(sql.contains("lock in share mode"));
+        assertTrue(sql.contains("limit 1"));
+        for(String key:new String[]{"tenant_id","client_id","owner_jiacn","execution_id","output_id"}) {
+            assertTrue(sql.contains("cast("+key+" as binary)"),key);
+            assertTrue(sql.contains("octet_length("+key+")"),key);
+        }
+    }
+
+    @Test void daoPreparationForwardsFullOwnerScopeAndNeverCallsLockQuery() {
+        var outputs=mock(PersonalWorkspaceExecutionOutputMapper.class);
+        var dao=new PersonalWorkspaceExecutionDaoImpl(mock(PersonalWorkspaceExecutionMapper.class),
+                mock(PersonalWorkspaceExecutionInputMapper.class),outputs);
+        var receipt=new PersonalWorkspaceExecutionOutputEntity().setOutputId("output_1");
+        when(outputs.findByOutputId("0","client","owner","execution","output_1")).thenReturn(receipt);
+        assertSame(receipt,dao.findOutput("0","client","owner","execution","output_1"));
+        verify(outputs).findByOutputId("0","client","owner","execution","output_1");
+        verifyNoMoreInteractions(outputs);
+        assertThrows(IllegalArgumentException.class,()->dao.findOutput("1","client","owner","execution","output_1"));
+        assertThrows(IllegalArgumentException.class,()->dao.findOutput("0","client","0","execution","output_1"));
+        assertThrows(IllegalArgumentException.class,()->dao.findOutput("0","client","owner"," execution","output_1"));
     }
 }
