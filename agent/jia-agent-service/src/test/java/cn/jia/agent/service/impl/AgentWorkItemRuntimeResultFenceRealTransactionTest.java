@@ -127,7 +127,9 @@ class AgentWorkItemRuntimeResultFenceRealTransactionTest {
     private String sourceCommandId(){return AgentCommandCanonicalCodec.hallCommandId(TENANT,CLIENT,OWNER,TASK,PREVIOUS,"source-intent",AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE);}
     private AgentWorkItemResultCommitDTO command() {
         var artifact=new AgentTaskArtifactPublishDTO();artifact.setArtifactId("original-result-artifact");artifact.setWorkItemId(WORK);artifact.setProducerAgentId(TARGET);
-        artifact.setArtifactType("summary");artifact.setTitle("Original E05 result");artifact.setContentBytes("immutable result".getBytes(StandardCharsets.UTF_8));artifact.setContentMimeType("text/plain");
+        byte[] content="immutable result".getBytes(StandardCharsets.UTF_8);
+        artifact.setArtifactType("summary");artifact.setTitle("Original E05 result");artifact.setContentBytes(content);artifact.setContentMimeType("text/plain");
+        artifact.setContentHash(HexFormat.of().formatHex(AgentCommandCanonicalCodec.sha256(content)));artifact.setContentByteLength((long)content.length);
         artifact.setArtifactVersion(1);artifact.setExpectedPreviousVersion(0);artifact.setVisibility("task_members");artifact.setMetadata(Map.of());
         var command=new AgentWorkItemResultCommitDTO();command.setWorkItemId(WORK);command.setProducerAgentId(TARGET);command.setLeaseToken(TOKEN);command.setExpectedWorkItemVersion(6L);command.setArtifact(artifact);return command;
     }
@@ -140,6 +142,8 @@ class AgentWorkItemRuntimeResultFenceRealTransactionTest {
         assertEquals((long)count("agent_task_event"),jdbc.queryForObject("SELECT current_event_version FROM agent_task_meta",Long.class));
     }
     @Test void committedResultReceiptAndReadbacksUseActualRowsEventsAndConfirmedVersion() throws Exception {
+        assertEquals("aad972c33165829e10aeb40674b0cb0df32a6935d4a3d3f77e5fc121761ba626",command().getArtifact().getContentHash());
+        assertEquals(16L,command().getArtifact().getContentByteLength());
         var result=mvc.perform(post(path).principal(principal).contentType("application/json").content(body())).andExpect(status().isOk()).andReturn();
         var wire=json.readTree(result.getResponse().getContentAsString());assertEquals("submitted",wire.path("status").asText());assertEquals(7L,wire.path("workItemVersion").longValue());assertFalse(wire.has("data"));
         assertEquals(1,count("agent_task_artifact"));assertEquals(4,count("agent_task_event"));assertEquals(1,storage.stores.get());
@@ -235,6 +239,8 @@ class AgentWorkItemRuntimeResultFenceRealTransactionTest {
         int events=count("agent_task_event");
         storage.afterStore=()->{
             var competing=command().getArtifact();competing.setContentBytes(null);competing.setContentMimeType(null);competing.setContent("unrelated existing artifact");
+            byte[] content=competing.getContent().getBytes(StandardCharsets.UTF_8);
+            competing.setContentHash(HexFormat.of().formatHex(AgentCommandCanonicalCodec.sha256(content)));competing.setContentByteLength((long)content.length);
             artifacts.publish(TENANT,CLIENT,OWNER,TASK,TARGET,competing);
         };
         mvc.perform(post(path).principal(principal).contentType("application/json").content(body())).andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("WORK_ITEM_RESULT_STALE"));
@@ -313,7 +319,7 @@ class AgentWorkItemRuntimeResultFenceRealTransactionTest {
         final AtomicInteger stores=new AtomicInteger();final Map<String,byte[]> material=new HashMap<>();Runnable afterStore=()->{};CountDownLatch entered,release;
         @Override public StoredObject store(Scope scope,byte[] content,String mime) {
             assertFalse(TransactionSynchronizationManager.isActualTransactionActive(),"no external storage I/O under a DB transaction/fence");
-            String hash=cn.jia.agent.common.TaskEventPayload.ContentDigest.fromUtf8(new String(content,StandardCharsets.UTF_8)).sha256();String uri=uri(scope,hash);material.put(uri,content.clone());stores.incrementAndGet();
+            String hash=HexFormat.of().formatHex(AgentCommandCanonicalCodec.sha256(content));String uri=uri(scope,hash);material.put(uri,content.clone());stores.incrementAndGet();
             afterStore.run();if(entered!=null){entered.countDown();try{assertTrue(release.await(10,TimeUnit.SECONDS));}catch(InterruptedException interrupted){Thread.currentThread().interrupt();throw new AssertionError(interrupted);}}
             return new StoredObject(uri,hash,content.length,mime,true);
         }
