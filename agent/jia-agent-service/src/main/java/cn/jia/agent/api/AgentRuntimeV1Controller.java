@@ -1,6 +1,7 @@
 package cn.jia.agent.api;
 
 import cn.jia.agent.entity.AgentCommandAckResult;
+import cn.jia.agent.entity.AgentCommandAckRejectedException;
 import cn.jia.agent.entity.AgentRuntimeV1AckRequest;
 import cn.jia.agent.entity.AgentRuntimeV1EnrollmentRequest;
 import cn.jia.agent.entity.AgentRuntimeV1EnrollmentResult;
@@ -104,9 +105,10 @@ public class AgentRuntimeV1Controller {
         return ok(runtime.acknowledge(headers.token(), messageId, request, now()));
     }
 
-    @ExceptionHandler(AgentBizException.class)
-    public ResponseEntity<JsonResult<Void>> rejected(AgentBizException ignored) {
-        // Do not log or expose request/body/header data on installer/runtime failures.
+    @ExceptionHandler({AgentBizException.class, AgentCommandAckRejectedException.class})
+    public ResponseEntity<JsonResult<Void>> rejected(RuntimeException ignored) {
+        // D06 detailed reasons remain internal; both explicit rejection types use
+        // the same scope-hiding response. Never log reason/request/body/proof data.
         JsonResult<Void> result = JsonResult.failure("AGENT_FORBIDDEN", "Runtime v1 request rejected");
         result.setStatus(HttpStatus.FORBIDDEN.value());
         return ResponseEntity.status(HttpStatus.FORBIDDEN).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(result);

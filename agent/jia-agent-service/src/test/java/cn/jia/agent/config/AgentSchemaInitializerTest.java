@@ -43,6 +43,66 @@ class AgentSchemaInitializerTest extends BaseMockTest {
     JdbcTemplate jdbcTemplate;
 
     @Test
+    void hostedProfileInitializerAndFullBaselineDeclareSameFourChecks() throws Exception {
+        // Source parity only; real MySQL execution remains the separate acceptance lane.
+        JdbcTemplate template = schemaCaptureTemplate("MySQL");
+        new AgentSchemaInitializer(template).afterPropertiesSet();
+        ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+        verify(template, atLeastOnce()).execute(captor.capture());
+        String created = captor.getAllValues().stream()
+                .filter(sql -> sql.contains("CREATE TABLE IF NOT EXISTS agent_hosted_profile ("))
+                .findFirst().orElseThrow();
+        Map<String, String> baseline = hostedCheckClauses(
+                tableDefinition(readResource("db/schema.sql"), "agent_hosted_profile"));
+        assertEquals(Set.of("chk_hosted_state", "chk_hosted_generation",
+                "chk_hosted_single_tenant", "chk_hosted_repair"), baseline.keySet());
+        assertEquals(baseline, hostedCheckClauses(created));
+        assertEquals("tenant_id='0'", baseline.get("chk_hosted_single_tenant"));
+    }
+
+    @Test
+    void hostedProfileStrictCatalogAcceptsExactlyFourChecksOnRepeat() {
+        JdbcTemplate catalog = withHostedProfileCatalog(new JdbcTemplate(), hostedProfileChecks());
+        AgentSchemaInitializer initializer = new AgentSchemaInitializer(catalog);
+        initializer.validateHostedProfileSchema();
+        initializer.validateHostedProfileSchema();
+    }
+
+    @Test
+    void hostedProfileStrictCatalogRejectsEveryMissingCheckIncludingOldThreeSet() {
+        for (String missing : hostedProfileChecks().keySet()) {
+            Map<String, String> checks = new LinkedHashMap<>(hostedProfileChecks());
+            checks.remove(missing);
+            IllegalStateException rejected = assertThrows(IllegalStateException.class,
+                    () -> new AgentSchemaInitializer(withHostedProfileCatalog(new JdbcTemplate(), checks))
+                            .validateHostedProfileSchema());
+            assertTrue(rejected.getMessage().startsWith("PWA-HOSTED-P0 CHECK set drift:"), missing);
+        }
+    }
+
+    @Test
+    void hostedProfileStrictCatalogRejectsExtraOrChangedCheckExpressions() {
+        Map<String, String> extra = new LinkedHashMap<>(hostedProfileChecks());
+        extra.put("chk_hosted_extra", "generation <= 100");
+        assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(withHostedProfileCatalog(new JdbcTemplate(), extra))
+                        .validateHostedProfileSchema());
+        Map<String, String> wrongExpressions = Map.of(
+                "chk_hosted_state", "lifecycle_state IN ('ACTIVE')",
+                "chk_hosted_generation", "generation > 0",
+                "chk_hosted_single_tenant", "tenant_id = '1'",
+                "chk_hosted_repair", "resume_state IS NULL");
+        for (Map.Entry<String, String> wrong : wrongExpressions.entrySet()) {
+            Map<String, String> checks = new LinkedHashMap<>(hostedProfileChecks());
+            checks.put(wrong.getKey(), wrong.getValue());
+            IllegalStateException rejected = assertThrows(IllegalStateException.class,
+                    () -> new AgentSchemaInitializer(withHostedProfileCatalog(new JdbcTemplate(), checks))
+                            .validateHostedProfileSchema());
+            assertTrue(rejected.getMessage().startsWith("PWA-HOSTED-P0 CHECK set drift:"), wrong.getKey());
+        }
+    }
+
+    @Test
     void taskEventStorageEngineValidationAcceptsOnlyInnoDb() {
         JdbcTemplate valid = engineTemplate(Map.of(
                 "agent_task_meta", "InnoDB",
@@ -1718,6 +1778,10 @@ class AgentSchemaInitializerTest extends BaseMockTest {
     }
 
     private JdbcTemplate withHostedProfileCatalog(JdbcTemplate delegate) {
+        return withHostedProfileCatalog(delegate, hostedProfileChecks());
+    }
+
+    private JdbcTemplate withHostedProfileCatalog(JdbcTemplate delegate, Map<String, String> checks) {
         return new JdbcTemplate() {
             @Override
             public DataSource getDataSource() {
@@ -1795,7 +1859,7 @@ class AgentSchemaInitializerTest extends BaseMockTest {
 
             @Override
             public void query(String sql, RowCallbackHandler rowCallbackHandler) {
-                if (!emitHostedProfileRows(sql, rowCallbackHandler)) {
+                if (!emitHostedProfileRows(sql, rowCallbackHandler, checks)) {
                     delegate.query(sql, rowCallbackHandler);
                 }
             }
@@ -1803,6 +1867,11 @@ class AgentSchemaInitializerTest extends BaseMockTest {
     }
 
     private boolean emitHostedProfileRows(String sql, RowCallbackHandler rowCallbackHandler) {
+        return emitHostedProfileRows(sql, rowCallbackHandler, hostedProfileChecks());
+    }
+
+    private boolean emitHostedProfileRows(String sql, RowCallbackHandler rowCallbackHandler,
+            Map<String, String> checks) {
         String normalized = normalizeCatalogSql(sql);
         try {
             if (normalized.contains("from information_schema.columns")
@@ -1825,7 +1894,7 @@ class AgentSchemaInitializerTest extends BaseMockTest {
             }
             if (normalized.contains("join information_schema.check_constraints")
                     && normalized.contains("table_name='agent_hosted_profile'")) {
-                for (Map.Entry<String, String> entry : hostedProfileChecks().entrySet()) {
+                for (Map.Entry<String, String> entry : checks.entrySet()) {
                     java.sql.ResultSet row = mock(java.sql.ResultSet.class);
                     when(row.getString("CONSTRAINT_NAME")).thenReturn(entry.getKey());
                     when(row.getString("CHECK_CLAUSE")).thenReturn(entry.getValue());
@@ -1903,11 +1972,38 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                 "uk_hosted_binding", "uk_hosted_profile_key");
     }
 
+    private Map<String, String> hostedCheckClauses(String definition) {
+        Map<String, String> result = new LinkedHashMap<>();
+        Matcher matcher = Pattern.compile("(?i)\\bconstraint\\s+(chk_hosted_[a-z_]+)\\s+check\\s*\\(")
+                .matcher(definition);
+        while (matcher.find()) {
+            int depth = 1, end = matcher.end();
+            boolean quoted = false;
+            for (; end < definition.length(); end++) {
+                char c = definition.charAt(end);
+                if (c == '\'') {
+                    if (quoted && end + 1 < definition.length() && definition.charAt(end + 1) == '\'') end++;
+                    else quoted = !quoted;
+                } else if (!quoted) {
+                    if (c == '(') depth++;
+                    else if (c == ')' && --depth == 0) break;
+                }
+            }
+            assertEquals(0, depth, "complete CHECK clause");
+            String expression = definition.substring(matcher.end(), end)
+                    .replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
+            org.junit.jupiter.api.Assertions.assertNull(result.put(matcher.group(1).toLowerCase(Locale.ROOT), expression),
+                    "CHECK names must be unique");
+        }
+        return result;
+    }
+
     private Map<String, String> hostedProfileChecks() {
         return Map.of(
                 "chk_hosted_state",
                 "lifecycle_state IN ('PREPARED','STAGED_DISABLED','FILE_ENABLED','ACTIVE','SUSPENDING','SUSPENDED','REPAIR_REQUIRED')",
                 "chk_hosted_generation", "generation >= 0",
+                "chk_hosted_single_tenant", "tenant_id = '0'",
                 "chk_hosted_repair",
                 "(lifecycle_state='REPAIR_REQUIRED' AND resume_state IS NOT NULL) OR "
                         + "(lifecycle_state<>'REPAIR_REQUIRED' AND resume_state IS NULL)");

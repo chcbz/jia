@@ -147,6 +147,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                     KEY idx_hosted_scope_state (tenant_id,client_id,owner_jiacn,lifecycle_state),
                     CONSTRAINT chk_hosted_state CHECK (lifecycle_state IN ('PREPARED','STAGED_DISABLED','FILE_ENABLED','ACTIVE','SUSPENDING','SUSPENDED','REPAIR_REQUIRED')),
                     CONSTRAINT chk_hosted_generation CHECK (generation >= 0),
+                    CONSTRAINT chk_hosted_single_tenant CHECK (tenant_id = '0'),
                     CONSTRAINT chk_hosted_repair CHECK ((lifecycle_state='REPAIR_REQUIRED' AND resume_state IS NOT NULL) OR (lifecycle_state<>'REPAIR_REQUIRED' AND resume_state IS NULL))
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Durable hosted Agent profile publication state'
                 """);
@@ -236,6 +237,7 @@ public class AgentSchemaInitializer implements InitializingBean {
         java.util.Map<String, String> expectedChecks = java.util.Map.of(
                 "chk_hosted_state", "lifecycle_state IN ('PREPARED','STAGED_DISABLED','FILE_ENABLED','ACTIVE','SUSPENDING','SUSPENDED','REPAIR_REQUIRED')",
                 "chk_hosted_generation", "generation >= 0",
+                "chk_hosted_single_tenant", "tenant_id = '0'",
                 "chk_hosted_repair", "(lifecycle_state='REPAIR_REQUIRED' AND resume_state IS NOT NULL) OR (lifecycle_state<>'REPAIR_REQUIRED' AND resume_state IS NULL)");
         java.util.Map<String, String> actualChecks = new java.util.HashMap<>();
         jdbcTemplate.query("""
