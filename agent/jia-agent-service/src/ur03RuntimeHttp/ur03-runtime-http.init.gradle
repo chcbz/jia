@@ -1,0 +1,70 @@
+// UR-03 opt-in fixture only. Does not change main/default/Owner test source sets.
+// In Flow, pass this AFTER ops/ci/aliyun-flow/cold-init.gradle.
+// Requires API Git checkout + pinned two-module client archive/manifest and Node 20.20.2.
+// Controller verifies archiveSHA + manifestSHA before extraction; fixture verifies manifest/bytes.
+// External non-sensitive inputs: UR03_API_COMMIT, UR03_CLIENT_ROOT, UR03_CLIENT_COMMIT, UR03_NODE_BIN.
+// Task additionally requires existing Flow launcher control CYF_FLOW_GRADLE_ACTIVE=1.
+// Node needs outbound localhost socket access, Java needs 127.0.0.1 ephemeral bind; no Internet.
+// Java A -> STOP/exit -> parent JDBC -> fresh Java B on SAME private H2-file, never reseed.
+// NOT enrollment/WS/Rabbit/Provider/TASK-execution/MySQL or production verification.
+import org.gradle.api.tasks.testing.Test
+
+gradle.projectsEvaluated {
+    def p = gradle.rootProject.findProject(':agent:jia-agent-service')
+    if (p == null) throw new GradleException('UR03_AGENT_PROJECT_REQUIRED')
+    if (p.sourceSets.findByName('ur03RuntimeHttp') != null) {
+        throw new GradleException('UR03_SOURCE_SET_ALREADY_DEFINED')
+    }
+    def s = p.sourceSets.create('ur03RuntimeHttp') {
+        java.setSrcDirs(['src/ur03RuntimeHttp/java'])
+        resources.setSrcDirs(['src/ur03RuntimeHttp/resources'])
+        compileClasspath += p.sourceSets.main.output
+        runtimeClasspath += output + compileClasspath
+    }
+    p.configurations.named(s.implementationConfigurationName) {
+        extendsFrom p.configurations.testImplementation
+    }
+    p.configurations.named(s.runtimeOnlyConfigurationName) {
+        extendsFrom p.configurations.testRuntimeOnly
+    }
+    // Real account verification, not a fixed snapshot or mock DAO. Test-only.
+    p.dependencies.add(s.implementationConfigurationName,
+            p.dependencies.project(path: ':user:jia-user-service'))
+    p.dependencies.add(s.implementationConfigurationName,
+            p.dependencies.project(path: ':user:jia-user-mapper'))
+
+    p.tasks.register('ur03RuntimeHttp', Test) {
+        group = 'verification'
+        description = 'UR-03 real Node HTTP/Spring/MyBatis/H2-file dual-JVM acceptance (not MySQL or business execution).'
+        dependsOn p.tasks.named(s.classesTaskName)
+        testClassesDirs = s.output.classesDirs
+        classpath = s.runtimeClasspath
+        useJUnitPlatform()
+        maxParallelForks = 1
+        // Each scheduled paired-source acceptance must actually open sockets/restart the DB.
+        // Client archive is external to the API checkout: never reuse stale task/cache evidence.
+        outputs.upToDateWhen { false }
+        outputs.cacheIf { false }
+        filter { includeTestsMatching 'cn.jia.agent.acceptance.Ur03RuntimeHttpDbAcceptanceTest' }
+        // Do not pass Flow credentials or external datasource configuration to tests.
+        def inputs = [:]
+        ['UR03_API_COMMIT', 'UR03_CLIENT_ROOT', 'UR03_CLIENT_COMMIT', 'UR03_NODE_BIN'].each { key ->
+            def value = System.getenv(key)
+            if (value != null) inputs[key] = value
+        }
+        setEnvironment(inputs)
+        doFirst {
+            if (System.getenv('CYF_FLOW_GRADLE_ACTIVE') != '1') {
+                throw new GradleException('UR03_FLOW_ONLY_NOT_RUN_LOCALLY')
+            }
+            if (inputs.size() != 4) throw new GradleException('UR03_PAIRED_SOURCE_INPUTS_REQUIRED')
+            systemProperty 'ur03.fixture.classpath', s.runtimeClasspath.asPath
+            systemProperty 'ur03.api.root', p.rootProject.projectDir.absolutePath
+        }
+        testLogging {
+            events 'passed', 'failed', 'skipped'
+            exceptionFormat 'short'
+            showStandardStreams = true // Only fixed UR03 stage/number receipts are emitted.
+        }
+    }
+}
