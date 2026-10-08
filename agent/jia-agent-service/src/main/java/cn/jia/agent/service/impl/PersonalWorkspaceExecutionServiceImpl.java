@@ -25,6 +25,9 @@ import cn.jia.agent.entity.PersonalWorkspaceExecutionOutputEntity;
 import cn.jia.agent.entity.PersonalWorkspaceFileEntity;
 import cn.jia.agent.entity.PersonalWorkspaceVersionEntity;
 import cn.jia.agent.service.PersonalWorkspaceExecutionService;
+import cn.jia.agent.security.AgentRuntimeAuthentication;
+import cn.jia.agent.security.AgentRuntimeAuthenticationService;
+import org.springframework.security.core.context.SecurityContextHolder;
 import cn.jia.agent.service.ControlledImageFollowupAuthorityService;
 import cn.jia.agent.service.AgentTaskExecutionGrantService;
 import cn.jia.agent.service.AgentWorkItemLeaseService;
@@ -142,6 +145,30 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         this.conversationGrants = Objects.requireNonNull(grants);
         this.taskMutations = Objects.requireNonNull(transactions);
     }
+    private AgentRuntimeAuthenticationService runtimeAuthentication;
+
+    @Autowired
+    public void setRuntimeAuthentication(AgentRuntimeAuthenticationService authentication) {
+        this.runtimeAuthentication=Objects.requireNonNull(authentication,"runtimeAuthentication");
+    }
+
+    /** Native filter identity is re-fenced at the commit phase, not across source storage I/O.
+     * Missing, user and legacy key principals are never alternative execution lanes. */
+    private org.springframework.security.core.Authentication nativeAuthentication(RuntimeScope scope) {
+        var authentication=SecurityContextHolder.getContext().getAuthentication();
+        if (!(authentication instanceof AgentRuntimeAuthentication) || runtimeAuthentication==null)
+            throw failure(Reason.NOT_FOUND);
+        var expected=new AgentRuntimeAuthentication.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                scope.agentId(),scope.runtimeInstanceId());
+        if (!expected.equals(AgentRuntimeAuthenticationService.requireProof(authentication).scope()))
+            throw failure(Reason.NOT_FOUND);
+        return authentication;
+    }
+
+    private <T> T nativeMutation(RuntimeScope scope, java.util.function.Supplier<T> operation) {
+        return runtimeAuthentication.withNativeFence(nativeAuthentication(scope),operation);
+    }
+
     private AgentTaskStateService taskStates;
 
     @Autowired(required = false)
@@ -1108,8 +1135,9 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         // Private storage may perform external I/O. Validate the immutable, content-addressed bytes
         // before the root-first transaction so no Agent/Chat row lock is held across that boundary.
         // The late check revalidates the exact persisted source rows/digest under the execution lock.
+        nativeAuthentication(scope);
         verifiedV3SourceBytes(scope,candidate);
-        var receipt=followupAuthority.consumeForStart(new ControlledImageFollowupAuthorityService.RuntimeScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.agentId(),scope.runtimeInstanceId()),new ControlledImageFollowupAuthorityService.StartCommand(taskId,runId,command.executionId(),command.commandId(),command.messageId(),command.operation(),command.inputSnapshotDigest(),authorityProvider(command.providerExecution()),command.fence().version(),"pwe_lease_"+plainSha("controlled-provider-start-v3\n"+command.executionId()+"\n"+scope.runtimeInstanceId()+"\n"+command.fence().version())),()->withConversationRoot(scope,taskId,runId,true,execution->{requireConversationFence(scope,execution,command.fence(),false);requireStartCommand(execution,command.commandId(),command.messageId());if(!same(command.inputSnapshotDigest(),execution.getRuntimeInputSnapshotDigest())||!same(command.operation(),execution.getPermittedOperation())||execution.getConversationProviderStartedAt()!=null)throw failure(Reason.TASK_CONFLICT);verifiedV3SourceRows(scope,execution);return null;}));
+        var receipt=nativeMutation(scope,()->followupAuthority.consumeForStart(new ControlledImageFollowupAuthorityService.RuntimeScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.agentId(),scope.runtimeInstanceId()),new ControlledImageFollowupAuthorityService.StartCommand(taskId,runId,command.executionId(),command.commandId(),command.messageId(),command.operation(),command.inputSnapshotDigest(),authorityProvider(command.providerExecution()),command.fence().version(),"pwe_lease_"+plainSha("controlled-provider-start-v3\n"+command.executionId()+"\n"+scope.runtimeInstanceId()+"\n"+command.fence().version())),()->withConversationRoot(scope,taskId,runId,true,execution->{requireConversationFence(scope,execution,command.fence(),false);requireStartCommand(execution,command.commandId(),command.messageId());if(!same(command.inputSnapshotDigest(),execution.getRuntimeInputSnapshotDigest())||!same(command.operation(),execution.getPermittedOperation())||execution.getConversationProviderStartedAt()!=null)throw failure(Reason.TASK_CONFLICT);verifiedV3SourceRows(scope,execution);return null;})));
         return new ControlledProviderStartReceiptV3(3,true,receipt.taskId(),receipt.runId(),receipt.conversationId(),receipt.executionId(),receipt.commandId(),receipt.messageId(),receipt.operation(),receipt.inputSnapshotDigest(),provider(receipt.providerExecution()),receipt.leaseVersion());
     }
 
