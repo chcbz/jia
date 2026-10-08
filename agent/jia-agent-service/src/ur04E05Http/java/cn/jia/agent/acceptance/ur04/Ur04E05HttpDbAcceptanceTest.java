@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class Ur04E05HttpDbAcceptanceTest {
     @TempDir(cleanup = CleanupMode.ALWAYS) Path temporaryDirectory;
     private static final String BASELINE = "4c5875b5bed143c793d7812143d60deab8d65674";
-    private static final String CLIENT = "7594fd72251d38b6e1d23a1a3cca184ae0d085e7";
+    private static final String CLIENT = "d91ebbf436911eac20ffb70cb92192a65c742e11";
     private String stage = "SOURCE_PREPARE";
 
     @Test void e05ActualClientHttpCommitsOriginalResultAndTerminalAck() throws Exception {
@@ -336,7 +336,7 @@ class Ur04E05HttpDbAcceptanceTest {
             assertEquals(java.process.pid(), integer(ready, "pid")); long port = integer(ready, "port"); if (port <= 0 || port > 65535) throw new SafeFailure("LOOPBACK_PORT_REQUIRED");
             commands = array(ready, "commands"); node = nodeChild(); nodeParents.add(node.process.pid()); Map<String, Object> input = baseInput(); input.put("op", "INIT"); input.put("apiOrigin", "http://127.0.0.1:" + port);
             if (fresh) input.put("authorizations", authorizations); JsonNode boot = node.exchange(input, "NODE_BOOT"); assertEquals(node.process.pid(), integer(boot, "pid"));
-            assertEquals(CLIENT, text(boot, "sourceCommit")); assertEquals("0827ce904179862ab55648fe99b780cea94faf98", text(boot, "sourceTree"));
+            assertEquals(CLIENT, text(boot, "sourceCommit")); assertEquals("b2e3f17ff57e21e2482c0fc54e71dbf4b92dbd82", text(boot, "sourceTree"));
             provenance = Map.of("archiveSha256", text(boot, "archiveSha256"), "sourceManifestSha256", text(boot, "sourceManifestSha256"),
                 "artifactManifestSha256", text(boot, "artifactManifestSha256"), "nodeSha256", text(boot, "nodeSha256"), "cleanRun", text(boot, "cleanRun"));
             for (String key : List.of("archiveSha256", "sourceManifestSha256", "artifactManifestSha256", "nodeSha256"))

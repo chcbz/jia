@@ -24,7 +24,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * M4 genuine MySQL E05 remains NOT_RUN; passing these selectors cannot close UR06. */
 class Ur06EnrollMysqlAcceptanceTest {
     private static final String BASELINE="fcac494a5103a7bc1175c96e9df50d2fcc35c182";
-    private static final String CLIENT="7594fd72251d38b6e1d23a1a3cca184ae0d085e7";
+    private static final String CLIENT="d91ebbf436911eac20ffb70cb92192a65c742e11";
     private String stage="SOURCE";
     private interface Checked { void run() throws Exception; }
     private void safe(Checked work) throws Exception {
