@@ -1,5 +1,5 @@
 {
-  "fixtureVersion": 1,
+  "fixtureVersion": 2,
   "session": {
     "method": "POST",
     "path": "/agent/runtime/v1/session",
@@ -9,8 +9,8 @@
     "request": {
       "installationId": "rti_0123456789abcdef0123456789abcdef",
       "tenantId": "0",
-      "clientId": "client-fixture",
-      "canonicalAgentId": "agt_0123456789abcdef0123456789abcdef",
+      "clientId": "client-a",
+      "canonicalAgentId": "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "manifestVersion": "1",
       "manifestSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "hostId": "host-fixture",
@@ -19,8 +19,8 @@
     "response": {
       "installationId": "rti_0123456789abcdef0123456789abcdef",
       "tenantId": "0",
-      "clientId": "client-fixture",
-      "canonicalAgentId": "agt_0123456789abcdef0123456789abcdef",
+      "clientId": "client-a",
+      "canonicalAgentId": "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "hostId": "host-fixture",
       "runtimeInstanceId": "boot-fixture",
       "sessionGeneration": 7,
@@ -37,7 +37,7 @@
     "path": "/ws/agent/channel",
     "headers": {
       "Authorization": "AgentRuntime REDACTED_SESSION_TOKEN",
-      "X-Agent-Id": "agt_0123456789abcdef0123456789abcdef",
+      "X-Agent-Id": "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "X-Agent-Installation-Id": "rti_0123456789abcdef0123456789abcdef",
       "X-Agent-Host-Id": "host-fixture",
       "X-Agent-Runtime-Id": "boot-fixture",
@@ -69,10 +69,10 @@
   },
   "ack": {
     "method": "POST",
-    "path": "/agent/runtime/v1/commands/msg-fixture/acks",
+    "path": "/agent/runtime/v1/commands/00000000-0000-0000-0000-000000000005/acks",
     "headers": {
       "Authorization": "AgentRuntime REDACTED_SESSION_TOKEN",
-      "X-Agent-Id": "agt_0123456789abcdef0123456789abcdef",
+      "X-Agent-Id": "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "X-Agent-Installation-Id": "rti_0123456789abcdef0123456789abcdef",
       "X-Agent-Host-Id": "host-fixture",
       "X-Agent-Runtime-Id": "boot-fixture",
@@ -81,19 +81,19 @@
     "request": {
       "installationId": "rti_0123456789abcdef0123456789abcdef",
       "tenantId": "0",
-      "clientId": "client-fixture",
-      "canonicalAgentId": "agt_0123456789abcdef0123456789abcdef",
+      "clientId": "client-a",
+      "canonicalAgentId": "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "hostId": "host-fixture",
       "runtimeInstanceId": "boot-fixture",
       "sessionGeneration": 7,
       "deliveryVersion": 11,
-      "messageId": "msg-fixture",
-      "correlationId": "correlation-fixture",
-      "commandId": "command-fixture",
-      "taskId": "task-fixture",
-      "workItemId": null,
-      "payloadReference": "payload-fixture",
-      "expiresAt": "2026-10-08T08:00:00Z",
+      "messageId": "00000000-0000-0000-0000-000000000005",
+      "correlationId": "task-1",
+      "commandId": "cmd_hall_action_9dd18f3cf8da97efee635d92477921c4aa5f15eb6b36e593c5400c89cf1273d0",
+      "taskId": "task-1",
+      "workItemId": "work-1",
+      "payloadReference": null,
+      "expiresAt": "1970-01-01T01:00:01.000Z",
       "status": "STARTED"
     },
     "response": {
@@ -110,25 +110,30 @@
       "ACK body proof must equal authenticated session proof, not select authority.",
       "deliveryVersion is nullable last confirmed D06 version, never a predicted first CAS version. Only matching status and a valid monotonic D06 result version with ADVANCED/PRIOR confirms the command commit; persist that exact result in the existing checkpoint.",
       "Expired commands deny new RECEIVED/STARTED admission, not terminal reports of already executed work.",
-      "Transport failure preserves the existing checkpoint and original message/command/work keys."
+      "Transport failure preserves the existing checkpoint and original message/command/work keys.",
+      "canonicalAgentId is projected from the sealed manifest only after exact raw tenantId/clientId/targetAgentId matching.",
+      "Runtime installationId/hostId/runtimeInstanceId/sessionGeneration come only from current authenticated transport, never a business frame installationId.",
+      "Missing canonical payloadReference projects to null. D06 persistent command/message/task/workItem, source/context and lease checks remain mandatory.",
+      "Raw expiresAt is a positive safe integer epoch millisecond within the valid Date range, projected to ISO UTC; it never replaces persistent D06 expiry.",
+      "Keep the complete raw canonical bytes and fingerprint unchanged; nullable workItemId remains null rather than an invented work key."
     ],
     "responseEnvelope": "JsonResult.data",
     "firstRequest": {
       "installationId": "rti_0123456789abcdef0123456789abcdef",
       "tenantId": "0",
-      "clientId": "client-fixture",
-      "canonicalAgentId": "agt_0123456789abcdef0123456789abcdef",
+      "clientId": "client-a",
+      "canonicalAgentId": "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "hostId": "host-fixture",
       "runtimeInstanceId": "boot-fixture",
       "sessionGeneration": 7,
       "deliveryVersion": null,
-      "messageId": "msg-fixture",
-      "correlationId": "correlation-fixture",
-      "commandId": "command-fixture",
-      "taskId": "task-fixture",
-      "workItemId": null,
-      "payloadReference": "payload-fixture",
-      "expiresAt": "2026-10-08T08:00:00Z",
+      "messageId": "00000000-0000-0000-0000-000000000005",
+      "correlationId": "task-1",
+      "commandId": "cmd_hall_action_9dd18f3cf8da97efee635d92477921c4aa5f15eb6b36e593c5400c89cf1273d0",
+      "taskId": "task-1",
+      "workItemId": "work-1",
+      "payloadReference": null,
+      "expiresAt": "1970-01-01T01:00:01.000Z",
       "status": "RECEIVED"
     }
   },
@@ -162,6 +167,90 @@
       "Same installation/host may rotate generation on reconnect/reboot; another host/installation is rejected, not silently displaced.",
       "Schema removal is not needed to recover: preserve additive columns; never restore stale credentials or replay work."
     ],
-    "authorization": "Schema/mapper coordination pending; no production DDL authorized."
+    "authorization": "Additive source authorized; no production DDL or historical migration executed."
+  },
+  "canonicalDispatchProjectionR2": {
+    "rawFixture": "command-dispatch-e05.canonical.redacted.json",
+    "rawSha256": "057a4626387846f4bf420cab046d7d0bb4d12cdae6569e90839af00161cbd5a3",
+    "raw": {
+      "schemaVersion": 1,
+      "messageType": "command.dispatch",
+      "messageId": "00000000-0000-0000-0000-000000000005",
+      "commandId": "cmd_hall_action_9dd18f3cf8da97efee635d92477921c4aa5f15eb6b36e593c5400c89cf1273d0",
+      "correlationId": "task-1",
+      "causationId": "evt-e05",
+      "tenantId": "0",
+      "clientId": "client-a",
+      "ownerJiacn": "owner-a",
+      "taskId": "task-1",
+      "workItemId": "work-1",
+      "targetAgentId": "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "commandType": "WORK_ITEM_EXECUTE",
+      "issuedAt": 1000,
+      "expiresAt": 3601000,
+      "intentId": "rsi_dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "attempt": 1,
+      "payload": {
+        "actionType": "work_item_execute",
+        "instruction": "Execute reassigned work item",
+        "conversationType": "juyiting",
+        "reason": "lease_expired_reassignment",
+        "conversationId": null,
+        "triggerEventId": "evt-e05",
+        "autonomyLevel": "supervised",
+        "requiresApproval": true,
+        "context": {
+          "taskTitle": null,
+          "workItemTitle": "Work One",
+          "requestSummary": null,
+          "reviewSummary": null,
+          "contextVersion": "5",
+          "referenceIds": [
+            "cmd_hall_action_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          ],
+          "tags": [
+            "lease-expired",
+            "reassignment"
+          ],
+          "bindingVersion": "e05-reassignment-v1",
+          "reassignmentId": "rsn_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      }
+    },
+    "trustedManifest": {
+      "tenantId": "0",
+      "clientId": "client-a",
+      "canonicalAgentId": "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "currentTransport": {
+      "installationId": "rti_0123456789abcdef0123456789abcdef",
+      "hostId": "host-fixture",
+      "runtimeInstanceId": "boot-fixture",
+      "sessionGeneration": 7
+    },
+    "projectedFirstAck": {
+      "installationId": "rti_0123456789abcdef0123456789abcdef",
+      "tenantId": "0",
+      "clientId": "client-a",
+      "canonicalAgentId": "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "hostId": "host-fixture",
+      "runtimeInstanceId": "boot-fixture",
+      "sessionGeneration": 7,
+      "deliveryVersion": null,
+      "messageId": "00000000-0000-0000-0000-000000000005",
+      "correlationId": "task-1",
+      "commandId": "cmd_hall_action_9dd18f3cf8da97efee635d92477921c4aa5f15eb6b36e593c5400c89cf1273d0",
+      "taskId": "task-1",
+      "workItemId": "work-1",
+      "payloadReference": null,
+      "expiresAt": "1970-01-01T01:00:01.000Z",
+      "status": "RECEIVED"
+    },
+    "clockEpochMillis": 1001000,
+    "rules": [
+      "Do not modify the 1970 source expiry for tests; use the frozen clock.",
+      "SKILL_INSTALL raw installationId is the product installation and is retained as business data, never Runtime authority.",
+      "The transport may rotate without rewriting immutable raw dispatch bytes or raw fingerprints."
+    ]
   }
 }

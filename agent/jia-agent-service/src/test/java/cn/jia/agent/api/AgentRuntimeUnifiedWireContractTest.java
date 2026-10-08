@@ -1,8 +1,8 @@
 package cn.jia.agent.api;
 
 import cn.jia.agent.entity.*;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import java.util.HashSet;
 import java.util.Set;
@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class AgentRuntimeUnifiedWireContractTest {
     private final ObjectMapper mapper = new ObjectMapper();
     private JsonNode fixture() throws Exception {
-        try (var input = getClass().getResourceAsStream("/ur02/unified-runtime-wire-v1.redacted.json")) {
+        try (var input = getClass().getResourceAsStream("/ur02/unified-runtime-wire-v2.redacted.json")) {
             assertNotNull(input);
             return mapper.readTree(input);
         }
@@ -43,6 +43,8 @@ class AgentRuntimeUnifiedWireContractTest {
         assertFalse(f.path("websocket").path("headers").has("X-API-Key"));
         var request = mapper.treeToValue(f.path("ack").path("request"), AgentRuntimeV1AckRequest.class);
         assertEquals(f.path("ack").path("request"), mapper.valueToTree(request));
+        assertNull(request.payloadReference());
+        assertEquals("1970-01-01T01:00:01.000Z",request.expiresAt());
         assertEquals(7, request.sessionGeneration());
         assertEquals(Long.valueOf(11), request.deliveryVersion());
     }
@@ -61,6 +63,6 @@ class AgentRuntimeUnifiedWireContractTest {
         assertEquals(node, mapper.valueToTree(request));
     }
     private static Set<String> fields(JsonNode node) {
-        Set<String> fields = new HashSet<>(); node.fieldNames().forEachRemaining(fields::add); return fields;
+        Set<String> fields = new HashSet<>(); node.propertyNames().forEach(fields::add); return fields;
     }
 }

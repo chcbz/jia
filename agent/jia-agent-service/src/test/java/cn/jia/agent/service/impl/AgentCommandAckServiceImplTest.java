@@ -24,40 +24,45 @@ class AgentCommandAckServiceImplTest {
         final AgentConsumerInboxEntity inbox;
         final PlatformTransactionManager manager = mock(PlatformTransactionManager.class);
         final AgentCommandAckServiceImpl service;
-        Fixture(String status) {
-            var draft = new AgentCommandDraft(1, COMMAND, "task", INTENT, "0", "client", "owner", "task", null,
+        Fixture(String status) { this(status,defaultDraft(),MESSAGE); }
+        private static AgentCommandDraft defaultDraft() {
+            return new AgentCommandDraft(1, COMMAND, "task", INTENT, "0", "client", "owner", "task", null,
                     "agent", "TASK_INVITE", 1000, EXPIRES, INTENT,
                     new AgentHallCommandPayload("task_briefing", "fixture instruction", "juyiting", null, null, null, "assist", false, null));
-            byte[] business = AgentCommandCanonicalCodec.businessBytes(draft), wire = AgentCommandCanonicalCodec.wireBytes(draft, MESSAGE, 1);
-            delivery = new AgentCommandDeliveryEntity().setId(1L).setOwnerJiacn("owner").setCommandId(COMMAND).setTaskId("task")
-                    .setTargetAgentId("agent").setCommandType("TASK_INVITE").setCommandPayload(business)
+        }
+        Fixture(String status,AgentCommandDraft draft,String message) {
+            byte[] business = AgentCommandCanonicalCodec.businessBytes(draft), wire = AgentCommandCanonicalCodec.wireBytes(draft, message, 1);
+            delivery = new AgentCommandDeliveryEntity().setId(1L).setOwnerJiacn(draft.ownerJiacn()).setCommandId(draft.commandId()).setTaskId(draft.taskId())
+                    .setTargetAgentId(draft.targetAgentId()).setWorkItemId(draft.workItemId()).setCommandType(draft.commandType()).setCommandPayload(business)
                     .setCommandPayloadHash(AgentCommandCanonicalCodec.sha256(business)).setAttemptCount(1)
-                    .setActiveMessageId(MESSAGE).setActiveAttempt(1).setExpiresAt(EXPIRES).setVersion(7L).setStatus(status);
-            delivery.setTenantId("0"); delivery.setClientId("client");
+                    .setActiveMessageId(message).setActiveAttempt(1).setExpiresAt(draft.expiresAt()).setVersion(7L).setStatus(status);
+            delivery.setTenantId(draft.tenantId()); delivery.setClientId(draft.clientId());
             var route = AgentRabbitTopologyManifest.canonical().defaultCommandPublishRoute();
-            outbox = new AgentOutboxEventEntity().setId(10L).setEventId("event").setMessageId(MESSAGE).setCommandId(COMMAND)
-                    .setDeliveryId(1L).setAggregateType("task").setAggregateId("task").setDestination(route.destination()).setRoutingKey(route.routingKey())
+            outbox = new AgentOutboxEventEntity().setId(10L).setEventId("event").setMessageId(message).setCommandId(draft.commandId())
+                    .setDeliveryId(1L).setAggregateType("task").setAggregateId(draft.taskId()).setDestination(route.destination()).setRoutingKey(route.routingKey())
                     .setWirePayload(wire).setWirePayloadHash(AgentCommandCanonicalCodec.sha256(wire)).setStatus("PUBLISHED")
-                    .setAttemptCount(1).setActiveAttempt(1).setExpiresAt(EXPIRES).setPublisherConfirmStatus("ACK")
+                    .setAttemptCount(1).setActiveAttempt(1).setExpiresAt(draft.expiresAt()).setPublisherConfirmStatus("ACK")
                     .setConfirmedAt(NOW - 10).setMandatoryReturnStatus("NOT_RETURNED").setPublishedAt(NOW - 9).setVersion(2L);
-            outbox.setTenantId("0"); outbox.setClientId("client");
+            outbox.setTenantId(draft.tenantId()); outbox.setClientId(draft.clientId());
             inbox = new AgentConsumerInboxEntity().setId(20L).setConsumerName(AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1)
-                    .setMessageId(MESSAGE).setEventId("event").setCommandId(COMMAND).setDeliveryId(1L)
+                    .setMessageId(message).setEventId("event").setCommandId(draft.commandId()).setDeliveryId(1L)
                     .setWirePayload(wire).setWirePayloadHash(AgentCommandCanonicalCodec.sha256(wire))
-                    .setAttemptCount(1).setActiveAttempt(1).setExpiresAt(EXPIRES).setProcessedAt(NOW - 2).setVersion(1L)
+                    .setAttemptCount(1).setActiveAttempt(1).setExpiresAt(draft.expiresAt()).setProcessedAt(NOW - 2).setVersion(1L)
                     .setStatus("PROCESSED").setResultStatus("SENT");
-            inbox.setTenantId("0"); inbox.setClientId("client");
-            when(dao.lockDeliveryByCommand("0", "client", COMMAND)).thenReturn(delivery);
-            when(dao.lockActiveOutboxes("0", "client", 1L, MESSAGE)).thenReturn(List.of(outbox));
-            when(dao.lockInbox("0", "client", AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1, MESSAGE)).thenReturn(inbox);
+            inbox.setTenantId(draft.tenantId()); inbox.setClientId(draft.clientId());
+            when(dao.lockDeliveryByCommand(draft.tenantId(), draft.clientId(), draft.commandId())).thenReturn(delivery);
+            when(dao.lockActiveOutboxes(draft.tenantId(), draft.clientId(), 1L, message)).thenReturn(List.of(outbox));
+            when(dao.lockInbox(draft.tenantId(), draft.clientId(), AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1, message)).thenReturn(inbox);
             when(dao.advanceAck(any(), anyString(), any(), anyLong())).thenReturn(1);
             when(manager.getTransaction(any())).thenReturn(mock(TransactionStatus.class));
             var gate = mock(AgentRabbitSafetyGate.class);
             when(gate.state()).thenReturn(AgentRabbitActivationState.DISPATCH_SCOPED);
-            when(gate.allowsDispatch("0", "client")).thenReturn(true);
+            when(gate.allowsDispatch(draft.tenantId(), draft.clientId())).thenReturn(true);
             service = new AgentCommandAckServiceImpl(dao, gate, manager);
         }
-        AgentCommandAck ack(String status) { return new AgentCommandAck("0", "client", "agent", "independent-ack", MESSAGE, COMMAND, "task", null, status, EXPIRES); }
+        AgentCommandAck ack(String status) { return new AgentCommandAck(delivery.getTenantId(), delivery.getClientId(),
+                delivery.getTargetAgentId(), "independent-ack", delivery.getActiveMessageId(), delivery.getCommandId(),
+                delivery.getTaskId(), delivery.getWorkItemId(), status, delivery.getExpiresAt()); }
     }
     @Test void expiredStartedCanReportEachTerminalAndReturnCommittedVersion() {
         for (String terminal : List.of("SUCCEEDED", "FAILED", "REJECTED")) {
