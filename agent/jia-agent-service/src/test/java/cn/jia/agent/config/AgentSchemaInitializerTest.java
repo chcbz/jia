@@ -588,6 +588,9 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                     .findFirst().orElseThrow();
             assertEquals(normalizeSqlStructure(tableDefinition(schema, table)),
                     normalizeSqlStructure(initializerDefinition), table);
+            assertEquals(normalizeSqlStructure(tableDefinition(schema, table)),
+                    normalizeSqlStructure(tableDefinition(
+                            readResource("db/agent-identity-schema.sql"), table)), table + " migration");
         }
     }
 
@@ -1268,6 +1271,16 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                 () -> new AgentSchemaInitializer(identityCatalogTemplate("check")).afterPropertiesSet());
         assertTrue(error.getMessage().contains("chk_identity_registry_scope"), error.getMessage());
         assertTrue(error.getMessage().contains("incompatible definition"), error.getMessage());
+
+        for (String oldContract : List.of("system-null-tenant", "owner-tenant", "dual-tenant",
+                "alias-owner-tenant")) {
+            IllegalStateException rejected = assertThrows(IllegalStateException.class,
+                    () -> new AgentSchemaInitializer(identityCatalogTemplate(oldContract)).afterPropertiesSet());
+            String constraint = "alias-owner-tenant".equals(oldContract)
+                    ? "chk_identity_alias_scope" : "chk_identity_registry_scope";
+            assertTrue(rejected.getMessage().contains(constraint), oldContract + ": " + rejected.getMessage());
+            assertTrue(rejected.getMessage().contains("incompatible definition"), rejected.getMessage());
+        }
     }
 
     @Test
@@ -1382,7 +1395,27 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                     return (List<T>) identityIndex(String.valueOf(args[0]), String.valueOf(args[1]));
                 }
                 if (normalized.contains("join information_schema.check_constraints")) {
-                    return (List<T>) identityChecks("check".equals(fault));
+                    List<AgentSchemaInitializer.CheckDefinition> checks =
+                            new java.util.ArrayList<>(identityChecks("check".equals(fault)));
+                    for (int i = 0; i < checks.size(); i++) {
+                        AgentSchemaInitializer.CheckDefinition original = checks.get(i);
+                        String clause = original.clause();
+                        if ("chk_identity_registry_scope".equals(original.name())) {
+                            clause = switch (fault) {
+                                case "system-null-tenant" -> clause.replaceFirst("tenant_id = '0'", "tenant_id IS NULL");
+                                case "owner-tenant" -> clause.replace("tenant_id = '0'", "tenant_id = TRIM(owner_jiacn)");
+                                case "dual-tenant" -> clause.replace("tenant_id = '0'",
+                                        "(tenant_id = '0' OR tenant_id = TRIM(owner_jiacn))");
+                                default -> clause;
+                            };
+                        } else if ("chk_identity_alias_scope".equals(original.name())
+                                && "alias-owner-tenant".equals(fault)) {
+                            clause = "tenant_id = TRIM(owner_jiacn)";
+                        }
+                        checks.set(i, new AgentSchemaInitializer.CheckDefinition(
+                                original.table(), original.name(), clause));
+                    }
+                    return (List<T>) checks;
                 }
                 if (normalized.contains("join information_schema.referential_constraints")) {
                     return (List<T>) identityForeignKey("fk".equals(fault));
