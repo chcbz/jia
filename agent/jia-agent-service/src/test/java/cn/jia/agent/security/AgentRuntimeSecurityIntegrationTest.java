@@ -495,6 +495,40 @@ class AgentRuntimeSecurityIntegrationTest {
     }
 
     @Test
+    void generationChangedDuringConversationSourceReadCannotDeliverOldAdmittedBytes() throws Exception {
+        var scope=new PersonalWorkspaceExecutionService.RuntimeScope(TENANT,CLIENT_A,OWNER_A,A,"runtime-a");
+        var fence=new PersonalWorkspaceExecutionService.ConversationFence(2L,"01234567-89ab-cdef-0123-456789abcdef");
+        String source="private-source-must-not-leak";
+        when(workspaceExecutions.conversationInputContent(scope,"task-a","run-a",fence,"input_1"))
+                .thenAnswer(call->{
+                    persisted.get(A).setRuntimeSessionGeneration(2L).setRuntimeInstanceId("replacement");
+                    return new PersonalWorkspaceExecutionService.RuntimeContent("bird.png","image/png",source.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                });
+        var response=conversationMvc.perform(headers(post("/internal/agent/tasks/task-a/runs/run-a/conversation/inputs/input_1/content"),A,"runtime-a",TOKEN_A)
+                .contentType("application/json").content("{\"version\":2,\"token\":\""+fence.token()+"\"}"))
+                .andExpect(status().isBadRequest()).andReturn().getResponse();
+        assertFalse(response.getContentAsString().contains(source));
+        var ordered=inOrder(workspaceExecutions,installations,rows);
+        ordered.verify(workspaceExecutions).conversationInputContent(scope,"task-a","run-a",fence,"input_1");
+        ordered.verify(installations).lock(installationFor(A));
+        ordered.verify(rows).lockInScope(TENANT,CLIENT_A,A);
+    }
+
+    @Test
+    void installationRevokedDuringFileSourceReadCannotDeliverPreparedBytes() throws Exception {
+        var scope=new PersonalWorkspaceExecutionService.RuntimeScope(TENANT,CLIENT_A,OWNER_A,A,"runtime-a");
+        String source="revoked-private-file";
+        when(workspaceExecutions.runtimeInputContent(scope,"task-a","run-a","input_1")).thenAnswer(call->{
+            installationRows.get(installationFor(A)).setStatus("REVOKED");
+            return new PersonalWorkspaceExecutionService.RuntimeContent("file.png","image/png",source.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        });
+        var response=runtimeFailureMvc.perform(headers(get("/internal/agent/tasks/task-a/runs/run-a/inputs/input_1/content"),A,"runtime-a",TOKEN_A))
+                .andExpect(status().isBadRequest()).andReturn().getResponse();
+        assertFalse(response.getContentAsString().contains(source));
+        verify(workspaceExecutions).runtimeInputContent(scope,"task-a","run-a","input_1");
+    }
+
+    @Test
     void nativeProviderStartRequiresExactRuntimeFenceAndRejectsBrowserRoutes() throws Exception {
         var scope=new PersonalWorkspaceExecutionService.RuntimeScope(TENANT,CLIENT_A,OWNER_A,A,"runtime-a");
         String path="/internal/agent/tasks/task-a/runs/run-a/conversation/provider-start";

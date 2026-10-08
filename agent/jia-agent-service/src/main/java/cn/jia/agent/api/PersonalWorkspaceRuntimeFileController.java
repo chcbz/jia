@@ -41,7 +41,8 @@ public class PersonalWorkspaceRuntimeFileController {
     @GetMapping(value = "/workspace-executions/commands", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<RuntimeQueueView> queuedCommands(HttpServletRequest request, Authentication authentication) {
         requireNoQuery(request);
-        return json(new RuntimeQueueView(service.runtimeQueuedCommands(scope(authentication), 16)));
+        var queue=new RuntimeQueueView(service.runtimeQueuedCommands(scope(authentication), 16));
+        return json(runtimeAuthentication.withNativeFence(authentication,()->queue));
     }
 
     @PostMapping(value = "/{taskId}/runs/{runId}/start", consumes = MediaType.APPLICATION_JSON_VALUE,
@@ -58,12 +59,17 @@ public class PersonalWorkspaceRuntimeFileController {
     @GetMapping(value = "/{taskId}/runs/{runId}/inputs", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<List<PersonalWorkspaceExecutionService.RuntimeInput>> inputs(@PathVariable String taskId,
             @PathVariable String runId, HttpServletRequest request, Authentication authentication) {
-        requireNoQuery(request); return json(service.runtimeInputs(scope(authentication), taskId, runId));
+        requireNoQuery(request);
+        var inputs=service.runtimeInputs(scope(authentication), taskId, runId);
+        return json(runtimeAuthentication.withNativeFence(authentication,()->inputs));
     }
     @GetMapping("/{taskId}/runs/{runId}/inputs/{inputRef}/content")
     public ResponseEntity<byte[]> content(@PathVariable String taskId, @PathVariable String runId,
             @PathVariable String inputRef, HttpServletRequest request, Authentication authentication) {
-        requireNoQuery(request); PersonalWorkspaceExecutionService.RuntimeContent content=service.runtimeInputContent(scope(authentication),taskId,runId,inputRef);
+        requireNoQuery(request);
+        var loaded=service.runtimeInputContent(scope(authentication),taskId,runId,inputRef);
+        // Revalidate the admitted proof after source I/O, never while holding it across storage.
+        var content=runtimeAuthentication.withNativeFence(authentication,()->loaded);
         return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).header("X-Content-Type-Options","nosniff")
                 .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename(safe(content.filename()),StandardCharsets.UTF_8).build().toString())
                 .contentType(MediaType.parseMediaType(content.contentMimeType())).contentLength(content.bytes().length).body(content.bytes());

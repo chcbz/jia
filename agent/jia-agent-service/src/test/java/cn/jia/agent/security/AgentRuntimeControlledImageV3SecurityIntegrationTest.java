@@ -41,6 +41,8 @@ class AgentRuntimeControlledImageV3SecurityIntegrationTest {
     @Test void realNativeHttpChainPreservesExactWorkspaceAndAssetSourceFields() throws Exception {
         var executions=org.mockito.Mockito.mock(cn.jia.agent.service.PersonalWorkspaceExecutionService.class);
         var authentication=org.mockito.Mockito.mock(AgentRuntimeAuthenticationService.class);
+        org.mockito.Mockito.when(authentication.withNativeFence(org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(call->((java.util.function.Supplier<?>)call.getArgument(1)).get());
         var principal=new AgentRuntimeAuthentication(new AgentRuntimeAuthentication.Scope("0","client","owner","agent","runtime"));
         org.mockito.Mockito.when(authentication.authenticate(org.mockito.ArgumentMatchers.any(AgentRuntimeAuthenticationFilter.SessionHeaders.class), org.mockito.ArgumentMatchers.eq(true))).thenReturn(principal);
         var aware=new org.springframework.security.web.servletapi.SecurityContextHolderAwareRequestFilter();
@@ -101,6 +103,8 @@ class AgentRuntimeControlledImageV3SecurityIntegrationTest {
     @Test void spoolUploadRequiresNativeIdentityStrictProofAndExactBytesBeforeServiceWrites() throws Exception {
         var executions=org.mockito.Mockito.mock(cn.jia.agent.service.PersonalWorkspaceExecutionService.class);
         var authentication=org.mockito.Mockito.mock(AgentRuntimeAuthenticationService.class);
+        org.mockito.Mockito.when(authentication.withNativeFence(org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(call->((java.util.function.Supplier<?>)call.getArgument(1)).get());
         var principal=new AgentRuntimeAuthentication(new AgentRuntimeAuthentication.Scope("0","client","owner","agent","runtime"));
         org.mockito.Mockito.when(authentication.authenticate(org.mockito.ArgumentMatchers.any(AgentRuntimeAuthenticationFilter.SessionHeaders.class), org.mockito.ArgumentMatchers.eq(true))).thenReturn(principal);
         var aware=new org.springframework.security.web.servletapi.SecurityContextHolderAwareRequestFilter();aware.afterPropertiesSet();
