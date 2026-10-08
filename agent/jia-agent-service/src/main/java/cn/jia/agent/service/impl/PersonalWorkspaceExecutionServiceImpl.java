@@ -1730,32 +1730,81 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public StagedOutput stageOutput(RuntimeScope scope, String taskId, String runId, String outputId,
             String originalFilename, String contentMimeType, byte[] content) {
-        PersonalWorkspaceExecutionEntity candidate=runtimeExecution(scope,taskId,runId,false);
+        var candidate=runtimeExecution(scope,taskId,runId,false);
         if ("CONVERSATION".equals(candidate.getExecutionMode())) throw failure(Reason.CAPABILITY_UNAVAILABLE);
-        return stageOutputLocked(scope,runtimeExecution(scope,taskId,runId,true),outputId,
-                originalFilename,contentMimeType,content);
+        byte[] immutable=content==null?null:content.clone();
+        validateOutputUpload(candidate,outputId,originalFilename,contentMimeType,immutable);
+        nativeAuthentication(scope);
+        String expectedHash=plainSha(immutable);
+        // A retry uses the original immutable receipt. No row locks span storage.store(),
+        // and an already-staged output is never written again merely because its ACK was lost.
+        var prior=executions.findOutput(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                candidate.getExecutionId(),outputId);
+        PersonalWorkspaceStorage.StoredObject stored;
+        if(prior!=null) {
+            if(!same(prior.getContentHash(),expectedHash)||!Objects.equals(prior.getByteLength(),(long)immutable.length)
+                    ||!same(contentMimeType,prior.getContentMimeType())) throw failure(Reason.OUTPUT_CONFLICT);
+            stored=new PersonalWorkspaceStorage.StoredObject(prior.getStorageUri(),prior.getContentHash(),
+                    Objects.requireNonNullElse(prior.getByteLength(),-1L),prior.getContentMimeType());
+            requireStoredUpload(stored,expectedHash,immutable.length,contentMimeType);
+            requireMatchingStagedOutput(candidate,prior,stored);
+        } else {
+            stored=storage.store(storageScope(scope),immutable,contentMimeType);
+            requireStoredUpload(stored,expectedHash,immutable.length,contentMimeType);
+        }
+        var prepared=stored;
+        return nativeMutation(scope,()->{
+            var current=runtimeExecution(scope,taskId,runId,true);
+            if(!same(candidate.getExecutionId(),current.getExecutionId())
+                    ||!Objects.equals(candidate.getExecutionMode(),current.getExecutionMode())
+                    ||!same(contentMimeType,current.getOutputContentMimeType())) throw failure(Reason.TASK_CONFLICT);
+            var previous=executions.lockOutput(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                    current.getExecutionId(),outputId);
+            if(prior!=null&&(previous==null||!same(prepared.storageUri(),previous.getStorageUri())))
+                throw failure(Reason.OUTPUT_CONFLICT);
+            return persistStagedOutput(scope,current,outputId,originalFilename,contentMimeType,previous,prepared);
+        });
+    }
+
+    private void validateOutputUpload(PersonalWorkspaceExecutionEntity execution,String outputId,
+            String originalFilename,String contentMimeType,byte[] content) {
+        id(outputId,"outputId",100);filename(originalFilename,contentMimeType);validMime(contentMimeType);
+        if(!"output_1".equals(outputId)||content==null||content.length==0||content.length>storage.maxContentBytes()
+                ||!same(contentMimeType,execution.getOutputContentMimeType())
+                ||!PersonalWorkspaceOutputFormatValidator.isValid(contentMimeType,content)) throw failure(Reason.BAD_REQUEST);
+    }
+    private static void requireStoredUpload(PersonalWorkspaceStorage.StoredObject stored,String hash,
+            long byteLength,String contentMimeType) {
+        if(stored==null||stored.storageUri()==null||stored.storageUri().isBlank()
+                ||!same(hash,stored.sha256())||stored.byteLength()!=byteLength
+                ||!same(contentMimeType,stored.mimeType())) throw failure(Reason.STORAGE_UNAVAILABLE);
+    }
+    private static void requireMatchingStagedOutput(PersonalWorkspaceExecutionEntity execution,
+            PersonalWorkspaceExecutionOutputEntity previous,PersonalWorkspaceStorage.StoredObject stored) {
+        if(!same(previous.getContentHash(),stored.sha256())||!Objects.equals(previous.getByteLength(),stored.byteLength())
+                ||!same(previous.getContentMimeType(),stored.mimeType())
+                ||!same(filePurpose(previous),"CONVERSATION".equals(execution.getExecutionMode())?"CONVERSATION":"FILE")
+                ||!"STAGED".equals(previous.getOutputState())) throw failure(Reason.OUTPUT_CONFLICT);
     }
 
     private StagedOutput stageOutputLocked(RuntimeScope scope,PersonalWorkspaceExecutionEntity execution,
             String outputId,String originalFilename,String contentMimeType,byte[] content) {
-        id(outputId, "outputId", 100); filename(originalFilename, contentMimeType); validMime(contentMimeType);
-        if (!"output_1".equals(outputId) || content == null || content.length == 0
-                || content.length > storage.maxContentBytes()
-                || !same(contentMimeType, execution.getOutputContentMimeType())
-                || !PersonalWorkspaceOutputFormatValidator.isValid(contentMimeType, content)) {
-            throw failure(Reason.BAD_REQUEST);
-        }
-        PersonalWorkspaceExecutionOutputEntity previous = executions.lockOutput(scope.tenantId(), scope.clientId(),
-                scope.ownerJiacn(), execution.getExecutionId(), outputId);
-        PersonalWorkspaceStorage.StoredObject stored = storage.store(storageScope(scope), content, contentMimeType);
-        if (previous != null) {
-            if (!same(previous.getContentHash(), stored.sha256()) || previous.getByteLength() != stored.byteLength()
-                    || !same(filePurpose(previous),"CONVERSATION".equals(execution.getExecutionMode())
-                        ? "CONVERSATION" : "FILE") || !"STAGED".equals(previous.getOutputState())) throw failure(Reason.OUTPUT_CONFLICT);
-            return new StagedOutput(outputId, previous.getContentHash(), previous.getByteLength(), previous.getOutputState());
+        validateOutputUpload(execution,outputId,originalFilename,contentMimeType,content);
+        var previous=executions.lockOutput(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                execution.getExecutionId(),outputId);
+        var stored=storage.store(storageScope(scope),content,contentMimeType);
+        return persistStagedOutput(scope,execution,outputId,originalFilename,contentMimeType,previous,stored);
+    }
+    /** Row-only commit phase. Conversation recovery retains its existing transaction until
+     * its storage preparation boundary is migrated; ordinary file uploads never perform I/O here. */
+    private StagedOutput persistStagedOutput(RuntimeScope scope,PersonalWorkspaceExecutionEntity execution,
+            String outputId,String originalFilename,String contentMimeType,
+            PersonalWorkspaceExecutionOutputEntity previous,PersonalWorkspaceStorage.StoredObject stored) {
+        if(previous!=null) {
+            requireMatchingStagedOutput(execution,previous,stored);
+            return new StagedOutput(outputId,previous.getContentHash(),previous.getByteLength(),previous.getOutputState());
         }
         long now = System.currentTimeMillis();
         PersonalWorkspaceExecutionOutputEntity output = new PersonalWorkspaceExecutionOutputEntity()

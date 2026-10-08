@@ -85,7 +85,10 @@ public class PersonalWorkspaceRuntimeFileController {
         requireNoQueryString(request); if(file==null || !taskId.equals(declaredTaskId) || !runId.equals(declaredRunId)
                 || !outputId.equals(declaredOutputId) || !declaredSha256.matches("[0-9a-f]{64}")
                 || !declaredLength.matches("0|[1-9][0-9]*")) throw new RequestFailure();
-        PersonalWorkspaceExecutionService.StagedOutput staged = service.stageOutput(scope(authentication),taskId,runId,outputId,file.getOriginalFilename(),file.getContentType(),file.getBytes());
+        byte[] bytes=file.getBytes();
+        if(!declaredSha256.equals(digest(bytes))||!declaredLength.equals(Integer.toString(bytes.length)))
+            throw new RequestFailure();
+        PersonalWorkspaceExecutionService.StagedOutput staged = service.stageOutput(scope(authentication),taskId,runId,outputId,file.getOriginalFilename(),file.getContentType(),bytes);
         if (!declaredSha256.equals(staged.sha256()) || !declaredLength.equals(Long.toString(staged.byteLength()))) throw new RequestFailure();
         return ResponseEntity.status(HttpStatus.CREATED).header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).body(staged);
     }
@@ -123,6 +126,10 @@ public class PersonalWorkspaceRuntimeFileController {
     }
     private static void requireNoQuery(HttpServletRequest request){if(request.getParameterMap()!=null&&!request.getParameterMap().isEmpty())throw new RequestFailure();}
     private static void requireNoQueryString(HttpServletRequest request){if(request.getQueryString()!=null&&!request.getQueryString().isEmpty())throw new RequestFailure();}
+    private static String digest(byte[] bytes) {
+        try { return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes)); }
+        catch(java.security.NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
+    }
     private static String safe(String value){return value==null?"output.bin":value.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]","_").replaceAll("^\\.+","").trim();}
     private static <T> ResponseEntity<T> json(T body){return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).contentType(MediaType.APPLICATION_JSON).body(body);}
     private static ResponseEntity<ErrorBody> error(HttpStatus status,String code,String message){return ResponseEntity.status(status).header(HttpHeaders.CACHE_CONTROL,CACHE_CONTROL).contentType(new MediaType(MediaType.APPLICATION_JSON,StandardCharsets.UTF_8)).body(new ErrorBody(code,message));}

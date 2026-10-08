@@ -117,7 +117,7 @@ class PersonalWorkspaceControlledImageV3StartTest {
 
  /** Real native service + real transaction-advised auth; DAO/storage/authority are explicit
   * collaborators. Cloud DB/root/paid-side-effect integration remains separate evidence. */
- private static final class StartFixture {
+ static final class StartFixture {
   static final String ID="rti_"+"1".repeat(32), AGENT="agt_"+"a".repeat(32);
   final PersonalWorkspaceExecutionDao executions=mock(PersonalWorkspaceExecutionDao.class);
   final PersonalWorkspaceDao workspace=mock(PersonalWorkspaceDao.class);
