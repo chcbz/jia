@@ -58,6 +58,7 @@ class AgentWebSocketNativeProviderCredentialBindingTest {
     @SuppressWarnings("unchecked") private static void bind(AgentWebSocketHandler handler,WebSocketSession session,
             NativeProviderCredentialBindingDeclaration declaration)throws Exception{
         ((Map<String,WebSocketSession>)field(handler,"sessions")).put(session.getId(),session);
+        ((Map<String,Boolean>)field(handler,"sessionDurableStateHealthy")).put(session.getId(),true);
         ((Map<String,Set<String>>)field(handler,"sessionAgentIds")).computeIfAbsent(session.getId(),x->ConcurrentHashMap.newKeySet()).add("agent-a");
         ((Map<String,Set<String>>)field(handler,"successfullyRegisteredAgentIds")).computeIfAbsent(session.getId(),x->ConcurrentHashMap.newKeySet()).add("agent-a");
         ((Map<String,NativeProviderCredentialBindingDeclaration>)field(handler,"sessionNativeProviderCredentialBinding")).put(session.getId(),declaration);

@@ -32,15 +32,15 @@ class AgentWebSocketTypedDeliberationTest {
         AgentService agents=mock(AgentService.class);@SuppressWarnings("unchecked") ObjectProvider<AgentService> provider=mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(agents);when(agents.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO("agent-a","1".repeat(32),AgentConstants.STATUS_ONLINE));
-        AgentRuntimeAuthenticationService auth=mock(AgentRuntimeAuthenticationService.class);
-        when(auth.bind(anyString(),anyString(),anyString(),anyString(),anyString(),any(),anyString(),any()))
-                .thenReturn(new AgentRuntimeAuthenticationService.Receipt("native-runtime-v1","0","client","owner","agent-a","runtime",true));
+        AgentRuntimeAuthenticationService auth=mock(AgentRuntimeAuthenticationService.class);stubFence(auth);
+        when(auth.bind(anyString(),any(AgentRuntimeAuthenticationService.Proof.class),any()))
+                .thenReturn(new AgentRuntimeAuthenticationService.Receipt("native-runtime-v1","0","client","owner","agent-a","runtime","rti_"+"1".repeat(32),"host-a",1,true));
         when(auth.isCurrentBinding(anyString(),anyString(),anyString(),anyString(),anyString(),anyString())).thenReturn(true);
         TypedDeliberationSessionRegistry registry=new TypedDeliberationSessionRegistry();
         AgentWebSocketHandler handler=handler(provider);handler.setRuntimeAuthentication(auth);handler.setTypedDeliberationSessions(registry);
         WebSocketSession session=session("s1");handler.afterConnectionEstablished(session);
         String declaration=new tools.jackson.databind.ObjectMapper().writeValueAsString(TypedDeliberationDeclarationTest.declaration("READY"));
-        handler.handleTextMessage(session,new TextMessage("{\"schemaVersion\":1,\"messageType\":\"agent.register\",\"messageId\":\"r1\",\"agentId\":\"agent-a\",\"runtimeInstanceId\":\"runtime\",\"typedDeliberation\":"+declaration+"}"));
+        handler.handleTextMessage(session,new TextMessage("{\"schemaVersion\":1,\"messageType\":\"agent.register\",\"messageId\":\"r1\",\"agentId\":\"agent-a\",\"runtimeInstanceId\":\"runtime\",\"installationId\":\"rti_11111111111111111111111111111111\",\"hostId\":\"host-a\",\"sessionGeneration\":1,\"durableStateHealthy\":true,\"typedDeliberation\":"+declaration+"}"));
         assertEquals("s1",registry.requireSingleReady(new TypedDeliberationSessionRegistry.Scope("0","owner","client"),"agent-a").sessionId());
         handler.afterConnectionClosed(session,CloseStatus.NORMAL);
         assertThrows(IllegalStateException.class,()->registry.requireSingleReady(new TypedDeliberationSessionRegistry.Scope("0","owner","client"),"agent-a"));
@@ -50,16 +50,16 @@ class AgentWebSocketTypedDeliberationTest {
         AgentService agents=mock(AgentService.class);@SuppressWarnings("unchecked") ObjectProvider<AgentService> provider=mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(agents);when(agents.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO("agent-a","1".repeat(32),AgentConstants.STATUS_ONLINE));
-        AgentRuntimeAuthenticationService auth=mock(AgentRuntimeAuthenticationService.class);
-        when(auth.bind(anyString(),anyString(),anyString(),anyString(),anyString(),any(),anyString(),any()))
-                .thenReturn(new AgentRuntimeAuthenticationService.Receipt("native-runtime-v1","0","client","owner","agent-a","runtime",true));
+        AgentRuntimeAuthenticationService auth=mock(AgentRuntimeAuthenticationService.class);stubFence(auth);
+        when(auth.bind(anyString(),any(AgentRuntimeAuthenticationService.Proof.class),any()))
+                .thenReturn(new AgentRuntimeAuthenticationService.Receipt("native-runtime-v1","0","client","owner","agent-a","runtime","rti_"+"1".repeat(32),"host-a",1,true));
         when(auth.isCurrentBinding(anyString(),anyString(),anyString(),anyString(),anyString(),anyString())).thenReturn(true);
         TypedInspectionSessionRegistry registry=new TypedInspectionSessionRegistry();
         AgentWebSocketHandler handler=handler(provider);handler.setRuntimeAuthentication(auth);handler.setTypedInspectionSessions(registry);
         WebSocketSession session=session("inspection-registration");handler.afterConnectionEstablished(session);
         String declaration=new tools.jackson.databind.ObjectMapper().writeValueAsString(
                 TypedInspectionDeclarationTest.declaration(true));
-        handler.handleTextMessage(session,new TextMessage("{\"schemaVersion\":1,\"messageType\":\"agent.register\",\"messageId\":\"r1\",\"agentId\":\"agent-a\",\"runtimeInstanceId\":\"runtime\",\"typedInspection\":"+declaration+"}"));
+        handler.handleTextMessage(session,new TextMessage("{\"schemaVersion\":1,\"messageType\":\"agent.register\",\"messageId\":\"r1\",\"agentId\":\"agent-a\",\"runtimeInstanceId\":\"runtime\",\"installationId\":\"rti_11111111111111111111111111111111\",\"hostId\":\"host-a\",\"sessionGeneration\":1,\"durableStateHealthy\":true,\"typedInspection\":"+declaration+"}"));
         assertEquals("inspection-registration",registry.requireSingleReady(
                 new TypedInspectionSessionRegistry.Scope("0","owner","client"),"agent-a").sessionId());
         handler.afterConnectionClosed(session,CloseStatus.NORMAL);
@@ -71,9 +71,9 @@ class AgentWebSocketTypedDeliberationTest {
         AgentService agents=mock(AgentService.class);@SuppressWarnings("unchecked") ObjectProvider<AgentService> provider=mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(agents);when(agents.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO("agent-a","1".repeat(32),AgentConstants.STATUS_ONLINE));
-        AgentRuntimeAuthenticationService auth=mock(AgentRuntimeAuthenticationService.class);
-        when(auth.bind(anyString(),anyString(),anyString(),anyString(),anyString(),any(),anyString(),any()))
-                .thenReturn(new AgentRuntimeAuthenticationService.Receipt("native-runtime-v1","0","client","owner","agent-a","runtime",true));
+        AgentRuntimeAuthenticationService auth=mock(AgentRuntimeAuthenticationService.class);stubFence(auth);
+        when(auth.bind(anyString(),any(AgentRuntimeAuthenticationService.Proof.class),any()))
+                .thenReturn(new AgentRuntimeAuthenticationService.Receipt("native-runtime-v1","0","client","owner","agent-a","runtime","rti_"+"1".repeat(32),"host-a",1,true));
         when(auth.isCurrentBinding(anyString(),anyString(),anyString(),anyString(),anyString(),anyString())).thenReturn(true);
         TypedDeliberationSessionRegistry registry=new TypedDeliberationSessionRegistry();
         AgentWebSocketHandler handler=handler(provider);handler.setRuntimeAuthentication(auth);handler.setTypedDeliberationSessions(registry);
@@ -81,7 +81,7 @@ class AgentWebSocketTypedDeliberationTest {
         Map<String,Object> malformed=new java.util.LinkedHashMap<>(TypedDeliberationDeclarationTest.declaration("READY"));
         malformed.put("operations",java.util.List.of("GENERATE_IMAGE"));
         String declaration=new tools.jackson.databind.ObjectMapper().writeValueAsString(malformed);
-        handler.handleTextMessage(session,new TextMessage("{\"schemaVersion\":1,\"messageType\":\"agent.register\",\"messageId\":\"r1\",\"agentId\":\"agent-a\",\"runtimeInstanceId\":\"runtime\",\"typedDeliberation\":"+declaration+"}"));
+        handler.handleTextMessage(session,new TextMessage("{\"schemaVersion\":1,\"messageType\":\"agent.register\",\"messageId\":\"r1\",\"agentId\":\"agent-a\",\"runtimeInstanceId\":\"runtime\",\"installationId\":\"rti_11111111111111111111111111111111\",\"hostId\":\"host-a\",\"sessionGeneration\":1,\"durableStateHealthy\":true,\"typedDeliberation\":"+declaration+"}"));
         assertThrows(IllegalStateException.class,()->registry.requireSingleReady(
                 new TypedDeliberationSessionRegistry.Scope("0","owner","client"),"agent-a"));
         assertEquals(1,registry.size());
@@ -202,8 +202,20 @@ class AgentWebSocketTypedDeliberationTest {
     private static ChatTurnEntity turn(){return new ChatTurnEntity().setTurnId("turn");}
     private static String finalWire(String outcome){return baseWire().replace("\"content\":\"plain\"","\"content\":\"你好🌏\"")+",\"outcomeContractVersion\":1,\"interactionOutcome\":"+outcome+"}";}
     private static String baseWire(){return "{\"schemaVersion\":1,\"messageType\":\"chat.message\",\"messageId\":\"m1\",\"agentId\":\"agent-a\",\"sourceAgentId\":\"agent-a\",\"runtimeInstanceId\":\"runtime\",\"conversationId\":\"42\",\"conversationGeneration\":\"1\",\"requestId\":\"request\",\"turnId\":\"turn\",\"dispatchId\":\"dispatch\",\"contextSnapshotId\":\"snapshot\",\"contextHash\":\"sha256:"+"a".repeat(64)+"\",\"content\":\"plain\"";}
-    private static AgentWebSocketHandler handler(ObjectProvider<AgentService> provider){return new AgentWebSocketHandler(mock(ChatClient.class),provider,mock(ChatMessageDao.class),new ChatConversationEventBroker());}
-    private static WebSocketSession session(String id){WebSocketSession value=mock(WebSocketSession.class);when(value.getId()).thenReturn(id);when(value.isOpen()).thenReturn(true);when(value.getAttributes()).thenReturn(new ConcurrentHashMap<>(Map.of("tenantId","0","jiacn","owner","clientId","client","agentId","agent-a","runtimeInstanceId","runtime")));return value;}
-    @SuppressWarnings("unchecked") private static void bind(AgentWebSocketHandler handler,WebSocketSession session)throws Exception{((Map<String,WebSocketSession>)field(handler,"sessions")).put(session.getId(),session);((Map<String,Set<String>>)field(handler,"sessionAgentIds")).computeIfAbsent(session.getId(),x->ConcurrentHashMap.newKeySet()).add("agent-a");((Map<String,Set<String>>)field(handler,"successfullyRegisteredAgentIds")).computeIfAbsent(session.getId(),x->ConcurrentHashMap.newKeySet()).add("agent-a");}
+    private static AgentWebSocketHandler handler(ObjectProvider<AgentService> provider){
+        var handler=new AgentWebSocketHandler(mock(ChatClient.class),provider,mock(ChatMessageDao.class),new ChatConversationEventBroker());
+        var auth=mock(AgentRuntimeAuthenticationService.class);stubFence(auth);
+        when(auth.isCurrentBinding(anyString(),anyString(),anyString(),anyString(),anyString(),anyString())).thenReturn(true);
+        handler.setRuntimeAuthentication(auth);return handler;
+    }
+    private static void stubFence(AgentRuntimeAuthenticationService auth) {
+        lenient().when(auth.withFence(any(),anyBoolean(),any())).thenAnswer(inv->((java.util.function.Supplier<?>)inv.getArgument(2)).get());
+    }
+    private static WebSocketSession session(String id){WebSocketSession value=mock(WebSocketSession.class);when(value.getId()).thenReturn(id);when(value.isOpen()).thenReturn(true);when(value.getAttributes()).thenReturn(new ConcurrentHashMap<>(Map.of("tenantId","0","jiacn","owner","clientId","client","agentId","agent-a","runtimeInstanceId","runtime")));
+        value.getAttributes().put(cn.jia.chat.config.AgentRuntimeHandshakeInterceptor.PROOF_ATTRIBUTE,
+                new AgentRuntimeAuthenticationService.Proof(new cn.jia.agent.security.AgentRuntimeAuthentication.Scope(
+                        "0","client","owner","agent-a","runtime"),"rti_"+"1".repeat(32),"host-a",1,"a".repeat(64),1,0));
+        return value;}
+    @SuppressWarnings("unchecked") private static void bind(AgentWebSocketHandler handler,WebSocketSession session)throws Exception{((Map<String,WebSocketSession>)field(handler,"sessions")).put(session.getId(),session);((Map<String,Boolean>)field(handler,"sessionDurableStateHealthy")).put(session.getId(),true);((Map<String,Set<String>>)field(handler,"sessionAgentIds")).computeIfAbsent(session.getId(),x->ConcurrentHashMap.newKeySet()).add("agent-a");((Map<String,Set<String>>)field(handler,"successfullyRegisteredAgentIds")).computeIfAbsent(session.getId(),x->ConcurrentHashMap.newKeySet()).add("agent-a");}
     private static Object field(Object target,String name)throws Exception{Field f=target.getClass().getDeclaredField(name);f.setAccessible(true);return f.get(target);}
 }
