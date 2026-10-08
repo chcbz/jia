@@ -957,7 +957,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
             sendProtocolError(session,payload,"SKILL_RESULT_REJECTED","Skill result identity unavailable"); return;
         }
         try {
-            Map<String,Object> receipt=skillResults.accept(tenant,client,agent,sessionAttribute(session,"managedApiKeyId"),payload);
+            Map<String,Object> receipt=withSessionMutationFence(session, () -> skillResults.accept(sessionProof(session),payload));
             sendEvent(session,"work.result.receipt",receipt); // accept() returns only after durable commit
         } catch (RuntimeException failure) {
             sendProtocolError(session,payload,"SKILL_RESULT_REJECTED","Skill result could not be committed");
@@ -2847,17 +2847,22 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         return ready == 1;
     }
 
-    private boolean matchesManagedSkill(WebSocketSession session,String tenant,String client,String agent,String key,byte[] generation) {
-        return session.isOpen() && agent.equals(sessionAgentId(session)) && tenant.equals(sessionJiacn(session))
-                && client.equals(sessionClientId(session)) && key.equals(sessionAttribute(session,"managedApiKeyId"))
-                && successfullyRegisteredAgentIds(session.getId()).contains(agent)
-                && session.getAttributes().get("skillRegistrationHash") instanceof byte[] hash
-                && java.security.MessageDigest.isEqual(generation,hash);
+    private boolean matchesManagedSkill(WebSocketSession session,String tenant,String client,String agent,
+            cn.jia.agent.service.AgentManagedSessionLookup.SessionFence fence) {
+        if (fence == null || !exactCommandSessionReady(session,tenant,client,agent,"SKILL_INSTALL")) return false;
+        var proof = sessionProof(session);
+        return fence.runtimeInstallationId().equals(proof.installationId()) && fence.hostId().equals(proof.hostId())
+                && fence.runtimeInstanceId().equals(proof.scope().runtimeInstanceId())
+                && fence.sessionGeneration()==proof.sessionGeneration();
     }
-    public boolean isManagedSkillSessionReady(String tenant,String client,String agent,String key,byte[] generation) {
-        return sessions.values().stream().anyMatch(s->matchesManagedSkill(s,tenant,client,agent,key,generation));
+    public boolean isManagedSkillSessionReady(String tenant,String client,String agent,
+            cn.jia.agent.service.AgentManagedSessionLookup.SessionFence fence) {
+        int count=0;
+        for (var session : sessions.values()) if(matchesManagedSkill(session,tenant,client,agent,fence)) count++;
+        return count==1;
     }
-    public AgentRawCommandDispatchResult dispatchManagedSkill(String tenant,String client,String agent,String key,byte[] generation,byte[] raw) {
+    public AgentRawCommandDispatchResult dispatchManagedSkill(String tenant,String client,String agent,
+            cn.jia.agent.service.AgentManagedSessionLookup.SessionFence fence,byte[] raw) {
         if (org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive())
             throw new IllegalStateException("Skill WebSocket I/O inside transaction");
         try {
@@ -2866,12 +2871,17 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                     || !validRawCommandEnvelope(tenant,client,textJson(node,"orderId"),agent,raw))
                 return AgentRawCommandDispatchResult.rejected();
         } catch(Exception invalid) { return AgentRawCommandDispatchResult.rejected(); }
-        // Latest registration generation selects one exact authenticated session, not an owner-wide broadcast.
-        for(var session:sessions.values()) if(matchesManagedSkill(session,tenant,client,agent,key,generation)) {
-            try { synchronized(session) { session.sendMessage(new TextMessage(raw)); } return AgentRawCommandDispatchResult.sent(1,1); }
-            catch(Exception failure) { return AgentRawCommandDispatchResult.sendFailed(1); }
-        }
-        return AgentRawCommandDispatchResult.offline();
+        List<WebSocketSession> current=new ArrayList<>();
+        for(var session:sessions.values()) if(matchesManagedSkill(session,tenant,client,agent,fence)) current.add(session);
+        if(current.size()!=1) return AgentRawCommandDispatchResult.offline();
+        var selected=current.getFirst();
+        try {
+            synchronized(selected) {
+                if(!matchesManagedSkill(selected,tenant,client,agent,fence)) return AgentRawCommandDispatchResult.offline();
+                selected.sendMessage(new TextMessage(raw));
+            }
+            return AgentRawCommandDispatchResult.sent(1,1);
+        } catch(Exception failure) { return AgentRawCommandDispatchResult.sendFailed(1); }
     }
 
     public boolean isAgentConnected(String tenantId, String clientId, String agentId) {
@@ -3056,6 +3066,11 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         var scope = proof.scope();
         for (var entry : Map.of("tenantId", scope.tenantId(), "clientId", scope.clientId(),
                 "runtimeInstanceId", scope.runtimeInstanceId(), "hostId", proof.hostId()).entrySet()) {
+            // Skill's immutable result outbox already records the executing boot ID. It is
+            // historical business evidence (and part of the persisted result hash), not the
+            // current transport proof. Reconnect must not rewrite it. Current proof comes from
+            // the authenticated socket and is re-fenced inside accept(), including on replay.
+            if ("runtimeInstanceId".equals(entry.getKey()) && "SKILL_INSTALL_RESULT".equals(payload.get("resultType"))) continue;
             if (payload.containsKey(entry.getKey()) && !entry.getValue().equals(payload.get(entry.getKey()))) {
                 throw new cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException(
                         "runtimeInstanceId".equals(entry.getKey()) ? "RUNTIME_INSTANCE_ID_MISMATCH" : "SESSION_PROOF_MISMATCH",

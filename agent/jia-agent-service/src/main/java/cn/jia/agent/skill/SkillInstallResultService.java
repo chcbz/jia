@@ -5,7 +5,7 @@ import cn.jia.agent.entity.AgentCommandDeliveryEntity;
 import cn.jia.agent.hosting.HostingRentHttp;
 import cn.jia.economy.entity.skill.*;
 import cn.jia.economy.mapper.*;
-import cn.jia.oauth.entity.OauthApiKeyEntity;
+import cn.jia.agent.security.AgentRuntimeAuthenticationService;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -25,48 +25,44 @@ public final class SkillInstallResultService {
     private final AgentCommandTransportDao commands;
     private final SkillMarketplaceService skills;
     private final SkillAgentVersions versions;
-    private final AgentRuntimeDao runtimes;
+    private final AgentRuntimeAuthenticationService authentication;
     private final ObjectProvider<SkillPackages> packages;
     private final TransactionTemplate tx;
     public SkillInstallResultService(EconomySkillMarketplaceMapper market,EconomySkillApplicationMapper app,
             AgentCommandTransportDao commands,SkillMarketplaceService skills,SkillAgentVersions versions,
-            AgentRuntimeDao runtimes,ObjectProvider<SkillPackages> packages,PlatformTransactionManager manager) {
+            AgentRuntimeAuthenticationService authentication,ObjectProvider<SkillPackages> packages,PlatformTransactionManager manager) {
         this.market=market;this.app=app;this.commands=commands;this.skills=skills;this.versions=versions;
-        this.runtimes=runtimes;this.packages=packages;this.tx=new TransactionTemplate(manager);
+        this.authentication=authentication;this.packages=packages;this.tx=new TransactionTemplate(manager);
     }
-    public Map<String,Object> accept(String tenant,String client,String registeredAgent,String authenticatedKeyId,Map<String,Object> body) {
-        require("0".equals(tenant),403,"SKILL_RESULT_REJECTED");
-        require(authenticatedKeyId!=null && !authenticatedKeyId.isBlank(),403,"SKILL_RESULT_REJECTED");
+    public Map<String,Object> accept(AgentRuntimeAuthenticationService.Proof proof,Map<String,Object> body) {
+        require(proof!=null && "0".equals(proof.scope().tenantId()),403,"SKILL_RESULT_REJECTED");
+        String tenant=proof.scope().tenantId(),client=proof.scope().clientId(),registeredAgent=proof.scope().agentId();
         String installId=text(body,"installationId"),messageId=text(body,"messageId");
         var hint=app.installation(tenant,client,installId);
         require(hint!=null && registeredAgent.equals(hint.getTargetAgentId()),403,"SKILL_RESULT_REJECTED");
         var visible=app.order(tenant,client,hint.getOrderId());
         require(visible!=null,403,"SKILL_RESULT_REJECTED");
         byte[] hash=resultHash(body);
-        return tx.execute(s->{
-            var runtime=runtimes.findByAgentIdForUpdate(registeredAgent);
-            require(runtime!=null && "0".equals(runtime.getTenantId()) && client.equals(runtime.getClientId())
-                    && runtime.getOwnerJiacn()!=null && !runtime.getOwnerJiacn().isBlank(),403,"SKILL_RESULT_REJECTED");
-            String ownerJiacn=runtime.getOwnerJiacn();
+        return authentication.withFence(proof,false,()->tx.execute(s->{
+            String ownerJiacn=proof.scope().ownerJiacn();
             var actor=new HostingRentHttp.Actor(visible.getBuyerId(),tenant,client,ownerJiacn);
             require(skills.available(actor),503,"SKILL_MARKETPLACE_DISABLED");
             skills.actorLock(actor);
             var authenticatedBinding=app.deliveryBinding(tenant,client,installId);
-            require(authenticatedBinding!=null && authenticatedKeyId.equals(authenticatedBinding.getApiKeyId()),403,"SKILL_RESULT_REJECTED");
+            requireBinding(authenticatedBinding,registeredAgent,proof);
             var prior=app.lockResult(tenant,client,messageId);
             if(prior!=null) {
                 same(prior.getRequestHash(),hash); require(installId.equals(prior.getInstallationId()),409,"SKILL_RESULT_CONFLICT");
                 return receipt(body);
             }
-            // Persistent binding/key and command fences survive an ordinary same-key reconnect.
+            // Immutable installation/host binding survives an ordinary authorized reconnect.
             versions.requireOwned(actor,registeredAgent,null,false);
             var order=market.selectOrderForUpdate(tenant,client,hint.getOrderId());
             var i=market.selectInstallationForUpdate(tenant,client,registeredAgent,installId);
             require(order!=null && i!=null && order.getOrderId().equals(i.getOrderId()),403,"SKILL_RESULT_REJECTED");
             validateEnvelope(body,i);
             var binding=app.deliveryBinding(tenant,client,installId);
-            require(binding!=null,409,"SKILL_REGISTRATION_CHANGED");
-            require(binding.getApiKeyId().equals(skills.requireManagedKey(actor,registeredAgent)),403,"SKILL_AGENT_CREDENTIAL_UNPROVEN");
+            requireBinding(binding,registeredAgent,proof);
             var delivery=commands.lockDelivery(tenant,client,ownerJiacn,i.getCommandId());
             requireCurrentDelivery(i,delivery,ownerJiacn,false);
             boolean success="SUCCEEDED".equals(body.get("status"));
@@ -100,16 +96,15 @@ public final class SkillInstallResultService {
             one(app.insertResult(tenant,client,messageId,installId,hash,outcome,now));
             // UNKNOWN receipt records observation only; escrow remains held for trusted reconciliation.
             return receipt(body);
-        });
+        }));
     }
-    public byte[] packageBytes(OauthApiKeyEntity key,String installationId) {
-        require(key!=null && key.getId()!=null && key.getJiacn()!=null && "0".equals(key.getTenantId())
-                && Integer.valueOf(1).equals(key.getStatus()) && (key.getExpireTime()==null || key.getExpireTime()>System.currentTimeMillis()),403,"SKILL_DOWNLOAD_FORBIDDEN");
-        String t="0",c=key.getClientId(),ownerJiacn=key.getJiacn();
+    public byte[] packageBytes(AgentRuntimeAuthenticationService.Proof proof,String installationId) {
+        require(proof!=null && "0".equals(proof.scope().tenantId()),403,"SKILL_DOWNLOAD_FORBIDDEN");
+        String t=proof.scope().tenantId(),c=proof.scope().clientId(),ownerJiacn=proof.scope().ownerJiacn();
         require(ownerJiacn!=null && !ownerJiacn.isBlank() && !"0".equals(ownerJiacn),403,"SKILL_DOWNLOAD_FORBIDDEN");
         var hint=app.installation(t,c,installationId);
-        require(hint!=null,403,"SKILL_DOWNLOAD_FORBIDDEN");
-        return tx.execute(s->{
+        require(hint!=null && proof.scope().agentId().equals(hint.getTargetAgentId()),403,"SKILL_DOWNLOAD_FORBIDDEN");
+        return authentication.withFence(proof,false,()->tx.execute(s->{
             var visible=app.order(t,c,hint.getOrderId());
             require(visible!=null,403,"SKILL_DOWNLOAD_FORBIDDEN");
             var actor=new HostingRentHttp.Actor(visible.getBuyerId(),t,c,ownerJiacn);
@@ -119,12 +114,12 @@ public final class SkillInstallResultService {
             var i=market.selectInstallationForUpdate(t,c,hint.getTargetAgentId(),installationId);
             require(o!=null && "INSTALLING".equals(o.getStatus()) && i!=null && "INSTALLING".equals(i.getStatus()),403,"SKILL_DOWNLOAD_FORBIDDEN");
             var binding=app.deliveryBinding(t,c,installationId);
-            require(binding!=null && key.getId().equals(binding.getApiKeyId()) && key.getId().equals(skills.requireManagedKey(actor,i.getTargetAgentId())),403,"SKILL_DOWNLOAD_FORBIDDEN");
+            requireBinding(binding,i.getTargetAgentId(),proof);
             requireCurrentDelivery(i,commands.lockDelivery(t,c,ownerJiacn,i.getCommandId()),ownerJiacn,true);
             var pkg=packages.getObject().get(i.getProductVersionId());
             require(pkg.product().packageSize()==i.getPackageSize() && Arrays.equals(pkg.product().packageSha256(),i.getPackageSha256()),503,"SKILL_PACKAGE_UNAVAILABLE");
             return pkg.bytes(); // already cached at startup; no filesystem/network I/O under transaction
-        });
+        }));
     }
     static void requireCurrentDelivery(SkillInstallationEntity i,AgentCommandDeliveryEntity d,String ownerJiacn,boolean download) {
         require(d!=null && "0".equals(i.getTenantId()) && "0".equals(d.getTenantId())

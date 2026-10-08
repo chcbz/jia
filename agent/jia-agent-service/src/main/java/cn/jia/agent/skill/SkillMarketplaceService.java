@@ -13,7 +13,7 @@ import cn.jia.economy.entity.EconomyAccountEntity;
 import cn.jia.economy.entity.skill.*;
 import cn.jia.economy.mapper.*;
 import cn.jia.economy.service.*;
-import cn.jia.oauth.service.ApiKeyService;
+import cn.jia.agent.security.AgentRuntimeAuthenticationService;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -36,23 +36,22 @@ public final class SkillMarketplaceService {
     private final ObjectProvider<AgentCommandTransportWriter> writer;
     private final ObjectProvider<AgentRabbitSafetyGate> transportGate;
     private final ObjectProvider<SkillPackages> packages;
-    private final ObjectProvider<ApiKeyService> keys;
+    private final ObjectProvider<AgentRuntimeAuthenticationService> authentication;
     private final TransactionTemplate tx;
-    private final SkillManagedCredentials credentials;
     private final ObjectProvider<AgentManagedSessionLookup> sessions;
     public SkillMarketplaceService(EconomySkillMarketplaceMapper market,EconomySkillApplicationMapper application,
             EconomyLedgerMapper ledger,EconomyPostingService posting,EconomyPreviewGate preview,
             SkillAgentVersions versions,AgentRuntimeDao runtimes,ObjectProvider<AgentCommandTransportWriter> writer,
             ObjectProvider<AgentRabbitSafetyGate> transportGate,ObjectProvider<SkillPackages> packages,
-            ObjectProvider<ApiKeyService> keys,SkillManagedCredentials credentials,ObjectProvider<AgentManagedSessionLookup> sessions,PlatformTransactionManager manager) {
+            ObjectProvider<AgentRuntimeAuthenticationService> authentication,ObjectProvider<AgentManagedSessionLookup> sessions,PlatformTransactionManager manager) {
         this.market=market; this.application=application; this.ledger=ledger; this.posting=posting;
         this.preview=preview; this.versions=versions; this.runtimes=runtimes; this.writer=writer;
-        this.transportGate=transportGate; this.packages=packages; this.keys=keys; this.tx=new TransactionTemplate(manager);this.credentials=credentials;this.sessions=sessions;
+        this.transportGate=transportGate; this.packages=packages; this.authentication=authentication; this.tx=new TransactionTemplate(manager);this.sessions=sessions;
     }
     public boolean available(HostingRentHttp.Actor a) {
         var gate=transportGate.getIfAvailable();
         return versions.enabled() && preview.allows(a.tenantId(),a.clientId()) && packages.getIfAvailable()!=null
-                && writer.getIfAvailable()!=null && keys.getIfAvailable()!=null && sessions.getIfAvailable()!=null && gate!=null
+                && writer.getIfAvailable()!=null && authentication.getIfAvailable()!=null && sessions.getIfAvailable()!=null && gate!=null
                 && gate.rabbitDispatchEnabled() && gate.allowsDispatch(a.tenantId(),a.clientId());
     }
     public Map<String,Object> capabilities(HostingRentHttp.Actor a) {
@@ -86,13 +85,21 @@ public final class SkillMarketplaceService {
     }
     public Map<String,Object> quote(HostingRentHttp.Actor a,String key,Map<String,String> body,boolean admin) {
         enabled(a); byte[] hash=HostingRentHttp.hash("skill-quote-v1",body);
-        return tx.execute(s->{
+        var replay = tx.execute(s -> {
+            actorLock(a);
+            var old = market.selectPurchaseQuoteByActorKeyForUpdate(a.tenantId(),a.clientId(),"USER",a.actorId(),bytes(key));
+            if (old == null) return null;
+            same(old.getRequestHash(),hash); return quoteDto(old);
+        });
+        if (replay != null) return replay;
+        var proof = readyProof(a, body.get("targetAgentId"));
+        return authentication.getObject().withFence(proof, false, () -> tx.execute(s->{
             actorLock(a);
             var old=market.selectPurchaseQuoteByActorKeyForUpdate(a.tenantId(),a.clientId(),"USER",a.actorId(),bytes(key));
             if(old!=null) { same(old.getRequestHash(),hash); return quoteDto(old); }
             String agent=body.get("targetAgentId"), productVersion=body.get("productVersionId");
             long version=HostingRentHttp.positive(body.get("expectedAgentVersion"));
-            versions.requireOwned(a,agent,version,true); requireManagedKey(a,agent);
+            versions.requireOwned(a,agent,version,true); requireReady(a,agent,proof);
             var v=productLocked(a,productVersion,admin);
             require(application.lockSkillKey(a.tenantId(),a.clientId(),agent,v.getSkillKey()).isEmpty(),409,"SKILL_ALREADY_ORDERED");
             long now=System.currentTimeMillis();
@@ -103,11 +110,21 @@ public final class SkillMarketplaceService {
                     .setDeploymentRestriction(v.getDeploymentRestriction()).setExpiresAt(Math.addExact(now,300000L))
                     .setTenantId(a.tenantId()).setClientId(a.clientId()).setCreateTime(now);
             one(market.insertPurchaseQuote(q)); return quoteDto(q);
-        });
+        }));
     }
     public Map<String,Object> purchase(HostingRentHttp.Actor a,String key,Map<String,String> body,boolean admin) {
         enabled(a); byte[] hash=HostingRentHttp.hash("skill-purchase-v1",body);
-        return tx.execute(s->{
+        var replay = tx.execute(s -> {
+            actorLock(a);
+            var old = market.selectOrderReceiptByActorKeyForUpdate(a.tenantId(),a.clientId(),"USER",a.actorId(),bytes(key));
+            if (old == null) return null;
+            same(old.getRequestHash(),hash);
+            var order = market.selectOrderByBuyer(a.tenantId(),a.clientId(),"USER",a.actorId(),old.getOrderId());
+            require(order!=null,503,"SKILL_STATE_UNAVAILABLE"); return orderDto(order,old.getOrderStatus());
+        });
+        if (replay != null) return replay;
+        var proof = readyProof(a, body.get("targetAgentId"));
+        return authentication.getObject().withFence(proof, false, () -> tx.execute(s->{
             actorLock(a);
             var old=market.selectOrderReceiptByActorKeyForUpdate(a.tenantId(),a.clientId(),"USER",a.actorId(),bytes(key));
             if(old!=null) {
@@ -123,7 +140,7 @@ public final class SkillMarketplaceService {
                     && q.getExpectedAgentVersion().toString().equals(body.get("expectedAgentVersion"))
                     && q.getExpectedPriceMicro().toString().equals(body.get("expectedPriceMicro")),409,"SKILL_QUOTE_MISMATCH");
             versions.requireOwned(a,q.getTargetAgentId(),q.getExpectedAgentVersion(),true);
-            String keyId=requireManagedKey(a,q.getTargetAgentId());
+            requireReady(a,q.getTargetAgentId(),proof);
             var v=productLocked(a,q.getProductVersionId(),admin);
             require(v.getPriceMicro().equals(q.getExpectedPriceMicro()) && Arrays.equals(v.getApprovedPermissionsSha256(),q.getApprovedPermissionsSha256())
                     && v.getApprovedPermissionsManifest().equals(body.get("approvedPermissions")),409,"SKILL_PERMISSIONS_MISMATCH");
@@ -154,8 +171,8 @@ public final class SkillMarketplaceService {
                     .setSkillKey(v.getSkillKey()).setSkillVersion(v.getSkillVersion()).setPackageSize(v.getPackageSize()).setPackageSha256(v.getPackageSha256())
                     .setDownloadPath(payload.downloadPath()).setStatus("REQUESTED").setVersion(1L).setTenantId(a.tenantId()).setClientId(a.clientId()).setCreateTime(now).setUpdateTime(now);
             one(market.insertInstallation(install));
-            one(application.insertDeliveryBinding(a.tenantId(),a.clientId(),installId,keyId,
-                    registrationHash(runtimes.findByAgentIdForUpdate(q.getTargetAgentId())),reserve==null?null:reserve.escrow().escrowVersion()));
+            one(application.insertDeliveryBinding(a.tenantId(),a.clientId(),installId,q.getTargetAgentId(),
+                    proof.installationId(),proof.hostId(),reserve==null?null:reserve.escrow().escrowVersion()));
             var entitlement=new SkillEntitlementEntity().setEntitlementId(id("se_")).setOrderId(orderId).setInstallationId(installId)
                     .setProductVersionId(v.getProductVersionId()).setTargetAgentId(q.getTargetAgentId()).setSkillKey(v.getSkillKey()).setSkillVersion(v.getSkillVersion())
                     .setPermissionGrantVersion(1L).setApprovedPermissionsManifest(v.getApprovedPermissionsManifest()).setApprovedPermissionsSha256(v.getApprovedPermissionsSha256())
@@ -170,7 +187,7 @@ public final class SkillMarketplaceService {
             one(market.markOrderInstalling(a.tenantId(),a.clientId(),orderId,1,now));
             one(market.markInstallationInstalling(a.tenantId(),a.clientId(),q.getTargetAgentId(),installId,draft.commandId(),1,1,1,1,now));
             return orderDto(order,"FUNDS_HELD");
-        });
+        }));
     }
     private SkillProductVersionEntity productLocked(HostingRentHttp.Actor a,String id,boolean admin) {
         var published=market.selectPurchasableProductVersion(a.tenantId(),a.clientId(),id);
@@ -189,11 +206,34 @@ public final class SkillMarketplaceService {
                 && Arrays.equals(p.approvedPermissionsSha256(),v.getApprovedPermissionsSha256())
                 && p.deploymentRestriction().equals(v.getDeploymentRestriction()),503,"SKILL_PACKAGE_UNAVAILABLE");
     }
-    String requireManagedKey(HostingRentHttp.Actor a,String agentId) {
-        String key=credentials.requireCurrent(a,agentId);
-        require(sessions.getIfAvailable()!=null && sessions.getObject().isReady(a.tenantId(),a.clientId(),agentId,key,
-                registrationHash(runtimes.findByAgentIdForUpdate(agentId))),409,"SKILL_AGENT_REGISTRATION_REQUIRED");
-        return key;
+    private AgentRuntimeAuthenticationService.Proof readyProof(HostingRentHttp.Actor actor, String agentId) {
+        HostingRentHttp.exact(agentId,100);
+        var row = runtimes.findInScope(actor.tenantId(),actor.clientId(),agentId);
+        require(row != null && actor.ownerJiacn().equals(row.getOwnerJiacn()),403,"AGENT_FORBIDDEN");
+        final AgentRuntimeAuthenticationService.Proof proof;
+        try { proof = authentication.getObject().currentRegisteredProof(actor.tenantId(),actor.clientId(),agentId); }
+        catch (IllegalArgumentException unavailable) { throw new SkillMarketplaceException(409,"SKILL_AGENT_REGISTRATION_REQUIRED"); }
+        requireReady(actor,agentId,proof);
+        return proof;
+    }
+    void requireReady(HostingRentHttp.Actor actor, String agentId, AgentRuntimeAuthenticationService.Proof proof) {
+        require(proof != null && actor.tenantId().equals(proof.scope().tenantId())
+                && actor.clientId().equals(proof.scope().clientId()) && actor.ownerJiacn().equals(proof.scope().ownerJiacn())
+                && agentId.equals(proof.scope().agentId()) && sessions.getIfAvailable()!=null
+                && sessions.getObject().isReady(actor.tenantId(),actor.clientId(),agentId,sessionFence(proof)),
+                409,"SKILL_AGENT_REGISTRATION_REQUIRED");
+    }
+    public static AgentManagedSessionLookup.SessionFence sessionFence(AgentRuntimeAuthenticationService.Proof proof) {
+        return new AgentManagedSessionLookup.SessionFence(proof.installationId(),proof.hostId(),
+                proof.scope().runtimeInstanceId(),proof.sessionGeneration());
+    }
+    static void requireBinding(SkillDeliveryBindingEntity binding, String agentId,
+            AgentRuntimeAuthenticationService.Proof proof) {
+        require(binding != null && binding.getCanonicalAgentId()!=null && binding.getRuntimeInstallationId()!=null
+                && binding.getRuntimeHostId()!=null,409,"SKILL_RUNTIME_MAPPING_REQUIRED");
+        require(agentId.equals(binding.getCanonicalAgentId()) && agentId.equals(proof.scope().agentId())
+                && binding.getRuntimeInstallationId().equals(proof.installationId())
+                && binding.getRuntimeHostId().equals(proof.hostId()),403,"SKILL_DELIVERY_FENCED");
     }
     public Map<String,Object> order(HostingRentHttp.Actor a,String id) {
         enabled(a); var o=market.selectOrderByBuyer(a.tenantId(),a.clientId(),"USER",a.actorId(),id);
@@ -238,14 +278,6 @@ public final class SkillMarketplaceService {
     }
     static EconomyAccountKey escrow(String order) { return new EconomyAccountKey("SILVER",EconomyAccountOwnerType.ORDER,order,EconomyAccountPurpose.ESCROW); }
     static EconomyAccountKey availableAccount(String actor) { return new EconomyAccountKey("SILVER",EconomyAccountOwnerType.USER,actor,EconomyAccountPurpose.AVAILABLE); }
-    static byte[] registrationHash(AgentRuntimeEntity r) {
-        require(r!=null && r.getTokenHash()!=null && !r.getTokenHash().isBlank(),409,"AGENT_NOT_READY");
-        return sessionRegistrationHash(r.getAgentId(),r.getTokenHash());
-    }
-    public static byte[] sessionRegistrationHash(String agent,String token) {
-        HostingRentHttp.exact(agent,100);HostingRentHttp.exact(token,100);
-        return HostingRentHttp.hash("skill-registration",Map.of("agent",agent,"token",token));
-    }
     static Map<String,Object> quoteDto(SkillPurchaseQuoteEntity q) {
         return Map.of("quoteId",q.getQuoteId(),"productVersionId",q.getProductVersionId(),"targetAgentId",q.getTargetAgentId(),
                 "expectedAgentVersion",q.getExpectedAgentVersion().toString(),"priceMicro",q.getExpectedPriceMicro().toString(),"expiresAt",q.getExpiresAt().toString());

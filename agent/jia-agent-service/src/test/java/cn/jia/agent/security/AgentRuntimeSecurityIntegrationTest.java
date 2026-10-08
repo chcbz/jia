@@ -442,6 +442,25 @@ class AgentRuntimeSecurityIntegrationTest {
     }
 
     @Test
+    void skillPackageUsesActualNativeChainAndNeverLegacyKeyOrProductInstallAsRuntimeProof() throws Exception {
+        var installs=mock(cn.jia.agent.skill.SkillInstallResultService.class);
+        var controller=new cn.jia.agent.api.SkillPackageController(installs);
+        var packageMvc=MockMvcBuilders.standaloneSetup(controller).addFilters(context.getBean(FilterChainProxy.class)).build();
+        String path="/internal/agent/skill-installations/si_original/package";
+        when(installs.packageBytes(any(),eq("si_original"))).thenReturn(new byte[]{1,2,3});
+        packageMvc.perform(headers(get(path),A,"runtime-a",TOKEN_A))
+                .andExpect(status().isOk()).andExpect(header().string("Cache-Control","private, no-store"));
+        var proof=org.mockito.ArgumentCaptor.forClass(AgentRuntimeAuthenticationService.Proof.class);
+        verify(installs).packageBytes(proof.capture(),eq("si_original"));
+        assertEquals(A,proof.getValue().scope().agentId());assertNotEquals("si_original",proof.getValue().installationId());
+        packageMvc.perform(get(path).header("X-API-Key","old-secret")).andExpect(status().isUnauthorized());
+        packageMvc.perform(get(path)).andExpect(status().isUnauthorized());
+        packageMvc.perform(headers(get(path),A,"runtime-a",TOKEN_A).header("X-Agent-Installation-Id","si_original"))
+                .andExpect(status().isUnauthorized());
+        verifyNoMoreInteractions(installs);verifyNoInteractions(keys);
+    }
+
+    @Test
     void conversationReferenceBytesRequireExactRuntimeAndFenceBody() throws Exception {
         var scope=new PersonalWorkspaceExecutionService.RuntimeScope(TENANT,CLIENT_A,OWNER_A,A,"runtime-a");
         var fence=new PersonalWorkspaceExecutionService.ConversationFence(2L,

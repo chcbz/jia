@@ -146,6 +146,37 @@ public class AgentRuntimeAuthenticationService {
         return authentication;
     }
 
+    /** Authenticated HTTP proof must be the filter's own full-scope details, not body fields. */
+    public static Proof requireProof(org.springframework.security.core.Authentication authentication) {
+        if (!(authentication instanceof AgentRuntimeAuthentication runtime) || !runtime.isAuthenticated()
+                || !(runtime.getDetails() instanceof Proof proof)
+                || !runtime.getPrincipal().equals(proof.scope())) throw denied();
+        return proof;
+    }
+
+    /** Money admission may consult live evidence; it grants no authority to an arbitrary caller. */
+    public Proof currentRegisteredProof(String tenantId, String clientId, String agentId) {
+        Proof result = null;
+        for (var binding : bindings.values()) {
+            var candidate = binding.proof();
+            var scope = candidate.scope();
+            if (!tenantId.equals(scope.tenantId()) || !clientId.equals(scope.clientId())
+                    || !agentId.equals(scope.agentId())) continue;
+            try {
+                if (!hasChannel(candidate)) continue;
+                validateCurrent(candidate, true);
+            } catch (IllegalArgumentException stale) {
+                // Older boot entries are liveness hints, not authority. A valid current boot
+                // must not be starved by the previous one still awaiting socket close.
+                continue;
+            }
+            if (result != null) throw denied();
+            result = candidate;
+        }
+        if (result == null) throw denied();
+        return result;
+    }
+
     /** No secret is retained in WS attributes or the registry. */
     public Receipt bind(String sessionId, Proof proof, BooleanSupplier connected) {
         if (!exact(sessionId, 128) || proof == null || connected == null || !connected.getAsBoolean()) throw denied();

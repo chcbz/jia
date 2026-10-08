@@ -21,7 +21,8 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
         // One X-Agent-Id is also the established API-key websocket identity header. It is not,
         // by itself, proof that the caller is presenting an AgentRuntime credential. Ambiguous
         // duplicates remain fail-closed instead of falling through to a first-value consumer.
-        return request.getRequestURI().equals(request.getContextPath() + "/ws/agent/channel")
+        return request.getRequestURI().matches(request.getContextPath() + "/internal/agent/skill-installations/[^/]+/package")
+                || request.getRequestURI().equals(request.getContextPath() + "/ws/agent/channel")
                 || request.getRequestURI().startsWith(request.getContextPath() + "/agent/runtime/v1/commands/")
                 || request.getHeader("X-Agent-Runtime-Id") != null
                 || Collections.list(request.getHeaders("X-Agent-Id")).size() > 1
@@ -33,7 +34,8 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
         String path = request.getRequestURI().substring(request.getContextPath().length());
         // No matrix parameters, encoded separators, dot-segments or alternate dispatch paths.
         String id = "[A-Za-z0-9][A-Za-z0-9._:-]{0,99}";
-        return "GET".equals(request.getMethod()) && path.equals("/ws/agent/channel")
+        return "GET".equals(request.getMethod()) && path.matches("/internal/agent/skill-installations/" + id + "/package")
+                || "GET".equals(request.getMethod()) && path.equals("/ws/agent/channel")
                 || "POST".equals(request.getMethod()) && path.matches("/agent/runtime/v1/commands/" + id + "/acks")
                 || "GET".equals(request.getMethod()) && (path.equals("/internal/agent/tasks/conversation-executions/commands")
                 || path.equals("/internal/agent/tasks/conversation-executions/controlled-image-v3-commands"))

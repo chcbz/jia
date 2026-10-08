@@ -208,6 +208,19 @@ class AgentRuntimePersistentSessionFenceTest {
         var ordered = inOrder(installations, rows);
         ordered.verify(installations).lock(ID); ordered.verify(rows).lockInScope("0", "client", AGENT);
     }
+    @Test void registeredProofSelectsOnlyPersistedCurrentBootEvenBeforeOldSocketCloses() {
+        var first=auth.issue(installation,request("host","boot-1"),1000);row.setStatus("online");
+        var old=auth.verify(headers(first));auth.bind("old-open-socket",old,()->true);
+        var second=auth.issue(installation,request("host","boot-2"),1001);row.setStatus("online");
+        var current=auth.verify(headers(second));auth.bind("current-open-socket",current,()->true);
+        assertEquals(current,auth.currentRegisteredProof("0","client",AGENT));
+        auth.disconnect("old-open-socket");
+        assertEquals(current,auth.currentRegisteredProof("0","client",AGENT));
+        assertThrows(RuntimeException.class,()->auth.currentRegisteredProof("0","foreign-client",AGENT));
+        auth.disconnect("current-open-socket");
+        assertThrows(RuntimeException.class,()->auth.currentRegisteredProof("0","client",AGENT));
+    }
+
     @Test void registrationReceiptAndDisconnectCannotRevokeReplacementChannel() {
         var session = auth.issue(installation, request("host", "boot"), 1000); row.setStatus("online");
         var proof = auth.verify(headers(session));
