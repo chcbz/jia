@@ -246,7 +246,7 @@ class AgentWorkItemRuntimeResultFenceRealTransactionTest {
     @Test void sourceWrongScopeAndUnknownCommandHideExistenceAndNeverPrepareStorage() throws Exception {
         int events=count("agent_task_event");
         mvc.perform(post(path.replace(receipt.getCommandId(),"unknown-command")).principal(principal).contentType("application/json").content(body())).andExpect(status().isNotFound());
-        var foreign=new AgentRuntimeAuthentication(new AgentRuntimeAuthentication.Scope(TENANT,"foreign-client",OWNER,TARGET,"boot-fixture"));
+        var foreign=authenticationFixture(new AgentRuntimeAuthentication.Scope(TENANT,"foreign-client",OWNER,TARGET,"boot-fixture"));
         foreign.setDetails(new AgentRuntimeAuthenticationService.Proof(foreign.getPrincipal(),INSTALLATION,"host-fixture",7,"a".repeat(64),7,2));
         mvc.perform(get(path).principal(foreign)).andExpect(status().isUnauthorized());assertNoResultMutation(events);assertEquals(0,storage.stores.get());
     }
@@ -281,8 +281,18 @@ class AgentWorkItemRuntimeResultFenceRealTransactionTest {
         var row=new AgentRuntimeEntity().setAgentId(TARGET).setOwnerJiacn(OWNER).setBindingId(3L).setStatus("online").setRuntimeInstallationId(INSTALLATION).setRuntimeHostId("host-fixture")
                 .setRuntimeInstanceId((String)values.get("BOOT")).setRuntimeSessionGeneration(((Number)values.get("GENERATION")).longValue()).setTokenHash("urs1:"+"a".repeat(64)+":7:2");row.setTenantId(TENANT);row.setClientId(CLIENT);return row;
     }
+    /** Standalone test fixture only; production native admission still belongs to its filter/service. */
+    private static AgentRuntimeAuthentication authenticationFixture(AgentRuntimeAuthentication.Scope scope) {
+        try {
+            var constructor = AgentRuntimeAuthentication.class.getDeclaredConstructor(AgentRuntimeAuthentication.Scope.class);
+            assertFalse(java.lang.reflect.Modifier.isPublic(constructor.getModifiers()), "Do not open production authentication construction for fixtures");
+            return org.springframework.beans.BeanUtils.instantiateClass(constructor, scope);
+        } catch (NoSuchMethodException changedSignature) {
+            throw new AssertionError("Runtime authentication fixture constructor changed", changedSignature);
+        }
+    }
     private AgentRuntimeAuthentication principal(long generation,String boot) {
-        var scope=new AgentRuntimeAuthentication.Scope(TENANT,CLIENT,OWNER,TARGET,boot);var result=new AgentRuntimeAuthentication(scope);
+        var scope=new AgentRuntimeAuthentication.Scope(TENANT,CLIENT,OWNER,TARGET,boot);var result=authenticationFixture(scope);
         result.setDetails(new AgentRuntimeAuthenticationService.Proof(scope,INSTALLATION,"host-fixture",generation,"a".repeat(64),7,2));return result;
     }
     @SuppressWarnings("unchecked") private <T> T proxy(T raw,Class<T> type) {

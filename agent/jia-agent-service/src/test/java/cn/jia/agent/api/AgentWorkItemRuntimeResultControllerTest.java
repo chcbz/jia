@@ -41,13 +41,23 @@ class AgentWorkItemRuntimeResultControllerTest {
         authentication = mock(AgentRuntimeAuthenticationService.class);
         var scope = new AgentRuntimeAuthentication.Scope("0", "client-a", "owner-a",
                 fixture.path("postResult").path("request").path("producerAgentId").asText(), "boot-fixture");
-        principal = new AgentRuntimeAuthentication(scope);
+        principal = authenticationFixture(scope);
         principal.setDetails(new AgentRuntimeAuthenticationService.Proof(scope,
                 "rti_0123456789abcdef0123456789abcdef", "host-fixture", 7, "a".repeat(64), 1, 0));
         mvc = MockMvcBuilders.standaloneSetup(new AgentWorkItemRuntimeResultController(results, reassignments, authentication))
                 .setControllerAdvice(new cn.jia.core.security.SensitiveResponseBodyAdvice(new cn.jia.core.security.SensitiveResponseProperties()))
                 .build();
         path = fixture.path("postResult").path("path").asText();
+    }
+    /** Standalone test fixture only; production native admission still belongs to its filter/service. */
+    private static AgentRuntimeAuthentication authenticationFixture(AgentRuntimeAuthentication.Scope scope) {
+        try {
+            var constructor = AgentRuntimeAuthentication.class.getDeclaredConstructor(AgentRuntimeAuthentication.Scope.class);
+            assertFalse(java.lang.reflect.Modifier.isPublic(constructor.getModifiers()), "Do not open production authentication construction for fixtures");
+            return org.springframework.beans.BeanUtils.instantiateClass(constructor, scope);
+        } catch (NoSuchMethodException changedSignature) {
+            throw new AssertionError("Runtime authentication fixture constructor changed", changedSignature);
+        }
     }
     private void fence() {
         doAnswer(inv -> ((Supplier<?>) inv.getArgument(1)).get()).when(authentication).withNativeFence(eq(principal), notNull());
@@ -116,7 +126,7 @@ class AgentWorkItemRuntimeResultControllerTest {
         verifyNoInteractions(results, reassignments, authentication);
     }
     @Test void missingRuntimeProofAndUserPrincipalCannotFallbackToJwtOrApiKey() throws Exception {
-        for (var user : List.of(new AgentRuntimeAuthentication(principal.getPrincipal()),
+        for (var user : List.of(authenticationFixture(principal.getPrincipal()),
                 UsernamePasswordAuthenticationToken.authenticated("owner-a", "key", List.of()))) {
             mvc.perform(post(path).principal(user).contentType("application/json").content(body())).andExpect(status().isForbidden());
         }
