@@ -765,3 +765,48 @@ tasks.register('mmdControlledImageFollowupV3', Test) {
     classpath = mmdControlledImageFollowupV3SourceSet.runtimeClasspath
     useJUnitPlatform()
 }
+
+// EXECUTION-HISTORY-HTTP-20261008: isolated real transport/SQL slice, no production startup.
+def executionHistoryHttpSourceSet = sourceSets.create('executionHistoryHttp') {
+    java.srcDir 'src/executionHistoryHttp/java'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(executionHistoryHttpSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.implementation
+}
+configurations.named(executionHistoryHttpSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.runtimeOnly
+}
+dependencies {
+    add(executionHistoryHttpSourceSet.implementationConfigurationName,
+            platform("org.springframework.boot:spring-boot-dependencies:${libs.versions.spring.boot.asProvider().get()}"))
+    add(executionHistoryHttpSourceSet.implementationConfigurationName, libs.junit.jupiter)
+    add(executionHistoryHttpSourceSet.implementationConfigurationName, 'org.mybatis:mybatis-spring:4.0.0')
+    add(executionHistoryHttpSourceSet.implementationConfigurationName, 'org.apache.tomcat.embed:tomcat-embed-core')
+    add(executionHistoryHttpSourceSet.implementationConfigurationName, 'org.springframework.security:spring-security-config')
+    add(executionHistoryHttpSourceSet.implementationConfigurationName, 'org.springframework.security:spring-security-web')
+    add(executionHistoryHttpSourceSet.implementationConfigurationName, 'org.springframework.security:spring-security-oauth2-resource-server')
+    add(executionHistoryHttpSourceSet.implementationConfigurationName, 'org.springframework.security:spring-security-oauth2-jose')
+    add(executionHistoryHttpSourceSet.implementationConfigurationName, project(':task:jia-task-core'))
+    add(executionHistoryHttpSourceSet.implementationConfigurationName, project(':task:jia-task-api'))
+    add(executionHistoryHttpSourceSet.implementationConfigurationName, project(':oauth:jia-oauth-api'))
+    add(executionHistoryHttpSourceSet.runtimeOnlyConfigurationName, 'org.junit.platform:junit-platform-launcher:6.0.1')
+    add(executionHistoryHttpSourceSet.runtimeOnlyConfigurationName, libs.mysql)
+}
+tasks.register('executionHistoryHttp', Test) {
+    group = 'verification'
+    description = 'Real loopback HTTP/JWT/production service/MyBatis/private MySQL/shared frontend contract.'
+    dependsOn tasks.named(executionHistoryHttpSourceSet.classesTaskName)
+    testClassesDirs = executionHistoryHttpSourceSet.output.classesDirs
+    classpath = executionHistoryHttpSourceSet.runtimeClasspath
+    useJUnitPlatform()
+    maxParallelForks = 1
+    // External shared fixture/scripts/source are part of this test's explicit input identity.
+    ['CYF_HISTORY_CONTRACT', 'CYF_HISTORY_NODE_SCRIPT'].each { key ->
+        def path = providers.environmentVariable(key)
+        if (path.isPresent()) inputs.file(path.get())
+    }
+    inputs.property('webSource', providers.environmentVariable('CYF_HISTORY_WEB_COMMIT').orElse('UNSET'))
+    testLogging { events 'passed', 'failed'; exceptionFormat 'full'; showStandardStreams = true }
+}
