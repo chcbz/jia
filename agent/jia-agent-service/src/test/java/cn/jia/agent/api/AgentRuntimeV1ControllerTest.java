@@ -76,6 +76,25 @@ class AgentRuntimeV1ControllerTest {
         verify(runtime).acknowledge(eq("rts1_" + "a".repeat(64)), eq("msg-1"), any(), anyLong());
     }
 
+    @Test void realControllerSerializationMatchesNestedEnrollmentWireFixture() throws Exception {
+        var mapper = new tools.jackson.databind.ObjectMapper();
+        tools.jackson.databind.JsonNode fixture;
+        try (var input = getClass().getResourceAsStream("/ur02/unified-runtime-wire-v2.redacted.json")) {
+            fixture = mapper.readTree(input).path("enrollment");
+        }
+        var expected = fixture.path("response");
+        when(runtime.enroll(any(), anyLong())).thenReturn(mapper.treeToValue(expected, AgentRuntimeV1EnrollmentResult.class));
+        var result = mvc.perform(post(fixture.path("path").asText()).contentType("application/json")
+                        .content(mapper.writeValueAsString(fixture.path("request"))))
+                .andExpect(status().isOk()).andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
+                .andReturn();
+        var data = mapper.readTree(result.getResponse().getContentAsString()).path("data");
+        org.junit.jupiter.api.Assertions.assertEquals(expected, data);
+        org.junit.jupiter.api.Assertions.assertFalse(data.has("installationId"));
+        org.junit.jupiter.api.Assertions.assertEquals("ACTIVE", data.path("installation").path("status").asText());
+        verify(runtime).enroll(any(), anyLong());
+    }
+
     @Test void installationBearerCannotCommitCommandAckAndSessionRejectsBrowserOrigin() throws Exception {
         mvc.perform(post("/agent/runtime/v1/commands/msg-1/acks").header(HttpHeaders.AUTHORIZATION, "Bearer rta1_secret")
                 .contentType("application/json").content(ackJson())).andExpect(status().isBadRequest());

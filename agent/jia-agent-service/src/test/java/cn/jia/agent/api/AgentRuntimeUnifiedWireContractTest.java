@@ -17,6 +17,20 @@ class AgentRuntimeUnifiedWireContractTest {
             return mapper.readTree(input);
         }
     }
+    @Test void enrollmentUsesOnlyNestedInstallationAndIndependentPrivateAuthorization() throws Exception {
+        var node = fixture().path("enrollment").path("response");
+        var value = mapper.treeToValue(node, AgentRuntimeV1EnrollmentResult.class);
+        assertWireEquals(node, mapper.valueToTree(value));
+        assertEquals(Set.of("installation", "runtimeAuthorization"), fields(node));
+        assertFalse(node.has("installationId"));
+        assertEquals(fixture().path("session").path("request").path("installationId").asText(),
+                value.installation().installationId());
+        assertEquals("ACTIVE", value.installation().status());
+        assertFalse(mapper.writeValueAsString(value.installation()).contains(value.runtimeAuthorization()));
+        assertEquals(Set.of("installationId", "tenantId", "clientId", "canonicalAgentId",
+                "manifestVersion", "manifestSha256", "enrollmentSecret"),
+                fields(fixture().path("enrollment").path("request")));
+    }
     @Test void sessionRequestRoundTripsWithExactFieldSet() throws Exception {
         var node = fixture().path("session").path("request");
         var value = mapper.treeToValue(node, AgentRuntimeV1SessionRequest.class);

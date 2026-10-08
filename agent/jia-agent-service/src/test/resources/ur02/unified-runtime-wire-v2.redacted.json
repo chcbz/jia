@@ -252,5 +252,38 @@
       "SKILL_INSTALL raw installationId is the product installation and is retained as business data, never Runtime authority.",
       "The transport may rotate without rewriting immutable raw dispatch bytes or raw fingerprints."
     ]
+  },
+  "enrollment": {
+    "method": "POST",
+    "path": "/agent/runtime/v1/enroll",
+    "request": {
+      "installationId": "rti_0123456789abcdef0123456789abcdef",
+      "tenantId": "0",
+      "clientId": "client-a",
+      "canonicalAgentId": "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "manifestVersion": "1",
+      "manifestSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "enrollmentSecret": "REDACTED_ONE_TIME_ENROLLMENT_SECRET"
+    },
+    "response": {
+      "installation": {
+        "installationId": "rti_0123456789abcdef0123456789abcdef",
+        "tenantId": "0",
+        "clientId": "client-a",
+        "canonicalAgentId": "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "manifestVersion": "1",
+        "manifestSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "enrollmentExpiresAt": 3601000,
+        "status": "ACTIVE",
+        "lastHeartbeatAt": null
+      },
+      "runtimeAuthorization": "REDACTED_INSTALLATION_AUTHORIZATION"
+    },
+    "responseEnvelope": "JsonResult.data",
+    "rules": [
+      "installationId is nested at data.installation.installationId, never a top-level enrollment response field.",
+      "runtimeAuthorization is installer-only private material, never InstallationView, URL or logs.",
+      "An already-consumed enrollment secret is not retryable after a lost or unparseable response; retain recovery-required state."
+    ]
   }
 }
