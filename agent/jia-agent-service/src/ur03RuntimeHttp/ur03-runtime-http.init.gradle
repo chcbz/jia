@@ -1,9 +1,9 @@
 // UR-03 opt-in fixture only. Does not change main/default/Owner test source sets.
-// In Flow, pass this AFTER ops/ci/aliyun-flow/cold-init.gradle.
+// For CYF local backend acceptance, pass this AFTER ops/ci/aliyun-flow/cold-init.gradle.
 // Requires API Git checkout + pinned two-module client archive/manifest and Node 20.20.2.
 // Controller verifies archiveSHA + manifestSHA before extraction; fixture verifies manifest/bytes.
 // External non-sensitive inputs: UR03_API_COMMIT, UR03_CLIENT_ROOT, UR03_CLIENT_COMMIT, UR03_NODE_BIN.
-// Task additionally requires existing Flow launcher control CYF_FLOW_GRADLE_ACTIVE=1.
+// Explicit local opt-in: UR03_LOCAL_ACCEPTANCE=1, consumed by the task only (not child env).
 // Node needs outbound localhost socket access, Java needs 127.0.0.1 ephemeral bind; no Internet.
 // Java A -> STOP/exit -> parent JDBC -> fresh Java B on SAME private H2-file, never reseed.
 // NOT enrollment/WS/Rabbit/Provider/TASK-execution/MySQL or production verification.
@@ -66,7 +66,7 @@ gradle.projectsEvaluated {
         outputs.upToDateWhen { false }
         outputs.cacheIf { false }
         filter { includeTestsMatching 'cn.jia.agent.acceptance.Ur03RuntimeHttpDbAcceptanceTest' }
-        // Do not pass Flow credentials or external datasource configuration to tests.
+        // Do not pass launcher credentials or external datasource configuration to tests.
         def inputs = [:]
         ['UR03_API_COMMIT', 'UR03_CLIENT_ROOT', 'UR03_CLIENT_COMMIT', 'UR03_NODE_BIN'].each { key ->
             def value = System.getenv(key)
@@ -74,8 +74,8 @@ gradle.projectsEvaluated {
         }
         setEnvironment(inputs)
         doFirst {
-            if (System.getenv('CYF_FLOW_GRADLE_ACTIVE') != '1') {
-                throw new GradleException('UR03_FLOW_ONLY_NOT_RUN_LOCALLY')
+            if (System.getenv('UR03_LOCAL_ACCEPTANCE') != '1') {
+                throw new GradleException('UR03_LOCAL_ACCEPTANCE_OPT_IN_REQUIRED')
             }
             if (inputs.size() != 4) throw new GradleException('UR03_PAIRED_SOURCE_INPUTS_REQUIRED')
             systemProperty 'ur03.fixture.classpath', s.runtimeClasspath.asPath

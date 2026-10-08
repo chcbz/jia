@@ -36,6 +36,7 @@ import org.h2.jdbcx.JdbcDataSource;
 import org.mybatis.spring.SqlSessionTemplate;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.BeanCreationException;
+import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
@@ -172,6 +173,11 @@ public final class Ur03RuntimeHttpFixture {
             "accounts", "taskGate", "authentication", "ackGate", "commandAcks", "runtime", "controller",
             "sensitiveProperties", "sensitiveAdvice", "springSecurityFilterChain", "mvcHandlerMappingIntrospector",
             "requestMappingHandlerAdapter", "requestMappingHandlerMapping", "mvcContentNegotiationManager", "mvcConversionService");
+    // Only these six inherited @Inject baseMapper dependencies belong to this fixture.
+    private static final Set<String> DIAGNOSTIC_MAPPER_TYPES = Set.of(
+            "cn.jia.agent.mapper.AgentRuntimeV1InstallationMapper", "cn.jia.agent.mapper.AgentRuntimeMapper",
+            "cn.jia.agent.mapper.AgentIdentityRegistryMapper", "cn.jia.agent.mapper.AgentIdentityAliasMapper",
+            "cn.jia.agent.mapper.AgentPersonaBindingMapper", "cn.jia.user.mapper.InfoMapper");
     private static final Set<String> DIAGNOSTIC_CLASSES = Set.of(
             "cn.jia.agent.acceptance.Ur03RuntimeHttpFixture", "cn.jia.agent.acceptance.Ur03RuntimeHttpFixture$AckAdvanceProbe",
             "cn.jia.agent.api.AgentRuntimeV1Controller", "cn.jia.agent.security.AgentRuntimeAuthenticationService",
@@ -194,6 +200,9 @@ public final class Ur03RuntimeHttpFixture {
         String normalized = name.replace('/', '.');
         return DIAGNOSTIC_CLASSES.contains(normalized) ? normalized : null;
     }
+    static String allowedMissingBeanType(String name) {
+        return name != null && DIAGNOSTIC_MAPPER_TYPES.contains(name) ? name : null;
+    }
     private static String diagnosticType(Throwable failure) {
         return DIAGNOSTIC_TYPES.contains(failure.getClass().getName()) ? failure.getClass().getSimpleName() : "OTHER";
     }
@@ -209,6 +218,11 @@ public final class Ur03RuntimeHttpFixture {
             if (cause instanceof BeanCreationException bean && bean.getBeanName() != null
                     && DIAGNOSTIC_BEANS.contains(bean.getBeanName())) {
                 safe.put("bean", bean.getBeanName());
+            }
+            if (cause instanceof NoSuchBeanDefinitionException missingBean && missingBean.getBeanType() != null) {
+                // Type API only: never parse the exception message or expose arbitrary dependency names.
+                String missing = allowedMissingBeanType(missingBean.getBeanType().getName());
+                if (missing != null) safe.put("missingBeanType", missing);
             }
             if (cause instanceof ClassNotFoundException || cause instanceof NoClassDefFoundError) {
                 String missing = cause.getMessage() == null ? null : allowedMissingClass(cause.getMessage());
@@ -483,6 +497,26 @@ public final class Ur03RuntimeHttpFixture {
             return factory;
         }
         @Bean SqlSessionTemplate sqlSessionTemplate(SqlSessionFactory factory) { return new SqlSessionTemplate(factory); }
+        // Register real SqlSessionTemplate proxies as Spring beans, not only MyBatis mapped interfaces.
+        // Spring resolves BaseDaoImpl's inherited @Inject even after wire() assigns the field.
+        @Bean AgentRuntimeV1InstallationMapper installationMapper(SqlSessionTemplate session) {
+            return session.getMapper(AgentRuntimeV1InstallationMapper.class);
+        }
+        @Bean AgentRuntimeMapper runtimeMapper(SqlSessionTemplate session) {
+            return session.getMapper(AgentRuntimeMapper.class);
+        }
+        @Bean AgentIdentityRegistryMapper registryMapper(SqlSessionTemplate session) {
+            return session.getMapper(AgentIdentityRegistryMapper.class);
+        }
+        @Bean AgentIdentityAliasMapper aliasMapper(SqlSessionTemplate session) {
+            return session.getMapper(AgentIdentityAliasMapper.class);
+        }
+        @Bean AgentPersonaBindingMapper bindingMapper(SqlSessionTemplate session) {
+            return session.getMapper(AgentPersonaBindingMapper.class);
+        }
+        @Bean InfoMapper infoMapper(SqlSessionTemplate session) {
+            return session.getMapper(InfoMapper.class);
+        }
         @Bean AgentRuntimeV1InstallationDao installations(SqlSessionTemplate session) throws Exception {
             return wire(new AgentRuntimeV1InstallationDaoImpl(), session.getMapper(AgentRuntimeV1InstallationMapper.class));
         }
