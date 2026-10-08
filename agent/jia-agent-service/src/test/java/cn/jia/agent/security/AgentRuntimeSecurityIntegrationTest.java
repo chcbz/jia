@@ -37,7 +37,7 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
 import org.springframework.security.web.FilterChainProxy;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
-import org.springframework.test.web.servlet.request.MockMultipartHttpServletRequestBuilder;
+import org.springframework.test.web.servlet.request.AbstractMockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -298,18 +298,14 @@ class AgentRuntimeSecurityIntegrationTest {
                 && owner.equals(actualOwner);
     }
 
-    MockHttpServletRequestBuilder headers(
-            MockHttpServletRequestBuilder request, String agent, String runtime, String token) {
-        return request.header("Authorization", "AgentRuntime " + credential(token))
+    <B extends AbstractMockHttpServletRequestBuilder<?>> B headers(
+            B request, String agent, String runtime, String token) {
+        request.header("Authorization", "AgentRuntime " + credential(token))
                 .header("X-Agent-Id", agent).header("X-Agent-Runtime-Id", runtime)
                 .header("X-Agent-Installation-Id", installationFor(agent)).header("X-Agent-Host-Id", "host")
                 .header("X-Agent-Session-Generation", persisted.containsKey(agent) && persisted.get(agent).getRuntimeSessionGeneration() != null
                         ? persisted.get(agent).getRuntimeSessionGeneration().toString() : "1");
-    }
-
-    MockMultipartHttpServletRequestBuilder headers(
-            MockMultipartHttpServletRequestBuilder request, String agent, String runtime, String token) {
-        return (MockMultipartHttpServletRequestBuilder) headers((MockHttpServletRequestBuilder) request, agent, runtime, token);
+        return request;
     }
 
     static String credential(String token) { return token.startsWith("rts1_") ? token : "rts1_" + token.repeat(2); }
