@@ -29,7 +29,8 @@
       "websocketPath": "/ws/agent/channel",
       "status": "CHANNEL_PENDING"
     },
-    "credentialFormat": "rts1_[0-9a-f]{64}"
+    "credentialFormat": "rts1_[0-9a-f]{64}",
+    "responseEnvelope": "JsonResult.data"
   },
   "websocket": {
     "method": "GET",
@@ -47,14 +48,23 @@
       "All proofs match installation, full subject, persistent host and boot instance at server-issued generation.",
       "Registration receipt contains no sessionToken or replacement credential.",
       "Existing per-operation adapter declarations remain required and are activated only after successful registration receipt delivery.",
-      "Missing/false durableStateHealthy or unavailable actual adapter means not execution-ready; heartbeat alone is insufficient."
+      "Missing/false durableStateHealthy or unavailable actual adapter means not execution-ready; heartbeat alone is insufficient.",
+      "readyCommandTypes contains only existing command types supported by actual adapters; duplicate or unknown types reject registration. An empty/missing list does not admit commands.",
+      "profiles.EXECUTE in existing chat runtimeCapabilities v1 remains unavailable; do not change this chat contract to advertise command execution.",
+      "Authenticated presence can report durableStateHealthy false and immediately retire execution readiness without denying already-executed outcome reports."
     ],
     "registrationRequiredFields": {
       "installationId": "rti_0123456789abcdef0123456789abcdef",
       "hostId": "host-fixture",
       "runtimeInstanceId": "boot-fixture",
       "sessionGeneration": 7,
-      "durableStateHealthy": true
+      "durableStateHealthy": true,
+      "readyCommandTypes": [
+        "TASK_INVITE"
+      ]
+    },
+    "presenceHealthFields": {
+      "durableStateHealthy": false
     }
   },
   "ack": {
@@ -76,7 +86,7 @@
       "hostId": "host-fixture",
       "runtimeInstanceId": "boot-fixture",
       "sessionGeneration": 7,
-      "deliveryVersion": 12,
+      "deliveryVersion": 11,
       "messageId": "msg-fixture",
       "correlationId": "correlation-fixture",
       "commandId": "command-fixture",
@@ -98,10 +108,29 @@
     },
     "rules": [
       "ACK body proof must equal authenticated session proof, not select authority.",
-      "deliveryVersion is the expected committed version (last observed + 1 for an advance); only matching kind/status/deliveryVersion confirms commit, never WS send.",
+      "deliveryVersion is nullable last confirmed D06 version, never a predicted first CAS version. Only matching status and a valid monotonic D06 result version with ADVANCED/PRIOR confirms the command commit; persist that exact result in the existing checkpoint.",
       "Expired commands deny new RECEIVED/STARTED admission, not terminal reports of already executed work.",
       "Transport failure preserves the existing checkpoint and original message/command/work keys."
-    ]
+    ],
+    "responseEnvelope": "JsonResult.data",
+    "firstRequest": {
+      "installationId": "rti_0123456789abcdef0123456789abcdef",
+      "tenantId": "0",
+      "clientId": "client-fixture",
+      "canonicalAgentId": "agt_0123456789abcdef0123456789abcdef",
+      "hostId": "host-fixture",
+      "runtimeInstanceId": "boot-fixture",
+      "sessionGeneration": 7,
+      "deliveryVersion": null,
+      "messageId": "msg-fixture",
+      "correlationId": "correlation-fixture",
+      "commandId": "command-fixture",
+      "taskId": "task-fixture",
+      "workItemId": null,
+      "payloadReference": "payload-fixture",
+      "expiresAt": "2026-10-08T08:00:00Z",
+      "status": "RECEIVED"
+    }
   },
   "persistentFenceEvidence": {
     "baseCommit": "ce047c43e0f275d1ad427c484b8919213be36fa4",

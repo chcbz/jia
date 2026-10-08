@@ -36,6 +36,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
+    private final cn.jia.agent.security.AgentRuntimeAuthenticationService runtimeAuthentication =
+            org.mockito.Mockito.mock(cn.jia.agent.security.AgentRuntimeAuthenticationService.class);
+    private final Map<String, String> currentChannels = new HashMap<>();
     @Mock ChatClient chatClient;
     @Mock AgentService agentService;
     @Mock ObjectProvider<AgentService> agentServiceProvider;
@@ -43,7 +46,7 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
     @Mock ChatConversationEventBroker eventBroker;
 
     @Test
-    void rawCommandGoesOnlyToExactTenantClientAndTargetSessionsWithoutWrappingOrReserialization()
+    void rawCommandGoesOnlyToCurrentExactChannelWithoutWrappingOrReserialization()
             throws Exception {
         WebSocketSession exactOne = session("exact-1", "tenant-a", "client-a", "agent-1");
         WebSocketSession exactTwo = session("exact-2", "tenant-a", "client-a", "agent-1");
@@ -64,15 +67,13 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
                 "tenant-a", "client-a", "task-1", "agent-1", raw);
 
         assertEquals(AgentRawCommandDispatchResult.Status.SENT, result.status());
-        assertEquals(2, result.matchingSessionCount());
-        assertEquals(2, result.sentSessionCount());
-        ArgumentCaptor<TextMessage> first = ArgumentCaptor.forClass(TextMessage.class);
+        assertEquals(1, result.matchingSessionCount());
+        assertEquals(1, result.sentSessionCount());
         ArgumentCaptor<TextMessage> second = ArgumentCaptor.forClass(TextMessage.class);
-        verify(exactOne).sendMessage(first.capture());
+        verify(exactOne, never()).sendMessage(any(TextMessage.class));
         verify(exactTwo).sendMessage(second.capture());
-        assertArrayEquals(raw, first.getValue().getPayload().getBytes(StandardCharsets.UTF_8));
         assertArrayEquals(raw, second.getValue().getPayload().getBytes(StandardCharsets.UTF_8));
-        assertEquals(new String(raw, StandardCharsets.UTF_8), first.getValue().getPayload());
+        assertEquals(new String(raw, StandardCharsets.UTF_8), second.getValue().getPayload());
         verify(crossTenant, never()).sendMessage(any(TextMessage.class));
         verify(crossClient, never()).sendMessage(any(TextMessage.class));
         verify(otherAgent, never()).sendMessage(any(TextMessage.class));
@@ -213,7 +214,7 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
     }
 
     @Test
-    void oneMatchingSessionFailureDoesNotPreventOtherExactSessionFromReceivingRawBytes()
+    void staleSessionDoesNotPreventCurrentExactSessionFromReceivingRawBytes()
             throws Exception {
         WebSocketSession failing = session("failing", "tenant-a", "client-a", "agent-1");
         WebSocketSession succeeding = session("succeeding", "tenant-a", "client-a", "agent-1");
@@ -221,17 +222,15 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
         register(handler, failing, "agent-1");
         register(handler, succeeding, "agent-1");
         org.mockito.Mockito.clearInvocations(failing, succeeding);
-        doThrow(new IllegalStateException("simulated partial websocket failure"))
-                .when(failing).sendMessage(any(TextMessage.class));
         byte[] raw = wire("tenant-a", "client-a", "task-1", "agent-1");
 
         AgentRawCommandDispatchResult result = handler.dispatchExactRawCommand(
                 "tenant-a", "client-a", "task-1", "agent-1", raw);
 
         assertEquals(AgentRawCommandDispatchResult.Status.SENT, result.status());
-        assertEquals(2, result.matchingSessionCount());
+        assertEquals(1, result.matchingSessionCount());
         assertEquals(1, result.sentSessionCount());
-        verify(failing).sendMessage(any(TextMessage.class));
+        verify(failing, never()).sendMessage(any(TextMessage.class));
         ArgumentCaptor<TextMessage> sent = ArgumentCaptor.forClass(TextMessage.class);
         verify(succeeding).sendMessage(sent.capture());
         assertArrayEquals(raw, sent.getValue().getPayload().getBytes(StandardCharsets.UTF_8));
@@ -298,16 +297,24 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
             AgentRegisterDTO request = invocation.getArgument(0);
             return new AgentRegisterResultDTO(request.getAgentId(), "token", "online");
         });
-        return new AgentWebSocketHandler(
+        var handler = new AgentWebSocketHandler(
                 chatClient, agentServiceProvider, chatMessageDao, eventBroker);
+        org.mockito.Mockito.lenient().when(runtimeAuthentication.isCurrentBinding(
+                any(), any(), any(), any(), any(), any())).thenAnswer(inv ->
+                inv.getArgument(0).equals(currentChannels.get(
+                        inv.getArgument(1) + "|" + inv.getArgument(2) + "|" + inv.getArgument(4))));
+        handler.setRuntimeAuthentication(runtimeAuthentication);
+        return handler;
     }
 
     private void register(
             AgentWebSocketHandler handler, WebSocketSession session, String agentId) throws Exception {
         handler.afterConnectionEstablished(session);
+        currentChannels.put(session.getAttributes().get("tenantId") + "|"
+                + session.getAttributes().get("clientId") + "|" + agentId, session.getId());
         handler.handleTextMessage(session, new TextMessage(
                 "{\"type\":\"agent.register\",\"agentId\":\"" + agentId
-                        + "\",\"name\":\"Agent\"}"));
+                        + "\",\"name\":\"Agent\",\"durableStateHealthy\":true,\"readyCommandTypes\":[\"TASK_INVITE\"]}"));
     }
 
     private WebSocketSession session(
@@ -318,6 +325,7 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
         when(session.getAttributes()).thenReturn(new HashMap<>(Map.of(
                 "agentId", agentId,
                 "runtimeInstanceId", "runtime-1",
+                "tenantId", tenantId,
                 "jiacn", tenantId,
                 "clientId", clientId)));
         return session;

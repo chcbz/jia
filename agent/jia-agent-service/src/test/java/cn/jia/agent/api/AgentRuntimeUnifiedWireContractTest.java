@@ -44,7 +44,7 @@ class AgentRuntimeUnifiedWireContractTest {
         var request = mapper.treeToValue(f.path("ack").path("request"), AgentRuntimeV1AckRequest.class);
         assertEquals(f.path("ack").path("request"), mapper.valueToTree(request));
         assertEquals(7, request.sessionGeneration());
-        assertEquals(12, request.deliveryVersion());
+        assertEquals(Long.valueOf(11), request.deliveryVersion());
     }
     @Test void onlyD06AdvancedOrPriorIsACommandCommitReceipt() throws Exception {
         for (var name : new String[]{"response", "priorResponse"}) {
@@ -53,6 +53,12 @@ class AgentRuntimeUnifiedWireContractTest {
             assertEquals("STARTED", result.status());
             assertEquals(12, result.deliveryVersion());
         }
+    }
+    @Test void firstAckDoesNotInventAClientKnownDeliveryVersion() throws Exception {
+        var node = fixture().path("ack").path("firstRequest");
+        var request = mapper.treeToValue(node, AgentRuntimeV1AckRequest.class);
+        assertNull(request.deliveryVersion());
+        assertEquals(node, mapper.valueToTree(request));
     }
     private static Set<String> fields(JsonNode node) {
         Set<String> fields = new HashSet<>(); node.fieldNames().forEachRemaining(fields::add); return fields;

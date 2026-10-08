@@ -79,6 +79,41 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
             SecurityContextHolder.setContext(previous);
         }
     }
+    /** Unified proof syntax shared by native HTTP and the WS handshake. Parsing grants no authority.
+     * Persistent installation/subject/host/generation validation is separately mandatory.
+     */
+    public static SessionHeaders sessionHeaders(HttpServletRequest request) {
+        if (request.getHeader("Origin") != null || request.getHeader("X-API-Key") != null
+                || request.getParameter("api_key") != null || request.getParameter("apiKey") != null
+                || request.getParameter("token") != null || request.getParameter("sessionToken") != null
+                || request.getParameter("access_token") != null
+                || request.getParameter("runtimeAuthorization") != null) {
+            throw AgentRuntimeAuthenticationService.denied();
+        }
+        String authorization = single(request, "Authorization");
+        if (!authorization.matches("AgentRuntime rts1_[0-9a-f]{64}")) throw AgentRuntimeAuthenticationService.denied();
+        String agent = single(request, "X-Agent-Id");
+        String installation = single(request, "X-Agent-Installation-Id");
+        String host = single(request, "X-Agent-Host-Id");
+        String instance = single(request, "X-Agent-Runtime-Id");
+        String generation = single(request, "X-Agent-Session-Generation");
+        if (!AgentRuntimeAuthenticationService.validAgentReference(agent)
+                || !installation.matches("rti_[0-9a-f]{32}")
+                || !AgentRuntimeAuthenticationService.exact(host, 100)
+                || !AgentRuntimeAuthenticationService.exact(instance, 100) || instance.equals(agent)
+                || !generation.matches("[1-9][0-9]*")) throw AgentRuntimeAuthenticationService.denied();
+        long parsed;
+        try { parsed = Long.parseLong(generation); }
+        catch (NumberFormatException invalid) { throw AgentRuntimeAuthenticationService.denied(); }
+        return new SessionHeaders(agent, installation, host, instance, parsed, authorization.substring(13));
+    }
+
+    /** Secret stays in the native request boundary; never store this record in WS attributes or logs. */
+    public record SessionHeaders(String agentId, String installationId, String hostId,
+            String runtimeInstanceId, long sessionGeneration, String token) {
+        @Override public String toString() { return "AgentRuntimeSessionHeaders[credentials=REDACTED]"; }
+    }
+
     private static String single(HttpServletRequest request, String header) {
         var values = Collections.list(request.getHeaders(header));
         if (values.size() != 1) throw AgentRuntimeAuthenticationService.denied();

@@ -66,6 +66,7 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
         Map<String, Object> attributes = new HashMap<>();
         attributes.put("agentId", "agent-a");
         attributes.put("runtimeInstanceId", "runtime-a");
+        attributes.put("tenantId", "tenant-a");
         attributes.put("jiacn", "tenant-a");
         attributes.put("clientId", "client-a");
         org.mockito.Mockito.lenient().when(session.getId()).thenReturn("session-a");
@@ -74,7 +75,7 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
         org.mockito.Mockito.lenient().when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
         handler = new AgentWebSocketHandler(
                 chatClient, agentServiceProvider, chatMessageDao, eventBroker,
-                null, new AgentProtocolMessageNormalizer(), reconnectSignal, ackService);
+                null, new AgentProtocolMessageNormalizer(), reconnectSignal);
     }
 
     @Test
@@ -114,29 +115,14 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
     }
 
     @Test
-    void ackRequiresSuccessfulRegistrationAndUsesAuthoritativeSessionScope() throws Exception {
+    void wsAckNeverCommitsEvenAfterSuccessfulRegistration() throws Exception {
         handler.handleTextMessage(session, ackMessage("ack-before", "dispatch-1", "RECEIVED"));
-        verify(ackService, never()).acknowledge(any(), anyLong());
-
         when(agentService.register(any(AgentRegisterDTO.class))).thenReturn(
                 new AgentRegisterResultDTO("agent-a", "token", AgentConstants.STATUS_ONLINE));
         handler.handleTextMessage(session, registerMessage());
-        when(ackService.acknowledge(any(), anyLong())).thenReturn(
-                new AgentCommandAckResult(AgentCommandAckResult.Kind.ADVANCED, "RECEIVED", 3));
         handler.handleTextMessage(session, ackMessage("ack-1", "dispatch-1", "RECEIVED"));
-
-        ArgumentCaptor<AgentCommandAck> ack = ArgumentCaptor.forClass(AgentCommandAck.class);
-        verify(ackService).acknowledge(ack.capture(), anyLong());
-        assertEquals("tenant-a", ack.getValue().tenantId());
-        assertEquals("client-a", ack.getValue().clientId());
-        assertEquals("agent-a", ack.getValue().registeredAgentId());
-        assertEquals("ack-1", ack.getValue().messageId());
-        assertEquals("dispatch-1", ack.getValue().correlationId());
-        assertEquals("cmd-1", ack.getValue().commandId());
-        assertEquals("task-1", ack.getValue().taskId());
-        assertEquals("RECEIVED", ack.getValue().ackStatus());
+        verify(ackService, never()).acknowledge(any(), anyLong());
     }
-
 
     @Test
     void presenceBeforeSuccessfulRegisterDoesNotBecomeAuthoritativeExactPresence() throws Exception {
@@ -156,18 +142,12 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
     }
 
     @Test
-    void canonicalA06RejectedAckIsForwardedAfterRegistration() throws Exception {
+    void wsTerminalAckAlsoRequiresHttpAndNeverMutatesD06() throws Exception {
         when(agentService.register(any(AgentRegisterDTO.class))).thenReturn(
                 new AgentRegisterResultDTO("agent-a", "token", AgentConstants.STATUS_ONLINE));
         handler.handleTextMessage(session, registerMessage());
-        when(ackService.acknowledge(any(), anyLong())).thenReturn(
-                new AgentCommandAckResult(AgentCommandAckResult.Kind.ADVANCED, "REJECTED", 3));
-
         handler.handleTextMessage(session, ackMessage("ack-rejected", "dispatch-1", "REJECTED"));
-
-        ArgumentCaptor<AgentCommandAck> ack = ArgumentCaptor.forClass(AgentCommandAck.class);
-        verify(ackService).acknowledge(ack.capture(), anyLong());
-        assertEquals("REJECTED", ack.getValue().ackStatus());
+        verify(ackService, never()).acknowledge(any(), anyLong());
     }
 
     @Test
@@ -225,7 +205,7 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
         verify(session, org.mockito.Mockito.atLeastOnce()).sendMessage(outbound.capture());
         String combined = outbound.getAllValues().stream().map(TextMessage::getPayload)
                 .reduce("", String::concat);
-        assertTrue(combined.contains("COMMAND_ACK_REJECTED"));
+        assertTrue(combined.contains("COMMAND_ACK_HTTP_REQUIRED"));
         assertTrue(!combined.contains("tenant-other") && !combined.contains("agent-other"));
     }
 

@@ -204,7 +204,7 @@ class AgentRuntimeV1ServiceImplTest {
     private static AgentRuntimeV1AckRequest ackWithCorrelation(String tenant, String agent, String correlationId) {
         return new AgentRuntimeV1AckRequest("msg-1", correlationId, "cmd-1", "task-1", null,
                 tenant, "client-a", agent, "ref", "9999", "RECEIVED",
-                "rti-1", "host-1", "boot-1", 1, 1);
+                "rti-1", "host-1", "boot-1", 1, 1L);
     }
     private static byte[] sha(String value) {
         try { return java.security.MessageDigest.getInstance("SHA-256").digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8)); }
