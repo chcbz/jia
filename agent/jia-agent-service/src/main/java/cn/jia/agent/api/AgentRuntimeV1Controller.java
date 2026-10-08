@@ -62,7 +62,7 @@ public class AgentRuntimeV1Controller {
         return ok(null);
     }
 
-    @cn.jia.core.security.AllowSensitiveOutput
+    @cn.jia.core.security.AllowSensitiveOutput(reason = "Installer-only enrollment credential response; never exposed through InstallationView or logs")
     @PostMapping("/enroll")
     public ResponseEntity<JsonResult<AgentRuntimeV1EnrollmentResult>> enroll(
             @RequestBody AgentRuntimeV1EnrollmentRequest request, HttpServletRequest servletRequest) {
@@ -71,7 +71,7 @@ public class AgentRuntimeV1Controller {
         return ok(runtime.enroll(request, now()));
     }
 
-    @cn.jia.core.security.AllowSensitiveOutput
+    @cn.jia.core.security.AllowSensitiveOutput(reason = "Installation-Bearer-authorized independent Runtime session credential response with no-store caching")
     @PostMapping("/session")
     public ResponseEntity<JsonResult<AgentRuntimeV1SessionResponse>> session(
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
