@@ -492,16 +492,17 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
     private void requireRuntimeCommandSource(String tenantId, String clientId, String ownerJiacn,
             String taskId, String workItemId, AgentWorkItemReassignmentEntity receipt) {
         var delivery = reassignmentDao.findSourceCommand(tenantId, clientId, ownerJiacn, receipt.getCommandId());
-        if (delivery == null) throw unavailable();
+        // A row outside the receipt's exact scope/target remains hidden. Only after matching
+        // that row may a damaged canonical source be classified as the original business conflict.
+        if (delivery == null || !receipt.getCommandId().equals(delivery.getCommandId())
+                || !tenantId.equals(delivery.getTenantId()) || !clientId.equals(delivery.getClientId())
+                || !ownerJiacn.equals(delivery.getOwnerJiacn()) || !taskId.equals(delivery.getTaskId())
+                || !workItemId.equals(delivery.getWorkItemId())
+                || !receipt.getTargetAgentId().equals(delivery.getTargetAgentId())) throw unavailable();
         try {
             var draft = AgentCommandCanonicalCodec.decodeBusinessBytes(delivery.getCommandPayload());
             if (!MessageDigest.isEqual(AgentCommandCanonicalCodec.sha256(delivery.getCommandPayload()),
                         delivery.getCommandPayloadHash())
-                    || !receipt.getCommandId().equals(delivery.getCommandId())
-                    || !tenantId.equals(delivery.getTenantId()) || !clientId.equals(delivery.getClientId())
-                    || !ownerJiacn.equals(delivery.getOwnerJiacn()) || !taskId.equals(delivery.getTaskId())
-                    || !workItemId.equals(delivery.getWorkItemId())
-                    || !receipt.getTargetAgentId().equals(delivery.getTargetAgentId())
                     || !AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE.equals(delivery.getCommandType())
                     || !receipt.getCommandId().equals(draft.commandId()) || !tenantId.equals(draft.tenantId())
                     || !clientId.equals(draft.clientId()) || !ownerJiacn.equals(draft.ownerJiacn())
@@ -512,7 +513,8 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
                     || !AgentCommandCanonicalCodec.E05_REASSIGNMENT_BINDING_VERSION.equals(payload.context().bindingVersion())
                     || !receipt.getReassignmentId().equals(payload.context().reassignmentId())
                     || !Long.toString(receipt.getResultWorkItemVersion()).equals(payload.context().contextVersion())
-                    || !List.of(receipt.getSourceCommandId()).equals(payload.context().referenceIds())) throw unavailable();
+                    || !List.of(receipt.getSourceCommandId()).equals(payload.context().referenceIds()))
+                throw failure(Reason.INVALID_SOURCE_COMMAND, "Runtime source linkage is invalid");
             // Verify the original predecessor too. Transport ACK state/expiry is not business authority.
             var source = new RequiredRequest(receipt.getOperatorSubject(), receipt.getCoordinatorAgentId(),
                     receipt.getTaskVersion(), receipt.getExpectedWorkItemVersion(), receipt.getPreviousAgentId(),
