@@ -114,7 +114,7 @@
       "canonicalAgentId is projected from the sealed manifest only after exact raw tenantId/clientId/targetAgentId matching.",
       "Runtime installationId/hostId/runtimeInstanceId/sessionGeneration come only from current authenticated transport, never a business frame installationId.",
       "Missing canonical payloadReference projects to null. D06 persistent command/message/task/workItem, source/context and lease checks remain mandatory.",
-      "Raw expiresAt is a positive safe integer epoch millisecond within the valid Date range, projected to ISO UTC; it never replaces persistent D06 expiry.",
+      "Raw expiresAt is a safe integer epoch millisecond within the inclusive valid Date range [-8640000000000000, 8640000000000000] (including zero and negative values), projected to ISO UTC; it never replaces persistent D06 expiry.",
       "Keep the complete raw canonical bytes and fingerprint unchanged; nullable workItemId remains null rather than an invented work key."
     ],
     "responseEnvelope": "JsonResult.data",

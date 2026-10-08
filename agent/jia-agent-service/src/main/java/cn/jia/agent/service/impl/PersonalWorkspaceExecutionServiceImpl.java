@@ -46,6 +46,7 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.core.StreamReadFeature;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.ObjectMapper;
@@ -1938,9 +1939,41 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         if ("CONVERSATION".equals(candidate.getExecutionMode())) throw failure(Reason.CAPABILITY_UNAVAILABLE);
         if ("TASK".equals(candidate.getExecutionMode())) {
             requireTaskPublicationDependencies();
-            return taskMutations.executeWithLockedTaskRootInOwnerScope(
-                    scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId,
-                    root -> commitTaskOutputsLocked(scope, taskId, runId, manifestId, declarations, root));
+            nativeAuthentication(scope);
+            if (TransactionSynchronizationManager.isActualTransactionActive())
+                throw new IllegalStateException("TASK publication preparation requires no enclosing transaction");
+            var immutable=List.copyOf(declarations);
+            var prepared=taskMutations.executeWithLockedTaskRootInOwnerScope(
+                    scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,root -> {
+                        var execution=lockedTaskPublicationExecution(scope,taskId,runId,root);
+                        if(!same(candidate.getExecutionId(),execution.getExecutionId())) throw failure(Reason.TASK_CONFLICT);
+                        var output=lockAndVerifyManifest(scope,execution,manifestId,immutable).getFirst();
+                        requireTaskPublicationState(scope,execution,output);
+                        return new TaskPublicationPreparation(taskPublicationBinding(execution),preparedOutput(output),
+                                output.getWorkspaceFileId(),output.getWorkspaceFileVersion(),output.getPublicationRevision(),
+                                taskManifest(execution,output));
+                    });
+            PreparedTaskArtifacts artifacts=null;
+            AgentTaskCollaborationException preparationConflict=null;
+            try {
+                if(!prepared.output().committed()) {
+                    byte[] content=readPreparedOutput(scope,prepared.output());
+                    var deliverable=prepareTaskArtifact(scope,prepared,"pwe_art_"+prepared.binding().execution().executionId(),
+                            "document",prepared.output().filename(),prepared.output().stored().mimeType(),content);
+                    var manifest=prepareTaskArtifact(scope,prepared,"pwe_manifest_"+prepared.binding().execution().executionId(),
+                            "summary","Delivery manifest","application/json",prepared.manifest().getBytes(StandardCharsets.UTF_8));
+                    artifacts=new PreparedTaskArtifacts(deliverable,manifest);
+                }
+            } catch(AgentTaskCollaborationException conflict) {
+                if(conflict.getReason()!=AgentTaskCollaborationException.Reason.VERSION_CONFLICT) throw conflict;
+                // Another original commit may have won during storage. Only its exact persisted
+                // output mapping under the current fence can turn this into an idempotent receipt.
+                preparationConflict=conflict;
+            }
+            var ready=artifacts;var observedConflict=preparationConflict;
+            return nativeMutation(scope,()->taskMutations.executeWithLockedTaskRootInOwnerScope(
+                    scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,
+                    root -> commitTaskOutputsLocked(scope,taskId,runId,manifestId,immutable,root,prepared,ready,observedConflict)));
         }
         var immutable=List.copyOf(declarations);
         return nativeMutation(scope,()->{
@@ -2055,39 +2088,58 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         return committed(manifestId, outputs);
     }
 
-    /**
-     * Trusted TASK publication path. The order is task root -> execution -> output -> workspace
-     * file/version. It reads staged bytes only on the server, creates exact task artifacts, then
-     * submits the existing formal-delivery protocol. A retry only resumes this mapping and never
-     * invokes a Provider or exposes a lease/storage URI to the browser.
-     */
+    private record TaskPublicationBinding(NativeExecutionBinding execution,String workItemId,
+            String leaseToken,Long leaseVersion,Long leaseExpiresAt) {
+        @Override public String toString() { return "TaskPublicationBinding[REDACTED]"; }
+    }
+    private record TaskPublicationPreparation(TaskPublicationBinding binding,PreparedNativeOutput output,
+            String workspaceFileId,Integer workspaceFileVersion,Long publicationRevision,String manifest) { }
+    private record PreparedTaskArtifacts(AgentTaskArtifactService.PreparedPublication deliverable,
+            AgentTaskArtifactService.PreparedPublication manifest) { }
+    private static TaskPublicationBinding taskPublicationBinding(PersonalWorkspaceExecutionEntity execution) {
+        return new TaskPublicationBinding(nativeExecutionBinding(execution),execution.getWorkItemId(),
+                execution.getLeaseToken(),execution.getLeaseWorkItemVersion(),execution.getLeaseExpiresAt());
+    }
+    private PersonalWorkspaceExecutionEntity lockedTaskPublicationExecution(RuntimeScope scope,String taskId,
+            String runId,AgentTaskMetaEntity root) {
+        if(root==null || !same(taskId,root.getTaskId()) || root.getTaskVersion()==null || root.getTaskVersion()<0
+                || !same(scope.tenantId(),root.getTenantId()) || !same(scope.clientId(),root.getClientId())
+                || !same(scope.ownerJiacn(),root.getOwnerJiacn())) throw failure(Reason.TASK_CONFLICT);
+        var execution=executions.lockByTaskRun(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,runId);
+        if(execution==null || !"TASK".equals(execution.getExecutionMode())
+                || !same(scope.agentId(),execution.getTargetAgentId())) throw failure(Reason.NOT_FOUND);
+        return execution;
+    }
+    private void requireTaskPublicationState(RuntimeScope scope,PersonalWorkspaceExecutionEntity execution,
+            PersonalWorkspaceExecutionOutputEntity output) {
+        if(!"FILE".equals(filePurpose(output))) throw failure(Reason.OUTPUT_CONFLICT);
+        if("COMMITTED".equals(output.getOutputState()) && "PUBLISHED".equals(output.getPublicationState())) return;
+        if(!("QUEUED".equals(execution.getExecutionState()) || "OUTPUT_STAGED".equals(execution.getExecutionState()))
+                || !"STAGED".equals(output.getOutputState()) || !"PENDING".equals(output.getPublicationState()))
+            throw failure(Reason.OUTPUT_CONFLICT);
+        requireLiveTaskLease(scope,execution);
+    }
+
+    /** Runtime installation -> scope -> task root -> execution/output -> row-only artifact/formal
+     * publication. All storage preparation has completed; the original lease and source are repeated. */
     private CommitView commitTaskOutputsLocked(RuntimeScope scope, String taskId, String runId,
-            String manifestId, List<OutputDeclaration> declarations, AgentTaskMetaEntity root) {
-        if (root == null || !same(taskId, root.getTaskId()) || root.getTaskVersion() == null
-                || root.getTaskVersion() < 0) {
-            throw failure(Reason.TASK_CONFLICT);
-        }
-        PersonalWorkspaceExecutionEntity execution = executions.lockByTaskRun(
-                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId, runId);
-        if (execution == null || !"TASK".equals(execution.getExecutionMode())
-                || !same(scope.agentId(), execution.getTargetAgentId())) {
-            throw failure(Reason.NOT_FOUND);
-        }
+            String manifestId, List<OutputDeclaration> declarations, AgentTaskMetaEntity root,
+            TaskPublicationPreparation prepared,PreparedTaskArtifacts artifacts,AgentTaskCollaborationException preparationConflict) {
+        var execution=lockedTaskPublicationExecution(scope,taskId,runId,root);
+        if(!prepared.binding().equals(taskPublicationBinding(execution))) throw failure(Reason.TASK_CONFLICT);
         List<PersonalWorkspaceExecutionOutputEntity> outputs = lockAndVerifyManifest(
                 scope, execution, manifestId, declarations);
         PersonalWorkspaceExecutionOutputEntity output = outputs.getFirst();
-        if (!"FILE".equals(filePurpose(output))) throw failure(Reason.OUTPUT_CONFLICT);
-        if ("COMMITTED".equals(output.getOutputState())
-                && "PUBLISHED".equals(output.getPublicationState())) {
-            return committed(manifestId, outputs);
-        }
-        if (!("QUEUED".equals(execution.getExecutionState())
-                || "OUTPUT_STAGED".equals(execution.getExecutionState()))
-                || !"STAGED".equals(output.getOutputState())
-                || !"PENDING".equals(output.getPublicationState())) {
+        requirePreparedOutput(prepared.output(),output);
+        requireTaskPublicationState(scope,execution,output);
+        if ("COMMITTED".equals(output.getOutputState()) && "PUBLISHED".equals(output.getPublicationState()))
+            return committed(manifestId,outputs);
+        if(preparationConflict!=null) throw preparationConflict;
+        if(prepared.output().committed() || artifacts==null
+                || !Objects.equals(prepared.workspaceFileId(),output.getWorkspaceFileId())
+                || !Objects.equals(prepared.workspaceFileVersion(),output.getWorkspaceFileVersion())
+                || !Objects.equals(prepared.publicationRevision(),output.getPublicationRevision()))
             throw failure(Reason.OUTPUT_CONFLICT);
-        }
-        requireLiveTaskLease(scope, execution);
         // Persisted immediately before mapping so an interrupted response is explicitly recoverable
         // by the same runtime manifest, without restarting the agent/provider work.
         execution.setExecutionState("OUTPUT_STAGED").setFailureCode(null)
@@ -2109,17 +2161,12 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             throw failure(Reason.OUTPUT_CONFLICT);
         }
 
-        PersonalWorkspaceStorage.StoredContent staged = storage.read(storageScope(scope), output.getStorageUri(),
-                output.getContentHash(), output.getByteLength(), output.getContentMimeType());
-        byte[] content = staged.content();
-        if (content == null || content.length != output.getByteLength()) throw failure(Reason.STORAGE_UNAVAILABLE);
         String artifactId = "pwe_art_" + execution.getExecutionId();
-        AgentTaskArtifactViewDTO deliverable = publishTaskArtifact(scope, execution, artifactId,
-                "document", output.getOriginalFilename(), output, content);
+        AgentTaskArtifactViewDTO deliverable = publishPreparedTaskArtifact(scope, execution, artifacts.deliverable(),
+                artifactId,output.getContentHash());
         String manifestArtifactId = "pwe_manifest_" + execution.getExecutionId();
-        byte[] manifestContent = taskManifest(execution, output).getBytes(StandardCharsets.UTF_8);
-        AgentTaskArtifactViewDTO manifest = publishTaskArtifact(scope, execution, manifestArtifactId,
-                "summary", "Delivery manifest", "application/json", manifestContent);
+        AgentTaskArtifactViewDTO manifest = publishPreparedTaskArtifact(scope, execution, artifacts.manifest(),
+                manifestArtifactId,plainSha(prepared.manifest().getBytes(StandardCharsets.UTF_8)));
         AgentTaskFormalDeliveryViewDTO formal = submitFormalDelivery(
                 scope, execution, root, deliverable, manifest, output);
         if (formal == null || !same(taskId, formal.getTaskId())
@@ -2176,36 +2223,30 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         return version;
     }
 
-    private AgentTaskArtifactViewDTO publishTaskArtifact(RuntimeScope scope,
-            PersonalWorkspaceExecutionEntity execution, String artifactId, String artifactType,
-            String title, PersonalWorkspaceExecutionOutputEntity output, byte[] content) {
-        return publishTaskArtifact(scope, execution, artifactId, artifactType, title,
-                output.getContentMimeType(), content);
+    private AgentTaskArtifactService.PreparedPublication prepareTaskArtifact(RuntimeScope scope,
+            TaskPublicationPreparation prepared,String artifactId,String artifactType,
+            String title,String mimeType,byte[] content) {
+        var binding=prepared.binding();
+        AgentTaskArtifactPublishDTO command = new AgentTaskArtifactPublishDTO();
+        command.setArtifactId(artifactId);command.setWorkItemId(binding.workItemId());
+        command.setProducerAgentId(binding.execution().targetAgentId());command.setArtifactType(artifactType);
+        command.setTitle(title);command.setContentBytes(content);command.setContentMimeType(mimeType);
+        command.setContentHash(plainSha(content));command.setContentByteLength((long)content.length);
+        command.setArtifactVersion(1);command.setExpectedPreviousVersion(0);command.setVisibility("task_members");
+        var result=taskArtifacts.preparePublication(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                binding.execution().taskId(),binding.execution().targetAgentId(),command);
+        if(result==null) throw failure(Reason.TASK_CONFLICT);
+        return result;
     }
 
-    private AgentTaskArtifactViewDTO publishTaskArtifact(RuntimeScope scope,
-            PersonalWorkspaceExecutionEntity execution, String artifactId, String artifactType,
-            String title, String mimeType, byte[] content) {
-        AgentTaskArtifactPublishDTO command = new AgentTaskArtifactPublishDTO();
-        command.setArtifactId(artifactId);
-        command.setWorkItemId(execution.getWorkItemId());
-        command.setProducerAgentId(execution.getTargetAgentId());
-        command.setArtifactType(artifactType);
-        command.setTitle(title);
-        command.setContentBytes(content);
-        command.setContentMimeType(mimeType);
-        command.setContentHash(plainSha(content));
-        command.setContentByteLength((long) content.length);
-        command.setArtifactVersion(1);
-        command.setExpectedPreviousVersion(0);
-        command.setVisibility("task_members");
-        AgentTaskArtifactViewDTO result = taskArtifacts.publish(scope.tenantId(), scope.clientId(),
-                scope.ownerJiacn(), execution.getTaskId(), execution.getTargetAgentId(), command);
+    private AgentTaskArtifactViewDTO publishPreparedTaskArtifact(RuntimeScope scope,
+            PersonalWorkspaceExecutionEntity execution,AgentTaskArtifactService.PreparedPublication prepared,
+            String artifactId,String expectedHash) {
+        AgentTaskArtifactViewDTO result = taskArtifacts.publishPrepared(scope.tenantId(), scope.clientId(),
+                scope.ownerJiacn(), execution.getTaskId(), execution.getTargetAgentId(), prepared);
         if (result == null || !same(artifactId, result.getArtifactId())
                 || result.getArtifactVersion() == null || result.getArtifactVersion() != 1
-                || !same(command.getContentHash(), result.getContentHash())) {
-            throw failure(Reason.TASK_CONFLICT);
-        }
+                || !same(expectedHash, result.getContentHash())) throw failure(Reason.TASK_CONFLICT);
         return result;
     }
 

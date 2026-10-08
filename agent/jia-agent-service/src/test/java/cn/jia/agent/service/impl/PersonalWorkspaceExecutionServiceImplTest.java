@@ -877,8 +877,13 @@ class PersonalWorkspaceExecutionServiceImplTest {
                 org.mockito.ArgumentMatchers.eq(PersonalWorkspaceExecutionProperties.DOCX)))
                 .thenReturn(new PersonalWorkspaceStorage.StoredContent("agent result".getBytes(StandardCharsets.UTF_8),
                         contentHash, 12L, PersonalWorkspaceExecutionProperties.DOCX));
-        when(artifacts.publish(any(), any(), any(), any(), any(), any())).thenAnswer(invocation -> {
-            AgentTaskArtifactPublishDTO publish = invocation.getArgument(5);
+        var publications = new java.util.IdentityHashMap<AgentTaskArtifactService.PreparedPublication, AgentTaskArtifactPublishDTO>();
+        when(artifacts.preparePublication(any(), any(), any(), any(), any(), any())).thenAnswer(invocation -> {
+            var prepared = mock(AgentTaskArtifactService.PreparedPublication.class);
+            publications.put(prepared, invocation.getArgument(5));return prepared;
+        });
+        when(artifacts.publishPrepared(any(), any(), any(), any(), any(), any())).thenAnswer(invocation -> {
+            var publish = publications.get(invocation.getArgument(5));
             return artifact(publish.getArtifactId(), publish.getContentHash(), publish.getContentMimeType());
         });
         AgentTaskFormalDeliveryViewDTO formal = new AgentTaskFormalDeliveryViewDTO();
@@ -902,7 +907,7 @@ class PersonalWorkspaceExecutionServiceImplTest {
         assertEquals(formal.getDeliveryId(), output.getFormalDeliveryId());
         assertEquals("OUTPUT_COMMITTED", execution.getExecutionState());
         verify(writes).archiveRuntimeOutput(any(), any(), any());
-        verify(artifacts, times(2)).publish(any(), any(), any(), org.mockito.ArgumentMatchers.eq("task-1"),
+        verify(artifacts, times(2)).publishPrepared(any(), any(), any(), org.mockito.ArgumentMatchers.eq("task-1"),
                 org.mockito.ArgumentMatchers.eq("agent-a"), any());
         verify(formalDeliveries).submit(any(), any(), any(), org.mockito.ArgumentMatchers.eq("task-1"),
                 org.mockito.ArgumentMatchers.eq("agent-a"), any());

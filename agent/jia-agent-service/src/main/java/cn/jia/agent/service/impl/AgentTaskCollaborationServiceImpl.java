@@ -40,6 +40,8 @@ import jakarta.inject.Named;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -310,10 +312,75 @@ public class AgentTaskCollaborationServiceImpl
                 taskRoot -> publishLocked(tenantId, clientId, ownerJiacn, taskId, actorAgentId, command, taskRoot));
     }
 
+    @Override
+    @Transactional(propagation = Propagation.NEVER)
+    public PreparedPublication preparePublication(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, AgentTaskArtifactPublishDTO command) {
+        // Reject, never suspend, a caller already holding a root/fence transaction.
+        if (TransactionSynchronizationManager.isActualTransactionActive())
+            throw new IllegalStateException("Artifact preparation requires no enclosing transaction");
+        requireScope(tenantId, clientId, ownerJiacn, taskId, actorAgentId);
+        AgentTaskArtifactPublishDTO frozen = snapshotPublication(command);
+        ArtifactPublicationShape shape = mutationTransaction.executeWithLockedTaskRootInOwnerScope(
+                tenantId, clientId, ownerJiacn, taskId, root -> validatePublicationLocked(
+                        tenantId, clientId, ownerJiacn, taskId, actorAgentId, frozen, root));
+        ArtifactPayload payload = materializeArtifactPayload(
+                tenantId, clientId, ownerJiacn, taskId, frozen, shape.payloadMode());
+        return new PreparedArtifactPublication(this, tenantId, clientId, ownerJiacn, taskId,
+                actorAgentId, frozen, payload);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public AgentTaskArtifactViewDTO publishPrepared(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, PreparedPublication prepared) {
+        requireScope(tenantId, clientId, ownerJiacn, taskId, actorAgentId);
+        if (!(prepared instanceof PreparedArtifactPublication value) || value.issuer() != this
+                || !tenantId.equals(value.tenantId()) || !clientId.equals(value.clientId())
+                || !ownerJiacn.equals(value.ownerJiacn()) || !taskId.equals(value.taskId())
+                || !actorAgentId.equals(value.actorAgentId())) throw forbidden();
+        return mutationTransaction.executeWithLockedTaskRootInOwnerScope(tenantId, clientId, ownerJiacn, taskId,
+                root -> {
+                    ArtifactPublicationShape shape = validatePublicationLocked(tenantId, clientId, ownerJiacn,
+                            taskId, actorAgentId, value.command(), root);
+                    return persistPublication(tenantId, clientId, ownerJiacn, taskId, actorAgentId,
+                            value.command(), shape, value.payload());
+                });
+    }
+
+    private AgentTaskArtifactPublishDTO snapshotPublication(AgentTaskArtifactPublishDTO source) {
+        if (source == null) throw invalid("artifact command is required");
+        AgentTaskArtifactPublishDTO copy = new AgentTaskArtifactPublishDTO();
+        copy.setArtifactId(source.getArtifactId());copy.setWorkItemId(source.getWorkItemId());
+        copy.setProducerAgentId(source.getProducerAgentId());copy.setArtifactType(source.getArtifactType());
+        copy.setTitle(source.getTitle());copy.setContent(source.getContent());copy.setStorageUri(source.getStorageUri());
+        copy.setContentBytes(source.getContentBytes());copy.setContentMimeType(source.getContentMimeType());
+        copy.setContentHash(source.getContentHash());copy.setContentByteLength(source.getContentByteLength());
+        copy.setArtifactVersion(source.getArtifactVersion());copy.setExpectedPreviousVersion(source.getExpectedPreviousVersion());
+        copy.setVisibility(source.getVisibility());
+        copy.setMetadata(parseObject(serializeObject(source.getMetadata(), "metadata", MAX_TEXT_BYTES), "metadata"));
+        return copy;
+    }
+
+    private record ArtifactPublicationShape(String workItemId, String artifactType, String visibility,
+            ArtifactPayloadMode payloadMode) { }
+    private record PreparedArtifactPublication(AgentTaskCollaborationServiceImpl issuer, String tenantId,
+            String clientId, String ownerJiacn, String taskId, String actorAgentId,
+            AgentTaskArtifactPublishDTO command, ArtifactPayload payload) implements PreparedPublication {
+        @Override public String toString() { return "PreparedArtifactPublication[REDACTED]"; }
+    }
+
     private AgentTaskArtifactViewDTO publishLocked(String tenantId, String clientId, String ownerJiacn,
             String taskId, String actorAgentId, AgentTaskArtifactPublishDTO command, AgentTaskMetaEntity taskRoot) {
-        // Frozen order: task-root lock -> ACL/work-item validation -> artifact-version lock ->
-        // bounded filesystem write -> artifact row -> ARTIFACT_PUBLISHED event.
+        ArtifactPublicationShape shape = validatePublicationLocked(
+                tenantId, clientId, ownerJiacn, taskId, actorAgentId, command, taskRoot);
+        ArtifactPayload payload = materializeArtifactPayload(
+                tenantId, clientId, ownerJiacn, taskId, command, shape.payloadMode());
+        return persistPublication(tenantId, clientId, ownerJiacn, taskId, actorAgentId, command, shape, payload);
+    }
+
+    private ArtifactPublicationShape validatePublicationLocked(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, AgentTaskArtifactPublishDTO command, AgentTaskMetaEntity taskRoot) {
         requireAccess(tenantId, clientId, ownerJiacn, taskId, actorAgentId, true, taskRoot);
         if (command == null) {
             throw invalid("artifact command is required");
@@ -347,8 +414,13 @@ public class AgentTaskCollaborationServiceImpl
             throw notFound();
         }
 
-        ArtifactPayload payload = materializeArtifactPayload(
-                tenantId, clientId, ownerJiacn, taskId, command, payloadMode);
+        return new ArtifactPublicationShape(workItemId, artifactType, visibility, payloadMode);
+    }
+
+    private AgentTaskArtifactViewDTO persistPublication(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, AgentTaskArtifactPublishDTO command,
+            ArtifactPublicationShape shape, ArtifactPayload payload) {
+        String workItemId=shape.workItemId(), artifactType=shape.artifactType(), visibility=shape.visibility();
         AgentTaskArtifactDTO insert = new AgentTaskArtifactDTO();
         insert.setArtifactId(command.getArtifactId());
         insert.setTaskId(taskId);

@@ -30,6 +30,10 @@ import cn.jia.agent.mapper.AgentTaskMetaMapper;
 import cn.jia.agent.mapper.AgentTaskRequestMapper;
 import cn.jia.agent.mapper.AgentTaskWorkItemMapper;
 import cn.jia.agent.service.AgentTaskArtifactService;
+import cn.jia.agent.service.AgentTaskArtifactStorage;
+import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import cn.jia.agent.service.AgentTaskEventAfterCommitPublisher;
 import cn.jia.agent.service.AgentTaskEventBroker;
 import cn.jia.agent.service.AgentTaskEventWriter;
@@ -51,9 +55,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.interceptor.NameMatchTransactionAttributeSource;
-import org.springframework.transaction.interceptor.RuleBasedTransactionAttribute;
-import org.springframework.transaction.interceptor.RollbackRuleAttribute;
 import org.springframework.transaction.interceptor.TransactionInterceptor;
 
 import javax.sql.DataSource;
@@ -100,6 +101,7 @@ class AgentTaskCollaborationServiceRealTransactionTest {
     private AgentTaskArtifactDao artifactDao;
     private AgentTaskRequestService requestService;
     private AgentTaskArtifactService artifactService;
+    private MemoryArtifactStorage artifactStorage;
     private AgentTaskWorkItemDao workItemDao;
     private AgentWorkItemLeaseService leaseService;
     private AgentTaskMutationTransaction mutationTransaction;
@@ -135,8 +137,9 @@ class AgentTaskCollaborationServiceRealTransactionTest {
         mutationTransaction = new AgentTaskMutationTransactionImpl(taskDao, transactionManager);
 
         AtomicLong collaborationClock = new AtomicLong(LEASE_NOW);
+        artifactStorage=new MemoryArtifactStorage();
         AgentTaskCollaborationServiceImpl raw = new AgentTaskCollaborationServiceImpl(
-                taskDao, memberDao, workItemDao, requestDao, artifactDao,
+                taskDao, memberDao, workItemDao, requestDao, artifactDao,artifactStorage,
                 mutationTransaction, eventWriter, collaborationClock::incrementAndGet);
         Object proxy = transactionalProxy(raw, dataSource,
                 AgentTaskRequestService.class, AgentTaskArtifactService.class);
@@ -544,6 +547,104 @@ class AgentTaskCollaborationServiceRealTransactionTest {
                 Long.class, TASK));
     }
 
+    @Test
+    void managedPreparationReleasesRealRootTransactionBeforeStorageAndPublishesRowsAtomically() {
+        var command=managedArtifact("prepared",new byte[]{1,2,3});
+        var prepared=artifactService.preparePublication(TENANT,CLIENT,OWNER,TASK,REQUESTER,command);
+        assertEquals(1,artifactStorage.stores);assertEquals(0,count("SELECT COUNT(*) FROM agent_task_artifact"));
+        assertEquals(0,count("SELECT COUNT(*) FROM agent_task_event"));
+        assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
+        var result=artifactService.publishPrepared(TENANT,CLIENT,OWNER,TASK,REQUESTER,prepared);
+        assertEquals("prepared",result.getArtifactId());assertTrue(result.getManagedStorage());
+        assertEquals(1,artifactStorage.stores);assertEquals(1,count("SELECT COUNT(*) FROM agent_task_artifact"));
+        assertEquals(1,count("SELECT COUNT(*) FROM agent_task_event"));
+    }
+
+    @Test
+    void preparedCommandAndNestedMetadataAreOpaqueImmutableSnapshots() {
+        var command=artifact("immutable",1,0);var nested=new java.util.LinkedHashMap<String,Object>();nested.put("original",true);
+        command.setMetadata(Map.of("nested",nested));String original=command.getContent();
+        var prepared=artifactService.preparePublication(TENANT,CLIENT,OWNER,TASK,REQUESTER,command);
+        command.setContent("replacement");command.setProducerAgentId(TARGET);command.setArtifactVersion(9);nested.put("original",false);
+        assertEquals("PreparedArtifactPublication[REDACTED]",prepared.toString());
+        var result=artifactService.publishPrepared(TENANT,CLIENT,OWNER,TASK,REQUESTER,prepared);
+        assertEquals(original,result.getContent());assertEquals(1,result.getArtifactVersion());
+        assertEquals(Boolean.TRUE,((Map<?,?>)result.getMetadata().get("nested")).get("original"));
+    }
+
+    @Test
+    void forgedCrossOwnerAndCrossActorPreparedCapabilitiesCannotPersist() {
+        var prepared=artifactService.preparePublication(TENANT,CLIENT,OWNER,TASK,REQUESTER,artifact("opaque",1,0));
+        for(var proof:List.of(prepared,new AgentTaskArtifactService.PreparedPublication(){})) {
+            assertThrows(AgentTaskCollaborationException.class,()->artifactService.publishPrepared(TENANT,CLIENT,"other-owner",TASK,REQUESTER,proof));
+            assertThrows(AgentTaskCollaborationException.class,()->artifactService.publishPrepared(TENANT,CLIENT,OWNER,TASK,TARGET,proof));
+        }
+        assertThrows(AgentTaskCollaborationException.class,()->artifactService.publishPrepared(TENANT,CLIENT,OWNER,TASK,REQUESTER,
+                new AgentTaskArtifactService.PreparedPublication(){}));
+        assertEquals(0,count("SELECT COUNT(*) FROM agent_task_artifact"));assertEquals(0,count("SELECT COUNT(*) FROM agent_task_event"));
+    }
+
+    @Test
+    void aclAndOriginalVersionAreRecheckedAfterStorageNotAssumedFromPreparation() {
+        var command=managedArtifact("recheck",new byte[]{4});
+        var prepared=artifactService.preparePublication(TENANT,CLIENT,OWNER,TASK,REQUESTER,command);
+        jdbc.update("UPDATE agent_task_member SET member_role='observer' WHERE agent_id=?",REQUESTER);
+        assertThrows(AgentTaskCollaborationException.class,()->artifactService.publishPrepared(TENANT,CLIENT,OWNER,TASK,REQUESTER,prepared));
+        assertEquals(0,count("SELECT COUNT(*) FROM agent_task_artifact"));
+        jdbc.update("UPDATE agent_task_member SET member_role='worker' WHERE agent_id=?",REQUESTER);
+        artifactService.publish(TENANT,CLIENT,OWNER,TASK,REQUESTER,artifact("recheck",1,0));
+        assertEquals(Reason.VERSION_CONFLICT,assertThrows(AgentTaskCollaborationException.class,
+                ()->artifactService.publishPrepared(TENANT,CLIENT,OWNER,TASK,REQUESTER,prepared)).getReason());
+        assertEquals(1,artifactStorage.stores);assertEquals(1,count("SELECT COUNT(*) FROM agent_task_artifact"));
+        assertEquals(1,count("SELECT COUNT(*) FROM agent_task_event"));
+    }
+
+    @Test
+    void preparedAppendFailureRollsBackRowsEventAndRootVersionRetainingRecoverableDigest() {
+        var raw=new AgentTaskCollaborationServiceImpl(taskDao,memberDao,workItemDao,requestDao,artifactDao,
+                artifactStorage,mutationTransaction,command->{eventWriter.append(command);throw new IllegalStateException("after append");},()->LEASE_NOW);
+        var failing=(AgentTaskArtifactService)transactionalProxy(raw,dataSource,AgentTaskArtifactService.class);
+        var prepared=failing.preparePublication(TENANT,CLIENT,OWNER,TASK,REQUESTER,managedArtifact("rollback",new byte[]{5}));
+        assertThrows(IllegalStateException.class,()->failing.publishPrepared(TENANT,CLIENT,OWNER,TASK,REQUESTER,prepared));
+        assertEquals(0,count("SELECT COUNT(*) FROM agent_task_artifact"));assertEquals(0,count("SELECT COUNT(*) FROM agent_task_event"));
+        assertEquals(0L,jdbc.queryForObject("SELECT current_event_version FROM agent_task_meta WHERE task_id=?",Long.class,TASK));
+        assertEquals(1,artifactStorage.stores);assertEquals(1,artifactStorage.objects.size());
+    }
+
+    @Test
+    void preparationRefusesAlreadyHeldTransactionInsteadOfSuspendingLockedRoot() {
+        var transaction=new TransactionTemplate(transactionManager);
+        transaction.executeWithoutResult(status->assertThrows(org.springframework.transaction.IllegalTransactionStateException.class,
+                ()->artifactService.preparePublication(TENANT,CLIENT,OWNER,TASK,REQUESTER,managedArtifact("held",new byte[]{6}))));
+        assertEquals(0,artifactStorage.stores);assertEquals(0,count("SELECT COUNT(*) FROM agent_task_artifact"));
+    }
+
+    private AgentTaskArtifactPublishDTO managedArtifact(String id,byte[] bytes) {
+        var command=artifact(id,1,0);command.setContent(null);command.setContentBytes(bytes);
+        command.setContentHash(sha256Bytes(bytes));command.setContentByteLength((long)bytes.length);command.setContentMimeType("image/png");
+        return command;
+    }
+    private static String sha256Bytes(byte[] bytes) {
+        try{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));}
+        catch(Exception failure){throw new AssertionError(failure);}
+    }
+    private static final class MemoryArtifactStorage implements AgentTaskArtifactStorage {
+        final Map<String,byte[]> objects=new java.util.LinkedHashMap<>();int stores;
+        @Override public StoredObject store(Scope scope,byte[] content,String mimeType) {
+            assertFalse(TransactionSynchronizationManager.isActualTransactionActive(),"storage must run after root transaction completion");
+            String hash=sha256Bytes(content),uri=uri(scope,hash);objects.put(uri,content.clone());stores++;
+            return new StoredObject(uri,hash,content.length,mimeType,true);
+        }
+        @Override public StoredContent read(Scope scope,String storageUri,String hash,long length,String mimeType) {
+            return new StoredContent(objects.get(storageUri),hash,length,mimeType);
+        }
+        @Override public boolean owns(String uri) { return uri.startsWith("test-managed:"); }
+        @Override public boolean matches(Scope scope,String uri,String hash) { return uri.equals(uri(scope,hash)); }
+        private static String uri(Scope scope,String hash) {
+            return "test-managed:"+scope.tenantId()+"/"+scope.clientId()+"/"+scope.ownerJiacn()+"/"+scope.taskId()+"/"+hash;
+        }
+    }
+
     private List<Outcome> runConcurrently(List<Callable<Outcome>> calls,
             CountDownLatch ready, CountDownLatch start) throws Exception {
         ExecutorService executor = Executors.newFixedThreadPool(calls.size());
@@ -581,11 +682,9 @@ class AgentTaskCollaborationServiceRealTransactionTest {
     private Object transactionalProxy(Object raw, DataSource dataSource, Class<?>... interfaces) {
         TransactionInterceptor interceptor = new TransactionInterceptor();
         interceptor.setTransactionManager(transactionManager);
-        NameMatchTransactionAttributeSource source = new NameMatchTransactionAttributeSource();
-        RuleBasedTransactionAttribute attribute = new RuleBasedTransactionAttribute();
-        attribute.setRollbackRules(List.of(new RollbackRuleAttribute(Exception.class)));
-        source.setNameMap(Map.of("*", attribute));
-        interceptor.setTransactionAttributeSource(source);
+        // Honor actual production method/class annotations, including NEVER preparation.
+        // Mature REQUIRED methods retain their original rollbackFor=Exception semantics.
+        interceptor.setTransactionAttributeSource(new AnnotationTransactionAttributeSource());
         ProxyFactory proxyFactory = new ProxyFactory(raw);
         proxyFactory.setInterfaces(interfaces);
         proxyFactory.addAdvice(interceptor);

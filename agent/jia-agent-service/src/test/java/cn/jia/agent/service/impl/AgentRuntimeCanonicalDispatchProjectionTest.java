@@ -47,7 +47,7 @@ class AgentRuntimeCanonicalDispatchProjectionTest {
                 || !raw.path("targetAgentId").equals(manifest.path("canonicalAgentId")))
             throw new IllegalArgumentException("SUBJECT_MISMATCH");
         JsonNode expiry = raw.path("expiresAt");
-        if (!expiry.isIntegralNumber() || !expiry.canConvertToLong() || expiry.asLong() <= 0
+        if (!expiry.isIntegralNumber() || !expiry.canConvertToLong() || expiry.asLong() < -8_640_000_000_000_000L
                 || expiry.asLong() > 8_640_000_000_000_000L)
             throw new IllegalArgumentException("UNSAFE_EXPIRY");
         return new AgentRuntimeV1AckRequest(raw.path("messageId").asText(), raw.path("correlationId").asText(),
@@ -77,9 +77,18 @@ class AgentRuntimeCanonicalDispatchProjectionTest {
             ObjectNode raw = (ObjectNode)json.readTree(rawBytes()); raw.put(field,"foreign");
             assertThrows(IllegalArgumentException.class,()->project(raw,c.path("trustedManifest"),c.path("currentTransport")));
         }
-        for (var value : new String[]{"null","0","-1","1.5","9007199254740992","8640000000000001","\"3601000\""}) {
+        for (var value : new String[]{"null","1.5","9007199254740992","-9007199254740992","8640000000000001","-8640000000000001","\"3601000\""}) {
             ObjectNode raw = (ObjectNode)json.readTree(rawBytes()); raw.set("expiresAt",json.readTree(value));
             assertThrows(IllegalArgumentException.class,()->project(raw,c.path("trustedManifest"),c.path("currentTransport")));
+        }
+    }
+    @Test void legalNonPositiveAndDateBoundaryEpochsProjectWithoutGrantingAdmission() throws Exception {
+        var c=contract();
+        for(long epoch:new long[]{0,-1,-8_640_000_000_000_000L,8_640_000_000_000_000L}) {
+            ObjectNode raw=(ObjectNode)json.readTree(rawBytes());raw.put("expiresAt",epoch);
+            var ack=project(raw,c.path("trustedManifest"),c.path("currentTransport"));
+            assertEquals(Instant.ofEpochMilli(epoch),Instant.parse(ack.expiresAt()));
+            assertEquals(epoch,raw.path("expiresAt").asLong());
         }
     }
     @Test void productInstallationAndReconnectDoNotRewriteBusinessFingerprint() throws Exception {
@@ -120,6 +129,27 @@ class AgentRuntimeCanonicalDispatchProjectionTest {
         assertEquals(8,result.deliveryVersion()); verify(f.manager).commit(any());
         assertEquals(raw.path("commandId").asText(),f.delivery.getCommandId());
         assertEquals("work-1",f.delivery.getWorkItemId()); verify(f.dao).advanceAck(eq(f.delivery),eq("RECEIVED"),isNull(),eq(1_001_000L));
+    }
+    @Test void informationalZeroAndNegativeIsoDoNotOverridePersistentAdmissionOrStartedEvidence() throws Exception {
+        var c=contract();var original=json.readTree(rawBytes());
+        for(long epoch:new long[]{0,-1}) {
+            ObjectNode projected=((ObjectNode)original).deepCopy();projected.put("expiresAt",epoch);
+            var first=project(projected,c.path("trustedManifest"),c.path("currentTransport"));
+            var terminal=new AgentRuntimeV1AckRequest(first.messageId(),first.correlationId(),first.commandId(),
+                    first.taskId(),first.workItemId(),first.tenantId(),first.clientId(),first.canonicalAgentId(),null,
+                    first.expiresAt(),"SUCCEEDED",first.installationId(),first.hostId(),first.runtimeInstanceId(),
+                    first.sessionGeneration(),null);
+            // The real source codec retains its positive issuedAt/fixed TTL policy. ACK time is
+            // informational; legitimate persisted STARTED evidence alone allows expired terminal reporting.
+            var started=new AgentCommandAckServiceImplTest.Fixture("STARTED",draft(original),first.messageId());
+            var result=boundary(started,terminal).acknowledge("rts1_redacted",first.messageId(),terminal,3_601_000L);
+            assertEquals(AgentCommandAckResult.Kind.ADVANCED,result.kind());assertEquals("SUCCEEDED",result.status());
+            verify(started.manager).commit(any());
+            var fresh=new AgentCommandAckServiceImplTest.Fixture("SENT",draft(original),first.messageId());
+            assertThrows(AgentCommandAckRejectedException.class,()->boundary(fresh,first).acknowledge(
+                    "rts1_redacted",first.messageId(),first,3_601_000L));
+            verify(fresh.dao,never()).advanceAck(any(),anyString(),any(),anyLong());verify(fresh.manager).rollback(any());
+        }
     }
     @Test void nullReferenceNeverBypassesSourceContextOrLeaseEvidence() throws Exception {
         var c=contract(); var raw=json.readTree(rawBytes());
