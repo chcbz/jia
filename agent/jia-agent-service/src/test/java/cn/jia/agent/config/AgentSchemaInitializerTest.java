@@ -127,6 +127,26 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         new AgentSchemaInitializer(taskEventUniqueIndexTemplate(required))
                 .validateTaskEventUniqueIndexes();
 
+        for (String ownerlessIndex : List.of("uk_task_event_id", "uk_task_event_version")) {
+            java.util.ArrayList<AgentSchemaInitializer.TaskEventIndexColumn> ownerless =
+                    new java.util.ArrayList<>();
+            for (AgentSchemaInitializer.TaskEventIndexColumn part : required) {
+                if (!ownerlessIndex.equals(part.indexName())) {
+                    ownerless.add(part);
+                } else if (!"owner_jiacn".equals(part.columnName())) {
+                    ownerless.add(new AgentSchemaInitializer.TaskEventIndexColumn(
+                            part.indexName(), part.columnName(),
+                            part.sequence() > 3 ? part.sequence() - 1 : part.sequence(),
+                            part.subPart()));
+                }
+            }
+            IllegalStateException error = assertThrows(IllegalStateException.class,
+                    () -> new AgentSchemaInitializer(taskEventUniqueIndexTemplate(ownerless))
+                            .validateTaskEventUniqueIndexes());
+            assertTrue(error.getMessage().contains("dangerous scoped-uniqueness drift"),
+                    error.getMessage());
+        }
+
         for (AgentSchemaInitializer.TaskEventIndexColumn dangerous : List.of(
                 new AgentSchemaInitializer.TaskEventIndexColumn(
                         "uk_global_event_id", "event_id", 1, null),
@@ -267,14 +287,14 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         }
 
         assertTrue(schema.contains("create table if not exists agent_scene_state"));
-        assertTrue(schema.contains("unique key uk_agent_scene_state_scope_agent (tenant_id, client_id, scene_id, agent_id)"));
-        assertTrue(schema.contains("key idx_agent_scene_state_scope_version (tenant_id, client_id, scene_id, state_version)"));
+        assertTrue(schema.contains("unique key uk_agent_scene_state_scope_agent (tenant_id, client_id, owner_jiacn, scene_id, agent_id)"));
+        assertTrue(schema.contains("key idx_agent_scene_state_scope_version (tenant_id, client_id, owner_jiacn, scene_id, state_version)"));
         assertTrue(schema.contains("create table if not exists agent_scene_event"));
-        assertTrue(schema.contains("unique key uk_agent_scene_event_scope_version (tenant_id, client_id, scene_id, scene_version)"));
+        assertTrue(schema.contains("unique key uk_agent_scene_event_scope_version (tenant_id, client_id, owner_jiacn, scene_id, scene_version)"));
         assertTrue(schema.contains("create table if not exists agent_scene_phase_report"));
-        assertTrue(schema.contains("unique key uk_agent_scene_phase_report_scope_report (tenant_id, client_id, scene_id, report_id)"));
+        assertTrue(schema.contains("unique key uk_agent_scene_phase_report_scope_report (tenant_id, client_id, owner_jiacn, scene_id, report_id)"));
         assertTrue(schema.contains("create table if not exists agent_scene_version"));
-        assertTrue(schema.contains("primary key (tenant_id, client_id, scene_id)"));
+        assertTrue(schema.contains("primary key (tenant_id, client_id, owner_jiacn, scene_id)"));
 
         for (String table : Set.of(
                 "agent_scene_state", "agent_scene_event", "agent_scene_phase_report", "agent_scene_version")) {
@@ -282,11 +302,12 @@ class AgentSchemaInitializerTest extends BaseMockTest {
             String compact = definition.replaceAll("\\s+", " ");
             assertTrue(compact.contains("tenant_id varchar(50) not null"), table);
             assertTrue(compact.contains("client_id varchar(50) not null"), table);
+            assertTrue(compact.contains("owner_jiacn varchar(50) not null"), table);
             assertTrue(compact.contains("scene_id varchar(100) not null"), table);
             assertFalse(definition.matches("(?s).*\\b(x|y|path|coordinates?|frame|frame_index|token|credential|model_response)\\b.*"), table);
         }
         assertEquals(Set.of(
-                        "tenant_id", "client_id", "scene_id", "current_version", "create_time", "update_time"),
+                        "tenant_id", "client_id", "owner_jiacn", "scene_id", "current_version", "create_time", "update_time"),
                 tableStructure(tableDefinition(schema, "agent_scene_version")).columns().keySet());
     }
 
@@ -937,8 +958,9 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                     return (List<T>) List.of(
                             new AgentSchemaInitializer.IndexColumn(1, "tenant_id", 1, null),
                             new AgentSchemaInitializer.IndexColumn(1, "client_id", 2, null),
-                            new AgentSchemaInitializer.IndexColumn(1, "scene_id", 3, null),
-                            new AgentSchemaInitializer.IndexColumn(1, "agent_id", 4, null));
+                            new AgentSchemaInitializer.IndexColumn(1, "owner_jiacn", 3, null),
+                            new AgentSchemaInitializer.IndexColumn(1, "scene_id", 4, null),
+                            new AgentSchemaInitializer.IndexColumn(1, "agent_id", 5, null));
                 }
                 return List.of();
             }
@@ -1027,8 +1049,9 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                     return (List<T>) List.of(
                             new AgentSchemaInitializer.IndexColumn(1, "tenant_id", 1, null),
                             new AgentSchemaInitializer.IndexColumn(1, "client_id", 2, null),
-                            new AgentSchemaInitializer.IndexColumn(1, "scene_id", 3, null),
-                            new AgentSchemaInitializer.IndexColumn(1, "agent_id", 4, null));
+                            new AgentSchemaInitializer.IndexColumn(1, "owner_jiacn", 3, null),
+                            new AgentSchemaInitializer.IndexColumn(1, "scene_id", 4, null),
+                            new AgentSchemaInitializer.IndexColumn(1, "agent_id", 5, null));
                 }
                 return List.of();
             }
@@ -1062,8 +1085,9 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                     return (List<T>) List.of(
                             new AgentSchemaInitializer.IndexColumn(0, "client_id", 1, null),
                             new AgentSchemaInitializer.IndexColumn(0, "tenant_id", 2, null),
-                            new AgentSchemaInitializer.IndexColumn(0, "scene_id", 3, null),
-                            new AgentSchemaInitializer.IndexColumn(0, "agent_id", 4, null));
+                            new AgentSchemaInitializer.IndexColumn(0, "owner_jiacn", 3, null),
+                            new AgentSchemaInitializer.IndexColumn(0, "scene_id", 4, null),
+                            new AgentSchemaInitializer.IndexColumn(0, "agent_id", 5, null));
                 }
                 return List.of();
             }
@@ -1097,8 +1121,9 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                     return (List<T>) List.of(
                             new AgentSchemaInitializer.IndexColumn(0, "tenant_id", 1, null),
                             new AgentSchemaInitializer.IndexColumn(0, "client_id", 2, 12),
-                            new AgentSchemaInitializer.IndexColumn(0, "scene_id", 3, null),
-                            new AgentSchemaInitializer.IndexColumn(0, "agent_id", 4, null));
+                            new AgentSchemaInitializer.IndexColumn(0, "owner_jiacn", 3, null),
+                            new AgentSchemaInitializer.IndexColumn(0, "scene_id", 4, null),
+                            new AgentSchemaInitializer.IndexColumn(0, "agent_id", 5, null));
                 }
                 return List.of();
             }
@@ -1275,15 +1300,19 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                 new AgentSchemaInitializer.TaskEventIndexColumn(
                         "uk_task_event_id", "client_id", 2, null),
                 new AgentSchemaInitializer.TaskEventIndexColumn(
-                        "uk_task_event_id", "event_id", 3, null),
+                        "uk_task_event_id", "owner_jiacn", 3, null),
+                new AgentSchemaInitializer.TaskEventIndexColumn(
+                        "uk_task_event_id", "event_id", 4, null),
                 new AgentSchemaInitializer.TaskEventIndexColumn(
                         "uk_task_event_version", "tenant_id", 1, null),
                 new AgentSchemaInitializer.TaskEventIndexColumn(
                         "uk_task_event_version", "client_id", 2, null),
                 new AgentSchemaInitializer.TaskEventIndexColumn(
-                        "uk_task_event_version", "task_id", 3, null),
+                        "uk_task_event_version", "owner_jiacn", 3, null),
                 new AgentSchemaInitializer.TaskEventIndexColumn(
-                        "uk_task_event_version", "event_version", 4, null));
+                        "uk_task_event_version", "task_id", 4, null),
+                new AgentSchemaInitializer.TaskEventIndexColumn(
+                        "uk_task_event_version", "event_version", 5, null));
     }
 
     private JdbcTemplate identityCatalogTemplate(String fault) {
@@ -2132,7 +2161,7 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                     "varchar", "varchar(20)", false, "utf8mb4_0900_bin", "");
             case "aggregate_type" -> new AgentSchemaInitializer.ColumnDefinition(
                     "varchar", "varchar(30)", false, "utf8mb4_0900_bin", "");
-            case "tenant_id", "client_id" -> new AgentSchemaInitializer.ColumnDefinition(
+            case "tenant_id", "client_id", "owner_jiacn" -> new AgentSchemaInitializer.ColumnDefinition(
                     "varchar", "varchar(50)", false, "utf8mb4_0900_bin", "");
             case "event_json" -> new AgentSchemaInitializer.ColumnDefinition(
                     "mediumtext", "mediumtext", false, null, "");
@@ -2144,14 +2173,14 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         List<String> columns = switch (index) {
             case "PRIMARY" -> List.of("id");
             case "uk_task_event_version" ->
-                    List.of("tenant_id", "client_id", "task_id", "event_version");
-            case "uk_task_event_id" -> List.of("tenant_id", "client_id", "event_id");
+                    List.of("tenant_id", "client_id", "owner_jiacn", "task_id", "event_version");
+            case "uk_task_event_id" -> List.of("tenant_id", "client_id", "owner_jiacn", "event_id");
             case "idx_task_event_occurred" ->
-                    List.of("tenant_id", "client_id", "task_id", "occurred_at");
+                    List.of("tenant_id", "client_id", "owner_jiacn", "task_id", "occurred_at");
             case "idx_event_actor_time" ->
-                    List.of("tenant_id", "client_id", "actor_type", "actor_id", "occurred_at");
+                    List.of("tenant_id", "client_id", "owner_jiacn", "actor_type", "actor_id", "occurred_at");
             case "idx_event_type_time" ->
-                    List.of("tenant_id", "client_id", "event_type", "occurred_at");
+                    List.of("tenant_id", "client_id", "owner_jiacn", "event_type", "occurred_at");
             default -> List.of();
         };
         boolean unique = "PRIMARY".equals(index) || index.startsWith("uk_");
