@@ -782,6 +782,7 @@ dependencies {
     add(executionHistoryHttpSourceSet.implementationConfigurationName,
             platform("org.springframework.boot:spring-boot-dependencies:${libs.versions.spring.boot.asProvider().get()}"))
     add(executionHistoryHttpSourceSet.implementationConfigurationName, libs.junit.jupiter)
+    add(executionHistoryHttpSourceSet.implementationConfigurationName, 'org.mybatis:mybatis-spring:4.0.0')
     add(executionHistoryHttpSourceSet.implementationConfigurationName, 'org.apache.tomcat.embed:tomcat-embed-core')
     add(executionHistoryHttpSourceSet.implementationConfigurationName, 'org.springframework.security:spring-security-config')
     add(executionHistoryHttpSourceSet.implementationConfigurationName, 'org.springframework.security:spring-security-web')

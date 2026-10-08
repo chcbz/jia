@@ -100,7 +100,7 @@ class ExecutionHistoryHttpContractTest {
             };
             return new PersonalWorkspaceExecutionServiceImpl(dao, workspace, links,
                     forbidden(AgentRuntimeDao.class), storage, new PersonalWorkspaceWriteService(workspace, links),
-                    new PersonalWorkspaceExecutionProperties());
+                    new PersonalWorkspaceExecutionProperties(null));
         }
         @Bean PersonalWorkspaceExecutionController controller(PersonalWorkspaceExecutionService service) {
             return new PersonalWorkspaceExecutionController(service);
