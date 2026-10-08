@@ -496,7 +496,7 @@ CREATE TABLE IF NOT EXISTS archive_source_artifact_object (
     KEY idx_archive_source_artifact_operation (tenant_id,client_id,owner_jiacn,operation_key),
     KEY idx_archive_source_artifact_cleanup (state,touched_at,source_id),
     CONSTRAINT fk_archive_source_artifact_operation FOREIGN KEY (tenant_id,client_id,owner_jiacn,operation_key) REFERENCES archive_operation(tenant_id,client_id,owner_jiacn,operation_key),
-    CONSTRAINT chk_archive_source_artifact_sha CHECK (sha256 REGEXP '^[0-9a-f]{64}$'),
+    CONSTRAINT chk_archive_source_artifact_sha CHECK (REGEXP_LIKE(sha256,'^[0-9a-f]{64}$')),
     CONSTRAINT chk_archive_source_artifact_bytes CHECK ((byte_length >= 1) AND (revision >= 1)),
     CONSTRAINT chk_archive_source_artifact_mime CHECK (mime_type='text/plain'),
     CONSTRAINT chk_archive_source_artifact_state CHECK (state IN ('PENDING','DELETE_PENDING','REFERENCED','DELETED'))

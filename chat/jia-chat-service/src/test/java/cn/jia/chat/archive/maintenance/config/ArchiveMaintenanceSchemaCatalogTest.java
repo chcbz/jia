@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -286,6 +287,37 @@ class ArchiveMaintenanceSchemaCatalogTest {
         }
         assertTrue(sql.contains("INSERT IGNORE INTO archive_collection"));
     }
+    @Test
+    void sourceArtifactShaCheckMatchesCanonicalMySqlMetadataExactly() {
+        var expected = ArchiveMaintenanceSchemaCatalog.expected().tables().get("archive_source_artifact_object");
+        assertEquals("YES:regexp_like(sha256,'^[0-9a-f]{64}$')",
+                expected.checks().get("chk_archive_source_artifact_sha"));
+        for (String metadata : java.util.List.of(
+                "regexp_like(`sha256`,_utf8mb4'^[0-9a-f]{64}$')",
+                "regexp_like(`sha256`,_utf8mb4\\'^[0-9a-f]{64}$\\')")) {
+            var actualChecks = new LinkedHashMap<>(expected.checks());
+            actualChecks.put("chk_archive_source_artifact_sha",
+                    "YES:" + ArchiveMaintenanceSchemaCatalog.normalizeCheck(metadata));
+            assertEquals(expected.checks(), actualChecks);
+            assertDoesNotThrow(() -> ArchiveMaintenanceSchemaCatalog.verify("archive_source_artifact_object",
+                    expected, new ArchiveMaintenanceSchemaCatalog.Table(expected.columns(), expected.indexes(),
+                            expected.foreignKeys(), actualChecks), "InnoDB:utf8mb4_0900_bin"));
+        }
+    }
+
+    @Test
+    void sourceArtifactAlteredRegexPatternIsStillSchemaDrift() {
+        var expected = ArchiveMaintenanceSchemaCatalog.expected().tables().get("archive_source_artifact_object");
+        var actualChecks = new LinkedHashMap<>(expected.checks());
+        actualChecks.put("chk_archive_source_artifact_sha", "YES:" + ArchiveMaintenanceSchemaCatalog.normalizeCheck(
+                "regexp_like(`sha256`,_utf8mb4'^[0-9a-f]{63}$')"));
+        var failure = assertThrows(IllegalStateException.class, () -> ArchiveMaintenanceSchemaCatalog.verify(
+                "archive_source_artifact_object", expected,
+                new ArchiveMaintenanceSchemaCatalog.Table(expected.columns(), expected.indexes(),
+                        expected.foreignKeys(), actualChecks), "InnoDB:utf8mb4_0900_bin"));
+        assertEquals("Archive maintenance schema drift at archive_source_artifact_object.checks", failure.getMessage());
+    }
+
     @Test
     void failsClosedForExistingColumnTypeIndexAndCheckDrift() {
         var draft = ArchiveMaintenanceSchemaCatalog.expected().tables().get("archive_draft");

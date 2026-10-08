@@ -14,9 +14,11 @@ import cn.jia.agent.service.ArchiveAgentExecutionPort;
 import cn.jia.agent.service.InstalledSkillResolver;
 import cn.jia.agent.service.impl.AgentIdentityServiceImpl;
 import cn.jia.chat.archive.config.ArchiveSchemaInitializer;
+import cn.jia.chat.archive.config.ArchiveSchemaCatalog;
 import cn.jia.chat.archive.config.ArchiveReaderDataSchemaInitializer;
 import cn.jia.chat.archive.maintenance.config.ArchiveMaintenanceProperties;
 import cn.jia.chat.archive.maintenance.config.ArchiveMaintenanceSchemaInitializer;
+import cn.jia.chat.archive.maintenance.config.ArchiveMaintenanceSchemaCatalog;
 import cn.jia.chat.archive.maintenance.dto.*;
 import cn.jia.chat.archive.maintenance.model.ArchiveActorScope;
 import cn.jia.chat.archive.maintenance.model.ArchiveConfirmedPolicyRef;
@@ -124,6 +126,57 @@ class ArchiveMaintenanceConcurrencyMySqlTest {
     @AfterEach
     void tearDown() {
         if (jdbc != null) clean();
+    }
+
+    @Test
+    void sourceArtifactShaCheckMatchesMySqlMetadataAndRejectsInvalidSha() {
+        String metadata = jdbc.queryForObject("""
+                SELECT CONCAT(t.enforced,':',c.check_clause)
+                FROM information_schema.table_constraints t
+                JOIN information_schema.check_constraints c
+                  ON c.constraint_schema=t.constraint_schema AND c.constraint_name=t.constraint_name
+                WHERE t.table_schema=DATABASE() AND t.table_name='archive_source_artifact_object'
+                  AND t.constraint_type='CHECK' AND t.constraint_name='chk_archive_source_artifact_sha'
+                """, String.class);
+        assertTrue(metadata != null && metadata.startsWith("YES:"), String.valueOf(metadata));
+        assertEquals(ArchiveMaintenanceSchemaCatalog.expected().tables().get("archive_source_artifact_object")
+                        .checks().get("chk_archive_source_artifact_sha"),
+                "YES:" + ArchiveSchemaCatalog.normalizeCheck(metadata.substring(4)));
+        // Reinitialization verifies the real DB catalog again, without weakening comparison.
+        new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
+                new ArchiveMaintenanceProperties()).initialize();
+        jdbc.update("""
+                INSERT INTO archive_operation(tenant_id,client_id,owner_jiacn,operation_key,
+                    http_method,canonical_path,request_sha256,target_type,target_id,state)
+                VALUES ('0','client-a','owner-a','schema-sha','POST',?,?,'SOURCE','source-sha-valid','PENDING')
+                """, "/archive/admin/v1/collections/" + COLLECTION + "/source-snapshots", SHA);
+        String insert = """
+                INSERT INTO archive_source_artifact_object(source_id,tenant_id,client_id,owner_jiacn,
+                    operation_key,storage_uri,sha256,byte_length,mime_type,state,revision)
+                VALUES (?,'0','client-a','owner-a','schema-sha','schema-check-fixture',?,1,'text/plain','PENDING',1)
+                """;
+        String validSha = "0123456789abcdef".repeat(4);
+        assertEquals(1, jdbc.update(insert, "source-sha-valid", validSha));
+        assertEquals(validSha, jdbc.queryForObject("SELECT sha256 FROM archive_source_artifact_object "
+                + "WHERE source_id='source-sha-valid'", String.class));
+        int index = 0;
+        for (String invalidSha : List.of("a".repeat(63), "g".repeat(64), "A".repeat(64), "")) {
+            String sourceId = "source-sha-invalid-" + index++;
+            var rejected = assertThrows(DataAccessException.class, () -> jdbc.update(insert, sourceId, invalidSha));
+            assertTrue(rejected.getMostSpecificCause().getMessage().contains("chk_archive_source_artifact_sha"),
+                    rejected.getMostSpecificCause().getMessage());
+        }
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM archive_source_artifact_object", Integer.class));
+    }
+
+    @Test
+    void sourceArtifactAlteredShaRegexPatternFailsClosedOnMySql() {
+        jdbc.execute("ALTER TABLE archive_source_artifact_object DROP CHECK chk_archive_source_artifact_sha, "
+                + "ADD CONSTRAINT chk_archive_source_artifact_sha CHECK (REGEXP_LIKE(sha256,'^[0-9a-f]{63}$'))");
+        var failure = assertThrows(IllegalStateException.class, () ->
+                new ArchiveMaintenanceSchemaInitializer(jdbc, new JdbcArchiveMaintenanceStore(jdbc),
+                        new ArchiveMaintenanceProperties()).initialize());
+        assertEquals("Archive maintenance schema drift at archive_source_artifact_object.checks", failure.getMessage());
     }
 
     @Test
