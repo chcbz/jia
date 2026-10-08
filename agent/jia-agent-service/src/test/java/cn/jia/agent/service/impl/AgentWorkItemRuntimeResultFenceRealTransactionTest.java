@@ -180,7 +180,13 @@ class AgentWorkItemRuntimeResultFenceRealTransactionTest {
     }
     @Test void sourceCanonicalHashCorruptionDuringStorageFailsBeforeBusinessWrites() throws Exception {
         int events=count("agent_task_event");storage.afterStore=()->jdbc.update("UPDATE agent_command_delivery SET command_payload_hash=? WHERE command_id=?",new byte[32],receipt.getCommandId());
-        mvc.perform(post(path).principal(principal).contentType("application/json").content(body())).andExpect(status().isConflict());assertNoResultMutation(events);
+        mvc.perform(post(path).principal(principal).contentType("application/json").content(body())).andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("WORK_ITEM_RESULT_STALE"));assertNoResultMutation(events);
+    }
+    @Test void sourceRowOutsideExactTargetStillHidesExistenceAfterStorage() throws Exception {
+        int events=count("agent_task_event");storage.afterStore=()->jdbc.update("UPDATE agent_command_delivery SET target_agent_id=? WHERE command_id=?",PREVIOUS,receipt.getCommandId());
+        mvc.perform(post(path).principal(principal).contentType("application/json").content(body())).andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("WORK_ITEM_RESULT_NOT_FOUND"));assertNoResultMutation(events);assertEquals(1,storage.material.size());
     }
     @Test void aclChangedDuringStorageIsRecheckedRatherThanTrustedFromPreparedObject() throws Exception {
         int events=count("agent_task_event");storage.afterStore=()->jdbc.update("UPDATE agent_task_member SET member_role='observer' WHERE agent_id=?",TARGET);
