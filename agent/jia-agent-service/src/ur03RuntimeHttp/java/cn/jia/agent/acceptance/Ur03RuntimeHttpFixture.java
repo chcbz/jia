@@ -165,6 +165,7 @@ public final class Ur03RuntimeHttpFixture {
             "org.springframework.context.ApplicationContextException", "org.apache.catalina.LifecycleException",
             "org.apache.ibatis.exceptions.PersistenceException", "org.apache.ibatis.binding.BindingException",
             "org.mybatis.spring.MyBatisSystemException", "org.springframework.aop.framework.AopConfigException",
+            "tools.jackson.databind.exc.JsonNodeException", "org.opentest4j.AssertionFailedError",
             "cn.jia.agent.acceptance.Ur03RuntimeHttpFixture$FixtureFailure");
     static final Set<String> DIAGNOSTIC_BEANS = Set.of("dataSource", "transactionManager", "sqlSessionFactory",
             "sqlSessionTemplate", "installations", "runtimes", "registry", "aliases", "bindings", "users", "identity",
