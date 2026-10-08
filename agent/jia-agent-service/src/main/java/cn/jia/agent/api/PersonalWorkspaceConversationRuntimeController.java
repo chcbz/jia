@@ -1,6 +1,7 @@
 package cn.jia.agent.api;
 
 import cn.jia.agent.security.AgentRuntimeAuthentication;
+import cn.jia.agent.security.AgentRuntimeAuthenticationService;
 import cn.jia.core.security.AllowSensitiveOutput;
 import cn.jia.agent.service.PersonalWorkspaceExecutionService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -54,8 +55,11 @@ public final class PersonalWorkspaceConversationRuntimeController {
     public record ProviderStartReceipt(boolean started) { }
     private final PersonalWorkspaceExecutionService executions;
 
-    public PersonalWorkspaceConversationRuntimeController(PersonalWorkspaceExecutionService executions) {
+    private final AgentRuntimeAuthenticationService runtimeAuthentication;
+    public PersonalWorkspaceConversationRuntimeController(PersonalWorkspaceExecutionService executions,
+            AgentRuntimeAuthenticationService runtimeAuthentication) {
         this.executions=Objects.requireNonNull(executions,"executions");
+        this.runtimeAuthentication=Objects.requireNonNull(runtimeAuthentication,"runtimeAuthentication");
     }
 
     @GetMapping(value="/conversation-executions/commands",produces=MediaType.APPLICATION_JSON_VALUE)
@@ -76,8 +80,8 @@ public final class PersonalWorkspaceConversationRuntimeController {
             Authentication authentication) {
         noQuery(request);
         if (claim==null || claim.commandId()==null || claim.messageId()==null) throw new BadRequest();
-        return ok(executions.claimConversationStart(scope(authentication),taskId,runId,
-                claim.commandId(),claim.messageId()));
+        return ok(runtimeAuthentication.withNativeFence(authentication, () ->
+                executions.claimConversationStart(scope(authentication),taskId,runId,claim.commandId(),claim.messageId())));
     }
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/lease/renew",consumes=MediaType.APPLICATION_JSON_VALUE,
@@ -86,7 +90,8 @@ public final class PersonalWorkspaceConversationRuntimeController {
             @PathVariable String runId,@RequestBody FenceRequest request,HttpServletRequest servletRequest,
             Authentication authentication) {
         noQuery(servletRequest);
-        return ok(executions.renewConversationLease(scope(authentication),taskId,runId,fence(request)));
+        return ok(runtimeAuthentication.withNativeFence(authentication, () ->
+                executions.renewConversationLease(scope(authentication),taskId,runId,fence(request))));
     }
 
     @PostMapping(value="/{taskId}/runs/{runId}/conversation/provider-start",
@@ -259,7 +264,8 @@ public final class PersonalWorkspaceConversationRuntimeController {
             Authentication authentication) {
         noQuery(request);
         if (body==null || body.code()==null) throw new BadRequest();
-        return ok(executions.failConversation(scope(authentication),taskId,runId,fence(body.fence()),body.code()));
+        return ok(runtimeAuthentication.withNativeFence(authentication, () ->
+                executions.failConversation(scope(authentication),taskId,runId,fence(body.fence()),body.code())));
     }
 
     @ExceptionHandler(ControlledStartFailure.class)

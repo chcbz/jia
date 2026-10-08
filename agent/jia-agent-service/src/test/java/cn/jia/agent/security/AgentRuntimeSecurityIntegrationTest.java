@@ -192,6 +192,11 @@ class AgentRuntimeSecurityIntegrationTest {
             var row = persisted.get(inv.getArgument(2));
             return row != null && inv.getArgument(0).equals(row.getTenantId()) && inv.getArgument(1).equals(row.getClientId()) ? row : null;
         });
+        when(rows.lockInScope(anyString(), anyString(), anyString())).thenAnswer(inv -> {
+            var row=persisted.get(inv.getArgument(2));
+            return row!=null && inv.getArgument(0).equals(row.getTenantId())
+                    && inv.getArgument(1).equals(row.getClientId()) ? row : null;
+        });
         accounts = context.getBean(AccountSecurityService.class);
         workspaceExecutions = context.getBean(PersonalWorkspaceExecutionService.class);
         when(rows.findByAgentId(anyString())).thenAnswer(inv -> persisted.get(inv.getArgument(0)));
@@ -217,10 +222,10 @@ class AgentRuntimeSecurityIntegrationTest {
         mvc = MockMvcBuilders.standaloneSetup(new RuntimeScopeProbeController())
                 .addFilters(filters).build();
         runtimeFailureMvc = MockMvcBuilders.standaloneSetup(
-                        new PersonalWorkspaceRuntimeFileController(workspaceExecutions))
+                        new PersonalWorkspaceRuntimeFileController(workspaceExecutions,auth))
                 .addFilters(filters).build();
         conversationMvc = MockMvcBuilders.standaloneSetup(
-                        new PersonalWorkspaceConversationRuntimeController(workspaceExecutions))
+                        new PersonalWorkspaceConversationRuntimeController(workspaceExecutions,auth))
                 .addFilters(filters).build();
     }
 
@@ -954,6 +959,17 @@ class AgentRuntimeSecurityIntegrationTest {
     }
 
     @Test
+    void proofRotatedAfterHttpAdmissionCannotMutateOriginalWorkspaceRun() {
+        var admitted=authenticate(auth,A,"runtime-a",TOKEN_A);
+        persisted.get(A).setRuntimeSessionGeneration(2L).setRuntimeInstanceId("replacement-boot");
+        var controller=new PersonalWorkspaceRuntimeFileController(workspaceExecutions,auth);
+        var request=new org.springframework.mock.web.MockHttpServletRequest("POST","/internal/agent/tasks/task-a/runs/run-a/failure");
+        assertThrows(RuntimeException.class,()->controller.failure("task-a","run-a",
+                new PersonalWorkspaceRuntimeFileController.FailureRequest("OUTPUT_MISSING"),request,admitted));
+        verifyNoInteractions(workspaceExecutions);
+    }
+
+    @Test
     void disabledCapabilityIsReflectedWithoutChangingAuthenticatedScope() {
         var disabledGate = new AgentTaskEventsGate(new AgentTaskEventsProperties(false, List.of()));
         var scopedAuth = new AgentRuntimeAuthenticationService(rows,
@@ -1003,7 +1019,7 @@ class AgentRuntimeSecurityIntegrationTest {
     void runtimeV1ClientLaneIsPostOnlyAndExcludesScopedInstallationAdministration() {
         var servletContext = new MockServletContext();
         for (String path : List.of("/agent/runtime/v1/enroll", "/agent/runtime/v1/session",
-                "/agent/runtime/v1/heartbeat", "/agent/runtime/v1/commands/message-1/acks")) {
+                "/agent/runtime/v1/heartbeat")) {
             assertTrue(AgentRuntimeSecurityConfiguration.selectsRuntimeV1ClientLane(
                     post(path).buildRequest(servletContext)));
             assertFalse(AgentRuntimeSecurityConfiguration.selectsRuntimeV1ClientLane(

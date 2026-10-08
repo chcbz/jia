@@ -154,6 +154,13 @@ public class AgentRuntimeAuthenticationService {
         return proof;
     }
 
+    /** Native business commit boundary. This entry point owns a proxy transaction;
+     * the internal call to withFence() must never rely on self-invocation advice. */
+    @Transactional(rollbackFor = Exception.class)
+    public <T> T withNativeFence(org.springframework.security.core.Authentication authentication, Supplier<T> operation) {
+        return withFence(requireProof(authentication), false, operation);
+    }
+
     /** Money admission may consult live evidence; it grants no authority to an arbitrary caller. */
     public Proof currentRegisteredProof(String tenantId, String clientId, String agentId) {
         Proof result = null;

@@ -1,6 +1,7 @@
 package cn.jia.agent.api;
 
 import cn.jia.agent.security.AgentRuntimeAuthentication;
+import cn.jia.agent.security.AgentRuntimeAuthenticationService;
 import cn.jia.agent.service.PersonalWorkspaceExecutionService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.ContentDisposition;
@@ -30,7 +31,12 @@ import java.util.Objects;
 public class PersonalWorkspaceRuntimeFileController {
     private static final String CACHE_CONTROL = "private, no-store";
     private final PersonalWorkspaceExecutionService service;
-    public PersonalWorkspaceRuntimeFileController(PersonalWorkspaceExecutionService service) { this.service=Objects.requireNonNull(service,"service"); }
+    private final AgentRuntimeAuthenticationService runtimeAuthentication;
+    public PersonalWorkspaceRuntimeFileController(PersonalWorkspaceExecutionService service,
+            AgentRuntimeAuthenticationService runtimeAuthentication) {
+        this.service=Objects.requireNonNull(service,"service");
+        this.runtimeAuthentication=Objects.requireNonNull(runtimeAuthentication,"runtimeAuthentication");
+    }
 
     @GetMapping(value = "/workspace-executions/commands", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<RuntimeQueueView> queuedCommands(HttpServletRequest request, Authentication authentication) {
@@ -45,7 +51,8 @@ public class PersonalWorkspaceRuntimeFileController {
             Authentication authentication) {
         requireNoQuery(servletRequest);
         if (request == null || request.commandId() == null || request.messageId() == null) throw new RequestFailure();
-        return json(service.start(scope(authentication), taskId, runId, request.commandId(), request.messageId()));
+        return json(runtimeAuthentication.withNativeFence(authentication, () ->
+                service.start(scope(authentication), taskId, runId, request.commandId(), request.messageId())));
     }
 
     @GetMapping(value = "/{taskId}/runs/{runId}/inputs", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -93,7 +100,8 @@ public class PersonalWorkspaceRuntimeFileController {
             Authentication authentication) {
         requireNoQuery(servletRequest);
         if (request == null || request.code() == null) throw new RequestFailure();
-        return json(service.fail(scope(authentication), taskId, runId, request.code()));
+        return json(runtimeAuthentication.withNativeFence(authentication, () ->
+                service.fail(scope(authentication), taskId, runId, request.code())));
     }
     @ExceptionHandler(PersonalWorkspaceExecutionService.Failure.class)
     public ResponseEntity<ErrorBody> failure(PersonalWorkspaceExecutionService.Failure ignored) { return error(HttpStatus.NOT_FOUND,"RUNTIME_FILE_NOT_FOUND","Runtime file access is unavailable"); }

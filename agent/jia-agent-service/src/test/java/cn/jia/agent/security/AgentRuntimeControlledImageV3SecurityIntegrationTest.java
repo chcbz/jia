@@ -46,7 +46,7 @@ class AgentRuntimeControlledImageV3SecurityIntegrationTest {
         var aware=new org.springframework.security.web.servletapi.SecurityContextHolderAwareRequestFilter();
         aware.afterPropertiesSet();
         var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(
-          new cn.jia.agent.api.PersonalWorkspaceConversationRuntimeController(executions))
+          new cn.jia.agent.api.PersonalWorkspaceConversationRuntimeController(executions,authentication))
           .setControllerAdvice(new cn.jia.core.security.SensitiveResponseBodyAdvice(new cn.jia.core.security.SensitiveResponseProperties()))
           .addFilters(new AgentRuntimeAuthenticationFilter(authentication),aware).build();
         var sources=List.of(
@@ -105,7 +105,7 @@ class AgentRuntimeControlledImageV3SecurityIntegrationTest {
         org.mockito.Mockito.when(authentication.authenticate(org.mockito.ArgumentMatchers.any(AgentRuntimeAuthenticationFilter.SessionHeaders.class), org.mockito.ArgumentMatchers.eq(true))).thenReturn(principal);
         var aware=new org.springframework.security.web.servletapi.SecurityContextHolderAwareRequestFilter();aware.afterPropertiesSet();
         var mvc=org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(
-            new cn.jia.agent.api.PersonalWorkspaceConversationRuntimeController(executions))
+            new cn.jia.agent.api.PersonalWorkspaceConversationRuntimeController(executions,authentication))
             .addFilters(new AgentRuntimeAuthenticationFilter(authentication),aware).build();
         byte[] bytes=new byte[]{1,2,3}; // Controller tests byte proof; service tests real PNG format.
         String hash=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));

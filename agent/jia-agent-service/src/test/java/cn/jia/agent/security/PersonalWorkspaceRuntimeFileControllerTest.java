@@ -20,7 +20,10 @@ class PersonalWorkspaceRuntimeFileControllerTest {
     @Test
     void runtimeFailureReceiptUsesExactRuntimeScopeAndNoStoreResponse() {
         PersonalWorkspaceExecutionService service = mock(PersonalWorkspaceExecutionService.class);
-        PersonalWorkspaceRuntimeFileController controller = new PersonalWorkspaceRuntimeFileController(service);
+        var auth=mock(AgentRuntimeAuthenticationService.class);
+        when(auth.withNativeFence(org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(i->((java.util.function.Supplier<?>)i.getArgument(1)).get());
+        PersonalWorkspaceRuntimeFileController controller = new PersonalWorkspaceRuntimeFileController(service,auth);
         HttpServletRequest request = mock(HttpServletRequest.class);
         when(request.getParameterMap()).thenReturn(Map.of());
         AgentRuntimeAuthentication authentication = new AgentRuntimeAuthentication(

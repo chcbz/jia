@@ -1,6 +1,7 @@
 package cn.jia.chat.api;
 
 import cn.jia.agent.security.AgentRuntimeAuthentication;
+import cn.jia.agent.security.AgentRuntimeAuthenticationService;
 import cn.jia.chat.service.ChatDeliberationException;
 import cn.jia.chat.service.ChatInspectionAuthorityService;
 import cn.jia.core.entity.JsonResult;
@@ -26,8 +27,11 @@ public final class AgentInspectionInputController {
     private static final String MANIFEST_HEADER = "X-Inspection-Manifest-Digest";
     private final ChatInspectionAuthorityService authority;
 
-    public AgentInspectionInputController(ChatInspectionAuthorityService authority) {
+    private final AgentRuntimeAuthenticationService runtimeAuthentication;
+    public AgentInspectionInputController(ChatInspectionAuthorityService authority,
+            AgentRuntimeAuthenticationService runtimeAuthentication) {
         this.authority = Objects.requireNonNull(authority);
+        this.runtimeAuthentication = Objects.requireNonNull(runtimeAuthentication);
     }
 
     @GetMapping("/internal/agent/chat/requests/{requestId}/turns/{turnId}/inspection/inputs/{sourceRefId}/content")
@@ -35,18 +39,22 @@ public final class AgentInspectionInputController {
             @PathVariable String turnId, @PathVariable String sourceRefId,
             Authentication authentication, HttpServletRequest request) {
         if (request.getQueryString() != null || request.getContentLengthLong() > 0) throw unavailable();
-        if (!(authentication instanceof AgentRuntimeAuthentication runtime)) {
+        if (!(authentication instanceof AgentRuntimeAuthentication runtime) || !runtime.isAuthenticated()) {
             throw new RuntimeAccessException(authentication == null || !authentication.isAuthenticated()
                     ? HttpStatus.UNAUTHORIZED : HttpStatus.FORBIDDEN);
         }
         List<String> headers = Collections.list(request.getHeaders(MANIFEST_HEADER));
         if (headers.size() != 1) throw unavailable();
+        var proof=AgentRuntimeAuthenticationService.requireProof(runtime);
+        runtimeAuthentication.validateCurrent(proof,false);
         ChatInspectionAuthorityService.Content value = authority.read(runtime.getPrincipal(), requestId,
                 turnId, sourceRefId, headers.getFirst());
-        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+        // Source storage can perform I/O; never hold the new Runtime fence across it.
+        // Inspection is read-only. Current installation/proof is checked again for delivery.
+        return runtimeAuthentication.withNativeFence(runtime, () -> ResponseEntity.ok().cacheControl(CacheControl.noStore())
                 .header("X-Content-Type-Options", "nosniff")
                 .header(HttpHeaders.CONTENT_TYPE, value.mimeType())
-                .contentLength(value.bytes().length).body(value.bytes());
+                .contentLength(value.bytes().length).body(value.bytes()));
     }
 
     @ExceptionHandler(ChatDeliberationException.class)

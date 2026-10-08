@@ -105,6 +105,28 @@ class AgentRuntimePersistentSessionFenceTest {
         assertFalse(entered.get()); verify(manager).rollback(transaction); verify(manager, never()).commit(any());
     }
 
+    @Test void nativeCommitEntryOwnsProxyTransactionAndRejectsProofRotatedAfterAdmission() {
+        var session=auth.issue(installation,request("host","boot"),1000);
+        var admitted=auth.authenticate(headers(session),false);
+        var manager=mock(org.springframework.transaction.PlatformTransactionManager.class);
+        var status=mock(org.springframework.transaction.TransactionStatus.class);
+        when(manager.getTransaction(any())).thenReturn(status);
+        var advice=new org.springframework.transaction.interceptor.TransactionInterceptor();
+        advice.setTransactionManager(manager);
+        advice.setTransactionAttributeSource(new org.springframework.transaction.annotation.AnnotationTransactionAttributeSource());
+        var factory=new org.springframework.aop.framework.ProxyFactory(auth);factory.setProxyTargetClass(true);factory.addAdvice(advice);
+        var proxy=(AgentRuntimeAuthenticationService)factory.getProxy();
+        clearInvocations(installations,rows);
+        assertEquals("original-commit",proxy.withNativeFence(admitted,()->"original-commit"));
+        var ordered=inOrder(manager,installations,rows);
+        ordered.verify(manager).getTransaction(any());ordered.verify(installations).lock(ID);
+        ordered.verify(rows).lockInScope("0","client",AGENT);ordered.verify(manager).commit(status);
+        auth.issue(installation,request("host","replacement"),1001);clearInvocations(manager);
+        AtomicBoolean entered=new AtomicBoolean();
+        assertThrows(RuntimeException.class,()->proxy.withNativeFence(admitted,()->entered.compareAndSet(false,true)));
+        assertFalse(entered.get());verify(manager).rollback(status);verify(manager,never()).commit(any());
+    }
+
     @Test void coldProvisionedIdentityIssuesIndependentDigestOnlyPendingSession() {
         var session = auth.issue(installation, request("host", "boot"), 1000);
         assertEquals("CHANNEL_PENDING", session.status()); assertEquals(1, session.sessionGeneration());
