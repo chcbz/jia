@@ -58,6 +58,30 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                 "chk_hosted_single_tenant", "chk_hosted_repair"), baseline.keySet());
         assertEquals(baseline, hostedCheckClauses(created));
         assertEquals("tenant_id='0'", baseline.get("chk_hosted_single_tenant"));
+
+        // Statement extraction must preserve quoted SQL and comments, not truncate a CHECK oracle.
+        String prefix = "create table if not exists statement_probe (";
+        for (String body : List.of(
+                "value varchar(100) comment 'before; after', id bigint)",
+                "value varchar(100) comment 'doubled ''; still quoted', id bigint)",
+                "value varchar(100) comment 'escaped \\'; still quoted', id bigint)",
+                "value varchar(100) comment \"double; quote\", id bigint)",
+                "value varchar(100) comment \"escaped \\\"; still quoted\", id bigint)",
+                "value varchar(100) comment \"doubled \"\"; still quoted\", id bigint)",
+                "`semi;colon``name` bigint, id bigint)",
+                "id bigint /* block; ' quote */ , value bigint)",
+                "id bigint -- line; ' quote\n, value bigint)",
+                "id bigint # line; \" quote\r\n, value bigint)",
+                "id bigint comment '-- # /* ; */', value bigint)")) {
+            String statement = prefix + body;
+            assertEquals(statement, tableDefinition(statement + "; select 1;", "statement_probe"));
+        }
+        for (String unfinished : List.of(
+                "value varchar(100) comment 'unterminated;", "`unterminated;",
+                "id bigint /* unterminated;", "id bigint) -- no terminator;")) {
+            assertThrows(AssertionError.class,
+                    () -> tableDefinition(prefix + unfinished, "statement_probe"));
+        }
     }
 
     @Test
@@ -1634,9 +1658,50 @@ class AgentSchemaInitializerTest extends BaseMockTest {
     private String tableDefinition(String schema, String table) {
         int start = schema.indexOf("create table if not exists " + table + " (");
         assertTrue(start >= 0, table);
-        int end = schema.indexOf(";", start);
-        assertTrue(end > start, table);
-        return schema.substring(start, end);
+        char quote = 0;
+        boolean lineComment = false;
+        boolean blockComment = false;
+        for (int i = start; i < schema.length(); i++) {
+            char current = schema.charAt(i);
+            char next = i + 1 < schema.length() ? schema.charAt(i + 1) : 0;
+            if (lineComment) {
+                if (current == '\n' || current == '\r') {
+                    lineComment = false;
+                }
+                continue;
+            }
+            if (blockComment) {
+                if (current == '*' && next == '/') {
+                    blockComment = false;
+                    i++;
+                }
+                continue;
+            }
+            if (quote != 0) {
+                if (quote != '`' && current == '\\' && next != 0) {
+                    i++; // MySQL string backslash escape: the next character cannot close the quote.
+                } else if (current == quote) {
+                    if (next == quote) {
+                        i++; // Doubled string/identifier quote remains inside the quoted value.
+                    } else {
+                        quote = 0;
+                    }
+                }
+                continue;
+            }
+            if (current == '\'' || current == '"' || current == '`') {
+                quote = current;
+            } else if (current == '/' && next == '*') {
+                blockComment = true;
+                i++;
+            } else if (current == '#' || (current == '-' && next == '-'
+                    && (i + 2 == schema.length() || Character.isWhitespace(schema.charAt(i + 2))))) {
+                lineComment = true;
+            } else if (current == ';') {
+                return schema.substring(start, i);
+            }
+        }
+        throw new AssertionError("Missing unquoted SQL statement terminator for " + table);
     }
 
     private JdbcTemplate dialectTemplate(String productName) throws Exception {
