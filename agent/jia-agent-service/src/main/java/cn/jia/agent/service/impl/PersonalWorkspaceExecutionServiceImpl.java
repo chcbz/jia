@@ -1544,44 +1544,69 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public StagedOutput stageConversationOutput(RuntimeScope scope, String taskId, String runId,
             ConversationFence fence, String outputId, String filename, String mimeType, byte[] content) {
-        requireConversationExecutionEnabled();
-        return withConversationRoot(scope,taskId,runId,true,false,false,"RESULT",execution -> {
+        requireConversationExecutionEnabled(); nativeAuthentication(scope);
+        byte[] immutable=content==null?null:content.clone();
+        // Original root/ACL/consumed START and lease are checked before storage, and again
+        // after preparation. No Runtime or business row lock spans filesystem I/O.
+        var preparation=withConversationRoot(scope,taskId,runId,true,false,false,"RESULT",execution -> {
             requireConversationFence(scope,execution,fence,false);
             requireControlledV3StartedForResult(execution);
-            return stageOutputLocked(scope,execution,outputId,filename,mimeType,content);
+            validateOutputUpload(execution,outputId,filename,mimeType,immutable);
+            var existing=executions.lockOutput(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                    execution.getExecutionId(),outputId);
+            if(existing!=null) requireMatchingStagedOutput(execution,existing,
+                    new PersonalWorkspaceStorage.StoredObject(existing.getStorageUri(),plainSha(immutable),immutable.length,mimeType));
+            return new NativeResultPreparation(nativeExecutionBinding(execution),existing==null?null:preparedOutput(existing));
         });
+        var stored=prepareResultUpload(scope,preparation.existing(),immutable,mimeType);
+        return nativeMutation(scope,()->withConversationRoot(scope,taskId,runId,true,false,false,"RESULT",execution -> {
+            requireConversationFence(scope,execution,fence,false);
+            requireControlledV3StartedForResult(execution);
+            requirePreparedExecution(execution,preparation.execution());
+            validateOutputUpload(execution,outputId,filename,mimeType,immutable);
+            var existing=executions.lockOutput(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                    execution.getExecutionId(),outputId);
+            if(preparation.existing()!=null) requirePreparedOutput(preparation.existing(),existing);
+            return persistStagedOutput(scope,execution,outputId,filename,mimeType,existing,stored);
+        }));
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public CommitView commitConversationOutput(RuntimeScope scope, String taskId, String runId,
             ConversationFence fence, String manifestId, List<OutputDeclaration> outputs) {
         requireConversationExecutionEnabled();id(manifestId,"manifestId",100);validateManifest(outputs);
-        return withConversationRoot(scope,taskId,runId,true,true,false,"RESULT",execution -> {
+        nativeAuthentication(scope); var immutable=List.copyOf(outputs);
+        var prepared=withConversationRoot(scope,taskId,runId,true,true,false,"RESULT",execution -> {
             requireConversationFence(scope,execution,fence,"OUTPUT_COMMITTED".equals(execution.getExecutionState()));
             requireControlledV3StartedForResult(execution);
-            return commitConversationOutputs(scope,execution,manifestId,outputs);
+            var output=lockAndVerifyManifest(scope,execution,manifestId,immutable).getFirst();
+            requireConversationOutputState(execution,output);
+            return new NativeResultPreparation(nativeExecutionBinding(execution),preparedOutput(output));
         });
+        if(!prepared.existing().committed()) readPreparedOutput(scope,prepared.existing());
+        return nativeMutation(scope,()->withConversationRoot(scope,taskId,runId,true,true,false,"RESULT",execution -> {
+            requireConversationFence(scope,execution,fence,"OUTPUT_COMMITTED".equals(execution.getExecutionState()));
+            requireControlledV3StartedForResult(execution);
+            requirePreparedExecution(execution,prepared.execution());
+            return commitConversationOutputs(scope,execution,manifestId,immutable,prepared.existing());
+        }));
     }
 
     /** Existing immutable server bytes only: no expired START fence is renewed or reused. */
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public CommitView recoverStagedConversationOutput(RuntimeScope scope, String taskId, String runId,
             String manifestId, ConversationResultRecovery command) {
         return recoverConversationResult(scope,taskId,runId,manifestId,command,null,null,null);
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public CommitView recoverConversationOutput(RuntimeScope scope, String taskId, String runId,
             String manifestId, ConversationResultRecovery command, String filename,
             String contentMimeType, byte[] content) {
         if (content==null || content.length==0) throw failure(Reason.BAD_REQUEST);
-        return recoverConversationResult(scope,taskId,runId,manifestId,command,filename,contentMimeType,content);
+        return recoverConversationResult(scope,taskId,runId,manifestId,command,filename,contentMimeType,content.clone());
     }
 
     private CommitView recoverConversationResult(RuntimeScope scope, String taskId, String runId,
@@ -1592,43 +1617,130 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 || !safeId(command.messageId(),100) || !sha(command.inputSnapshotDigest()))
             throw failure(Reason.BAD_REQUEST);
         validateManifest(command.outputs());
-        var declared=command.outputs().getFirst();
+        var immutable=new ConversationResultRecovery(command.executionId(),command.commandId(),command.messageId(),
+                command.inputSnapshotDigest(),List.copyOf(command.outputs()));
+        var declared=immutable.outputs().getFirst();
         if (content!=null && (declared.byteLength()!=content.length
                 || !same(declared.sha256(),plainSha(content)))) throw failure(Reason.BAD_REQUEST);
         // Validate the original manifest before any content-addressed storage side effect.
         var proof=new PersonalWorkspaceExecutionOutputEntity().setOutputId(declared.outputId())
                 .setContentHash(declared.sha256()).setByteLength(declared.byteLength());
         if (!same(manifestId(taskId,runId,List.of(proof)),manifestId)) throw failure(Reason.OUTPUT_CONFLICT);
-        return withConversationRoot(scope,taskId,runId,true,true,false,"RESULT_RECOVERY",execution -> {
-            if (!Objects.equals(3,execution.getExecutionProtocolVersion())
-                    || execution.getControlledConsentId()==null
-                    || !same(command.executionId(),execution.getExecutionId())
-                    || !same(command.inputSnapshotDigest(),execution.getRuntimeInputSnapshotDigest()))
-                throw failure(Reason.NOT_FOUND);
-            requireStartCommand(execution,command.commandId(),command.messageId());
-            requireControlledV3StartedForResult(execution);
-            Long expiry=execution.getConversationLeaseExpiresAt();
-            if (!"OUTPUT_COMMITTED".equals(execution.getExecutionState())
-                    && expiry!=null && expiry>System.currentTimeMillis()
-                    && !same(scope.runtimeInstanceId(),execution.getConversationLeaseRuntimeId()))
-                throw failure(Reason.TASK_CONFLICT);
-            // An authenticated result upload is not a new execution permission. The root,
-            // assignment, current conversation ACL and historical consumed START were checked above.
-            // Existing immutable output wins: do not overwrite or store again after a lost ACK.
-            if (content!=null) {
-                var existing=executions.lockOutput(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
-                        execution.getExecutionId(),declared.outputId());
-                if (existing==null) {
-                    if (!"QUEUED".equals(execution.getExecutionState())) throw failure(Reason.OUTPUT_CONFLICT);
-                    stageOutputLocked(scope,execution,declared.outputId(),filename,contentMimeType,content);
-                } else if (!same(existing.getContentMimeType(),contentMimeType)) {
-                    throw failure(Reason.OUTPUT_CONFLICT);
-                }
+        nativeAuthentication(scope);
+        var preparation=withConversationRoot(scope,taskId,runId,true,true,false,"RESULT_RECOVERY",execution -> {
+            requireConversationRecovery(scope,execution,immutable);
+            var existing=executions.lockOutput(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                    execution.getExecutionId(),declared.outputId());
+            if(existing==null) {
+                if(content==null) throw failure(Reason.OUTPUT_MISSING);
+                if(!"QUEUED".equals(execution.getExecutionState())) throw failure(Reason.OUTPUT_CONFLICT);
+                validateOutputUpload(execution,declared.outputId(),filename,contentMimeType,content);
+            } else {
+                var output=lockAndVerifyManifest(scope,execution,manifestId,immutable.outputs()).getFirst();
+                requireConversationOutputState(execution,output);
+                if(content!=null&&!same(contentMimeType,output.getContentMimeType())) throw failure(Reason.OUTPUT_CONFLICT);
             }
-            // Staging and commit share this transaction. Never read source materials, consume cost,
-            // restart the Provider, or rewrite the historical START/lease during recovery.
-            return commitConversationOutputs(scope,execution,manifestId,command.outputs());
+            return new NativeResultPreparation(nativeExecutionBinding(execution),existing==null?null:preparedOutput(existing));
         });
+        // Existing immutable output always wins after a lost ACK. Never store again or read inputs.
+        var prepared=preparation.existing();
+        if(prepared==null) {
+            var stored=prepareResultUpload(scope,null,content,contentMimeType);
+            prepared=new PreparedNativeOutput(preparation.execution().executionId(),declared.outputId(),filename,stored,false);
+        }
+        if(!prepared.committed()) readPreparedOutput(scope,prepared);
+        var finalPrepared=prepared;
+        return nativeMutation(scope,()->withConversationRoot(scope,taskId,runId,true,true,false,"RESULT_RECOVERY",execution -> {
+            requireConversationRecovery(scope,execution,immutable);
+            requirePreparedExecution(execution,preparation.execution());
+            var existing=executions.lockOutput(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                    execution.getExecutionId(),declared.outputId());
+            if(existing==null) {
+                if(preparation.existing()!=null || !"QUEUED".equals(execution.getExecutionState()))
+                    throw failure(Reason.OUTPUT_CONFLICT);
+                validateOutputUpload(execution,declared.outputId(),filename,contentMimeType,content);
+                persistStagedOutput(scope,execution,declared.outputId(),filename,contentMimeType,null,finalPrepared.stored());
+            } else requirePreparedOutput(finalPrepared,existing);
+            // Row-only atomic stage/commit. Never consume cost, restart the Provider,
+            // renew an expired lease or rewrite historical START during result recovery.
+            return commitConversationOutputs(scope,execution,manifestId,immutable.outputs(),finalPrepared);
+        }));
+    }
+
+    private static void requireConversationRecovery(RuntimeScope scope,PersonalWorkspaceExecutionEntity execution,
+            ConversationResultRecovery command) {
+        if (!Objects.equals(3,execution.getExecutionProtocolVersion())
+                || execution.getControlledConsentId()==null
+                || !same(command.executionId(),execution.getExecutionId())
+                || !same(command.inputSnapshotDigest(),execution.getRuntimeInputSnapshotDigest()))
+            throw failure(Reason.NOT_FOUND);
+        requireStartCommand(execution,command.commandId(),command.messageId());
+        requireControlledV3StartedForResult(execution);
+        Long expiry=execution.getConversationLeaseExpiresAt();
+        if (!"OUTPUT_COMMITTED".equals(execution.getExecutionState())
+                && expiry!=null && expiry>System.currentTimeMillis()
+                && !same(scope.runtimeInstanceId(),execution.getConversationLeaseRuntimeId()))
+            throw failure(Reason.TASK_CONFLICT);
+    }
+
+    /** Immutable business provenance, independent of the current transport's rotatable boot. */
+    private record NativeExecutionBinding(String executionId,String taskId,String runId,String conversationId,
+            String targetAgentId,String taskGrantId,Long taskGrantVersion,Long assignmentRevision,String consentId,
+            Integer protocolVersion,String operation,String operationGrantId,String inputSnapshotDigest,String outputMime,
+            String executionMode,Long grantRevision,String requestHash,String instruction,
+            String leaseToken,String leaseRuntimeId,Long leaseVersion,Long leaseExpiresAt,
+            Long providerStartedAt,Long providerLeaseVersion) {
+        @Override public String toString() { return "NativeExecutionBinding[REDACTED]"; }
+    }
+    private static NativeExecutionBinding nativeExecutionBinding(PersonalWorkspaceExecutionEntity execution) {
+        return new NativeExecutionBinding(execution.getExecutionId(),execution.getTaskId(),execution.getRunId(),
+                execution.getConversationId(),execution.getTargetAgentId(),execution.getTaskGrantId(),
+                execution.getTaskGrantVersion(),execution.getAssignmentRevision(),execution.getControlledConsentId(),
+                execution.getExecutionProtocolVersion(),execution.getPermittedOperation(),execution.getOperationGrantId(),
+                execution.getRuntimeInputSnapshotDigest(),execution.getOutputContentMimeType(),execution.getExecutionMode(),
+                execution.getGrantRevision(),execution.getRequestHash(),execution.getInstruction(),
+                execution.getConversationLeaseToken(),execution.getConversationLeaseRuntimeId(),
+                execution.getConversationLeaseVersion(),execution.getConversationLeaseExpiresAt(),
+                execution.getConversationProviderStartedAt(),execution.getConversationProviderLeaseVersion());
+    }
+    private record NativeResultPreparation(NativeExecutionBinding execution,PreparedNativeOutput existing) { }
+    private record PreparedNativeOutput(String executionId,String outputId,String filename,
+            PersonalWorkspaceStorage.StoredObject stored,boolean committed) { }
+    private static PreparedNativeOutput preparedOutput(PersonalWorkspaceExecutionOutputEntity output) {
+        return new PreparedNativeOutput(output.getExecutionId(),output.getOutputId(),output.getOriginalFilename(),
+                new PersonalWorkspaceStorage.StoredObject(output.getStorageUri(),output.getContentHash(),
+                        Objects.requireNonNullElse(output.getByteLength(),-1L),output.getContentMimeType()),
+                "COMMITTED".equals(output.getOutputState()));
+    }
+    private static void requirePreparedExecution(PersonalWorkspaceExecutionEntity execution,NativeExecutionBinding binding) {
+        if(!binding.equals(nativeExecutionBinding(execution))) throw failure(Reason.TASK_CONFLICT);
+    }
+    private static void requirePreparedOutput(PreparedNativeOutput prepared,PersonalWorkspaceExecutionOutputEntity output) {
+        var stored=prepared.stored();
+        if(output==null || !same(prepared.executionId(),output.getExecutionId())
+                || !same(prepared.outputId(),output.getOutputId())
+                || !Objects.equals(prepared.filename(),output.getOriginalFilename())
+                || !same(stored.storageUri(),output.getStorageUri())
+                || !same(stored.sha256(),output.getContentHash())
+                || !Objects.equals(stored.byteLength(),output.getByteLength())
+                || !same(stored.mimeType(),output.getContentMimeType())) throw failure(Reason.OUTPUT_CONFLICT);
+    }
+    private PersonalWorkspaceStorage.StoredObject prepareResultUpload(RuntimeScope scope,PreparedNativeOutput existing,
+            byte[] content,String mimeType) {
+        String hash=plainSha(content);
+        var stored=existing==null?storage.store(storageScope(scope),content,mimeType):existing.stored();
+        requireStoredUpload(stored,hash,content.length,mimeType); return stored;
+    }
+    /** Exact immutable snapshot read with no Runtime/root/output row locks held. */
+    private byte[] readPreparedOutput(RuntimeScope scope,PreparedNativeOutput prepared) {
+        var stored=prepared.stored();
+        var content=storage.read(storageScope(scope),stored.storageUri(),stored.sha256(),stored.byteLength(),stored.mimeType());
+        byte[] bytes=content==null?null:content.content(); // StoredContent already returns a defensive copy.
+        if(bytes==null || bytes.length!=stored.byteLength()
+                || !same(plainSha(bytes),stored.sha256()) || !same(content.sha256(),stored.sha256())
+                || content.byteLength()!=stored.byteLength() || !same(content.mimeType(),stored.mimeType()))
+            throw failure(Reason.STORAGE_UNAVAILABLE);
+        return bytes;
     }
 
     @Override
@@ -1789,16 +1901,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 ||!"STAGED".equals(previous.getOutputState())) throw failure(Reason.OUTPUT_CONFLICT);
     }
 
-    private StagedOutput stageOutputLocked(RuntimeScope scope,PersonalWorkspaceExecutionEntity execution,
-            String outputId,String originalFilename,String contentMimeType,byte[] content) {
-        validateOutputUpload(execution,outputId,originalFilename,contentMimeType,content);
-        var previous=executions.lockOutput(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
-                execution.getExecutionId(),outputId);
-        var stored=storage.store(storageScope(scope),content,contentMimeType);
-        return persistStagedOutput(scope,execution,outputId,originalFilename,contentMimeType,previous,stored);
-    }
-    /** Row-only commit phase. Conversation recovery retains its existing transaction until
-     * its storage preparation boundary is migrated; ordinary file uploads never perform I/O here. */
+    /** Row-only stage phase; all native lanes prepare storage before persistent fencing. */
     private StagedOutput persistStagedOutput(RuntimeScope scope,PersonalWorkspaceExecutionEntity execution,
             String outputId,String originalFilename,String contentMimeType,
             PersonalWorkspaceExecutionOutputEntity previous,PersonalWorkspaceStorage.StoredObject stored) {
@@ -1821,7 +1924,6 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public CommitView commitOutputs(RuntimeScope scope, String taskId, String runId, String manifestId,
             List<OutputDeclaration> declarations) {
         validateRuntimeScope(scope); id(taskId, "taskId", 100); id(runId, "runId", 100);
@@ -1840,25 +1942,33 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                     scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId,
                     root -> commitTaskOutputsLocked(scope, taskId, runId, manifestId, declarations, root));
         }
-        PersonalWorkspaceExecutionEntity execution = runtimeExecution(scope, taskId, runId, true, true);
-        return commitPrivateOutputs(scope, execution, manifestId, declarations);
+        var immutable=List.copyOf(declarations);
+        return nativeMutation(scope,()->{
+            var execution=runtimeExecution(scope,taskId,runId,true,true);
+            if(!same(candidate.getExecutionId(),execution.getExecutionId())
+                    || !Objects.equals(candidate.getExecutionMode(),execution.getExecutionMode()))
+                throw failure(Reason.TASK_CONFLICT);
+            return commitPrivateOutputs(scope,execution,manifestId,immutable);
+        });
     }
 
-    private CommitView commitConversationOutputs(RuntimeScope scope, PersonalWorkspaceExecutionEntity execution,
-            String manifestId,List<OutputDeclaration> declarations) {
-        List<PersonalWorkspaceExecutionOutputEntity> outputs=lockAndVerifyManifest(scope,execution,manifestId,declarations);
-        var output=outputs.getFirst();
+    private static void requireConversationOutputState(PersonalWorkspaceExecutionEntity execution,
+            PersonalWorkspaceExecutionOutputEntity output) {
         if (!"CONVERSATION".equals(output.getOutputPurpose()) || output.getWorkspaceFileId()!=null
                 || output.getWorkspaceFileVersion()!=null || output.getArtifactId()!=null
                 || output.getFormalDeliveryId()!=null || !"PENDING".equals(output.getPublicationState()))
             throw failure(Reason.OUTPUT_CONFLICT);
-        if ("COMMITTED".equals(output.getOutputState())) return committed(manifestId,outputs);
+        if ("COMMITTED".equals(output.getOutputState())) return;
         if (!"STAGED".equals(output.getOutputState()) || !"QUEUED".equals(execution.getExecutionState()))
             throw failure(Reason.OUTPUT_CONFLICT);
-        var content=storage.read(storageScope(scope),output.getStorageUri(),output.getContentHash(),
-                output.getByteLength(),output.getContentMimeType());
-        if (content.content()==null || content.content().length!=output.getByteLength())
-            throw failure(Reason.STORAGE_UNAVAILABLE);
+    }
+    private CommitView commitConversationOutputs(RuntimeScope scope, PersonalWorkspaceExecutionEntity execution,
+            String manifestId,List<OutputDeclaration> declarations,PreparedNativeOutput prepared) {
+        List<PersonalWorkspaceExecutionOutputEntity> outputs=lockAndVerifyManifest(scope,execution,manifestId,declarations);
+        var output=outputs.getFirst();
+        requireConversationOutputState(execution,output); requirePreparedOutput(prepared,output);
+        if ("COMMITTED".equals(output.getOutputState())) return committed(manifestId,outputs);
+        if(prepared.committed()) throw failure(Reason.OUTPUT_CONFLICT);
         output.setOutputState("COMMITTED").setCommittedAt(System.currentTimeMillis());
         executions.updateOutput(output);
         execution.setExecutionState("OUTPUT_COMMITTED");executions.update(execution);

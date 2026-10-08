@@ -83,6 +83,20 @@ class PersonalWorkspaceNativeOutputFenceTest {
         verify(f.manager).rollback(f.status);
     }
 
+    @Test void privateArchiveCannotBypassPersistentFenceAndContainsNoStorageIo() throws Exception {
+        var f=fixture();byte[] bytes=png();var original=output(bytes,"private-original");
+        original.setOriginalFilename("output.png");
+        when(f.executions.lockOutputs("0","client","owner","execution")).thenReturn(java.util.List.of(original));
+        String manifest="pwe_m_"+hash(("task\nrun\noutput_1\n"+hash(bytes)+"\n"+bytes.length+"\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        f.row.setRuntimeSessionGeneration(2L).setRuntimeInstanceId("replacement");
+        assertThrows(RuntimeException.class,()->f.service.commitOutputs(f.scope,"task","run",manifest,
+                java.util.List.of(new PersonalWorkspaceExecutionService.OutputDeclaration("output_1",hash(bytes),bytes.length))));
+        verify(f.executions,never()).lockOutputs(anyString(),anyString(),anyString(),anyString());
+        verify(f.executions,never()).updateOutput(any());verify(f.storage,never()).store(any(),any(),any());
+        verify(f.storage,never()).read(any(),anyString(),anyString(),anyLong(),anyString());
+        verify(f.manager).rollback(f.status);
+    }
+
     private static PersonalWorkspaceControlledImageV3StartTest.StartFixture fixture() throws Exception {
         var f=new PersonalWorkspaceControlledImageV3StartTest.StartFixture();
         f.execution.setExecutionMode("PRIVATE").setOutputContentMimeType("image/png");

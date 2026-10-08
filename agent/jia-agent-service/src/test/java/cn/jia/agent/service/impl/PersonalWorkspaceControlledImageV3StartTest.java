@@ -164,7 +164,7 @@ class PersonalWorkspaceControlledImageV3StartTest {
    var advice=new TransactionInterceptor();advice.setTransactionManager(manager);
    advice.setTransactionAttributeSource(new AnnotationTransactionAttributeSource());
    var proxy=new ProxyFactory(auth);proxy.setProxyTargetClass(true);proxy.addAdvice(advice);
-   var authentication=new AgentRuntimeAuthentication(new AgentRuntimeAuthentication.Scope("0","client","owner",AGENT,"boot"));
+   var authentication=org.springframework.beans.BeanUtils.instantiateClass(AgentRuntimeAuthentication.class.getDeclaredConstructor(AgentRuntimeAuthentication.Scope.class),new AgentRuntimeAuthentication.Scope("0","client","owner",AGENT,"boot"));
    authentication.setDetails(new AgentRuntimeAuthenticationService.Proof(authentication.getPrincipal(),ID,"host",1,"b".repeat(64),7,2));
    SecurityContextHolder.getContext().setAuthentication(authentication);
 

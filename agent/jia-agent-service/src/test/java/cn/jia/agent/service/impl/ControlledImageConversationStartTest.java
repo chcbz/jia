@@ -71,7 +71,7 @@ class ControlledImageConversationStartTest {
         service=new PersonalWorkspaceExecutionServiceImpl(executions,workspace,taskLinks,runtimes,storage,writes,
                 new PersonalWorkspaceExecutionProperties(List.of("image/png")));
         service.setConversationAdmission(grants,transactions);
-        var principal=new AgentRuntimeAuthentication(new AgentRuntimeAuthentication.Scope("0","client","owner","agent","runtime"));
+        var principal=org.springframework.beans.BeanUtils.instantiateClass(AgentRuntimeAuthentication.class.getDeclaredConstructor(AgentRuntimeAuthentication.Scope.class),new AgentRuntimeAuthentication.Scope("0","client","owner","agent","runtime"));
         principal.setDetails(new AgentRuntimeAuthenticationService.Proof(principal.getPrincipal(),
                 "rti_"+"1".repeat(32),"host",1,"b".repeat(64),7,2));
         SecurityContextHolder.getContext().setAuthentication(principal);
