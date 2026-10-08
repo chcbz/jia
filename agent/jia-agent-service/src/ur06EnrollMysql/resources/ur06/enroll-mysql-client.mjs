@@ -12,7 +12,7 @@ export const SOURCE = Object.freeze({ commit: 'd91ebbf436911eac20ffb70cb92192a65
   tarSha256: '3c826b9e78db3bc4ca5a9eef1e9026ebeb0e34626e214a6b1b2d8bd532169b36', tarBytes: 3624960 });
 const PREFIX = 'UR06_PIPE ';
 let phase = 'PRIVATE_INPUT';
-const SAFE_CODES = new Set(["ARTIFACT_ALIAS_FORBIDDEN", "ARTIFACT_FULL_INVENTORY_REQUIRED", "ARTIFACT_LINK_PROOF_REQUIRED", "ARTIFACT_MEMBER_MISMATCH", "CLEAN_ARTIFACT_EVIDENCE_REQUIRED", "CLIENT_COMMIT_REQUIRED", "CURRENT_TRANSPORT_REQUIRED", "ENGINE_SOURCE_BINDING_REQUIRED", "EXACT_AGENT_INDEX_REQUIRED", "EXPLICIT_STOP_REQUIRED", "MEMBER_UNSAFE", "NODE_20_20_2_REQUIRED", "NODE_ARTIFACT_BINARY_BINDING_REQUIRED", "OWNED_SUBJECT_SOCKET_REQUIRED", "PATH_ALIAS_FORBIDDEN", "PATH_CANONICAL_REQUIRED", "PATH_TYPE_REQUIRED", "PRIVATE_CHILD_ONLY", "PRIVATE_ENROLL_START_REQUIRED", "PRIVATE_INIT_REQUIRED", "PRIVATE_ORIGIN_REQUIRED", "PRIVATE_STATE_MODE_REQUIRED", "PRIVATE_STATE_NAME_REQUIRED", "REAL_CODEX_EXECUTABLE_REQUIRED", "RUNTIME_SOURCE_BINDING_REQUIRED", "SOURCE_ALIAS_FORBIDDEN", "SOURCE_ARCHIVE_MISMATCH", "SOURCE_FULL_TREE_MISMATCH", "SOURCE_IDENTITY_REQUIRED", "SOURCE_MEMBER_HASH_REQUIRED", "SOURCE_MEMBER_MISMATCH", "SOURCE_UNEXPECTED_MEMBER", "UNKNOWN_PRIVATE_OPERATION"]);
+const SAFE_CODES = new Set(['ARTIFACT_ALIAS_FORBIDDEN', 'ARTIFACT_FULL_INVENTORY_REQUIRED', 'ARTIFACT_LINK_PROOF_REQUIRED', 'ARTIFACT_MEMBER_MISMATCH', 'CHILD_INTERPRETER_PATH_UNSAFE', 'CLEAN_ARTIFACT_EVIDENCE_REQUIRED', 'CLIENT_COMMIT_REQUIRED', 'CURRENT_TRANSPORT_REQUIRED', 'ENGINE_SOURCE_BINDING_REQUIRED', 'EXACT_AGENT_INDEX_REQUIRED', 'EXPLICIT_STOP_REQUIRED', 'MEMBER_UNSAFE', 'NEGATIVE_ALLOWLIST_REQUIRED', 'NEGATIVE_COMMAND_BINDING_REQUIRED', 'NODE_20_20_2_REQUIRED', 'NODE_ARTIFACT_BINARY_BINDING_REQUIRED', 'ONE_ORIGINAL_CHECKPOINT_REQUIRED', 'ONE_ORIGINAL_MATERIAL_REQUIRED', 'ORIGINAL_CONFLICT_AUDIT_REQUIRED', 'ORIGINAL_MATERIAL_REQUIRED', 'OWNED_SUBJECT_SOCKET_REQUIRED', 'PATH_ALIAS_FORBIDDEN', 'PATH_CANONICAL_REQUIRED', 'PATH_TYPE_REQUIRED', 'PIPE_REQUEST_REQUIRED', 'PRIOR_TERMINAL_REQUIRED', 'PRIVATE_CHILD_ONLY', 'PRIVATE_ENROLL_START_REQUIRED', 'PRIVATE_INIT_REQUIRED', 'PRIVATE_ORIGIN_REQUIRED', 'PRIVATE_PURPOSE_REQUIRED', 'PRIVATE_STATE_MODE_REQUIRED', 'PRIVATE_STATE_NAME_REQUIRED', 'PRIVATE_THREE_SUBJECTS_REQUIRED', 'REAL_CODEX_EXECUTABLE_REQUIRED', 'REAL_LEASE_FOR_NEGATIVE_REQUIRED', 'RUNTIME_SOURCE_BINDING_REQUIRED', 'SOURCE_ALIAS_FORBIDDEN', 'SOURCE_ARCHIVE_MISMATCH', 'SOURCE_FULL_TREE_MISMATCH', 'SOURCE_IDENTITY_REQUIRED', 'SOURCE_MEMBER_HASH_REQUIRED', 'SOURCE_MEMBER_MISMATCH', 'SOURCE_UNEXPECTED_MEMBER', 'SYNTHETIC_AUTH_REQUIRED', 'TRACKED_SYNTHETIC_MODULE_REQUIRED', 'UNKNOWN_PRIVATE_OPERATION']);
 const sha = b => createHash('sha256').update(b).digest('hex');
 const object = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 const fail = code => Object.assign(new Error(code), { code });
@@ -263,15 +263,201 @@ async function host(input, lines) {
     throw fail('EXPLICIT_STOP_REQUIRED');
   } finally { controller.abort(); await running; }
 }
+async function prepareM4(input) {
+  const provenance = await verified(input);
+  requireInput(sha(await readFile(process.execPath)) === sha(await readFile(resolve(input.artifactRoot, 'node/bin/node'))), 'NODE_ARTIFACT_BINARY_BINDING_REQUIRED');
+  const root = await canonical(input.root); const { digestManifest } = await import(pathToFileURL(resolve(input.artifactRoot, 'runtime/lib/manifest.mjs')));
+  phase = 'PRIVATE_SUBJECT_PREPARE';
+  await mkdir(resolve(root, 'host'), { mode: 0o700 });
+  const entries = [], manifests = [];
+  for (let index = 0; index < 3; index++) {
+    const base = resolve(root, `agent-${index}`);
+    await mkdir(base, { mode: 0o700 });
+    for (const dir of ['state', 'home', 'work', 'workspace', 'repository']) await mkdir(resolve(base, dir), { mode: 0o700 });
+    const manifest = { runtimeProtocolVersion: 'v1', manifestVersion: '1', installationId: `rti_${String(index + 1).repeat(32)}`,
+      tenantId: '0', clientId: 'ur06-client', canonicalAgentId: `agt_${String(index + 1).repeat(32)}` };
+    manifest.manifestSha256 = digestManifest(manifest); manifests.push(manifest);
+    const childPath = resolve(base, 'synthetic-executor.mjs');
+    const node = await canonical(input.nodeBin, false);
+    requireInput(node === await canonical(process.execPath, false), 'NODE_ARTIFACT_BINARY_BINDING_REQUIRED');
+    requireInput(!/\s/.test(node), 'CHILD_INTERPRETER_PATH_UNSAFE');
+    requireInput(await canonical(input.childModule, false) === resolve(root, 'nonpaid-execution-child.mjs'), 'TRACKED_SYNTHETIC_MODULE_REQUIRED');
+    const childBytes = await readFile(input.childModule);
+    requireInput(sha(childBytes) === 'bd5c7a113efeeb5eabb00d2623065c62da3bab09f47bcedf825f3348e22c3805', 'TRACKED_SYNTHETIC_MODULE_REQUIRED');
+    const childSource = childBytes.toString('utf8');
+    requireInput(childSource.startsWith('#!/usr/bin/env node\n'), 'TRACKED_SYNTHETIC_MODULE_REQUIRED');
+    await writeFile(childPath, childSource.replace(/^#![^\n]+/, `#!${node}`), { mode: 0o700 });
+    // Direct pinned interpreter, no shell/PWD/SHLVL additions or env fallback.
+    const profile = { profileId: `ur04-${index}`, agentId: manifest.canonicalAgentId, name: 'UR04 SYNTHETIC',
+      codexBin: childPath, codexHome: resolve(base, 'home'), codexWorkdir: resolve(base, 'work'),
+      workspacePolicyId: `ur04-policy-${index}`, workspaceRole: 'coder', appServerEnabled: false, fastChatEnabled: false,
+      codexSessionMode: 'new', codexApproval: 'never', codexSandbox: 'workspace-write', typedInspectionProviderNetwork: 'isolated' };
+    const environment = { PATH: process.env.PATH, HOME: resolve(base, 'home'), LANG: 'C.UTF-8' };
+    const git = args => execFileSync('git', args, { cwd: resolve(base, 'repository'), env: environment, stdio: 'pipe' });
+    git(['init', '-b', 'main']); git(['config', 'user.name', 'UR04 synthetic']); git(['config', 'user.email', 'ur04@invalid']);
+    await writeFile(resolve(base, 'repository/README.md'), 'UR04 SYNTHETIC no Provider\n', { mode: 0o600 });
+    git(['add', 'README.md']); git(['commit', '-m', 'synthetic workspace']);
+    await privateJson(resolve(base, 'home/ur04-child-control.json'), { workspaceRoot: resolve(base, 'workspace') });
+    await privateJson(resolve(base, 'manifest.json'), manifest); await privateJson(resolve(base, 'profile.json'), profile);
+    entries.push({ manifestPath: resolve(base, 'manifest.json'), profilePath: resolve(base, 'profile.json'), stateRoot: resolve(base, 'state') });
+  }
+  await privateJson(resolve(root, 'host.json'), { configVersion: 1, hostId: 'ur04-host', stateRoot: resolve(root, 'host'), agents: entries });
+  emit({ stage: 'NODE_PREPARED', manifests, provenance });
+}
+async function runtimeM4(input, lines) {
+  const provenance = await verified(input); requireInput(process.versions.node === '20.20.2', 'NODE_20_20_2_REQUIRED');
+  requireInput(sha(await readFile(process.execPath)) === sha(await readFile(resolve(input.artifactRoot, 'node/bin/node'))), 'NODE_ARTIFACT_BINARY_BINDING_REQUIRED');
+  const root = await canonical(input.root);
+  const { readRuntimeHostConfig } = await import(pathToFileURL(resolve(input.artifactRoot, 'runtime/lib/manifest.mjs')));
+  const { runUnifiedRuntime } = await import(pathToFileURL(resolve(input.artifactRoot, 'runtime/agent-runtime.mjs')));
+  const { createExecutionAdapterFactory } = await import(pathToFileURL(resolve(input.artifactRoot, 'runtime/lib/execution-adapter.mjs')));
+  phase = 'ORIGINAL_HOST_CONFIG';
+  const config = await readRuntimeHostConfig(resolve(root, 'host.json'));
+  requireInput(new URL(input.apiOrigin).hostname === '127.0.0.1' && config.agents.length === 3, 'PRIVATE_THREE_SUBJECTS_REQUIRED');
+  if (input.authorizations) for (let i = 0; i < config.agents.length; i++) {
+    requireInput(/^rta1_[0-9a-f]{64}$/.test(input.authorizations[i]), 'SYNTHETIC_AUTH_REQUIRED');
+    await privateJson(resolve(config.agents[i].stateRoot, 'runtime-authorization.json'), { installationId: config.agents[i].manifest.installationId, runtimeAuthorization: input.authorizations[i] });
+  }
+  const workspacePolicies = new Map(config.agents.map((agent, index) => [agent.profile.workspacePolicyId, {
+    policyId: agent.profile.workspacePolicyId, root: resolve(root, `agent-${index}/workspace`), repository: resolve(root, `agent-${index}/repository`),
+    baseRef: 'refs/heads/main', trustedRemoteUrl: 'https://ur04.invalid/synthetic.git', trustedRemoteRef: 'refs/heads/main' }]));
+  const controller = new AbortController(), executors = new Map(), isolated = new Set(); let runtimeFailed = false;
+  // Transparent observer only: original default factory and every original executor method unchanged.
+  const observeFactory = async options => {
+    const actual = await createExecutionAdapterFactory(options);
+    return { ...actual, createExecutor: settings => { const executor = actual.createExecutor(settings); executors.set(settings.subjectKey, executor); return executor; } };
+  };
+  phase = 'ORIGINAL_HOST_RUNNING';
+  const running = runUnifiedRuntime({ config, apiOrigin: input.apiOrigin, instanceId: `ur04-boot-${randomUUID()}`,
+    signal: controller.signal, createAdapters: observeFactory, workspacePolicies, heartbeatIntervalMs: 100,
+    logger: (event, fields) => { if (event === 'runtime-agent-isolated' && fields?.subjectKey) isolated.add(fields.subjectKey); } }).catch(() => { runtimeFailed = true; emit({ stage: 'ERROR', code: 'ORIGINAL_RUNTIME_FAILURE' }); });
+  emit({ stage: 'NODE_BOOT', pid: process.pid, ...provenance, nodeVersion: process.versions.node, nodeSha256: sha(await readFile(process.execPath)), synthetic: true });
+  async function snapshot() {
+    const agents = [];
+    for (const agent of config.agents) {
+      const executor = executors.get(agent.subjectKey), state = executor?.state();
+      let ledger = [], inbox = [], pending = [], confirmed = [], conflicts = [];
+      if (state) {
+        ledger = state.ledger.listEntries().map(e => ({ commandId: e.commandId, status: e.status, fingerprint: e.fingerprint }));
+        // Read the actual original dedupe conflict audit, never fabricate an ingress completion marker.
+        for (const file of await readdir(state.ledger.conflictsDir)) {
+          requireInput(/^[A-Za-z0-9-]+\.json$/.test(file), 'ORIGINAL_CONFLICT_AUDIT_REQUIRED');
+          const path = resolve(state.ledger.conflictsDir, file);
+          requireInput(!(await lstat(path)).isSymbolicLink() && (await lstat(path)).isFile(), 'ORIGINAL_CONFLICT_AUDIT_REQUIRED');
+          const conflict = await json(path);
+          requireInput(typeof conflict.commandId === 'string' && /^[0-9a-f]{64}$/.test(conflict.existingFingerprint)
+            && /^[0-9a-f]{64}$/.test(conflict.conflictingFingerprint) && conflict.existingFingerprint !== conflict.conflictingFingerprint,
+            'ORIGINAL_CONFLICT_AUDIT_REQUIRED');
+          conflicts.push({ commandId: conflict.commandId, existingFingerprint: conflict.existingFingerprint, conflictingFingerprint: conflict.conflictingFingerprint });
+        }
+        inbox = [...state.inbox.commandStateIndex().values()].flat().map(e => ({ commandId: e.normalized.commandId,
+          state: e.record.state, fingerprint: e.record.fingerprint ?? null, materialDigest: e.record.e05ResultDigest ?? null }));
+        pending = state.ackOutbox.pendingEnvelopes().map(e => ({ commandId: e.envelope.commandId, status: e.envelope.ackStatus, sequence: e.record.queueSequence }));
+        confirmed = [...state.inbox.commandStateIndex().values()].flat().map(e => ({ commandId: e.normalized.commandId,
+          commit: state.ledger.runtimeAckCommit(e.normalized.commandId, e.normalized.messageId) ?? null }));
+      }
+      const childFile = resolve(agent.profile.codexHome, 'ur04-child.jsonl'); let children = [];
+      try { children = (await readFile(childFile, 'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+      const records = state ? [...state.inbox.commandStateIndex().values()].flat().map(e => e.record) : [];
+      const checkpointBytes = JSON.stringify({ records, ledger: state?.ledger.listEntries() || [], pending: state?.ackOutbox.pendingEnvelopes() || [] });
+      const credentialsAbsent = !/rts1_[0-9a-f]{64}|rta1_[0-9a-f]{64}|"leaseToken"|"sessionToken"/.test(checkpointBytes);
+      agents.push({ credentialsAbsent, isolated: isolated.has(agent.subjectKey), ready: executor?.ready() === true, subjectKey: agent.subjectKey, ledger, inbox, pending, confirmed, conflicts, children });
+    }
+    return { stage: 'NODE_SNAPSHOT', agents, pid: process.pid, runtimeFailed };
+  }
+  try {
+    for await (const line of lines) {
+      const request = JSON.parse(line); requireInput(object(request), 'PIPE_REQUEST_REQUIRED');
+      if (request.op === 'STOP') { controller.abort(); await running; await verified(input); emit({ stage: 'NODE_STOPPED' }); return; }
+      if (request.op === 'SNAPSHOT') { emit(await snapshot()); continue; }
+      requireInput(Number.isInteger(request.agentIndex) && request.agentIndex >= 0 && request.agentIndex < 3, 'EXACT_AGENT_INDEX_REQUIRED');
+      const agent = config.agents[request.agentIndex], executor = executors.get(agent.subjectKey), state = executor?.state();
+      if (request.op === 'DISCONNECT') {
+        requireInput(state?.ws?.readyState === 1, 'OWNED_SUBJECT_SOCKET_REQUIRED');
+        state.ws.close(1000); // genuine owned native channel close, original adapter reconnect/auth path
+        emit({ stage: 'SUBJECT_DISCONNECTED' });
+      } else if (request.op === 'RELEASE') {
+        await writeFile(resolve(agent.profile.codexHome, 'ur04-release'), 'heartbeat-confirmed\n', { mode: 0o600 }); emit({ stage: 'CHILD_RELEASED' });
+      } else if (request.op === 'ROTATE') {
+        const { RuntimeV1Client } = await import(pathToFileURL(resolve(input.artifactRoot, 'runtime/lib/runtime-client.mjs')));
+        const rotation = new RuntimeV1Client({ manifest: agent.manifest, apiBaseUrl: input.apiOrigin, stateDir: agent.stateRoot,
+          hostId: config.hostId, runtimeInstanceId: `ur04-rotation-${randomUUID()}` });
+        const session = await rotation.session();
+        emit({ stage: 'ROTATED', generation: session.sessionGeneration });
+      } else if (request.op === 'NEGATIVE_HTTP') {
+        requireInput(state?.runtimeTransport && ['ACTOR','SCOPE','OLD_SESSION','UNREGISTERED','PRODUCER'].includes(request.variant), 'NEGATIVE_ALLOWLIST_REQUIRED');
+        // Genuine HTTP negative requests intentionally bypass client URI rejection, never server auth.
+        const command = request.command;
+        requireInput(object(command) && /^ur04-task-[0-2]$/.test(command.taskId) && /^ur04-work-[0-2]$/.test(command.workItemId)
+          && /^rsn_[0-9a-f]{64}$/.test(command.reassignmentId) && /^cmd_hall_action_[0-9a-f]{64}$/.test(command.commandId), 'NEGATIVE_COMMAND_BINDING_REQUIRED');
+        let path = `/internal/agent/tasks/${command.taskId}/work-items/${command.workItemId}/reassignments/${command.reassignmentId}/commands/${command.commandId}/result-commit`;
+        let headers = state.runtimeTransport.headers(), method = 'GET', body;
+        if (request.variant === 'ACTOR') {
+          path = `/agent/tasks/${command.taskId}/work-items/${command.workItemId}/reassignments/${command.reassignmentId}/lease?actorAgentId=${config.agents[(request.agentIndex + 1) % 3].manifest.canonicalAgentId}`;
+          method = 'POST'; body = { commandId: command.commandId, expectedWorkItemVersion: 5 };
+        } else if (request.variant === 'SCOPE') headers = { ...headers, 'X-Agent-Id': config.agents[(request.agentIndex + 1) % 3].manifest.canonicalAgentId };
+        else if (request.variant === 'OLD_SESSION' || request.variant === 'UNREGISTERED') {
+          const { RuntimeV1Client } = await import(pathToFileURL(resolve(input.artifactRoot, 'runtime/lib/runtime-client.mjs')));
+          const pending = new RuntimeV1Client({ manifest: agent.manifest, apiBaseUrl: input.apiOrigin, stateDir: agent.stateRoot, hostId: config.hostId, runtimeInstanceId: `ur04-negative-${randomUUID()}` });
+          await pending.session(); if (request.variant === 'UNREGISTERED') headers = pending.sessionHeaders();
+        } else if (request.variant === 'PRODUCER') {
+          const records = state.inbox.commandStateIndex().get(command.commandId);
+          requireInput(records?.length === 1 && records[0].record.e05ResultMaterial, 'ORIGINAL_MATERIAL_REQUIRED');
+          const material = structuredClone(records[0].record.e05ResultMaterial);
+          const leasePath = path.replace(/result-commit$/, 'lease');
+          const current = await state.runtimeTransport.nativeFetch(new URL(leasePath, input.apiOrigin), { method: 'GET' });
+          requireInput(current.status === 200, 'REAL_LEASE_FOR_NEGATIVE_REQUIRED'); const lease = await current.json();
+          material.producerAgentId = config.agents[(request.agentIndex + 1) % 3].manifest.canonicalAgentId;
+          method = 'POST'; body = { ...material, leaseToken: lease.leaseToken }; // genuine same current lease, wrong producer
+        }
+        const response = await globalThis.fetch(new URL(path, input.apiOrigin), { method, headers: { ...headers, 'Content-Type': 'application/json' },
+          redirect: 'error', ...(body ? { body: JSON.stringify(body) } : {}) });
+        await response.arrayBuffer(); emit({ stage: 'NEGATIVE_HTTP', status: response.status });
+      } else if (request.op === 'HTTP') {
+        requireInput(state?.runtimeTransport && typeof request.path === 'string' && request.path.startsWith('/'), 'CURRENT_TRANSPORT_REQUIRED');
+        // Real nativeFetch applies current transport proof and exact production path ACL.
+        const response = await state.runtimeTransport.nativeFetch(new URL(request.path, input.apiOrigin), { method: request.method,
+          headers: { 'Content-Type': 'application/json' }, ...(request.body ? { body: JSON.stringify(request.body) } : {}) });
+        const bytes = Buffer.from(await response.arrayBuffer());
+        emit({ stage: 'HTTP_RESULT', status: response.status, bodySha256: sha(bytes) });
+      } else if (request.op === 'ORIGINAL_READBACK') {
+        requireInput(state?.runtimeTransport, 'CURRENT_TRANSPORT_REQUIRED');
+        const records = state.inbox.commandStateIndex().get(request.commandId);
+        requireInput(records?.length === 1 && records[0].record.e05ResultMaterial, 'ONE_ORIGINAL_MATERIAL_REQUIRED');
+        const { recoverE05Result } = await import(pathToFileURL(resolve(input.artifactRoot, 'codex-ws-agent/agent-client.mjs')));
+        const outcome = await recoverE05Result({ profile: state.profile, message: records[0].normalized, record: records[0].record,
+          nativeFetch: state.runtimeTransport.nativeFetch, apiOrigin: input.apiOrigin });
+        emit({ stage: 'ORIGINAL_READBACK', completed: outcome.status === 'completed', materialDigest: records[0].record.e05ResultDigest });
+      } else if (request.op === 'RECOVER') {
+        requireInput(state?.runtimeTransport, 'CURRENT_TRANSPORT_REQUIRED');
+        await state.processor.reconcileE05Results({ nativeFetch: state.runtimeTransport.nativeFetch, apiOrigin: input.apiOrigin });
+        emit({ stage: 'RECOVERY_OBSERVED' });
+      } else if (request.op === 'DUPLICATE_ACK') {
+        requireInput(state, 'CURRENT_TRANSPORT_REQUIRED'); const records = state.inbox.commandStateIndex().get(request.commandId);
+        requireInput(records?.length === 1, 'ONE_ORIGINAL_CHECKPOINT_REQUIRED');
+        const record = records[0]; const { runtimeCommandContext } = await import(pathToFileURL(resolve(input.artifactRoot, 'codex-ws-agent/agent-client.mjs')));
+        const previous = state.ledger.runtimeAckCommit(request.commandId, record.normalized.messageId);
+        requireInput(previous?.status === 'SUCCEEDED', 'PRIOR_TERMINAL_REQUIRED');
+        const result = await state.runtimeTransport.acknowledge(runtimeCommandContext(state.profile, record.normalized), 'SUCCEEDED', previous.deliveryVersion);
+        emit({ stage: 'DUPLICATE_ACK', kind: result.kind, status: result.status, deliveryVersion: result.deliveryVersion });
+      } else throw fail('UNKNOWN_PRIVATE_OPERATION');
+    }
+    throw fail('EXPLICIT_STOP_REQUIRED');
+  } finally { controller.abort(); await running; }
+}
 async function main() {
   requireInput(process.env.UR06_PRIVATE_CHILD === '1', 'PRIVATE_CHILD_ONLY');
   for (const key of ['log', 'warn', 'error', 'info', 'debug']) console[key] = () => {};
   const lines = createInterface({ input: process.stdin, crlfDelay: Infinity })[Symbol.asyncIterator]();
   const first = await lines.next(); requireInput(!first.done, 'PRIVATE_INIT_REQUIRED'); const input = JSON.parse(first.value);
-  if (input.op === 'PREPARE') { await prepare(input); return; }
+  requireInput(['FOUNDATION', 'M4'].includes(input.purpose), 'PRIVATE_PURPOSE_REQUIRED');
+  if (input.op === 'PREPARE') { await (input.purpose === 'M4' ? prepareM4(input) : prepare(input)); return; }
   const provenance = await verified(input);
   if (input.op === 'VERIFY') { emit({ stage: 'VERIFIED', provenance }); return; }
   requireInput(new URL(input.apiOrigin).hostname === '127.0.0.1' && new URL(input.apiOrigin).port !== '', 'PRIVATE_ORIGIN_REQUIRED');
+  if (input.purpose === 'M4') {
+    requireInput(input.op === 'INIT', 'PRIVATE_INIT_REQUIRED'); await runtimeM4(input, { [Symbol.asyncIterator]: () => lines }); return;
+  }
   if (input.op === 'ENROLL') {
     if (input.pauseBeforeRequest === true) {
       emit({ stage: 'ENROLL_READY' });

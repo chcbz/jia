@@ -90,6 +90,11 @@ import jakarta.servlet.*;
 import jakarta.servlet.http.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import org.springframework.jdbc.core.RowCallbackHandler;
+import org.springframework.beans.factory.config.BeanPostProcessor;
+import org.springframework.aop.framework.ProxyFactory;
+import org.aopalliance.intercept.MethodInterceptor;
 import org.springframework.jdbc.datasource.AbstractDataSource;
 import org.springframework.core.io.FileSystemResource;
 import java.lang.reflect.InvocationTargetException;
@@ -100,15 +105,23 @@ import java.sql.DriverManager;
 import java.sql.Statement;
 import java.sql.PreparedStatement;
 import java.sql.CallableStatement;
+import java.sql.BatchUpdateException;
 
 /** Fixture-only original Spring/controller/DAO/native WS assembly on private MySQL.
- * No application auto-configuration, alternate auth, fake DAO or credential preseed.
+ * No application auto-configuration, alternate auth or fake DAO. Foundation
+ * installations use real create/enroll; M4 uses explicit synthetic ACTIVE history.
  * Child stdout is a parent-owned private pipe, NOT an artifact/report/log destination. */
 public final class Ur06EnrollMysqlFixture {
     static final String TENANT = "0", CLIENT = "ur06-client", OWNER = "ur06-owner", PREFIX = "UR06_PIPE ";
     static final JsonMapper JSON = JsonMapper.builder().build();
     static final String[] AGENTS = java.util.stream.IntStream.range(1, 9).mapToObj(i -> "agt_" + Integer.toHexString(i).repeat(32)).toArray(String[]::new);
     static final String[] INSTALLATIONS = java.util.stream.IntStream.range(1, 9).mapToObj(i -> "rti_" + Integer.toHexString(i).repeat(32)).toArray(String[]::new);
+    private static String purpose = "FOUNDATION", fault = "NONE";
+    private static final long LEASE_MILLIS = 900_000;
+    private static final CountDownLatch preparedRelease = new CountDownLatch(1), responseRelease = new CountDownLatch(1);
+    private static final AtomicBoolean faultUsed = new AtomicBoolean();
+    private static final AtomicLong ACK_UPDATES = new AtomicLong(), WORK_UPDATES = new AtomicLong(), ARTIFACT_INSERTS = new AtomicLong(), SUBMITTED_ATTEMPTS = new AtomicLong();
+    private static boolean m4() { return "M4".equals(purpose); }
     private static DataSource activeDataSource;
     private static Path activeRoot;
     private static PrintStream protocol;
@@ -118,7 +131,7 @@ public final class Ur06EnrollMysqlFixture {
     private static final CountDownLatch heldResponse = new CountDownLatch(1);
     private static final AtomicBoolean cutUsed = new AtomicBoolean();
     private static final List<Map<String, Object>> HTTP = new CopyOnWriteArrayList<>();
-        private Ur06EnrollMysqlFixture() { }
+    private Ur06EnrollMysqlFixture() { }
     static void require(boolean value, String code) { if (!value) throw new FixtureFailure(code); }
     static String text(JsonNode node, String key) {
         JsonNode f = node == null ? null : node.get(key);
@@ -141,19 +154,27 @@ public final class Ur06EnrollMysqlFixture {
             emit(Map.of("stage", "JAVA_BOOT", "pid", ProcessHandle.current().pid()));
             JsonNode init = JSON.readTree(in.readLine()); require("INIT".equals(text(init, "op")), "INIT_REQUIRED");
             activeRoot = privateRoot(Path.of(text(init, "root")));
-            activeDataSource = new GuardedDataSource(DatabaseSpec.from(init.get("database")));
+            purpose = text(init, "purpose"); require(Set.of("FOUNDATION", "M4").contains(purpose), "PURPOSE_ALLOWLIST_REQUIRED");
+            fault = text(init, "fault"); require(Set.of("NONE", "RESULT_LOSS", "ACK_LOSS", "PREPARED", "ROLLBACK").contains(fault)
+                && (m4() || "NONE".equals(fault)), "FAULT_ALLOWLIST_REQUIRED");
+            activeDataSource = new GuardedDataSource(DatabaseSpec.from(init.get("database")), m4());
             JdbcTemplate jdbc = new JdbcTemplate(activeDataSource);
             bootStage = "BOOT_SCHEMA";
-            if (init.get("initialize").asBoolean()) initialize(jdbc, Path.of(text(init, "apiRoot")));
+            if (init.get("initialize").asBoolean()) {
+                if (m4()) initializeM4(jdbc, Path.of(text(init, "apiRoot")), init);
+                else initialize(jdbc, Path.of(text(init, "apiRoot")));
+            }
             else require(jdbc.queryForObject("SELECT COUNT(*) FROM agent_runtime WHERE agent_id='ur06-legacy'", Integer.class) == 1,
                     "NO_RESEED_RESTART_REQUIRED");
+            if (m4()) require(jdbc.queryForObject("SELECT COUNT(*) FROM agent_runtime_v1_installation", Integer.class) == 3, "RESTART_RESEED_FORBIDDEN");
             bootStage = "BOOT_HTTP";
             try (HttpFixture http = new HttpFixture(activeRoot)) {
-                http.start(); emit(Map.of("stage", "JAVA_READY", "pid", ProcessHandle.current().pid(), "port", http.port()));
+                http.start(); emit(Map.of("stage", "JAVA_READY", "pid", ProcessHandle.current().pid(), "port", http.port(), "commands", m4() ? commands(jdbc) : List.of()));
                 String line;
                 while ((line = in.readLine()) != null) {
                     JsonNode r = JSON.readTree(line); String op = text(r, "op");
-                    if (op.equals("STOP")) { heldResponse.countDown(); http.close(); emit(Map.of("stage", "STOPPED")); return; }
+                    if (op.equals("STOP")) { heldResponse.countDown(); responseRelease.countDown(); preparedRelease.countDown(); http.close(); emit(Map.of("stage", "STOPPED")); return; }
+                    if (m4()) { handleM4(jdbc, r); continue; }
                     if (op.equals("CREATE")) {
                         int i = Math.toIntExact(integer(r, "agentIndex")); require(i >= 0 && i < 8, "INDEX_REQUIRED");
                         JsonNode m = r.get("manifest"); require(AGENTS[i].equals(text(m, "canonicalAgentId")) && INSTALLATIONS[i].equals(text(m, "installationId")), "MANIFEST_SUBJECT_REQUIRED");
@@ -199,7 +220,7 @@ public final class Ur06EnrollMysqlFixture {
             emit(safe); System.exit(1);
         }
     }
-    private static void initialize(JdbcTemplate jdbc, Path api) throws Exception {
+    private static void initializeSchema(JdbcTemplate jdbc, Path api) throws Exception {
         require(api.isAbsolute() && api.toRealPath().equals(api), "API_CANONICAL_REQUIRED");
         // Original module baseline resources (no ambiguous shared db/schema.sql lookup).
         for (String path : List.of("agent/jia-agent-mapper/src/main/resources/db/schema.sql",
@@ -218,6 +239,9 @@ public final class Ur06EnrollMysqlFixture {
         require(legacy(jdbc).size() == 1, "LEGACY_KEY_REQUIRED");
         require(jdbc.queryForObject("SELECT COUNT(*) FROM agent_runtime WHERE agent_id='ur06-legacy' AND runtime_installation_id IS NULL AND runtime_host_id IS NULL AND runtime_instance_id IS NULL AND runtime_session_generation IS NULL AND create_time=17 AND update_time=17", Integer.class) == 1,
             "NULL_OWNERSHIP_PRESERVED_REQUIRED");
+    }
+    private static void initialize(JdbcTemplate jdbc, Path api) throws Exception {
+        initializeSchema(jdbc, api);
         new TransactionTemplate(new DataSourceTransactionManager(activeDataSource)).executeWithoutResult(tx -> {
             jdbc.update("INSERT INTO user_info(id,jiacn,account_state,auth_epoch,client_id,tenant_id) VALUES(700,?,'ACTIVE',2,?,'0')", OWNER, CLIENT);
             long now = System.currentTimeMillis();
@@ -231,6 +255,155 @@ public final class Ur06EnrollMysqlFixture {
         // Installation table remains EMPTY until the original proxied create operation.
         require(jdbc.queryForObject("SELECT COUNT(*) FROM agent_runtime_v1_installation", Integer.class) == 0, "INSTALLATION_PRESEED_FORBIDDEN");
     }
+    /** Full original E05 SQL and owner Phase-A run on ONE verified JDBC session.
+     * Synthetic historical receipts are NOT enrollment/Rabbit/JWT reassignment proof. */
+    private static void initializeM4(JdbcTemplate jdbc, Path api, JsonNode init) throws Exception {
+        initializeSchema(jdbc, api);
+        try (Connection c = activeDataSource.getConnection()) {
+            for (String name : List.of("agent-work-item-reassignment-e05.sql", "single-tenant-task-owner-ddl.sql")) {
+                Path resource = api.resolve("agent/jia-agent-mapper/src/main/resources/db/" + name);
+                require(resource.toRealPath().equals(resource), "DDL_ALIAS_FORBIDDEN");
+                new ResourceDatabasePopulator(new FileSystemResource(resource)).populate(c);
+            }
+        }
+        seedM4(jdbc, init);
+        if ("ROLLBACK".equals(fault)) jdbc.execute("CREATE TRIGGER ur06_m4_submit_rollback BEFORE INSERT ON agent_task_event FOR EACH ROW BEGIN IF NEW.event_type='WORK_ITEM_SUBMITTED' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='UR06_SYNTHETIC_SUBMITTED_SQL_FAILURE'; END IF; END");
+    }
+    private static void handleM4(JdbcTemplate jdbc, JsonNode request) {
+        String op = text(request, "op");
+        if ("SNAPSHOT".equals(op)) { emit(snapshotM4(jdbc)); return; }
+        if ("RELEASE_PREPARED".equals(op)) { preparedRelease.countDown(); emit(Map.of("stage", "PREPARED_RELEASED")); return; }
+        int index = Math.toIntExact(integer(request, "agentIndex")); require(index >= 0 && index < 3, "EXACT_AGENT_REQUIRED");
+        if ("SEED_WORK".equals(op)) {
+            require(jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_meta WHERE task_id=?", Integer.class, "ur04-task-" + index) == 0, "WORK_RESEED_FORBIDDEN");
+            new TransactionTemplate(new DataSourceTransactionManager(activeDataSource)).executeWithoutResult(tx -> seedWork(jdbc, index, System.currentTimeMillis()));
+            emit(Map.of("stage", "WORK_SEEDED", "commands", commands(jdbc)));
+        } else if ("DISPATCH".equals(op) || "ALTERED_DISPATCH".equals(op)) {
+            byte[] wire = jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event WHERE id=?", byte[].class, index * 2 + 2);
+            if ("ALTERED_DISPATCH".equals(op)) {
+                String raw = new String(wire, StandardCharsets.UTF_8); require(raw.contains("UR04 synthetic original execution"), "ALTERED_FRAME_ANCHOR_REQUIRED");
+                wire = raw.replace("UR04 synthetic original execution", "UR04 conflicting original execution").getBytes(StandardCharsets.UTF_8);
+            }
+            var delivered = nativeHandler.dispatchExactRawCommand(TENANT, CLIENT, "ur04-task-" + index, AGENTS[index], wire);
+            emit(Map.of("stage", "DISPATCHED", "sent", delivered.status() == AgentRawCommandDispatchResult.Status.SENT, "agentIndex", index));
+        } else if ("MUTATE".equals(op)) { mutate(jdbc, request); emit(Map.of("stage", "MUTATED")); }
+        else throw new FixtureFailure("OPERATION_ALLOWLIST_REQUIRED");
+    }
+    private static void seedM4(JdbcTemplate jdbc, JsonNode init) {
+        long now = System.currentTimeMillis(); JsonNode manifests = init.get("manifests"), authorizations = init.get("authorizations");
+        require(manifests != null && manifests.isArray() && manifests.size() == 3 && authorizations != null && authorizations.isArray() && authorizations.size() == 3, "THREE_SYNTHETIC_INSTALLATIONS_REQUIRED");
+        new TransactionTemplate(new DataSourceTransactionManager(activeDataSource)).executeWithoutResult(status -> {
+            jdbc.update("INSERT INTO user_info(id,jiacn,account_state,auth_epoch,client_id,tenant_id) VALUES(700,?,'ACTIVE',2,?,'0')", OWNER, CLIENT);
+            for (int index = 0; index < 3; index++) {
+                JsonNode m = manifests.get(index); String authorization = authorizations.get(index).isTextual() ? authorizations.get(index).asText() : "";
+                require(authorization.matches("rta1_[0-9a-f]{64}") && INSTALLATIONS[index].equals(text(m, "installationId"))
+                    && AGENTS[index].equals(text(m, "canonicalAgentId")) && TENANT.equals(text(m, "tenantId")) && CLIENT.equals(text(m, "clientId")), "SYNTHETIC_SUBJECT_MISMATCH");
+                String manifestHash = text(m, "manifestSha256"); require(manifestHash.matches("sha256:[0-9a-f]{64}"), "SEALED_MANIFEST_REQUIRED");
+                long id = 1000 + index;
+                jdbc.update("INSERT INTO agent_persona(id,persona_code,name,rank_no,abilities,active,system_agent,tenant_id,client_id) VALUES(?,?,?,?,?,1,0,?,?)",
+                    id, "ur04-persona-" + index, "UR04 persona " + index, 200 + index, "[]", TENANT, CLIENT);
+                jdbc.update("INSERT INTO agent_persona_binding(id,jiacn,persona_code,agent_id,bound_at,status,tenant_id,client_id,create_time,update_time) VALUES(?,?,?,?,?,1,?,?,?,?)",
+                    id, OWNER, "ur04-persona-" + index, AGENTS[index], now, TENANT, CLIENT, now, now);
+                jdbc.update("INSERT INTO agent_identity_registry(id,canonical_agent_id,canonical_type,lifecycle_status,owner_jiacn,binding_id,provisioned_at,activated_at,audit_reason,tenant_id,client_id,create_time,update_time) VALUES(?,?,'OPAQUE','ACTIVE',?,?,?,?,'UR04_SYNTHETIC',?,?,?,?)",
+                    id, AGENTS[index], OWNER, id, now, now, TENANT, CLIENT, now, now);
+                jdbc.update("INSERT INTO agent_runtime_v1_installation(id,installation_id,canonical_agent_id,manifest_version,manifest_sha256,enrollment_secret_hash,enrollment_expires_at,enrollment_consumed_at,runtime_authorization_hash,runtime_authorization_issued_at,status,version,tenant_id,client_id,create_time,update_time) VALUES(?,?,?,'1',?,?,?,?,?,?,'ACTIVE',0,?,?,?,?)",
+                    id, INSTALLATIONS[index], AGENTS[index], manifestHash.substring(7), sha256("synthetic-enrollment-unused"), now + 86400000, now, sha256(authorization), now, TENANT, CLIENT, now, now);
+
+            }
+        });
+    }
+    private static void seedWork(JdbcTemplate jdbc, int index, long now) {
+        String task = "ur04-task-" + index, work = "ur04-work-" + index;
+        String previous = AGENTS[(index + 1) % 3], coordinator = AGENTS[(index + 2) % 3], target = AGENTS[index];
+        String reassignment = "rsn_" + hex(sha256(String.join("\0", "e05-reassignment-v1", TENANT, CLIENT, OWNER, task, work, "ur04-key-" + index)));
+        String token = "ur04-business-" + UUID.randomUUID(), message = "00000000-0000-0000-0000-" + String.format(Locale.ROOT, "%012d", index + 1);
+        String sourceIntent = "ur04-source-" + index, intent = "ur04-successor-" + index, event = "ur04-outbox-" + index;
+        String source = AgentCommandCanonicalCodec.hallCommandId(TENANT, CLIENT, OWNER, task, previous, sourceIntent, "WORK_ITEM_EXECUTE");
+        String command = AgentCommandCanonicalCodec.hallCommandId(TENANT, CLIENT, OWNER, task, target, intent, "WORK_ITEM_EXECUTE");
+        jdbc.update("INSERT INTO agent_task_meta(task_id,owner_jiacn,reward_status,collaboration_mode,risk_level,max_agents,coordinator_agent_id,review_required,task_version,current_event_version,tenant_id,client_id,create_time,update_time) VALUES(?,?,'running','team','low',3,?,0,7,0,?,?,?,?)",
+            task, OWNER, coordinator, TENANT, CLIENT, now, now);
+        for (String agent : Arrays.copyOf(AGENTS, 3)) jdbc.update("INSERT INTO agent_task_member(task_id,owner_jiacn,agent_id,member_role,member_status,assignment_source,version,tenant_id,client_id,create_time,update_time) VALUES(?,?,?,?,'working','manual',0,?,?,?,?)",
+            task, OWNER, agent, agent.equals(coordinator) ? "coordinator" : "worker", TENANT, CLIENT, now, now);
+        jdbc.update("INSERT INTO agent_task_work_item(work_item_id,task_id,owner_jiacn,title,description,work_type,assignee_agent_id,status,lease_token,lease_until,attempt_count,max_attempts,version,tenant_id,client_id,create_time,update_time) VALUES(?,?,?,'UR04 synthetic work','UR04 synthetic original execution','coding',?,'claimed',?,?,2,3,5,?,?,?,?)",
+            work, task, OWNER, target, token, now + LEASE_MILLIS, TENANT, CLIENT, now, now);
+        AgentHallCommandPayload predecessorPayload = new AgentHallCommandPayload("work_item_execute", "UR04 synthetic predecessor", "juyiting", "manual", null,
+            "ur04-source-event-" + index, "supervised", true, new AgentHallCommandContext(null, "UR04 synthetic work", null, null, "4", List.of(), List.of()));
+        AgentCommandDraft predecessor = new AgentCommandDraft(1, source, task, "ur04-source-event-" + index, TENANT, CLIENT, OWNER, task, work, previous,
+            "WORK_ITEM_EXECUTE", now, now + AgentCommandCanonicalCodec.HALL_COMMAND_TTL_MILLIS, sourceIntent, predecessorPayload);
+        AgentHallCommandPayload payload = new AgentHallCommandPayload("work_item_execute", "UR04 synthetic original execution", "juyiting", "lease_expired_reassignment", null,
+            event, "supervised", true, new AgentHallCommandContext(null, "UR04 synthetic work", null, null, "5", List.of(source), List.of("lease-expired", "reassignment"), "e05-reassignment-v1", reassignment));
+        AgentCommandDraft successor = new AgentCommandDraft(1, command, task, event, TENANT, CLIENT, OWNER, task, work, target,
+            "WORK_ITEM_EXECUTE", now, now + AgentCommandCanonicalCodec.HALL_COMMAND_TTL_MILLIS, intent, payload);
+        seedTransport(jdbc, index * 2 + 1, predecessor, "source-" + message, "ur04-source-event-" + index, now);
+        seedTransport(jdbc, index * 2 + 2, successor, message, event, now);
+        jdbc.update("INSERT INTO agent_work_item_reassignment(reassignment_id,request_sha256,task_id,owner_jiacn,work_item_id,operator_subject,coordinator_agent_id,previous_agent_id,target_agent_id,source_command_id,command_id,message_id,outbox_event_id,expected_work_item_version,result_work_item_version,task_version,lease_fence_sha256,previous_lease_until,lease_until,attempt_count,max_attempts,tenant_id,client_id,create_time,update_time) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,4,5,7,?,?,?,2,3,?,?,?,?)",
+            reassignment, hex(sha256("synthetic-historical-request-" + index)), task, OWNER, work, "ur04-operator", coordinator, previous, target, source, command, message, event,
+            hex(sha256(token)), now - 1000, now + LEASE_MILLIS, TENANT, CLIENT, now, now);
+    }
+    private static void seedTransport(JdbcTemplate jdbc, long id, AgentCommandDraft draft, String message, String event, long now) {
+        byte[] business = AgentCommandCanonicalCodec.businessBytes(draft), wire = AgentCommandCanonicalCodec.wireBytes(draft, message, 1);
+        var route = AgentRabbitTopologyManifest.canonical().defaultCommandPublishRoute();
+        jdbc.update("INSERT INTO agent_command_delivery(id,owner_jiacn,command_id,task_id,work_item_id,target_agent_id,command_type,command_payload,command_payload_hash,status,attempt_count,active_message_id,active_attempt,expires_at,version,tenant_id,client_id,create_time,update_time) VALUES(?,?,?,?,?,?,'WORK_ITEM_EXECUTE',?,?,'SENT',1,?,1,?,7,?,?,?,?)",
+            id, OWNER, draft.commandId(), draft.taskId(), draft.workItemId(), draft.targetAgentId(), business, AgentCommandCanonicalCodec.sha256(business), message, draft.expiresAt(), TENANT, CLIENT, now, now);
+        jdbc.update("INSERT INTO agent_outbox_event(id,event_id,message_id,command_id,delivery_id,aggregate_type,aggregate_id,destination,routing_key,wire_payload,wire_payload_hash,status,attempt_count,active_attempt,expires_at,publisher_confirm_status,confirmed_at,mandatory_return_status,published_at,version,tenant_id,client_id,create_time,update_time) VALUES(?,?,?,?,?,'task',?,?,?,?,?,'PUBLISHED',1,1,?,'ACK',?,'NOT_RETURNED',?,0,?,?,?,?)",
+            id, event, message, draft.commandId(), id, draft.taskId(), route.destination(), route.routingKey(), wire, AgentCommandCanonicalCodec.sha256(wire), draft.expiresAt(), now, now, TENANT, CLIENT, now, now);
+        jdbc.update("INSERT INTO agent_consumer_inbox(id,consumer_name,message_id,event_id,command_id,delivery_id,wire_payload,wire_payload_hash,status,result_status,attempt_count,active_attempt,expires_at,processed_at,version,tenant_id,client_id,create_time,update_time) VALUES(?,'agent-command-dispatch-v1',?,?,?,?,?,?,'PROCESSED','SENT',1,1,?,?,0,?,?,?,?)",
+            id, message, event, draft.commandId(), id, wire, AgentCommandCanonicalCodec.sha256(wire), draft.expiresAt(), now, TENANT, CLIENT, now, now);
+    }
+    private static List<Map<String, Object>> commands(JdbcTemplate jdbc) {
+        return jdbc.query("SELECT r.*,d.expires_at,d.target_agent_id FROM agent_work_item_reassignment r JOIN agent_command_delivery d ON r.command_id=d.command_id ORDER BY r.id", (rs, row) -> {
+            Map<String, Object> command = new LinkedHashMap<>();
+            for (String name : List.of("commandId", "messageId", "taskId", "workItemId", "reassignmentId", "sourceCommandId")) command.put(name, rs.getString(name.replaceAll("([A-Z])", "_$1").toLowerCase(Locale.ROOT)));
+            command.put("agentIndex", Arrays.asList(AGENTS).indexOf(rs.getString("target_agent_id"))); command.put("targetAgentId", rs.getString("target_agent_id"));
+            command.put("expiresAt", java.time.Instant.ofEpochMilli(rs.getLong("expires_at")).toString()); return command;
+        });
+    }
+    private static void mutate(JdbcTemplate jdbc, JsonNode request) {
+        int index = Math.toIntExact(integer(request, "agentIndex")); require(index >= 0 && index < 3, "EXACT_AGENT_REQUIRED");
+        String task = "ur04-task-" + index; String mutation = text(request, "mutation");
+        switch (mutation) {
+            case "SUCCESSOR_HASH" -> jdbc.update("UPDATE agent_command_delivery SET command_payload_hash=? WHERE id=?", new byte[32], index * 2 + 2);
+            case "PREDECESSOR_HASH" -> jdbc.update("UPDATE agent_command_delivery SET command_payload_hash=? WHERE id=?", new byte[32], index * 2 + 1);
+            case "SOURCE_TARGET" -> jdbc.update("UPDATE agent_command_delivery SET target_agent_id=? WHERE id=?", AGENTS[(index + 1) % 3], index * 2 + 2);
+            case "PROOF" -> jdbc.update("UPDATE agent_task_event SET event_json='{}' WHERE task_id=? AND event_type='WORK_ITEM_SUBMITTED'", task);
+            case "MATERIAL" -> jdbc.update("UPDATE agent_task_artifact SET content='tampered synthetic material' WHERE task_id=?", task);
+            case "REVOKE" -> jdbc.update("UPDATE agent_runtime_v1_installation SET status='REVOKED',version=version+1 WHERE installation_id=?", INSTALLATIONS[index]);
+            default -> throw new FixtureFailure("MUTATION_ALLOWLIST_REQUIRED");
+        }
+    }
+    static Map<String, Object> snapshotM4(JdbcTemplate jdbc) {
+        Map<String, Object> out = new LinkedHashMap<>(); out.put("stage", "SNAPSHOT");
+        out.put("ackUpdates", ACK_UPDATES.get()); out.put("workUpdates", WORK_UPDATES.get()); out.put("artifactInserts", ARTIFACT_INSERTS.get()); out.put("submittedAttempts", SUBMITTED_ATTEMPTS.get());
+        out.put("http", List.copyOf(HTTP));
+        out.put("runtimes", jdbc.query("SELECT agent_id,runtime_session_generation,runtime_instance_id,status FROM agent_runtime WHERE agent_id IN (?, ?, ?) ORDER BY agent_id", (rs, row) -> Map.of("generation", rs.getLong(2), "boot", rs.getString(3), "status", rs.getString(4)), AGENTS[0], AGENTS[1], AGENTS[2]));
+        out.put("work", jdbc.query("SELECT status,version,result_artifact_id,lease_token,lease_until FROM agent_task_work_item ORDER BY id", (rs, row) -> Map.of("status", rs.getString(1), "version", rs.getLong(2), "hasResult", rs.getString(3) != null, "leaseCleared", rs.getString(4) == null && rs.getObject(5) == null)));
+        out.put("deliveries", jdbc.query("SELECT status,version FROM agent_command_delivery WHERE MOD(id,2)=0 ORDER BY id", (rs, row) -> Map.of("status", rs.getString(1), "version", rs.getLong(2))));
+        out.put("artifacts", jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_artifact", Integer.class));
+        out.put("submittedEvents", jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_event WHERE event_type='WORK_ITEM_SUBMITTED'", Integer.class));
+        out.put("events", jdbc.queryForObject("SELECT COUNT(*) FROM agent_task_event", Integer.class));
+        out.put("eventVersion", jdbc.queryForObject("SELECT COALESCE(SUM(current_event_version),0) FROM agent_task_meta", Long.class));
+        out.put("businessSha256", businessFingerprint(jdbc)); return out;
+    }
+    static String businessFingerprint(JdbcTemplate jdbc) {
+        try {
+            MessageDigest hash = MessageDigest.getInstance("SHA-256");
+            for (String table : List.of("agent_task_meta", "agent_task_member", "agent_task_work_item", "agent_task_artifact", "agent_task_event", "agent_work_item_reassignment"))
+                jdbc.query("SELECT * FROM " + table + " ORDER BY id", (RowCallbackHandler) rs -> fingerprintRow(hash, rs));
+            return hex(hash.digest());
+        } catch (java.security.NoSuchAlgorithmException impossible) { throw new FixtureFailure("DIGEST_UNAVAILABLE"); }
+    }
+    private static void fingerprintRow(MessageDigest hash, ResultSet rs) throws SQLException {
+        for (int column = 1; column <= rs.getMetaData().getColumnCount(); column++) {
+            Object value = rs.getObject(column); byte[] bytes;
+            if (value == null) bytes = new byte[]{0}; else if (value instanceof byte[] binary) bytes = binary;
+            else if (value instanceof java.sql.Blob blob) bytes = blob.getBytes(1, Math.toIntExact(blob.length()));
+            else if (value instanceof java.sql.Clob clob) bytes = clob.getSubString(1, Math.toIntExact(clob.length())).getBytes(StandardCharsets.UTF_8);
+            else bytes = value.toString().getBytes(StandardCharsets.UTF_8);
+            hash.update(java.nio.ByteBuffer.allocate(4).putInt(bytes.length).array()); hash.update(bytes);
+        }
+    }
+    static String optionalText(JsonNode value, String key) { JsonNode field = value == null ? null : value.get(key); return field != null && field.isTextual() ? field.asText() : ""; }
+    static String hex(byte[] value) { return HexFormat.of().formatHex(value); }
     static List<Map<String, Object>> legacy(JdbcTemplate jdbc) {
         return jdbc.queryForList("SELECT * FROM agent_runtime WHERE agent_id='ur06-legacy'");
     }
@@ -263,6 +436,77 @@ public final class Ur06EnrollMysqlFixture {
         jdbc.update("INSERT INTO agent_consumer_inbox(id,consumer_name,message_id,event_id,command_id,delivery_id,wire_payload,wire_payload_hash,status,result_status,attempt_count,active_attempt,expires_at,processed_at,version,tenant_id,client_id,create_time,update_time) VALUES(?,'agent-command-dispatch-v1',?,?,?,?,?,?,'PROCESSED','SENT',1,1,?,?,0,'0',?,?,?)", id,message,event,command,id,wire,AgentCommandCanonicalCodec.sha256(wire),draft.expiresAt(),now,CLIENT,now,now);
         Map<String,Object> context = new LinkedHashMap<>(); context.put("commandId",command); context.put("taskId",task); context.put("workItemId",null); context.put("messageId",message); context.put("correlationId",message); context.put("expiresAt",java.time.Instant.ofEpochMilli(draft.expiresAt()).toString());
         return context;
+    }
+    private static final class M4ResponseCut implements Filter {
+        @Override public void doFilter(ServletRequest req, ServletResponse res, FilterChain chain) throws IOException, ServletException {
+            HttpServletRequest raw = (HttpServletRequest) req;
+            if (raw.getRequestURI().equals("/ws/agent/channel")) { chain.doFilter(req, res); return; }
+            // Spring 7's explicit cacheLimit=0 keeps all consumed synthetic request bytes:
+            // observation only, no size rejection/truncation or eager body read.
+            ContentCachingRequestWrapper request = new ContentCachingRequestWrapper(raw, 0);
+            ContentCachingResponseWrapper response = new ContentCachingResponseWrapper((HttpServletResponse) res);
+            String path = request.getRequestURI(), category = category(path), before = "";
+            if ("GET".equals(request.getMethod()) && Set.of("RESULT", "LEASE").contains(category)) before = businessFingerprint(new JdbcTemplate(activeDataSource));
+            try {
+                chain.doFilter(request, response);
+                byte[] bytes = response.getContentAsByteArray();
+                // Background original pollers may encounter an unassembled unrelated 404 HTML route.
+                // Optional observation must not turn that real status into a synthetic JSON failure.
+                String contentType = response.getContentType();
+                JsonNode body = bytes.length > 0 && contentType != null && contentType.startsWith("application/json")
+                        ? JSON.readTree(bytes) : JSON.createObjectNode();
+                if (body == null || !body.isObject()) body = JSON.createObjectNode();
+                JsonNode data = body.get("data"); if (data == null || !data.isObject()) data = body;
+                Map<String, Object> receipt = new LinkedHashMap<>(); receipt.put("category", category); receipt.put("method", request.getMethod()); receipt.put("status", response.getStatus());
+                int index = commandIndex(path);
+                JsonNode requestBody = request.getContentAsByteArray().length > 0
+                        ? JSON.readTree(request.getContentAsByteArray()) : JSON.createObjectNode();
+                if (requestBody == null || !requestBody.isObject()) requestBody = JSON.createObjectNode();
+                if (category.equals("ACK")) index = Arrays.asList(AGENTS).indexOf(optionalText(requestBody, "canonicalAgentId"));
+                receipt.put("index", index);
+                if (Set.of("LEASE", "START", "HEARTBEAT").contains(category) && request.getMethod().equals("POST")) {
+                    receipt.put("actorMatches", index >= 0 && AGENTS[index].equals(request.getParameter("actorAgentId"))
+                            && request.getParameterValues("actorAgentId").length == 1);
+                }
+                JsonNode expected = requestBody.get("expectedWorkItemVersion");
+                if (expected != null && expected.isIntegralNumber() && expected.canConvertToLong()) receipt.put("expectedVersion", expected.longValue());
+                JsonNode confirmed = requestBody.get("deliveryVersion");
+                if (category.equals("ACK")) {
+                    receipt.put("firstAck", confirmed != null && confirmed.isNull());
+                    if (confirmed != null && confirmed.isIntegralNumber() && confirmed.canConvertToLong()) receipt.put("lastConfirmedVersion", confirmed.longValue());
+                }
+                if (data.get("deliveryVersion") != null && data.get("deliveryVersion").isIntegralNumber()) receipt.put("version", data.get("deliveryVersion").longValue());
+                if (data.get("workItemVersion") != null && data.get("workItemVersion").isIntegralNumber()) receipt.put("workVersion", data.get("workItemVersion").longValue());
+                for (String key : List.of("kind", "status")) {
+                    String v = optionalText(data, key);
+                    if (Set.of("ADVANCED", "PRIOR", "RECEIVED", "STARTED", "SUCCEEDED", "REJECTED", "FAILED", "submitted", "claimed", "running").contains(v)) receipt.put(key.equals("status") ? "businessStatus" : key, v);
+                }
+                if (!before.isEmpty()) receipt.put("readOnly", before.equals(businessFingerprint(new JdbcTemplate(activeDataSource))));
+                HTTP.add(receipt); emit(Map.of("stage", "HTTP_OBSERVED", "receipt", receipt));
+                boolean resultCut = "RESULT_LOSS".equals(fault) && category.equals("RESULT") && request.getMethod().equals("POST") && response.getStatus() == 200;
+                boolean ackCut = "ACK_LOSS".equals(fault) && category.equals("ACK") && response.getStatus() == 200 && "SUCCEEDED".equals(optionalText(data, "status"));
+                if ((resultCut || ackCut) && faultUsed.compareAndSet(false, true)) {
+                    // Actual DB state verifies transaction commit before holding the response.
+                    Map<String, Object> snapshot = snapshotM4(new JdbcTemplate(activeDataSource));
+                    require(((Number) snapshot.get("submittedEvents")).longValue() == 1, "CUT_REQUIRES_REAL_SUBMITTED_COMMIT");
+                    if (ackCut) require("SUCCEEDED".equals(new JdbcTemplate(activeDataSource).queryForObject("SELECT status FROM agent_command_delivery WHERE id=2", String.class)), "CUT_REQUIRES_REAL_D06_COMMIT");
+                    emit(Map.of("stage", resultCut ? "RESULT_COMMIT_HELD" : "TERMINAL_ACK_HELD", "snapshot", snapshot));
+                    responseRelease.await(); // parent destroys only this owned JVM, making actual TCP response loss
+                }
+                response.copyBodyToResponse();
+            } catch (InterruptedException failure) { Thread.currentThread().interrupt(); throw new ServletException("UR04_PRIVATE_CUT_INTERRUPTED"); }
+        }
+        private static int commandIndex(String path) { for (int index = 0; index < 3; index++) if (path.contains("ur04-task-" + index)) return index; return -1; }
+        private static String category(String path) {
+            if (path.endsWith("/result-commit")) return "RESULT";
+            if (path.endsWith("/lease/heartbeat")) return "HEARTBEAT";
+            if (path.endsWith("/lease/start")) return "START";
+            if (path.endsWith("/lease")) return "LEASE";
+            if (path.endsWith("/acks")) return "ACK";
+            if (path.endsWith("/session")) return "SESSION";
+            if (path.endsWith("/heartbeat")) return "PRESENCE";
+            return "OTHER";
+        }
     }
     private static final class ResponseCut implements Filter {
         @Override public void doFilter(ServletRequest raw, ServletResponse response, FilterChain chain) throws IOException, ServletException {
@@ -328,7 +572,7 @@ public final class Ur06EnrollMysqlFixture {
                 require(org.springframework.aop.support.AopUtils.isAopProxy(spring.getBean(type)),"REAL_TRANSACTION_PROXY_REQUIRED");
             require(nativeHandler!=null,"NATIVE_HANDLER_REQUIRED");
             var servlet=Tomcat.addServlet(context,"dispatcher",new DispatcherServlet(spring)); servlet.setLoadOnStartup(1); context.addServletMappingDecoded("/","dispatcher");
-            addFilter(context,"response-cut",new ResponseCut()); addFilter(context,"runtime-security",new DelegatingFilterProxy("springSecurityFilterChain",spring));
+            addFilter(context,"response-cut", m4() ? new M4ResponseCut() : new ResponseCut()); addFilter(context,"runtime-security",new DelegatingFilterProxy("springSecurityFilterChain",spring));
         }
         static void addFilter(Context c,String name,Filter f) { FilterDef d=new FilterDef(); d.setFilterName(name); d.setFilter(f); c.addFilterDef(d); FilterMap m=new FilterMap(); m.setFilterName(name); m.addURLPattern("/*"); m.setDispatcher("REQUEST"); c.addFilterMap(m); }
         void start() throws Exception { bootStage="BOOT_TOMCAT_START"; tomcat.start(); require(port()>0,"BOUND_PORT_REQUIRED"); }
@@ -377,7 +621,9 @@ public final class Ur06EnrollMysqlFixture {
     /** Transparent JDBC observation, not a substitute DAO/transaction. Verifies the
      * real owned server before each execute/batch/commit, including original initializers. */
     static final class GuardedDataSource extends AbstractDataSource {
-        final DatabaseSpec spec; GuardedDataSource(DatabaseSpec spec) { this.spec=spec; }
+        final DatabaseSpec spec; final boolean observe;
+        GuardedDataSource(DatabaseSpec spec) { this(spec, false); }
+        GuardedDataSource(DatabaseSpec spec, boolean observe) { this.spec=spec; this.observe=observe; }
         @Override public Connection getConnection() throws SQLException {
             Connection raw=DriverManager.getConnection(spec.url("ur06_fixture"),spec.user(),spec.password());
             try {
@@ -391,13 +637,49 @@ public final class Ur06EnrollMysqlFixture {
                         Object result=m.invoke(raw,a);
                         if (result instanceof Statement statement) {
                             Class<?> type=result instanceof CallableStatement ? CallableStatement.class : result instanceof PreparedStatement ? PreparedStatement.class : Statement.class;
+                            String preparedSql = a != null && a.length > 0 && a[0] instanceof String sql ? sql : "";
+                            Map<Integer, Object> parameters = new HashMap<>();
+                            List<SqlObservation> batches = new ArrayList<>();
                             return Proxy.newProxyInstance(type.getClassLoader(),new Class<?>[]{type},(sp,sm,sa)-> {
-                                try { if (sm.getName().startsWith("execute") || sm.getName().equals("addBatch")) spec.verify(raw);
-                                    if (sm.getName().equals("unwrap")) {
-                                        require(sa != null && sa.length == 1 && sa[0] == type,"JDBC_UNWRAP_FORBIDDEN"); return sp;
+                                try {
+                                    String name = sm.getName();
+                                    if (name.startsWith("execute") || name.equals("addBatch")) spec.verify(raw);
+                                    if (name.equals("unwrap")) { require(sa != null && sa.length == 1 && sa[0] == type,"JDBC_UNWRAP_FORBIDDEN"); return sp; }
+                                    if (name.equals("getConnection")) return p;
+                                    if (name.startsWith("set") && sa != null && sa.length >= 2 && sa[0] instanceof Integer key)
+                                        parameters.put(key, name.equals("setNull") ? null : sa[1]);
+                                    if (name.equals("clearParameters")) parameters.clear();
+                                    if (name.equals("clearBatch")) batches.clear();
+                                    String sql = sa != null && sa.length > 0 && sa[0] instanceof String text ? text : preparedSql;
+                                    SqlObservation observation = SqlObservation.of(sql, parameters);
+                                    if (name.equals("addBatch")) {
+                                        Object added = sm.invoke(statement, sa); batches.add(observation); return added;
                                     }
-                                    if (sm.getName().equals("getConnection")) return p; return sm.invoke(statement,sa); }
-                                catch(InvocationTargetException e){throw e.getCause();}
+                                    boolean batch = name.equals("executeBatch") || name.equals("executeLargeBatch");
+                                    boolean execution = name.startsWith("execute");
+                                    if (observe && execution && !batch) observation.before();
+                                    Object executed;
+                                    try { executed = sm.invoke(statement,sa); }
+                                    catch (InvocationTargetException failure) {
+                                        if (observe && batch && failure.getCause() instanceof BatchUpdateException partial)
+                                            observeBatch(batches, partial.getLargeUpdateCounts());
+                                        throw failure;
+                                    }
+                                    if (observe && execution) {
+                                        if (batch) {
+                                            int length = java.lang.reflect.Array.getLength(executed);
+                                            long[] rows = new long[length];
+                                            for (int i=0;i<length;i++) rows[i]=((Number)java.lang.reflect.Array.get(executed,i)).longValue();
+                                            observeBatch(batches, rows);
+                                        } else {
+                                            long count = executed instanceof Number number ? number.longValue()
+                                                : executed instanceof Boolean && !((Boolean)executed) ? statement.getLargeUpdateCount() : -1;
+                                            observation.after(count);
+                                        }
+                                    }
+                                    if (batch) batches.clear();
+                                    return executed;
+                                } catch(InvocationTargetException e){throw e.getCause();}
                             });
                         }
                         return result;
@@ -407,6 +689,37 @@ public final class Ur06EnrollMysqlFixture {
         }
         @Override public Connection getConnection(String user,String password) throws SQLException {
             require(Objects.equals(user,spec.user()) && Objects.equals(password,spec.password()),"MYSQL_CREDENTIAL_SCOPE_REQUIRED"); return getConnection();
+        }
+    }
+    /** A transparent successful SQL attempt receipt, NOT a commit receipt. Durable
+     * independent JDBC rows (and trigger rollback) remain the original oracle. */
+    private static void observeBatch(List<SqlObservation> batch, long[] counts) {
+        // Actual executeBatch receipts only; not addBatch and not unattempted tail
+        // after a partial BatchUpdateException. No synthetic success on SQL failure.
+        require(counts.length <= batch.size(), "SQL_BATCH_RECEIPT_REQUIRED");
+        for (int i=0;i<counts.length;i++) { batch.get(i).before(); batch.get(i).after(counts[i]); }
+    }
+    private record SqlObservation(String kind, boolean submitted) {
+        static SqlObservation of(String sql, Map<Integer,Object> values) {
+            String normalized = sql.toLowerCase(Locale.ROOT).replace("`", "").replaceAll("\\s+", " ").trim();
+            String kind = normalized.startsWith("insert into agent_task_artifact ") || normalized.startsWith("insert into agent_task_artifact(") ? "ARTIFACT"
+                : normalized.startsWith("update agent_task_work_item ") ? "WORK"
+                : normalized.startsWith("update agent_command_delivery ") && normalized.matches("(?s).*set status\\s*=.*") ? "ACK" : "OTHER";
+            boolean event = normalized.startsWith("insert into agent_task_event ") || normalized.startsWith("insert into agent_task_event(");
+            // Capture only the immutable event type, never SQL/params/material/token.
+            return new SqlObservation(kind, event && values.values().stream().anyMatch("WORK_ITEM_SUBMITTED"::equals));
+        }
+        void before() { if (submitted) SUBMITTED_ATTEMPTS.incrementAndGet(); }
+        void after(long rows) {
+            // MyBatis simple updates provide exact row counts. SUCCESS_NO_INFO is a
+            // genuine executeBatch success receipt, counted as one attempt, not rows.
+            if (rows <= 0 && rows != Statement.SUCCESS_NO_INFO) return;
+            switch(kind) {
+                case "ARTIFACT" -> ARTIFACT_INSERTS.addAndGet(rows == Statement.SUCCESS_NO_INFO ? 1 : rows);
+                case "WORK" -> WORK_UPDATES.addAndGet(rows == Statement.SUCCESS_NO_INFO ? 1 : rows);
+                case "ACK" -> ACK_UPDATES.addAndGet(rows == Statement.SUCCESS_NO_INFO ? 1 : rows);
+                default -> { }
+            }
         }
     }
     static Map<String,Object> safeFailure(Throwable failure) {
@@ -579,6 +892,22 @@ public final class Ur06EnrollMysqlFixture {
         @Bean AgentWorkItemReassignmentController leaseController(AgentWorkItemReassignmentService service, AgentRuntimeAuthenticationService auth) { return new AgentWorkItemReassignmentController(service, auth); }
         @Bean AgentWorkItemRuntimeResultController resultController(AgentWorkItemResultCommitService service, AgentWorkItemReassignmentService reassignments,
                 AgentRuntimeAuthenticationService auth) { return new AgentWorkItemRuntimeResultController(service, reassignments, auth); }
+        @Bean static BeanPostProcessor preparedBoundary() {
+            return new BeanPostProcessor() {
+                @Override public Object postProcessAfterInitialization(Object bean, String name) {
+                    if (!"results".equals(name)) return bean;
+                    ProxyFactory observer = new ProxyFactory(bean); observer.setProxyTargetClass(true);
+                    observer.addAdvice((MethodInterceptor) call -> {
+                        Object prepared = call.proceed(); // real opaque prepare and its NEVER advice complete first
+                        if ("prepareRuntimeResult".equals(call.getMethod().getName()) && m4() && "PREPARED".equals(fault)) {
+                            require(!org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive(), "PREPARE_OUTER_TRANSACTION_FORBIDDEN");
+                            emit(Map.of("stage", "PREPARED_HELD")); preparedRelease.await();
+                        }
+                        return prepared; // unchanged production object, no fake receipt
+                    }); return observer.getProxy();
+                }
+            };
+        }
         @Bean SensitiveResponseProperties sensitiveProperties() { return new SensitiveResponseProperties(); }
         @Bean SensitiveResponseBodyAdvice sensitiveAdvice(SensitiveResponseProperties properties) { return new SensitiveResponseBodyAdvice(properties); }
     }

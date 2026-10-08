@@ -56,38 +56,64 @@ gradle.projectsEvaluated {
     p.dependencies.add(s.implementationConfigurationName,
             'org.springframework.ai:spring-ai-client-chat:' + libs.findVersion('spring-ai').get().requiredVersion)
 
-    p.tasks.register('ur06EnrollMysql', Test) {
-        group = 'verification'
-        description = 'UR-06 original enrollment/default-fetch/native WS/D06 on isolated MySQL 8.0.21; not production/Provider/E05 M4.'
-        dependsOn p.tasks.named(s.classesTaskName)
-        testClassesDirs = s.output.classesDirs
-        classpath = s.runtimeClasspath
-        useJUnitPlatform()
-        maxParallelForks = 1
-        // Each scheduled paired-source acceptance must actually open sockets/restart the DB.
-        // Client archive is external to the API checkout: never reuse stale task/cache evidence.
-        outputs.upToDateWhen { false }
-        outputs.cacheIf { false }
-        filter { includeTestsMatching 'cn.jia.agent.acceptance.ur06.Ur06EnrollMysqlAcceptanceTest' }
-        // Do not pass launcher credentials, opt-in control or external datasource configuration to tests.
-        def inputs = [:]
-        ['UR06_API_COMMIT', 'UR06_CLIENT_ROOT', 'UR06_CLIENT_COMMIT', 'UR06_NODE_BIN', 'UR06_ARTIFACT_ROOT', 'UR06_MYSQLD_BIN', 'UR06_CODEX_BIN'].each { key ->
-            def value = System.getenv(key)
-            if (value != null) inputs[key] = value
-        }
-        setEnvironment(inputs)
-        doFirst {
-            if (System.getenv('UR06_LOCAL_ACCEPTANCE') != '1') {
-                throw new GradleException('UR06_LOCAL_ACCEPTANCE_REQUIRED')
+    def selectors = [
+        ur06EnrollMysql: [
+            'e1OriginalPendingEnrollNestedCredentialDurability',
+            'e2RealNativeRegistrationSeparateJvmGenerationAndSibling',
+            'e3WrongExpiredManifestAndSubjectDeniedWithoutConsumption',
+            'e4IndependentStateConcurrentSecretCasAndReplayDenial',
+            'e5RealCommittedResponseLossRestartNeverReplaysSecret',
+            'm1OriginalMysqlInitializersRepeatNullableFenceAndConstraints',
+            'm3NativeCurrentFenceD06ReceiptsRevocationAndSiblingIsolation'
+        ],
+        ur06M4MysqlE05: [
+            'e05ActualClientHttpCommitsOriginalResultAndTerminalAck',
+            'e05LostResultReadbackSurvivesJavaAndNodeRestart',
+            'e05TerminalAckLostResponseReplaysPriorWithoutWorkRerun',
+            'e05PreparedCommitRefencesAndRollbackIsDurable',
+            'e05SourceAndOriginalResultProofStayFailClosed',
+            'e05UnknownStartedNeverRerunsAndSiblingRemainsReady'
+        ]
+    ]
+    selectors.each { name, methods ->
+        p.tasks.register(name, Test) {
+            group = 'verification'
+            description = name == 'ur06EnrollMysql'
+                    ? 'UR-06 seven original enrollment/native WS/D06/MySQL foundation selectors.'
+                    : 'UR-06 M4 complete original six E05 on private MySQL 8.0.21; synthetic historical receipts, not production/Provider/enrollment.'
+            dependsOn p.tasks.named(s.classesTaskName)
+            testClassesDirs = s.output.classesDirs
+            classpath = s.runtimeClasspath
+            useJUnitPlatform()
+            maxParallelForks = 1
+            // Each scheduled paired-source acceptance must actually open sockets/restart the Java+Node JVM/processes (same MySQL stays live).
+            // Client archive is external to the API checkout: never reuse stale task/cache evidence.
+            outputs.upToDateWhen { false }
+            outputs.cacheIf { false }
+            filter {
+                methods.each { method -> includeTestsMatching('cn.jia.agent.acceptance.ur06.Ur06EnrollMysqlAcceptanceTest.' + method) }
+                failOnNoMatchingTests = true
             }
-            if (inputs.size() != 7) throw new GradleException('UR06_PAIRED_SOURCE_INPUTS_REQUIRED')
-            systemProperty 'ur06.fixture.classpath', s.runtimeClasspath.asPath
-            systemProperty 'ur06.api.root', p.rootProject.projectDir.absolutePath
-        }
-        testLogging {
-            events 'passed', 'failed', 'skipped'
-            exceptionFormat 'short'
-            showStandardStreams = true // Only fixed UR06 stage/number receipts are emitted.
+            // Do not pass launcher credentials, opt-in control or external datasource configuration to tests.
+            def inputs = [:]
+            ['UR06_API_COMMIT', 'UR06_CLIENT_ROOT', 'UR06_CLIENT_COMMIT', 'UR06_NODE_BIN', 'UR06_ARTIFACT_ROOT', 'UR06_MYSQLD_BIN', 'UR06_CODEX_BIN'].each { key ->
+                def value = System.getenv(key)
+                if (value != null) inputs[key] = value
+            }
+            setEnvironment(inputs)
+            doFirst {
+                if (System.getenv('UR06_LOCAL_ACCEPTANCE') != '1') {
+                    throw new GradleException('UR06_LOCAL_ACCEPTANCE_REQUIRED')
+                }
+                if (inputs.size() != 7) throw new GradleException('UR06_PAIRED_SOURCE_INPUTS_REQUIRED')
+                systemProperty 'ur06.fixture.classpath', s.runtimeClasspath.asPath
+                systemProperty 'ur06.api.root', p.rootProject.projectDir.absolutePath
+            }
+            testLogging {
+                events 'passed', 'failed', 'skipped'
+                exceptionFormat 'short'
+                showStandardStreams = true // Only fixed UR06 stage/number receipts are emitted.
+            }
         }
     }
 }
