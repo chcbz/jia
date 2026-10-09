@@ -72,7 +72,8 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
     private static final String JDBC_URL =
             "jdbc:h2:mem:cyf_b08_identity_race;MODE=MYSQL;DB_CLOSE_DELAY=-1;"
                     + "CASE_INSENSITIVE_IDENTIFIERS=TRUE;LOCK_TIMEOUT=10000";
-    private static final String TENANT = "owner-a";
+    private static final String TENANT = "0";
+    private static final String OWNER = "owner-a";
     private static final String CLIENT = "client-a";
     private static final String TASK = "task-identity";
     private static final String AGENT_A = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -157,7 +158,7 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
     void persistedReferencesRejectUnknownCrossScopeAliasPaddedSystemAndProvisioned() {
         insertIdentity(TENANT, CLIENT, AGENT_A, AgentConstants.IDENTITY_STATUS_ACTIVE,
                 AgentConstants.BINDING_STATUS_ACTIVE);
-        compatibilityService.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false);
+        compatibilityService.assign(TENANT, CLIENT, OWNER, TASK, List.of(AGENT_A), false);
 
         assertTamperedReferenceRejected("agt_dddddddddddddddddddddddddddddddd");
 
@@ -190,7 +191,7 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
             Future<AgentLegacyTaskCompatibilityService.AssignOutcome> assign = executor.submit(() ->
-                    compatibilityService.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false));
+                    compatibilityService.assign(TENANT, CLIENT, OWNER, TASK, List.of(AGENT_A), false));
             assertTrue(identityLocked.await(10, TimeUnit.SECONDS));
             Future<Void> suspend = executor.submit(() -> {
                 suspendBinding(bindingId, null, null);
@@ -228,7 +229,7 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
             });
             assertTrue(suspended.await(10, TimeUnit.SECONDS));
             Future<Object> assign = executor.submit(() -> capture(() ->
-                    compatibilityService.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false)));
+                    compatibilityService.assign(TENANT, CLIENT, OWNER, TASK, List.of(AGENT_A), false)));
             Thread.sleep(150L);
             assertFalse(assign.isDone(), "assign must wait for the binding/registry suspension locks");
             allowSuspendCommit.countDown();
@@ -250,13 +251,13 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
     void reportLocksIdentityUntilMutationCommitThenSuspendMayProceed() throws Exception {
         long bindingId = insertIdentity(TENANT, CLIENT, AGENT_A,
                 AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE);
-        compatibilityService.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false);
+        compatibilityService.assign(TENANT, CLIENT, OWNER, TASK, List.of(AGENT_A), false);
         pauseNextIdentityLock();
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
             Future<AgentLegacyTaskCompatibilityService.ReportOutcome> report = executor.submit(() ->
                     compatibilityService.report(
-                            TENANT, CLIENT, TENANT, TASK, AGENT_A, "running", null));
+                            TENANT, CLIENT, OWNER, TASK, AGENT_A, "running", null));
             assertTrue(identityLocked.await(10, TimeUnit.SECONDS));
             Future<Void> suspend = executor.submit(() -> {
                 suspendBinding(bindingId, null, null);
@@ -285,7 +286,7 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
     void suspendCommitBeforeReportRejectsMutationWithoutDeadlock() throws Exception {
         long bindingId = insertIdentity(TENANT, CLIENT, AGENT_A,
                 AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE);
-        compatibilityService.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A), false);
+        compatibilityService.assign(TENANT, CLIENT, OWNER, TASK, List.of(AGENT_A), false);
         CountDownLatch suspended = new CountDownLatch(1);
         CountDownLatch allowSuspendCommit = new CountDownLatch(1);
         ExecutorService executor = Executors.newFixedThreadPool(2);
@@ -297,7 +298,7 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
             assertTrue(suspended.await(10, TimeUnit.SECONDS));
             Future<Object> report = executor.submit(() -> capture(() ->
                     compatibilityService.report(
-                            TENANT, CLIENT, TENANT, TASK, AGENT_A, "running", null)));
+                            TENANT, CLIENT, OWNER, TASK, AGENT_A, "running", null)));
             Thread.sleep(150L);
             assertFalse(report.isDone(), "report must wait for the suspension locks");
             allowSuspendCommit.countDown();
@@ -322,8 +323,8 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
                 AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE);
         insertIdentity(TENANT, CLIENT, AGENT_B,
                 AgentConstants.IDENTITY_STATUS_ACTIVE, AgentConstants.BINDING_STATUS_ACTIVE);
-        compatibilityService.assign(TENANT, CLIENT, TENANT, TASK, List.of(AGENT_A, AGENT_B), false);
-        compatibilityService.report(TENANT, CLIENT, TENANT, TASK, AGENT_A, "completed", null);
+        compatibilityService.assign(TENANT, CLIENT, OWNER, TASK, List.of(AGENT_A, AGENT_B), false);
+        compatibilityService.report(TENANT, CLIENT, OWNER, TASK, AGENT_A, "completed", null);
 
         if (AgentConstants.IDENTITY_STATUS_SUSPENDED.equals(lifecycle)) {
             suspendBinding(bindingA, null, null);
@@ -336,13 +337,13 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
             });
         }
         assertEquals(AGENT_A, identityService.requirePersistedCanonicalAgentIdInScope(
-                TENANT, CLIENT, TENANT, AGENT_A));
+                TENANT, CLIENT, OWNER, AGENT_A));
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> identityService.requireCanonicalAgentIdInScope(
-                        TENANT, CLIENT, TENANT, AGENT_A));
+                        TENANT, CLIENT, OWNER, AGENT_A));
 
         AgentLegacyTaskCompatibilityService.ReportOutcome completed = compatibilityService.report(
-                TENANT, CLIENT, TENANT, TASK, AGENT_B, "completed", null);
+                TENANT, CLIENT, OWNER, TASK, AGENT_B, "completed", null);
         assertEquals("completed", completed.taskStatus());
         assertEquals(2, count("agent_task_member"));
         assertEquals(2, count("agent_task_work_item"));
@@ -350,13 +351,13 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
         AgentServiceImpl.AgentBizException reportError = assertThrows(
                 AgentServiceImpl.AgentBizException.class,
                 () -> compatibilityService.report(
-                        TENANT, CLIENT, TENANT, TASK, AGENT_A, "completed", null));
+                        TENANT, CLIENT, OWNER, TASK, AGENT_A, "completed", null));
         assertEquals(cn.jia.agent.common.AgentErrorConstants.AGENT_FORBIDDEN,
                 reportError.getCode());
         AgentServiceImpl.AgentBizException assignError = assertThrows(
                 AgentServiceImpl.AgentBizException.class,
                 () -> compatibilityService.assign(
-                        TENANT, CLIENT, TENANT, TASK + "-new", List.of(AGENT_A), false));
+                        TENANT, CLIENT, OWNER, TASK + "-new", List.of(AGENT_A), false));
         assertEquals(cn.jia.agent.common.AgentErrorConstants.AGENT_FORBIDDEN,
                 assignError.getCode());
         assertEquals(0, jdbc.queryForObject(
@@ -369,7 +370,7 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
         jdbc.update("UPDATE agent_task_work_item SET assignee_agent_id=?", persistedAgentId);
         AgentTaskStateException error = assertThrows(AgentTaskStateException.class,
                 () -> aggregationService.aggregate(
-                        TENANT, CLIENT, TASK, aggregationCommand(0L)));
+                        TENANT, CLIENT, OWNER, TASK, aggregationCommand(0L)));
         assertEquals(AgentTaskStateException.Reason.INVALID_PERSISTED_STATE, error.getReason());
         jdbc.update("UPDATE agent_task_member SET agent_id=?", AGENT_A);
         jdbc.update("UPDATE agent_task_work_item SET assignee_agent_id=?", AGENT_A);
@@ -380,7 +381,7 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
         jdbc.update("INSERT INTO agent_persona_binding "
                         + "(jiacn,persona_code,agent_id,bound_at,status,tenant_id,client_id,create_time,update_time) "
                         + "VALUES (?,?,?,?,?,?,?,1,1)",
-                tenantId, "persona-" + canonical.substring(4, 8), canonical, 1L,
+                OWNER, "persona-" + canonical.substring(4, 8), canonical, 1L,
                 bindingStatus, tenantId, clientId);
         long bindingId = jdbc.queryForObject(
                 "SELECT MAX(id) FROM agent_persona_binding", Long.class);
@@ -389,7 +390,7 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
                         + "(canonical_agent_id,canonical_type,lifecycle_status,client_id,owner_jiacn,"
                         + "tenant_id,binding_id,provisioned_at,activated_at,audit_reason,create_time,update_time) "
                         + "VALUES (?,'OPAQUE',?,?,?,?,?,?,?,'test',1,1)",
-                canonical, lifecycle, clientId, tenantId, tenantId,
+                canonical, lifecycle, clientId, OWNER, tenantId,
                 bindingId, 1L, activatedAt);
         return bindingId;
     }
@@ -399,7 +400,7 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
         new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
             jdbc.update("UPDATE agent_persona_binding SET status=? WHERE id=?",
                     AgentConstants.BINDING_STATUS_SUSPENDED, bindingId);
-            identityService.suspendForBinding(TENANT, CLIENT, TENANT, bindingId);
+            identityService.suspendForBinding(TENANT, CLIENT, OWNER, bindingId);
             if (suspended != null) {
                 suspended.countDown();
             }
@@ -447,6 +448,7 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
                 .setEventJson(command.getEventJson())
                 .setOccurredAt(command.getOccurredAt());
         event.setTenantId(command.getTenantId());
+        event.setOwnerJiacn(command.getOwnerJiacn());
         event.setClientId(command.getClientId());
         event.setCreateTime(command.getOccurredAt());
         event.setUpdateTime(command.getOccurredAt());
@@ -585,6 +587,7 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
         jdbc.execute("""
                 CREATE TABLE agent_task_meta (
                     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     task_id VARCHAR(100) NOT NULL, reward_status VARCHAR(20) NOT NULL,
                     assigned_agent_id VARCHAR(100), required_abilities TEXT, reward INT,
                     assigned_at BIGINT, started_at BIGINT, completed_at BIGINT,
@@ -600,6 +603,7 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
         jdbc.execute("""
                 CREATE TABLE agent_task_member (
                     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     task_id VARCHAR(100) NOT NULL, agent_id VARCHAR(100) NOT NULL,
                     member_role VARCHAR(20) NOT NULL, member_status VARCHAR(20) NOT NULL,
                     assignment_source VARCHAR(20) NOT NULL, joined_at BIGINT, accepted_at BIGINT,
@@ -613,6 +617,7 @@ class AgentLegacyTaskIdentityRaceRealTransactionTest {
         jdbc.execute("""
                 CREATE TABLE agent_task_work_item (
                     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     work_item_id VARCHAR(100) NOT NULL, task_id VARCHAR(100) NOT NULL,
                     title VARCHAR(255) NOT NULL, description TEXT, work_type VARCHAR(30) NOT NULL,
                     required_abilities TEXT, assignee_agent_id VARCHAR(100), status VARCHAR(20) NOT NULL,

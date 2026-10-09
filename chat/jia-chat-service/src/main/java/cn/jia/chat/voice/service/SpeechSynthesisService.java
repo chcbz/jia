@@ -17,6 +17,7 @@ import cn.jia.chat.voice.state.VoiceOperation;
 import cn.jia.chat.voice.state.VoiceRequestCoordinator;
 import cn.jia.chat.voice.state.VoiceReservation;
 import cn.jia.chat.voice.state.VoiceStateUnavailableException;
+import cn.jia.chat.voice.validation.Pcm16Wav;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.Objects;
@@ -39,7 +40,6 @@ public final class SpeechSynthesisService {
         this.digests = digests;
     }
 
-
     public void requireAvailable(String requestId) {
         VoiceServiceSupport.requireCommonEnabled(properties,
                 properties.getSynthesis().isEnabled(), properties.getSynthesis().getProvider(),
@@ -52,8 +52,11 @@ public final class SpeechSynthesisService {
     public SpeechSynthesisResult synthesize(VoiceIdentity identity, VoiceSynthesisRequest request) {
         String requestId = request.requestId();
         requireAvailable(requestId);
+        VoiceSpeechProperties.Synthesis config = properties.getSynthesis();
+        String expectedMediaType = mediaType(request.format(), requestId);
         String identityScope = digests.identityScope(identity);
-        String digest = digests.synthesis(request.text(), request.voice(), request.format());
+        String digest = digests.synthesis(provider.alias(), config.getModel(),
+                config.getProviderVoice(), request.text(), request.voice(), request.format());
         VoiceBeginResult begin;
         try {
             begin = coordinator.begin(VoiceOperation.SYNTHESIS, identityScope, requestId, digest);
@@ -67,11 +70,11 @@ public final class SpeechSynthesisService {
             VoiceCachedResult replay = begin.replay();
             byte[] payload = replay == null ? null : replay.payload();
             if (payload == null || payload.length == 0
-                    || payload.length > OpenAiCompatibleSpeechSynthesisProvider.MAX_AUDIO_BYTES
-                    || !"audio/mpeg".equals(replay.contentType())) {
+                    || payload.length > maximumBytes(request.format())
+                    || !expectedMediaType.equals(replay.contentType())) {
                 throw VoiceException.of(VoiceErrorCode.UNAVAILABLE, requestId);
             }
-            return new SpeechSynthesisResult(payload, "audio/mpeg");
+            return new SpeechSynthesisResult(payload, expectedMediaType);
         }
         VoiceReservation reservation = VoiceServiceSupport.reservation(begin, requestId);
         if (reservation == null
@@ -85,30 +88,54 @@ public final class SpeechSynthesisService {
         }
         long started = System.nanoTime();
         try {
-            SpeechSynthesisResult result = provider.synthesize(new SpeechSynthesisRequest(
-                    request.text(), request.voice(), request.format()));
+            SpeechSynthesisResult result;
+            try (VoiceLeaseGuard lease = VoiceLeaseGuard.startIfRealtime(
+                    provider.alias(), properties, coordinator, reservation)) {
+                result = provider.synthesize(new SpeechSynthesisRequest(
+                        request.text(), request.voice(), request.format()));
+                lease.requireOwned(requestId);
+            }
             byte[] audio = result == null ? null : result.audio();
             if (audio == null || audio.length == 0
-                    || audio.length > OpenAiCompatibleSpeechSynthesisProvider.MAX_AUDIO_BYTES
-                    || !"audio/mpeg".equals(result.mediaType())) {
+                    || audio.length > maximumBytes(request.format())
+                    || !expectedMediaType.equals(result.mediaType())) {
                 VoiceServiceSupport.transitionFailure(coordinator, reservation,
                         SpeechProviderException.FailureKind.KNOWN, requestId);
                 throw VoiceException.of(VoiceErrorCode.PROVIDER_ERROR, requestId);
             }
             VoiceServiceSupport.completeSuccess(coordinator, reservation,
-                    new VoiceCachedResult(audio, "audio/mpeg"), requestId);
+                    new VoiceCachedResult(audio, expectedMediaType), requestId);
             long latencyMs = (System.nanoTime() - started) / 1_000_000L;
-            log.info("Voice TTS completed code=E0 latencyMs={} byteBucket={} provider={} mime=audio/mpeg",
-                    latencyMs, audio.length <= 1024 * 1024 ? "lte1m" : "lte8m", provider.alias());
-            return new SpeechSynthesisResult(audio, "audio/mpeg");
+            log.info("Voice TTS completed code=E0 latencyMs={} byteBucket={} provider={} mime={}",
+                    latencyMs, audio.length <= 1024 * 1024 ? "lte1m" : "lte8m",
+                    provider.alias(), expectedMediaType);
+            return new SpeechSynthesisResult(audio, expectedMediaType);
         } catch (SpeechProviderException exception) {
             VoiceServiceSupport.transitionFailure(
                     coordinator, reservation, exception.failureKind(), requestId);
             throw VoiceServiceSupport.providerError(exception, requestId);
         } catch (VoiceException exception) {
+            if (exception.error() == VoiceErrorCode.RESULT_UNKNOWN) {
+                VoiceServiceSupport.transitionFailure(coordinator, reservation,
+                        SpeechProviderException.FailureKind.UNKNOWN, requestId);
+            }
             throw exception;
         } finally {
             VoiceServiceSupport.release(coordinator, reservation);
         }
+    }
+
+    private static String mediaType(String format, String requestId) {
+        return switch (format) {
+            case "mp3" -> "audio/mpeg";
+            case "wav" -> Pcm16Wav.MEDIA_TYPE;
+            default -> throw VoiceException.of(VoiceErrorCode.INVALID_REQUEST, requestId);
+        };
+    }
+
+    private static int maximumBytes(String format) {
+        return "wav".equals(format)
+                ? Pcm16Wav.MAX_WAV_BYTES
+                : OpenAiCompatibleSpeechSynthesisProvider.MAX_AUDIO_BYTES;
     }
 }

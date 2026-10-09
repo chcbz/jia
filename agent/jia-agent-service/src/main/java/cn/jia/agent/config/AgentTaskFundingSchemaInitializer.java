@@ -47,6 +47,7 @@ public final class AgentTaskFundingSchemaInitializer implements InitializingBean
             } else if (!Set.copyOf(present).equals(Set.copyOf(TABLES))) {
                 throw new IllegalStateException("Partial ECO-V0 funded-task schema: " + present);
             }
+            migrateOwnerScopeIfNecessary();
             // Explicit W04-R3 -> W06 migration, NOT drift repair. Validate the entire exact
             // accepted old catalog before atomically replacing its one state CHECK.
             if (check(LEGACY_FUNDING_STATE).equals(inspectChecks("agent_task_funding").get("chk_agent_task_funding_state"))) {
@@ -57,6 +58,65 @@ public final class AgentTaskFundingSchemaInitializer implements InitializingBean
             }
             validateCatalog();
         });
+    }
+
+    private void migrateOwnerScopeIfNecessary() {
+        boolean operationMissing = !columnNames("agent_task_funding_operation").contains("owner_jiacn");
+        boolean fundingMissing = !columnNames("agent_task_funding").contains("owner_jiacn");
+        if (!operationMissing && !fundingMissing) return;
+        if (rowCount("agent_task_funding_operation") != 0 || rowCount("agent_task_funding") != 0) {
+            throw new IllegalStateException("Cannot infer owner_jiacn for persisted funded-task rows");
+        }
+        if (operationMissing) {
+            Map<String, IndexSpec> expected = indexes(
+                    "PRIMARY",true,"id",
+                    "uk_task_funding_operation_actor_key",true,"tenant_id,client_id,principal_type,principal_id,idempotency_key",
+                    "uk_task_funding_operation_task",true,"tenant_id,client_id,task_id");
+            if (!expected.equals(inspectIndexes("agent_task_funding_operation"))) {
+                throw new IllegalStateException("Unexpected ownerless funding-operation indexes");
+            }
+            jdbc.execute("ALTER TABLE agent_task_funding_operation "
+                    + "ADD COLUMN owner_jiacn VARCHAR(50) NOT NULL AFTER client_id, "
+                    + "DROP INDEX uk_task_funding_operation_actor_key, "
+                    + "DROP INDEX uk_task_funding_operation_task, "
+                    + "ADD UNIQUE INDEX uk_task_funding_operation_actor_key "
+                    + "(tenant_id,client_id,owner_jiacn,principal_type,principal_id,idempotency_key), "
+                    + "ADD UNIQUE INDEX uk_task_funding_operation_task "
+                    + "(tenant_id,client_id,owner_jiacn,task_id)");
+        }
+        if (fundingMissing) {
+            Map<String, IndexSpec> expected = indexes(
+                    "PRIMARY",true,"id",
+                    "idx_agent_task_funding_payer",false,"tenant_id,client_id,payer_principal_type,payer_principal_id,funding_status,id",
+                    "uk_agent_task_funding_escrow",true,"tenant_id,client_id,escrow_id",
+                    "uk_agent_task_funding_task",true,"tenant_id,client_id,task_id");
+            if (!expected.equals(inspectIndexes("agent_task_funding"))) {
+                throw new IllegalStateException("Unexpected ownerless funding indexes");
+            }
+            jdbc.execute("ALTER TABLE agent_task_funding "
+                    + "ADD COLUMN owner_jiacn VARCHAR(50) NOT NULL AFTER client_id, "
+                    + "DROP INDEX idx_agent_task_funding_payer, "
+                    + "DROP INDEX uk_agent_task_funding_escrow, "
+                    + "DROP INDEX uk_agent_task_funding_task, "
+                    + "ADD INDEX idx_agent_task_funding_payer "
+                    + "(tenant_id,client_id,owner_jiacn,payer_principal_type,payer_principal_id,funding_status,id), "
+                    + "ADD UNIQUE INDEX uk_agent_task_funding_escrow "
+                    + "(tenant_id,client_id,owner_jiacn,escrow_id), "
+                    + "ADD UNIQUE INDEX uk_agent_task_funding_task "
+                    + "(tenant_id,client_id,owner_jiacn,task_id)");
+        }
+    }
+
+    private Set<String> columnNames(String table) {
+        return Set.copyOf(jdbc.queryForList("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema=DATABASE() AND table_name=?
+                """, String.class, table));
+    }
+
+    private int rowCount(String table) {
+        Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Integer.class);
+        return count == null ? -1 : count;
     }
 
     void validateCatalog() { validateCatalog(false); }
@@ -277,11 +337,12 @@ public final class AgentTaskFundingSchemaInitializer implements InitializingBean
                 c("receipt_updated_at","bigint","YES",null,null,""),
                 c("tenant_id","varchar(50)","NO",null,COLLATION,""),
                 c("client_id","varchar(50)","NO",null,COLLATION,""),
+                c("owner_jiacn","varchar(50)","NO",null,COLLATION,""),
                 c("create_time","bigint","NO",null,null,""),
                 c("update_time","bigint","NO",null,null,"")), indexes(
                 "PRIMARY",true,"id",
-                "uk_task_funding_operation_actor_key",true,"tenant_id,client_id,principal_type,principal_id,idempotency_key",
-                "uk_task_funding_operation_task",true,"tenant_id,client_id,task_id"), Map.of(
+                "uk_task_funding_operation_actor_key",true,"tenant_id,client_id,owner_jiacn,principal_type,principal_id,idempotency_key",
+                "uk_task_funding_operation_task",true,"tenant_id,client_id,owner_jiacn,task_id"), Map.of(
                 "chk_task_funding_operation_hash", check("octet_length(request_hash)=32"),
                 "chk_task_funding_operation_key", check("octet_length(idempotency_key)=36"),
                 "chk_task_funding_operation_status", check("(status='POSTING' AND reserve_transaction_id IS NULL AND receipt_task_version IS NULL AND receipt_created_at IS NULL AND receipt_updated_at IS NULL) OR (status='COMPLETED' AND reserve_transaction_id IS NOT NULL AND receipt_task_version IS NOT NULL AND receipt_task_version=0 AND receipt_created_at IS NOT NULL AND receipt_created_at>0 AND receipt_updated_at IS NOT NULL AND receipt_updated_at>0)"))));
@@ -297,10 +358,10 @@ public final class AgentTaskFundingSchemaInitializer implements InitializingBean
                 c("cancel_refunded_micro","bigint","YES",null,null,""), c("cancel_task_version","bigint","YES",null,null,""),
                 c("refunded_at","bigint","YES",null,null,""), c("version","bigint","NO","0",null,""),
                 c("tenant_id","varchar(50)","NO",null,COLLATION,""), c("client_id","varchar(50)","NO",null,COLLATION,""),
-                c("create_time","bigint","NO",null,null,""), c("update_time","bigint","NO",null,null,"")), indexes(
-                "PRIMARY",true,"id", "idx_agent_task_funding_payer",false,"tenant_id,client_id,payer_principal_type,payer_principal_id,funding_status,id",
-                "uk_agent_task_funding_escrow",true,"tenant_id,client_id,escrow_id",
-                "uk_agent_task_funding_task",true,"tenant_id,client_id,task_id"), Map.of(
+                c("owner_jiacn","varchar(50)","NO",null,COLLATION,""), c("create_time","bigint","NO",null,null,""), c("update_time","bigint","NO",null,null,"")), indexes(
+                "PRIMARY",true,"id", "idx_agent_task_funding_payer",false,"tenant_id,client_id,owner_jiacn,payer_principal_type,payer_principal_id,funding_status,id",
+                "uk_agent_task_funding_escrow",true,"tenant_id,client_id,owner_jiacn,escrow_id",
+                "uk_agent_task_funding_task",true,"tenant_id,client_id,owner_jiacn,task_id"), Map.of(
                 "chk_agent_task_funding_amount", check("gross_bounty_amount_micro>0 AND remaining_micro>=0 AND remaining_micro<=gross_bounty_amount_micro"),
                 "chk_agent_task_funding_mode", check("funding_mode='FUNDED_SINGLE_AGENT'"),
                 "chk_agent_task_funding_policy", check("settlement_policy='GROSS_INCLUSIVE'"),

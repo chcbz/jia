@@ -68,8 +68,9 @@ public final class SpeechTranscriptionService {
         requireAvailable(requestId);
         String identityScope = digests.identityScope(identity);
         VoiceAdmission admission = admit(identityScope, requestId);
-        try (VoiceAudioUpload upload = uploadFactory.create(audio, requestId)) {
+        try (VoiceAudioUpload upload = uploadFactory.create(audio, requestId, provider.alias())) {
             String digest = digests.transcription(
+                    provider.alias(), properties.getTranscription().getModel(),
                     language, upload.mediaType(), upload.audioDigest());
             VoiceBeginResult begin;
             try {
@@ -156,10 +157,15 @@ public final class SpeechTranscriptionService {
         try {
             FileChannelSpeechTranscriptionProvider handleProvider =
                     (FileChannelSpeechTranscriptionProvider) provider;
-            SpeechTranscriptionResult result = handleProvider.transcribe(
-                    new FileChannelSpeechTranscriptionRequest(
-                            upload.channel(), upload.size(), upload.mediaType(),
-                            language, upload.durationMs()));
+            SpeechTranscriptionResult result;
+            try (VoiceLeaseGuard lease = VoiceLeaseGuard.startIfRealtime(
+                    provider.alias(), properties, coordinator, reservation)) {
+                result = handleProvider.transcribe(
+                        new FileChannelSpeechTranscriptionRequest(
+                                upload.channel(), upload.size(), upload.mediaType(),
+                                language, upload.durationMs()));
+                lease.requireOwned(requestId);
+            }
             if (result == null || result.text() == null || result.text().isBlank()) {
                 VoiceServiceSupport.transitionFailure(coordinator, reservation,
                         SpeechProviderException.FailureKind.KNOWN, requestId);

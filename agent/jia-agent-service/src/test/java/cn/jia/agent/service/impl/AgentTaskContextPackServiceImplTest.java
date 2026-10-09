@@ -340,6 +340,7 @@ class AgentTaskContextPackServiceImplTest {
     private static AgentTaskContextPackTaskSourceRow taskSource(
             String title, String description) {
         AgentTaskContextPackTaskSourceRow result = new AgentTaskContextPackTaskSourceRow();
+        result.setOwnerJiacn(OWNER);
         result.setTenantId(TENANT);
         result.setClientId(CLIENT);
         result.setTaskId(TASK);

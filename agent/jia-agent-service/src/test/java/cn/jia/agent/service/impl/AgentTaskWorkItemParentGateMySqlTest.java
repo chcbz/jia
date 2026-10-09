@@ -45,7 +45,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** MySQL 8.0.21 reproduction for the terminal aggregate versus late child insert race. */
 @EnabledIfEnvironmentVariable(named = "B05_MYSQL_URL", matches = ".+")
 class AgentTaskWorkItemParentGateMySqlTest {
-    private static final String TENANT = "tenant-a";
+    private static final String TENANT = "0";
+    private static final String OWNER = "owner-a";
     private static final String CLIENT = "client-a";
     private static final String TASK = "task-1";
 
@@ -81,15 +82,15 @@ class AgentTaskWorkItemParentGateMySqlTest {
         workItemDao = new AgentTaskWorkItemDaoImpl(
                 template.getMapper(AgentTaskWorkItemMapper.class));
         jdbc.update("INSERT INTO agent_task_meta "
-                        + "(task_id,reward_status,task_version,tenant_id,client_id,create_time,update_time) "
-                        + "VALUES (?,?,0,?,?,1,1)",
-                TASK, "running", TENANT, CLIENT);
+                        + "(task_id,reward_status,task_version,tenant_id,client_id,owner_jiacn,create_time,update_time) "
+                        + "VALUES (?,?,0,?,?,?,1,1)",
+                TASK, "running", TENANT, CLIENT, OWNER);
         jdbc.update("INSERT INTO agent_task_work_item "
                         + "(work_item_id,task_id,title,work_type,status,priority,required_item,"
                         + "attempt_count,max_attempts,result_artifact_id,completed_at,version,"
-                        + "tenant_id,client_id,create_time,update_time) "
-                        + "VALUES (?,?,?,'implementation','completed',10,1,1,3,'artifact-a',100,0,?,?,1,1)",
-                "work-a", TASK, "work-a", TENANT, CLIENT);
+                        + "tenant_id,client_id,owner_jiacn,create_time,update_time) "
+                        + "VALUES (?,?,?,'implementation','completed',10,1,1,3,'artifact-a',100,0,?,?,?,1,1)",
+                "work-a", TASK, "work-a", TENANT, CLIENT, OWNER);
     }
 
     @AfterEach
@@ -109,11 +110,11 @@ class AgentTaskWorkItemParentGateMySqlTest {
         try {
             Future<Integer> left = executor.submit(() -> {
                 start.await(10, TimeUnit.SECONDS);
-                return taskMetaDao.reserveOpenTaskRoot(TENANT, CLIENT, taskId, 100L);
+                return taskMetaDao.reserveOpenTaskRootInOwnerScope(TENANT, CLIENT, OWNER, taskId, 100L);
             });
             Future<Integer> right = executor.submit(() -> {
                 start.await(10, TimeUnit.SECONDS);
-                return taskMetaDao.reserveOpenTaskRoot(TENANT, CLIENT, taskId, 200L);
+                return taskMetaDao.reserveOpenTaskRootInOwnerScope(TENANT, CLIENT, OWNER, taskId, 200L);
             });
             start.countDown();
             List<Integer> results = List.of(
@@ -144,21 +145,21 @@ class AgentTaskWorkItemParentGateMySqlTest {
     @Test
     void rootReservationAndLockNeverMergeCaseOrTrailingPaddingUnderCiCollation() {
         String exact = "Root-Exact";
-        assertEquals(1, taskMetaDao.reserveOpenTaskRoot(
-                TENANT, CLIENT, exact, 100L));
-        assertEquals(0, taskMetaDao.reserveOpenTaskRoot(
-                TENANT, CLIENT, "root-exact", 101L));
+        assertEquals(1, taskMetaDao.reserveOpenTaskRootInOwnerScope(
+                TENANT, CLIENT, OWNER, exact, 100L));
+        assertEquals(0, taskMetaDao.reserveOpenTaskRootInOwnerScope(
+                TENANT, CLIENT, OWNER, "root-exact", 101L));
         assertThrows(IllegalArgumentException.class,
-                () -> taskMetaDao.reserveOpenTaskRoot(
-                        TENANT, CLIENT, exact + " ", 102L));
+                () -> taskMetaDao.reserveOpenTaskRootInOwnerScope(
+                        TENANT, CLIENT, OWNER, exact + " ", 102L));
 
-        assertTrue(taskMetaDao.findByTaskIdForUpdate(
-                TENANT, CLIENT, exact) != null);
-        assertEquals(null, taskMetaDao.findByTaskIdForUpdate(
-                TENANT, CLIENT, "root-exact"));
+        assertTrue(taskMetaDao.findByTaskIdForUpdateInOwnerScope(
+                TENANT, CLIENT, OWNER, exact) != null);
+        assertEquals(null, taskMetaDao.findByTaskIdForUpdateInOwnerScope(
+                TENANT, CLIENT, OWNER, "root-exact"));
         assertThrows(IllegalArgumentException.class,
-                () -> taskMetaDao.findByTaskIdForUpdate(
-                        TENANT, CLIENT, exact + " "));
+                () -> taskMetaDao.findByTaskIdForUpdateInOwnerScope(
+                        TENANT, CLIENT, OWNER, exact + " "));
         assertEquals(1, jdbc.queryForObject(
                 "SELECT COUNT(*) FROM agent_task_meta WHERE task_id=?",
                 Integer.class, exact));
@@ -168,9 +169,11 @@ class AgentTaskWorkItemParentGateMySqlTest {
     void parentGateKeepsScopedUniqueIndexSargable() {
         String explain = jdbc.queryForObject(
                 "EXPLAIN SELECT id FROM agent_task_meta parent "
-                        + "WHERE parent.tenant_id=? AND parent.client_id=? AND parent.task_id=? "
+                        + "WHERE parent.tenant_id=? AND parent.client_id=? AND parent.owner_jiacn=? AND parent.task_id=? "
                         + "AND CAST(parent.tenant_id AS BINARY(200))=CAST(? AS BINARY(200)) "
                         + "AND OCTET_LENGTH(parent.tenant_id)=OCTET_LENGTH(?) "
+                        + "AND CAST(parent.owner_jiacn AS BINARY)=CAST(? AS BINARY) "
+                        + "AND OCTET_LENGTH(parent.owner_jiacn)=OCTET_LENGTH(?) "
                         + "AND CAST(parent.client_id AS BINARY(200))=CAST(? AS BINARY(200)) "
                         + "AND OCTET_LENGTH(parent.client_id)=OCTET_LENGTH(?) "
                         + "AND CAST(SUBSTRING(parent.task_id,1,50) AS BINARY(200))="
@@ -179,7 +182,7 @@ class AgentTaskWorkItemParentGateMySqlTest {
                         + "CAST(SUBSTRING(?,51,50) AS BINARY(200)) "
                         + "AND OCTET_LENGTH(parent.task_id)=OCTET_LENGTH(?) FOR UPDATE",
                 (rs, rowNum) -> rs.getString("key"),
-                TENANT, CLIENT, TASK, TENANT, TENANT, CLIENT, CLIENT, TASK, TASK, TASK);
+                TENANT, CLIENT, OWNER, TASK, TENANT, TENANT, OWNER, OWNER, CLIENT, CLIENT, TASK, TASK, TASK);
 
         assertEquals("uk_task_scope", explain);
     }
@@ -189,7 +192,7 @@ class AgentTaskWorkItemParentGateMySqlTest {
         AgentTaskWorkItemDTO wrongCase = readyWorkItem("case-scope-child");
         wrongCase.setTaskId("Task-1");
 
-        assertEquals(0, workItemDao.insert("Tenant-A", "Client-A", wrongCase));
+        assertEquals(0, workItemDao.insert("Tenant-A", "Client-A", OWNER, wrongCase));
         assertEquals(0, jdbc.queryForObject(
                 "SELECT COUNT(*) FROM agent_task_work_item WHERE work_item_id='case-scope-child'",
                 Integer.class));
@@ -200,7 +203,7 @@ class AgentTaskWorkItemParentGateMySqlTest {
         jdbc.update("UPDATE agent_task_meta SET reward_status='Running' WHERE task_id=?", TASK);
 
         assertEquals(0, workItemDao.insert(
-                TENANT, CLIENT, readyWorkItem("case-status-child")));
+                TENANT, CLIENT, OWNER, readyWorkItem("case-status-child")));
         assertEquals(0, jdbc.queryForObject(
                 "SELECT COUNT(*) FROM agent_task_work_item WHERE work_item_id='case-status-child'",
                 Integer.class));
@@ -212,7 +215,7 @@ class AgentTaskWorkItemParentGateMySqlTest {
                 + "WHERE task_id=?", TASK);
 
         assertEquals(0, workItemDao.insert(
-                TENANT, CLIENT, readyWorkItem("nul-status-child")));
+                TENANT, CLIENT, OWNER, readyWorkItem("nul-status-child")));
         assertEquals(0, jdbc.queryForObject(
                 "SELECT COUNT(*) FROM agent_task_work_item WHERE work_item_id='nul-status-child'",
                 Integer.class));
@@ -229,12 +232,12 @@ class AgentTaskWorkItemParentGateMySqlTest {
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
             Future<AgentTaskAggregationDTO> aggregate = executor.submit(() ->
-                    pausingAggregate.aggregate(TENANT, CLIENT, TASK, command(0L)));
+                    pausingAggregate.aggregate(TENANT, CLIENT, OWNER, TASK, command(0L)));
             assertTrue(snapshotRead.await(10, TimeUnit.SECONDS));
 
             Future<Integer> lateInsert = executor.submit(() -> {
                 insertStarted.countDown();
-                return workItemDao.insert(TENANT, CLIENT, readyWorkItem("late-required"));
+                return workItemDao.insert(TENANT, CLIENT, OWNER, readyWorkItem("late-required"));
             });
             assertTrue(insertStarted.await(10, TimeUnit.SECONDS));
             Thread.sleep(300L);
@@ -300,6 +303,7 @@ class AgentTaskWorkItemParentGateMySqlTest {
         jdbc.execute("""
                 CREATE TABLE agent_task_meta (
                     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     task_id VARCHAR(100) NOT NULL,
                     reward_status VARCHAR(20) NOT NULL,
                     assigned_agent_id VARCHAR(100), required_abilities TEXT, reward INT,
@@ -316,6 +320,7 @@ class AgentTaskWorkItemParentGateMySqlTest {
         jdbc.execute("""
                 CREATE TABLE agent_task_member (
                     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     task_id VARCHAR(100) NOT NULL, agent_id VARCHAR(100) NOT NULL,
                     member_role VARCHAR(20) NOT NULL, member_status VARCHAR(20) NOT NULL,
                     assignment_source VARCHAR(20) NOT NULL, joined_at BIGINT, accepted_at BIGINT,
@@ -329,6 +334,7 @@ class AgentTaskWorkItemParentGateMySqlTest {
         jdbc.execute("""
                 CREATE TABLE agent_task_work_item (
                     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     work_item_id VARCHAR(100) NOT NULL, task_id VARCHAR(100) NOT NULL,
                     title VARCHAR(255) NOT NULL, description TEXT, work_type VARCHAR(30) NOT NULL,
                     required_abilities TEXT, assignee_agent_id VARCHAR(100), status VARCHAR(20) NOT NULL,
@@ -426,26 +432,26 @@ class AgentTaskWorkItemParentGateMySqlTest {
         }
 
         @Override
-        public AgentTaskMetaEntity findByTaskIdForUpdate(
-                String tenantId, String clientId, String taskId) {
-            return delegate.findByTaskIdForUpdate(tenantId, clientId, taskId);
+        public AgentTaskMetaEntity findByTaskIdForUpdateInOwnerScope(
+                String tenantId, String clientId, String ownerJiacn, String taskId) {
+            return delegate.findByTaskIdForUpdateInOwnerScope(tenantId, clientId, ownerJiacn, taskId);
         }
 
         @Override
         public List<AgentTaskAggregationSnapshotRow> findAggregationSnapshot(
-                String tenantId, String clientId, String taskId) {
+                String tenantId, String clientId, String ownerJiacn, String taskId) {
             List<AgentTaskAggregationSnapshotRow> snapshot =
-                    delegate.findAggregationSnapshot(tenantId, clientId, taskId);
+                    delegate.findAggregationSnapshot(tenantId, clientId, ownerJiacn, taskId);
             read.countDown();
             await(proceed);
             return snapshot;
         }
 
         @Override
-        public int updateStatusByVersion(
-                String tenantId, String clientId, String taskId, long expectedVersion,
+        public int updateStatusByVersionInOwnerScope(
+                String tenantId, String clientId, String ownerJiacn, String taskId, long expectedVersion,
                 String rewardStatus, Long startedAt, Long completedAt, String failureReason) {
-            return delegate.updateStatusByVersion(tenantId, clientId, taskId, expectedVersion,
+            return delegate.updateStatusByVersionInOwnerScope(tenantId, clientId, ownerJiacn, taskId, expectedVersion,
                     rewardStatus, startedAt, completedAt, failureReason);
         }
     }

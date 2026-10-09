@@ -102,13 +102,17 @@ class AgentTaskMetaScopedDaoTest {
         assertTrue(sql.contains("task.assigned_agent_id = #{agentid}"), sql);
         assertTrue(sql.contains("cast(task.assigned_agent_id as binary(400)) "), sql);
         assertTrue(sql.contains("cast(task.reward_status as binary) in ("), sql);
-        String taskAssignment = sql.substring(
-                sql.indexOf("task.assigned_agent_id = #{agentid}"),
-                sql.indexOf("or exists ( select 1 from agent_task_member"));
+        String activeRoot = sql.substring(
+                sql.indexOf("cast(task.reward_status as binary) in ("),
+                sql.indexOf("task.assigned_agent_id = #{agentid}"));
         for (String status : new String[]{
                 "open", "planning", "assigned", "running", "reviewing", "blocked"}) {
-            assertTrue(taskAssignment.contains("cast('" + status + "' as binary)"),
-                    status + ": " + taskAssignment);
+            assertTrue(activeRoot.contains("cast('" + status + "' as binary)"),
+                    status + ": " + activeRoot);
+        }
+        for (String terminal : new String[]{"completed", "failed", "cancelled", "archived"}) {
+            assertFalse(activeRoot.contains("cast('" + terminal + "' as binary)"),
+                    terminal + ": " + activeRoot);
         }
 
         assertTrue(sql.contains("from agent_task_member member"), sql);

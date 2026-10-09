@@ -75,14 +75,14 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
         AgentInboxClaimToken token = token();
         when(inboxService.claim(any(AgentInboxMessage.class), any(), anyLong(), anyLong()))
                 .thenReturn(AgentInboxClaim.acquired(token));
-        when(accessService.resolveMemberAccess("tenant-a", "client-a", "task-1", "agent-1"))
+        when(accessService.resolveMemberAccess("0", "client-a", "owner-a", "task-1", "agent-1"))
                 .thenReturn(AgentTaskAccessLevel.READ_WRITE);
         doAnswer(invocation -> {
             assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
             assertArrayEquals(rabbit.getBody(), invocation.getArgument(4));
             return AgentRawCommandDispatchResult.sent(1, 1);
         }).when(dispatcher).dispatchExactRawCommand(
-                "tenant-a", "client-a", "task-1", "agent-1", rabbit.getBody());
+                "0", "client-a", "task-1", "agent-1", rabbit.getBody());
         stubCompletion(token, AgentInboxDisposition.Type.SENT);
 
         consumer().consume(rabbit, channel);
@@ -95,9 +95,9 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
         InOrder order = inOrder(inboxService, accessService, dispatcher, channel);
         order.verify(inboxService).claim(any(), any(), anyLong(), anyLong());
         order.verify(accessService).resolveMemberAccess(
-                "tenant-a", "client-a", "task-1", "agent-1");
+                "0", "client-a", "owner-a", "task-1", "agent-1");
         order.verify(dispatcher).dispatchExactRawCommand(
-                "tenant-a", "client-a", "task-1", "agent-1", rabbit.getBody());
+                "0", "client-a", "task-1", "agent-1", rabbit.getBody());
         order.verify(inboxService).complete(any(), any(), anyLong());
         order.verify(channel).basicAck(77L, false);
         verify(channel, never()).basicNack(anyLong(), any(Boolean.class), any(Boolean.class));
@@ -146,7 +146,7 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
         assertEquals("evt-1", retry.eventId());
         assertEquals(41L, retry.deliveryId());
         assertEquals("cmd-1", retry.commandId());
-        assertEquals("tenant-a", retry.tenantId());
+        assertEquals("0", retry.tenantId());
         assertEquals("client-a", retry.clientId());
         assertEquals("task-1", retry.taskId());
         assertEquals("agent-1", retry.targetAgentId());
@@ -157,7 +157,7 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
                 retry.wirePayloadHash());
         verify(channel).basicAck(77L, false);
         verify(channel, never()).basicNack(anyLong(), any(Boolean.class), any(Boolean.class));
-        verify(accessService, never()).resolveMemberAccess(any(), any(), any(), any());
+        verify(accessService, never()).resolveMemberAccess(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -190,13 +190,13 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
         consumer().consume(message(0), channel);
 
         verify(channel).basicAck(77L, false);
-        verify(accessService, never()).resolveMemberAccess(any(), any(), any(), any());
+        verify(accessService, never()).resolveMemberAccess(any(), any(), any(), any(), any());
         verify(dispatcher, never()).dispatchExactRawCommand(any(), any(), any(), any(), any());
 
         org.mockito.Mockito.reset(channel, inboxService, publisher);
         AgentInboxResult mismatched = new AgentInboxResult(
                 91L, AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
-                "tenant-a", "client-a", "msg-other", "evt-1", "cmd-1", 41L,
+                "0", "client-a", "msg-other", "evt-1", "cmd-1", 41L,
                 "PROCESSED", "SENT", NOW, null);
         when(inboxService.claim(any(), any(), anyLong(), anyLong()))
                 .thenReturn(AgentInboxClaim.priorResult(mismatched));
@@ -323,7 +323,7 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
     void staleAcquiredTokenParksAndNeverChecksAclOrSends() throws Exception {
         AgentInboxClaimToken stale = new AgentInboxClaimToken(
                 91L, AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
-                "tenant-a", "client-a", "msg-other", "evt-1", "cmd-1", 41L,
+                "0", "client-a", "msg-other", "evt-1", "cmd-1", 41L,
                 "d05-test-consumer", NOW + AgentCommandRabbitConsumer.CLAIM_LEASE_MILLIS,
                 1, 0L, 1, 7L, EXPIRES_AT);
         when(inboxService.claim(any(), any(), anyLong(), anyLong()))
@@ -333,7 +333,7 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
         consumer().consume(message(0), channel);
 
         verify(publisher).publish(any(), anyLong());
-        verify(accessService, never()).resolveMemberAccess(any(), any(), any(), any());
+        verify(accessService, never()).resolveMemberAccess(any(), any(), any(), any(), any());
         verify(dispatcher, never()).dispatchExactRawCommand(any(), any(), any(), any(), any());
         verify(channel).basicAck(77L, false);
     }
@@ -362,7 +362,7 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
         AgentInboxClaimToken token = token();
         when(inboxService.claim(any(), any(), anyLong(), anyLong()))
                 .thenReturn(AgentInboxClaim.acquired(token));
-        when(accessService.resolveMemberAccess(any(), any(), any(), any()))
+        when(accessService.resolveMemberAccess(any(), any(), any(), any(), any()))
                 .thenReturn(AgentTaskAccessLevel.READ_ONLY);
         stubCompletion(token, AgentInboxDisposition.Type.DEAD);
         consumer().consume(message(0), channel);
@@ -375,7 +375,7 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
         AgentInboxClaimToken token = token();
         when(inboxService.claim(any(), any(), anyLong(), anyLong()))
                 .thenReturn(AgentInboxClaim.acquired(token));
-        when(accessService.resolveMemberAccess(any(), any(), any(), any()))
+        when(accessService.resolveMemberAccess(any(), any(), any(), any(), any()))
                 .thenThrow(new IllegalStateException("temporary ACL database failure"));
         when(publisher.publish(any(), anyLong())).thenReturn(AgentRabbitPublishResult.ack());
         stubCompletion(token, AgentInboxDisposition.Type.RETRY);
@@ -400,7 +400,7 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
         AgentInboxClaimToken token = token();
         when(inboxService.claim(any(), any(), anyLong(), anyLong()))
                 .thenReturn(AgentInboxClaim.acquired(token));
-        when(accessService.resolveMemberAccess(any(), any(), any(), any()))
+        when(accessService.resolveMemberAccess(any(), any(), any(), any(), any()))
                 .thenThrow(new IllegalStateException("temporary ACL database failure"));
         when(publisher.publish(any(), anyLong())).thenReturn(timeout());
 
@@ -527,7 +527,7 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
         AgentInboxClaimToken token = token();
         when(inboxService.claim(any(), any(), anyLong(), anyLong()))
                 .thenReturn(AgentInboxClaim.acquired(token));
-        when(accessService.resolveMemberAccess(any(), any(), any(), any()))
+        when(accessService.resolveMemberAccess(any(), any(), any(), any(), any()))
                 .thenThrow(new IllegalStateException("temporary ACL database failure"));
         stubCompletion(token, AgentInboxDisposition.Type.DEAD);
 
@@ -567,7 +567,7 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
         StatefulInboxService stateful = new StatefulInboxService(false);
         CapturingPublisher capturing = new CapturingPublisher(true);
         AgentRawCommandDispatcher exactDispatcher = mock(AgentRawCommandDispatcher.class);
-        when(accessService.resolveMemberAccess(any(), any(), any(), any()))
+        when(accessService.resolveMemberAccess(any(), any(), any(), any(), any()))
                 .thenReturn(AgentTaskAccessLevel.READ_WRITE);
         when(exactDispatcher.dispatchExactRawCommand(any(), any(), any(), any(), any()))
                 .thenReturn(AgentRawCommandDispatchResult.sent(1, 1));
@@ -593,7 +593,7 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
         assertEquals(2, stateful.claimCount);
         assertEquals(1, stateful.successfulCompletions);
         verify(exactDispatcher).dispatchExactRawCommand(
-                "tenant-a", "client-a", "task-1", "agent-1", original.getBody());
+                "0", "client-a", "task-1", "agent-1", original.getBody());
         verify(redeliveryChannel).basicAck(78L, false);
         verify(redeliveryChannel, never()).basicNack(
                 anyLong(), any(Boolean.class), any(Boolean.class));
@@ -606,7 +606,7 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
         stateful.completionFailuresRemaining = 1;
         CapturingPublisher capturing = new CapturingPublisher(true);
         AgentRawCommandDispatcher exactDispatcher = mock(AgentRawCommandDispatcher.class);
-        when(accessService.resolveMemberAccess(any(), any(), any(), any()))
+        when(accessService.resolveMemberAccess(any(), any(), any(), any(), any()))
                 .thenReturn(AgentTaskAccessLevel.READ_WRITE);
         when(exactDispatcher.dispatchExactRawCommand(any(), any(), any(), any(), any()))
                 .thenReturn(AgentRawCommandDispatchResult.sendFailed(1),
@@ -634,7 +634,7 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
         assertEquals(2, stateful.completeAttempts);
         assertEquals(1, stateful.successfulCompletions);
         verify(exactDispatcher, times(2)).dispatchExactRawCommand(
-                "tenant-a", "client-a", "task-1", "agent-1", message(0).getBody());
+                "0", "client-a", "task-1", "agent-1", message(0).getBody());
         verify(redeliveryChannel).basicAck(78L, false);
     }
 
@@ -646,7 +646,7 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
         stateful.completionFailuresRemaining = 1;
         CapturingPublisher capturing = new CapturingPublisher(true);
         AgentRawCommandDispatcher exactDispatcher = mock(AgentRawCommandDispatcher.class);
-        when(accessService.resolveMemberAccess(any(), any(), any(), any()))
+        when(accessService.resolveMemberAccess(any(), any(), any(), any(), any()))
                 .thenReturn(AgentTaskAccessLevel.READ_WRITE);
         when(exactDispatcher.dispatchExactRawCommand(any(), any(), any(), any(), any()))
                 .thenReturn(AgentRawCommandDispatchResult.offline());
@@ -684,7 +684,7 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
         stateful.completionFailuresRemaining = 1;
         CapturingPublisher capturing = new CapturingPublisher(false);
         AgentRawCommandDispatcher exactDispatcher = mock(AgentRawCommandDispatcher.class);
-        when(accessService.resolveMemberAccess(any(), any(), any(), any()))
+        when(accessService.resolveMemberAccess(any(), any(), any(), any(), any()))
                 .thenReturn(AgentTaskAccessLevel.READ_WRITE);
         when(exactDispatcher.dispatchExactRawCommand(any(), any(), any(), any(), any()))
                 .thenReturn(AgentRawCommandDispatchResult.offline());
@@ -720,7 +720,7 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
             assertEquals("evt-1", attempt.eventId());
             assertEquals(41L, attempt.deliveryId());
             assertEquals("cmd-1", attempt.commandId());
-            assertEquals("tenant-a", attempt.tenantId());
+            assertEquals("0", attempt.tenantId());
             assertEquals("client-a", attempt.clientId());
             assertEquals("task-1", attempt.taskId());
             assertEquals("agent-1", attempt.targetAgentId());
@@ -817,7 +817,7 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
             claimCount++;
             assertEquals(AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
                     message.consumerName());
-            assertEquals("tenant-a", message.tenantId());
+            assertEquals("0", message.tenantId());
             assertEquals("client-a", message.clientId());
             assertEquals("msg-1", message.messageId());
             assertEquals("evt-1", message.eventId());
@@ -883,7 +883,7 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
             leaseUntil = Math.min(now + leaseMillis, EXPIRES_AT);
             activeToken = new AgentInboxClaimToken(
                     91L, AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
-                    "tenant-a", "client-a", "msg-1", "evt-1", "cmd-1", 41L,
+                    "0", "client-a", "msg-1", "evt-1", "cmd-1", 41L,
                     leaseOwner, leaseUntil, activeAttempt, inboxVersion,
                     1, deliveryVersion, EXPIRES_AT);
             return AgentInboxClaim.acquired(activeToken);
@@ -893,7 +893,7 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
             String resultStatus = "PROCESSED".equals(state) ? "SENT" : state;
             return new AgentInboxResult(
                     91L, AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
-                    "tenant-a", "client-a", "msg-1", "evt-1", "cmd-1", 41L,
+                    "0", "client-a", "msg-1", "evt-1", "cmd-1", 41L,
                     state, resultStatus, now, lastError);
         }
 
@@ -914,7 +914,7 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
     private void acquiredWritable(AgentInboxClaimToken token) {
         when(inboxService.claim(any(), any(), anyLong(), anyLong()))
                 .thenReturn(AgentInboxClaim.acquired(token));
-        when(accessService.resolveMemberAccess(any(), any(), any(), any()))
+        when(accessService.resolveMemberAccess(any(), any(), any(), any(), any()))
                 .thenReturn(AgentTaskAccessLevel.READ_WRITE);
     }
 
@@ -957,7 +957,7 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
     private AgentInboxClaimToken token(long expiresAt) {
         return new AgentInboxClaimToken(
                 91L, AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
-                "tenant-a", "client-a", "msg-1", "evt-1", "cmd-1", 41L,
+                "0", "client-a", "msg-1", "evt-1", "cmd-1", 41L,
                 "d05-test-consumer",
                 Math.min(NOW + AgentCommandRabbitConsumer.CLAIM_LEASE_MILLIS, expiresAt),
                 1, 0L, 1, 7L, expiresAt);
@@ -979,7 +979,7 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
                 AgentRabbitTopologyManifest.MAIN_EXCHANGE,
                 AgentRabbitTopologyManifest.GENERAL_ROUTING_KEY,
                 body, AgentCommandAmqpContract.sha256(body), "msg-1", "evt-1", 41L,
-                "cmd-1", "tenant-a", "client-a", "task-1", "agent-1",
+                "cmd-1", "0", "client-a", "task-1", "agent-1",
                 AgentProtocolConstants.COMMAND_TASK_INVITE, 1, expiresAt,
                 MANIFEST.sha256(), sourceRetry);
         MessageProperties properties = new MessageProperties();
@@ -999,7 +999,8 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
     private String wire(long expiresAt) {
         return ("{\"schemaVersion\":1,\"messageType\":\"command.dispatch\","
                 + "\"messageId\":\"msg-1\",\"commandId\":\"cmd-1\","
-                + "\"tenantId\":\"tenant-a\",\"clientId\":\"client-a\","
+                + "\"tenantId\":\"0\",\"clientId\":\"client-a\","
+                + "\"ownerJiacn\":\"owner-a\","
                 + "\"taskId\":\"task-1\",\"targetAgentId\":\"agent-1\","
                 + "\"commandType\":\"TASK_INVITE\",\"attempt\":1,"
                 + "\"expiresAt\":" + expiresAt
@@ -1007,7 +1008,7 @@ class AgentCommandRabbitConsumerTest extends BaseMockTest {
     }
 
     private AgentRabbitSafetyGate allowedGate() {
-        return gateFor("tenant-a", "client-a");
+        return gateFor("0", "client-a");
     }
 
     private AgentRabbitSafetyGate gateFor(String tenantId, String clientId) {

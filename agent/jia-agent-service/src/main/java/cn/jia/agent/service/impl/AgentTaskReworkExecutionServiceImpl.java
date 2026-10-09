@@ -8,6 +8,7 @@ import cn.jia.agent.entity.PersonalWorkspaceExecutionOutputEntity;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.service.AgentTaskReworkExecutionService;
 import cn.jia.agent.service.PersonalWorkspaceExecutionService;
+import cn.jia.agent.service.PersonalWorkspaceTaskLinkService;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,16 +29,19 @@ public class AgentTaskReworkExecutionServiceImpl implements AgentTaskReworkExecu
     private final PersonalWorkspaceExecutionDao executions;
     private final PersonalWorkspaceExecutionService executionService;
     private final AgentTaskMutationTransaction taskMutations;
+    private final PersonalWorkspaceTaskLinkService taskLinks;
 
     @Inject
     public AgentTaskReworkExecutionServiceImpl(AgentTaskFormalDeliveryDao formalDeliveries,
             PersonalWorkspaceExecutionDao executions,
             PersonalWorkspaceExecutionService executionService,
-            AgentTaskMutationTransaction taskMutations) {
+            AgentTaskMutationTransaction taskMutations,
+            PersonalWorkspaceTaskLinkService taskLinks) {
         this.formalDeliveries = Objects.requireNonNull(formalDeliveries, "formalDeliveries");
         this.executions = Objects.requireNonNull(executions, "executions");
         this.executionService = Objects.requireNonNull(executionService, "executionService");
         this.taskMutations = Objects.requireNonNull(taskMutations, "taskMutations");
+        this.taskLinks = Objects.requireNonNull(taskLinks, "taskLinks");
     }
 
     @Override
@@ -98,7 +102,32 @@ public class AgentTaskReworkExecutionServiceImpl implements AgentTaskReworkExecu
                         command.outputContentMimeType(),
                         List.of(new PersonalWorkspaceExecutionService.InputSelection(
                                 command.sourceFileId(), command.sourceFileVersion())), sourceRef);
+        // Explicit rework authorizes this exact published version as an input. The normal
+        // TASK queue still enforces its INPUT/REFERENCE relation; do not bypass that gate.
+        // Both calls join this transaction, so a failed queue/lease rolls back the link too.
+        try {
+            taskLinks.create(new PersonalWorkspaceTaskLinkService.Scope(scope.tenantId(),
+                            scope.clientId(), scope.ownerJiacn()), command.taskId(),
+                    new PersonalWorkspaceTaskLinkService.CreateCommand(command.sourceFileId(),
+                            command.sourceFileVersion(), "INPUT", reworkLinkKey(idempotencyKey)));
+        } catch (PersonalWorkspaceTaskLinkService.Failure denied) {
+            throw failure(switch (denied.getReason()) {
+                case NOT_FOUND -> PersonalWorkspaceExecutionService.Reason.NOT_FOUND;
+                case IDEMPOTENCY_CONFLICT -> PersonalWorkspaceExecutionService.Reason.IDEMPOTENCY_CONFLICT;
+                case BAD_REQUEST -> PersonalWorkspaceExecutionService.Reason.BAD_REQUEST;
+                default -> PersonalWorkspaceExecutionService.Reason.STORAGE_UNAVAILABLE;
+            });
+        }
         return executionService.create(scope, create, idempotencyKey);
+    }
+
+    private static String reworkLinkKey(String key) {
+        try {
+            return "formal-rework-input:" + java.util.HexFormat.of().formatHex(
+                    MessageDigest.getInstance("SHA-256").digest(key.getBytes(StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException unavailable) {
+            throw new IllegalStateException("SHA-256 is required", unavailable);
+        }
     }
 
     private static void validate(PersonalWorkspaceExecutionService.OwnerScope scope,

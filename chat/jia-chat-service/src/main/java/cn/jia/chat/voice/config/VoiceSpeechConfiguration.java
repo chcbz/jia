@@ -4,6 +4,8 @@ import cn.jia.chat.voice.SpeechSynthesisProvider;
 import cn.jia.chat.voice.SpeechTranscriptionProvider;
 import cn.jia.chat.voice.provider.DisabledSpeechSynthesisProvider;
 import cn.jia.chat.voice.provider.DisabledSpeechTranscriptionProvider;
+import cn.jia.chat.voice.provider.CliproxyRealtimeSpeechSynthesisProvider;
+import cn.jia.chat.voice.provider.CliproxyRealtimeSpeechTranscriptionProvider;
 import cn.jia.chat.voice.provider.OpenAiCompatibleSpeechSynthesisProvider;
 import cn.jia.chat.voice.provider.OpenAiCompatibleSpeechTranscriptionProvider;
 import cn.jia.chat.voice.service.SpeechSynthesisService;
@@ -110,6 +112,9 @@ public class VoiceSpeechConfiguration {
         if ("openai-compatible".equals(properties.getTranscription().getProvider())) {
             return new OpenAiCompatibleSpeechTranscriptionProvider(properties, openAi, objectMapper);
         }
+        if ("cliproxy-realtime".equals(properties.getTranscription().getProvider())) {
+            return new CliproxyRealtimeSpeechTranscriptionProvider(properties, openAi, objectMapper);
+        }
         return new DisabledSpeechTranscriptionProvider();
     }
 
@@ -122,6 +127,9 @@ public class VoiceSpeechConfiguration {
             VoiceActivationConfigurationValidator activationValidator) {
         if ("openai-compatible".equals(properties.getSynthesis().getProvider())) {
             return new OpenAiCompatibleSpeechSynthesisProvider(properties, openAi, objectMapper);
+        }
+        if ("cliproxy-realtime".equals(properties.getSynthesis().getProvider())) {
+            return new CliproxyRealtimeSpeechSynthesisProvider(properties, openAi, objectMapper);
         }
         return new DisabledSpeechSynthesisProvider();
     }

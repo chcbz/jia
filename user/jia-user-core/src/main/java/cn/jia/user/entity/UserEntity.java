@@ -68,6 +68,7 @@ public class UserEntity extends BaseEntity {
     private Integer sex;
 
     @Schema(description = "昵称")
+    @TableField(updateStrategy = FieldStrategy.NOT_NULL)
     private String nickname;
 
     @Schema(description = "头像")

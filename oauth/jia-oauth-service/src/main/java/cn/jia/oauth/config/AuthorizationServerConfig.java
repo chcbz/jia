@@ -27,6 +27,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.ObjectPostProcessor;
@@ -197,8 +198,9 @@ public class AuthorizationServerConfig {
 
     @Bean
     @ConditionalOnProperty(name = "cyf.oauth.authorization-server.enabled", havingValue = "true", matchIfMissing = true)
-    public OAuth2TokenCustomizer<JwtEncodingContext> jwtTokenCustomizer() {
-        return new AccountSecurityTokenCustomizer(accountSecurityService, tenantAuthorizationRepository);
+    public OAuth2TokenCustomizer<JwtEncodingContext> jwtTokenCustomizer(
+            @Value("${cyf.security.legacy-single-tenant-id:0}") String canonicalTenantId) {
+        return new AccountSecurityTokenCustomizer(accountSecurityService, tenantAuthorizationRepository, canonicalTenantId);
     }
 
     static class CustomAuthenticationEntryPoint extends LoginUrlAuthenticationEntryPoint {

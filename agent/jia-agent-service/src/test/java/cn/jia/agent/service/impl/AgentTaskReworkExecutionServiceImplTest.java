@@ -8,6 +8,7 @@ import cn.jia.agent.entity.PersonalWorkspaceExecutionOutputEntity;
 import cn.jia.agent.service.AgentTaskMutationTransaction;
 import cn.jia.agent.service.AgentTaskReworkExecutionService;
 import cn.jia.agent.service.PersonalWorkspaceExecutionService;
+import cn.jia.agent.service.PersonalWorkspaceTaskLinkService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -32,6 +33,7 @@ class AgentTaskReworkExecutionServiceImplTest {
     private PersonalWorkspaceExecutionService executionService;
     private AgentTaskMutationTransaction taskMutations;
     private AgentTaskReworkExecutionService service;
+    private PersonalWorkspaceTaskLinkService taskLinks;
 
     @BeforeEach
     void setUp() {
@@ -39,8 +41,9 @@ class AgentTaskReworkExecutionServiceImplTest {
         executions = mock(PersonalWorkspaceExecutionDao.class);
         executionService = mock(PersonalWorkspaceExecutionService.class);
         taskMutations = mock(AgentTaskMutationTransaction.class);
+        taskLinks = mock(PersonalWorkspaceTaskLinkService.class);
         service = new AgentTaskReworkExecutionServiceImpl(
-                formalDeliveries, executions, executionService, taskMutations);
+                formalDeliveries, executions, executionService, taskMutations, taskLinks);
         AgentTaskMetaEntity root = new AgentTaskMetaEntity().setTaskId("task-1");
         root.setTenantId("0"); root.setClientId("client-a"); root.setOwnerJiacn("owner-a");
         doAnswer(invocation -> {
@@ -66,6 +69,16 @@ class AgentTaskReworkExecutionServiceImplTest {
         var result = service.create(SCOPE, command(1L), "rework-key-0001");
 
         assertEquals(expected, result);
+        var link = ArgumentCaptor.forClass(PersonalWorkspaceTaskLinkService.CreateCommand.class);
+        var order = org.mockito.Mockito.inOrder(taskLinks, executionService);
+        order.verify(taskLinks).create(eq(new PersonalWorkspaceTaskLinkService.Scope(
+                "0", "client-a", "owner-a")), eq("task-1"), link.capture());
+        order.verify(executionService).create(eq(SCOPE), any(), eq("rework-key-0001"));
+        assertEquals("file-1", link.getValue().fileId());
+        assertEquals(3, link.getValue().version());
+        assertEquals("INPUT", link.getValue().role());
+        org.junit.jupiter.api.Assertions.assertTrue(link.getValue().idempotencyKey()
+                .matches("formal-rework-input:[a-f0-9]{64}"));
         ArgumentCaptor<PersonalWorkspaceExecutionService.CreateCommand> create =
                 ArgumentCaptor.forClass(PersonalWorkspaceExecutionService.CreateCommand.class);
         verify(executionService).create(eq(SCOPE), create.capture(), eq("rework-key-0001"));
@@ -91,6 +104,7 @@ class AgentTaskReworkExecutionServiceImplTest {
         verify(executions, never()).findPublishedReworkSource(
                 any(), any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyInt());
         verify(executionService, never()).create(any(), any(), any());
+        verify(taskLinks, never()).create(any(), any(), any());
     }
 
     @Test
@@ -103,6 +117,7 @@ class AgentTaskReworkExecutionServiceImplTest {
         verify(executions, never()).findPublishedReworkSource(
                 any(), any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyInt());
         verify(executionService, never()).create(any(), any(), any());
+        verify(taskLinks, never()).create(any(), any(), any());
 
         when(executions.findPublishedReworkSource("0", "client-a", "owner-a", "task-1",
                 "delivery-1", "output-1", "file-1", 3)).thenReturn(null);
@@ -110,6 +125,71 @@ class AgentTaskReworkExecutionServiceImplTest {
                 () -> service.create(SCOPE, command(1L), "rework-key-0002"));
         assertEquals(PersonalWorkspaceExecutionService.Reason.NOT_FOUND, missing.getReason());
         verify(executionService, never()).create(any(), any(), any());
+        verify(taskLinks, never()).create(any(), any(), any());
+    }
+
+    @Test
+    void missingInputFileCannotQueueAndLinkFailureKeepsOwnerSafeReason() {
+        when(formalDeliveries.findForUpdate("0", "client-a", "delivery-1"))
+                .thenReturn(changesRequested(1L));
+        when(executions.findPublishedReworkSource("0", "client-a", "owner-a", "task-1",
+                "delivery-1", "output-1", "file-1", 3)).thenReturn(source());
+        when(taskLinks.create(any(), any(), any())).thenThrow(
+                new PersonalWorkspaceTaskLinkService.Failure(PersonalWorkspaceTaskLinkService.Reason.NOT_FOUND));
+        var failure = assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                () -> service.create(SCOPE, command(1L), "rework-key-missing"));
+        assertEquals(PersonalWorkspaceExecutionService.Reason.NOT_FOUND, failure.getReason());
+        verify(executionService, never()).create(any(), any(), any());
+    }
+
+    @Test
+    void crossOwnerSourceCannotCreateInputLinkOrQueue() {
+        when(formalDeliveries.findForUpdate("0", "client-a", "delivery-1"))
+                .thenReturn(changesRequested(1L));
+        var foreign = source(); foreign.setOwnerJiacn("owner-b");
+        when(executions.findPublishedReworkSource("0", "client-a", "owner-a", "task-1",
+                "delivery-1", "output-1", "file-1", 3)).thenReturn(foreign);
+        var failure = assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                () -> service.create(SCOPE, command(1L), "rework-key-foreign"));
+        assertEquals(PersonalWorkspaceExecutionService.Reason.NOT_FOUND, failure.getReason());
+        verify(taskLinks, never()).create(any(), any(), any());
+        verify(executionService, never()).create(any(), any(), any());
+    }
+
+    @Test
+    void realSpringTransactionRollsBackInputLinkWhenQueueFails() {
+        var ds = new org.springframework.jdbc.datasource.DriverManagerDataSource(
+                "jdbc:h2:mem:bf23_" + java.util.UUID.randomUUID() + ";DB_CLOSE_DELAY=-1", "sa", "");
+        var jdbc = new org.springframework.jdbc.core.JdbcTemplate(ds);
+        jdbc.execute("CREATE TABLE rework_link_fixture(file_id VARCHAR(100), file_version INT)");
+        try {
+            when(formalDeliveries.findForUpdate("0", "client-a", "delivery-1"))
+                    .thenReturn(changesRequested(1L));
+            when(executions.findPublishedReworkSource("0", "client-a", "owner-a", "task-1",
+                    "delivery-1", "output-1", "file-1", 3)).thenReturn(source());
+            when(taskLinks.create(any(), any(), any())).thenAnswer(inv -> {
+                org.junit.jupiter.api.Assertions.assertTrue(org.springframework.transaction.support
+                        .TransactionSynchronizationManager.isActualTransactionActive());
+                PersonalWorkspaceTaskLinkService.CreateCommand link = inv.getArgument(2);
+                jdbc.update("INSERT INTO rework_link_fixture VALUES (?, ?)", link.fileId(), link.version());
+                return null;
+            });
+            when(executionService.create(any(), any(), any())).thenAnswer(inv -> {
+                assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM rework_link_fixture", Integer.class));
+                throw new PersonalWorkspaceExecutionService.Failure(PersonalWorkspaceExecutionService.Reason.TASK_CONFLICT);
+            });
+            var proxy = new org.springframework.aop.framework.ProxyFactory(service);
+            proxy.addAdvice(new org.springframework.transaction.interceptor.TransactionInterceptor(
+                    new org.springframework.jdbc.datasource.DataSourceTransactionManager(ds),
+                    new org.springframework.transaction.annotation.AnnotationTransactionAttributeSource()));
+            var transactional = (AgentTaskReworkExecutionService) proxy.getProxy();
+            var failure = assertThrows(PersonalWorkspaceExecutionService.Failure.class,
+                    () -> transactional.create(SCOPE, command(1L), "rework-rollback-key"));
+            assertEquals(PersonalWorkspaceExecutionService.Reason.TASK_CONFLICT, failure.getReason());
+            assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM rework_link_fixture", Integer.class));
+        } finally {
+            jdbc.execute("SHUTDOWN");
+        }
     }
 
     private static AgentTaskReworkExecutionService.ReworkCommand command(long decisionVersion) {

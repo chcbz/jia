@@ -18,6 +18,7 @@ import cn.jia.chat.entity.AgentTaskThreadEntity;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.exception.AgentTaskThreadException;
+import cn.jia.chat.service.AgentSenderIdentityResolver;
 import jakarta.inject.Inject;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -114,7 +115,7 @@ public class AgentTaskThreadCreationTransaction {
                 ownerJiacn, clientId, thread.getConversationId());
         requireCanonicalConversation(tenantId, clientId, ownerJiacn, taskId, thread, conversation);
 
-        String senderName = trustedSenderName(runtime, actorAgentId);
+        String senderName = AgentSenderIdentityResolver.resolve(runtime, actorAgentId);
         if (requestedSenderName != null && !requestedSenderName.equals(senderName)) {
             throw new AgentTaskThreadException(
                     AgentTaskThreadException.Reason.INVALID_REQUEST,
@@ -284,20 +285,6 @@ public class AgentTaskThreadCreationTransaction {
                 || !Integer.valueOf(0).equals(conversation.getStatus())) {
             throw unavailable();
         }
-    }
-
-    private String trustedSenderName(AgentRuntimeDTO runtime, String actorAgentId) {
-        String candidate = runtime.getName();
-        if (!canonicalDisplayName(candidate)) {
-            candidate = runtime.getPersonaName();
-        }
-        return canonicalDisplayName(candidate) ? candidate : actorAgentId;
-    }
-
-    private boolean canonicalDisplayName(String value) {
-        return value != null && !value.isBlank() && value.equals(value.strip())
-                && value.length() <= 100
-                && value.chars().noneMatch(Character::isISOControl);
     }
 
     private boolean canonicalId(String value) {

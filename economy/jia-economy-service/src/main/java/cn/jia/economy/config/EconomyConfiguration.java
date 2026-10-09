@@ -7,7 +7,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 @Configuration(proxyBeanMethods = false)
-@EnableConfigurationProperties(EconomyPreviewProperties.class)
+@EnableConfigurationProperties({EconomyPreviewProperties.class, EconomyOnboardingGrantProperties.class})
 public class EconomyConfiguration {
     @Bean
     public EconomyPreviewGate economyPreviewGate(EconomyPreviewProperties properties) {

@@ -1,0 +1,38 @@
+{
+  "capabilityContractVersion": 1,
+  "runtimeVersion": "juyiting-fast-context-runtime-v2",
+  "protocolVersions": [1],
+  "chatProtocolVersions": [1],
+  "contextSnapshotVersions": [1],
+  "contextEnvelopeVersions": [2],
+  "deltaVersions": [1],
+  "dispatchAckTypes": ["chat.dispatch.ack"],
+  "deliverySemantics": ["AT_LEAST_ONCE_DURABLE_DEDUPE_REQUIRED"],
+  "interactionModes": [],
+  "profiles": {
+    "CHAT": {
+      "supported": true,
+      "enabled": false,
+      "strictNoToolsVerified": false
+    },
+    "INSPECT": {
+      "supported": false,
+      "enabled": false,
+      "strictNoToolsVerified": false,
+      "unavailableReason": "fixed-manifest-provider-isolation-not-verified"
+    },
+    "EXECUTE": {
+      "supported": false,
+      "enabled": false
+    }
+  },
+  "legacyCompatibility": {
+    "PRIVATE": true,
+    "TASK": true,
+    "nativeStart": false,
+    "dispatchAckTypes": ["chat.dispatch.ack"]
+  },
+  "fastChatEnabled": false,
+  "appServerEnabled": false,
+  "trueDeltaEnabled": false
+}

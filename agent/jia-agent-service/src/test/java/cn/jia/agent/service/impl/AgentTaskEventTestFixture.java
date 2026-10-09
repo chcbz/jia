@@ -28,7 +28,8 @@ import java.util.Objects;
 
 /** Shared isolated database fixture for C01B-5 event writer evidence. */
 final class AgentTaskEventTestFixture implements AutoCloseable {
-    static final String TENANT = "tenant-c01b5";
+    static final String TENANT = "0";
+    static final String OWNER = "owner-c01b5";
     static final String CLIENT = "client-c01b5";
     static final String TASK = "task-c01b5";
 
@@ -114,15 +115,16 @@ final class AgentTaskEventTestFixture implements AutoCloseable {
                 INSERT INTO agent_task_meta
                     (task_id, reward_status, collaboration_mode, risk_level, max_agents,
                      review_required, task_version, current_event_version,
-                     tenant_id, client_id, create_time, update_time)
-                VALUES (?, 'open', 'single', 'low', 1, 0, 0, ?, ?, ?, ?, ?)
-                """, TASK, currentEventVersion, TENANT, CLIENT, now, now);
+                     tenant_id, client_id, owner_jiacn, create_time, update_time)
+                VALUES (?, 'open', 'single', 'low', 1, 0, 0, ?, ?, ?, ?, ?, ?)
+                """, TASK, currentEventVersion, TENANT, CLIENT, OWNER, now, now);
     }
 
     AgentTaskEventWriteCommand command(String eventId) {
         return new AgentTaskEventWriteCommand()
                 .setTenantId(TENANT)
                 .setClientId(CLIENT)
+                .setOwnerJiacn(OWNER)
                 .setTaskId(TASK)
                 .setEventId(eventId)
                 .setEventType(TaskEventType.PROGRESS_REPORTED)
@@ -138,25 +140,25 @@ final class AgentTaskEventTestFixture implements AutoCloseable {
         return jdbc.queryForList("""
                 SELECT event_version
                 FROM agent_task_event
-                WHERE tenant_id=? AND client_id=? AND task_id=?
+                WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND task_id=?
                 ORDER BY event_version
-                """, Long.class, TENANT, CLIENT, TASK);
+                """, Long.class, TENANT, CLIENT, OWNER, TASK);
     }
 
     long currentEventVersion() {
         return Objects.requireNonNull(jdbc.queryForObject("""
                 SELECT current_event_version
                 FROM agent_task_meta
-                WHERE tenant_id=? AND client_id=? AND task_id=?
-                """, Long.class, TENANT, CLIENT, TASK));
+                WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND task_id=?
+                """, Long.class, TENANT, CLIENT, OWNER, TASK));
     }
 
     long maxEventVersion() {
         Long value = jdbc.queryForObject("""
                 SELECT MAX(event_version)
                 FROM agent_task_event
-                WHERE tenant_id=? AND client_id=? AND task_id=?
-                """, Long.class, TENANT, CLIENT, TASK);
+                WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND task_id=?
+                """, Long.class, TENANT, CLIENT, OWNER, TASK);
         return value == null ? 0L : value;
     }
 
@@ -164,8 +166,8 @@ final class AgentTaskEventTestFixture implements AutoCloseable {
         return Objects.requireNonNull(jdbc.queryForObject("""
                 SELECT COUNT(*)
                 FROM agent_task_event
-                WHERE tenant_id=? AND client_id=? AND task_id=?
-                """, Integer.class, TENANT, CLIENT, TASK));
+                WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND task_id=?
+                """, Integer.class, TENANT, CLIENT, OWNER, TASK));
     }
 
     @Override
@@ -193,6 +195,7 @@ final class AgentTaskEventTestFixture implements AutoCloseable {
                     current_event_version BIGINT NOT NULL DEFAULT 0,
                     tenant_id VARCHAR(50) NOT NULL,
                     client_id VARCHAR(50) NOT NULL,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     create_time BIGINT,
                     update_time BIGINT,
                     PRIMARY KEY (id),
@@ -214,6 +217,7 @@ final class AgentTaskEventTestFixture implements AutoCloseable {
                     occurred_at BIGINT NOT NULL,
                     tenant_id VARCHAR(50) NOT NULL,
                     client_id VARCHAR(50) NOT NULL,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     create_time BIGINT,
                     update_time BIGINT,
                     PRIMARY KEY (id),

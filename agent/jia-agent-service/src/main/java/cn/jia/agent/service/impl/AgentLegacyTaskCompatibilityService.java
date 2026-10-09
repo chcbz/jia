@@ -5,6 +5,7 @@ import cn.jia.agent.common.TaskEventType;
 import cn.jia.agent.dao.AgentTaskMemberDao;
 import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.dao.AgentTaskWorkItemDao;
+import cn.jia.agent.dao.HallRequestDraftDao;
 import cn.jia.agent.entity.AgentTaskAggregationCommandDTO;
 import cn.jia.agent.entity.AgentTaskAggregationDTO;
 import cn.jia.agent.entity.AgentTaskMemberDTO;
@@ -68,6 +69,9 @@ public class AgentLegacyTaskCompatibilityService {
     private final AgentTaskMutationTransaction mutationTransaction;
     private final AgentTaskEventWriter eventWriter;
     private final LongSupplier clock;
+    // Direct-construction compatibility mirrors the funded guard; Spring installs the persisted proof.
+    private volatile HallRequestDraftDao hallRequestDraftDao;
+    private volatile boolean hallDraftGuardConfigured;
     private volatile FundedBountyLegacyGuard fundedBountyLegacyGuard =
             FundedBountyLegacyGuard.unconfigured();
 
@@ -118,6 +122,12 @@ public class AgentLegacyTaskCompatibilityService {
     void configureFundedBountyLegacyGuard(ObjectProvider<FundedBountyLegacyGuard> provider) {
         this.fundedBountyLegacyGuard = Objects.requireNonNull(provider, "provider")
                 .getIfAvailable(FundedBountyLegacyGuard::failClosed);
+    }
+
+    @Autowired
+    void configureHallDraftGuard(ObjectProvider<HallRequestDraftDao> provider) {
+        hallRequestDraftDao = Objects.requireNonNull(provider, "provider").getIfAvailable();
+        hallDraftGuardConfigured = true;
     }
 
     public String resolveAgentId(
@@ -218,6 +228,15 @@ public class AgentLegacyTaskCompatibilityService {
             throw invalid("Task cannot be assigned in its current status");
         }
 
+        if (expectedTaskVersion != null) {
+            if (!expectedTaskVersion.equals(task.getTaskVersion())) {
+                throw invalid("Task version changed before assignment");
+            }
+            // Strict callers validate their grant inputs while the root and canonical identities
+            // are locked, including an already-persisted idempotent assignment.
+            precommitValidator.validate(task, agentIds);
+        }
+
         List<AgentTaskMemberEntity> members = requireSnapshot(
                 memberDao.listByTask(tenantId, clientId, ownerJiacn, taskId), "task member");
         List<AgentTaskWorkItemEntity> defaultItems = requireSnapshot(
@@ -233,10 +252,9 @@ public class AgentLegacyTaskCompatibilityService {
             return new AssignOutcome(persistedAgentIds, false, null, null);
         }
 
-        if (expectedTaskVersion != null && !expectedTaskVersion.equals(task.getTaskVersion())) {
-            throw invalid("Task version changed before assignment");
+        if (expectedTaskVersion == null) {
+            precommitValidator.validate(task, agentIds);
         }
-        precommitValidator.validate(task, agentIds);
         String fromStatus = taskStatus.value();
         applyAssignmentMeta(task, agentIds, changedAt);
         if (expectedTaskVersion == null) {
@@ -260,6 +278,24 @@ public class AgentLegacyTaskCompatibilityService {
         String taskAssignedEventId = appendAssignmentEvents(
                 tenantId, clientId, ownerJiacn, taskId, task, agentIds, source, fromStatus, changedAt);
         return new AssignOutcome(agentIds, true, taskAssignedEventId, changedAt);
+    }
+
+    /**
+     * Strict v2 adapter used only while the caller already holds this exact owner-scoped task root.
+     * The caller owns the surrounding REQUIRED transaction and must preserve task -> identity -> input -> grant order.
+     */
+    public AssignOutcome assignResolvedVersionedWithLockedTask(String tenantId, String clientId,
+            String ownerJiacn, String taskId, List<String> canonicalAgentIds, boolean automatic,
+            long expectedTaskVersion, AssignmentPrecommitValidator precommitValidator,
+            AgentTaskMetaEntity lockedTask) {
+        requireScope(tenantId, clientId, ownerJiacn);
+        requireExactText(taskId, "taskId", 100);
+        if (expectedTaskVersion < 0 || expectedTaskVersion == Long.MAX_VALUE) {
+            throw invalid("Expected task version is invalid");
+        }
+        return assignResolvedLocked(tenantId, clientId, ownerJiacn, taskId,
+                requireResolvedAgentIds(canonicalAgentIds), automatic, now(), lockedTask,
+                expectedTaskVersion, Objects.requireNonNull(precommitValidator, "precommitValidator"));
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -289,6 +325,16 @@ public class AgentLegacyTaskCompatibilityService {
             AgentTaskStatus reportStatus, String failureReason, AgentTaskMetaEntity task) {
         validateLockedTask(task, tenantId, clientId, taskId);
         fundedBountyLegacyGuard.requireLifecycleAllowed(tenantId, clientId, taskId, true);
+        // The root is locked and no member, lease, event or task status has been mutated yet.
+        // TASK_CREATE has no executable result until an explicit formal delivery/user decision.
+        // A legacy completed (or running/failed) report must never impersonate that protocol.
+        if (hallDraftGuardConfigured) {
+            HallRequestDraftDao drafts = hallRequestDraftDao;
+            if (drafts == null) throw reserved("Hall task origin proof is unavailable");
+            int matches = drafts.countSubmittedTaskCreates(tenantId, clientId, ownerJiacn, taskId);
+            if (matches > 1 || matches < 0) throw invalidPersisted("Ambiguous Hall task origin");
+            if (matches == 1) throw reserved("Formal Hall tasks require the explicit execution and delivery protocol");
+        }
         List<String> lockedAgentIds = identityService.lockActiveCanonicalAgentIdsInScope(
                 tenantId, clientId, ownerJiacn, List.of(agentId));
         if (!List.of(agentId).equals(lockedAgentIds)) {

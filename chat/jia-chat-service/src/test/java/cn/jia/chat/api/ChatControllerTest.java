@@ -1,6 +1,7 @@
 package cn.jia.chat.api;
 
 import cn.jia.agent.service.AgentService;
+import cn.jia.agent.service.PersonalWorkspaceTaskLinkService;
 import cn.jia.chat.entity.AgentTaskThreadConstants;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
@@ -13,10 +14,13 @@ import cn.jia.chat.memory.MemoryRepository;
 import cn.jia.chat.service.ChatConversationEventBroker;
 import cn.jia.chat.service.ChatConversationService;
 import cn.jia.chat.service.ConversationLibraryService;
+import cn.jia.chat.service.ChatDeliberationService;
 import cn.jia.chat.service.BuiltinHallAgentSupport;
 import cn.jia.chat.service.JuyitingAgentRelayService;
 import cn.jia.chat.service.JuyitingAgentRelayResult;
 import cn.jia.chat.service.JuyitingConversationScopeService;
+import cn.jia.chat.service.HumanSenderIdentityResolver;
+import cn.jia.chat.service.ServerResolvedSender;
 import cn.jia.chat.service.impl.AgentTaskThreadMemoryGuard;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
@@ -27,6 +31,7 @@ import cn.jia.core.tenant.UserAdmissionScope;
 import cn.jia.core.redis.RedisService;
 import cn.jia.core.security.SensitiveResponseBodyAdvice;
 import cn.jia.core.security.SensitiveResponseProperties;
+import cn.jia.user.service.UserService;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,6 +39,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.core.MethodParameter;
 import org.springframework.http.MediaType;
 import reactor.core.publisher.Flux;
@@ -48,6 +54,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -82,6 +89,12 @@ class ChatControllerTest extends BaseMockTest {
     AgentTaskThreadMemoryGuard taskThreadMemoryGuard;
     @Mock
     AgentService agentService;
+    @Mock
+    PersonalWorkspaceTaskLinkService taskLinkService;
+    @Mock
+    UserService userService;
+    @Mock
+    ChatDeliberationService chatDeliberationService;
 
     @BeforeEach
     void setUpIdentity() {
@@ -94,6 +107,32 @@ class ChatControllerTest extends BaseMockTest {
     @AfterEach
     void tearDown() {
         EsContextHolder.setContext(new EsContext());
+    }
+
+    @Test
+    void builtinPromptCarriesTrustedTaskReferencesWithoutClaimingFileContents() {
+        ChatMessageDTO request = new ChatMessageDTO();
+        request.setContent("请结合关联资料说明下一步");
+        Map<String, Object> materials = Map.of(
+                "status", "AVAILABLE",
+                "complete", true,
+                "items", List.of(
+                        Map.of("fileId", "file-input", "version", 3, "role", "INPUT"),
+                        Map.of("fileId", "file-reference", "version", 2, "role", "REFERENCE")));
+
+        Prompt prompt = newController().buildBuiltinSongJiangPrompt(request, materials);
+
+        assertEquals("请结合关联资料说明下一步", prompt.getUserMessage().getText());
+        String system = prompt.getSystemMessage().getText();
+        String normalizedSystem = system.replaceAll("\\s+", " ");
+        assertTrue(system.contains("resolved and authorized by the server"));
+        assertTrue(system.contains("file-input"));
+        assertTrue(system.contains("\"version\":3"));
+        assertTrue(system.contains("\"role\":\"REFERENCE\""));
+        assertTrue(normalizedSystem.contains("do not grant permission to read files"));
+        assertTrue(normalizedSystem.contains("Do not claim knowledge"));
+        assertFalse(system.contains("downloadUrl"));
+        assertFalse(system.contains("file contents here"));
     }
 
     @Test
@@ -110,8 +149,6 @@ class ChatControllerTest extends BaseMockTest {
 
         when(chatConversationService.create(any(UserAdmissionScope.class), any(ChatConversationEntity.class))).thenReturn(conversation);
         when(redisService.subscribeToChannel("1001")).thenReturn(Flux.never());
-        when(agentWebSocketHandler.sendDirectMessageToAgent(
-                eq("tester"), eq("web-client"), eq("agent-wuyong"), any(Map.class))).thenReturn(true);
         when(chatConversationEventBroker.stream(
                 org.mockito.ArgumentMatchers.eq("1001"),
                 org.mockito.ArgumentMatchers.eq(1L), any())).thenReturn(Flux.just("""
@@ -125,21 +162,28 @@ class ChatControllerTest extends BaseMockTest {
         request.setConversationType(ChatController.CONVERSATION_TYPE_JUYITING);
         request.setSenderType("user");
         request.setSenderName("测试用户");
-        request.setMetadata(Map.of("selectedAgentId", "agent-wuyong"));
+        request.setMetadata(Map.of(
+                "selectedAgentId", "agent-wuyong",
+                "senderType", "agent",
+                "senderName", "宋江"));
 
-        List<String> chunks = controller.handleChat(request).collectList().block();
+        List<String> chunks = controller.handleChat(request, null).collectList().block();
 
-        ArgumentCaptor<ChatMessageEntity> messageCaptor = ArgumentCaptor.forClass(ChatMessageEntity.class);
-        verify(chatConversationService).appendOwnedMessage(
-                eq(areaZeroScope()), messageCaptor.capture(), eq(1L));
-        verify(agentWebSocketHandler).sendDirectMessageToAgent(
-                eq("tester"), eq("web-client"), eq("agent-wuyong"), any(Map.class));
-
-        ChatMessageEntity saved = messageCaptor.getValue();
-        assertTrue("1001".equals(saved.getConversationId()));
-        assertTrue("USER".equals(saved.getMessageType()));
-        assertTrue("请吴用回报当前进度".equals(saved.getContent()));
-        assertTrue(saved.getMetadata().contains("\"selectedAgentId\":\"agent-wuyong\""));
+        ArgumentCaptor<ServerResolvedSender> senderCaptor =
+                ArgumentCaptor.forClass(ServerResolvedSender.class);
+        verify(chatDeliberationService).admit(eq("0"), senderCaptor.capture(),
+                eq("1001"), eq(1L), any(), any(), eq(request), any());
+        assertEquals("user", senderCaptor.getValue().type());
+        assertEquals("tester", senderCaptor.getValue().displayName());
+        assertEquals("tester", senderCaptor.getValue().jiacn());
+        assertEquals("web-client", senderCaptor.getValue().clientId());
+        verify(agentWebSocketHandler, never()).sendDirectMessageToAgent(
+                anyString(), anyString(), anyString(), any(Map.class));
+        verify(chatConversationService, never()).appendOwnedMessage(
+                anyString(), anyString(), any(ChatMessageEntity.class),
+                org.mockito.ArgumentMatchers.anyLong());
+        assertTrue(chunks.getFirst().contains("\"conversationId\":\"1001\""));
+        assertFalse(chunks.getFirst().contains("agentDelivery"));
         assertTrue(chunks.stream().anyMatch(item -> item.contains("\"agentDelivery\"")));
         assertTrue(chunks.stream().anyMatch(item -> item.contains("\"conversationId\": \"1001\"")));
     }
@@ -165,7 +209,7 @@ class ChatControllerTest extends BaseMockTest {
         java.util.concurrent.CountDownLatch cancelled = new java.util.concurrent.CountDownLatch(1);
         java.util.concurrent.atomic.AtomicReference<Throwable> failure = new java.util.concurrent.atomic.AtomicReference<>();
         JuyitingAgentRelayService relay = org.mockito.Mockito.mock(JuyitingAgentRelayService.class);
-        when(relay.relay(any(), any(), eq("1001"), any())).thenReturn(new JuyitingAgentRelayResult(
+        when(relay.relay(any(UserAdmissionScope.class), any(), eq("1001"), any(ServerResolvedSender.class), any())).thenReturn(new JuyitingAgentRelayResult(
                 true, Mono.just(true), Flux.<String>never()
                         .doOnSubscribe(ignored -> subscribed.countDown())
                         .doOnCancel(cancelled::countDown)));
@@ -174,12 +218,13 @@ class ChatControllerTest extends BaseMockTest {
                 chatClient, chatConversationService, redisService, chatClientBuilder,
                 chatConversationEventBroker, builtinHallAgentSupport,
                 new JuyitingConversationScopeService(builtinHallAgentSupport, agentService),
-                relay, memoryRepository, taskThreadMemoryGuard);
+                relay, memoryRepository, taskThreadMemoryGuard,
+                new HumanSenderIdentityResolver(userService));
         ChatMessageDTO request = new ChatMessageDTO();
         request.setConversationId("1001");
         request.setContent("请回报");
 
-        reactor.core.Disposable subscription = controller.handleChat(request)
+        reactor.core.Disposable subscription = controller.handleChat(request, null)
                 .subscribe(ignored -> { }, failure::set);
         assertTrue(subscribed.await(1, java.util.concurrent.TimeUnit.SECONDS));
         subscription.dispose();
@@ -193,6 +238,11 @@ class ChatControllerTest extends BaseMockTest {
 
     @Test
     void genericChatCannotCreateReservedTaskThreadScope() {
+        EsContext context = new EsContext();
+        context.setJiacn("tester");
+        context.setClientId("web-client");
+        EsContextHolder.setContext(context);
+
         ChatMessageDTO request = new ChatMessageDTO();
         request.setContent("spoof task thread");
         request.setConversationType(ChatController.CONVERSATION_TYPE_JUYITING);
@@ -201,7 +251,7 @@ class ChatControllerTest extends BaseMockTest {
         request.setTaskId("task-1");
 
         AgentTaskThreadException denied = assertThrows(AgentTaskThreadException.class,
-                () -> newController().handleChat(request));
+                () -> newController().handleChat(request, null));
         assertEquals(AgentTaskThreadException.Reason.NOT_FOUND_OR_FORBIDDEN, denied.getReason());
 
         ChatMessageDTO metadataSpoof = new ChatMessageDTO();
@@ -210,7 +260,7 @@ class ChatControllerTest extends BaseMockTest {
         metadataSpoof.setMetadata(Map.of("mode",
                 AgentTaskThreadConstants.CONVERSATION_SCOPE_TYPE));
         assertThrows(AgentTaskThreadException.class,
-                () -> newController().handleChat(metadataSpoof));
+                () -> newController().handleChat(metadataSpoof, null));
 
         verify(chatConversationService, never()).create(any(UserAdmissionScope.class), any(ChatConversationEntity.class));
     }
@@ -269,7 +319,15 @@ class ChatControllerTest extends BaseMockTest {
         when(chatConversationService.findByConversationId(areaZeroScope(), "1001"))
                 .thenReturn(List.of(userMessage, agentMessage));
 
-        Object controllerBody = newController().getConversationContent("1001");
+        var assets = org.mockito.Mockito.mock(cn.jia.chat.service.ChatBountyAssetProjector.class);
+        var trustedPart = new cn.jia.chat.service.ChatBountyAssetProjector.Part(
+                "part_1", "image", "ready", "ast_1", "image/png", "bird.png", "1", "a".repeat(64), 20);
+        when(assets.partsFor(new cn.jia.agent.service.PersonalWorkspaceExecutionService.OwnerScope(
+                "0", "web-client", "tester"), "1001"))
+                .thenReturn(Map.of(Long.toString(agentMessageId), List.of(trustedPart)));
+        ChatController controller = newController();
+        controller.setBountyAssets(assets);
+        Object controllerBody = controller.getConversationContent("1001");
         SensitiveResponseBodyAdvice advice =
                 new SensitiveResponseBodyAdvice(new SensitiveResponseProperties());
         Method method = ChatController.class.getDeclaredMethod("getConversationContent", String.class);
@@ -287,6 +345,13 @@ class ChatControllerTest extends BaseMockTest {
         assertEquals(agentMetadata, messages.get(1).get("metadata"));
         assertEquals("user", messages.get(0).get("senderType"));
         assertEquals("agent", messages.get(1).get("senderType"));
+        assertTrue(((List<?>) messages.get(0).get("parts")).isEmpty());
+        var projected = (List<Map<String, Object>>) messages.get(1).get("parts");
+        assertEquals("ast_1", projected.getFirst().get("assetId"));
+        assertEquals("ready", projected.getFirst().get("state"));
+        assertEquals("image/png", projected.getFirst().get("mime"));
+        verify(assets).partsFor(new cn.jia.agent.service.PersonalWorkspaceExecutionService.OwnerScope(
+                "0", "web-client", "tester"), "1001");
         assertTrue(String.valueOf(messages.get(0).get("content")).contains("password=******"));
         assertTrue(!json.contains("hunter2"));
         verify(chatConversationService).findByConversationId(areaZeroScope(), "1001");
@@ -308,7 +373,7 @@ class ChatControllerTest extends BaseMockTest {
         setObjectField(request, "conversationScopeKey", "task:372");
         setObjectField(request, "taskId", "372");
         setObjectField(request, "targetAgentIds", List.of("agent-wuyong", "agent-linchong"));
-        when(agentService.listTaskWritableMemberAgentIds("tester", "web-client", "372"))
+        when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "372"))
                 .thenReturn(List.of("agent-wuyong", "agent-linchong"));
         when(chatConversationService.create(any(UserAdmissionScope.class), any(ChatConversationEntity.class)))
                 .thenAnswer(invocation -> invocation.getArgument(1));
@@ -390,11 +455,11 @@ class ChatControllerTest extends BaseMockTest {
         setObjectField(request, "targetAgentIds", List.of("agent-linchong"));
         request.setMetadata(Map.of("participantAgentIds", List.of("agent-wuyong")));
 
-        when(agentService.listTaskWritableMemberAgentIds("tester", "web-client", "372"))
+        when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "372"))
                 .thenReturn(List.of("agent-wuyong"));
 
         assertThrows(AgentTaskThreadException.class,
-                () -> controller.handleChat(request).collectList().block());
+                () -> controller.handleChat(request, null).collectList().block());
         verify(chatConversationService, org.mockito.Mockito.never()).create(
                 any(UserAdmissionScope.class), any(ChatConversationEntity.class));
         verify(chatConversationService, org.mockito.Mockito.never()).appendOwnedMessage(
@@ -410,7 +475,7 @@ class ChatControllerTest extends BaseMockTest {
         EsContextHolder.setContext(context);
         List<String> members = List.of("agent-wuyong", "agent-linchong");
         ChatController controller = newController();
-        when(agentService.listTaskWritableMemberAgentIds("tester", "web-client", "task-7"))
+        when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "task-7"))
                 .thenReturn(members);
         when(chatConversationService.create(any(UserAdmissionScope.class), any(ChatConversationEntity.class)))
                 .thenAnswer(invocation -> ((ChatConversationEntity) invocation.getArgument(1))
@@ -429,11 +494,7 @@ class ChatControllerTest extends BaseMockTest {
                     return value;
                 });
         when(redisService.subscribeToChannel("1001")).thenReturn(Flux.never());
-        for (String member : members) {
-            when(agentWebSocketHandler.sendDirectMessageToAgent(
-                    eq("tester"), eq("web-client"), eq(member), any(Map.class)))
-                    .thenReturn(true);
-        }
+        when(chatConversationEventBroker.stream(eq("1001"), eq(1L), any())).thenReturn(Flux.empty());
         ChatMessageDTO request = new ChatMessageDTO();
         request.setContent("两位都回报");
         request.setConversationType("juyiting");
@@ -442,7 +503,7 @@ class ChatControllerTest extends BaseMockTest {
         request.setTaskId("task-7");
         request.setTargetAgentIds(members);
 
-        List<String> chunks = controller.handleChat(request).collectList().block();
+        List<String> chunks = controller.handleChat(request, null).collectList().block();
 
         ArgumentCaptor<ChatConversationEntity> created =
                 ArgumentCaptor.forClass(ChatConversationEntity.class);
@@ -450,10 +511,10 @@ class ChatControllerTest extends BaseMockTest {
         assertEquals(null, created.getValue().getTargetAgentId());
         assertEquals("[\"agent-wuyong\",\"agent-linchong\"]",
                 created.getValue().getTargetAgentIds());
-        for (String member : members) {
-            verify(agentWebSocketHandler).sendDirectMessageToAgent(
-                    eq("tester"), eq("web-client"), eq(member), any(Map.class));
-        }
+        verify(chatDeliberationService).admit(eq("0"), any(ServerResolvedSender.class),
+                eq("1001"), eq(1L), any(), any(), eq(request), any());
+        verify(agentWebSocketHandler, never()).sendDirectMessageToAgent(
+                anyString(), anyString(), anyString(), any(Map.class));
         assertEquals(2, chunks.stream().filter(value -> value.contains("agentDelivery")).count());
     }
 
@@ -476,8 +537,10 @@ class ChatControllerTest extends BaseMockTest {
                 broker, builtinHallAgentSupport, scopeService,
                 new JuyitingAgentRelayService(
                         agentWebSocketHandler, broker, builtinHallAgentSupport,
-                        chatConversationService, agentService, scopeService),
-                memoryRepository, taskThreadMemoryGuard);
+                        chatConversationService, agentService, scopeService,
+                        taskLinkService, chatDeliberationService),
+                memoryRepository, taskThreadMemoryGuard,
+                new HumanSenderIdentityResolver(userService));
         java.util.List<String> events = new java.util.concurrent.CopyOnWriteArrayList<>();
         java.util.concurrent.CountDownLatch ready = new java.util.concurrent.CountDownLatch(1);
         java.util.concurrent.CountDownLatch completed =
@@ -619,6 +682,9 @@ class ChatControllerTest extends BaseMockTest {
     }
 
     private ChatController newController() {
+        if (EsContextHolder.getContext().getTenantId() == null) {
+            EsContextHolder.getContext().setTenantId("0");
+        }
         org.mockito.Mockito.lenient().when(taskThreadMemoryGuard.excludeProtected(any()))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         ChatConversationEntity publicConversation = new ChatConversationEntity()
@@ -642,6 +708,21 @@ class ChatControllerTest extends BaseMockTest {
                     ((Runnable) invocation.getArgument(3)).run();
                     return true;
                 });
+        org.mockito.Mockito.lenient().doAnswer(invocation -> {
+                    cn.jia.chat.service.JuyitingConversationScope scope = invocation.getArgument(4);
+                    cn.jia.chat.deliberation.InteractionRoute route = invocation.getArgument(5);
+                    ChatMessageDTO input = invocation.getArgument(6);
+                    String requestId = input.getRequestId() == null ? "req-test" : input.getRequestId();
+                    java.util.List<ChatDeliberationService.Dispatch> dispatches = scope.targetAgentIds().stream()
+                            .map(agent -> new ChatDeliberationService.Dispatch(requestId, "turn-" + agent,
+                                    "dispatch-" + agent, "event-" + agent, agent, route.name(), "RECEIVED",
+                                    "snapshot-" + agent, "sha256:ctx", Map.of(), Map.of()))
+                            .toList();
+                    return new ChatDeliberationService.Admission(requestId, 1L, "9007199254740993",
+                            invocation.getArgument(2), invocation.getArgument(3), route, dispatches, false);
+                }).when(chatDeliberationService).admit(
+                        anyString(), any(ServerResolvedSender.class), anyString(),
+                        org.mockito.ArgumentMatchers.anyLong(), any(), any(), any(), any());
         JuyitingConversationScopeService scopeService = new JuyitingConversationScopeService(builtinHallAgentSupport, agentService);
         JuyitingAgentRelayService relayService = new JuyitingAgentRelayService(
                 agentWebSocketHandler,
@@ -649,7 +730,9 @@ class ChatControllerTest extends BaseMockTest {
                 builtinHallAgentSupport,
                 chatConversationService,
                 agentService,
-                scopeService
+                scopeService,
+                taskLinkService,
+                chatDeliberationService
         );
         return new ChatController(
                 chatClient,
@@ -661,16 +744,19 @@ class ChatControllerTest extends BaseMockTest {
                 scopeService,
                 relayService,
                 memoryRepository,
-                taskThreadMemoryGuard
+                taskThreadMemoryGuard,
+                new HumanSenderIdentityResolver(userService)
         );
     }
 
     private ChatConversationEntity invokeGetOrCreateConversation(ChatController controller, ChatMessageDTO request)
             throws Exception {
         Method method = ChatController.class.getDeclaredMethod(
-                "getOrCreateConversation", UserAdmissionScope.class, ChatMessageDTO.class);
+                "getOrCreateConversation", UserAdmissionScope.class, ChatMessageDTO.class, ServerResolvedSender.class);
         method.setAccessible(true);
-        return (ChatConversationEntity) method.invoke(controller, areaZeroScope(), request);
+        ServerResolvedSender sender = new HumanSenderIdentityResolver(userService)
+                .resolve(EsContextHolder.getContext());
+        return (ChatConversationEntity) method.invoke(controller, areaZeroScope(), request, sender);
     }
 
     private Object getObjectField(Object target, String fieldName) throws Exception {

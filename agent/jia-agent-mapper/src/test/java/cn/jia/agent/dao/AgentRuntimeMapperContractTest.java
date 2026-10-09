@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AgentRuntimeMapperContractTest {
     @Test
-    void rosterFiltersActiveBindingAndIdentityBeforeDatabasePagination() throws Exception {
+    void rosterIncludesProvisionedAndActiveOwnedIdentitiesBeforeDatabasePagination() throws Exception {
         String sql = selectSql("findActiveRosterByOwner");
 
         assertRuntimeProjection(sql);
@@ -21,7 +21,9 @@ class AgentRuntimeMapperContractTest {
         assertTrue(sql.contains("inner join agent_identity_registry i on i.binding_id = b.id"));
         assertTrue(sql.contains("b.id = r.binding_id"));
         assertTrue(sql.contains("b.status = 1"));
-        assertTrue(sql.contains("i.lifecycle_status = 'active'"));
+        assertTrue(sql.contains("i.lifecycle_status in ('provisioned', 'active')"));
+        assertTrue(sql.contains("cast(i.lifecycle_status as binary) in ( cast('provisioned' as binary), cast('active' as binary))"));
+        assertTrue(sql.contains("octet_length(i.lifecycle_status) in ( octet_length('provisioned'), octet_length('active'))"));
         assertTrue(sql.contains("i.canonical_agent_id = r.agent_id"));
         assertTrue(sql.contains("b.persona_code = r.persona_code"));
         assertTrue(sql.contains("or exists ( select 1 from agent_identity_alias a"));
@@ -54,6 +56,7 @@ class AgentRuntimeMapperContractTest {
         assertTrue(sql.contains("b.id = r.binding_id"));
         assertTrue(sql.contains("b.status = 1"));
         assertTrue(sql.contains("i.lifecycle_status = 'active'"));
+        assertFalse(sql.contains("i.lifecycle_status in ('provisioned', 'active')"));
         assertTrue(sql.contains("i.canonical_agent_id = r.agent_id"));
         assertTrue(sql.contains("order by r.persona_code asc"));
         assertFalse(sql.contains("r.status in ('online', 'busy')"));

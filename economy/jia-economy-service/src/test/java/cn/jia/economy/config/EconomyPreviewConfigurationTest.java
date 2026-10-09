@@ -35,13 +35,16 @@ class EconomyPreviewConfigurationTest {
     }
 
     @Test
-    void hostingSchemaRequiresItsOwnExplicitFlagAndNeverFollowsPreviewAlone() {
-        RUNNER.withPropertyValues(
-                        "economy.preview.enabled=true",
-                        "economy.preview.allowed-scopes[0].tenant-id=Tenant-A",
-                        "economy.preview.allowed-scopes[0].client-id=Client-A")
-                .run(context -> assertTrue(
-                        context.getBeansOfType(EconomyHostingRentSchemaInitializer.class).isEmpty()));
+    void hostingSchemaRequiresItsOwnExplicitFlagAndNeverFollowsPreviewAlone() throws Exception {
+        var method = EconomyConfiguration.class.getMethod(
+                "economyHostingRentSchemaInitializer", org.springframework.jdbc.core.JdbcTemplate.class);
+        var condition = method.getAnnotation(
+                org.springframework.boot.autoconfigure.condition.ConditionalOnProperty.class);
+        assertNotNull(condition);
+        assertEquals("economy.hosting-rent", condition.prefix());
+        assertEquals(List.of("schema-enabled"), List.of(condition.name()));
+        assertEquals("true", condition.havingValue());
+        assertFalse(condition.matchIfMissing());
     }
 
     @Test
@@ -50,14 +53,21 @@ class EconomyPreviewConfigurationTest {
                         "economy.preview.enabled=true",
                         "economy.preview.test-issuance-enabled=true",
                         "economy.preview.allowed-scopes[0].tenant-id=Tenant-A",
-                        "economy.preview.allowed-scopes[0].client-id=Client-A")
+                        "economy.preview.allowed-scopes[0].client-id=Client-A",
+                        "economy.onboarding-grant.enabled=true",
+                        "economy.onboarding-grant.amount-micro=1000000000",
+                        "economy.onboarding-grant.campaign-ref=hosting-welcome-v1")
                 .run(context -> {
                     assertNull(context.getStartupFailure());
                     EconomyPreviewProperties properties = context.getBean(EconomyPreviewProperties.class);
+                    EconomyOnboardingGrantProperties grant = context.getBean(EconomyOnboardingGrantProperties.class);
                     assertTrue(properties.enabled());
                     assertTrue(properties.testIssuanceEnabled());
                     assertEquals(List.of(new EconomyPreviewProperties.AllowedScope("Tenant-A", "Client-A")),
                             properties.allowedScopes());
+                    assertTrue(grant.enabled());
+                    assertEquals(1000000000L, grant.amountMicro());
+                    assertEquals("hosting-welcome-v1", grant.campaignRef());
                 });
 
         PROPERTIES_RUNNER.withPropertyValues(
@@ -173,7 +183,7 @@ class EconomyPreviewConfigurationTest {
     }
 
     @Configuration(proxyBeanMethods = false)
-    @EnableConfigurationProperties(EconomyPreviewProperties.class)
+    @EnableConfigurationProperties({EconomyPreviewProperties.class, EconomyOnboardingGrantProperties.class})
     static class PropertiesOnlyConfiguration {
     }
 

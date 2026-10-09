@@ -1,0 +1,26 @@
+{
+  "sourceSqlSha256": "98af3d88d5a1212e52764e308b2361e99dbffbb7595d1196123465a0481a41a4",
+  "capturedAt": "2026-10-01T23:51:39.539221+08:00",
+  "capturedRawRows": [
+    "chk_chat_typed_admission_digest\tYES\t(regexp_like(`request_digest`,cast(_utf8mb4\\'^sha256:[0-9a-f]{64}$\\' as char charset binary)) and regexp_like(`body_digest`,cast(_utf8mb4\\'^sha256:[0-9a-f]{64}$\\' as char charset binary)))",
+    "chk_chat_typed_admission_generation\tYES\t(`conversation_generation` >= 1)",
+    "chk_chat_typed_admission_intent\tYES\t(`intent` in (_utf8mb4\\'DISCUSSION\\',_utf8mb4\\'CLARIFICATION_REPLY\\'))",
+    "chk_chat_typed_admission_reply\tYES\t(((`intent` = _utf8mb4\\'DISCUSSION\\') and (`pending_question_id` is null)) or ((`intent` = _utf8mb4\\'CLARIFICATION_REPLY\\') and (`parent_outcome_id` is not null) and (`pending_question_id` is not null)))",
+    "chk_chat_typed_admission_revision\tYES\t((`request_revision` = 1) and (`assignment_revision` >= 0) and (`state_version` >= 0) and (`event_cursor` >= 0))",
+    "chk_chat_typed_admission_turns\tYES\t(json_valid(`turn_ids_json`) and json_valid(`source_catalog_json`))",
+    "chk_chat_typed_outcome_digest\tYES\tregexp_like(`final_digest`,cast(_utf8mb4\\'^sha256:[0-9a-f]{64}$\\' as char charset binary))",
+    "chk_chat_typed_outcome_generation\tYES\t(`conversation_generation` >= 1)",
+    "chk_chat_typed_outcome_json\tYES\t(json_valid(`binding_json`) and json_valid(`facts_json`) and json_valid(`outcome_json`) and json_valid(`source_catalog_json`))",
+    "chk_chat_typed_outcome_kind\tYES\t(`kind` in (_utf8mb4\\'ANSWER\\',_utf8mb4\\'CLARIFY\\',_utf8mb4\\'EXECUTION_PROPOSAL\\'))",
+    "chk_chat_typed_outcome_revision\tYES\t((`request_revision` = 1) and (`assignment_revision` >= 0))",
+    "chk_chat_typed_pending_required\tYES\tjson_valid(`required_facts_json`)",
+    "chk_chat_typed_pending_state\tYES\t(`state` in (_utf8mb4\\'OPEN\\',_utf8mb4\\'ANSWERED\\'))",
+    "chk_chat_typed_pending_version\tYES\t(((`state` = _utf8mb4\\'OPEN\\') and (`state_version` = 0) and (`reply_request_id` is null) and (`reply_idempotency_key` is null) and (`reply_body_digest` is null)) or ((`state` = _utf8mb4\\'ANSWERED\\') and (`state_version` = 1) and (`reply_request_id` is not null) and (`reply_idempotency_key` is not null) and regexp_like(`reply_body_digest`,cast(_utf8mb4\\'^sha256:[0-9a-f]{64}$\\' as char charset binary))))",
+    "chk_chat_typed_proposal_operation\tYES\t(`operation` in (_utf8mb4\\'GENERATE_IMAGE\\',_utf8mb4\\'EDIT_IMAGE\\'))",
+    "chk_chat_typed_proposal_parent\tYES\t(((`parent_request_id` is null) and (`parent_step_id` is null)) or ((`parent_request_id` is not null) and (`parent_step_id` is not null)))",
+    "chk_chat_typed_proposal_sources\tYES\t(json_valid(`source_ref_ids_json`) and json_valid(`source_selectors_json`))",
+    "chk_chat_typed_proposal_state\tYES\t((`state` = _utf8mb4\\'PROPOSED\\') and (`state_version` = 0))"
+  ],
+  "capturedRawRowsSha256": "d535852877316d8ffb3510a2af81e8da7c5122d0675c78bdf9ae8224c521775c",
+  "rowCount": 18
+}

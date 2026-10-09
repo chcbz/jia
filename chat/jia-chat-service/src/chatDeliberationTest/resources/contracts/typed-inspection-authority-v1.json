@@ -1,0 +1,171 @@
+{
+  "contract": "juyiting-typed-inspection-v1",
+  "status": "DESIGN_FIXTURE_ONLY_ALL_RUNTIME_NOT_RUN",
+  "api_source": "a6e3e06cb4fa29ed6c01d80e8d8f0ae9372a1de9",
+  "request_example": {
+    "schemaVersion": 1,
+    "intent": "DISCUSSION",
+    "taskId": "fixture-task",
+    "expectedAssignmentRevision": "3",
+    "content": "Describe the reference bird.",
+    "parentOutcomeId": null,
+    "expectedParentStateVersion": null,
+    "pendingQuestionId": null,
+    "expectedPendingQuestionStateVersion": null,
+    "sourceSelectors": [
+      {
+        "kind": "TASK_LINKED_WORKSPACE_VERSION",
+        "fileId": "fixture-file",
+        "version": "2",
+        "purpose": "REFERENCE",
+        "assetId": null,
+        "assetRevision": null
+      }
+    ]
+  },
+  "manifest_example": {
+    "schemaVersion": 1,
+    "purpose": "INSPECT",
+    "scope": {
+      "tenantId": "0",
+      "ownerJiacn": "fixture-owner",
+      "clientId": "fixture-client",
+      "conversationId": "42",
+      "conversationGeneration": "1",
+      "taskId": "fixture-task",
+      "assignmentRevision": "3",
+      "requestId": "fixture-inspection-request",
+      "requestRevision": "1",
+      "targetAgentId": "fixture-agent"
+    },
+    "profile": {
+      "profileId": "fixture-profile-not-enabled",
+      "engineContractId": "fixture-engine-not-measured",
+      "enginePolicyDigest": "sha256:d0cf6723442662597e5b7b03bd926b09a86c6a87ccb3ea6477aab2933b97f706",
+      "toolPolicyDigest": "sha256:936a028b3f4bbd6b723fa1a78f5f3cd64b39d72b5a80213bbe3da42b91fc9186",
+      "inputPolicyDigest": "sha256:37e13ec101618e4a523f3ebcb80b19651e399d3bde330cf0cdf741302d82e9ef"
+    },
+    "sources": [
+      {
+        "sourceRefId": "source_f1d4f3b7c0fe8de5776833ad695adc4e68e67f06",
+        "selector": {
+          "kind": "TASK_LINKED_WORKSPACE_VERSION",
+          "fileId": "fixture-file",
+          "version": "2",
+          "purpose": "REFERENCE",
+          "assetId": null,
+          "assetRevision": null
+        },
+        "mediaKind": "text",
+        "mimeType": "text/plain",
+        "byteLength": "15",
+        "sha256": "6c060375175531b3e9bf027e422f6c6a7efb37310c6f15ae9e41d0b28a9ce14c",
+        "carrier": "DIRECT_TEXT",
+        "carrierContractDigest": "sha256:620c1269a89ff762b964e315df0f49059ff38cb7db9a78325802b7e30c589b4e"
+      }
+    ]
+  },
+  "canonical_manifest": "{\"profile\":{\"engineContractId\":\"fixture-engine-not-measured\",\"enginePolicyDigest\":\"sha256:d0cf6723442662597e5b7b03bd926b09a86c6a87ccb3ea6477aab2933b97f706\",\"inputPolicyDigest\":\"sha256:37e13ec101618e4a523f3ebcb80b19651e399d3bde330cf0cdf741302d82e9ef\",\"profileId\":\"fixture-profile-not-enabled\",\"toolPolicyDigest\":\"sha256:936a028b3f4bbd6b723fa1a78f5f3cd64b39d72b5a80213bbe3da42b91fc9186\"},\"purpose\":\"INSPECT\",\"schemaVersion\":1,\"scope\":{\"assignmentRevision\":\"3\",\"clientId\":\"fixture-client\",\"conversationGeneration\":\"1\",\"conversationId\":\"42\",\"ownerJiacn\":\"fixture-owner\",\"requestId\":\"fixture-inspection-request\",\"requestRevision\":\"1\",\"targetAgentId\":\"fixture-agent\",\"taskId\":\"fixture-task\",\"tenantId\":\"0\"},\"sources\":[{\"byteLength\":\"15\",\"carrier\":\"DIRECT_TEXT\",\"carrierContractDigest\":\"sha256:620c1269a89ff762b964e315df0f49059ff38cb7db9a78325802b7e30c589b4e\",\"mediaKind\":\"text\",\"mimeType\":\"text/plain\",\"selector\":{\"assetId\":null,\"assetRevision\":null,\"fileId\":\"fixture-file\",\"kind\":\"TASK_LINKED_WORKSPACE_VERSION\",\"purpose\":\"REFERENCE\",\"version\":\"2\"},\"sha256\":\"6c060375175531b3e9bf027e422f6c6a7efb37310c6f15ae9e41d0b28a9ce14c\",\"sourceRefId\":\"source_f1d4f3b7c0fe8de5776833ad695adc4e68e67f06\"}]}",
+  "manifest_digest": "sha256:bcbd200a33f207ac6e2a42dc544338722e6a871080576a7e39d4622aec8c5838",
+  "authorization_id": "inspection_e503e95f508758ac30efd2825c0d139673d152d7",
+  "source_content_fixture": "bird reference\n",
+  "source_catalog_fixture": {
+    "sourceKind": "TASK_WORKSPACE_FILE",
+    "selectorKind": "TASK_LINKED_WORKSPACE_VERSION",
+    "selector": {
+      "kind": "TASK_LINKED_WORKSPACE_VERSION",
+      "fileId": "fixture-file",
+      "version": "2",
+      "purpose": "REFERENCE",
+      "assetId": null,
+      "assetRevision": null
+    },
+    "mediaType": "text",
+    "contentMimeType": "text/plain",
+    "contentHash": "6c060375175531b3e9bf027e422f6c6a7efb37310c6f15ae9e41d0b28a9ce14c",
+    "byteLength": "15",
+    "parentRequestId": null,
+    "parentStepId": null
+  },
+  "source_scope_fixture": {
+    "tenantId": "0",
+    "ownerJiacn": "fixture-owner",
+    "clientId": "fixture-client",
+    "conversationId": "42",
+    "conversationGeneration": "1"
+  },
+  "requirements": [
+    {
+      "id": "IA01",
+      "scenario": "same_key_same_body",
+      "expected": "original_admission_no_new_dispatch",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "IA02",
+      "scenario": "cross_route_same_key",
+      "expected": "409",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "IA03",
+      "scenario": "foreign_runtime_scope",
+      "expected": "404",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "IA04",
+      "scenario": "human_jwt_machine_get",
+      "expected": "403",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "IA05",
+      "scenario": "source_version_changes_after_admit",
+      "expected": "read_original_version_or_reject_never_substitute",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "IA06",
+      "scenario": "link_revoked_or_assignment_generation_changed",
+      "expected": "deny_new_read_and_recheck_final",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "IA07",
+      "scenario": "manifest_or_content_digest_mismatch",
+      "expected": "no_model_call",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "IA08",
+      "scenario": "outcome_v1_v2_cross_route",
+      "expected": "reject",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "IA09",
+      "scenario": "same_pending_concurrent_reply",
+      "expected": "one_success_other_conflict",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "IA10",
+      "scenario": "native_acceptance_unknown",
+      "expected": "readback_no_second_start",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "IA11",
+      "scenario": "all_four_carriers_two_modes",
+      "expected": "real_content_and_isolation_evidence",
+      "status": "NOT_RUN"
+    },
+    {
+      "id": "IA12",
+      "scenario": "full_browser_delivery_acceptance",
+      "expected": "actual_task_completed_exact_selected_delivery",
+      "status": "NOT_RUN"
+    }
+  ]
+}

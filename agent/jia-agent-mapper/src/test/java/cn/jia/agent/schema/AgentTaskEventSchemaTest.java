@@ -38,13 +38,14 @@ class AgentTaskEventSchemaTest {
         List<String> requiredColumns = List.of(
                 "task_id", "event_version", "event_id", "event_type",
                 "actor_type", "actor_id", "aggregate_type", "aggregate_id",
-                "event_json", "occurred_at", "tenant_id", "client_id");
+                "event_json", "occurred_at", "tenant_id", "client_id", "owner_jiacn");
         for (String col : requiredColumns) {
             assertTrue(eventDef.contains(col), "Missing column: " + col);
         }
 
         assertTrue(eventDef.contains("tenant_id varchar(50) not null"));
         assertTrue(eventDef.contains("client_id varchar(50) not null"));
+        assertTrue(eventDef.contains("owner_jiacn varchar(50) not null"));
         assertTrue(eventDef.contains("event_json mediumtext not null"),
                 "event_json must be MEDIUMTEXT NOT NULL");
         assertTrue(eventDef.contains("actor_id varchar(100) default null"),
@@ -60,9 +61,9 @@ class AgentTaskEventSchemaTest {
         String eventDef = compact(tableDefinition(schema, "agent_task_event"));
 
         assertTrue(eventDef.contains(
-                "unique key uk_task_event_version (tenant_id, client_id, task_id, event_version)"));
+                "unique key uk_task_event_version (tenant_id, client_id, owner_jiacn, task_id, event_version)"));
         assertTrue(eventDef.contains(
-                "unique key uk_task_event_id (tenant_id, client_id, event_id)"));
+                "unique key uk_task_event_id (tenant_id, client_id, owner_jiacn, event_id)"));
     }
 
     @Test
@@ -71,11 +72,11 @@ class AgentTaskEventSchemaTest {
         String eventDef = compact(tableDefinition(schema, "agent_task_event"));
 
         assertTrue(eventDef.contains(
-                "key idx_task_event_occurred (tenant_id, client_id, task_id, occurred_at)"));
+                "key idx_task_event_occurred (tenant_id, client_id, owner_jiacn, task_id, occurred_at)"));
         assertTrue(eventDef.contains(
-                "key idx_event_actor_time (tenant_id, client_id, actor_type, actor_id, occurred_at)"));
+                "key idx_event_actor_time (tenant_id, client_id, owner_jiacn, actor_type, actor_id, occurred_at)"));
         assertTrue(eventDef.contains(
-                "key idx_event_type_time (tenant_id, client_id, event_type, occurred_at)"));
+                "key idx_event_type_time (tenant_id, client_id, owner_jiacn, event_type, occurred_at)"));
     }
 
     @Test
@@ -97,7 +98,9 @@ class AgentTaskEventSchemaTest {
         assertFalse(eventDef.contains("websocket_session_id"));
         assertFalse(eventDef.contains("outbox"));
         assertFalse(eventDef.contains("inbox"));
-        assertFalse(eventDef.contains("delivery"));
+        // Formal delivery is a business aggregate, not a transport delivery column.
+        assertFalse(eventDef.contains("delivery_id "));
+        assertFalse(eventDef.contains("message_id "));
     }
 
     @Test

@@ -104,6 +104,21 @@ public class PersonalWorkspaceExecutionDaoImpl implements PersonalWorkspaceExecu
         }
         return List.copyOf(found);
     }
+    @Override public List<PersonalWorkspaceExecutionEntity> listQueuedConversationsByTarget(
+            String tenantId, String clientId, String ownerJiacn, String targetAgentId,
+            Long afterCreatedAt, String afterExecutionId, int limit) {
+        scope(tenantId, clientId, ownerJiacn); id(targetAgentId, "targetAgentId");
+        if ((afterCreatedAt == null) != (afterExecutionId == null)
+                || (afterCreatedAt != null && (afterCreatedAt < 0 || afterExecutionId.isBlank())))
+            throw new IllegalArgumentException("invalid conversation inbox cursor");
+        return executions.listQueuedConversationsByTarget(tenantId, clientId, ownerJiacn, targetAgentId,
+                afterCreatedAt, afterExecutionId, Math.max(1, Math.min(limit, 16)));
+    }
+    @Override public boolean hasExecutionProtocolVersionColumn() {
+        int count=executions.countExecutionProtocolVersionColumn();
+        if(count<0||count>1)throw new IllegalStateException("execution protocol catalog ambiguity");
+        return count==1;
+    }
     @Override public void insert(PersonalWorkspaceExecutionEntity execution) { init(execution); executions.insert(execution); }
     @Override public PersonalWorkspaceExecutionOutputEntity findOutput(String tenantId,String clientId,String ownerJiacn,String executionId,String outputId) {
         scope(tenantId,clientId,ownerJiacn);id(executionId,"executionId");id(outputId,"outputId");
@@ -112,6 +127,24 @@ public class PersonalWorkspaceExecutionDaoImpl implements PersonalWorkspaceExecu
         var output=found.getFirst();if(output==null||!Objects.equals(tenantId,output.getTenantId())||!Objects.equals(clientId,output.getClientId())||!Objects.equals(ownerJiacn,output.getOwnerJiacn())||!Objects.equals(executionId,output.getExecutionId())||!Objects.equals(outputId,output.getOutputId()))throw new IllegalStateException("output scope mismatch");return output;
     }
     @Override public void update(PersonalWorkspaceExecutionEntity execution) { execution.setUpdateTime(DateUtil.nowTime()); executions.updateById(execution); }
+    @Override public boolean markControlledProviderStarted(String tenantId,String clientId,String ownerJiacn,
+            String taskId,String runId,String executionId,String consentId,long leaseVersion,long startedAt) {
+        scope(tenantId,clientId,ownerJiacn);id(taskId,"taskId");id(runId,"runId");
+        id(executionId,"executionId");id(consentId,"consentId");
+        if(leaseVersion<1||leaseVersion>9_007_199_254_740_991L||startedAt<1)
+            throw new IllegalArgumentException("controlled provider start");
+        return executions.markControlledProviderStarted(tenantId,clientId,ownerJiacn,taskId,runId,
+                executionId,consentId,leaseVersion,startedAt)==1;
+    }
+    @Override public boolean markControlledProviderStartedV3(String tenantId,String clientId,String ownerJiacn,
+            String taskId,String runId,String executionId,String consentId,String operationGrantId,
+            long leaseVersion,long startedAt) {
+        scope(tenantId,clientId,ownerJiacn);id(taskId,"taskId");id(runId,"runId");id(executionId,"executionId");
+        id(consentId,"consentId");id(operationGrantId,"operationGrantId");
+        if(leaseVersion<1||leaseVersion>9_007_199_254_740_991L||startedAt<1)throw new IllegalArgumentException("v3 provider start");
+        return executions.markControlledProviderStartedV3(tenantId,clientId,ownerJiacn,taskId,runId,
+                executionId,consentId,operationGrantId,leaseVersion,startedAt)==1;
+    }
     @Override public void insertInput(PersonalWorkspaceExecutionInputEntity input) { init(input); inputs.insert(input); }
     @Override public List<PersonalWorkspaceExecutionInputEntity> listInputs(String tenantId,
             String clientId, String ownerJiacn, String executionId) {

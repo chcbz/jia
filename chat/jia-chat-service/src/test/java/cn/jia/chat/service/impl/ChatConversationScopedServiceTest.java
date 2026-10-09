@@ -46,7 +46,9 @@ class ChatConversationScopedServiceTest extends BaseMockTest {
     void setUp() {
         service = new ChatConversationServiceImpl(
                 conversationDao, messageDao, taskThreadDao,
-                new ChatConversationEventBroker());
+                new ChatConversationEventBroker(),
+                org.mockito.Mockito.mock(cn.jia.chat.deliberation.ChatBountyBindingStore.class),
+                org.mockito.Mockito.mock(cn.jia.agent.service.AgentService.class));
         service.setConversationAdmissionService(admissionService);
     }
 

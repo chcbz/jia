@@ -1,9 +1,9 @@
 package cn.jia.oauth.security;
 
 import cn.jia.user.entity.CustomUserDetails;
+import cn.jia.core.security.TenantClaimPolicy;
 import cn.jia.user.security.AccountSecurityService;
 import cn.jia.user.security.AccountSecuritySnapshot;
-import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
@@ -17,19 +17,42 @@ import org.springframework.security.oauth2.server.authorization.token.OAuth2Toke
 import java.security.Principal;
 import java.util.Optional;
 
-@RequiredArgsConstructor
 public final class AccountSecurityTokenCustomizer implements OAuth2TokenCustomizer<JwtEncodingContext> {
     static final String TOKEN_KIND = "token_kind";
     static final String USER_TOKEN_KIND = "user";
     static final String MACHINE_TOKEN_KIND = "machine";
 
     private final AccountSecurityService accountSecurityService;
+    private final String tenantId;
+
+    public AccountSecurityTokenCustomizer(AccountSecurityService accountSecurityService) {
+        this(accountSecurityService, TenantClaimPolicy.defaultSingleTenant());
+    }
+
+    public AccountSecurityTokenCustomizer(AccountSecurityService accountSecurityService, String tenantId) {
+        this(accountSecurityService, null, tenantId);
+    }
+
+    public AccountSecurityTokenCustomizer(AccountSecurityService accountSecurityService,
+            JdbcTenantAuthorizationRepository repository) {
+        this(accountSecurityService, repository, TenantClaimPolicy.defaultSingleTenant());
+    }
+
+    public AccountSecurityTokenCustomizer(AccountSecurityService accountSecurityService,
+            JdbcTenantAuthorizationRepository repository, String tenantId) {
+        this.accountSecurityService = accountSecurityService;
+        this.tenantAuthorizationRepository = repository;
+        this.tenantId = TenantClaimPolicy.exact(tenantId);
+    }
 
     private final JdbcTenantAuthorizationRepository tenantAuthorizationRepository;
 
     @Override
     public void customize(JwtEncodingContext context) {
-        context.getClaims().claim("client_id", context.getRegisteredClient().getClientId());
+        context.getClaims()
+                .claim("client_id", context.getRegisteredClient().getClientId())
+                .claim(TenantClaimPolicy.CANONICAL_CLAIM, tenantId)
+                .claim(TenantClaimPolicy.VERSION_CLAIM, TenantClaimPolicy.CURRENT_VERSION);
 
         CustomUserDetails userDetails = findUserDetails(context);
         if (userDetails != null) {
@@ -41,7 +64,9 @@ public final class AccountSecurityTokenCustomizer implements OAuth2TokenCustomiz
                         .claim("jiacn", userDetails.getJiacn())
                         .claim("username", userDetails.getUsername())
                         .claim("auth_epoch", userDetails.getLoginAuthEpoch());
-                addBoundTenantClaims(context, userDetails);
+                if (tenantAuthorizationRepository != null) {
+                    addBoundTenantClaims(context, userDetails);
+                }
             }
             return;
         }

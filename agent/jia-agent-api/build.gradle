@@ -3,6 +3,7 @@ dependencies {
     api project(':common:jia-common-api')
     api platform("org.springframework.boot:spring-boot-dependencies:${libs.versions.spring.boot.asProvider().get()}")
     api 'io.projectreactor:reactor-core'
+    api(libs.jackson.annotations)
 }
 
 version = '1.1.2-SNAPSHOT'

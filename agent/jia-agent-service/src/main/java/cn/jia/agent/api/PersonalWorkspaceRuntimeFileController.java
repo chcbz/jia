@@ -38,6 +38,16 @@ public class PersonalWorkspaceRuntimeFileController {
         return json(new RuntimeQueueView(service.runtimeQueuedCommands(scope(authentication), 16)));
     }
 
+    @PostMapping(value = "/{taskId}/runs/{runId}/start", consumes = MediaType.APPLICATION_JSON_VALUE,
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<PersonalWorkspaceExecutionService.RuntimeStartView> start(@PathVariable String taskId,
+            @PathVariable String runId, @RequestBody StartRequest request, HttpServletRequest servletRequest,
+            Authentication authentication) {
+        requireNoQuery(servletRequest);
+        if (request == null || request.commandId() == null || request.messageId() == null) throw new RequestFailure();
+        return json(service.start(scope(authentication), taskId, runId, request.commandId(), request.messageId()));
+    }
+
     @GetMapping(value = "/{taskId}/runs/{runId}/inputs", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<List<PersonalWorkspaceExecutionService.RuntimeInput>> inputs(@PathVariable String taskId,
             @PathVariable String runId, HttpServletRequest request, Authentication authentication) {
@@ -105,6 +115,7 @@ public class PersonalWorkspaceRuntimeFileController {
     public record RuntimeQueueView(List<PersonalWorkspaceExecutionService.RuntimeQueuedCommand> items) { }
     public record CommitRequest(List<CommitOutput> outputs) { }
     public record CommitOutput(String outputId,String sha256,Long length) { }
+    public record StartRequest(String commandId, String messageId) { }
     public record FailureRequest(String code) { }
     public record ErrorBody(String code,String message) { }
     private static final class RequestFailure extends RuntimeException { }

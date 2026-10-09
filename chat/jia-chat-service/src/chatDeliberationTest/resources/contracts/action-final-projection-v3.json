@@ -1,0 +1,38 @@
+{
+  "chatAction": {
+    "schemaVersion": 3,
+    "route": "CHAT",
+    "conversationId": "42",
+    "conversationGeneration": "1",
+    "requestId": "request",
+    "requestRevision": "1",
+    "turnId": "turn",
+    "state": "READY",
+    "outcome": {
+      "outcomeContractVersion": 3,
+      "outcomeId": "action-outcome_2e73906e2d5109ae1253d51ecef0a48b82aa1a95",
+      "taskId": "task",
+      "assignmentRevision": "3",
+      "assistantMessageId": "9",
+      "finalDigest": "sha256:6376d4e54163dc52a3094bf6904c14244c05f525a0288fa433ed367f4cb5655e",
+      "kind": "ACTION_REQUEST",
+      "text": "处理中",
+      "clarification": null,
+      "action": {
+        "actionRequestId": "act_74953fac11db0de180e45f381a98922881c24cde",
+        "actionId": "write-document",
+        "instruction": "整理文档",
+        "sourceRefIds": []
+      }
+    },
+    "inspection": null,
+    "actionProgress": {
+      "actionRequestId": "act_74953fac11db0de180e45f381a98922881c24cde",
+      "state": "QUEUED",
+      "dispatchVersion": "0",
+      "childRequestId": null,
+      "childRoute": null,
+      "childStateVersion": null
+    }
+  }
+}

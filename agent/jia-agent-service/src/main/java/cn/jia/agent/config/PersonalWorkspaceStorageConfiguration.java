@@ -65,6 +65,34 @@ public class PersonalWorkspaceStorageConfiguration {
 
     @Bean
     @ConditionalOnProperty(prefix = "agent.personal-workspace-storage", name = "enabled", havingValue = "true")
+    public AgentTaskExecutionGrantSchemaInitializer agentTaskExecutionGrantSchemaInitializer(
+            JdbcTemplate jdbcTemplate) {
+        return new AgentTaskExecutionGrantSchemaInitializer(jdbcTemplate);
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "agent.personal-workspace-storage", name = "enabled", havingValue = "true")
+    public AgentTaskBountyBootstrapOutboxSchemaInitializer agentTaskBountyBootstrapOutboxSchemaInitializer(
+            JdbcTemplate jdbcTemplate) {
+        return new AgentTaskBountyBootstrapOutboxSchemaInitializer(jdbcTemplate);
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "agent.personal-workspace-storage", name = "enabled", havingValue = "true")
+    public AgentTaskRequirementSnapshotSchemaInitializer agentTaskRequirementSnapshotSchemaInitializer(
+            JdbcTemplate jdbcTemplate) {
+        return new AgentTaskRequirementSnapshotSchemaInitializer(jdbcTemplate);
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "agent.personal-workspace-storage", name = "enabled", havingValue = "true")
+    public AgentTaskCreationOperationSchemaInitializer agentTaskCreationOperationSchemaInitializer(
+            JdbcTemplate jdbcTemplate) {
+        return new AgentTaskCreationOperationSchemaInitializer(jdbcTemplate);
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "agent.personal-workspace-storage", name = "enabled", havingValue = "true")
     public PersonalWorkspaceConversationLinkSchemaInitializer personalWorkspaceConversationLinkSchemaInitializer(
             JdbcTemplate jdbcTemplate) {
         return new PersonalWorkspaceConversationLinkSchemaInitializer(jdbcTemplate);

@@ -34,6 +34,9 @@ import static org.mockito.Mockito.*;
 /** Real transaction-boundary fixture; the provider and ledger are deterministic internal test doubles. */
 class HostingRentReconcilerTest {
     private static final String AGENT = "agt_0123456789abcdef0123456789abcdef";
+    private static final String TENANT = "0";
+    private static final String CLIENT = "Client-A";
+    private static final String OWNER = "Tenant-A";
     private final EconomyHostingRentMapper mapper = mock(EconomyHostingRentMapper.class);
     private final HostingRentLedgerService ledger = mock(HostingRentLedgerService.class);
     private final AgentIdentityService identities = mock(AgentIdentityService.class);
@@ -57,9 +60,9 @@ class HostingRentReconcilerTest {
         when(provider.available()).thenReturn(true);
         worker = new HostingRentReconciler(new AgentHostingRentProperties(true, null, null, null),
                 new EconomyPreviewGate(new EconomyPreviewProperties(true, List.of(
-                        new EconomyPreviewProperties.AllowedScope("Tenant-A", "Client-A")))), mapper, ledger, identities,
+                        new EconomyPreviewProperties.AllowedScope(TENANT, CLIENT)))), mapper, ledger, identities,
                 owners, providers, credentials, manager, bindings, true);
-        intent = new EconomyHostingProvisioningIntentEntity().setId(1L).setTenantId("Tenant-A").setClientId("Client-A")
+        intent = new EconomyHostingProvisioningIntentEntity().setId(1L).setTenantId(TENANT).setClientId(CLIENT)
                 .setPrincipalType("USER").setPrincipalId("Login-A").setAgentId(AGENT).setPersonaCode("wuyong")
                 .setIntentId("hri-test").setLeaseId("hrl-test").setQuotePurpose("INITIAL")
                 .setManagedApiKeyId("managed-key-31")
@@ -68,14 +71,14 @@ class HostingRentReconcilerTest {
                 .setPrincipalType("USER").setPrincipalId("Login-A").setBindingId("17")
                 .setStatus("PROVISIONING").setLatestIntentId("hri-test");
         when(mapper.selectPendingIntents(0L)).thenReturn(List.of(intent));
-        when(mapper.selectIntentForUpdate("Tenant-A", "Client-A", "hri-test")).thenReturn(intent);
-        when(mapper.selectLeaseForUpdate("Tenant-A", "Client-A", "hrl-test")).thenReturn(lease);
-        when(owners.requireOwner(any())).thenReturn("Tenant-A");
+        when(mapper.selectIntentForUpdate(TENANT, CLIENT, "hri-test")).thenReturn(intent);
+        when(mapper.selectLeaseForUpdate(TENANT, CLIENT, "hrl-test")).thenReturn(lease);
+        when(owners.requireOwner(any())).thenReturn(OWNER);
         var identity = new AgentIdentityRegistryEntity().setBindingId(17L).setCanonicalAgentId(AGENT);
-        when(identities.requireRegistrationIdentityInScope("Tenant-A", "Client-A", "Tenant-A", AGENT)).thenReturn(identity);
+        when(identities.requireRegistrationIdentityInScope(TENANT, CLIENT, OWNER, AGENT)).thenReturn(identity);
         var binding = new AgentPersonaBindingEntity().setId(17L).setStatus(1).setAgentId(AGENT)
-                .setJiacn("Tenant-A").setPersonaCode("wuyong");
-        binding.setClientId("Client-A");
+                .setJiacn(OWNER).setPersonaCode("wuyong");
+        binding.setClientId(CLIENT);
         when(bindings.findByIdForUpdate(17L)).thenReturn(binding);
         when(identities.requireActiveBinding(identity, null)).thenReturn(binding);
         doAnswer(call -> { transition(call.getArgument(0), "PROVISIONING_UNKNOWN"); return null; })
@@ -124,7 +127,7 @@ class HostingRentReconcilerTest {
         doAnswer(call -> new ManagedHostingProvisioner.Observation(call.getArgument(0),
                 ManagedHostingProvisioner.Outcome.UNKNOWN, null)).when(provider).prepareAndObserve(any());
         worker.reconcilePending();
-        var wrong = new ManagedHostingProvisioner.Preparation("Tenant-A", "Client-A", "Tenant-A", AGENT,
+        var wrong = new ManagedHostingProvisioner.Preparation(TENANT, CLIENT, OWNER, AGENT,
                 "different-intent", "hrl-test", "17", 1800000000000L);
         doReturn(new ManagedHostingProvisioner.Observation(wrong, ManagedHostingProvisioner.Outcome.FAILED_NO_EFFECT, "wrong-proof"))
                 .when(provider).prepareAndObserve(any());
@@ -225,7 +228,7 @@ class HostingRentReconcilerTest {
     void boundedScanMovesBeyondOneHundredHeldOrdersThenWrapsWithoutLosingDurableState() {
         var rows = java.util.stream.LongStream.rangeClosed(1, 100).mapToObj(id ->
                 new EconomyHostingProvisioningIntentEntity().setId(id).setIntentId("held-" + id)
-                        .setTenantId("Tenant-A").setClientId("Client-A")).toList();
+                        .setTenantId(TENANT).setClientId(CLIENT)).toList();
         when(mapper.selectPendingIntents(0L)).thenReturn(rows);
         when(mapper.selectPendingIntents(100L)).thenReturn(List.of());
         worker.reconcilePending(); worker.reconcilePending(); worker.reconcilePending();
@@ -248,10 +251,10 @@ class HostingRentReconcilerTest {
                 .setLatestIntentId("new-renewal-intent"); // generation remains original INITIAL after renewals
         var free = new EconomyHostingReprovisionEntity().setRequestId("hrr-free").setIntentId("hri-test")
                 .setLeaseId("hrl-test").setAgentId(AGENT).setPersonaCode("wuyong").setPrincipalId("Login-A")
-                .setTenantId("Tenant-A").setClientId("Client-A").setVersion(1L).setStatus("ACCEPTED")
+                .setTenantId(TENANT).setClientId(CLIENT).setVersion(1L).setStatus("ACCEPTED")
                 .setRequestedAt(requestedAt).setPaidThrough(requestedAt + 2592000000L);
-        when(mapper.selectReprovisionForUpdate("Tenant-A", "Client-A", "hrr-free")).thenReturn(free);
-        when(mapper.markReprovisionUnknown("Tenant-A", "Client-A", "hrr-free", 1L)).thenAnswer(call -> {
+        when(mapper.selectReprovisionForUpdate(TENANT, CLIENT, "hrr-free")).thenReturn(free);
+        when(mapper.markReprovisionUnknown(TENANT, CLIENT, "hrr-free", 1L)).thenAnswer(call -> {
             assertTrue(TransactionSynchronizationManager.isActualTransactionActive()); free.setStatus("PROVISIONING_UNKNOWN").setVersion(2L); return 1;
         });
         when(provider.prepareAndObserve(any())).thenAnswer(call -> {
@@ -263,7 +266,7 @@ class HostingRentReconcilerTest {
         verify(mapper, never()).finishReprovision(anyString(), anyString(), anyString(), anyLong(), anyString(), any(), anyString());
         when(provider.prepareAndObserve(any())).thenAnswer(call -> new ManagedHostingProvisioner.Observation(
                 call.getArgument(0), ManagedHostingProvisioner.Outcome.SERVICE_READY, "exact-free-proof", requestedAt + 1));
-        when(mapper.finishReprovision("Tenant-A", "Client-A", "hrr-free", 2L, "SERVICE_READY", requestedAt + 1, "exact-free-proof"))
+        when(mapper.finishReprovision(TENANT, CLIENT, "hrr-free", 2L, "SERVICE_READY", requestedAt + 1, "exact-free-proof"))
                 .thenAnswer(call -> { free.setStatus("SERVICE_READY").setVersion(3L); return 1; });
         worker.reconcileFree(free, provider); worker.reconcileFree(free, provider);
         verify(mapper, times(1)).finishReprovision(anyString(), anyString(), anyString(), anyLong(), anyString(), any(), anyString());

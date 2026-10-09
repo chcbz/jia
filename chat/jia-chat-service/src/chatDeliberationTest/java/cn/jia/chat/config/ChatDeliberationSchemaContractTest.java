@@ -1,0 +1,205 @@
+package cn.jia.chat.config;
+
+import org.junit.jupiter.api.Test;
+
+import java.nio.charset.StandardCharsets;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+class ChatDeliberationSchemaContractTest {
+    @Test
+    void schemaDeclaresDurableScopeAndIdempotencyConstraints() throws Exception {
+        try (var stream = getClass().getResourceAsStream("/db/chat-deliberation-schema.sql")) {
+            if (stream == null) throw new AssertionError("schema resource missing");
+            String sql = new String(stream.readAllBytes(), StandardCharsets.UTF_8).toLowerCase();
+            String compact = sql.replaceAll("\\s+", " ");
+            assertTrue(sql.contains("create table if not exists chat_context_snapshot"));
+            assertTrue(sql.contains("create table if not exists chat_request"));
+            assertTrue(sql.contains("create table if not exists chat_turn"));
+            assertTrue(sql.contains("create table if not exists chat_dispatch_outbox"));
+            assertTrue(sql.contains("create table if not exists chat_conversation_event"));
+            assertTrue(sql.contains("create table if not exists chat_interaction_step"));
+            assertTrue(sql.contains("create table if not exists chat_step_execution_link"));
+            assertTrue(sql.contains("create table if not exists chat_bounty_binding"));
+            assertTrue(sql.contains("create table if not exists chat_conversation_asset"));
+            assertTrue(compact.contains("uk_chat_asset_step_output (tenant_id,owner_jiacn,client_id,step_id,output_id)"));
+            assertTrue(compact.contains("fk_chat_asset_step_scope foreign key (tenant_id,owner_jiacn,client_id,step_id)"));
+            assertTrue(compact.contains("primary key (tenant_id,owner_jiacn,client_id,task_id)"));
+            assertTrue(compact.contains("uk_chat_bounty_binding_conversation (tenant_id,owner_jiacn,client_id,conversation_id)"));
+            assertTrue(compact.contains("uk_chat_step_request_number (tenant_id, owner_jiacn, client_id, request_id, request_revision, step_number)"));
+            assertTrue(compact.contains("idx_chat_step_task (tenant_id, owner_jiacn, client_id, task_id, assignment_revision, target_agent_id)"));
+            assertTrue(compact.contains("fk_chat_step_request_scope foreign key (tenant_id, owner_jiacn, client_id, request_id, request_revision)"));
+            assertTrue(compact.contains("fk_chat_exec_step_scope foreign key (tenant_id, owner_jiacn, client_id, step_id)"));
+            assertTrue(compact.contains("uk_chat_exec_step (step_id)"));
+            assertTrue(compact.contains("uk_chat_exec_execution (execution_id)"));
+            assertTrue(sql.contains("create table if not exists chat_deliberation_schema_version"));
+            assertTrue(compact.contains("idx_chat_outbox_ready (status, available_at, event_id)"));
+            assertTrue(sql.contains("available_at bigint default null"));
+            assertTrue(sql.contains("lease_owner"));
+            assertTrue(sql.contains("lease_until"));
+            assertTrue(sql.contains("attempt_count"));
+            assertTrue(sql.contains("fencing_token"));
+            assertTrue(sql.contains("uk_chat_request_scope_revision"));
+            assertTrue(sql.contains("tenant_id, owner_jiacn, client_id, request_id, request_revision"));
+            assertTrue(sql.contains("uk_chat_turn_request_target"));
+            assertTrue(sql.contains("tenant_id, owner_jiacn, client_id, request_id, target_agent_id"));
+            assertTrue(sql.contains("final_digest"));
+            assertTrue(sql.contains("state_version"));
+            assertTrue(compact.contains("uk_chat_outbox_turn_event (turn_id, event_type)"));
+            assertTrue(sql.contains("engine=innodb default charset=utf8mb4 collate=utf8mb4_0900_bin"));
+            assertTrue(compact.contains("uk_chat_turn_request_target (tenant_id, owner_jiacn, client_id, request_id, target_agent_id)"));
+            assertTrue(compact.contains("idx_chat_turn_conversation (tenant_id, owner_jiacn, client_id, conversation_id, conversation_generation, state, updated_at)"));
+            assertFalse(sql.contains("drop table"));
+            assertFalse(sql.contains("delete from"));
+        }
+    }
+
+    @Test
+    void initializerValidatesTypesCollationNullabilityUniquenessAndIndexOrder() throws Exception {
+        String source = java.nio.file.Files.readString(java.nio.file.Path.of(
+                "src/main/java/cn/jia/chat/config/ChatDeliberationSchemaInitializer.java"));
+        assertTrue(source.contains("character_maximum_length"));
+        assertTrue(source.contains("is_nullable"));
+        assertTrue(source.contains("collation_name"));
+        assertTrue(source.contains("non_unique"));
+        assertTrue(source.contains("seq_in_index"));
+        assertTrue(source.contains("allow-additive-migration:false"));
+        assertTrue(source.contains("chat_interaction_step"));
+        assertTrue(source.contains("chat_step_execution_link"));
+        assertTrue(source.contains("validateForeignKeys(table)"));
+        assertTrue(source.contains("information_schema.key_column_usage"));
+        assertTrue(source.contains("ALGORITHM=INPLACE, LOCK=NONE"));
+        assertFalse(source.contains("index_name.contains"));
+        assertTrue(source.contains("PREFLIGHT"));
+        assertTrue(source.contains("BACKFILLED"));
+        assertTrue(source.contains("TIGHTENED"));
+        assertTrue(source.contains("for (var entry : expected.entrySet())"));
+        assertTrue(source.contains("validateExistingColumnsBeforeExpansion"));
+        assertTrue(source.contains("isLegacyReadyIndex"));
+        assertTrue(source.contains("DROP INDEX idx_chat_outbox_ready"));
+        String migration = java.nio.file.Files.readString(java.nio.file.Path.of(
+                "../jia-chat-mapper/src/main/resources/db/chat-deliberation-v2-migration.sql"));
+        // Real MySQL 8 legacy migration failed at the first dynamic ALTER when the
+        // LOCK option was not separated from the ADD/DROP action by a comma.
+        assertFalse(migration.matches("(?s).*LOCK=NONE\\s+(?:ADD|DROP)\\b.*"));
+        assertTrue(migration.contains("LOCK=NONE, ADD COLUMN available_at"));
+        // SENT/DEAD explicitly clear scheduling; a NOT NULL column made real legacy
+        // dead-letter updates and the normal mapper settle path fail at runtime.
+        assertTrue(migration.contains("MODIFY available_at BIGINT DEFAULT NULL"));
+        assertTrue(migration.contains("status NOT IN ('SENT','DEAD') AND available_at IS NULL"));
+        assertTrue(source.contains("c(\"available_at\",b(true,null))"));
+        assertTrue(migration.contains("CREATE PROCEDURE cyf_migrate_chat_deliberation_v2()"));
+        assertTrue(migration.contains("DECLARE EXIT HANDLER FOR SQLEXCEPTION"));
+        assertTrue(migration.contains("IF v_lock_acquired THEN"));
+        assertTrue(migration.contains("GET_LOCK('cyf:chat-deliberation:v2', 10)"));
+        assertTrue(migration.contains("IF v_lock_result IS NULL OR v_lock_result <> 1 THEN"));
+        assertTrue(migration.contains("SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='chat deliberation v2 migration lock unavailable'"));
+        assertTrue(migration.contains("RELEASE_LOCK('cyf:chat-deliberation:v2')"));
+        assertTrue(migration.contains("CREATE TABLE IF NOT EXISTS chat_conversation_event"));
+        assertTrue(migration.contains("LEGACY_DISPATCH_UNRECOVERABLE"));
+        assertTrue(migration.contains("LEGACY_CANCEL_UNRECOVERABLE_RESYNC_REQUIRED"));
+        assertTrue(migration.contains("legacy-cancel-recovery:"));
+        assertTrue(migration.contains("legacy-final:"));
+        assertTrue(migration.contains("legacy-resync:"));
+        assertTrue(migration.contains("chat outbox relay column contract mismatch"));
+        assertTrue(migration.contains("active cancel payload scope contract mismatch"));
+        int invariantGuard = migration.indexOf("-- APPLIED is reachable only after all schema and data guards above succeed.");
+        int applied = migration.indexOf("VALUES(2,'APPLIED'");
+        assertTrue(invariantGuard > 0 && applied > invariantGuard);
+        assertTrue(migration.indexOf("SIGNAL SQLSTATE '45000'", migration.indexOf("DATA_BACKFILLED")) < applied);
+        assertTrue(migration.contains("PREFLIGHT -> EXPANDED -> BACKFILLED -> TIGHTENED -> DATA_BACKFILLED -> APPLIED"));
+        assertTrue(source.contains("acquireMigrationLock"));
+        assertTrue(source.contains("initializeWhileLocked"));
+        assertTrue(source.contains("backfillLegacyData"));
+        assertTrue(source.contains("releaseMigrationLock"));
+    }
+    @Test
+    void real1b5fa4ceCancelFixtureIsCanonicalizedInsteadOfTrustedAsValidJson() throws Exception {
+        String fixture;
+        try (var stream = getClass().getResourceAsStream("/fixtures/1b5fa4ce-cancel-payload.json")) {
+            if (stream == null) throw new AssertionError("1b5fa4ce fixture missing");
+            fixture = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+        }
+        @SuppressWarnings("unchecked")
+        var legacy = (java.util.Map<String, Object>) cn.jia.core.util.JsonUtil.getMapper()
+                .readValue(fixture, java.util.Map.class);
+        assertEquals(java.util.Set.of("requestId", "turnId", "dispatchId", "reason"), legacy.keySet());
+        assertFalse(legacy.containsKey("targetAgentId"));
+        assertFalse(legacy.containsKey("conversationId"));
+        assertFalse(legacy.containsKey("tenantId"));
+
+        String migration = java.nio.file.Files.readString(java.nio.file.Path.of(
+                "../jia-chat-mapper/src/main/resources/db/chat-deliberation-v2-migration.sql"));
+        assertTrue(migration.contains("Canonicalize every turn-backed cancel"));
+        assertTrue(migration.contains("t.tenant_id=o.tenant_id AND t.owner_jiacn=o.owner_jiacn AND t.client_id=o.client_id"));
+        assertTrue(migration.contains("'targetAgentId',t.target_agent_id"));
+        assertTrue(migration.contains("'conversationId',t.conversation_id"));
+        assertTrue(migration.contains("'tenantId',t.tenant_id"));
+        assertTrue(migration.contains("WHERE o.event_type='CANCEL_REQUESTED';"));
+    }
+
+
+    @Test
+    void actualMysqlTextMetadataCapacitiesPassStrictColumnsAndAdditivePreflight() throws Exception {
+        var jdbc=org.mockito.Mockito.mock(org.springframework.jdbc.core.JdbcTemplate.class);
+        var rows=actualMysqlContextColumnRows();
+        org.mockito.Mockito.when(jdbc.queryForList(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.eq("chat_context_snapshot"))).thenReturn(rows);
+        var initializer=new ChatDeliberationSchemaInitializer(jdbc);
+        var validation=ChatDeliberationSchemaInitializer.class.getDeclaredMethod("validateColumns",String.class);
+        validation.setAccessible(true);
+        validation.invoke(initializer,"chat_context_snapshot");
+        var preflight=ChatDeliberationSchemaInitializer.class.getDeclaredMethod("validateExistingColumnsBeforeExpansion",String.class,java.util.Map.class);
+        preflight.setAccessible(true);
+        var byName=new java.util.LinkedHashMap<String,java.util.Map<String,Object>>();
+        rows.forEach(row->byName.put((String)row.get("column_name"),row));
+        preflight.invoke(initializer,"chat_context_snapshot",byName);
+    }
+
+    @Test
+    void nullOrWrongTextCapacityStillFailsInsteadOfSkippingTextLengthValidation() throws Exception {
+        for(String column:java.util.List.of("source_vector_json","facts_manifest_json")) {
+            for(Long bad:java.util.Arrays.asList(null,42L)) {
+                var jdbc=org.mockito.Mockito.mock(org.springframework.jdbc.core.JdbcTemplate.class);
+                var rows=actualMysqlContextColumnRows();
+                rows.stream().filter(row->column.equals(row.get("column_name"))).findFirst().orElseThrow()
+                        .put("character_maximum_length",bad);
+                org.mockito.Mockito.when(jdbc.queryForList(org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.eq("chat_context_snapshot"))).thenReturn(rows);
+                var validation=ChatDeliberationSchemaInitializer.class.getDeclaredMethod("validateColumns",String.class);
+                validation.setAccessible(true);
+                var failure=org.junit.jupiter.api.Assertions.assertThrows(java.lang.reflect.InvocationTargetException.class,
+                        ()->validation.invoke(new ChatDeliberationSchemaInitializer(jdbc),"chat_context_snapshot"));
+                org.junit.jupiter.api.Assertions.assertInstanceOf(IllegalStateException.class,failure.getCause());
+                assertTrue(failure.getCause().getMessage().contains("chat_context_snapshot."+column));
+            }
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static java.util.List<java.util.Map<String,Object>> actualMysqlContextColumnRows() throws Exception {
+        var field=ChatDeliberationSchemaInitializer.class.getDeclaredField("COLUMNS");field.setAccessible(true);
+        var definitions=(java.util.Map<String,java.util.Map<String,Object>>)field.get(null);
+        var rows=new java.util.ArrayList<java.util.Map<String,Object>>();
+        for(var entry:definitions.get("chat_context_snapshot").entrySet()) {
+            Object definition=entry.getValue();var values=new java.util.HashMap<String,Object>();
+            for(String accessor:java.util.List.of("type","length","nullable","defaultValue","extra","collated")) {
+                var method=definition.getClass().getDeclaredMethod(accessor);method.setAccessible(true);
+                values.put(accessor,method.invoke(definition));
+            }
+            var row=new java.util.LinkedHashMap<String,Object>();
+            row.put("column_name",entry.getKey());row.put("data_type",values.get("type"));
+            // Independent actual MySQL 8.0.21 observations; do not copy the descriptor's TEXT length.
+            Object length=switch((String)values.get("type")) {
+                case "text"->65535L;case "mediumtext"->16777215L;default->values.get("length");};
+            row.put("character_maximum_length",length);
+            row.put("is_nullable",Boolean.TRUE.equals(values.get("nullable"))?"YES":"NO");
+            row.put("column_default",values.get("defaultValue"));row.put("extra",values.get("extra"));
+            row.put("collation_name",Boolean.TRUE.equals(values.get("collated"))?"utf8mb4_0900_bin":null);
+            rows.add(row);
+        }
+        return rows;
+    }
+}

@@ -25,10 +25,36 @@ class CorsConfigTest {
                 cors.getAllowedHeaders());
         assertEquals(List.of("authorization", "content-type", "idempotency-key", "if-match", "last-event-id", "x-request-id"),
                 cors.checkHeaders(List.of("authorization", "content-type", "idempotency-key", "if-match", "last-event-id", "x-request-id")));
-        assertTrue(cors.getAllowedMethods().containsAll(List.of("POST", "OPTIONS")));
+        assertTrue(cors.getAllowedMethods().containsAll(List.of("POST", "PATCH", "OPTIONS")));
+        assertEquals(List.of("ETag"), cors.getExposedHeaders());
         assertEquals(Boolean.TRUE, cors.getAllowCredentials());
         assertEquals(Ordered.HIGHEST_PRECEDENCE,
                 config.corsFilterFilterRegistrationBean().getOrder());
+    }
+
+    @Test
+    void trustedBrowserCanReadMutationEtagWithoutExposingItToUntrustedOrigins() throws Exception {
+        var filter = configured(new String[]{"https://kit.chaoyoufan.cn"})
+                .corsFilterFilterRegistrationBean().getFilter();
+        var request = new MockHttpServletRequest("POST", "/agent/tasks/396/file-links");
+        request.addHeader("Origin", "https://kit.chaoyoufan.cn");
+        var response = new MockHttpServletResponse();
+        filter.doFilter(request, response, (req, res) -> {
+            var http = (jakarta.servlet.http.HttpServletResponse) res;
+            http.setStatus(201);
+            http.setHeader("ETag", "\"rel_1:1\"");
+        });
+        assertEquals(201, response.getStatus());
+        assertEquals("https://kit.chaoyoufan.cn", response.getHeader("Access-Control-Allow-Origin"));
+        assertEquals("ETag", response.getHeader("Access-Control-Expose-Headers"));
+        assertEquals("\"rel_1:1\"", response.getHeader("ETag"));
+
+        var untrusted = new MockHttpServletRequest("POST", "/agent/tasks/396/file-links");
+        untrusted.addHeader("Origin", "https://untrusted.example");
+        var rejected = new MockHttpServletResponse();
+        filter.doFilter(untrusted, rejected, (req, res) -> fail("untrusted origin must not proceed"));
+        assertEquals(403, rejected.getStatus());
+        assertNull(rejected.getHeader("Access-Control-Allow-Origin"));
     }
 
     @Test
@@ -37,13 +63,13 @@ class CorsConfigTest {
     }
 
     @Test
-    void rumPreflightAllowsEveryRequestedHeaderWithoutReachingAuthentication() throws Exception {
+    void patchPreflightAllowsWorkspaceResultMutationHeadersWithoutReachingAuthentication() throws Exception {
         var filter = configured(new String[]{"https://kit.chaoyoufan.cn"})
                 .corsFilterFilterRegistrationBean().getFilter();
-        var request = new MockHttpServletRequest("OPTIONS", "/agent/map");
+        var request = new MockHttpServletRequest("OPTIONS", "/agent/hall/items/PRIVATE_CASE/fixture/mark");
         request.addHeader("Origin", "https://kit.chaoyoufan.cn");
-        request.addHeader("Access-Control-Request-Method", "GET");
-        request.addHeader("Access-Control-Request-Headers", "authorization,content-type,x-request-id");
+        request.addHeader("Access-Control-Request-Method", "PATCH");
+        request.addHeader("Access-Control-Request-Headers", "authorization,content-type,idempotency-key,x-request-id");
         var response = new MockHttpServletResponse();
         filter.doFilter(request, response, (req, res) -> fail("preflight must not require authentication"));
         assertEquals(200, response.getStatus());
@@ -51,7 +77,10 @@ class CorsConfigTest {
         assertEquals("true", response.getHeader("Access-Control-Allow-Credentials"));
         var headers = Arrays.stream(response.getHeader("Access-Control-Allow-Headers").split(","))
                 .map(String::trim).toList();
-        assertTrue(headers.containsAll(List.of("authorization", "content-type", "x-request-id")));
+        var methods = Arrays.stream(response.getHeader("Access-Control-Allow-Methods").split(","))
+                .map(String::trim).toList();
+        assertTrue(methods.contains("PATCH"));
+        assertTrue(headers.containsAll(List.of("authorization", "content-type", "idempotency-key", "x-request-id")));
     }
 
     @Test
@@ -80,7 +109,7 @@ class CorsConfigTest {
     private static CorsConfig configured(String[] origins) {
         CorsConfig config = new CorsConfig();
         ReflectionTestUtils.setField(config, "allowedOriginPatterns", origins);
-        ReflectionTestUtils.setField(config, "allowedMethods", new String[]{"GET", "POST", "OPTIONS"});
+        ReflectionTestUtils.setField(config, "allowedMethods", new String[]{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"});
         ReflectionTestUtils.setField(config, "allowedHeaders", new String[]{"Authorization", "Content-Type", "X-API-Key"});
         return config;
     }

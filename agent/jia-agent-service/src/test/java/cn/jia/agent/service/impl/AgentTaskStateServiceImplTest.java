@@ -311,7 +311,7 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
             assertEquals(Reason.INVALID_PERSISTED_STATE, failure.getReason());
         }
 
-        verify(workItemDao, never()).updateByVersion(any(), any(), any(), any(), any(), anyLong(), any());
+        verify(workItemDao, never()).updateByVersion(any(), any(), any(), any(), anyLong(), any());
         verifyNoInteractions(eventWriter, dependencyService);
     }
 
@@ -375,7 +375,7 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
                         TENANT, CLIENT, OWNER, WORK_ITEM_ID, transition("claimed", 2L, null)));
 
         assertEquals(Reason.RESERVED_FOR_CLAIM_PROTOCOL, exception.getReason());
-        verify(workItemDao, never()).updateByVersion(any(), any(), any(), any(), any(), anyLong(), any());
+        verify(workItemDao, never()).updateByVersion(any(), any(), any(), any(), anyLong(), any());
         assertTrue(AgentTaskWorkItemStatus.READY.requiresClaimProtocol(AgentTaskWorkItemStatus.CLAIMED));
     }
 
@@ -424,7 +424,7 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
 
         assertEquals(Reason.INVALID_TRANSITION, exception.getReason());
         verify(memberDao, never()).updateByVersion(any(), any(), any(), any(), any(), anyLong(), any());
-        verify(workItemDao, never()).updateByVersion(any(), any(), any(), any(), any(), anyLong(), any());
+        verify(workItemDao, never()).updateByVersion(any(), any(), any(), any(), anyLong(), any());
         verifyNoInteractions(taskMetaDao);
     }
 
@@ -492,7 +492,7 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
         assertEquals(Reason.INVALID_REQUEST, exception.getReason());
         assertTrue(exception.getMessage().contains("non-blank assignee"));
         verify(memberDao, never()).updateByVersion(any(), any(), any(), any(), any(), anyLong(), any());
-        verify(workItemDao, never()).updateByVersion(any(), any(), any(), any(), any(), anyLong(), any());
+        verify(workItemDao, never()).updateByVersion(any(), any(), any(), any(), anyLong(), any());
     }
 
     @Test
@@ -511,7 +511,7 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
 
         assertEquals(Reason.INVALID_REQUEST, exception.getReason());
         verify(memberDao, never()).updateByVersion(any(), any(), any(), any(), any(), anyLong(), any());
-        verify(workItemDao, never()).updateByVersion(any(), any(), any(), any(), any(), anyLong(), any());
+        verify(workItemDao, never()).updateByVersion(any(), any(), any(), any(), anyLong(), any());
     }
 
     @Test
@@ -531,7 +531,7 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
         assertEquals(Reason.INVALID_REQUEST, exception.getReason());
         assertTrue(exception.getMessage().contains("assignee does not match"));
         verify(memberDao, never()).updateByVersion(any(), any(), any(), any(), any(), anyLong(), any());
-        verify(workItemDao, never()).updateByVersion(any(), any(), any(), any(), any(), anyLong(), any());
+        verify(workItemDao, never()).updateByVersion(any(), any(), any(), any(), anyLong(), any());
     }
 
     // ── P2-3: Persisted noncanonical status values are rejected ──
@@ -597,7 +597,7 @@ class AgentTaskStateServiceImplTest extends BaseMockTest {
                         TENANT, CLIENT, OWNER, WORK_ITEM_ID, transition("submitted", 6L, null)));
 
         assertEquals(Reason.INVALID_PERSISTED_STATE, exception.getReason());
-        verify(workItemDao, never()).updateByVersion(any(), any(), any(), any(), any(), anyLong(), any());
+        verify(workItemDao, never()).updateByVersion(any(), any(), any(), any(), anyLong(), any());
     }
 
     @Test

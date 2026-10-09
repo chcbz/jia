@@ -83,7 +83,8 @@ class AgentTaskCollaborationServiceRealTransactionTest {
     private static final String JDBC_URL =
             "jdbc:h2:mem:cyf_b06_real_tx;MODE=MYSQL;DB_CLOSE_DELAY=-1;"
             + "CASE_INSENSITIVE_IDENTIFIERS=TRUE;LOCK_TIMEOUT=10000";
-    private static final String TENANT = "tenant-a";
+    private static final String TENANT = "0";
+    private static final String OWNER = "owner-a";
     private static final String CLIENT = "client-a";
     private static final String TASK = "task-1";
     private static final String REQUESTER = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -149,9 +150,9 @@ class AgentTaskCollaborationServiceRealTransactionTest {
         var identityAuthority = org.mockito.Mockito.mock(cn.jia.agent.service.AgentIdentityService.class);
         for (String canonical : List.of(REQUESTER, TARGET)) {
             org.mockito.Mockito.lenient().when(identityAuthority.requireCanonicalAgentIdInScope(
-                    TENANT, CLIENT, TENANT, canonical)).thenReturn(canonical);
+                    TENANT, CLIENT, OWNER, canonical)).thenReturn(canonical);
             org.mockito.Mockito.lenient().when(identityAuthority.requirePersistedCanonicalAgentIdInScope(
-                    TENANT, CLIENT, TENANT, canonical)).thenReturn(canonical);
+                    TENANT, CLIENT, OWNER, canonical)).thenReturn(canonical);
         }
         rawLease.setIdentityService(identityAuthority);
         leaseService = (AgentWorkItemLeaseService) transactionalProxy(
@@ -175,38 +176,43 @@ class AgentTaskCollaborationServiceRealTransactionTest {
     @Test
     void aclCrossTenantAndIllegalReferencesFailClosedWithRealMappers() {
         AgentTaskCollaborationException crossTenant = assertThrows(AgentTaskCollaborationException.class,
-                () -> requestService.get("tenant-b", CLIENT, TASK, REQUESTER, "req-secret"));
-        assertEquals(Reason.NOT_FOUND, crossTenant.getReason());
-        assertEquals("Resource was not found in the requested scope", crossTenant.getMessage());
+                () -> requestService.get("tenant-b", CLIENT, OWNER, TASK, REQUESTER, "req-secret"));
+        assertEquals(Reason.INVALID_REQUEST, crossTenant.getReason());
+        for (String otherOwner : List.of("owner-b", "OWNER-A")) {
+            AgentTaskCollaborationException hidden = assertThrows(AgentTaskCollaborationException.class,
+                    () -> requestService.get(TENANT, CLIENT, otherOwner, TASK, REQUESTER, "req-secret"));
+            assertEquals(Reason.NOT_FOUND, hidden.getReason());
+            assertEquals("Resource was not found in the requested scope", hidden.getMessage());
+        }
 
         String outsider = "agt_cccccccccccccccccccccccccccccccc";
         AgentTaskCollaborationException nonMember = assertThrows(AgentTaskCollaborationException.class,
-                () -> requestService.list(TENANT, CLIENT, TASK, outsider, null));
+                () -> requestService.list(TENANT, CLIENT, OWNER, TASK, outsider, null));
         assertEquals(Reason.FORBIDDEN, nonMember.getReason());
 
         insertWorkItem(TENANT, CLIENT, "other-task", "work-other");
         AgentTaskRequestCreateDTO command = createRequest("req-bad-work");
         command.setWorkItemId("work-other");
         AgentTaskCollaborationException badWork = assertThrows(AgentTaskCollaborationException.class,
-                () -> requestService.create(TENANT, CLIENT, TASK, REQUESTER, command));
+                () -> requestService.create(TENANT, CLIENT, OWNER, TASK, REQUESTER, command));
         assertEquals(Reason.NOT_FOUND, badWork.getReason());
         assertEquals(0, count("SELECT COUNT(*) FROM agent_task_request"));
     }
 
     @Test
     void requestStateMachineAndConcurrentCasAllowExactlyOneTerminalDecision() throws Exception {
-        requestService.create(TENANT, CLIENT, TASK, REQUESTER, createRequest("req-race"));
-        requestService.acknowledge(TENANT, CLIENT, TASK, TARGET, "req-race",
+        requestService.create(TENANT, CLIENT, OWNER, TASK, REQUESTER, createRequest("req-race"));
+        requestService.acknowledge(TENANT, CLIENT, OWNER, TASK, TARGET, "req-race",
                 transition(0L, Map.of("acknowledged", true)));
 
         CountDownLatch ready = new CountDownLatch(2);
         CountDownLatch start = new CountDownLatch(1);
         List<Outcome> outcomes = runConcurrently(List.of(
                 () -> invokeAfterBarrier(ready, start, () -> requestService.resolve(
-                        TENANT, CLIENT, TASK, TARGET, "req-race",
+                        TENANT, CLIENT, OWNER, TASK, TARGET, "req-race",
                         transition(1L, Map.of("decision", "resolved")))),
                 () -> invokeAfterBarrier(ready, start, () -> requestService.reject(
-                        TENANT, CLIENT, TASK, TARGET, "req-race",
+                        TENANT, CLIENT, OWNER, TASK, TARGET, "req-race",
                         transition(1L, Map.of("decision", "rejected"))))), ready, start);
 
         assertEquals(1, outcomes.stream().filter(Outcome::success).count());
@@ -218,7 +224,7 @@ class AgentTaskCollaborationServiceRealTransactionTest {
         assertTrue(row.get("RESPONSE_JSON").toString().contains("decision"));
 
         AgentTaskCollaborationException terminal = assertThrows(AgentTaskCollaborationException.class,
-                () -> requestService.cancel(TENANT, CLIENT, TASK, REQUESTER, "req-race",
+                () -> requestService.cancel(TENANT, CLIENT, OWNER, TASK, REQUESTER, "req-race",
                         transition(2L, null)));
         assertEquals(Reason.INVALID_TRANSITION, terminal.getReason());
         assertEquals(2L, jdbc.queryForObject(
@@ -227,15 +233,15 @@ class AgentTaskCollaborationServiceRealTransactionTest {
 
     @Test
     void concurrentArtifactPublishUsesLockAndUniqueConstraintToKeepChainMonotonic() throws Exception {
-        artifactService.publish(TENANT, CLIENT, TASK, REQUESTER, artifact("artifact-race", 1, 0));
+        artifactService.publish(TENANT, CLIENT, OWNER, TASK, REQUESTER, artifact("artifact-race", 1, 0));
 
         CountDownLatch ready = new CountDownLatch(2);
         CountDownLatch start = new CountDownLatch(1);
         List<Outcome> outcomes = runConcurrently(List.of(
                 () -> invokeAfterBarrier(ready, start, () -> artifactService.publish(
-                        TENANT, CLIENT, TASK, REQUESTER, artifact("artifact-race", 2, 1))),
+                        TENANT, CLIENT, OWNER, TASK, REQUESTER, artifact("artifact-race", 2, 1))),
                 () -> invokeAfterBarrier(ready, start, () -> artifactService.publish(
-                        TENANT, CLIENT, TASK, REQUESTER, artifact("artifact-race", 2, 1)))), ready, start);
+                        TENANT, CLIENT, OWNER, TASK, REQUESTER, artifact("artifact-race", 2, 1)))), ready, start);
 
         assertEquals(1, outcomes.stream().filter(Outcome::success).count());
         assertEquals(1, outcomes.stream().filter(o -> o.reason() == Reason.VERSION_CONFLICT).count());
@@ -248,22 +254,22 @@ class AgentTaskCollaborationServiceRealTransactionTest {
 
     @Test
     void artifactAclVisibilityAndStableOrderingAreEnforcedByRealDatabasePath() {
-        artifactService.publish(TENANT, CLIENT, TASK, REQUESTER, artifact("shared", 1, 0));
+        artifactService.publish(TENANT, CLIENT, OWNER, TASK, REQUESTER, artifact("shared", 1, 0));
         AgentTaskArtifactPublishDTO privateArtifact = artifact("private", 1, 0);
         privateArtifact.setVisibility("private");
-        artifactService.publish(TENANT, CLIENT, TASK, REQUESTER, privateArtifact);
+        artifactService.publish(TENANT, CLIENT, OWNER, TASK, REQUESTER, privateArtifact);
         AgentTaskArtifactPublishDTO reviewArtifact = artifact("review", 1, 0);
         reviewArtifact.setVisibility("reviewer");
-        artifactService.publish(TENANT, CLIENT, TASK, REQUESTER, reviewArtifact);
+        artifactService.publish(TENANT, CLIENT, OWNER, TASK, REQUESTER, reviewArtifact);
 
         List<String> reviewerView = artifactService.list(
-                TENANT, CLIENT, TASK, TARGET, null).stream().map(a -> a.getArtifactId()).toList();
+                TENANT, CLIENT, OWNER, TASK, TARGET, null).stream().map(a -> a.getArtifactId()).toList();
         assertEquals(List.of("review", "shared"), reviewerView);
         assertThrows(AgentTaskCollaborationException.class,
-                () -> artifactService.getLatest(TENANT, CLIENT, TASK, TARGET, "private"));
+                () -> artifactService.getLatest(TENANT, CLIENT, OWNER, TASK, TARGET, "private"));
 
         List<String> producerView = artifactService.list(
-                TENANT, CLIENT, TASK, REQUESTER, null).stream().map(a -> a.getArtifactId()).toList();
+                TENANT, CLIENT, OWNER, TASK, REQUESTER, null).stream().map(a -> a.getArtifactId()).toList();
         assertEquals(List.of("review", "private", "shared"), producerView);
     }
 
@@ -276,22 +282,22 @@ class AgentTaskCollaborationServiceRealTransactionTest {
             rows.add(new Object[]{
                     "req-other-" + index, TASK, "work-other", REQUESTER, "agent", TARGET,
                     "review", "open", 10, "Other", "Other request", 0L,
-                    TENANT, CLIENT, 1L, 1L});
+                    TENANT, CLIENT, OWNER, 1L, 1L});
         }
         rows.add(new Object[]{
                 "req-target-b", TASK, "work-target", REQUESTER, "agent", TARGET,
                 "review", "open", 1, "Target B", "Target request", 0L,
-                TENANT, CLIENT, 1L, 1L});
+                TENANT, CLIENT, OWNER, 1L, 1L});
         rows.add(new Object[]{
                 "req-target-a", TASK, "work-target", REQUESTER, "agent", TARGET,
                 "review", "open", 1, "Target A", "Target request", 0L,
-                TENANT, CLIENT, 1L, 1L});
+                TENANT, CLIENT, OWNER, 1L, 1L});
         jdbc.batchUpdate("""
                 INSERT INTO agent_task_request
                 (request_id, task_id, work_item_id, requester_agent_id, target_type, target_id,
                  request_type, status, priority, title, description, version,
-                 tenant_id, client_id, create_time, update_time)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 tenant_id, client_id, owner_jiacn, create_time, update_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, rows);
 
         AgentTaskRequestQueryDTO query = new AgentTaskRequestQueryDTO();
@@ -299,7 +305,7 @@ class AgentTaskCollaborationServiceRealTransactionTest {
         query.setWorkItemId("work-target");
         query.setLimit(2);
         List<String> ids = requestService.list(
-                TENANT, CLIENT, TASK, REQUESTER, query).stream()
+                TENANT, CLIENT, OWNER, TASK, REQUESTER, query).stream()
                 .map(item -> item.getRequestId()).toList();
 
         assertEquals(List.of("req-target-a", "req-target-b"), ids);
@@ -311,31 +317,31 @@ class AgentTaskCollaborationServiceRealTransactionTest {
         for (int index = 0; index < 500; index++) {
             rows.add(new Object[]{
                     "hidden-" + index, TASK, REQUESTER, "analysis", "Hidden", "x",
-                    sha256("x"), 1, "private", "{}", 10_000L, TENANT, CLIENT, 1L, 1L});
+                    sha256("x"), 1, "private", "{}", 10_000L, TENANT, CLIENT, OWNER, 1L, 1L});
         }
         rows.add(new Object[]{
                 "visible-b", TASK, REQUESTER, "analysis", "Visible B", "x",
-                sha256("x"), 1, "task_members", "{}", 1L, TENANT, CLIENT, 1L, 1L});
+                sha256("x"), 1, "task_members", "{}", 1L, TENANT, CLIENT, OWNER, 1L, 1L});
         rows.add(new Object[]{
                 "visible-a", TASK, REQUESTER, "analysis", "Visible A", "x",
-                sha256("x"), 1, "reviewer", "{}", 1L, TENANT, CLIENT, 1L, 1L});
+                sha256("x"), 1, "reviewer", "{}", 1L, TENANT, CLIENT, OWNER, 1L, 1L});
         jdbc.batchUpdate("""
                 INSERT INTO agent_task_artifact
                 (artifact_id, task_id, producer_agent_id, artifact_type, title, content,
                  content_hash, artifact_version, visibility, metadata_json, created_at,
-                 tenant_id, client_id, create_time, update_time)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 tenant_id, client_id, owner_jiacn, create_time, update_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, rows);
 
         AgentTaskArtifactQueryDTO query = new AgentTaskArtifactQueryDTO();
         query.setLimit(2);
         List<String> ids = artifactService.list(
-                TENANT, CLIENT, TASK, TARGET, query).stream()
+                TENANT, CLIENT, OWNER, TASK, TARGET, query).stream()
                 .map(item -> item.getArtifactId()).toList();
 
         assertEquals(List.of("visible-a", "visible-b"), ids);
         AgentTaskCollaborationException hidden = assertThrows(AgentTaskCollaborationException.class,
-                () -> artifactService.getLatest(TENANT, CLIENT, TASK, TARGET, "hidden-0"));
+                () -> artifactService.getLatest(TENANT, CLIENT, OWNER, TASK, TARGET, "hidden-0"));
         assertEquals(Reason.NOT_FOUND, hidden.getReason());
     }
 
@@ -344,7 +350,7 @@ class AgentTaskCollaborationServiceRealTransactionTest {
         insertRunningWorkItem("work-result", 7L, "lease-current", 1_500L);
 
         var result = resultService.commitResult(
-                TENANT, CLIENT, TASK, REQUESTER, resultCommand("work-result", "artifact-result",
+                TENANT, CLIENT, OWNER, TASK, REQUESTER, resultCommand("work-result", "artifact-result",
                         "lease-current", 7L));
 
         assertEquals("submitted", result.getStatus());
@@ -367,7 +373,7 @@ class AgentTaskCollaborationServiceRealTransactionTest {
         insertRunningWorkItem("work-result", 7L, "lease-current", 1_500L);
 
         AgentTaskStateException error = assertThrows(AgentTaskStateException.class,
-                () -> resultService.commitResult(TENANT, CLIENT, TASK, REQUESTER,
+                () -> resultService.commitResult(TENANT, CLIENT, OWNER, TASK, REQUESTER,
                         resultCommand("work-result", "artifact-stale", "lease-old", 7L)));
 
         assertEquals(AgentTaskStateException.Reason.LEASE_INVALID, error.getReason());
@@ -386,7 +392,7 @@ class AgentTaskCollaborationServiceRealTransactionTest {
                 new Class<?>[]{AgentTaskWorkItemDao.class},
                 (proxy, method, args) -> {
                     if (method.getName().equals("updateActiveLeaseByVersion")
-                            && args[10] instanceof AgentTaskWorkItemDTO update
+                            && args[11] instanceof AgentTaskWorkItemDTO update
                             && "submitted".equals(update.getStatus())) {
                         beforeResultCas.countDown();
                         if (!allowResultCas.await(10, TimeUnit.SECONDS)) {
@@ -409,7 +415,7 @@ class AgentTaskCollaborationServiceRealTransactionTest {
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
             Future<Object> resultFuture = executor.submit(() -> pausingResult.commitResult(
-                    TENANT, CLIENT, TASK, REQUESTER,
+                    TENANT, CLIENT, OWNER, TASK, REQUESTER,
                     resultCommand("work-result", "artifact-result", "lease-current", 7L)));
             assertTrue(beforeResultCas.await(10, TimeUnit.SECONDS));
 
@@ -420,7 +426,7 @@ class AgentTaskCollaborationServiceRealTransactionTest {
                 heartbeat.setExpectedVersion(7L);
                 heartbeat.setLeaseDurationMillis(800L);
                 try {
-                    return leaseService.heartbeat(TENANT, CLIENT, TASK, "work-result", heartbeat);
+                    return leaseService.heartbeat(TENANT, CLIENT, OWNER, TASK, "work-result", heartbeat);
                 } catch (RuntimeException e) {
                     return e;
                 }
@@ -461,7 +467,7 @@ class AgentTaskCollaborationServiceRealTransactionTest {
                         dataSource, AgentWorkItemResultCommitService.class);
 
         assertThrows(IllegalStateException.class, () -> failing.commitResult(
-                TENANT, CLIENT, TASK, REQUESTER,
+                TENANT, CLIENT, OWNER, TASK, REQUESTER,
                 resultCommand("work-result", "artifact-rollback", "lease-current", 7L)));
 
         Map<String, Object> work = jdbc.queryForMap(
@@ -484,7 +490,7 @@ class AgentTaskCollaborationServiceRealTransactionTest {
         external.setStorageUri("s3://bucket/private/path/artifact.bin");
         external.setContentByteLength(null);
 
-        artifactService.publish(TENANT, CLIENT, TASK, REQUESTER, external);
+        artifactService.publish(TENANT, CLIENT, OWNER, TASK, REQUESTER, external);
 
         String payload = jdbc.queryForObject(
                 "SELECT event_json FROM agent_task_event WHERE event_type='ARTIFACT_PUBLISHED'",
@@ -499,10 +505,10 @@ class AgentTaskCollaborationServiceRealTransactionTest {
 
     @Test
     void requestAndArtifactEventsPersistWithCanonicalTypesAndRedactedPayloads() {
-        requestService.create(TENANT, CLIENT, TASK, REQUESTER, createRequest("req-events"));
-        requestService.acknowledge(TENANT, CLIENT, TASK, TARGET, "req-events",
+        requestService.create(TENANT, CLIENT, OWNER, TASK, REQUESTER, createRequest("req-events"));
+        requestService.acknowledge(TENANT, CLIENT, OWNER, TASK, TARGET, "req-events",
                 transition(0L, Map.of("ack", true)));
-        artifactService.publish(TENANT, CLIENT, TASK, REQUESTER,
+        artifactService.publish(TENANT, CLIENT, OWNER, TASK, REQUESTER,
                 artifact("artifact-events", 1, 0));
 
         assertEquals(List.of("REVIEW_REQUESTED", "REQUEST_ACKNOWLEDGED",
@@ -529,7 +535,7 @@ class AgentTaskCollaborationServiceRealTransactionTest {
                 dataSource, AgentTaskRequestService.class);
 
         assertThrows(IllegalStateException.class, () -> failing.create(
-                TENANT, CLIENT, TASK, REQUESTER, createRequest("req-rollback")));
+                TENANT, CLIENT, OWNER, TASK, REQUESTER, createRequest("req-rollback")));
 
         assertEquals(0, count("SELECT COUNT(*) FROM agent_task_request"));
         assertEquals(0, count("SELECT COUNT(*) FROM agent_task_event"));
@@ -608,6 +614,7 @@ class AgentTaskCollaborationServiceRealTransactionTest {
         jdbc.execute("""
                 CREATE TABLE agent_task_meta (
                     id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     task_id VARCHAR(100) NOT NULL,
                     reward_status VARCHAR(20) NOT NULL DEFAULT 'open',
                     assigned_agent_id VARCHAR(100),
@@ -627,6 +634,7 @@ class AgentTaskCollaborationServiceRealTransactionTest {
         jdbc.execute("""
                 CREATE TABLE agent_task_event (
                     id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     task_id VARCHAR(100) NOT NULL, event_version BIGINT NOT NULL,
                     event_id VARCHAR(100) NOT NULL, event_type VARCHAR(64) NOT NULL,
                     actor_type VARCHAR(20) NOT NULL, actor_id VARCHAR(100),
@@ -640,6 +648,7 @@ class AgentTaskCollaborationServiceRealTransactionTest {
         jdbc.execute("""
                 CREATE TABLE agent_task_member (
                     id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     task_id VARCHAR(100) NOT NULL,
                     agent_id VARCHAR(100) NOT NULL,
                     member_role VARCHAR(20) NOT NULL,
@@ -655,6 +664,7 @@ class AgentTaskCollaborationServiceRealTransactionTest {
         jdbc.execute("""
                 CREATE TABLE agent_task_work_item (
                     id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     work_item_id VARCHAR(100) NOT NULL,
                     task_id VARCHAR(100) NOT NULL,
                     title VARCHAR(255) NOT NULL DEFAULT '', description TEXT,
@@ -672,6 +682,7 @@ class AgentTaskCollaborationServiceRealTransactionTest {
         jdbc.execute("""
                 CREATE TABLE agent_task_request (
                     id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     request_id VARCHAR(100) NOT NULL, task_id VARCHAR(100) NOT NULL,
                     work_item_id VARCHAR(100), requester_agent_id VARCHAR(100) NOT NULL,
                     target_type VARCHAR(20) NOT NULL, target_id VARCHAR(100) NOT NULL,
@@ -686,6 +697,7 @@ class AgentTaskCollaborationServiceRealTransactionTest {
         jdbc.execute("""
                 CREATE TABLE agent_task_artifact (
                     id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    owner_jiacn VARCHAR(50) NOT NULL,
                     artifact_id VARCHAR(100) NOT NULL, task_id VARCHAR(100) NOT NULL,
                     work_item_id VARCHAR(100), producer_agent_id VARCHAR(100) NOT NULL,
                     artifact_type VARCHAR(30) NOT NULL, title VARCHAR(255) NOT NULL,
@@ -700,25 +712,25 @@ class AgentTaskCollaborationServiceRealTransactionTest {
 
     private void insertTask(String tenant, String client, String task, String coordinator) {
         jdbc.update("INSERT INTO agent_task_meta"
-                        + " (task_id, reward_status, coordinator_agent_id, tenant_id, client_id, create_time, update_time)"
-                        + " VALUES (?, 'running', ?, ?, ?, 1, 1)",
-                task, coordinator, tenant, client);
+                        + " (task_id, reward_status, coordinator_agent_id, tenant_id, client_id, owner_jiacn, create_time, update_time)"
+                        + " VALUES (?, 'running', ?, ?, ?, ?, 1, 1)",
+                task, coordinator, tenant, client, OWNER);
     }
 
     private void insertMember(String tenant, String client, String task,
             String agent, String role, String status) {
         jdbc.update("INSERT INTO agent_task_member"
                         + " (task_id, agent_id, member_role, member_status, assignment_source,"
-                        + " tenant_id, client_id, create_time, update_time)"
-                        + " VALUES (?, ?, ?, ?, 'manual', ?, ?, 1, 1)",
-                task, agent, role, status, tenant, client);
+                        + " tenant_id, client_id, owner_jiacn, create_time, update_time)"
+                        + " VALUES (?, ?, ?, ?, 'manual', ?, ?, ?, 1, 1)",
+                task, agent, role, status, tenant, client, OWNER);
     }
 
     private void insertWorkItem(String tenant, String client, String task, String workItem) {
         jdbc.update("INSERT INTO agent_task_work_item"
-                        + " (work_item_id, task_id, title, work_type, status, tenant_id, client_id, create_time, update_time)"
-                        + " VALUES (?, ?, 'work', 'implementation', 'ready', ?, ?, 1, 1)",
-                workItem, task, tenant, client);
+                        + " (work_item_id, task_id, title, work_type, status, tenant_id, client_id, owner_jiacn, create_time, update_time)"
+                        + " VALUES (?, ?, 'work', 'implementation', 'ready', ?, ?, ?, 1, 1)",
+                workItem, task, tenant, client, OWNER);
     }
 
     private AgentTaskRequestCreateDTO createRequest(String requestId) {
@@ -748,10 +760,10 @@ class AgentTaskCollaborationServiceRealTransactionTest {
                 (work_item_id, task_id, title, description, work_type, required_abilities,
                  assignee_agent_id, status, priority, required_item, dependency_json,
                  lease_token, lease_until, attempt_count, max_attempts, result_artifact_id,
-                 submitted_at, completed_at, version, tenant_id, client_id, create_time, update_time)
+                 submitted_at, completed_at, version, tenant_id, client_id, owner_jiacn, create_time, update_time)
                 VALUES (?, ?, 'result work', 'preserve', 'implementation', '[]',
-                        ?, 'running', 10, 1, '[]', ?, ?, 0, 3, NULL, NULL, NULL, ?, ?, ?, 1, 1)
-                """, workItemId, TASK, REQUESTER, leaseToken, leaseUntil, version, TENANT, CLIENT);
+                        ?, 'running', 10, 1, '[]', ?, ?, 0, 3, NULL, NULL, NULL, ?, ?, ?, ?, 1, 1)
+                """, workItemId, TASK, REQUESTER, leaseToken, leaseUntil, version, TENANT, CLIENT, OWNER);
     }
 
     private AgentWorkItemResultCommitDTO resultCommand(

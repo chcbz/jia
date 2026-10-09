@@ -1,6 +1,7 @@
 package cn.jia.agent.service.impl;
 
 import cn.jia.agent.dao.AgentRuntimeV1InstallationDao;
+import cn.jia.agent.dao.AgentIdentityRegistryDao;
 import cn.jia.agent.entity.AgentCommandAck;
 import cn.jia.agent.entity.AgentCommandAckResult;
 import cn.jia.agent.entity.AgentRuntimeV1AckRequest;
@@ -42,6 +43,7 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
 
     private final AgentRuntimeV1InstallationDao installations;
     private final AgentIdentityService identityService;
+    private final AgentIdentityRegistryDao identityRegistry;
     private final ObjectProvider<AgentCommandAckService> commandAcks;
 
     @Override
@@ -70,22 +72,23 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
     }
 
     @Override
-    public AgentRuntimeV1InstallationView status(String tenantId, String clientId, String installationId) {
+    public AgentRuntimeV1InstallationView status(String tenantId, String clientId, String ownerJiacn, String installationId) {
         requireScope(tenantId, clientId);
         AgentRuntimeV1InstallationEntity installation = installations.findInScope(tenantId, clientId, installationId);
-        if (installation == null) throw forbidden("Runtime v1 installation is unavailable");
+        requireInstallationOwner(installation, tenantId, clientId, ownerJiacn);
         return view(installation, null);
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public void revoke(String tenantId, String clientId, String installationId, long now) {
+    public void revoke(String tenantId, String clientId, String ownerJiacn, String installationId, long now) {
         requireScope(tenantId, clientId);
         AgentRuntimeV1InstallationEntity installation = installations.lock(installationId);
         if (installation == null || !sameScope(installation, tenantId, clientId)
                 || installation.getVersion() == null || installation.getId() == null) {
             throw forbidden("Runtime v1 installation is unavailable");
         }
+        requireInstallationOwner(installation, tenantId, clientId, ownerJiacn);
         if ("REVOKED".equals(installation.getStatus())) return;
         if (installations.revoke(installation, now) != 1) throw forbidden("Runtime v1 installation changed");
     }
@@ -187,6 +190,30 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
                 && Objects.equals(installation.getClientId(), clientId)
                 && Objects.equals(installation.getCanonicalAgentId(), canonicalAgentId);
     }
+    /** Management remains owner-bound even though every user now shares tenant 0.
+     * Lifecycle is deliberately not an execution gate: an owner can inspect/revoke
+     * a pending, suspended or retired installation without activating that Agent.
+     */
+    private void requireInstallationOwner(AgentRuntimeV1InstallationEntity installation,
+            String tenantId, String clientId, String ownerJiacn) {
+        try {
+            new cn.jia.agent.service.AgentHostedBindingTransaction.Scope(tenantId, clientId, ownerJiacn);
+        } catch (IllegalArgumentException invalidScope) {
+            throw forbidden("Runtime v1 installation is unavailable");
+        }
+        if (!sameScope(installation, tenantId, clientId)
+                || !exact(installation.getCanonicalAgentId(), 100)) {
+            throw forbidden("Runtime v1 installation is unavailable");
+        }
+        var identity = identityRegistry.findExactByCanonicalInScope(
+                tenantId, clientId, ownerJiacn, installation.getCanonicalAgentId());
+        if (identity == null || !tenantId.equals(identity.getTenantId())
+                || !clientId.equals(identity.getClientId()) || !ownerJiacn.equals(identity.getOwnerJiacn())
+                || !installation.getCanonicalAgentId().equals(identity.getCanonicalAgentId())) {
+            throw forbidden("Runtime v1 installation is unavailable");
+        }
+    }
+
     private static boolean sameScope(AgentRuntimeV1InstallationEntity installation, String tenantId, String clientId) {
         return installation != null && Objects.equals(installation.getTenantId(), tenantId)
                 && Objects.equals(installation.getClientId(), clientId);

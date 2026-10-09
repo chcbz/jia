@@ -13,14 +13,17 @@ class AgentTaskContextPackMapperTest {
     @Test
     void taskDescriptionLookupIsNumericAndExactScopedWithSafeColumnsOnly() throws Exception {
         Method method = AgentTaskContextPackMapper.class.getMethod(
-                "findTaskDescription", String.class, String.class, String.class);
+                "findTaskDescription", String.class, String.class, String.class, String.class);
         String sql = String.join(" ", method.getAnnotation(Select.class).value())
                 .replaceAll("\\s+", " ").toLowerCase();
 
         assertTrue(sql.contains("regexp '^[0-9]+$'"));
         assertTrue(sql.contains("plan.id = cast(#{taskid} as unsigned)"));
-        assertTrue(sql.contains("cast(plan.jiacn as binary)"));
-        assertTrue(sql.contains("octet_length(plan.client_id)"));
+        assertTrue(sql.contains("#{tenantid} = '0'"));
+        assertTrue(sql.contains("cast(plan.jiacn as binary) = cast(#{ownerjiacn} as binary)"));
+        assertTrue(sql.contains("octet_length(plan.jiacn) = octet_length(#{ownerjiacn})"));
+        assertTrue(sql.contains("cast(plan.client_id as binary) = cast(#{clientid} as binary)"));
+        assertTrue(sql.contains("octet_length(plan.client_id) = octet_length(#{clientid})"));
         assertFalse(sql.contains("remind_phone"));
         assertFalse(sql.contains("remind_msg"));
         assertFalse(sql.contains("select *"));

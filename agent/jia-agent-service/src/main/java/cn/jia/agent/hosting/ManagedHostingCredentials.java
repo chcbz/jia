@@ -1,5 +1,6 @@
 package cn.jia.agent.hosting;
 
+import cn.jia.agent.common.AgentConstants;
 import cn.jia.agent.dao.AgentPersonaBindingDao;
 import cn.jia.agent.service.AgentIdentityService;
 import cn.jia.economy.entity.EconomyHostingProvisioningIntentEntity;
@@ -29,6 +30,90 @@ public final class ManagedHostingCredentials {
         this.bindings = bindings; this.transactions = new TransactionTemplate(manager);
     }
     public boolean available() { return keys.getIfAvailable() != null; }
+
+    /**
+     * Authorizes only the first websocket connection of a managed, paid onboarding profile.
+     * Ordinary API keys and non-PROVISIONED identities must continue through the standard
+     * active-identity authorization path.
+     */
+    public void authorizeProvisionedHandshake(String tenantId, String clientId, String ownerJiacn,
+            String agentId, String managedApiKeyId, String keyName) {
+        transactions.executeWithoutResult(status -> {
+            try {
+                HostingRentHttp.exact(tenantId, 50);
+                HostingRentHttp.exact(clientId, 50);
+                HostingRentHttp.exact(ownerJiacn, 50);
+                HostingRentHttp.exact(agentId, 100);
+                HostingRentHttp.exact(managedApiKeyId, 100);
+                HostingRentHttp.exact(keyName, 100);
+            } catch (IllegalArgumentException invalid) {
+                throw unavailable();
+            }
+            if (!"0".equals(tenantId) || "0".equals(ownerJiacn) || !keyName.startsWith("hosting:")) {
+                throw unavailable();
+            }
+            String intentId = keyName.substring("hosting:".length());
+            try { HostingRentHttp.exact(intentId, 100); }
+            catch (IllegalArgumentException invalid) { throw unavailable(); }
+
+            var intent = rent.selectIntentForUpdate(tenantId, clientId, intentId);
+            if (intent == null || !intentId.equals(intent.getIntentId())
+                    || !tenantId.equals(intent.getTenantId()) || !clientId.equals(intent.getClientId())
+                    || !"INITIAL".equals(intent.getQuotePurpose()) || !"USER".equals(intent.getPrincipalType())
+                    || !agentId.equals(intent.getAgentId())
+                    || !managedApiKeyId.equals(intent.getManagedApiKeyId())
+                    || !"PROVISIONING_UNKNOWN".equals(intent.getStatus())
+                    || intent.getCaptureTransactionId() != null || intent.getRefundTransactionId() != null
+                    || intent.getServiceReadyAt() != null) {
+                throw unavailable();
+            }
+            var actor = new HostingRentHttp.Actor(
+                    intent.getPrincipalId(), tenantId, clientId, ownerJiacn);
+            if (!ownerJiacn.equals(owners.requireOwner(actor))) throw unavailable();
+
+            var lease = rent.selectLeaseForUpdate(tenantId, clientId, intent.getLeaseId());
+            if (lease == null || !intent.getLeaseId().equals(lease.getLeaseId())
+                    || !agentId.equals(lease.getAgentId())
+                    || !intent.getPrincipalId().equals(lease.getPrincipalId())
+                    || !"USER".equals(lease.getPrincipalType())
+                    || !"PROVISIONING".equals(lease.getStatus())
+                    || !intentId.equals(lease.getLatestIntentId())
+                    || lease.getBindingId() == null) {
+                throw unavailable();
+            }
+
+            long bindingId;
+            try { bindingId = Long.parseLong(lease.getBindingId()); }
+            catch (NumberFormatException invalid) { throw unavailable(); }
+            var locked = bindings.findByIdForUpdate(bindingId);
+            if (locked == null || !Long.valueOf(bindingId).equals(locked.getId())
+                    || !Integer.valueOf(AgentConstants.BINDING_STATUS_ACTIVE).equals(locked.getStatus())
+                    || !agentId.equals(locked.getAgentId()) || !clientId.equals(locked.getClientId())
+                    || !ownerJiacn.equals(locked.getJiacn())) {
+                throw unavailable();
+            }
+            var identity = identities.requireRegistrationIdentityInScope(
+                    tenantId, clientId, ownerJiacn, agentId);
+            var binding = identities.requireActiveBinding(identity, null);
+            if (!AgentConstants.IDENTITY_STATUS_PROVISIONED.equals(identity.getLifecycleStatus())
+                    || !agentId.equals(identity.getCanonicalAgentId())
+                    || !Long.valueOf(bindingId).equals(identity.getBindingId())
+                    || binding == null || !Long.valueOf(bindingId).equals(binding.getId())) {
+                throw unavailable();
+            }
+
+            ApiKeyService service = keys.getIfAvailable();
+            OauthApiKeyEntity key = service == null ? null : service.get(managedApiKeyId);
+            if (key == null || !managedApiKeyId.equals(key.getId())
+                    || !tenantId.equals(key.getTenantId()) || !clientId.equals(key.getClientId())
+                    || !ownerJiacn.equals(key.getJiacn()) || !keyName.equals(key.getKeyName())
+                    || !Integer.valueOf(1).equals(key.getStatus())
+                    || !("Managed canonical Agent " + agentId).equals(key.getDescription())
+                    || key.getExpireTime() != null && key.getExpireTime() <= System.currentTimeMillis()) {
+                throw unavailable();
+            }
+        });
+    }
 
     public String credential(ManagedHostingProvisioner.Preparation p) {
         return transactions.execute(status -> {

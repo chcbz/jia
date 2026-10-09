@@ -16,10 +16,10 @@ public interface AgentTaskFundingMapper {
     @Insert("""
             INSERT INTO agent_task_funding_operation
                 (principal_type,principal_id,idempotency_key,request_hash,task_id,status,
-                 tenant_id,client_id,create_time,update_time)
+                 tenant_id,client_id,owner_jiacn,create_time,update_time)
             VALUES
                 (#{principalType},#{principalId},#{idempotencyKey},#{requestHash},#{taskId},#{status},
-                 #{tenantId},#{clientId},#{createTime},#{updateTime})
+                 #{tenantId},#{clientId},#{ownerJiacn},#{createTime},#{updateTime})
             """)
     int insertOperation(AgentTaskFundingOperationEntity operation);
 
@@ -57,11 +57,11 @@ public interface AgentTaskFundingMapper {
             INSERT INTO agent_task_funding
                 (task_id,funding_mode,funding_status,payer_principal_type,payer_principal_id,
                  settlement_policy,gross_bounty_amount_micro,remaining_micro,required_skill_requirements,
-                 version,tenant_id,client_id,create_time,update_time)
+                 version,tenant_id,client_id,owner_jiacn,create_time,update_time)
             VALUES
                 (#{taskId},#{fundingMode},#{fundingStatus},#{payerPrincipalType},#{payerPrincipalId},
                  #{settlementPolicy},#{grossBountyAmountMicro},#{remainingMicro},#{requiredSkillRequirements},
-                 #{version},#{tenantId},#{clientId},#{createTime},#{updateTime})
+                 #{version},#{tenantId},#{clientId},#{ownerJiacn},#{createTime},#{updateTime})
             """)
     int insertFunding(AgentTaskFundingEntity funding);
 

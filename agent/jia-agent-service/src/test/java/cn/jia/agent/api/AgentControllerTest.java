@@ -51,8 +51,8 @@ class AgentControllerTest {
         ResponseEntity<?> response = assertInstanceOf(ResponseEntity.class, catalogResponse);
         assertEquals("private, no-store", response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL));
         var scope = new cn.jia.agent.service.AgentHostedBindingTransaction.Scope(
-                "Owner-A", "Client-A", "Owner-A");
-        verify(agentService).listPersonaCatalog("Owner-A", "Client-A", "Owner-A");
+                "0", "Client-A", "Owner-A");
+        verify(agentService).listPersonaCatalog("0", "Client-A", "Owner-A");
         verify(provisioning).bind(scope, "wuyong", "local");
         verify(provisioning).repair(scope, 17L);
         verify(provisioning).unbind(scope, "wuyong");
@@ -67,7 +67,7 @@ class AgentControllerTest {
         AgentTaskTeamRecommendationDTO recommendation = new AgentTaskTeamRecommendationDTO();
         recommendation.setTaskId("task-001");
         when(agentService.recommendTaskTeam(
-                "Owner-A", "Client-A", "task-001", request)).thenReturn(recommendation);
+                "0", "Client-A", "task-001", request)).thenReturn(recommendation);
 
         Object raw = controller.recommendTaskTeam(
                 "task-001", request, jwt("Owner-A", "Client-A"));
@@ -76,7 +76,7 @@ class AgentControllerTest {
         assertEquals("private, no-store",
                 response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL));
         verify(agentService).recommendTaskTeam(
-                "Owner-A", "Client-A", "task-001", request);
+                "0", "Client-A", "task-001", request);
         Method method = AgentController.class.getDeclaredMethod(
                 "recommendTaskTeam", String.class,
                 AgentTaskTeamRecommendationRequestDTO.class, Authentication.class);

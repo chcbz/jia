@@ -69,6 +69,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** D06 production mapper + REQUIRED rollback evidence on H2 MySQL mode. */
 class AgentCommandRecoveryRealTransactionTest {
+    private static final String OWNER = "owner-a";
     private static final long NOW = 1_700_000_000_000L;
     private static final long ISSUED = NOW - 1_000L;
     private static final long EXPIRES = ISSUED + AgentCommandCanonicalCodec.TASK_INVITE_TTL_MILLIS;
@@ -151,8 +152,8 @@ class AgentCommandRecoveryRealTransactionTest {
         AgentCommandInboxServiceImpl inbox = new AgentCommandInboxServiceImpl(inboxDao, gate(), manager);
         var claim = inbox.claim(new AgentInboxMessage(
                 AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
-                "tenant-a", "client-a", M1, "event-1",
-                "cmd_task_invite_a40585d9a8f94e453a79de08e8c9723874e0b915c6e4975a8668b0ba1fc40624",
+                "0", "client-a", M1, "event-1",
+                "cmd_task_invite_14462c37822a7e26d1124dae824c98311eea17c9a50e35492ac2983aea023b05",
                 1L, wire), "fast-ack-worker", NOW, 10_000L);
         assertEquals(AgentInboxClaim.Kind.ACQUIRED, claim.kind());
         assertEquals("CONSUMED", string("SELECT status FROM agent_command_delivery WHERE id=1"));
@@ -249,8 +250,8 @@ class AgentCommandRecoveryRealTransactionTest {
         AgentCommandInboxServiceImpl inbox = new AgentCommandInboxServiceImpl(inboxDao, gate(), manager);
         AgentInboxClaim inboxClaim = inbox.claim(new AgentInboxMessage(
                 AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
-                "tenant-a", "client-a", M2, eventId,
-                "cmd_task_invite_a40585d9a8f94e453a79de08e8c9723874e0b915c6e4975a8668b0ba1fc40624",
+                "0", "client-a", M2, eventId,
+                "cmd_task_invite_14462c37822a7e26d1124dae824c98311eea17c9a50e35492ac2983aea023b05",
                 1L, wire), "direct-terminal-worker", NOW + 3, 10_000L);
         assertEquals(AgentInboxClaim.Kind.ACQUIRED, inboxClaim.kind());
         assertEquals("CONSUMED", string("SELECT status FROM agent_command_delivery WHERE id=1"));
@@ -428,7 +429,7 @@ class AgentCommandRecoveryRealTransactionTest {
                 assertEquals("MANUAL_TAKEOVER_REQUIRED", observation.reason());
                 assertEquals(attempt, observation.activeAttempt());
                 assertEquals(M4, observation.activeMessageId());
-                assertEquals("tenant-a", observation.tenantId());
+                assertEquals("0", observation.tenantId());
                 assertEquals("client-a", observation.clientId());
                 assertEquals("task-1", observation.taskId());
                 assertEquals("agent-a", observation.targetAgentId());
@@ -547,8 +548,8 @@ class AgentCommandRecoveryRealTransactionTest {
         AgentCommandInboxServiceImpl inbox = new AgentCommandInboxServiceImpl(inboxDao, gate(), manager);
         AgentInboxClaim inboxClaim = inbox.claim(new AgentInboxMessage(
                 AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
-                "tenant-a", "client-a", M2, eventId,
-                "cmd_task_invite_a40585d9a8f94e453a79de08e8c9723874e0b915c6e4975a8668b0ba1fc40624",
+                "0", "client-a", M2, eventId,
+                "cmd_task_invite_14462c37822a7e26d1124dae824c98311eea17c9a50e35492ac2983aea023b05",
                 1L, wire), "inbox-d06", NOW + 3, 10_000L);
         assertEquals(AgentInboxClaim.Kind.ACQUIRED, inboxClaim.kind());
         inbox.complete(inboxClaim.token(), AgentInboxDisposition.sent(), NOW + 4);
@@ -666,8 +667,8 @@ class AgentCommandRecoveryRealTransactionTest {
         AgentCommandInboxServiceImpl inbox = new AgentCommandInboxServiceImpl(inboxDao, gate(), manager);
         AgentInboxClaim inboxClaim = inbox.claim(new AgentInboxMessage(
                 AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
-                "tenant-a", "client-a", messageId, eventId,
-                "cmd_task_invite_a40585d9a8f94e453a79de08e8c9723874e0b915c6e4975a8668b0ba1fc40624",
+                "0", "client-a", messageId, eventId,
+                "cmd_task_invite_14462c37822a7e26d1124dae824c98311eea17c9a50e35492ac2983aea023b05",
                 1L, wire), worker + "-inbox", now + 2, 10_000L);
         assertEquals(AgentInboxClaim.Kind.ACQUIRED, inboxClaim.kind());
         inbox.complete(inboxClaim.token(), AgentInboxDisposition.sent(), now + 3);
@@ -710,7 +711,7 @@ class AgentCommandRecoveryRealTransactionTest {
 
     private AgentCommandReconnectScope scope() {
         return new AgentCommandReconnectScope(
-                "tenant-a", "client-a", "agent-a", "agent-a", "AGENT_RECONNECT");
+                "0", "client-a", "agent-a", "agent-a", "AGENT_RECONNECT");
     }
 
     private AgentCommandAck ack(String messageId, String status) {
@@ -718,8 +719,8 @@ class AgentCommandRecoveryRealTransactionTest {
     }
 
     private AgentCommandAck ack(String messageId, String status, String correlationId) {
-        return new AgentCommandAck("tenant-a", "client-a", "agent-a", messageId, correlationId,
-                "cmd_task_invite_a40585d9a8f94e453a79de08e8c9723874e0b915c6e4975a8668b0ba1fc40624",
+        return new AgentCommandAck("0", "client-a", "agent-a", messageId, correlationId,
+                "cmd_task_invite_14462c37822a7e26d1124dae824c98311eea17c9a50e35492ac2983aea023b05",
                 "task-1", null, status, NOW);
     }
 
@@ -731,8 +732,8 @@ class AgentCommandRecoveryRealTransactionTest {
         byte[] wire = blob("SELECT wire_payload FROM agent_outbox_event WHERE message_id='" + M1 + "'");
         AgentInboxClaim claim = inbox.claim(new AgentInboxMessage(
                 AgentInboxConsumers.AGENT_COMMAND_DISPATCH_V1,
-                "tenant-a", "client-a", M1, "event-1",
-                "cmd_task_invite_a40585d9a8f94e453a79de08e8c9723874e0b915c6e4975a8668b0ba1fc40624",
+                "0", "client-a", M1, "event-1",
+                "cmd_task_invite_14462c37822a7e26d1124dae824c98311eea17c9a50e35492ac2983aea023b05",
                 1L, wire), worker, now, 10_000L);
         assertEquals(AgentInboxClaim.Kind.ACQUIRED, claim.kind());
         return claim;
@@ -784,8 +785,8 @@ class AgentCommandRecoveryRealTransactionTest {
     }
 
     private void insertWaitingSource() {
-        AgentCommandDraft draft = new AgentCommandDraft(1, "cmd_task_invite_a40585d9a8f94e453a79de08e8c9723874e0b915c6e4975a8668b0ba1fc40624", "task-1", "cause-1",
-                "tenant-a", "client-a", "task-1", null, "agent-a",
+        AgentCommandDraft draft = new AgentCommandDraft(1, "cmd_task_invite_14462c37822a7e26d1124dae824c98311eea17c9a50e35492ac2983aea023b05", "task-1", "cause-1",
+                "0", "client-a", OWNER, "task-1", null, "agent-a",
                 AgentProtocolConstants.COMMAND_TASK_INVITE, ISSUED, EXPIRES,
                 new AgentTaskInvitePayload(
                         "task_briefing", "宋江首领已完成悬赏分派，请按职责协作推进。",
@@ -802,17 +803,17 @@ class AgentCommandRecoveryRealTransactionTest {
                 INSERT INTO agent_command_delivery(
                   id,command_id,task_id,target_agent_id,command_type,command_payload,
                   command_payload_hash,status,attempt_count,next_retry_at,active_message_id,
-                  active_attempt,expires_at,last_error,version,tenant_id,client_id,create_time,update_time)
-                VALUES (1,'cmd_task_invite_a40585d9a8f94e453a79de08e8c9723874e0b915c6e4975a8668b0ba1fc40624','task-1','agent-a','TASK_INVITE',?,?,'WAITING_AGENT',1,?, ?,1,?,'AGENT_OFFLINE',7,'tenant-a','client-a',?,?)
-                """, business, AgentCommandCanonicalCodec.sha256(business), NOW - 1, M1, EXPIRES, NOW, NOW);
+                  active_attempt,expires_at,last_error,version,tenant_id,client_id,owner_jiacn,create_time,update_time)
+                VALUES (1,'cmd_task_invite_14462c37822a7e26d1124dae824c98311eea17c9a50e35492ac2983aea023b05','task-1','agent-a','TASK_INVITE',?,?,'WAITING_AGENT',1,?, ?,1,?,'AGENT_OFFLINE',7,'0','client-a',?,?,?)
+                """, business, AgentCommandCanonicalCodec.sha256(business), NOW - 1, M1, EXPIRES, OWNER, NOW, NOW);
         jdbc.update("""
                 INSERT INTO agent_outbox_event(
                   id,event_id,message_id,command_id,delivery_id,aggregate_type,aggregate_id,
                   destination,routing_key,wire_payload,wire_payload_hash,status,attempt_count,
                   active_attempt,expires_at,publisher_confirm_status,confirmed_at,
                   mandatory_return_status,published_at,version,tenant_id,client_id,create_time,update_time)
-                VALUES (10,'event-1',?,'cmd_task_invite_a40585d9a8f94e453a79de08e8c9723874e0b915c6e4975a8668b0ba1fc40624',1,'task','task-1',?,?,?,?,'PUBLISHED',1,1,?,
-                        'ACK',?,'NOT_RETURNED',?,2,'tenant-a','client-a',?,?)
+                VALUES (10,'event-1',?,'cmd_task_invite_14462c37822a7e26d1124dae824c98311eea17c9a50e35492ac2983aea023b05',1,'task','task-1',?,?,?,?,'PUBLISHED',1,1,?,
+                        'ACK',?,'NOT_RETURNED',?,2,'0','client-a',?,?)
                 """, M1, route.destination(), route.routingKey(), wire,
                 AgentCommandCanonicalCodec.sha256(wire), EXPIRES, NOW - 10, NOW - 9, NOW, NOW);
         jdbc.update("""
@@ -820,8 +821,8 @@ class AgentCommandRecoveryRealTransactionTest {
                   id,consumer_name,message_id,event_id,command_id,delivery_id,wire_payload,
                   wire_payload_hash,status,result_status,attempt_count,next_retry_at,active_attempt,
                   expires_at,processed_at,last_error,version,tenant_id,client_id,create_time,update_time)
-                VALUES (20,'agent-command-dispatch-v1',?,'event-1','cmd_task_invite_a40585d9a8f94e453a79de08e8c9723874e0b915c6e4975a8668b0ba1fc40624',1,?,?,'WAITING_AGENT',
-                        'WAITING_AGENT',1,?,1,?,?,'AGENT_OFFLINE',1,'tenant-a','client-a',?,?)
+                VALUES (20,'agent-command-dispatch-v1',?,'event-1','cmd_task_invite_14462c37822a7e26d1124dae824c98311eea17c9a50e35492ac2983aea023b05',1,?,?,'WAITING_AGENT',
+                        'WAITING_AGENT',1,?,1,?,?,'AGENT_OFFLINE',1,'0','client-a',?,?)
                 """, M1, wire, AgentCommandCanonicalCodec.sha256(wire), NOW - 1,
                 EXPIRES, NOW - 2, NOW, NOW);
     }
@@ -829,7 +830,7 @@ class AgentCommandRecoveryRealTransactionTest {
     private void createSchema() {
         jdbc.execute("""
                 CREATE TABLE agent_command_delivery(
-                  id BIGINT AUTO_INCREMENT PRIMARY KEY, command_id VARCHAR(100) NOT NULL,
+                  id BIGINT AUTO_INCREMENT PRIMARY KEY, owner_jiacn VARCHAR(50) NOT NULL, command_id VARCHAR(100) NOT NULL,
                   task_id VARCHAR(100) NOT NULL, work_item_id VARCHAR(100), target_agent_id VARCHAR(100) NOT NULL,
                   command_type VARCHAR(64) NOT NULL, command_payload BLOB NOT NULL,
                   command_payload_hash BINARY(32) NOT NULL, status VARCHAR(32) NOT NULL,
@@ -838,7 +839,7 @@ class AgentCommandRecoveryRealTransactionTest {
                   last_error VARCHAR(2000), version BIGINT NOT NULL, replay_parent_message_id VARCHAR(100),
                   replay_requester_id VARCHAR(100), replay_approver_id VARCHAR(100), replay_reason VARCHAR(1000),
                   tenant_id VARCHAR(50) NOT NULL, client_id VARCHAR(50) NOT NULL, create_time BIGINT, update_time BIGINT,
-                  UNIQUE(tenant_id,client_id,command_id))
+                  UNIQUE(tenant_id,client_id,owner_jiacn,command_id))
                 """);
         jdbc.execute("""
                 CREATE TABLE agent_outbox_event(
@@ -877,7 +878,7 @@ class AgentCommandRecoveryRealTransactionTest {
                 new AgentRabbitSafetyProperties.RabbitDispatch(true),
                 new AgentRabbitSafetyProperties.RabbitBroker("isolated.invalid", 35672, "user", "pass", "/d06"));
         return new AgentRabbitSafetyGate(properties, new AgentRabbitDispatchScopeProperties(
-                List.of(new AgentRabbitDispatchScopeProperties.AllowedScope("tenant-a", "client-a"))));
+                List.of(new AgentRabbitDispatchScopeProperties.AllowedScope("0", "client-a"))));
     }
 
     private AgentRawCommandDispatcher connected() {

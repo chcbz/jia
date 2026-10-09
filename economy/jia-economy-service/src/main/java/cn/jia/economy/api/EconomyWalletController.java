@@ -85,6 +85,20 @@ public final class EconomyWalletController {
         return new LedgerResponse(List.copyOf(items), encodeCursor(page.nextCursor()));
     }
 
+    @PostMapping(value = "/onboarding-grant", consumes = MediaType.APPLICATION_JSON_VALUE,
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    public OnboardingGrantResponse claimOnboardingGrant(@RequestBody byte[] rawBody,
+            HttpServletRequest request, Authentication authentication) {
+        requireNoQuery(request);
+        requireEmptyObject(rawBody);
+        Subject subject = requireSubject(authentication);
+        requirePreviewScope(subject.scope());
+        EconomyWalletService.OnboardingGrantReceipt receipt =
+                walletService.claimOnboardingGrant(subject.scope(), subject.actorId());
+        return new OnboardingGrantResponse(receipt.transactionId(), receipt.status(),
+                MicroSilver.format(receipt.amountMicro()), receipt.campaignRef());
+    }
+
     @PostMapping(value = "/preview/issuances", consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
     public IssuanceResponse issue(@RequestBody byte[] rawBody, HttpServletRequest request,
@@ -149,13 +163,14 @@ public final class EconomyWalletController {
         Object jiacn = claims.get("jiacn");
         Object clientId = claims.get("client_id");
         Object subject = claims.get("sub");
-        if (!(jiacn instanceof String tenant) || !(clientId instanceof String client)
+        if (!(jiacn instanceof String ownerJiacn) || !(clientId instanceof String client)
                 || !(subject instanceof String actor)
-                || !validExact(tenant, 50) || !validExact(client, 50) || !validExact(actor, 100)) {
+                || !validExact(ownerJiacn, 50) || "0".equals(ownerJiacn)
+                || !validExact(client, 50) || !validExact(actor, 100)) {
             throw new EconomyRequestException(HttpStatus.FORBIDDEN, "ECONOMY_FORBIDDEN",
                     "Economy scope is unavailable");
         }
-        return new Subject(new EconomyScope(tenant, client), actor);
+        return new Subject(new EconomyScope("0", client), actor);
     }
 
     private static void requireNoQuery(HttpServletRequest request) {
@@ -191,6 +206,18 @@ public final class EconomyWalletController {
         String value = values.nextElement();
         if (values.hasMoreElements() || value == null || value.contains(",")) throw badRequest();
         return value;
+    }
+
+    private static void requireEmptyObject(byte[] rawBody) {
+        if (rawBody == null || rawBody.length == 0) throw badRequest();
+        try {
+            JsonNode root = STRICT_JSON.readTree(rawBody);
+            if (root == null || !root.isObject() || root.size() != 0) throw badRequest();
+        } catch (EconomyRequestException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            throw badRequest();
+        }
     }
 
     private static IssuanceRequest parseIssuanceBody(byte[] rawBody) {
@@ -344,6 +371,10 @@ public final class EconomyWalletController {
     }
 
     public record IssuanceResponse(String transactionId, String status, String amountMicro) {
+    }
+
+    public record OnboardingGrantResponse(
+            String transactionId, String status, String amountMicro, String campaignRef) {
     }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)

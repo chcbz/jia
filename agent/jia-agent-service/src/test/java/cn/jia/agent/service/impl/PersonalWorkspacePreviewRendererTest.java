@@ -195,6 +195,20 @@ class PersonalWorkspacePreviewRendererTest {
     }
 
     @Test
+    void previewsAudioAndModernRasterAsExactNonTransformedBytes() {
+        for (String mime : List.of("image/webp", "image/gif", "audio/mpeg", "audio/ogg",
+                "audio/wav", "audio/mp4", "audio/webm")) {
+            byte[] bytes = ("isolated fixture " + mime).getBytes(StandardCharsets.UTF_8);
+            var preview = renderer.render(mime, bytes);
+            assertEquals("READY", preview.view().state());
+            assertEquals(mime, preview.view().parts().getFirst().contentMimeType());
+            assertArrayEquals(bytes, preview.bytes());
+        }
+        assertEquals("UNSUPPORTED", renderer.render("text/html", "<script>".getBytes(StandardCharsets.UTF_8))
+                .view().state());
+    }
+
+    @Test
     void limitsAndCleansTextPreviewWhileKeepingItPlainText() {
         String source = "first\u0001line\r\n" + "x".repeat(PersonalWorkspacePreviewRenderer.MAX_TEXT_CODE_POINTS);
         var preview = renderer.render("text/plain", source.getBytes(StandardCharsets.UTF_8));

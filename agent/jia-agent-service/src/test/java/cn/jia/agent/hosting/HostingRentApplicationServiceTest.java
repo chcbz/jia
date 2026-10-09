@@ -32,7 +32,7 @@ import static org.mockito.Mockito.*;
 class HostingRentApplicationServiceTest {
     static final String AGENT = "agt_0123456789abcdef0123456789abcdef";
     static final String KEY = "00000000-0000-0000-0000-000000000002";
-    static final HostingRentHttp.Actor ACTOR = new HostingRentHttp.Actor("login-sub", "Tenant-A", "Client-A");
+    static final HostingRentHttp.Actor ACTOR = new HostingRentHttp.Actor("login-sub", "0", "Client-A", "Tenant-A");
     private final EconomyHostingRentMapper rent = mock(EconomyHostingRentMapper.class);
     private final HostingRentLedgerService ledger = mock(HostingRentLedgerService.class);
     private final AgentHostingRentBindingMapper roots = mock(AgentHostingRentBindingMapper.class);
@@ -58,21 +58,21 @@ class HostingRentApplicationServiceTest {
         when(provider.availableFor(anyString(), anyString(), anyString())).thenAnswer(call -> provider.available());
         application = new HostingRentApplicationService(new AgentHostingRentProperties(true, null, null, null),
                 new EconomyPreviewGate(new EconomyPreviewProperties(true, List.of(
-                        new EconomyPreviewProperties.AllowedScope("Tenant-A", "Client-A")))), owners, rent,
+                        new EconomyPreviewProperties.AllowedScope("0", "Client-A")))), owners, rent,
                 ledger, roots, bindings, runtimes, identities, providers, reconciler,
                 new DataSourceTransactionManager(dataSource), true);
         when(owners.requireOwner(ACTOR)).thenReturn("Tenant-A");
         when(roots.lockPersona("wuyong")).thenReturn(new AgentPersonaEntity().setPersonaCode("wuyong").setName("fixture")
                 .setActive(true).setSystemAgent(false));
         when(roots.lockBindings("Client-A", "wuyong")).thenReturn(List.of());
-        when(rent.selectQuoteForUpdate("Tenant-A", "Client-A", "hrq-test")).thenReturn(new EconomyHostingRentQuoteEntity()
+        when(rent.selectQuoteForUpdate("0", "Client-A", "hrq-test")).thenReturn(new EconomyHostingRentQuoteEntity()
                 .setQuoteId("hrq-test").setQuotePurpose("INITIAL").setPrincipalId("login-sub").setPrincipalType("USER")
                 .setPersonaCode("wuyong").setAgentId(AGENT).setPlanVersion(1L).setAmountMicro(1000000000L).setPeriodSeconds(2592000L));
         when(ledger.reserve(any())).thenAnswer(call -> {
             assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
             HostingRentReserveCommand command = call.getArgument(0);
             assertEquals("login-sub", command.principal().id());
-            assertEquals("Tenant-A", command.scope().tenantId());
+            assertEquals("0", command.scope().tenantId());
             jdbc.update("INSERT INTO effects VALUES('reserve')");
             return receipt;
         });
@@ -86,11 +86,11 @@ class HostingRentApplicationServiceTest {
         when(identities.provisionOpaqueIdentity(any(), anyString())).thenAnswer(call -> {
             jdbc.update("INSERT INTO effects VALUES('identity')");
             var identity = new AgentIdentityRegistryEntity().setCanonicalAgentId(AGENT).setOwnerJiacn("Tenant-A");
-            identity.setTenantId("Tenant-A");
+            identity.setTenantId("0");
             return identity;
         });
         when(runtimes.insert(any())).thenAnswer(call -> { jdbc.update("INSERT INTO effects VALUES('runtime')"); return 1; });
-        when(rent.attachBinding("Tenant-A", "Client-A", "hrl-test", "17")).thenReturn(1);
+        when(rent.attachBinding("0", "Client-A", "hrl-test", "17")).thenReturn(1);
     }
 
     @Test
@@ -128,7 +128,7 @@ class HostingRentApplicationServiceTest {
 
     @Test
     void receiptReplayNeedsNoProvisionerOrNewBindingAndUnprovenOwnerCannotReachFunds() {
-        when(rent.selectIntentByQuoteForUpdate("Tenant-A", "Client-A", "hrq-test"))
+        when(rent.selectIntentByQuoteForUpdate("0", "Client-A", "hrq-test"))
                 .thenReturn(new EconomyHostingProvisioningIntentEntity().setIntentId("hri-test"));
         doReturn(receipt).when(ledger).reserve(any());
         when(provider.available()).thenReturn(false);
@@ -157,7 +157,7 @@ class HostingRentApplicationServiceTest {
 
     @Test
     void quoteAllocatesOnlyOpaqueProposedIdentityWithoutBindingOrRuntimeMutation() {
-        when(rent.selectPlanForUpdate("Tenant-A", "Client-A", "agent-hosting-preview", 1L)).thenReturn(
+        when(rent.selectPlanForUpdate("0", "Client-A", "agent-hosting-preview", 1L)).thenReturn(
                 new EconomyHostingRentPlanEntity().setPlanId("agent-hosting-preview").setPlanVersion(1L)
                         .setAmountMicro(1000000000L).setPeriodSeconds(2592000L).setStatus("ACTIVE"));
         when(ledger.quote(any())).thenAnswer(call -> {

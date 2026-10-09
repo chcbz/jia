@@ -14,6 +14,8 @@ import jakarta.inject.Inject;
 import jakarta.inject.Named;
 
 import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -30,16 +32,22 @@ import java.util.UUID;
 /** Owner-scoped workspace API; browser-created files are marked with USER_UPLOAD provenance. */
 @Named
 public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
-    private static final Set<String> MIME_TYPES = Set.of("image/png", "image/jpeg", "text/plain", "application/pdf",
+    private static final Set<String> MIME_TYPES = Set.of("image/png", "image/jpeg", "image/webp", "image/gif",
+            "audio/mpeg", "audio/ogg", "audio/wav", "audio/mp4", "audio/webm",
+            "text/plain", "application/pdf",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             "application/vnd.openxmlformats-officedocument.presentationml.presentation");
-    private static final Map<String, Set<String>> EXTENSIONS = Map.of(
-            "image/png", Set.of(".png"), "image/jpeg", Set.of(".jpg", ".jpeg"),
-            "text/plain", Set.of(".txt"), "application/pdf", Set.of(".pdf"),
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document", Set.of(".docx"),
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", Set.of(".xlsx"),
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation", Set.of(".pptx"));
+    private static final Map<String, Set<String>> EXTENSIONS = Map.ofEntries(
+            Map.entry("image/png", Set.of(".png")), Map.entry("image/jpeg", Set.of(".jpg", ".jpeg")),
+            Map.entry("image/webp", Set.of(".webp")), Map.entry("image/gif", Set.of(".gif")),
+            Map.entry("audio/mpeg", Set.of(".mp3")), Map.entry("audio/ogg", Set.of(".ogg", ".oga")),
+            Map.entry("audio/wav", Set.of(".wav")), Map.entry("audio/mp4", Set.of(".m4a", ".mp4")),
+            Map.entry("audio/webm", Set.of(".webm")),
+            Map.entry("text/plain", Set.of(".txt")), Map.entry("application/pdf", Set.of(".pdf")),
+            Map.entry("application/vnd.openxmlformats-officedocument.wordprocessingml.document", Set.of(".docx")),
+            Map.entry("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", Set.of(".xlsx")),
+            Map.entry("application/vnd.openxmlformats-officedocument.presentationml.presentation", Set.of(".pptx")));
     private static final int PAGE_SIZE = 50;
     private final PersonalWorkspaceDao dao;
     private final PersonalWorkspaceStorage storage;
@@ -62,7 +70,7 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
     @Override public PersonalWorkspaceViews.ListView list(Scope scope, ListQuery query) {
         validateScope(scope); query= query == null ? new ListQuery(null,null,null,null) : query;
         String q=blankToNull(query.q()); if(q!=null) text(q,100);
-        String family=blankToNull(query.mediaFamily()); if(family!=null && !Set.of("IMAGE","TEXT","DOCUMENT","SPREADSHEET","PRESENTATION","PDF").contains(family)) bad();
+        String family=blankToNull(query.mediaFamily()); if(family!=null && !Set.of("IMAGE","AUDIO","TEXT","DOCUMENT","SPREADSHEET","PRESENTATION","PDF").contains(family)) bad();
         String state=blankToNull(query.state()); if(state==null) state="ACTIVE"; if(!Set.of("ACTIVE","TRASHED").contains(state)) bad();
         Cursor cursor=parseCursor(query.cursor()); List<PersonalWorkspaceFileEntity> rows=dao.listFiles(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),q,family,state,cursor==null?null:cursor.createdAt(),cursor==null?null:cursor.fileId(),PAGE_SIZE+1);
         boolean more=rows.size()>PAGE_SIZE; if(more) rows=rows.subList(0,PAGE_SIZE); String next=more?cursor(rows.get(rows.size()-1)):null;
@@ -87,6 +95,96 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
             version.setTenantId(scope.tenantId()); version.setClientId(scope.clientId());
             writes.completeCreate(writeScope(scope),claim.operation(),file,version); return new PersonalWorkspaceViews.UploadView(operation(claim.operation()),view(file),version(version));
         } catch (RuntimeException failure) { writes.fail(writeScope(scope),claim.operation(),reason(failure)); throw failure; }
+    }
+    /** Internal archive: a chat caller has already resolved the owner-scoped committed source.
+     * Keep the source identity/revision and actual digest in the idempotency fingerprint so a
+     * reused key cannot silently archive another draft. The existing private store deduplicates
+     * bytes within the owner scope; this operation creates only the requested personal file.
+     */
+    @Override public PersonalWorkspaceViews.UploadView archiveConversationAsset(Scope scope,
+            ConversationArchiveCommand command) {
+        validateScope(scope);
+        if (command == null || command.revision() < 1
+                || command.assetId() == null || !command.assetId().matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}")
+                || command.sha256() == null || !command.sha256().matches("[0-9a-f]{64}")) bad();
+        ValidUpload valid = validate(new UploadCommand(command.idempotency(), command.displayName(),
+                command.filename(), command.contentMimeType(), command.content()));
+        if (!command.sha256().equals(hash(valid.content()))) bad();
+        String requestHash = hash("ARCHIVE_ASSET", command.assetId(), Long.toString(command.revision()),
+                command.sha256(), valid.key(), valid.displayName(), valid.filename(), valid.mime());
+        PersonalWorkspaceWriteService.Claim claim = writes.claim(writeScope(scope), "ARCHIVE_ASSET",
+                valid.key(), requestHash);
+        if (!claim.claimed()) return completedUpload(scope, claim.operation());
+        String fileId = "pws_" + UUID.randomUUID().toString().replace("-", "");
+        try {
+            PersonalWorkspaceStorage.StoredObject stored = storage.store(storageScope(scope),
+                    valid.content(), valid.mime());
+            if (!command.sha256().equals(stored.sha256())
+                    || valid.content().length != stored.byteLength())
+                throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.STORAGE_CORRUPT);
+            long now = System.currentTimeMillis();
+            PersonalWorkspaceFileEntity file = new PersonalWorkspaceFileEntity().setFileId(fileId)
+                    .setOwnerJiacn(scope.ownerJiacn()).setSourceKind("UPLOAD")
+                    .setOriginKind("AGENT_DELIVERY").setDisplayName(valid.displayName())
+                    .setMediaFamily(family(valid.mime())).setState("ACTIVE")
+                    .setMetadataRevision(1L).setLatestVersion(1).setCreatedAt(now);
+            file.setTenantId(scope.tenantId()); file.setClientId(scope.clientId());
+            PersonalWorkspaceVersionEntity version = new PersonalWorkspaceVersionEntity()
+                    .setFileId(fileId).setOwnerJiacn(scope.ownerJiacn()).setVersion(1)
+                    .setOriginalFilename(valid.filename()).setContentMimeType(valid.mime())
+                    .setByteLength(stored.byteLength()).setContentHash(stored.sha256())
+                    .setStorageUri(stored.storageUri()).setCreatedAt(now);
+            version.setTenantId(scope.tenantId()); version.setClientId(scope.clientId());
+            writes.completeCreate(writeScope(scope), claim.operation(), file, version);
+            return new PersonalWorkspaceViews.UploadView(operation(claim.operation()), view(file), version(version));
+        } catch (RuntimeException failure) {
+            writes.fail(writeScope(scope), claim.operation(), reason(failure));
+            throw failure;
+        }
+    }
+    /** Internal archive of bytes derived from a server-locked Chat message snapshot. */
+    @Override public PersonalWorkspaceViews.UploadView archiveConversationText(Scope scope,
+            ConversationTextArchiveCommand command) {
+        validateScope(scope);
+        if (command == null || command.sourceSnapshotKey() == null
+                || !command.sourceSnapshotKey().matches("[0-9a-f]{64}")
+                || command.sha256() == null || !command.sha256().matches("[0-9a-f]{64}")) bad();
+        ValidUpload valid = validate(new UploadCommand(command.idempotency(), command.displayName(),
+                command.filename(), "text/plain", command.content()));
+        requireStrictUtf8(valid.content());
+        if (!command.sha256().equals(hash(valid.content()))) bad();
+        String requestHash = hash("ARCHIVE_TEXT", command.sourceSnapshotKey(), command.sha256(),
+                valid.key(), valid.displayName(), valid.filename(), valid.mime());
+        PersonalWorkspaceWriteService.Claim claim = writes.claim(writeScope(scope), "ARCHIVE_TEXT",
+                valid.key(), requestHash);
+        if (!claim.claimed()) return completedUpload(scope, claim.operation());
+        String fileId = "pws_" + UUID.randomUUID().toString().replace("-", "");
+        try {
+            PersonalWorkspaceStorage.StoredObject stored = storage.store(storageScope(scope),
+                    valid.content(), "text/plain");
+            if (!command.sha256().equals(stored.sha256())
+                    || valid.content().length != stored.byteLength()
+                    || !"text/plain".equals(stored.mimeType()))
+                throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.STORAGE_CORRUPT);
+            long now = System.currentTimeMillis();
+            PersonalWorkspaceFileEntity file = new PersonalWorkspaceFileEntity().setFileId(fileId)
+                    .setOwnerJiacn(scope.ownerJiacn()).setSourceKind("UPLOAD")
+                    .setOriginKind("AGENT_DELIVERY").setDisplayName(valid.displayName())
+                    .setMediaFamily("TEXT").setState("ACTIVE").setMetadataRevision(1L)
+                    .setLatestVersion(1).setCreatedAt(now);
+            file.setTenantId(scope.tenantId()); file.setClientId(scope.clientId());
+            PersonalWorkspaceVersionEntity version = new PersonalWorkspaceVersionEntity()
+                    .setFileId(fileId).setOwnerJiacn(scope.ownerJiacn()).setVersion(1)
+                    .setOriginalFilename(valid.filename()).setContentMimeType("text/plain")
+                    .setByteLength(stored.byteLength()).setContentHash(stored.sha256())
+                    .setStorageUri(stored.storageUri()).setCreatedAt(now);
+            version.setTenantId(scope.tenantId()); version.setClientId(scope.clientId());
+            writes.completeCreate(writeScope(scope), claim.operation(), file, version);
+            return new PersonalWorkspaceViews.UploadView(operation(claim.operation()), view(file), version(version));
+        } catch (RuntimeException failure) {
+            writes.fail(writeScope(scope), claim.operation(), reason(failure));
+            throw failure;
+        }
     }
     @Override public PersonalWorkspaceViews.UploadView appendVersion(Scope scope,String fileId,UploadCommand command,int expectedPreviousVersion){
         PersonalWorkspaceFileEntity old=file(scope,fileId); if(!"ACTIVE".equals(old.getState())||expectedPreviousVersion<1) bad(); ValidUpload valid=validate(command); String requestHash=hash("APPEND",valid,fileId,String.valueOf(expectedPreviousVersion));
@@ -151,20 +249,32 @@ public class PersonalWorkspaceServiceImpl implements PersonalWorkspaceService {
     private PersonalWorkspaceFileEntity file(Scope s,String id){validateScope(s);id(id,"fileId",100);PersonalWorkspaceFileEntity f=dao.findFile(s.tenantId(),s.clientId(),s.ownerJiacn(),id);if(f==null)throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);return f;}
     private PersonalWorkspaceVersionEntity versionEntity(Scope s,String id,int n){file(s,id);if(n<1)bad();PersonalWorkspaceVersionEntity v=dao.findVersion(s.tenantId(),s.clientId(),s.ownerJiacn(),id,n);if(v==null)throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);return v;}
     private PersonalWorkspaceViews.FileView view(PersonalWorkspaceFileEntity f){return new PersonalWorkspaceViews.FileView(f.getFileId(),f.getSourceKind(),f.getOriginKind(),f.getDisplayName(),f.getMediaFamily(),f.getState(),f.getMetadataRevision(),f.getLatestVersion(),f.getCreatedAt(),new PersonalWorkspaceViews.Capabilities("AVAILABLE","AVAILABLE","UNVERIFIED",previewCapability(f),"AVAILABLE"));}
-    private static String previewCapability(PersonalWorkspaceFileEntity f){return Set.of("IMAGE","TEXT","DOCUMENT","SPREADSHEET","PRESENTATION","PDF").contains(f.getMediaFamily())?"AVAILABLE":"UNSUPPORTED";}
+    private static String previewCapability(PersonalWorkspaceFileEntity f){return Set.of("IMAGE","AUDIO","TEXT","DOCUMENT","SPREADSHEET","PRESENTATION","PDF").contains(f.getMediaFamily())?"AVAILABLE":"UNSUPPORTED";}
     private PersonalWorkspaceViews.VersionView version(PersonalWorkspaceVersionEntity v){return new PersonalWorkspaceViews.VersionView(v.getFileId(),v.getVersion(),v.getOriginalFilename(),v.getContentMimeType(),v.getByteLength(),v.getContentHash(),v.getCreatedAt(),MIME_TYPES.contains(v.getContentMimeType())?"READY":"UNSUPPORTED");}
     private static PersonalWorkspaceViews.OperationView operation(PersonalWorkspaceOperationEntity o){return new PersonalWorkspaceViews.OperationView(o.getOperationId(),o.getState(),o.getFileId(),o.getFileVersion(),o.getErrorCode());}
     private static PersonalWorkspaceWriteService.Scope writeScope(Scope s){return new PersonalWorkspaceWriteService.Scope(s.tenantId(),s.clientId(),s.ownerJiacn());}
     private static PersonalWorkspaceStorage.Scope storageScope(Scope s){return new PersonalWorkspaceStorage.Scope(s.tenantId(),s.clientId(),s.ownerJiacn());}
     private static ValidUpload validate(UploadCommand c){if(c==null)bad();String key=key(c.idempotency());String mime=lower(c.contentMimeType());if(!MIME_TYPES.contains(mime))throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.UNSUPPORTED);String name=filename(c.originalFilename(),mime);String display=blankToNull(c.displayName());if(display==null)display=name;text(display,255);byte[] bytes=c.content();if(bytes==null||bytes.length==0)bad();return new ValidUpload(key,display,name,mime,bytes);}
     private static String filename(String raw,String mime){text(raw,255);String base=raw.replace('\\','/');if(base.contains("/"))bad();Set<String> extensions=EXTENSIONS.get(mime);String normalized=base.toLowerCase(Locale.ROOT);if(extensions==null||extensions.stream().noneMatch(normalized::endsWith))throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.UNSUPPORTED);return base;}
-    private static String family(String mime){if(mime.startsWith("image/"))return "IMAGE";if("text/plain".equals(mime))return "TEXT";if("application/pdf".equals(mime))return "PDF";if(mime.contains("spreadsheet"))return "SPREADSHEET";if(mime.contains("presentation"))return "PRESENTATION";return "DOCUMENT";}
+    private static String family(String mime){if(mime.startsWith("image/"))return "IMAGE";if(mime.startsWith("audio/"))return "AUDIO";if("text/plain".equals(mime))return "TEXT";if("application/pdf".equals(mime))return "PDF";if(mime.contains("spreadsheet"))return "SPREADSHEET";if(mime.contains("presentation"))return "PRESENTATION";return "DOCUMENT";}
     private static String key(Idempotency i){if(i==null)bad();id(i.key(),"Idempotency-Key",100);return i.key();}
     private static void validateScope(Scope s){if(s==null||!"0".equals(s.tenantId()))bad();id(s.clientId(),"clientId",50);id(s.ownerJiacn(),"owner",50);if("0".equals(s.ownerJiacn()))bad();}
     private static void id(String value,String name,int max){if(value==null||value.isBlank()||!value.equals(value.strip())||value.codePointCount(0,value.length())>max||value.chars().anyMatch(Character::isISOControl))bad();}
     private static void text(String value,int max){id(value,"text",max);}
     private static String lower(String v){if(v==null)return null;String mime=v.split(";",2)[0].trim().toLowerCase(Locale.ROOT);return "image/jpg".equals(mime)?"image/jpeg":mime;}
     private static String blankToNull(String value){return value==null||value.isBlank()?null:value;}
+    private static void requireStrictUtf8(byte[] bytes) {
+        try {
+            String decoded = StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(bytes)).toString();
+            byte[] encoded = decoded.getBytes(StandardCharsets.UTF_8);
+            if (!java.util.Arrays.equals(bytes, encoded)) bad();
+        } catch (CharacterCodingException malformed) {
+            bad();
+        }
+    }
     private static String hash(String... values){try{MessageDigest d=MessageDigest.getInstance("SHA-256");for(String v:values){byte[]b=Objects.requireNonNullElse(v,"").getBytes(StandardCharsets.UTF_8);d.update(ByteBuffer.allocate(4).putInt(b.length).array());d.update(b);}return HexFormat.of().formatHex(d.digest());}catch(NoSuchAlgorithmException e){throw new IllegalStateException(e);}}
     private static String hash(byte[] bytes){try{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(Objects.requireNonNull(bytes,"bytes")));}catch(NoSuchAlgorithmException e){throw new IllegalStateException(e);}}
     private static String hash(String type,ValidUpload v,String... rest){List<String> p=new ArrayList<>();p.add(type);p.add(v.key());p.add(v.displayName());p.add(v.filename());p.add(v.mime());p.add(hash(v.content()));p.addAll(List.of(rest));return hash(p.toArray(String[]::new));}

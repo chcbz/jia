@@ -28,6 +28,21 @@ public interface HallRequestDraftMapper extends BaseMapper<HallRequestDraftEntit
             created_at,updated_at
             """;
 
+    /** Exact owner-bound proof that a task originated in a submitted Hall TASK_CREATE draft. */
+    @Select("""
+            SELECT COUNT(*) FROM hall_request_draft
+             WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
+               AND kind='TASK_CREATE' AND state='SUBMITTED' AND submission_ref=#{taskId}
+            """ + EXACT_SCOPE + """
+               AND CAST(kind AS BINARY)=CAST('TASK_CREATE' AS BINARY)
+               AND CAST(state AS BINARY)=CAST('SUBMITTED' AS BINARY)
+               AND CAST(submission_ref AS BINARY)=CAST(#{taskId} AS BINARY)
+               AND OCTET_LENGTH(submission_ref)=OCTET_LENGTH(#{taskId})
+            """)
+    int countSubmittedTaskCreates(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("ownerJiacn") String ownerJiacn,
+            @Param("taskId") String taskId);
+
     @Select("SELECT " + COLUMNS + """
               FROM hall_request_draft
              WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}

@@ -16,7 +16,7 @@ public final class ConversationMetadataPolicy {
             "requestId", "conversationId", "conversationType", "conversationScopeType",
             "conversationScopeKey", "scopeKey", "mode", "taskId", "selectedTaskId",
             "workItemId", "sourceAgentId", "targetAgentId", "targetAgentIds",
-            "participantAgentIds", "agentId", "selectedAgentId", "senderType", "senderName",
+            "participantAgentIds", "agentId", "selectedAgentId",
             "phase", "chunkIndex", "chunkCount");
 
     private ConversationMetadataPolicy() {

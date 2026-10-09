@@ -54,6 +54,28 @@ class HallRequestDraftMapperContractTest {
         assertFalse(sql.contains("draft-cursor"), "cursor value must remain JDBC-bound");
     }
 
+    @Test
+    void formalTaskOriginProofUsesExactOwnerAndSubmittedTaskReference() throws Exception {
+        Method method = HallRequestDraftMapper.class.getMethod("countSubmittedTaskCreates",
+                String.class, String.class, String.class, String.class);
+        String script = String.join(" ", method.getAnnotation(Select.class).value());
+        Map<String, Object> parameters = Map.of("tenantId", "0", "clientId", "client-a",
+                "ownerJiacn", "owner-a", "taskId", "396 ");
+        BoundSql bound = new XMLLanguageDriver().createSqlSource(new Configuration(), script, Map.class)
+                .getBoundSql(parameters);
+        String sql = bound.getSql().replaceAll("\\s+", " ").trim();
+        assertTrue(sql.startsWith("SELECT COUNT(*) FROM hall_request_draft"), sql);
+        for (String column : List.of("tenant_id", "client_id", "owner_jiacn", "submission_ref")) {
+            assertTrue(sql.contains("CAST(" + column + " AS BINARY)=CAST(? AS BINARY)"), sql);
+            assertTrue(sql.contains("OCTET_LENGTH(" + column + ")=OCTET_LENGTH(?)"), sql);
+        }
+        assertTrue(sql.contains("CAST(kind AS BINARY)=CAST('TASK_CREATE' AS BINARY)"), sql);
+        assertTrue(sql.contains("CAST(state AS BINARY)=CAST('SUBMITTED' AS BINARY)"), sql);
+        assertFalse(sql.contains("396"), "task reference must remain JDBC-bound");
+        assertEquals(3L, bound.getParameterMappings().stream()
+                .filter(mapping -> "taskId".equals(mapping.getProperty())).count());
+    }
+
     private static BoundSql listEditingBoundSql(Long beforeUpdatedAt, String beforeDraftId)
             throws Exception {
         Method target = HallRequestDraftMapper.class.getMethod("listEditing", String.class,

@@ -41,10 +41,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AgentCommandRecoveryServiceTest {
+    private static final String OWNER = "owner-a";
     private static final long NOW = 1_700_000_000_000L;
     private static final long ISSUED = NOW - 1_000L;
     private static final long EXPIRES = ISSUED + AgentCommandCanonicalCodec.TASK_INVITE_TTL_MILLIS;
-    private static final String COMMAND_ID = "cmd_task_invite_a40585d9a8f94e453a79de08e8c9723874e0b915c6e4975a8668b0ba1fc40624";
+    private static final String COMMAND_ID = "cmd_task_invite_14462c37822a7e26d1124dae824c98311eea17c9a50e35492ac2983aea023b05";
     private static final String M1 = "11111111-1111-1111-1111-111111111111";
     private static final String M2 = "22222222-2222-2222-2222-222222222222";
     private static final String E2 = "33333333-3333-3333-3333-333333333333";
@@ -73,7 +74,7 @@ class AgentCommandRecoveryServiceTest {
 
             RecordingDao sent = withDraft(sentDao(), draft);
             AgentCommandAck ack = new AgentCommandAck(
-                    "tenant-a", "client-a", "agent-a", "ack-" + item.actionType(), M1,
+                    "0", "client-a", "agent-a", "ack-" + item.actionType(), M1,
                     draft.commandId(), "task-1", draft.workItemId(), "RECEIVED", NOW);
             AgentCommandAckResult result = ackService(sent, enabledGate()).acknowledge(ack, NOW);
             assertEquals(AgentCommandAckResult.Kind.ADVANCED, result.kind(), item.commandType());
@@ -95,7 +96,7 @@ class AgentCommandRecoveryServiceTest {
                 AgentRabbitTopologyManifest.canonical(), transactionManager(),
                 () -> ids.removeFirst());
         AgentCommandOperationRequest request = new AgentCommandOperationRequest(
-                "tenant-a", "client-a", 1L, "task-1", "agent-a", M1,
+                "0", "client-a", 1L, "task-1", "agent-a", M1,
                 "operator-a", "approver-b", "incident recovery", "INC-42");
 
         AgentCommandManualReissueResult result = service.reissueManually(request, NOW);
@@ -290,7 +291,7 @@ class AgentCommandRecoveryServiceTest {
                         assertEquals(0, result.reissued());
                         var observation = result.deferrals().getFirst();
                         assertEquals("MANUAL_TAKEOVER_REQUIRED", observation.reason());
-                        assertEquals("tenant-a", observation.tenantId());
+                        assertEquals("0", observation.tenantId());
                         assertEquals("client-a", observation.clientId());
                         assertEquals("task-1", observation.taskId());
                         assertEquals(null, observation.workItemId());
@@ -338,7 +339,7 @@ class AgentCommandRecoveryServiceTest {
         assertEquals(0, scan.reissued());
         assertArrayEquals(before, sourceSnapshot(dao));
         AgentCommandOperationRequest request = new AgentCommandOperationRequest(
-                "tenant-a", "client-a", 1L, "task-1", "agent-a", M2,
+                "0", "client-a", 1L, "task-1", "agent-a", M2,
                 "operator-a", "approver-b", "incident recovery", "INC-E05");
         assertEquals("MANUAL_REISSUE_DELIVERY_FORBIDDEN", assertThrows(RuntimeException.class,
                 () -> service.reissueManually(request, EXPIRES - 2_000L)).getMessage());
@@ -394,7 +395,7 @@ class AgentCommandRecoveryServiceTest {
         RecordingDao deferred = manualSourceDao(1);
         deferred.delivery.setUpdateTime(NOW - 29_999L);
         AgentCommandOperationRequest request = new AgentCommandOperationRequest(
-                "tenant-a", "client-a", 1L, "task-1", "agent-a", M1,
+                "0", "client-a", 1L, "task-1", "agent-a", M1,
                 "operator-a", "approver-b", "incident recovery", "INC-42");
 
         assertEquals("MANUAL_REISSUE_POLICY_DEFER", assertThrows(RuntimeException.class,
@@ -431,11 +432,11 @@ class AgentCommandRecoveryServiceTest {
     void reconnectRequesterReasonBindingRejectsImpersonationBeforeDiscoveryOrMutation() {
         for (AgentCommandReconnectScope invalid : List.of(
                 new AgentCommandReconnectScope(
-                        "tenant-a", "client-a", "agent-a", "operator", "AGENT_RECONNECT"),
+                        "0", "client-a", "agent-a", "operator", "AGENT_RECONNECT"),
                 new AgentCommandReconnectScope(
-                        "tenant-a", "client-a", "agent-a", "agent-b", "AGENT_RECONNECT"),
+                        "0", "client-a", "agent-a", "agent-b", "AGENT_RECONNECT"),
                 new AgentCommandReconnectScope(
-                        "tenant-a", "client-a", "agent-a", "agent-a",
+                        "0", "client-a", "agent-a", "agent-a",
                         "WAITING_AGENT_SCHEDULER"))) {
             RecordingDao dao = waitingDao();
             assertThrows(IllegalArgumentException.class, () -> reissue(
@@ -735,13 +736,13 @@ class AgentCommandRecoveryServiceTest {
                 ack("ack-old", "RECEIVED", "old-message"),
                 new AgentCommandAck("tenant-other", "client-a", "agent-a", "ack-tenant", M1,
                         COMMAND_ID, "task-1", null, "RECEIVED", NOW),
-                new AgentCommandAck("tenant-a", "client-other", "agent-a", "ack-client", M1,
+                new AgentCommandAck("0", "client-other", "agent-a", "ack-client", M1,
                         COMMAND_ID, "task-1", null, "RECEIVED", NOW),
-                new AgentCommandAck("tenant-a", "client-a", "agent-a", "ack-task", M1,
+                new AgentCommandAck("0", "client-a", "agent-a", "ack-task", M1,
                         COMMAND_ID, "task-other", null, "RECEIVED", NOW),
-                new AgentCommandAck("tenant-a", "client-a", "agent-a", "ack-work", M1,
+                new AgentCommandAck("0", "client-a", "agent-a", "ack-work", M1,
                         COMMAND_ID, "task-1", "work-other", "RECEIVED", NOW),
-                new AgentCommandAck("tenant-a", "client-a", "agent-other", "ack-agent", M1,
+                new AgentCommandAck("0", "client-a", "agent-other", "ack-agent", M1,
                         COMMAND_ID, "task-1", null, "RECEIVED", NOW))) {
             RecordingDao dao = sentDao();
             assertThrows(AgentCommandAckRejectedException.class,
@@ -963,7 +964,7 @@ class AgentCommandRecoveryServiceTest {
         RecordingDao wrongAgent = sentDao();
         setAutomaticReplay(wrongAgent);
         AgentCommandAck wrongIdentity = new AgentCommandAck(
-                "tenant-a", "client-a", "agent-other", "ack-wrong-agent", M1,
+                "0", "client-a", "agent-other", "ack-wrong-agent", M1,
                 COMMAND_ID, "task-1", null, "SUCCEEDED", NOW);
         assertThrows(AgentCommandAckRejectedException.class,
                 () -> ackService(wrongAgent, enabledGate()).acknowledge(wrongIdentity, NOW));
@@ -1074,12 +1075,12 @@ class AgentCommandRecoveryServiceTest {
 
     private AgentCommandReconnectScope reconnectScope() {
         return new AgentCommandReconnectScope(
-                "tenant-a", "client-a", "agent-a", "agent-a", "AGENT_RECONNECT");
+                "0", "client-a", "agent-a", "agent-a", "AGENT_RECONNECT");
     }
 
     private AgentCommandAck ack(String ackMessageId, String status, String correlationId) {
         return new AgentCommandAck(
-                "tenant-a", "client-a", "agent-a", ackMessageId, correlationId,
+                "0", "client-a", "agent-a", ackMessageId, correlationId,
                 COMMAND_ID, "task-1", null, status, NOW);
     }
 
@@ -1117,13 +1118,13 @@ class AgentCommandRecoveryServiceTest {
         AgentCommandDraft draft = draft();
         byte[] business = AgentCommandCanonicalCodec.businessBytes(draft);
         byte[] wire = AgentCommandCanonicalCodec.wireBytes(draft, M1, 1);
-        AgentCommandDeliveryEntity delivery = new AgentCommandDeliveryEntity()
+        AgentCommandDeliveryEntity delivery = new AgentCommandDeliveryEntity().setOwnerJiacn(OWNER)
                 .setId(1L).setCommandId(COMMAND_ID).setTaskId("task-1").setWorkItemId(null)
                 .setTargetAgentId("agent-a").setCommandType(AgentProtocolConstants.COMMAND_TASK_INVITE)
                 .setCommandPayload(business).setCommandPayloadHash(AgentCommandCanonicalCodec.sha256(business))
                 .setAttemptCount(1).setActiveMessageId(M1).setActiveAttempt(1)
                 .setExpiresAt(EXPIRES).setVersion(7L);
-        delivery.setTenantId("tenant-a");
+        delivery.setTenantId("0");
         delivery.setClientId("client-a");
         delivery.setUpdateTime(NOW - 100_000L);
 
@@ -1138,7 +1139,7 @@ class AgentCommandRecoveryServiceTest {
                 .setExpiresAt(EXPIRES).setPublisherConfirmStatus("ACK").setConfirmedAt(NOW - 10)
                 .setMandatoryReturnStatus("NOT_RETURNED").setPublishedAt(NOW - 9)
                 .setVersion(2L);
-        outbox.setTenantId("tenant-a");
+        outbox.setTenantId("0");
         outbox.setClientId("client-a");
 
         AgentConsumerInboxEntity inbox = new AgentConsumerInboxEntity()
@@ -1147,7 +1148,7 @@ class AgentCommandRecoveryServiceTest {
                 .setWirePayload(wire).setWirePayloadHash(AgentCommandCanonicalCodec.sha256(wire))
                 .setAttemptCount(1).setActiveAttempt(1).setExpiresAt(EXPIRES)
                 .setProcessedAt(NOW - 2).setVersion(1L);
-        inbox.setTenantId("tenant-a");
+        inbox.setTenantId("0");
         inbox.setClientId("client-a");
         return new RecordingDao(delivery, outbox, inbox);
     }
@@ -1173,10 +1174,10 @@ class AgentCommandRecoveryServiceTest {
     private static AgentCommandDraft hallDraft(String actionType, String commandType) {
         String intentId = "intent-d06-" + actionType;
         String commandId = AgentCommandCanonicalCodec.hallCommandId(
-                "tenant-a", "client-a", "task-1", "agent-a", intentId, commandType);
+                "0", "client-a", OWNER, "task-1", "agent-a", intentId, commandType);
         return new AgentCommandDraft(
                 1, commandId, "task-1", intentId,
-                "tenant-a", "client-a", "task-1", "work-1", "agent-a",
+                "0", "client-a", OWNER, "task-1", "work-1", "agent-a",
                 commandType, ISSUED,
                 ISSUED + AgentCommandCanonicalCodec.HALL_COMMAND_TTL_MILLIS,
                 intentId, new AgentHallCommandPayload(
@@ -1207,7 +1208,7 @@ class AgentCommandRecoveryServiceTest {
                     .setExpiresAt(EXPIRES).setPublisherConfirmStatus("ACK")
                     .setConfirmedAt(NOW - 20).setMandatoryReturnStatus("NOT_RETURNED")
                     .setPublishedAt(NOW - 19).setVersion(2L);
-            parent.setTenantId("tenant-a");
+            parent.setTenantId("0");
             parent.setClientId("client-a");
             if (attempt > 2) {
                 parent.setReplayParentMessageId("grandparent-message")
@@ -1273,7 +1274,7 @@ class AgentCommandRecoveryServiceTest {
                 .setExpiresAt(EXPIRES).setPublisherConfirmStatus("ACK")
                 .setConfirmedAt(NOW - 20).setMandatoryReturnStatus("NOT_RETURNED")
                 .setPublishedAt(NOW - 19).setVersion(2L);
-        parent.setTenantId("tenant-a");
+        parent.setTenantId("0");
         parent.setClientId("client-a");
         if (parentParentMessageId != null) {
             parent.setReplayParentMessageId(parentParentMessageId)
@@ -1291,13 +1292,13 @@ class AgentCommandRecoveryServiceTest {
                 .setStatus("PROCESSED").setResultStatus("SENT")
                 .setAttemptCount(1).setActiveAttempt(1).setExpiresAt(EXPIRES)
                 .setProcessedAt(NOW - 18).setVersion(1L);
-        dao.parentInbox.setTenantId("tenant-a");
+        dao.parentInbox.setTenantId("0");
         dao.parentInbox.setClientId("client-a");
     }
 
     private static AgentCommandDraft draft() {
         return new AgentCommandDraft(1, COMMAND_ID, "task-1", "cause-1",
-                "tenant-a", "client-a", "task-1", null, "agent-a",
+                "0", "client-a", OWNER, "task-1", null, "agent-a",
                 AgentProtocolConstants.COMMAND_TASK_INVITE, ISSUED, EXPIRES,
                 new AgentTaskInvitePayload(
                         "task_briefing", "宋江首领已完成悬赏分派，请按职责协作推进。",
@@ -1324,7 +1325,7 @@ class AgentCommandRecoveryServiceTest {
                 new AgentRabbitSafetyProperties.RabbitBroker(
                         "isolated.invalid", 35672, "user", "pass", "/d06"));
         return new AgentRabbitSafetyGate(properties, new AgentRabbitDispatchScopeProperties(
-                List.of(new AgentRabbitDispatchScopeProperties.AllowedScope("tenant-a", "client-a"))));
+                List.of(new AgentRabbitDispatchScopeProperties.AllowedScope("0", "client-a"))));
     }
 
     private static AgentRabbitSafetyGate dbShadowGate() {

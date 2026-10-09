@@ -12,3 +12,36 @@ dependencies {
 
 version = '1.1.2-SNAPSHOT'
 description = 'jia-economy-service'
+
+
+// Economy hosting configuration/schema slice. It is isolated from historical
+// default-test compilation debt and keeps the real MySQL fixture opt-in through
+// CYF_ECO_MYSQL_URL; without that environment variable only the no-DB contract runs.
+def economyHostingRegressionSourceSet = sourceSets.create('economyHostingRegression') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/economy/config/EconomyPreviewConfigurationTest.java'
+        include 'cn/jia/economy/config/EconomyHostingRentSchemaInitializerMySqlTest.java'
+        include 'cn/jia/economy/config/EconomyMySqlTestFixture.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(economyHostingRegressionSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(economyHostingRegressionSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('economyHostingRegression', Test) {
+    maxParallelForks = 1
+    maxHeapSize = '256m'
+    jvmArgs '-XX:MaxMetaspaceSize=160m', '-Xss256k'
+    group = 'verification'
+    description = 'Runs isolated economy hosting preview and opt-in MySQL schema regressions.'
+    dependsOn tasks.named(economyHostingRegressionSourceSet.classesTaskName)
+    testClassesDirs = economyHostingRegressionSourceSet.output.classesDirs
+    classpath = economyHostingRegressionSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}

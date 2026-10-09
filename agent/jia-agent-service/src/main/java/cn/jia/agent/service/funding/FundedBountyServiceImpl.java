@@ -105,6 +105,7 @@ public final class FundedBountyServiceImpl implements FundedBountyService {
         operation.setStatus("POSTING");
         operation.setTenantId(actor.tenantId());
         operation.setClientId(actor.clientId());
+        operation.setOwnerJiacn(actor.ownerJiacn());
         operation.setCreateTime(now);
         operation.setUpdateTime(now);
         try {
@@ -322,6 +323,7 @@ public final class FundedBountyServiceImpl implements FundedBountyService {
         funding.setVersion(0L);
         funding.setTenantId(actor.tenantId());
         funding.setClientId(actor.clientId());
+        funding.setOwnerJiacn(actor.ownerJiacn());
         funding.setCreateTime(now);
         funding.setUpdateTime(now);
         return funding;
@@ -417,6 +419,7 @@ public final class FundedBountyServiceImpl implements FundedBountyService {
     private void requireOwnedFunding(FundedBountyActor actor, AgentTaskFundingEntity funding) {
         if (funding == null || !actor.tenantId().equals(funding.getTenantId())
                 || !actor.clientId().equals(funding.getClientId())
+                || !actor.ownerJiacn().equals(funding.getOwnerJiacn())
                 || !EconomyPrincipalType.USER.name().equals(funding.getPayerPrincipalType())
                 || !exact(actor.userId(), funding.getPayerPrincipalId())) {
             throw new FundedBountyException(HttpStatus.NOT_FOUND, "TASK_NOT_FOUND", "Task not found");

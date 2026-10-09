@@ -46,7 +46,7 @@ class AgentCommandMailboxServiceImplTest {
         accessService = mock(AgentTaskCollaborationAccessService.class);
         transactions = mock(PlatformTransactionManager.class);
         when(transactions.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
-        when(accessService.resolveMemberAccessForUpdate(any(), any(), any(), any()))
+        when(accessService.resolveMemberAccessForUpdate(any(), any(), any(), any(), any()))
                 .thenReturn(AgentTaskAccessLevel.READ_WRITE);
         when(agentService.requireApiKeyOwnedAgentForUpdate(any(), any(), any()))
                 .thenAnswer(invocation -> runtime(invocation.getArgument(2)));
@@ -75,9 +75,9 @@ class AgentCommandMailboxServiceImplTest {
         InOrder order = inOrder(transactions, accessService, agentService, mapper);
         order.verify(transactions).getTransaction(any());
         order.verify(accessService).resolveMemberAccessForUpdate(
-                "0", "client-a", "task-1", "caller-a");
+                "0", "client-a", "owner-a", "task-1", "caller-a");
         order.verify(accessService).resolveMemberAccessForUpdate(
-                "0", "client-a", "task-1", "target-a");
+                "0", "client-a", "owner-a", "task-1", "target-a");
         order.verify(agentService).requireApiKeyOwnedAgentForUpdate(
                 "client-a", "owner-a", "caller-a");
         order.verify(agentService).requireApiKeyOwnedAgentForUpdate(
@@ -91,7 +91,7 @@ class AgentCommandMailboxServiceImplTest {
     @Test
     void revokeObservedByLockedAccessReturnsNoProjectionAndRollsBack() {
         when(accessService.resolveMemberAccessForUpdate(
-                "0", "client-a", "task-1", "target-a"))
+                "0", "client-a", "owner-a", "task-1", "target-a"))
                 .thenReturn(AgentTaskAccessLevel.NONE);
 
         assertThrows(AgentCommandMailboxAccessDeniedException.class, () -> service.query(

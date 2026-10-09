@@ -15,7 +15,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class AgentTaskArtifactOutcomeEventProjectionTest {
-    private static final String TENANT = "tenant-a";
+    private static final String TENANT = "0";
+    private static final String OWNER = "owner-a";
     private static final String CLIENT = "client-a";
     private static final String TASK = "task-1";
     private static final String VIEWER = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -24,7 +25,7 @@ class AgentTaskArtifactOutcomeEventProjectionTest {
     @Test
     void privateOutcomeEventsPreserveReplayContinuityWithoutLeakingMetadata() {
         AuthorizedSubject worker = new AuthorizedSubject(
-                TENANT, CLIENT, TASK, VIEWER, "worker", "other-coordinator");
+                TENANT, CLIENT, OWNER, TASK, VIEWER, "worker", "other-coordinator");
 
         for (String eventType : new String[]{
                 TaskEventType.ARTIFACT_ACCEPTED, TaskEventType.ARTIFACT_SUPERSEDED}) {
@@ -39,7 +40,7 @@ class AgentTaskArtifactOutcomeEventProjectionTest {
     @Test
     void outcomeAggregateBindsTheExactArtifactVersion() {
         AuthorizedSubject coordinator = new AuthorizedSubject(
-                TENANT, CLIENT, TASK, VIEWER, "worker", VIEWER);
+                TENANT, CLIENT, OWNER, TASK, VIEWER, "worker", VIEWER);
         DurableEvent valid = event(TaskEventType.ARTIFACT_ACCEPTED, "task_members");
         DurableEvent wrongAggregate = new DurableEvent(valid.scope(), valid.eventVersion(),
                 valid.eventId(), valid.eventType(), valid.actorType(), valid.actorId(),
@@ -55,11 +56,11 @@ class AgentTaskArtifactOutcomeEventProjectionTest {
     @Test
     void producerReviewerAndCoordinatorVisibilityUsesExistingArtifactAcl() {
         AuthorizedSubject producer = new AuthorizedSubject(
-                TENANT, CLIENT, TASK, PRODUCER, "worker", "other-coordinator");
+                TENANT, CLIENT, OWNER, TASK, PRODUCER, "worker", "other-coordinator");
         AuthorizedSubject reviewer = new AuthorizedSubject(
-                TENANT, CLIENT, TASK, VIEWER, "reviewer", "other-coordinator");
+                TENANT, CLIENT, OWNER, TASK, VIEWER, "reviewer", "other-coordinator");
         AuthorizedSubject coordinator = new AuthorizedSubject(
-                TENANT, CLIENT, TASK, VIEWER, "worker", VIEWER);
+                TENANT, CLIENT, OWNER, TASK, VIEWER, "worker", VIEWER);
 
         assertFalse(AgentTaskEventProjection.project(
                 producer, event(TaskEventType.ARTIFACT_ACCEPTED, "private"))
@@ -90,7 +91,7 @@ class AgentTaskArtifactOutcomeEventProjectionTest {
             payload.put(TaskEventPayload.Key.SUPERSEDED_BY_ARTIFACT_ID, "artifact-new")
                     .put(TaskEventPayload.Key.SUPERSEDED_BY_ARTIFACT_VERSION, 1L);
         }
-        return new DurableEvent(new TaskScope(TENANT, CLIENT, TENANT, TASK),
+        return new DurableEvent(new TaskScope(TENANT, CLIENT, OWNER, TASK),
                 17L, "evt-outcome", eventType, "agent", VIEWER,
                 "artifact", AgentTaskWorkspaceEventValidator.artifactOutcomeAggregateId(
                         TASK, "artifact-private", 1), payload.toJson(), 1234L);

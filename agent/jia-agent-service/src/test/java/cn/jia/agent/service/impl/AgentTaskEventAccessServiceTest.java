@@ -32,7 +32,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class AgentTaskEventAccessServiceTest extends BaseMockTest {
-    private static final String TENANT = "tenant-a";
+    private static final String TENANT = "0";
+    private static final String OWNER = "owner-a";
     private static final String CLIENT = "client-a";
     private static final String TASK = "task-1";
     private static final String ACTOR = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -50,16 +51,16 @@ class AgentTaskEventAccessServiceTest extends BaseMockTest {
         task = task();
         member = member("accepted");
         lenient().doReturn(ACTOR).when(identity)
-                .requireCanonicalAgentIdInScope(TENANT, CLIENT, TENANT, ACTOR);
-        when(dao.findTask(TENANT, CLIENT, TASK)).thenReturn(task);
-        when(dao.findActorMember(TENANT, CLIENT, TASK, ACTOR)).thenReturn(member);
+                .requireCanonicalAgentIdInScope(TENANT, CLIENT, OWNER, ACTOR);
+        when(dao.findTask(TENANT, CLIENT, OWNER, TASK)).thenReturn(task);
+        when(dao.findActorMember(TENANT, CLIENT, OWNER, TASK, ACTOR)).thenReturn(member);
     }
 
     @Test
     void authorizationIsShortRequiredReadOnlyTransactionNotSnapshotBoundary()
             throws Exception {
         Method authorize = AgentTaskWorkspaceServiceImpl.class.getMethod(
-                "authorize", String.class, String.class, String.class, String.class);
+                "authorize", String.class, String.class, String.class, String.class, String.class);
         Transactional tx = authorize.getAnnotation(Transactional.class);
         assertEquals(Propagation.REQUIRED, tx.propagation());
         assertEquals(Isolation.DEFAULT, tx.isolation());
@@ -67,9 +68,10 @@ class AgentTaskEventAccessServiceTest extends BaseMockTest {
         assertEquals(1, tx.rollbackFor().length);
         assertEquals(Exception.class, tx.rollbackFor()[0]);
 
-        AuthorizedSubject subject = service.authorize(TENANT, CLIENT, TASK, ACTOR);
+        AuthorizedSubject subject = service.authorize(TENANT, CLIENT, OWNER, TASK, ACTOR);
         assertEquals(TENANT, subject.tenantId());
         assertEquals(CLIENT, subject.clientId());
+        assertEquals(OWNER, subject.ownerJiacn());
         assertEquals(TASK, subject.taskId());
         assertEquals(ACTOR, subject.actorAgentId());
         assertEquals("worker", subject.actorRole());
@@ -77,20 +79,20 @@ class AgentTaskEventAccessServiceTest extends BaseMockTest {
         assertFalse(subject.reviewerAccess());
         InOrder aclOrder = inOrder(identity, dao);
         aclOrder.verify(identity).requireCanonicalAgentIdInScope(
-                TENANT, CLIENT, TENANT, ACTOR);
-        aclOrder.verify(dao).findTask(TENANT, CLIENT, TASK);
-        aclOrder.verify(dao).findActorMember(TENANT, CLIENT, TASK, ACTOR);
-        verify(dao, never()).findMembers(TENANT, CLIENT, TASK);
-        verify(dao, never()).findWorkItems(TENANT, CLIENT, TASK);
-        verify(dao, never()).findOpenRequests(TENANT, CLIENT, TASK);
-        verify(dao, never()).findLatestEvents(TENANT, CLIENT, TASK);
+                TENANT, CLIENT, OWNER, ACTOR);
+        aclOrder.verify(dao).findTask(TENANT, CLIENT, OWNER, TASK);
+        aclOrder.verify(dao).findActorMember(TENANT, CLIENT, OWNER, TASK, ACTOR);
+        verify(dao, never()).findMembers(TENANT, CLIENT, OWNER, TASK);
+        verify(dao, never()).findWorkItems(TENANT, CLIENT, OWNER, TASK);
+        verify(dao, never()).findOpenRequests(TENANT, CLIENT, OWNER, TASK);
+        verify(dao, never()).findLatestEvents(TENANT, CLIENT, OWNER, TASK);
     }
 
     @ParameterizedTest
     @ValueSource(strings = {"accepted", "working", "blocked", "done", "failed"})
     void exactReadableMemberStatusMatrixIsAccepted(String status) {
         member.setMemberStatus(status);
-        AuthorizedSubject subject = service.authorize(TENANT, CLIENT, TASK, ACTOR);
+        AuthorizedSubject subject = service.authorize(TENANT, CLIENT, OWNER, TASK, ACTOR);
         assertEquals("worker", subject.actorRole());
     }
 
@@ -98,7 +100,7 @@ class AgentTaskEventAccessServiceTest extends BaseMockTest {
     @ValueSource(strings = {"invited", "rejected", "left", "unknown"})
     void nonReadableMemberStatusMatrixFailsWithOneGenericReason(String status) {
         member.setMemberStatus(status);
-        assertGenericNotFound(() -> service.authorize(TENANT, CLIENT, TASK, ACTOR));
+        assertGenericNotFound(() -> service.authorize(TENANT, CLIENT, OWNER, TASK, ACTOR));
     }
 
     @Test
@@ -106,36 +108,45 @@ class AgentTaskEventAccessServiceTest extends BaseMockTest {
         doThrow(new AgentServiceImpl.AgentBizException(
                 "AGENT_FORBIDDEN", "foreign or inactive"))
                 .when(identity).requireCanonicalAgentIdInScope(
-                        TENANT, CLIENT, TENANT, ACTOR);
-        assertGenericNotFound(() -> service.authorize(TENANT, CLIENT, TASK, ACTOR));
+                        TENANT, CLIENT, OWNER, ACTOR);
+        assertGenericNotFound(() -> service.authorize(TENANT, CLIENT, OWNER, TASK, ACTOR));
 
         doReturn("agt_alias_target").when(identity)
-                .requireCanonicalAgentIdInScope(TENANT, CLIENT, TENANT, ACTOR);
-        assertGenericNotFound(() -> service.authorize(TENANT, CLIENT, TASK, ACTOR));
+                .requireCanonicalAgentIdInScope(TENANT, CLIENT, OWNER, ACTOR);
+        assertGenericNotFound(() -> service.authorize(TENANT, CLIENT, OWNER, TASK, ACTOR));
 
-        when(identity.requireCanonicalAgentIdInScope(TENANT, CLIENT, TENANT, ACTOR))
+        when(identity.requireCanonicalAgentIdInScope(TENANT, CLIENT, OWNER, ACTOR))
                 .thenReturn(ACTOR);
-        when(dao.findTask(TENANT, CLIENT, TASK)).thenReturn(null);
-        assertGenericNotFound(() -> service.authorize(TENANT, CLIENT, TASK, ACTOR));
+        when(dao.findTask(TENANT, CLIENT, OWNER, TASK)).thenReturn(null);
+        assertGenericNotFound(() -> service.authorize(TENANT, CLIENT, OWNER, TASK, ACTOR));
 
-        when(dao.findTask(TENANT, CLIENT, TASK)).thenReturn(task);
+        when(dao.findTask(TENANT, CLIENT, OWNER, TASK)).thenReturn(task);
         task.setCoordinatorAgentId(ACTOR);
-        when(dao.findActorMember(TENANT, CLIENT, TASK, ACTOR)).thenReturn(null);
-        assertGenericNotFound(() -> service.authorize(TENANT, CLIENT, TASK, ACTOR));
+        when(dao.findActorMember(TENANT, CLIENT, OWNER, TASK, ACTOR)).thenReturn(null);
+        assertGenericNotFound(() -> service.authorize(TENANT, CLIENT, OWNER, TASK, ACTOR));
     }
 
     @Test
     void roleAndCoordinatorCapabilitiesAreFrozenInImmutableSubject() {
         member.setMemberRole("reviewer");
-        AuthorizedSubject reviewer = service.authorize(TENANT, CLIENT, TASK, ACTOR);
+        AuthorizedSubject reviewer = service.authorize(TENANT, CLIENT, OWNER, TASK, ACTOR);
         assertTrue(reviewer.reviewerAccess());
         assertFalse(reviewer.coordinatorAccess());
 
         member.setMemberRole("worker");
         task.setCoordinatorAgentId(ACTOR);
-        AuthorizedSubject coordinator = service.authorize(TENANT, CLIENT, TASK, ACTOR);
+        AuthorizedSubject coordinator = service.authorize(TENANT, CLIENT, OWNER, TASK, ACTOR);
         assertTrue(coordinator.coordinatorAccess());
         assertFalse(coordinator.reviewerAccess());
+    }
+
+    @Test
+    void foreignOwnerRowsCannotAuthorizeEvenWithMatchingTenantClientAndTask() {
+        task.setOwnerJiacn("owner-b");
+        assertGenericNotFound(() -> service.authorize(TENANT, CLIENT, OWNER, TASK, ACTOR));
+        task.setOwnerJiacn(OWNER);
+        member.setOwnerJiacn("OWNER-A");
+        assertGenericNotFound(() -> service.authorize(TENANT, CLIENT, OWNER, TASK, ACTOR));
     }
 
     private static void assertGenericNotFound(Runnable invocation) {
@@ -148,6 +159,7 @@ class AgentTaskEventAccessServiceTest extends BaseMockTest {
     private static TaskRow task() {
         TaskRow row = new TaskRow();
         row.setTenantId(TENANT);
+        row.setOwnerJiacn(OWNER);
         row.setClientId(CLIENT);
         row.setTaskId(TASK);
         row.setCoordinatorAgentId("agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
@@ -157,6 +169,7 @@ class AgentTaskEventAccessServiceTest extends BaseMockTest {
     private static MemberRow member(String status) {
         MemberRow row = new MemberRow();
         row.setTenantId(TENANT);
+        row.setOwnerJiacn(OWNER);
         row.setClientId(CLIENT);
         row.setTaskId(TASK);
         row.setAgentId(ACTOR);

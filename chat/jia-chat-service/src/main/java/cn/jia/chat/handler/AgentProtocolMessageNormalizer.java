@@ -21,6 +21,7 @@ public class AgentProtocolMessageNormalizer {
             AgentProtocolConstants.TYPE_PROTOCOL_ERROR,
             AgentProtocolConstants.TYPE_CHAT_MESSAGE,
             AgentProtocolConstants.TYPE_CHAT_MESSAGE_DELTA,
+            AgentProtocolConstants.TYPE_CHAT_DISPATCH_ACK,
             AgentProtocolConstants.TYPE_COMMAND_DISPATCH,
             AgentProtocolConstants.TYPE_COMMAND_ACK,
             AgentProtocolConstants.TYPE_WORK_PROGRESS,
@@ -32,8 +33,9 @@ public class AgentProtocolMessageNormalizer {
 
     private static final List<String> RESERVED_FIELDS = List.of(
             "schemaVersion", "tenantId", "clientId", "agentId", "sourceAgentId", "targetAgentId",
-            "receiverAgentId", "runtimeInstanceId", "messageId", "requestId", "commandId", "commandType",
-            "correlationId", "causationId", "conversationId", "taskId", "workItemId",
+            "receiverAgentId", "runtimeInstanceId", "messageId", "requestId", "requestRevision",
+            "turnId", "dispatchId", "contextSnapshotId", "contextHash", "deltaSeq", "route",
+            "commandId", "commandType", "correlationId", "causationId", "conversationId", "conversationGeneration", "taskId", "workItemId",
             "issuedAt", "sentAt", "timestamp", "expiresAt", "attempt");
 
     public NormalizedMessage normalizeInbound(Map<String, Object> rawMessage) {
@@ -58,7 +60,8 @@ public class AgentProtocolMessageNormalizer {
         AgentProtocolEnvelopeDTO envelope = new AgentProtocolEnvelopeDTO();
         envelope.setSchemaVersion(schemaVersion);
         envelope.setMessageType(canonicalType);
-        envelope.setMessageId(value(raw, body, "messageId", "requestId"));
+        envelope.setMessageId(hasDurableTurnBinding(raw, body)
+                ? value(raw, body, "messageId") : value(raw, body, "messageId", "requestId"));
         envelope.setCommandId(value(raw, body, "commandId"));
         envelope.setCorrelationId(value(raw, body, "correlationId"));
         envelope.setCausationId(value(raw, body, "causationId"));
@@ -97,16 +100,26 @@ public class AgentProtocolMessageNormalizer {
         }
         validateCanonicalAgentAliases(raw);
         validateCanonicalAgentAliases(body);
-        validateAliasGroupWithinLayer(raw, "messageId", "messageId", "requestId");
-        validateAliasGroupWithinLayer(body, "messageId", "messageId", "requestId");
+        if (!hasDurableTurnBinding(raw, body)) {
+            validateAliasGroupWithinLayer(raw, "messageId", "messageId", "requestId");
+            validateAliasGroupWithinLayer(body, "messageId", "messageId", "requestId");
+        }
         validateAliasGroupWithinLayer(raw, "targetAgentId", "targetAgentId", "receiverAgentId");
         validateAliasGroupWithinLayer(body, "targetAgentId", "targetAgentId", "receiverAgentId");
         validateAliasGroupWithinLayer(raw, "sentAt", "sentAt", "timestamp");
         validateAliasGroupWithinLayer(body, "sentAt", "sentAt", "timestamp");
-        validateAliasGroupAcrossLayers(raw, body, "messageId", "messageId", "requestId");
+        if (!hasDurableTurnBinding(raw, body)) {
+            validateAliasGroupAcrossLayers(raw, body, "messageId", "messageId", "requestId");
+        }
         validateAliasGroupAcrossLayers(raw, body, "sourceAgentId", "agentId", "sourceAgentId");
         validateAliasGroupAcrossLayers(raw, body, "targetAgentId", "targetAgentId", "receiverAgentId");
         validateAliasGroupAcrossLayers(raw, body, "sentAt", "sentAt", "timestamp");
+    }
+
+    private boolean hasDurableTurnBinding(Map<String, Object> raw, Map<String, Object> body) {
+        return raw.containsKey("turnId") || body.containsKey("turnId")
+                || raw.containsKey("dispatchId") || body.containsKey("dispatchId")
+                || raw.containsKey("contextSnapshotId") || body.containsKey("contextSnapshotId");
     }
 
     private void validateDeclaredSchemaVersion(Map<String, Object> layer) {
@@ -349,6 +362,7 @@ public class AgentProtocolMessageNormalizer {
     private boolean requiresMessageId(String type) {
         return AgentProtocolConstants.TYPE_CHAT_MESSAGE.equals(type)
                 || AgentProtocolConstants.TYPE_CHAT_MESSAGE_DELTA.equals(type)
+                || AgentProtocolConstants.TYPE_CHAT_DISPATCH_ACK.equals(type)
                 || AgentProtocolConstants.TYPE_COMMAND_DISPATCH.equals(type)
                 || AgentProtocolConstants.TYPE_COMMAND_ACK.equals(type)
                 || AgentProtocolConstants.TYPE_WORK_PROGRESS.equals(type)

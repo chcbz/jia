@@ -3,6 +3,8 @@ package cn.jia.oauth.config;
 import cn.jia.core.redis.ThirdPartyLoginTransactionService;
 import cn.jia.oauth.api.OauthController;
 import cn.jia.oauth.config.OauthExternalHttpClient;
+import cn.jia.oauth.dto.GithubOauthTokenDTO;
+import cn.jia.oauth.dto.GithubOauthUserDTO;
 import cn.jia.oauth.service.ClientService;
 import cn.jia.test.BaseMockTest;
 import cn.jia.user.entity.CustomUserDetails;
@@ -14,6 +16,7 @@ import cn.jia.user.service.PermsService;
 import cn.jia.user.service.UserService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.springframework.http.HttpEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -69,7 +72,7 @@ class OauthControllerAccountSecurityTest extends BaseMockTest {
                 new ThirdPartyLoginTransactionService.Transaction("github",
                         "https://client.example/oauth2/authorize?client_id=web");
         when(transactions.consume("github", "state")).thenReturn(transaction);
-        when(externalHttpClient.postForEntity(anyString(), any(HttpEntity.class)))
+        when(externalHttpClient.postJson(anyString(), any(HttpEntity.class), eq(GithubOauthTokenDTO.class)))
                 .thenThrow(new OauthExternalHttpClient.OauthExternalCallRejectedException("safe"));
         OauthController controller = controller();
         ReflectionTestUtils.setField(controller, "githubAppId", "app");
@@ -79,6 +82,47 @@ class OauthControllerAccountSecurityTest extends BaseMockTest {
                 controller.thirdPartyGithub("code", "state", new MockHttpServletRequest(), new MockHttpServletResponse()));
 
         verifyNoInteractions(userService, accountSecurityService, permsService);
+    }
+
+    @Test
+    void repeatedGithubLoginRejectsMojibakeAndKeepsSafeUsernameFallback() {
+        ThirdPartyLoginTransactionService.Transaction transaction =
+                new ThirdPartyLoginTransactionService.Transaction("github",
+                        "https://client.example/oauth2/authorize?client_id=web");
+        when(transactions.consume(eq("github"), anyString())).thenReturn(transaction);
+        GithubOauthTokenDTO token = new GithubOauthTokenDTO();
+        token.setAccessToken("provider-token");
+        when(externalHttpClient.postJson(anyString(), any(HttpEntity.class), eq(GithubOauthTokenDTO.class)))
+                .thenReturn(token);
+        GithubOauthUserDTO profile = new GithubOauthUserDTO();
+        profile.setId(42L);
+        profile.setLogin("alice");
+        profile.setName("Ã©");
+        when(externalHttpClient.exchangeJson(anyString(), eq(org.springframework.http.HttpMethod.GET),
+                any(HttpEntity.class), eq(GithubOauthUserDTO.class))).thenReturn(profile);
+        when(userService.upsert(any())).thenReturn(new UserEntity()
+                .setId(17L).setGithubid("42").setUsername("alice").setJiacn("Jia-A").setNickname("数据库好昵称"));
+        when(accountSecurityService.findByUserId(17)).thenReturn(Optional.of(
+                new AccountSecuritySnapshot(17, "Jia-A", AccountState.ACTIVE, 6)));
+        when(permsService.findByUserId(17L)).thenReturn(List.of());
+        OauthController controller = controller();
+        ReflectionTestUtils.setField(controller, "githubAppId", "app");
+        ReflectionTestUtils.setField(controller, "githubSecret", "secret");
+
+        assertEquals("redirect:https://client.example/oauth2/authorize?client_id=web",
+                controller.thirdPartyGithub("code-1", "state-1",
+                        new MockHttpServletRequest(), new MockHttpServletResponse()));
+        assertEquals("redirect:https://client.example/oauth2/authorize?client_id=web",
+                controller.thirdPartyGithub("code-2", "state-2",
+                        new MockHttpServletRequest(), new MockHttpServletResponse()));
+
+        ArgumentCaptor<UserEntity> users = ArgumentCaptor.forClass(UserEntity.class);
+        verify(userService, times(2)).upsert(users.capture());
+        for (UserEntity callbackUser : users.getAllValues()) {
+            assertEquals("alice", callbackUser.getUsername());
+            assertEquals("42", callbackUser.getGithubid());
+            assertNull(callbackUser.getNickname());
+        }
     }
 
     @Test
@@ -165,7 +209,7 @@ class OauthControllerAccountSecurityTest extends BaseMockTest {
 
     private OauthController controller() {
         return new OauthController(clientService, userService, accountSecurityService,
-                permsService, externalHttpClient, transactions);
+                permsService, externalHttpClient, new ExternalIdentityDisplayNamePolicy(), transactions);
     }
 
     private String complete(UserEntity user) {

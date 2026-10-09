@@ -54,9 +54,14 @@ public final class VoiceRequestValidator {
                 || text.isBlank() || text.codePointCount(0, text.length()) > 2_000) {
             throw VoiceException.of(VoiceErrorCode.INVALID_REQUEST, requestId);
         }
+        String requiredFormat = switch (properties.getProvider()) {
+            case "openai-compatible" -> "mp3";
+            case "cliproxy-realtime" -> "wav";
+            default -> null;
+        };
         if (!allowed(properties.getVoices(), request.voice())
                 || !allowed(properties.getFormats(), request.format())
-                || !"mp3".equals(request.format())) {
+                || requiredFormat == null || !requiredFormat.equals(request.format())) {
             throw VoiceException.of(VoiceErrorCode.INVALID_REQUEST, requestId);
         }
         return request;

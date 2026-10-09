@@ -30,7 +30,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class AgentIdentityServiceImplTest extends BaseMockTest {
-    private static final String TENANT = "owner-a";
+    private static final String TENANT = "0";
+    private static final String OWNER = "owner-a";
     private static final String CLIENT = "client-a";
     private static final String CANONICAL = "agt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -59,7 +60,7 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
         assertEquals(AgentConstants.IDENTITY_STATUS_PROVISIONED, result.getLifecycleStatus());
         assertEquals(TENANT, result.getTenantId());
         assertEquals(CLIENT, result.getClientId());
-        assertEquals(TENANT, result.getOwnerJiacn());
+        assertEquals(OWNER, result.getOwnerJiacn());
         assertEquals(binding.getId(), result.getBindingId());
         verify(registryDao).insert(result);
     }
@@ -72,7 +73,7 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
             AgentPersonaBindingEntity binding = binding(CANONICAL);
             AgentIdentityRegistryEntity existing = registry(binding, CANONICAL,
                     AgentConstants.IDENTITY_TYPE_OPAQUE, lifecycle);
-            when(registryDao.findExactByBindingInScope(TENANT, CLIENT, TENANT, binding.getId()))
+            when(registryDao.findExactByBindingInScope(TENANT, CLIENT, OWNER, binding.getId()))
                     .thenReturn(existing);
 
             assertThrows(AgentServiceImpl.AgentBizException.class,
@@ -85,16 +86,16 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
         AgentPersonaBindingEntity binding = binding(CANONICAL);
         AgentIdentityRegistryEntity provisioned = registry(binding, CANONICAL,
                 AgentConstants.IDENTITY_TYPE_OPAQUE, AgentConstants.IDENTITY_STATUS_PROVISIONED);
-        when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, TENANT, CANONICAL))
+        when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, OWNER, CANONICAL))
                 .thenReturn(provisioned);
         when(registryDao.findExactByCanonicalInScopeForUpdate(
-                TENANT, CLIENT, TENANT, CANONICAL)).thenReturn(provisioned);
+                TENANT, CLIENT, OWNER, CANONICAL)).thenReturn(provisioned);
         when(bindingDao.selectById(binding.getId())).thenReturn(binding);
         when(bindingDao.findByIdForUpdate(binding.getId())).thenReturn(binding);
         when(registryDao.activateProvisioned(eq(provisioned.getId()), anyLong())).thenReturn(1);
 
         AgentIdentityRegistryEntity resolved = service.requireRegistrationIdentityInScope(
-                TENANT, CLIENT, TENANT, CANONICAL);
+                TENANT, CLIENT, OWNER, CANONICAL);
         AgentIdentityRegistryEntity activated = service.activateForFirstRegistration(resolved);
         AgentIdentityRegistryEntity repeated = service.activateForFirstRegistration(activated);
 
@@ -110,13 +111,13 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
         AgentPersonaBindingEntity binding = binding(legacy);
         AgentIdentityRegistryEntity identity = registry(binding, legacy,
                 AgentConstants.IDENTITY_TYPE_LEGACY_CANONICAL, AgentConstants.IDENTITY_STATUS_ACTIVE);
-        when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, TENANT, legacy)).thenReturn(identity);
+        when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, OWNER, legacy)).thenReturn(identity);
         when(bindingDao.selectById(binding.getId())).thenReturn(binding);
 
         assertEquals(legacy, service.requireCanonicalAgentIdInScope(
-                TENANT, CLIENT, TENANT, legacy));
+                TENANT, CLIENT, OWNER, legacy));
         assertEquals(legacy, service.resolveAgentIdInScope(
-                TENANT, CLIENT, TENANT, legacy));
+                TENANT, CLIENT, OWNER, legacy));
         verify(aliasDao, never()).findExactActiveLegacyAlias(any(), any(), any(), any());
     }
 
@@ -125,10 +126,10 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
         for (String value : new String[]{CANONICAL, CANONICAL.toUpperCase()}) {
             assertThrows(AgentServiceImpl.AgentBizException.class,
                     () -> service.requireRegistrationIdentityInScope(
-                            TENANT, CLIENT, TENANT, value));
+                            TENANT, CLIENT, OWNER, value));
             assertThrows(AgentServiceImpl.AgentBizException.class,
                     () -> service.resolveAgentIdInScope(
-                            TENANT, CLIENT, TENANT, value));
+                            TENANT, CLIENT, OWNER, value));
         }
         verify(aliasDao, never()).findExactActiveLegacyAlias(any(), any(), any(), any());
     }
@@ -138,7 +139,7 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
         String legacy = "jyt-client-a-wuyong";
 
         AgentServiceImpl.AgentBizException error = assertThrows(AgentServiceImpl.AgentBizException.class,
-                () -> service.resolveAgentIdInScope(TENANT, CLIENT, TENANT, legacy));
+                () -> service.resolveAgentIdInScope(TENANT, CLIENT, OWNER, legacy));
 
         assertEquals(AgentErrorConstants.AGENT_FORBIDDEN, error.getCode());
         assertTrue(error.getMessage().contains("not explicitly approved"));
@@ -152,17 +153,17 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
         AgentIdentityRegistryEntity identity = registry(binding, CANONICAL,
                 AgentConstants.IDENTITY_TYPE_OPAQUE, AgentConstants.IDENTITY_STATUS_ACTIVE);
         AgentIdentityAliasEntity alias = alias(identity, legacy);
-        when(aliasDao.findExactActiveLegacyAlias(TENANT, CLIENT, TENANT, legacy)).thenReturn(alias);
-        when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, TENANT, CANONICAL)).thenReturn(identity);
+        when(aliasDao.findExactActiveLegacyAlias(TENANT, CLIENT, OWNER, legacy)).thenReturn(alias);
+        when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, OWNER, CANONICAL)).thenReturn(identity);
         when(bindingDao.selectById(binding.getId())).thenReturn(binding);
 
         assertEquals(CANONICAL, service.resolveLegacyAgentIdInScope(
-                TENANT, CLIENT, TENANT, legacy));
+                TENANT, CLIENT, OWNER, legacy));
         assertEquals(CANONICAL, service.resolveAgentIdInScope(
-                TENANT, CLIENT, TENANT, legacy));
+                TENANT, CLIENT, OWNER, legacy));
 
         assertThrows(AgentServiceImpl.AgentBizException.class,
-                () -> service.resolveLegacyAgentIdInScope(TENANT, "CLIENT-A", TENANT, legacy));
+                () -> service.resolveLegacyAgentIdInScope(TENANT, "CLIENT-A", OWNER, legacy));
     }
 
     @Test
@@ -170,11 +171,11 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
         AgentPersonaBindingEntity binding = binding(CANONICAL);
         AgentIdentityRegistryEntity damaged = registry(binding, CANONICAL,
                 AgentConstants.IDENTITY_TYPE_OPAQUE, AgentConstants.IDENTITY_STATUS_SUSPENDED);
-        when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, TENANT, CANONICAL))
+        when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, OWNER, CANONICAL))
                 .thenReturn(damaged);
 
         assertThrows(AgentServiceImpl.AgentBizException.class,
-                () -> service.resolveAgentIdInScope(TENANT, CLIENT, TENANT, CANONICAL));
+                () -> service.resolveAgentIdInScope(TENANT, CLIENT, OWNER, CANONICAL));
 
         verify(aliasDao, never()).findExactActiveLegacyAlias(any(), any(), any(), any());
     }
@@ -187,12 +188,12 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
             AgentPersonaBindingEntity binding = binding(CANONICAL);
             AgentIdentityRegistryEntity identity = registry(binding, CANONICAL,
                     AgentConstants.IDENTITY_TYPE_OPAQUE, lifecycle);
-            when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, TENANT, CANONICAL))
+            when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, OWNER, CANONICAL))
                     .thenReturn(identity);
 
             assertThrows(AgentServiceImpl.AgentBizException.class,
                     () -> service.requireRegistrationIdentityInScope(
-                            TENANT, CLIENT, TENANT, CANONICAL));
+                            TENANT, CLIENT, OWNER, CANONICAL));
         }
     }
 
@@ -212,12 +213,12 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
             });
             AgentIdentityRegistryEntity identity = registry(binding, CANONICAL,
                     AgentConstants.IDENTITY_TYPE_OPAQUE, lifecycle);
-            when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, TENANT, CANONICAL))
+            when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, OWNER, CANONICAL))
                     .thenReturn(identity);
             when(bindingDao.selectById(binding.getId())).thenReturn(binding);
 
             assertEquals(CANONICAL, service.requirePersistedCanonicalAgentIdInScope(
-                    TENANT, CLIENT, TENANT, CANONICAL), lifecycle);
+                    TENANT, CLIENT, OWNER, CANONICAL), lifecycle);
         }
     }
 
@@ -226,35 +227,35 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
         AgentPersonaBindingEntity binding = binding(CANONICAL);
         AgentIdentityRegistryEntity provisioned = registry(binding, CANONICAL,
                 AgentConstants.IDENTITY_TYPE_OPAQUE, AgentConstants.IDENTITY_STATUS_PROVISIONED);
-        when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, TENANT, CANONICAL))
+        when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, OWNER, CANONICAL))
                 .thenReturn(provisioned);
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> service.requirePersistedCanonicalAgentIdInScope(
-                        TENANT, CLIENT, TENANT, CANONICAL));
+                        TENANT, CLIENT, OWNER, CANONICAL));
 
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> service.requirePersistedCanonicalAgentIdInScope(
-                        TENANT, CLIENT, TENANT, "builtin-songjiang"));
+                        TENANT, CLIENT, OWNER, "builtin-songjiang"));
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> service.requirePersistedCanonicalAgentIdInScope(
-                        TENANT, CLIENT, TENANT, "legacy-alias"));
+                        TENANT, CLIENT, OWNER, "legacy-alias"));
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> service.requirePersistedCanonicalAgentIdInScope(
-                        TENANT, CLIENT, TENANT, CANONICAL + " "));
+                        TENANT, CLIENT, OWNER, CANONICAL + " "));
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> service.requirePersistedCanonicalAgentIdInScope(
-                        TENANT, "client-b", TENANT, CANONICAL));
+                        TENANT, "client-b", OWNER, CANONICAL));
 
         AgentIdentityRegistryEntity active = registry(binding, CANONICAL,
                 AgentConstants.IDENTITY_TYPE_OPAQUE, AgentConstants.IDENTITY_STATUS_ACTIVE);
         AgentPersonaBindingEntity tampered = binding(CANONICAL);
         tampered.setJiacn("owner-b");
-        when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, TENANT, CANONICAL))
+        when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, OWNER, CANONICAL))
                 .thenReturn(active);
         when(bindingDao.selectById(binding.getId())).thenReturn(tampered);
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> service.requirePersistedCanonicalAgentIdInScope(
-                        TENANT, CLIENT, TENANT, CANONICAL));
+                        TENANT, CLIENT, OWNER, CANONICAL));
     }
 
     @Test
@@ -268,32 +269,32 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
         AgentIdentityRegistryEntity identityB = registry(bindingB, canonicalB,
                 AgentConstants.IDENTITY_TYPE_OPAQUE, AgentConstants.IDENTITY_STATUS_ACTIVE);
         identityB.setId(10L);
-        when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, TENANT, CANONICAL))
+        when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, OWNER, CANONICAL))
                 .thenReturn(identityA);
-        when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, TENANT, canonicalB))
+        when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, OWNER, canonicalB))
                 .thenReturn(identityB);
         when(bindingDao.findByIdForUpdate(bindingA.getId())).thenReturn(bindingA);
         when(bindingDao.findByIdForUpdate(bindingB.getId())).thenReturn(bindingB);
         when(registryDao.findExactByCanonicalInScopeForUpdate(
-                TENANT, CLIENT, TENANT, CANONICAL)).thenReturn(identityA);
+                TENANT, CLIENT, OWNER, CANONICAL)).thenReturn(identityA);
         when(registryDao.findExactByCanonicalInScopeForUpdate(
-                TENANT, CLIENT, TENANT, canonicalB)).thenReturn(identityB);
+                TENANT, CLIENT, OWNER, canonicalB)).thenReturn(identityB);
 
         assertIterableEquals(List.of(canonicalB, CANONICAL),
                 service.lockActiveCanonicalAgentIdsInScope(
-                        TENANT, CLIENT, TENANT, List.of(canonicalB, CANONICAL)));
+                        TENANT, CLIENT, OWNER, List.of(canonicalB, CANONICAL)));
 
         InOrder order = inOrder(registryDao, bindingDao);
         order.verify(registryDao).findExactByCanonicalInScope(
-                TENANT, CLIENT, TENANT, CANONICAL);
+                TENANT, CLIENT, OWNER, CANONICAL);
         order.verify(bindingDao).findByIdForUpdate(bindingA.getId());
         order.verify(registryDao).findExactByCanonicalInScopeForUpdate(
-                TENANT, CLIENT, TENANT, CANONICAL);
+                TENANT, CLIENT, OWNER, CANONICAL);
         order.verify(registryDao).findExactByCanonicalInScope(
-                TENANT, CLIENT, TENANT, canonicalB);
+                TENANT, CLIENT, OWNER, canonicalB);
         order.verify(bindingDao).findByIdForUpdate(bindingB.getId());
         order.verify(registryDao).findExactByCanonicalInScopeForUpdate(
-                TENANT, CLIENT, TENANT, canonicalB);
+                TENANT, CLIENT, OWNER, canonicalB);
     }
 
     @Test
@@ -302,18 +303,18 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
         binding.setStatus(AgentConstants.BINDING_STATUS_SUSPENDED);
         AgentIdentityRegistryEntity suspended = registry(binding, CANONICAL,
                 AgentConstants.IDENTITY_TYPE_OPAQUE, AgentConstants.IDENTITY_STATUS_SUSPENDED);
-        when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, TENANT, CANONICAL))
+        when(registryDao.findExactByCanonicalInScope(TENANT, CLIENT, OWNER, CANONICAL))
                 .thenReturn(suspended);
         when(bindingDao.findByIdForUpdate(binding.getId())).thenReturn(binding);
         when(registryDao.findExactByCanonicalInScopeForUpdate(
-                TENANT, CLIENT, TENANT, CANONICAL)).thenReturn(suspended);
+                TENANT, CLIENT, OWNER, CANONICAL)).thenReturn(suspended);
 
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> service.lockActiveCanonicalAgentIdsInScope(
-                        TENANT, CLIENT, TENANT, List.of(CANONICAL)));
+                        TENANT, CLIENT, OWNER, List.of(CANONICAL)));
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> service.lockActiveCanonicalAgentIdsInScope(
-                        TENANT, CLIENT, TENANT, List.of(CANONICAL, CANONICAL)));
+                        TENANT, CLIENT, OWNER, List.of(CANONICAL, CANONICAL)));
     }
 
     @Test
@@ -325,41 +326,41 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
                 CANONICAL + " "}) {
             assertThrows(AgentServiceImpl.AgentBizException.class,
                     () -> service.requireCanonicalAgentIdInScope(
-                            TENANT, CLIENT, TENANT, invalid), invalid);
+                            TENANT, CLIENT, OWNER, invalid), invalid);
         }
     }
 
     @Test
     void exactIdentityTextUsesUnicodeCodePointLimitsAndRejectsUnpairedSurrogates() {
         String supplementary = new String(Character.toChars(0x1f642));
-        String tenant = "t" + supplementary.repeat(49);
+        String owner = "o" + supplementary.repeat(49);
         String client = "c" + supplementary.repeat(49);
         String canonical = "a" + supplementary.repeat(99);
         AgentPersonaBindingEntity binding = binding(canonical);
-        binding.setTenantId(tenant);
+        binding.setTenantId(TENANT);
         binding.setClientId(client);
-        binding.setJiacn(tenant);
+        binding.setJiacn(owner);
         AgentIdentityRegistryEntity identity = registry(binding, canonical,
                 AgentConstants.IDENTITY_TYPE_LEGACY_CANONICAL,
                 AgentConstants.IDENTITY_STATUS_ACTIVE);
-        identity.setTenantId(tenant);
+        identity.setTenantId(TENANT);
         identity.setClientId(client);
-        identity.setOwnerJiacn(tenant);
-        when(registryDao.findExactByCanonicalInScope(tenant, client, tenant, canonical))
+        identity.setOwnerJiacn(owner);
+        when(registryDao.findExactByCanonicalInScope(TENANT, client, owner, canonical))
                 .thenReturn(identity);
         when(bindingDao.selectById(binding.getId())).thenReturn(binding);
 
         assertEquals(canonical, service.requireCanonicalAgentIdInScope(
-                tenant, client, tenant, canonical));
+                TENANT, client, owner, canonical));
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> service.requireCanonicalAgentIdInScope(
-                        "t" + supplementary.repeat(50), client, tenant, canonical));
+                        TENANT, client, "o" + supplementary.repeat(50), canonical));
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> service.requireCanonicalAgentIdInScope(
-                        tenant, client, tenant, "a" + supplementary.repeat(100)));
+                        TENANT, client, owner, "a" + supplementary.repeat(100)));
         assertThrows(AgentServiceImpl.AgentBizException.class,
                 () -> service.requireCanonicalAgentIdInScope(
-                        tenant, client, tenant, "agent-\ud800"));
+                        TENANT, client, owner, "agent-\ud800"));
     }
 
     @Test
@@ -379,7 +380,7 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
         binding.setId(5L);
         binding.setTenantId(TENANT);
         binding.setClientId(CLIENT);
-        binding.setJiacn(TENANT);
+        binding.setJiacn(OWNER);
         binding.setPersonaCode("wuyong");
         binding.setAgentId(agentId);
         binding.setBoundAt(1L);
@@ -396,7 +397,7 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
         identity.setLifecycleStatus(lifecycle);
         identity.setTenantId(TENANT);
         identity.setClientId(CLIENT);
-        identity.setOwnerJiacn(TENANT);
+        identity.setOwnerJiacn(OWNER);
         identity.setBindingId(binding.getId());
         identity.setProvisionedAt(1L);
         if (!AgentConstants.IDENTITY_STATUS_PROVISIONED.equals(lifecycle)) {
@@ -423,7 +424,7 @@ class AgentIdentityServiceImplTest extends BaseMockTest {
         alias.setValidFrom(1L);
         alias.setTenantId(TENANT);
         alias.setClientId(CLIENT);
-        alias.setOwnerJiacn(TENANT);
+        alias.setOwnerJiacn(OWNER);
         alias.setAuditReason("approved alias");
         return alias;
     }

@@ -14,11 +14,13 @@ import cn.jia.agent.entity.AgentTaskAssignDTO;
 import cn.jia.agent.entity.AgentTaskDTO;
 import cn.jia.agent.entity.AgentTaskReportDTO;
 import cn.jia.agent.service.AgentService;
+import cn.jia.agent.service.PersonalWorkspaceTaskLinkService;
 import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
 import cn.jia.chat.service.ChatConversationEventBroker;
 import cn.jia.chat.service.ChatConversationService;
+import cn.jia.chat.service.ChatDeliberationService;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
 import cn.jia.chat.service.BuiltinHallAgentSupport;
 import cn.jia.chat.service.HallActionDispatchResult;
@@ -26,6 +28,9 @@ import cn.jia.chat.service.HallActionDispatcher;
 import cn.jia.chat.service.HallActionIntent;
 import cn.jia.chat.service.JuyitingAgentRelayResult;
 import cn.jia.chat.service.JuyitingAgentRelayService;
+import cn.jia.chat.service.DisplayNameSource;
+import cn.jia.chat.service.ServerResolvedSender;
+import cn.jia.chat.service.ServerResolvedAgentSender;
 import cn.jia.chat.service.JuyitingConversationScopeService;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
@@ -55,6 +60,8 @@ import java.time.Duration;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.argThat;
 import static org.mockito.Mockito.never;
@@ -78,6 +85,8 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
     WebSocketSession session;
     @Mock
     BuiltinHallAgentSupport builtinHallAgentSupport;
+    @Mock
+    PersonalWorkspaceTaskLinkService taskLinkService;
 
 
     @BeforeEach
@@ -187,7 +196,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         verify(session, org.mockito.Mockito.atLeast(1)).sendMessage(messages.capture());
         assertTrue(messages.getAllValues().stream()
                 .map(TextMessage::getPayload)
-                .anyMatch(payload -> payload.contains("abilities must be an array")));
+                .anyMatch(payload -> payload.contains("AGENT_REGISTRATION_UNAVAILABLE")));
     }
 
     @Test
@@ -273,7 +282,8 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         verify(session, org.mockito.Mockito.times(2)).sendMessage(messageCaptor.capture());
         String messages = messageCaptor.getAllValues().stream()
                 .map(TextMessage::getPayload).reduce("", String::concat);
-        assertTrue(messages.contains("abilities must be an array"));
+        assertTrue(messages.contains("AGENT_REGISTRATION_UNAVAILABLE"));
+        assertFalse(messages.contains("abilities must be an array"), "registration error must stay sanitized");
         assertTrue(messages.contains("abilities must contain non-blank strings"));
     }
 
@@ -846,6 +856,70 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
     }
 
     @Test
+    void canonicalTaskTenantChecksAuthenticatedReceiverOwnerBeforeSendingInvite() throws Exception {
+        WebSocketSession owner = org.mockito.Mockito.mock(WebSocketSession.class);
+        WebSocketSession otherOwner = org.mockito.Mockito.mock(WebSocketSession.class);
+        stubAgentSession(owner, "session-owner-395", "agent-wuyong", "owner-a", "client-a", null);
+        stubAgentSession(otherOwner, "session-other-395", "agent-wuyong", "owner-b", "client-a", null);
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.register(any(AgentRegisterDTO.class))).thenAnswer(invocation -> {
+            AgentRegisterDTO register = invocation.getArgument(0);
+            return new AgentRegisterResultDTO(register.getAgentId(), "token", AgentConstants.STATUS_ONLINE);
+        });
+        when(agentService.listTaskMemberAgentIds("0", "client-a", "395"))
+                .thenAnswer(invocation -> "owner-a".equals(EsContextHolder.getContext().getJiacn())
+                        ? List.of("agent-wuyong") : List.of());
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        for (WebSocketSession session : List.of(owner, otherOwner)) {
+            handler.afterConnectionEstablished(session);
+            handler.handleTextMessage(session, new TextMessage(
+                    "{\"type\":\"agent.register\",\"agentId\":\"agent-wuyong\",\"name\":\"Wu Yong\"}"));
+        }
+        org.mockito.Mockito.clearInvocations(owner, otherOwner);
+        AgentActionIntentDTO invite = new AgentActionIntentDTO();
+        invite.setIntentId("invite-395");
+        invite.setTenantId("0");
+        invite.setClientId("client-a");
+        invite.setActorAgentId("agent-wuyong");
+        invite.setTaskId("395");
+        invite.setCommandType(AgentProtocolConstants.COMMAND_TASK_INVITE);
+        invite.setInstruction("请阅读榜文");
+        assertEquals("dispatched", handler.publishAgentAction(invite).getStatus());
+        verify(owner).sendMessage(any(TextMessage.class));
+        verify(otherOwner, never()).sendMessage(any(TextMessage.class));
+        org.mockito.Mockito.verify(agentService, org.mockito.Mockito.atLeastOnce())
+                .listTaskMemberAgentIds("0", "client-a", "395");
+    }
+
+    @Test
+    void canonicalTaskTenantRejectsNonWritableChatAndOtherCommands() throws Exception {
+        stubAgentSession("session-owner-blocked", "agent-wuyong");
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.register(any(AgentRegisterDTO.class)))
+                .thenReturn(new AgentRegisterResultDTO("agent-wuyong", "token", AgentConstants.STATUS_ONLINE));
+        // A registered Agent with no writable membership cannot receive other task commands.
+        when(agentService.listTaskWritableMemberAgentIds("0", "jia_client", "395"))
+                .thenReturn(List.of());
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        handler.afterConnectionEstablished(session);
+        handler.handleTextMessage(session, new TextMessage(
+                "{\"type\":\"agent.register\",\"agentId\":\"agent-wuyong\",\"name\":\"Wu Yong\"}"));
+        org.mockito.Mockito.clearInvocations(session);
+        AgentActionIntentDTO command = new AgentActionIntentDTO();
+        command.setIntentId("command-395");
+        command.setTenantId("0");
+        command.setClientId("jia_client");
+        command.setActorAgentId("agent-wuyong");
+        command.setTaskId("395");
+        command.setCommandType("TASK_EXECUTE");
+        command.setInstruction("not authorized");
+        assertEquals("queued", handler.publishAgentAction(command).getStatus());
+        verify(session, never()).sendMessage(any(TextMessage.class));
+    }
+
+    @Test
     void taskScopedDirectDeliveryFailsClosedForMissingConflictingOrMaliciousScope() throws Exception {
         stubAgentSession("session-fail-closed", "agent-target");
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
@@ -947,6 +1021,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
         when(agentService.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO("agent-001", "token-001", AgentConstants.STATUS_ONLINE));
+        when(agentService.get("agent-001")).thenReturn(runtime("agent-001", "Wu Yong"));
 
         ChatConversationEntity conversation = new ChatConversationEntity()
                 .setId(1001L).setJiacn("juyiting").setConversationType("juyiting")
@@ -974,7 +1049,10 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 {"type":"agent.register","requestId":"reg-1","agentId":"agent-001","name":"Wu Yong"}
                 """));
         handler.handleTextMessage(session, new TextMessage("""
-                {"type":"agent.message","requestId":"reply-1","conversationId":"1001","conversationType":"juyiting","agentId":"agent-001","senderName":"Wu Yong","content":"Inspect the current state first."}
+                {"type":"agent.message.delta","requestId":"reply-1-delta","conversationId":"1001","conversationType":"juyiting","agentId":"agent-001","senderName":"宋江","agentName":"林冲","content":"Inspect "}
+                """));
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"agent.message","requestId":"reply-1","conversationId":"1001","conversationType":"juyiting","agentId":"agent-001","senderName":"宋江","agentName":"林冲","content":"Inspect the current state first."}
                 """));
 
         verify(chatConversationService).appendOwnedMessage(
@@ -994,6 +1072,12 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                         && "Wu Yong".equals(event.get("senderName"))
                         && "Inspect the current state first.".equals(event.get("content"))));
 
+        verify(chatConversationEventBroker).publishIfLive(
+                org.mockito.Mockito.eq("1001"), org.mockito.Mockito.eq(1L), any(), argThat(event ->
+                "agent_message_delta".equals(event.get("type"))
+                        && "Wu Yong".equals(event.get("senderName"))
+                        && "Inspect ".equals(event.get("content"))));
+
         ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
         verify(session, org.mockito.Mockito.atLeast(4)).sendMessage(messageCaptor.capture());
         String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
@@ -1003,6 +1087,69 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         assertTrue(messages.contains("\"conversationId\":\"1001\""));
         assertTrue(messages.contains("Inspect the current state first."));
         verify(agentService, never()).reportTask(any(String.class), any(AgentTaskReportDTO.class));
+    }
+
+    @Test
+    void durableAgentCallbacksUseAuthenticatedRuntimeIdentityInsteadOfPayloadNames() throws Exception {
+        stubAgentSession("session-durable-identity", "agent-001");
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.register(any(AgentRegisterDTO.class)))
+                .thenReturn(new AgentRegisterResultDTO("agent-001", "token-001", AgentConstants.STATUS_ONLINE));
+        when(agentService.get("agent-001")).thenReturn(runtime("agent-001", "Wu Yong"));
+        ChatConversationEntity conversation = new ChatConversationEntity()
+                .setId(1001L).setJiacn("juyiting").setConversationType("juyiting")
+                .setConversationScopeType("public").setConversationScopeKey("public")
+                .setTargetAgentIds("[\"agent-001\"]").setLifecycleGeneration(1L);
+        conversation.setTenantId("0"); conversation.setClientId("jia_client");
+        when(chatConversationService.getOwned("juyiting", "jia_client", "1001"))
+                .thenReturn(conversation);
+        ChatDeliberationService deliberation = org.mockito.Mockito.mock(ChatDeliberationService.class);
+        when(deliberation.acceptDelta(anyString(), anyString(), anyString(), anyString(),
+                org.mockito.ArgumentMatchers.anyLong(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), org.mockito.ArgumentMatchers.anyLong(), anyString(),
+                any(ServerResolvedAgentSender.class)))
+                .thenReturn(new ChatDeliberationService.DeltaResult(
+                        ChatDeliberationService.DeltaStatus.ACCEPTED, null, null));
+        cn.jia.chat.deliberation.ChatTurnEntity turn = new cn.jia.chat.deliberation.ChatTurnEntity()
+                .setTurnId("turn-1");
+        when(deliberation.persistFinal(anyString(), anyString(), anyString(), anyString(),
+                org.mockito.ArgumentMatchers.anyLong(), anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), any(ServerResolvedAgentSender.class)))
+                .thenReturn(new ChatDeliberationService.FinalResult(
+                        ChatDeliberationService.FinalStatus.PERSISTED, 501L, "401", "evt-final", turn, null));
+
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker);
+        handler.setChatConversationService(chatConversationService);
+        handler.setChatDeliberationService(deliberation);
+        handler.afterConnectionEstablished(session);
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"agent.register","requestId":"reg-1","agentId":"agent-001","name":"Wu Yong"}
+                """));
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"agent.message.delta","requestId":"req-1","turnId":"turn-1","dispatchId":"dispatch-1","conversationId":"1001","conversationGeneration":"1","contextSnapshotId":"snapshot-1","contextHash":"sha256:ctx","deltaSeq":"1","agentId":"agent-001","senderName":"宋江","agentName":"林冲","content":"delta"}
+                """));
+        handler.handleTextMessage(session, new TextMessage("""
+                {"type":"agent.message","requestId":"req-1","turnId":"turn-1","dispatchId":"dispatch-1","conversationId":"1001","conversationGeneration":"1","contextSnapshotId":"snapshot-1","contextHash":"sha256:ctx","agentId":"agent-001","senderName":"宋江","agentName":"林冲","content":"final"}
+                """));
+
+        ArgumentCaptor<ServerResolvedAgentSender> deltaSender =
+                ArgumentCaptor.forClass(ServerResolvedAgentSender.class);
+        verify(deliberation).acceptDelta(eq("0"), eq("juyiting"), eq("jia_client"), eq("1001"),
+                eq(1L), eq("agent-001"), eq("req-1"), eq("turn-1"), eq("dispatch-1"),
+                eq("snapshot-1"), eq("sha256:ctx"), eq(1L), eq("delta"), deltaSender.capture());
+        ArgumentCaptor<ServerResolvedAgentSender> finalSender =
+                ArgumentCaptor.forClass(ServerResolvedAgentSender.class);
+        verify(deliberation).persistFinal(eq("0"), eq("juyiting"), eq("jia_client"), eq("1001"),
+                eq(1L), eq("agent-001"), eq("req-1"), eq("turn-1"), eq("dispatch-1"),
+                eq("snapshot-1"), eq("sha256:ctx"), eq("final"), finalSender.capture());
+        for (ServerResolvedAgentSender sender : List.of(deltaSender.getValue(), finalSender.getValue())) {
+            assertEquals("agent", sender.type());
+            assertEquals("Wu Yong", sender.displayName());
+            assertEquals("agent-001", sender.agentId());
+            assertFalse("宋江".equals(sender.displayName()));
+            assertFalse("林冲".equals(sender.displayName()));
+        }
     }
 
     @Test
@@ -1058,11 +1205,13 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(chatConversationService.getOwned("juyiting", "jia_client", "2003")).thenReturn(missingTask);
         when(chatConversationService.getOwned("juyiting", "jia_client", "2004")).thenReturn(queryFailure);
         when(chatConversationService.getOwned("juyiting", "jia_client", "2005")).thenReturn(crossTask);
-        when(agentService.listTaskWritableMemberAgentIds("juyiting", "jia_client", "task-7"))
-                .thenReturn(List.of("agent-001"));
-        when(agentService.listTaskWritableMemberAgentIds("juyiting", "jia_client", "task-8"))
+        when(agentService.listTaskWritableMemberAgentIds("0", "jia_client", "task-7"))
+                .thenAnswer(invocation -> "juyiting".equals(EsContextHolder.getContext().getJiacn())
+                        && "jia_client".equals(EsContextHolder.getContext().getClientId())
+                        ? List.of("agent-001") : List.of());
+        when(agentService.listTaskWritableMemberAgentIds("0", "jia_client", "task-8"))
                 .thenReturn(List.of("agent-other"));
-        when(agentService.listTaskWritableMemberAgentIds("juyiting", "jia_client", "task-10"))
+        when(agentService.listTaskWritableMemberAgentIds("0", "jia_client", "task-10"))
                 .thenThrow(new IllegalStateException("query failed"));
         when(chatConversationService.appendOwnedMessage(
                 org.mockito.ArgumentMatchers.eq("juyiting"),
@@ -1088,9 +1237,41 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 org.mockito.ArgumentMatchers.eq("jia_client"), any(ChatMessageEntity.class),
                 org.mockito.ArgumentMatchers.eq(1L));
         verify(agentService, org.mockito.Mockito.times(2))
-                .listTaskWritableMemberAgentIds("juyiting", "jia_client", "task-7");
-        verify(agentService).listTaskWritableMemberAgentIds("juyiting", "jia_client", "task-8");
-        verify(agentService).listTaskWritableMemberAgentIds("juyiting", "jia_client", "task-10");
+                .listTaskWritableMemberAgentIds("0", "jia_client", "task-7");
+        verify(agentService).listTaskWritableMemberAgentIds("0", "jia_client", "task-8");
+        verify(agentService).listTaskWritableMemberAgentIds("0", "jia_client", "task-10");
+    }
+
+    @Test
+    void taskMemberLookupRestoresCallingContextAfterSuccessAndFailure() {
+        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
+        when(agentService.listTaskWritableMemberAgentIds("0", "jia_client", "task-7"))
+                .thenAnswer(invocation -> {
+                    assertEquals("juyiting", EsContextHolder.getContext().getJiacn());
+                    assertEquals("jia_client", EsContextHolder.getContext().getClientId());
+                    return List.of("agent-001");
+                });
+        when(agentService.listTaskWritableMemberAgentIds("0", "jia_client", "task-8"))
+                .thenThrow(new IllegalStateException("authoritative lookup unavailable"));
+        AgentWebSocketHandler handler = new AgentWebSocketHandler(
+                chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker);
+        EsContext previous = EsContextHolder.getContext();
+        EsContext caller = new EsContext();
+        caller.setJiacn("unrelated-owner");
+        caller.setClientId("unrelated-client");
+        EsContextHolder.setContext(caller);
+        try {
+            Set<String> success = org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                    handler, "resolveConversationTaskMembers", "juyiting", "jia_client", "task-7");
+            assertEquals(Set.of("agent-001"), success);
+            org.junit.jupiter.api.Assertions.assertSame(caller, EsContextHolder.getContext());
+            Set<String> failure = org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                    handler, "resolveConversationTaskMembers", "juyiting", "jia_client", "task-8");
+            assertEquals(Set.of(), failure);
+            org.junit.jupiter.api.Assertions.assertSame(caller, EsContextHolder.getContext());
+        } finally {
+            EsContextHolder.setContext(previous);
+        }
     }
 
     @Test
@@ -1163,7 +1344,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                     request.getAgentId(), "token", AgentConstants.STATUS_ONLINE);
         });
         when(agentService.listTaskWritableMemberAgentIds(
-                "juyiting", "jia_client", "task-recipients"))
+                "0", "jia_client", "task-recipients"))
                 .thenReturn(List.of("agent-current"));
         ChatConversationEntity conversation = new ChatConversationEntity()
                 .setId(2012L).setJiacn("juyiting").setConversationType("juyiting")
@@ -1200,7 +1381,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         verify(senderSession, org.mockito.Mockito.atLeastOnce()).sendMessage(any(TextMessage.class));
         verify(revokedSession, never()).sendMessage(any(TextMessage.class));
         verify(agentService, org.mockito.Mockito.times(2))
-                .listTaskWritableMemberAgentIds("juyiting", "jia_client", "task-recipients");
+                .listTaskWritableMemberAgentIds("0", "jia_client", "task-recipients");
     }
 
     @Test
@@ -1658,7 +1839,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
         when(agentService.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO("agent-wuyong", "token-001", AgentConstants.STATUS_ONLINE));
-        when(agentService.listTaskWritableMemberAgentIds("juyiting", "jia_client", "task-001"))
+        when(agentService.listTaskWritableMemberAgentIds("0", "jia_client", "task-001"))
                 .thenReturn(List.of("agent-wuyong"));
 
         AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
@@ -1672,7 +1853,16 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(session.isOpen()).thenReturn(true);
         EsContextHolder.setContext(commandContext);
 
-        HallActionDispatcher dispatcher = new HallActionDispatcher(handler);
+        cn.jia.agent.config.AgentRabbitSafetyGate gate = org.mockito.Mockito.mock(
+                cn.jia.agent.config.AgentRabbitSafetyGate.class);
+        when(gate.state()).thenReturn(cn.jia.agent.config.AgentRabbitActivationState.OFF);
+        cn.jia.agent.service.AgentTaskCollaborationAccessService access = org.mockito.Mockito.mock(
+                cn.jia.agent.service.AgentTaskCollaborationAccessService.class);
+        when(access.resolveMemberAccess("0", "jia_client", "juyiting", "task-001", "agent-wuyong"))
+                .thenReturn(cn.jia.agent.access.AgentTaskAccessLevel.READ_WRITE);
+        HallActionDispatcher dispatcher = new HallActionDispatcher(handler, gate,
+                org.mockito.Mockito.mock(ObjectProvider.class), org.mockito.Mockito.mock(ObjectProvider.class),
+                agentService, access);
 
         HallActionIntent intent = new HallActionIntent();
         intent.setIntentId("intent-dispatch-1");
@@ -1684,7 +1874,11 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         intent.setInstruction("请向林冲说明阻塞并请求替代方案");
         intent.setReason("接口依赖阻塞");
 
-        HallActionDispatchResult result = dispatcher.dispatch(intent);
+        assertEquals("failed", dispatcher.dispatch(intent).getStatus(),
+                "owner-less dispatch must remain fail closed");
+        verify(session, never()).sendMessage(any(TextMessage.class));
+        HallActionDispatchResult result = dispatcher.dispatch(intent,
+                new cn.jia.chat.service.HallTrustedCaller("0", "jia_client", "juyiting", "agent-wuyong"));
 
         assertEquals("dispatched", result.getStatus());
 
@@ -1746,14 +1940,12 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         conversation.setTenantId("0"); conversation.setClientId("web-client");
         when(chatConversationService.get(areaZeroScope(), "1001"))
                 .thenReturn(conversation);
-        when(chatConversationService.appendOwnedMessage(
-                org.mockito.ArgumentMatchers.eq(areaZeroScope()), any(ChatMessageEntity.class),
-                org.mockito.ArgumentMatchers.eq(1L)))
-                .thenAnswer(invocation -> invocation.getArgument(1));
         JuyitingConversationScopeService scopeService = new JuyitingConversationScopeService(builtinHallAgentSupport, agentService);
+        ChatDeliberationService deliberationService = org.mockito.Mockito.mock(ChatDeliberationService.class);
         JuyitingAgentRelayService relayService = new JuyitingAgentRelayService(
                 handler, chatConversationEventBroker, builtinHallAgentSupport,
-                chatConversationService, agentService, scopeService);
+                chatConversationService, agentService, scopeService,
+                taskLinkService, deliberationService);
 
         ChatMessageDTO chatMessage = new ChatMessageDTO();
         chatMessage.setContent("请回报当前进度");
@@ -1770,13 +1962,35 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 .thenReturn(Flux.just("{\"type\":\"agent_message\",\"content\":\"ok\"}"));
 
         EsContext relayContext = new EsContext();
+        relayContext.setTenantId("0");
         relayContext.setJiacn("tester");
         relayContext.setClientId("web-client");
         EsContextHolder.setContext(relayContext);
-        JuyitingAgentRelayResult relayResult = relayService.relay(areaZeroScope(), chatMessage, "1001", () -> Flux.just("builtin"));
+        ChatDeliberationService.Dispatch dispatch = new ChatDeliberationService.Dispatch(
+                "req-1", "turn-1", "dispatch-1", "event-1", "agent-wuyong", "CHAT",
+                "RECEIVED", "snapshot-1", "sha256:ctx", Map.of(), Map.of());
+        when(deliberationService.admit(any(), any(ServerResolvedSender.class), any(),
+                org.mockito.ArgumentMatchers.anyLong(), any(), any(), any(), any()))
+                .thenReturn(new ChatDeliberationService.Admission("req-1", 1L, "9007199254740993",
+                        "1001", 1L, cn.jia.chat.deliberation.InteractionRoute.CHAT, List.of(dispatch), false));
+        JuyitingAgentRelayResult relayResult = relayService.relay(
+                areaZeroScope(), chatMessage, "1001",
+                new ServerResolvedSender("user", "测试用户", "tester", "web-client",
+                        DisplayNameSource.NICKNAME),
+                cn.jia.chat.deliberation.InteractionRoute.CHAT);
         List<String> events = relayResult.stream().collectList().block(Duration.ofSeconds(5));
-
         assertTrue(relayResult.attempted());
+        assertTrue(handler.sendDirectMessageToAgent("0", "tester", "web-client", "agent-wuyong", Map.ofEntries(
+                Map.entry("schemaVersion", AgentProtocolConstants.VERSION_1),
+                Map.entry("messageType", AgentProtocolConstants.TYPE_CHAT_MESSAGE),
+                Map.entry("messageId", "event-1"), Map.entry("correlationId", "1001"),
+                Map.entry("tenantId", "0"), Map.entry("clientId", "web-client"),
+                Map.entry("targetAgentId", "agent-wuyong"), Map.entry("agentId", "agent-wuyong"),
+                Map.entry("requestId", "req-1"), Map.entry("requestRevision", "1"),
+                Map.entry("turnId", "turn-1"), Map.entry("dispatchId", "dispatch-1"),
+                Map.entry("conversationId", "1001"), Map.entry("conversationGeneration", "1"),
+                Map.entry("content", "请回报当前进度"), Map.entry("sentAt", "1"), Map.entry("timestamp", "1"),
+                Map.entry("payload", Map.of("content", "请回报当前进度", "conversationId", "1001")))));
 
         ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
         verify(session, org.mockito.Mockito.atLeast(1)).sendMessage(messageCaptor.capture());
@@ -1848,6 +2062,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
             String tenantId, String clientId, String runtimeInstanceId) {
         Map<String, Object> attributes = new java.util.HashMap<>();
         attributes.put("agentId", agentId);
+        attributes.put("tenantId", "0");
         attributes.put("clientId", clientId);
         attributes.put("jiacn", tenantId);
         if (runtimeInstanceId != null) {

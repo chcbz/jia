@@ -84,7 +84,8 @@ class AgentTaskEventRealTransactionTest {
     private static final String JDBC_URL =
             "jdbc:h2:mem:cyf_c01_v2;MODE=MYSQL;DB_CLOSE_DELAY=-1;"
             + "CASE_INSENSITIVE_IDENTIFIERS=TRUE";
-    private static final String TENANT = "tenant-c01";
+    private static final String TENANT = "0";
+    private static final String OWNER = "owner-c01";
     private static final String CLIENT = "client-c01";
     private static final String TASK_ID = "task-event-001";
     private static final String ALT_TENANT = "tenant-other";
@@ -141,10 +142,11 @@ class AgentTaskEventRealTransactionTest {
                     current_event_version   BIGINT NOT NULL DEFAULT 0,
                     tenant_id               VARCHAR(50) NOT NULL,
                     client_id               VARCHAR(50) NOT NULL,
+                    owner_jiacn      VARCHAR(50) NOT NULL,
                     create_time             BIGINT DEFAULT NULL,
                     update_time             BIGINT DEFAULT NULL,
                     PRIMARY KEY (id),
-                    UNIQUE KEY uk_agent_task_meta_scope (tenant_id, client_id, task_id)
+                    UNIQUE KEY uk_agent_task_meta_scope (tenant_id, client_id, owner_jiacn, task_id)
                 )
                 """);
         jdbc.execute("""
@@ -162,11 +164,12 @@ class AgentTaskEventRealTransactionTest {
                     occurred_at     BIGINT NOT NULL,
                     tenant_id       VARCHAR(50) NOT NULL,
                     client_id       VARCHAR(50) NOT NULL,
+                    owner_jiacn      VARCHAR(50) NOT NULL,
                     create_time     BIGINT DEFAULT NULL,
                     update_time     BIGINT DEFAULT NULL,
                     PRIMARY KEY (id),
-                    UNIQUE KEY uk_task_event_version (tenant_id, client_id, task_id, event_version),
-                    UNIQUE KEY uk_task_event_id (tenant_id, client_id, event_id)
+                    UNIQUE KEY uk_task_event_version (tenant_id, client_id, owner_jiacn, task_id, event_version),
+                    UNIQUE KEY uk_task_event_id (tenant_id, client_id, owner_jiacn, event_id)
                 )
                 """);
     }
@@ -184,11 +187,11 @@ class AgentTaskEventRealTransactionTest {
                 INSERT INTO agent_task_meta
                     (task_id, reward_status, collaboration_mode, risk_level, max_agents,
                      review_required, task_version, current_event_version,
-                     tenant_id, client_id, create_time, update_time)
+                     tenant_id, client_id, owner_jiacn, create_time, update_time)
                 VALUES (?, 'open', 'single', 'low', 1,
                         0, 0, ?,
-                        ?, ?, ?, ?)
-                """, taskId, currentEventVersion, tenantId, clientId, now, now);
+                        ?, ?, ?, ?, ?)
+                """, taskId, currentEventVersion, tenantId, clientId, OWNER, now, now);
     }
 
     private AgentTaskEventWriteCommand command(String eventId, String eventType) {
@@ -200,6 +203,7 @@ class AgentTaskEventRealTransactionTest {
         return new AgentTaskEventWriteCommand()
                 .setTenantId(TENANT)
                 .setClientId(CLIENT)
+                .setOwnerJiacn(OWNER)
                 .setTaskId(TASK_ID)
                 .setEventId(eventId)
                 .setEventType(eventType)
@@ -236,7 +240,7 @@ class AgentTaskEventRealTransactionTest {
         assertEquals(2L, cv);
 
         List<AgentTaskEventEntity> events = eventDao.findAfterVersion(
-                TENANT, CLIENT, TASK_ID, 0L, 2);
+                TENANT, CLIENT, OWNER, TASK_ID, 0L, 2);
         assertEquals(2, events.size());
     }
 
@@ -323,7 +327,7 @@ class AgentTaskEventRealTransactionTest {
         // Manually trigger rollback via direct DAO without commit
         TransactionStatus tx = txManager.getTransaction(new DefaultTransactionDefinition());
         try {
-            Long cv = eventDao.lockAndAllocateVersion(TENANT, CLIENT, TASK_ID);
+            Long cv = eventDao.lockAndAllocateVersion(TENANT, CLIENT, OWNER, TASK_ID);
             assertNotNull(cv);
             long nv = cv + 1;
             long now = DateUtil.nowTime();
@@ -341,11 +345,12 @@ class AgentTaskEventRealTransactionTest {
             event.setOccurredAt(now);
             event.setTenantId(TENANT);
             event.setClientId(CLIENT);
+            event.setOwnerJiacn(OWNER);
             event.setCreateTime(now);
             event.setUpdateTime(now);
 
             eventDao.insertEvent(event);
-            eventDao.commitEventVersion(TENANT, CLIENT, TASK_ID, cv, nv, now);
+            eventDao.commitEventVersion(TENANT, CLIENT, OWNER, TASK_ID, cv, nv, now);
 
             txManager.rollback(tx);
 
@@ -468,11 +473,12 @@ class AgentTaskEventRealTransactionTest {
                     occurred_at     BIGINT NOT NULL,
                     tenant_id       VARCHAR(50) NOT NULL,
                     client_id       VARCHAR(50) NOT NULL,
+                    owner_jiacn      VARCHAR(50) NOT NULL,
                     create_time     BIGINT DEFAULT NULL,
                     update_time     BIGINT DEFAULT NULL,
                     PRIMARY KEY (id),
-                    UNIQUE KEY uk_task_event_version (tenant_id, client_id, task_id, event_version),
-                    UNIQUE KEY uk_task_event_id (tenant_id, client_id, event_id)
+                    UNIQUE KEY uk_task_event_version (tenant_id, client_id, owner_jiacn, task_id, event_version),
+                    UNIQUE KEY uk_task_event_id (tenant_id, client_id, owner_jiacn, event_id)
                 )
                 """);
     }
@@ -496,8 +502,10 @@ class AgentTaskEventRealTransactionTest {
             writer.append(c);
         });
 
+        assertAppendFails(ALT_TENANT, CLIENT, "evt-unsupported-tenant");
+
         AgentTaskEventWriteCommand c5 = command("evt-sc5", TaskEventType.TASK_CREATED);
-        c5.setTenantId(ALT_TENANT);
+        c5.setOwnerJiacn("other-owner");
         cn.jia.agent.exception.AgentTaskCollaborationException ex =
                 assertThrows(cn.jia.agent.exception.AgentTaskCollaborationException.class,
                         () -> writer.append(c5));
@@ -509,6 +517,7 @@ class AgentTaskEventRealTransactionTest {
         AgentTaskEventWriteCommand c = new AgentTaskEventWriteCommand()
                 .setTenantId(tenantId)
                 .setClientId(clientId)
+                .setOwnerJiacn(OWNER)
                 .setTaskId(TASK_ID)
                 .setEventId(eventId)
                 .setEventType(TaskEventType.TASK_CREATED)
@@ -550,7 +559,7 @@ class AgentTaskEventRealTransactionTest {
         seedTask(TENANT, CLIENT, TASK_ID);
         long now = DateUtil.nowTime();
         assertThrows(IllegalArgumentException.class, () ->
-                eventDao.commitEventVersion(TENANT, CLIENT, TASK_ID,
+                eventDao.commitEventVersion(TENANT, CLIENT, OWNER, TASK_ID,
                         Long.MAX_VALUE, Long.MAX_VALUE + 1, now));
     }
 
@@ -563,18 +572,18 @@ class AgentTaskEventRealTransactionTest {
 
         // newVersion == expected → rejected
         assertThrows(IllegalArgumentException.class, () ->
-                eventDao.commitEventVersion(TENANT, CLIENT, TASK_ID, 5L, 5L, now));
+                eventDao.commitEventVersion(TENANT, CLIENT, OWNER, TASK_ID, 5L, 5L, now));
 
         // newVersion == expected - 1 → rejected
         assertThrows(IllegalArgumentException.class, () ->
-                eventDao.commitEventVersion(TENANT, CLIENT, TASK_ID, 5L, 4L, now));
+                eventDao.commitEventVersion(TENANT, CLIENT, OWNER, TASK_ID, 5L, 4L, now));
 
         // newVersion == expected + 2 → rejected (skip)
         assertThrows(IllegalArgumentException.class, () ->
-                eventDao.commitEventVersion(TENANT, CLIENT, TASK_ID, 5L, 7L, now));
+                eventDao.commitEventVersion(TENANT, CLIENT, OWNER, TASK_ID, 5L, 7L, now));
 
         // newVersion == expected + 1 → OK
-        int ok = eventDao.commitEventVersion(TENANT, CLIENT, TASK_ID, 5L, 6L, now);
+        int ok = eventDao.commitEventVersion(TENANT, CLIENT, OWNER, TASK_ID, 5L, 6L, now);
         assertEquals(1, ok);
     }
 
@@ -584,10 +593,10 @@ class AgentTaskEventRealTransactionTest {
     void byteExactCaseScopeMismatch() {
         seedTask(TENANT, CLIENT, TASK_ID);
 
-        // Different case tenant should fail as byte-exact mismatch
+        // Different case owner should fail as byte-exact mismatch
         // (H2 CASE_INSENSITIVE_IDENTIFIERS only affects column names, not string comparison)
         Long result = eventDao.lockAndAllocateVersion(
-                TENANT.toUpperCase(), CLIENT, TASK_ID);
+                TENANT, CLIENT, OWNER.toUpperCase(), TASK_ID);
         assertNull(result, "different-case scope should not match");
     }
 
@@ -668,6 +677,7 @@ class AgentTaskEventRealTransactionTest {
             dup.setOccurredAt(DateUtil.nowTime());
             dup.setTenantId(TENANT);
             dup.setClientId(CLIENT);
+            dup.setOwnerJiacn(OWNER);
             dup.setCreateTime(DateUtil.nowTime());
             dup.setUpdateTime(DateUtil.nowTime());
 
@@ -685,12 +695,12 @@ class AgentTaskEventRealTransactionTest {
         seedTask(TENANT, CLIENT, TASK_ID);
         writer.append(command("evt-lookup-1", TaskEventType.TASK_CREATED));
 
-        // Wrong tenant → null
-        assertNull(eventDao.findByEventId(ALT_TENANT, CLIENT, "evt-lookup-1"));
+        // Wrong owner in the same deployment tenant → null
+        assertNull(eventDao.findByEventId(TENANT, CLIENT, "other-owner", "evt-lookup-1"));
 
         // Trailing space → IAE
         assertThrows(IllegalArgumentException.class, () ->
-                eventDao.findByEventId(TENANT, CLIENT, "evt-lookup-1 "));
+                eventDao.findByEventId(TENANT, CLIENT, OWNER, "evt-lookup-1 "));
     }
 
     // ── Test 14: CAS prevents lost update ──
@@ -701,12 +711,12 @@ class AgentTaskEventRealTransactionTest {
         long now = DateUtil.nowTime();
 
         // First commit succeeds: 5 → 6
-        int r1 = eventDao.commitEventVersion(TENANT, CLIENT, TASK_ID, 5L, 6L, now);
+        int r1 = eventDao.commitEventVersion(TENANT, CLIENT, OWNER, TASK_ID, 5L, 6L, now);
         assertEquals(1, r1);
 
         // Second commit with stale expected (5→6 again) fails at SQL CAS
         // because current_event_version is now 6, not 5
-        int r2 = eventDao.commitEventVersion(TENANT, CLIENT, TASK_ID, 5L, 6L, now);
+        int r2 = eventDao.commitEventVersion(TENANT, CLIENT, OWNER, TASK_ID, 5L, 6L, now);
         assertEquals(0, r2, "CAS should reject stale expected version");
 
         Long cv = jdbc.queryForObject(
@@ -769,25 +779,25 @@ class AgentTaskEventRealTransactionTest {
         }
 
         List<AgentTaskEventEntity> after = eventDao.findAfterVersion(
-                TENANT, CLIENT, TASK_ID, 2L, 2);
+                TENANT, CLIENT, OWNER, TASK_ID, 2L, 2);
         assertEquals(2, after.size());
         assertEquals(3L, after.get(0).getEventVersion());
         assertEquals(4L, after.get(1).getEventVersion());
-        assertEquals(5L, eventDao.findCurrentVersion(TENANT, CLIENT, TASK_ID));
-        assertEquals(1L, eventDao.findEarliestVersion(TENANT, CLIENT, TASK_ID));
-        assertNull(eventDao.findCurrentVersion(TENANT.toUpperCase(), CLIENT, TASK_ID));
-        assertNull(eventDao.findEarliestVersion(TENANT.toUpperCase(), CLIENT, TASK_ID));
+        assertEquals(5L, eventDao.findCurrentVersion(TENANT, CLIENT, OWNER, TASK_ID));
+        assertEquals(1L, eventDao.findEarliestVersion(TENANT, CLIENT, OWNER, TASK_ID));
+        assertNull(eventDao.findCurrentVersion(TENANT, CLIENT, OWNER.toUpperCase(), TASK_ID));
+        assertNull(eventDao.findEarliestVersion(TENANT, CLIENT, OWNER.toUpperCase(), TASK_ID));
         assertTrue(eventDao.findAfterVersion(
-                TENANT.toUpperCase(), CLIENT, TASK_ID, 0L, 2).isEmpty());
+                TENANT, CLIENT, OWNER.toUpperCase(), TASK_ID, 0L, 2).isEmpty());
 
         assertTrue(eventDao.findAfterVersion(
-                TENANT, CLIENT, TASK_ID, 5L, 2).isEmpty());
+                TENANT, CLIENT, OWNER, TASK_ID, 5L, 2).isEmpty());
         assertThrows(IllegalArgumentException.class, () ->
-                eventDao.findAfterVersion(TENANT, CLIENT, TASK_ID, -1L, 2));
+                eventDao.findAfterVersion(TENANT, CLIENT, OWNER, TASK_ID, -1L, 2));
         assertThrows(IllegalArgumentException.class, () ->
-                eventDao.findAfterVersion(TENANT, CLIENT, TASK_ID, 0L, 0));
+                eventDao.findAfterVersion(TENANT, CLIENT, OWNER, TASK_ID, 0L, 0));
         assertThrows(IllegalArgumentException.class, () ->
-                eventDao.findAfterVersion(TENANT, CLIENT, TASK_ID, 0L, 1001));
+                eventDao.findAfterVersion(TENANT, CLIENT, OWNER, TASK_ID, 0L, 1001));
     }
 
     // ── Test 18: Multiple aggregate types ──
@@ -808,7 +818,7 @@ class AgentTaskEventRealTransactionTest {
                 TaskEventType.Aggregate.ARTIFACT, "art-1"));
 
         List<AgentTaskEventEntity> events = eventDao.findAfterVersion(
-                TENANT, CLIENT, TASK_ID, 0L, 5);
+                TENANT, CLIENT, OWNER, TASK_ID, 0L, 5);
         assertEquals(5, events.size());
 
         Set<String> types = new HashSet<>();

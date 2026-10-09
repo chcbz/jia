@@ -3,12 +3,15 @@ package cn.jia.agent.service.impl;
 import cn.jia.agent.common.TaskEventType;
 import cn.jia.agent.dao.AgentTaskFormalDeliveryDao;
 import cn.jia.agent.exception.AgentTaskCollaborationException;
+import cn.jia.agent.dao.AgentTaskMemberDao;
 import cn.jia.agent.dao.AgentTaskMetaDao;
 import cn.jia.agent.dao.AgentTaskWorkItemDao;
 import cn.jia.agent.entity.AgentTaskEventWriteCommand;
 import cn.jia.agent.entity.AgentTaskFormalDeliveryDecisionDTO;
 import cn.jia.agent.entity.AgentTaskFormalDeliveryEntity;
 import cn.jia.agent.entity.AgentTaskFormalDeliveryItemEntity;
+import cn.jia.agent.entity.AgentTaskMemberDTO;
+import cn.jia.agent.entity.AgentTaskMemberEntity;
 import cn.jia.agent.entity.AgentTaskMetaEntity;
 import cn.jia.agent.entity.AgentTaskWorkItemDTO;
 import cn.jia.agent.entity.AgentTaskWorkItemEntity;
@@ -23,6 +26,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -43,6 +47,7 @@ class AgentTaskFormalDeliveryDecisionServiceImplTest {
 
     private AgentTaskFormalDeliveryDao deliveryDao;
     private AgentTaskMetaDao taskMetaDao;
+    private AgentTaskMemberDao memberDao;
     private AgentTaskWorkItemDao workItemDao;
     private AgentTaskMutationTransaction transaction;
     private AgentTaskEventWriter eventWriter;
@@ -52,6 +57,7 @@ class AgentTaskFormalDeliveryDecisionServiceImplTest {
     void setUp() {
         deliveryDao = mock(AgentTaskFormalDeliveryDao.class);
         taskMetaDao = mock(AgentTaskMetaDao.class);
+        memberDao = mock(AgentTaskMemberDao.class);
         workItemDao = mock(AgentTaskWorkItemDao.class);
         transaction = mock(AgentTaskMutationTransaction.class);
         eventWriter = mock(AgentTaskEventWriter.class);
@@ -61,7 +67,7 @@ class AgentTaskFormalDeliveryDecisionServiceImplTest {
                     return mutation.apply(root());
                 });
         service = new AgentTaskFormalDeliveryDecisionServiceImpl(deliveryDao, taskMetaDao,
-                workItemDao, transaction, eventWriter, () -> 2_000L);
+                memberDao, workItemDao, transaction, eventWriter, () -> 2_000L);
     }
 
     @Test
@@ -95,17 +101,22 @@ class AgentTaskFormalDeliveryDecisionServiceImplTest {
                 TaskEventType.WORK_ITEM_READY, TaskEventType.TASK_STARTED),
                 events.getAllValues().stream().map(AgentTaskEventWriteCommand::getEventType).toList());
         assertFalse(events.getAllValues().getFirst().getEventJson().contains("add tests"));
+        verify(memberDao, never()).findByTaskAndAgentForUpdate(any(), any(), any(), any(), any());
     }
 
     @Test
     void acceptedDecisionCompletesTaskAndWorkItem() {
         when(deliveryDao.findForUpdate(TENANT, CLIENT, DELIVERY)).thenReturn(delivery());
         when(workItemDao.findByTaskAndWorkItemId(TENANT, CLIENT, OWNER, TASK, WORK)).thenReturn(workItem());
+        when(memberDao.findByTaskAndAgentForUpdate(TENANT, CLIENT, OWNER, TASK, "agent-a"))
+                .thenReturn(member());
         when(deliveryDao.reviewByVersion(TENANT, CLIENT, DELIVERY, "submitted", 0L,
                 "accepted", OWNER, null, 2_000L)).thenReturn(1);
         when(taskMetaDao.updateStatusByVersionInOwnerScope(TENANT, CLIENT, OWNER, TASK, 4L, "completed",
                 100L, 2_000L, null)).thenReturn(1);
         when(workItemDao.updateByVersion(eq(TENANT), eq(CLIENT), eq(OWNER), eq(WORK), eq(8L), any()))
+                .thenReturn(1);
+        when(memberDao.updateByVersion(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK), eq("agent-a"), eq(3L), any()))
                 .thenReturn(1);
         when(deliveryDao.listItems(TENANT, CLIENT, DELIVERY)).thenReturn(List.of(item()));
 
@@ -116,6 +127,18 @@ class AgentTaskFormalDeliveryDecisionServiceImplTest {
         verify(workItemDao).updateByVersion(eq(TENANT), eq(CLIENT), eq(OWNER), eq(WORK), eq(8L), update.capture());
         assertEquals("completed", update.getValue().getStatus());
         assertEquals(2_000L, update.getValue().getCompletedAt());
+        ArgumentCaptor<AgentTaskMemberDTO> memberUpdate = ArgumentCaptor.forClass(AgentTaskMemberDTO.class);
+        verify(memberDao).updateByVersion(eq(TENANT), eq(CLIENT), eq(OWNER), eq(TASK),
+                eq("agent-a"), eq(3L), memberUpdate.capture());
+        assertEquals("done", memberUpdate.getValue().getMemberStatus());
+        assertEquals(2_000L, memberUpdate.getValue().getCompletedAt());
+
+        ArgumentCaptor<AgentTaskEventWriteCommand> events = ArgumentCaptor.forClass(AgentTaskEventWriteCommand.class);
+        verify(eventWriter, org.mockito.Mockito.times(4)).append(events.capture());
+        assertEquals(List.of(TaskEventType.FORMAL_DELIVERY_ACCEPTED, TaskEventType.MEMBER_DONE,
+                TaskEventType.WORK_ITEM_COMPLETED, TaskEventType.TASK_COMPLETED),
+                events.getAllValues().stream().map(AgentTaskEventWriteCommand::getEventType).toList());
+        assertTrue(events.getAllValues().get(1).getEventJson().contains("\"role\":\"coordinator\""));
     }
 
     @Test
@@ -169,6 +192,15 @@ class AgentTaskFormalDeliveryDecisionServiceImplTest {
         entity.setState("submitted"); entity.setSubmissionDigest(HASH); entity.setManifestArtifactId(MANIFEST);
         entity.setManifestArtifactVersion(1); entity.setSubmittedAt(1_000L); entity.setVersion(0L);
         return entity;
+    }
+
+    private static AgentTaskMemberEntity member() {
+        AgentTaskMemberEntity member = new AgentTaskMemberEntity();
+        member.setTenantId(TENANT); member.setClientId(CLIENT); member.setOwnerJiacn(OWNER);
+        member.setTaskId(TASK); member.setAgentId("agent-a"); member.setMemberRole("coordinator");
+        member.setMemberStatus("accepted"); member.setAssignmentSource("manual");
+        member.setJoinedAt(500L); member.setAcceptedAt(600L); member.setVersion(3L);
+        return member;
     }
 
     private static AgentTaskWorkItemEntity workItem() {

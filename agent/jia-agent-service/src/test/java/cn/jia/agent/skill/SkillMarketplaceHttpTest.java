@@ -28,7 +28,7 @@ class SkillMarketplaceHttpTest {
         assertThrows(SkillMarketplaceException.class,()->SkillMarketplaceHttp.body(raw(json.replace("[]","[\"a\",\"a\"]")),true));
     }
     @Test void actorIsNeverReplacedWithLegacyTenantOwner() {
-        var a=new HostingRentHttp.Actor("login-sub","legacy-owner","client");
-        assertEquals("login-sub",a.principal().id()); assertEquals("legacy-owner",a.scope().tenantId());
+        var a=new HostingRentHttp.Actor("login-sub","0","client","legacy-owner");
+        assertEquals("login-sub",a.principal().id()); assertEquals("0",a.scope().tenantId()); assertEquals("legacy-owner",a.ownerJiacn());
     }
 }

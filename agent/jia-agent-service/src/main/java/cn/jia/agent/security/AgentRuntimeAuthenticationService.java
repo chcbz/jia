@@ -10,6 +10,7 @@ import cn.jia.core.tenant.WorkerScope;
 import cn.jia.oauth.service.ApiKeyService;
 import cn.jia.user.security.AccountSecurityService;
 import cn.jia.user.security.AccountSecuritySnapshot;
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -98,8 +99,9 @@ public final class AgentRuntimeAuthenticationService implements AgentCommandV2Ru
     public synchronized AgentRuntimeAuthentication authenticate(String agent, String runtime, String token) {
         if (agent == null || runtime == null || !validToken(token)) throw denied();
         Binding binding = bindings.get(agent);
-        if (binding == null || !binding.scope.runtimeInstanceId().equals(runtime)) throw denied();
-        validate(binding, token);
+        if (binding == null || !binding.scope.runtimeInstanceId().equals(runtime)
+                || !MessageDigest.isEqual(binding.tokenDigest, digest(token))) throw denied();
+        validatePersistent(binding);
         if (bindings.get(agent) != binding || !binding.connected.getAsBoolean()) throw denied();
         return new AgentRuntimeAuthentication(binding.scope);
     }
@@ -141,8 +143,23 @@ public final class AgentRuntimeAuthenticationService implements AgentCommandV2Ru
                 AgentCommandV2ExecutionPort.SEND_TIMEOUT_MILLIS);
     }
 
+    /**
+     * Non-secret current-session check for server-side capability projection. The originally
+     * bound registration-token digest is rechecked against the current persisted token; API key,
+     * account epoch, identity and runtime state are revalidated exactly as for native HTTP auth.
+     */
+    public boolean isCurrentBinding(String sessionId, String tenantId, String clientId,
+            String ownerJiacn, String agentId, String runtimeInstanceId) {
+        Binding binding = bindings.get(agentId);
+        if (binding == null || !binding.sessionId.equals(sessionId)
+                || !binding.scope.equals(new AgentRuntimeAuthentication.Scope(
+                        tenantId, clientId, ownerJiacn, agentId, runtimeInstanceId))) return false;
+        validatePersistent(binding);
+        return bindings.get(agentId) == binding && binding.connected.getAsBoolean();
+    }
+
     private void validate(Binding binding, String token) {
-        if (!MessageDigest.isEqual(binding.tokenDigest, digest(token))) throw denied();
+        if (!validToken(token) || !MessageDigest.isEqual(binding.tokenDigest, digest(token))) throw denied();
         validatePersistent(binding);
     }
 
@@ -165,10 +182,18 @@ public final class AgentRuntimeAuthenticationService implements AgentCommandV2Ru
                 || !scope.clientId().equals(row.getClientId()) || row.getBindingId() == null
                 || !Set.of("online", "busy").contains(row.getStatus()) || !validToken(row.getTokenHash())
                 || !MessageDigest.isEqual(binding.tokenDigest, digest(row.getTokenHash()))) throw denied();
-        var identity = identities.requireActiveIdentityForBinding(scope.tenantId(), scope.clientId(),
-                scope.ownerJiacn(), row.getBindingId(), scope.agentId());
-        if (identity == null || !scope.agentId().equals(identity.getCanonicalAgentId())) throw denied();
-        if (identities.requireActiveBinding(identity, null) == null) throw denied();
+        try {
+            var identity = identities.requireActiveIdentityForBinding(scope.tenantId(), scope.clientId(),
+                    scope.ownerJiacn(), row.getBindingId(), scope.agentId());
+            if (identity == null || !scope.agentId().equals(identity.getCanonicalAgentId())) throw denied();
+            if (identities.requireActiveBinding(identity, null) == null) throw denied();
+        } catch (DataAccessException unavailable) {
+            throw unavailable;
+        } catch (RuntimeException invalidIdentity) {
+            // Identity lifecycle/binding mismatch is an authentication denial. Persistence
+            // failures remain distinguishable above so capability reads can return 503.
+            throw denied();
+        }
     }
 
     private AccountSecuritySnapshot account(String ownerJiacn) {

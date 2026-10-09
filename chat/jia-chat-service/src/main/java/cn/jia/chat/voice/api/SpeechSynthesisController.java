@@ -34,7 +34,8 @@ public class SpeechSynthesisController {
         this.service = service;
     }
 
-    @PostMapping(path = "/synthesis", consumes = "application/json", produces = "audio/mpeg")
+    @PostMapping(path = "/synthesis", consumes = "application/json",
+            produces = {"audio/mpeg", "audio/wav"})
     public ResponseEntity<byte[]> synthesize(
             @RequestBody VoiceSynthesisRequest rawRequest, Authentication authentication) {
         VoiceIdentity identity = identityResolver.resolve(authentication);
@@ -42,7 +43,7 @@ public class SpeechSynthesisController {
         SpeechSynthesisResult result = service.synthesize(identity, request);
         byte[] audio = result.audio();
         return ResponseEntity.ok()
-                .contentType(MediaType.parseMediaType("audio/mpeg"))
+                .contentType(MediaType.parseMediaType(result.mediaType()))
                 .cacheControl(CacheControl.noStore())
                 .header("X-Voice-Request-Id", request.requestId())
                 .header(HttpHeaders.CONTENT_LENGTH, Integer.toString(audio.length))

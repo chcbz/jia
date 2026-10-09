@@ -1,5 +1,6 @@
 package cn.jia.chat.config;
 
+import cn.jia.agent.hosting.ManagedHostingCredentials;
 import cn.jia.agent.service.AgentService;
 import cn.jia.oauth.entity.OauthApiKeyEntity;
 import cn.jia.oauth.service.ApiKeyService;
@@ -26,6 +27,7 @@ class ApiKeyHandshakeInterceptorManagedRefundTest {
         ApiKeyService keys = mock(ApiKeyService.class);
         @SuppressWarnings("unchecked") ObjectProvider<ApiKeyService> keyProvider = mock(ObjectProvider.class);
         @SuppressWarnings("unchecked") ObjectProvider<AgentService> agentProvider = mock(ObjectProvider.class);
+        @SuppressWarnings("unchecked") ObjectProvider<ManagedHostingCredentials> managedProvider = mock(ObjectProvider.class);
         when(keyProvider.getIfAvailable()).thenReturn(keys);
         OauthApiKeyEntity disabled = new OauthApiKeyEntity().setApiKey("managed-secret").setKeyName("hosting:hri-one")
                 .setStatus(0).setClientId("Client-A").setJiacn("Owner-A");
@@ -38,7 +40,7 @@ class ApiKeyHandshakeInterceptorManagedRefundTest {
         when(request.getHeaders()).thenReturn(headers);
         when(request.getURI()).thenReturn(URI.create("ws://localhost/openclaw"));
 
-        boolean accepted = new ApiKeyHandshakeInterceptor(keyProvider, agentProvider).beforeHandshake(
+        boolean accepted = new ApiKeyHandshakeInterceptor(keyProvider, agentProvider, managedProvider).beforeHandshake(
                 request, response, mock(WebSocketHandler.class), new HashMap<>());
 
         assertFalse(accepted);

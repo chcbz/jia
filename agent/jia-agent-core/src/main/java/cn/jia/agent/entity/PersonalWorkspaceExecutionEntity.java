@@ -25,6 +25,25 @@ public class PersonalWorkspaceExecutionEntity extends BaseEntity {
     private String runId;
     /** PRIVATE bridge and TASK work-item execution are distinct domains; this field never implies delivery. */
     private String executionMode;
+    /** CONVERSATION-only immutable admission fence; never from a browser authorization flag. */
+    private String taskGrantId;
+    private Long taskGrantVersion;
+    private Long assignmentRevision;
+    private String permittedOperation;
+    /** Controlled-image authority identity; null preserves native-v1 conversation semantics. */
+    private String controlledConsentId;
+    /** Protocol 1/2 remain legacy; protocol 3 requires the independent per-intent grant. */
+    private Integer executionProtocolVersion;
+    private String operationGrantId;
+    private String runtimeInputSnapshotDigest;
+    /** CONVERSATION-only native claim. Token and runtime instance stay server-side. */
+    private String conversationLeaseToken;
+    private String conversationLeaseRuntimeId;
+    private Long conversationLeaseVersion;
+    private Long conversationLeaseExpiresAt;
+    /** Permanently records the first authorized paid Provider START; never reset on failure. */
+    private Long conversationProviderStartedAt;
+    private Long conversationProviderLeaseVersion;
     private String workItemId;
     /** Runtime-only lease material; never exposed by browser views or queue payloads. */
     private String leaseToken;

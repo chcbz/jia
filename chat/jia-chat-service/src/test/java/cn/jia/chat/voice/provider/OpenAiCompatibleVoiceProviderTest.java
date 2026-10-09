@@ -129,7 +129,8 @@ class OpenAiCompatibleVoiceProviderTest {
                 retainedChannel, original.length, "audio/webm;codecs=opus",
                 MessageDigest.getInstance("SHA-256").digest(original), 1200);
         VoiceAudioUploadFactory factory = mock(VoiceAudioUploadFactory.class);
-        when(factory.create(any(), org.mockito.ArgumentMatchers.eq(REQUEST_ID))).thenReturn(upload);
+        when(factory.create(any(), org.mockito.ArgumentMatchers.eq(REQUEST_ID),
+                org.mockito.ArgumentMatchers.eq("openai-compatible"))).thenReturn(upload);
         AtomicReference<byte[]> dispatchedBody = new AtomicReference<>();
         HttpClient client = mock(HttpClient.class);
         when(client.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))

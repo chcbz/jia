@@ -19,6 +19,11 @@ public class HallRequestDraftDaoImpl implements HallRequestDraftDao {
         this.mapper = Objects.requireNonNull(mapper, "mapper");
     }
 
+    @Override public int countSubmittedTaskCreates(String tenantId, String clientId,
+            String ownerJiacn, String taskId) {
+        scope(tenantId, clientId, ownerJiacn); id(taskId, "taskId", 100);
+        return mapper.countSubmittedTaskCreates(tenantId, clientId, ownerJiacn, taskId);
+    }
     @Override public HallRequestDraftEntity find(String tenantId, String clientId,
             String ownerJiacn, String draftId) {
         scope(tenantId, clientId, ownerJiacn); id(draftId, "draftId", 100);
