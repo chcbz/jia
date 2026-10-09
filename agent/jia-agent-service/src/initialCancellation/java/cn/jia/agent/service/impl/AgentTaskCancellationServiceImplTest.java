@@ -90,7 +90,7 @@ class AgentTaskCancellationServiceImplTest {
                 startsWith("cancel_"),matches("[0-9a-f]{64}"),anyLong());
         verify(dao).releaseTaskOccupation(eq("0"),eq("client"),eq("owner"),eq("417"),anyLong());
     }
-    @ParameterizedTest @ValueSource(strings={"open","planning","assigned"})
+    @ParameterizedTest(name="{displayName} [{index}] {argumentsWithNames}") @ValueSource(strings={"open","planning","assigned"})
     void allInitialRootStates(String status) { root.setRewardStatus(status); assertEquals("cancelled",cancel().status()); }
     @Test void staleVersionBeforeAnyWrite() {
         root.setTaskVersion(2L);
@@ -115,7 +115,7 @@ class AgentTaskCancellationServiceImplTest {
                 () -> service.cancel("0","client","foreign","actor","417",1));
         verifyNoInteractions(dao,items,states,grants);
     }
-    @ParameterizedTest @ValueSource(strings={"running","reviewing","blocked","completed","failed","archived","Assigned","?"})
+    @ParameterizedTest(name="{displayName} [{index}] {argumentsWithNames}") @ValueSource(strings={"running","reviewing","blocked","completed","failed","archived","Assigned","?"})
     void unsupportedOrUnknownRoot(String status) { root.setRewardStatus(status); assertThrows(AgentTaskStateException.class,this::cancel); noWrites(); }
     @Test void startedAssignedRootRejected() { root.setStartedAt(1L); assertThrows(AgentTaskStateException.class,this::cancel); noWrites(); }
     @Test void ordinaryRewardAndFundingFactsBothRejected() {
@@ -123,7 +123,7 @@ class AgentTaskCancellationServiceImplTest {
         root.setReward(null); when(dao.hasMoneyFacts("0","client","owner","417")).thenReturn(true);
         assertThrows(AgentTaskStateException.class,this::cancel); noWrites();
     }
-    @ParameterizedTest @ValueSource(strings={"claimed","running","submitted","blocked","completed","failed","READY","?"})
+    @ParameterizedTest(name="{displayName} [{index}] {argumentsWithNames}") @ValueSource(strings={"claimed","running","submitted","blocked","completed","failed","READY","?"})
     void unsafeChildStateRejected(String status) {
         when(items.listByTaskForUpdate("0","client","owner","417",501)).thenReturn(List.of(item("w",status)));
         assertThrows(AgentTaskStateException.class,this::cancel); noWrites();
@@ -142,18 +142,18 @@ class AgentTaskCancellationServiceImplTest {
         when(dao.lockMembers("0","client","owner","417")).thenReturn(List.of(member("a","working")));
         assertThrows(AgentTaskStateException.class,this::cancel); noWrites();
     }
-    @ParameterizedTest @ValueSource(strings={"working","blocked","done","failed"})
+    @ParameterizedTest(name="{displayName} [{index}] {argumentsWithNames}") @ValueSource(strings={"working","blocked","done","failed"})
     void workedMemberStatesRejectEvenWithoutStartedTimestamp(String status) {
         when(dao.lockMembers("0","client","owner","417")).thenReturn(List.of(member("a",status)));
         assertThrows(AgentTaskStateException.class,this::cancel); noWrites();
     }
-    @ParameterizedTest @ValueSource(strings={"invited","accepted"})
+    @ParameterizedTest(name="{displayName} [{index}] {argumentsWithNames}") @ValueSource(strings={"invited","accepted"})
     void nonterminalCompletedClockIsStillUncertainAndRejected(String status) {
         when(dao.lockMembers("0","client","owner","417"))
                 .thenReturn(List.of(member("a",status).setCompletedAt(1L)));
         assertThrows(AgentTaskStateException.class,this::cancel); noWrites();
     }
-    @ParameterizedTest @ValueSource(strings={"left","rejected"})
+    @ParameterizedTest(name="{displayName} [{index}] {argumentsWithNames}") @ValueSource(strings={"left","rejected"})
     void memberExitClockDoesNotHideActualStartEvidence(String status) {
         when(dao.lockMembers("0","client","owner","417"))
                 .thenReturn(List.of(member("a",status).setStartedAt(1L).setCompletedAt(2L)));
