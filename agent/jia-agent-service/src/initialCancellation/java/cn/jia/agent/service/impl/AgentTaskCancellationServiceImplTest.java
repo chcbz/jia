@@ -76,7 +76,7 @@ class AgentTaskCancellationServiceImplTest {
     }
     @Test void multipleMembersItemsTerminalPreservationAndUnusedGrant() {
         when(dao.lockMembers("0","client","owner","417")).thenReturn(List.of(
-                member("a","accepted"),member("b","invited"),member("c","left"),member("d","rejected")));
+                member("a","accepted"),member("b","invited"),member("c","left").setCompletedAt(1L),member("d","rejected").setCompletedAt(2L)));
         when(items.listByTaskForUpdate("0","client","owner","417",501)).thenReturn(List.of(
                 item("w","ready"),item("p","pending"),item("x","cancelled")));
         assertEquals(new AgentTaskCancellationService.Receipt("417","cancelled",2),cancel());
@@ -99,7 +99,8 @@ class AgentTaskCancellationServiceImplTest {
     }
     @Test void closedReplayWithOriginalAndCurrentVersionHasNoDuplicateEvents() {
         root.setRewardStatus("cancelled").setTaskVersion(2L);
-        when(dao.lockMembers("0","client","owner","417")).thenReturn(List.of(member("a","left")));
+        when(dao.lockMembers("0","client","owner","417")).thenReturn(List.of(
+                member("a","left").setCompletedAt(1L),member("b","rejected").setCompletedAt(2L)));
         when(items.listByTaskForUpdate("0","client","owner","417",501)).thenReturn(List.of(item("w","cancelled")));
         when(dao.lockGrants("0","client","owner","417")).thenReturn(List.of(grant().setState("REVOKED")));
         assertEquals(2,cancel().taskVersion());
@@ -139,6 +140,23 @@ class AgentTaskCancellationServiceImplTest {
         when(dao.lockMembers("0","client","owner","417")).thenReturn(List.of(member("a","accepted").setStartedAt(1L)));
         assertThrows(AgentTaskStateException.class,this::cancel); noWrites();
         when(dao.lockMembers("0","client","owner","417")).thenReturn(List.of(member("a","working")));
+        assertThrows(AgentTaskStateException.class,this::cancel); noWrites();
+    }
+    @ParameterizedTest @ValueSource(strings={"working","blocked","done","failed"})
+    void workedMemberStatesRejectEvenWithoutStartedTimestamp(String status) {
+        when(dao.lockMembers("0","client","owner","417")).thenReturn(List.of(member("a",status)));
+        assertThrows(AgentTaskStateException.class,this::cancel); noWrites();
+    }
+    @ParameterizedTest @ValueSource(strings={"invited","accepted"})
+    void nonterminalCompletedClockIsStillUncertainAndRejected(String status) {
+        when(dao.lockMembers("0","client","owner","417"))
+                .thenReturn(List.of(member("a",status).setCompletedAt(1L)));
+        assertThrows(AgentTaskStateException.class,this::cancel); noWrites();
+    }
+    @ParameterizedTest @ValueSource(strings={"left","rejected"})
+    void memberExitClockDoesNotHideActualStartEvidence(String status) {
+        when(dao.lockMembers("0","client","owner","417"))
+                .thenReturn(List.of(member("a",status).setStartedAt(1L).setCompletedAt(2L)));
         assertThrows(AgentTaskStateException.class,this::cancel); noWrites();
     }
     @Test void completeGraphOverflowAndForeignScopeRejected() {

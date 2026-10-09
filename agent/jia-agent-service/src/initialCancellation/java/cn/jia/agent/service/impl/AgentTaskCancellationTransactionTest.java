@@ -1,6 +1,7 @@
 package cn.jia.agent.service.impl;
 
 import cn.jia.agent.dao.*;
+import cn.jia.agent.api.AgentTaskCancellationController;
 import cn.jia.agent.entity.*;
 import cn.jia.agent.exception.AgentTaskStateException;
 import cn.jia.agent.mapper.AgentTaskCancellationMapper;
@@ -10,11 +11,16 @@ import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import java.util.*;
 import java.util.concurrent.*;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 /** Real Spring REQUIRED/root row locks + production cancellation/state services with JDBC DAO
  * fixtures. H2 transaction evidence is NOT production MySQL/annotation-mapper verification. */
@@ -34,14 +40,14 @@ class AgentTaskCancellationTransactionTest {
         var ds=new DriverManagerDataSource("jdbc:h2:mem:cancel_"+UUID.randomUUID()+";MODE=MySQL;DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=10000","sa","");
         jdbc=new JdbcTemplate(ds);
         jdbc.execute("CREATE TABLE root(task_id VARCHAR(100) PRIMARY KEY,owner VARCHAR(50),status VARCHAR(30),version BIGINT,event_version BIGINT)");
-        jdbc.execute("CREATE TABLE member(agent_id VARCHAR(100) PRIMARY KEY,status VARCHAR(30),version BIGINT)");
+        jdbc.execute("CREATE TABLE member(agent_id VARCHAR(100) PRIMARY KEY,status VARCHAR(30),version BIGINT,started_at BIGINT,completed_at BIGINT)");
         jdbc.execute("CREATE TABLE item(work_id VARCHAR(100) PRIMARY KEY,status VARCHAR(30),version BIGINT)");
         jdbc.execute("CREATE TABLE grant_row(grant_id VARCHAR(100) PRIMARY KEY,state VARCHAR(30),version BIGINT)");
         jdbc.execute("CREATE TABLE bootstrap(id BIGINT PRIMARY KEY,status VARCHAR(30),version BIGINT,attempt_count INT,error VARCHAR(50))");
         jdbc.execute("CREATE TABLE event_row(event_id VARCHAR(100) PRIMARY KEY,type VARCHAR(64),payload VARCHAR(4096))");
         jdbc.execute("CREATE TABLE occupation(agent VARCHAR(100) PRIMARY KEY,task VARCHAR(100))");
         jdbc.update("INSERT INTO root VALUES('417','owner','assigned',1,0)");
-        jdbc.update("INSERT INTO member VALUES('a','accepted',0)");
+        jdbc.update("INSERT INTO member VALUES('a','accepted',0,NULL,NULL)");
         jdbc.update("INSERT INTO item VALUES('w','ready',0)");
         jdbc.update("INSERT INTO grant_row VALUES('g','ACTIVE',1)");
         jdbc.update("INSERT INTO bootstrap VALUES(5,'RETRY',10,100,NULL)");
@@ -60,8 +66,11 @@ class AgentTaskCancellationTransactionTest {
         when(members.findByTaskAndAgent(anyString(),anyString(),anyString(),anyString(),anyString()))
                 .thenAnswer(i -> readMember(i.getArgument(4)));
         when(members.updateByVersion(anyString(),anyString(),anyString(),anyString(),anyString(),anyLong(),any()))
-                .thenAnswer(i -> jdbc.update("UPDATE member SET status=?,version=version+1 WHERE agent_id=? AND version=?",
-                        new Object[]{((AgentTaskMemberDTO)i.getArgument(6)).getMemberStatus(),i.getArgument(4),i.getArgument(5)}));
+                .thenAnswer(i -> {
+                    AgentTaskMemberDTO update=i.getArgument(6);
+                    return jdbc.update("UPDATE member SET status=?,started_at=?,completed_at=?,version=version+1 WHERE agent_id=? AND version=?",
+                            new Object[]{update.getMemberStatus(),update.getStartedAt(),update.getCompletedAt(),i.getArgument(4),i.getArgument(5)});
+                });
         when(items.findByWorkItemId(anyString(),anyString(),anyString(),anyString()))
                 .thenAnswer(i -> readItem(i.getArgument(3)));
         when(items.updateByVersion(anyString(),anyString(),anyString(),anyString(),anyLong(),any()))
@@ -69,8 +78,9 @@ class AgentTaskCancellationTransactionTest {
                         new Object[]{((AgentTaskWorkItemDTO)i.getArgument(5)).getStatus(),i.getArgument(3),i.getArgument(4)}));
         when(items.listByTaskForUpdate(anyString(),anyString(),anyString(),anyString(),eq(501)))
                 .thenAnswer(i -> { jdbc.queryForList("SELECT * FROM item ORDER BY work_id FOR UPDATE"); return List.of(readItem("w")); });
-        when(dao.lockMembers(anyString(),anyString(),anyString(),anyString())).thenAnswer(i -> {
-            jdbc.queryForList("SELECT * FROM member ORDER BY agent_id FOR UPDATE"); return List.of(readMember("a")); });
+        when(dao.lockMembers(anyString(),anyString(),anyString(),anyString())).thenAnswer(i ->
+                jdbc.queryForList("SELECT agent_id FROM member ORDER BY agent_id FOR UPDATE",String.class)
+                        .stream().map(this::readMember).toList());
         when(dao.lockGrants(anyString(),anyString(),anyString(),anyString())).thenAnswer(i -> {
             jdbc.queryForList("SELECT * FROM grant_row ORDER BY grant_id FOR UPDATE");
             return List.of(AgentTaskCancellationServiceImplTest.grant().setState(text("grant_row","state"))
@@ -108,7 +118,8 @@ class AgentTaskCancellationTransactionTest {
     AgentTaskMemberEntity readMember(String id) {
         return jdbc.queryForObject("SELECT * FROM member WHERE agent_id=?",(rs,n) ->
                 AgentTaskCancellationServiceImplTest.member(id,rs.getString("status"))
-                        .setMemberRole("worker").setAssignmentSource("legacy").setVersion(rs.getLong("version")),new Object[]{id});
+                        .setMemberRole("worker").setAssignmentSource("legacy").setVersion(rs.getLong("version"))
+                        .setStartedAt((Long)rs.getObject("started_at")).setCompletedAt((Long)rs.getObject("completed_at")),new Object[]{id});
     }
     AgentTaskWorkItemEntity readItem(String id) {
         return jdbc.queryForObject("SELECT * FROM item WHERE work_id=?",(rs,n) ->
@@ -120,6 +131,8 @@ class AgentTaskCancellationTransactionTest {
     void assertOriginal() {
         assertEquals("assigned",text("root","status")); assertEquals(1,number("root","version"));
         assertEquals(0,number("root","event_version")); assertEquals("accepted",text("member","status"));
+        assertNull(jdbc.queryForObject("SELECT started_at FROM member WHERE agent_id='a'",Long.class));
+        assertNull(jdbc.queryForObject("SELECT completed_at FROM member WHERE agent_id='a'",Long.class));
         assertEquals("ready",text("item","status")); assertEquals("ACTIVE",text("grant_row","state"));
         assertEquals("RETRY",text("bootstrap","status")); assertEquals(100,number("bootstrap","attempt_count"));
         assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM event_row",Integer.class));
@@ -128,6 +141,9 @@ class AgentTaskCancellationTransactionTest {
     @Test void rootChildrenGrantBootstrapOccupationAndEventsCommitOnce() {
         assertEquals(2,cancel().taskVersion());
         assertEquals("cancelled",text("root","status")); assertEquals("left",text("member","status"));
+        assertNull(readMember("a").getStartedAt());
+        assertNotNull(readMember("a").getCompletedAt());
+        assertTrue(readMember("a").getCompletedAt()>0);
         assertEquals("cancelled",text("item","status")); assertEquals("REVOKED",text("grant_row","state"));
         assertEquals("DEAD",text("bootstrap","status")); assertEquals("TASK_CANCELLED",text("bootstrap","error"));
         assertEquals(100,number("bootstrap","attempt_count"));
@@ -136,6 +152,36 @@ class AgentTaskCancellationTransactionTest {
         assertEquals(3,number("root","event_version"));
         assertEquals(Set.of("MEMBER_LEFT","WORK_ITEM_CANCELLED","TASK_CANCELLED"),new HashSet<>(jdbc.queryForList("SELECT type FROM event_row",String.class)));
         assertEquals(2,cancel().taskVersion()); assertEquals(3,number("root","event_version"));
+    }
+    @Test void realMemberExitClocksSurviveOriginalVersionHttpReplayWithoutDuplicateEvents() throws Exception {
+        jdbc.update("INSERT INTO member VALUES('b','invited',0,NULL,NULL)");
+        var mvc=MockMvcBuilders.standaloneSetup(new AgentTaskCancellationController(service)).build();
+        var jwt=new JwtAuthenticationToken(Jwt.withTokenValue("fixture-token").header("alg","none")
+                .subject("actor").claim("jiacn","owner").claim("client_id","client").build(),List.of(),"actor");
+        mvc.perform(post("/agent/tasks/417/cancel").principal(jwt).contentType("application/json")
+                .content("{\"expectedTaskVersion\":1}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.taskId").value("417"))
+                .andExpect(jsonPath("$.status").value("cancelled")).andExpect(jsonPath("$.taskVersion").value(2));
+        assertEquals("left",readMember("a").getMemberStatus());
+        assertEquals("rejected",readMember("b").getMemberStatus());
+        assertNull(readMember("a").getStartedAt()); assertNull(readMember("b").getStartedAt());
+        Long leftAt=readMember("a").getCompletedAt(),rejectedAt=readMember("b").getCompletedAt();
+        assertNotNull(leftAt); assertNotNull(rejectedAt); assertTrue(leftAt>0); assertTrue(rejectedAt>0);
+        assertEquals(2,number("root","version"));
+        assertEquals(4,number("root","event_version"));
+        var eventsBefore=jdbc.queryForList("SELECT * FROM event_row ORDER BY event_id");
+        var graphBefore=jdbc.queryForList("SELECT * FROM member ORDER BY agent_id");
+        for (long expectedVersion:List.of(1L,2L)) {
+            mvc.perform(post("/agent/tasks/417/cancel").principal(jwt).contentType("application/json")
+                    .content("{\"expectedTaskVersion\":"+expectedVersion+"}"))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.taskVersion").value(2));
+            assertEquals(2,number("root","version"));
+            assertEquals(4,number("root","event_version"));
+            assertEquals(eventsBefore,jdbc.queryForList("SELECT * FROM event_row ORDER BY event_id"));
+            assertEquals(graphBefore,jdbc.queryForList("SELECT * FROM member ORDER BY agent_id"));
+            assertEquals(leftAt,readMember("a").getCompletedAt());
+            assertEquals(rejectedAt,readMember("b").getCompletedAt());
+        }
     }
     @Test void failureAtFinalOccupationWriteRollsBackAllEarlierWritesAndEvents() {
         doThrow(new IllegalStateException("fixture last-stage failure")).when(dao)

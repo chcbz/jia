@@ -77,8 +77,12 @@ public class AgentTaskCancellationServiceImpl implements AgentTaskCancellationSe
                 AgentTaskMemberStatus status;
                 try { status=AgentTaskMemberStatus.fromPersistedValue(member.getMemberStatus()); }
                 catch (IllegalArgumentException failure) { throw error(INVALID_PERSISTED_STATE); }
-                if (member.getStartedAt()!=null || member.getCompletedAt()!=null
-                        || status==AgentTaskMemberStatus.WORKING || status==AgentTaskMemberStatus.BLOCKED
+                // LEFT/REJECTED completedAt is an exit clock written by the existing
+                // state service, not work-start evidence. Preserve it on initial cancel/replay.
+                if (member.getStartedAt()!=null
+                        || !(status==AgentTaskMemberStatus.INVITED || status==AgentTaskMemberStatus.ACCEPTED
+                            || status==AgentTaskMemberStatus.LEFT || status==AgentTaskMemberStatus.REJECTED)
+                        || !status.isTerminal() && member.getCompletedAt()!=null
                         || replay && !status.isTerminal()) throw error(INVALID_TRANSITION);
             }
             List<AgentTaskWorkItemEntity> items=workItems.listByTaskForUpdate(
