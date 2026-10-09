@@ -25,6 +25,7 @@ class AgentTaskCancellationPersistenceTest {
     @BeforeEach void setup() {
         jdbc=new JdbcTemplate(new DriverManagerDataSource("jdbc:h2:mem:cancel_sql_"+UUID.randomUUID()+";MODE=MySQL;DB_CLOSE_DELAY=-1","sa",""));
         jdbc.execute("CREATE TABLE agent_personal_workspace_execution(tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50),task_id VARCHAR(100),execution_mode VARCHAR(30),execution_state VARCHAR(30),conversation_lease_token VARCHAR(100),conversation_lease_runtime_id VARCHAR(100),conversation_lease_expires_at BIGINT,lease_token VARCHAR(100),lease_expires_at BIGINT,work_item_id VARCHAR(100))");
+        jdbc.execute("CREATE TABLE agent_task_provider_cost_consent(id BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50),task_id VARCHAR(100),consent_id VARCHAR(100),state VARCHAR(30),version BIGINT,created_at BIGINT,expires_at BIGINT,bound_grant_id VARCHAR(100),bound_grant_version BIGINT,bound_assignment_revision BIGINT,reserved_execution_id VARCHAR(100),reserved_run_id VARCHAR(100),consumed_lease_id VARCHAR(100),consumed_at BIGINT,revoke_idempotency_key VARCHAR(100),revoke_request_digest VARCHAR(100),revoked_at BIGINT)");
         jdbc.execute("CREATE TABLE agent_runtime(tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50),agent_id VARCHAR(100),current_task_id VARCHAR(100),current_task_title VARCHAR(100),status VARCHAR(30),update_time BIGINT)");
         jdbc.execute("CREATE TABLE chat_conversation(id BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),jiacn VARCHAR(50),task_id VARCHAR(100))");
         jdbc.execute("CREATE TABLE chat_turn(turn_id VARCHAR(100),tenant_id VARCHAR(50),client_id VARCHAR(50),owner_jiacn VARCHAR(50),conversation_id VARCHAR(100),state VARCHAR(30))");
@@ -48,6 +49,83 @@ class AgentTaskCancellationPersistenceTest {
     }
     Map<String,Object> scope() { return Map.of("tenantId","0","clientId","client","ownerJiacn","owner","taskId","417","now",1000L,"id",5L,"version",10L); }
     boolean unsafe(String method) { var q=query(method,scope()); return !jdbc.queryForList(q.sql(),q.params()).isEmpty(); }
+    List<AgentTaskProviderCostConsentEntity> consentRows(String task) {
+        var params=new HashMap<String,Object>(scope()); params.put("taskId",task);
+        var q=query("lockCostConsents",params);
+        return jdbc.query(q.sql(),(rs,n) -> {
+            var row=new AgentTaskProviderCostConsentEntity().setConsentId(rs.getString("consent_id"))
+                    .setTaskId(rs.getString("task_id")).setOwnerJiacn(rs.getString("owner_jiacn"))
+                    .setState(rs.getString("state")).setVersion((Long)rs.getObject("version"))
+                    .setCreatedAt((Long)rs.getObject("created_at")).setExpiresAt((Long)rs.getObject("expires_at"))
+                    .setBoundGrantId(rs.getString("bound_grant_id")).setBoundGrantVersion((Long)rs.getObject("bound_grant_version"))
+                    .setBoundAssignmentRevision((Long)rs.getObject("bound_assignment_revision"))
+                    .setReservedExecutionId(rs.getString("reserved_execution_id")).setReservedRunId(rs.getString("reserved_run_id"))
+                    .setConsumedLeaseId(rs.getString("consumed_lease_id")).setConsumedAt((Long)rs.getObject("consumed_at"))
+                    .setRevokeIdempotencyKey(rs.getString("revoke_idempotency_key"))
+                    .setRevokeRequestDigest(rs.getString("revoke_request_digest")).setRevokedAt((Long)rs.getObject("revoked_at"));
+            row.setTenantId(rs.getString("tenant_id")); row.setClientId(rs.getString("client_id")); return row;
+        },q.params());
+    }
+    void consumedConsent(String task,long id,long consumedAt) {
+        jdbc.update("INSERT INTO agent_task_provider_cost_consent VALUES(?,'0','client','owner',?,?,'CONSUMED',4,1,1893456000000,?,1,1,?,?,?, ?,NULL,NULL,NULL)",
+                id,task,"consent_"+task,"grant_"+task,"pwe_"+task,"run_"+task,"lease_"+task,consumedAt);
+    }
+    AgentTaskCancellationDaoImpl consentDao() {
+        var mapper=mock(AgentTaskCancellationMapper.class);
+        when(mapper.lockCostConsents(anyString(),anyString(),anyString(),anyString()))
+                .thenAnswer(i -> consentRows(i.getArgument(3)));
+        return new AgentTaskCancellationDaoImpl(mapper);
+    }
+    @Test void fourConsumedProviderAuthorizationsAreHistoryNotEscrowOrCurrentExecution() {
+        consumedConsent("417",1,1790984226520L); consumedConsent("421",2,1791044859033L);
+        consumedConsent("424",3,1791350510534L); consumedConsent("431",4,1791423362476L);
+        var dao=consentDao();
+        var before=jdbc.queryForList("SELECT * FROM agent_task_provider_cost_consent ORDER BY id");
+        for (String task:List.of("417","421","424","431")) {
+            assertFalse(dao.hasMoneyFacts("0","client","owner",task));
+            assertFalse(dao.hasExecutionFacts("0","client","owner",task));
+        }
+        assertEquals(before,jdbc.queryForList("SELECT * FROM agent_task_provider_cost_consent ORDER BY id"));
+    }
+    @Test void nonterminalOrMalformedTerminalConsentStillFailsClosed() {
+        consumedConsent("417",1,1790984226520L); var dao=consentDao();
+        for (String state:List.of("ISSUED","BOUND","RESERVED","EXPIRED","consumed","CONSUMED ","UNKNOWN")) {
+            jdbc.update("UPDATE agent_task_provider_cost_consent SET state=?",state);
+            assertTrue(dao.hasExecutionFacts("0","client","owner","417"));
+        }
+        jdbc.update("UPDATE agent_task_provider_cost_consent SET state='CONSUMED',consumed_at=NULL");
+        assertTrue(dao.hasExecutionFacts("0","client","owner","417"));
+        jdbc.update("UPDATE agent_task_provider_cost_consent SET consumed_at=1790984226520,reserved_run_id=NULL");
+        assertTrue(dao.hasExecutionFacts("0","client","owner","417"));
+        jdbc.update("UPDATE agent_task_provider_cost_consent SET reserved_run_id='run_417',consumed_lease_id=' lease'");
+        assertTrue(dao.hasExecutionFacts("0","client","owner","417"));
+        jdbc.update("UPDATE agent_task_provider_cost_consent SET consumed_lease_id='lease_417',version=3");
+        assertTrue(dao.hasExecutionFacts("0","client","owner","417"));
+        jdbc.update("UPDATE agent_task_provider_cost_consent SET version=4,consumed_at=?",System.currentTimeMillis()+60000);
+        assertTrue(dao.hasExecutionFacts("0","client","owner","417"));
+    }
+    @Test void closedConsentDoesNotBypassCurrentNativeOrCommandFacts() {
+        consumedConsent("417",1,1790984226520L);
+        var mapper=mock(AgentTaskCancellationMapper.class);
+        when(mapper.lockCostConsents("0","client","owner","417")).thenAnswer(i -> consentRows("417"));
+        var dao=new AgentTaskCancellationDaoImpl(mapper);
+        assertFalse(dao.hasExecutionFacts("0","client","owner","417"));
+        when(mapper.execution(eq("0"),eq("client"),eq("owner"),eq("417"),anyLong())).thenReturn(1L);
+        assertTrue(dao.hasExecutionFacts("0","client","owner","417"));
+        when(mapper.command("0","client","owner","417")).thenReturn(1L);
+        assertTrue(dao.hasCommandFacts("0","client","owner","417"));
+    }
+    @Test void revokedAuthorizationPreservesBoundReservationButCannotAlsoBeConsumed() {
+        consumedConsent("417",1,1790984226520L); var dao=consentDao();
+        jdbc.update("UPDATE agent_task_provider_cost_consent SET state='REVOKED',consumed_at=NULL,consumed_lease_id=NULL,revoked_at=1000,revoke_idempotency_key='revoke-key',revoke_request_digest=?","a".repeat(64));
+        assertFalse(dao.hasExecutionFacts("0","client","owner","417"));
+        jdbc.update("UPDATE agent_task_provider_cost_consent SET reserved_execution_id=NULL,reserved_run_id=NULL,bound_grant_id=NULL,bound_grant_version=NULL,bound_assignment_revision=NULL,version=2");
+        assertFalse(dao.hasExecutionFacts("0","client","owner","417"));
+        jdbc.update("UPDATE agent_task_provider_cost_consent SET consumed_at=900");
+        assertTrue(dao.hasExecutionFacts("0","client","owner","417"));
+        jdbc.update("UPDATE agent_task_provider_cost_consent SET consumed_at=NULL,revoke_request_digest='not-a-digest'");
+        assertTrue(dao.hasExecutionFacts("0","client","owner","417"));
+    }
     @Test void closedConversationWithHistoricalLeasePreservedButQueuedTaskAndLiveLeaseReject() {
         jdbc.update("INSERT INTO agent_personal_workspace_execution VALUES('0','client','owner','417','CONVERSATION','OUTPUT_COMMITTED','old-token','old-runtime',900,NULL,NULL,NULL)");
         assertFalse(unsafe("execution"));
@@ -107,7 +185,7 @@ class AgentTaskCancellationPersistenceTest {
         var failure=assertThrows(InvocationTargetException.class,() -> method.invoke(service,
                 new AgentTaskExecutionGrantService.Scope("0","client","owner"),root,
                 AgentTaskCancellationServiceImplTest.grant(),1L,1L,"a","DELIBERATE",false));
-        assertInstanceOf(cn.jia.agent.exception.AgentTaskExecutionGrantException.class,failure.getCause());
+        assertInstanceOf(cn.jia.agent.service.AgentTaskExecutionGrantException.class,failure.getCause());
     }
     @Test void cancelledRootCannotAuthorizeQueuedHallWrites() {
         var roots=mock(cn.jia.agent.dao.AgentTaskMetaDao.class);

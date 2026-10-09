@@ -29,8 +29,15 @@ public interface AgentTaskCancellationMapper {
     Long fundingOperation(@Param("tenantId") String tenantId, @Param("clientId") String clientId,
             @Param("ownerJiacn") String ownerJiacn, @Param("taskId") String taskId);
 
-    @Select("SELECT 1 FROM agent_task_provider_cost_consent" + SCOPE + " LIMIT 1 FOR UPDATE")
-    Long costConsent(@Param("tenantId") String tenantId, @Param("clientId") String clientId,
+    // Provider authorization is not escrow funding. Inspect only terminal lifecycle facts,
+    // not credential/input payloads; consumed/revoked history is preserved without any write.
+    @Select("SELECT tenant_id,client_id,owner_jiacn,task_id,consent_id,state,version,created_at,expires_at,"
+            + "bound_grant_id,bound_grant_version,bound_assignment_revision,reserved_execution_id,reserved_run_id,"
+            + "consumed_lease_id,consumed_at,revoke_idempotency_key,revoke_request_digest,revoked_at"
+            + " FROM agent_task_provider_cost_consent" + SCOPE
+            + " ORDER BY CAST(consent_id AS BINARY),id FOR UPDATE")
+    List<cn.jia.agent.entity.AgentTaskProviderCostConsentEntity> lockCostConsents(
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
             @Param("ownerJiacn") String ownerJiacn, @Param("taskId") String taskId);
 
     // Only historical, closed CONVERSATION output is compatible with an unstarted business task.
