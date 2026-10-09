@@ -69,6 +69,10 @@ public interface AgentService {
     /** Returns only canonical members currently allowed to append task conversation messages. */
     List<String> listTaskWritableMemberAgentIds(String tenantId, String clientId, String taskId);
 
+    /** Explicit trusted owner scope for captured admission and asynchronous callbacks. */
+    List<String> listTaskWritableMemberAgentIds(
+            String tenantId, String clientId, String ownerJiacn, String taskId);
+
     AgentTaskDTO assignTask(String taskId, AgentTaskAssignDTO request);
 
     List<AgentTaskRecommendationDTO> recommendTaskAssignees(String taskId);

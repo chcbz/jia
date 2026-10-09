@@ -51,8 +51,8 @@ public class JuyitingConversationScopeService {
     }
 
     /**
-     * Applies the business-area boundary before consulting the legacy Agent ACL.
-     * Non-legacy areas currently support only the built-in Song Jiang public hall.
+     * Captures the exact authenticated tenant/client/owner before task ACL lookup.
+     * Display metadata and requested resource IDs cannot replace any identity part.
      */
     public JuyitingConversationScope authorize(
             ChatMessageDTO chatMessage,
@@ -62,39 +62,30 @@ public class JuyitingConversationScopeService {
                 || !isSupportedScope(requested.scopeType())) {
             throw denied();
         }
-        String tenantId = admission.businessScope().tenantId().value();
-        if ("0".equals(tenantId)) {
-            return authorize(
-                    chatMessage, requested,
-                    admission.businessScope().ownerJiacn(),
-                    admission.businessScope().callerClientId());
-        }
-        if (!SCOPE_PUBLIC.equals(requested.scopeType())
-                || isTaskScoped(requested)
-                || !SCOPE_PUBLIC.equals(requested.scopeKey())) {
-            throw denied();
-        }
-        String defaultAgentId = requireScopeId(builtinHallAgentSupport.defaultAgentId());
-        List<String> targets = normalizeAgentIds(requested.targetAgentIds());
-        if (targets.isEmpty()) {
-            targets = List.of(defaultAgentId);
-        }
-        if (targets.size() != 1 || !defaultAgentId.equals(targets.getFirst())) {
-            throw denied();
-        }
-        return withTargets(requested, targets, targets);
+        return authorize(chatMessage, requested,
+                admission.businessScope().tenantId().value(),
+                admission.businessScope().ownerJiacn(),
+                admission.businessScope().callerClientId());
     }
 
     /**
-     * Resolves task membership from the authenticated tenant/client and returns an ACL-frozen scope.
+     * Legacy tenant-zero compatibility entry point. The third argument is the owner,
+     * not a tenant ID; new callers use the authenticated admission overload.
      * Caller participant metadata is intentionally ignored for authorization.
      */
     public JuyitingConversationScope authorize(
             ChatMessageDTO chatMessage,
             JuyitingConversationScope requested,
-            String tenantId,
+            String ownerJiacn,
             String clientId) {
-        if (requested == null || !isCanonicalIdentity(tenantId) || !isCanonicalIdentity(clientId)
+        return authorize(chatMessage, requested, "0", ownerJiacn, clientId);
+    }
+
+    private JuyitingConversationScope authorize(
+            ChatMessageDTO chatMessage, JuyitingConversationScope requested,
+            String tenantId, String ownerJiacn, String clientId) {
+        cn.jia.core.tenant.TenantId.of(tenantId);
+        if (requested == null || !isCanonicalIdentity(ownerJiacn) || !isCanonicalIdentity(clientId)
                 || !isSupportedScope(requested.scopeType())) {
             throw denied();
         }
@@ -115,7 +106,7 @@ public class JuyitingConversationScopeService {
         List<String> members;
         try {
             members = normalizeAuthoritativeAgentIds(
-                    agentService.listTaskWritableMemberAgentIds("0", clientId, taskId));
+                    agentService.listTaskWritableMemberAgentIds(tenantId, clientId, ownerJiacn, taskId));
         } catch (RuntimeException queryFailure) {
             throw denied();
         }

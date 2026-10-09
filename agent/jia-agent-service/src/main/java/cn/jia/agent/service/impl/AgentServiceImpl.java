@@ -1189,7 +1189,12 @@ public class AgentServiceImpl implements AgentService {
     @Override
     public List<String> listTaskWritableMemberAgentIds(
             String tenantId, String clientId, String taskId) {
-        String ownerJiacn = resolveCurrentJiacn();
+        return listTaskWritableMemberAgentIds(tenantId, clientId, resolveCurrentJiacn(), taskId);
+    }
+
+    @Override
+    public List<String> listTaskWritableMemberAgentIds(
+            String tenantId, String clientId, String ownerJiacn, String taskId) {
         requireExactTaskOwnerScope(tenantId, clientId, ownerJiacn, taskId);
 
         AgentTaskMetaEntity task = agentTaskMetaDao.findByTaskIdInOwnerScope(
@@ -1839,7 +1844,7 @@ public class AgentServiceImpl implements AgentService {
 
     private void requireExactTaskOwnerScope(
             String tenantId, String clientId, String ownerJiacn, String taskId) {
-        require(SINGLE_TENANT_ID.equals(tenantId), "tenantId must be 0");
+        cn.jia.core.tenant.TenantId.of(tenantId);
         require(isExactAuthenticatedScopeId(clientId), "clientId is invalid");
         require(isExactAuthenticatedScopeId(ownerJiacn), "ownerJiacn is invalid");
         require(isExactStoredText(taskId, 100), "taskId is invalid");

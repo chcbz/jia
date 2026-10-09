@@ -3240,10 +3240,6 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
         return sessionAttribute(session, "clientId");
     }
 
-    private String sessionTenantId(WebSocketSession session) {
-        return sessionAttribute(session, "tenantId");
-    }
-
     private String sessionJiacn(WebSocketSession session) {
         return sessionAttribute(session, "jiacn");
     }

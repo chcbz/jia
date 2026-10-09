@@ -33,6 +33,19 @@ public class EsSecurityContextFilter implements Filter {
     }
 
     private void overwriteFromJwt(EsContext context, Jwt jwt) throws ServletException {
+        Object kind = jwt.getClaims().get("token_kind");
+        if ("machine".equals(kind) || kind == null && stringClaim(jwt, "jiacn") == null) {
+            // Machine tokens are validated upstream but do not carry user
+            // admission. Neither signed display claims nor cookie state may
+            // turn them into a tenant/owner business identity.
+            context.setJiacn(null);
+            context.setAppcn(null);
+            context.setUsername(null);
+            context.setTenantId(null);
+            context.setDataDomainId(null);
+            context.setClientId(stringClaim(jwt, "client_id"));
+            return;
+        }
         String tenant;
         try {
             tenant = TenantClaimPolicy.resolve(jwt.getClaims(), legacySingleTenantId);
