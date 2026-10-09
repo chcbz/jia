@@ -1,0 +1,289 @@
+{
+  "fixtureVersion": 2,
+  "session": {
+    "method": "POST",
+    "path": "/agent/runtime/v1/session",
+    "headers": {
+      "Authorization": "Bearer REDACTED_INSTALLATION_AUTHORIZATION"
+    },
+    "request": {
+      "installationId": "rti_0123456789abcdef0123456789abcdef",
+      "tenantId": "0",
+      "clientId": "client-a",
+      "canonicalAgentId": "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "manifestVersion": "1",
+      "manifestSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "hostId": "host-fixture",
+      "runtimeInstanceId": "boot-fixture"
+    },
+    "response": {
+      "installationId": "rti_0123456789abcdef0123456789abcdef",
+      "tenantId": "0",
+      "clientId": "client-a",
+      "canonicalAgentId": "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "hostId": "host-fixture",
+      "runtimeInstanceId": "boot-fixture",
+      "sessionGeneration": 7,
+      "scheme": "AgentRuntime",
+      "sessionToken": "REDACTED_SESSION_TOKEN",
+      "websocketPath": "/ws/agent/channel",
+      "status": "CHANNEL_PENDING"
+    },
+    "credentialFormat": "rts1_[0-9a-f]{64}",
+    "responseEnvelope": "JsonResult.data"
+  },
+  "websocket": {
+    "method": "GET",
+    "path": "/ws/agent/channel",
+    "headers": {
+      "Authorization": "AgentRuntime REDACTED_SESSION_TOKEN",
+      "X-Agent-Id": "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "X-Agent-Installation-Id": "rti_0123456789abcdef0123456789abcdef",
+      "X-Agent-Host-Id": "host-fixture",
+      "X-Agent-Runtime-Id": "boot-fixture",
+      "X-Agent-Session-Generation": "7"
+    },
+    "rules": [
+      "No URL credentials, API key fallback, Origin, duplicate security headers or body-selected authority.",
+      "All proofs match installation, full subject, persistent host and boot instance at server-issued generation.",
+      "Registration receipt contains no sessionToken or replacement credential.",
+      "Existing per-operation adapter declarations remain required and are activated only after successful registration receipt delivery.",
+      "Missing/false durableStateHealthy or unavailable actual adapter means not execution-ready; heartbeat alone is insufficient.",
+      "readyCommandTypes contains only existing command types supported by actual adapters; duplicate or unknown types reject registration. An empty/missing list does not admit commands.",
+      "profiles.EXECUTE in existing chat runtimeCapabilities v1 remains unavailable; do not change this chat contract to advertise command execution.",
+      "Authenticated presence can report durableStateHealthy false and immediately retire execution readiness without denying already-executed outcome reports."
+    ],
+    "registrationRequiredFields": {
+      "installationId": "rti_0123456789abcdef0123456789abcdef",
+      "hostId": "host-fixture",
+      "runtimeInstanceId": "boot-fixture",
+      "sessionGeneration": 7,
+      "durableStateHealthy": true,
+      "readyCommandTypes": [
+        "TASK_INVITE"
+      ]
+    },
+    "presenceHealthFields": {
+      "durableStateHealthy": false
+    }
+  },
+  "ack": {
+    "method": "POST",
+    "path": "/agent/runtime/v1/commands/00000000-0000-0000-0000-000000000005/acks",
+    "headers": {
+      "Authorization": "AgentRuntime REDACTED_SESSION_TOKEN",
+      "X-Agent-Id": "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "X-Agent-Installation-Id": "rti_0123456789abcdef0123456789abcdef",
+      "X-Agent-Host-Id": "host-fixture",
+      "X-Agent-Runtime-Id": "boot-fixture",
+      "X-Agent-Session-Generation": "7"
+    },
+    "request": {
+      "installationId": "rti_0123456789abcdef0123456789abcdef",
+      "tenantId": "0",
+      "clientId": "client-a",
+      "canonicalAgentId": "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "hostId": "host-fixture",
+      "runtimeInstanceId": "boot-fixture",
+      "sessionGeneration": 7,
+      "deliveryVersion": 11,
+      "messageId": "00000000-0000-0000-0000-000000000005",
+      "correlationId": "task-1",
+      "commandId": "cmd_hall_action_9dd18f3cf8da97efee635d92477921c4aa5f15eb6b36e593c5400c89cf1273d0",
+      "taskId": "task-1",
+      "workItemId": "work-1",
+      "payloadReference": null,
+      "expiresAt": "1970-01-01T01:00:01.000Z",
+      "status": "STARTED"
+    },
+    "response": {
+      "kind": "ADVANCED",
+      "status": "STARTED",
+      "deliveryVersion": 12
+    },
+    "priorResponse": {
+      "kind": "PRIOR",
+      "status": "STARTED",
+      "deliveryVersion": 12
+    },
+    "rules": [
+      "ACK body proof must equal authenticated session proof, not select authority.",
+      "deliveryVersion is nullable last confirmed D06 version, never a predicted first CAS version. Only matching status and a valid monotonic D06 result version with ADVANCED/PRIOR confirms the command commit; persist that exact result in the existing checkpoint.",
+      "Expired commands deny new RECEIVED/STARTED admission, not terminal reports of already executed work.",
+      "Transport failure preserves the existing checkpoint and original message/command/work keys.",
+      "canonicalAgentId is projected from the sealed manifest only after exact raw tenantId/clientId/targetAgentId matching.",
+      "Runtime installationId/hostId/runtimeInstanceId/sessionGeneration come only from current authenticated transport, never a business frame installationId.",
+      "Missing canonical payloadReference projects to null. D06 persistent command/message/task/workItem, source/context and lease checks remain mandatory.",
+      "Raw expiresAt is a safe integer epoch millisecond within the inclusive valid Date range [-8640000000000000, 8640000000000000] (including zero and negative values), projected to ISO UTC; it never replaces persistent D06 expiry.",
+      "Keep the complete raw canonical bytes and fingerprint unchanged; nullable workItemId remains null rather than an invented work key."
+    ],
+    "responseEnvelope": "JsonResult.data",
+    "firstRequest": {
+      "installationId": "rti_0123456789abcdef0123456789abcdef",
+      "tenantId": "0",
+      "clientId": "client-a",
+      "canonicalAgentId": "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "hostId": "host-fixture",
+      "runtimeInstanceId": "boot-fixture",
+      "sessionGeneration": 7,
+      "deliveryVersion": null,
+      "messageId": "00000000-0000-0000-0000-000000000005",
+      "correlationId": "task-1",
+      "commandId": "cmd_hall_action_9dd18f3cf8da97efee635d92477921c4aa5f15eb6b36e593c5400c89cf1273d0",
+      "taskId": "task-1",
+      "workItemId": "work-1",
+      "payloadReference": null,
+      "expiresAt": "1970-01-01T01:00:01.000Z",
+      "status": "RECEIVED"
+    }
+  },
+  "persistentFenceEvidence": {
+    "baseCommit": "ce047c43e0f275d1ad427c484b8919213be36fa4",
+    "existing": {
+      "runtimeRowLock": "agent/jia-agent-mapper/src/main/java/cn/jia/agent/dao/AgentRuntimeDao.java#findByAgentIdForUpdate",
+      "registrationRotation": "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentServiceImpl.java#register",
+      "installationAuthorization": "agent/jia-agent-mapper/src/main/java/cn/jia/agent/dao/AgentRuntimeV1InstallationDao.java",
+      "d06Commit": "agent/jia-agent-service/src/main/java/cn/jia/agent/service/impl/AgentCommandAckServiceImpl.java#acknowledgeLocked"
+    },
+    "limits": [
+      "tokenHash rotates at registration but carries no installation/host/instance/generation ownership.",
+      "Installation version is heartbeat CAS, not an execution-session fence.",
+      "Process-local socket map is readiness evidence only, never durable ownership."
+    ],
+    "requestedColumns": [
+      "runtime_installation_id",
+      "runtime_host_id",
+      "runtime_instance_id",
+      "runtime_session_generation"
+    ],
+    "lockOrder": [
+      "installation row",
+      "exact runtime row",
+      "D06 delivery/outbox/inbox (ACK only)"
+    ],
+    "recovery": [
+      "Add nullable columns only; no backfill or business-key rewrites.",
+      "Null ownership is execution-not-ready until an installation-authorized claim commits.",
+      "Same installation/host may rotate generation on reconnect/reboot; another host/installation is rejected, not silently displaced.",
+      "Schema removal is not needed to recover: preserve additive columns; never restore stale credentials or replay work."
+    ],
+    "authorization": "Additive source authorized; no production DDL or historical migration executed."
+  },
+  "canonicalDispatchProjectionR2": {
+    "rawFixture": "command-dispatch-e05.canonical.redacted.json",
+    "rawSha256": "057a4626387846f4bf420cab046d7d0bb4d12cdae6569e90839af00161cbd5a3",
+    "raw": {
+      "schemaVersion": 1,
+      "messageType": "command.dispatch",
+      "messageId": "00000000-0000-0000-0000-000000000005",
+      "commandId": "cmd_hall_action_9dd18f3cf8da97efee635d92477921c4aa5f15eb6b36e593c5400c89cf1273d0",
+      "correlationId": "task-1",
+      "causationId": "evt-e05",
+      "tenantId": "0",
+      "clientId": "client-a",
+      "ownerJiacn": "owner-a",
+      "taskId": "task-1",
+      "workItemId": "work-1",
+      "targetAgentId": "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "commandType": "WORK_ITEM_EXECUTE",
+      "issuedAt": 1000,
+      "expiresAt": 3601000,
+      "intentId": "rsi_dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "attempt": 1,
+      "payload": {
+        "actionType": "work_item_execute",
+        "instruction": "Execute reassigned work item",
+        "conversationType": "juyiting",
+        "reason": "lease_expired_reassignment",
+        "conversationId": null,
+        "triggerEventId": "evt-e05",
+        "autonomyLevel": "supervised",
+        "requiresApproval": true,
+        "context": {
+          "taskTitle": null,
+          "workItemTitle": "Work One",
+          "requestSummary": null,
+          "reviewSummary": null,
+          "contextVersion": "5",
+          "referenceIds": [
+            "cmd_hall_action_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          ],
+          "tags": [
+            "lease-expired",
+            "reassignment"
+          ],
+          "bindingVersion": "e05-reassignment-v1",
+          "reassignmentId": "rsn_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      }
+    },
+    "trustedManifest": {
+      "tenantId": "0",
+      "clientId": "client-a",
+      "canonicalAgentId": "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "currentTransport": {
+      "installationId": "rti_0123456789abcdef0123456789abcdef",
+      "hostId": "host-fixture",
+      "runtimeInstanceId": "boot-fixture",
+      "sessionGeneration": 7
+    },
+    "projectedFirstAck": {
+      "installationId": "rti_0123456789abcdef0123456789abcdef",
+      "tenantId": "0",
+      "clientId": "client-a",
+      "canonicalAgentId": "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "hostId": "host-fixture",
+      "runtimeInstanceId": "boot-fixture",
+      "sessionGeneration": 7,
+      "deliveryVersion": null,
+      "messageId": "00000000-0000-0000-0000-000000000005",
+      "correlationId": "task-1",
+      "commandId": "cmd_hall_action_9dd18f3cf8da97efee635d92477921c4aa5f15eb6b36e593c5400c89cf1273d0",
+      "taskId": "task-1",
+      "workItemId": "work-1",
+      "payloadReference": null,
+      "expiresAt": "1970-01-01T01:00:01.000Z",
+      "status": "RECEIVED"
+    },
+    "clockEpochMillis": 1001000,
+    "rules": [
+      "Do not modify the 1970 source expiry for tests; use the frozen clock.",
+      "SKILL_INSTALL raw installationId is the product installation and is retained as business data, never Runtime authority.",
+      "The transport may rotate without rewriting immutable raw dispatch bytes or raw fingerprints."
+    ]
+  },
+  "enrollment": {
+    "method": "POST",
+    "path": "/agent/runtime/v1/enroll",
+    "request": {
+      "installationId": "rti_0123456789abcdef0123456789abcdef",
+      "tenantId": "0",
+      "clientId": "client-a",
+      "canonicalAgentId": "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "manifestVersion": "1",
+      "manifestSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "enrollmentSecret": "REDACTED_ONE_TIME_ENROLLMENT_SECRET"
+    },
+    "response": {
+      "installation": {
+        "installationId": "rti_0123456789abcdef0123456789abcdef",
+        "tenantId": "0",
+        "clientId": "client-a",
+        "canonicalAgentId": "agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "manifestVersion": "1",
+        "manifestSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "enrollmentExpiresAt": 3601000,
+        "status": "ACTIVE",
+        "lastHeartbeatAt": null
+      },
+      "runtimeAuthorization": "REDACTED_INSTALLATION_AUTHORIZATION"
+    },
+    "responseEnvelope": "JsonResult.data",
+    "rules": [
+      "installationId is nested at data.installation.installationId, never a top-level enrollment response field.",
+      "runtimeAuthorization is installer-only private material, never InstallationView, URL or logs.",
+      "An already-consumed enrollment secret is not retryable after a lost or unparseable response; retain recovery-required state."
+    ]
+  }
+}

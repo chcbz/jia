@@ -61,6 +61,8 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
     private TransactionTemplate transactions;
     private PersonalWorkspaceExecutionDao rows;
     private PersonalWorkspaceExecutionServiceImpl service;
+    private boolean rollbackFinalMutation;
+
     private final ControlledImageFollowupAuthorityService authority=
             mock(ControlledImageFollowupAuthorityService.class);
     private final WorkspaceConversationAccessService conversation=
@@ -93,6 +95,7 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
     }
 
     @AfterEach void tearDown() {
+        org.springframework.security.core.context.SecurityContextHolder.clearContext();
         if(admin==null||database==null)return;
         if(!database.startsWith(namespace))throw new IllegalStateException("unowned database");
         admin.execute("DROP DATABASE IF EXISTS `"+database+"`");
@@ -107,10 +110,10 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
         var runtime=new PersonalWorkspaceExecutionService.RuntimeScope("0","client","owner","agent","runtime");
         var fence=new PersonalWorkspaceExecutionService.ConversationFence(1,"lease-token");
 
-        var staged=inTx(() -> service.stageConversationOutput(runtime,"task","run-result",fence,
+        var staged=withoutOuterTx(() -> service.stageConversationOutput(nativeScope(runtime),"task","run-result",fence,
                 "output_1","bird.png","image/png",bytes));
         String manifest="pwe_m_"+sha("task\nrun-result\noutput_1\n"+hash+"\n"+bytes.length+"\n");
-        var committed=inTx(() -> service.commitConversationOutput(runtime,"task","run-result",fence,
+        var committed=withoutOuterTx(() -> service.commitConversationOutput(nativeScope(runtime),"task","run-result",fence,
                 manifest,List.of(new PersonalWorkspaceExecutionService.OutputDeclaration(
                         "output_1",hash,bytes.length))));
         var failed=inTx(() -> service.failConversation(runtime,"task","run-failure",fence,
@@ -135,7 +138,7 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
                 "0","client","other-owner","agent","runtime");
         assertEquals(PersonalWorkspaceExecutionService.Reason.NOT_FOUND,assertThrows(
                 PersonalWorkspaceExecutionService.Failure.class,
-                () -> inTx(() -> service.stageConversationOutput(foreignOwner,"task","run-result",fence,
+                () -> withoutOuterTx(() -> service.stageConversationOutput(nativeScope(foreignOwner),"task","run-result",fence,
                         "output_1","bird.png","image/png",bytes))).getReason());
         var wrongAgent=new PersonalWorkspaceExecutionService.RuntimeScope(
                 "0","client","owner","other-agent","runtime");
@@ -189,7 +192,7 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
                 .thenThrow(new IllegalStateException("revoked"));
         assertEquals(PersonalWorkspaceExecutionService.Reason.NOT_FOUND,assertThrows(
                 PersonalWorkspaceExecutionService.Failure.class,
-                () -> inTx(() -> service.stageConversationOutput(runtime,"task","run-denied",fence,
+                () -> withoutOuterTx(() -> service.stageConversationOutput(nativeScope(runtime),"task","run-denied",fence,
                         "output_1","bird.png","image/png",bytes))).getReason());
         assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM agent_personal_workspace_execution_output",
                 Integer.class));
@@ -201,17 +204,17 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
         byte[] bytes=png();String hash=sha(bytes);
         var original=new PersonalWorkspaceExecutionService.RuntimeScope("0","client","owner","agent","runtime");
         var replacement=new PersonalWorkspaceExecutionService.RuntimeScope("0","client","owner","agent","replacement");
-        inTx(() -> service.stageConversationOutput(original,"task",row.getRunId(),
+        withoutOuterTx(() -> service.stageConversationOutput(nativeScope(original),"task",row.getRunId(),
                 new PersonalWorkspaceExecutionService.ConversationFence(1,"lease-token"),
                 "output_1","bird.png","image/png",bytes));
         String manifest="pwe_m_"+sha("task\n"+row.getRunId()+"\noutput_1\n"+hash+"\n"+bytes.length+"\n");
         var command=recovery(row,hash,bytes.length);
         assertThrows(PersonalWorkspaceExecutionService.Failure.class,
-                () -> inTx(() -> service.recoverStagedConversationOutput(replacement,"task",row.getRunId(),manifest,command)));
+                () -> withoutOuterTx(() -> service.recoverStagedConversationOutput(nativeScope(replacement),"task",row.getRunId(),manifest,command)));
         jdbc.update("UPDATE agent_personal_workspace_execution SET conversation_lease_expires_at=1 WHERE execution_id=?",row.getExecutionId());
-        var committed=inTx(() -> service.recoverStagedConversationOutput(replacement,"task",row.getRunId(),manifest,command));
+        var committed=withoutOuterTx(() -> service.recoverStagedConversationOutput(nativeScope(replacement),"task",row.getRunId(),manifest,command));
         assertEquals("COMMITTED",committed.state());assertEquals(hash,committed.items().getFirst().sha256());
-        assertEquals(committed,inTx(() -> service.recoverStagedConversationOutput(replacement,"task",row.getRunId(),manifest,command)));
+        assertEquals(committed,withoutOuterTx(() -> service.recoverStagedConversationOutput(nativeScope(replacement),"task",row.getRunId(),manifest,command)));
         var saved=rows.find("0","client","owner",row.getExecutionId());
         assertEquals("OUTPUT_COMMITTED",saved.getExecutionState());
         assertEquals("runtime",saved.getConversationLeaseRuntimeId());assertEquals(1L,saved.getConversationLeaseVersion());
@@ -226,37 +229,37 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
         var proof=recovery(row,hash,bytes.length);
         String manifest="pwe_m_"+sha("task\n"+row.getRunId()+"\noutput_1\n"+hash+"\n"+bytes.length+"\n");
         assertThrows(PersonalWorkspaceExecutionService.Failure.class,
-                () -> inTx(() -> service.recoverStagedConversationOutput(runtime,"task",row.getRunId(),manifest,proof)));
-        inTx(() -> service.stageConversationOutput(runtime,"task",row.getRunId(),
+                () -> withoutOuterTx(() -> service.recoverStagedConversationOutput(nativeScope(runtime),"task",row.getRunId(),manifest,proof)));
+        withoutOuterTx(() -> service.stageConversationOutput(nativeScope(runtime),"task",row.getRunId(),
                 new PersonalWorkspaceExecutionService.ConversationFence(1,"lease-token"),"output_1","bird.png","image/png",bytes));
         var changed=new PersonalWorkspaceExecutionService.ConversationResultRecovery(row.getExecutionId(),
                 proof.commandId(),proof.messageId(),"0".repeat(64),proof.outputs());
         for(var bad:List.of(changed,recovery(row,"a".repeat(64),bytes.length),recovery(row,hash,bytes.length+1)))
             assertThrows(PersonalWorkspaceExecutionService.Failure.class,
-                    () -> inTx(() -> service.recoverStagedConversationOutput(runtime,"task",row.getRunId(),manifest,bad)));
+                    () -> withoutOuterTx(() -> service.recoverStagedConversationOutput(nativeScope(runtime),"task",row.getRunId(),manifest,bad)));
         for(var badScope:List.of(new PersonalWorkspaceExecutionService.RuntimeScope("0","client","other-owner","agent","runtime"),
                 new PersonalWorkspaceExecutionService.RuntimeScope("0","client","owner","other-agent","runtime")))
             assertThrows(PersonalWorkspaceExecutionService.Failure.class,
-                    () -> inTx(() -> service.recoverStagedConversationOutput(badScope,"task",row.getRunId(),manifest,proof)));
+                    () -> withoutOuterTx(() -> service.recoverStagedConversationOutput(nativeScope(badScope),"task",row.getRunId(),manifest,proof)));
         assertThrows(IllegalStateException.class,() -> inTx(() -> {
-            service.recoverStagedConversationOutput(runtime,"task",row.getRunId(),manifest,proof);
+            service.recoverStagedConversationOutput(nativeScope(runtime),"task",row.getRunId(),manifest,proof);
             throw new IllegalStateException("simulated transaction failure");
         }));
         assertEquals("QUEUED",rows.find("0","client","owner",row.getExecutionId()).getExecutionState());
         assertEquals("STAGED",inTx(() -> rows.lockOutput("0","client","owner",row.getExecutionId(),"output_1")).getOutputState());
         when(conversation.requireAccessible(any(),eq("42"))).thenThrow(new IllegalStateException("revoked"));
         assertThrows(PersonalWorkspaceExecutionService.Failure.class,
-                () -> inTx(() -> service.recoverStagedConversationOutput(runtime,"task",row.getRunId(),manifest,proof)));
+                () -> withoutOuterTx(() -> service.recoverStagedConversationOutput(nativeScope(runtime),"task",row.getRunId(),manifest,proof)));
         assertEquals("STAGED",inTx(() -> rows.lockOutput("0","client","owner",row.getExecutionId(),"output_1")).getOutputState());
     }
 
     @Test void committedV3OwnerCanListAndReadOriginalBytesWithoutRuntimeIdentity() throws Exception {
         var row=persist("exec-owner-read","run-owner-read","42");byte[] bytes=png();String hash=sha(bytes);
         var runtime=new PersonalWorkspaceExecutionService.RuntimeScope("0","client","owner","agent","runtime");
-        inTx(() -> service.stageConversationOutput(runtime,"task",row.getRunId(),
+        withoutOuterTx(() -> service.stageConversationOutput(nativeScope(runtime),"task",row.getRunId(),
                 new PersonalWorkspaceExecutionService.ConversationFence(1,"lease-token"),"output_1","bird.png","image/png",bytes));
         String manifest="pwe_m_"+sha("task\n"+row.getRunId()+"\noutput_1\n"+hash+"\n"+bytes.length+"\n");
-        inTx(() -> service.recoverStagedConversationOutput(runtime,"task",row.getRunId(),manifest,recovery(row,hash,bytes.length)));
+        withoutOuterTx(() -> service.recoverStagedConversationOutput(nativeScope(runtime),"task",row.getRunId(),manifest,recovery(row,hash,bytes.length)));
         var grant=useActualOwnerAuthority(rows.find("0","client","owner",row.getExecutionId()));
         var owner=new PersonalWorkspaceExecutionService.OwnerScope("0","client","owner");
         var outputs=inTx(() -> service.listConversationOutputs(owner,"task",row.getRunId()));
@@ -318,15 +321,15 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
         var runtime=new PersonalWorkspaceExecutionService.RuntimeScope("0","client","owner","agent","replacement");
         var proof=recovery(row,hash,bytes.length);
         String manifest="pwe_m_"+sha("task\n"+row.getRunId()+"\noutput_1\n"+hash+"\n"+bytes.length+"\n");
-        assertThrows(IllegalStateException.class,()->inTx(()->{
-            service.recoverConversationOutput(runtime,"task",row.getRunId(),manifest,proof,"bird.png","image/png",bytes);
-            throw new IllegalStateException("rollback after result commit");
-        }));
+        rollbackFinalMutation=true;
+        assertThrows(IllegalStateException.class,()->service.recoverConversationOutput(nativeScope(runtime),
+                "task",row.getRunId(),manifest,proof,"bird.png","image/png",bytes));
+        rollbackFinalMutation=false;
         assertEquals("QUEUED",rows.find("0","client","owner",row.getExecutionId()).getExecutionState());
         assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM agent_personal_workspace_execution_output",Integer.class));
-        var result=inTx(()->service.recoverConversationOutput(runtime,"task",row.getRunId(),manifest,proof,"bird.png","image/png",bytes));
+        var result=withoutOuterTx(()->service.recoverConversationOutput(nativeScope(runtime),"task",row.getRunId(),manifest,proof,"bird.png","image/png",bytes));
         assertEquals("COMMITTED",result.state());assertEquals(hash,result.items().getFirst().sha256());
-        assertEquals(result,inTx(()->service.recoverConversationOutput(runtime,"task",row.getRunId(),manifest,proof,"bird.png","image/png",bytes)));
+        assertEquals(result,withoutOuterTx(()->service.recoverConversationOutput(nativeScope(runtime),"task",row.getRunId(),manifest,proof,"bird.png","image/png",bytes)));
         var saved=rows.find("0","client","owner",row.getExecutionId());
         assertEquals("OUTPUT_COMMITTED",saved.getExecutionState());assertEquals(10L,saved.getConversationProviderStartedAt());
         assertEquals("runtime",saved.getConversationLeaseRuntimeId());assertEquals(1L,saved.getConversationLeaseVersion());
@@ -347,7 +350,7 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
         var start=new java.util.concurrent.CountDownLatch(1);
         try(var executor=java.util.concurrent.Executors.newFixedThreadPool(2)) {
             java.util.concurrent.Callable<PersonalWorkspaceExecutionService.CommitView> call=()->{
-                start.await();return inTx(()->service.recoverConversationOutput(runtime,"task",row.getRunId(),manifest,
+                start.await();return withoutOuterTx(()->service.recoverConversationOutput(nativeScope(runtime),"task",row.getRunId(),manifest,
                         proof,"bird.png","image/png",bytes));
             };
             var first=executor.submit(call);var second=executor.submit(call);start.countDown();
@@ -372,6 +375,15 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
                 mock(cn.jia.agent.dao.PersonalWorkspaceTaskLinkDao.class),
                 mock(cn.jia.agent.dao.AgentRuntimeDao.class),storage,mock(PersonalWorkspaceWriteService.class),
                 new PersonalWorkspaceExecutionProperties(List.of("image/png")));
+        // Transport collaborator only; persistence remains real isolated MySQL/MyBatis.
+        // Final mutation joins one REQUIRED transaction, preparation has its own short root transaction.
+        var auth=mock(cn.jia.agent.security.AgentRuntimeAuthenticationService.class);
+        when(auth.withNativeFence(any(),any())).thenAnswer(call->transactions.execute(status->{
+            Object result=((Supplier<?>)call.getArgument(1)).get();
+            if(rollbackFinalMutation) throw new IllegalStateException("rollback final result mutation");
+            return result;
+        }));
+        service.setRuntimeAuthentication(auth);
         AgentTaskMutationTransaction taskTransactions=mock(AgentTaskMutationTransaction.class);
         when(taskTransactions.executeWithLockedTaskRootInOwnerScope(eq("0"),eq("client"),eq("owner"),
                 eq("task"),any())).thenAnswer(invocation -> {
@@ -379,7 +391,7 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
             AgentTaskMutationTransaction.LockedTaskMutation<Object> mutation=invocation.getArgument(4);
             var root=new AgentTaskMetaEntity().setTaskId("task").setAssignedAgentId("agent").setTaskVersion(1L);
             root.setTenantId("0");root.setClientId("client");root.setOwnerJiacn("owner");
-            return mutation.apply(root);
+            return transactions.execute(status->mutation.apply(root));
         });
         service.setConversationAdmission(mock(cn.jia.agent.service.AgentTaskExecutionGrantService.class),
                 taskTransactions);
@@ -430,6 +442,20 @@ class PersonalWorkspaceControlledImageV3ResultMySqlTest {
         return inTx(() -> { rows.insert(row);return row; });
     }
 
+    private PersonalWorkspaceExecutionService.RuntimeScope nativeScope(PersonalWorkspaceExecutionService.RuntimeScope scope) {
+        cn.jia.agent.security.AgentRuntimeAuthentication principal;
+        try {
+            principal=org.springframework.beans.BeanUtils.instantiateClass(
+                    cn.jia.agent.security.AgentRuntimeAuthentication.class.getDeclaredConstructor(cn.jia.agent.security.AgentRuntimeAuthentication.Scope.class),
+                    new cn.jia.agent.security.AgentRuntimeAuthentication.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
+                            scope.agentId(),scope.runtimeInstanceId()));
+        } catch (ReflectiveOperationException failure) { throw new AssertionError(failure); }
+        principal.setDetails(new cn.jia.agent.security.AgentRuntimeAuthenticationService.Proof(principal.getPrincipal(),
+                "rti_"+"1".repeat(32),"host",1,"b".repeat(64),7,2));
+        org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(principal);
+        return scope;
+    }
+    private <T> T withoutOuterTx(Supplier<T> action) { return action.get(); }
     private <T> T inTx(Supplier<T> action) {
         return transactions.execute(status -> action.get());
     }

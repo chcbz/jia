@@ -66,6 +66,7 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
         Map<String, Object> attributes = new HashMap<>();
         attributes.put("agentId", "agent-a");
         attributes.put("runtimeInstanceId", "runtime-a");
+        attributes.put("tenantId", "tenant-a");
         attributes.put("jiacn", "tenant-a");
         attributes.put("clientId", "client-a");
         org.mockito.Mockito.lenient().when(session.getId()).thenReturn("session-a");
@@ -74,7 +75,8 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
         org.mockito.Mockito.lenient().when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
         handler = new AgentWebSocketHandler(
                 chatClient, agentServiceProvider, chatMessageDao, eventBroker,
-                null, new AgentProtocolMessageNormalizer(), reconnectSignal, ackService);
+                null, new AgentProtocolMessageNormalizer(), reconnectSignal);
+        UnifiedRuntimeTestSupport.authorize(handler);
     }
 
     @Test
@@ -86,7 +88,7 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
         presence.setAgentId("agent-a");
         presence.setStatus(AgentConstants.STATUS_ONLINE);
         when(agentService.updateStatus(any(), any())).thenReturn(presence);
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"schemaVersion":1,"messageType":"agent.presence","messageId":"presence-1",
                  "agentId":"agent-a","sourceAgentId":"agent-a","runtimeInstanceId":"runtime-a",
                  "status":"online"}
@@ -95,13 +97,13 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
 
         when(agentService.register(any(AgentRegisterDTO.class))).thenReturn(
                 new AgentRegisterResultDTO("agent-other", "token", AgentConstants.STATUS_ONLINE));
-        handler.handleTextMessage(session, registerMessage());
+        UnifiedRuntimeTestSupport.deliver(handler, session, registerMessage());
         verify(reconnectSignal, never()).signalReconnect(any());
 
         when(agentService.register(any(AgentRegisterDTO.class))).thenReturn(
                 new AgentRegisterResultDTO("agent-a", "token", AgentConstants.STATUS_ONLINE));
         when(reconnectSignal.signalReconnect(any())).thenReturn(true);
-        handler.handleTextMessage(session, registerMessage());
+        UnifiedRuntimeTestSupport.deliver(handler, session, registerMessage());
 
         ArgumentCaptor<AgentCommandReconnectScope> scope =
                 ArgumentCaptor.forClass(AgentCommandReconnectScope.class);
@@ -114,29 +116,18 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
     }
 
     @Test
-    void ackRequiresSuccessfulRegistrationAndUsesAuthoritativeSessionScope() throws Exception {
-        handler.handleTextMessage(session, ackMessage("ack-before", "dispatch-1", "RECEIVED"));
-        verify(ackService, never()).acknowledge(any(), anyLong());
-
+    void wsAckNeverCommitsEvenAfterSuccessfulRegistration() throws Exception {
+        UnifiedRuntimeTestSupport.deliver(handler, session, ackMessage("ack-before", "dispatch-1", "RECEIVED"));
         when(agentService.register(any(AgentRegisterDTO.class))).thenReturn(
                 new AgentRegisterResultDTO("agent-a", "token", AgentConstants.STATUS_ONLINE));
-        handler.handleTextMessage(session, registerMessage());
-        when(ackService.acknowledge(any(), anyLong())).thenReturn(
-                new AgentCommandAckResult(AgentCommandAckResult.Kind.ADVANCED, "RECEIVED", 3));
-        handler.handleTextMessage(session, ackMessage("ack-1", "dispatch-1", "RECEIVED"));
-
-        ArgumentCaptor<AgentCommandAck> ack = ArgumentCaptor.forClass(AgentCommandAck.class);
-        verify(ackService).acknowledge(ack.capture(), anyLong());
-        assertEquals("tenant-a", ack.getValue().tenantId());
-        assertEquals("client-a", ack.getValue().clientId());
-        assertEquals("agent-a", ack.getValue().registeredAgentId());
-        assertEquals("ack-1", ack.getValue().messageId());
-        assertEquals("dispatch-1", ack.getValue().correlationId());
-        assertEquals("cmd-1", ack.getValue().commandId());
-        assertEquals("task-1", ack.getValue().taskId());
-        assertEquals("RECEIVED", ack.getValue().ackStatus());
+        UnifiedRuntimeTestSupport.deliver(handler, session, registerMessage());
+        UnifiedRuntimeTestSupport.deliver(handler, session, ackMessage("ack-1", "dispatch-1", "RECEIVED"));
+        verify(ackService, never()).acknowledge(any(), anyLong());
+        ArgumentCaptor<TextMessage> outbound = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, org.mockito.Mockito.atLeastOnce()).sendMessage(outbound.capture());
+        assertTrue(outbound.getAllValues().stream().map(TextMessage::getPayload)
+                .anyMatch(wire -> wire.contains("COMMAND_ACK_HTTP_REQUIRED")));
     }
-
 
     @Test
     void presenceBeforeSuccessfulRegisterDoesNotBecomeAuthoritativeExactPresence() throws Exception {
@@ -146,7 +137,7 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
         presence.setStatus(AgentConstants.STATUS_ONLINE);
         when(agentService.updateStatus(any(), any())).thenReturn(presence);
 
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"schemaVersion":1,"messageType":"agent.presence","messageId":"presence-only",
                  "agentId":"agent-a","sourceAgentId":"agent-a","runtimeInstanceId":"runtime-a",
                  "status":"online"}
@@ -156,18 +147,12 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
     }
 
     @Test
-    void canonicalA06RejectedAckIsForwardedAfterRegistration() throws Exception {
+    void wsTerminalAckAlsoRequiresHttpAndNeverMutatesD06() throws Exception {
         when(agentService.register(any(AgentRegisterDTO.class))).thenReturn(
                 new AgentRegisterResultDTO("agent-a", "token", AgentConstants.STATUS_ONLINE));
-        handler.handleTextMessage(session, registerMessage());
-        when(ackService.acknowledge(any(), anyLong())).thenReturn(
-                new AgentCommandAckResult(AgentCommandAckResult.Kind.ADVANCED, "REJECTED", 3));
-
-        handler.handleTextMessage(session, ackMessage("ack-rejected", "dispatch-1", "REJECTED"));
-
-        ArgumentCaptor<AgentCommandAck> ack = ArgumentCaptor.forClass(AgentCommandAck.class);
-        verify(ackService).acknowledge(ack.capture(), anyLong());
-        assertEquals("REJECTED", ack.getValue().ackStatus());
+        UnifiedRuntimeTestSupport.deliver(handler, session, registerMessage());
+        UnifiedRuntimeTestSupport.deliver(handler, session, ackMessage("ack-rejected", "dispatch-1", "REJECTED"));
+        verify(ackService, never()).acknowledge(any(), anyLong());
     }
 
     @Test
@@ -209,24 +194,40 @@ class AgentWebSocketCommandRecoveryTest extends BaseMockTest {
     void ackHiddenScopeConflictIsRejectedWithoutDurableCallOrExistenceLeak() throws Exception {
         when(agentService.register(any(AgentRegisterDTO.class))).thenReturn(
                 new AgentRegisterResultDTO("agent-a", "token", AgentConstants.STATUS_ONLINE));
-        handler.handleTextMessage(session, registerMessage());
-        org.mockito.Mockito.clearInvocations(ackService, session);
+        UnifiedRuntimeTestSupport.deliver(handler, session, registerMessage());
+        org.mockito.Mockito.clearInvocations(agentService, ackService, session);
 
-        handler.handleTextMessage(session, new TextMessage("""
-                {"schemaVersion":1,"messageType":"command.ack","messageId":"ack-x",
-                 "correlationId":"dispatch-1","commandId":"cmd-1","taskId":"task-1",
-                 "agentId":"agent-a","sourceAgentId":"agent-a","runtimeInstanceId":"runtime-a",
-                 "tenantId":"tenant-other","receiverAgentId":"agent-other",
-                 "ackStatus":"RECEIVED","ackAt":1700000000000,
-                 "payload":{"targetAgentId":"agent-other"}}
-                """));
+        for (String selector : java.util.List.of("other", "missing")) {
+            UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
+                    {"schemaVersion":1,"messageType":"command.ack","messageId":"ack-x",
+                     "correlationId":"dispatch-1","commandId":"cmd-1","taskId":"task-1",
+                     "agentId":"agent-a","sourceAgentId":"agent-a","runtimeInstanceId":"runtime-a",
+                     "tenantId":"tenant-%s","receiverAgentId":"agent-%s",
+                     "ackStatus":"RECEIVED","ackAt":1700000000000,
+                     "payload":{"targetAgentId":"agent-%s"}}
+                    """.formatted(selector, selector, selector)));
+        }
         verify(ackService, never()).acknowledge(any(), anyLong());
         ArgumentCaptor<TextMessage> outbound = ArgumentCaptor.forClass(TextMessage.class);
-        verify(session, org.mockito.Mockito.atLeastOnce()).sendMessage(outbound.capture());
-        String combined = outbound.getAllValues().stream().map(TextMessage::getPayload)
-                .reduce("", String::concat);
-        assertTrue(combined.contains("COMMAND_ACK_REJECTED"));
-        assertTrue(!combined.contains("tenant-other") && !combined.contains("agent-other"));
+        verify(session, org.mockito.Mockito.times(2)).sendMessage(outbound.capture());
+        org.mockito.Mockito.verifyNoInteractions(agentService, ackService);
+        java.util.List<Map<String, Object>> rejections = new java.util.ArrayList<>();
+        for (TextMessage message : outbound.getAllValues()) {
+            String wire = message.getPayload();
+            assertFalse(wire.contains("tenant-other") || wire.contains("agent-other")
+                    || wire.contains("tenant-missing") || wire.contains("agent-missing"));
+            Map<String, Object> rejected = new tools.jackson.databind.ObjectMapper().readValue(
+                    wire, new tools.jackson.core.type.TypeReference<Map<String, Object>>() { });
+            // Transport proof is checked before WS ACK routing or durable lookup.
+            assertEquals("SESSION_PROOF_MISMATCH", rejected.get("code"));
+            assertEquals("Runtime message proof rejected", rejected.get("message"));
+            assertEquals("protocol.error", rejected.get("messageType"));
+            assertFalse(rejected.containsKey("tenantId") || rejected.containsKey("receiverAgentId")
+                    || rejected.containsKey("payload"));
+            rejected.remove("timestamp");
+            rejections.add(rejected);
+        }
+        assertEquals(rejections.get(0), rejections.get(1));
     }
 
     private TextMessage registerMessage() {

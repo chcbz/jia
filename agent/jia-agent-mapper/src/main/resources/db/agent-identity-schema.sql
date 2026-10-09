@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS agent_identity_registry (
     lifecycle_status        VARCHAR(20) NOT NULL DEFAULT 'PROVISIONED' COMMENT 'PROVISIONED/ACTIVE/SUSPENDED/RETIRED | RETIRED is terminal and cannot be reverted',
     client_id               VARCHAR(50) DEFAULT NULL COMMENT 'Immutable owner-scope client after insert | NULL only for system identity',
     owner_jiacn             VARCHAR(50) DEFAULT NULL COMMENT 'Immutable owner-scope jiacn after insert | NULL only for system identity',
-    tenant_id               VARCHAR(50) DEFAULT '0' COMMENT 'Must equal TRIM(owner_jiacn) | NULL only for system | immutable after insert',
+    tenant_id               VARCHAR(50) DEFAULT '0' COMMENT 'Single tenant scope; 0 for every identity including system rows',
     binding_id              BIGINT DEFAULT NULL COMMENT 'Audited source binding ID | immutable after insert | not an ownership substitute',
     provisioned_at          BIGINT DEFAULT NULL COMMENT 'Provisioned time',
     activated_at            BIGINT DEFAULT NULL COMMENT 'First activation time',
@@ -44,11 +44,11 @@ CREATE TABLE IF NOT EXISTS agent_identity_registry (
     ),
     CONSTRAINT chk_identity_registry_scope CHECK (
         (canonical_type = 'SYSTEM'
-            AND client_id IS NULL AND owner_jiacn IS NULL AND tenant_id IS NULL)
+            AND client_id IS NULL AND owner_jiacn IS NULL AND tenant_id = '0')
         OR (canonical_type <> 'SYSTEM'
             AND client_id IS NOT NULL AND TRIM(client_id) <> ''
             AND owner_jiacn IS NOT NULL AND TRIM(owner_jiacn) <> ''
-            AND tenant_id = TRIM(owner_jiacn))
+            AND tenant_id = '0')
     ),
     CONSTRAINT chk_identity_registry_retired CHECK (
         (lifecycle_status = 'RETIRED' AND retired_at IS NOT NULL)
@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS agent_identity_alias (
                             ) STORED,
     client_id               VARCHAR(50) NOT NULL COMMENT 'Immutable owner-scope client after insert',
     owner_jiacn             VARCHAR(50) NOT NULL COMMENT 'Immutable owner-scope jiacn after insert',
-    tenant_id               VARCHAR(50) NOT NULL COMMENT 'Must equal TRIM(owner_jiacn) | immutable after insert',
+    tenant_id               VARCHAR(50) NOT NULL COMMENT 'Single tenant scope; always 0 | immutable after insert',
     audit_reason            VARCHAR(1000) NOT NULL COMMENT 'Auditable alias evidence/reason',
     create_time             BIGINT DEFAULT NULL COMMENT 'Create time',
     update_time             BIGINT DEFAULT NULL COMMENT 'Update time',
@@ -84,7 +84,7 @@ CREATE TABLE IF NOT EXISTS agent_identity_alias (
     KEY idx_identity_alias_canonical (canonical_agent_id, alias_status),
     CONSTRAINT chk_identity_alias_type CHECK (alias_type = 'LEGACY_AGENT_ID'),
     CONSTRAINT chk_identity_alias_status CHECK (alias_status IN ('ACTIVE', 'REVOKED')),
-    CONSTRAINT chk_identity_alias_scope CHECK (tenant_id = TRIM(owner_jiacn)),
+    CONSTRAINT chk_identity_alias_scope CHECK (tenant_id = '0'),
     CONSTRAINT chk_identity_alias_no_blank_scope CHECK (
         TRIM(client_id) <> '' AND TRIM(owner_jiacn) <> ''
     ),
@@ -113,6 +113,27 @@ BEGIN
     END IF;
 END$$
 DELIMITER ;
+
+-- Contract-only upgrade: row conversion is a separate approved maintenance operation.
+-- Reject old owner-as-tenant / NULL rows before MODIFY, index replacement or FK/CHECK drop.
+CALL a02_assert(
+    (SELECT COUNT(*) FROM agent_persona_binding
+      WHERE NOT (BINARY tenant_id <=> BINARY '0') OR OCTET_LENGTH(tenant_id) <> 1) = 0,
+    'A02: binding tenant conversion requires separate approved maintenance');
+CALL a02_assert(
+    (SELECT COUNT(*) FROM agent_identity_registry
+      WHERE NOT (BINARY tenant_id <=> BINARY '0') OR OCTET_LENGTH(tenant_id) <> 1) = 0,
+    'A02: registry tenant conversion requires separate approved maintenance');
+CALL a02_assert(
+    (SELECT COUNT(*) FROM agent_identity_alias
+      WHERE NOT (BINARY tenant_id <=> BINARY '0') OR OCTET_LENGTH(tenant_id) <> 1) = 0,
+    'A02: alias tenant conversion requires separate approved maintenance');
+CALL a02_assert(
+    (SELECT COUNT(*) FROM (
+        SELECT client_id, persona_code FROM agent_persona_binding
+         WHERE status = 1 GROUP BY client_id, persona_code HAVING COUNT(*) > 1
+    ) AS a02_active_persona_conflicts) = 0,
+    'A02: active persona conflict requires separate approved maintenance');
 
 -- Dry-run requires these runtime projection columns. Keep schema.sql, migration,
 -- Initializer and the report in lock-step.
@@ -188,6 +209,7 @@ SET @a02_sql = IF(
 PREPARE a02_stmt FROM @a02_sql; EXECUTE a02_stmt; DEALLOCATE PREPARE a02_stmt;
 
 ALTER TABLE agent_persona_binding
+    MODIFY COLUMN tenant_id VARCHAR(50) NOT NULL DEFAULT '0' COMMENT 'Single tenant ID; always 0',
     MODIFY COLUMN owner_jiacn VARCHAR(50) GENERATED ALWAYS AS (jiacn) STORED,
     MODIFY COLUMN lifecycle_status VARCHAR(20) GENERATED ALWAYS AS (
         CASE status WHEN 2 THEN 'PROVISIONED' WHEN 1 THEN 'ACTIVE'
@@ -202,15 +224,15 @@ SET @a02_index_columns = (
      WHERE table_schema = DATABASE() AND table_name = 'agent_persona_binding'
        AND index_name = 'uk_agent_binding_active_persona');
 SET @a02_sql = IF(
-    COALESCE(@a02_index_columns, '') <> 'client_id,owner_jiacn,active_persona_code'
+    COALESCE(@a02_index_columns, '') <> 'tenant_id,client_id,active_persona_code'
       AND (SELECT COUNT(*) FROM information_schema.statistics
             WHERE table_schema = DATABASE() AND table_name = 'agent_persona_binding'
               AND index_name = 'uk_agent_binding_active_persona_a02') = 0,
-    'CREATE UNIQUE INDEX uk_agent_binding_active_persona_a02 ON agent_persona_binding (client_id, owner_jiacn, active_persona_code)',
+    'CREATE UNIQUE INDEX uk_agent_binding_active_persona_a02 ON agent_persona_binding (tenant_id, client_id, active_persona_code)',
     'DO 1');
 PREPARE a02_stmt FROM @a02_sql; EXECUTE a02_stmt; DEALLOCATE PREPARE a02_stmt;
 SET @a02_sql = IF(@a02_index_columns IS NOT NULL
-                    AND @a02_index_columns <> 'client_id,owner_jiacn,active_persona_code',
+                    AND @a02_index_columns <> 'tenant_id,client_id,active_persona_code',
     'ALTER TABLE agent_persona_binding DROP INDEX uk_agent_binding_active_persona', 'DO 1');
 PREPARE a02_stmt FROM @a02_sql; EXECUTE a02_stmt; DEALLOCATE PREPARE a02_stmt;
 SET @a02_sql = IF(
@@ -262,9 +284,16 @@ SET @a02_sql = IF((SELECT COUNT(*) FROM information_schema.table_constraints
       AND constraint_name = 'chk_agent_binding_tenant_owner' AND constraint_type = 'CHECK') > 0,
     'ALTER TABLE agent_persona_binding DROP CHECK chk_agent_binding_tenant_owner', 'DO 1');
 PREPARE a02_stmt FROM @a02_sql; EXECUTE a02_stmt; DEALLOCATE PREPARE a02_stmt;
+-- Remove the canonical name on repeat as well; the legacy owner name is an upgrade
+-- input only, never a second accepted runtime contract.
+SET @a02_sql = IF((SELECT COUNT(*) FROM information_schema.table_constraints
+    WHERE constraint_schema = DATABASE() AND table_name = 'agent_persona_binding'
+      AND constraint_name = 'chk_agent_binding_single_tenant' AND constraint_type = 'CHECK') > 0,
+    'ALTER TABLE agent_persona_binding DROP CHECK chk_agent_binding_single_tenant', 'DO 1');
+PREPARE a02_stmt FROM @a02_sql; EXECUTE a02_stmt; DEALLOCATE PREPARE a02_stmt;
 ALTER TABLE agent_persona_binding
     ADD CONSTRAINT chk_agent_binding_status CHECK (status IN (0, 1, 2, 3)),
-    ADD CONSTRAINT chk_agent_binding_tenant_owner CHECK (tenant_id IS NULL OR tenant_id = owner_jiacn);
+    ADD CONSTRAINT chk_agent_binding_single_tenant CHECK (tenant_id = '0');
 
 -- Real b0 -> current upgrade. Drop dependent FK/checks, normalize the complete
 -- column definitions and binary collation, then recreate exact constraints.
@@ -322,7 +351,7 @@ ALTER TABLE agent_identity_registry
     MODIFY COLUMN lifecycle_status VARCHAR(20) NOT NULL DEFAULT 'PROVISIONED' COMMENT 'PROVISIONED/ACTIVE/SUSPENDED/RETIRED | RETIRED is terminal and cannot be reverted',
     MODIFY COLUMN client_id VARCHAR(50) DEFAULT NULL COMMENT 'Immutable owner-scope client after insert | NULL only for system identity',
     MODIFY COLUMN owner_jiacn VARCHAR(50) DEFAULT NULL COMMENT 'Immutable owner-scope jiacn after insert | NULL only for system identity',
-    MODIFY COLUMN tenant_id VARCHAR(50) DEFAULT '0' COMMENT 'Must equal TRIM(owner_jiacn) | NULL only for system | immutable after insert',
+    MODIFY COLUMN tenant_id VARCHAR(50) DEFAULT '0' COMMENT 'Single tenant scope; 0 for every identity including system rows',
     MODIFY COLUMN binding_id BIGINT DEFAULT NULL COMMENT 'Audited source binding ID | immutable after insert | not an ownership substitute',
     MODIFY COLUMN audit_reason VARCHAR(1000) NOT NULL COMMENT 'Auditable creation/migration reason | immutable after insert';
 ALTER TABLE agent_identity_registry COMMENT = 'Durable canonical Agent identity registry | collation binary enforces exact case matching';
@@ -340,7 +369,7 @@ ALTER TABLE agent_identity_alias
     ) STORED,
     MODIFY COLUMN client_id VARCHAR(50) NOT NULL COMMENT 'Immutable owner-scope client after insert',
     MODIFY COLUMN owner_jiacn VARCHAR(50) NOT NULL COMMENT 'Immutable owner-scope jiacn after insert',
-    MODIFY COLUMN tenant_id VARCHAR(50) NOT NULL COMMENT 'Must equal TRIM(owner_jiacn) | immutable after insert';
+    MODIFY COLUMN tenant_id VARCHAR(50) NOT NULL COMMENT 'Single tenant scope; always 0 | immutable after insert';
 ALTER TABLE agent_identity_alias COMMENT = 'Scoped legacy Agent ID compatibility aliases | collation binary enforces exact case matching';
 
 -- Fail closed if b0/partial indexes do not have the exact required shape.
@@ -380,11 +409,11 @@ ALTER TABLE agent_identity_registry
         OR (canonical_type = 'SYSTEM' AND canonical_agent_id = 'builtin-songjiang')),
     ADD CONSTRAINT chk_identity_registry_scope CHECK (
         (canonical_type = 'SYSTEM'
-            AND client_id IS NULL AND owner_jiacn IS NULL AND tenant_id IS NULL)
+            AND client_id IS NULL AND owner_jiacn IS NULL AND tenant_id = '0')
         OR (canonical_type <> 'SYSTEM'
             AND client_id IS NOT NULL AND TRIM(client_id) <> ''
             AND owner_jiacn IS NOT NULL AND TRIM(owner_jiacn) <> ''
-            AND tenant_id = TRIM(owner_jiacn))),
+            AND tenant_id = '0')),
     ADD CONSTRAINT chk_identity_registry_retired CHECK (
         (lifecycle_status = 'RETIRED' AND retired_at IS NOT NULL)
         OR (lifecycle_status <> 'RETIRED' AND retired_at IS NULL));
@@ -392,7 +421,7 @@ ALTER TABLE agent_identity_registry
 ALTER TABLE agent_identity_alias
     ADD CONSTRAINT chk_identity_alias_type CHECK (alias_type = 'LEGACY_AGENT_ID'),
     ADD CONSTRAINT chk_identity_alias_status CHECK (alias_status IN ('ACTIVE', 'REVOKED')),
-    ADD CONSTRAINT chk_identity_alias_scope CHECK (tenant_id = TRIM(owner_jiacn)),
+    ADD CONSTRAINT chk_identity_alias_scope CHECK (tenant_id = '0'),
     ADD CONSTRAINT chk_identity_alias_no_blank_scope CHECK (
         TRIM(client_id) <> '' AND TRIM(owner_jiacn) <> ''),
     ADD CONSTRAINT chk_identity_alias_window CHECK (

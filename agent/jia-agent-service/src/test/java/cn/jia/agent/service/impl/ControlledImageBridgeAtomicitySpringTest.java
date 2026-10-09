@@ -5,6 +5,10 @@ import cn.jia.agent.dao.*;
 import cn.jia.agent.entity.*;
 import cn.jia.agent.service.*;
 import cn.jia.chat.service.WorkspaceConversationAccessService;
+import cn.jia.agent.security.AgentRuntimeAuthentication;
+import cn.jia.agent.security.AgentRuntimeAuthenticationService;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -27,6 +31,8 @@ import static org.mockito.Mockito.*;
 class ControlledImageBridgeAtomicitySpringTest {
     private JdbcTemplate jdbc;
     private AgentTaskMutationTransaction transactions;
+
+    @AfterEach void clearRuntimePrincipal() { SecurityContextHolder.clearContext(); }
 
     @BeforeEach void setUp() {
         DriverManagerDataSource source=new DriverManagerDataSource(
@@ -88,6 +94,12 @@ class ControlledImageBridgeAtomicitySpringTest {
                 storage,mock(PersonalWorkspaceWriteService.class),
                 new PersonalWorkspaceExecutionProperties(List.of("image/png")));
         service.setConversationAdmission(grants,transactions);service.setControlledConsentLifecycle(consents);
+        var principal=org.springframework.beans.BeanUtils.instantiateClass(AgentRuntimeAuthentication.class.getDeclaredConstructor(AgentRuntimeAuthentication.Scope.class),new AgentRuntimeAuthentication.Scope("0","client","owner","agent","runtime"));
+        principal.setDetails(new AgentRuntimeAuthenticationService.Proof(principal.getPrincipal(),"rti_"+"1".repeat(32),"host",1,"b".repeat(64),7,2));
+        SecurityContextHolder.getContext().setAuthentication(principal);
+        var auth=mock(AgentRuntimeAuthenticationService.class);
+        when(auth.withNativeFence(any(),any())).thenAnswer(call->((java.util.function.Supplier<?>)call.getArgument(1)).get());
+        service.setRuntimeAuthentication(auth);
         WorkspaceConversationAccessService access=mock(WorkspaceConversationAccessService.class);
         when(access.requireAccessible(new WorkspaceConversationAccessService.Scope("0","client","owner"),
                 "conversation")).thenReturn(new WorkspaceConversationAccessService.ConversationView(

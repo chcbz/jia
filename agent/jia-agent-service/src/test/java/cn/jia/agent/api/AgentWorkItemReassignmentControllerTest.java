@@ -39,12 +39,14 @@ class AgentWorkItemReassignmentControllerTest {
     private static final String ACTOR = "agt_cccccccccccccccccccccccccccccccc";
     private AgentWorkItemReassignmentService service;
     private MockMvc mvc;
+    private cn.jia.agent.security.AgentRuntimeAuthenticationService runtimeAuthentication;
 
     @BeforeEach
     void setUp() {
         service = mock(AgentWorkItemReassignmentService.class);
+        runtimeAuthentication=mock(cn.jia.agent.security.AgentRuntimeAuthenticationService.class);
         mvc = MockMvcBuilders.standaloneSetup(
-                new AgentWorkItemReassignmentController(service)).build();
+                new AgentWorkItemReassignmentController(service, runtimeAuthentication)).build();
     }
 
     @Test
@@ -158,6 +160,43 @@ class AgentWorkItemReassignmentControllerTest {
         verify(service).readLease(eq("0"), eq("client-a"), eq("tenant-a"),
                 eq("agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"), eq("task-1"), eq("work-1"),
                 eq("rsn-1"), any());
+    }
+
+    @Test
+    void nativeLeaseCommitUsesRuntimeFenceAndRetainsOriginalCommandAndWorkItemVersion() throws Exception {
+        var runtime=mock(cn.jia.agent.security.AgentRuntimeAuthentication.class);
+        var scope=new cn.jia.agent.security.AgentRuntimeAuthentication.Scope("0","client-a","tenant-a",ACTOR,"boot");
+        when(runtime.isAuthenticated()).thenReturn(true);when(runtime.getPrincipal()).thenReturn(scope);
+        when(runtimeAuthentication.withNativeFence(eq(runtime),any())).thenAnswer(i->((java.util.function.Supplier<?>)i.getArgument(1)).get());
+        var lease=new AgentWorkItemReassignmentLeaseDTO();lease.setLeaseToken("existing-business-lease");
+        when(service.startLease(anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),anyString(),any())).thenReturn(lease);
+        mvc.perform(post("/agent/tasks/task-1/work-items/work-1/reassignments/rsn-1/lease/start")
+                .queryParam("actorAgentId",ACTOR)
+                .contentType(MediaType.APPLICATION_JSON).content("{\"commandId\":\"cmd-original\",\"expectedWorkItemVersion\":5}").principal(runtime))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.leaseToken").value("existing-business-lease"));
+        verify(runtimeAuthentication).withNativeFence(eq(runtime),any());
+        var command=org.mockito.ArgumentCaptor.forClass(cn.jia.agent.entity.AgentWorkItemReassignmentLeaseRequestDTO.class);
+        verify(service).startLease(eq("0"),eq("client-a"),eq("tenant-a"),eq(ACTOR),eq("task-1"),eq("work-1"),eq("rsn-1"),command.capture());
+        org.junit.jupiter.api.Assertions.assertEquals("cmd-original",command.getValue().getCommandId());
+        org.junit.jupiter.api.Assertions.assertEquals(5L,command.getValue().getExpectedWorkItemVersion());
+    }
+
+    @Test
+    void nativeLeaseQueryConfirmsAuthenticatedTargetAndCannotSelectOrOmitActor() throws Exception {
+        var runtime=mock(cn.jia.agent.security.AgentRuntimeAuthentication.class);
+        when(runtime.isAuthenticated()).thenReturn(true);
+        when(runtime.getPrincipal()).thenReturn(new cn.jia.agent.security.AgentRuntimeAuthentication.Scope("0","client-a","tenant-a",ACTOR,"boot"));
+        String path="/agent/tasks/task-1/work-items/work-1/reassignments/rsn-1/lease/start";
+        String body="{\"commandId\":\"cmd-original\",\"expectedWorkItemVersion\":5}";
+        mvc.perform(post(path).contentType(MediaType.APPLICATION_JSON).content(body).principal(runtime))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("BAD_REQUEST"));
+        mvc.perform(post(path).queryParam("actorAgentId","agt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+                .contentType(MediaType.APPLICATION_JSON).content(body).principal(runtime))
+                .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("WORK_ITEM_REASSIGNMENT_FORBIDDEN"));
+        mvc.perform(post(path).queryParam("actorAgentId",ACTOR,ACTOR)
+                .contentType(MediaType.APPLICATION_JSON).content(body).principal(runtime))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(service,runtimeAuthentication);
     }
 
     @Test

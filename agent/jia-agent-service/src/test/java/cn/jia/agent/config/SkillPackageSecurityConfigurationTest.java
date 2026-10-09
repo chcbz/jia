@@ -1,39 +1,24 @@
 package cn.jia.agent.config;
-import cn.jia.oauth.entity.OauthApiKeyEntity;
-import cn.jia.oauth.service.ApiKeyService;
-import cn.jia.user.security.*;
-import org.junit.jupiter.api.*;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.mock.web.*;
-import org.springframework.security.core.context.SecurityContextHolder;
-import java.util.*;
+
+import cn.jia.agent.security.AgentRuntimeAuthenticationFilter;
+import org.junit.jupiter.api.Test;
+import org.springframework.mock.web.MockHttpServletRequest;
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
+
 class SkillPackageSecurityConfigurationTest {
-    @AfterEach void cleanup() { SecurityContextHolder.clearContext(); }
-    @Test void exactCurrentKeyAuthenticatesWithoutExposingSecretInPrincipal() throws Exception {
-        var key=new OauthApiKeyEntity();key.setId("key");key.setTenantId("0");key.setJiacn("Tenant");key.setClientId("Client");key.setApiKey("secret-fixture");key.setStatus(1);
-        var keys=mock(ApiKeyService.class);when(keys.findByApiKey("secret-fixture")).thenReturn(key);when(keys.get("key")).thenReturn(key);
-        var accounts=mock(AccountSecurityService.class);when(accounts.findUniqueByExactJiacn("Tenant")).thenReturn(Optional.of(new AccountSecuritySnapshot(1,"Tenant",AccountState.ACTIVE,1)));
-        var filter=new SkillPackageSecurityConfiguration.PackageKeyFilter(provider(keys),provider(accounts));
-        var request=new MockHttpServletRequest("GET","/internal/agent/skill-installations/i/package");request.addHeader("X-API-Key","secret-fixture");
-        filter.doFilter(request,new MockHttpServletResponse(),(r,s)->{
-            var principal=(OauthApiKeyEntity)SecurityContextHolder.getContext().getAuthentication().getPrincipal();
-            assertEquals("key",principal.getId());assertNull(principal.getApiKey());
-        });
-        assertNull(SecurityContextHolder.getContext().getAuthentication());
-        key.setStatus(0);var denied=new MockHttpServletResponse();
-        filter.doFilter(newRequest(),denied,(r,s)->fail("revoked key reached handler"));assertEquals(403,denied.getStatus());
+    @Test void packagePathAlwaysSelectsSingleNativeLaneIncludingMissingCredentials() {
+        var request=new MockHttpServletRequest("GET","/internal/agent/skill-installations/si_1/package");
+        assertTrue(AgentRuntimeAuthenticationFilter.selectsRuntimeCredentialLane(request));
+        assertTrue(AgentRuntimeAuthenticationFilter.allowed(request));
+        assertThrows(IllegalArgumentException.class,()->AgentRuntimeAuthenticationFilter.sessionHeaders(request));
+        assertEquals(0,SkillPackageSecurityConfiguration.class.getDeclaredMethods().length);
     }
-    @Test void duplicateHeaderQueryAndWrongMethodDenyBeforeCredentialLookup() throws Exception {
-        var keys=mock(ApiKeyService.class);var accounts=mock(AccountSecurityService.class);
-        var filter=new SkillPackageSecurityConfiguration.PackageKeyFilter(provider(keys),provider(accounts));
-        for(int n=0;n<3;n++) {
-            var request=newRequest();if(n==0)request.addHeader("X-API-Key","other");if(n==1)request.addParameter("key","secret");if(n==2)request.setMethod("POST");
-            var response=new MockHttpServletResponse();filter.doFilter(request,response,(r,s)->fail("invalid request admitted"));assertEquals(403,response.getStatus());
-        }
-        verifyNoInteractions(keys,accounts);
+    @Test void legacyKeyCannotAuthenticatePackageAndMethodOrEncodedPathIsRejected() {
+        var request=new MockHttpServletRequest("GET","/internal/agent/skill-installations/si_1/package");
+        request.addHeader("X-API-Key","historical-only");
+        assertThrows(IllegalArgumentException.class,()->AgentRuntimeAuthenticationFilter.sessionHeaders(request));
+        request.setMethod("POST");assertFalse(AgentRuntimeAuthenticationFilter.allowed(request));
+        request.setMethod("GET");request.setRequestURI("/internal/agent/skill-installations/si_1%2fother/package");
+        assertFalse(AgentRuntimeAuthenticationFilter.allowed(request));
     }
-    private static MockHttpServletRequest newRequest() { var r=new MockHttpServletRequest("GET","/internal/agent/skill-installations/i/package");r.addHeader("X-API-Key","secret-fixture");return r; }
-    @SuppressWarnings("unchecked") private static <T> ObjectProvider<T> provider(T value) { ObjectProvider<T> p=mock(ObjectProvider.class);when(p.getObject()).thenReturn(value);when(p.getIfAvailable()).thenReturn(value);return p; }
 }

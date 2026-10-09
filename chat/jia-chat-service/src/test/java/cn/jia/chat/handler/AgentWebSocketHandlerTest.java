@@ -127,17 +127,17 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         running.setAssignedAgentName("Wu Yong");
         when(agentService.reportTask(any(String.class), any(AgentTaskReportDTO.class))).thenReturn(running);
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage("{\"type\":\"ping\",\"requestId\":\"ping-1\"}"));
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("{\"type\":\"ping\",\"requestId\":\"ping-1\"}"));
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.register","requestId":"reg-1","agentId":"agent-001","name":"Wu Yong","abilities":["planning","analysis"]}
                 """));
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"task.assign","requestId":"assign-1","taskId":"task-001","agentId":"agent-001","allowQueue":false}
                 """));
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"task.report","requestId":"report-1","taskId":"task-001","agentId":"agent-001","status":"running","currentTaskTitle":"Verify"}
                 """));
 
@@ -167,17 +167,17 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(agentService.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO(
                         "agent-001", "token", AgentConstants.STATUS_ONLINE));
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
 
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.register","agentId":"agent-001","runtimeInstanceId":"runtime-1"}
                 """));
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.register","agentId":"agent-001","runtimeInstanceId":"runtime-1",
                  "abilities":[]}
                 """));
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.register","agentId":"agent-001","runtimeInstanceId":"runtime-1",
                  "abilities":null}
                 """));
@@ -202,18 +202,18 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         updated.setStatus(AgentConstants.STATUS_ONLINE);
         when(agentService.updateStatus(any(String.class), any(AgentStatusDTO.class)))
                 .thenReturn(updated);
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
 
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.presence","agentId":"agent-001","runtimeInstanceId":"runtime-1",
                  "status":"online"}
                 """));
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.presence","agentId":"agent-001","runtimeInstanceId":"runtime-1",
                  "status":"online","abilities":[]}
                 """));
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.presence","agentId":"agent-001","runtimeInstanceId":"runtime-1",
                  "status":"online","abilities":null}
                 """));
@@ -240,9 +240,9 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         updated.setAbilities(List.of("code-edit", "review"));
         when(agentService.updateStatus(any(String.class), any(AgentStatusDTO.class))).thenReturn(updated);
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
-        handler.handleTextMessage(session, new TextMessage("""
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.presence","schemaVersion":1,"messageId":"presence-1",
                  "agentId":"agent-001","sourceAgentId":"agent-001","runtimeInstanceId":"runtime-1",
                  "status":"online",
@@ -258,14 +258,14 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
     void abilitiesMustBeAnArrayOfNonBlankStrings() throws Exception {
         stubAgentSession("session-invalid-abilities", "agent-001", "runtime-1");
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
 
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.register","agentId":"agent-001","runtimeInstanceId":"runtime-1",
                  "abilities":{"planning":true}}
                 """));
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.presence","agentId":"agent-001","runtimeInstanceId":"runtime-1",
                  "status":"online","abilities":["planning",null]}
                 """));
@@ -290,8 +290,8 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         stubAgentSession(crossTenant, "session-cross-tenant", "agent-b", "tenant-b", "client-a", null);
         stubAgentSession(crossClient, "session-cross-client", "agent-c", "tenant-a", "client-b", null);
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         handler.afterConnectionEstablished(matching);
         handler.afterConnectionEstablished(crossTenant);
         handler.afterConnectionEstablished(crossClient);
@@ -333,21 +333,50 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(agentService.listTaskWritableMemberAgentIds("tenant-a", "client-a", "task-legacy"))
                 .thenReturn(List.of("agent-legacy"));
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         for (WebSocketSession candidate : List.of(firstSession, secondSession,
                 crossTenantSession, crossClientSession)) {
             handler.afterConnectionEstablished(candidate);
-            handler.handleTextMessage(candidate, new TextMessage(
+            UnifiedRuntimeTestSupport.deliver(handler, candidate, new TextMessage(
                     "{\"type\":\"agent.register\",\"agentId\":\"agent-legacy\",\"name\":\"Agent\"}"));
         }
         org.mockito.Mockito.clearInvocations(firstSession, secondSession, crossTenantSession, crossClientSession);
 
-        handler.handleTextMessage(firstSession, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, firstSession, new TextMessage("""
                 {"type":"task.assign","requestId":"legacy-assign","taskId":"task-legacy",
                  "agentId":"agent-legacy","targetAgentId":"agent-malicious",
                  "tenantId":"tenant-malicious","clientId":"client-malicious"}
                 """));
+
+        ArgumentCaptor<TextMessage> rejectedCaptor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(firstSession).sendMessage(rejectedCaptor.capture());
+        assertTrue(rejectedCaptor.getValue().getPayload().contains("SESSION_PROOF_MISMATCH"));
+        assertFalse(rejectedCaptor.getValue().getPayload().contains("tenant-malicious"));
+        assertFalse(rejectedCaptor.getValue().getPayload().contains("client-malicious"));
+        verify(secondSession, never()).sendMessage(any(TextMessage.class));
+        verify(crossTenantSession, never()).sendMessage(any(TextMessage.class));
+        verify(crossClientSession, never()).sendMessage(any(TextMessage.class));
+        verify(agentService, never()).assignTask(any(String.class), any(AgentTaskAssignDTO.class));
+        verify(agentService, never()).listTaskWritableMemberAgentIds(
+                any(String.class), any(String.class), any(String.class));
+        // Proof rejection disconnects the binding: explicitly re-register the original
+        // authenticated proof before sending a legitimate follow-up assignment.
+        UnifiedRuntimeTestSupport.deliver(handler, firstSession, new TextMessage(
+                "{\"type\":\"agent.register\",\"agentId\":\"agent-legacy\",\"name\":\"Agent\"}"));
+        org.mockito.Mockito.clearInvocations(firstSession, secondSession, crossTenantSession, crossClientSession);
+
+        // Authenticated transport scope is not the task DTO's historical owner field.
+        // The body target remains untrusted; the assignment still uses the session Agent.
+        UnifiedRuntimeTestSupport.deliver(handler, firstSession, new TextMessage("""
+                {"type":"task.assign","requestId":"legacy-assign","taskId":"task-legacy",
+                 "agentId":"agent-legacy","targetAgentId":"agent-malicious",
+                 "tenantId":"0","clientId":"client-a"}
+                """));
+        ArgumentCaptor<AgentTaskAssignDTO> assignment = ArgumentCaptor.forClass(AgentTaskAssignDTO.class);
+        verify(agentService).assignTask(eq("task-legacy"), assignment.capture());
+        assertEquals("agent-legacy", assignment.getValue().getAgentId());
+        verify(agentService).listTaskWritableMemberAgentIds("tenant-a", "client-a", "task-legacy");
 
         ArgumentCaptor<TextMessage> firstCaptor = ArgumentCaptor.forClass(TextMessage.class);
         ArgumentCaptor<TextMessage> secondCaptor = ArgumentCaptor.forClass(TextMessage.class);
@@ -387,16 +416,16 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(agentService.assignTask(any(String.class), any(AgentTaskAssignDTO.class)))
                 .thenReturn(missingScope, mismatchedScope);
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage(
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(
                 "{\"type\":\"agent.register\",\"agentId\":\"agent-legacy\",\"name\":\"Agent\"}"));
         org.mockito.Mockito.clearInvocations(session);
 
-        handler.handleTextMessage(session, new TextMessage(
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(
                 "{\"type\":\"task.assign\",\"taskId\":\"task-missing-scope\",\"agentId\":\"agent-legacy\"}"));
-        handler.handleTextMessage(session, new TextMessage(
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(
                 "{\"type\":\"task.assign\",\"taskId\":\"task-cross-scope\",\"agentId\":\"agent-legacy\"}"));
 
         verify(session, never()).sendMessage(any(TextMessage.class));
@@ -414,14 +443,14 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(agentService.listTaskWritableMemberAgentIds("juyiting", "jia_client", "task-non-member"))
                 .thenReturn(List.of("agent-other"));
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage(
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(
                 "{\"type\":\"agent.register\",\"agentId\":\"agent-legacy\",\"name\":\"Agent\"}"));
         org.mockito.Mockito.clearInvocations(session);
 
-        handler.handleTextMessage(session, new TextMessage(
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(
                 "{\"type\":\"task.assign\",\"taskId\":\"task-non-member\",\"agentId\":\"agent-legacy\"}"));
 
         verify(session, never()).sendMessage(any(TextMessage.class));
@@ -443,11 +472,11 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(agentService.listTaskWritableMemberAgentIds("tenant-a", "client-a", "task-failure"))
                 .thenReturn(List.of("agent-legacy"));
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         for (WebSocketSession candidate : List.of(firstSession, secondSession)) {
             handler.afterConnectionEstablished(candidate);
-            handler.handleTextMessage(candidate, new TextMessage(
+            UnifiedRuntimeTestSupport.deliver(handler, candidate, new TextMessage(
                     "{\"type\":\"agent.register\",\"agentId\":\"agent-legacy\",\"name\":\"Agent\"}"));
         }
         org.mockito.Mockito.clearInvocations(firstSession, secondSession);
@@ -467,7 +496,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         org.mockito.Mockito.doAnswer(failFirstSendOnly)
                 .when(secondSession).sendMessage(any(TextMessage.class));
 
-        handler.handleTextMessage(firstSession, new TextMessage(
+        UnifiedRuntimeTestSupport.deliver(handler, firstSession, new TextMessage(
                 "{\"type\":\"task.assign\",\"taskId\":\"task-failure\",\"agentId\":\"agent-legacy\"}"));
 
         verify(firstSession, org.mockito.Mockito.times(1)).sendMessage(any(TextMessage.class));
@@ -481,13 +510,12 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
 
     @Test
     void supportsSpecChatTypeAliases() throws Exception {
-        when(session.getId()).thenReturn("session-chat");
-        when(session.isOpen()).thenReturn(true);
+        stubAgentSession("session-chat", "agent-001", "runtime-chat");
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"chat.stop","requestId":"stop-1","conversationId":"juyi-1"}
                 """));
 
@@ -505,9 +533,9 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(agentService.assignTask(any(String.class), any(AgentTaskAssignDTO.class)))
                 .thenThrow(new TestAgentException(AgentErrorConstants.AGENT_OFFLINE, "Agent is offline"));
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
-        handler.handleTextMessage(session, new TextMessage("""
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"task.assign","requestId":"assign-1","taskId":"task-001","agentId":"agent-001"}
                 """));
 
@@ -521,13 +549,12 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
 
     @Test
     void extractsConversationTypeFromPayload() throws Exception {
-        when(session.getId()).thenReturn("session-juyi");
-        when(session.isOpen()).thenReturn(true);
+        stubAgentSession("session-juyi", "agent-001", "runtime-juyi");
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"ping","requestId":"ping-juyi","conversationType":"juyiting","conversationId":"juyi-1"}
                 """));
 
@@ -548,10 +575,10 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(agentService.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO("agent-001", "token-001", AgentConstants.STATUS_ONLINE));
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.register","requestId":"reg-1","agentId":"agent-001","name":"Wu Yong"}
                 """));
 
@@ -601,12 +628,12 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 .thenReturn(new AgentRegisterResultDTO(
                         "agent-shared", "token", AgentConstants.STATUS_ONLINE));
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(
-                chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(
+                chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker));
         for (WebSocketSession candidate : List.of(
                 ownedSession, crossOwnerSession, crossClientSession)) {
             handler.afterConnectionEstablished(candidate);
-            handler.handleTextMessage(candidate, new TextMessage(
+            UnifiedRuntimeTestSupport.deliver(handler, candidate, new TextMessage(
                     "{\"type\":\"agent.register\",\"agentId\":\"agent-shared\",\"name\":\"Agent\"}"));
         }
         org.mockito.Mockito.clearInvocations(
@@ -644,12 +671,12 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(agentService.listTaskWritableMemberAgentIds("tenant-a", "client-a", "task-multi"))
                 .thenReturn(List.of("agent-multi"));
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         for (WebSocketSession candidate : List.of(firstSession, secondSession, closedSession,
                 crossTenantSession, crossClientSession)) {
             handler.afterConnectionEstablished(candidate);
-            handler.handleTextMessage(candidate, new TextMessage(
+            UnifiedRuntimeTestSupport.deliver(handler, candidate, new TextMessage(
                     "{\"type\":\"agent.register\",\"agentId\":\"agent-multi\",\"name\":\"Agent\"}"));
         }
         org.mockito.Mockito.clearInvocations(firstSession, secondSession, closedSession,
@@ -683,11 +710,11 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(agentService.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO("agent-multi", "token", AgentConstants.STATUS_ONLINE));
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         for (WebSocketSession candidate : List.of(failingSession, healthySession)) {
             handler.afterConnectionEstablished(candidate);
-            handler.handleTextMessage(candidate, new TextMessage(
+            UnifiedRuntimeTestSupport.deliver(handler, candidate, new TextMessage(
                     "{\"type\":\"agent.register\",\"agentId\":\"agent-multi\",\"name\":\"Agent\"}"));
         }
         org.mockito.Mockito.clearInvocations(failingSession, healthySession);
@@ -711,10 +738,10 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
         when(agentService.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO("agent-trusted", "token", AgentConstants.STATUS_ONLINE));
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage(
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(
                 "{\"type\":\"agent.register\",\"agentId\":\"agent-trusted\",\"name\":\"Agent\"}"));
         org.mockito.Mockito.clearInvocations(session);
 
@@ -743,10 +770,10 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(agentService.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO("agent-001", "token-001", AgentConstants.STATUS_ONLINE));
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.register","requestId":"reg-1","agentId":"agent-001","name":"Wu Yong"}
                 """));
 
@@ -809,12 +836,12 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(agentService.listTaskWritableMemberAgentIds("tenant-a", "client-a", "task-001"))
                 .thenReturn(List.of("agent-target"));
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         for (WebSocketSession candidate : List.of(
                 targetSession, otherAgentSession, crossTenantSession, crossClientSession)) {
             handler.afterConnectionEstablished(candidate);
-            handler.handleTextMessage(candidate, new TextMessage(
+            UnifiedRuntimeTestSupport.deliver(handler, candidate, new TextMessage(
                     "{\"type\":\"agent.register\",\"agentId\":\""
                             + candidate.getAttributes().get("agentId") + "\",\"name\":\"Agent\"}"));
         }
@@ -863,11 +890,11 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(agentService.listTaskMemberAgentIds("0", "client-a", "395"))
                 .thenAnswer(invocation -> "owner-a".equals(EsContextHolder.getContext().getJiacn())
                         ? List.of("agent-wuyong") : List.of());
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         for (WebSocketSession session : List.of(owner, otherOwner)) {
             handler.afterConnectionEstablished(session);
-            handler.handleTextMessage(session, new TextMessage(
+            UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(
                     "{\"type\":\"agent.register\",\"agentId\":\"agent-wuyong\",\"name\":\"Wu Yong\"}"));
         }
         org.mockito.Mockito.clearInvocations(owner, otherOwner);
@@ -895,10 +922,10 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         // A registered Agent with no writable membership cannot receive other task commands.
         when(agentService.listTaskWritableMemberAgentIds("0", "jia_client", "395"))
                 .thenReturn(List.of());
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage(
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(
                 "{\"type\":\"agent.register\",\"agentId\":\"agent-wuyong\",\"name\":\"Wu Yong\"}"));
         org.mockito.Mockito.clearInvocations(session);
         AgentActionIntentDTO command = new AgentActionIntentDTO();
@@ -921,10 +948,10 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 .thenReturn(new AgentRegisterResultDTO("agent-target", "token", AgentConstants.STATUS_ONLINE));
         when(agentService.listTaskWritableMemberAgentIds("juyiting", "other-client", "task-001"))
                 .thenReturn(List.of("agent-target"));
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage(
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(
                 "{\"type\":\"agent.register\",\"agentId\":\"agent-target\",\"name\":\"Agent\"}"));
         org.mockito.Mockito.clearInvocations(session);
 
@@ -992,10 +1019,10 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         capability.setCollaborationHint("适合任务拆解、方案评审、风险判断和协同安排。");
         when(agentService.listCapabilities()).thenReturn(List.of(capability));
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"capability.lookup","requestId":"cap-1","agentId":"agent-wuyong"}
                 """));
 
@@ -1035,17 +1062,17 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                     message.setClientId("jia_client"); message.setConversationType("juyiting");
                     return message;
                 });
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         handler.setChatConversationService(chatConversationService);
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.register","requestId":"reg-1","agentId":"agent-001","name":"Wu Yong"}
                 """));
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.message.delta","requestId":"reply-1-delta","conversationId":"1001","conversationType":"juyiting","agentId":"agent-001","senderName":"宋江","agentName":"林冲","content":"Inspect "}
                 """));
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.message","requestId":"reply-1","conversationId":"1001","conversationType":"juyiting","agentId":"agent-001","senderName":"宋江","agentName":"林冲","content":"Inspect the current state first."}
                 """));
 
@@ -1108,22 +1135,24 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 .setTurnId("turn-1");
         when(deliberation.persistFinal(anyString(), anyString(), anyString(), anyString(),
                 org.mockito.ArgumentMatchers.anyLong(), anyString(), anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), any(ServerResolvedAgentSender.class)))
+                anyString(), anyString(), anyString(), org.mockito.ArgumentMatchers.<Integer>isNull(),
+                org.mockito.ArgumentMatchers.<String>isNull(), org.mockito.ArgumentMatchers.<String>isNull(),
+                any(ServerResolvedAgentSender.class)))
                 .thenReturn(new ChatDeliberationService.FinalResult(
                         ChatDeliberationService.FinalStatus.PERSISTED, 501L, "401", "evt-final", turn, null));
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         handler.setChatConversationService(chatConversationService);
         handler.setChatDeliberationService(deliberation);
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.register","requestId":"reg-1","agentId":"agent-001","name":"Wu Yong"}
                 """));
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.message.delta","requestId":"req-1","turnId":"turn-1","dispatchId":"dispatch-1","conversationId":"1001","conversationGeneration":"1","contextSnapshotId":"snapshot-1","contextHash":"sha256:ctx","deltaSeq":"1","agentId":"agent-001","senderName":"宋江","agentName":"林冲","content":"delta"}
                 """));
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.message","requestId":"req-1","turnId":"turn-1","dispatchId":"dispatch-1","conversationId":"1001","conversationGeneration":"1","contextSnapshotId":"snapshot-1","contextHash":"sha256:ctx","agentId":"agent-001","senderName":"宋江","agentName":"林冲","content":"final"}
                 """));
 
@@ -1136,7 +1165,22 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 ArgumentCaptor.forClass(ServerResolvedAgentSender.class);
         verify(deliberation).persistFinal(eq("0"), eq("juyiting"), eq("jia_client"), eq("1001"),
                 eq(1L), eq("agent-001"), eq("req-1"), eq("turn-1"), eq("dispatch-1"),
-                eq("snapshot-1"), eq("sha256:ctx"), eq("final"), finalSender.capture());
+                eq("snapshot-1"), eq("sha256:ctx"), eq("final"),
+                org.mockito.ArgumentMatchers.<Integer>isNull(), org.mockito.ArgumentMatchers.<String>isNull(),
+                org.mockito.ArgumentMatchers.<String>isNull(), finalSender.capture());
+        ArgumentCaptor<TextMessage> finalReceipt = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, org.mockito.Mockito.atLeastOnce()).sendMessage(finalReceipt.capture());
+        Map<String, Object> saved = finalReceipt.getAllValues().stream()
+                .map(TextMessage::getPayload)
+                .map(wire -> new ObjectMapper().readValue(wire, new TypeReference<Map<String, Object>>() { }))
+                .filter(event -> "agent_message_saved".equals(event.get("type")))
+                .findFirst().orElseThrow(() -> new AssertionError("Missing persisted final receipt"));
+        assertEquals("turn-1", saved.get("turnId"));
+        assertEquals("501", saved.get("messageId"));
+        assertEquals("evt-final", saved.get("eventId"));
+        assertEquals(false, saved.get("duplicate"));
+        verify(chatConversationService, never()).appendOwnedMessage(any(), any(), any(),
+                org.mockito.ArgumentMatchers.anyLong());
         for (ServerResolvedAgentSender sender : List.of(deltaSender.getValue(), finalSender.getValue())) {
             assertEquals("agent", sender.type());
             assertEquals("Wu Yong", sender.displayName());
@@ -1156,17 +1200,17 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(chatConversationService.getOwned("juyiting", "jia_client", "1001"))
                 .thenThrow(new IllegalStateException("foreign conversation"));
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(
-                chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(
+                chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker));
         handler.setChatConversationService(chatConversationService);
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.register","agentId":"agent-001","name":"Wu Yong"}
                 """));
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.message","conversationId":"1001","agentId":"agent-001","content":"inject"}
                 """));
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.message.delta","conversationId":"1001","agentId":"agent-001","content":"inject-delta"}
                 """));
 
@@ -1213,14 +1257,14 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 org.mockito.ArgumentMatchers.eq(1L)))
                 .thenAnswer(invocation -> ((ChatMessageEntity) invocation.getArgument(2)).setId(600L));
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(
-                chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(
+                chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker));
         handler.setChatConversationService(chatConversationService);
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage(
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(
                 "{\"type\":\"agent.register\",\"agentId\":\"agent-001\"}"));
         for (String id : List.of("2001", "2002", "2003", "2004", "2005")) {
-            handler.handleTextMessage(session, new TextMessage(
+            UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(
                     "{\"type\":\"agent.message\",\"conversationId\":\"" + id
                             + "\",\"agentId\":\"agent-001\",\"content\":\"reply\","
                             + "\"participantAgentIds\":[\"agent-001\"]}"));
@@ -1247,8 +1291,8 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 });
         when(agentService.listTaskWritableMemberAgentIds("0", "jia_client", "task-8"))
                 .thenThrow(new IllegalStateException("authoritative lookup unavailable"));
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(
-                chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(
+                chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker));
         EsContext previous = EsContextHolder.getContext();
         EsContext caller = new EsContext();
         caller.setJiacn("unrelated-owner");
@@ -1294,18 +1338,18 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(chatConversationService.getOwned("juyiting", "jia_client", "2011"))
                 .thenReturn(emptyTargets);
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(
-                chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(
+                chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker));
         handler.setChatConversationService(chatConversationService);
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage(
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(
                 "{\"type\":\"agent.register\",\"agentId\":\"agent-001\"}"));
         org.mockito.Mockito.clearInvocations(session);
 
-        handler.handleTextMessage(session, new TextMessage(
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(
                 "{\"type\":\"agent.message\",\"conversationId\":\"2010\"," +
                         "\"agentId\":\"agent-001\",\"content\":\"blocked\"}"));
-        handler.handleTextMessage(session, new TextMessage(
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(
                 "{\"type\":\"agent.message.delta\",\"conversationId\":\"2011\"," +
                         "\"agentId\":\"agent-001\",\"content\":\"blocked\"}"));
 
@@ -1357,18 +1401,18 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 any(ChatMessageEntity.class), org.mockito.ArgumentMatchers.eq(1L)))
                 .thenAnswer(invocation -> ((ChatMessageEntity) invocation.getArgument(2)).setId(712L));
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(
-                chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(
+                chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker));
         handler.setChatConversationService(chatConversationService);
         handler.afterConnectionEstablished(senderSession);
         handler.afterConnectionEstablished(revokedSession);
-        handler.handleTextMessage(senderSession, new TextMessage(
+        UnifiedRuntimeTestSupport.deliver(handler, senderSession, new TextMessage(
                 "{\"type\":\"agent.register\",\"agentId\":\"agent-current\"}"));
-        handler.handleTextMessage(revokedSession, new TextMessage(
+        UnifiedRuntimeTestSupport.deliver(handler, revokedSession, new TextMessage(
                 "{\"type\":\"agent.register\",\"agentId\":\"agent-revoked\"}"));
         org.mockito.Mockito.clearInvocations(senderSession, revokedSession);
 
-        handler.handleTextMessage(senderSession, new TextMessage(
+        UnifiedRuntimeTestSupport.deliver(handler, senderSession, new TextMessage(
                 "{\"type\":\"agent.message\",\"conversationId\":\"2012\"," +
                         "\"agentId\":\"agent-current\",\"content\":\"scoped result\"}"));
 
@@ -1399,15 +1443,15 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         try (ChatConversationEventBroker.DeletionFence fence = broker.beginDeletion("3000")) {
             fence.commitDeleted(1L);
         }
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(
-                chatClient, agentServiceProvider, chatMessageDao, broker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(
+                chatClient, agentServiceProvider, chatMessageDao, broker));
         handler.setChatConversationService(chatConversationService);
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage(
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(
                 "{\"type\":\"agent.register\",\"agentId\":\"agent-001\"}"));
         org.mockito.Mockito.clearInvocations(session, chatClient);
 
-        handler.handleTextMessage(session, new TextMessage(
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(
                 "{\"type\":\"chat.stream\",\"requestId\":\"req-1\","
                         + "\"conversationId\":\"3000\",\"agentId\":\"agent-001\","
                         + "\"content\":\"late\"}"));
@@ -1445,15 +1489,15 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                     }
                     return ((ChatMessageEntity) invocation.getArgument(2)).setId(700L);
                 });
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(
-                chatClient, agentServiceProvider, chatMessageDao, broker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(
+                chatClient, agentServiceProvider, chatMessageDao, broker));
         handler.setChatConversationService(chatConversationService);
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage(
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(
                 "{\"type\":\"agent.register\",\"agentId\":\"agent-001\"}"));
         org.mockito.Mockito.clearInvocations(session);
 
-        handler.handleTextMessage(session, new TextMessage(
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(
                 "{\"type\":\"agent.message\",\"conversationId\":\"3001\","
                         + "\"agentId\":\"agent-001\",\"content\":\"late\"}"));
 
@@ -1492,14 +1536,14 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 new java.util.concurrent.CountDownLatch(1);
         broker.stream("3002", 1L, () -> true).subscribe(
                 ignored -> events.incrementAndGet(), ignored -> { }, completed::countDown);
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(
-                chatClient, agentServiceProvider, chatMessageDao, broker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(
+                chatClient, agentServiceProvider, chatMessageDao, broker));
         handler.setChatConversationService(chatConversationService);
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage(
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(
                 "{\"type\":\"agent.register\",\"agentId\":\"agent-001\"}"));
 
-        handler.handleTextMessage(session, new TextMessage(
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(
                 "{\"type\":\"agent.message.delta\",\"conversationId\":\"3002\","
                         + "\"agentId\":\"agent-001\",\"content\":\"late\"}"));
 
@@ -1549,18 +1593,18 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 any(ChatMessageEntity.class), org.mockito.ArgumentMatchers.eq(1L)))
                 .thenAnswer(invocation -> ((ChatMessageEntity) invocation.getArgument(2)).setId(710L));
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(
-                chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(
+                chatClient, agentServiceProvider, chatMessageDao, chatConversationEventBroker));
         handler.setChatConversationService(chatConversationService);
         handler.afterConnectionEstablished(targetSession);
         handler.afterConnectionEstablished(nonRecipientSession);
-        handler.handleTextMessage(targetSession, new TextMessage(
+        UnifiedRuntimeTestSupport.deliver(handler, targetSession, new TextMessage(
                 "{\"type\":\"agent.register\",\"agentId\":\"agent-target\"}"));
-        handler.handleTextMessage(nonRecipientSession, new TextMessage(
+        UnifiedRuntimeTestSupport.deliver(handler, nonRecipientSession, new TextMessage(
                 "{\"type\":\"agent.register\",\"agentId\":\"agent-other\"}"));
         org.mockito.Mockito.clearInvocations(targetSession, nonRecipientSession);
 
-        handler.handleTextMessage(targetSession, new TextMessage(
+        UnifiedRuntimeTestSupport.deliver(handler, targetSession, new TextMessage(
                 "{\"type\":\"agent.message\",\"conversationId\":\"3010\","
                         + "\"agentId\":\"agent-target\",\"content\":\"private result\"}"));
 
@@ -1573,10 +1617,10 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
     void canonicalWorkResultDoesNotInvokeLegacyTaskReportHandler() throws Exception {
         stubAgentSession("session-result", "agent-001", "runtime-1");
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"schemaVersion":1,"type":"work.result","messageId":"result-1","sourceAgentId":"agent-001","runtimeInstanceId":"runtime-1","taskId":"task-001","status":"completed"}
                 """));
 
@@ -1603,13 +1647,13 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(agentService.listTaskWritableMemberAgentIds("juyiting", "jia_client", "task-001"))
                 .thenReturn(List.of("agent-member"));
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         handler.afterConnectionEstablished(memberSession);
         handler.afterConnectionEstablished(nonMemberSession);
-        handler.handleTextMessage(memberSession, new TextMessage(
+        UnifiedRuntimeTestSupport.deliver(handler, memberSession, new TextMessage(
                 "{\"type\":\"agent.register\",\"agentId\":\"agent-member\",\"name\":\"Member\"}"));
-        handler.handleTextMessage(nonMemberSession, new TextMessage(
+        UnifiedRuntimeTestSupport.deliver(handler, nonMemberSession, new TextMessage(
                 "{\"type\":\"agent.register\",\"agentId\":\"agent-other\",\"name\":\"Other\"}"));
         org.mockito.Mockito.clearInvocations(memberSession, nonMemberSession);
 
@@ -1642,10 +1686,10 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
         when(agentService.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO("agent-001", "token-001", AgentConstants.STATUS_ONLINE));
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.register","requestId":"reg-1","agentId":"agent-001","name":"Wu Yong"}
                 """));
         when(agentService.listTaskWritableMemberAgentIds("juyiting", "jia_client", "task-001"))
@@ -1677,10 +1721,10 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
     @Test
     void requiresRuntimeInstanceIdOnProtocolV1Registration() throws Exception {
         stubAgentSession("session-runtime-required", "agent-001");
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"schemaVersion":1,"type":"agent.register","sourceAgentId":"agent-001","name":"Wu Yong"}
                 """));
 
@@ -1698,13 +1742,13 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
         when(agentService.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO("agent-001", "token-001", AgentConstants.STATUS_ONLINE));
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"schemaVersion":1,"type":"agent.register","sourceAgentId":"agent-001","runtimeInstanceId":"runtime-1","name":"Wu Yong"}
                 """));
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"schemaVersion":1,"type":"chat.message","messageId":"message-1","sourceAgentId":"agent-001","conversationId":"1001","content":"missing runtime"}
                 """));
 
@@ -1716,18 +1760,18 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
     }
 
     @Test
-    void rejectsLateRuntimeBindingAfterLegacyRegistration() throws Exception {
+    void handshakeFixedRuntimeCannotBeReboundByLaterMessages() throws Exception {
         stubAgentSession("session-runtime-late", "agent-001");
         when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
         when(agentService.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO("agent-001", "token-001", AgentConstants.STATUS_ONLINE));
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.register","agentId":"agent-001","name":"Wu Yong"}
                 """));
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"schemaVersion":1,"type":"chat.message","messageId":"message-1","sourceAgentId":"agent-001","runtimeInstanceId":"runtime-late","conversationId":"1001","content":"late binding"}
                 """));
 
@@ -1735,17 +1779,16 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
         verify(session, org.mockito.Mockito.atLeast(4)).sendMessage(messageCaptor.capture());
         String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
-        assertTrue(messages.contains("\"code\":\"RUNTIME_INSTANCE_ID_NOT_FIXED\""));
+        assertTrue(messages.contains("\"code\":\"RUNTIME_INSTANCE_ID_MISMATCH\""));
     }
 
     @Test
     void rejectsRegistrationRuntimeConflictWithAuthenticatedSession() throws Exception {
         stubAgentSession("session-runtime-auth", "agent-001", "runtime-auth");
-        when(agentServiceProvider.getIfAvailable()).thenReturn(agentService);
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"schemaVersion":1,"type":"agent.register","sourceAgentId":"agent-001","runtimeInstanceId":"runtime-payload","name":"Wu Yong"}
                 """));
 
@@ -1754,6 +1797,10 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         verify(session, org.mockito.Mockito.atLeast(2)).sendMessage(messageCaptor.capture());
         String messages = messageCaptor.getAllValues().stream().map(TextMessage::getPayload).reduce("", String::concat);
         assertTrue(messages.contains("\"code\":\"RUNTIME_INSTANCE_ID_MISMATCH\""));
+        // The proof mismatch is rejected before resolving a business service, not by a
+        // weakened register implementation or a permissive authentication fallback.
+        verify(agentServiceProvider, never()).getIfAvailable();
+        org.mockito.Mockito.verifyNoInteractions(agentService);
     }
 
     @Test
@@ -1763,13 +1810,13 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(agentService.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO("agent-001", "token-001", AgentConstants.STATUS_ONLINE));
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"schemaVersion":1,"type":"agent.register","messageId":"register-1","sourceAgentId":"agent-001","runtimeInstanceId":"runtime-1","name":"Wu Yong"}
                 """));
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"schemaVersion":1,"type":"chat.message","messageId":"message-1","sourceAgentId":"agent-001","runtimeInstanceId":"runtime-2","conversationId":"1001","content":"must be rejected"}
                 """));
 
@@ -1792,16 +1839,16 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                             AgentConstants.STATUS_ONLINE);
                 });
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.register","requestId":"reg-1","agentId":"agent-001","name":"吴用"}
                 """));
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.register","requestId":"reg-2","agentId":"agent-002","name":"林冲"}
                 """));
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.message","requestId":"reply-2","conversationId":"2001","conversationType":"juyiting","agentId":"agent-002","senderName":"林冲","content":"请先盘点当前局势。"}
                 """));
 
@@ -1836,10 +1883,10 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(agentService.listTaskWritableMemberAgentIds("0", "jia_client", "task-001"))
                 .thenReturn(List.of("agent-wuyong"));
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.register","requestId":"reg-1","agentId":"agent-wuyong","name":"Wu Yong"}
                 """));
 
@@ -1917,10 +1964,10 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         when(agentService.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO("agent-wuyong", "token-001", AgentConstants.STATUS_ONLINE));
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.register","requestId":"reg-1","agentId":"agent-wuyong","name":"Wu Yong"}
                 """));
 

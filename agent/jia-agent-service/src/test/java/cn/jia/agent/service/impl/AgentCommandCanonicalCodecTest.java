@@ -142,6 +142,27 @@ class AgentCommandCanonicalCodecTest {
     }
 
     @Test
+    void unifiedRuntimeDispatchFixtureIsGeneratedByTheRealCanonicalCodec() throws Exception {
+        byte[] actual = AgentCommandCanonicalCodec.wireBytes(
+                e05Draft("5", "cmd_hall_action_" + "a".repeat(64), "rsn_" + "c".repeat(64)),
+                "00000000-0000-0000-0000-000000000005");
+        try (var fixture = getClass().getResourceAsStream(
+                "/ur02/command-dispatch-e05.canonical.redacted.json")) {
+            org.junit.jupiter.api.Assertions.assertNotNull(fixture);
+            assertArrayEquals(actual, fixture.readAllBytes());
+        }
+        assertEquals("057a4626387846f4bf420cab046d7d0bb4d12cdae6569e90839af00161cbd5a3",
+                HexFormat.of().formatHex(AgentCommandCanonicalCodec.sha256(actual)));
+        String json = new String(actual, StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"targetAgentId\":\"agt_" + "b".repeat(32) + "\""));
+        assertTrue(json.contains("\"expiresAt\":3601000"));
+        assertFalse(json.contains("canonicalAgentId"));
+        assertFalse(json.contains("payloadReference"));
+        assertFalse(json.contains("installationId"));
+        assertFalse(json.contains("leaseToken"));
+    }
+
+    @Test
     void e05OldMissingMismatchedAndUnknownBindingsFailClosed() {
         AgentCommandDraft valid = e05Draft("5", "cmd_hall_action_" + "a".repeat(64),
                 "rsn_" + "c".repeat(64));

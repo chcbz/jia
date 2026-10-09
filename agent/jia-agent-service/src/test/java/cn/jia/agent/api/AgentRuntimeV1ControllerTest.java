@@ -1,6 +1,7 @@
 package cn.jia.agent.api;
 
 import cn.jia.agent.entity.AgentCommandAckResult;
+import cn.jia.agent.entity.AgentCommandAckRejectedException;
 import cn.jia.agent.entity.AgentRuntimeV1EnrollmentResult;
 import cn.jia.agent.entity.AgentRuntimeV1InstallationView;
 import cn.jia.agent.service.AgentRuntimeV1Service;
@@ -15,6 +16,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.time.Instant;
 import java.util.Map;
+import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -34,15 +36,20 @@ class AgentRuntimeV1ControllerTest {
 
     @BeforeEach void setUp() {
         runtime = mock(AgentRuntimeV1Service.class);
-        mvc = MockMvcBuilders.standaloneSetup(new AgentRuntimeV1Controller(runtime)).build();
+        mvc = MockMvcBuilders.standaloneSetup(new AgentRuntimeV1Controller(runtime))
+                .setControllerAdvice(new cn.jia.core.security.SensitiveResponseBodyAdvice(new cn.jia.core.security.SensitiveResponseProperties()))
+                .build();
     }
 
     @Test void installerRuntimeAndAckUseExactJsonResultDataEnvelope() throws Exception {
         AgentRuntimeV1InstallationView view = view("ACTIVE");
         when(runtime.enroll(any(), anyLong())).thenReturn(new AgentRuntimeV1EnrollmentResult(view, "rta1_secret"));
-        when(runtime.session(eq("rta1_secret"), any(), anyLong())).thenReturn(view);
+        var session = new cn.jia.agent.entity.AgentRuntimeV1SessionResponse("rti_" + "1".repeat(32), "0", "client-a",
+                "agt_0123456789abcdef0123456789abcdef", "host-1", "boot-1", 1,
+                "AgentRuntime", "rts1_" + "a".repeat(64), "/ws/agent/channel", "CHANNEL_PENDING");
+        when(runtime.session(eq("rta1_secret"), any(), anyLong())).thenReturn(session);
         when(runtime.heartbeat(eq("rta1_secret"), any(), anyLong())).thenReturn(view);
-        when(runtime.acknowledge(eq("rta1_secret"), eq("msg-1"), any(), anyLong())).thenReturn(
+        when(runtime.acknowledge(eq("rts1_" + "a".repeat(64)), eq("msg-1"), any(), anyLong())).thenReturn(
                 new AgentCommandAckResult(AgentCommandAckResult.Kind.ADVANCED, "RECEIVED", 1));
 
         mvc.perform(post("/agent/runtime/v1/enroll").contentType("application/json").content(enrollmentJson()))
@@ -53,21 +60,109 @@ class AgentRuntimeV1ControllerTest {
         mvc.perform(post("/agent/runtime/v1/session").header(HttpHeaders.AUTHORIZATION, "Bearer rta1_secret")
                         .contentType("application/json").content(runtimeJson()))
                 .andExpect(status().isOk()).andExpect(content().string(org.hamcrest.Matchers.containsString("\"data\":{")))
-                .andExpect(content().string(org.hamcrest.Matchers.containsString("\"status\":\"ACTIVE\"")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("\"status\":\"CHANNEL_PENDING\"")))
                 .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("runtimeAuthorization"))));
         mvc.perform(post("/agent/runtime/v1/heartbeat").header(HttpHeaders.AUTHORIZATION, "Bearer rta1_secret")
                         .contentType("application/json").content(runtimeJson()))
                 .andExpect(status().isOk()).andExpect(content().string(org.hamcrest.Matchers.containsString("\"data\":{")))
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("\"status\":\"ACTIVE\"")))
                 .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("rta1_secret"))));
-        mvc.perform(post("/agent/runtime/v1/commands/msg-1/acks").header(HttpHeaders.AUTHORIZATION, "Bearer rta1_secret")
+        mvc.perform(post("/agent/runtime/v1/commands/msg-1/acks").header(HttpHeaders.AUTHORIZATION, "AgentRuntime rts1_" + "a".repeat(64))
+                        .header("X-Agent-Id", "agt_0123456789abcdef0123456789abcdef")
+                        .header("X-Agent-Installation-Id", "rti_" + "1".repeat(32)).header("X-Agent-Host-Id", "host-1")
+                        .header("X-Agent-Runtime-Id", "boot-1").header("X-Agent-Session-Generation", "1")
                         .contentType("application/json").content(ackJson()))
                 .andExpect(status().isOk()).andExpect(content().string(org.hamcrest.Matchers.containsString("\"data\":{")))
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("\"kind\":\"ADVANCED\"")))
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("\"status\":\"RECEIVED\"")));
-        verify(runtime).acknowledge(eq("rta1_secret"), eq("msg-1"), any(), anyLong());
+        verify(runtime).acknowledge(eq("rts1_" + "a".repeat(64)), eq("msg-1"), any(), anyLong());
     }
 
+    @Test void d06AckRejectionsHaveOneSafeForbiddenEnvelopeWithoutPrivateReasonOrProof() throws Exception {
+        String previousBody = null;
+        List<String> reasons = List.of("ACK_DELIVERY_NOT_FOUND", "ACK_SOURCE_PROVENANCE_INVALID",
+                "ACK_ACTIVE_MESSAGE_MISMATCH", "ACK_CAS_LOST",
+                "private-source-reason rta1_private rts1_private " + ackJson());
+        for (String reason : reasons) {
+            org.mockito.Mockito.doThrow(new AgentCommandAckRejectedException(reason)).when(runtime)
+                    .acknowledge(any(), any(), any(), anyLong());
+            var response = mvc.perform(runtimeAckRequest(ackJson()))
+                    .andExpect(status().isForbidden())
+                    .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
+                    .andReturn().getResponse();
+            String body = response.getContentAsString();
+            var json = new tools.jackson.databind.ObjectMapper().readTree(body);
+            org.junit.jupiter.api.Assertions.assertEquals("AGENT_FORBIDDEN", json.path("code").asText());
+            org.junit.jupiter.api.Assertions.assertEquals("Runtime v1 request rejected", json.path("msg").asText());
+            org.junit.jupiter.api.Assertions.assertEquals(403, json.path("status").intValue());
+            org.junit.jupiter.api.Assertions.assertTrue(!json.has("data") || json.path("data").isNull());
+            for (String hidden : List.of(reason, "COMMAND_ACK_REJECTED", "reasonCode", "commandId",
+                    "msg-1", "cmd-1", "host-1", "boot-1", "rti_", "rta1_", "rts1_")) {
+                org.junit.jupiter.api.Assertions.assertFalse(body.contains(hidden));
+            }
+            if (previousBody != null) org.junit.jupiter.api.Assertions.assertEquals(previousBody, body);
+            previousBody = body;
+        }
+        verify(runtime, org.mockito.Mockito.times(reasons.size()))
+                .acknowledge(eq("rts1_" + "a".repeat(64)), eq("msg-1"), any(), anyLong());
+    }
+
+    @Test void malformedAckSessionProofStaysBadRequestAndNeverCallsD06() throws Exception {
+        mvc.perform(runtimeAckRequest(ackJson(), "not-a-number"))
+                .andExpect(status().isBadRequest())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
+        org.mockito.Mockito.verifyNoInteractions(runtime);
+    }
+
+    @Test void mismatchedAckBodyProofStaysForbiddenAndNeverCallsD06() throws Exception {
+        mvc.perform(runtimeAckRequest(ackJson().replace("\"sessionGeneration\":1", "\"sessionGeneration\":2")))
+                .andExpect(status().isForbidden())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
+        org.mockito.Mockito.verifyNoInteractions(runtime);
+    }
+
+    @Test void serviceIllegalArgumentStillUsesBadRequestNotAckForbidden() throws Exception {
+        when(runtime.acknowledge(any(), any(), any(), anyLong()))
+                .thenThrow(new IllegalArgumentException("private parser reason rts1_private"));
+        var response = mvc.perform(runtimeAckRequest(ackJson()))
+                .andExpect(status().isBadRequest())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
+                .andReturn().getResponse();
+        var json = new tools.jackson.databind.ObjectMapper().readTree(response.getContentAsString());
+        org.junit.jupiter.api.Assertions.assertEquals("BAD_REQUEST", json.path("code").asText());
+        org.junit.jupiter.api.Assertions.assertEquals(400, json.path("status").intValue());
+        org.junit.jupiter.api.Assertions.assertFalse(response.getContentAsString().contains("private"));
+        verify(runtime).acknowledge(eq("rts1_" + "a".repeat(64)), eq("msg-1"), any(), anyLong());
+    }
+
+    @Test void realControllerSerializationMatchesNestedEnrollmentWireFixture() throws Exception {
+        var mapper = new tools.jackson.databind.ObjectMapper();
+        tools.jackson.databind.JsonNode fixture;
+        try (var input = getClass().getResourceAsStream("/ur02/unified-runtime-wire-v2.redacted.json")) {
+            fixture = mapper.readTree(input).path("enrollment");
+        }
+        var expected = fixture.path("response");
+        when(runtime.enroll(any(), anyLong())).thenReturn(mapper.treeToValue(expected, AgentRuntimeV1EnrollmentResult.class));
+        var result = mvc.perform(post(fixture.path("path").asText()).contentType("application/json")
+                        .content(mapper.writeValueAsString(fixture.path("request"))))
+                .andExpect(status().isOk()).andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
+                .andReturn();
+        var data = mapper.readTree(result.getResponse().getContentAsString()).path("data");
+        org.junit.jupiter.api.Assertions.assertEquals(expected, data);
+        org.junit.jupiter.api.Assertions.assertFalse(data.has("installationId"));
+        org.junit.jupiter.api.Assertions.assertEquals("ACTIVE", data.path("installation").path("status").asText());
+        verify(runtime).enroll(any(), anyLong());
+    }
+
+    @Test void installationBearerCannotCommitCommandAckAndSessionRejectsBrowserOrigin() throws Exception {
+        mvc.perform(post("/agent/runtime/v1/commands/msg-1/acks").header(HttpHeaders.AUTHORIZATION, "Bearer rta1_secret")
+                .contentType("application/json").content(ackJson())).andExpect(status().isBadRequest());
+        org.mockito.Mockito.verifyNoInteractions(runtime);
+        mvc.perform(post("/agent/runtime/v1/session").header(HttpHeaders.AUTHORIZATION, "Bearer rta1_secret")
+                .header("Origin", "https://browser.invalid").contentType("application/json").content(runtimeJson()))
+                .andExpect(status().isForbidden());
+        org.mockito.Mockito.verifyNoInteractions(runtime);
+    }
     @Test void statusIsRedactedAndLegacyUrlCredentialsAreRejected() throws Exception {
         when(runtime.status("0", "client-a", "tenant-a", "rti-1")).thenReturn(view("ACTIVE"));
         mvc.perform(get("/agent/runtime/v1/installations/rti-1").principal(jwt()))
@@ -89,6 +184,18 @@ class AgentRuntimeV1ControllerTest {
                 .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("legacy"))));
     }
 
+    private static org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder runtimeAckRequest(String body) {
+        return runtimeAckRequest(body, "1");
+    }
+    private static org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder runtimeAckRequest(String body, String generation) {
+        return post("/agent/runtime/v1/commands/msg-1/acks")
+                .header(HttpHeaders.AUTHORIZATION, "AgentRuntime rts1_" + "a".repeat(64))
+                .header("X-Agent-Id", "agt_0123456789abcdef0123456789abcdef")
+                .header("X-Agent-Installation-Id", "rti_" + "1".repeat(32))
+                .header("X-Agent-Host-Id", "host-1").header("X-Agent-Runtime-Id", "boot-1")
+                .header("X-Agent-Session-Generation", generation).contentType("application/json").content(body);
+    }
+
     private static AgentRuntimeV1InstallationView view(String state) {
         return new AgentRuntimeV1InstallationView("rti-1", "tenant-a", "client-a",
                 "agt_0123456789abcdef0123456789abcdef", "1", "b".repeat(64), 99_999L, state, null);
@@ -106,11 +213,13 @@ class AgentRuntimeV1ControllerTest {
     private static String runtimeJson() { return """
             {"installationId":"rti-1","tenantId":"tenant-a","clientId":"client-a",
              "canonicalAgentId":"agt_0123456789abcdef0123456789abcdef","manifestVersion":"1",
-             "manifestSha256":"%s","health":"ok"}
+             "manifestSha256":"%s","health":"ok","hostId":"host-1","runtimeInstanceId":"boot-1"}
             """.formatted("b".repeat(64)); }
     private static String ackJson() { return """
             {"messageId":"msg-1","correlationId":"corr-1","commandId":"cmd-1","taskId":"task-1",
              "tenantId":"tenant-a","clientId":"client-a",
-             "canonicalAgentId":"agt_0123456789abcdef0123456789abcdef","status":"RECEIVED"}
+             "canonicalAgentId":"agt_0123456789abcdef0123456789abcdef","status":"RECEIVED",
+             "installationId":"rti_11111111111111111111111111111111","hostId":"host-1",
+             "runtimeInstanceId":"boot-1","sessionGeneration":1,"deliveryVersion":null}
             """; }
 }

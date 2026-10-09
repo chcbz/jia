@@ -1,0 +1,119 @@
+// Isolated UR06 opt-in source set. Main owns execution via orchestrator and artifact callback.
+// No default task dependency, Flow identity, production dependency or conditional skip.
+import org.gradle.api.tasks.testing.Test
+
+// --init-script is also applied to composite plugin/build-logic and buildSrc builds.
+// Bind to this checked-in script's API settings directory, not Gradle.parent/currentDir
+// or the presence of the agent project (which must still fail closed in the API build).
+// cold-init.gradle includes <API>/plugin; its settings root is not the API settings root.
+def apiBuildRoot = initscript.sourceFile?.canonicalFile
+for (String segment : ['ur06-enroll-mysql.init.gradle', 'ur06EnrollMysql', 'src', 'jia-agent-service', 'agent']) {
+    if (apiBuildRoot == null || apiBuildRoot.name != segment) {
+        throw new GradleException('UR06_INIT_SOURCE_PATH_REQUIRED')
+    }
+    apiBuildRoot = apiBuildRoot.parentFile
+}
+def isApiBuild = false
+gradle.settingsEvaluated { settings ->
+    isApiBuild = settings.settingsDir.canonicalFile == apiBuildRoot
+    if (isApiBuild && settings.rootProject.name != 'jia') {
+        throw new GradleException('UR06_API_SETTINGS_ROOT_REQUIRED')
+    }
+}
+
+gradle.projectsEvaluated {
+    if (!isApiBuild) return // No source set/task/project lookup in included builds or buildSrc.
+    def p = gradle.rootProject.findProject(':agent:jia-agent-service')
+    if (p == null) throw new GradleException('UR06_AGENT_PROJECT_REQUIRED')
+    if (p.sourceSets.findByName('ur06EnrollMysql') != null) {
+        throw new GradleException('UR06_SOURCE_SET_ALREADY_DEFINED')
+    }
+    def s = p.sourceSets.create('ur06EnrollMysql') {
+        java.setSrcDirs(['src/ur06EnrollMysql/java'])
+        resources.setSrcDirs(['src/ur06EnrollMysql/resources'])
+        compileClasspath += p.sourceSets.main.output
+        runtimeClasspath += output + compileClasspath
+    }
+    p.configurations.named(s.implementationConfigurationName) {
+        extendsFrom p.configurations.testImplementation
+    }
+    p.configurations.named(s.runtimeOnlyConfigurationName) {
+        extendsFrom p.configurations.testRuntimeOnly
+    }
+    // Real account verification, not a fixed snapshot or mock DAO. Test-only.
+    p.dependencies.add(s.implementationConfigurationName,
+            p.dependencies.project(path: ':user:jia-user-service'))
+    p.dependencies.add(s.implementationConfigurationName,
+            p.dependencies.project(path: ':user:jia-user-mapper'))
+
+    ['jia-chat-service', 'jia-chat-mapper'].each { module ->
+        p.dependencies.add(s.implementationConfigurationName, p.dependencies.project(path: ':chat:' + module))
+    }
+    def libs = p.rootProject.extensions.getByType(org.gradle.api.artifacts.VersionCatalogsExtension).named('libs')
+    p.dependencies.add(s.implementationConfigurationName, libs.findLibrary('spring.boot.starter.websocket').get())
+    // Handler constructor references ChatClient. Only its API type is compiled/loaded;
+    // no model bean/autoconfiguration or Provider request is created by this fixture.
+    p.dependencies.add(s.implementationConfigurationName,
+            'org.springframework.ai:spring-ai-client-chat:' + libs.findVersion('spring-ai').get().requiredVersion)
+
+    def selectors = [
+        ur06EnrollMysql: [
+            'e1OriginalPendingEnrollNestedCredentialDurability',
+            'e2RealNativeRegistrationSeparateJvmGenerationAndSibling',
+            'e3WrongExpiredManifestAndSubjectDeniedWithoutConsumption',
+            'e4IndependentStateConcurrentSecretCasAndReplayDenial',
+            'e5RealCommittedResponseLossRestartNeverReplaysSecret',
+            'm1OriginalMysqlInitializersRepeatNullableFenceAndConstraints',
+            'm3NativeCurrentFenceD06ReceiptsRevocationAndSiblingIsolation'
+        ],
+        ur06M4MysqlE05: [
+            'e05ActualClientHttpCommitsOriginalResultAndTerminalAck',
+            'e05LostResultReadbackSurvivesJavaAndNodeRestart',
+            'e05TerminalAckLostResponseReplaysPriorWithoutWorkRerun',
+            'e05PreparedCommitRefencesAndRollbackIsDurable',
+            'e05SourceAndOriginalResultProofStayFailClosed',
+            'e05UnknownStartedNeverRerunsAndSiblingRemainsReady'
+        ]
+    ]
+    selectors.each { name, methods ->
+        p.tasks.register(name, Test) {
+            group = 'verification'
+            description = name == 'ur06EnrollMysql'
+                    ? 'UR-06 seven original enrollment/native WS/D06/MySQL foundation selectors.'
+                    : 'UR-06 M4 complete original six E05 on private MySQL 8.0.21; synthetic historical receipts, not production/Provider/enrollment.'
+            dependsOn p.tasks.named(s.classesTaskName)
+            testClassesDirs = s.output.classesDirs
+            classpath = s.runtimeClasspath
+            useJUnitPlatform()
+            maxParallelForks = 1
+            // Each scheduled paired-source acceptance must actually open sockets/restart the Java+Node JVM/processes (same MySQL stays live).
+            // Client archive is external to the API checkout: never reuse stale task/cache evidence.
+            outputs.upToDateWhen { false }
+            outputs.cacheIf { false }
+            filter {
+                methods.each { method -> includeTestsMatching('cn.jia.agent.acceptance.ur06.Ur06EnrollMysqlAcceptanceTest.' + method) }
+                failOnNoMatchingTests = true
+            }
+            // Do not pass launcher credentials, opt-in control or external datasource configuration to tests.
+            def inputs = [:]
+            ['UR06_API_COMMIT', 'UR06_CLIENT_ROOT', 'UR06_CLIENT_COMMIT', 'UR06_NODE_BIN', 'UR06_ARTIFACT_ROOT', 'UR06_MYSQLD_BIN', 'UR06_CODEX_BIN'].each { key ->
+                def value = System.getenv(key)
+                if (value != null) inputs[key] = value
+            }
+            setEnvironment(inputs)
+            doFirst {
+                if (System.getenv('UR06_LOCAL_ACCEPTANCE') != '1') {
+                    throw new GradleException('UR06_LOCAL_ACCEPTANCE_REQUIRED')
+                }
+                if (inputs.size() != 7) throw new GradleException('UR06_PAIRED_SOURCE_INPUTS_REQUIRED')
+                systemProperty 'ur06.fixture.classpath', s.runtimeClasspath.asPath
+                systemProperty 'ur06.api.root', p.rootProject.projectDir.absolutePath
+            }
+            testLogging {
+                events 'passed', 'failed', 'skipped'
+                exceptionFormat 'short'
+                showStandardStreams = true // Only fixed UR06 stage/number receipts are emitted.
+            }
+        }
+    }
+}

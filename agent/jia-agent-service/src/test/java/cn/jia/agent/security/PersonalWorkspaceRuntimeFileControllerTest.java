@@ -20,7 +20,10 @@ class PersonalWorkspaceRuntimeFileControllerTest {
     @Test
     void runtimeFailureReceiptUsesExactRuntimeScopeAndNoStoreResponse() {
         PersonalWorkspaceExecutionService service = mock(PersonalWorkspaceExecutionService.class);
-        PersonalWorkspaceRuntimeFileController controller = new PersonalWorkspaceRuntimeFileController(service);
+        var auth=mock(AgentRuntimeAuthenticationService.class);
+        when(auth.withNativeFence(org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(i->((java.util.function.Supplier<?>)i.getArgument(1)).get());
+        PersonalWorkspaceRuntimeFileController controller = new PersonalWorkspaceRuntimeFileController(service,auth);
         HttpServletRequest request = mock(HttpServletRequest.class);
         when(request.getParameterMap()).thenReturn(Map.of());
         AgentRuntimeAuthentication authentication = new AgentRuntimeAuthentication(
@@ -41,5 +44,20 @@ class PersonalWorkspaceRuntimeFileControllerTest {
         assertEquals("FAILED", response.getBody().state());
         verify(service).fail(new PersonalWorkspaceExecutionService.RuntimeScope("0", "client-a", "owner-a",
                 "agent-a", "runtime-a"), "pwe_task_1", "pwe_run_1", "OUTPUT_MISSING");
+    }
+    @Test void declaredPayloadFingerprintMismatchRejectsBeforeAnyStagingMutation() throws Exception {
+        var service=mock(PersonalWorkspaceExecutionService.class);
+        var controller=new PersonalWorkspaceRuntimeFileController(service,mock(AgentRuntimeAuthenticationService.class));
+        var request=mock(HttpServletRequest.class);
+        var principal=new AgentRuntimeAuthentication(new AgentRuntimeAuthentication.Scope(
+                "0","client-a","owner-a","agent-a","runtime-a"));
+        byte[] bytes=new byte[]{1,2,3};
+        var file=new org.springframework.mock.web.MockMultipartFile("file","output.png","image/png",bytes);
+        String hash=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+        org.junit.jupiter.api.Assertions.assertThrows(RuntimeException.class,()->controller.stage("task","run","output_1",
+                file,"task","run","output_1","0".repeat(64),"3",request,principal));
+        org.junit.jupiter.api.Assertions.assertThrows(RuntimeException.class,()->controller.stage("task","run","output_1",
+                file,"task","run","output_1",hash,"4",request,principal));
+        org.mockito.Mockito.verifyNoInteractions(service);
     }
 }

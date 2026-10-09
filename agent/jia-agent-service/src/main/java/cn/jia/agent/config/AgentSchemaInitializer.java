@@ -101,9 +101,12 @@ public class AgentSchemaInitializer implements InitializingBean {
                     KEY idx_agent_binding_agent (client_id, agent_id, status),
                     KEY idx_agent_binding_persona (client_id, persona_code, status),
                     CONSTRAINT chk_agent_binding_status CHECK (status IN (0, 1, 2, 3)),
-                    CONSTRAINT chk_agent_binding_tenant_owner CHECK (tenant_id = '0')
+                    CONSTRAINT chk_agent_binding_single_tenant CHECK (tenant_id = '0')
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Durable Agent persona binding history'
                 """.formatted(ownerJiacnColumn, lifecycleColumn, activePersonaColumn, activeAgentColumn));
+        // Existing binding contracts are migrated only by explicitly approved maintenance.
+        // Reject drift before generated-column/index additions can mask an old tenant contract.
+        validateBindingTenantContract();
         addRequiredColumnIfMissing("agent_persona_binding", "owner_jiacn", ownerJiacnColumn);
         addRequiredColumnIfMissing("agent_persona_binding", "lifecycle_status", lifecycleColumn);
         addRequiredColumnIfMissing("agent_persona_binding", "active_persona_code", activePersonaColumn);
@@ -115,10 +118,61 @@ public class AgentSchemaInitializer implements InitializingBean {
         ensureRequiredIndex("agent_persona_binding", "uk_agent_binding_active_agent", true,
                 List.of("active_agent_id"),
                 "CREATE UNIQUE INDEX uk_agent_binding_active_agent ON agent_persona_binding (active_agent_id)");
-        ensureRequiredCheckConstraint("agent_persona_binding", "chk_agent_binding_status",
-                "status IN (0, 1, 2, 3)");
-        ensureRequiredCheckConstraint("agent_persona_binding", "chk_agent_binding_tenant_owner",
-                "tenant_id = '0'");
+    }
+
+    void validateBindingTenantContract() {
+        boolean h2 = isH2Database();
+        String schema = h2 ? "SCHEMA()" : "DATABASE()";
+        List<java.util.Map<String, Object>> columns = jdbcTemplate.queryForList("""
+                SELECT DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE, COLUMN_DEFAULT
+                FROM information_schema.columns
+                WHERE table_schema = %s
+                  AND LOWER(table_name) = 'agent_persona_binding'
+                  AND LOWER(column_name) = 'tenant_id'
+                """.formatted(schema));
+        if (columns.size() != 1) {
+            throw new IllegalStateException("Agent binding tenant column catalog drift");
+        }
+        java.util.Map<String, Object> column = columns.getFirst();
+        Object length = column.get("CHARACTER_MAXIMUM_LENGTH");
+        String expectedType = h2 ? "character varying" : "varchar";
+        Object defaultValue = column.get("COLUMN_DEFAULT");
+        // H2 reports a SQL string literal; MySQL reports the actual default string.
+        if (h2 && "'0'".equals(defaultValue)) defaultValue = "0";
+        if (!expectedType.equalsIgnoreCase(String.valueOf(column.get("DATA_TYPE")))
+                || !(length instanceof Number) || ((Number) length).longValue() != 50L
+                || !"NO".equalsIgnoreCase(String.valueOf(column.get("IS_NULLABLE")))
+                || !"0".equals(defaultValue)) {
+            throw new IllegalStateException("Agent binding tenant type/nullability/default drift");
+        }
+        List<java.util.Map<String, Object>> checks = jdbcTemplate.queryForList("""
+                SELECT tc.CONSTRAINT_NAME, tc.ENFORCED, cc.CHECK_CLAUSE
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.check_constraints cc
+                  ON cc.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA
+                 AND cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+                WHERE tc.CONSTRAINT_SCHEMA = %s
+                  AND LOWER(tc.TABLE_NAME) = 'agent_persona_binding'
+                  AND tc.CONSTRAINT_TYPE = 'CHECK'
+                """.formatted(schema));
+        java.util.Map<String, String> actual = new java.util.HashMap<>();
+        for (java.util.Map<String, Object> check : checks) {
+            String name = String.valueOf(check.get("CONSTRAINT_NAME"));
+            if (h2) name = name.toLowerCase(Locale.ROOT);
+            String clause = (String) check.get("CHECK_CLAUSE");
+            // H2 renders identifiers with double quotes; MySQL uses backticks.
+            if (h2 && clause != null) clause = clause.replace("\"", "");
+            if (!"YES".equalsIgnoreCase(String.valueOf(check.get("ENFORCED")))
+                    || actual.putIfAbsent(name, normalizeIdentityExpression(clause)) != null) {
+                throw new IllegalStateException("Agent binding CHECK enforcement/duplicate drift");
+            }
+        }
+        java.util.Map<String, String> expected = java.util.Map.of(
+                "chk_agent_binding_status", normalizeIdentityExpression("status IN (0, 1, 2, 3)"),
+                "chk_agent_binding_single_tenant", normalizeIdentityExpression("tenant_id = '0'"));
+        if (!expected.equals(actual)) {
+            throw new IllegalStateException("Agent binding CHECK set/clause drift");
+        }
     }
 
     private void ensureHostedProfileTable() {
@@ -147,6 +201,7 @@ public class AgentSchemaInitializer implements InitializingBean {
                     KEY idx_hosted_scope_state (tenant_id,client_id,owner_jiacn,lifecycle_state),
                     CONSTRAINT chk_hosted_state CHECK (lifecycle_state IN ('PREPARED','STAGED_DISABLED','FILE_ENABLED','ACTIVE','SUSPENDING','SUSPENDED','REPAIR_REQUIRED')),
                     CONSTRAINT chk_hosted_generation CHECK (generation >= 0),
+                    CONSTRAINT chk_hosted_single_tenant CHECK (tenant_id = '0'),
                     CONSTRAINT chk_hosted_repair CHECK ((lifecycle_state='REPAIR_REQUIRED' AND resume_state IS NOT NULL) OR (lifecycle_state<>'REPAIR_REQUIRED' AND resume_state IS NULL))
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin COMMENT='Durable hosted Agent profile publication state'
                 """);
@@ -236,6 +291,7 @@ public class AgentSchemaInitializer implements InitializingBean {
         java.util.Map<String, String> expectedChecks = java.util.Map.of(
                 "chk_hosted_state", "lifecycle_state IN ('PREPARED','STAGED_DISABLED','FILE_ENABLED','ACTIVE','SUSPENDING','SUSPENDED','REPAIR_REQUIRED')",
                 "chk_hosted_generation", "generation >= 0",
+                "chk_hosted_single_tenant", "tenant_id = '0'",
                 "chk_hosted_repair", "(lifecycle_state='REPAIR_REQUIRED' AND resume_state IS NOT NULL) OR (lifecycle_state<>'REPAIR_REQUIRED' AND resume_state IS NULL)");
         java.util.Map<String, String> actualChecks = new java.util.HashMap<>();
         jdbcTemplate.query("""
@@ -903,10 +959,10 @@ public class AgentSchemaInitializer implements InitializingBean {
                     create_time         BIGINT DEFAULT NULL COMMENT 'Create time',
                     update_time         BIGINT DEFAULT NULL COMMENT 'Update time',
                     PRIMARY KEY (id),
-                    UNIQUE KEY uk_task_member_scope (tenant_id, client_id, task_id, agent_id),
-                    KEY idx_task_member_agent_status (tenant_id, client_id, agent_id, member_status),
-                    KEY idx_task_member_task_status (tenant_id, client_id, task_id, member_status),
-                    KEY idx_task_member_task_role (tenant_id, client_id, task_id, member_role, member_status)
+                    UNIQUE KEY uk_task_member_scope (tenant_id, client_id, owner_jiacn, task_id, agent_id),
+                    KEY idx_task_member_agent_status (tenant_id, client_id, owner_jiacn, agent_id, member_status),
+                    KEY idx_task_member_task_status (tenant_id, client_id, owner_jiacn, task_id, member_status),
+                    KEY idx_task_member_task_role (tenant_id, client_id, owner_jiacn, task_id, member_role, member_status)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped Agent task members'
                 """);
 
@@ -938,11 +994,11 @@ public class AgentSchemaInitializer implements InitializingBean {
                     create_time         BIGINT DEFAULT NULL COMMENT 'Create time',
                     update_time         BIGINT DEFAULT NULL COMMENT 'Update time',
                     PRIMARY KEY (id),
-                    UNIQUE KEY uk_work_item_scope (tenant_id, client_id, work_item_id),
-                    KEY idx_work_item_task_status (tenant_id, client_id, task_id, status, priority),
-                    KEY idx_work_item_assignee_status (tenant_id, client_id, assignee_agent_id, status, lease_until),
+                    UNIQUE KEY uk_work_item_scope (tenant_id, client_id, owner_jiacn, work_item_id),
+                    KEY idx_work_item_task_status (tenant_id, client_id, owner_jiacn, task_id, status, priority),
+                    KEY idx_work_item_assignee_status (tenant_id, client_id, owner_jiacn, assignee_agent_id, status, lease_until),
                     KEY idx_work_item_lease (status, lease_until, id),
-                    KEY idx_work_item_task_required (tenant_id, client_id, task_id, required_item, status)
+                    KEY idx_work_item_task_required (tenant_id, client_id, owner_jiacn, task_id, required_item, status)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped Agent task work items'
                 """);
 
@@ -1068,10 +1124,10 @@ public class AgentSchemaInitializer implements InitializingBean {
                     create_time         BIGINT DEFAULT NULL COMMENT 'Create time',
                     update_time         BIGINT DEFAULT NULL COMMENT 'Update time',
                     PRIMARY KEY (id),
-                    UNIQUE KEY uk_task_request_scope (tenant_id, client_id, request_id),
-                    KEY idx_task_request_task_status (tenant_id, client_id, task_id, status, priority, create_time),
-                    KEY idx_task_request_target_status (tenant_id, client_id, target_type, target_id, status, due_at),
-                    KEY idx_task_request_work_item (tenant_id, client_id, work_item_id, status)
+                    UNIQUE KEY uk_task_request_scope (tenant_id, client_id, owner_jiacn, request_id),
+                    KEY idx_task_request_task_status (tenant_id, client_id, owner_jiacn, task_id, status, priority, create_time),
+                    KEY idx_task_request_target_status (tenant_id, client_id, owner_jiacn, target_type, target_id, status, due_at),
+                    KEY idx_task_request_work_item (tenant_id, client_id, owner_jiacn, work_item_id, status)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped Agent collaboration requests'
                 """);
 
@@ -1097,11 +1153,11 @@ public class AgentSchemaInitializer implements InitializingBean {
                     create_time             BIGINT DEFAULT NULL COMMENT 'Create time',
                     update_time             BIGINT DEFAULT NULL COMMENT 'Update time',
                     PRIMARY KEY (id),
-                    UNIQUE KEY uk_artifact_version (tenant_id, client_id, artifact_id, artifact_version),
-                    KEY idx_artifact_task_created (tenant_id, client_id, task_id, created_at),
-                    KEY idx_artifact_work_item (tenant_id, client_id, work_item_id, artifact_type, created_at),
-                    KEY idx_artifact_producer (tenant_id, client_id, producer_agent_id, created_at),
-                    KEY idx_artifact_hash (tenant_id, client_id, content_hash)
+                    UNIQUE KEY uk_artifact_version (tenant_id, client_id, owner_jiacn, artifact_id, artifact_version),
+                    KEY idx_artifact_task_created (tenant_id, client_id, owner_jiacn, task_id, created_at),
+                    KEY idx_artifact_work_item (tenant_id, client_id, owner_jiacn, work_item_id, artifact_type, created_at),
+                    KEY idx_artifact_producer (tenant_id, client_id, owner_jiacn, producer_agent_id, created_at),
+                    KEY idx_artifact_hash (tenant_id, client_id, owner_jiacn, content_hash)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Scoped versioned Agent task artifacts'
                 """);
 

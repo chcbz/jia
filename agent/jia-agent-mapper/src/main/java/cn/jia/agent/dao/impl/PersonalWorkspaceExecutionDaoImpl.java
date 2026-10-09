@@ -140,6 +140,11 @@ public class PersonalWorkspaceExecutionDaoImpl implements PersonalWorkspaceExecu
                 Math.max(1, Math.min(limit, 100)));
     }
     @Override public void updateInput(PersonalWorkspaceExecutionInputEntity input) { input.setUpdateTime(DateUtil.nowTime()); inputs.updateById(input); }
+    @Override public PersonalWorkspaceExecutionOutputEntity findOutput(String tenantId,
+            String clientId, String ownerJiacn, String executionId, String outputId) {
+        scope(tenantId, clientId, ownerJiacn); id(executionId, "executionId"); id(outputId, "outputId");
+        return outputs.findByOutputId(tenantId, clientId, ownerJiacn, executionId, outputId);
+    }
     @Override public PersonalWorkspaceExecutionOutputEntity lockOutput(String tenantId,
             String clientId, String ownerJiacn, String executionId, String outputId) {
         scope(tenantId, clientId, ownerJiacn); id(executionId, "executionId"); id(outputId, "outputId");

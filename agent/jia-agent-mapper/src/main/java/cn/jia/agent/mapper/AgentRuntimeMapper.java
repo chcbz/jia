@@ -10,6 +10,36 @@ import java.util.List;
 
 public interface AgentRuntimeMapper extends BaseMapper<AgentRuntimeEntity> {
     @Select("""
+            SELECT * FROM agent_runtime
+            WHERE tenant_id = #{tenantId} AND client_id = #{clientId} AND agent_id = #{agentId}
+              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(agent_id AS BINARY) = CAST(#{agentId} AS BINARY)
+              AND OCTET_LENGTH(agent_id) = OCTET_LENGTH(#{agentId})
+            LIMIT 1
+            """)
+    AgentRuntimeEntity findInScope(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("agentId") String agentId);
+
+    @Select("""
+            SELECT * FROM agent_runtime
+            WHERE tenant_id = #{tenantId} AND client_id = #{clientId} AND agent_id = #{agentId}
+              AND CAST(tenant_id AS BINARY) = CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{tenantId})
+              AND CAST(client_id AS BINARY) = CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id) = OCTET_LENGTH(#{clientId})
+              AND CAST(agent_id AS BINARY) = CAST(#{agentId} AS BINARY)
+              AND OCTET_LENGTH(agent_id) = OCTET_LENGTH(#{agentId})
+            LIMIT 1
+            FOR UPDATE
+            """)
+    AgentRuntimeEntity lockInScope(@Param("tenantId") String tenantId,
+            @Param("clientId") String clientId, @Param("agentId") String agentId);
+
+
+    @Select("""
             SELECT *
             FROM agent_runtime
             WHERE agent_id = #{agentId}

@@ -7,6 +7,8 @@ import cn.jia.agent.entity.*;
 import cn.jia.agent.mapper.AgentCommandTransportMapper;
 import cn.jia.agent.hosting.*;
 import cn.jia.agent.service.*;
+import cn.jia.agent.security.AgentRuntimeAuthentication;
+import cn.jia.agent.security.AgentRuntimeAuthenticationService;
 import cn.jia.agent.service.impl.AgentCommandTransportWriterImpl;
 import cn.jia.economy.config.*;
 import cn.jia.economy.config.skillseed.PlatformSkillPackageCatalog;
@@ -82,6 +84,7 @@ class SkillMarketplaceRealTransactionTest {
     private EconomySkillApplicationMapper app;
     private SkillMarketplaceService service;
     private SkillInstallResultService results;
+    private AgentRuntimeAuthenticationService authentication;
     private SkillAgentVersions versions;
     private AgentRuntimeEntity runtime;
     private OauthApiKeyEntity key;
@@ -90,6 +93,8 @@ class SkillMarketplaceRealTransactionTest {
     private EconomySkillCredentialMapper credentialMapper;
     private ApiKeyService keys;
     private AgentManagedSessionLookup sessions;
+    private AgentService agents;
+    private HostingRentOwnerResolver owner;
     private SkillInstallDispatchService dispatch;
     private EconomyLedgerMapper ledger;
 
@@ -109,11 +114,24 @@ class SkillMarketplaceRealTransactionTest {
         ledger=sql.getMapper(EconomyLedgerMapper.class);
         var gate=new EconomyPreviewGate(new EconomyPreviewProperties(true,List.of(new EconomyPreviewProperties.AllowedScope(ACTOR.tenantId(),ACTOR.clientId()))));
         var posting=new EconomyPostingServiceImpl(ledger,manager,gate);
-        var agents=mock(AgentService.class); var owner=mock(HostingRentOwnerResolver.class); var runtimes=mock(AgentRuntimeDao.class);
+        agents=mock(AgentService.class); owner=mock(HostingRentOwnerResolver.class); var runtimes=mock(AgentRuntimeDao.class);
         runtime=new AgentRuntimeEntity().setAgentId(AGENT).setOwnerJiacn(ACTOR.ownerJiacn()).setBindingId(7L).setTokenHash("registration-1").setStatus("online");
         runtime.setTenantId(ACTOR.tenantId());
         runtime.setClientId(ACTOR.clientId());
+        runtime.setRuntimeInstallationId("rti_"+"a".repeat(32));
+        runtime.setRuntimeHostId("host-1");runtime.setRuntimeInstanceId("runtime-1");runtime.setRuntimeSessionGeneration(1L);
         when(runtimes.findByAgentIdForUpdate(AGENT)).thenAnswer(i->runtime);
+        when(runtimes.findInScope(ACTOR.tenantId(),ACTOR.clientId(),AGENT)).thenAnswer(i->runtime);
+        authentication=mock(AgentRuntimeAuthenticationService.class);
+        when(authentication.currentRegisteredProof(ACTOR.tenantId(),ACTOR.clientId(),AGENT)).thenAnswer(i->proof());
+        // Explicit trusted transport adapter only. SQL, REQUIRED nesting, money and outbox are real.
+        // Persistent fence/auth concurrency is separately exercised by AgentRuntimePersistentSessionFenceTest.
+        when(authentication.withFence(any(),eq(false),any())).thenAnswer(i->{
+            AgentRuntimeAuthenticationService.Proof supplied=i.getArgument(0);
+            if(!proof().equals(supplied)) throw new SkillMarketplaceException(403,"SKILL_DELIVERY_FENCED");
+            java.util.function.Supplier<?> action=i.getArgument(2);
+            return tx.execute(status->action.get());
+        });
         when(owner.requireOwner(any())).thenAnswer(inv -> {
             HostingRentHttp.Actor requested = inv.getArgument(0);
             if (!ACTOR.equals(requested)) throw new cn.jia.agent.hosting.HostingRentApplicationException(
@@ -137,10 +155,10 @@ class SkillMarketplaceRealTransactionTest {
         credentialMapper.insert("sc_1","key-1",AGENT,7L,ACTOR.tenantId(),ACTOR.clientId(),1L);
         credentials=new SkillManagedCredentials(credentialMapper,app,mock(EconomyHostingRentMapper.class),versions,runtimes,provider(keys),gate,manager,true,false);
         sessions=mock(AgentManagedSessionLookup.class);
-        when(sessions.isReady(eq(ACTOR.tenantId()),eq(ACTOR.clientId()),eq(AGENT),eq("key-1"),any())).thenReturn(true);
-        service=new SkillMarketplaceService(market,app,ledger,posting,gate,versions,runtimes,provider(writer),provider(transport),provider(packages),provider(keys),credentials,provider(sessions),manager);
-        dispatch=new SkillInstallDispatchService(app,market,service,versions,runtimes,commands,provider(sessions),manager);
-        results=new SkillInstallResultService(market,app,commands,service,versions,runtimes,provider(packages),manager);
+        when(sessions.isReady(eq(ACTOR.tenantId()),eq(ACTOR.clientId()),eq(AGENT),any())).thenReturn(true);
+        service=new SkillMarketplaceService(market,app,ledger,posting,gate,versions,runtimes,provider(writer),provider(transport),provider(packages),provider(authentication),provider(sessions),manager);
+        dispatch=new SkillInstallDispatchService(app,market,service,versions,authentication,commands,provider(sessions),manager);
+        results=new SkillInstallResultService(market,app,commands,service,versions,authentication,provider(packages),manager);
         for(var p:new PlatformSkillPackageCatalog().products()) {
             market.insertProduct(new SkillProductEntity().setProductId(p.productId()).setSellerType("SYSTEM").setSellerId("SKILL_STORE")
                     .setName(p.name()).setDescription(p.description()).setStatus("DRAFT").setVersion(1L)
@@ -247,14 +265,14 @@ class SkillMarketplaceRealTransactionTest {
         assertEquals("FUNDS_HELD",receipt.get("status")); assertEquals(70000000L,wallet());
         assertEquals(1,count("agent_command_delivery"));assertEquals(1,count("agent_outbox_event"));assertEquals(1,count("economy_skill_entitlement"));
         assertEquals("INSTALLING",service.order(ACTOR,(String)receipt.get("orderId")).get("status"));
-        var i=installation(); sent(i);assertEquals(i.getPackageSize().longValue(),results.packageBytes(key,i.getInstallationId()).length);
-        var success=result(i,"SUCCEEDED",null);results.accept(ACTOR.tenantId(),ACTOR.clientId(),AGENT,"key-1",success);
-        results.accept(ACTOR.tenantId(),ACTOR.clientId(),AGENT,"key-1",success);
+        var i=installation(); sent(i);assertEquals(i.getPackageSize().longValue(),results.packageBytes(proof(),i.getInstallationId()).length);
+        var success=result(i,"SUCCEEDED",null);results.accept(proof(),success);
+        results.accept(proof(),success);
         assertEquals("ACTIVE",service.order(ACTOR,i.getOrderId()).get("status"));assertEquals(70000000L,wallet());
         assertEquals(2,count("economy_transaction"));assertEquals(0L,jdbc.queryForObject("SELECT SUM(signed_amount_micro) FROM economy_entry",Long.class));
         assertEquals(receipt,service.purchase(ACTOR,idem,body,false));
         assertEquals("ACTIVE",service.entitlements(ACTOR,AGENT).getFirst().get("status"));
-        assertThrows(SkillMarketplaceException.class,()->results.packageBytes(key,i.getInstallationId()));
+        assertThrows(SkillMarketplaceException.class,()->results.packageBytes(proof(),i.getInstallationId()));
     }
     @Test void persistedSkillWireAndResultReplayKeepTransportAndInstallationIdentitiesDistinct() {
         var body=purchaseBody("spv_repo_test_1_0_0");String idem=uuid();
@@ -283,14 +301,14 @@ class SkillMarketplaceRealTransactionTest {
         sent(i);var success=result(i,"SUCCEEDED",null);
         assertNotEquals(i.getMessageId(),success.get("messageId"));
         var wrongInstallation=new LinkedHashMap<>(success);wrongInstallation.put("installationId",i.getMessageId());
-        assertThrows(SkillMarketplaceException.class,()->results.accept(ACTOR.tenantId(),ACTOR.clientId(),AGENT,"key-1",wrongInstallation));
+        assertThrows(SkillMarketplaceException.class,()->results.accept(proof(),wrongInstallation));
         var wrongAttempt=new LinkedHashMap<>(success);wrongAttempt.put("attempt",i.getAttempt()+1);
-        assertThrows(SkillMarketplaceException.class,()->results.accept(ACTOR.tenantId(),ACTOR.clientId(),AGENT,"key-1",wrongAttempt));
+        assertThrows(SkillMarketplaceException.class,()->results.accept(proof(),wrongAttempt));
         assertEquals(0,count("economy_skill_result_receipt"));assertEquals("INSTALLING",installation().getStatus());
-        var accepted=results.accept(ACTOR.tenantId(),ACTOR.clientId(),AGENT,"key-1",success);
+        var accepted=results.accept(proof(),success);
         assertEquals(success.get("messageId"),accepted.get("correlationId"));
         assertEquals(i.getInstallationId(),accepted.get("installationId"));
-        assertEquals(accepted,results.accept(ACTOR.tenantId(),ACTOR.clientId(),AGENT,"key-1",success));
+        assertEquals(accepted,results.accept(proof(),success));
         assertEquals(1,count("economy_skill_result_receipt"));assertEquals("SUCCEEDED",installation().getStatus());
         assertEquals(i.getInstallationId(),installation().getInstallationId());
         assertEquals(i.getMessageId(),installation().getRequestId());
@@ -299,24 +317,24 @@ class SkillMarketplaceRealTransactionTest {
     @Test void confirmedPreactivationFailureRefundsOriginalOrderExactlyOnce() {
         service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);var i=installation();sent(i);
         var failure=result(i,"FAILED","SKILL_PACKAGE_DIGEST_MISMATCH");
-        results.accept(ACTOR.tenantId(),ACTOR.clientId(),AGENT,"key-1",failure);results.accept(ACTOR.tenantId(),ACTOR.clientId(),AGENT,"key-1",failure);
+        results.accept(proof(),failure);results.accept(proof(),failure);
         assertEquals(100000000L,wallet());assertEquals(2,count("economy_transaction"));
         assertEquals("REFUNDED",service.order(ACTOR,i.getOrderId()).get("status"));
         assertEquals("FAILED",service.entitlements(ACTOR,AGENT).getFirst().get("status"));
-        assertThrows(SkillMarketplaceException.class,()->results.accept(ACTOR.tenantId(),ACTOR.clientId(),AGENT,"key-1",result(i,"SUCCEEDED",null)));
+        assertThrows(SkillMarketplaceException.class,()->results.accept(proof(),result(i,"SUCCEEDED",null)));
         assertEquals(100000000L,wallet());
     }
     @Test void unknownNeverRefundsAndLaterSuccessCanCapture() {
         service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);var i=installation();sent(i);
-        results.accept(ACTOR.tenantId(),ACTOR.clientId(),AGENT,"key-1",result(i,"FAILED","SKILL_INSTALL_IO_FAILED"));
+        results.accept(proof(),result(i,"FAILED","SKILL_INSTALL_IO_FAILED"));
         assertEquals(70000000L,wallet());assertEquals(1,count("economy_transaction"));
         assertEquals("INSTALLING",service.order(ACTOR,i.getOrderId()).get("status"));
-        results.accept(ACTOR.tenantId(),ACTOR.clientId(),AGENT,"key-1",result(i,"SUCCEEDED",null));
+        results.accept(proof(),result(i,"SUCCEEDED",null));
         assertEquals(2,count("economy_transaction"));assertEquals("ACTIVE",service.order(ACTOR,i.getOrderId()).get("status"));
     }
     @Test void freeSkillHasDurableInstallationAndNoInventedMoneyReferences() {
         service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_inspector_1_0_0"),false);var i=installation();sent(i);
-        results.accept(ACTOR.tenantId(),ACTOR.clientId(),AGENT,"key-1",result(i,"SUCCEEDED",null));
+        results.accept(proof(),result(i,"SUCCEEDED",null));
         assertEquals(0,count("economy_transaction"));assertEquals(0,count("economy_escrow"));assertEquals(100000000L,wallet());
         var o=app.order(ACTOR.tenantId(),ACTOR.clientId(),i.getOrderId());assertNull(o.getEscrowId());assertNull(o.getReserveTransactionId());assertNull(o.getCaptureTransactionId());
         assertEquals("ACTIVE",o.getStatus());
@@ -338,10 +356,41 @@ class SkillMarketplaceRealTransactionTest {
         runtime.setTokenHash("registration-2");versions.observe(runtime);
         assertThrows(SkillMarketplaceException.class,()->service.purchase(ACTOR,uuid(),body,false));
         assertThrows(SkillMarketplaceException.class,()->service.quote(ACTOR,uuid(),Map.of("targetAgentId",AGENT,"productVersionId","spv_deploy_runner_1_0_0","expectedAgentVersion","2"),false));
-        var denied=assertThrows(cn.jia.agent.hosting.HostingRentApplicationException.class,
+        // Runtime exact owner denial now precedes the hosting owner resolver; still 403,
+        // and no funds/escrow/installation/command may be reserved by this different scope.
+        var denied=assertThrows(SkillMarketplaceException.class,
                 ()->service.purchase(new HostingRentHttp.Actor(ACTOR.actorId(),"0",ACTOR.clientId(),"tenant-a"),uuid(),body,false));
-        assertEquals(403,denied.status());
-        assertEquals(0,count("economy_transaction"));assertEquals(0,count("agent_command_delivery"));
+        assertEquals(403,denied.status());assertEquals("AGENT_FORBIDDEN",denied.code());
+        assertNoPurchaseSideEffects();
+    }
+    @Test void exactRuntimeProofNeverBypassesHostingOwnerRejectionOrChangesWalletAndVersion() {
+        var body=purchaseBody("spv_repo_test_1_0_0");
+        long version=versions.requireOwned(ACTOR,AGENT,null,false);
+        when(owner.requireOwner(ACTOR)).thenThrow(new cn.jia.agent.hosting.HostingRentApplicationException(403,"HOSTING_RENT_OWNER_UNPROVEN"));
+        var denied=assertThrows(cn.jia.agent.hosting.HostingRentApplicationException.class,()->service.purchase(ACTOR,uuid(),body,false));
+        assertEquals(403,denied.status());assertEquals("HOSTING_RENT_OWNER_UNPROVEN",denied.code());
+        assertNoPurchaseSideEffects();assertEquals(version,jdbc.queryForObject("SELECT version FROM economy_skill_agent_version",Long.class));
+    }
+    @Test void exactRuntimeProofNeverBypassesRealHostingRentAdmissionOrConsumesVersion() {
+        var body=purchaseBody("spv_repo_test_1_0_0");long version=versions.requireOwned(ACTOR,AGENT,null,false);
+        var rentMapper=mock(EconomyHostingRentMapper.class);
+        var lease=new EconomyHostingLeaseEntity().setStatus("ACTIVE").setPaidThrough(1L);
+        when(rentMapper.selectLatestLease(ACTOR.tenantId(),ACTOR.clientId(),AGENT)).thenReturn(lease);
+        var rentAdmission=new cn.jia.agent.hosting.HostingRentWorkAdmission(rentMapper,true);
+        doAnswer(call->{rentAdmission.requireNewWork(call.getArgument(0),call.getArgument(1),call.getArgument(2));return null;})
+                .when(agents).requireHostingNewWork(ACTOR.tenantId(),ACTOR.clientId(),AGENT);
+        var overdue=assertThrows(cn.jia.agent.hosting.HostingRentApplicationException.class,()->service.purchase(ACTOR,uuid(),body,false));
+        assertEquals(409,overdue.status());assertEquals("HOSTING_RENT_RENEWAL_REQUIRED",overdue.code());assertNoPurchaseSideEffects();
+        lease.setStatus("SUSPENDED");
+        var suspended=assertThrows(cn.jia.agent.hosting.HostingRentApplicationException.class,()->service.purchase(ACTOR,uuid(),body,false));
+        assertEquals(409,suspended.status());assertEquals("HOSTING_RENT_NOT_ACTIVE",suspended.code());assertNoPurchaseSideEffects();
+        assertEquals(version,versions.requireOwned(ACTOR,AGENT,null,false));
+    }
+    private void assertNoPurchaseSideEffects() {
+        assertEquals(100000000L,wallet());
+        for(String table:List.of("economy_transaction","economy_escrow","economy_skill_order","economy_skill_order_receipt",
+                "economy_skill_installation","economy_skill_entitlement","economy_skill_delivery_binding",
+                "agent_command_delivery","agent_outbox_event")) assertEquals(0,count(table),table);
     }
     @Test void concurrentSameKeyHasOneReserveOneDeliveryAndImmutableReceipt() throws Exception {
         var body=purchaseBody("spv_repo_test_1_0_0");String idem=uuid();var start=new CountDownLatch(1);var pool=Executors.newFixedThreadPool(2);
@@ -353,12 +402,12 @@ class SkillMarketplaceRealTransactionTest {
     }
     @Test void foreignAgentKeyOrStaleDeliveryCannotDownloadOrSettle() {
         service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_inspector_1_0_0"),false);var i=installation();sent(i);
-        var foreign=new OauthApiKeyEntity();foreign.setId("other-key");foreign.setTenantId(ACTOR.tenantId());foreign.setJiacn(ACTOR.ownerJiacn());foreign.setClientId(ACTOR.clientId());foreign.setStatus(1);
+        var foreign=foreignProof("other-agent","rti_"+"b".repeat(32));
         assertThrows(SkillMarketplaceException.class,()->results.packageBytes(foreign,i.getInstallationId()));
-        assertThrows(SkillMarketplaceException.class,()->results.accept(ACTOR.tenantId(),ACTOR.clientId(),"other-agent","key-1",result(i,"SUCCEEDED",null)));
+        assertThrows(SkillMarketplaceException.class,()->results.accept(foreign,result(i,"SUCCEEDED",null)));
         jdbc.update("UPDATE agent_command_delivery SET active_attempt=2");
-        assertThrows(SkillMarketplaceException.class,()->results.packageBytes(key,i.getInstallationId()));
-        assertThrows(SkillMarketplaceException.class,()->results.accept(ACTOR.tenantId(),ACTOR.clientId(),AGENT,"key-1",result(i,"SUCCEEDED",null)));
+        assertThrows(SkillMarketplaceException.class,()->results.packageBytes(proof(),i.getInstallationId()));
+        assertThrows(SkillMarketplaceException.class,()->results.accept(proof(),result(i,"SUCCEEDED",null)));
         assertEquals("INSTALLING",service.order(ACTOR,i.getOrderId()).get("status"));
     }
     @Test void fundingLookupUsesOnlyPersistedInstalledActiveExactAgentSkills() {
@@ -367,21 +416,27 @@ class SkillMarketplaceRealTransactionTest {
         var actor=new cn.jia.agent.service.funding.FundedBountyActor(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(), ACTOR.actorId());
         service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);var i=installation();sent(i);
         assertFalse(lookup.lookup(actor,AGENT,List.of(requirement)).allRequirementsMatched());
-        results.accept(ACTOR.tenantId(),ACTOR.clientId(),AGENT,"key-1",result(i,"SUCCEEDED",null));
+        results.accept(proof(),result(i,"SUCCEEDED",null));
         assertTrue(lookup.lookup(actor,AGENT,List.of(requirement)).allRequirementsMatched());
         doReturn(List.of()).when(market).selectEntitlementsByAgent(ACTOR.tenantId(),ACTOR.clientId(),AGENT);
         assertFalse(lookup.lookup(actor,AGENT,List.of(requirement)).allRequirementsMatched());
     }
-    @Test void sameKeyReconnectCanDownloadAndReconcileDurableOldResult() {
+    @Test void sameInstallationHostReconnectCanDownloadAndReconcileDurableOldResult() {
         service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);var i=installation();sent(i);
         var original=result(i,"SUCCEEDED",null);original.put("runtimeInstanceId","original-runtime");
-        runtime.setTokenHash("reconnected-generation");versions.observe(runtime);
-        assertTrue(results.packageBytes(key,i.getInstallationId()).length>0);
-        results.accept(ACTOR.tenantId(),ACTOR.clientId(),AGENT,"key-1",original);
+        var originalProof=proof();
+        runtime.setTokenHash("reconnected-generation").setRuntimeInstanceId("runtime-2").setRuntimeSessionGeneration(2L);versions.observe(runtime);
+        assertThrows(SkillMarketplaceException.class,()->results.packageBytes(originalProof,i.getInstallationId()));
+        var binding=app.deliveryBinding(ACTOR.tenantId(),ACTOR.clientId(),i.getInstallationId());
+        assertEquals(runtime.getRuntimeInstallationId(),binding.getRuntimeInstallationId());
+        assertEquals(runtime.getRuntimeHostId(),binding.getRuntimeHostId());
+        assertNull(binding.getApiKeyId());assertNull(binding.getRegistrationHash());
+        assertTrue(results.packageBytes(proof(),i.getInstallationId()).length>0);
+        results.accept(proof(),original);
         assertEquals("ACTIVE",service.order(ACTOR,i.getOrderId()).get("status"));assertEquals(2,count("economy_transaction"));
-        assertThrows(SkillMarketplaceException.class,()->results.accept(ACTOR.tenantId(),ACTOR.clientId(),AGENT,"foreign-key",original));
+        assertThrows(SkillMarketplaceException.class,()->results.accept(foreignProof(AGENT,"rti_"+"b".repeat(32)),original));
     }
-    @Test void nonRentalCredentialSecretOnceExplicitRotationAndRegistrationRequiredBeforeCharging() {
+    @Test void legacyCredentialRotationDoesNotAuthorizeRuntimeAdmission() {
         when(keys.update(any())).thenAnswer(x->x.getArgument(0));
         var created=new java.util.concurrent.atomic.AtomicReference<OauthApiKeyEntity>();
         when(keys.create(any())).thenAnswer(x->{OauthApiKeyEntity k=x.getArgument(0);k.setId(uuid());created.set(k);return k;});
@@ -393,8 +448,9 @@ class SkillMarketplaceRealTransactionTest {
         assertEquals(0,key.getStatus());assertEquals(2,count("economy_skill_managed_credential"));
         assertEquals("SKILL_CREDENTIAL_SECRET_NOT_REPLAYABLE",assertThrows(SkillMarketplaceException.class,()->credentials.rotate(ACTOR,AGENT,idem,version)).code());
         assertEquals("IDEMPOTENCY_CONFLICT",assertThrows(SkillMarketplaceException.class,()->credentials.rotate(ACTOR,AGENT,idem,version+1)).code());
+        when(sessions.isReady(eq(ACTOR.tenantId()),eq(ACTOR.clientId()),eq(AGENT),any())).thenReturn(false);
         assertEquals("SKILL_AGENT_REGISTRATION_REQUIRED",assertThrows(SkillMarketplaceException.class,()->purchaseBody("spv_repo_test_1_0_0")).code());
-        when(sessions.isReady(eq(ACTOR.tenantId()),eq(ACTOR.clientId()),eq(AGENT),eq(created.get().getId()),any())).thenReturn(true);
+        when(sessions.isReady(eq(ACTOR.tenantId()),eq(ACTOR.clientId()),eq(AGENT),any())).thenReturn(true);
         runtime.setTokenHash("new-key-registration");versions.observe(runtime);
         var body=purchaseBody("spv_repo_test_1_0_0");service.purchase(ACTOR,uuid(),body,false);
         assertEquals("SKILL_INSTALLATION_PENDING",assertThrows(SkillMarketplaceException.class,()->credentials.rotate(ACTOR,AGENT,uuid(),versions.requireOwned(ACTOR,AGENT,null,false))).code());
@@ -409,13 +465,38 @@ class SkillMarketplaceRealTransactionTest {
     @Test void skillDispatchUsesDurableOrderNotTaskAclAndIoRunsAfterCommit() {
         service.purchase(ACTOR,uuid(),purchaseBody("spv_repo_test_1_0_0"),false);var i=installation();sent(i);
         byte[] wire=jdbc.queryForObject("SELECT wire_payload FROM agent_outbox_event",byte[].class);
-        when(sessions.dispatch(eq(ACTOR.tenantId()),eq(ACTOR.clientId()),eq(AGENT),eq("key-1"),any(),any())).thenAnswer(x->{
+        when(sessions.dispatch(eq(ACTOR.tenantId()),eq(ACTOR.clientId()),eq(AGENT),any(),any())).thenAnswer(x->{
             assertFalse(TransactionSynchronizationManager.isActualTransactionActive());return AgentRawCommandDispatchResult.sent(1,1);
         });
         assertEquals(AgentRawCommandDispatchResult.Status.SENT,dispatch.dispatch(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(), i.getOrderId(),AGENT,i.getCommandId(),wire).status());
         byte[] tampered=wire.clone();tampered[0]='[';
         assertThrows(SkillMarketplaceException.class,()->dispatch.dispatch(ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(), i.getOrderId(),AGENT,i.getCommandId(),tampered));
-        verify(sessions,times(1)).dispatch(anyString(),anyString(),anyString(),anyString(),any(),any());
+        verify(sessions,times(1)).dispatch(anyString(),anyString(),anyString(),any(),any());
+    }
+    @Test void unmappedHistoryBlocksOnlyItsDeliveryWithoutRechargingOrReplaying() {
+        var body=purchaseBody("spv_repo_test_1_0_0");String idem=uuid();
+        var receipt=service.purchase(ACTOR,idem,body,false);var i=installation();sent(i);
+        // Isolated fixture mutation represents an existing, unmigrated legacy record.
+        jdbc.update("UPDATE economy_skill_delivery_binding SET canonical_agent_id=NULL,runtime_installation_id=NULL,runtime_host_id=NULL,api_key_id='historical-key',registration_hash=?",new byte[32]);
+        assertEquals("SKILL_RUNTIME_MAPPING_REQUIRED",assertThrows(SkillMarketplaceException.class,
+                ()->results.packageBytes(proof(),i.getInstallationId())).code());
+        assertEquals("SKILL_RUNTIME_MAPPING_REQUIRED",assertThrows(SkillMarketplaceException.class,
+                ()->results.accept(proof(),result(i,"SUCCEEDED",null))).code());
+        assertEquals(receipt,service.purchase(ACTOR,idem,body,false));
+        assertEquals(1,count("economy_transaction"));assertEquals(1,count("agent_command_delivery"));
+        assertEquals(70000000L,wallet());assertEquals(0,count("economy_skill_result_receipt"));
+    }
+    private AgentRuntimeAuthenticationService.Proof proof() {
+        return new AgentRuntimeAuthenticationService.Proof(new AgentRuntimeAuthentication.Scope(
+                ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(),AGENT,runtime.getRuntimeInstanceId()),
+                runtime.getRuntimeInstallationId(),runtime.getRuntimeHostId(),runtime.getRuntimeSessionGeneration(),
+                java.util.HexFormat.of().formatHex(cn.jia.agent.service.impl.AgentCommandCanonicalCodec.sha256(
+                        runtime.getTokenHash().getBytes(StandardCharsets.UTF_8))),1L,1L);
+    }
+    private AgentRuntimeAuthenticationService.Proof foreignProof(String agent,String installation) {
+        var current=proof();return new AgentRuntimeAuthenticationService.Proof(new AgentRuntimeAuthentication.Scope(
+                ACTOR.tenantId(),ACTOR.clientId(),ACTOR.ownerJiacn(),agent,current.scope().runtimeInstanceId()),
+                installation,current.hostId(),current.sessionGeneration(),current.tokenDigest(),1L,1L);
     }
     private Map<String,String> purchaseBody(String product) {
         String version=Long.toString(versions.requireOwned(ACTOR,AGENT,null,false));

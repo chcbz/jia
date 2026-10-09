@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS agent_work_item_reassignment (
     client_id                   VARCHAR(50) NOT NULL,
     create_time                 BIGINT NOT NULL,
     update_time                 BIGINT NOT NULL,
+    owner_jiacn                  VARCHAR(50) NOT NULL COMMENT 'Authenticated task owner',
     PRIMARY KEY (id),
     UNIQUE KEY uk_work_item_reassignment_id
         (tenant_id, client_id, reassignment_id),
@@ -33,6 +34,8 @@ CREATE TABLE IF NOT EXISTS agent_work_item_reassignment (
         (tenant_id, client_id, command_id),
     KEY idx_work_item_reassignment_latest
         (tenant_id, client_id, task_id, work_item_id, id),
+    KEY idx_agent_work_item_reassignment_owner_scope
+        (tenant_id, client_id, owner_jiacn, task_id, work_item_id),
     CONSTRAINT chk_work_item_reassignment_digest
         CHECK (CHAR_LENGTH(request_sha256)=64 AND CHAR_LENGTH(lease_fence_sha256)=64),
     CONSTRAINT chk_work_item_reassignment_versions

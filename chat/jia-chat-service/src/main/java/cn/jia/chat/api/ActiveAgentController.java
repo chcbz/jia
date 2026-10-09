@@ -21,7 +21,7 @@ public class ActiveAgentController {
 
     @GetMapping("/active")
     public Object activeAgents() {
-        List<AgentRuntimeDTO> agents = new ArrayList<>(agentWebSocketHandler.getConnectedAgents());
+        List<AgentRuntimeDTO> agents = new ArrayList<>(agentWebSocketHandler.getExecutionReadyAgents());
         boolean hasSongJiang = agents.stream()
                 .anyMatch(agent -> BuiltinHallAgentSupport.SONGJIANG_AGENT_ID.equals(agent.getAgentId()));
         if (!hasSongJiang) {

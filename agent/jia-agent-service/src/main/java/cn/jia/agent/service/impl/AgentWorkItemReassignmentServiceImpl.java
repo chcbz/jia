@@ -429,6 +429,101 @@ public class AgentWorkItemReassignmentServiceImpl implements AgentWorkItemReassi
         });
     }
 
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public <T> T withRuntimeResultSource(String tenantId, String clientId, String ownerJiacn,
+            String targetAgentId, String taskId, String workItemId, String reassignmentId,
+            String commandId, boolean allowSubmitted,
+            java.util.function.Function<RuntimeResultSource, T> operation) {
+        requireTransportAvailable();
+        requireScope(tenantId, clientId, ownerJiacn, taskId, workItemId);
+        requireAgent(targetAgentId, "targetAgentId");
+        if (!exact(reassignmentId, 100) || !exact(commandId, 100) || operation == null)
+            throw failure(Reason.INVALID_REQUEST, "Invalid Runtime source request");
+        return mutationTransaction.executeWithLockedTaskRootInOwnerScope(tenantId, clientId, ownerJiacn, taskId, root -> {
+            var receipt = reassignmentDao.findByReassignmentIdForUpdate(
+                    tenantId, clientId, ownerJiacn, taskId, workItemId, reassignmentId);
+            if (receipt == null) throw unavailable();
+            requireReceipt(receipt, tenantId, clientId, ownerJiacn, taskId, workItemId, reassignmentId);
+            if (!targetAgentId.equals(receipt.getTargetAgentId()) || !commandId.equals(receipt.getCommandId()))
+                throw unavailable();
+            var latest = reassignmentDao.findLatestByWorkItemForUpdate(
+                    tenantId, clientId, ownerJiacn, taskId, workItemId);
+            if (latest == null || !reassignmentId.equals(latest.getReassignmentId())) throw unavailable();
+            requireActiveMemberLocked(tenantId, clientId, ownerJiacn, taskId, targetAgentId, false);
+            lockActiveCanonicalAgents(tenantId, clientId, ownerJiacn, receiptAgents(receipt));
+            requireRuntimes(tenantId, clientId, ownerJiacn, List.of(targetAgentId));
+            requireRuntimeCommandSource(tenantId, clientId, ownerJiacn, taskId, workItemId, receipt);
+            var snapshot = workItemDao.findByTaskAndWorkItemId(tenantId, clientId, ownerJiacn, taskId, workItemId);
+            if (snapshot == null || snapshot.getVersion() == null) throw unavailable();
+            var current = requireCurrentWorkItem(tenantId, clientId, ownerJiacn, taskId, workItemId, snapshot.getVersion());
+            if (!targetAgentId.equals(current.getAssigneeAgentId())
+                    || current.getVersion() < receipt.getResultWorkItemVersion()
+                    || !Objects.equals(current.getAttemptCount(), receipt.getAttemptCount())
+                    || !Objects.equals(current.getMaxAttempts(), receipt.getMaxAttempts())) throw unavailable();
+            var status = persistedStatus(current.getStatus());
+            boolean submitted = allowSubmitted && (status == AgentTaskWorkItemStatus.SUBMITTED
+                    || status == AgentTaskWorkItemStatus.COMPLETED) && current.getResultArtifactId() != null;
+            if (!submitted && ((status != AgentTaskWorkItemStatus.CLAIMED && status != AgentTaskWorkItemStatus.RUNNING)
+                    || !validToken(current.getLeaseToken()) || current.getLeaseUntil() == null
+                    || current.getLeaseUntil() <= now()
+                    || !receipt.getLeaseFenceSha256().equals(sha256(current.getLeaseToken()))))
+                throw failure(Reason.VERSION_CONFLICT, "Original command lease is no longer current");
+            return operation.apply(new RuntimeResultSource(reassignmentId, commandId, receipt.getSourceCommandId(),
+                    receipt.getMessageId(), receipt.getResultWorkItemVersion(), receipt.getLeaseFenceSha256(),
+                    receipt.getAttemptCount(), receipt.getMaxAttempts()));
+        });
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public AgentWorkItemReassignmentLeaseDTO readCurrentRuntimeLease(String tenantId, String clientId,
+            String ownerJiacn, String targetAgentId, String taskId, String workItemId,
+            String reassignmentId, String commandId) {
+        return withRuntimeResultSource(tenantId, clientId, ownerJiacn, targetAgentId, taskId, workItemId,
+                reassignmentId, commandId, false, source -> {
+                    var receipt = reassignmentDao.findByReassignmentIdForUpdate(
+                            tenantId, clientId, ownerJiacn, taskId, workItemId, reassignmentId);
+                    var item = workItemDao.findByTaskAndWorkItemId(tenantId, clientId, ownerJiacn, taskId, workItemId);
+                    return leaseResult(receipt, item, item.getVersion(), now());
+                });
+    }
+
+    private void requireRuntimeCommandSource(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String workItemId, AgentWorkItemReassignmentEntity receipt) {
+        var delivery = reassignmentDao.findSourceCommand(tenantId, clientId, ownerJiacn, receipt.getCommandId());
+        // A row outside the receipt's exact scope/target remains hidden. Only after matching
+        // that row may a damaged canonical source be classified as the original business conflict.
+        if (delivery == null || !receipt.getCommandId().equals(delivery.getCommandId())
+                || !tenantId.equals(delivery.getTenantId()) || !clientId.equals(delivery.getClientId())
+                || !ownerJiacn.equals(delivery.getOwnerJiacn()) || !taskId.equals(delivery.getTaskId())
+                || !workItemId.equals(delivery.getWorkItemId())
+                || !receipt.getTargetAgentId().equals(delivery.getTargetAgentId())) throw unavailable();
+        try {
+            var draft = AgentCommandCanonicalCodec.decodeBusinessBytes(delivery.getCommandPayload());
+            if (!MessageDigest.isEqual(AgentCommandCanonicalCodec.sha256(delivery.getCommandPayload()),
+                        delivery.getCommandPayloadHash())
+                    || !AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE.equals(delivery.getCommandType())
+                    || !receipt.getCommandId().equals(draft.commandId()) || !tenantId.equals(draft.tenantId())
+                    || !clientId.equals(draft.clientId()) || !ownerJiacn.equals(draft.ownerJiacn())
+                    || !taskId.equals(draft.taskId()) || !workItemId.equals(draft.workItemId())
+                    || !receipt.getTargetAgentId().equals(draft.targetAgentId())
+                    || !AgentProtocolConstants.COMMAND_WORK_ITEM_EXECUTE.equals(draft.commandType())
+                    || !(draft.payload() instanceof AgentHallCommandPayload payload) || payload.context() == null
+                    || !AgentCommandCanonicalCodec.E05_REASSIGNMENT_BINDING_VERSION.equals(payload.context().bindingVersion())
+                    || !receipt.getReassignmentId().equals(payload.context().reassignmentId())
+                    || !Long.toString(receipt.getResultWorkItemVersion()).equals(payload.context().contextVersion())
+                    || !List.of(receipt.getSourceCommandId()).equals(payload.context().referenceIds()))
+                throw failure(Reason.INVALID_SOURCE_COMMAND, "Runtime source linkage is invalid");
+            // Verify the original predecessor too. Transport ACK state/expiry is not business authority.
+            var source = new RequiredRequest(receipt.getOperatorSubject(), receipt.getCoordinatorAgentId(),
+                    receipt.getTaskVersion(), receipt.getExpectedWorkItemVersion(), receipt.getPreviousAgentId(),
+                    receipt.getTargetAgentId(), receipt.getSourceCommandId(), "runtime-result", "runtime-result", taskId);
+            requireSourceCommand(tenantId, clientId, ownerJiacn, taskId, workItemId, source);
+        } catch (AgentWorkItemReassignmentException rejected) { throw rejected; }
+        catch (RuntimeException invalid) { throw failure(Reason.INVALID_SOURCE_COMMAND, "Runtime source is invalid", invalid); }
+    }
+
     private AgentCommandDraft commandDraft(
             String tenantId, String clientId, String ownerJiacn, String taskId, String workItemId,
             RequiredRequest required, AgentTaskMetaEntity root, AgentTaskWorkItemEntity current,

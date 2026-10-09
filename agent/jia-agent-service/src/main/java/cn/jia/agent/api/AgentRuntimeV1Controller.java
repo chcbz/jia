@@ -1,12 +1,16 @@
 package cn.jia.agent.api;
 
 import cn.jia.agent.entity.AgentCommandAckResult;
+import cn.jia.agent.entity.AgentCommandAckRejectedException;
 import cn.jia.agent.entity.AgentRuntimeV1AckRequest;
 import cn.jia.agent.entity.AgentRuntimeV1EnrollmentRequest;
 import cn.jia.agent.entity.AgentRuntimeV1EnrollmentResult;
 import cn.jia.agent.entity.AgentRuntimeV1InstallationRequest;
 import cn.jia.agent.entity.AgentRuntimeV1InstallationView;
 import cn.jia.agent.entity.AgentRuntimeV1RuntimeRequest;
+import cn.jia.agent.entity.AgentRuntimeV1SessionRequest;
+import cn.jia.agent.entity.AgentRuntimeV1SessionResponse;
+import cn.jia.agent.security.AgentRuntimeAuthenticationFilter;
 import cn.jia.agent.service.AgentRuntimeV1Service;
 import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 import cn.jia.core.entity.JsonResult;
@@ -59,19 +63,21 @@ public class AgentRuntimeV1Controller {
         return ok(null);
     }
 
+    @cn.jia.core.security.AllowSensitiveOutput(reason = "Installer-only enrollment credential response; never exposed through InstallationView or logs")
     @PostMapping("/enroll")
     public ResponseEntity<JsonResult<AgentRuntimeV1EnrollmentResult>> enroll(
             @RequestBody AgentRuntimeV1EnrollmentRequest request, HttpServletRequest servletRequest) {
-        rejectLegacyApiKey(servletRequest);
-        // This installer-only response is intentionally the sole Runtime v1 response containing authorization material.
+        rejectNativeClient(servletRequest);
+        // Installer-only authorization response; never embed secrets in InstallationView.
         return ok(runtime.enroll(request, now()));
     }
 
+    @cn.jia.core.security.AllowSensitiveOutput(reason = "Installation-Bearer-authorized independent Runtime session credential response with no-store caching")
     @PostMapping("/session")
-    public ResponseEntity<JsonResult<AgentRuntimeV1InstallationView>> session(
+    public ResponseEntity<JsonResult<AgentRuntimeV1SessionResponse>> session(
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
-            @RequestBody AgentRuntimeV1RuntimeRequest request, HttpServletRequest servletRequest) {
-        rejectLegacyApiKey(servletRequest);
+            @RequestBody AgentRuntimeV1SessionRequest request, HttpServletRequest servletRequest) {
+        rejectNativeClient(servletRequest);
         return ok(runtime.session(bearer(authorization), request, now()));
     }
 
@@ -79,7 +85,7 @@ public class AgentRuntimeV1Controller {
     public ResponseEntity<JsonResult<AgentRuntimeV1InstallationView>> heartbeat(
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
             @RequestBody AgentRuntimeV1RuntimeRequest request, HttpServletRequest servletRequest) {
-        rejectLegacyApiKey(servletRequest);
+        rejectNativeClient(servletRequest);
         return ok(runtime.heartbeat(bearer(authorization), request, now()));
     }
 
@@ -88,12 +94,21 @@ public class AgentRuntimeV1Controller {
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
             @RequestBody AgentRuntimeV1AckRequest request, HttpServletRequest servletRequest) {
         rejectLegacyApiKey(servletRequest);
-        return ok(runtime.acknowledge(bearer(authorization), messageId, request, now()));
+        var headers = AgentRuntimeAuthenticationFilter.sessionHeaders(servletRequest);
+        if (request == null || !java.util.Objects.equals(headers.agentId(), request.canonicalAgentId())
+                || !java.util.Objects.equals(headers.installationId(), request.installationId())
+                || !java.util.Objects.equals(headers.hostId(), request.hostId())
+                || !java.util.Objects.equals(headers.runtimeInstanceId(), request.runtimeInstanceId())
+                || headers.sessionGeneration() != request.sessionGeneration()) {
+            throw new AgentBizException("AGENT_FORBIDDEN", "Runtime ACK rejected");
+        }
+        return ok(runtime.acknowledge(headers.token(), messageId, request, now()));
     }
 
-    @ExceptionHandler(AgentBizException.class)
-    public ResponseEntity<JsonResult<Void>> rejected(AgentBizException ignored) {
-        // Do not log or expose request/body/header data on installer/runtime failures.
+    @ExceptionHandler({AgentBizException.class, AgentCommandAckRejectedException.class})
+    public ResponseEntity<JsonResult<Void>> rejected(RuntimeException ignored) {
+        // D06 detailed reasons remain internal; both explicit rejection types use
+        // the same scope-hiding response. Never log reason/request/body/proof data.
         JsonResult<Void> result = JsonResult.failure("AGENT_FORBIDDEN", "Runtime v1 request rejected");
         result.setStatus(HttpStatus.FORBIDDEN.value());
         return ResponseEntity.status(HttpStatus.FORBIDDEN).header(HttpHeaders.CACHE_CONTROL, CACHE_CONTROL).body(result);
@@ -112,6 +127,12 @@ public class AgentRuntimeV1Controller {
             throw new AgentBizException("AGENT_FORBIDDEN", "Runtime v1 authorization rejected");
         }
         return header.substring("Bearer ".length());
+    }
+    private static void rejectNativeClient(HttpServletRequest request) {
+        if (request == null || request.getHeader("Origin") != null || request.getHeader("X-API-Key") != null
+                || request.getQueryString() != null) {
+            throw new AgentBizException("AGENT_FORBIDDEN", "Native Runtime request rejected");
+        }
     }
     private static void rejectLegacyApiKey(HttpServletRequest request) {
         if (request != null && (request.getParameter("api_key") != null || request.getParameter("apiKey") != null)) {
