@@ -63,12 +63,35 @@ class AgentTaskCollaborationAccessServiceImplTest extends BaseMockTest {
         assertEquals(AgentTaskAccessLevel.NONE,
                 service.resolveMemberAccess(TENANT, CLIENT, OWNER, TASK, AGENT));
 
-        assertEquals(AgentTaskAccessLevel.NONE,
-                service.resolveMemberAccess("tenant-b", CLIENT, OWNER, TASK, AGENT));
+        // Strict single-tenant owner scope already rejects this input in baseline 1e911.
+        assertThrows(IllegalArgumentException.class,
+                () -> service.resolveMemberAccess("tenant-b", CLIENT, OWNER, TASK, AGENT));
         assertEquals(AgentTaskAccessLevel.NONE,
                 service.resolveMemberAccess(TENANT, "client-b", OWNER, TASK, AGENT));
         assertEquals(AgentTaskAccessLevel.NONE,
+                service.resolveMemberAccess(TENANT, CLIENT, "owner-b", TASK, AGENT));
+        assertEquals(AgentTaskAccessLevel.NONE,
                 service.resolveMemberAccess(TENANT, CLIENT, OWNER, "task-2", AGENT));
+    }
+
+    @Test
+    void cancelledCanonicalMembersHaveReadOnlyAccessIncludingLockedWriteChecks() {
+        AgentTaskCollaborationAccessServiceImpl service = service();
+        AgentTaskMetaEntity cancelled = task().setRewardStatus("cancelled");
+        when(taskMetaDao.findByTaskIdInOwnerScope(TENANT, CLIENT, OWNER, TASK))
+                .thenReturn(cancelled);
+        when(taskMetaDao.findByTaskIdForUpdateInOwnerScope(TENANT, CLIENT, OWNER, TASK))
+                .thenReturn(cancelled);
+        for (String status : java.util.List.of("accepted", "working", "blocked", "done", "failed")) {
+            when(memberDao.findByTaskAndAgent(TENANT, CLIENT, OWNER, TASK, AGENT))
+                    .thenReturn(member(status));
+            when(memberDao.findByTaskAndAgentForUpdate(TENANT, CLIENT, OWNER, TASK, AGENT))
+                    .thenReturn(member(status));
+            assertEquals(AgentTaskAccessLevel.READ_ONLY,
+                    service.resolveMemberAccess(TENANT, CLIENT, OWNER, TASK, AGENT), status);
+            assertEquals(AgentTaskAccessLevel.READ_ONLY,
+                    service.resolveMemberAccessForUpdate(TENANT, CLIENT, OWNER, TASK, AGENT), status);
+        }
     }
 
     @Test
