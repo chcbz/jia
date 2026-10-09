@@ -284,9 +284,16 @@ SET @a02_sql = IF((SELECT COUNT(*) FROM information_schema.table_constraints
       AND constraint_name = 'chk_agent_binding_tenant_owner' AND constraint_type = 'CHECK') > 0,
     'ALTER TABLE agent_persona_binding DROP CHECK chk_agent_binding_tenant_owner', 'DO 1');
 PREPARE a02_stmt FROM @a02_sql; EXECUTE a02_stmt; DEALLOCATE PREPARE a02_stmt;
+-- Remove the canonical name on repeat as well; the legacy owner name is an upgrade
+-- input only, never a second accepted runtime contract.
+SET @a02_sql = IF((SELECT COUNT(*) FROM information_schema.table_constraints
+    WHERE constraint_schema = DATABASE() AND table_name = 'agent_persona_binding'
+      AND constraint_name = 'chk_agent_binding_single_tenant' AND constraint_type = 'CHECK') > 0,
+    'ALTER TABLE agent_persona_binding DROP CHECK chk_agent_binding_single_tenant', 'DO 1');
+PREPARE a02_stmt FROM @a02_sql; EXECUTE a02_stmt; DEALLOCATE PREPARE a02_stmt;
 ALTER TABLE agent_persona_binding
     ADD CONSTRAINT chk_agent_binding_status CHECK (status IN (0, 1, 2, 3)),
-    ADD CONSTRAINT chk_agent_binding_tenant_owner CHECK (tenant_id = '0');
+    ADD CONSTRAINT chk_agent_binding_single_tenant CHECK (tenant_id = '0');
 
 -- Real b0 -> current upgrade. Drop dependent FK/checks, normalize the complete
 -- column definitions and binary collation, then recreate exact constraints.

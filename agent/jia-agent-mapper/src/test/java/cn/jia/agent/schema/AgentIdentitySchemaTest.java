@@ -100,7 +100,15 @@ class AgentIdentitySchemaTest {
         assertTrue(migration.contains("chk_identity_alias_no_blank_scope"));
         assertFalse(migration.contains("tenant_id = trim(owner_jiacn)"));
         assertFalse(migration.contains("tenant_id is null or tenant_id = owner_jiacn"));
-        assertTrue(migration.contains("chk_agent_binding_tenant_owner check (tenant_id = '0')"));
+        assertTrue(migration.contains("chk_agent_binding_single_tenant check (tenant_id = '0')"));
+        assertTrue(migration.contains("drop check chk_agent_binding_tenant_owner"));
+        assertTrue(migration.contains("drop check chk_agent_binding_single_tenant"));
+        assertFalse(migration.contains("add constraint chk_agent_binding_tenant_owner"));
+        String binding = compact(tableDefinition(readResource("db/schema.sql"), "agent_persona_binding"));
+        assertTrue(binding.contains("tenant_id varchar(50) not null default '0'"));
+        assertTrue(binding.contains("chk_agent_binding_single_tenant check (tenant_id = '0')"));
+        assertTrue(binding.contains("unique key uk_agent_binding_active_persona "
+                + "(tenant_id, client_id, active_persona_code)"));
         assertTrue(migration.contains("on agent_persona_binding (tenant_id, client_id, active_persona_code)"));
         assertTrue(migration.contains("registry tenant conversion requires separate approved maintenance"));
         assertTrue(migration.indexOf("registry tenant conversion requires separate approved maintenance")

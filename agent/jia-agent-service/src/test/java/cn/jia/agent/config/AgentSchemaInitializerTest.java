@@ -127,6 +127,165 @@ class AgentSchemaInitializerTest extends BaseMockTest {
     }
 
     @Test
+    void bindingTenantStrictCatalogAcceptsExactlyEnforcedCanonicalContractOnRepeat() throws Exception {
+        for (String dialect : List.of("MySQL", "H2")) {
+            List<String> statements = new java.util.ArrayList<>();
+            JdbcTemplate catalog = bindingContractTemplate(dialect,
+                    List.of(bindingTenantColumn(dialect)), bindingTenantChecks(dialect), statements);
+            AgentSchemaInitializer initializer = new AgentSchemaInitializer(catalog);
+            initializer.validateBindingTenantContract();
+            initializer.validateBindingTenantContract();
+            assertTrue(statements.isEmpty(), "Binding validation must not repair DDL or convert data");
+        }
+    }
+
+    @Test
+    void bindingTenantStrictCatalogRejectsMissingDuplicateNullableTypeLengthAndDefaultDrift()
+            throws Exception {
+        Map<String, Object> required = bindingTenantColumn("MySQL");
+        List<List<Map<String, Object>>> variants = new java.util.ArrayList<>();
+        variants.add(List.of());
+        variants.add(List.of(required, required));
+        for (Map.Entry<String, Object> wrong : Map.<String, Object>of(
+                "DATA_TYPE", "char", "CHARACTER_MAXIMUM_LENGTH", 49L,
+                "IS_NULLABLE", "YES", "COLUMN_DEFAULT", "1").entrySet()) {
+            Map<String, Object> drifted = new LinkedHashMap<>(required);
+            drifted.put(wrong.getKey(), wrong.getValue());
+            variants.add(List.of(drifted));
+        }
+        for (String missing : required.keySet()) {
+            Map<String, Object> drifted = new LinkedHashMap<>(required);
+            drifted.put(missing, null);
+            variants.add(List.of(drifted));
+        }
+        Map<String, Object> numericDefault = new LinkedHashMap<>(required);
+        numericDefault.put("COLUMN_DEFAULT", 0);
+        variants.add(List.of(numericDefault));
+        Map<String, Object> quotedMysqlDefault = new LinkedHashMap<>(required);
+        quotedMysqlDefault.put("COLUMN_DEFAULT", "'0'");
+        variants.add(List.of(quotedMysqlDefault));
+        for (List<Map<String, Object>> columns : variants) {
+            List<String> statements = new java.util.ArrayList<>();
+            JdbcTemplate catalog = bindingContractTemplate("MySQL", columns,
+                    bindingTenantChecks("MySQL"), statements);
+            IllegalStateException rejected = assertThrows(IllegalStateException.class,
+                    () -> new AgentSchemaInitializer(catalog).validateBindingTenantContract());
+            assertTrue(rejected.getMessage().startsWith("Agent binding tenant"));
+            assertTrue(statements.isEmpty());
+        }
+    }
+
+    @Test
+    void bindingTenantStrictCatalogRejectsMissingLegacyOnlyDoubleAndWrongCaseChecks() throws Exception {
+        List<Map<String, Object>> required = bindingTenantChecks("MySQL");
+        Map<String, Object> status = required.get(0);
+        Map<String, Object> singleTenant = required.get(1);
+        Map<String, Object> legacy = new LinkedHashMap<>(singleTenant);
+        legacy.put("CONSTRAINT_NAME", "chk_agent_binding_tenant_owner");
+        Map<String, Object> wrongCase = new LinkedHashMap<>(singleTenant);
+        wrongCase.put("CONSTRAINT_NAME", "CHK_AGENT_BINDING_SINGLE_TENANT");
+        for (List<Map<String, Object>> checks : List.of(
+                List.<Map<String, Object>>of(), List.of(status), List.of(singleTenant),
+                List.of(status, legacy), List.of(status, legacy, singleTenant),
+                List.of(status, wrongCase))) {
+            JdbcTemplate catalog = bindingContractTemplate("MySQL",
+                    List.of(bindingTenantColumn("MySQL")), checks, new java.util.ArrayList<>());
+            IllegalStateException rejected = assertThrows(IllegalStateException.class,
+                    () -> new AgentSchemaInitializer(catalog).validateBindingTenantContract());
+            assertEquals("Agent binding CHECK set/clause drift", rejected.getMessage());
+        }
+    }
+
+    @Test
+    void bindingTenantStrictCatalogRejectsWeakClausesAndUnenforcedChecks() throws Exception {
+        for (int index : List.of(0, 1)) {
+            List<String> weakClauses = index == 0
+                    ? List.of("status IN (0, 1, 2, 3, 4)", "status >= 0", "TRUE")
+                    : List.of("tenant_id IS NULL OR tenant_id = '0'", "tenant_id = TRIM(jiacn)",
+                            "tenant_id = '1'", "tenant_id = '0' OR TRUE", "TRUE");
+            for (String clause : weakClauses) {
+                List<Map<String, Object>> checks = new java.util.ArrayList<>(bindingTenantChecks("MySQL"));
+                Map<String, Object> wrong = new LinkedHashMap<>(checks.get(index));
+                wrong.put("CHECK_CLAUSE", clause);
+                checks.set(index, wrong);
+                JdbcTemplate catalog = bindingContractTemplate("MySQL",
+                        List.of(bindingTenantColumn("MySQL")), checks, new java.util.ArrayList<>());
+                IllegalStateException rejected = assertThrows(IllegalStateException.class,
+                        () -> new AgentSchemaInitializer(catalog).validateBindingTenantContract());
+                assertEquals("Agent binding CHECK set/clause drift", rejected.getMessage());
+            }
+            for (String enforcement : List.of("NO", "")) {
+                List<Map<String, Object>> checks = new java.util.ArrayList<>(bindingTenantChecks("MySQL"));
+                Map<String, Object> wrong = new LinkedHashMap<>(checks.get(index));
+                wrong.put("ENFORCED", enforcement);
+                checks.set(index, wrong);
+                JdbcTemplate catalog = bindingContractTemplate("MySQL",
+                        List.of(bindingTenantColumn("MySQL")), checks, new java.util.ArrayList<>());
+                IllegalStateException rejected = assertThrows(IllegalStateException.class,
+                        () -> new AgentSchemaInitializer(catalog).validateBindingTenantContract());
+                assertEquals("Agent binding CHECK enforcement/duplicate drift", rejected.getMessage());
+            }
+        }
+    }
+
+    @Test
+    void bindingTenantStrictCatalogRejectsDuplicateCheckMetadata() throws Exception {
+        List<Map<String, Object>> required = bindingTenantChecks("MySQL");
+        for (Map<String, Object> duplicate : required) {
+            List<Map<String, Object>> checks = new java.util.ArrayList<>(required);
+            checks.add(duplicate);
+            JdbcTemplate catalog = bindingContractTemplate("MySQL",
+                    List.of(bindingTenantColumn("MySQL")), checks, new java.util.ArrayList<>());
+            IllegalStateException rejected = assertThrows(IllegalStateException.class,
+                    () -> new AgentSchemaInitializer(catalog).validateBindingTenantContract());
+            assertEquals("Agent binding CHECK enforcement/duplicate drift", rejected.getMessage());
+        }
+    }
+
+    @Test
+    void bindingContractFailsBeforeGeneratedColumnIndexOrAutomaticCheckRepair() throws Exception {
+        Map<String, Object> nullable = new LinkedHashMap<>(bindingTenantColumn("MySQL"));
+        nullable.put("IS_NULLABLE", "YES");
+        for (boolean badColumn : List.of(true, false)) {
+            List<String> statements = new java.util.ArrayList<>();
+            JdbcTemplate catalog = bindingContractTemplate("MySQL",
+                    List.of(badColumn ? nullable : bindingTenantColumn("MySQL")),
+                    badColumn ? bindingTenantChecks("MySQL") : List.of(), statements);
+            assertThrows(IllegalStateException.class,
+                    () -> invokeEnsureBindingTable(new AgentSchemaInitializer(catalog)));
+            assertEquals(1, statements.size());
+            assertTrue(statements.getFirst().startsWith("CREATE TABLE IF NOT EXISTS agent_persona_binding"));
+            assertTrue(statements.stream().noneMatch(sql -> sql.startsWith("ALTER TABLE")
+                    || sql.startsWith("CREATE INDEX") || sql.startsWith("CREATE UNIQUE INDEX")));
+        }
+    }
+
+    @Test
+    void bindingInitializerBaselineAndMigrationDeclareSingleCanonicalTenantContract() throws Exception {
+        JdbcTemplate template = schemaCaptureTemplate("MySQL");
+        new AgentSchemaInitializer(template).afterPropertiesSet();
+        String created = executedStatements(template).stream()
+                .filter(sql -> sql.contains("CREATE TABLE IF NOT EXISTS agent_persona_binding ("))
+                .findFirst().orElseThrow();
+        String baseline = tableDefinition(readResource("db/schema.sql"), "agent_persona_binding");
+        for (String definition : List.of(created, baseline)) {
+            String normalized = normalizeCatalogSql(definition);
+            assertTrue(normalized.contains("tenant_id varchar(50) not null default '0'"));
+            assertTrue(normalized.contains("constraint chk_agent_binding_single_tenant check (tenant_id = '0')"));
+            assertTrue(normalized.contains("constraint chk_agent_binding_status check (status in (0, 1, 2, 3))"));
+            assertTrue(normalized.contains("unique key uk_agent_binding_active_persona "
+                    + "(tenant_id, client_id, active_persona_code)"));
+            assertFalse(normalized.contains("chk_agent_binding_tenant_owner"));
+        }
+        String migration = normalizeCatalogSql(readResource("db/agent-identity-schema.sql"));
+        assertTrue(migration.contains("modify column tenant_id varchar(50) not null default '0'"));
+        assertTrue(migration.contains("add constraint chk_agent_binding_single_tenant check (tenant_id = '0')"));
+        assertTrue(migration.contains("drop check chk_agent_binding_tenant_owner"));
+        assertTrue(migration.contains("drop check chk_agent_binding_single_tenant"));
+        assertFalse(migration.contains("add constraint chk_agent_binding_tenant_owner"));
+    }
+
+    @Test
     void taskEventStorageEngineValidationAcceptsOnlyInnoDb() {
         JdbcTemplate valid = engineTemplate(Map.of(
                 "agent_task_meta", "InnoDB",
@@ -845,7 +1004,8 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         };
 
         IllegalStateException error = assertThrows(IllegalStateException.class,
-                () -> new AgentSchemaInitializer(failingTemplate).afterPropertiesSet());
+                () -> new AgentSchemaInitializer(withHostedProfileCatalog(failingTemplate))
+                        .afterPropertiesSet());
         assertTrue(error.getMessage().contains("uk_agent_binding_active_persona"), error.getMessage());
     }
 
@@ -1750,6 +1910,10 @@ class AgentSchemaInitializerTest extends BaseMockTest {
     private void configureTaskEventCatalog(JdbcTemplate template, String productName) throws Exception {
         DataSource dataSource = dialectDataSource(productName);
         lenient().when(template.getDataSource()).thenReturn(dataSource);
+        lenient().doAnswer(invocation -> {
+            List<Map<String, Object>> rows = bindingTenantCatalogRows(invocation.getArgument(0));
+            return rows == null ? List.of() : rows;
+        }).when(template).queryForList(anyString());
         AtomicBoolean eventCreated = new AtomicBoolean();
         Set<String> historicalTables = new java.util.LinkedHashSet<>();
         List<AgentSchemaInitializer.TriggerDefinition> historicalTriggers =
@@ -1904,6 +2068,72 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         }).when(template).queryForObject(anyString(), any(Class.class));
     }
 
+    private Map<String, Object> bindingTenantColumn(String dialect) {
+        return Map.of("DATA_TYPE", "H2".equals(dialect) ? "CHARACTER VARYING" : "varchar",
+                "CHARACTER_MAXIMUM_LENGTH", 50L, "IS_NULLABLE", "NO",
+                "COLUMN_DEFAULT", "H2".equals(dialect) ? "'0'" : "0");
+    }
+
+    private List<Map<String, Object>> bindingTenantChecks(String dialect) {
+        boolean h2 = "H2".equals(dialect);
+        return List.of(
+                Map.of("CONSTRAINT_NAME", h2 ? "CHK_AGENT_BINDING_STATUS" : "chk_agent_binding_status",
+                        "ENFORCED", "YES", "CHECK_CLAUSE", h2 ? "\"STATUS\" IN (0, 1, 2, 3)" : "status IN (0, 1, 2, 3)"),
+                Map.of("CONSTRAINT_NAME", h2 ? "CHK_AGENT_BINDING_SINGLE_TENANT" : "chk_agent_binding_single_tenant",
+                        "ENFORCED", "YES", "CHECK_CLAUSE", h2 ? "\"TENANT_ID\" = '0'" : "tenant_id = '0'"));
+    }
+
+    private List<Map<String, Object>> bindingTenantCatalogRows(String sql) {
+        String normalized = normalizeCatalogSql(sql);
+        if (!normalized.contains("'agent_persona_binding'")) return null;
+        String dialect = normalized.contains("schema()") ? "H2" : "MySQL";
+        if (normalized.contains("from information_schema.columns")) {
+            return List.of(bindingTenantColumn(dialect));
+        }
+        if (normalized.contains("join information_schema.check_constraints")) {
+            return bindingTenantChecks(dialect);
+        }
+        return null;
+    }
+
+    private JdbcTemplate bindingContractTemplate(String dialect, List<Map<String, Object>> columns,
+            List<Map<String, Object>> checks, List<String> statements) throws Exception {
+        return new JdbcTemplate(dialectDataSource(dialect)) {
+            @Override
+            public List<Map<String, Object>> queryForList(String sql) {
+                String normalized = normalizeCatalogSql(sql);
+                assertTrue(normalized.contains("'agent_persona_binding'"));
+                if (normalized.contains("from information_schema.columns")) return columns;
+                assertTrue(normalized.contains("join information_schema.check_constraints"));
+                assertTrue(normalized.contains("tc.enforced"));
+                return checks;
+            }
+
+            @Override
+            public void execute(String sql) {
+                statements.add(sql);
+            }
+
+            @Override
+            public int update(String sql, Object... args) {
+                throw new AssertionError("Binding contract validation must not convert tenant data");
+            }
+        };
+    }
+
+    private void invokeEnsureBindingTable(AgentSchemaInitializer initializer) {
+        try {
+            var method = AgentSchemaInitializer.class.getDeclaredMethod("ensureBindingTable");
+            method.setAccessible(true);
+            method.invoke(initializer);
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            if (e.getCause() instanceof RuntimeException runtime) throw runtime;
+            throw new AssertionError(e.getCause());
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
+    }
+
     private JdbcTemplate withHostedProfileCatalog(JdbcTemplate delegate) {
         return withHostedProfileCatalog(delegate, hostedProfileChecks());
     }
@@ -1913,6 +2143,12 @@ class AgentSchemaInitializerTest extends BaseMockTest {
             @Override
             public DataSource getDataSource() {
                 return delegate.getDataSource();
+            }
+
+            @Override
+            public List<Map<String, Object>> queryForList(String sql) {
+                List<Map<String, Object>> rows = bindingTenantCatalogRows(sql);
+                return rows == null ? delegate.queryForList(sql) : rows;
             }
 
             @Override

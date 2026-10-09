@@ -101,9 +101,12 @@ public class AgentSchemaInitializer implements InitializingBean {
                     KEY idx_agent_binding_agent (client_id, agent_id, status),
                     KEY idx_agent_binding_persona (client_id, persona_code, status),
                     CONSTRAINT chk_agent_binding_status CHECK (status IN (0, 1, 2, 3)),
-                    CONSTRAINT chk_agent_binding_tenant_owner CHECK (tenant_id = '0')
+                    CONSTRAINT chk_agent_binding_single_tenant CHECK (tenant_id = '0')
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Durable Agent persona binding history'
                 """.formatted(ownerJiacnColumn, lifecycleColumn, activePersonaColumn, activeAgentColumn));
+        // Existing binding contracts are migrated only by explicitly approved maintenance.
+        // Reject drift before generated-column/index additions can mask an old tenant contract.
+        validateBindingTenantContract();
         addRequiredColumnIfMissing("agent_persona_binding", "owner_jiacn", ownerJiacnColumn);
         addRequiredColumnIfMissing("agent_persona_binding", "lifecycle_status", lifecycleColumn);
         addRequiredColumnIfMissing("agent_persona_binding", "active_persona_code", activePersonaColumn);
@@ -115,10 +118,61 @@ public class AgentSchemaInitializer implements InitializingBean {
         ensureRequiredIndex("agent_persona_binding", "uk_agent_binding_active_agent", true,
                 List.of("active_agent_id"),
                 "CREATE UNIQUE INDEX uk_agent_binding_active_agent ON agent_persona_binding (active_agent_id)");
-        ensureRequiredCheckConstraint("agent_persona_binding", "chk_agent_binding_status",
-                "status IN (0, 1, 2, 3)");
-        ensureRequiredCheckConstraint("agent_persona_binding", "chk_agent_binding_tenant_owner",
-                "tenant_id = '0'");
+    }
+
+    void validateBindingTenantContract() {
+        boolean h2 = isH2Database();
+        String schema = h2 ? "SCHEMA()" : "DATABASE()";
+        List<java.util.Map<String, Object>> columns = jdbcTemplate.queryForList("""
+                SELECT DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE, COLUMN_DEFAULT
+                FROM information_schema.columns
+                WHERE table_schema = %s
+                  AND LOWER(table_name) = 'agent_persona_binding'
+                  AND LOWER(column_name) = 'tenant_id'
+                """.formatted(schema));
+        if (columns.size() != 1) {
+            throw new IllegalStateException("Agent binding tenant column catalog drift");
+        }
+        java.util.Map<String, Object> column = columns.getFirst();
+        Object length = column.get("CHARACTER_MAXIMUM_LENGTH");
+        String expectedType = h2 ? "character varying" : "varchar";
+        Object defaultValue = column.get("COLUMN_DEFAULT");
+        // H2 reports a SQL string literal; MySQL reports the actual default string.
+        if (h2 && "'0'".equals(defaultValue)) defaultValue = "0";
+        if (!expectedType.equalsIgnoreCase(String.valueOf(column.get("DATA_TYPE")))
+                || !(length instanceof Number) || ((Number) length).longValue() != 50L
+                || !"NO".equalsIgnoreCase(String.valueOf(column.get("IS_NULLABLE")))
+                || !"0".equals(defaultValue)) {
+            throw new IllegalStateException("Agent binding tenant type/nullability/default drift");
+        }
+        List<java.util.Map<String, Object>> checks = jdbcTemplate.queryForList("""
+                SELECT tc.CONSTRAINT_NAME, tc.ENFORCED, cc.CHECK_CLAUSE
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.check_constraints cc
+                  ON cc.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA
+                 AND cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+                WHERE tc.CONSTRAINT_SCHEMA = %s
+                  AND LOWER(tc.TABLE_NAME) = 'agent_persona_binding'
+                  AND tc.CONSTRAINT_TYPE = 'CHECK'
+                """.formatted(schema));
+        java.util.Map<String, String> actual = new java.util.HashMap<>();
+        for (java.util.Map<String, Object> check : checks) {
+            String name = String.valueOf(check.get("CONSTRAINT_NAME"));
+            if (h2) name = name.toLowerCase(Locale.ROOT);
+            String clause = (String) check.get("CHECK_CLAUSE");
+            // H2 renders identifiers with double quotes; MySQL uses backticks.
+            if (h2 && clause != null) clause = clause.replace("\"", "");
+            if (!"YES".equalsIgnoreCase(String.valueOf(check.get("ENFORCED")))
+                    || actual.putIfAbsent(name, normalizeIdentityExpression(clause)) != null) {
+                throw new IllegalStateException("Agent binding CHECK enforcement/duplicate drift");
+            }
+        }
+        java.util.Map<String, String> expected = java.util.Map.of(
+                "chk_agent_binding_status", normalizeIdentityExpression("status IN (0, 1, 2, 3)"),
+                "chk_agent_binding_single_tenant", normalizeIdentityExpression("tenant_id = '0'"));
+        if (!expected.equals(actual)) {
+            throw new IllegalStateException("Agent binding CHECK set/clause drift");
+        }
     }
 
     private void ensureHostedProfileTable() {
