@@ -91,27 +91,27 @@ class AgentTaskCancellationControllerTest {
         verifyNoInteractions(service);
     }
     @Test void ownerMismatchIsOpaque404() throws Exception {
-        when(service.cancel(anyString(),anyString(),anyString(),anyString(),anyString(),anyLong()))
-                .thenThrow(new AgentTaskCollaborationException(AgentTaskCollaborationException.Reason.NOT_FOUND,"secret owner"));
+        doThrow(new AgentTaskCollaborationException(AgentTaskCollaborationException.Reason.NOT_FOUND,"secret owner")).when(service)
+                .cancel(anyString(),anyString(),anyString(),anyString(),anyString(),anyLong());
         mvc.perform(post("/agent/tasks/417/cancel").principal(jwt()).contentType("application/json")
                 .content("{\"expectedTaskVersion\":1}")).andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("TASK_NOT_FOUND"));
     }
     @Test void strictVersionConflictAndUnsupportedInflightAre409() throws Exception {
-        when(service.cancel(anyString(),anyString(),anyString(),anyString(),anyString(),anyLong()))
-                .thenThrow(new AgentTaskStateException(AgentTaskStateException.Reason.VERSION_CONFLICT,"internal"));
+        doThrow(new AgentTaskStateException(AgentTaskStateException.Reason.VERSION_CONFLICT,"internal")).when(service)
+                .cancel(anyString(),anyString(),anyString(),anyString(),anyString(),anyLong());
         mvc.perform(post("/agent/tasks/417/cancel").principal(jwt()).contentType("application/json")
                 .content("{\"expectedTaskVersion\":1}")).andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("TASK_VERSION_CONFLICT"));
-        when(service.cancel(anyString(),anyString(),anyString(),anyString(),anyString(),anyLong()))
-                .thenThrow(new AgentTaskStateException(AgentTaskStateException.Reason.INVALID_TRANSITION,"runtime secret"));
+        doThrow(new AgentTaskStateException(AgentTaskStateException.Reason.INVALID_TRANSITION,"runtime secret")).when(service)
+                .cancel(anyString(),anyString(),anyString(),anyString(),anyString(),anyLong());
         mvc.perform(post("/agent/tasks/417/cancel").principal(jwt()).contentType("application/json")
                 .content("{\"expectedTaskVersion\":1}")).andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("INITIAL_CANCEL_UNSUPPORTED"));
     }
     @Test void missingSchemaOrInvalidReceiptIsFailClosed503() throws Exception {
-        when(service.cancel(anyString(),anyString(),anyString(),anyString(),anyString(),anyLong()))
-                .thenThrow(new IllegalStateException("jdbc credentials must not be exposed"));
+        doThrow(new IllegalStateException("jdbc credentials must not be exposed")).when(service)
+                .cancel(anyString(),anyString(),anyString(),anyString(),anyString(),anyLong());
         mvc.perform(post("/agent/tasks/417/cancel").principal(jwt()).contentType("application/json")
                 .content("{\"expectedTaskVersion\":1}")).andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value("CANCEL_UNAVAILABLE"));

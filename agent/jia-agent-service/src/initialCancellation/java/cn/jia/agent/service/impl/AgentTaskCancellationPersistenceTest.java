@@ -70,8 +70,26 @@ class AgentTaskCancellationPersistenceTest {
         jdbc.update("INSERT INTO agent_task_provider_cost_consent VALUES(?,'0','client','owner',?,?,'CONSUMED',4,1,1893456000000,?,1,1,?,?,?, ?,NULL,NULL,NULL)",
                 id,task,"consent_"+task,"grant_"+task,"pwe_"+task,"run_"+task,"lease_"+task,consumedAt);
     }
-    AgentTaskCancellationDaoImpl consentDao() {
+    AgentTaskCancellationMapper absentQueryMapper() {
         var mapper=mock(AgentTaskCancellationMapper.class);
+        // MyBatis SELECT 1 with no row returns null. Mockito's boxed-Long default 0
+        // is still a present row to production existence predicates, so model absence explicitly.
+        when(mapper.funding(anyString(),anyString(),anyString(),anyString())).thenReturn(null);
+        when(mapper.fundingOperation(anyString(),anyString(),anyString(),anyString())).thenReturn(null);
+        when(mapper.execution(anyString(),anyString(),anyString(),anyString(),anyLong())).thenReturn(null);
+        when(mapper.finalization(anyString(),anyString(),anyString(),anyString())).thenReturn(null);
+        when(mapper.delivery(anyString(),anyString(),anyString(),anyString())).thenReturn(null);
+        when(mapper.command(anyString(),anyString(),anyString(),anyString())).thenReturn(null);
+        when(mapper.outbox(anyString(),anyString(),anyString(),anyString())).thenReturn(null);
+        when(mapper.chatTurn(anyString(),anyString(),anyString(),anyString())).thenReturn(null);
+        when(mapper.chatRequest(anyString(),anyString(),anyString(),anyString())).thenReturn(null);
+        when(mapper.chatStep(anyString(),anyString(),anyString(),anyString())).thenReturn(null);
+        when(mapper.chatDispatch(anyString(),anyString(),anyString(),anyString())).thenReturn(null);
+        when(mapper.lockCostConsents(anyString(),anyString(),anyString(),anyString())).thenReturn(List.of());
+        return mapper;
+    }
+    AgentTaskCancellationDaoImpl consentDao() {
+        var mapper=absentQueryMapper();
         when(mapper.lockCostConsents(anyString(),anyString(),anyString(),anyString()))
                 .thenAnswer(i -> consentRows(i.getArgument(3)));
         return new AgentTaskCancellationDaoImpl(mapper);
@@ -106,7 +124,7 @@ class AgentTaskCancellationPersistenceTest {
     }
     @Test void closedConsentDoesNotBypassCurrentNativeOrCommandFacts() {
         consumedConsent("417",1,1790984226520L);
-        var mapper=mock(AgentTaskCancellationMapper.class);
+        var mapper=absentQueryMapper();
         when(mapper.lockCostConsents("0","client","owner","417")).thenAnswer(i -> consentRows("417"));
         var dao=new AgentTaskCancellationDaoImpl(mapper);
         assertFalse(dao.hasExecutionFacts("0","client","owner","417"));
@@ -169,7 +187,7 @@ class AgentTaskCancellationPersistenceTest {
         assertEquals(0,jdbc.update(q.sql(),q.params()));
     }
     @Test void productionDaoNeverIgnoresMissingSchemaOrOrphanOutbox() {
-        var mapper=mock(AgentTaskCancellationMapper.class); var dao=new AgentTaskCancellationDaoImpl(mapper);
+        var mapper=absentQueryMapper(); var dao=new AgentTaskCancellationDaoImpl(mapper);
         when(mapper.outbox("0","client","owner","417")).thenReturn(1L);
         assertTrue(dao.hasCommandFacts("0","client","owner","417"));
         when(mapper.execution(eq("0"),eq("client"),eq("owner"),eq("417"),anyLong())).thenThrow(new IllegalStateException("missing table"));

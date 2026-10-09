@@ -56,17 +56,17 @@ class AgentTaskCancellationTransactionTest {
                 .thenAnswer(i -> readRoot(i.getArgument(2),"417",true));
         when(roots.updateStatusByVersionInOwnerScope(anyString(),anyString(),anyString(),anyString(),anyLong(),anyString(),any(),any(),any()))
                 .thenAnswer(i -> jdbc.update("UPDATE root SET status=?,version=version+1 WHERE task_id=? AND owner=? AND version=?",
-                        i.getArgument(5),i.getArgument(3),i.getArgument(2),i.getArgument(4)));
+                        new Object[]{i.getArgument(5),i.getArgument(3),i.getArgument(2),i.getArgument(4)}));
         when(members.findByTaskAndAgent(anyString(),anyString(),anyString(),anyString(),anyString()))
                 .thenAnswer(i -> readMember(i.getArgument(4)));
         when(members.updateByVersion(anyString(),anyString(),anyString(),anyString(),anyString(),anyLong(),any()))
                 .thenAnswer(i -> jdbc.update("UPDATE member SET status=?,version=version+1 WHERE agent_id=? AND version=?",
-                        ((AgentTaskMemberDTO)i.getArgument(6)).getMemberStatus(),i.getArgument(4),i.getArgument(5)));
+                        new Object[]{((AgentTaskMemberDTO)i.getArgument(6)).getMemberStatus(),i.getArgument(4),i.getArgument(5)}));
         when(items.findByWorkItemId(anyString(),anyString(),anyString(),anyString()))
                 .thenAnswer(i -> readItem(i.getArgument(3)));
         when(items.updateByVersion(anyString(),anyString(),anyString(),anyString(),anyLong(),any()))
                 .thenAnswer(i -> jdbc.update("UPDATE item SET status=?,version=version+1 WHERE work_id=? AND version=?",
-                        ((AgentTaskWorkItemDTO)i.getArgument(5)).getStatus(),i.getArgument(3),i.getArgument(4)));
+                        new Object[]{((AgentTaskWorkItemDTO)i.getArgument(5)).getStatus(),i.getArgument(3),i.getArgument(4)}));
         when(items.listByTaskForUpdate(anyString(),anyString(),anyString(),anyString(),eq(501)))
                 .thenAnswer(i -> { jdbc.queryForList("SELECT * FROM item ORDER BY work_id FOR UPDATE"); return List.of(readItem("w")); });
         when(dao.lockMembers(anyString(),anyString(),anyString(),anyString())).thenAnswer(i -> {
@@ -81,16 +81,17 @@ class AgentTaskCancellationTransactionTest {
                     .setVersion(number("bootstrap","version"))); });
         when(dao.cancelRetryBootstrap(anyString(),anyString(),anyString(),anyString(),anyLong(),anyLong(),anyLong()))
                 .thenAnswer(i -> jdbc.update("UPDATE bootstrap SET status='DEAD',error='TASK_CANCELLED',version=version+1 WHERE id=? AND version=? AND status='RETRY'",
-                        i.getArgument(4),i.getArgument(5)));
+                        new Object[]{i.getArgument(4),i.getArgument(5)}));
         when(grants.revoke(anyString(),anyString(),anyString(),anyString(),anyString(),anyLong(),anyString(),anyString(),anyLong()))
                 .thenAnswer(i -> jdbc.update("UPDATE grant_row SET state='REVOKED',version=version+1 WHERE grant_id=? AND version=? AND state='ACTIVE'",
-                        i.getArgument(4),i.getArgument(5))==1);
-        when(events.append(any())).thenAnswer(i -> {
+                        new Object[]{i.getArgument(4),i.getArgument(5)})==1);
+        doAnswer(i -> {
             AgentTaskEventWriteCommand command=i.getArgument(0);
-            jdbc.update("INSERT INTO event_row VALUES(?,?,?)",command.getEventId(),command.getEventType(),command.getEventJson());
-            jdbc.update("UPDATE root SET event_version=event_version+1 WHERE task_id='417'"); return null; });
+            jdbc.update("INSERT INTO event_row VALUES(?,?,?)",new Object[]{command.getEventId(),command.getEventType(),command.getEventJson()});
+            jdbc.update("UPDATE root SET event_version=event_version+1 WHERE task_id='417'"); return null;
+        }).when(events).append(any());
         when(dao.releaseTaskOccupation(anyString(),anyString(),anyString(),anyString(),anyLong()))
-                .thenAnswer(i -> jdbc.update("UPDATE occupation SET task=NULL WHERE task=?",(String)i.getArgument(3)));
+                .thenAnswer(i -> jdbc.update("UPDATE occupation SET task=NULL WHERE task=?",new Object[]{i.getArgument(3)}));
         tx=new AgentTaskMutationTransactionImpl(roots,new DataSourceTransactionManager(ds));
         states=new AgentTaskStateServiceImpl(roots,members,items,tx,events);
         service=new AgentTaskCancellationServiceImpl(tx,states,items,grants,dao);
@@ -101,17 +102,17 @@ class AgentTaskCancellationTransactionTest {
                     .setRewardStatus(rs.getString("status")).setTaskVersion(rs.getLong("version"))
                     .setCurrentEventVersion(rs.getLong("event_version"));
             row.setTenantId("0"); row.setClientId("client"); return row;
-        },owner,task);
+        },new Object[]{owner,task});
         return rows.isEmpty() ? null : rows.getFirst();
     }
     AgentTaskMemberEntity readMember(String id) {
         return jdbc.queryForObject("SELECT * FROM member WHERE agent_id=?",(rs,n) ->
                 AgentTaskCancellationServiceImplTest.member(id,rs.getString("status"))
-                        .setMemberRole("worker").setAssignmentSource("legacy").setVersion(rs.getLong("version")),id);
+                        .setMemberRole("worker").setAssignmentSource("legacy").setVersion(rs.getLong("version")),new Object[]{id});
     }
     AgentTaskWorkItemEntity readItem(String id) {
         return jdbc.queryForObject("SELECT * FROM item WHERE work_id=?",(rs,n) ->
-                AgentTaskCancellationServiceImplTest.item(id,rs.getString("status")).setVersion(rs.getLong("version")),id);
+                AgentTaskCancellationServiceImplTest.item(id,rs.getString("status")).setVersion(rs.getLong("version")),new Object[]{id});
     }
     String text(String table,String column) { return jdbc.queryForObject("SELECT "+column+" FROM "+table,String.class); }
     long number(String table,String column) { return Objects.requireNonNull(jdbc.queryForObject("SELECT "+column+" FROM "+table,Long.class)); }
@@ -137,23 +138,24 @@ class AgentTaskCancellationTransactionTest {
         assertEquals(2,cancel().taskVersion()); assertEquals(3,number("root","event_version"));
     }
     @Test void failureAtFinalOccupationWriteRollsBackAllEarlierWritesAndEvents() {
-        when(dao.releaseTaskOccupation(anyString(),anyString(),anyString(),anyString(),anyLong()))
-                .thenThrow(new IllegalStateException("fixture last-stage failure"));
+        doThrow(new IllegalStateException("fixture last-stage failure")).when(dao)
+                .releaseTaskOccupation(anyString(),anyString(),anyString(),anyString(),anyLong());
         assertThrows(IllegalStateException.class,this::cancel); assertOriginal();
     }
     @Test void lostGrantCasRollsBackMemberWorkItemEvents() {
-        when(grants.revoke(anyString(),anyString(),anyString(),anyString(),anyString(),anyLong(),anyString(),anyString(),anyLong()))
-                .thenReturn(false);
+        doReturn(false).when(grants)
+                .revoke(anyString(),anyString(),anyString(),anyString(),anyString(),anyLong(),anyString(),anyString(),anyLong());
         assertThrows(AgentTaskStateException.class,this::cancel); assertOriginal();
     }
     @Test void eventFailureRollsBackStateAndVersion() {
-        when(events.append(any())).thenThrow(new IllegalStateException("fixture event failure"));
+        doThrow(new IllegalStateException("fixture event failure")).when(events).append(any());
         assertThrows(IllegalStateException.class,this::cancel); assertOriginal();
     }
     @Test void lateTaskStartSerializesBehindCancelAndCannotRun() throws Exception {
         var rootHeld=new CountDownLatch(1); var release=new CountDownLatch(1); var starting=new CountDownLatch(1);
-        when(dao.lockMembers(anyString(),anyString(),anyString(),anyString())).thenAnswer(i -> {
-            rootHeld.countDown(); assertTrue(release.await(5,TimeUnit.SECONDS)); return List.of(readMember("a")); });
+        doAnswer(i -> {
+            rootHeld.countDown(); assertTrue(release.await(5,TimeUnit.SECONDS)); return List.of(readMember("a"));
+        }).when(dao).lockMembers(anyString(),anyString(),anyString(),anyString());
         var pool=Executors.newFixedThreadPool(2);
         try {
             var cancelled=pool.submit(this::cancel); assertTrue(rootHeld.await(5,TimeUnit.SECONDS));
