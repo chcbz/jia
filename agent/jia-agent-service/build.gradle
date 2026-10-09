@@ -810,3 +810,25 @@ tasks.register('executionHistoryHttp', Test) {
     inputs.property('webSource', providers.environmentVariable('CYF_HISTORY_WEB_COMMIT').orElse('UNSET'))
     testLogging { events 'passed', 'failed'; exceptionFormat 'full'; showStandardStreams = true }
 }
+
+// GSS-CANCEL-20261010: isolated targeted suite, preserving historical default-test debt.
+def initialCancellationSourceSet = sourceSets.create('initialCancellation') {
+    java.srcDir 'src/initialCancellation/java'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(initialCancellationSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(initialCancellationSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('initialCancellation', Test) {
+    group = 'verification'
+    description = 'Initial owner cancellation HTTP/service/root transaction and late-start contracts.'
+    dependsOn tasks.named(initialCancellationSourceSet.classesTaskName)
+    testClassesDirs = initialCancellationSourceSet.output.classesDirs
+    classpath = initialCancellationSourceSet.runtimeClasspath
+    useJUnitPlatform()
+    maxParallelForks = 1
+}

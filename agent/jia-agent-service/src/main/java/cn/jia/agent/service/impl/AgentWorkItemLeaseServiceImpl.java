@@ -96,7 +96,13 @@ public class AgentWorkItemLeaseServiceImpl implements AgentWorkItemLeaseService 
             String taskId, AgentTaskMutationTransaction.LockedTaskMutation<T> mutation) {
         try {
             return mutationTransaction.executeWithLockedTaskRootInOwnerScope(
-                    tenantId, clientId, ownerJiacn, taskId, mutation);
+                    tenantId, clientId, ownerJiacn, taskId, root -> {
+                        if ("cancelled".equals(root.getRewardStatus())) {
+                            throw new AgentTaskStateException(Reason.INVALID_TRANSITION,
+                                    "Cancelled tasks cannot admit lease operations");
+                        }
+                        return mutation.apply(root);
+                    });
         } catch (AgentTaskCollaborationException e) {
             if (e.getReason() == AgentTaskCollaborationException.Reason.NOT_FOUND) {
                 throw notFound();

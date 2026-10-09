@@ -631,7 +631,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
 
     private static void requireConversationRoot(AgentTaskMetaEntity root,OwnerScope scope,
             String taskId,String agentId,Long assignmentRevision) {
-        if (root==null || !same(taskId,root.getTaskId())
+        if (root==null || "cancelled".equals(root.getRewardStatus()) || !same(taskId,root.getTaskId())
                 || !same(scope.tenantId(),root.getTenantId()) || !same(scope.clientId(),root.getClientId())
                 || !same(scope.ownerJiacn(),root.getOwnerJiacn())
                 || !same(agentId,root.getAssignedAgentId())
