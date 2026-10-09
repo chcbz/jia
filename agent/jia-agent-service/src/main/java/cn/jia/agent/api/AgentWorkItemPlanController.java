@@ -128,6 +128,8 @@ public class AgentWorkItemPlanController {
             throw new AuthenticationFailure(false);
         }
         Map<String, Object> claims = jwt.getToken().getClaims();
+        if (!"0".equals(claims.get("tenant_id")) || !"cyf".equals(claims.get("data_domain_id")))
+            throw new AuthenticationFailure(true);
         Object owner = claims.get("jiacn");
         Object client = claims.get("client_id");
         if (!(owner instanceof String ownerJiacn) || !(client instanceof String clientId)
@@ -135,6 +137,7 @@ public class AgentWorkItemPlanController {
                 || "0".equals(ownerJiacn) || "0".equals(clientId)) {
             throw new AuthenticationFailure(true);
         }
+        // Legacy planning services persist only tenant-0 / client-scoped tasks.
         return new Scope("0", clientId, ownerJiacn);
     }
 

@@ -2,6 +2,11 @@ package cn.jia.oauth.api;
 
 import cn.jia.oauth.config.ResourceServerConfig;
 import cn.jia.oauth.security.AccountSecurityJwtValidator;
+import cn.jia.oauth.security.TenantAuthorizationAttributes;
+import cn.jia.oauth.security.TenantAuthorizationVerifier;
+import cn.jia.core.tenant.TenantId;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.oauth.security.TenantAuthorizationAttributes.TenantKind;
 import cn.jia.user.security.AccountSecurityService;
 import cn.jia.user.security.AccountSecuritySnapshot;
 import cn.jia.user.security.AccountState;
@@ -124,10 +129,15 @@ class SessionRevocationResourceSecurityTest {
             return new SessionRevocationController(service);
         }
         @Bean ProtectedUserController protectedUserController() { return new ProtectedUserController(); }
+        @Bean TenantAuthorizationVerifier tenantAuthorizationVerifier() {
+            return (selection, uid, clientId) -> uid == 17 && "web".equals(clientId)
+                    && selection.equals(new TenantAuthorizationAttributes(TenantId.of("1"),
+                    DataDomainId.of("cyf"), "华南测试区", TenantKind.TEST, "2", "3", "4"));
+        }
 
         @Bean
         @Primary
-        JwtDecoder testJwtDecoder(AccountSecurityService service) {
+        JwtDecoder testJwtDecoder(AccountSecurityService service, TenantAuthorizationVerifier verifier) {
             return token -> {
                 Jwt jwt = switch (token) {
                     case "user-token" -> jwt(token, Map.of(
@@ -137,7 +147,7 @@ class SessionRevocationResourceSecurityTest {
                             "token_kind", "machine", "sub", "agent", "client_id", "agent"));
                     default -> throw new BadJwtException("Malformed token");
                 };
-                if (new AccountSecurityJwtValidator(service).validate(jwt).hasErrors()) {
+                if (new AccountSecurityJwtValidator(service, verifier).validate(jwt).hasErrors()) {
                     throw new BadJwtException("Invalid token");
                 }
                 return jwt;
@@ -148,6 +158,12 @@ class SessionRevocationResourceSecurityTest {
             Jwt.Builder builder = Jwt.withTokenValue(value).header("alg", "RS256")
                     .issuedAt(Instant.now().minusSeconds(5)).expiresAt(Instant.now().plusSeconds(300));
             claims.forEach(builder::claim);
+            if ("user-token".equals(value)) {
+                builder.claim("tenant_id", "1").claim("data_domain_id", "cyf")
+                        .claim("tenant_name", "华南测试区").claim("tenant_kind", "TEST")
+                        .claim("tenant_session_epoch", "2").claim("membership_revision", "3")
+                        .claim("client_tenant_grant_revision", "4");
+            }
             return builder.build();
         }
     }

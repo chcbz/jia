@@ -13,5 +13,13 @@ public record AgentInboxResult(
         String status,
         String resultStatus,
         Long processedAt,
-        String lastError) {
+        String lastError,
+        Long nextRetryAt) {
+
+    public AgentInboxResult(long inboxId, String consumerName, String tenantId, String clientId,
+            String messageId, String eventId, String commandId, long deliveryId, String status,
+            String resultStatus, Long processedAt, String lastError) {
+        this(inboxId, consumerName, tenantId, clientId, messageId, eventId, commandId,
+                deliveryId, status, resultStatus, processedAt, lastError, null);
+    }
 }

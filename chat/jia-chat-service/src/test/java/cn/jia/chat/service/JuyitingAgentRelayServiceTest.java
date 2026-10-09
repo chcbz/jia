@@ -7,6 +7,10 @@ import cn.jia.chat.handler.AgentWebSocketHandler;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
+import cn.jia.core.tenant.UserAdmissionScope;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -56,14 +60,14 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
     @Test
     void legalSingleAgentRelayPersistsWithGenerationAndStreamsFinalEvent() throws Exception {
         stubLiveConversation();
-        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+        when(chatConversationService.get(areaZeroScope(), "1001"))
                 .thenReturn(conversation("public", "public", null,
                         List.of("agent-wuyong")));
         when(agentWebSocketHandler.sendDirectMessageToAgent(
                 eq("tester"), eq("web-client"), eq("agent-wuyong"), any(Map.class)))
                 .thenReturn(true);
 
-        JuyitingAgentRelayResult result = service().relay(
+        JuyitingAgentRelayResult result = service().relay(areaZeroScope(),
                 request("public", null, List.of("agent-wuyong")), "1001", Flux::empty);
         CompletableFuture<List<String>> eventsFuture = result.stream()
                 .take(2).collectList().toFuture();
@@ -77,7 +81,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         assertTrue(events.stream().anyMatch(value -> value.contains("agentDelivery")));
         assertTrue(events.stream().anyMatch(value -> value.contains("\"content\":\"ok\"")));
         verify(chatConversationService).appendOwnedMessage(
-                eq("tester"), eq("web-client"), any(ChatMessageEntity.class), eq(1L));
+                eq(areaZeroScope()), any(ChatMessageEntity.class), eq(1L));
         assertEquals(0, broker.subscriberCount("1001"));
         assertEquals(0, broker.watcherCount("1001"));
     }
@@ -89,12 +93,12 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         ChatMessageDTO request = request("bounty", "task-7", List.of("agent-linchong"));
         request.setMetadata(Map.of("participantAgentIds", List.of("agent-linchong")));
 
-        JuyitingAgentRelayResult result = service().relay(request, "1001", Flux::empty);
+        JuyitingAgentRelayResult result = service().relay(areaZeroScope(), request, "1001", Flux::empty);
 
         assertTrue(result.attempted());
         assertTrue(result.stream().blockFirst().contains("task conversation scope unavailable"));
         verify(chatConversationService, never()).appendOwnedMessage(
-                any(), any(), any(ChatMessageEntity.class), org.mockito.ArgumentMatchers.anyLong());
+                any(UserAdmissionScope.class), any(ChatMessageEntity.class), org.mockito.ArgumentMatchers.anyLong());
         verify(agentWebSocketHandler, never()).sendDirectMessageToAgent(
                 any(), any(), any(), any(Map.class));
     }
@@ -104,12 +108,12 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         ChatMessageDTO request = request("bounty", "task-7", List.of("agent-wuyong"));
         when(agentService.listTaskWritableMemberAgentIds("tester", "web-client", "task-7"))
                 .thenThrow(new IllegalStateException("query"));
-        assertTrue(service().relay(request, "1001", Flux::empty)
+        assertTrue(service().relay(areaZeroScope(), request, "1001", Flux::empty)
                 .stream().blockFirst().contains("scope unavailable"));
 
         org.mockito.Mockito.doReturn(List.of()).when(agentService)
                 .listTaskWritableMemberAgentIds("tester", "web-client", "task-7");
-        assertTrue(service().relay(request, "1001", Flux::empty)
+        assertTrue(service().relay(areaZeroScope(), request, "1001", Flux::empty)
                 .stream().blockFirst().contains("scope unavailable"));
     }
 
@@ -119,7 +123,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         List<String> members = List.of("agent-wuyong", "agent-linchong");
         when(agentService.listTaskWritableMemberAgentIds("tester", "web-client", "task-7"))
                 .thenReturn(members);
-        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+        when(chatConversationService.get(areaZeroScope(), "1001"))
                 .thenReturn(conversation("bounty", "task:task-7", "task-7", members));
         for (String member : members) {
             when(agentWebSocketHandler.sendDirectMessageToAgent(
@@ -127,7 +131,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
                     .thenReturn(true);
         }
 
-        JuyitingAgentRelayResult result = service().relay(
+        JuyitingAgentRelayResult result = service().relay(areaZeroScope(),
                 request("bounty", "task-7", members), "1001", Flux::empty);
         List<String> events = result.stream().collectList().block();
 
@@ -139,7 +143,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         }
         ArgumentCaptor<ChatMessageEntity> message = ArgumentCaptor.forClass(ChatMessageEntity.class);
         verify(chatConversationService).appendOwnedMessage(
-                eq("tester"), eq("web-client"), message.capture(), eq(1L));
+                eq(areaZeroScope()), message.capture(), eq(1L));
         assertTrue(message.getValue().getMetadata().contains(
                 "\"participantAgentIds\":[\"agent-wuyong\",\"agent-linchong\"]"));
     }
@@ -153,16 +157,16 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
                 "bounty", "task:task-7", "task-7", List.of("agent-wuyong"));
         legacy.setTargetAgentId(null);
         legacy.setTargetAgentIds(null);
-        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+        when(chatConversationService.get(areaZeroScope(), "1001"))
                 .thenReturn(legacy);
 
-        JuyitingAgentRelayResult result = service().relay(
+        JuyitingAgentRelayResult result = service().relay(areaZeroScope(),
                 request("bounty", "task-7", List.of("agent-wuyong")),
                 "1001", Flux::empty);
 
         assertTrue(result.stream().blockFirst().contains("conversation scope mismatch"));
         verify(chatConversationService, never()).appendOwnedMessage(
-                any(), any(), any(ChatMessageEntity.class),
+                any(UserAdmissionScope.class), any(ChatMessageEntity.class),
                 org.mockito.ArgumentMatchers.anyLong());
     }
 
@@ -172,7 +176,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         List<String> members = List.of("agent-wuyong", "agent-linchong");
         when(agentService.listTaskWritableMemberAgentIds(
                 "tester", "web-client", "task-7")).thenReturn(members);
-        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+        when(chatConversationService.get(areaZeroScope(), "1001"))
                 .thenReturn(conversation("bounty", "task:task-7", "task-7", members));
         for (String member : members) {
             when(agentWebSocketHandler.sendDirectMessageToAgent(
@@ -180,7 +184,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
                     .thenReturn(false);
         }
 
-        JuyitingAgentRelayResult result = service().relay(
+        JuyitingAgentRelayResult result = service().relay(areaZeroScope(),
                 request("bounty", "task-7", members), "1001", Flux::empty);
         List<String> events = result.stream().collectList().block();
 
@@ -191,16 +195,16 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
 
     @Test
     void deletedConversationBeforeRelaySubscriptionCompletesDeliveryOutcomeFalse() {
-        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+        when(chatConversationService.get(areaZeroScope(), "1001"))
                 .thenReturn(conversation("public", "public", null,
                         List.of("agent-wuyong")));
         when(chatConversationService.appendOwnedMessage(
-                eq("tester"), eq("web-client"), any(ChatMessageEntity.class), eq(1L)))
-                .thenAnswer(invocation -> invocation.getArgument(2));
+                eq(areaZeroScope()), any(ChatMessageEntity.class), eq(1L)))
+                .thenAnswer(invocation -> invocation.getArgument(1));
         when(chatConversationService.isLiveGeneration(
-                "tester", "web-client", "1001", 1L)).thenReturn(false);
+                areaZeroScope(), "1001", 1L)).thenReturn(false);
 
-        JuyitingAgentRelayResult result = service().relay(
+        JuyitingAgentRelayResult result = service().relay(areaZeroScope(),
                 request("public", null, List.of("agent-wuyong")),
                 "1001", Flux::empty);
 
@@ -214,30 +218,30 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
     void requestedTargetOutsidePersistedSetIsRejected() {
         when(agentService.listTaskWritableMemberAgentIds("tester", "web-client", "task-7"))
                 .thenReturn(List.of("agent-wuyong", "agent-linchong"));
-        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+        when(chatConversationService.get(areaZeroScope(), "1001"))
                 .thenReturn(conversation("bounty", "task:task-7", "task-7",
                         List.of("agent-wuyong")));
 
-        JuyitingAgentRelayResult result = service().relay(
+        JuyitingAgentRelayResult result = service().relay(areaZeroScope(),
                 request("bounty", "task-7", List.of("agent-linchong")),
                 "1001", Flux::empty);
 
         assertTrue(result.stream().blockFirst().contains("conversation scope mismatch"));
         verify(chatConversationService, never()).appendOwnedMessage(
-                any(), any(), any(ChatMessageEntity.class), org.mockito.ArgumentMatchers.anyLong());
+                any(UserAdmissionScope.class), any(ChatMessageEntity.class), org.mockito.ArgumentMatchers.anyLong());
     }
 
     @Test
     void clientDisposalReleasesRelayEventAndDeletionSubscriptions() {
         stubLiveConversation();
-        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+        when(chatConversationService.get(areaZeroScope(), "1001"))
                 .thenReturn(conversation("public", "public", null,
                         List.of("agent-wuyong")));
         when(agentWebSocketHandler.sendDirectMessageToAgent(
                 eq("tester"), eq("web-client"), eq("agent-wuyong"), any(Map.class)))
                 .thenReturn(true);
 
-        var subscription = service().relay(
+        var subscription = service().relay(areaZeroScope(),
                         request("public", null, List.of("agent-wuyong")),
                         "1001", Flux::empty)
                 .stream().subscribe();
@@ -253,7 +257,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
     @Test
     void deletionCompletesExistingRelaySubscriptionAndReleasesBrokerSubscribers() throws Exception {
         stubLiveConversation();
-        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+        when(chatConversationService.get(areaZeroScope(), "1001"))
                 .thenReturn(conversation("public", "public", null,
                         List.of("agent-wuyong")));
         when(agentWebSocketHandler.sendDirectMessageToAgent(
@@ -261,7 +265,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
                 .thenReturn(true);
         CountDownLatch complete = new CountDownLatch(1);
 
-        var subscription = service().relay(
+        var subscription = service().relay(areaZeroScope(),
                         request("public", null, List.of("agent-wuyong")),
                         "1001", Flux::empty)
                 .stream().subscribe(ignored -> { }, ignored -> { }, complete::countDown);
@@ -281,10 +285,17 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
 
     private void stubLiveConversation() {
         when(chatConversationService.isLiveGeneration(
-                "tester", "web-client", "1001", 1L)).thenReturn(true);
+                areaZeroScope(), "1001", 1L)).thenReturn(true);
         when(chatConversationService.appendOwnedMessage(
-                eq("tester"), eq("web-client"), any(ChatMessageEntity.class), eq(1L)))
-                .thenAnswer(invocation -> invocation.getArgument(2));
+                eq(areaZeroScope()), any(ChatMessageEntity.class), eq(1L)))
+                .thenAnswer(invocation -> invocation.getArgument(1));
+    }
+
+    private UserAdmissionScope areaZeroScope() {
+        return new UserAdmissionScope(
+                new BusinessScope(TenantId.of("0"), DataDomainId.of("cyf"),
+                        "tester", "web-client"),
+                1L, 0L, 0L, 0L, 0L);
     }
 
     private JuyitingAgentRelayService service() {

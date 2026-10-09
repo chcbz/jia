@@ -1,55 +1,48 @@
 package cn.jia.core.mybatis;
 
 /**
- * 租户查询范围统一工具。
- * <p>
- * tenant_id 字段规则：
- * <ul>
- *   <li>默认值为 {@code "0"}，表示公共/无租户划分的数据。</li>
- *   <li>写入时由业务代码显式指定 tenant_id。</li>
- *   <li>查询时，只要 IN（指定 tenantId, "0"），确保公共数据同时可见。</li>
- * </ul>
- * </p>
+ * Tenant query predicates. A business area is always matched exactly: tenant
+ * {@code 0} is an ordinary area, never a public-data fallback.
  *
  * @since 2026-08-01
  */
 public final class TenantScopeHelper {
 
-    /** 默认公共租户标识 */
+    /**
+     * Historical bootstrap tenant value. It remains only so legacy modules can
+     * compile while their explicit migration mode is still LEGACY_CLIENT; it is
+     * never appended as a query fallback by this helper.
+     */
+    @Deprecated(since = "2026-09-23", forRemoval = true)
     public static final String DEFAULT_TENANT = "0";
 
     /**
-     * 生成手写 SQL 的 tenant 范围条件。
-     * 形如 {@code (tenant_id = #{tenantId} OR tenant_id = '0')}。
+     * Generates an exact tenant predicate for handwritten SQL.
      *
      * @param paramName MyBatis 参数名（如 "tenantId"）
      */
     public static String scopeClause(String paramName) {
-        return "(tenant_id = #{" + paramName + "} OR tenant_id = '" + DEFAULT_TENANT + "')";
+        return "tenant_id = #{" + paramName + "}";
     }
 
     /**
-     * 生成带 CAST(BINARY) 精确匹配的 tenant 范围条件。
-     * 形如：
-     * {@code (CAST(tenant_id AS BINARY) = CAST(#{paramName} AS BINARY) OR tenant_id = '0')}
+     * Generates a binary exact tenant predicate for legacy non-binary collations.
      *
      * @param paramName MyBatis 参数名
      * @param width     BINARY 宽度（如 200）
      */
     public static String scopeClauseWithCast(String paramName, int width) {
-        return "(CAST(tenant_id AS BINARY(" + width + ")) = CAST(#{" + paramName
-                + "} AS BINARY(" + width + ")) OR tenant_id = '" + DEFAULT_TENANT + "')";
+        return "CAST(tenant_id AS BINARY(" + width + ")) = CAST(#{" + paramName
+                + "} AS BINARY(" + width + "))";
     }
 
     /**
-     * 生成带 OCTET_LENGTH 精确匹配的 tenant 范围条件。
-     * 形如：
-     * {@code (OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{paramName}) OR tenant_id = '0')}
+     * Generates a length-aware exact tenant predicate.
      *
      * @param paramName MyBatis 参数名
      */
     public static String scopeClauseWithOctet(String paramName) {
-        return "(OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{" + paramName + "}) OR tenant_id = '" + DEFAULT_TENANT + "')";
+        return "tenant_id = #{" + paramName + "} AND OCTET_LENGTH(tenant_id) = OCTET_LENGTH(#{" + paramName + "})";
     }
 
     private TenantScopeHelper() {

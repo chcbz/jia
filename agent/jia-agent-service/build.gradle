@@ -148,9 +148,16 @@ def v1131AcceptanceSourceSet = sourceSets.create('v1131Acceptance') {
         include 'cn/jia/agent/api/PersonalWorkspaceTaskFileLinkControllerTest.java'
         include 'cn/jia/agent/api/PersonalWorkspaceConversationFileLinkControllerTest.java'
         include 'cn/jia/agent/api/PersonalWorkspaceExecutionControllerTest.java'
+        include 'cn/jia/agent/api/AgentTaskFormalDeliveryControllerTest.java'
         include 'cn/jia/agent/api/AgentTaskWorkspaceControllerTest.java'
         include 'cn/jia/agent/api/AgentTaskWorkspaceCacheControlFilterTest.java'
+        include 'cn/jia/agent/api/AgentTaskArtifactControllerTest.java'
+        include 'cn/jia/agent/api/AgentTaskArtifactOutcomeControllerTest.java'
         include 'cn/jia/agent/api/AgentTaskDeliverableControllerTest.java'
+        include 'cn/jia/agent/api/AgentWorkItemPlanControllerTest.java'
+        include 'cn/jia/agent/api/AgentTaskContextPackTenantScopeTest.java'
+        include 'cn/jia/agent/api/AgentControllerTenantScopeTest.java'
+        include 'cn/jia/agent/api/AgentFundedBountyControllerTest.java'
         include 'cn/jia/agent/api/PersonalWorkspaceHttpPersistenceIntegrationTest.java'
         include 'cn/jia/agent/api/PersonalWorkspaceControllerPreviewTest.java'
     }
@@ -338,12 +345,156 @@ tasks.register('juyitingCollaboration', Test) {
     useJUnitPlatform()
 }
 
+// T06 multi-region Agent relay v2 verification slice. The default test source set
+// still contains historical pre-scope fixtures, so compile only the protocol,
+// scheduler and fail-closed configuration contracts changed by this task.
+def tenantRelayV2SourceSet = sourceSets.create('tenantRelayV2') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/config/AgentOutboxRelayConfigurationTest.java'
+        include 'cn/jia/agent/config/AgentRabbitV2ScopedTopologyTest.java'
+        include 'cn/jia/agent/config/AgentRabbitTopologyManifestTest.java'
+        include 'cn/jia/agent/config/AgentOutboxRelayV2SchemaGateTest.java'
+        include 'cn/jia/agent/config/AgentRabbitSafetyConfigurationTest.java'
+        include 'cn/jia/agent/service/impl/AgentOutboxRelaySchedulerTest.java'
+        include 'cn/jia/agent/service/impl/AgentRabbitOutboxPublisherTest.java'
+        include 'cn/jia/agent/service/impl/AgentConfirmedRabbitPublisherImplTest.java'
+        include 'cn/jia/agent/service/impl/AgentCommandRabbitPublisherIntegrationTest.java'
+        include 'cn/jia/agent/service/impl/AgentOutboxRelayScopeFenceTest.java'
+        include 'cn/jia/agent/mapper/AgentOutboxRelayV2MapperContractTest.java'
+        include 'cn/jia/agent/mapper/AgentOutboxRelayV2PersistenceTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(tenantRelayV2SourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(tenantRelayV2SourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('tenantRelayV2', Test) {
+    group = 'verification'
+    description = 'Runs the T06 tenant/domain/pool fenced Agent outbox relay v2 tests.'
+    dependsOn tasks.named(tenantRelayV2SourceSet.classesTaskName)
+    testClassesDirs = tenantRelayV2SourceSet.output.classesDirs
+    classpath = tenantRelayV2SourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
+
+// T06 producer/reissue protocol-v2 slice. Keep this separate from the relay
+// worker tests so producer provenance, transactional writes and recovery fences
+// remain independently auditable.
+def tenantCommandProducerV2SourceSet = sourceSets.create('tenantCommandProducerV2') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/service/impl/AgentCommandProducerV2Test.java'
+        include 'cn/jia/agent/service/impl/AgentCommandDualLaneReissueServiceTest.java'
+        include 'cn/jia/agent/service/impl/AgentCommandDlqRedriverV2AdmissionTest.java'
+        include 'cn/jia/agent/service/impl/AgentCommandRedrivePublishAttemptTest.java'
+        include 'cn/jia/agent/mapper/AgentCommandRecoveryScopedDiscoveryTest.java'
+        include 'cn/jia/agent/config/AgentCommandOperationsConfigurationTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(tenantCommandProducerV2SourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(tenantCommandProducerV2SourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('tenantCommandProducerV2', Test) {
+    group = 'verification'
+    description = 'Runs the T06 protocol-v2 command producer and reissue tests.'
+    dependsOn tasks.named(tenantCommandProducerV2SourceSet.classesTaskName)
+    testClassesDirs = tenantCommandProducerV2SourceSet.output.classesDirs
+    classpath = tenantCommandProducerV2SourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
+
+// T06 protocol-v2 consumer/Inbox slice, including the dedicated scoped Rabbit listener.
+def tenantCommandConsumerV2SourceSet = sourceSets.create('tenantCommandConsumerV2') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/service/impl/AgentCommandRabbitMessageDecoderTest.java'
+        include 'cn/jia/agent/service/impl/AgentCommandRabbitV2MessageDecoderTest.java'
+        include 'cn/jia/agent/service/impl/AgentCommandRabbitV2ConsumerTest.java'
+        include 'cn/jia/agent/service/impl/AgentCommandV2ExecutionPortImplTest.java'
+        include 'cn/jia/agent/security/AgentCommandV2RuntimeAuthorityTest.java'
+        include 'cn/jia/agent/service/impl/AgentCommandInboxV2ScopeFenceTest.java'
+        include 'cn/jia/agent/service/impl/AgentCommandInboxV2StateMachineTest.java'
+        include 'cn/jia/agent/service/impl/AgentCommandInboxV2TransactionTest.java'
+        include 'cn/jia/agent/service/impl/AgentCommandInboxV2ExecutionAdmissionConcurrencyTest.java'
+        include 'cn/jia/agent/mapper/AgentCommandInboxV2ContractTest.java'
+        include 'cn/jia/agent/config/AgentCommandConsumerV2SchemaGateTest.java'
+        include 'cn/jia/agent/config/AgentCommandRabbitV2ListenerConfigurationTest.java'
+        include 'cn/jia/agent/service/impl/AgentCommandRabbitConsumerConfigurationTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(tenantCommandConsumerV2SourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(tenantCommandConsumerV2SourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('tenantCommandConsumerV2', Test) {
+    group = 'verification'
+    description = 'Runs the T06 protocol-v2 command consumer and durable Inbox core tests.'
+    dependsOn tasks.named(tenantCommandConsumerV2SourceSet.classesTaskName)
+    testClassesDirs = tenantCommandConsumerV2SourceSet.output.classesDirs
+    classpath = tenantCommandConsumerV2SourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
+
+// T06 runtime-v2 R2a1 additive persistence only. It is deliberately separate from
+// consumer activation: compiling/running this slice does not enable runtime v2 or execute DDL.
+def runtimeV2PersistenceSourceSet = sourceSets.create('runtimeV2Persistence') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/config/AgentRuntimeV2PersistenceSchemaGateTest.java'
+        include 'cn/jia/agent/config/AgentMysqlCheckCanonicalizerTest.java'
+        include 'cn/jia/agent/mapper/AgentRuntimeV2PersistenceContractTest.java'
+        include 'cn/jia/agent/mapper/AgentRuntimeV2PersistenceMapperTest.java'
+        include 'cn/jia/agent/mapper/AgentRuntimeV2BindingGenerationFactTest.java'
+        include 'cn/jia/agent/mapper/AgentRuntimeV2WirePersistenceTest.java'
+        include 'cn/jia/agent/mapper/AgentRuntimeV2ExecutionCommitTransactionTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(runtimeV2PersistenceSourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(runtimeV2PersistenceSourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('runtimeV2Persistence', Test) {
+    group = 'verification'
+    description = 'Runs T06 R2a1/R2a2 runtime-v2 persistence, wire, lifecycle, schema-gate and scoped MyBatis tests.'
+    dependsOn tasks.named(runtimeV2PersistenceSourceSet.classesTaskName)
+    testClassesDirs = runtimeV2PersistenceSourceSet.output.classesDirs
+    classpath = runtimeV2PersistenceSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
+
 // R2b1 registration/crypto/snapshot/schema slice. Dormant and manual-DDL only.
 def runtimeV2RegistrationSourceSet = sourceSets.create('runtimeV2Registration') {
     java {
         srcDir 'src/test/java'
         include 'cn/jia/agent/entity/AgentRuntimeV2RegistrationContractTest.java'
         include 'cn/jia/agent/entity/AgentRuntimeV2RegistrationAdversarialTest.java'
+        include 'cn/jia/agent/entity/AgentRuntimeV2RegistrationDeltaHashesTest.java'
+        include 'cn/jia/agent/config/AgentRuntimeV2RegistrationTransactionTest.java'
+        include 'cn/jia/agent/config/AgentRuntimeV2PrivateMysqlFixture.java'
+        include 'cn/jia/agent/config/AgentRuntimeV2PrivateMysqlFixtureTest.java'
+        include 'cn/jia/agent/config/AgentRuntimeV2RegistrationDeltaSchemaGateTest.java'
         include 'cn/jia/agent/dao/AgentRuntimeV2RegistrationDaoTest.java'
         include 'cn/jia/agent/config/AgentRuntimeV2RegistrationSchemaGateTest.java'
         include 'cn/jia/agent/mapper/AgentRuntimeV2RegistrationMigrationTest.java'
@@ -364,5 +515,91 @@ tasks.register('runtimeV2Registration', Test) {
     dependsOn tasks.named(runtimeV2RegistrationSourceSet.classesTaskName)
     testClassesDirs = runtimeV2RegistrationSourceSet.output.classesDirs
     classpath = runtimeV2RegistrationSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
+
+tasks.named('check') {
+    dependsOn tasks.named('tenantRelayV2')
+    dependsOn tasks.named('tenantCommandProducerV2')
+    dependsOn tasks.named('tenantCommandConsumerV2')
+}
+
+// R2c real transaction/relay slice. Registration fixture bytecode is reused, not copied or excluded.
+def runtimeV2DispatchSourceSet = sourceSets.create('runtimeV2Dispatch') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/config/AgentRuntimeV2Dispatch*.java'
+        include 'cn/jia/agent/entity/AgentRuntimeV2Dispatch*.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output + runtimeV2RegistrationSourceSet.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(runtimeV2DispatchSourceSet.implementationConfigurationName) { extendsFrom configurations.testImplementation }
+configurations.named(runtimeV2DispatchSourceSet.runtimeOnlyConfigurationName) { extendsFrom configurations.testRuntimeOnly }
+tasks.register('runtimeV2Dispatch', Test) {
+    group = 'verification'
+    description = 'Runs R2c isolated real composite/dispatch/relay transactions; does not enable V2.'
+    dependsOn tasks.named(runtimeV2RegistrationSourceSet.classesTaskName), tasks.named(runtimeV2DispatchSourceSet.classesTaskName)
+    testClassesDirs = runtimeV2DispatchSourceSet.output.classesDirs
+    classpath = runtimeV2DispatchSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
+// Retained legacy suite reaches the real R2c fixture without copying or excluding its old tests.
+tenantCommandConsumerV2SourceSet.compileClasspath += runtimeV2DispatchSourceSet.output
+tenantCommandConsumerV2SourceSet.runtimeClasspath += runtimeV2DispatchSourceSet.output + runtimeV2RegistrationSourceSet.output
+tasks.named(tenantCommandConsumerV2SourceSet.compileJavaTaskName) { dependsOn tasks.named(runtimeV2DispatchSourceSet.classesTaskName) }
+
+// R2d raw execution/holder chain. Reuses existing isolated registration/dispatch fixture bytecode.
+def runtimeV2ExecutionSourceSet = sourceSets.create('runtimeV2Execution') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/entity/AgentRuntimeV2ExecutionCodecTest.java'
+        include 'cn/jia/agent/config/AgentRuntimeV2Execution*.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output + runtimeV2PersistenceSourceSet.output + runtimeV2RegistrationSourceSet.output + runtimeV2DispatchSourceSet.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(runtimeV2ExecutionSourceSet.implementationConfigurationName) { extendsFrom configurations.testImplementation }
+configurations.named(runtimeV2ExecutionSourceSet.runtimeOnlyConfigurationName) { extendsFrom configurations.testRuntimeOnly }
+tasks.register('runtimeV2Execution', Test) {
+    group = 'verification'
+    description = 'Runs dormant R2d strict raw execution, replay, holder, renew and terminal transactions.'
+    dependsOn tasks.named(runtimeV2PersistenceSourceSet.classesTaskName), tasks.named(runtimeV2DispatchSourceSet.classesTaskName), tasks.named(runtimeV2ExecutionSourceSet.classesTaskName)
+    testClassesDirs = runtimeV2ExecutionSourceSet.output.classesDirs
+    classpath = runtimeV2ExecutionSourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
+
+// R4 has a fresh, explicit slice. Earlier fixtures are separately compiled
+// into this build's outputs; no historical artifact/classpath is overwritten
+// or selected by a newest-cache heuristic. Default test debt stays visible.
+def runtimeV2R4SourceSet = sourceSets.create('runtimeV2R4') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/agent/entity/AgentRuntimeV2EffectCodecTest.java'
+        include 'cn/jia/agent/config/AgentRuntimeV2EffectConfigurationTest.java'
+        include 'cn/jia/agent/config/AgentRuntimeV2EffectSchemaGateTest.java'
+        include 'cn/jia/agent/config/AgentRuntimeV2EffectTransactionTest.java'
+        include 'cn/jia/agent/config/AgentRuntimeV2RecoveryAuthorityTest.java'
+        include 'cn/jia/agent/config/AgentRuntimeV2ResourceEffectsTest.java'
+        include 'cn/jia/agent/config/AgentRuntimeV2R4ProductionFixture.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output + runtimeV2PersistenceSourceSet.output + runtimeV2RegistrationSourceSet.output + runtimeV2DispatchSourceSet.output + runtimeV2ExecutionSourceSet.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(runtimeV2R4SourceSet.implementationConfigurationName) { extendsFrom configurations.testImplementation }
+configurations.named(runtimeV2R4SourceSet.runtimeOnlyConfigurationName) { extendsFrom configurations.testRuntimeOnly }
+tasks.named(runtimeV2R4SourceSet.compileJavaTaskName) {
+    dependsOn tasks.named(runtimeV2PersistenceSourceSet.classesTaskName), tasks.named(runtimeV2RegistrationSourceSet.classesTaskName), tasks.named(runtimeV2DispatchSourceSet.classesTaskName), tasks.named(runtimeV2ExecutionSourceSet.classesTaskName)
+}
+tasks.register('runtimeV2R4', Test) {
+    group = 'verification'
+    description = 'Runs isolated R4 effects, recovery, exact graph and actual resource transaction candidates; does not activate V2.'
+    dependsOn tasks.named(runtimeV2R4SourceSet.classesTaskName)
+    testClassesDirs = runtimeV2R4SourceSet.output.classesDirs
+    classpath = runtimeV2R4SourceSet.runtimeClasspath
     useJUnitPlatform()
 }

@@ -9,6 +9,7 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.HashMap;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -36,7 +37,8 @@ class AuthenticationControllerTest {
         assertEquals("alice", identity.username());
         assertEquals("jia-17", identity.jiacn());
         assertEquals(List.of("openid", "write"), identity.scopes());
-        assertEquals(5, OAuthResourceIdentityDTO.class.getRecordComponents().length);
+        assertEquals(13, OAuthResourceIdentityDTO.class.getRecordComponents().length);
+        assertNull(identity.tenantId());
     }
 
     @Test
@@ -50,6 +52,54 @@ class AuthenticationControllerTest {
         assertNull(identity.username());
         assertNull(identity.jiacn());
         assertEquals(List.of(), identity.scopes());
+    }
+
+    @Test
+    void returnsTheCompleteTenantIdentityBundleWithNoStore() {
+        ResponseEntity<OAuthResourceIdentityDTO> response = controller.resource(authenticated(jwt(tenantUserClaims())));
+
+        OAuthResourceIdentityDTO identity = successData(response);
+        assertEquals("1", identity.tenantId());
+        assertEquals("cyf", identity.dataDomainId());
+        assertEquals("华南测试区", identity.tenantName());
+        assertEquals("TEST", identity.tenantKind());
+        assertEquals("3", identity.tenantSessionEpoch());
+        assertEquals("8", identity.membershipRevision());
+        assertEquals("4", identity.clientTenantGrantRevision());
+        assertEquals("https://auth.example", identity.issuer());
+        assertEquals("no-store", response.getHeaders().getFirst("Cache-Control"));
+    }
+
+    @Test
+    void rejectsAPartialOrMalformedTenantIdentityBundle() {
+        assertUnauthorized(jwt(Map.of("sub", "user", "client_id", "web", "tenant_id", "1")));
+        Map<String, Object> missingDomain = tenantUserClaims();
+        missingDomain.remove("data_domain_id");
+        assertUnauthorized(jwt(missingDomain));
+        Map<String, Object> missingIssuer = tenantUserClaims();
+        missingIssuer.remove("iss");
+        assertUnauthorized(jwt(missingIssuer));
+        Map<String, Object> malformedDomain = tenantUserClaims();
+        malformedDomain.put("data_domain_id", "CyF");
+        assertUnauthorized(jwt(malformedDomain));
+        Map<String, Object> machineWithTenant = tenantUserClaims();
+        machineWithTenant.put("token_kind", "machine");
+        assertUnauthorized(jwt(machineWithTenant));
+        Map<String, Object> legacyUserWithTenant = tenantUserClaims();
+        legacyUserWithTenant.remove("token_kind");
+        assertUnauthorized(jwt(legacyUserWithTenant));
+        Map<String, Object> missingUid = tenantUserClaims();
+        missingUid.remove("uid");
+        assertUnauthorized(jwt(missingUid));
+        Map<String, Object> overflowRevision = tenantUserClaims();
+        overflowRevision.put("membership_revision", "9223372036854775808");
+        assertUnauthorized(jwt(overflowRevision));
+        assertUnauthorized(jwt(Map.of("sub", "user", "client_id", "web", "tenant_id", "01",
+                "tenant_name", "test", "tenant_kind", "TEST", "tenant_session_epoch", "1",
+                "membership_revision", "1", "client_tenant_grant_revision", "1")));
+        assertUnauthorized(jwt(Map.of("sub", "user", "client_id", "web", "tenant_id", "1",
+                "tenant_name", "test", "tenant_kind", "OTHER", "tenant_session_epoch", "1",
+                "membership_revision", "1", "client_tenant_grant_revision", "1")));
     }
 
     @Test
@@ -135,6 +185,26 @@ class AuthenticationControllerTest {
                     "client_id", "client",
                     "scope", List.of("openid", malformedScope))));
         }
+    }
+
+    private static Map<String, Object> tenantUserClaims() {
+        Map<String, Object> claims = new HashMap<>();
+        claims.put("sub", "user-17");
+        claims.put("client_id", "public-web");
+        claims.put("token_kind", "user");
+        claims.put("uid", "17");
+        claims.put("jiacn", "jia-17");
+        claims.put("username", "alice");
+        claims.put("auth_epoch", 0L);
+        claims.put("tenant_id", "1");
+        claims.put("data_domain_id", "cyf");
+        claims.put("tenant_name", "华南测试区");
+        claims.put("tenant_kind", "TEST");
+        claims.put("tenant_session_epoch", "3");
+        claims.put("membership_revision", "8");
+        claims.put("client_tenant_grant_revision", "4");
+        claims.put("iss", "https://auth.example");
+        return claims;
     }
 
     private static OAuthResourceIdentityDTO successData(

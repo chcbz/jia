@@ -49,6 +49,9 @@ public final class HostingRentHttp {
         }
         try {
             Map<String, Object> claims = jwt.getToken().getClaims();
+            if (!"0".equals(claims.get("tenant_id")) || !"cyf".equals(claims.get("data_domain_id"))) {
+                throw new IllegalArgumentException("unsupported region or domain");
+            }
             return new Actor(claim(claims, "sub"), "0", claim(claims, "client_id"),
                     claim(claims, "jiacn"));
         } catch (IllegalArgumentException exception) {

@@ -14,7 +14,16 @@ import java.util.List;
  */
 @Data
 public class MemoryDocument {
+    public static final String DOCUMENT_KIND_LIBRARY = "LIBRARY";
+    public static final String DOCUMENT_KIND_CONVERSATION_SUMMARY = "CONVERSATION_SUMMARY";
+    public static final String PUBLICATION_CLASS_DIRECT = "DIRECT";
+    public static final String PUBLICATION_CLASS_MANIFEST = "MANIFEST";
+    public static final String STATE_PUBLISHED = "PUBLISHED";
 
+    private String documentKind;
+    private String publicationClass;
+
+    private String state;
     /**
      * 文档ID (ES auto-generate)
      */
@@ -24,6 +33,18 @@ public class MemoryDocument {
      * 用户标识
      */
     private String jiacn;
+
+    /** Authoritative business area for non-legacy documents. */
+    private String tenantId;
+
+    /** Authoritative business data domain for non-legacy documents. */
+    private String dataDomainId;
+
+    /** Exact legacy client provenance; required in LEGACY_CLIENT mode. */
+    private String clientId;
+
+    /** LEGACY_CLIENT or DOMAIN. */
+    private String scopeMode;
 
     /**
      * 会话ID (会话级摘要时使用)
@@ -84,6 +105,21 @@ public class MemoryDocument {
      * 向量嵌入 (用于相似度检索)
      */
     private float[] embedding;
+
+    /** Monotonic source snapshot version for idempotent conversation summaries. */
+    private Long snapshotVersion;
+
+    /** SHA-256 over lifecycle generation and the complete ordered source message set. */
+    private String snapshotToken;
+
+    /** Conversation lifecycle generation captured by the publication. */
+    private Long lifecycleGeneration;
+
+    /**
+     * SHA-256 over the canonical Elasticsearch payload. The fingerprint field
+     * itself is deliberately excluded from the digest.
+     */
+    private String payloadFingerprint;
 
     /**
      * 相似度分数 (检索时使用)

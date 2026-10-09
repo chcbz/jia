@@ -319,11 +319,17 @@ class PersonalWorkspaceHttpPersistenceIntegrationTest {
     }
 
     private static JwtAuthenticationToken jwt(String owner, String client) {
-        Jwt token = Jwt.withTokenValue("fixture")
+        return jwt(owner, client, "0", "cyf");
+    }
+
+    private static JwtAuthenticationToken jwt(String owner, String client, String tenant, String domain) {
+        Jwt.Builder builder = Jwt.withTokenValue("fixture")
                 .header("alg", "none")
                 .claim("jiacn", owner)
-                .claim("client_id", client)
-                .build();
+                .claim("client_id", client);
+        if (tenant != null) builder.claim("tenant_id", tenant);
+        if (domain != null) builder.claim("data_domain_id", domain);
+        Jwt token = builder.build();
         return new JwtAuthenticationToken(token, List.of());
     }
 

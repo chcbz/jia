@@ -4,6 +4,7 @@ import cn.jia.agent.entity.*;
 import cn.jia.agent.hosting.HostingRentHttp;
 import cn.jia.agent.service.AgentManagedSessionLookup;
 import cn.jia.agent.service.impl.AgentCommandCanonicalCodec;
+import cn.jia.agent.service.impl.AgentCommandProtocolSupport;
 import cn.jia.economy.mapper.*;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
@@ -52,7 +53,8 @@ public final class SkillInstallDispatchService {
                     && ownerJiacn.equals(draft.ownerJiacn()) && commandId.equals(draft.commandId())
                     && order.equals(draft.taskId()) && agent.equals(draft.targetAgentId())
                     && Arrays.equals(AgentCommandCanonicalCodec.sha256(d.getCommandPayload()),d.getCommandPayloadHash())
-                    && Arrays.equals(wire,AgentCommandCanonicalCodec.wireBytes(draft,d.getActiveMessageId(),d.getActiveAttempt())),403,"SKILL_DELIVERY_FENCED");
+                    && Arrays.equals(wire,AgentCommandProtocolSupport.wireBytes(
+                            draft,d.getActiveMessageId(),d.getActiveAttempt(),d)),403,"SKILL_DELIVERY_FENCED");
             return new Proof(key,registrationHash(runtimes.findByAgentIdForUpdate(agent)));
         });
         return sessions.getObject().dispatch(tenant,client,agent,proof.key(),proof.registration(),wire);

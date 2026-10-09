@@ -21,6 +21,100 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AgentRuntimeV2PersistenceSchemaGateTest {
+    @Test void generatedMetadataFormattingPassesEveryColumnContractBranchWithoutMutatingRawRecords() throws Exception {
+        Map<String,String> retained = retainedGeneratedFields();
+        for (String branch : List.of("base", "registration", "execution")) {
+            for (String shape : List.of("expected", "plain", "retained")) {
+                FakeCatalog catalog = branch.equals("base") ? canonical() : registrationCanonical();
+                if (branch.equals("execution")) {
+                    catalog.columns.put(AgentRuntimeV2PersistenceSchemaGate.REQUEST, new ArrayList<>(
+                            AgentRuntimeV2PersistenceSchemaGate.executionExtendedColumns().get(AgentRuntimeV2PersistenceSchemaGate.REQUEST)));
+                    catalog.checks.get(AgentRuntimeV2PersistenceSchemaGate.REQUEST).put("chk_execution_request_raw",
+                            enforced(AgentRuntimeV2ExecutionSchemaGate.checkClause()));
+                }
+                if (!shape.equals("expected")) catalog.columns.forEach((table, columns) -> columns.replaceAll(c -> {
+                    if (c.generationExpression().isEmpty()) return c;
+                    String plain = "(" + c.generationExpression().replace("octet_length(", "length(") + ")";
+                    String expression = shape.equals("retained") && table.equals(AgentRuntimeV2PersistenceSchemaGate.BINDING)
+                            ? retained.getOrDefault(c.name(), plain) : plain;
+                    return generated(c, expression);
+                }));
+                Map<String,List<AgentRuntimeV2PersistenceSchemaGate.ColumnDefinition>> before = copyColumns(catalog.columns);
+                var expectedBefore = AgentRuntimeV2PersistenceSchemaGate.registrationExtendedColumns();
+                assertDoesNotThrow(() -> new AgentRuntimeV2PersistenceSchemaGate(catalog).afterPropertiesSet(), branch + ":" + shape);
+                assertEquals(before, catalog.columns, "comparison must retain raw catalog records");
+                assertEquals(expectedBefore, AgentRuntimeV2PersistenceSchemaGate.registrationExtendedColumns(),
+                        "comparison must retain exact raw expected contract literals");
+                assertTrue(catalog.columns.values().stream().flatMap(List::stream)
+                        .noneMatch(c -> c.generationExpression().startsWith("generated:")));
+            }
+        }
+    }
+
+    @Test void generatedMeaningMalformedAndEveryNonExpressionAttributeDriftStillFailsTheGate() {
+        String name = "live_business_subject";
+        var original = AgentRuntimeV2PersistenceSchemaGate.registrationExtendedColumns().get(AgentRuntimeV2PersistenceSchemaGate.BINDING)
+                .stream().filter(c -> c.name().equals(name)).findFirst().orElseThrow();
+        String raw = original.generationExpression();
+        for (String expression : List.of(raw.replace("'REVOKED'", "'revoked'"), raw.replace("`status`", "`STATUS`"),
+                raw.replace("octet_length", "char_length"), raw.replace("sha2", "hex"),
+                raw.replace(",256)", ",224)"), raw.replace(",3,", ",4,"),
+                raw.replace("`tenant_id`", "`client_id`"),
+                raw.replace("`registration_subject_sha256` is not null", "`registration_subject_sha256` is null"),
+                raw.replace(" and (`registration_subject_sha256` is not null)", ""),
+                raw.replace("else NULL", "else 'REVOKED'"), raw + ";", "generated:" + raw,
+                "case when x=1 then x end", "if(x=1,1,null)", "")) {
+            assertNotEquals(raw, expression);
+            FakeCatalog changed = registrationCanonical();
+            replaceColumn(changed.columns.get(AgentRuntimeV2PersistenceSchemaGate.BINDING), name, c -> generated(c, expression));
+            assertDenied(changed);
+        }
+        for (String field : List.of("name", "dataType", "columnType", "nullable", "default", "collation", "extra")) {
+            FakeCatalog changed = registrationCanonical();
+            replaceColumn(changed.columns.get(AgentRuntimeV2PersistenceSchemaGate.BINDING), name,
+                    c -> new AgentRuntimeV2PersistenceSchemaGate.ColumnDefinition(
+                            field.equals("name") ? "forged" : c.name(), field.equals("dataType") ? "varchar" : c.dataType(),
+                            field.equals("columnType") ? "char(63)" : c.columnType(), field.equals("nullable") ? !c.nullable() : c.nullable(),
+                            field.equals("default") ? "forged" : c.defaultValue(), field.equals("collation") ? "utf8mb4_0900_ai_ci" : c.collation(),
+                            field.equals("extra") ? "VIRTUAL GENERATED" : c.extra(), c.generationExpression()));
+            assertDenied(changed);
+        }
+    }
+
+    @Test void generatedColumnNormalizationDoesNotRelaxCountOrderOrDuplicateRules() {
+        for (String mutation : List.of("missing", "extra", "reordered", "duplicate")) {
+            FakeCatalog catalog = registrationCanonical();
+            var columns = catalog.columns.get(AgentRuntimeV2PersistenceSchemaGate.BINDING);
+            switch (mutation) {
+                case "missing" -> columns.remove(8);
+                case "extra" -> columns.add(columns.get(8));
+                case "reordered" -> java.util.Collections.swap(columns, 8, 9);
+                default -> columns.set(9, columns.get(8));
+            }
+            assertDenied(catalog);
+        }
+    }
+
+    private static AgentRuntimeV2PersistenceSchemaGate.ColumnDefinition generated(
+            AgentRuntimeV2PersistenceSchemaGate.ColumnDefinition c, String expression) {
+        return new AgentRuntimeV2PersistenceSchemaGate.ColumnDefinition(c.name(), c.dataType(), c.columnType(),
+                c.nullable(), c.defaultValue(), c.collation(), c.extra(), expression);
+    }
+    private static Map<String,String> retainedGeneratedFields() throws Exception {
+        try (var stream = AgentRuntimeV2PersistenceSchemaGateTest.class.getResourceAsStream("runtime-v2-generated-columns-native-20261008.tsv")) {
+            assertNotNull(stream);
+            Map<String,String> result = new LinkedHashMap<>();
+            for (String line : new String(stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8).lines()
+                    .filter(s -> !s.startsWith("#") && !s.isBlank()).toList()) {
+                String[] fields = line.split("\t", -1); assertEquals(3, fields.length);
+                assertEquals(fields[1], java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                        .digest(fields[2].getBytes(java.nio.charset.StandardCharsets.UTF_8))));
+                assertEquals(null, result.put(fields[0], fields[2]));
+            }
+            assertEquals(2, result.size()); return result;
+        }
+    }
+
     private static final String SCOPE = """
             (((protocol_version IS NULL OR protocol_version = 1) AND tenant_id = '0'
               AND data_domain_id IS NULL AND execution_pool_id IS NULL AND admission_epoch IS NULL
@@ -40,7 +134,7 @@ class AgentRuntimeV2PersistenceSchemaGateTest {
               AND ack_message_id IS NULL AND ack_status IS NULL AND ack_at IS NULL
               AND ack_agent_id IS NULL AND ack_runtime_installation_id IS NULL
               AND ack_runtime_instance_id IS NULL)
-             OR (protocol_version = 2
+             OR (protocol_version IS NOT NULL AND protocol_version = 2
               AND ((attempt_count = 0 AND active_attempt = 0 AND status = 'EXPIRED'
                     AND claim_delivery_version IS NULL AND claim_inbox_version IS NULL
                     AND claim_started_at IS NULL)
@@ -65,6 +159,39 @@ class AgentRuntimeV2PersistenceSchemaGateTest {
                     AND ack_runtime_instance_id IS NOT NULL
                     AND OCTET_LENGTH(ack_runtime_instance_id) BETWEEN 1 AND 100))))
             """;
+
+    @Test
+    void guardedRuntimeAckMatchesOriginalSourceAndMissingGuardFailsBothGates() throws Exception {
+        String sql = Files.readString(Path.of(System.getProperty("user.dir"), "..", "jia-agent-mapper",
+                "src", "main", "resources", "db", "agent-runtime-v2-persistence-manual-20260930.sql").normalize());
+        String source = checkClause(sql, AgentCommandConsumerV2SchemaGate.ACK_EVIDENCE_CHECK);
+        assertTrue(AgentCommandConsumerV2SchemaGate.isCanonicalRuntimeAckEvidenceCheck(source));
+        assertEquals(AgentMysqlCheckCanonicalizer.canonicalCheck(ACK),
+                AgentMysqlCheckCanonicalizer.canonicalCheck(source));
+        String missingGuard = source.replace("protocol_version IS NOT NULL AND protocol_version = 2", "protocol_version = 2");
+        assertNotEquals(source, missingGuard);
+        assertTrue(!AgentCommandConsumerV2SchemaGate.isCanonicalRuntimeAckEvidenceCheck(missingGuard));
+        FakeCatalog catalog = canonical();
+        catalog.checks.get(AgentRuntimeV2PersistenceSchemaGate.INBOX)
+                .put(AgentCommandConsumerV2SchemaGate.ACK_EVIDENCE_CHECK, enforced(missingGuard));
+        assertDenied(catalog);
+        assertThrows(IllegalStateException.class,
+                () -> new AgentCommandConsumerV2SchemaGate(catalog.consumerView()).afterPropertiesSet());
+    }
+
+    @Test
+    void catalogRepresentationsPreserveRuntimeAndGeneratedExpressionContracts() {
+        FakeCatalog catalog = registrationCanonical();
+        catalog.checks.values().forEach(checks -> checks.replaceAll((name, old) ->
+                enforced(old.clause().replace("OCTET_LENGTH(", "LENGTH(")
+                        .replaceAll("'([^']*)'", "_utf8mb4\\\\'$1\\\\'"))));
+        assertDoesNotThrow(() -> new AgentRuntimeV2PersistenceSchemaGate(catalog).afterPropertiesSet());
+        assertEquals("", AgentRuntimeV2PersistenceSchemaGate.canonicalCheck(null));
+        assertEquals("", AgentRuntimeV2PersistenceSchemaGate.canonicalCheck(" "));
+        assertThrows(IllegalArgumentException.class, () -> AgentMysqlCheckCanonicalizer.canonicalCheck(" "));
+        assertNotEquals(AgentRuntimeV2PersistenceSchemaGate.canonicalCheck("CAST(a AS BINARY)=CAST(b AS BINARY)"),
+                AgentRuntimeV2PersistenceSchemaGate.canonicalCheck("a=b"));
+    }
 
     @Test
     void acceptsExactRuntimeCatalogAndLegacyConsumerGateAlsoAcceptsExtension() {
@@ -133,6 +260,26 @@ class AgentRuntimeV2PersistenceSchemaGateTest {
         assertNotEquals(
                 AgentRuntimeV2PersistenceSchemaGate.canonicalCheck("status='A  B'"),
                 AgentRuntimeV2PersistenceSchemaGate.canonicalCheck("status='A B'"));
+    }
+
+    @Test
+    void acceptsOnlyExactThreeColumnExecutionExtensionAndExactEnforcedCheck() {
+        for (String mutation : List.of("none", "missing", "type", "order", "extra", "check", "unenforced", "extra-check")) {
+            var catalog = registrationCanonical();
+            var columns = new ArrayList<>(AgentRuntimeV2PersistenceSchemaGate.executionExtendedColumns()
+                    .get(AgentRuntimeV2PersistenceSchemaGate.REQUEST));
+            if (mutation.equals("missing")) columns.removeLast();
+            if (mutation.equals("order")) java.util.Collections.swap(columns, columns.size()-1, columns.size()-2);
+            if (mutation.equals("type")) {var old = columns.getLast();columns.set(columns.size()-1,
+                    new AgentRuntimeV2PersistenceSchemaGate.ColumnDefinition(old.name(), "binary", "binary(16)", old.nullable(), old.defaultValue(), old.collation(), old.extra(), old.generationExpression()));}
+            if (mutation.equals("extra")) columns.add(columns.getLast());
+            catalog.columns.put(AgentRuntimeV2PersistenceSchemaGate.REQUEST, columns);
+            catalog.checks.get(AgentRuntimeV2PersistenceSchemaGate.REQUEST).put("chk_execution_request_raw",
+                    new AgentRuntimeV2PersistenceSchemaGate.CheckDefinition(mutation.equals("check") ? "1=1" : AgentRuntimeV2ExecutionSchemaGate.checkClause(), !mutation.equals("unenforced")));
+            if (mutation.equals("extra-check")) catalog.checks.get(AgentRuntimeV2PersistenceSchemaGate.REQUEST).put("extra", enforced("1=1"));
+            if (mutation.equals("none")) assertDoesNotThrow(() -> new AgentRuntimeV2PersistenceSchemaGate(catalog).afterPropertiesSet());
+            else assertDenied(catalog);
+        }
     }
 
     @Test
@@ -525,7 +672,7 @@ class AgentRuntimeV2PersistenceSchemaGateTest {
         return catalog;
     }
 
-    private static FakeCatalog registrationCanonical() {
+    static FakeCatalog registrationCanonical() {
         FakeCatalog catalog = canonical();
         catalog.columns.clear();
         catalog.columns.putAll(copyColumns(AgentRuntimeV2PersistenceSchemaGate.registrationExtendedColumns()));
@@ -580,7 +727,7 @@ class AgentRuntimeV2PersistenceSchemaGateTest {
         source.forEach((k,v)->copy.put(k,new LinkedHashMap<>(v))); return copy;
     }
 
-    private static final class FakeCatalog implements AgentRuntimeV2PersistenceSchemaGate.Catalog {
+    static final class FakeCatalog implements AgentRuntimeV2PersistenceSchemaGate.Catalog {
         String product="MySQL"; int reads; final List<String> tableNames=new ArrayList<>();
         final Map<String,AgentRuntimeV2PersistenceSchemaGate.TableDefinition> tables=new LinkedHashMap<>();
         final Map<String,List<AgentRuntimeV2PersistenceSchemaGate.ColumnDefinition>> columns=new LinkedHashMap<>();

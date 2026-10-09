@@ -9,7 +9,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 @Configuration(proxyBeanMethods = false)
 public class AgentCommandTransportSchemaConfiguration {
     @Bean
-    @Conditional(AgentCommandOutboxEnabledCondition.class)
+    @Conditional(AgentCommandLegacyTransportSchemaEnabledCondition.class)
     public AgentCommandTransportSchemaInitializer agentCommandTransportSchemaInitializer(
             JdbcTemplate jdbcTemplate) {
         return new AgentCommandTransportSchemaInitializer(jdbcTemplate);

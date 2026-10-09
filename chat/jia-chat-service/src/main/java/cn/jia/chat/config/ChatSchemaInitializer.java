@@ -7,6 +7,7 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
+import org.springframework.context.annotation.Profile;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -19,6 +20,7 @@ import java.util.Map;
 
 @Slf4j
 @Component
+@Profile("!local-test-area")
 @RequiredArgsConstructor
 public class ChatSchemaInitializer implements ApplicationRunner {
     private final JdbcTemplate jdbcTemplate;

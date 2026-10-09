@@ -175,7 +175,11 @@ public class PersonalWorkspaceController {
     private PersonalWorkspaceService.Scope scope(Authentication authentication) {
         if(authentication==null||!authentication.isAuthenticated()||!(authentication instanceof JwtAuthenticationToken jwt)) throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);
         Map<String,Object> claims=jwt.getToken().getClaims(); Object owner=claims.get("jiacn"),client=claims.get("client_id");
+        if (!"0".equals(claims.get("tenant_id")) || !"cyf".equals(claims.get("data_domain_id")))
+            throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);
         if(!(owner instanceof String o)||!(client instanceof String c)||!valid(o,50)||!valid(c,50)||"0".equals(o)) throw new PersonalWorkspaceException(PersonalWorkspaceException.Reason.NOT_FOUND);
+        // This legacy file store has no domain column and must not reinterpret
+        // an authorized token from another area or product as tenant 0.
         return new PersonalWorkspaceService.Scope("0",c,o);
     }
     private PersonalWorkspaceService.UploadCommand upload(MultipartFile file,String displayName,String key) throws IOException {

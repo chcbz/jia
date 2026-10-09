@@ -111,13 +111,17 @@ public class AgentTaskWorkspaceController {
             throw new WorkspaceAuthenticationException(false);
         }
         Map<String, Object> claims = jwt.getToken().getClaims();
-        Object jiacn = claims.get("jiacn");
-        Object clientId = claims.get("client_id");
-        if (!(jiacn instanceof String tenant) || !(clientId instanceof String client)
-                || !validExact(tenant, 50) || !validExact(client, 50)) {
+        if (!"0".equals(claims.get("tenant_id")) || !"cyf".equals(claims.get("data_domain_id"))) {
             throw new WorkspaceAuthenticationException(true);
         }
-        return new Scope(tenant, client);
+        Object jiacn = claims.get("jiacn");
+        Object clientId = claims.get("client_id");
+        if (!(jiacn instanceof String ownerJiacn) || !(clientId instanceof String client)
+                || !validExact(ownerJiacn, 50) || !validExact(client, 50)) {
+            throw new WorkspaceAuthenticationException(true);
+        }
+        // This workspace snapshot is still a tenant-0 / client-scoped legacy read.
+        return new Scope(ownerJiacn, client);
     }
 
     private static String singleRequiredQuery(

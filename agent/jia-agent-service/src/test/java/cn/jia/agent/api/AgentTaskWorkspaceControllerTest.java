@@ -130,6 +130,23 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
     }
 
     @Test
+    void regionOneAndOtherDomainsCannotReadLegacyRegionZeroTaskWorkspace() throws Exception {
+        for (JwtAuthenticationToken principal : List.of(
+                authenticate("tenant-a", "client-a", "1", "cyf"),
+                authenticate("tenant-a", "client-a", "00", "cyf"),
+                authenticate("tenant-a", "client-a", "0", "other"),
+                authenticate("tenant-a", "client-a", null, "cyf"),
+                authenticate("tenant-a", "client-a", "0", null))) {
+            mvc.perform(get("/agent/tasks/{taskId}/workspace", TASK)
+                            .queryParam("actorAgentId", ACTOR).principal(principal))
+                    .andExpect(status().isForbidden())
+                    .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
+                    .andExpect(jsonPath("$.code").value("WORKSPACE_FORBIDDEN"));
+        }
+        verifyNoInteractions(taskEventsGate, service);
+    }
+
+    @Test
     void disabledGateReturnsNoStore503BeforeWorkspaceServiceAllocation() throws Exception {
         when(taskEventsGate.allows("0", "client-a")).thenReturn(false);
 
@@ -331,11 +348,19 @@ class AgentTaskWorkspaceControllerTest extends BaseMockTest {
     }
 
     private static JwtAuthenticationToken authenticate(String jiacn, String clientId) {
-        Jwt jwt = Jwt.withTokenValue("token")
+        return authenticate(jiacn, clientId, "0", "cyf");
+    }
+
+    private static JwtAuthenticationToken authenticate(String jiacn, String clientId,
+            String tenantId, String dataDomainId) {
+        Jwt.Builder builder = Jwt.withTokenValue("token")
                 .header("alg", "none")
                 .claim("jiacn", jiacn)
                 .claim("client_id", clientId)
-                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();
+                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60));
+        if (tenantId != null) builder.claim("tenant_id", tenantId);
+        if (dataDomainId != null) builder.claim("data_domain_id", dataDomainId);
+        Jwt jwt = builder.build();
         JwtAuthenticationToken authentication = new JwtAuthenticationToken(jwt, List.of());
         SecurityContextHolder.getContext().setAuthentication(authentication);
         return authentication;

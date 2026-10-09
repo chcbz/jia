@@ -70,7 +70,10 @@ public final class AgentRuntimeV2RegistrationSchemaGate implements InitializingB
     private static void validateColumns(String table, List<ColumnDefinition> actual) {
         List<ColumnDefinition> expected = expectedColumns().get(table);
         if (NEW_TABLES.contains(table)) {
-            if (!expected.equals(actual)) throw invalid(table + " column contract drift");
+            if (expected.size() != actual.size()) throw invalid(table + " column contract drift");
+            for (int i = 0; i < expected.size(); i++) {
+                if (!columnMatches(expected.get(i), actual.get(i))) throw invalid(table + " column contract drift");
+            }
             return;
         }
         Map<String, ColumnDefinition> byName = new LinkedHashMap<>();
@@ -79,11 +82,23 @@ public final class AgentRuntimeV2RegistrationSchemaGate implements InitializingB
         }
         List<String> positions = new ArrayList<>();
         for (ColumnDefinition column : expected) {
-            if (!column.equals(byName.get(column.name()))) throw invalid(table + " additive column drift: " + column.name());
+            if (!columnMatches(column, byName.get(column.name()))) throw invalid(table + " additive column drift: " + column.name());
             positions.add(column.name());
         }
         List<String> actualOrder = actual.stream().map(ColumnDefinition::name).filter(positions::contains).toList();
         if (!actualOrder.equals(positions)) throw invalid(table + " additive column order drift");
+    }
+
+    private static boolean columnMatches(ColumnDefinition expected, ColumnDefinition actual) {
+        return actual != null && Objects.equals(expected.name(), actual.name())
+                && Objects.equals(expected.dataType(), actual.dataType())
+                && Objects.equals(expected.columnType(), actual.columnType())
+                && expected.nullable() == actual.nullable()
+                && Objects.equals(expected.defaultValue(), actual.defaultValue())
+                && Objects.equals(expected.collation(), actual.collation())
+                && Objects.equals(expected.extra(), actual.extra())
+                && AgentRuntimeV2PersistenceSchemaGate.sameGeneratedExpression(
+                        expected.generationExpression(), actual.generationExpression());
     }
 
     private static void validateIndexes(String table, Map<String, IndexDefinition> actual) {

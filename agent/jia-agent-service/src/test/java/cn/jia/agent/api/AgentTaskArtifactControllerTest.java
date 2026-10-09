@@ -120,6 +120,27 @@ class AgentTaskArtifactControllerTest {
     }
 
     @Test
+    void otherAreaDomainOrMissingBindingCannotPublishOrDownloadLegacyArtifacts() throws Exception {
+        for (JwtAuthenticationToken principal : List.of(
+                jwt("tenant-a", "client-a", "1", "cyf"),
+                jwt("tenant-a", "client-a", "00", "cyf"),
+                jwt("tenant-a", "client-a", "0", "other"),
+                jwt("tenant-a", "client-a", null, "cyf"),
+                jwt("tenant-a", "client-a", "0", null))) {
+            mvc.perform(post("/agent/tasks/{taskId}/artifacts", TASK)
+                            .queryParam("actorAgentId", ACTOR)
+                            .contentType(MediaType.APPLICATION_JSON).content(publishBody())
+                            .principal(principal))
+                    .andExpect(status().isForbidden())
+                    .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
+            mvc.perform(get("/agent/tasks/{taskId}/artifacts/{artifactId}/versions/1/content",
+                            TASK, ARTIFACT).queryParam("actorAgentId", ACTOR).principal(principal))
+                    .andExpect(status().isForbidden());
+        }
+        verifyNoInteractions(artifactService, contentService);
+    }
+
+    @Test
     void allStorageDigestProducerAndInlineOverrideFieldsAreRejected() throws Exception {
         for (String protectedField : List.of(
                 "\"producerAgentId\":\"attacker\"",
@@ -404,9 +425,16 @@ class AgentTaskArtifactControllerTest {
     }
 
     private JwtAuthenticationToken jwt(String tenant, String client) {
-        Jwt jwt = Jwt.withTokenValue("token").header("alg", "none")
-                .claim("jiacn", tenant).claim("client_id", client)
-                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();
+        return jwt(tenant, client, "0", "cyf");
+    }
+
+    private JwtAuthenticationToken jwt(String owner, String client, String tenantId, String domainId) {
+        Jwt.Builder builder = Jwt.withTokenValue("token").header("alg", "none")
+                .claim("jiacn", owner).claim("client_id", client)
+                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60));
+        if (tenantId != null) builder.claim("tenant_id", tenantId);
+        if (domainId != null) builder.claim("data_domain_id", domainId);
+        Jwt jwt = builder.build();
         return new JwtAuthenticationToken(jwt, List.of());
     }
 

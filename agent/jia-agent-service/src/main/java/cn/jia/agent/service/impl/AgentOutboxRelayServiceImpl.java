@@ -6,6 +6,8 @@ import cn.jia.agent.config.AgentRabbitActivationState;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.config.AgentRabbitTopologyManifest;
 import cn.jia.agent.config.AgentRabbitTopologyReadiness;
+import cn.jia.agent.config.AgentRabbitV2TopologyManifest;
+import cn.jia.agent.config.AgentRabbitV2TopologyReadiness;
 import cn.jia.agent.dao.AgentOutboxRelayDao;
 import cn.jia.agent.entity.AgentCommandDeliveryEntity;
 import cn.jia.agent.entity.AgentConfirmedPublishRequest;
@@ -16,6 +18,8 @@ import cn.jia.agent.entity.AgentOutboxEventEntity;
 import cn.jia.agent.entity.AgentRabbitPublishResult;
 import cn.jia.agent.entity.AgentOutboxSettleResult;
 import cn.jia.agent.service.AgentOutboxRelayService;
+import cn.jia.core.tenant.TenantModuleAdmissionGuard;
+import cn.jia.core.tenant.WorkerScope;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -48,10 +52,44 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
     private final AgentRabbitSafetyGate gate;
     private final AgentRabbitTopologyManifest manifest;
     private final AgentRabbitTopologyReadiness readiness;
+    private final AgentRabbitV2TopologyReadiness v2Readiness;
     private final AgentOutboxRelaySettings settings;
+    private final TenantModuleAdmissionGuard admissionGuard;
     private final TransactionTemplate claimTransaction;
     private final TransactionTemplate settleTransaction;
 
+    public AgentOutboxRelayServiceImpl(
+            AgentOutboxRelayDao dao,
+            AgentRabbitSafetyGate gate,
+            AgentRabbitTopologyManifest manifest,
+            AgentRabbitTopologyReadiness readiness,
+            AgentOutboxRelaySettings settings,
+            TenantModuleAdmissionGuard admissionGuard,
+            PlatformTransactionManager transactionManager) {
+        this(dao, gate, manifest, readiness, new AgentRabbitV2TopologyReadiness(),
+                settings, admissionGuard, transactionManager);
+    }
+
+    public AgentOutboxRelayServiceImpl(
+            AgentOutboxRelayDao dao, AgentRabbitSafetyGate gate,
+            AgentRabbitTopologyManifest manifest, AgentRabbitTopologyReadiness readiness,
+            AgentRabbitV2TopologyReadiness v2Readiness, AgentOutboxRelaySettings settings,
+            TenantModuleAdmissionGuard admissionGuard,
+            PlatformTransactionManager transactionManager) {
+        this.dao = Objects.requireNonNull(dao, "dao");
+        this.gate = Objects.requireNonNull(gate, "gate");
+        this.manifest = Objects.requireNonNull(manifest, "manifest");
+        this.readiness = Objects.requireNonNull(readiness, "readiness");
+        this.v2Readiness = Objects.requireNonNull(v2Readiness, "v2Readiness");
+        this.settings = Objects.requireNonNull(settings, "settings");
+        this.admissionGuard = Objects.requireNonNull(admissionGuard, "admissionGuard");
+        Objects.requireNonNull(transactionManager, "transactionManager");
+        claimTransaction = requiresNew(transactionManager);
+        settleTransaction = requiresNew(transactionManager);
+    }
+
+    /** Legacy construction is retained only to keep historical fixtures compilable. */
+    @Deprecated
     public AgentOutboxRelayServiceImpl(
             AgentOutboxRelayDao dao,
             AgentRabbitSafetyGate gate,
@@ -63,15 +101,17 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
         this.gate = Objects.requireNonNull(gate, "gate");
         this.manifest = Objects.requireNonNull(manifest, "manifest");
         this.readiness = Objects.requireNonNull(readiness, "readiness");
+        this.v2Readiness = new AgentRabbitV2TopologyReadiness();
         this.settings = Objects.requireNonNull(settings, "settings");
+        this.admissionGuard = null;
         Objects.requireNonNull(transactionManager, "transactionManager");
         claimTransaction = requiresNew(transactionManager);
         settleTransaction = requiresNew(transactionManager);
     }
 
     @Override
-    public List<AgentOutboxCandidate> discover(long now, int requested) {
-        if (!globallyPublishable() || requested <= 0) {
+    public List<AgentOutboxCandidate> discover(WorkerScope scope, long now, int requested) {
+        if (scope == null || admissionGuard == null || !globallyPublishable(scope) || requested <= 0) {
             return List.of();
         }
         int limit = settings.discoveryLimit(requested);
@@ -79,20 +119,20 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
             return List.of();
         }
         int corruptionLimit = Math.min(requested, settings.batchSize());
-        List<AgentOutboxCandidate> corrupt = dao.selectCorruptCandidates(now, corruptionLimit);
+        List<AgentOutboxCandidate> corrupt = dao.selectCorruptCandidates(scope, now, corruptionLimit);
         if (corrupt != null) {
             Set<Long> quarantined = new HashSet<>();
             for (AgentOutboxCandidate candidate : corrupt) {
                 if (candidate != null && candidate.outboxId() > 0
                         && quarantined.add(candidate.outboxId())) {
-                    quarantineCandidate(candidate, now);
+                    quarantineCandidate(scope, candidate, now);
                 }
             }
         }
 
         List<AgentOutboxCandidate> merged = new ArrayList<>(limit * 2);
-        List<AgentOutboxCandidate> due = dao.selectDueCandidates(now, limit);
-        List<AgentOutboxCandidate> stale = dao.selectStaleCandidates(now, limit);
+        List<AgentOutboxCandidate> due = dao.selectDueCandidates(scope, now, limit);
+        List<AgentOutboxCandidate> stale = dao.selectStaleCandidates(scope, now, limit);
         if (due != null) merged.addAll(due.stream().filter(Objects::nonNull).toList());
         if (stale != null) merged.addAll(stale.stream().filter(Objects::nonNull).toList());
         merged.sort(Comparator.comparingLong(AgentOutboxCandidate::eligibleAt)
@@ -101,8 +141,8 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
         List<AgentOutboxCandidate> result = new ArrayList<>(limit);
         for (AgentOutboxCandidate candidate : merged) {
             if (!seen.add(candidate.outboxId())) continue;
-            if (!validCandidateHint(candidate)) {
-                quarantineCandidate(candidate, now);
+            if (!validCandidateHint(scope, candidate)) {
+                quarantineCandidate(scope, candidate, now);
                 continue;
             }
             result.add(candidate);
@@ -113,46 +153,50 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
 
     @Override
     public AgentOutboxClaim claim(
-            AgentOutboxCandidate candidate, String leaseOwner, long now) {
-        if (!globallyPublishable()) {
+            WorkerScope scope, AgentOutboxCandidate candidate, String leaseOwner, long now) {
+        if (scope == null || admissionGuard == null || !globallyPublishable(scope)) {
             return AgentOutboxClaim.disabled();
         }
         if (candidate == null || candidate.outboxId() <= 0
-                || !validExact(leaseOwner, 100) || now <= 0) {
+                || !validLeaseOwner(scope, leaseOwner) || now <= 0) {
             return AgentOutboxClaim.skipped();
         }
-        if (!validCandidateHint(candidate)) {
-            quarantineCandidate(candidate, now);
+        if (!validCandidateHint(scope, candidate)) {
+            quarantineCandidate(scope, candidate, now);
             return AgentOutboxClaim.skipped();
         }
         AgentOutboxClaim result = claimTransaction.execute(
-                ignored -> claimInTransaction(candidate, leaseOwner, now));
+                ignored -> admissionGuard.withWorkerAdmission(scope,
+                        TenantModuleAdmissionGuard.WorkerOperation.CLAIM,
+                        mode -> claimInTransaction(scope, candidate, leaseOwner, now)));
         return result == null ? AgentOutboxClaim.skipped() : result;
     }
 
     @Override
     public AgentOutboxSettleResult settle(
-            AgentOutboxClaimToken token, AgentRabbitPublishResult result, long now) {
-        if (token == null || result == null || now <= 0) {
+            WorkerScope scope, AgentOutboxClaimToken token, AgentRabbitPublishResult result, long now) {
+        if (scope == null || admissionGuard == null || token == null || result == null || now <= 0
+                || !tokenMatchesScope(scope, token)) {
             return AgentOutboxSettleResult.STALE;
         }
         AgentOutboxSettleResult settled = settleTransaction.execute(
-                ignored -> settleInTransaction(token, result, now));
+                ignored -> admissionGuard.withWorkerAdmission(scope,
+                        TenantModuleAdmissionGuard.WorkerOperation.SETTLEMENT,
+                        mode -> settleInTransaction(scope, token, result, now)));
         return settled == null ? AgentOutboxSettleResult.STALE : settled;
     }
 
     private AgentOutboxClaim claimInTransaction(
-            AgentOutboxCandidate candidate, String leaseOwner, long now) {
-        if (!globallyPublishable()) {
+            WorkerScope scope, AgentOutboxCandidate candidate, String leaseOwner, long now) {
+        if (!globallyPublishable(scope)) {
             return AgentOutboxClaim.disabled();
         }
         // Frozen lock order: delivery -> outbox. A missing delivery is still an attempted first lock.
-        AgentCommandDeliveryEntity delivery = dao.lockDelivery(
-                candidate.tenantId(), candidate.clientId(), candidate.deliveryId());
-        AgentOutboxEventEntity outbox = dao.lockOutbox(
-                candidate.tenantId(), candidate.clientId(), candidate.outboxId());
-        List<AgentOutboxEventEntity> previousAttempts = lockPreviousAttempts(delivery, outbox);
-        if (outbox == null || !candidateMatches(candidate, outbox)
+        AgentCommandDeliveryEntity delivery = dao.lockDelivery(scope, candidate.deliveryId());
+        AgentOutboxEventEntity outbox = dao.lockOutbox(scope, candidate.outboxId());
+        List<AgentOutboxEventEntity> previousAttempts = lockPreviousAttempts(scope, delivery, outbox);
+        if (outbox == null || !candidateMatches(scope, candidate, outbox)
+                || !claimantStateMatches(scope, outbox)
                 || isTerminalOutbox(outbox.getStatus())) {
             return AgentOutboxClaim.skipped();
         }
@@ -166,11 +210,11 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
         }
         if (versionFenceCannotClaim(outbox)
                 || (safeAssociation(delivery, outbox) && versionFenceCannotClaim(delivery))) {
-            quarantineBoth(delivery, outbox, VERSION_FENCE_EXHAUSTED, now);
+            quarantineBoth(scope, delivery, outbox, VERSION_FENCE_EXHAUSTED, now);
             return AgentOutboxClaim.skipped();
         }
         if (delivery == null) {
-            quarantineBoth(null, outbox, DISCOVERY_DELIVERY_NOT_FOUND, now);
+            quarantineBoth(scope, null, outbox, DISCOVERY_DELIVERY_NOT_FOUND, now);
             return AgentOutboxClaim.skipped();
         }
 
@@ -179,15 +223,15 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
                 outbox.getLastError())
                 || !AgentCommandTransportWriterImpl.DISPATCH_ELIGIBLE_MARKER.equals(
                 delivery.getLastError()))) {
-            disposeBoth(delivery, outbox, "DEAD", null, UNADMITTED_PENDING, now);
+            disposeBoth(scope, delivery, outbox, "DEAD", null, UNADMITTED_PENDING, now);
             return AgentOutboxClaim.skipped();
         }
         if (!gate.allowsDispatch(outbox.getTenantId(), outbox.getClientId())) {
-            disposeBoth(delivery, outbox, "DEAD", null,
+            disposeBoth(scope, delivery, outbox, "DEAD", null,
                     AgentCommandTransportWriterImpl.DISPATCH_SCOPE_MARKER, now);
             return AgentOutboxClaim.skipped();
         }
-        String corruption = validateCommon(delivery, outbox, previousAttempts);
+        String corruption = validateCommon(scope, delivery, outbox, previousAttempts);
         if ("UNSUPPORTED_REPLAY_PROVENANCE".equals(corruption)) {
             // Provenance is an authorization boundary, not a relay-owned state transition.
             // Reject without claim, publish, quarantine, or terminal mutation.
@@ -197,15 +241,15 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
             corruption = validateLane(delivery, outbox, now);
         }
         if (corruption != null) {
-            disposeBoth(delivery, outbox, "DEAD", null, corruption, now);
+            disposeBoth(scope, delivery, outbox, "DEAD", null, corruption, now);
             return AgentOutboxClaim.skipped();
         }
         if (now >= outbox.getExpiresAt()) {
-            disposeBoth(delivery, outbox, "EXPIRED", null, MESSAGE_EXPIRED, now);
+            disposeBoth(scope, delivery, outbox, "EXPIRED", null, MESSAGE_EXPIRED, now);
             return AgentOutboxClaim.skipped();
         }
         if (outbox.getAttemptCount() >= settings.maxAttempts()) {
-            disposeBoth(delivery, outbox, "FAILED", null, ATTEMPT_EXHAUSTED, now);
+            disposeBoth(scope, delivery, outbox, "FAILED", null, ATTEMPT_EXHAUSTED, now);
             return AgentOutboxClaim.skipped();
         }
 
@@ -213,16 +257,20 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
         try {
             leaseUntil = Math.addExact(now, settings.leaseMillis());
         } catch (ArithmeticException overflow) {
-            disposeBoth(delivery, outbox, "DEAD", null, "LEASE_TIME_OVERFLOW", now);
+            disposeBoth(scope, delivery, outbox, "DEAD", null, "LEASE_TIME_OVERFLOW", now);
             return AgentOutboxClaim.skipped();
         }
-        requireOne(dao.claimDelivery(delivery, leaseOwner, leaseUntil, null, now),
+        requireOne(dao.claimDelivery(scope, delivery, leaseOwner, leaseUntil, null, now),
                 "delivery claim CAS");
-        requireOne(dao.claimOutbox(outbox, leaseOwner, leaseUntil, null, now),
+        requireOne(dao.claimOutbox(scope, outbox, leaseOwner, leaseUntil, null, now),
                 "outbox claim CAS");
 
         return AgentOutboxClaim.acquired(new AgentOutboxClaimToken(
-                outbox.getId(), delivery.getId(), outbox.getTenantId(), outbox.getClientId(),
+                outbox.getId(), delivery.getId(), outbox.getTenantId(), outbox.getDataDomainId(),
+                outbox.getExecutionPoolId(), outbox.getAdmissionEpoch(),
+                outbox.getProducerDeploymentId(), outbox.getModuleId(), outbox.getMigrationEpoch(),
+                outbox.getProtocolVersion(), scope.deploymentId(), scope.workerGeneration(),
+                outbox.getClientId(),
                 outbox.getEventId(), outbox.getMessageId(), outbox.getCommandId(),
                 delivery.getTaskId(), delivery.getTargetAgentId(), delivery.getCommandType(),
                 outbox.getDestination(), outbox.getRoutingKey(), outbox.getWirePayload(),
@@ -233,12 +281,10 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
     }
 
     private AgentOutboxSettleResult settleInTransaction(
-            AgentOutboxClaimToken token, AgentRabbitPublishResult result, long now) {
-        AgentCommandDeliveryEntity delivery = dao.lockDelivery(
-                token.tenantId(), token.clientId(), token.deliveryId());
-        AgentOutboxEventEntity outbox = dao.lockOutbox(
-                token.tenantId(), token.clientId(), token.outboxId());
-        List<AgentOutboxEventEntity> previousAttempts = lockPreviousAttempts(delivery, outbox);
+            WorkerScope scope, AgentOutboxClaimToken token, AgentRabbitPublishResult result, long now) {
+        AgentCommandDeliveryEntity delivery = dao.lockDelivery(scope, token.deliveryId());
+        AgentOutboxEventEntity outbox = dao.lockOutbox(scope, token.outboxId());
+        List<AgentOutboxEventEntity> previousAttempts = lockPreviousAttempts(scope, delivery, outbox);
         if (!tokenMatchesOutbox(token, outbox)) {
             return AgentOutboxSettleResult.STALE;
         }
@@ -249,7 +295,7 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
         }
         if (versionFenceExhausted(outbox)
                 || (activeDelivery && versionFenceExhausted(delivery))) {
-            quarantineBoth(activeDelivery ? delivery : null, outbox,
+            quarantineBoth(scope, activeDelivery ? delivery : null, outbox,
                     VERSION_FENCE_EXHAUSTED, now);
             return AgentOutboxSettleResult.DEAD;
         }
@@ -258,9 +304,9 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
         // at or after expiresAt. D07 owns the downstream authoritative expiry decision.
         if (result.type() == AgentRabbitPublishResult.Type.ACK) {
             if (activeDelivery) {
-                disposeDelivery(delivery, "PUBLISHED", null, null, now);
+                disposeDelivery(scope, delivery, "PUBLISHED", null, null, now);
             }
-            disposeOutbox(outbox, "PUBLISHED", null,
+            disposeOutbox(scope, outbox, "PUBLISHED", null,
                     "ACK", now, null, "NOT_RETURNED", null,
                     null, null, now, null, now);
             return AgentOutboxSettleResult.PUBLISHED;
@@ -268,9 +314,9 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
 
         if (now >= token.expiresAt()) {
             if (activeDelivery) {
-                disposeDelivery(delivery, "EXPIRED", null, MESSAGE_EXPIRED, now);
+                disposeDelivery(scope, delivery, "EXPIRED", null, MESSAGE_EXPIRED, now);
             }
-            disposeOutbox(outbox, "EXPIRED", null,
+            disposeOutbox(scope, outbox, "EXPIRED", null,
                     result.confirmStatus(), confirmedAt(result, now), result.errorCode(),
                     result.returnStatus(), returnedAt(result, now), result.returnReplyCode(),
                     result.returnReplyText(), null, MESSAGE_EXPIRED, now);
@@ -278,15 +324,15 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
         }
 
         if (!activeDelivery) {
-            disposeOutbox(outbox, "DEAD", null,
+            disposeOutbox(scope, outbox, "DEAD", null,
                     result.confirmStatus(), confirmedAt(result, now), result.errorCode(),
                     result.returnStatus(), returnedAt(result, now), result.returnReplyCode(),
                     result.returnReplyText(), null, STALE_DELIVERY_FENCE, now);
             return AgentOutboxSettleResult.DEAD;
         }
         if (outbox.getAttemptCount() >= settings.maxAttempts()) {
-            disposeDelivery(delivery, "FAILED", null, ATTEMPT_EXHAUSTED, now);
-            disposeOutbox(outbox, "FAILED", null,
+            disposeDelivery(scope, delivery, "FAILED", null, ATTEMPT_EXHAUSTED, now);
+            disposeOutbox(scope, outbox, "FAILED", null,
                     result.confirmStatus(), confirmedAt(result, now), result.errorCode(),
                     result.returnStatus(), returnedAt(result, now), result.returnReplyCode(),
                     result.returnReplyText(), null, ATTEMPT_EXHAUSTED, now);
@@ -296,34 +342,35 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
         long nextRetryAt = settings.nextRetryAt(
                 outbox.getEventId(), token.publishAttempt(), outbox.getAttemptCount(),
                 now, outbox.getExpiresAt());
-        disposeDelivery(delivery, "RETRY", nextRetryAt, result.errorCode(), now);
-        disposeOutbox(outbox, "RETRY", nextRetryAt,
+        disposeDelivery(scope, delivery, "RETRY", nextRetryAt, result.errorCode(), now);
+        disposeOutbox(scope, outbox, "RETRY", nextRetryAt,
                 result.confirmStatus(), confirmedAt(result, now), result.errorCode(),
                 result.returnStatus(), returnedAt(result, now), result.returnReplyCode(),
                 result.returnReplyText(), null, result.errorCode(), now);
         return AgentOutboxSettleResult.RETRY;
     }
 
-    private void quarantineCandidate(AgentOutboxCandidate candidate, long now) {
+    private void quarantineCandidate(WorkerScope scope, AgentOutboxCandidate candidate, long now) {
         if (candidate == null || candidate.outboxId() <= 0 || now <= 0) return;
         claimTransaction.execute(ignored -> {
-            quarantineCandidateInTransaction(candidate, now);
+            admissionGuard.withWorkerAdmission(scope, TenantModuleAdmissionGuard.WorkerOperation.CLAIM,
+                    mode -> { quarantineCandidateInTransaction(scope, candidate, now); return null; });
             return null;
         });
     }
 
-    private void quarantineCandidateInTransaction(AgentOutboxCandidate candidate, long now) {
-        boolean exactScope = validExact(candidate.tenantId(), 50)
-                && validExact(candidate.clientId(), 50);
+    private void quarantineCandidateInTransaction(WorkerScope scope, AgentOutboxCandidate candidate, long now) {
+        boolean exactScope = candidateScopeMatches(scope, candidate)
+                && validExact(candidate.clientId(), 50)
+                && validExact(candidate.producerDeploymentId(), 100);
         AgentCommandDeliveryEntity delivery = null;
         if (exactScope && candidate.deliveryId() > 0) {
             // Preserve delivery -> outbox lock order whenever an association could be safe.
-            delivery = dao.lockDelivery(
-                    candidate.tenantId(), candidate.clientId(), candidate.deliveryId());
+            delivery = dao.lockDelivery(scope, candidate.deliveryId());
         }
-        AgentOutboxEventEntity outbox = dao.lockOutboxForQuarantine(candidate);
+        AgentOutboxEventEntity outbox = dao.lockOutboxForQuarantine(scope, candidate);
         if (outbox == null || isTerminalOutbox(outbox.getStatus())
-                || !corruptionCandidateMatches(candidate, outbox)
+                || !corruptionCandidateMatches(scope, candidate, outbox)
                 || !eligibleForDiscovery(outbox, now)) {
             return;
         }
@@ -343,22 +390,22 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
             // The unlocked hint no longer represents a discovery-level poison row.
             return;
         }
-        quarantineBoth(paired ? delivery : null, outbox, errorCode, now);
+        quarantineBoth(scope, paired ? delivery : null, outbox, errorCode, now);
     }
 
-    private boolean globallyPublishable() {
+    private boolean globallyPublishable(WorkerScope scope) {
         AgentRabbitActivationState state = gate.state();
         if (state != AgentRabbitActivationState.DISPATCH_CANARY
                 && state != AgentRabbitActivationState.DISPATCH_SCOPED) {
             return false;
         }
-        AgentRabbitTopologyReadiness.Snapshot snapshot = readiness.snapshot();
-        return snapshot.canonicalTopologyReady()
-                && manifest.sha256().equals(snapshot.manifestSha256());
+        if (scope == null) return false;
+        AgentRabbitV2TopologyManifest scoped = AgentRabbitV2TopologyManifest.forScope(scope);
+        return v2Readiness.snapshot(scoped).canonicalTopologyReady(scoped);
     }
 
     private String validateCommon(
-            AgentCommandDeliveryEntity delivery,
+            WorkerScope scope, AgentCommandDeliveryEntity delivery,
             AgentOutboxEventEntity outbox,
             List<AgentOutboxEventEntity> previousAttempts) {
         if (delivery.getId() == null || outbox.getId() == null
@@ -403,7 +450,12 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
         if (!storedHashMatches(wire, outbox.getWirePayloadHash())) {
             return "OUTBOX_STORED_HASH_CORRUPT";
         }
-        if (!manifest.allowsCommandPublish(outbox.getDestination(), outbox.getRoutingKey())) {
+        AgentRabbitV2TopologyManifest scopedManifest =
+                AgentRabbitV2TopologyManifest.forScope(scope);
+        if (!scopedManifest.matchesScope(outbox.getTenantId(), outbox.getDataDomainId(),
+                outbox.getExecutionPoolId())
+                || !scopedManifest.allowsCommandPublish(
+                        outbox.getDestination(), outbox.getRoutingKey())) {
             return "DESTINATION_POLICY_REJECTED";
         }
         try {
@@ -411,9 +463,12 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
                     outbox.getDestination(), outbox.getRoutingKey(), wire,
                     outbox.getWirePayloadHash(), outbox.getMessageId(), outbox.getEventId(),
                     outbox.getDeliveryId(), outbox.getCommandId(), outbox.getTenantId(),
+                    outbox.getDataDomainId(), outbox.getExecutionPoolId(),
+                    outbox.getAdmissionEpoch(), outbox.getProducerDeploymentId(),
+                    outbox.getModuleId(), outbox.getMigrationEpoch(), outbox.getProtocolVersion(),
                     outbox.getClientId(), delivery.getTaskId(), delivery.getTargetAgentId(),
                     delivery.getCommandType(), delivery.getActiveAttempt(), outbox.getExpiresAt(),
-                    manifest.sha256(), AgentCommandAmqpContract.INITIAL_SOURCE_SETTLEMENT_RETRY));
+                    scopedManifest.sha256(), AgentCommandAmqpContract.INITIAL_SOURCE_SETTLEMENT_RETRY));
             return null;
         } catch (IllegalArgumentException ignored) {
             return "WIRE_IDENTITY_DRIFT";
@@ -492,6 +547,15 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
                 && Objects.equals(outbox.getId(), token.outboxId())
                 && Objects.equals(outbox.getDeliveryId(), token.deliveryId())
                 && Objects.equals(outbox.getTenantId(), token.tenantId())
+                && Objects.equals(outbox.getDataDomainId(), token.dataDomainId())
+                && Objects.equals(outbox.getExecutionPoolId(), token.executionPoolId())
+                && Objects.equals(outbox.getAdmissionEpoch(), token.admissionEpoch())
+                && Objects.equals(outbox.getProducerDeploymentId(), token.producerDeploymentId())
+                && Objects.equals(outbox.getModuleId(), token.moduleId())
+                && Objects.equals(outbox.getMigrationEpoch(), token.migrationEpoch())
+                && Objects.equals(outbox.getProtocolVersion(), token.protocolVersion())
+                && Objects.equals(outbox.getClaimedDeploymentId(), token.claimantDeploymentId())
+                && Objects.equals(outbox.getClaimedWorkerGeneration(), token.claimantWorkerGeneration())
                 && Objects.equals(outbox.getClientId(), token.clientId())
                 && Objects.equals(outbox.getEventId(), token.eventId())
                 && Objects.equals(outbox.getMessageId(), token.messageId())
@@ -517,6 +581,15 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
         return delivery != null
                 && Objects.equals(delivery.getId(), token.deliveryId())
                 && Objects.equals(delivery.getTenantId(), token.tenantId())
+                && Objects.equals(delivery.getDataDomainId(), token.dataDomainId())
+                && Objects.equals(delivery.getExecutionPoolId(), token.executionPoolId())
+                && Objects.equals(delivery.getAdmissionEpoch(), token.admissionEpoch())
+                && Objects.equals(delivery.getProducerDeploymentId(), token.producerDeploymentId())
+                && Objects.equals(delivery.getModuleId(), token.moduleId())
+                && Objects.equals(delivery.getMigrationEpoch(), token.migrationEpoch())
+                && Objects.equals(delivery.getProtocolVersion(), token.protocolVersion())
+                && Objects.equals(delivery.getClaimedDeploymentId(), token.claimantDeploymentId())
+                && Objects.equals(delivery.getClaimedWorkerGeneration(), token.claimantWorkerGeneration())
                 && Objects.equals(delivery.getClientId(), token.clientId())
                 && Objects.equals(delivery.getCommandId(), token.commandId())
                 && Objects.equals(delivery.getTaskId(), token.taskId())
@@ -531,46 +604,46 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
     }
 
     private void quarantineBoth(
-            AgentCommandDeliveryEntity delivery,
+            WorkerScope scope, AgentCommandDeliveryEntity delivery,
             AgentOutboxEventEntity outbox,
             String errorCode,
             long now) {
         if (safeAssociation(delivery, outbox)) {
-            requireOne(dao.quarantineDelivery(delivery, errorCode, now),
+            requireOne(dao.quarantineDelivery(scope, delivery, errorCode, now),
                     "delivery quarantine CAS");
         }
-        requireOne(dao.quarantineOutbox(outbox, errorCode, now),
+        requireOne(dao.quarantineOutbox(scope, outbox, errorCode, now),
                 "outbox quarantine CAS");
     }
 
     private void disposeBoth(
-            AgentCommandDeliveryEntity delivery,
+            WorkerScope scope, AgentCommandDeliveryEntity delivery,
             AgentOutboxEventEntity outbox,
             String status,
             Long nextRetryAt,
             String errorCode,
             long now) {
         if (safeAssociation(delivery, outbox)) {
-            disposeDelivery(delivery, status, nextRetryAt, errorCode, now);
+            disposeDelivery(scope, delivery, status, nextRetryAt, errorCode, now);
         }
-        disposeOutbox(outbox, status, nextRetryAt,
+        disposeOutbox(scope, outbox, status, nextRetryAt,
                 "NONE", null, null, "NONE", null,
                 null, null, null, errorCode, now);
     }
 
     private void disposeDelivery(
-            AgentCommandDeliveryEntity delivery, String status, Long nextRetryAt,
+            WorkerScope scope, AgentCommandDeliveryEntity delivery, String status, Long nextRetryAt,
             String errorCode, long now) {
-        requireOne(dao.disposeDelivery(delivery, status, nextRetryAt, errorCode, now),
+        requireOne(dao.disposeDelivery(scope, delivery, status, nextRetryAt, errorCode, now),
                 "delivery disposition CAS");
     }
 
     private void disposeOutbox(
-            AgentOutboxEventEntity outbox, String status, Long nextRetryAt,
+            WorkerScope scope, AgentOutboxEventEntity outbox, String status, Long nextRetryAt,
             String confirmStatus, Long confirmedAt, String confirmError,
             String returnStatus, Long returnedAt, Integer returnReplyCode,
             String returnReplyText, Long publishedAt, String errorCode, long now) {
-        requireOne(dao.disposeOutbox(outbox, status, nextRetryAt,
+        requireOne(dao.disposeOutbox(scope, outbox, status, nextRetryAt,
                 confirmStatus, confirmedAt, confirmError, returnStatus, returnedAt,
                 returnReplyCode, returnReplyText, publishedAt, errorCode, now),
                 "outbox disposition CAS");
@@ -581,19 +654,20 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
         return status != null && TERMINAL_OUTBOX.contains(status);
     }
 
-    private static boolean validCandidateHint(AgentOutboxCandidate candidate) {
+    private static boolean validCandidateHint(WorkerScope scope, AgentOutboxCandidate candidate) {
         return candidate.outboxId() > 0 && candidate.deliveryId() > 0
                 && candidate.outboxVersion() >= 0
                 && candidate.outboxVersion() < Long.MAX_VALUE - 1
                 && candidate.outboxStatus() != null
                 && Set.of("PENDING", "RETRY", "CLAIMED").contains(candidate.outboxStatus())
-                && validExact(candidate.tenantId(), 50)
+                && candidateScopeMatches(scope, candidate)
+                && validExact(candidate.producerDeploymentId(), 100)
                 && validExact(candidate.clientId(), 50);
     }
 
     private static boolean corruptionCandidateMatches(
-            AgentOutboxCandidate candidate, AgentOutboxEventEntity outbox) {
-        return candidateMatches(candidate, outbox)
+            WorkerScope scope, AgentOutboxCandidate candidate, AgentOutboxEventEntity outbox) {
+        return candidateMatches(scope, candidate, outbox)
                 && candidateFenceMatches(candidate, outbox);
     }
 
@@ -648,10 +722,18 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
     }
 
     private static boolean candidateMatches(
-            AgentOutboxCandidate candidate, AgentOutboxEventEntity outbox) {
+            WorkerScope scope, AgentOutboxCandidate candidate, AgentOutboxEventEntity outbox) {
         return Objects.equals(outbox.getId(), candidate.outboxId())
                 && Objects.equals(outbox.getDeliveryId(), candidate.deliveryId())
                 && Objects.equals(outbox.getTenantId(), candidate.tenantId())
+                && Objects.equals(outbox.getDataDomainId(), candidate.dataDomainId())
+                && Objects.equals(outbox.getExecutionPoolId(), candidate.executionPoolId())
+                && Objects.equals(outbox.getAdmissionEpoch(), candidate.admissionEpoch())
+                && Objects.equals(outbox.getProducerDeploymentId(), candidate.producerDeploymentId())
+                && Objects.equals(outbox.getModuleId(), candidate.moduleId())
+                && Objects.equals(outbox.getMigrationEpoch(), candidate.migrationEpoch())
+                && Objects.equals(outbox.getProtocolVersion(), candidate.protocolVersion())
+                && candidateScopeMatches(scope, candidate)
                 && Objects.equals(outbox.getClientId(), candidate.clientId());
     }
 
@@ -660,11 +742,57 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
         return delivery != null && outbox != null
                 && Objects.equals(delivery.getId(), outbox.getDeliveryId())
                 && Objects.equals(delivery.getTenantId(), outbox.getTenantId())
+                && Objects.equals(delivery.getDataDomainId(), outbox.getDataDomainId())
+                && Objects.equals(delivery.getExecutionPoolId(), outbox.getExecutionPoolId())
+                && Objects.equals(delivery.getAdmissionEpoch(), outbox.getAdmissionEpoch())
+                && Objects.equals(delivery.getProducerDeploymentId(), outbox.getProducerDeploymentId())
+                && Objects.equals(delivery.getModuleId(), outbox.getModuleId())
+                && Objects.equals(delivery.getMigrationEpoch(), outbox.getMigrationEpoch())
+                && Objects.equals(delivery.getProtocolVersion(), outbox.getProtocolVersion())
+                && Objects.equals(delivery.getClaimedDeploymentId(), outbox.getClaimedDeploymentId())
+                && Objects.equals(delivery.getClaimedWorkerGeneration(), outbox.getClaimedWorkerGeneration())
                 && Objects.equals(delivery.getClientId(), outbox.getClientId())
                 && Objects.equals(delivery.getCommandId(), outbox.getCommandId())
                 && Objects.equals(delivery.getActiveMessageId(), outbox.getMessageId())
                 && Objects.equals(delivery.getTaskId(), outbox.getAggregateId())
                 && "task".equals(outbox.getAggregateType());
+    }
+
+    private static boolean candidateScopeMatches(WorkerScope scope, AgentOutboxCandidate candidate) {
+        return scope != null && candidate != null
+                && candidate.protocolVersion() == AgentCommandAmqpContract.WIRE_VERSION
+                && scope.tenantId().value().equals(candidate.tenantId())
+                && scope.dataDomainId().value().equals(candidate.dataDomainId())
+                && scope.executionPoolId().equals(candidate.executionPoolId())
+                && scope.admissionEpoch() == candidate.admissionEpoch()
+                && scope.moduleId().equals(candidate.moduleId())
+                && scope.migrationEpoch() == candidate.migrationEpoch();
+    }
+
+    private static boolean claimantStateMatches(WorkerScope scope, AgentOutboxEventEntity outbox) {
+        if ("CLAIMED".equals(outbox.getStatus())) {
+            return scope.deploymentId().equals(outbox.getClaimedDeploymentId())
+                    && Objects.equals(scope.workerGeneration(), outbox.getClaimedWorkerGeneration());
+        }
+        return outbox.getClaimedDeploymentId() == null
+                && outbox.getClaimedWorkerGeneration() == null;
+    }
+
+    private static boolean tokenMatchesScope(WorkerScope scope, AgentOutboxClaimToken token) {
+        return AgentCommandAmqpContract.WIRE_VERSION == token.protocolVersion()
+                && scope.tenantId().value().equals(token.tenantId())
+                && scope.dataDomainId().value().equals(token.dataDomainId())
+                && scope.executionPoolId().equals(token.executionPoolId())
+                && scope.admissionEpoch() == token.admissionEpoch()
+                && scope.moduleId().equals(token.moduleId())
+                && scope.migrationEpoch() == token.migrationEpoch()
+                && scope.deploymentId().equals(token.claimantDeploymentId())
+                && scope.workerGeneration() == token.claimantWorkerGeneration()
+                && AgentOutboxLeaseOwner.matches(scope, token.leaseOwner());
+    }
+
+    private static boolean validLeaseOwner(WorkerScope scope, String leaseOwner) {
+        return AgentOutboxLeaseOwner.matches(scope, leaseOwner);
     }
 
     private static boolean storedHashMatches(byte[] payload, byte[] storedHash) {
@@ -674,13 +802,13 @@ public final class AgentOutboxRelayServiceImpl implements AgentOutboxRelayServic
 
     /** D03 original publish and exact D06 automatic reissue are the only relay-admitted lanes. */
     private List<AgentOutboxEventEntity> lockPreviousAttempts(
-            AgentCommandDeliveryEntity delivery, AgentOutboxEventEntity outbox) {
+            WorkerScope scope, AgentCommandDeliveryEntity delivery, AgentOutboxEventEntity outbox) {
         if (delivery == null || outbox == null || delivery.getActiveAttempt() == null
                 || delivery.getActiveAttempt() <= 1) {
             return List.of();
         }
         return dao.lockPreviousAttemptOutboxes(
-                delivery.getTenantId(), delivery.getClientId(), delivery.getId(),
+                scope, delivery.getId(),
                 delivery.getActiveAttempt() - 1);
     }
 

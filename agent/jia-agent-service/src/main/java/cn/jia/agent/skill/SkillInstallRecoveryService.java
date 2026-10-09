@@ -5,6 +5,7 @@ import cn.jia.agent.entity.*;
 import cn.jia.agent.service.AgentCommandInboxService;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.service.impl.AgentCommandCanonicalCodec;
+import cn.jia.agent.service.impl.AgentCommandProtocolSupport;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -71,7 +72,8 @@ public final class SkillInstallRecoveryService {
                     && d.getOwnerJiacn().equals(draft.ownerJiacn()) && d.getCommandId().equals(draft.commandId())
                     && d.getTaskId().equals(draft.taskId()) && d.getTargetAgentId().equals(draft.targetAgentId())
                     && Arrays.equals(AgentCommandCanonicalCodec.sha256(d.getCommandPayload()),d.getCommandPayloadHash())
-                    && Arrays.equals(o.getWirePayload(),AgentCommandCanonicalCodec.wireBytes(draft,d.getActiveMessageId(),d.getActiveAttempt())),409,"SKILL_DELIVERY_FENCED");
+                    && Arrays.equals(o.getWirePayload(),AgentCommandProtocolSupport.wireBytes(
+                            draft,d.getActiveMessageId(),d.getActiveAttempt(),d,o)),409,"SKILL_DELIVERY_FENCED");
             if("WAITING_AGENT".equals(d.getStatus()) || "SENT".equals(d.getStatus())) {
                 require(d.getUpdateTime()<=now-60000 && ("WAITING_AGENT".equals(d.getStatus())?
                         "WAITING_AGENT".equals(i.getStatus()) && "WAITING_AGENT".equals(i.getResultStatus()):

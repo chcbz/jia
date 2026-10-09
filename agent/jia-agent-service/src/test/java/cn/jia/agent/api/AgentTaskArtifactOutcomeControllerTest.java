@@ -502,6 +502,33 @@ class AgentTaskArtifactOutcomeControllerTest {
         return view;
     }
 
+    @Test
+    void otherAreaOrDomainCannotAcceptOrReadLegacyArtifactOutcomes() throws Exception {
+        for (JwtAuthenticationToken principal : List.of(
+                jwtForArea("1", "cyf"), jwtForArea("00", "cyf"),
+                jwtForArea("0", "other"), jwtForArea(null, "cyf"),
+                jwtForArea("0", null))) {
+            mvc.perform(get("/agent/tasks/{taskId}/artifact-outcomes/accepted", TASK)
+                            .principal(principal))
+                    .andExpect(status().isForbidden())
+                    .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
+            mvc.perform(post("/agent/tasks/{taskId}/artifact-outcomes/accept", TASK)
+                            .header("Idempotency-Key", DECISION)
+                            .contentType(MediaType.APPLICATION_JSON).content(acceptBody())
+                            .principal(principal))
+                    .andExpect(status().isForbidden());
+        }
+        verifyNoInteractions(gate, service);
+    }
+
+    private static JwtAuthenticationToken jwtForArea(String tenantId, String domainId) {
+        Jwt.Builder builder = Jwt.withTokenValue("token").header("alg", "none")
+                .claim("jiacn", OWNER).claim("client_id", CLIENT).claim("sub", ACTOR);
+        if (tenantId != null) builder.claim("tenant_id", tenantId);
+        if (domainId != null) builder.claim("data_domain_id", domainId);
+        return new JwtAuthenticationToken(builder.build(), List.of(), ACTOR);
+    }
+
     private static JwtAuthenticationToken jwt(
             String tenant, String client, String subject) {
         return jwtClaims(tenant, client, subject, subject);
@@ -510,6 +537,8 @@ class AgentTaskArtifactOutcomeControllerTest {
     private static JwtAuthenticationToken jwtClaims(
             Object tenant, Object client, Object subject, String authenticationName) {
         Jwt.Builder builder = Jwt.withTokenValue("token").header("alg", "none")
+                .claim("tenant_id", "0")
+                .claim("data_domain_id", "cyf")
                 .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60));
         if (tenant != null) {
             builder.claim("jiacn", tenant);

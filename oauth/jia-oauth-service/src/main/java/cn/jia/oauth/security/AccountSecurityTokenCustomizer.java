@@ -25,6 +25,8 @@ public final class AccountSecurityTokenCustomizer implements OAuth2TokenCustomiz
 
     private final AccountSecurityService accountSecurityService;
 
+    private final JdbcTenantAuthorizationRepository tenantAuthorizationRepository;
+
     @Override
     public void customize(JwtEncodingContext context) {
         context.getClaims().claim("client_id", context.getRegisteredClient().getClientId());
@@ -39,6 +41,7 @@ public final class AccountSecurityTokenCustomizer implements OAuth2TokenCustomiz
                         .claim("jiacn", userDetails.getJiacn())
                         .claim("username", userDetails.getUsername())
                         .claim("auth_epoch", userDetails.getLoginAuthEpoch());
+                addBoundTenantClaims(context, userDetails);
             }
             return;
         }
@@ -56,6 +59,39 @@ public final class AccountSecurityTokenCustomizer implements OAuth2TokenCustomiz
             claims.remove("username");
             claims.remove("auth_epoch");
         });
+    }
+
+    private void addBoundTenantClaims(JwtEncodingContext context, CustomUserDetails userDetails) {
+        OAuth2Authorization authorization = context.getAuthorization();
+        if (authorization == null) throw invalidGrant();
+        Object value = authorization.getAttribute(TenantAuthorizationAttributes.attributeName());
+        // An unselected authorization must never mint a user access token.
+        if (value == null) throw invalidGrant();
+        if (!(value instanceof TenantAuthorizationAttributes tenant)) {
+            throw invalidGrant();
+        }
+        // A bound authorization is immutable. Every code exchange/refresh must
+        // observe the current region, membership and client/domain grant; stale
+        // versions or unavailable control data are denied, not silently renewed.
+        try {
+            if (!authorization.getRegisteredClientId().equals(context.getRegisteredClient().getId())
+                    || !tenantAuthorizationRepository.isEligibleForIssuance(tenant, userDetails.getUserId(),
+                            context.getRegisteredClient().getClientId())) {
+                throw invalidGrant();
+            }
+        } catch (OAuth2AuthenticationException exception) {
+            throw exception;
+        } catch (RuntimeException exception) {
+            throw invalidGrant();
+        }
+        context.getClaims()
+                .claim("tenant_id", tenant.tenantId().value())
+                .claim("data_domain_id", tenant.dataDomainId().value())
+                .claim("tenant_name", tenant.tenantName())
+                .claim("tenant_kind", tenant.tenantKind().name())
+                .claim("tenant_session_epoch", tenant.tenantSessionEpoch())
+                .claim("membership_revision", tenant.membershipRevision())
+                .claim("client_tenant_grant_revision", tenant.clientTenantGrantRevision());
     }
 
     private void requireCurrentLoginPrincipal(CustomUserDetails principal) {

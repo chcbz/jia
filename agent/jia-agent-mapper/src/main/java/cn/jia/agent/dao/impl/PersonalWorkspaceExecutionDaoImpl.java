@@ -82,7 +82,35 @@ public class PersonalWorkspaceExecutionDaoImpl implements PersonalWorkspaceExecu
         return executions.listQueuedByTarget(tenantId, clientId, ownerJiacn, targetAgentId,
                 Math.max(1, Math.min(limit, 16)));
     }
+    @Override public List<PersonalWorkspaceExecutionEntity> findTaskAssociations(String tenantId,
+            String clientId, String ownerJiacn, String taskId, String workItemId,
+            String targetAgentId) {
+        scope(tenantId, clientId, ownerJiacn); id(taskId, "taskId");
+        id(workItemId, "workItemId"); id(targetAgentId, "targetAgentId");
+        var found = executions.findTaskAssociations(tenantId, clientId, ownerJiacn,
+                taskId, workItemId, targetAgentId);
+        if (found == null || found.size() > 2) throw new IllegalStateException("invalid TASK association result");
+        for (var execution : found) {
+            if (execution == null || !Objects.equals(tenantId, execution.getTenantId())
+                    || !Objects.equals(clientId, execution.getClientId())
+                    || !Objects.equals(ownerJiacn, execution.getOwnerJiacn())
+                    || !Objects.equals(taskId, execution.getTaskId())
+                    || !Objects.equals(workItemId, execution.getWorkItemId())
+                    || !Objects.equals(targetAgentId, execution.getTargetAgentId())
+                    || !"TASK".equals(execution.getExecutionMode())) {
+                throw new IllegalStateException("TASK association scope mismatch");
+            }
+            id(execution.getExecutionId(), "executionId");
+        }
+        return List.copyOf(found);
+    }
     @Override public void insert(PersonalWorkspaceExecutionEntity execution) { init(execution); executions.insert(execution); }
+    @Override public PersonalWorkspaceExecutionOutputEntity findOutput(String tenantId,String clientId,String ownerJiacn,String executionId,String outputId) {
+        scope(tenantId,clientId,ownerJiacn);id(executionId,"executionId");id(outputId,"outputId");
+        var found=executions.findOutputForPrecomputation(tenantId,clientId,ownerJiacn,executionId,outputId);
+        if(found==null||found.size()>1)throw new IllegalStateException("ambiguous exact output");if(found.isEmpty())return null;
+        var output=found.getFirst();if(output==null||!Objects.equals(tenantId,output.getTenantId())||!Objects.equals(clientId,output.getClientId())||!Objects.equals(ownerJiacn,output.getOwnerJiacn())||!Objects.equals(executionId,output.getExecutionId())||!Objects.equals(outputId,output.getOutputId()))throw new IllegalStateException("output scope mismatch");return output;
+    }
     @Override public void update(PersonalWorkspaceExecutionEntity execution) { execution.setUpdateTime(DateUtil.nowTime()); executions.updateById(execution); }
     @Override public void insertInput(PersonalWorkspaceExecutionInputEntity input) { init(input); inputs.insert(input); }
     @Override public List<PersonalWorkspaceExecutionInputEntity> listInputs(String tenantId,

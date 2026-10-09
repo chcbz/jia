@@ -18,6 +18,15 @@ public class AgentOutboxEventEntity extends BaseEntity {
     @Serial private static final long serialVersionUID = 1L;
     @TableId(value = "id", type = IdType.AUTO)
     private Long id;
+    private Integer protocolVersion;
+    private String dataDomainId;
+    private String executionPoolId;
+    private Long admissionEpoch;
+    private String producerDeploymentId;
+    private String moduleId;
+    private Long migrationEpoch;
+    private String claimedDeploymentId;
+    private Long claimedWorkerGeneration;
     private String eventId;
     private String messageId;
     private String commandId;

@@ -16,11 +16,13 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 /** Domain-separated LP fingerprints and keyed digests for runtime-v2 registration. */
 public final class AgentRuntimeV2RegistrationFingerprints {
     private static final HexFormat HEX = HexFormat.of();
     private static final String UUID4 = "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
+    private static final Pattern UUID4_PATTERN = Pattern.compile(UUID4);
     private AgentRuntimeV2RegistrationFingerprints() {}
 
     public record Subject(String credentialKind, String credentialReference, String tenantId,
@@ -175,7 +177,7 @@ public final class AgentRuntimeV2RegistrationFingerprints {
     private static byte[] uuidBytes(String value){UUID u=UUID.fromString(value);return ByteBuffer.allocate(16).putLong(u.getMostSignificantBits()).putLong(u.getLeastSignificantBits()).array();}
     private static byte[] uint64(long value){return ByteBuffer.allocate(8).putLong(value).array();}
     private static void requireHash(String value,String name){if(value==null||!value.matches("[0-9a-f]{64}"))throw new IllegalArgumentException(name+" is not lowercase SHA-256");}
-    static void uuid(String value,String name){if(value==null||!value.matches(UUID4))throw new IllegalArgumentException(name+" is not UUIDv4");}
+    static void uuid(String value,String name){if(value==null||!UUID4_PATTERN.matcher(value).matches())throw new IllegalArgumentException(name+" is not UUIDv4");}
     static void exact(String value,int max,String name){RuntimeV2ExactIdentity.require(value,max,name);}
     static void tenant(String value){TenantId.of(value);}
     static void positive(long value,String name){if(value<=0)throw new IllegalArgumentException(name+" must be positive");}

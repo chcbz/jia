@@ -1,5 +1,6 @@
 package cn.jia.agent.service;
 
+import cn.jia.agent.entity.AgentRuntimeV2EffectCodec;
 import java.util.List;
 
 /** Owner-scoped private file execution and narrow runtime bridge contract. */
@@ -29,6 +30,47 @@ public interface PersonalWorkspaceExecutionService {
             List<OutputDeclaration> outputs);
     /** Runtime-only terminal report. It is idempotent for the same exact owner/agent execution. */
     ExecutionView fail(RuntimeScope scope, String taskId, String runId, String code);
+
+    /** Internal R4 resource boundary, not a runtime credential or public RPC.
+     * The composite reducer supplies C (not R), owns the original transaction
+     * and rechecks its authority beforeCommit. Every locked method takes the
+     * actual TASK root before execution/input/output/file/publication rows.
+     * No method starts a legacy execution, authenticates a legacy key or opens
+     * an independent transaction. These resources remain strictly area zero.
+     */
+    record V2Scope(String tenantId,String clientId,String ownerJiacn,String agentId,
+            String taskId,String workItemId,String executionId,String runId) { }
+    AgentRuntimeV2EffectCodec.DescribedResult v2Describe(V2Scope scope);
+    /** Descriptive precomputation only. Accepted bytes must be matched again
+     * to current pinned input metadata by v2Input under composite locks. */
+    record V2PreparedInput(String executionId,String runId,String inputId,String storageUri,
+            String contentType,long length,String sha256,byte[] content) {
+        public V2PreparedInput { content=content.clone(); }
+        @Override public byte[] content(){return content.clone();}
+    }
+    V2PreparedInput v2PrepareInput(V2Scope scope,String inputId);
+    AgentRuntimeV2EffectCodec.ReadResult v2Input(V2Scope scope,
+            AgentRuntimeV2EffectCodec.FileRead request,V2PreparedInput prepared);
+    /** Private content-addressed materialization/format checking occurs outside
+     * the business transaction. Publication still happens ONLY in v2Commit. */
+    interface V2PreparedMaterialization { }
+    record V2PreparedOutput(String contentType,String storageUri,String sha256,long length,byte[] content,
+            AgentTaskArtifactService.PreparedArtifact document,AgentTaskArtifactService.PreparedArtifact manifest,
+            V2PreparedMaterialization materialization) {
+        public V2PreparedOutput(String contentType,String storageUri,String sha256,long length,byte[] content){this(contentType,storageUri,sha256,length,content,null,null,null);}
+        public V2PreparedOutput { content=content.clone(); }
+        @Override public byte[] content(){return content.clone();}
+    }
+    V2PreparedOutput v2PrepareOutput(V2Scope scope,byte[] completeContent);
+    StagedOutput v2Stage(V2Scope scope,String outputId,V2PreparedOutput prepared);
+    /** Requires the exact server-produced staged materialization; no path or
+     * caller-selected formal-delivery identity is accepted. */
+    V2PreparedOutput v2PrepareCommit(V2Scope scope,String outputId);
+    AgentRuntimeV2EffectCodec.CommitProjection v2Commit(V2Scope scope,
+            AgentRuntimeV2EffectCodec.FileCommit request,V2PreparedOutput prepared);
+    /** Read-only authoritative result locks under the original REQUIRED task
+     * root. No lease extension, storage access or resource publication. */
+    void v2LockKnownOutcome(V2Scope scope);
 
     record OwnerScope(String tenantId, String clientId, String ownerJiacn) { }
     record RuntimeScope(String tenantId, String clientId, String ownerJiacn, String agentId,

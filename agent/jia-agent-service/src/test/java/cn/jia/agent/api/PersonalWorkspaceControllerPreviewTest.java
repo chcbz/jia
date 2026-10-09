@@ -16,6 +16,7 @@ import java.util.List;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
@@ -95,13 +96,35 @@ class PersonalWorkspaceControllerPreviewTest {
         verify(service, times(2)).preview(scope, FILE, 1);
     }
 
+    @Test
+    void otherAreaOrDomainCannotUploadOrReadLegacyPersonalFiles() throws Exception {
+        for (JwtAuthenticationToken principal : List.of(
+                jwt("1", "cyf"), jwt("00", "cyf"), jwt("0", "other"),
+                jwt(null, "cyf"), jwt("0", null))) {
+            mvc.perform(get("/agent/personal-workspace/files").principal(principal))
+                    .andExpect(status().isNotFound());
+            mvc.perform(multipart("/agent/personal-workspace/files")
+                            .file(new MockMultipartFile("file", "notes.txt", "text/plain", new byte[]{1}))
+                            .header("Idempotency-Key", "cross-area-key").principal(principal))
+                    .andExpect(status().isNotFound());
+        }
+        verifyNoInteractions(service);
+    }
+
     private static JwtAuthenticationToken jwt() {
-        Jwt token = Jwt.withTokenValue("token")
+        return jwt("0", "cyf");
+    }
+
+    private static JwtAuthenticationToken jwt(String tenant, String domain) {
+        Jwt.Builder builder = Jwt.withTokenValue("token")
                 .header("alg", "none")
                 .claim("jiacn", OWNER)
                 .claim("client_id", CLIENT)
                 .claim("sub", "subject-a")
-                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();
+                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60));
+        if (tenant != null) builder.claim("tenant_id", tenant);
+        if (domain != null) builder.claim("data_domain_id", domain);
+        Jwt token = builder.build();
         return new JwtAuthenticationToken(token, List.of());
     }
 }

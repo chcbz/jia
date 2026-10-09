@@ -3,12 +3,17 @@ package cn.jia.chat.dao.impl;
 import cn.jia.chat.dao.ChatConversationDao;
 import cn.jia.chat.entity.AgentTaskThreadConstants;
 import cn.jia.chat.entity.ChatConversationEntity;
+import cn.jia.chat.entity.ConversationDataScope;
 import cn.jia.chat.mapper.ChatConversationMapper;
+import cn.jia.chat.mapper.MemoryPublicationMapper;
 import cn.jia.common.dao.BaseDaoImpl;
-import cn.jia.core.mybatis.TenantScopeHelper;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
 import cn.jia.core.util.StringUtil;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import jakarta.inject.Named;
+import jakarta.inject.Inject;
 
 import java.util.List;
 
@@ -17,89 +22,120 @@ import java.util.List;
 public class ChatConversationDaoImpl extends BaseDaoImpl<ChatConversationMapper, ChatConversationEntity>
         implements ChatConversationDao {
 
+    @Inject
+    private MemoryPublicationMapper memoryPublicationMapper;
+
     @Override
     public ChatConversationEntity findScopedById(
-            String ownerJiacn, String clientId, String conversationId) {
-        requireIdentity(ownerJiacn, "ownerJiacn");
-        requireIdentity(clientId, "clientId");
-        return baseMapper.findExactScopedById(ownerJiacn, clientId, parseId(conversationId));
+            ConversationDataScope scope, String conversationId) {
+        requireScope(scope);
+        Long id = parseId(conversationId);
+        return scope.mode() == ConversationDataScope.Mode.DOMAIN
+                ? baseMapper.findExactDomainScopedById(
+                scope.tenantId(), scope.dataDomainId(), scope.ownerJiacn(), id)
+                : baseMapper.findExactScopedById(
+                scope.ownerJiacn(), scope.callerClientId(), id);
     }
 
     @Override
     public ChatConversationEntity lockScopedById(
-            String ownerJiacn, String clientId, String conversationId) {
-        requireIdentity(ownerJiacn, "ownerJiacn");
-        requireIdentity(clientId, "clientId");
-        return baseMapper.lockExactScopedById(ownerJiacn, clientId, parseId(conversationId));
+            ConversationDataScope scope, String conversationId) {
+        requireScope(scope);
+        Long id = parseId(conversationId);
+        return scope.mode() == ConversationDataScope.Mode.DOMAIN
+                ? baseMapper.lockExactDomainScopedById(
+                scope.tenantId(), scope.dataDomainId(), scope.ownerJiacn(), id)
+                : baseMapper.lockExactScopedById(
+                scope.ownerJiacn(), scope.callerClientId(), id);
     }
 
     @Override
     public ChatConversationEntity lockScopedByIdIncludingDeleted(
-            String ownerJiacn, String clientId, String conversationId) {
-        requireIdentity(ownerJiacn, "ownerJiacn");
-        requireIdentity(clientId, "clientId");
-        return baseMapper.lockExactScopedByIdIncludingDeleted(
-                ownerJiacn, clientId, parseId(conversationId));
+            ConversationDataScope scope, String conversationId) {
+        requireScope(scope);
+        Long id = parseId(conversationId);
+        return scope.mode() == ConversationDataScope.Mode.DOMAIN
+                ? baseMapper.lockExactDomainScopedByIdIncludingDeleted(
+                scope.tenantId(), scope.dataDomainId(), scope.ownerJiacn(), id)
+                : baseMapper.lockExactScopedByIdIncludingDeleted(
+                scope.ownerJiacn(), scope.callerClientId(), id);
     }
 
     @Override
     public int softDeleteScopedById(
-            String ownerJiacn, String clientId, String conversationId, long deletedAt) {
-        requireIdentity(ownerJiacn, "ownerJiacn");
-        requireIdentity(clientId, "clientId");
+            ConversationDataScope scope, String conversationId, long deletedAt) {
+        requireScope(scope);
         if (deletedAt <= 0) {
             throw new IllegalArgumentException("deletedAt is invalid");
         }
-        return baseMapper.softDeleteExactScopedById(
-                ownerJiacn, clientId, parseId(conversationId), deletedAt);
+        Long id = parseId(conversationId);
+        int deleted = scope.mode() == ConversationDataScope.Mode.DOMAIN
+                ? baseMapper.softDeleteExactDomainScopedById(
+                scope.tenantId(), scope.dataDomainId(), scope.ownerJiacn(), id, deletedAt)
+                : baseMapper.softDeleteExactScopedById(
+                scope.ownerJiacn(), scope.callerClientId(), id, deletedAt);
+        if (deleted == 1) {
+            String scopeKey = scope.mode() == ConversationDataScope.Mode.DOMAIN
+                    ? scope.dataDomainId() : scope.callerClientId();
+            memoryPublicationMapper.tombstonePublications(
+                    scope.tenantId(), scope.mode().name(), scopeKey,
+                    scope.ownerJiacn(), Long.toString(id), deletedAt);
+            memoryPublicationMapper.cancelWork(
+                    scope.tenantId(), scope.mode().name(), scopeKey,
+                    scope.ownerJiacn(), Long.toString(id), deletedAt);
+        }
+        return deleted;
     }
 
     @Override
     public int updateScopedFields(
-            String ownerJiacn, String clientId, ChatConversationEntity entity) {
-        requireIdentity(ownerJiacn, "ownerJiacn");
-        requireIdentity(clientId, "clientId");
+            ConversationDataScope scope, ChatConversationEntity entity) {
+        requireScope(scope);
         if (entity == null || entity.getId() == null) {
             throw new IllegalArgumentException("conversation is required");
         }
-        return baseMapper.updateExactOwnedFields(ownerJiacn, clientId, entity.getId(),
+        return scope.mode() == ConversationDataScope.Mode.DOMAIN
+                ? baseMapper.updateExactDomainOwnedFields(
+                scope.tenantId(), scope.dataDomainId(), scope.ownerJiacn(), entity.getId(),
+                entity.getTitle(), entity.getStatus())
+                : baseMapper.updateExactOwnedFields(
+                scope.ownerJiacn(), scope.callerClientId(), entity.getId(),
                 entity.getTitle(), entity.getStatus());
     }
 
     @Override
     public boolean isLiveGeneration(
-            String ownerJiacn, String clientId, String conversationId, long expectedGeneration) {
-        requireIdentity(ownerJiacn, "ownerJiacn");
-        requireIdentity(clientId, "clientId");
+            ConversationDataScope scope, String conversationId, long expectedGeneration) {
+        requireScope(scope);
         if (expectedGeneration < 1) {
             throw new IllegalArgumentException("expectedGeneration is invalid");
         }
-        return baseMapper.countExactLiveGeneration(
-                ownerJiacn, clientId, parseId(conversationId), expectedGeneration) == 1;
+        Long id = parseId(conversationId);
+        int count = scope.mode() == ConversationDataScope.Mode.DOMAIN
+                ? baseMapper.countExactDomainLiveGeneration(
+                scope.tenantId(), scope.dataDomainId(), scope.ownerJiacn(), id, expectedGeneration)
+                : baseMapper.countExactLiveGeneration(
+                scope.ownerJiacn(), scope.callerClientId(), id, expectedGeneration);
+        return count == 1;
     }
 
     @Override
-    public List<ChatConversationEntity> selectNonTaskThreadByEntity(ChatConversationEntity example) {
+    public List<ChatConversationEntity> selectNonTaskThreadByEntity(
+            ConversationDataScope scope, ChatConversationEntity example) {
+        requireScope(scope);
         if (example == null) {
             throw new IllegalArgumentException("scoped conversation example is required");
         }
-        requireIdentity(example.getJiacn(), "jiacn");
-        requireIdentity(example.getClientId(), "clientId");
-        if (!TenantScopeHelper.DEFAULT_TENANT.equals(example.getTenantId())) {
-            throw new IllegalArgumentException("tenantId must be the single tenant");
-        }
-
         QueryWrapper<ChatConversationEntity> wrapper = new QueryWrapper<>();
-        wrapper.eq("jiacn", example.getJiacn())
-                .apply("CAST(jiacn AS BINARY) = CAST({0} AS BINARY)", example.getJiacn())
-                .apply("OCTET_LENGTH(jiacn) = OCTET_LENGTH({0})", example.getJiacn())
-                .eq("client_id", example.getClientId())
-                .apply("CAST(client_id AS BINARY) = CAST({0} AS BINARY)", example.getClientId())
-                .apply("OCTET_LENGTH(client_id) = OCTET_LENGTH({0})", example.getClientId())
-                .eq("tenant_id", TenantScopeHelper.DEFAULT_TENANT)
-                .apply("CAST(tenant_id AS BINARY) = CAST('0' AS BINARY)")
-                .apply("OCTET_LENGTH(tenant_id) = OCTET_LENGTH('0')")
-                .isNull("deleted_at");
+        exact(wrapper, "data_scope_mode", scope.mode().name());
+        exact(wrapper, "tenant_id", scope.tenantId());
+        exact(wrapper, "jiacn", scope.ownerJiacn());
+        if (scope.mode() == ConversationDataScope.Mode.DOMAIN) {
+            exact(wrapper, "data_domain_id", scope.dataDomainId());
+        } else {
+            exact(wrapper, "client_id", scope.callerClientId());
+        }
+        wrapper.isNull("deleted_at");
         addAllowedFilters(example, wrapper);
         wrapper.and(nested -> nested.isNull("conversation_scope_type")
                         .or().ne("conversation_scope_type",
@@ -107,6 +143,54 @@ public class ChatConversationDaoImpl extends BaseDaoImpl<ChatConversationMapper,
                 .notExists("SELECT 1 FROM agent_task_thread t "
                         + "WHERE t.conversation_id = CAST(chat_conversation.id AS CHAR)");
         return baseMapper.selectList(wrapper);
+    }
+
+    @Override
+    public ChatConversationEntity findScopedById(
+            String ownerJiacn, String clientId, String conversationId) {
+        return findScopedById(legacyScope(ownerJiacn, clientId), conversationId);
+    }
+
+    @Override
+    public ChatConversationEntity lockScopedById(
+            String ownerJiacn, String clientId, String conversationId) {
+        return lockScopedById(legacyScope(ownerJiacn, clientId), conversationId);
+    }
+
+    @Override
+    public ChatConversationEntity lockScopedByIdIncludingDeleted(
+            String ownerJiacn, String clientId, String conversationId) {
+        return lockScopedByIdIncludingDeleted(legacyScope(ownerJiacn, clientId), conversationId);
+    }
+
+    @Override
+    public int softDeleteScopedById(
+            String ownerJiacn, String clientId, String conversationId, long deletedAt) {
+        return softDeleteScopedById(
+                legacyScope(ownerJiacn, clientId), conversationId, deletedAt);
+    }
+
+    @Override
+    public int updateScopedFields(
+            String ownerJiacn, String clientId, ChatConversationEntity entity) {
+        return updateScopedFields(legacyScope(ownerJiacn, clientId), entity);
+    }
+
+    @Override
+    public boolean isLiveGeneration(
+            String ownerJiacn, String clientId, String conversationId, long expectedGeneration) {
+        return isLiveGeneration(
+                legacyScope(ownerJiacn, clientId), conversationId, expectedGeneration);
+    }
+
+    @Override
+    public List<ChatConversationEntity> selectNonTaskThreadByEntity(
+            ChatConversationEntity example) {
+        if (example == null) {
+            throw new IllegalArgumentException("scoped conversation example is required");
+        }
+        return selectNonTaskThreadByEntity(
+                legacyScope(example.getJiacn(), example.getClientId()), example);
     }
 
     private void addAllowedFilters(
@@ -127,6 +211,31 @@ public class ChatConversationDaoImpl extends BaseDaoImpl<ChatConversationMapper,
                         "target_agent_ids", example.getTargetAgentIds())
                 .eq(example.getCreateTime() != null, "create_time", example.getCreateTime())
                 .eq(example.getUpdateTime() != null, "update_time", example.getUpdateTime());
+    }
+
+    private void exact(QueryWrapper<ChatConversationEntity> wrapper, String column, String value) {
+        wrapper.eq(column, value)
+                .apply("CAST(" + column + " AS BINARY) = CAST({0} AS BINARY)", value)
+                .apply("OCTET_LENGTH(" + column + ") = OCTET_LENGTH({0})", value);
+    }
+
+    private ConversationDataScope legacyScope(String ownerJiacn, String clientId) {
+        requireIdentity(ownerJiacn, "ownerJiacn");
+        requireIdentity(clientId, "clientId");
+        return new ConversationDataScope(
+                new BusinessScope(TenantId.of("0"), DataDomainId.of("cyf"),
+                        ownerJiacn, clientId),
+                ConversationDataScope.Mode.LEGACY_CLIENT);
+    }
+
+    private void requireScope(ConversationDataScope scope) {
+        if (scope == null) {
+            throw new IllegalArgumentException("conversation scope is required");
+        }
+        requireIdentity(scope.tenantId(), "tenantId");
+        requireIdentity(scope.dataDomainId(), "dataDomainId");
+        requireIdentity(scope.ownerJiacn(), "ownerJiacn");
+        requireIdentity(scope.callerClientId(), "clientId");
     }
 
     private Long parseId(String value) {

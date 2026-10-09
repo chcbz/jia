@@ -602,12 +602,17 @@ class AgentTaskThreadRealDatabaseTest {
                     id BIGINT NOT NULL AUTO_INCREMENT,
                     title VARCHAR(500),
                     jiacn VARCHAR(50),
+                    data_domain_id VARCHAR(64) NOT NULL DEFAULT 'cyf',
                     conversation_type VARCHAR(20),
                     conversation_scope_type VARCHAR(20),
                     conversation_scope_key VARCHAR(120),
                     task_id VARCHAR(64),
                     target_agent_id VARCHAR(100),
                     deleted_at BIGINT,
+                    lifecycle_generation BIGINT NOT NULL DEFAULT 1,
+                    data_scope_mode VARCHAR(20) NOT NULL DEFAULT 'LEGACY_CLIENT',
+                    memory_published_token CHAR(64),
+                    memory_published_revision BIGINT,
                     status INT,
                     create_time BIGINT,
                     update_time BIGINT,
@@ -631,6 +636,7 @@ class AgentTaskThreadRealDatabaseTest {
                     update_time BIGINT,
                     tenant_id VARCHAR_IGNORECASE(50),
                     client_id VARCHAR_IGNORECASE(50),
+                    data_domain_id VARCHAR(64) NOT NULL DEFAULT 'cyf',
                     PRIMARY KEY (id)
                 )""");
         jdbc.execute("""

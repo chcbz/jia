@@ -186,6 +186,8 @@ public class AgentTaskArtifactOutcomeController {
             throw new AuthenticationFailure(false);
         }
         Map<String, Object> claims = jwt.getToken().getClaims();
+        if (!"0".equals(claims.get("tenant_id")) || !"cyf".equals(claims.get("data_domain_id")))
+            throw new AuthenticationFailure(true);
         String ownerJiacn = requiredClaim(claims, "jiacn", 50);
         if ("0".equals(ownerJiacn)) {
             throw new AuthenticationFailure(true);
@@ -195,6 +197,8 @@ public class AgentTaskArtifactOutcomeController {
         if (!byteExact(authentication.getName(), actorAgentId)) {
             throw new AuthenticationFailure(true);
         }
+        // Legacy outcome and event gate remain tenant-0 / client scoped;
+        // nonzero selected areas must not be rebound to that scope.
         return new Scope("0", clientId, ownerJiacn, actorAgentId);
     }
 

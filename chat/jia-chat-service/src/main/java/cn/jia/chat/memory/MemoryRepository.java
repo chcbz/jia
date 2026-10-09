@@ -1,5 +1,8 @@
 package cn.jia.chat.memory;
 
+import cn.jia.chat.entity.ConversationDataScope;
+import cn.jia.chat.entity.MemoryPublicationRecord;
+
 import java.util.List;
 
 /**
@@ -19,6 +22,19 @@ public interface MemoryRepository {
      */
     void save(MemoryDocument document);
 
+    default void save(ConversationDataScope scope, MemoryDocument document) {
+        throw new IllegalStateException("Scoped memory storage is unavailable");
+    }
+
+    /**
+     * Saves one idempotent, monotonically versioned conversation snapshot.
+     */
+    default void saveConversationSnapshot(
+            ConversationDataScope scope, MemoryDocument document,
+            MemoryPublicationRecord publication) {
+        throw new IllegalStateException("Versioned conversation memory storage is unavailable");
+    }
+
     /**
      * 保存记忆文档列表
      *
@@ -37,6 +53,12 @@ public interface MemoryRepository {
      * @return 记忆文档列表
      */
     List<MemoryDocument> searchWithConversationBoost(String jiacn, String userMessage, String currentConversationId, int topK, double similarityThreshold);
+
+    default List<MemoryDocument> searchWithConversationBoost(
+            ConversationDataScope scope, String userMessage, String currentConversationId,
+            int topK, double similarityThreshold) {
+        throw new IllegalStateException("Scoped memory search is unavailable");
+    }
 
     /**
      * 搜索记忆 (简单向量检索)

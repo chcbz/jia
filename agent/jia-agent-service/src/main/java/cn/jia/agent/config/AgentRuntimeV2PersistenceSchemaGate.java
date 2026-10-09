@@ -44,13 +44,15 @@ public final class AgentRuntimeV2PersistenceSchemaGate implements InitializingBe
         }
         List<ColumnDefinition> bindingColumns = catalog.columns(BINDING);
         boolean registrationExtended;
-        if (expectedColumns().get(BINDING).equals(bindingColumns)) {
+        if (columnsMatch(expectedColumns().get(BINDING), bindingColumns)) {
             registrationExtended = false;
-        } else if (registrationExtendedColumns().get(BINDING).equals(bindingColumns)) {
+        } else if (columnsMatch(registrationExtendedColumns().get(BINDING), bindingColumns)) {
             registrationExtended = true;
         } else {
             throw invalid(BINDING + " column contract drift");
         }
+        boolean executionExtended = registrationExtended
+                && columnsMatch(executionExtendedColumns().get(REQUEST), catalog.columns(REQUEST));
         for (String table : List.of(INBOX, BINDING, GENERATION_FACT, RECEIPT, LEASE_FACT,
                 GRANT, ANCHOR, REQUEST)) {
             TableDefinition definition = catalog.table(table);
@@ -60,9 +62,10 @@ public final class AgentRuntimeV2PersistenceSchemaGate implements InitializingBe
             }
             List<ColumnDefinition> actualColumns = BINDING.equals(table)
                     ? bindingColumns : catalog.columns(table);
-            Map<String, List<ColumnDefinition>> columnContract = registrationExtended
+            Map<String, List<ColumnDefinition>> columnContract = executionExtended
+                    ? executionExtendedColumns() : registrationExtended
                     ? registrationExtendedColumns() : expectedColumns();
-            if (!columnContract.get(table).equals(actualColumns)) {
+            if (!columnsMatch(columnContract.get(table), actualColumns)) {
                 throw invalid(table + " column contract drift");
             }
             Map<String, Map<String, IndexDefinition>> indexContract = registrationExtended
@@ -73,7 +76,34 @@ public final class AgentRuntimeV2PersistenceSchemaGate implements InitializingBe
             if (catalog.participatingForeignKeyCount(table) != 0) {
                 throw invalid(table + " must not participate in foreign keys");
             }
-            validateChecks(table, catalog.checks(table), registrationExtended);
+            validateChecks(table, catalog.checks(table), registrationExtended, executionExtended);
+        }
+    }
+
+    private static boolean columnsMatch(List<ColumnDefinition> expected, List<ColumnDefinition> actual) {
+        if (actual == null || expected.size() != actual.size()) return false;
+        for (int i = 0; i < expected.size(); i++) {
+            ColumnDefinition want = expected.get(i), got = actual.get(i);
+            if (got == null || !Objects.equals(want.name(), got.name())
+                    || !Objects.equals(want.dataType(), got.dataType())
+                    || !Objects.equals(want.columnType(), got.columnType())
+                    || want.nullable() != got.nullable()
+                    || !Objects.equals(want.defaultValue(), got.defaultValue())
+                    || !Objects.equals(want.collation(), got.collation())
+                    || !Objects.equals(want.extra(), got.extra())
+                    || !sameGeneratedExpression(want.generationExpression(), got.generationExpression())) return false;
+        }
+        return true;
+    }
+
+    // Compare raw SQL only here. Records and copies retain the original catalog
+    // bytes; a generated: key must never be fed back into the SQL parser.
+    static boolean sameGeneratedExpression(String expected, String actual) {
+        try {
+            return AgentMysqlCheckCanonicalizer.generatedExpression(expected)
+                    .equals(AgentMysqlCheckCanonicalizer.generatedExpression(actual));
+        } catch (IllegalArgumentException unsupported) {
+            return false;
         }
     }
 
@@ -220,6 +250,16 @@ public final class AgentRuntimeV2PersistenceSchemaGate implements InitializingBe
         return Map.copyOf(result);
     }
 
+    static Map<String, List<ColumnDefinition>> executionExtendedColumns() {
+        var result = new LinkedHashMap<>(registrationExtendedColumns());
+        var request = new ArrayList<>(result.get(REQUEST));
+        AgentRuntimeV2ExecutionSchemaGate.extensionColumns().forEach(c -> request.add(
+                new ColumnDefinition(c.name(), c.dataType(), c.columnType(), c.nullable(),
+                        c.defaultValue(), c.collation(), c.extra(), c.generationExpression())));
+        result.put(REQUEST, List.copyOf(request));
+        return Map.copyOf(result);
+    }
+
     private static List<ColumnDefinition> insertAfter(List<ColumnDefinition> baseline, String anchor,
             List<AgentRuntimeV2RegistrationSchemaGate.ColumnDefinition> additions) {
         List<ColumnDefinition> result = new ArrayList<>();
@@ -244,7 +284,8 @@ public final class AgentRuntimeV2PersistenceSchemaGate implements InitializingBe
         });
         return Map.copyOf(result);
     }
-    private static void validateChecks(String table, Map<String, CheckDefinition> checks, boolean registrationExtended) {
+    private static void validateChecks(String table, Map<String, CheckDefinition> checks,
+            boolean registrationExtended, boolean executionExtended) {
         Set<String> expected = switch (table) {
             case INBOX -> Set.of(AgentCommandConsumerV2SchemaGate.SCOPE_CHECK,
                     AgentCommandConsumerV2SchemaGate.ACK_EVIDENCE_CHECK,
@@ -264,6 +305,11 @@ public final class AgentRuntimeV2PersistenceSchemaGate implements InitializingBe
             combined.addAll(AgentRuntimeV2RegistrationSchemaGate.expectedChecks().get(table).keySet());
             expected = Set.copyOf(combined);
         }
+        if (executionExtended && REQUEST.equals(table)) {
+            var extended = new java.util.HashSet<>(expected);
+            extended.add("chk_execution_request_raw");
+            expected = Set.copyOf(extended);
+        }
         if (!checks.keySet().equals(expected) || checks.values().stream().anyMatch(c -> !c.enforced())) {
             throw invalid(table + " CHECK set is missing, extra, or unenforced");
         }
@@ -276,11 +322,15 @@ public final class AgentRuntimeV2PersistenceSchemaGate implements InitializingBe
             }
         }
         for (Map.Entry<String, CheckDefinition> entry : checks.entrySet()) {
-            String expectedClause = registrationExtended
+            String expectedClause = executionExtended && "chk_execution_request_raw".equals(entry.getKey())
+                    ? AgentRuntimeV2ExecutionSchemaGate.checkClause() : registrationExtended
                     ? registrationCheckClauses().get(entry.getKey())
                     : expectedCheckClauses().get(entry.getKey());
             if (expectedClause != null && !canonicalCheck(expectedClause)
                     .equals(canonicalCheck(entry.getValue().clause()))) {
+                if (registrationExtended && "chk_binding_generation_fact_canonical".equals(entry.getKey())
+                        && canonicalCheck(AgentRuntimeV2RegistrationDeltaSchemaGate.DISCONNECT_CHECK)
+                            .equals(canonicalCheck(entry.getValue().clause()))) continue;
                 throw invalid(table + " CHECK " + entry.getKey() + " is weakened or noncanonical");
             }
         }
@@ -655,8 +705,12 @@ public final class AgentRuntimeV2PersistenceSchemaGate implements InitializingBe
     }
 
     static boolean isCanonicalRuntimeProjectionCheck(String clause) {
-        return canonicalCheck(expectedCheckClauses().get("chk_inbox_runtime_v2_projection"))
-                .equals(canonicalCheck(clause));
+        try {
+            return AgentMysqlCheckCanonicalizer.canonicalCheck(expectedCheckClauses().get("chk_inbox_runtime_v2_projection"))
+                    .equals(AgentMysqlCheckCanonicalizer.canonicalCheck(clause));
+        } catch (IllegalArgumentException malformed) {
+            return false;
+        }
     }
 
     private static List<ColumnDefinition> runtimeInboxColumns() {
@@ -941,159 +995,14 @@ public final class AgentRuntimeV2PersistenceSchemaGate implements InitializingBe
         return Map.copyOf(result);
     }
     static String canonicalCheck(String value) {
-        String normalized = normalize(value).replaceAll(
-                "regexp_like\\(([a-z0-9_]+),\\s*('[^']*')\\)", "$1 regexp $2");
-        return canonicalBoolean(normalized);
-    }
-    private static String canonicalBoolean(String expression) {
-        String value = stripOuter(expression);
-        List<String> alternatives = splitBoolean(value, "or");
-        if (alternatives.size() > 1) {
-            return "or(" + String.join(",", alternatives.stream()
-                    .map(AgentRuntimeV2PersistenceSchemaGate::canonicalBoolean).toList()) + ")";
+        try {
+            // This legacy seam also compares generated-column metadata. Blank
+            // metadata has a dedicated generated-expression path; CHECK parsing
+            // itself never treats malformed/empty input as a valid predicate.
+            return AgentMysqlCheckCanonicalizer.expression(value);
+        } catch (IllegalArgumentException malformed) {
+            throw invalid("unsupported or malformed catalog expression");
         }
-        List<String> conjunctions = splitBoolean(value, "and");
-        if (conjunctions.size() > 1) {
-            return "and(" + String.join(",", conjunctions.stream()
-                    .map(AgentRuntimeV2PersistenceSchemaGate::canonicalBoolean).toList()) + ")";
-        }
-        return value.trim();
-    }
-    private static List<String> splitBoolean(String expression, String operator) {
-        List<String> result = new ArrayList<>();
-        int start = 0;
-        int depth = 0;
-        boolean quoted = false;
-        boolean between = false;
-        for (int index = 0; index < expression.length();) {
-            char character = expression.charAt(index);
-            if (character == '\'') {
-                if (quoted && index + 1 < expression.length()
-                        && expression.charAt(index + 1) == '\'') {
-                    index += 2;
-                    continue;
-                }
-                quoted = !quoted;
-                index++;
-                continue;
-            }
-            if (quoted) {
-                index++;
-                continue;
-            }
-            if (character == '(') {
-                depth++;
-                index++;
-                continue;
-            }
-            if (character == ')') {
-                depth--;
-                index++;
-                continue;
-            }
-            if (depth == 0 && Character.isLetter(character)) {
-                int end = index + 1;
-                while (end < expression.length()
-                        && (Character.isLetterOrDigit(expression.charAt(end))
-                        || expression.charAt(end) == '_')) end++;
-                String word = expression.substring(index, end);
-                if ("between".equals(word)) {
-                    between = true;
-                } else if ("and".equals(word) && between) {
-                    between = false;
-                } else if (operator.equals(word)) {
-                    result.add(expression.substring(start, index).trim());
-                    start = end;
-                }
-                index = end;
-                continue;
-            }
-            index++;
-        }
-        result.add(expression.substring(start).trim());
-        return List.copyOf(result);
-    }
-    private static String stripOuter(String expression) {
-        String value = expression.trim();
-        while (value.startsWith("(") && matchingClose(value, 0) == value.length() - 1) {
-            value = value.substring(1, value.length() - 1).trim();
-        }
-        return value;
-    }
-    private static int matchingClose(String value, int open) {
-        int depth = 0;
-        boolean quoted = false;
-        for (int index = open; index < value.length(); index++) {
-            char character = value.charAt(index);
-            if (character == '\'') {
-                if (quoted && index + 1 < value.length() && value.charAt(index + 1) == '\'') {
-                    index++;
-                } else {
-                    quoted = !quoted;
-                }
-            } else if (!quoted && character == '(') {
-                depth++;
-            } else if (!quoted && character == ')' && --depth == 0) {
-                return index;
-            }
-        }
-        return -1;
-    }
-    private static String normalize(String value) {
-        if (value == null) return "";
-        StringBuilder normalized = new StringBuilder(value.length());
-        boolean quoted = false;
-        boolean pendingWhitespace = false;
-        for (int index = 0; index < value.length(); index++) {
-            char character = value.charAt(index);
-            if (quoted) {
-                normalized.append(character);
-                if (character == '\'') {
-                    if (index + 1 < value.length() && value.charAt(index + 1) == '\'') {
-                        normalized.append(value.charAt(++index));
-                    } else {
-                        quoted = false;
-                    }
-                }
-                continue;
-            }
-            if (character == '\'') {
-                appendPendingWhitespace(normalized, character, pendingWhitespace);
-                pendingWhitespace = false;
-                normalized.append(character);
-                quoted = true;
-                continue;
-            }
-            if (character == '`') continue;
-            if (isUtf8mb4Introducer(value, index)) {
-                index += "_utf8mb4".length() - 1;
-                continue;
-            }
-            if (Character.isWhitespace(character)) {
-                pendingWhitespace = true;
-                continue;
-            }
-            appendPendingWhitespace(normalized, character, pendingWhitespace);
-            pendingWhitespace = false;
-            normalized.append(Character.toLowerCase(character));
-        }
-        return normalized.toString().trim();
-    }
-    private static boolean isUtf8mb4Introducer(String value, int index) {
-        String introducer = "_utf8mb4";
-        if (!value.regionMatches(true, index, introducer, 0, introducer.length())) return false;
-        int next = index + introducer.length();
-        while (next < value.length() && Character.isWhitespace(value.charAt(next))) next++;
-        return next < value.length() && value.charAt(next) == '\'';
-    }
-    private static void appendPendingWhitespace(StringBuilder target, char next,
-            boolean pendingWhitespace) {
-        if (!pendingWhitespace || target.isEmpty()) return;
-        char previous = target.charAt(target.length() - 1);
-        if (!isCheckPunctuation(previous) && !isCheckPunctuation(next)) target.append(' ');
-    }
-    private static boolean isCheckPunctuation(char value) {
-        return "=<>+(),".indexOf(value) >= 0;
     }
     private static IllegalStateException invalid(String reason) {
         return new IllegalStateException("Agent runtime v2 persistence schema unavailable: " + reason);

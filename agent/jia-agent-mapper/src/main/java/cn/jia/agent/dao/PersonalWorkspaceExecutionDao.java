@@ -28,6 +28,18 @@ public interface PersonalWorkspaceExecutionDao {
             String taskId, String runId);
     List<PersonalWorkspaceExecutionEntity> listQueuedByTarget(String tenantId, String clientId,
             String ownerJiacn, String targetAgentId, int limit);
+    /**
+     * Exact TASK association hint, including revoked/committed rows. Returns at
+     * most two rows so the composite reducer can reject ambiguity rather than
+     * interpret a truncated queue or hidden state as ordinary CODEX authority.
+     * This read neither locks a business root nor grants execution; the selected
+     * row must be locked/revalidated AFTER the composite task-root lock.
+     */
+    default List<PersonalWorkspaceExecutionEntity> findTaskAssociations(String tenantId,
+            String clientId, String ownerJiacn, String taskId, String workItemId,
+            String targetAgentId) {
+        throw new UnsupportedOperationException("exact TASK association lookup unavailable");
+    }
     void insert(PersonalWorkspaceExecutionEntity execution);
     void update(PersonalWorkspaceExecutionEntity execution);
     void insertInput(PersonalWorkspaceExecutionInputEntity input);
@@ -42,6 +54,12 @@ public interface PersonalWorkspaceExecutionDao {
     void updateInput(PersonalWorkspaceExecutionInputEntity input);
     PersonalWorkspaceExecutionOutputEntity lockOutput(String tenantId, String clientId,
             String ownerJiacn, String executionId, String outputId);
+    /** Descriptive immutable-content precomputation only; caller must lock and
+     * revalidate the exact row under the resource root before publication. */
+    default PersonalWorkspaceExecutionOutputEntity findOutput(String tenantId,String clientId,
+            String ownerJiacn,String executionId,String outputId) {
+        throw new UnsupportedOperationException("exact output lookup unavailable");
+    }
     List<PersonalWorkspaceExecutionOutputEntity> lockOutputs(String tenantId, String clientId,
             String ownerJiacn, String executionId);
     /** Exact immutable, already-published TASK output eligible as a rework source. */

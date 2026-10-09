@@ -15,8 +15,24 @@ public final class AccountSecurityJwtValidator implements OAuth2TokenValidator<J
 
     private final AccountSecurityService accountSecurityService;
 
+    private final TenantAuthorizationVerifier tenantAuthorizationVerifier;
+    private final boolean requireBoundIdentity;
+
     public AccountSecurityJwtValidator(AccountSecurityService accountSecurityService) {
+        this(accountSecurityService, null, true);
+    }
+
+    public AccountSecurityJwtValidator(AccountSecurityService accountSecurityService,
+                                       TenantAuthorizationVerifier tenantAuthorizationVerifier) {
+        this(accountSecurityService, tenantAuthorizationVerifier, true);
+    }
+
+    public AccountSecurityJwtValidator(AccountSecurityService accountSecurityService,
+                                       TenantAuthorizationVerifier tenantAuthorizationVerifier,
+                                       boolean requireBoundIdentity) {
         this.accountSecurityService = accountSecurityService;
+        this.tenantAuthorizationVerifier = tenantAuthorizationVerifier;
+        this.requireBoundIdentity = requireBoundIdentity;
     }
 
     @Override
@@ -46,7 +62,22 @@ public final class AccountSecurityJwtValidator implements OAuth2TokenValidator<J
                     : account.isAuthenticatable()
                     && account.jiacn().equals(identity.jiacn())
                     && account.authEpoch() == 0;
-            return valid ? OAuth2TokenValidatorResult.success() : failure();
+            if (!valid) return failure();
+            if (identity.tokenClass() == AccountSecurityJwtClaims.TokenClass.USER) {
+                Optional<TenantAuthorizationAttributes> bound = AccountSecurityJwtClaims.tenantBinding(jwt);
+                if (bound.isEmpty() || tenantAuthorizationVerifier == null
+                        || !tenantAuthorizationVerifier.isCurrent(bound.get(), identity.userId(),
+                        jwt.getClaim("client_id"))) {
+                    return failure();
+                }
+            } else {
+                // Legacy user JWTs have no trustworthy area/owner binding. A
+                // strict multi-area deployment must reject them. Compatibility
+                // deployments remain tenant-zero-only and preserve their
+                // existing account/auth-epoch validation until cutover.
+                if (requireBoundIdentity) return failure();
+            }
+            return OAuth2TokenValidatorResult.success();
         } catch (RuntimeException exception) {
             return failure();
         }

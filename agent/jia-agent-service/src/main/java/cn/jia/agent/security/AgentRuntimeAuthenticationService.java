@@ -3,6 +3,10 @@ package cn.jia.agent.security;
 import cn.jia.agent.config.AgentTaskEventsGate;
 import cn.jia.agent.dao.AgentRuntimeDao;
 import cn.jia.agent.service.AgentIdentityService;
+import cn.jia.agent.service.AgentCommandV2ExecutionPort;
+import cn.jia.agent.service.AgentCommandV2RuntimeAuthority;
+import cn.jia.agent.service.AgentCommandV2RuntimeGateway;
+import cn.jia.core.tenant.WorkerScope;
 import cn.jia.oauth.service.ApiKeyService;
 import cn.jia.user.security.AccountSecurityService;
 import cn.jia.user.security.AccountSecuritySnapshot;
@@ -22,7 +26,7 @@ import java.util.function.BooleanSupplier;
  * No secret is retained in the registry or principal. No client-selected scope is accepted.
  */
 @Service
-public final class AgentRuntimeAuthenticationService {
+public final class AgentRuntimeAuthenticationService implements AgentCommandV2RuntimeAuthority {
     private static final String SINGLE_TENANT_ID = "0";
     // Wire syntax is bounded only; persisted direct-canonical authority is mandatory below.
     private static final Pattern AGENT_REFERENCE =
@@ -41,31 +45,57 @@ public final class AgentRuntimeAuthenticationService {
     }
 
     /** Called ONLY after authenticated WebSocket registration with server session attributes. */
-    public Receipt bind(String sessionId, String client, String ownerJiacn, String agent, String runtime,
+    public synchronized Receipt bind(String sessionId, String client, String ownerJiacn, String agent, String runtime,
             String apiKeyId, String token, BooleanSupplier connected) {
+        return bindInternal(sessionId, SINGLE_TENANT_ID, client, ownerJiacn, agent, runtime,
+                apiKeyId, token, connected, null);
+    }
+
+    public synchronized Receipt bindV2(String sessionId, String tenantId, String client,
+            String ownerJiacn, String agent, String runtime, String apiKeyId, String token,
+            BooleanSupplier connected, WorkerScope workerScope) {
+        return bindInternal(sessionId, tenantId, client, ownerJiacn, agent, runtime,
+                apiKeyId, token, connected, workerScope);
+    }
+
+    private Receipt bindInternal(String sessionId, String tenantId, String client,
+            String ownerJiacn, String agent, String runtime, String apiKeyId, String token,
+            BooleanSupplier connected, WorkerScope workerScope) {
         if (!exact(sessionId, 128) || !exact(client, 50) || "0".equals(client)
+                || !exact(tenantId, 50)
                 || !exact(ownerJiacn, 50) || "0".equals(ownerJiacn)
                 || !validAgentReference(agent)
                 || !exact(runtime, 100) || runtime.equals(agent) || !exact(apiKeyId, 128)
                 || connected == null || !validToken(token)) throw denied();
-        var scope = new AgentRuntimeAuthentication.Scope(
-                SINGLE_TENANT_ID, client, ownerJiacn, agent, runtime);
         var account = account(ownerJiacn);
         var key = keys.get(apiKeyId);
         if (key == null || key.getApiKey() == null || key.getApiKey().isBlank()) throw denied();
+        if (!tenantId.equals(key.getTenantId())) throw denied();
+        String dataDomainId = null;
+        String executionPoolId = null;
+        if (workerScope == null) {
+            if (!SINGLE_TENANT_ID.equals(tenantId)) throw denied();
+        } else {
+            if (!tenantId.equals(workerScope.tenantId().value())) throw denied();
+            dataDomainId = workerScope.dataDomainId().value();
+            executionPoolId = workerScope.executionPoolId();
+        }
+        var scope = new AgentRuntimeAuthentication.Scope(
+                tenantId, client, ownerJiacn, agent, runtime);
         Binding binding = new Binding(sessionId, scope, apiKeyId, digest(key.getApiKey()),
-                digest(token), account.userId(), account.authEpoch(), connected);
+                digest(token), account.userId(), account.authEpoch(), connected,
+                dataDomainId, executionPoolId);
         validate(binding, token);
         bindings.put(agent, binding); // exact canonical identity: newer registration supersedes older
-        return new Receipt("native-runtime-v1", SINGLE_TENANT_ID, client, ownerJiacn, agent, runtime,
-                gate.allows(SINGLE_TENANT_ID, client));
+        return new Receipt(workerScope == null ? "native-runtime-v1" : "native-runtime-v2",
+                tenantId, client, ownerJiacn, agent, runtime, gate.allows(tenantId, client));
     }
 
-    public void disconnect(String sessionId) {
+    public synchronized void disconnect(String sessionId) {
         bindings.entrySet().removeIf(entry -> entry.getValue().sessionId.equals(sessionId));
     }
 
-    public AgentRuntimeAuthentication authenticate(String agent, String runtime, String token) {
+    public synchronized AgentRuntimeAuthentication authenticate(String agent, String runtime, String token) {
         if (agent == null || runtime == null || !validToken(token)) throw denied();
         Binding binding = bindings.get(agent);
         if (binding == null || !binding.scope.runtimeInstanceId().equals(runtime)) throw denied();
@@ -74,13 +104,53 @@ public final class AgentRuntimeAuthenticationService {
         return new AgentRuntimeAuthentication(binding.scope);
     }
 
+    @Override
+    public synchronized AgentCommandV2RuntimeGateway.DispatchResult authorizeAndDispatch(
+            WorkerScope workerScope, AgentCommandV2ExecutionPort.Command command,
+            AgentCommandV2RuntimeGateway gateway) {
+        if (workerScope == null || command == null || gateway == null) {
+            return AgentCommandV2RuntimeGateway.DispatchResult.rejected();
+        }
+        var token = command.claimToken();
+        Binding binding = bindings.get(token.targetAgentId());
+        if (binding == null || !binding.connected.getAsBoolean()) {
+            return AgentCommandV2RuntimeGateway.DispatchResult.offline();
+        }
+        var scope = binding.scope;
+        if (!workerScope.tenantId().value().equals(scope.tenantId())
+                || !workerScope.dataDomainId().value().equals(binding.dataDomainId)
+                || !workerScope.executionPoolId().equals(binding.executionPoolId)
+                || !token.tenantId().equals(scope.tenantId())
+                || !token.clientId().equals(scope.clientId())
+                || !command.ownerJiacn().equals(scope.ownerJiacn())
+                || !token.targetAgentId().equals(scope.agentId())) {
+            return AgentCommandV2RuntimeGateway.DispatchResult.rejected();
+        }
+        try {
+            validatePersistent(binding);
+        } catch (RuntimeException denied) {
+            return AgentCommandV2RuntimeGateway.DispatchResult.rejected();
+        }
+        if (bindings.get(scope.agentId()) != binding || !binding.connected.getAsBoolean()) {
+            return AgentCommandV2RuntimeGateway.DispatchResult.offline();
+        }
+        return gateway.dispatch(new AgentCommandV2RuntimeGateway.CurrentSession(
+                binding.sessionId, scope.tenantId(), binding.dataDomainId,
+                binding.executionPoolId, scope.clientId(), scope.ownerJiacn(),
+                scope.agentId(), scope.runtimeInstanceId()), command.wirePayload(),
+                AgentCommandV2ExecutionPort.SEND_TIMEOUT_MILLIS);
+    }
+
     private void validate(Binding binding, String token) {
+        if (!MessageDigest.isEqual(binding.tokenDigest, digest(token))) throw denied();
+        validatePersistent(binding);
+    }
+
+    private void validatePersistent(Binding binding) {
         var scope = binding.scope;
         if (!binding.connected.getAsBoolean()
-                || !SINGLE_TENANT_ID.equals(scope.tenantId())
                 || !account(scope.ownerJiacn()).matches(
-                        binding.userId, scope.ownerJiacn(), binding.authEpoch)
-                || !MessageDigest.isEqual(binding.tokenDigest, digest(token))) throw denied();
+                        binding.userId, scope.ownerJiacn(), binding.authEpoch)) throw denied();
         var key = keys.get(binding.apiKeyId);
         if (key == null || !binding.apiKeyId.equals(key.getId()) || !Integer.valueOf(1).equals(key.getStatus())
                 || !scope.tenantId().equals(key.getTenantId())
@@ -94,8 +164,7 @@ public final class AgentRuntimeAuthenticationService {
                 || !scope.ownerJiacn().equals(row.getOwnerJiacn())
                 || !scope.clientId().equals(row.getClientId()) || row.getBindingId() == null
                 || !Set.of("online", "busy").contains(row.getStatus()) || !validToken(row.getTokenHash())
-                || !MessageDigest.isEqual(row.getTokenHash().getBytes(StandardCharsets.UTF_8),
-                        token.getBytes(StandardCharsets.UTF_8))) throw denied();
+                || !MessageDigest.isEqual(binding.tokenDigest, digest(row.getTokenHash()))) throw denied();
         var identity = identities.requireActiveIdentityForBinding(scope.tenantId(), scope.clientId(),
                 scope.ownerJiacn(), row.getBindingId(), scope.agentId());
         if (identity == null || !scope.agentId().equals(identity.getCanonicalAgentId())) throw denied();
@@ -122,7 +191,9 @@ public final class AgentRuntimeAuthenticationService {
     static boolean validToken(String token) { return token != null && token.matches("[0-9a-f]{32}"); }
     static IllegalArgumentException denied() { return new IllegalArgumentException("AGENT_RUNTIME_UNAUTHENTICATED"); }
     private record Binding(String sessionId, AgentRuntimeAuthentication.Scope scope, String apiKeyId,
-                           byte[] keyDigest, byte[] tokenDigest, long userId, long authEpoch, BooleanSupplier connected) { }
+                           byte[] keyDigest, byte[] tokenDigest, long userId, long authEpoch,
+                           BooleanSupplier connected, String dataDomainId,
+                           String executionPoolId) { }
     public record Receipt(String scheme, String tenantId, String clientId, String ownerJiacn, String agentId,
                           String runtimeInstanceId, boolean contextPackEnabled) { }
 }

@@ -7,6 +7,7 @@ import cn.jia.agent.dao.PersonalWorkspaceDao;
 import cn.jia.agent.dao.PersonalWorkspaceExecutionDao;
 import cn.jia.agent.dao.PersonalWorkspaceTaskLinkDao;
 import cn.jia.agent.entity.AgentRuntimeEntity;
+import cn.jia.agent.entity.AgentRuntimeV2EffectCodec;
 import cn.jia.agent.entity.AgentTaskArtifactPublishDTO;
 import cn.jia.agent.entity.AgentTaskArtifactViewDTO;
 import cn.jia.agent.entity.AgentTaskFormalDeliveryItemDTO;
@@ -35,6 +36,9 @@ import jakarta.inject.Named;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.jdbc.datasource.ConnectionHolder;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -366,6 +370,198 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         return runtimeInputs(new OwnerScope(scope.tenantId(), scope.clientId(), scope.ownerJiacn()), execution.getExecutionId());
     }
 
+    @Override public AgentRuntimeV2EffectCodec.DescribedResult v2Describe(V2Scope scope) {
+        return v2Root(scope, root -> {
+            var candidates=executions.findTaskAssociations(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.taskId(),scope.workItemId(),scope.agentId());
+            if(candidates.isEmpty())return null;
+            if(candidates.size()!=1)throw failure(Reason.TASK_CONFLICT);
+            var candidate=candidates.getFirst();
+            var exact=new V2Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.agentId(),scope.taskId(),scope.workItemId(),candidate.getExecutionId(),candidate.getRunId());
+            var execution=v2Execution(exact,true);
+            // A revoked/failed/committed association is NOT an absent descriptor
+            // and may never silently fall back to the ordinary CODEX branch.
+            var inputs=executions.listInputs(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),execution.getExecutionId());
+            if(inputs==null||inputs.stream().anyMatch(input->!isExactInput(new OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),execution.getExecutionId(),input)||!"ACTIVE".equals(input.getGrantState())))throw failure(Reason.GRANT_REVOKED);
+            var command=command(execution,inputs.stream().map(PersonalWorkspaceExecutionServiceImpl::runtimeInput).toList());
+            if(command==null)throw failure(Reason.CAPABILITY_UNAVAILABLE);
+            var descriptor=new AgentRuntimeV2EffectCodec.FileDescriptor(command.taskId(),command.runId(),
+                    command.inputManifest().stream().map(input->new AgentRuntimeV2EffectCodec.FileInput(input.inputId(),input.relativePath(),input.downloadPath(),input.length(),input.sha256())).toList(),
+                    command.outputManifest().stream().map(output->new AgentRuntimeV2EffectCodec.FileOutput(output.outputId(),output.relativePath(),output.contentType(),output.maxLength(),output.uploadPath())).toList());
+            AgentRuntimeV2EffectCodec.encodeDescriptor("WORKSPACE_FILE",descriptor);
+            return new AgentRuntimeV2EffectCodec.DescribedResult("WORKSPACE_FILE",execution.getExecutionId(),execution.getWorkItemId(),descriptor);
+        });
+    }
+    @Override public V2PreparedInput v2PrepareInput(V2Scope scope,String inputId) {
+        v2Outside();v2Scope(scope,true);id(inputId,"inputId",100);
+        var execution=v2Execution(scope,false);
+        var input=executions.findInput(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),execution.getExecutionId(),inputId);
+        v2InputMetadata(scope,input,inputId);
+        var stored=storage.read(v2Storage(scope),input.getStorageUri(),input.getContentHash(),input.getByteLength(),input.getContentMimeType());
+        byte[] bytes=stored.content();
+        if(bytes==null||bytes.length!=input.getByteLength()||!plainSha(bytes).equals(input.getContentHash()))throw failure(Reason.STORAGE_UNAVAILABLE);
+        v2Outside();return new V2PreparedInput(scope.executionId(),scope.runId(),inputId,input.getStorageUri(),input.getContentMimeType(),bytes.length,input.getContentHash(),bytes);
+    }
+    @Override public AgentRuntimeV2EffectCodec.ReadResult v2Input(V2Scope scope,AgentRuntimeV2EffectCodec.FileRead request,V2PreparedInput prepared) {
+        return v2Root(scope,root->{
+            var execution=v2Execution(scope,true);v2File(scope,request.executionId(),request.taskId(),request.workItemId(),request.runId());
+            var input=executions.lockInput(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),execution.getExecutionId(),request.inputId());v2InputMetadata(scope,input,request.inputId());
+            if(prepared==null||!same(scope.executionId(),prepared.executionId())||!same(scope.runId(),prepared.runId())||!same(request.inputId(),prepared.inputId())||!same(input.getStorageUri(),prepared.storageUri())||!same(input.getContentMimeType(),prepared.contentType())||!same(input.getContentHash(),prepared.sha256())||input.getByteLength()!=prepared.length())throw failure(Reason.GRANT_CHANGED);
+            byte[] bytes=prepared.content();if(bytes.length!=prepared.length()||!plainSha(bytes).equals(prepared.sha256())||request.offset()>bytes.length||request.length()>bytes.length-request.offset()||request.length()>AgentRuntimeV2EffectCodec.CHUNK_CAP)throw failure(Reason.BAD_REQUEST);
+            byte[] chunk=java.util.Arrays.copyOfRange(bytes,Math.toIntExact(request.offset()),Math.toIntExact(request.offset()+request.length()));
+            v2LeaseBeforeCommit(scope,execution);
+            return new AgentRuntimeV2EffectCodec.ReadResult(request.offset(),chunk.length,bytes.length,plainSha(chunk),chunk);
+        });
+    }
+    @Override public V2PreparedOutput v2PrepareOutput(V2Scope scope,byte[] completeContent) {
+        v2Outside();v2Scope(scope,true);var execution=v2Execution(scope,false);byte[] content=completeContent==null?null:completeContent.clone();String mime=execution.getOutputContentMimeType();
+        if(content==null||content.length==0||content.length>storage.maxContentBytes()||!executionMimeTypes.contains(mime)||!PersonalWorkspaceOutputFormatValidator.isValid(mime,content))throw failure(Reason.BAD_REQUEST);
+        var stored=storage.store(v2Storage(scope),content,mime);
+        if(stored==null||!same(stored.mimeType(),mime)||stored.byteLength()!=content.length||!plainSha(content).equals(stored.sha256()))throw failure(Reason.STORAGE_UNAVAILABLE);
+        v2Outside();return v2Prepared(scope,mime,stored.storageUri(),stored.sha256(),stored.byteLength(),content,null,null);
+    }
+    @Override public StagedOutput v2Stage(V2Scope scope,String outputId,V2PreparedOutput prepared) {
+        return v2Root(scope,root->{
+            var execution=v2Execution(scope,true);if(!"output_1".equals(outputId))throw failure(Reason.BAD_REQUEST);v2PreparedOutput(execution,prepared);
+            var prior=executions.lockOutput(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),execution.getExecutionId(),outputId);
+            if(prior!=null){v2SameOutput(prior,prepared);if(!"STAGED".equals(prior.getOutputState()))throw failure(Reason.OUTPUT_CONFLICT);v2LeaseBeforeCommit(scope,execution);return new StagedOutput(outputId,prior.getContentHash(),prior.getByteLength(),"STAGED");}
+            long now=System.currentTimeMillis();
+            var output=new PersonalWorkspaceExecutionOutputEntity().setOutputId(outputId).setExecutionId(execution.getExecutionId()).setOwnerJiacn(scope.ownerJiacn()).setOriginalFilename("result"+EXTENSIONS.get(prepared.contentType())).setContentMimeType(prepared.contentType()).setByteLength(prepared.length()).setContentHash(prepared.sha256()).setStorageUri(prepared.storageUri()).setOutputState("STAGED").setWorkspaceFileId(null).setWorkspaceFileVersion(null).setArtifactId(null).setArtifactVersion(null).setFormalDeliveryId(null).setPublicationState("PENDING").setPublicationRevision(0L).setPublicationFailureCode(null).setStagedAt(now).setCommittedAt(null);
+            scoped(output,v2Runtime(scope));executions.insertOutput(output);v2LeaseBeforeCommit(scope,execution);
+            return new StagedOutput(outputId,prepared.sha256(),prepared.length(),"STAGED");
+        });
+    }
+    @Override public V2PreparedOutput v2PrepareCommit(V2Scope scope,String outputId) {
+        v2Outside();v2Scope(scope,true);if(!"output_1".equals(outputId))throw failure(Reason.BAD_REQUEST);
+        var execution=executions.findByTaskRun(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.taskId(),scope.runId());v2Exact(scope,execution);
+        // Nonlocking precomputation must not borrow a row lock from a completed
+        // transaction. The metadata is reread under the task root by v2Commit.
+        var output=executions.findOutput(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.executionId(),outputId);
+        if(output==null||!Set.of("STAGED","COMMITTED").contains(output.getOutputState())||!same(execution.getOutputContentMimeType(),output.getContentMimeType()))throw failure(Reason.OUTPUT_MISSING);
+        var stored=storage.read(v2Storage(scope),output.getStorageUri(),output.getContentHash(),output.getByteLength(),output.getContentMimeType());
+        byte[] content=stored.content();String mime=output.getContentMimeType();
+        if(content==null||content.length!=output.getByteLength()||!plainSha(content).equals(output.getContentHash())||!executionMimeTypes.contains(mime)||!PersonalWorkspaceOutputFormatValidator.isValid(mime,content))throw failure(Reason.OUTPUT_CONFLICT);
+        requireTaskPublicationDependencies();
+        var documentCommand=taskArtifactCommand(execution,"pwe_art_"+execution.getExecutionId(),"document",output.getOriginalFilename(),mime,content);
+        var manifestCommand=taskArtifactCommand(execution,"pwe_manifest_"+execution.getExecutionId(),"summary","Delivery manifest","application/json",taskManifest(execution,output).getBytes(StandardCharsets.UTF_8));
+        var document=taskArtifacts.prepareManaged(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.taskId(),scope.agentId(),documentCommand);
+        var manifest=taskArtifacts.prepareManaged(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.taskId(),scope.agentId(),manifestCommand);
+        if(document==null||manifest==null)throw failure(Reason.CAPABILITY_UNAVAILABLE);
+        v2Outside();return v2Prepared(scope,mime,output.getStorageUri(),output.getContentHash(),output.getByteLength(),content,document,manifest);
+    }
+    @Override public AgentRuntimeV2EffectCodec.CommitProjection v2Commit(V2Scope scope,AgentRuntimeV2EffectCodec.FileCommit request,V2PreparedOutput prepared) {
+        return v2Root(scope,root->{
+            requireTaskPublicationDependencies();v2File(scope,request.executionId(),request.taskId(),request.workItemId(),request.runId());
+            var execution=executions.lockByTaskRun(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.taskId(),scope.runId());v2Exact(scope,execution);v2PreparedOutput(execution,prepared);
+            var output=executions.lockOutput(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.executionId(),"output_1");v2SameOutput(output,prepared);
+            var declaration=List.of(new OutputDeclaration("output_1",prepared.sha256(),prepared.length()));
+            String manifest="{\"outputs\":[{\"outputId\":\"output_1\",\"sha256\":\""+prepared.sha256()+"\",\"length\":"+prepared.length()+"}]}";
+            if(!manifestId(scope.taskId(),scope.runId(),List.of(output)).equals(request.manifestId())||!plainSha(manifest).equals(request.manifestSha256()))throw failure(Reason.OUTPUT_CONFLICT);
+            if(!"OUTPUT_COMMITTED".equals(execution.getExecutionState()))v2LeaseBeforeCommit(scope,execution,true);
+            // Reuse the actual archive/artifact/formal-delivery reducer, with
+            // precomputed private bytes instead of storage I/O under locks.
+            var committed=commitTaskOutputsLocked(v2Runtime(scope),scope.taskId(),scope.runId(),request.manifestId(),declaration,root,prepared);
+            return new AgentRuntimeV2EffectCodec.CommitProjection(scope.executionId(),scope.runId(),request.manifestId(),request.manifestSha256(),committed.items().stream().map(item->new AgentRuntimeV2EffectCodec.CommitItem(item.outputId(),item.fileId(),item.fileVersion(),item.sha256(),item.contentMimeType(),item.byteLength())).toList());
+        });
+    }
+    @Override public void v2LockKnownOutcome(V2Scope scope){
+        v2Root(scope,root->{
+            var transaction=v2Transaction();var jdbc=new org.springframework.jdbc.core.JdbcTemplate((javax.sql.DataSource)transaction.datasource());
+            var execution=executions.lockByTaskRun(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.taskId(),scope.runId());v2Exact(scope,execution);
+            if(!"OUTPUT_COMMITTED".equals(execution.getExecutionState()))throw failure(Reason.OUTPUT_MISSING);
+            // Stable resource locks, all after the task root, using the SAME
+            // JDBC holder. This method is descriptive; it cannot repair rows.
+            var inputs=jdbc.queryForList("SELECT * FROM agent_personal_workspace_execution_input WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND execution_id=? ORDER BY input_ref FOR UPDATE",scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.executionId());
+            for(var input:inputs.stream().sorted(java.util.Comparator.comparing(value->Objects.toString(value.get("file_id")))).toList()){
+                jdbc.queryForList("SELECT * FROM agent_personal_workspace_file WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND file_id=? FOR UPDATE",scope.tenantId(),scope.clientId(),scope.ownerJiacn(),input.get("file_id"));
+                jdbc.queryForList("SELECT * FROM agent_personal_workspace_file_version WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND file_id=? AND version=? FOR UPDATE",scope.tenantId(),scope.clientId(),scope.ownerJiacn(),input.get("file_id"),input.get("file_version"));
+            }
+            var outputs=jdbc.queryForList("SELECT * FROM agent_personal_workspace_execution_output WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND execution_id=? ORDER BY output_id FOR UPDATE",scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.executionId());
+            for(var output:outputs){
+                var fileId=output.get("workspace_file_id");if(fileId==null)throw failure(Reason.OUTPUT_MISSING);
+                jdbc.queryForList("SELECT * FROM agent_personal_workspace_file WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND file_id=? FOR UPDATE",scope.tenantId(),scope.clientId(),scope.ownerJiacn(),fileId);
+                jdbc.queryForList("SELECT * FROM agent_personal_workspace_file_version WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND file_id=? AND version=? FOR UPDATE",scope.tenantId(),scope.clientId(),scope.ownerJiacn(),fileId,output.get("workspace_file_version"));
+            }
+            jdbc.queryForList("SELECT * FROM agent_task_artifact WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND task_id=? AND artifact_id IN (?,?) ORDER BY artifact_id,artifact_version FOR UPDATE",scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.taskId(),"pwe_art_"+scope.executionId(),"pwe_manifest_"+scope.executionId());
+            String delivery=deliveryId(execution);
+            jdbc.queryForList("SELECT * FROM agent_task_formal_delivery WHERE tenant_id=? AND client_id=? AND task_id=? AND delivery_id=? FOR UPDATE",scope.tenantId(),scope.clientId(),scope.taskId(),delivery);
+            jdbc.queryForList("SELECT * FROM agent_task_formal_delivery_item WHERE tenant_id=? AND client_id=? AND delivery_id=? ORDER BY item_order FOR UPDATE",scope.tenantId(),scope.clientId(),delivery);
+            jdbc.queryForList("SELECT * FROM agent_task_member WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND task_id=? AND agent_id=? FOR UPDATE",scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.taskId(),scope.agentId());
+            jdbc.queryForList("SELECT * FROM agent_task_work_item WHERE tenant_id=? AND client_id=? AND owner_jiacn=? AND task_id=? AND work_item_id=? FOR UPDATE",scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.taskId(),scope.workItemId());
+            if(!transaction.equals(v2Transaction()))throw new IllegalStateException("original outcome transaction changed");return null;
+        });
+    }
+    private <T>T v2Root(V2Scope scope,java.util.function.Function<AgentTaskMetaEntity,T> action) {
+        v2Scope(scope,false);var resources=v2Transaction();if(taskMutations==null)throw failure(Reason.CAPABILITY_UNAVAILABLE);
+        T result=taskMutations.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.taskId(),root->{
+            if(!resources.equals(v2Transaction())||root==null||!same(root.getTaskId(),scope.taskId()))throw failure(Reason.TASK_CONFLICT);
+            return action.apply(root);
+        });
+        if(!resources.equals(v2Transaction()))throw new IllegalStateException("original resource transaction changed");return result;
+    }
+    private record V2Transaction(Object datasource,ConnectionHolder holder,java.sql.Connection connection) {
+        @Override public boolean equals(Object other){return other instanceof V2Transaction value&&datasource==value.datasource&&holder==value.holder&&connection==value.connection;}
+        @Override public int hashCode(){return System.identityHashCode(datasource)^System.identityHashCode(holder)^System.identityHashCode(connection);}
+    }
+    private static V2Transaction v2Transaction() {
+        if(!TransactionSynchronizationManager.isActualTransactionActive()||!TransactionSynchronizationManager.isSynchronizationActive()||TransactionSynchronizationManager.isCurrentTransactionReadOnly())throw new IllegalStateException("original composite write transaction required");
+        // Ignore the normal lazy MyBatis session binding, never an additional
+        // datasource or replacement of the original JDBC holder/connection.
+        var bindings=TransactionSynchronizationManager.getResourceMap().entrySet().stream().filter(entry->entry.getValue() instanceof ConnectionHolder).toList();
+        if(bindings.size()!=1)throw new IllegalStateException("single original datasource required");var binding=bindings.getFirst();var holder=(ConnectionHolder)binding.getValue();
+        return new V2Transaction(binding.getKey(),holder,holder.getConnection());
+    }
+    private static void v2Outside(){AgentRuntimeV2ExecutionServiceImpl.outside();}
+    private static void v2Scope(V2Scope scope,boolean full){
+        if(scope==null||!"0".equals(scope.tenantId()))throw failure(Reason.NOT_FOUND);
+        validateOwnerScope(new OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()));id(scope.agentId(),"agentId",100);id(scope.taskId(),"taskId",100);id(scope.workItemId(),"workItemId",100);
+        if(full){id(scope.executionId(),"executionId",100);id(scope.runId(),"runId",100);}
+    }
+    private PersonalWorkspaceExecutionEntity v2Execution(V2Scope scope,boolean lock){
+        v2Scope(scope,true);var execution=lock?executions.lockByTaskRun(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.taskId(),scope.runId()):executions.findByTaskRun(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.taskId(),scope.runId());v2Exact(scope,execution);
+        if(!"QUEUED".equals(execution.getExecutionState()))throw failure(Reason.GRANT_REVOKED);requireLiveTaskLease(v2Runtime(scope),execution);return execution;
+    }
+    private static void v2Exact(V2Scope scope,PersonalWorkspaceExecutionEntity execution){
+        if(execution==null||!same(scope.tenantId(),execution.getTenantId())||!same(scope.clientId(),execution.getClientId())||!same(scope.ownerJiacn(),execution.getOwnerJiacn())||!same(scope.agentId(),execution.getTargetAgentId())||!same(scope.taskId(),execution.getTaskId())||!same(scope.workItemId(),execution.getWorkItemId())||!same(scope.executionId(),execution.getExecutionId())||!same(scope.runId(),execution.getRunId())||!"TASK".equals(execution.getExecutionMode()))throw failure(Reason.NOT_FOUND);
+    }
+    private static void v2File(V2Scope scope,String execution,String task,String item,String run){if(!same(scope.executionId(),execution)||!same(scope.taskId(),task)||!same(scope.workItemId(),item)||!same(scope.runId(),run))throw failure(Reason.NOT_FOUND);}
+    private static RuntimeScope v2Runtime(V2Scope scope){return new RuntimeScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.agentId(),"R4_INTERNAL_RESOURCE");}
+    private static PersonalWorkspaceStorage.Scope v2Storage(V2Scope scope){return new PersonalWorkspaceStorage.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());}
+    private static void v2InputMetadata(V2Scope scope,PersonalWorkspaceExecutionInputEntity input,String id){if(input==null||!isExactInput(new OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),scope.executionId(),input)||!same(id,input.getInputRef())||!"ACTIVE".equals(input.getGrantState())||!SUPPORTED_INPUT_MIME_TYPES.contains(input.getContentMimeType()))throw failure(Reason.GRANT_REVOKED);}
+    private static final class OutputMaterialization implements V2PreparedMaterialization {
+        private final PersonalWorkspaceExecutionServiceImpl creator;
+        private final V2Scope scope;
+        private final String mime,uri,sha;
+        private final long length;
+        private final byte[] content;
+        private OutputMaterialization(PersonalWorkspaceExecutionServiceImpl creator,V2Scope scope,String mime,String uri,String sha,long length,byte[] content){this.creator=creator;this.scope=scope;this.mime=mime;this.uri=uri;this.sha=sha;this.length=length;this.content=content.clone();}
+    }
+    private V2PreparedOutput v2Prepared(V2Scope scope,String mime,String uri,String sha,long length,byte[] content,cn.jia.agent.service.AgentTaskArtifactService.PreparedArtifact document,cn.jia.agent.service.AgentTaskArtifactService.PreparedArtifact manifest){return new V2PreparedOutput(mime,uri,sha,length,content,document,manifest,new OutputMaterialization(this,scope,mime,uri,sha,length,content));}
+    private void v2PreparedOutput(PersonalWorkspaceExecutionEntity execution,V2PreparedOutput prepared){
+        if(prepared==null||!(prepared.materialization() instanceof OutputMaterialization material)||material.creator!=this||!same(material.scope.tenantId(),execution.getTenantId())||!same(material.scope.clientId(),execution.getClientId())||!same(material.scope.ownerJiacn(),execution.getOwnerJiacn())||!same(material.scope.agentId(),execution.getTargetAgentId())||!same(material.scope.taskId(),execution.getTaskId())||!same(material.scope.workItemId(),execution.getWorkItemId())||!same(material.scope.executionId(),execution.getExecutionId())||!same(material.scope.runId(),execution.getRunId())||!same(material.mime,prepared.contentType())||!same(material.uri,prepared.storageUri())||!same(material.sha,prepared.sha256())||material.length!=prepared.length()||!java.util.Arrays.equals(material.content,prepared.content())||!same(execution.getOutputContentMimeType(),prepared.contentType()))throw failure(Reason.OUTPUT_CONFLICT);
+    }
+    private static void v2SameOutput(PersonalWorkspaceExecutionOutputEntity output,V2PreparedOutput prepared){if(output==null||!same(output.getContentMimeType(),prepared.contentType())||!same(output.getStorageUri(),prepared.storageUri())||!same(output.getContentHash(),prepared.sha256())||output.getByteLength()!=prepared.length())throw failure(Reason.OUTPUT_CONFLICT);}
+    private void v2LeaseBeforeCommit(V2Scope scope,PersonalWorkspaceExecutionEntity execution){
+        v2LeaseBeforeCommit(scope,execution,false);
+    }
+    private void v2LeaseBeforeCommit(V2Scope scope,PersonalWorkspaceExecutionEntity execution,boolean publication){
+        requireLiveTaskLease(v2Runtime(scope),execution);long until=execution.getLeaseExpiresAt();long revision=execution.getGrantRevision(),itemVersion=execution.getLeaseWorkItemVersion();String token=execution.getLeaseToken();var transaction=v2Transaction();
+        // Publication legitimately advances the already-locked work item. The
+        // original resource deadline still closes at equality; it must not be
+        // replaced by a post-publication status or a renewed execution grant.
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization(){@Override public int getOrder(){return Integer.MAX_VALUE;}@Override public void beforeCommit(boolean readOnly){
+            if(readOnly||!transaction.equals(v2Transaction())||System.currentTimeMillis()>=until)throw failure(Reason.GRANT_REVOKED);
+            var current=executions.findByTaskRun(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.taskId(),scope.runId());v2Exact(scope,current);
+            if(current.getGrantRevision()!=revision||!same(current.getLeaseToken(),token)||!Objects.equals(current.getLeaseWorkItemVersion(),itemVersion)||!Objects.equals(current.getLeaseExpiresAt(),until))throw failure(Reason.GRANT_REVOKED);
+            if(!publication){if(!"QUEUED".equals(current.getExecutionState()))throw failure(Reason.GRANT_REVOKED);requireLiveTaskLease(v2Runtime(scope),current);return;}
+            // Only the real publication call registers this branch. Formal
+            // delivery consumes the original lease in this same transaction;
+            // the expected submitted mapping, not a renewed lease, is checked.
+            var item=workItems.findByTaskAndWorkItemId(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.taskId(),scope.workItemId());
+            var output=executions.findOutput(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.executionId(),"output_1");
+            if(!"OUTPUT_COMMITTED".equals(current.getExecutionState())||item==null||!"submitted".equals(item.getStatus())||!same(scope.agentId(),item.getAssigneeAgentId())||!Objects.equals(item.getVersion(),Math.addExact(itemVersion,1))||item.getLeaseToken()!=null||item.getLeaseUntil()!=null||!same(item.getResultArtifactId(),"pwe_manifest_"+scope.executionId())||output==null||!"COMMITTED".equals(output.getOutputState())||!"PUBLISHED".equals(output.getPublicationState())||!same(output.getArtifactId(),"pwe_art_"+scope.executionId())||!Objects.equals(output.getArtifactVersion(),1)||!same(output.getFormalDeliveryId(),deliveryId(current))||output.getWorkspaceFileId()==null||!Objects.equals(output.getWorkspaceFileVersion(),1))throw failure(Reason.GRANT_REVOKED);
+        }});
+    }
+
     @Override
     @Transactional(readOnly = true, rollbackFor = Exception.class)
     public List<RuntimeQueuedCommand> runtimeQueuedCommands(RuntimeScope scope, int limit) {
@@ -493,6 +689,10 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
      */
     private CommitView commitTaskOutputsLocked(RuntimeScope scope, String taskId, String runId,
             String manifestId, List<OutputDeclaration> declarations, AgentTaskMetaEntity root) {
+        return commitTaskOutputsLocked(scope,taskId,runId,manifestId,declarations,root,null);
+    }
+    private CommitView commitTaskOutputsLocked(RuntimeScope scope, String taskId, String runId,
+            String manifestId, List<OutputDeclaration> declarations, AgentTaskMetaEntity root,V2PreparedOutput prepared) {
         if (root == null || !same(taskId, root.getTaskId()) || root.getTaskVersion() == null
                 || root.getTaskVersion() < 0) {
             throw failure(Reason.TASK_CONFLICT);
@@ -538,17 +738,20 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             throw failure(Reason.OUTPUT_CONFLICT);
         }
 
-        PersonalWorkspaceStorage.StoredContent staged = storage.read(storageScope(scope), output.getStorageUri(),
-                output.getContentHash(), output.getByteLength(), output.getContentMimeType());
-        byte[] content = staged.content();
+        byte[] content;
+        if(prepared==null){
+            PersonalWorkspaceStorage.StoredContent staged = storage.read(storageScope(scope), output.getStorageUri(),
+                    output.getContentHash(), output.getByteLength(), output.getContentMimeType());
+            content=staged.content();
+        }else{v2SameOutput(output,prepared);content=prepared.content();}
         if (content == null || content.length != output.getByteLength()) throw failure(Reason.STORAGE_UNAVAILABLE);
         String artifactId = "pwe_art_" + execution.getExecutionId();
-        AgentTaskArtifactViewDTO deliverable = publishTaskArtifact(scope, execution, artifactId,
-                "document", output.getOriginalFilename(), output, content);
+        AgentTaskArtifactViewDTO deliverable = prepared==null?publishTaskArtifact(scope, execution, artifactId,
+                "document", output.getOriginalFilename(), output, content):publishPreparedTaskArtifact(scope,execution,artifactId,"document",output.getOriginalFilename(),output.getContentMimeType(),content,prepared.document());
         String manifestArtifactId = "pwe_manifest_" + execution.getExecutionId();
         byte[] manifestContent = taskManifest(execution, output).getBytes(StandardCharsets.UTF_8);
-        AgentTaskArtifactViewDTO manifest = publishTaskArtifact(scope, execution, manifestArtifactId,
-                "summary", "Delivery manifest", "application/json", manifestContent);
+        AgentTaskArtifactViewDTO manifest = prepared==null?publishTaskArtifact(scope, execution, manifestArtifactId,
+                "summary", "Delivery manifest", "application/json", manifestContent):publishPreparedTaskArtifact(scope,execution,manifestArtifactId,"summary","Delivery manifest","application/json",manifestContent,prepared.manifest());
         AgentTaskFormalDeliveryViewDTO formal = submitFormalDelivery(
                 scope, execution, root, deliverable, manifest, output);
         if (formal == null || !same(taskId, formal.getTaskId())
@@ -615,6 +818,20 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     private AgentTaskArtifactViewDTO publishTaskArtifact(RuntimeScope scope,
             PersonalWorkspaceExecutionEntity execution, String artifactId, String artifactType,
             String title, String mimeType, byte[] content) {
+        AgentTaskArtifactPublishDTO command=taskArtifactCommand(execution,artifactId,artifactType,title,mimeType,content);
+        AgentTaskArtifactViewDTO result = taskArtifacts.publish(scope.tenantId(), scope.clientId(),
+                scope.ownerJiacn(), execution.getTaskId(), execution.getTargetAgentId(), command);
+        return requirePublishedArtifact(artifactId,command,result);
+    }
+    private AgentTaskArtifactViewDTO publishPreparedTaskArtifact(RuntimeScope scope,
+            PersonalWorkspaceExecutionEntity execution,String artifactId,String artifactType,String title,
+            String mimeType,byte[] content,cn.jia.agent.service.AgentTaskArtifactService.PreparedArtifact prepared){
+        if(prepared==null)throw failure(Reason.OUTPUT_CONFLICT);
+        var command=taskArtifactCommand(execution,artifactId,artifactType,title,mimeType,content);
+        return requirePublishedArtifact(artifactId,command,taskArtifacts.publishPrepared(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),execution.getTaskId(),execution.getTargetAgentId(),command,prepared));
+    }
+    private static AgentTaskArtifactPublishDTO taskArtifactCommand(PersonalWorkspaceExecutionEntity execution,
+            String artifactId,String artifactType,String title,String mimeType,byte[] content){
         AgentTaskArtifactPublishDTO command = new AgentTaskArtifactPublishDTO();
         command.setArtifactId(artifactId);
         command.setWorkItemId(execution.getWorkItemId());
@@ -628,8 +845,10 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         command.setArtifactVersion(1);
         command.setExpectedPreviousVersion(0);
         command.setVisibility("task_members");
-        AgentTaskArtifactViewDTO result = taskArtifacts.publish(scope.tenantId(), scope.clientId(),
-                scope.ownerJiacn(), execution.getTaskId(), execution.getTargetAgentId(), command);
+        return command;
+    }
+    private static AgentTaskArtifactViewDTO requirePublishedArtifact(String artifactId,
+            AgentTaskArtifactPublishDTO command,AgentTaskArtifactViewDTO result){
         if (result == null || !same(artifactId, result.getArtifactId())
                 || result.getArtifactVersion() == null || result.getArtifactVersion() != 1
                 || !same(command.getContentHash(), result.getContentHash())) {

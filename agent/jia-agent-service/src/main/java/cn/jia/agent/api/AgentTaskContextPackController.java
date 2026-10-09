@@ -137,6 +137,8 @@ public class AgentTaskContextPackController {
             throw new ContextPackAuthenticationException(false);
         }
         Map<String, Object> claims = jwt.getToken().getClaims();
+        if (!"0".equals(claims.get("tenant_id")) || !"cyf".equals(claims.get("data_domain_id")))
+            throw new ContextPackAuthenticationException(true);
         String ownerJiacn = requiredClaim(claims, "jiacn", 50);
         String clientId = requiredClaim(claims, "client_id", 50);
         String actorAgentId = requiredClaim(claims, "sub", 100);
@@ -144,6 +146,7 @@ public class AgentTaskContextPackController {
         if (!validExact(name, 100) || !actorAgentId.equals(name)) {
             throw new ContextPackAuthenticationException(true);
         }
+        // Legacy pack generation and the event gate still use tenant-0/client storage.
         return new Scope("0", clientId, ownerJiacn, actorAgentId);
     }
 

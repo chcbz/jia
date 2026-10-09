@@ -5,6 +5,7 @@ import cn.jia.agent.config.AgentRabbitTopologyManifest;
 import cn.jia.agent.entity.AgentCommandDeliveryEntity;
 import cn.jia.agent.entity.AgentConfirmedPublishRequest;
 import cn.jia.agent.entity.AgentOutboxEventEntity;
+import cn.jia.core.tenant.ProducerScope;
 
 import java.security.MessageDigest;
 import java.util.List;
@@ -151,14 +152,25 @@ final class AgentCommandAutomaticReplayProvenance {
             return false;
         }
         try {
-            AgentRabbitTopologyManifest manifest = AgentRabbitTopologyManifest.canonical();
-            AgentCommandAmqpContract.validate(new AgentConfirmedPublishRequest(
-                    parent.getDestination(), parent.getRoutingKey(), parent.getWirePayload(),
-                    parent.getWirePayloadHash(), parent.getMessageId(), parent.getEventId(),
-                    parent.getDeliveryId(), parent.getCommandId(), parent.getTenantId(),
-                    parent.getClientId(), delivery.getTaskId(), delivery.getTargetAgentId(),
-                    delivery.getCommandType(), parent.getActiveAttempt(), parent.getExpiresAt(),
-                    manifest.sha256(), AgentCommandAmqpContract.INITIAL_SOURCE_SETTLEMENT_RETRY));
+            ProducerScope parentScope = AgentCommandProtocolSupport.producerScope(
+                    delivery, parent);
+            ProducerScope activeScope = AgentCommandProtocolSupport.producerScope(
+                    delivery, activeOutbox);
+            if (!Objects.equals(parentScope, activeScope)) return false;
+            if (parentScope != null) {
+                AgentRabbitTopologyManifest manifest = AgentRabbitTopologyManifest.canonical();
+                AgentCommandAmqpContract.validate(new AgentConfirmedPublishRequest(
+                        parent.getDestination(), parent.getRoutingKey(), parent.getWirePayload(),
+                        parent.getWirePayloadHash(), parent.getMessageId(), parent.getEventId(),
+                        parent.getDeliveryId(), parent.getCommandId(), parent.getTenantId(),
+                        parentScope.dataDomainId().value(), parentScope.executionPoolId(),
+                        parentScope.admissionEpoch(), parentScope.deploymentId(),
+                        parentScope.moduleId(), parentScope.migrationEpoch(),
+                        AgentCommandAmqpContract.WIRE_VERSION, parent.getClientId(),
+                        delivery.getTaskId(), delivery.getTargetAgentId(),
+                        delivery.getCommandType(), parent.getActiveAttempt(), parent.getExpiresAt(),
+                        manifest.sha256(), AgentCommandAmqpContract.INITIAL_SOURCE_SETTLEMENT_RETRY));
+            }
             return true;
         } catch (IllegalArgumentException invalid) {
             return false;

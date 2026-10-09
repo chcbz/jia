@@ -19,14 +19,24 @@ public class AgentRabbitTopologyConfiguration {
         return AgentRabbitTopologyManifest.canonical();
     }
 
+    @Bean(name = "agentRabbitRawConnectionFactoryBuilder", defaultCandidate = false)
+    public AgentRabbitRawConnectionFactoryBuilder agentRabbitRawConnectionFactoryBuilder() {
+        return new AgentRabbitRawConnectionFactoryBuilder();
+    }
+
+    @Bean(name = "agentRabbitCanonicalRawConnectionFactory", defaultCandidate = false)
+    public com.rabbitmq.client.ConnectionFactory agentRabbitCanonicalRawConnectionFactory(
+            AgentRabbitBrokerSettings settings,
+            @Qualifier("agentRabbitRawConnectionFactoryBuilder")
+            AgentRabbitRawConnectionFactoryBuilder builder) {
+        return builder.canonical(settings);
+    }
+
     @Bean(name = "agentRabbitConnectionFactory", defaultCandidate = false)
     public CachingConnectionFactory agentRabbitConnectionFactory(
-            AgentRabbitBrokerSettings settings) {
-        CachingConnectionFactory factory = new CachingConnectionFactory(
-                settings.host(), settings.port());
-        factory.setUsername(settings.username());
-        factory.setPassword(settings.password());
-        factory.setVirtualHost(settings.virtualHost());
+            @Qualifier("agentRabbitCanonicalRawConnectionFactory")
+            com.rabbitmq.client.ConnectionFactory rawFactory) {
+        CachingConnectionFactory factory = new CachingConnectionFactory(rawFactory);
         factory.setPublisherConfirmType(CachingConnectionFactory.ConfirmType.CORRELATED);
         factory.setPublisherReturns(true);
         return factory;
@@ -55,6 +65,20 @@ public class AgentRabbitTopologyConfiguration {
             @Qualifier("agentRabbitTopologyReadiness") AgentRabbitTopologyReadiness readiness) {
         return new AgentRabbitTopologyProvisioner(
                 manifest, admin, connectionFactory, readiness);
+    }
+
+    @Bean(name = "agentRabbitV2TopologyReadiness", defaultCandidate = false)
+    public AgentRabbitV2TopologyReadiness agentRabbitV2TopologyReadiness() {
+        return new AgentRabbitV2TopologyReadiness();
+    }
+
+    @Bean(name = "agentRabbitV2TopologyProvisioner", defaultCandidate = false)
+    public AgentRabbitV2TopologyProvisioner agentRabbitV2TopologyProvisioner(
+            @Qualifier("agentRabbitAdmin") RabbitAdmin admin,
+            @Qualifier("agentRabbitConnectionFactory") ConnectionFactory connectionFactory,
+            @Qualifier("agentRabbitV2TopologyReadiness")
+            AgentRabbitV2TopologyReadiness readiness) {
+        return new AgentRabbitV2TopologyProvisioner(admin, connectionFactory, readiness);
     }
 
     @Bean(name = "agentCommandListenerContainerFactory", defaultCandidate = false)

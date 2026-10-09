@@ -22,18 +22,28 @@ public final class AgentCommandReissueCoordinator implements AgentCommandReconne
     private static final Logger LOG = LoggerFactory.getLogger(AgentCommandReissueCoordinator.class);
     private static final long CLOSE_AWAIT_MILLIS = 1_000L;
 
-    private final AgentCommandReissueService service;
+    private final AgentCommandReissueService legacyService;
+    private final AgentCommandReissueService scopedService;
+    private final boolean dualLane;
     private final AgentCommandReissueSettings settings;
     private final ArrayBlockingQueue<AgentCommandReconnectScope> signals;
     private final LongSupplier nowMillis;
     private final AtomicBoolean closed = new AtomicBoolean();
     private final ScheduledExecutorService worker;
     private volatile long schedulerCursor;
+    private volatile long scopedSchedulerCursor;
 
     public AgentCommandReissueCoordinator(
             AgentCommandReissueService service,
             AgentCommandReissueSettings settings) {
-        this(service, settings, Clock.systemUTC()::millis, true);
+        this(service, null, false, settings, Clock.systemUTC()::millis, true);
+    }
+
+    public AgentCommandReissueCoordinator(
+            AgentCommandDualLaneReissueService service,
+            AgentCommandReissueSettings settings) {
+        this(Objects.requireNonNull(service, "service").legacyLane(),
+                service.scopedLane(), true, settings, Clock.systemUTC()::millis, true);
     }
 
     AgentCommandReissueCoordinator(
@@ -41,7 +51,28 @@ public final class AgentCommandReissueCoordinator implements AgentCommandReconne
             AgentCommandReissueSettings settings,
             LongSupplier nowMillis,
             boolean start) {
-        this.service = Objects.requireNonNull(service, "service");
+        this(service, null, false, settings, nowMillis, start);
+    }
+
+    AgentCommandReissueCoordinator(
+            AgentCommandReissueService legacyService,
+            AgentCommandReissueService scopedService,
+            AgentCommandReissueSettings settings,
+            LongSupplier nowMillis,
+            boolean start) {
+        this(legacyService, scopedService, true, settings, nowMillis, start);
+    }
+
+    private AgentCommandReissueCoordinator(
+            AgentCommandReissueService legacyService,
+            AgentCommandReissueService scopedService,
+            boolean dualLane,
+            AgentCommandReissueSettings settings,
+            LongSupplier nowMillis,
+            boolean start) {
+        this.legacyService = Objects.requireNonNull(legacyService, "legacyService");
+        this.scopedService = scopedService;
+        this.dualLane = dualLane;
         this.settings = Objects.requireNonNull(settings, "settings");
         this.nowMillis = Objects.requireNonNull(nowMillis, "nowMillis");
         this.signals = new ArrayBlockingQueue<>(settings.queueCapacity());
@@ -70,15 +101,27 @@ public final class AgentCommandReissueCoordinator implements AgentCommandReconne
         for (int i = 0; i < settings.reconnectBatchSize(); i++) {
             AgentCommandReconnectScope scope = signals.poll();
             if (scope == null) break;
-            service.reissueForReconnect(scope, settings.schedulerBatchSize(), now);
+            AgentCommandReissueService lane = reconnectLane(scope);
+            if (lane != null) {
+                lane.reissueForReconnect(scope, settings.schedulerBatchSize(), now);
+            }
         }
-        AgentCommandReissueScanResult due = service.reissueDue(
-                settings.schedulerBatchSize(), schedulerCursor, now);
-        if (due != null && due.examined() > 0) {
-            schedulerCursor = due.lastVisitedDeliveryId();
-        } else if (schedulerCursor > 0) {
-            schedulerCursor = 0;
+        schedulerCursor = scanDue(legacyService, schedulerCursor, now);
+        if (dualLane && scopedService != null) {
+            scopedSchedulerCursor = scanDue(scopedService, scopedSchedulerCursor, now);
         }
+    }
+
+    private AgentCommandReissueService reconnectLane(AgentCommandReconnectScope scope) {
+        if (!dualLane || "0".equals(scope.tenantId())) return legacyService;
+        return scopedService;
+    }
+
+    private long scanDue(AgentCommandReissueService lane, long cursor, long now) {
+        AgentCommandReissueScanResult due = lane.reissueDue(
+                settings.schedulerBatchSize(), cursor, now);
+        if (due != null && due.examined() > 0) return due.lastVisitedDeliveryId();
+        return cursor > 0 ? 0 : cursor;
     }
 
     int queuedSignalCount() {
@@ -87,6 +130,10 @@ public final class AgentCommandReissueCoordinator implements AgentCommandReconne
 
     long schedulerCursor() {
         return schedulerCursor;
+    }
+
+    long scopedSchedulerCursor() {
+        return scopedSchedulerCursor;
     }
 
     private void runSafely() {

@@ -46,7 +46,10 @@ class AgentCommandRabbitConsumerConfigurationTest {
 
     @Test
     void dispatchTrueWiresOnlyExplicitDedicatedPublisherAndManifest() {
-        runner.withPropertyValues("agent.rabbit-dispatch.enabled=true")
+        runner.withPropertyValues(
+                        "agent.rabbit-dispatch.enabled=true",
+                        "agent.rabbit-consume.enabled=true",
+                        "agent.rabbit-consume-v2.enabled=false")
                 .run(context -> {
                     assertNull(context.getStartupFailure());
                     AgentCommandRabbitConsumer consumer =
@@ -57,6 +60,33 @@ class AgentCommandRabbitConsumerConfigurationTest {
                             .getField(consumer, "decoder");
                     assertSame(manifest, org.springframework.test.util.ReflectionTestUtils
                             .getField(decoder, "manifest"));
+                });
+    }
+
+    @Test
+    void protocolV2DispatchDoesNotRegisterLegacyConsumer() {
+        runner.withPropertyValues(
+                        "agent.rabbit-dispatch.enabled=true",
+                        "agent.rabbit-consume.enabled=false",
+                        "agent.rabbit-consume-v2.enabled=true")
+                .run(context -> {
+                    assertNull(context.getStartupFailure());
+                    assertFalse(context.containsBean("agentCommandRabbitConsumer"));
+                    assertTrue(context.getBeansOfType(
+                            AgentCommandRabbitConsumer.class).isEmpty());
+                });
+    }
+
+    @Test
+    void dualConsumerFlagsDoNotRegisterLegacyConsumer() {
+        runner.withPropertyValues(
+                        "agent.rabbit-dispatch.enabled=true",
+                        "agent.rabbit-consume.enabled=true",
+                        "agent.rabbit-consume-v2.enabled=true")
+                .run(context -> {
+                    assertNull(context.getStartupFailure());
+                    assertTrue(context.getBeansOfType(
+                            AgentCommandRabbitConsumer.class).isEmpty());
                 });
     }
 }

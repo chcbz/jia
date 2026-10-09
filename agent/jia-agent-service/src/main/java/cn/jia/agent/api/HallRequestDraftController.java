@@ -207,10 +207,14 @@ public class HallRequestDraftController {
                 || !authentication.isAuthenticated()) throw new AuthenticationFailure(false);
         Map<String, Object> claims = jwt.getToken().getClaims();
         Object owner = claims.get("jiacn"); Object client = claims.get("client_id");
+        if (!"0".equals(claims.get("tenant_id")) || !"cyf".equals(claims.get("data_domain_id")))
+            throw new AuthenticationFailure(true);
         if (!(owner instanceof String ownerJiacn) || !(client instanceof String clientId)
                 || !identity(ownerJiacn) || !identity(clientId) || "0".equals(ownerJiacn)) {
             throw new AuthenticationFailure(true);
         }
+        // This legacy store is client-scoped and restricted to area 0.
+        // Never reinterpret an authorized area 1 token as an area 0 owner.
         return new HallRequestDraftService.OwnerScope("0", clientId, ownerJiacn);
     }
 

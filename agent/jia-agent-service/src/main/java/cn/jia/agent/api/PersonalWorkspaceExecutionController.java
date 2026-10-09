@@ -102,15 +102,24 @@ public class PersonalWorkspaceExecutionController {
             case OUTPUT_CONFLICT, OUTPUT_MISSING, STORAGE_UNAVAILABLE -> error(HttpStatus.SERVICE_UNAVAILABLE, "EXECUTION_UNAVAILABLE", "Execution is temporarily unavailable");
         };
     }
+    @ExceptionHandler(AuthenticationFailure.class)
+    public ResponseEntity<ErrorBody> authentication(AuthenticationFailure failure) {
+        return error(failure.forbidden ? HttpStatus.FORBIDDEN : HttpStatus.UNAUTHORIZED,
+                failure.forbidden ? "EXECUTION_FORBIDDEN" : "EXECUTION_UNAUTHENTICATED",
+                "Execution access is unavailable");
+    }
     @ExceptionHandler({IllegalArgumentException.class, RequestFailure.class})
     public ResponseEntity<ErrorBody> malformed(Exception ignored) { return error(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Invalid execution request"); }
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorBody> unexpected(Exception ignored, HttpServletRequest request) { return error(HttpStatus.SERVICE_UNAVAILABLE, "EXECUTION_UNAVAILABLE", "Execution is temporarily unavailable"); }
 
     private static PersonalWorkspaceExecutionService.OwnerScope scope(Authentication authentication) {
-        if (!(authentication instanceof JwtAuthenticationToken jwt) || !authentication.isAuthenticated()) throw new RequestFailure();
+        if (!(authentication instanceof JwtAuthenticationToken jwt) || !authentication.isAuthenticated()) throw new AuthenticationFailure(false);
         Map<String,Object> claims = jwt.getToken().getClaims(); Object owner=claims.get("jiacn"), client=claims.get("client_id");
-        if (!(owner instanceof String o) || !(client instanceof String c) || !valid(o,50) || !valid(c,50) || "0".equals(o)) throw new RequestFailure();
+        if (!"0".equals(claims.get("tenant_id")) || !"cyf".equals(claims.get("data_domain_id"))
+                || !(owner instanceof String o) || !(client instanceof String c)
+                || !valid(o,50) || !valid(c,50) || "0".equals(o)) throw new AuthenticationFailure(true);
+        // The execution DAO still supports only area 0 / client-scoped data.
         return new PersonalWorkspaceExecutionService.OwnerScope("0", c, o);
     }
     private static int historyLimit(String value) {
@@ -139,5 +148,9 @@ public class PersonalWorkspaceExecutionController {
     public record InputRequest(String fileId, String version) { }
     public record RevokeRequest(String expectedGrantRevision) { }
     public record ErrorBody(String code,String message) { }
+    private static final class AuthenticationFailure extends RuntimeException {
+        private final boolean forbidden;
+        private AuthenticationFailure(boolean forbidden) { this.forbidden = forbidden; }
+    }
     private static final class RequestFailure extends RuntimeException { }
 }

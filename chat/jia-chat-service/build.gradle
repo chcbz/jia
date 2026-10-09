@@ -5,6 +5,8 @@ dependencies {
 	implementation project(':chat:jia-chat-mapper')
 	implementation project(':agent:jia-agent-api')
 	implementation project(':agent:jia-agent-service')
+	implementation project(':agent:jia-agent-mapper')
+	implementation project(':oauth:jia-oauth-resource')
 	compileOnly project(':oauth:jia-oauth-api')
 	implementation project(':task:jia-task-core')
     implementation project(':task:jia-task-api')
@@ -38,6 +40,7 @@ dependencies {
 	testImplementation project(':oauth:jia-oauth-api')
 	testImplementation libs.spring.ai.starter.mcp.client
 	testImplementation "org.springframework.ai:spring-ai-starter-model-openai:${libs.versions.spring.ai.asProvider().get()}"
+	testImplementation libs.spring.ai.vector.store.advisor
 	testImplementation libs.spring.boot.starter.websocket
 	testImplementation libs.spring.security.oauth2.resource.server
 	testImplementation libs.spring.security.oauth2.jose
@@ -46,6 +49,57 @@ dependencies {
 
 version = '1.1.2-SNAPSHOT'
 description = 'jia-chat-service'
+
+def tenantCommandRuntimeV2SourceSet = sourceSets.create('tenantCommandRuntimeV2') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/chat/handler/AgentWebSocketV2RuntimeGatewayTest.java'
+        include 'cn/jia/chat/handler/AgentRuntimeV2WebSocketAdapterTest.java'
+        include 'cn/jia/chat/handler/AgentRuntimeV2SocketGatewayTest.java'
+        include 'cn/jia/chat/handler/AgentRuntimeV2ExecutionWebSocketTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(tenantCommandRuntimeV2SourceSet.implementationConfigurationName) {
+    extendsFrom configurations.testImplementation
+}
+configurations.named(tenantCommandRuntimeV2SourceSet.runtimeOnlyConfigurationName) {
+    extendsFrom configurations.testRuntimeOnly
+}
+tasks.register('tenantCommandRuntimeV2', Test) {
+    group = 'verification'
+    description = 'Runs protocol-v2 single-runtime WebSocket gateway tests.'
+    dependsOn tasks.named(tenantCommandRuntimeV2SourceSet.classesTaskName)
+    testClassesDirs = tenantCommandRuntimeV2SourceSet.output.classesDirs
+    classpath = tenantCommandRuntimeV2SourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
+
+def runtimeV2R4SourceSet = sourceSets.create('runtimeV2R4') {
+    java {
+        srcDir 'src/test/java'
+        include 'cn/jia/chat/handler/AgentRuntimeV2EffectWebSocketTest.java'
+        include 'cn/jia/chat/handler/AgentWebSocketV2RuntimeGatewayTest.java'
+        include 'cn/jia/chat/handler/AgentRuntimeV2WebSocketAdapterTest.java'
+        include 'cn/jia/chat/handler/AgentRuntimeV2SocketGatewayTest.java'
+        include 'cn/jia/chat/handler/AgentRuntimeV2ExecutionWebSocketTest.java'
+    }
+    resources.srcDir 'src/test/resources'
+    compileClasspath += sourceSets.main.output
+    runtimeClasspath += output + compileClasspath
+}
+configurations.named(runtimeV2R4SourceSet.implementationConfigurationName) { extendsFrom configurations.testImplementation }
+configurations.named(runtimeV2R4SourceSet.runtimeOnlyConfigurationName) { extendsFrom configurations.testRuntimeOnly }
+tasks.register('runtimeV2R4', Test) {
+    group = 'verification'
+    description = 'Runs fresh R4 additive raw routing with retained V2 WebSocket regressions; no runtime activation.'
+    dependsOn tasks.named(runtimeV2R4SourceSet.classesTaskName)
+    testClassesDirs = runtimeV2R4SourceSet.output.classesDirs
+    classpath = runtimeV2R4SourceSet.runtimeClasspath
+    useJUnitPlatform()
+}
 
 // D02 source-only verification slice. It avoids compiling unrelated historical chat tests.
 def juyitingExecutionReportSourceSet = sourceSets.create('juyitingExecutionReport') {

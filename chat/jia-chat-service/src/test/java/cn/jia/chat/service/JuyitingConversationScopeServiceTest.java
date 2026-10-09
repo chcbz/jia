@@ -2,6 +2,10 @@ package cn.jia.chat.service;
 
 import cn.jia.agent.service.AgentService;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
+import cn.jia.core.tenant.UserAdmissionScope;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
@@ -11,6 +15,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class JuyitingConversationScopeServiceTest extends BaseMockTest {
@@ -124,6 +129,47 @@ class JuyitingConversationScopeServiceTest extends BaseMockTest {
         JuyitingConversationScope scope = authorize(request);
         assertEquals("public", scope.scopeType());
         assertEquals(List.of("builtin-songjiang"), scope.targetAgentIds());
+    }
+
+
+    @Test
+    void domainAreaRejectsTaskBeforeLegacyAgentLookup() {
+        ChatMessageDTO request = bounty("372", List.of("agent-wuyong"));
+        JuyitingConversationScopeService service = service();
+
+        assertThrows(IllegalStateException.class, () -> service.authorize(
+                request, service.resolve(request), areaScope("1")));
+
+        verifyNoInteractions(agentService);
+    }
+
+
+    @Test
+    void domainAreaAllowsOnlyDefaultBuiltinPublicConversation() {
+        when(builtinHallAgentSupport.defaultAgentId()).thenReturn("builtin-songjiang");
+        ChatMessageDTO publicRequest = new ChatMessageDTO();
+        publicRequest.setConversationType("juyiting");
+        JuyitingConversationScopeService service = service();
+
+        JuyitingConversationScope publicScope = service.authorize(
+                publicRequest, service.resolve(publicRequest), areaScope("1"));
+        assertEquals(List.of("builtin-songjiang"), publicScope.targetAgentIds());
+
+        ChatMessageDTO privateRequest = new ChatMessageDTO();
+        privateRequest.setConversationType("juyiting");
+        privateRequest.setConversationScopeType("private");
+        privateRequest.setConversationScopeKey("agent:agent-wuyong");
+        privateRequest.setTargetAgentIds(List.of("agent-wuyong"));
+        assertThrows(IllegalStateException.class, () -> service.authorize(
+                privateRequest, service.resolve(privateRequest), areaScope("1")));
+        verifyNoInteractions(agentService);
+    }
+
+    private UserAdmissionScope areaScope(String tenantId) {
+        return new UserAdmissionScope(
+                new BusinessScope(TenantId.of(tenantId), DataDomainId.of("cyf"),
+                        "tenant-a", "client-a"),
+                1L, 0L, 0L, 0L, 0L);
     }
 
     private JuyitingConversationScope authorize(ChatMessageDTO request) {

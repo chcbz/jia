@@ -15,7 +15,9 @@ import java.util.List;
 /** D06 mapper. Discovery is unlocked; every mutation follows delivery -> active outbox -> Inbox locks. */
 public interface AgentCommandRecoveryMapper {
     String DELIVERY_COLUMNS = """
-            id, command_id, task_id, work_item_id, target_agent_id, command_type,
+            id, protocol_version, data_domain_id, execution_pool_id, admission_epoch,
+            producer_deployment_id, module_id, migration_epoch, command_id, owner_jiacn,
+            task_id, work_item_id, target_agent_id, command_type,
             command_payload, command_payload_hash, status, attempt_count,
             next_retry_at, lease_owner, lease_until, active_message_id, active_attempt,
             expires_at, last_error, version, replay_parent_message_id,
@@ -24,7 +26,9 @@ public interface AgentCommandRecoveryMapper {
             """;
 
     String OUTBOX_COLUMNS = """
-            id, event_id, message_id, command_id, delivery_id, aggregate_type,
+            id, protocol_version, data_domain_id, execution_pool_id, admission_epoch,
+            producer_deployment_id, module_id, migration_epoch, event_id, message_id,
+            command_id, delivery_id, aggregate_type,
             aggregate_id, destination, routing_key, wire_payload, wire_payload_hash,
             status, attempt_count, next_retry_at, lease_owner, lease_until,
             active_attempt, expires_at, publisher_confirm_status, confirmed_at,
@@ -34,17 +38,75 @@ public interface AgentCommandRecoveryMapper {
             tenant_id, client_id, create_time, update_time
             """;
 
+
+    String V2_DISCOVERY_FENCE = """
+              AND protocol_version=2
+              AND tenant_id=#{tenantId}
+              AND data_domain_id=#{dataDomainId}
+              AND execution_pool_id=#{executionPoolId}
+              AND admission_epoch=#{admissionEpoch}
+              AND producer_deployment_id=#{producerDeploymentId}
+              AND module_id=#{moduleId}
+              AND migration_epoch=#{migrationEpoch}
+              AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
+              AND CAST(data_domain_id AS BINARY)=CAST(#{dataDomainId} AS BINARY)
+              AND OCTET_LENGTH(data_domain_id)=OCTET_LENGTH(#{dataDomainId})
+              AND CAST(execution_pool_id AS BINARY)=CAST(#{executionPoolId} AS BINARY)
+              AND OCTET_LENGTH(execution_pool_id)=OCTET_LENGTH(#{executionPoolId})
+              AND CAST(producer_deployment_id AS BINARY)=CAST(#{producerDeploymentId} AS BINARY)
+              AND OCTET_LENGTH(producer_deployment_id)=OCTET_LENGTH(#{producerDeploymentId})
+              AND CAST(module_id AS BINARY)=CAST(#{moduleId} AS BINARY)
+              AND OCTET_LENGTH(module_id)=OCTET_LENGTH(#{moduleId})
+            """;
+
+    String LEGACY_DISCOVERY_FENCE = """
+              AND tenant_id='0'
+              AND CAST(tenant_id AS BINARY)=CAST('0' AS BINARY)
+              AND OCTET_LENGTH(tenant_id)=1
+              AND (protocol_version IS NULL OR protocol_version=1)
+              AND data_domain_id IS NULL
+              AND execution_pool_id IS NULL
+              AND admission_epoch IS NULL
+              AND producer_deployment_id IS NULL
+              AND module_id IS NULL
+              AND migration_epoch IS NULL
+            """;
+
+    String DELIVERY_PROTOCOL_FENCE = """
+              AND ((protocol_version IS NULL AND #{delivery.protocolVersion} IS NULL)
+                   OR protocol_version=#{delivery.protocolVersion})
+              AND ((data_domain_id IS NULL AND #{delivery.dataDomainId} IS NULL)
+                   OR (data_domain_id=#{delivery.dataDomainId}
+                       AND CAST(data_domain_id AS BINARY)=CAST(#{delivery.dataDomainId} AS BINARY)
+                       AND OCTET_LENGTH(data_domain_id)=OCTET_LENGTH(#{delivery.dataDomainId})))
+              AND ((execution_pool_id IS NULL AND #{delivery.executionPoolId} IS NULL)
+                   OR (execution_pool_id=#{delivery.executionPoolId}
+                       AND CAST(execution_pool_id AS BINARY)=CAST(#{delivery.executionPoolId} AS BINARY)
+                       AND OCTET_LENGTH(execution_pool_id)=OCTET_LENGTH(#{delivery.executionPoolId})))
+              AND ((admission_epoch IS NULL AND #{delivery.admissionEpoch} IS NULL)
+                   OR admission_epoch=#{delivery.admissionEpoch})
+              AND ((producer_deployment_id IS NULL AND #{delivery.producerDeploymentId} IS NULL)
+                   OR (producer_deployment_id=#{delivery.producerDeploymentId}
+                       AND CAST(producer_deployment_id AS BINARY)=CAST(#{delivery.producerDeploymentId} AS BINARY)
+                       AND OCTET_LENGTH(producer_deployment_id)=OCTET_LENGTH(#{delivery.producerDeploymentId})))
+              AND ((module_id IS NULL AND #{delivery.moduleId} IS NULL)
+                   OR (module_id=#{delivery.moduleId}
+                       AND CAST(module_id AS BINARY)=CAST(#{delivery.moduleId} AS BINARY)
+                       AND OCTET_LENGTH(module_id)=OCTET_LENGTH(#{delivery.moduleId})))
+              AND ((migration_epoch IS NULL AND #{delivery.migrationEpoch} IS NULL)
+                   OR migration_epoch=#{delivery.migrationEpoch})
+            """;
+
     @Select("""
             SELECT id AS deliveryId, tenant_id AS tenantId, client_id AS clientId,
                    target_agent_id AS targetAgentId,
                    CASE WHEN expires_at<=#{now} THEN TRUE ELSE FALSE END AS expiryCandidate
             FROM agent_command_delivery
-            WHERE tenant_id=#{tenantId} AND client_id=#{clientId}
+            WHERE client_id=#{clientId}
               AND target_agent_id=#{targetAgentId}
               AND status IN ('WAITING_AGENT','SENT') AND expires_at>#{now}
               AND id>#{afterDeliveryId}
-              AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
-              AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
               AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
               AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
               AND CAST(target_agent_id AS BINARY)=CAST(#{targetAgentId} AS BINARY)
@@ -52,11 +114,82 @@ public interface AgentCommandRecoveryMapper {
               AND (CAST(status AS BINARY)=CAST('WAITING_AGENT' AS BINARY)
                    OR CAST(status AS BINARY)=CAST('SENT' AS BINARY))
               AND OCTET_LENGTH(status)=CHAR_LENGTH(status)
+            """ + V2_DISCOVERY_FENCE + """
             ORDER BY id ASC
             LIMIT #{limit}
             """)
-    List<AgentWaitingCommandCandidate> selectReconnectCandidates(
+    List<AgentWaitingCommandCandidate> selectV2ReconnectCandidates(
             @Param("tenantId") String tenantId,
+            @Param("dataDomainId") String dataDomainId,
+            @Param("executionPoolId") String executionPoolId,
+            @Param("admissionEpoch") long admissionEpoch,
+            @Param("producerDeploymentId") String producerDeploymentId,
+            @Param("moduleId") String moduleId,
+            @Param("migrationEpoch") long migrationEpoch,
+            @Param("clientId") String clientId,
+            @Param("targetAgentId") String targetAgentId,
+            @Param("now") long now,
+            @Param("afterDeliveryId") long afterDeliveryId,
+            @Param("limit") int limit);
+
+    @Select("""
+            SELECT id AS deliveryId, tenant_id AS tenantId, client_id AS clientId,
+                   target_agent_id AS targetAgentId,
+                   CASE WHEN expires_at<=#{now} THEN TRUE ELSE FALSE END AS expiryCandidate
+            FROM agent_command_delivery
+            WHERE (
+                  (status='WAITING_AGENT' AND (
+                      expires_at<=#{now}
+                      OR (next_retry_at IS NOT NULL AND next_retry_at<=#{now} AND expires_at>#{now})))
+                  OR (status='RETRY' AND (
+                      expires_at<=#{now}
+                      OR (next_retry_at IS NOT NULL AND next_retry_at<=#{now} AND expires_at>#{now})))
+                  OR (status='SENT' AND (
+                      expires_at<=#{now}
+                      OR (update_time<=#{sentBefore} AND expires_at>#{now})))
+              ) AND id>#{afterDeliveryId}
+              AND (CAST(status AS BINARY)=CAST('WAITING_AGENT' AS BINARY)
+                   OR CAST(status AS BINARY)=CAST('RETRY' AS BINARY)
+                   OR CAST(status AS BINARY)=CAST('SENT' AS BINARY))
+              AND OCTET_LENGTH(status)=CHAR_LENGTH(status)
+            """ + V2_DISCOVERY_FENCE + """
+            ORDER BY id ASC
+            LIMIT #{limit}
+            """)
+    List<AgentWaitingCommandCandidate> selectV2DueCandidates(
+            @Param("tenantId") String tenantId,
+            @Param("dataDomainId") String dataDomainId,
+            @Param("executionPoolId") String executionPoolId,
+            @Param("admissionEpoch") long admissionEpoch,
+            @Param("producerDeploymentId") String producerDeploymentId,
+            @Param("moduleId") String moduleId,
+            @Param("migrationEpoch") long migrationEpoch,
+            @Param("now") long now,
+            @Param("sentBefore") long sentBefore,
+            @Param("afterDeliveryId") long afterDeliveryId,
+            @Param("limit") int limit);
+
+    @Select("""
+            SELECT id AS deliveryId, tenant_id AS tenantId, client_id AS clientId,
+                   target_agent_id AS targetAgentId,
+                   CASE WHEN expires_at<=#{now} THEN TRUE ELSE FALSE END AS expiryCandidate
+            FROM agent_command_delivery
+            WHERE client_id=#{clientId}
+              AND target_agent_id=#{targetAgentId}
+              AND status IN ('WAITING_AGENT','SENT') AND expires_at>#{now}
+              AND id>#{afterDeliveryId}
+              AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
+              AND CAST(target_agent_id AS BINARY)=CAST(#{targetAgentId} AS BINARY)
+              AND OCTET_LENGTH(target_agent_id)=OCTET_LENGTH(#{targetAgentId})
+              AND (CAST(status AS BINARY)=CAST('WAITING_AGENT' AS BINARY)
+                   OR CAST(status AS BINARY)=CAST('SENT' AS BINARY))
+              AND OCTET_LENGTH(status)=CHAR_LENGTH(status)
+            """ + LEGACY_DISCOVERY_FENCE + """
+            ORDER BY id ASC
+            LIMIT #{limit}
+            """)
+    List<AgentWaitingCommandCandidate> selectLegacyReconnectCandidates(
             @Param("clientId") String clientId,
             @Param("targetAgentId") String targetAgentId,
             @Param("now") long now,
@@ -79,14 +212,26 @@ public interface AgentCommandRecoveryMapper {
               AND (CAST(status AS BINARY)=CAST('WAITING_AGENT' AS BINARY)
                    OR CAST(status AS BINARY)=CAST('SENT' AS BINARY))
               AND OCTET_LENGTH(status)=CHAR_LENGTH(status)
+            """ + LEGACY_DISCOVERY_FENCE + """
             ORDER BY id ASC
             LIMIT #{limit}
             """)
-    List<AgentWaitingCommandCandidate> selectDueCandidates(
+    List<AgentWaitingCommandCandidate> selectLegacyDueCandidates(
             @Param("now") long now,
             @Param("sentBefore") long sentBefore,
             @Param("afterDeliveryId") long afterDeliveryId,
             @Param("limit") int limit);
+
+    @Select("SELECT " + DELIVERY_COLUMNS + " FROM agent_command_delivery " +
+            "WHERE id=#{deliveryId} AND tenant_id=#{tenantId} AND client_id=#{clientId} " +
+            "AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY) " +
+            "AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId}) " +
+            "AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY) " +
+            "AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId}) LIMIT 1")
+    AgentCommandDeliveryEntity selectDeliveryProtocolHint(
+            @Param("tenantId") String tenantId,
+            @Param("clientId") String clientId,
+            @Param("deliveryId") long deliveryId);
 
     @Select("SELECT " + DELIVERY_COLUMNS + " FROM agent_command_delivery " +
             "WHERE id=#{deliveryId} AND tenant_id=#{tenantId} AND client_id=#{clientId} " +
@@ -199,7 +344,7 @@ public interface AgentCommandRecoveryMapper {
               AND OCTET_LENGTH(active_message_id)=OCTET_LENGTH(#{delivery.activeMessageId})
               AND CAST(status AS BINARY)=CAST(#{delivery.status} AS BINARY)
               AND OCTET_LENGTH(status)=OCTET_LENGTH(#{delivery.status})
-            """)
+            """ + DELIVERY_PROTOCOL_FENCE)
     int reissueDelivery(
             @Param("delivery") AgentCommandDeliveryEntity delivery,
             @Param("newMessageId") String newMessageId,
@@ -242,7 +387,7 @@ public interface AgentCommandRecoveryMapper {
               AND OCTET_LENGTH(active_message_id)=OCTET_LENGTH(#{delivery.activeMessageId})
               AND CAST(status AS BINARY)=CAST(#{delivery.status} AS BINARY)
               AND OCTET_LENGTH(status)=OCTET_LENGTH(#{delivery.status})
-            """)
+            """ + DELIVERY_PROTOCOL_FENCE)
     int manualReissueDelivery(
             @Param("delivery") AgentCommandDeliveryEntity delivery,
             @Param("newMessageId") String newMessageId,
@@ -303,16 +448,45 @@ public interface AgentCommandRecoveryMapper {
             @Param("lastError") String lastError,
             @Param("now") long now);
 
+    @Update("""
+            UPDATE agent_consumer_inbox
+            SET status='EXPIRED', result_status='EXPIRED', next_retry_at=NULL,
+                lease_owner=NULL, lease_until=NULL, processed_at=#{now},
+                last_error=#{lastError}, version=version+1, update_time=#{now}
+            WHERE id=#{inbox.id} AND version=#{inbox.version}
+              AND active_attempt=#{inbox.activeAttempt}
+              AND tenant_id=#{inbox.tenantId} AND client_id=#{inbox.clientId}
+              AND consumer_name=#{inbox.consumerName} AND message_id=#{inbox.messageId}
+              AND status='RETRY' AND result_status='RETRY'
+              AND next_retry_at=#{inbox.nextRetryAt}
+              AND CAST(tenant_id AS BINARY)=CAST(#{inbox.tenantId} AS BINARY)
+              AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{inbox.tenantId})
+              AND CAST(client_id AS BINARY)=CAST(#{inbox.clientId} AS BINARY)
+              AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{inbox.clientId})
+              AND CAST(consumer_name AS BINARY)=CAST(#{inbox.consumerName} AS BINARY)
+              AND OCTET_LENGTH(consumer_name)=OCTET_LENGTH(#{inbox.consumerName})
+              AND CAST(message_id AS BINARY)=CAST(#{inbox.messageId} AS BINARY)
+              AND OCTET_LENGTH(message_id)=OCTET_LENGTH(#{inbox.messageId})
+              AND CAST(status AS BINARY)=CAST('RETRY' AS BINARY)
+              AND OCTET_LENGTH(status)=OCTET_LENGTH('RETRY')
+            """)
+    int expireRetryInbox(
+            @Param("inbox") AgentConsumerInboxEntity inbox,
+            @Param("lastError") String lastError,
+            @Param("now") long now);
+
     @Insert("""
             INSERT INTO agent_outbox_event
-              (event_id,message_id,command_id,delivery_id,aggregate_type,aggregate_id,
+              (protocol_version,data_domain_id,execution_pool_id,admission_epoch,producer_deployment_id,
+               module_id,migration_epoch,event_id,message_id,command_id,delivery_id,aggregate_type,aggregate_id,
                destination,routing_key,wire_payload,wire_payload_hash,status,attempt_count,
                next_retry_at,lease_owner,lease_until,active_attempt,expires_at,
                publisher_confirm_status,mandatory_return_status,last_error,version,
                replay_parent_message_id,replay_requester_id,replay_approver_id,replay_reason,
                tenant_id,client_id,create_time,update_time)
             VALUES
-              (#{eventId},#{messageId},#{commandId},#{deliveryId},#{aggregateType},#{aggregateId},
+              (#{protocolVersion},#{dataDomainId},#{executionPoolId},#{admissionEpoch},#{producerDeploymentId},
+               #{moduleId},#{migrationEpoch},#{eventId},#{messageId},#{commandId},#{deliveryId},#{aggregateType},#{aggregateId},
                #{destination},#{routingKey},#{wirePayload},#{wirePayloadHash},#{status},#{attemptCount},
                #{nextRetryAt},#{leaseOwner},#{leaseUntil},#{activeAttempt},#{expiresAt},
                #{publisherConfirmStatus},#{mandatoryReturnStatus},#{lastError},#{version},

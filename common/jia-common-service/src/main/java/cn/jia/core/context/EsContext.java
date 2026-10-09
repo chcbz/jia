@@ -14,4 +14,10 @@ public class EsContext {
 
     private String username;
 
+    /** Authenticated business area; null means a legacy/non-business identity. */
+    private String tenantId;
+
+    /** Server-owned product boundary, never inferred from clientId. */
+    private String dataDomainId;
+
 }

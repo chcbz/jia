@@ -74,12 +74,37 @@ class AgentWorkItemPlanControllerTest {
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
 
         Jwt malformed = Jwt.withTokenValue("token").header("alg", "none")
+                .claim("tenant_id", "0")
+                .claim("data_domain_id", "cyf")
                 .claim("jiacn", "tenant-a").claim("client_id", 7)
                 .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();
         mvc.perform(post("/agent/tasks/%20bad%20/work-item-plans/suggest")
                         .contentType(MediaType.APPLICATION_JSON).content("{")
                         .principal(new JwtAuthenticationToken(malformed, List.of())))
                 .andExpect(status().isForbidden());
+        verifyNoInteractions(service);
+    }
+
+    @Test
+    void otherAreaOrDomainCannotSuggestOrConfirmLegacyWorkItemPlans() throws Exception {
+        for (JwtAuthenticationToken principal : List.of(
+                jwtForArea("1", "cyf"), jwtForArea("00", "cyf"),
+                jwtForArea("0", "other"), jwtForArea(null, "cyf"),
+                jwtForArea("0", null))) {
+            mvc.perform(post("/agent/tasks/task-1/work-item-plans/suggest")
+                            .queryParam("actorAgentId", ACTOR)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"objective\":\"a\",\"maxItems\":1,\"dependencyMode\":\"parallel\"}")
+                            .principal(principal))
+                    .andExpect(status().isForbidden())
+                    .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
+            mvc.perform(post("/agent/tasks/task-1/work-item-plans/confirm")
+                            .header("Idempotency-Key", "confirm-key-0001")
+                            .queryParam("actorAgentId", ACTOR)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(confirmBody()).principal(principal))
+                    .andExpect(status().isForbidden());
+        }
         verifyNoInteractions(service);
     }
 
@@ -225,9 +250,19 @@ class AgentWorkItemPlanControllerTest {
 
     private JwtAuthenticationToken jwt(String tenant, String client) {
         Jwt jwt = Jwt.withTokenValue("token").header("alg", "none")
+                .claim("tenant_id", "0").claim("data_domain_id", "cyf")
                 .claim("jiacn", tenant).claim("client_id", client)
                 .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();
         return new JwtAuthenticationToken(jwt, List.of());
+    }
+
+    private JwtAuthenticationToken jwtForArea(String area, String domain) {
+        Jwt.Builder builder = Jwt.withTokenValue("token").header("alg", "none")
+                .claim("jiacn", "tenant-a").claim("client_id", "client-a")
+                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60));
+        if (area != null) builder.claim("tenant_id", area);
+        if (domain != null) builder.claim("data_domain_id", domain);
+        return new JwtAuthenticationToken(builder.build(), List.of());
     }
 
     private AgentWorkItemPlanViewDTO view(boolean confirmed) {

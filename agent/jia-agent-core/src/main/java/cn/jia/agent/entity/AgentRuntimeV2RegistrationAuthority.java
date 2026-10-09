@@ -47,7 +47,9 @@ public record AgentRuntimeV2RegistrationAuthority(List<String> fields) {
             }
         });
         AgentRuntimeV2RegistrationFingerprints.uuid(copy.get(13), "registrationAuthorityId");
-        if (!"ACTIVE".equals(copy.get(34)) || !"ACTIVE".equals(copy.get(49))) {
+        // This is evidence typing, not admission. DRAINING needs an exact completion
+        // authorization in the transaction resolver; ordinary admission still rejects it.
+        if (!List.of("ACTIVE", "DRAINING").contains(copy.get(34)) || !"ACTIVE".equals(copy.get(49))) {
             throw new IllegalArgumentException("registration authority requires active deployment and module admission");
         }
         fields = Collections.unmodifiableList(copy);

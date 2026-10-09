@@ -30,6 +30,7 @@
 		</div>
 		<div class="mod-body clearfix">
 			<div class="content pull-left">
+				<p th:if="${selected != null}" th:text="'当前区域：' + ${selected.tenantName} + '（' + ${selected.tenantKind} + '）'"></p>
 				<h1 class="title">OAUTH-BOOT 授权</h1>
 				<a href="#help">帮助</a>
 
@@ -40,6 +41,7 @@
 					<form class="s_from" method="post" th:action="@{/oauth2/authorize}">
 						<input type="hidden" name="client_id" th:value="${clientId}"/>
 						<input type="hidden" name="state" th:value="${state}"/>
+						<input th:if="${_csrf != null}" type="hidden" th:name="${_csrf.parameterName}" th:value="${_csrf.token}" />
 						<div th:each="item:${scopes}">
 							<input type="checkbox" name="scope" th:value="${item}" hidden="hidden" checked="checked"/>
 						</div>

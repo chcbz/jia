@@ -8,6 +8,53 @@ import org.apache.ibatis.annotations.Select;
 public interface PersonalWorkspaceExecutionMapper extends BaseMapper<PersonalWorkspaceExecutionEntity> {
 
     @Select("""
+            SELECT * FROM agent_personal_workspace_execution_output
+             WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
+               AND execution_id=#{executionId} AND output_id=#{outputId}
+               AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
+               AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
+               AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
+               AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
+               AND CAST(owner_jiacn AS BINARY)=CAST(#{ownerJiacn} AS BINARY)
+               AND OCTET_LENGTH(owner_jiacn)=OCTET_LENGTH(#{ownerJiacn})
+               AND CAST(execution_id AS BINARY)=CAST(#{executionId} AS BINARY)
+               AND OCTET_LENGTH(execution_id)=OCTET_LENGTH(#{executionId})
+               AND CAST(output_id AS BINARY)=CAST(#{outputId} AS BINARY)
+               AND OCTET_LENGTH(output_id)=OCTET_LENGTH(#{outputId})
+             LIMIT 2
+            """)
+    java.util.List<cn.jia.agent.entity.PersonalWorkspaceExecutionOutputEntity> findOutputForPrecomputation(
+            @Param("tenantId") String tenantId,@Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn,@Param("executionId") String executionId,
+            @Param("outputId") String outputId);
+
+    @Select("""
+            SELECT * FROM agent_personal_workspace_execution
+             WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
+               AND task_id=#{taskId} AND work_item_id=#{workItemId} AND target_agent_id=#{targetAgentId}
+               AND execution_mode='TASK'
+               AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
+               AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
+               AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
+               AND OCTET_LENGTH(client_id)=OCTET_LENGTH(#{clientId})
+               AND CAST(owner_jiacn AS BINARY)=CAST(#{ownerJiacn} AS BINARY)
+               AND OCTET_LENGTH(owner_jiacn)=OCTET_LENGTH(#{ownerJiacn})
+               AND CAST(task_id AS BINARY)=CAST(#{taskId} AS BINARY)
+               AND OCTET_LENGTH(task_id)=OCTET_LENGTH(#{taskId})
+               AND CAST(work_item_id AS BINARY)=CAST(#{workItemId} AS BINARY)
+               AND OCTET_LENGTH(work_item_id)=OCTET_LENGTH(#{workItemId})
+               AND CAST(target_agent_id AS BINARY)=CAST(#{targetAgentId} AS BINARY)
+               AND OCTET_LENGTH(target_agent_id)=OCTET_LENGTH(#{targetAgentId})
+               AND CAST(execution_mode AS BINARY)=CAST('TASK' AS BINARY)
+               AND OCTET_LENGTH(execution_mode)=4
+             ORDER BY CAST(execution_id AS BINARY) ASC LIMIT 2
+            """)
+    java.util.List<PersonalWorkspaceExecutionEntity> findTaskAssociations(
+            @Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("ownerJiacn") String ownerJiacn, @Param("taskId") String taskId,
+            @Param("workItemId") String workItemId, @Param("targetAgentId") String targetAgentId);
+
+    @Select("""
             <script>
             SELECT tenant_id, client_id, owner_jiacn, execution_id, target_agent_id,
                    execution_state, output_content_mime_type, created_at

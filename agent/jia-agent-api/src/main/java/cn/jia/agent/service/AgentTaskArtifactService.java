@@ -8,6 +8,23 @@ import java.util.List;
 
 /** Artifact APIs require the exact authenticated owner of the task. */
 public interface AgentTaskArtifactService {
+    /** Internal in-memory materialization, not a serializable resource grant.
+     * Implementations must reject caller implementations and foreign creators. */
+    interface PreparedArtifact { }
+
+    default PreparedArtifact prepareManaged(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, AgentTaskArtifactPublishDTO command) {
+        throw new UnsupportedOperationException("Managed artifact preparation unavailable");
+    }
+
+    /** Requires an already-active original synchronized writable transaction.
+     * Current locked command must match every prepared field; no storage I/O. */
+    default AgentTaskArtifactViewDTO publishPrepared(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, AgentTaskArtifactPublishDTO command,
+            PreparedArtifact prepared) {
+        throw new UnsupportedOperationException("Prepared artifact publication unavailable");
+    }
+
     AgentTaskArtifactViewDTO publish(String tenantId, String clientId, String ownerJiacn,
             String taskId, String actorAgentId, AgentTaskArtifactPublishDTO command);
 

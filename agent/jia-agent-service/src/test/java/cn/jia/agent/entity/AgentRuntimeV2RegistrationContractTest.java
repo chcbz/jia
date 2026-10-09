@@ -137,6 +137,33 @@ class AgentRuntimeV2RegistrationContractTest {
     }
 
     @Test
+    void bothOuterDecodersRejectDuplicateMissingReorderedBomUtf8UuidEnumsAndNull() {
+        String deliveryText=new String(AgentRuntimeV2RegistrationCodec.encodeReceiptDelivery(delivery(JSON[1],"ADVANCED","CURRENT")),StandardCharsets.UTF_8);
+        String rejectedText=new String(AgentRuntimeV2RegistrationCodec.encodeRejected(new AgentRuntimeV2RegistrationCodec.Rejected("CREATE","11111111-1111-4111-8111-111111111111",null,"NOT_AUTHORIZED")),StandardCharsets.UTF_8);
+        for(String text:List.of(deliveryText,rejectedText)) {
+            java.util.function.Consumer<byte[]> decoder=text==deliveryText?wire->AgentRuntimeV2RegistrationCodec.decodeReceiptDelivery(wire):wire->AgentRuntimeV2RegistrationCodec.decodeRejected(wire);
+            String messageType=text==deliveryText?"runtime.registration.receipt.delivery":"runtime.registration.rejected";
+            List<byte[]> malformed=new java.util.ArrayList<>();
+            malformed.add(bytes(text.replace("\"schemaVersion\":2,","\"schemaVersion\":2,\"schemaVersion\":2,")));
+            malformed.add(bytes(text.replace("\"schemaVersion\":2,","")));
+            malformed.add(bytes(text.replace("\"schemaVersion\":2,\"messageType\":\""+messageType+"\"","\"messageType\":\""+messageType+"\",\"schemaVersion\":2")));
+            malformed.add(bytes("\ufeff"+text));
+            byte[] invalidUtf8=bytes(text);invalidUtf8[invalidUtf8.length-2]=(byte)0xff;malformed.add(invalidUtf8);
+            malformed.add(bytes(text.replace("11111111-1111-4111-8111-111111111111","11111111-1111-1111-8111-111111111111")));
+            malformed.add(bytes(text.replace("\"correlationType\":\"CREATE\"","\"correlationType\":\"UNKNOWN\"")));
+            malformed.add(bytes(text.replace("\"correlationId\":\"11111111-1111-4111-8111-111111111111\"","\"correlationId\":null")));
+            for(byte[] wire:malformed)assertThrows(IllegalArgumentException.class,()->decoder.accept(wire));
+        }
+        assertThrows(IllegalArgumentException.class,()->AgentRuntimeV2RegistrationCodec.decodeReceiptDelivery(bytes(deliveryText.replace("\"deliveryResult\":\"ADVANCED\"","\"deliveryResult\":\"INVALID\""))));
+        assertThrows(IllegalArgumentException.class,()->AgentRuntimeV2RegistrationCodec.decodeReceiptDelivery(bytes(deliveryText.replace("\"receiptSha256\":\""+JSON_HASH[1]+"\"","\"receiptSha256\":\""+"0".repeat(64)+"\""))));
+        assertThrows(IllegalArgumentException.class,()->AgentRuntimeV2RegistrationCodec.decodeReceiptDelivery(bytes(deliveryText.replace("\"correlationId\":\"11111111-1111-4111-8111-111111111111\"","\"correlationId\":\"99999999-9999-4999-8999-999999999999\""))));
+        byte[] noncanonical=bytes(" "+JSON[1]);
+        String matchingHashNoncanonical=deliveryText.replace(Base64.getEncoder().encodeToString(bytes(JSON[1])),Base64.getEncoder().encodeToString(noncanonical)).replace(JSON_HASH[1],HEX.formatHex(AgentRuntimeV2RegistrationFingerprints.sha256(noncanonical)));
+        assertThrows(IllegalArgumentException.class,()->AgentRuntimeV2RegistrationCodec.decodeReceiptDelivery(bytes(matchingHashNoncanonical)));
+        assertThrows(IllegalArgumentException.class,()->AgentRuntimeV2RegistrationCodec.decodeRejected(bytes(rejectedText.replace("\"reasonCode\":\"NOT_AUTHORIZED\"","\"reasonCode\":\"UNKNOWN\""))));
+    }
+
+    @Test
     void fingerprintsHmacAndThreeCryptoVectorsMatchGolden() throws Exception {
         var subject = new AgentRuntimeV2RegistrationFingerprints.Subject(
                 "API_KEY", "api-key-1", "1", "runtime-client", "owner-a", "agent-a");

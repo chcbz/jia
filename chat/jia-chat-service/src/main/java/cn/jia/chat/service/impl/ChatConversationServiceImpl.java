@@ -6,16 +6,20 @@ import cn.jia.chat.dao.ChatMessageDao;
 import cn.jia.chat.entity.AgentTaskThreadConstants;
 import cn.jia.chat.entity.ChatConversationEntity;
 import cn.jia.chat.entity.ChatMessageEntity;
+import cn.jia.chat.entity.ConversationDataScope;
 import cn.jia.chat.exception.AgentTaskThreadException;
 import cn.jia.chat.exception.AgentTaskThreadException.Reason;
 import cn.jia.chat.service.ChatConversationService;
+import cn.jia.chat.service.ConversationAdmissionService;
 import cn.jia.chat.service.ChatConversationEventBroker;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
 import cn.jia.core.mybatis.TenantScopeHelper;
+import cn.jia.core.tenant.UserAdmissionScope;
 import com.github.pagehelper.PageHelper;
 import com.github.pagehelper.PageInfo;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -33,6 +37,7 @@ public class ChatConversationServiceImpl implements ChatConversationService {
     private final ChatMessageDao chatMessageDao;
     private final AgentTaskThreadDao taskThreadDao;
     private final ChatConversationEventBroker eventBroker;
+    private ConversationAdmissionService conversationAdmissionService;
 
     public ChatConversationServiceImpl(
             ChatConversationDao chatConversationDao,
@@ -45,6 +50,12 @@ public class ChatConversationServiceImpl implements ChatConversationService {
         this.eventBroker = eventBroker;
     }
 
+    @Autowired
+    void setConversationAdmissionService(
+            ConversationAdmissionService conversationAdmissionService) {
+        this.conversationAdmissionService = conversationAdmissionService;
+    }
+
     @Override
     public PageInfo<ChatConversationEntity> findPage(
             ChatConversationEntity example, int pageNum, int pageSize, String orderBy) {
@@ -52,6 +63,7 @@ public class ChatConversationServiceImpl implements ChatConversationService {
         ChatConversationEntity safe = copyAllowedSearch(example);
         safe.setJiacn(context.getJiacn());
         safe.setTenantId(TenantScopeHelper.DEFAULT_TENANT);
+        safe.setDataScopeMode(ConversationDataScope.Mode.LEGACY_CLIENT.name());
         safe.setClientId(context.getClientId());
         List<ChatConversationEntity> conversations;
         try {
@@ -145,6 +157,8 @@ public class ChatConversationServiceImpl implements ChatConversationService {
         safe.setJiacn(context.getJiacn());
         safe.setClientId(context.getClientId());
         safe.setTenantId(TenantScopeHelper.DEFAULT_TENANT);
+        safe.setDataDomainId("cyf");
+        safe.setDataScopeMode(ConversationDataScope.Mode.LEGACY_CLIENT.name());
         safe.setDeletedAt(null);
         safe.setLifecycleGeneration(1L);
         if (chatConversationDao.insert(safe) != 1) {
@@ -352,6 +366,327 @@ public class ChatConversationServiceImpl implements ChatConversationService {
             throw unavailable();
         }
         return conversation;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public PageInfo<ChatConversationEntity> findPage(
+            UserAdmissionScope admission, ChatConversationEntity example,
+            int pageNum, int pageSize, String orderBy) {
+        return requireAdmissionService().read(admission, scope -> {
+            ChatConversationEntity safe = copyAllowedSearch(example);
+            safe.setJiacn(scope.ownerJiacn());
+            safe.setTenantId(scope.tenantId());
+            safe.setDataDomainId(scope.dataDomainId());
+            safe.setDataScopeMode(scope.mode().name());
+            safe.setClientId(scope.callerClientId());
+            List<ChatConversationEntity> conversations;
+            try {
+                PageHelper.startPage(pageNum, pageSize, orderBy);
+                conversations = chatConversationDao.selectNonTaskThreadByEntity(scope, safe);
+            } catch (RuntimeException exception) {
+                log.warn("Unable to query admitted conversation scope; denying list", exception);
+                throw unavailable();
+            }
+            if (conversations == null) {
+                throw unavailable();
+            }
+            for (ChatConversationEntity conversation : conversations) {
+                if (conversation == null || conversation.getId() == null
+                        || conversation.getDeletedAt() != null
+                        || !belongsToScope(conversation, conversation.getId(), scope)
+                        || isTaskThreadEvidence(conversation)) {
+                    throw unavailable();
+                }
+            }
+            return PageInfo.of(conversations);
+        });
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void deleteConversation(
+            UserAdmissionScope admission, String conversationId) {
+        Long requestedId = parseConversationId(conversationId);
+        String canonicalId = Long.toString(requestedId);
+        ChatConversationEventBroker.DeletionFence deletionFence =
+                eventBroker.beginDeletion(canonicalId);
+        boolean[] handedToTransaction = {false};
+        try {
+            requireAdmissionService().write(admission, scope -> {
+                ChatConversationEntity conversation;
+                try {
+                    conversation = chatConversationDao.lockScopedByIdIncludingDeleted(
+                            scope, canonicalId);
+                } catch (RuntimeException exception) {
+                    log.warn("Unable to lock admitted conversation delete scope; denying mutation. conversationId={}",
+                            canonicalId, exception);
+                    throw unavailable();
+                }
+                if (conversation == null
+                        || !belongsToScope(conversation, requestedId, scope)
+                        || isTaskThreadEvidence(conversation)) {
+                    return null;
+                }
+                long liveGeneration = requireLifecycleGeneration(conversation);
+                if (conversation.getDeletedAt() == null) {
+                    long deletedAt = System.currentTimeMillis();
+                    if (chatConversationDao.softDeleteScopedById(
+                            scope, canonicalId, deletedAt) != 1) {
+                        throw unavailable();
+                    }
+                    chatMessageDao.deleteExactOwnedConversationMessages(scope, canonicalId);
+                }
+                handedToTransaction[0] = completeDeletionFenceAfterCommit(
+                        deletionFence, liveGeneration);
+                return null;
+            });
+        } finally {
+            if (!handedToTransaction[0]) {
+                deletionFence.close();
+            }
+        }
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<ChatMessageEntity> findByConversationId(
+            UserAdmissionScope admission, String conversationId) {
+        return requireAdmissionService().read(admission,
+                scope -> findScopedMessagesInternal(scope, conversationId, null));
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public ChatConversationEntity create(
+            UserAdmissionScope admission, ChatConversationEntity entity) {
+        if (entity == null) {
+            throw unavailable();
+        }
+        return requireAdmissionService().write(admission, scope -> {
+            ChatConversationEntity safe = copyAllowedCreate(entity);
+            if (AgentTaskThreadConstants.hasTaskThreadMarkerEvidence(safe)) {
+                throw unavailable();
+            }
+            safe.setJiacn(scope.ownerJiacn());
+            safe.setClientId(scope.callerClientId());
+            safe.setTenantId(scope.tenantId());
+            safe.setDataDomainId(scope.dataDomainId());
+            safe.setDataScopeMode(scope.mode().name());
+            safe.setDeletedAt(null);
+            safe.setLifecycleGeneration(1L);
+            if (chatConversationDao.insert(safe) != 1) {
+                throw unavailable();
+            }
+            return safe;
+        });
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ChatConversationEntity get(
+            UserAdmissionScope admission, String conversationId) {
+        return requireAdmissionService().read(admission,
+                scope -> requireScopedConversation(scope, conversationId, false));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public boolean isLiveGeneration(
+            UserAdmissionScope admission, String conversationId, long expectedGeneration) {
+        try {
+            if (expectedGeneration < 1) {
+                return false;
+            }
+            return requireAdmissionService().read(admission,
+                    scope -> chatConversationDao.isLiveGeneration(
+                            scope, Long.toString(parseConversationId(conversationId)),
+                            expectedGeneration));
+        } catch (RuntimeException unavailable) {
+            return false;
+        }
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<ChatMessageEntity> findOwnedMessages(
+            UserAdmissionScope admission, String conversationId) {
+        return requireAdmissionService().read(admission,
+                scope -> findScopedMessagesInternal(scope, conversationId, null));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<ChatMessageEntity> findOwnedMessages(
+            UserAdmissionScope admission, String conversationId, int limit) {
+        if (limit < 1 || limit > 500) {
+            throw unavailable();
+        }
+        return requireAdmissionService().read(admission,
+                scope -> findScopedMessagesInternal(scope, conversationId, limit));
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public ChatMessageEntity appendOwnedMessage(
+            UserAdmissionScope admission, ChatMessageEntity message) {
+        return appendOwnedMessage(admission, message, null);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public ChatMessageEntity appendOwnedMessage(
+            UserAdmissionScope admission, ChatMessageEntity message, long expectedGeneration) {
+        if (expectedGeneration < 1) {
+            throw unavailable();
+        }
+        return appendOwnedMessage(admission, message, Long.valueOf(expectedGeneration));
+    }
+
+    private ChatMessageEntity appendOwnedMessage(
+            UserAdmissionScope admission, ChatMessageEntity message, Long expectedGeneration) {
+        if (message == null) {
+            throw unavailable();
+        }
+        return requireAdmissionService().write(admission,
+                scope -> appendScopedMessage(scope, message, expectedGeneration));
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public ChatConversationEntity updateOwnedTitle(
+            UserAdmissionScope admission, String conversationId,
+            String title, Integer status) {
+        return requireAdmissionService().write(admission, scope -> {
+            ChatConversationEntity existing = requireScopedConversation(
+                    scope, conversationId, true);
+            return persistScopedUpdate(scope, existing, title, status);
+        });
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public ChatConversationEntity update(
+            UserAdmissionScope admission, ChatConversationEntity entity) {
+        if (entity == null || entity.getId() == null) {
+            throw unavailable();
+        }
+        return requireAdmissionService().write(admission, scope -> {
+            ChatConversationEntity existing = requireScopedConversation(
+                    scope, Long.toString(entity.getId()), true);
+            return persistScopedUpdate(
+                    scope, existing, entity.getTitle(), entity.getStatus());
+        });
+    }
+
+    private List<ChatMessageEntity> findScopedMessagesInternal(
+            ConversationDataScope scope, String conversationId, Integer limit) {
+        ChatConversationEntity conversation = requireScopedConversation(
+                scope, conversationId, false);
+        try {
+            return limit == null
+                    ? chatMessageDao.findOwnedByConversationId(
+                    scope, Long.toString(conversation.getId()))
+                    : chatMessageDao.findOwnedByConversationIdWithLimit(
+                    scope, Long.toString(conversation.getId()), limit);
+        } catch (RuntimeException exception) {
+            log.warn("Unable to read admitted conversation messages; denying access. conversationId={}",
+                    conversation.getId(), exception);
+            throw unavailable();
+        }
+    }
+
+    private ChatMessageEntity appendScopedMessage(
+            ConversationDataScope scope, ChatMessageEntity message, Long expectedGeneration) {
+        ChatConversationEntity conversation = requireScopedConversation(
+                scope, message.getConversationId(), true);
+        long actualGeneration = requireLifecycleGeneration(conversation);
+        if (expectedGeneration != null && expectedGeneration != actualGeneration) {
+            throw unavailable();
+        }
+        ChatMessageEntity safe = copyAllowedMessage(message);
+        safe.setConversationId(Long.toString(conversation.getId()));
+        safe.setJiacn(conversation.getJiacn());
+        safe.setClientId(scope.callerClientId());
+        safe.setTenantId(conversation.getTenantId());
+        safe.setDataDomainId(conversation.getDataDomainId());
+        safe.setConversationType(conversation.getConversationType());
+        safe.init4Creation();
+        if (chatMessageDao.insert(safe) != 1) {
+            throw unavailable();
+        }
+        return safe;
+    }
+
+    private ChatConversationEntity requireScopedConversation(
+            ConversationDataScope scope, String conversationId, boolean lock) {
+        Long requestedId = parseConversationId(conversationId);
+        ChatConversationEntity conversation;
+        try {
+            conversation = lock
+                    ? chatConversationDao.lockScopedById(
+                    scope, Long.toString(requestedId))
+                    : chatConversationDao.findScopedById(
+                    scope, Long.toString(requestedId));
+        } catch (RuntimeException exception) {
+            log.warn("Unable to verify admitted conversation ownership; denying access. conversationId={}",
+                    requestedId, exception);
+            throw unavailable();
+        }
+        if (conversation == null || conversation.getDeletedAt() != null
+                || !belongsToScope(conversation, requestedId, scope)
+                || isTaskThreadEvidence(conversation)) {
+            throw unavailable();
+        }
+        return conversation;
+    }
+
+    private ChatConversationEntity persistScopedUpdate(
+            ConversationDataScope scope, ChatConversationEntity existing,
+            String title, Integer status) {
+        ChatConversationEntity allowedUpdate = new ChatConversationEntity()
+                .setId(existing.getId())
+                .setTitle(title)
+                .setStatus(status)
+                .setJiacn(existing.getJiacn())
+                .setDataDomainId(existing.getDataDomainId())
+                .setConversationType(existing.getConversationType())
+                .setConversationScopeType(existing.getConversationScopeType())
+                .setConversationScopeKey(existing.getConversationScopeKey())
+                .setTaskId(existing.getTaskId())
+                .setTargetAgentId(existing.getTargetAgentId())
+                .setDataScopeMode(scope.mode().name())
+                .setTargetAgentIds(existing.getTargetAgentIds())
+                .setDeletedAt(null)
+                .setLifecycleGeneration(requireLifecycleGeneration(existing));
+        allowedUpdate.setTenantId(existing.getTenantId());
+        allowedUpdate.setClientId(existing.getClientId());
+        if (chatConversationDao.updateScopedFields(scope, allowedUpdate) != 1) {
+            throw unavailable();
+        }
+        return allowedUpdate;
+    }
+
+    private boolean belongsToScope(
+            ChatConversationEntity conversation, Long requestedId,
+            ConversationDataScope scope) {
+        if (conversation == null
+                || !requestedId.equals(conversation.getId())
+                || !scope.ownerJiacn().equals(conversation.getJiacn())
+                || !scope.tenantId().equals(conversation.getTenantId())
+                || !scope.mode().name().equals(conversation.getDataScopeMode())) {
+            return false;
+        }
+        return scope.mode() == ConversationDataScope.Mode.DOMAIN
+                ? scope.dataDomainId().equals(conversation.getDataDomainId())
+                : scope.callerClientId().equals(conversation.getClientId());
+    }
+
+    private ConversationAdmissionService requireAdmissionService() {
+        if (conversationAdmissionService == null) {
+            throw unavailable();
+        }
+        return conversationAdmissionService;
     }
 
     private EsContext requireIdentity() {

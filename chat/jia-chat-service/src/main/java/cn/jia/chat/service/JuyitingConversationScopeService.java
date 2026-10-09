@@ -4,6 +4,7 @@ import cn.jia.agent.service.AgentService;
 import cn.jia.chat.handler.dto.ChatMessageDTO;
 import cn.jia.core.util.JsonUtil;
 import cn.jia.core.util.StringUtil;
+import cn.jia.core.tenant.UserAdmissionScope;
 import org.springframework.stereotype.Service;
 import tools.jackson.core.type.TypeReference;
 
@@ -50,6 +51,41 @@ public class JuyitingConversationScopeService {
     }
 
     /**
+     * Applies the business-area boundary before consulting the legacy Agent ACL.
+     * Non-legacy areas currently support only the built-in Song Jiang public hall.
+     */
+    public JuyitingConversationScope authorize(
+            ChatMessageDTO chatMessage,
+            JuyitingConversationScope requested,
+            UserAdmissionScope admission) {
+        if (admission == null || requested == null
+                || !isSupportedScope(requested.scopeType())) {
+            throw denied();
+        }
+        String tenantId = admission.businessScope().tenantId().value();
+        if ("0".equals(tenantId)) {
+            return authorize(
+                    chatMessage, requested,
+                    admission.businessScope().ownerJiacn(),
+                    admission.businessScope().callerClientId());
+        }
+        if (!SCOPE_PUBLIC.equals(requested.scopeType())
+                || isTaskScoped(requested)
+                || !SCOPE_PUBLIC.equals(requested.scopeKey())) {
+            throw denied();
+        }
+        String defaultAgentId = requireScopeId(builtinHallAgentSupport.defaultAgentId());
+        List<String> targets = normalizeAgentIds(requested.targetAgentIds());
+        if (targets.isEmpty()) {
+            targets = List.of(defaultAgentId);
+        }
+        if (targets.size() != 1 || !defaultAgentId.equals(targets.getFirst())) {
+            throw denied();
+        }
+        return withTargets(requested, targets, targets);
+    }
+
+    /**
      * Resolves task membership from the authenticated tenant/client and returns an ACL-frozen scope.
      * Caller participant metadata is intentionally ignored for authorization.
      */
@@ -63,10 +99,7 @@ public class JuyitingConversationScopeService {
             throw denied();
         }
 
-        boolean taskScoped = SCOPE_BOUNTY.equals(requested.scopeType())
-                || StringUtil.isNotBlank(requested.taskId())
-                || (StringUtil.isNotBlank(requested.scopeKey())
-                && requested.scopeKey().startsWith("task:"));
+        boolean taskScoped = isTaskScoped(requested);
         if (!taskScoped) {
             List<String> targets = normalizeAgentIds(requested.targetAgentIds());
             if (SCOPE_PRIVATE.equals(requested.scopeType()) && targets.size() != 1) {
@@ -335,6 +368,13 @@ public class JuyitingConversationScopeService {
     private boolean isCanonicalIdentity(String value) {
         return value != null && !value.isBlank() && value.equals(value.strip())
                 && value.length() <= 50 && value.chars().noneMatch(Character::isISOControl);
+    }
+
+    private boolean isTaskScoped(JuyitingConversationScope requested) {
+        return requested != null && (SCOPE_BOUNTY.equals(requested.scopeType())
+                || StringUtil.isNotBlank(requested.taskId())
+                || (StringUtil.isNotBlank(requested.scopeKey())
+                && requested.scopeKey().startsWith("task:")));
     }
 
     private boolean isSupportedScope(String scopeType) {

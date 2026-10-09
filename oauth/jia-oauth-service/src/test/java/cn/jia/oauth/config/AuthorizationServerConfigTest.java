@@ -1,6 +1,11 @@
 package cn.jia.oauth.config;
 
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
+import cn.jia.oauth.security.CentralSigningProperties;
 import cn.jia.oauth.security.AccountSecurityTokenCustomizer;
+import cn.jia.oauth.security.JdbcTenantAuthorizationRepository;
+import cn.jia.oauth.security.TenantAuthorizationAttributes;
 import cn.jia.test.BaseMockTest;
 import cn.jia.user.entity.CustomUserDetails;
 import cn.jia.user.security.AccountSecurityService;
@@ -52,6 +57,7 @@ import static org.mockito.Mockito.*;
 
 class AuthorizationServerConfigTest extends BaseMockTest {
     @Mock AccountSecurityService accountSecurityService;
+    @Mock JdbcTenantAuthorizationRepository tenantAuthorizationRepository;
 
     private RegisteredClient client;
     private CustomUserDetails userDetails;
@@ -83,6 +89,26 @@ class AuthorizationServerConfigTest extends BaseMockTest {
     @AfterEach
     void tearDown() {
         AuthorizationServerContextHolder.resetContext();
+    }
+
+    @Test
+    void centralTenantIssuerMustBeFixedAndSigningExplicitlyEnabled() {
+        var config = new AuthorizationServerConfig();
+        var signing = new CentralSigningProperties();
+        assertThrows(IllegalStateException.class,
+                () -> config.authorizationServerSettings(signing, true, true));
+        assertEquals(null, config.authorizationServerSettings(signing, false, true).getIssuer());
+        signing.setEnabled(true);
+        assertThrows(IllegalStateException.class,
+                () -> config.authorizationServerSettings(signing, true, true));
+        signing.setIssuer("http://external.example.test");
+        assertThrows(IllegalStateException.class,
+                () -> config.authorizationServerSettings(signing, true, true));
+        signing.setIssuer("https://issuer.example");
+        assertEquals("https://issuer.example",
+                config.authorizationServerSettings(signing, true, true).getIssuer());
+        assertEquals("https://issuer.example",
+                config.authorizationServerSettings(signing, true, false).getIssuer());
     }
 
     @Test
@@ -145,8 +171,25 @@ class AuthorizationServerConfigTest extends BaseMockTest {
     void userClaimsUseFrozenEpochAndStalePrincipalCannotUpgradeItself() {
         when(accountSecurityService.findByUserId(17)).thenReturn(java.util.Optional.of(
                 new AccountSecuritySnapshot(17, "Jia-A", AccountState.ACTIVE, 4)));
-        JwtEncodingContext valid = encodingContext(userAuthentication, AuthorizationGrantType.AUTHORIZATION_CODE);
-        new AccountSecurityTokenCustomizer(accountSecurityService).customize(valid);
+        assertEquals("invalid_grant", assertThrows(OAuth2AuthenticationException.class,
+                () -> new AccountSecurityTokenCustomizer(accountSecurityService, tenantAuthorizationRepository)
+                        .customize(encodingContext(userAuthentication, AuthorizationGrantType.AUTHORIZATION_CODE)))
+                .getError().getErrorCode());
+        OAuth2Authorization unselected = OAuth2Authorization.withRegisteredClient(client)
+                .principalName("alice").authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE).build();
+        assertEquals("invalid_grant", assertThrows(OAuth2AuthenticationException.class,
+                () -> new AccountSecurityTokenCustomizer(accountSecurityService, tenantAuthorizationRepository)
+                        .customize(encodingContext(userAuthentication, AuthorizationGrantType.REFRESH_TOKEN, unselected)))
+                .getError().getErrorCode());
+        TenantAuthorizationAttributes selected = new TenantAuthorizationAttributes(
+                TenantId.of("1"), DataDomainId.of("cyf"), "华南测试区",
+                TenantAuthorizationAttributes.TenantKind.TEST, "3", "8", "4");
+        OAuth2Authorization authorization = OAuth2Authorization.withRegisteredClient(client)
+                .principalName("alice").authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
+                .attribute(TenantAuthorizationAttributes.attributeName(), selected).build();
+        when(tenantAuthorizationRepository.isEligibleForIssuance(selected, 17, "web-client")).thenReturn(true);
+        JwtEncodingContext valid = encodingContext(userAuthentication, AuthorizationGrantType.AUTHORIZATION_CODE, authorization);
+        new AccountSecurityTokenCustomizer(accountSecurityService, tenantAuthorizationRepository).customize(valid);
         Map<String, Object> claims = valid.getClaims().build().getClaims();
         assertEquals("user", claims.get("token_kind"));
         assertEquals("17", claims.get("uid"));
@@ -156,9 +199,76 @@ class AuthorizationServerConfigTest extends BaseMockTest {
         when(accountSecurityService.findByUserId(17)).thenReturn(java.util.Optional.of(
                 new AccountSecuritySnapshot(17, "Jia-A", AccountState.ACTIVE, 5)));
         OAuth2AuthenticationException failure = assertThrows(OAuth2AuthenticationException.class,
-                () -> new AccountSecurityTokenCustomizer(accountSecurityService)
-                        .customize(encodingContext(userAuthentication, AuthorizationGrantType.REFRESH_TOKEN)));
+                () -> new AccountSecurityTokenCustomizer(accountSecurityService, tenantAuthorizationRepository)
+                        .customize(encodingContext(userAuthentication, AuthorizationGrantType.REFRESH_TOKEN, authorization)));
         assertEquals("invalid_grant", failure.getError().getErrorCode());
+    }
+
+    @Test
+    void tenantClaimsComeOnlyFromBoundAuthorizationAttributes() {
+        TenantAuthorizationAttributes selected = new TenantAuthorizationAttributes(
+                TenantId.of("1"), DataDomainId.of("cyf"), "华南测试区",
+                TenantAuthorizationAttributes.TenantKind.TEST, "3", "8", "4");
+        OAuth2Authorization authorization = OAuth2Authorization.withRegisteredClient(client)
+                .principalName("alice")
+                .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
+                .attribute(TenantAuthorizationAttributes.attributeName(), selected)
+                .build();
+        JwtEncodingContext.Builder builder = JwtEncodingContext.with(
+                JwsHeader.with(SignatureAlgorithm.RS256), JwtClaimsSet.builder().subject("alice"));
+        builder.registeredClient(client);
+        builder.principal(userAuthentication);
+        builder.authorization(authorization);
+        builder.tokenType(OAuth2TokenType.ACCESS_TOKEN);
+        builder.authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE);
+        JwtEncodingContext context = builder.build();
+        when(accountSecurityService.findByUserId(17)).thenReturn(java.util.Optional.of(
+                new AccountSecuritySnapshot(17, "Jia-A", AccountState.ACTIVE, 4)));
+        when(tenantAuthorizationRepository.isEligibleForIssuance(selected, 17, "web-client")).thenReturn(true);
+        new AccountSecurityTokenCustomizer(accountSecurityService, tenantAuthorizationRepository).customize(context);
+        Map<String, Object> claims = context.getClaims().build().getClaims();
+        assertEquals("1", claims.get("tenant_id"));
+        assertEquals("cyf", claims.get("data_domain_id"));
+        assertEquals("华南测试区", claims.get("tenant_name"));
+        assertEquals("TEST", claims.get("tenant_kind"));
+        assertEquals("3", claims.get("tenant_session_epoch"));
+        assertEquals("8", claims.get("membership_revision"));
+        assertEquals("4", claims.get("client_tenant_grant_revision"));
+        JwtEncodingContext.Builder refreshBuilder = JwtEncodingContext.with(
+                JwsHeader.with(SignatureAlgorithm.RS256), JwtClaimsSet.builder().subject("alice"));
+        refreshBuilder.registeredClient(client);
+        refreshBuilder.principal(userAuthentication);
+        refreshBuilder.authorization(authorization);
+        refreshBuilder.tokenType(OAuth2TokenType.ACCESS_TOKEN);
+        refreshBuilder.authorizationGrantType(AuthorizationGrantType.REFRESH_TOKEN);
+        JwtEncodingContext refreshed = refreshBuilder.build();
+        new AccountSecurityTokenCustomizer(accountSecurityService, tenantAuthorizationRepository).customize(refreshed);
+        assertEquals("1", refreshed.getClaims().build().getClaim("tenant_id"));
+        when(tenantAuthorizationRepository.isEligibleForIssuance(selected, 17, "web-client")).thenReturn(false);
+        OAuth2AuthenticationException revoked = assertThrows(OAuth2AuthenticationException.class,
+                () -> new AccountSecurityTokenCustomizer(accountSecurityService, tenantAuthorizationRepository).customize(context));
+        assertEquals("invalid_grant", revoked.getError().getErrorCode());
+        assertEquals("invalid_grant", assertThrows(OAuth2AuthenticationException.class,
+                () -> new AccountSecurityTokenCustomizer(accountSecurityService, tenantAuthorizationRepository)
+                        .customize(refreshed)).getError().getErrorCode());
+        when(tenantAuthorizationRepository.isEligibleForIssuance(selected, 17, "web-client")).thenReturn(false);
+        assertEquals("invalid_grant", assertThrows(OAuth2AuthenticationException.class,
+                () -> new AccountSecurityTokenCustomizer(accountSecurityService, tenantAuthorizationRepository)
+                        .customize(context)).getError().getErrorCode());
+        when(tenantAuthorizationRepository.isEligibleForIssuance(selected, 17, "web-client"))
+                .thenThrow(new IllegalStateException("control data unavailable"));
+        assertEquals("invalid_grant", assertThrows(OAuth2AuthenticationException.class,
+                () -> new AccountSecurityTokenCustomizer(accountSecurityService, tenantAuthorizationRepository)
+                        .customize(context)).getError().getErrorCode());
+        assertThrows(NullPointerException.class, () -> new TenantAuthorizationAttributes(
+                TenantId.of("1"), null, "华南测试区",
+                TenantAuthorizationAttributes.TenantKind.TEST, "3", "8", "4"));
+        assertThrows(IllegalArgumentException.class, () -> new TenantAuthorizationAttributes(
+                TenantId.of("1"), DataDomainId.of("cyf"), "华南测试区",
+                TenantAuthorizationAttributes.TenantKind.TEST, "03", "8", "4"));
+        assertThrows(IllegalArgumentException.class, () -> new TenantAuthorizationAttributes(
+                TenantId.of("1"), DataDomainId.of("cyf"), "华南测试区",
+                TenantAuthorizationAttributes.TenantKind.TEST, "9223372036854775808", "8", "4"));
     }
 
     @Test
@@ -166,7 +276,7 @@ class AuthorizationServerConfigTest extends BaseMockTest {
         JwtEncodingContext context = encodingContext(clientPrincipal(), AuthorizationGrantType.CLIENT_CREDENTIALS);
         context.getClaims().claim("uid", "17").claim("jiacn", "stale").claim("username", "stale")
                 .claim("auth_epoch", 3L);
-        new AccountSecurityTokenCustomizer(accountSecurityService).customize(context);
+        new AccountSecurityTokenCustomizer(accountSecurityService, tenantAuthorizationRepository).customize(context);
         Map<String, Object> claims = context.getClaims().build().getClaims();
         assertEquals("machine", claims.get("token_kind"));
         assertFalse(claims.containsKey("uid"));
@@ -196,6 +306,11 @@ class AuthorizationServerConfigTest extends BaseMockTest {
     }
 
     private JwtEncodingContext encodingContext(Authentication principal, AuthorizationGrantType grantType) {
+        return encodingContext(principal, grantType, null);
+    }
+
+    private JwtEncodingContext encodingContext(Authentication principal, AuthorizationGrantType grantType,
+                                               OAuth2Authorization authorization) {
         JwtEncodingContext.Builder builder = JwtEncodingContext.with(
                 JwsHeader.with(SignatureAlgorithm.RS256), JwtClaimsSet.builder().subject(principal.getName()));
         builder.registeredClient(client);
@@ -203,6 +318,7 @@ class AuthorizationServerConfigTest extends BaseMockTest {
         builder.authorizationServerContext(AuthorizationServerContextHolder.getContext());
         builder.tokenType(OAuth2TokenType.ACCESS_TOKEN);
         builder.authorizationGrantType(grantType);
+        if (authorization != null) builder.authorization(authorization);
         return builder.build();
     }
 }

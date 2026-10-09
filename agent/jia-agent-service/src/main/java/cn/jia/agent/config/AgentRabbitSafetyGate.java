@@ -1,5 +1,9 @@
 package cn.jia.agent.config;
 
+import cn.jia.core.tenant.WorkerScope;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
+
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.Set;
@@ -10,10 +14,12 @@ public final class AgentRabbitSafetyGate {
     private final boolean rabbitTopologyEnabled;
     private final boolean rabbitPublishEnabled;
     private final boolean rabbitConsumeEnabled;
+    private final boolean rabbitConsumeV2Enabled;
     private final boolean rabbitDispatchEnabled;
     private final boolean brokerRequired;
     private final AgentRabbitActivationState state;
     private final Set<Scope> dispatchAllowedScopes;
+    private final Set<WorkerLaneScope> dispatchAllowedWorkerScopes;
 
     public AgentRabbitSafetyGate(AgentRabbitSafetyProperties properties) {
         this(properties, null);
@@ -29,13 +35,18 @@ public final class AgentRabbitSafetyGate {
         rabbitTopologyEnabled = properties.rabbitTopology().enabled();
         rabbitPublishEnabled = properties.rabbitPublish().enabled();
         rabbitConsumeEnabled = properties.rabbitConsume().enabled();
+        rabbitConsumeV2Enabled = properties.rabbitConsumeV2().enabled();
         rabbitDispatchEnabled = properties.rabbitDispatch().enabled();
         brokerRequired = rabbitTopologyEnabled || rabbitPublishEnabled
-                || rabbitConsumeEnabled || rabbitDispatchEnabled;
+                || rabbitConsumeEnabled || rabbitConsumeV2Enabled || rabbitDispatchEnabled;
 
         dispatchAllowedScopes = rabbitDispatchEnabled
                 ? validateScopes(dispatchScopes == null
                         ? null : dispatchScopes.allowedScopes())
+                : Set.of();
+        dispatchAllowedWorkerScopes = rabbitDispatchEnabled
+                ? validateWorkerScopes(dispatchScopes == null
+                        ? null : dispatchScopes.allowedWorkerScopes())
                 : Set.of();
         validateDependencies();
         if (brokerRequired) {
@@ -64,6 +75,10 @@ public final class AgentRabbitSafetyGate {
         return rabbitConsumeEnabled;
     }
 
+    public boolean rabbitConsumeV2Enabled() {
+        return rabbitConsumeV2Enabled;
+    }
+
     public boolean rabbitDispatchEnabled() {
         return rabbitDispatchEnabled;
     }
@@ -77,8 +92,20 @@ public final class AgentRabbitSafetyGate {
                 && dispatchAllowedScopes.contains(new Scope(tenantId, clientId));
     }
 
+    public boolean allowsWorkerDispatch(
+            String tenantId, String dataDomainId, String executionPoolId) {
+        return rabbitDispatchEnabled && dispatchAllowedWorkerScopes.contains(
+                new WorkerLaneScope(tenantId, dataDomainId, executionPoolId));
+    }
+
+    public boolean allowsWorkerDispatch(WorkerScope scope) {
+        return scope != null && allowsWorkerDispatch(
+                scope.tenantId().value(), scope.dataDomainId().value(),
+                scope.executionPoolId());
+    }
+
     public int dispatchScopeCount() {
-        return dispatchAllowedScopes.size();
+        return dispatchAllowedScopes.size() + dispatchAllowedWorkerScopes.size();
     }
 
     private void validateDependencies() {
@@ -88,17 +115,24 @@ public final class AgentRabbitSafetyGate {
         if (rabbitConsumeEnabled && (!commandOutboxEnabled || !rabbitTopologyEnabled)) {
             throw invalidConfiguration("rabbit consume requires command outbox and topology");
         }
+        if (rabbitConsumeV2Enabled && (!commandOutboxEnabled || !rabbitTopologyEnabled)) {
+            throw invalidConfiguration("rabbit consume v2 requires command outbox and topology");
+        }
+        if (rabbitConsumeEnabled && rabbitConsumeV2Enabled) {
+            throw invalidConfiguration("legacy and protocol-v2 Rabbit consumers are mutually exclusive");
+        }
+        boolean exactlyOneConsumer = rabbitConsumeEnabled ^ rabbitConsumeV2Enabled;
         if (rabbitDispatchEnabled
                 && (!commandOutboxEnabled || !rabbitTopologyEnabled
-                || !rabbitPublishEnabled || !rabbitConsumeEnabled
-                || dispatchAllowedScopes.isEmpty())) {
+                || !rabbitPublishEnabled || !exactlyOneConsumer
+                || dispatchScopeCount() == 0)) {
             throw invalidConfiguration("rabbit dispatch prerequisites are incomplete");
         }
     }
 
     private AgentRabbitActivationState resolveState() {
         if (rabbitDispatchEnabled) {
-            return dispatchAllowedScopes.size() == 1
+            return dispatchScopeCount() == 1
                     ? AgentRabbitActivationState.DISPATCH_CANARY
                     : AgentRabbitActivationState.DISPATCH_SCOPED;
         }
@@ -130,6 +164,37 @@ public final class AgentRabbitSafetyGate {
         return Collections.unmodifiableSet(validated);
     }
 
+    private static Set<WorkerLaneScope> validateWorkerScopes(
+            Iterable<AgentRabbitDispatchScopeProperties.AllowedWorkerScope> configuredScopes) {
+        if (configuredScopes == null) return Set.of();
+        LinkedHashSet<WorkerLaneScope> validated = new LinkedHashSet<>();
+        for (AgentRabbitDispatchScopeProperties.AllowedWorkerScope configured
+                : configuredScopes) {
+            if (configured == null) {
+                throw invalidConfiguration(
+                        "dispatch worker scopes must contain exact canonical ids");
+            }
+            try {
+                TenantId.of(configured.tenantId());
+                DataDomainId.of(configured.dataDomainId());
+            } catch (RuntimeException invalid) {
+                throw invalidConfiguration(
+                        "dispatch worker scopes must contain exact canonical ids");
+            }
+            if (configured.executionPoolId() == null
+                    || !configured.executionPoolId().matches("[a-z0-9-]{1,100}")) {
+                throw invalidConfiguration(
+                        "dispatch worker scopes must contain exact canonical ids");
+            }
+            WorkerLaneScope scope = new WorkerLaneScope(configured.tenantId(),
+                    configured.dataDomainId(), configured.executionPoolId());
+            if (!validated.add(scope)) {
+                throw invalidConfiguration("dispatch worker scopes must be unique exact tuples");
+            }
+        }
+        return Collections.unmodifiableSet(validated);
+    }
+
     private static void validateBroker(AgentRabbitSafetyProperties.RabbitBroker broker) {
         if (broker == null
                 || !nonBlankExact(broker.host())
@@ -153,5 +218,9 @@ public final class AgentRabbitSafetyGate {
     }
 
     private record Scope(String tenantId, String clientId) {
+    }
+
+    private record WorkerLaneScope(
+            String tenantId, String dataDomainId, String executionPoolId) {
     }
 }

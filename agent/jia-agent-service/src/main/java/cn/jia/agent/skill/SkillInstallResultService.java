@@ -2,6 +2,9 @@ package cn.jia.agent.skill;
 import cn.jia.agent.dao.AgentCommandTransportDao;
 import cn.jia.agent.dao.AgentRuntimeDao;
 import cn.jia.agent.entity.AgentCommandDeliveryEntity;
+import cn.jia.agent.entity.AgentRuntimeV2InternalOutboxRow;
+import cn.jia.agent.entity.AgentRuntimeV2EffectCodec;
+import cn.jia.agent.entity.AgentSkillInstallPayload;
 import cn.jia.agent.hosting.HostingRentHttp;
 import cn.jia.economy.entity.skill.*;
 import cn.jia.economy.mapper.*;
@@ -10,6 +13,8 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.jdbc.datasource.ConnectionHolder;
 import java.util.*;
 import static cn.jia.agent.skill.SkillMarketplaceException.require;
 import static cn.jia.agent.skill.SkillMarketplaceService.*;
@@ -125,6 +130,104 @@ public final class SkillInstallResultService {
             require(pkg.product().packageSize()==i.getPackageSize() && Arrays.equals(pkg.product().packageSha256(),i.getPackageSha256()),503,"SKILL_PACKAGE_UNAVAILABLE");
             return pkg.bytes(); // already cached at startup; no filesystem/network I/O under transaction
         });
+    }
+    /** Same-transaction V2 resource operations. The original composite reducer
+     * authenticates/locks the current credential and origin first. C remains
+     * the resource client; no managed legacy key or second delivery/start lane
+     * is execution authority here. Actor root precedes order/install/result.
+     */
+    private record V2Locked(HostingRentHttp.Actor actor,SkillOrderEntity order,
+            SkillInstallationEntity installation,SkillDeliveryBindingEntity binding,V2Transaction transaction) { }
+    private record V2Transaction(Object datasource,ConnectionHolder holder,java.sql.Connection connection) {
+        @Override public boolean equals(Object other){return other instanceof V2Transaction value&&datasource==value.datasource&&holder==value.holder&&connection==value.connection;}
+        @Override public int hashCode(){return System.identityHashCode(datasource)^System.identityHashCode(holder)^System.identityHashCode(connection);}
+    }
+    private V2Locked v2Lock(AgentRuntimeV2InternalOutboxRow origin,AgentSkillInstallPayload payload,
+            AgentRuntimeV2EffectCodec.SkillIdentity identity) {
+        var transaction=v2Transaction();String tenant=origin.text("tenant_id"),client=origin.text("command_caller_client_id"),owner=origin.text("owner_jiacn"),agent=origin.text("agent_id");
+        require("0".equals(tenant)&&payload!=null&&identity!=null,403,"SKILL_RESULT_REJECTED");
+        require(identity.installationId().equals(payload.installationId())&&identity.productVersionId().equals(payload.productVersionId())&&identity.packageDigest().equals(payload.packageDigest())&&identity.skillKey().equals(payload.skillKey())&&identity.skillVersion().equals(payload.skillVersion()),409,"SKILL_RESULT_CONFLICT");
+        var visible=app.order(tenant,client,payload.orderId());require(visible!=null,403,"SKILL_RESULT_REJECTED");
+        var actor=new HostingRentHttp.Actor(visible.getBuyerId(),tenant,client,owner);
+        require(skills.available(actor),503,"SKILL_MARKETPLACE_DISABLED");skills.actorLock(actor);
+        var order=market.selectOrderForUpdate(tenant,client,payload.orderId());
+        var installation=market.selectInstallationForUpdate(tenant,client,agent,payload.installationId());
+        require(order!=null&&installation!=null&&Objects.equals(order.getBuyerId(),actor.actorId())&&payload.orderId().equals(installation.getOrderId())&&agent.equals(installation.getTargetAgentId())&&origin.text("command_id").equals(installation.getCommandId())&&origin.text("source_message_id").equals(installation.getMessageId())&&payload.productVersionId().equals(installation.getProductVersionId())&&payload.skillKey().equals(installation.getSkillKey())&&payload.skillVersion().equals(installation.getSkillVersion())&&payload.packageDigest().equals(digest(installation.getPackageSha256()))&&payload.packageSize().equals(Long.toString(installation.getPackageSize())),403,"SKILL_DELIVERY_FENCED");
+        var binding=app.deliveryBinding(tenant,client,payload.installationId());require(binding!=null,409,"SKILL_STATE_CONFLICT");
+        require(transaction.equals(v2Transaction()),503,"SKILL_STATE_UNAVAILABLE");return new V2Locked(actor,order,installation,binding,transaction);
+    }
+    public AgentRuntimeV2EffectCodec.ReadResult v2Package(AgentRuntimeV2InternalOutboxRow origin,
+            AgentSkillInstallPayload payload,AgentRuntimeV2EffectCodec.SkillRead request) {
+        var locked=v2Lock(origin,payload,request.identity());
+        require("INSTALLING".equals(locked.order().getStatus())&&"INSTALLING".equals(locked.installation().getStatus()),403,"SKILL_DOWNLOAD_FORBIDDEN");
+        var pkg=packages.getObject().get(payload.productVersionId());byte[] bytes=pkg.bytes();
+        require(pkg.product().packageSize()==locked.installation().getPackageSize()&&Arrays.equals(pkg.product().packageSha256(),locked.installation().getPackageSha256())&&bytes.length==locked.installation().getPackageSize()&&payload.packageDigest().equals(digest(cn.jia.agent.entity.AgentRuntimeV2RegistrationFingerprints.sha256(bytes))),503,"SKILL_PACKAGE_UNAVAILABLE");
+        require(request.offset()>=0&&request.length()>=0&&request.length()<=AgentRuntimeV2EffectCodec.CHUNK_CAP&&request.offset()<=bytes.length&&request.length()<=bytes.length-request.offset(),400,"BAD_REQUEST");
+        byte[] chunk=Arrays.copyOfRange(bytes,Math.toIntExact(request.offset()),Math.toIntExact(request.offset()+request.length()));
+        require(locked.transaction().equals(v2Transaction()),503,"SKILL_STATE_UNAVAILABLE");
+        return new AgentRuntimeV2EffectCodec.ReadResult(request.offset(),chunk.length,bytes.length,HexFormat.of().formatHex(cn.jia.agent.entity.AgentRuntimeV2RegistrationFingerprints.sha256(chunk)),chunk);
+    }
+    /** The verifier, not wire status/failureCode, chooses a known disposition.
+     * UNKNOWN never captures/refunds escrow or changes entitlement/install.
+     * Stable result identity is the original effect, not a new transport ID.
+     */
+    public enum V2Disposition { ACTIVE, NOT_RUN_PROVEN, UNKNOWN }
+    public String v2Result(AgentRuntimeV2InternalOutboxRow origin,AgentSkillInstallPayload payload,
+            AgentRuntimeV2EffectCodec.SkillIdentity identity,String effectId,byte[] exactProof,
+            V2Disposition disposition,Long installedAt,long now) {
+        require(effectId!=null&&effectId.matches("eff_[0-9a-f]{64}")&&exactProof!=null&&exactProof.length>0&&disposition!=null&&now>0,400,"BAD_REQUEST");
+        var locked=v2Lock(origin,payload,identity);var actor=locked.actor();var order=locked.order();var installation=locked.installation();String tenant=actor.tenantId(),client=actor.clientId(),agent=installation.getTargetAgentId();
+        var prior=app.lockResult(tenant,client,effectId);
+        // Uncertainty belongs in the R4 append-only observation/event graph,
+        // never this unique TERMINAL business result slot. A later true proof
+        // must still be able to capture/refund exactly once with this effectId.
+        // Conversely an old UNKNOWN observation cannot downgrade a known row.
+        if(disposition==V2Disposition.UNKNOWN){
+            if(prior!=null){require(identity.installationId().equals(prior.getInstallationId())&&Set.of("ACTIVE","REFUNDED").contains(prior.getOutcome()),409,"SKILL_RESULT_CONFLICT");v2Known(locked,identity,prior.getOutcome(),installation.getInstalledAt());return prior.getOutcome();}
+            if(Set.of("ACTIVE","REFUNDED").contains(order.getStatus())){v2Known(locked,identity,order.getStatus(),installation.getInstalledAt());return order.getStatus();}
+            require("INSTALLING".equals(order.getStatus())&&"INSTALLING".equals(installation.getStatus()),409,"SKILL_STATE_CONFLICT");
+            require(locked.transaction().equals(v2Transaction()),503,"SKILL_STATE_UNAVAILABLE");return "UNKNOWN";
+        }
+        byte[] hash=cn.jia.agent.entity.AgentRuntimeV2RegistrationFingerprints.sha256(exactProof);
+        String outcome=disposition==V2Disposition.ACTIVE?"ACTIVE":disposition==V2Disposition.NOT_RUN_PROVEN?"REFUNDED":"UNKNOWN";
+        if(prior!=null){same(prior.getRequestHash(),hash);require(identity.installationId().equals(prior.getInstallationId())&&outcome.equals(prior.getOutcome()),409,"SKILL_RESULT_CONFLICT");v2Known(locked,identity,outcome,installedAt);return outcome;}
+        require(disposition==V2Disposition.ACTIVE?installedAt!=null&&installedAt>0&&installedAt<=now&&installedAt>=Math.max(1,order.getHeldAt()-300000L):installedAt==null,409,"SKILL_RESULT_CONFLICT");
+        if(Set.of("ACTIVE","REFUNDED").contains(order.getStatus())) {
+            v2Known(locked,identity,outcome,installedAt);
+        }else if(disposition!=V2Disposition.UNKNOWN){
+            require("INSTALLING".equals(order.getStatus())&&"INSTALLING".equals(installation.getStatus()),409,"SKILL_STATE_CONFLICT");
+            var entitlement=market.selectEntitlementByAgentSkillForUpdate(tenant,client,agent,identity.skillKey(),identity.skillVersion());
+            require(entitlement!=null&&identity.installationId().equals(entitlement.getInstallationId())&&order.getOrderId().equals(entitlement.getOrderId())&&"PENDING_INSTALLATION".equals(entitlement.getStatus()),409,"SKILL_STATE_CONFLICT");
+            boolean success=disposition==V2Disposition.ACTIVE;String transactionId=skills.settle(actor,order,locked.binding(),success,now);
+            if(success){
+                one(market.markInstallationSucceeded(tenant,client,agent,identity.installationId(),installation.getCommandId(),installation.getAttempt(),installation.getFencingToken(),installation.getDeliveryEpoch(),installation.getVersion(),installation.getPackageSha256(),installedAt));
+                one(market.markEntitlementActive(tenant,client,agent,entitlement.getEntitlementId(),identity.installationId(),entitlement.getVersion(),installedAt));
+                one(market.markOrderActive(tenant,client,order.getOrderId(),order.getVersion(),transactionId,now));
+            }else{
+                one(market.markInstallationFailed(tenant,client,agent,identity.installationId(),installation.getCommandId(),installation.getAttempt(),installation.getFencingToken(),installation.getDeliveryEpoch(),installation.getVersion(),"V2_NOT_RUN_PROVEN",now));
+                one(market.markEntitlementFailed(tenant,client,agent,entitlement.getEntitlementId(),identity.installationId(),entitlement.getVersion(),now));
+                one(market.markOrderRefunded(tenant,client,order.getOrderId(),order.getVersion(),transactionId,now));
+            }
+        }
+        one(app.insertResult(tenant,client,effectId,identity.installationId(),hash,outcome,now));
+        require(locked.transaction().equals(v2Transaction()),503,"SKILL_STATE_UNAVAILABLE");return outcome;
+    }
+    private void v2Known(V2Locked locked,AgentRuntimeV2EffectCodec.SkillIdentity identity,String outcome,Long installedAt){
+        var actor=locked.actor();var order=locked.order();var installation=locked.installation();boolean active="ACTIVE".equals(outcome);
+        require(Set.of("ACTIVE","REFUNDED").contains(outcome)&&outcome.equals(order.getStatus())&&(active?"SUCCEEDED":"FAILED").equals(installation.getStatus())
+                &&(active?installedAt!=null&&Objects.equals(installedAt,installation.getInstalledAt()):installedAt==null&&"V2_NOT_RUN_PROVEN".equals(installation.getFailureCode())),409,"SKILL_RESULT_CONFLICT");
+        var entitlement=market.selectEntitlementByAgentSkillForUpdate(actor.tenantId(),actor.clientId(),installation.getTargetAgentId(),identity.skillKey(),identity.skillVersion());
+        require(entitlement!=null&&identity.installationId().equals(entitlement.getInstallationId())&&order.getOrderId().equals(entitlement.getOrderId())&&(active?"ACTIVE":"FAILED").equals(entitlement.getStatus()),409,"SKILL_STATE_CONFLICT");
+        require(locked.transaction().equals(v2Transaction()),503,"SKILL_STATE_UNAVAILABLE");
+    }
+    private static V2Transaction v2Transaction(){
+        require(TransactionSynchronizationManager.isActualTransactionActive()&&TransactionSynchronizationManager.isSynchronizationActive()&&!TransactionSynchronizationManager.isCurrentTransactionReadOnly(),503,"SKILL_STATE_UNAVAILABLE");
+        // MyBatis legitimately binds its SqlSessionHolder lazily. That does
+        // not replace the original JDBC transaction; extra/replaced JDBC
+        // bindings or a changed connection still fail closed.
+        var bindings=TransactionSynchronizationManager.getResourceMap().entrySet().stream().filter(entry->entry.getValue() instanceof ConnectionHolder).toList();
+        require(bindings.size()==1,503,"SKILL_STATE_UNAVAILABLE");var binding=bindings.getFirst();var holder=(ConnectionHolder)binding.getValue();
+        return new V2Transaction(binding.getKey(),holder,holder.getConnection());
     }
     static void requireCurrentDelivery(SkillInstallationEntity i,AgentCommandDeliveryEntity d,String ownerJiacn,boolean download) {
         require(d!=null && "0".equals(i.getTenantId()) && "0".equals(d.getTenantId())

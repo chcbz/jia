@@ -5,6 +5,8 @@ import cn.jia.agent.config.AgentRabbitActivationState;
 import cn.jia.agent.config.AgentRabbitSafetyGate;
 import cn.jia.agent.config.AgentRabbitTopologyManifest;
 import cn.jia.agent.config.AgentRabbitTopologyReadiness;
+import cn.jia.agent.config.AgentRabbitV2TopologyManifest;
+import cn.jia.agent.config.AgentRabbitV2TopologyReadiness;
 import cn.jia.agent.entity.AgentConfirmedPublishRequest;
 import cn.jia.agent.entity.AgentRabbitPublishResult;
 import cn.jia.agent.service.AgentConfirmedRabbitPublisher;
@@ -42,6 +44,7 @@ public final class AgentConfirmedRabbitPublisherImpl implements AgentConfirmedRa
     private final AgentRabbitSafetyGate gate;
     private final AgentRabbitTopologyManifest manifest;
     private final AgentRabbitTopologyReadiness readiness;
+    private final AgentRabbitV2TopologyReadiness v2Readiness;
     private final Supplier<UUID> correlationIds;
 
     public AgentConfirmedRabbitPublisherImpl(
@@ -49,7 +52,15 @@ public final class AgentConfirmedRabbitPublisherImpl implements AgentConfirmedRa
             AgentRabbitSafetyGate gate,
             AgentRabbitTopologyManifest manifest,
             AgentRabbitTopologyReadiness readiness) {
-        this(template, gate, manifest, readiness, UUID::randomUUID);
+        this(template, gate, manifest, readiness, new AgentRabbitV2TopologyReadiness(),
+                UUID::randomUUID);
+    }
+
+    public AgentConfirmedRabbitPublisherImpl(
+            RabbitTemplate template, AgentRabbitSafetyGate gate,
+            AgentRabbitTopologyManifest manifest, AgentRabbitTopologyReadiness readiness,
+            AgentRabbitV2TopologyReadiness v2Readiness) {
+        this(template, gate, manifest, readiness, v2Readiness, UUID::randomUUID);
     }
 
     AgentConfirmedRabbitPublisherImpl(
@@ -57,11 +68,13 @@ public final class AgentConfirmedRabbitPublisherImpl implements AgentConfirmedRa
             AgentRabbitSafetyGate gate,
             AgentRabbitTopologyManifest manifest,
             AgentRabbitTopologyReadiness readiness,
+            AgentRabbitV2TopologyReadiness v2Readiness,
             Supplier<UUID> correlationIds) {
         this.template = Objects.requireNonNull(template, "template");
         this.gate = Objects.requireNonNull(gate, "gate");
         this.manifest = Objects.requireNonNull(manifest, "manifest");
         this.readiness = Objects.requireNonNull(readiness, "readiness");
+        this.v2Readiness = Objects.requireNonNull(v2Readiness, "v2Readiness");
         this.correlationIds = Objects.requireNonNull(correlationIds, "correlationIds");
     }
 
@@ -94,20 +107,18 @@ public final class AgentConfirmedRabbitPublisherImpl implements AgentConfirmedRa
             return exception("PUBLISH_PROVENANCE_INVALID");
         }
         AgentRabbitActivationState state = gate.state();
+        boolean dispatchAllowed = request.protocolVersion()
+                == AgentCommandAmqpContract.WIRE_VERSION
+                ? gate.allowsWorkerDispatch(request.tenantId(), request.dataDomainId(),
+                        request.executionPoolId())
+                : gate.allowsDispatch(request.tenantId(), request.clientId());
         if ((state != AgentRabbitActivationState.DISPATCH_CANARY
                 && state != AgentRabbitActivationState.DISPATCH_SCOPED)
-                || !gate.allowsDispatch(request.tenantId(), request.clientId())) {
+                || !dispatchAllowed) {
             return exception("DISPATCH_SCOPE_REJECTED");
         }
-        AgentRabbitTopologyReadiness.Snapshot topology = readiness.snapshot();
-        if (!topology.canonicalTopologyReady()
-                || !manifest.sha256().equals(topology.manifestSha256())
-                || !manifest.sha256().equals(request.topologySha256())) {
-            return exception("TOPOLOGY_NOT_CANONICAL_READY");
-        }
-        if (!manifest.allowsPublish(request.destination(), request.routingKey())) {
-            return exception("DESTINATION_POLICY_REJECTED");
-        }
+        AgentRabbitPublishResult topologyRejection = validateTopologyPolicy(request);
+        if (topologyRejection != null) return topologyRejection;
         UUID correlationId = correlationIds.get();
         if (correlationId == null) {
             return exception("RABBIT_CORRELATION_ID_UNAVAILABLE");
@@ -178,6 +189,34 @@ public final class AgentConfirmedRabbitPublisherImpl implements AgentConfirmedRa
         }
     }
 
+    private AgentRabbitPublishResult validateTopologyPolicy(
+            AgentConfirmedPublishRequest request) {
+        if (request.protocolVersion() == AgentCommandAmqpContract.LEGACY_WIRE_VERSION) {
+            AgentRabbitTopologyReadiness.Snapshot topology = readiness.snapshot();
+            if (!topology.canonicalTopologyReady()
+                    || !manifest.sha256().equals(request.topologySha256())) {
+                return exception("TOPOLOGY_NOT_CANONICAL_READY");
+            }
+            return manifest.allowsPublish(request.destination(), request.routingKey())
+                    ? null : exception("DESTINATION_POLICY_REJECTED");
+        }
+        AgentRabbitV2TopologyManifest scopedManifest;
+        try {
+            scopedManifest = AgentRabbitV2TopologyManifest.forPersistedScope(
+                    request.tenantId(), request.dataDomainId(), request.executionPoolId());
+        } catch (RuntimeException invalid) {
+            return exception("PUBLISH_SCOPE_INVALID");
+        }
+        AgentRabbitV2TopologyReadiness.Snapshot topology =
+                v2Readiness.snapshot(scopedManifest);
+        if (!topology.canonicalTopologyReady(scopedManifest)
+                || !scopedManifest.sha256().equals(request.topologySha256())) {
+            return exception("TOPOLOGY_NOT_CANONICAL_READY");
+        }
+        return scopedManifest.allowsPublish(request.destination(), request.routingKey())
+                ? null : exception("DESTINATION_POLICY_REJECTED");
+    }
+
     private static final Set<String> DEAD_LETTER_HEADERS = Set.of(
             "x-death", "x-first-death-exchange", "x-first-death-queue",
             "x-first-death-reason", "x-last-death-exchange", "x-last-death-queue",
@@ -219,8 +258,52 @@ public final class AgentConfirmedRabbitPublisherImpl implements AgentConfirmedRa
                 throw new IllegalArgumentException("Canonical DLQ header drift");
             }
         }
-        validateDeathHeaders(candidate);
+        validateDeathHeaders(candidate, deathTopology(request));
         return Collections.unmodifiableMap(preserved);
+    }
+
+    private static DeathTopology deathTopology(AgentConfirmedPublishRequest request) {
+        if (request.protocolVersion() == AgentCommandAmqpContract.LEGACY_WIRE_VERSION) {
+            AgentRabbitTopologyManifest legacy = AgentRabbitTopologyManifest.canonical();
+            if (!legacy.sha256().equals(request.topologySha256())
+                    || !legacy.allowsPublish(request.destination(), request.routingKey())) {
+                throw new IllegalArgumentException("Legacy topology provenance is invalid");
+            }
+            return new DeathTopology(
+                    AgentRabbitTopologyManifest.DISPATCH_QUEUE,
+                    AgentRabbitTopologyManifest.MAIN_EXCHANGE,
+                    AgentRabbitTopologyManifest.DEAD_LETTER_EXCHANGE,
+                    Map.of(
+                            AgentRabbitTopologyManifest.RETRY_5S_QUEUE,
+                            AgentRabbitTopologyManifest.RETRY_5S_ROUTING_KEY,
+                            AgentRabbitTopologyManifest.RETRY_30S_QUEUE,
+                            AgentRabbitTopologyManifest.RETRY_30S_ROUTING_KEY,
+                            AgentRabbitTopologyManifest.RETRY_5M_QUEUE,
+                            AgentRabbitTopologyManifest.RETRY_5M_ROUTING_KEY),
+                    legacy.bindings().stream()
+                            .filter(binding -> AgentRabbitTopologyManifest.DISPATCH_QUEUE
+                                    .equals(binding.queue()))
+                            .map(binding -> new DeathPublishRoute(
+                                    binding.exchange(), binding.routingKey()))
+                            .collect(java.util.stream.Collectors.toUnmodifiableSet()));
+        }
+        AgentRabbitV2TopologyManifest scoped = AgentRabbitV2TopologyManifest.forPersistedScope(
+                request.tenantId(), request.dataDomainId(), request.executionPoolId());
+        if (!scoped.sha256().equals(request.topologySha256())
+                || !scoped.allowsPublish(request.destination(), request.routingKey())) {
+            throw new IllegalArgumentException("Scoped topology provenance is invalid");
+        }
+        return new DeathTopology(
+                scoped.dispatchQueue(), scoped.mainExchange(), scoped.deadLetterExchange(),
+                Map.of(
+                        scoped.retry5sQueue(), scoped.retry5sRoutingKey(),
+                        scoped.retry30sQueue(), scoped.retry30sRoutingKey(),
+                        scoped.retry5mQueue(), scoped.retry5mRoutingKey()),
+                scoped.bindings().stream()
+                        .filter(binding -> scoped.dispatchQueue().equals(binding.queue()))
+                        .map(binding -> new DeathPublishRoute(
+                                binding.exchange(), binding.routingKey()))
+                        .collect(java.util.stream.Collectors.toUnmodifiableSet()));
     }
 
     private static void validateSpringTransportHeaders(Map<String, Object> candidate) {
@@ -247,7 +330,8 @@ public final class AgentConfirmedRabbitPublisherImpl implements AgentConfirmedRa
         }
     }
 
-    private static void validateDeathHeaders(Map<String, Object> candidate) {
+    private static void validateDeathHeaders(
+            Map<String, Object> candidate, DeathTopology topology) {
         Object deaths = candidate.get("x-death");
         boolean anyDeathHeader = DEAD_LETTER_HEADERS.stream().anyMatch(candidate::containsKey);
         if (deaths == null) {
@@ -261,7 +345,7 @@ public final class AgentConfirmedRabbitPublisherImpl implements AgentConfirmedRa
             throw new IllegalArgumentException("DLQ death history is invalid");
         }
         List<DeathEntry> entries = history.stream()
-                .map(AgentConfirmedRabbitPublisherImpl::deathEntry)
+                .map(value -> deathEntry(topology, value))
                 .toList();
         for (int index = 1; index < entries.size(); index++) {
             if (entries.get(index - 1).time() < entries.get(index).time()) {
@@ -272,7 +356,8 @@ public final class AgentConfirmedRabbitPublisherImpl implements AgentConfirmedRa
         validateDeathSummary(candidate, "x-last-death", entries, false);
     }
 
-    private static DeathEntry deathEntry(Object value) {
+    private static DeathEntry deathEntry(
+            DeathTopology topology, Object value) {
         if (!(value instanceof Map<?, ?> raw)
                 || raw.size() < 6 || raw.size() > DEATH_ENTRY_KEYS.size()) {
             throw new IllegalArgumentException("DLQ death entry shape is invalid");
@@ -309,32 +394,26 @@ public final class AgentConfirmedRabbitPublisherImpl implements AgentConfirmedRa
                 && !exactHeaderText(originalExpiration, 20).matches("[0-9]{1,20}")) {
             throw new IllegalArgumentException("DLQ original expiration is invalid");
         }
-        validateDeathRoute(reason, queue, exchange, routingKeys);
+        validateDeathRoute(topology, reason, queue, exchange, routingKeys);
         return new DeathEntry(count, reason, queue, exchange, time.getTime());
     }
 
     private static void validateDeathRoute(
-            String reason, String queue, String exchange, List<String> routingKeys) {
-        if (AgentRabbitTopologyManifest.DISPATCH_QUEUE.equals(queue)) {
+            DeathTopology topology, String reason, String queue, String exchange,
+            List<String> routingKeys) {
+        if (topology.dispatchQueue().equals(queue)) {
             if (!"rejected".equals(reason)
-                    || !AgentRabbitTopologyManifest.MAIN_EXCHANGE.equals(exchange)
+                    || !topology.mainExchange().equals(exchange)
                     || routingKeys.size() != 1
-                    || !AgentRabbitTopologyManifest.canonical().allowsCommandPublish(
-                            exchange, routingKeys.getFirst())) {
+                    || !topology.commandRoutes().contains(
+                            new DeathPublishRoute(exchange, routingKeys.getFirst()))) {
                 throw new IllegalArgumentException("DLQ dispatch death route is invalid");
             }
             return;
         }
-        Map<String, String> retryRoutes = Map.of(
-                AgentRabbitTopologyManifest.RETRY_5S_QUEUE,
-                        AgentRabbitTopologyManifest.RETRY_5S_ROUTING_KEY,
-                AgentRabbitTopologyManifest.RETRY_30S_QUEUE,
-                        AgentRabbitTopologyManifest.RETRY_30S_ROUTING_KEY,
-                AgentRabbitTopologyManifest.RETRY_5M_QUEUE,
-                        AgentRabbitTopologyManifest.RETRY_5M_ROUTING_KEY);
-        String expectedRouting = retryRoutes.get(queue);
+        String expectedRouting = topology.retryRoutes().get(queue);
         if (!"expired".equals(reason)
-                || !AgentRabbitTopologyManifest.DEAD_LETTER_EXCHANGE.equals(exchange)
+                || !topology.deadLetterExchange().equals(exchange)
                 || expectedRouting == null || routingKeys.size() != 1
                 || !expectedRouting.equals(routingKeys.getFirst())) {
             throw new IllegalArgumentException("DLQ retry death route is invalid");
@@ -424,6 +503,28 @@ public final class AgentConfirmedRabbitPublisherImpl implements AgentConfirmedRa
 
     private record DeathEntry(
             long count, String reason, String queue, String exchange, long time) {
+    }
+
+    private record DeathPublishRoute(String exchange, String routingKey) {
+        private DeathPublishRoute {
+            Objects.requireNonNull(exchange, "exchange");
+            Objects.requireNonNull(routingKey, "routingKey");
+        }
+    }
+
+    private record DeathTopology(
+            String dispatchQueue,
+            String mainExchange,
+            String deadLetterExchange,
+            Map<String, String> retryRoutes,
+            Set<DeathPublishRoute> commandRoutes) {
+        private DeathTopology {
+            Objects.requireNonNull(dispatchQueue, "dispatchQueue");
+            Objects.requireNonNull(mainExchange, "mainExchange");
+            Objects.requireNonNull(deadLetterExchange, "deadLetterExchange");
+            retryRoutes = Map.copyOf(retryRoutes);
+            commandRoutes = Set.copyOf(commandRoutes);
+        }
     }
 
     private static AgentRabbitPublishResult returned(

@@ -29,6 +29,10 @@ import cn.jia.chat.service.JuyitingAgentRelayService;
 import cn.jia.chat.service.JuyitingConversationScopeService;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
+import cn.jia.core.tenant.UserAdmissionScope;
 import reactor.core.publisher.Flux;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.BeforeEach;
@@ -90,6 +94,8 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 any(), org.mockito.ArgumentMatchers.anyLong(), any(), any())).thenReturn(true);
         org.mockito.Mockito.lenient().when(chatConversationService.isLiveGeneration(
                 any(), any(), any(), org.mockito.ArgumentMatchers.anyLong())).thenReturn(true);
+        org.mockito.Mockito.lenient().when(chatConversationService.isLiveGeneration(
+                any(UserAdmissionScope.class), any(), org.mockito.ArgumentMatchers.anyLong())).thenReturn(true);
     }
 
 
@@ -1738,13 +1744,12 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
                 .setConversationScopeType("public").setConversationScopeKey("public")
                 .setTargetAgentIds("[\"agent-wuyong\"]").setLifecycleGeneration(1L);
         conversation.setTenantId("0"); conversation.setClientId("web-client");
-        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+        when(chatConversationService.get(areaZeroScope(), "1001"))
                 .thenReturn(conversation);
         when(chatConversationService.appendOwnedMessage(
-                org.mockito.ArgumentMatchers.eq("tester"),
-                org.mockito.ArgumentMatchers.eq("web-client"), any(ChatMessageEntity.class),
+                org.mockito.ArgumentMatchers.eq(areaZeroScope()), any(ChatMessageEntity.class),
                 org.mockito.ArgumentMatchers.eq(1L)))
-                .thenAnswer(invocation -> invocation.getArgument(2));
+                .thenAnswer(invocation -> invocation.getArgument(1));
         JuyitingConversationScopeService scopeService = new JuyitingConversationScopeService(builtinHallAgentSupport, agentService);
         JuyitingAgentRelayService relayService = new JuyitingAgentRelayService(
                 handler, chatConversationEventBroker, builtinHallAgentSupport,
@@ -1768,7 +1773,7 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         relayContext.setJiacn("tester");
         relayContext.setClientId("web-client");
         EsContextHolder.setContext(relayContext);
-        JuyitingAgentRelayResult relayResult = relayService.relay(chatMessage, "1001", () -> Flux.just("builtin"));
+        JuyitingAgentRelayResult relayResult = relayService.relay(areaZeroScope(), chatMessage, "1001", () -> Flux.just("builtin"));
         List<String> events = relayResult.stream().collectList().block(Duration.ofSeconds(5));
 
         assertTrue(relayResult.attempted());
@@ -1804,6 +1809,13 @@ class AgentWebSocketHandlerTest extends BaseMockTest {
         EsContextHolder.setContext(new EsContext());
     }
 
+
+    private UserAdmissionScope areaZeroScope() {
+        return new UserAdmissionScope(
+                new BusinessScope(TenantId.of("0"), DataDomainId.of("cyf"),
+                        "tester", "web-client"),
+                1L, 0L, 0L, 0L, 0L);
+    }
 
     private cn.jia.agent.entity.AgentRuntimeDTO runtime(String agentId, String name) {
         cn.jia.agent.entity.AgentRuntimeDTO dto = new cn.jia.agent.entity.AgentRuntimeDTO();

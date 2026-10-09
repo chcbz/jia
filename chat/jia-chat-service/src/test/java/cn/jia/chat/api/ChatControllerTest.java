@@ -12,6 +12,7 @@ import cn.jia.chat.memory.MemoryDocument;
 import cn.jia.chat.memory.MemoryRepository;
 import cn.jia.chat.service.ChatConversationEventBroker;
 import cn.jia.chat.service.ChatConversationService;
+import cn.jia.chat.service.ConversationLibraryService;
 import cn.jia.chat.service.BuiltinHallAgentSupport;
 import cn.jia.chat.service.JuyitingAgentRelayService;
 import cn.jia.chat.service.JuyitingAgentRelayResult;
@@ -19,11 +20,16 @@ import cn.jia.chat.service.JuyitingConversationScopeService;
 import cn.jia.chat.service.impl.AgentTaskThreadMemoryGuard;
 import cn.jia.core.context.EsContext;
 import cn.jia.core.context.EsContextHolder;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
+import cn.jia.core.tenant.UserAdmissionScope;
 import cn.jia.core.redis.RedisService;
 import cn.jia.core.security.SensitiveResponseBodyAdvice;
 import cn.jia.core.security.SensitiveResponseProperties;
 import cn.jia.test.BaseMockTest;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
@@ -38,7 +44,6 @@ import tools.jackson.databind.ObjectMapper;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
@@ -72,9 +77,19 @@ class ChatControllerTest extends BaseMockTest {
     @Mock
     MemoryRepository memoryRepository;
     @Mock
+    ConversationLibraryService conversationLibraryService;
+    @Mock
     AgentTaskThreadMemoryGuard taskThreadMemoryGuard;
     @Mock
     AgentService agentService;
+
+    @BeforeEach
+    void setUpIdentity() {
+        EsContext context = new EsContext();
+        context.setJiacn("tester");
+        context.setClientId("web-client");
+        EsContextHolder.setContext(context);
+    }
 
     @AfterEach
     void tearDown() {
@@ -93,7 +108,7 @@ class ChatControllerTest extends BaseMockTest {
         conversation.setTitle("聚义厅议事");
         conversation.setConversationType(ChatController.CONVERSATION_TYPE_JUYITING);
 
-        when(chatConversationService.create(any(ChatConversationEntity.class))).thenReturn(conversation);
+        when(chatConversationService.create(any(UserAdmissionScope.class), any(ChatConversationEntity.class))).thenReturn(conversation);
         when(redisService.subscribeToChannel("1001")).thenReturn(Flux.never());
         when(agentWebSocketHandler.sendDirectMessageToAgent(
                 eq("tester"), eq("web-client"), eq("agent-wuyong"), any(Map.class))).thenReturn(true);
@@ -101,7 +116,7 @@ class ChatControllerTest extends BaseMockTest {
                 org.mockito.ArgumentMatchers.eq("1001"),
                 org.mockito.ArgumentMatchers.eq(1L), any())).thenReturn(Flux.just("""
                 {"type":"agent_message","conversationId":"1001","conversationType":"juyiting","agentId":"agent-wuyong","senderType":"agent","senderName":"Wu Yong","content":"ok"}
-                """).delayElements(Duration.ofMillis(10)));
+                """));
 
         ChatController controller = newController();
 
@@ -116,7 +131,7 @@ class ChatControllerTest extends BaseMockTest {
 
         ArgumentCaptor<ChatMessageEntity> messageCaptor = ArgumentCaptor.forClass(ChatMessageEntity.class);
         verify(chatConversationService).appendOwnedMessage(
-                eq("tester"), eq("web-client"), messageCaptor.capture(), eq(1L));
+                eq(areaZeroScope()), messageCaptor.capture(), eq(1L));
         verify(agentWebSocketHandler).sendDirectMessageToAgent(
                 eq("tester"), eq("web-client"), eq("agent-wuyong"), any(Map.class));
 
@@ -142,7 +157,7 @@ class ChatControllerTest extends BaseMockTest {
                 .setTitle("聚义厅议事")
                 .setConversationType(ChatController.CONVERSATION_TYPE_JUYITING)
                 .setLifecycleGeneration(1L);
-        when(chatConversationService.get("1001")).thenReturn(conversation);
+        when(chatConversationService.get(areaZeroScope(), "1001")).thenReturn(conversation);
         when(redisService.subscribeToChannel("1001")).thenReturn(Flux.never());
         when(chatConversationEventBroker.deletionSignal(eq("1001"), eq(1L), any()))
                 .thenReturn(Flux.never());
@@ -150,7 +165,7 @@ class ChatControllerTest extends BaseMockTest {
         java.util.concurrent.CountDownLatch cancelled = new java.util.concurrent.CountDownLatch(1);
         java.util.concurrent.atomic.AtomicReference<Throwable> failure = new java.util.concurrent.atomic.AtomicReference<>();
         JuyitingAgentRelayService relay = org.mockito.Mockito.mock(JuyitingAgentRelayService.class);
-        when(relay.relay(any(), eq("1001"), any())).thenReturn(new JuyitingAgentRelayResult(
+        when(relay.relay(any(), any(), eq("1001"), any())).thenReturn(new JuyitingAgentRelayResult(
                 true, Mono.just(true), Flux.<String>never()
                         .doOnSubscribe(ignored -> subscribed.countDown())
                         .doOnCancel(cancelled::countDown)));
@@ -197,12 +212,12 @@ class ChatControllerTest extends BaseMockTest {
         assertThrows(AgentTaskThreadException.class,
                 () -> newController().handleChat(metadataSpoof));
 
-        verify(chatConversationService, never()).create(any());
+        verify(chatConversationService, never()).create(any(UserAdmissionScope.class), any(ChatConversationEntity.class));
     }
 
     @Test
     void genericStopAndEventRoutesCannotUseTaskThreadConversation() {
-        when(chatConversationService.get("77")).thenThrow(new AgentTaskThreadException(
+        when(chatConversationService.get(areaZeroScope(), "77")).thenThrow(new AgentTaskThreadException(
                 AgentTaskThreadException.Reason.NOT_FOUND_OR_FORBIDDEN,
                 "protected task thread"));
         ChatController controller = newController();
@@ -251,7 +266,7 @@ class ChatControllerTest extends BaseMockTest {
                 .setConversationType("juyiting")
                 .setSenderType("agent")
                 .setSenderName("吴用");
-        when(chatConversationService.findByConversationId("1001"))
+        when(chatConversationService.findByConversationId(areaZeroScope(), "1001"))
                 .thenReturn(List.of(userMessage, agentMessage));
 
         Object controllerBody = newController().getConversationContent("1001");
@@ -274,7 +289,7 @@ class ChatControllerTest extends BaseMockTest {
         assertEquals("agent", messages.get(1).get("senderType"));
         assertTrue(String.valueOf(messages.get(0).get("content")).contains("password=******"));
         assertTrue(!json.contains("hunter2"));
-        verify(chatConversationService).findByConversationId("1001");
+        verify(chatConversationService).findByConversationId(areaZeroScope(), "1001");
     }
 
     @Test
@@ -295,13 +310,13 @@ class ChatControllerTest extends BaseMockTest {
         setObjectField(request, "targetAgentIds", List.of("agent-wuyong", "agent-linchong"));
         when(agentService.listTaskWritableMemberAgentIds("tester", "web-client", "372"))
                 .thenReturn(List.of("agent-wuyong", "agent-linchong"));
-        when(chatConversationService.create(any(ChatConversationEntity.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(chatConversationService.create(any(UserAdmissionScope.class), any(ChatConversationEntity.class)))
+                .thenAnswer(invocation -> invocation.getArgument(1));
 
         ChatConversationEntity created = invokeGetOrCreateConversation(controller, request);
 
         ArgumentCaptor<ChatConversationEntity> conversationCaptor = ArgumentCaptor.forClass(ChatConversationEntity.class);
-        verify(chatConversationService).create(conversationCaptor.capture());
+        verify(chatConversationService).create(eq(areaZeroScope()), conversationCaptor.capture());
         ChatConversationEntity captured = conversationCaptor.getValue();
 
         assertEquals(ChatController.CONVERSATION_TYPE_JUYITING, captured.getConversationType());
@@ -319,7 +334,7 @@ class ChatControllerTest extends BaseMockTest {
     @Test
     void listConversationsPassesScopeFiltersToService() throws Exception {
         ChatController controller = newController();
-        when(chatConversationService.findPage(any(), eq(1), eq(1), eq("update_time desc")))
+        when(chatConversationService.findPage(any(UserAdmissionScope.class), any(), eq(1), eq(1), eq("update_time desc")))
                 .thenReturn(new com.github.pagehelper.PageInfo<>(List.of()));
 
         ChatConversationEntity search = new ChatConversationEntity();
@@ -336,7 +351,8 @@ class ChatControllerTest extends BaseMockTest {
         controller.listConversations(page);
 
         ArgumentCaptor<ChatConversationEntity> searchCaptor = ArgumentCaptor.forClass(ChatConversationEntity.class);
-        verify(chatConversationService).findPage(searchCaptor.capture(), eq(1), eq(1), eq("update_time desc"));
+        verify(chatConversationService).findPage(eq(areaZeroScope()), searchCaptor.capture(),
+                eq(1), eq(1), eq("update_time desc"));
         ChatConversationEntity captured = searchCaptor.getValue();
         assertEquals(ChatController.CONVERSATION_TYPE_JUYITING, captured.getConversationType());
         assertEquals("private", getObjectField(captured, "conversationScopeType"));
@@ -379,9 +395,10 @@ class ChatControllerTest extends BaseMockTest {
 
         assertThrows(AgentTaskThreadException.class,
                 () -> controller.handleChat(request).collectList().block());
-        verify(chatConversationService, org.mockito.Mockito.never()).create(any());
+        verify(chatConversationService, org.mockito.Mockito.never()).create(
+                any(UserAdmissionScope.class), any(ChatConversationEntity.class));
         verify(chatConversationService, org.mockito.Mockito.never()).appendOwnedMessage(
-                any(), any(), any(ChatMessageEntity.class),
+                any(UserAdmissionScope.class), any(ChatMessageEntity.class),
                 org.mockito.ArgumentMatchers.anyLong());
     }
 
@@ -395,10 +412,10 @@ class ChatControllerTest extends BaseMockTest {
         ChatController controller = newController();
         when(agentService.listTaskWritableMemberAgentIds("tester", "web-client", "task-7"))
                 .thenReturn(members);
-        when(chatConversationService.create(any(ChatConversationEntity.class)))
-                .thenAnswer(invocation -> ((ChatConversationEntity) invocation.getArgument(0))
+        when(chatConversationService.create(any(UserAdmissionScope.class), any(ChatConversationEntity.class)))
+                .thenAnswer(invocation -> ((ChatConversationEntity) invocation.getArgument(1))
                         .setId(1001L));
-        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+        when(chatConversationService.get(areaZeroScope(), "1001"))
                 .thenAnswer(invocation -> {
                     ChatConversationEntity value = new ChatConversationEntity()
                             .setId(1001L).setJiacn("tester").setConversationType("juyiting")
@@ -429,7 +446,7 @@ class ChatControllerTest extends BaseMockTest {
 
         ArgumentCaptor<ChatConversationEntity> created =
                 ArgumentCaptor.forClass(ChatConversationEntity.class);
-        verify(chatConversationService).create(created.capture());
+        verify(chatConversationService).create(eq(areaZeroScope()), created.capture());
         assertEquals(null, created.getValue().getTargetAgentId());
         assertEquals("[\"agent-wuyong\",\"agent-linchong\"]",
                 created.getValue().getTargetAgentIds());
@@ -449,9 +466,9 @@ class ChatControllerTest extends BaseMockTest {
         ChatConversationEventBroker broker = new ChatConversationEventBroker();
         ChatConversationEntity conversation = new ChatConversationEntity()
                 .setId(5001L).setLifecycleGeneration(1L);
-        when(chatConversationService.get("5001")).thenReturn(conversation);
+        when(chatConversationService.get(areaZeroScope(), "5001")).thenReturn(conversation);
         when(chatConversationService.isLiveGeneration(
-                "tester", "web-client", "5001", 1L)).thenReturn(true);
+                areaZeroScope(), "5001", 1L)).thenReturn(true);
         JuyitingConversationScopeService scopeService =
                 new JuyitingConversationScopeService(builtinHallAgentSupport, agentService);
         ChatController controller = new ChatController(
@@ -484,6 +501,7 @@ class ChatControllerTest extends BaseMockTest {
     void searchLibraryReturnsEmptyResultsWhenMemorySearchFails() throws Exception {
         EsContext context = new EsContext();
         context.setJiacn("tester");
+        context.setClientId("web-client");
         EsContextHolder.setContext(context);
 
         when(memoryRepository.searchWithConversationBoost(anyString(), anyString(), any(), anyInt(), anyDouble()))
@@ -501,6 +519,7 @@ class ChatControllerTest extends BaseMockTest {
     void seedLibraryDocumentStoresProjectMemory() throws Exception {
         EsContext context = new EsContext();
         context.setJiacn("tester");
+        context.setClientId("web-client");
         EsContextHolder.setContext(context);
 
         ChatController controller = newController();
@@ -525,6 +544,61 @@ class ChatControllerTest extends BaseMockTest {
         assertEquals("E0", result.getCode());
     }
 
+    @Test
+    void tenantOneUsesScopedConversationLibraryBoundary() throws Exception {
+        EsContext context = new EsContext();
+        context.setJiacn("tester");
+        context.setClientId("web-client");
+        context.setTenantId("1");
+        context.setDataDomainId("cyf");
+        EsContextHolder.setContext(context);
+        when(conversationLibraryService.search(
+                any(UserAdmissionScope.class), anyString(), any(), anyInt(), anyDouble()))
+                .thenReturn(List.of());
+        ChatController controller = newController();
+        controller.setConversationLibraryService(conversationLibraryService);
+
+        JsonResult<?> search = invokeSearchLibrary(controller, "宋江");
+        JsonResult<?> save = invokeSeedLibraryDocument(
+                controller, "title", "content", "project", List.of("project"));
+
+        assertEquals("E0", search.getCode());
+        assertEquals("E0", save.getCode());
+        ArgumentCaptor<UserAdmissionScope> scope = ArgumentCaptor.forClass(UserAdmissionScope.class);
+        verify(conversationLibraryService).search(
+                scope.capture(), eq("宋江"), any(), eq(8), anyDouble());
+        assertEquals("1", scope.getValue().businessScope().tenantId().value());
+        assertEquals("cyf", scope.getValue().businessScope().dataDomainId().value());
+        verify(conversationLibraryService).save(
+                any(UserAdmissionScope.class), any(MemoryDocument.class));
+        verify(memoryRepository, never()).searchWithConversationBoost(
+                anyString(), anyString(), any(), anyInt(), anyDouble());
+        verify(memoryRepository, never()).save(any(MemoryDocument.class));
+    }
+
+    @Test
+    void vectorFilterEscapesOwnerIdentityBeforeParsing() throws Exception {
+        ChatController controller = newController();
+        Method method = ChatController.class.getDeclaredMethod(
+                "vectorFilterExpression", UserAdmissionScope.class, String.class);
+        method.setAccessible(true);
+        UserAdmissionScope admission = new UserAdmissionScope(
+                new BusinessScope(TenantId.of("1"), DataDomainId.of("cyf"),
+                        "O'Brien\\Root", "web-client"),
+                1L, 0L, 0L, 0L, 0L);
+
+        String expression = (String) method.invoke(controller, admission, "O'Brien\\Root");
+
+        assertTrue(expression.contains("O\\'Brien\\\\Root"), expression);
+        assertTrue(expression.contains("metadata.tenantId == '1'"), expression);
+        assertTrue(expression.contains("metadata.dataDomainId == 'cyf'"), expression);
+        Class<?> parserType = Class.forName(
+                "org.springframework.ai.vectorstore.filter.FilterExpressionTextParser");
+        Object parser = parserType.getConstructor().newInstance();
+        parserType.getMethod("parse", String.class).invoke(parser, expression);
+
+    }
+
     private JsonResult<?> invokeSearchLibrary(ChatController controller, String keyword) throws Exception {
         Class<?> requestClass = Class.forName("cn.jia.chat.api.ChatController$LibrarySearchRequest");
         Constructor<?> constructor = requestClass.getDeclaredConstructor();
@@ -537,6 +611,13 @@ class ChatControllerTest extends BaseMockTest {
         return (JsonResult<?>) method.invoke(controller, request);
     }
 
+    private UserAdmissionScope areaZeroScope() {
+        return new UserAdmissionScope(
+                new BusinessScope(TenantId.of("0"), DataDomainId.of("cyf"),
+                        "tester", "web-client"),
+                1L, 0L, 0L, 0L, 0L);
+    }
+
     private ChatController newController() {
         org.mockito.Mockito.lenient().when(taskThreadMemoryGuard.excludeProtected(any()))
                 .thenAnswer(invocation -> invocation.getArgument(0));
@@ -545,14 +626,13 @@ class ChatControllerTest extends BaseMockTest {
                 .setConversationScopeType("public").setConversationScopeKey("public")
                 .setTargetAgentIds("[\"agent-wuyong\"]");
         publicConversation.setTenantId("0"); publicConversation.setClientId("web-client");
-        org.mockito.Mockito.lenient().when(chatConversationService.getOwned(
-                "tester", "web-client", "1001")).thenReturn(publicConversation);
+        org.mockito.Mockito.lenient().when(chatConversationService.get(areaZeroScope(), "1001")).thenReturn(publicConversation);
         org.mockito.Mockito.lenient().when(chatConversationService.appendOwnedMessage(
-                anyString(), anyString(), any(ChatMessageEntity.class),
+                any(UserAdmissionScope.class), any(ChatMessageEntity.class),
                 org.mockito.ArgumentMatchers.anyLong()))
-                .thenAnswer(invocation -> invocation.getArgument(2));
+                .thenAnswer(invocation -> invocation.getArgument(1));
         org.mockito.Mockito.lenient().when(chatConversationService.isLiveGeneration(
-                anyString(), anyString(), anyString(), org.mockito.ArgumentMatchers.anyLong()))
+                any(UserAdmissionScope.class), anyString(), org.mockito.ArgumentMatchers.anyLong()))
                 .thenReturn(true);
         org.mockito.Mockito.lenient().when(chatConversationEventBroker.deletionSignal(
                 anyString(), org.mockito.ArgumentMatchers.anyLong(), any())).thenReturn(Flux.never());
@@ -587,9 +667,10 @@ class ChatControllerTest extends BaseMockTest {
 
     private ChatConversationEntity invokeGetOrCreateConversation(ChatController controller, ChatMessageDTO request)
             throws Exception {
-        Method method = ChatController.class.getDeclaredMethod("getOrCreateConversation", ChatMessageDTO.class);
+        Method method = ChatController.class.getDeclaredMethod(
+                "getOrCreateConversation", UserAdmissionScope.class, ChatMessageDTO.class);
         method.setAccessible(true);
-        return (ChatConversationEntity) method.invoke(controller, request);
+        return (ChatConversationEntity) method.invoke(controller, areaZeroScope(), request);
     }
 
     private Object getObjectField(Object target, String fieldName) throws Exception {

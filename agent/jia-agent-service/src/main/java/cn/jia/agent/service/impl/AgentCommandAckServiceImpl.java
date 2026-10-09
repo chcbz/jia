@@ -249,8 +249,14 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
                 || !storedHash(delivery.getCommandPayload(), delivery.getCommandPayloadHash())) {
             throw rejected("ACK_COMMAND_IDENTITY_INVALID");
         }
-        byte[] canonicalWire = AgentCommandCanonicalCodec.wireBytes(
-                draft, delivery.getActiveMessageId(), delivery.getActiveAttempt());
+        byte[] canonicalWire;
+        try {
+            canonicalWire = AgentCommandProtocolSupport.wireBytes(
+                    draft, delivery.getActiveMessageId(), delivery.getActiveAttempt(),
+                    delivery, outbox);
+        } catch (IllegalArgumentException invalid) {
+            throw rejected("ACK_SOURCE_PROTOCOL_INVALID");
+        }
         if (!Arrays.equals(canonicalWire, outbox.getWirePayload())) {
             throw rejected("ACK_WIRE_CANONICAL_DRIFT");
         }
@@ -295,8 +301,14 @@ public final class AgentCommandAckServiceImpl implements AgentCommandAckService 
         } catch (IllegalArgumentException invalid) {
             throw rejected("ACK_PARENT_COMMAND_PAYLOAD_INVALID");
         }
-        byte[] canonicalParentWire = AgentCommandCanonicalCodec.wireBytes(
-                draft, parentOutbox.getMessageId(), parentOutbox.getActiveAttempt());
+        byte[] canonicalParentWire;
+        try {
+            canonicalParentWire = AgentCommandProtocolSupport.wireBytes(
+                    draft, parentOutbox.getMessageId(), parentOutbox.getActiveAttempt(),
+                    delivery, parentOutbox);
+        } catch (IllegalArgumentException invalid) {
+            throw rejected("ACK_PARENT_PROTOCOL_INVALID");
+        }
         if (!Arrays.equals(canonicalParentWire, parentOutbox.getWirePayload())
                 || !Arrays.equals(canonicalParentWire, parentInbox.getWirePayload())) {
             throw rejected("ACK_PARENT_WIRE_CANONICAL_DRIFT");

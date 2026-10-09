@@ -8,6 +8,9 @@ import cn.jia.agent.service.AgentService;
 import cn.jia.agent.service.AgentTaskCollaborationAccessService;
 import cn.jia.agent.service.impl.AgentCommandTransportWriterImpl;
 import cn.jia.agent.service.impl.AgentCommandMailboxServiceImpl;
+import cn.jia.core.tenant.TenantModuleAdmissionGuard;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
@@ -33,8 +36,11 @@ public class AgentCommandTransportWriterConfiguration {
             AgentRabbitSafetyGate gate,
             AgentService agentService,
             AgentTaskCollaborationAccessService accessService,
+            @Qualifier("agentOutboxTenantModuleAdmissionGuard")
+            ObjectProvider<TenantModuleAdmissionGuard> admissionGuard,
             PlatformTransactionManager transactionManager) {
         return new AgentCommandTransportWriterImpl(
-                dao, gate, agentService, accessService, transactionManager);
+                dao, gate, agentService, accessService,
+                admissionGuard.getIfAvailable(), transactionManager);
     }
 }

@@ -2,6 +2,10 @@ package cn.jia.chat.dao;
 
 import cn.jia.chat.dao.impl.ChatMessageDaoImpl;
 import cn.jia.chat.entity.ChatMessageEntity;
+import cn.jia.chat.entity.ConversationDataScope;
+import cn.jia.core.tenant.BusinessScope;
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
 import cn.jia.chat.mapper.ChatConversationMapper;
 import cn.jia.chat.mapper.ChatMessageMapper;
 import cn.jia.common.dao.BaseDaoImpl;
@@ -24,10 +28,12 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class ChatMessageScopedQueryTest {
     private static final String OWNER = "Owner-A";
@@ -54,6 +60,7 @@ class ChatMessageScopedQueryTest {
                     id BIGINT NOT NULL AUTO_INCREMENT,
                     title VARCHAR(200),
                     jiacn VARCHAR_IGNORECASE(50),
+                    data_domain_id VARCHAR_IGNORECASE(64),
                     status INT,
                     conversation_type VARCHAR(20),
                     conversation_scope_type VARCHAR(20),
@@ -61,6 +68,7 @@ class ChatMessageScopedQueryTest {
                     task_id VARCHAR(64),
                     target_agent_id VARCHAR(100),
                     deleted_at BIGINT,
+                    data_scope_mode VARCHAR(20) NOT NULL DEFAULT 'LEGACY_CLIENT',
                     create_time BIGINT,
                     update_time BIGINT,
                     tenant_id VARCHAR_IGNORECASE(50),
@@ -76,6 +84,7 @@ class ChatMessageScopedQueryTest {
                     content TEXT,
                     metadata TEXT,
                     jiacn VARCHAR(50),
+                    data_domain_id VARCHAR_IGNORECASE(64),
                     sync_status VARCHAR(20),
                     conversation_type VARCHAR(20),
                     sender_type VARCHAR(20),
@@ -140,8 +149,9 @@ class ChatMessageScopedQueryTest {
 
     @Test
     void genericConversationQueriesAndDeletesFixTenantZeroWhileKeepingOwnerAndClientExact() throws Exception {
-        String conversationScope = normalize(ChatConversationMapper.EXACT_OWNER_SCOPE);
+        String conversationScope = normalize(ChatConversationMapper.EXACT_LEGACY_OWNER_SCOPE);
         assertTrue(conversationScope.contains("tenant_id = '0'"), conversationScope);
+        assertTrue(conversationScope.contains("data_scope_mode = 'legacy_client'"), conversationScope);
         assertFalse(conversationScope.contains("or tenant_id"), conversationScope);
         assertTrue(conversationScope.contains("jiacn = #{ownerjiacn}"), conversationScope);
         assertTrue(conversationScope.contains("client_id = #{clientid}"), conversationScope);
@@ -210,6 +220,169 @@ class ChatMessageScopedQueryTest {
         insertOwned(304, "1", OWNER, OWNER, CLIENT, 501, "legacy-owner-tenant");
         assertEquals(List.of(301L, 302L), dao.findOwnedByConversationId(
                 OWNER, CLIENT, "1").stream().map(ChatMessageEntity::getId).toList());
+    }
+
+    @Test
+    void domainScopeUsesTenantDomainAndOwnerWhileAllowingAnotherGrantedClient() {
+        jdbc.update("""
+                INSERT INTO chat_conversation
+                    (id, jiacn, data_domain_id, tenant_id, client_id, conversation_type,
+                     data_scope_mode, deleted_at)
+                VALUES (11, ?, 'cyf', '1', 'Creator-A', 'normal', 'DOMAIN', NULL),
+                       (12, ?, 'cyf', '0', 'Creator-A', 'normal', 'DOMAIN', NULL),
+                       (13, ?, 'other', '1', 'Creator-A', 'normal', 'DOMAIN', NULL),
+                       (14, 'Owner-B', 'cyf', '1', 'Creator-A', 'normal', 'DOMAIN', NULL)
+                """, OWNER, OWNER, OWNER);
+        insertDomainOwned(601, "11", OWNER, "1", "cyf", "Creator-A", 100, "allowed");
+        insertDomainOwned(602, "11", OWNER, "0", "cyf", "Creator-A", 101, "wrong-tenant-message");
+        insertDomainOwned(603, "11", OWNER, "1", "other", "Creator-A", 102, "wrong-domain-message");
+        insertDomainOwned(604, "11", "Owner-B", "1", "cyf", "Creator-A", 103, "wrong-owner-message");
+
+        ConversationDataScope areaOne = new ConversationDataScope(
+                new BusinessScope(TenantId.of("1"), DataDomainId.of("cyf"), OWNER, "Caller-B"),
+                ConversationDataScope.Mode.DOMAIN);
+        ConversationDataScope areaZero = new ConversationDataScope(
+                new BusinessScope(TenantId.of("0"), DataDomainId.of("cyf"), OWNER, "Caller-B"),
+                ConversationDataScope.Mode.DOMAIN);
+        ConversationDataScope otherDomain = new ConversationDataScope(
+                new BusinessScope(TenantId.of("1"), DataDomainId.of("other"), OWNER, "Caller-B"),
+                ConversationDataScope.Mode.DOMAIN);
+
+        assertEquals(List.of(601L), dao.findOwnedByConversationId(
+                areaOne, "11").stream().map(ChatMessageEntity::getId).toList());
+        assertEquals(List.of(), dao.findOwnedByConversationId(areaZero, "11"));
+        assertEquals(List.of(), dao.findOwnedByConversationId(otherDomain, "11"));
+        assertEquals(List.of(), dao.findOwnedByConversationId(areaOne, "12"));
+        assertEquals(List.of(), dao.findOwnedByConversationId(areaOne, "13"));
+        assertEquals(List.of(), dao.findOwnedByConversationId(areaOne, "14"));
+    }
+
+    @Test
+    void maintenanceQueriesRejectMixedConversationsAndExcludeOtherDomains() {
+        insertMaintenance(701, "20", OWNER, "0", "cyf", CLIENT, "PENDING", 100);
+        insertMaintenance(702, "21", "Legacy-Null", "0", null, CLIENT, "PENDING", 110);
+        insertMaintenance(703, "22", "Legacy-Empty", "0", "", CLIENT, "PENDING", 120);
+        insertMaintenance(704, "23", "Other-Domain", "0", "other", CLIENT, "PENDING", 130);
+        insertMaintenance(705, "24", "Tenant-One", "1", "cyf", CLIENT, "PENDING", 140);
+        insertMaintenance(706, "25", "Mixed", "0", "cyf", CLIENT, "PENDING", 150);
+        insertMaintenance(707, "25", "Mixed", "0", "other", CLIENT, "PENDING", 160);
+
+        assertEquals(List.of(701L), dao.findByConversationIdForMaintenance("20")
+                .stream().map(ChatMessageEntity::getId).toList());
+        assertEquals(List.of(702L), dao.findByConversationIdForMaintenance("21")
+                .stream().map(ChatMessageEntity::getId).toList());
+        assertEquals(List.of(703L), dao.findByConversationIdForMaintenance("22")
+                .stream().map(ChatMessageEntity::getId).toList());
+        assertThrows(IllegalStateException.class,
+                () -> dao.findByConversationIdForMaintenance("23"));
+        assertThrows(IllegalStateException.class,
+                () -> dao.findByConversationIdForMaintenance("24"));
+        assertThrows(IllegalStateException.class,
+                () -> dao.findByConversationIdForMaintenance("25"));
+
+        assertEquals(List.of("20", "21", "22"),
+                dao.findPendingConversationIds("PENDING", 20));
+        assertEquals(Set.of(OWNER, "Legacy-Null", "Legacy-Empty", "Mixed"),
+                Set.copyOf(dao.findActiveJiacns(50)));
+    }
+
+    @Test
+    void pendingQueryExclusionsAdvancePastPreviouslyFailedConversations() {
+        insertMaintenance(751, "40", OWNER, "0", "cyf", CLIENT, "PENDING", 100);
+        insertMaintenance(752, "41", OWNER, "0", null, CLIENT, "PENDING", 110);
+        insertMaintenance(753, "42", OWNER, "0", "", CLIENT, "PENDING", 120);
+
+        assertEquals(List.of("40", "41"),
+                dao.findPendingConversationIds("PENDING", List.of(), 2));
+        assertEquals(List.of("42"),
+                dao.findPendingConversationIds("PENDING", List.of("40", "41"), 2));
+    }
+
+    @Test
+    void pendingSnapshotCasOnlyUpdatesExactPendingAreaZeroIdentityAndIds() {
+        insertMaintenance(901, "40", OWNER, "0", "cyf", CLIENT, "PENDING", 100);
+        insertMaintenance(902, "40", OWNER, "0", null, CLIENT, "PENDING", 110);
+        insertMaintenance(903, "40", OWNER, "0", "", CLIENT, "PENDING", 120);
+        insertMaintenance(904, "40", OWNER, "0", "cyf", CLIENT, "PENDING", 130);
+        insertMaintenance(905, "40", OWNER, "0", "other", CLIENT, "PENDING", 140);
+        insertMaintenance(906, "40", OWNER, "1", "cyf", CLIENT, "PENDING", 150);
+        insertMaintenance(907, "40", OWNER, "0", "cyf", CLIENT, "SYNCED", 160);
+        insertMaintenance(908, "40", "Owner-B", "0", "cyf", CLIENT, "PENDING", 170);
+        insertMaintenance(909, "40", OWNER, "0", "cyf", "Client-B", "PENDING", 180);
+        insertMaintenance(910, "41", OWNER, "0", "cyf", CLIENT, "PENDING", 190);
+
+        ConversationDataScope scope = new ConversationDataScope(
+                new BusinessScope(TenantId.of("0"), DataDomainId.of("cyf"), OWNER, CLIENT),
+                ConversationDataScope.Mode.LEGACY_CLIENT);
+        int updated = dao.markPendingMessagesSynced(scope, "40", List.of(
+                901L, 902L, 903L, 905L, 906L, 907L, 908L, 909L, 910L));
+
+        assertEquals(3, updated);
+        assertEquals("SYNCED", messageStatus(901));
+        assertEquals("SYNCED", messageStatus(902));
+        assertEquals("SYNCED", messageStatus(903));
+        assertEquals("PENDING", messageStatus(904));
+        assertEquals("PENDING", messageStatus(905));
+        assertEquals("PENDING", messageStatus(906));
+        assertEquals("SYNCED", messageStatus(907));
+        assertEquals("PENDING", messageStatus(908));
+        assertEquals("PENDING", messageStatus(909));
+        assertEquals("PENDING", messageStatus(910));
+    }
+
+    @Test
+    void maintenanceCleanupRechecksAreaScopeDuringDelete() {
+        insertMaintenance(801, "30", OWNER, "0", "cyf", CLIENT, "SYNCED", 10);
+        insertMaintenance(802, "31", OWNER, "0", null, CLIENT, "SYNCED", 20);
+        insertMaintenance(803, "32", OWNER, "0", "other", CLIENT, "SYNCED", 30);
+        insertMaintenance(804, "33", OWNER, "1", "cyf", CLIENT, "SYNCED", 40);
+        insertMaintenance(805, "34", OWNER, "0", "cyf", CLIENT, "PENDING", 200);
+        insertMaintenance(806, "34", OWNER, "0", "other", CLIENT, "PENDING", 210);
+
+        assertEquals(1, dao.updateSyncStatusByConversationId("34", "EXCLUDED"));
+        assertEquals("EXCLUDED", messageStatus(805));
+        assertEquals("PENDING", messageStatus(806));
+        assertEquals(List.of(801L, 802L), dao.findExpiredMessageIds(100, 20));
+        assertEquals(2, dao.deleteMaintenanceMessageIds(List.of(801L, 802L, 803L, 804L)));
+        assertEquals(0, countMessage(801));
+        assertEquals(0, countMessage(802));
+        assertEquals(1, countMessage(803));
+        assertEquals(1, countMessage(804));
+    }
+
+    private String messageStatus(long id) {
+        return jdbc.queryForObject(
+                "SELECT sync_status FROM chat_message WHERE id = ?", String.class, id);
+    }
+
+    private int countMessage(long id) {
+        Integer count = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM chat_message WHERE id = ?", Integer.class, id);
+        return count == null ? 0 : count;
+    }
+
+    private void insertMaintenance(
+            long id, String conversationId, String jiacn, String tenantId,
+            String dataDomainId, String clientId, String syncStatus, long createTime) {
+        jdbc.update("""
+                INSERT INTO chat_message
+                (id, conversation_id, message_type, content, create_time, update_time,
+                 jiacn, data_domain_id, sync_status, tenant_id, client_id)
+                VALUES (?, ?, 'USER', 'content', ?, ?, ?, ?, ?, ?, ?)
+                """, id, conversationId, createTime, createTime, jiacn, dataDomainId,
+                syncStatus, tenantId, clientId);
+    }
+
+    private void insertDomainOwned(
+            long id, String conversationId, String jiacn, String tenantId,
+            String dataDomainId, String clientId, long createTime, String content) {
+        jdbc.update("""
+                INSERT INTO chat_message
+                (id, conversation_id, message_type, content, create_time, update_time,
+                 jiacn, data_domain_id, tenant_id, client_id)
+                VALUES (?, ?, 'USER', ?, ?, ?, ?, ?, ?, ?)
+                """, id, conversationId, content, createTime, createTime,
+                jiacn, dataDomainId, tenantId, clientId);
     }
 
     private void insert(

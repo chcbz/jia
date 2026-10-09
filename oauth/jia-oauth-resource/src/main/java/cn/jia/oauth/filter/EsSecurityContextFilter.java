@@ -30,6 +30,8 @@ public class EsSecurityContextFilter implements Filter {
         context.setAppcn(stringClaim(jwt, "appcn"));
         context.setClientId(stringClaim(jwt, "client_id"));
         context.setUsername(stringClaim(jwt, "username"));
+        context.setTenantId(stringClaim(jwt, "tenant_id"));
+        context.setDataDomainId(stringClaim(jwt, "data_domain_id"));
     }
 
     private static String stringClaim(Jwt jwt, String name) {

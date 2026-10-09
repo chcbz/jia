@@ -68,6 +68,7 @@ dependencies {
     implementation(libs.camunda)
     implementation(libs.jodd)
 
+    testImplementation project(':oauth:jia-oauth-service')
     testImplementation project(':common:jia-common-test')
     testImplementation(libs.spring.boot.starter.test)
     testImplementation(libs.junit.jupiter)

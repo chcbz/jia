@@ -17,7 +17,6 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
@@ -25,6 +24,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -79,7 +79,7 @@ class AgentTaskFormalDeliveryControllerTest {
         ArgumentCaptor<cn.jia.agent.entity.AgentTaskFormalDeliverySubmitDTO> command =
                 ArgumentCaptor.forClass(cn.jia.agent.entity.AgentTaskFormalDeliverySubmitDTO.class);
         verify(submission).submit(eq("0"), eq(CLIENT), eq(TENANT), eq(TASK), eq(ACTOR), command.capture());
-        assertEquals("fd_de3a458cf563ceb3f0d65b59b4fdad01913a98b3efc690265730518a31209a3c",
+        assertEquals("fd_6a534706edae6d0eabd9c29b3a3d212f6f74073296d8abf27ac31d40b95c31f0",
                 command.getValue().getDeliveryId());
         assertEquals("lease-secret-a", command.getValue().getLeaseToken());
     }
@@ -168,6 +168,26 @@ class AgentTaskFormalDeliveryControllerTest {
         verify(read, never()).listForTaskOwner(any(), any(), any(), any());
     }
 
+    @Test
+    void otherAreaOrDomainCannotReadDeliveriesOrStartLegacyRework() throws Exception {
+        for (JwtAuthenticationToken principal : List.of(
+                jwtClaims(TENANT, CLIENT, ACTOR, "1", "cyf"),
+                jwtClaims(TENANT, CLIENT, ACTOR, "00", "cyf"),
+                jwtClaims(TENANT, CLIENT, ACTOR, "0", "other"),
+                jwtClaims(TENANT, CLIENT, ACTOR, null, "cyf"),
+                jwtClaims(TENANT, CLIENT, ACTOR, "0", null))) {
+            mvc.perform(get("/agent/tasks/" + TASK + "/formal-deliveries")
+                            .principal(principal))
+                    .andExpect(status().isForbidden())
+                    .andExpect(header().string("Cache-Control", "private, no-store"));
+            mvc.perform(post("/agent/tasks/" + TASK
+                            + "/formal-deliveries/delivery-a/rework-executions")
+                            .principal(principal).contentType("application/json").content("{}"))
+                    .andExpect(status().isForbidden());
+        }
+        verifyNoInteractions(submission, decision, read, rework);
+    }
+
     private static AgentTaskFormalDeliveryViewDTO view(
             String state, Long reviewedAt, String reviewReason) {
         AgentTaskFormalDeliveryItemDTO item = new AgentTaskFormalDeliveryItemDTO();
@@ -190,9 +210,18 @@ class AgentTaskFormalDeliveryControllerTest {
         return jwtClaims(TENANT, CLIENT, ACTOR);
     }
 
-    private static JwtAuthenticationToken jwtClaims(String tenant, String client, String subject) {
-        Jwt token = new Jwt("token", Instant.ofEpochSecond(1), Instant.ofEpochSecond(9_999_999_999L),
-                Map.of("alg", "none"), Map.of("jiacn", tenant, "client_id", client, "sub", subject));
+    private static JwtAuthenticationToken jwtClaims(String owner, String client, String subject) {
+        return jwtClaims(owner, client, subject, "0", "cyf");
+    }
+
+    private static JwtAuthenticationToken jwtClaims(String owner, String client, String subject,
+            String area, String domain) {
+        Jwt.Builder builder = Jwt.withTokenValue("token").header("alg", "none")
+                .issuedAt(Instant.ofEpochSecond(1)).expiresAt(Instant.ofEpochSecond(9_999_999_999L))
+                .claim("jiacn", owner).claim("client_id", client).claim("sub", subject);
+        if (area != null) builder.claim("tenant_id", area);
+        if (domain != null) builder.claim("data_domain_id", domain);
+        Jwt token = builder.build();
         return new JwtAuthenticationToken(token, List.of()) {
             @Override public String getName() { return ACTOR; }
         };

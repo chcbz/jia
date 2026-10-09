@@ -253,6 +253,10 @@ public class AgentController {
                     "Authenticated JWT scope is required");
         }
         Map<String, Object> claims = jwt.getToken().getClaims();
+        if (!"0".equals(claims.get("tenant_id")) || !"cyf".equals(claims.get("data_domain_id"))) {
+            throw new AgentBizException(AgentErrorConstants.AGENT_FORBIDDEN,
+                    "Authenticated JWT scope is invalid");
+        }
         Object rawJiacn = claims.get("jiacn");
         Object rawClientId = claims.get("client_id");
         if (!(rawJiacn instanceof String jiacn) || !(rawClientId instanceof String clientId)
@@ -337,6 +341,7 @@ public class AgentController {
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             Authentication authentication) {
         if (!hasFundingFields(request)) {
+            requireJwtScope(authentication);
             return JsonResult.success(agentService.createTask(request));
         }
         FundedBountyActor actor = requireMoneyActor(authentication);
@@ -543,6 +548,10 @@ public class AgentController {
                     "ECONOMY_UNAUTHENTICATED", "Authentication is required");
         }
         Map<String, Object> claims = jwt.getToken().getClaims();
+        if (!"0".equals(claims.get("tenant_id")) || !"cyf".equals(claims.get("data_domain_id"))) {
+            throw new FundedBountyException(HttpStatus.FORBIDDEN,
+                    "ECONOMY_FORBIDDEN", "Authenticated money scope is incomplete");
+        }
         String subject = requiredMoneyClaim(claims, "sub", 100);
         if (!exact(authentication.getName(), subject)) {
             throw new FundedBountyException(HttpStatus.FORBIDDEN,

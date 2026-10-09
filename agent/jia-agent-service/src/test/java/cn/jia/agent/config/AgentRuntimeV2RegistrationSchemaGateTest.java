@@ -23,6 +23,95 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class AgentRuntimeV2RegistrationSchemaGateTest {
+    @Test void generatedMetadataExpectedRetainedAndSyntheticPlainFormatsReachTheActualGate() throws Exception {
+        Map<String,String> retained = retainedGeneratedFields();
+        for (String shape : List.of("expected", "retained", "plain")) {
+            Fake catalog = canonical();
+            if (!shape.equals("expected")) catalog.columns.forEach((table, columns) -> columns.replaceAll(c -> {
+                if (c.generationExpression().isEmpty()) return c;
+                String plain = "(" + c.generationExpression().replace("octet_length(", "length(") + ")";
+                return generated(c, shape.equals("retained") && table.equals("agent_runtime_v2_binding")
+                        ? retained.getOrDefault(c.name(), plain) : plain);
+            }));
+            catalog.columns.get("agent_runtime_v2_binding").add(0, new AgentRuntimeV2RegistrationSchemaGate.ColumnDefinition(
+                    "legal_baseline_column", "bigint", "bigint", false, null, null, "", ""));
+            Map<String,List<AgentRuntimeV2RegistrationSchemaGate.ColumnDefinition>> before = new HashMap<>();
+            catalog.columns.forEach((table, columns) -> before.put(table, List.copyOf(columns)));
+            assertDoesNotThrow(() -> new AgentRuntimeV2RegistrationSchemaGate(catalog).afterPropertiesSet(), shape);
+            assertEquals(before, catalog.columns, "raw records and legal additive baseline extras remain untouched");
+            assertTrue(catalog.columns.values().stream().flatMap(List::stream)
+                    .noneMatch(c -> c.generationExpression().startsWith("generated:")));
+        }
+    }
+
+    @Test void generatedDriftFailsForBothAdditiveAndExactTablesAndEveryOtherAttributeRemainsExact() {
+        for (String table : List.of("agent_runtime_v2_binding", AgentRuntimeV2RegistrationSchemaGate.AUTHORITY)) {
+            String name = table.equals("agent_runtime_v2_binding") ? "live_business_subject" : "active_business_subject";
+            var original = AgentRuntimeV2RegistrationSchemaGate.expectedColumns().get(table).stream()
+                    .filter(c -> c.name().equals(name)).findFirst().orElseThrow();
+            String raw = original.generationExpression();
+            String literal = table.equals("agent_runtime_v2_binding") ? "REVOKED" : "ACTIVE";
+            for (String expression : List.of(raw.replace("'" + literal + "'", "'" + literal.toLowerCase(Locale.ROOT) + "'"),
+                    raw.replace("`status`", "`STATUS`"), raw.replace("octet_length", "char_length"),
+                    raw.replace("sha2", "hex"), raw.replace(",256)", ",224)"), raw.replace(",3,", ",4,"),
+                    raw.replace("`tenant_id`", "`client_id`"), raw.replace("then sha2", "then lower"),
+                    raw.replace("else NULL", "else 'ACTIVE'"), raw + ";", "generated:" + raw,
+                    "case when x=1 then x end", "if(x=1,1,null)", "")) {
+                assertNotEquals(raw, expression);
+                Fake changed = canonical(); replaceColumn(changed, table, name, c -> generated(c, expression)); assertDenied(changed);
+            }
+            for (String field : List.of("name", "dataType", "columnType", "nullable", "default", "collation", "extra")) {
+                Fake changed = canonical(); replaceColumn(changed, table, name,
+                        c -> new AgentRuntimeV2RegistrationSchemaGate.ColumnDefinition(
+                                field.equals("name") ? "forged" : c.name(), field.equals("dataType") ? "varchar" : c.dataType(),
+                                field.equals("columnType") ? "char(63)" : c.columnType(), field.equals("nullable") ? !c.nullable() : c.nullable(),
+                                field.equals("default") ? "forged" : c.defaultValue(), field.equals("collation") ? "utf8mb4_0900_ai_ci" : c.collation(),
+                                field.equals("extra") ? "VIRTUAL GENERATED" : c.extra(), c.generationExpression()));
+                assertDenied(changed);
+            }
+        }
+        Fake guard = canonical(); replaceColumn(guard, "agent_runtime_v2_binding", "live_business_subject",
+                c -> generated(c, c.generationExpression().replace(" and (`registration_subject_sha256` is not null)", "")));
+        assertDenied(guard);
+    }
+
+    @Test void generatedComparisonPreservesExactAndAdditiveMembershipOrderAndDuplicateRejection() {
+        for (String table : List.of("agent_runtime_v2_binding", AgentRuntimeV2RegistrationSchemaGate.AUTHORITY)) {
+            for (String mutation : List.of("missing", "extra", "reordered", "duplicate")) {
+                Fake changed = canonical(); var columns = changed.columns.get(table);
+                switch (mutation) {
+                    case "missing" -> columns.removeLast();
+                    case "extra" -> columns.add(new AgentRuntimeV2RegistrationSchemaGate.ColumnDefinition(
+                            "legal_baseline_column", "bigint", "bigint", false, null, null, "", ""));
+                    case "reordered" -> java.util.Collections.swap(columns, 0, 1);
+                    default -> columns.set(1, columns.getFirst());
+                }
+                if (table.equals("agent_runtime_v2_binding") && mutation.equals("extra"))
+                    assertDoesNotThrow(() -> new AgentRuntimeV2RegistrationSchemaGate(changed).afterPropertiesSet());
+                else assertDenied(changed);
+            }
+        }
+    }
+
+    private static AgentRuntimeV2RegistrationSchemaGate.ColumnDefinition generated(
+            AgentRuntimeV2RegistrationSchemaGate.ColumnDefinition c, String expression) {
+        return new AgentRuntimeV2RegistrationSchemaGate.ColumnDefinition(c.name(), c.dataType(), c.columnType(),
+                c.nullable(), c.defaultValue(), c.collation(), c.extra(), expression);
+    }
+    private static Map<String,String> retainedGeneratedFields() throws Exception {
+        try (var stream = AgentRuntimeV2RegistrationSchemaGateTest.class.getResourceAsStream("runtime-v2-generated-columns-native-20261008.tsv")) {
+            assertNotNull(stream); Map<String,String> result = new LinkedHashMap<>();
+            for (String line : new String(stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8).lines()
+                    .filter(s -> !s.startsWith("#") && !s.isBlank()).toList()) {
+                String[] fields = line.split("\t", -1); assertEquals(3, fields.length);
+                assertEquals(fields[1], java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                        .digest(fields[2].getBytes(java.nio.charset.StandardCharsets.UTF_8))));
+                assertNull(result.put(fields[0], fields[2]));
+            }
+            assertEquals(2, result.size()); return result;
+        }
+    }
+
     @Test void exactCatalogAcceptedAndExistingBaselineMetadataMayCoexist() {
         Fake catalog = canonical();
         String existing = "agent_runtime_v2_binding";

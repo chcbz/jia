@@ -127,6 +127,8 @@ public class PersonalWorkspaceTaskFileLinkController {
         Map<String, Object> claims = jwt.getToken().getClaims();
         Object owner = claims.get("jiacn");
         Object client = claims.get("client_id");
+        if (!"0".equals(claims.get("tenant_id")) || !"cyf".equals(claims.get("data_domain_id")))
+            throw new AuthenticationFailure(true);
         if (!(owner instanceof String ownerJiacn) || !(client instanceof String clientId)
                 || !valid(ownerJiacn, 50) || !valid(clientId, 50) || "0".equals(ownerJiacn)) {
             throw new AuthenticationFailure(true);

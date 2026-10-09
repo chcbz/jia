@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowCallbackHandler;
+import org.springframework.context.annotation.Profile;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Component;
 
@@ -16,6 +17,7 @@ import java.util.Locale;
 
 @Slf4j
 @Component
+@Profile("!local-test-area")
 @RequiredArgsConstructor
 public class AgentSchemaInitializer implements InitializingBean {
     private final JdbcTemplate jdbcTemplate;

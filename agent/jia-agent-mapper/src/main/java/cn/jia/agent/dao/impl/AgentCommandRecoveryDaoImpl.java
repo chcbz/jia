@@ -6,6 +6,7 @@ import cn.jia.agent.entity.AgentConsumerInboxEntity;
 import cn.jia.agent.entity.AgentOutboxEventEntity;
 import cn.jia.agent.entity.AgentWaitingCommandCandidate;
 import cn.jia.agent.mapper.AgentCommandRecoveryMapper;
+import cn.jia.core.tenant.WorkerScope;
 import jakarta.inject.Named;
 import lombok.RequiredArgsConstructor;
 
@@ -17,17 +18,43 @@ public class AgentCommandRecoveryDaoImpl implements AgentCommandRecoveryDao {
     private final AgentCommandRecoveryMapper mapper;
 
     @Override
-    public List<AgentWaitingCommandCandidate> findReconnectCandidates(
-            String tenantId, String clientId, String targetAgentId,
+    public List<AgentWaitingCommandCandidate> findV2ReconnectCandidates(
+            WorkerScope scope, String clientId, String targetAgentId,
             long now, long afterDeliveryId, int limit) {
-        return mapper.selectReconnectCandidates(
-                tenantId, clientId, targetAgentId, now, afterDeliveryId, limit);
+        return mapper.selectV2ReconnectCandidates(
+                scope.tenantId().value(), scope.dataDomainId().value(), scope.executionPoolId(),
+                scope.admissionEpoch(), scope.deploymentId(), scope.moduleId(),
+                scope.migrationEpoch(), clientId, targetAgentId, now, afterDeliveryId, limit);
     }
 
     @Override
-    public List<AgentWaitingCommandCandidate> findDueCandidates(
+    public List<AgentWaitingCommandCandidate> findV2DueCandidates(
+            WorkerScope scope, long now, long sentBefore, long afterDeliveryId, int limit) {
+        return mapper.selectV2DueCandidates(
+                scope.tenantId().value(), scope.dataDomainId().value(), scope.executionPoolId(),
+                scope.admissionEpoch(), scope.deploymentId(), scope.moduleId(),
+                scope.migrationEpoch(), now, sentBefore, afterDeliveryId, limit);
+    }
+
+    @Override
+    public List<AgentWaitingCommandCandidate> findLegacyReconnectCandidates(
+            String tenantId, String clientId, String targetAgentId,
+            long now, long afterDeliveryId, int limit) {
+        if (!"0".equals(tenantId)) return List.of();
+        return mapper.selectLegacyReconnectCandidates(
+                clientId, targetAgentId, now, afterDeliveryId, limit);
+    }
+
+    @Override
+    public List<AgentWaitingCommandCandidate> findLegacyDueCandidates(
             long now, long sentBefore, long afterDeliveryId, int limit) {
-        return mapper.selectDueCandidates(now, sentBefore, afterDeliveryId, limit);
+        return mapper.selectLegacyDueCandidates(now, sentBefore, afterDeliveryId, limit);
+    }
+
+    @Override
+    public AgentCommandDeliveryEntity findDeliveryProtocolHint(
+            String tenantId, String clientId, long deliveryId) {
+        return mapper.selectDeliveryProtocolHint(tenantId, clientId, deliveryId);
     }
 
     @Override
@@ -85,6 +112,12 @@ public class AgentCommandRecoveryDaoImpl implements AgentCommandRecoveryDao {
     public int expireWaitingInbox(
             AgentConsumerInboxEntity inbox, String lastError, long now) {
         return mapper.expireWaitingInbox(inbox, lastError, now);
+    }
+
+    @Override
+    public int expireRetryInbox(
+            AgentConsumerInboxEntity inbox, String lastError, long now) {
+        return mapper.expireRetryInbox(inbox, lastError, now);
     }
 
     @Override

@@ -1,13 +1,19 @@
 package cn.jia.oauth.security;
 
+import cn.jia.core.tenant.DataDomainId;
+import cn.jia.core.tenant.TenantId;
 import org.springframework.security.oauth2.jwt.Jwt;
 
 import java.math.BigInteger;
 import java.util.Map;
+import java.util.Optional;
 import java.util.regex.Pattern;
 
 public record AccountSecurityJwtClaims(TokenClass tokenClass, long userId, String jiacn, long authEpoch) {
     private static final Pattern CANONICAL_UID = Pattern.compile("[1-9][0-9]*");
+    private static final Pattern CANONICAL_TENANT = Pattern.compile("0|[1-9][0-9]{0,49}");
+    private static final Pattern CANONICAL_DOMAIN = Pattern.compile("[a-z][a-z0-9-]{0,63}");
+    private static final Pattern CANONICAL_REVISION = Pattern.compile("0|[1-9][0-9]{0,18}");
 
     public enum TokenClass {
         USER,
@@ -16,11 +22,35 @@ public record AccountSecurityJwtClaims(TokenClass tokenClass, long userId, Strin
         LEGACY_MACHINE
     }
 
+
+    /** Parse an all-or-nothing, canonical single-area token binding. */
+    public static Optional<TenantAuthorizationAttributes> tenantBinding(Jwt jwt) {
+        Map<String, Object> claims = jwt.getClaims();
+        validateTenantBundle(claims);
+        if (!hasTenantBundle(claims)) return Optional.empty();
+        try {
+            return Optional.of(new TenantAuthorizationAttributes(
+                    TenantId.of(requireString(claims, "tenant_id")),
+                    DataDomainId.of(requireString(claims, "data_domain_id")),
+                    requireString(claims, "tenant_name"),
+                    TenantAuthorizationAttributes.TenantKind.valueOf(requireString(claims, "tenant_kind")),
+                    requireString(claims, "tenant_session_epoch"),
+                    requireString(claims, "membership_revision"),
+                    requireString(claims, "client_tenant_grant_revision")));
+        } catch (RuntimeException exception) {
+            throw invalid();
+        }
+    }
+
     public static AccountSecurityJwtClaims parse(Jwt jwt) {
         Map<String, Object> claims = jwt.getClaims();
+        validateTenantBundle(claims);
         if (claims.containsKey("token_kind")) {
             Object kind = claims.get("token_kind");
             if (!(kind instanceof String value)) {
+                throw invalid();
+            }
+            if (hasTenantBundle(claims) && !"user".equals(value)) {
                 throw invalid();
             }
             if ("user".equals(value)) {
@@ -46,6 +76,9 @@ public record AccountSecurityJwtClaims(TokenClass tokenClass, long userId, Strin
         }
 
         if (claims.containsKey("jiacn")) {
+            if (hasTenantBundle(claims)) {
+                throw invalid();
+            }
             rejectPresent(claims, "uid", "auth_epoch");
             requireString(claims, "sub");
             requireString(claims, "client_id");
@@ -55,12 +88,45 @@ public record AccountSecurityJwtClaims(TokenClass tokenClass, long userId, Strin
         }
 
         rejectPresent(claims, "uid", "username", "auth_epoch");
+        if (hasTenantBundle(claims)) {
+            throw invalid();
+        }
         String subject = requireString(claims, "sub");
         String clientId = requireString(claims, "client_id");
         if (!subject.equals(clientId)) {
             throw invalid();
         }
         return new AccountSecurityJwtClaims(TokenClass.LEGACY_MACHINE, 0, null, 0);
+    }
+
+    private static boolean hasTenantBundle(Map<String, Object> claims) {
+        return claims.containsKey("tenant_id") || claims.containsKey("data_domain_id") || claims.containsKey("tenant_name")
+                || claims.containsKey("tenant_kind") || claims.containsKey("tenant_session_epoch")
+                || claims.containsKey("membership_revision") || claims.containsKey("client_tenant_grant_revision");
+    }
+
+    private static void validateTenantBundle(Map<String, Object> claims) {
+        if (!hasTenantBundle(claims)) return;
+        if (!CANONICAL_TENANT.matcher(requireString(claims, "tenant_id")).matches()
+                || !CANONICAL_DOMAIN.matcher(requireString(claims, "data_domain_id")).matches()
+                || !("NORMAL".equals(requireString(claims, "tenant_kind"))
+                || "TEST".equals(requireString(claims, "tenant_kind")))
+                || !validRevision(requireString(claims, "tenant_session_epoch"))
+                || !validRevision(requireString(claims, "membership_revision"))
+                || !validRevision(requireString(claims, "client_tenant_grant_revision"))) {
+            throw invalid();
+        }
+        requireString(claims, "tenant_name");
+    }
+
+    private static boolean validRevision(String value) {
+        if (!CANONICAL_REVISION.matcher(value).matches()) return false;
+        try {
+            Long.parseLong(value);
+            return true;
+        } catch (NumberFormatException exception) {
+            return false;
+        }
     }
 
     private static long parseUid(String uid) {

@@ -8,9 +8,12 @@ import cn.jia.core.util.DateUtil;
 import cn.jia.core.util.StringUtil;
 import cn.jia.oauth.entity.OauthApiKeyEntity;
 import cn.jia.oauth.service.ApiKeyService;
+import cn.jia.core.tenant.WorkerScope;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.server.ServerHttpRequest;
 import org.springframework.http.server.ServerHttpResponse;
@@ -36,6 +39,16 @@ public class ApiKeyHandshakeInterceptor implements HandshakeInterceptor {
 
     private final ObjectProvider<ApiKeyService> apiKeyServiceProvider;
     private final ObjectProvider<AgentService> agentServiceProvider;
+    private WorkerScope workerScope;
+    private cn.jia.agent.security.AgentRuntimeV2RegistrationAuthorityResolver registrationProofs;
+    @Autowired(required=false)
+    public void setRegistrationProofs(cn.jia.agent.security.AgentRuntimeV2RegistrationAuthorityResolver proofs){this.registrationProofs=proofs;}
+
+    @Autowired(required = false)
+    public void setAgentCommandWorkerScope(
+            @Qualifier("agentOutboxWorkerScope") WorkerScope workerScope) {
+        this.workerScope = workerScope;
+    }
 
     @Override
     public boolean beforeHandshake(ServerHttpRequest request, ServerHttpResponse response,
@@ -58,6 +71,17 @@ public class ApiKeyHandshakeInterceptor implements HandshakeInterceptor {
             response.setStatusCode(HttpStatus.UNAUTHORIZED);
             return false;
         }
+        if (!exact(apiKeyEntity.getTenantId(), 50)
+                || !exact(apiKeyEntity.getClientId(), 50)
+                || !exact(apiKeyEntity.getJiacn(), 50)) {
+            response.setStatusCode(HttpStatus.UNAUTHORIZED);
+            return false;
+        }
+        if (workerScope != null
+                && !apiKeyEntity.getTenantId().equals(workerScope.tenantId().value())) {
+            response.setStatusCode(HttpStatus.FORBIDDEN);
+            return false;
+        }
 
         String agentId = getAgentId(request);
         if (StringUtil.isEmpty(agentId)) {
@@ -74,6 +98,12 @@ public class ApiKeyHandshakeInterceptor implements HandshakeInterceptor {
 
         attributes.put("clientId", apiKeyEntity.getClientId());
         attributes.put("jiacn", apiKeyEntity.getJiacn());
+        attributes.put("ownerJiacn", apiKeyEntity.getJiacn());
+        attributes.put("tenantId", apiKeyEntity.getTenantId());
+        if (workerScope != null) {
+            attributes.put("dataDomainId", workerScope.dataDomainId().value());
+            attributes.put("executionPoolId", workerScope.executionPoolId());
+        }
         attributes.put("apiKeyName", apiKeyEntity.getKeyName());
         attributes.put("managedApiKeyId", apiKeyEntity.getId()); // private authenticated ID, never a key secret
         attributes.put("agentId", agentId);
@@ -88,6 +118,8 @@ public class ApiKeyHandshakeInterceptor implements HandshakeInterceptor {
             response.setStatusCode(HttpStatus.FORBIDDEN);
             return false;
         }
+        if(registrationProofs!=null)attributes.put(cn.jia.chat.handler.AgentRuntimeV2WebSocketAdapter.IDENTITY_ATTRIBUTE,
+                registrationProofs.proof(apiKeyEntity.getId(),agentId,apiKey));
         return true;
     }
 
@@ -139,5 +171,11 @@ public class ApiKeyHandshakeInterceptor implements HandshakeInterceptor {
         }
         return apiKeyEntity.getExpireTime() == null
                 || !DateUtil.genDate(apiKeyEntity.getExpireTime()).before(new Date());
+    }
+
+    private boolean exact(String value, int maximum) {
+        return value != null && !value.isBlank() && value.length() <= maximum
+                && value.equals(value.strip())
+                && value.codePoints().noneMatch(Character::isISOControl);
     }
 }

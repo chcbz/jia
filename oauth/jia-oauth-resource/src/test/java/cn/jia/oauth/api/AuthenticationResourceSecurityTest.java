@@ -3,6 +3,8 @@ package cn.jia.oauth.api;
 import cn.jia.core.config.ExceptionHandlerAdvice;
 import cn.jia.oauth.config.ResourceServerConfig;
 import cn.jia.oauth.security.AccountSecurityJwtValidator;
+import cn.jia.oauth.security.TenantAuthorizationAttributes;
+import cn.jia.oauth.security.TenantAuthorizationVerifier;
 import cn.jia.user.security.AccountSecurityService;
 import cn.jia.user.security.AccountSecuritySnapshot;
 import cn.jia.user.security.AccountState;
@@ -31,6 +33,7 @@ import org.springframework.test.context.support.TestPropertySourceUtils;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.context.support.AnnotationConfigWebApplicationContext;
 import org.springframework.web.servlet.config.annotation.EnableWebMvc;
@@ -47,6 +50,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -104,11 +108,20 @@ class AuthenticationResourceSecurityTest {
                 .andExpect(jsonPath("$.username").value("alice"))
                 .andExpect(jsonPath("$.jiacn").value("jia-17"))
                 .andExpect(jsonPath("$.scopes", contains("openid", "profile", "write")))
-                .andExpect(jsonPath("$.*", hasSize(5)))
+                .andExpect(jsonPath("$.tenantId").value("1"))
+                .andExpect(jsonPath("$.*", hasSize(13)))
                 .andExpect(jsonPath("$.access_token").doesNotExist())
                 .andExpect(jsonPath("$.arbitrary_claim").doesNotExist())
                 .andExpect(content().string(org.hamcrest.Matchers.not(
                         org.hamcrest.Matchers.containsString("must-not-leak"))));
+    }
+
+    @Test
+    void previouslyIssuedUnboundUserTokenCannotAccessIdentityOrBusinessRoutes() throws Exception {
+        mockMvc.perform(get("/resource").header("Authorization", "Bearer unbound-user-token"))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/agent/probe").header("Authorization", "Bearer unbound-user-token"))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
@@ -153,6 +166,75 @@ class AuthenticationResourceSecurityTest {
         mockMvc.perform(get("/agent/probe").session(session))
                 .andExpect(status().isUnauthorized());
         assertNull(session.getAttribute("SPRING_SECURITY_SAVED_REQUEST"));
+    }
+
+    @Test
+    void strictDeploymentBlocksLegacyAgentRouteAfterBearerButKeepsIdentityAvailable()
+            throws Exception {
+        try (AnnotationConfigWebApplicationContext strict = new AnnotationConfigWebApplicationContext()) {
+            strict.setServletContext(new MockServletContext());
+            TestPropertySourceUtils.addInlinedPropertiesToEnvironment(strict,
+                    "cyf.tenant.require-bound-identity=true",
+                    "cyf.tenant.allowed-tenants[0]=0",
+                    "cyf.tenant.allowed-tenants[1]=1",
+                    "oauth.resource.uris[0]=/agent/**",
+                    "oauth.resource.uris[1]=/phrase/**",
+                    "oauth.resource.uris[2]=/media/**",
+                    "oauth.resource.uris[3]=/dwz/**",
+                    "spring.security.oauth2.resourceserver.jwt.issuer-uri=https://issuer.example.test",
+                    "spring.security.oauth2.resourceserver.jwt.jwk-set-uri=https://issuer.example.test/jwks");
+            strict.register(TestApplication.class);
+            strict.refresh();
+            // Both migrated-unknown and legacy URIs use this same bearer chain.
+            for (String path : List.of("/agent/probe", "/chat/probe", "/archive/probe",
+                    "/juyiting/probe", "/task/probe", "/job/probe", "/economy/probe",
+                    "/point/probe", "/workflow/probe", "/tip/probe", "/user/point/change",
+                    "/ws/chat", "/phrase/probe", "/media/probe")) {
+                MockHttpServletRequest request = new MockHttpServletRequest("GET", path);
+                assertEquals(1L, strict.getBean(FilterChainProxy.class).getFilterChains().stream()
+                        .filter(chain -> chain.matches(request)).count(), path);
+            }
+            for (MockHttpServletRequest request : List.of(
+                    new MockHttpServletRequest("GET", "/user/my"),
+                    new MockHttpServletRequest("POST", "/user/me/sessions/revoke-all"))) {
+                assertEquals(1L, strict.getBean(FilterChainProxy.class).getFilterChains().stream()
+                        .filter(chain -> chain.matches(request)).count(), request.getRequestURI());
+            }
+            // /user is also the legacy OAuth Principal endpoint; it must not
+            // accidentally enter the tenant-zero /user/** business gate.
+            assertEquals(0L, strict.getBean(FilterChainProxy.class).getFilterChains().stream()
+                    .filter(chain -> chain.matches(new MockHttpServletRequest("GET", "/user"))).count());
+            assertEquals(0L, strict.getBean(FilterChainProxy.class).getFilterChains().stream()
+                    .filter(chain -> chain.matches(new MockHttpServletRequest("HEAD", "/user"))).count());
+            MockMvc guarded = MockMvcBuilders.webAppContextSetup(strict)
+                    .addFilters(strict.getBean(FilterChainProxy.class)).build();
+            for (String path : List.of("/agent/probe", "/chat/probe", "/archive/probe", "/juyiting/probe",
+                    "/task/probe", "/job/probe", "/economy/probe", "/point/probe",
+                    "/workflow/probe", "/tip/probe", "/user/point/change",
+                    "/phrase/probe", "/media/probe")) {
+                guarded.perform(get(path).header("Authorization", "Bearer user-token"))
+                        .andExpect(status().isForbidden())
+                        .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                                .string("Cache-Control", "private, no-store"));
+                guarded.perform(get(path)).andExpect(status().isUnauthorized());
+            }
+            guarded.perform(get("/ws/chat").header("Authorization", "Bearer user-token"))
+                    .andExpect(status().isForbidden())
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                            .string("Cache-Control", "private, no-store"));
+            guarded.perform(get("/ws/chat")).andExpect(status().isUnauthorized());
+            guarded.perform(get("/user/my").header("Authorization", "Bearer user-token"))
+                    .andExpect(status().isOk());
+            guarded.perform(post("/user/me/sessions/revoke-all")
+                            .header("Authorization", "Bearer user-token"))
+                    .andExpect(status().isOk());
+            guarded.perform(get("/user/my")).andExpect(status().isUnauthorized());
+            guarded.perform(post("/user/me/sessions/revoke-all"))
+                    .andExpect(status().isUnauthorized());
+            guarded.perform(get("/resource")
+                            .header("Authorization", "Bearer user-token"))
+                    .andExpect(status().isOk());
+        }
     }
 
     @Test
@@ -215,8 +297,21 @@ class AuthenticationResourceSecurityTest {
         }
 
         @Bean
+        TenantAuthorizationVerifier tenantAuthorizationVerifier() {
+            return (selected, userId, clientId) -> selected.equals(binding())
+                    && ((userId == 17 && "public-web".equals(clientId))
+                    || (userId == 18 && " public-web ".equals(clientId)));
+        }
+
+        private static TenantAuthorizationAttributes binding() {
+            return new TenantAuthorizationAttributes(cn.jia.core.tenant.TenantId.of("1"),
+                    cn.jia.core.tenant.DataDomainId.of("cyf"), "华南测试区",
+                    TenantAuthorizationAttributes.TenantKind.TEST, "2", "3", "4");
+        }
+
+        @Bean
         @Primary
-        JwtDecoder testJwtDecoder(AccountSecurityService accountSecurityService) {
+        JwtDecoder testJwtDecoder(AccountSecurityService accountSecurityService, TenantAuthorizationVerifier verifier) {
             return token -> {
                 Jwt jwt = switch (token) {
                 case "user-token" -> jwt(token, Map.of(
@@ -238,6 +333,9 @@ class AuthenticationResourceSecurityTest {
                         "client_id", "public-web",
                         "username", "alice",
                         "jiacn", "jia-17"));
+                case "unbound-user-token" -> jwt(token, Map.of(
+                        "token_kind", "user", "uid", "17", "jiacn", "jia-17", "username", "alice",
+                        "auth_epoch", 4L, "sub", "user-17", "client_id", "public-web"));
                 case "machine-token" -> jwt(token, Map.of(
                         "token_kind", "machine",
                         "sub", "machine-client",
@@ -288,7 +386,7 @@ class AuthenticationResourceSecurityTest {
                         "scope", List.of("openid", "read\u0085write")));
                 default -> throw new BadJwtException("Malformed token");
                 };
-                if (new AccountSecurityJwtValidator(accountSecurityService).validate(jwt).hasErrors()) {
+                if (new AccountSecurityJwtValidator(accountSecurityService, verifier).validate(jwt).hasErrors()) {
                     throw new BadJwtException("Invalid token");
                 }
                 return jwt;
@@ -301,6 +399,12 @@ class AuthenticationResourceSecurityTest {
                     .issuedAt(Instant.now().minusSeconds(60))
                     .expiresAt(Instant.now().plusSeconds(300));
             claims.forEach(builder::claim);
+            if ("user-token".equals(tokenValue) || "exact-identity-token".equals(tokenValue)) {
+                builder.claim("tenant_id", "1").claim("data_domain_id", "cyf")
+                        .claim("tenant_name", "华南测试区").claim("tenant_kind", "TEST")
+                        .claim("tenant_session_epoch", "2").claim("membership_revision", "3")
+                        .claim("client_tenant_grant_revision", "4").claim("iss", "https://issuer.example");
+            }
             return builder.build();
         }
 
@@ -308,8 +412,63 @@ class AuthenticationResourceSecurityTest {
 
     @RestController
     static class AgentProbeController {
+
+        @GetMapping("/phrase/probe")
+        String phraseProbe() {
+            return "ok";
+        }
+
+        @GetMapping("/media/probe")
+        String mediaProbe() {
+            return "ok";
+        }
         @GetMapping("/agent/probe")
         String probe() {
+            return "ok";
+        }
+
+        @GetMapping("/chat/probe")
+        String chatProbe() {
+            return "ok";
+        }
+
+        @GetMapping("/archive/probe")
+        String archiveProbe() {
+            return "ok";
+        }
+
+        @GetMapping("/juyiting/probe")
+        String hallProbe() {
+            return "ok";
+        }
+
+        @GetMapping("/task/probe")
+        String taskProbe() {
+            return "ok";
+        }
+
+        @GetMapping("/job/probe")
+        String jobProbe() {
+            return "ok";
+        }
+
+        @GetMapping("/economy/probe")
+        String economyProbe() {
+            return "ok";
+        }
+
+        @GetMapping("/point/probe")
+        String pointProbe() {
+            return "ok";
+        }
+
+        @GetMapping("/user/my")
+        String myProfile() {
+            return "ok";
+        }
+
+        @PostMapping("/user/me/sessions/revoke-all")
+        String revokeSessions() {
             return "ok";
         }
     }
