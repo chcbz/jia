@@ -142,6 +142,49 @@ class AgentRuntimeV1ServiceImplTest {
         verify(installations, never()).lock(anyString()); verify(installations, never()).insertCandidateIfAbsent(any());
     }
 
+    @Test void concurrentAbsentInstallationCandidatesUseActualUniqueInsertAndOneExactWinnerInH2Transactions() throws Exception {
+        // Real mapper SQL + Spring transactions; H2 is NOT evidence of MySQL gap-lock semantics.
+        internalOwner();
+        var source = new org.springframework.jdbc.datasource.DriverManagerDataSource(
+                "jdbc:h2:mem:installation_race_" + java.util.UUID.randomUUID() + ";MODE=MYSQL;DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=10000", "sa", "");
+        var jdbc = new org.springframework.jdbc.core.JdbcTemplate(source);
+        jdbc.execute("CREATE TABLE agent_runtime_v1_installation(id BIGINT AUTO_INCREMENT PRIMARY KEY,installation_id VARCHAR(100) UNIQUE,"
+                + "canonical_agent_id VARCHAR(100),manifest_version VARCHAR(100),manifest_sha256 VARCHAR(64),enrollment_secret_hash BINARY(32),"
+                + "enrollment_expires_at BIGINT,status VARCHAR(32),version BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50))");
+        var factory = new org.mybatis.spring.SqlSessionFactoryBean(); factory.setDataSource(source);
+        var configuration = new org.apache.ibatis.session.Configuration(); configuration.setMapUnderscoreToCamelCase(true);
+        configuration.addMapper(cn.jia.agent.mapper.AgentRuntimeV1InstallationMapper.class); factory.setConfiguration(configuration);
+        var mapper = new org.mybatis.spring.SqlSessionTemplate(java.util.Objects.requireNonNull(factory.getObject()))
+                .getMapper(cn.jia.agent.mapper.AgentRuntimeV1InstallationMapper.class);
+        var bothAbsent = new java.util.concurrent.CountDownLatch(2);
+        when(installations.findInScope("0", "client-a", INTERNAL_ID)).thenAnswer(call -> {
+            var hint = mapper.selectByInstallationInScope("0", "client-a", INTERNAL_ID);
+            if (hint == null) {
+                bothAbsent.countDown(); assertTrue(bothAbsent.await(5, java.util.concurrent.TimeUnit.SECONDS));
+            }
+            return hint;
+        });
+        doAnswer(call -> { mapper.insertCandidateIfAbsent(call.getArgument(0)); return null; })
+                .when(installations).insertCandidateIfAbsent(any());
+        when(installations.lock(INTERNAL_ID)).thenAnswer(call -> mapper.selectByInstallationForUpdate(INTERNAL_ID));
+        var transactions = new org.springframework.transaction.support.TransactionTemplate(
+                new org.springframework.jdbc.datasource.DataSourceTransactionManager(source));
+        transactions.setIsolationLevel(org.springframework.transaction.TransactionDefinition.ISOLATION_REPEATABLE_READ);
+        var request = candidate("a".repeat(64), "b".repeat(64), 2000);
+        try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            java.util.concurrent.Callable<cn.jia.agent.entity.AgentRuntimeV1InstallationView> ensure = () ->
+                    transactions.execute(status -> service.ensureInstallation("0", "client-a", "owner-a", request, NOW));
+            var first = executor.submit(ensure); var second = executor.submit(ensure);
+            assertEquals(first.get(10, java.util.concurrent.TimeUnit.SECONDS), second.get(10, java.util.concurrent.TimeUnit.SECONDS));
+            assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM agent_runtime_v1_installation", Integer.class));
+            verify(installations, times(2)).insertCandidateIfAbsent(any()); verify(installations, times(2)).lock(INTERNAL_ID);
+            assertEquals("PENDING", transactions.execute(status -> service.ensureInstallation("0", "client-a", "owner-a", request, 3000)).status());
+            assertThrows(AgentServiceImpl.AgentBizException.class, () -> transactions.execute(status -> service.ensureInstallation(
+                    "0", "client-a", "owner-a", candidate("c".repeat(64), "b".repeat(64), 2000), NOW)));
+            assertEquals("a".repeat(64), jdbc.queryForObject("SELECT manifest_sha256 FROM agent_runtime_v1_installation", String.class));
+        } finally { jdbc.execute("DROP ALL OBJECTS"); }
+    }
+
     @Test void rejectsInstallationIdThatCannotBeBoundIntoTheManifest() {
         assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.create("tenant-a", "client-a", "owner-a",
                 new AgentRuntimeV1InstallationRequest("rti-not-opaque", AGENT, "1", "a".repeat(64),
