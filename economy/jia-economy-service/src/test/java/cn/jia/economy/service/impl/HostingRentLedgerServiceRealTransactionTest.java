@@ -105,10 +105,13 @@ class HostingRentLedgerServiceRealTransactionTest {
                 new EconomyPreviewProperties.AllowedScope(TENANT, CLIENT))));
         DataSourceTransactionManager transactionManager = new DataSourceTransactionManager(dataSource);
         AtomicInteger transactionIds = new AtomicInteger();
+        // IDs must be unique independently: competing postings can allocate both
+        // transaction IDs before either allocates its escrow ID.
+        AtomicInteger escrowIds = new AtomicInteger();
         EconomyPostingServiceImpl posting = new EconomyPostingServiceImpl(
                 ledgerMapper, transactionManager, gate,
                 () -> "etx-rent-" + transactionIds.incrementAndGet(),
-                () -> "esc-rent-" + transactionIds.get(), this::tick);
+                () -> "esc-rent-" + escrowIds.incrementAndGet(), this::tick);
         quoteIds = new AtomicInteger();
         leaseIds = new AtomicInteger();
         intentIds = new AtomicInteger();
