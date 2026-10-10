@@ -90,7 +90,17 @@ public final class HostingRentReconciler {
         if (TransactionSynchronizationManager.isActualTransactionActive()) throw new IllegalStateException("rent I/O transaction boundary");
         Snapshot snapshot = transactions.execute(status -> snapshot(row));
         if (snapshot == null) return;
-        if ("SERVICE_READY".equals(snapshot.status())) { settle(snapshot, true); return; }
+        if ("SERVICE_READY".equals(snapshot.status())) {
+            // Historical READY is not current registration evidence after a crash/restart.
+            // Adapter revalidates exact persisted Runtime-v1 linkage and live API proof.
+            var resumed = provider.prepareAndObserve(snapshot.preparation());
+            if (resumed != null && snapshot.preparation().equals(resumed.preparation())
+                    && resumed.outcome() == ManagedHostingProvisioner.Outcome.SERVICE_READY) {
+                HostingRentHttp.exact(resumed.evidenceRef(), 100);
+                settle(snapshot, true); // Preserve recorded readyAt/period and outcome version.
+            }
+            return;
+        }
         if ("FAILED_NO_EFFECT".equals(snapshot.status())) { settle(snapshot, false); return; }
         long version = snapshot.version();
         if ("FUNDS_RESERVED".equals(snapshot.status())) {
@@ -161,6 +171,11 @@ public final class HostingRentReconciler {
         if (request == null || !row.getIntentId().equals(request.getIntentId()) || !row.getLeaseId().equals(request.getLeaseId())
                 || !row.getAgentId().equals(request.getAgentId()) || !actor.actorId().equals(request.getPrincipalId())
                 || !("ACCEPTED".equals(request.getStatus()) || "PROVISIONING_UNKNOWN".equals(request.getStatus()))) return null;
+        // Authorization fixes a durable target before Runtime ensure. Recheck it after
+        // external I/O so an old registered operation cannot finish a different target.
+        if (!markUnknown && (request.getRuntimeTargetGeneration() == null || request.getRuntimeTargetGeneration() <= 1
+                || !request.getRuntimeTargetGeneration().equals(initial.getRuntimeProvisionGeneration())
+                || initial.getRuntimeInstallationId() == null || initial.getRuntimeManifestSha256() == null)) return null;
         long version = request.getVersion();
         if ("ACCEPTED".equals(request.getStatus())) {
             if (!markUnknown) return null;
@@ -221,6 +236,9 @@ public final class HostingRentReconciler {
             Snapshot checked = snapshot(current);
             if (checked == null || !checked.preparation().equals(snapshot.preparation())) return;
             if (capture) {
+                if (!"SERVICE_READY".equals(current.getStatus()) || current.getRuntimeInstallationId() == null
+                        || current.getRuntimeManifestSha256() == null
+                        || !Long.valueOf(1).equals(current.getRuntimeProvisionGeneration())) return;
                 ledger.capture(command);
             } else {
                 // The posting/projections and exact managed-key revocation share this REQUIRED transaction.

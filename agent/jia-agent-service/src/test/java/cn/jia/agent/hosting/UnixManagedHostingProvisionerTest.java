@@ -62,14 +62,17 @@ class UnixManagedHostingProvisionerTest {
             return "prepare".equals(request.get("method")) ? frame("preparedResponse") : observed;
         }).when(adapter).exchange(anyMap());
     }
+    private Map<String, Object> wire(Map<String, Object> request) {
+        return JSON.readValue(JSON.writeValueAsString(request), new TypeReference<Map<String, Object>>() {});
+    }
     @Test void frozenFlatWireAndBareManifestDigestAreByteCompatibleWithoutAnyCredential() {
         var p = preparation(); var c = candidate(); assertNotNull(c);
-        assertEquals(frame("prepareRequest"), JSON.convertValue(UnixManagedHostingProvisioner.request(p, "prepare", null), new TypeReference<Map<String,Object>>() {}));
-        assertEquals(frame("ensureRequest"), JSON.convertValue(UnixManagedHostingProvisioner.request(p, "ensure", c), new TypeReference<Map<String,Object>>() {}));
-        assertEquals(frame("observeRequest"), JSON.convertValue(UnixManagedHostingProvisioner.request(p, "observe", c), new TypeReference<Map<String,Object>>() {}));
+        assertEquals(frame("prepareRequest"), wire(UnixManagedHostingProvisioner.request(p, "prepare", null)));
+        assertEquals(frame("ensureRequest"), wire(UnixManagedHostingProvisioner.request(p, "ensure", c)));
+        assertEquals(frame("observeRequest"), wire(UnixManagedHostingProvisioner.request(p, "observe", c)));
         assertFalse(c.manifestSha256().startsWith("sha256:"));
         var free = preparation("reprovisionPrepareRequest");
-        assertEquals(frame("reprovisionPrepareRequest"), JSON.convertValue(UnixManagedHostingProvisioner.request(free, "prepare", null), new TypeReference<Map<String,Object>>() {}));
+        assertEquals(frame("reprovisionPrepareRequest"), wire(UnixManagedHostingProvisioner.request(free, "prepare", null)));
         assertEquals(2, UnixManagedHostingProvisioner.decodePrepared(free, frame("reprovisionPreparedResponse")).provisionGeneration());
     }
     @Test void preparedRejectsCrossWireScopeMethodNumericCoercionAndSecretsBeforeAuthorization() {

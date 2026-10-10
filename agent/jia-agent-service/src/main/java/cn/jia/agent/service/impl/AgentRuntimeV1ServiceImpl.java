@@ -94,12 +94,15 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
         requireInstallationOwner(candidate, tenantId, clientId, ownerJiacn);
         // Installation first, then hosting intent -> lease -> binding -> free request. This follows
         // session/registration's installation-before-binding fence and performs no external I/O.
-        var existing = installations.lock(request.installationId());
-        if (existing == null) {
+        // Do not FOR UPDATE a missing unique key: concurrent gap-lock holders would
+        // both need to upgrade to an insert lock. The unique insert arbitrates first;
+        // the subsequent locking read sees the winner even under REPEATABLE READ.
+        var hint = installations.findInScope(tenantId, clientId, request.installationId());
+        if (hint == null) {
             if (request.enrollmentExpiresAt() <= now) throw forbidden("Runtime v1 installation candidate expired");
             installations.insertCandidateIfAbsent(candidate);
-            existing = installations.lock(request.installationId());
         }
+        var existing = installations.lock(request.installationId());
         if (existing == null || !sameScope(existing, tenantId, clientId)
                 || !request.installationId().equals(existing.getInstallationId())
                 || !request.canonicalAgentId().equals(existing.getCanonicalAgentId())

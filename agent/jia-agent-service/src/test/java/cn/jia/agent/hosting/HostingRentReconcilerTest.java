@@ -66,6 +66,8 @@ class HostingRentReconcilerTest {
                 .setPrincipalType("USER").setPrincipalId("Login-A").setAgentId(AGENT).setPersonaCode("wuyong")
                 .setIntentId("hri-test").setLeaseId("hrl-test").setQuotePurpose("INITIAL")
                 .setManagedApiKeyId("managed-key-31")
+                .setRuntimeInstallationId("rti_0123456789abcdef0123456789abcdef")
+                .setRuntimeManifestSha256("a".repeat(64)).setRuntimeProvisionGeneration(1L)
                 .setVersion(1L).setStatus("FUNDS_RESERVED").setReservedAt(1800000000000L);
         lease = new EconomyHostingLeaseEntity().setLeaseId("hrl-test").setAgentId(AGENT)
                 .setPrincipalType("USER").setPrincipalId("Login-A").setBindingId("17")
@@ -204,10 +206,39 @@ class HostingRentReconcilerTest {
     }
 
     @Test
-    void aCommittedReadyOutcomeResumesSettlementWithoutRepeatedProviderIo() {
-        intent.setStatus("SERVICE_READY").setVersion(3L);
+    void aCommittedReadyOutcomeRequiresFreshProofAndResumesWithoutRepeatingReadyTransition() {
+        intent.setStatus("SERVICE_READY").setVersion(3L).setServiceReadyAt(1700000000000L);
+        when(provider.prepareAndObserve(any())).thenAnswer(call -> {
+            assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
+            return new ManagedHostingProvisioner.Observation(call.getArgument(0),
+                    ManagedHostingProvisioner.Outcome.SERVICE_READY, "fresh-live-proof", System.currentTimeMillis());
+        });
         worker.reconcilePending();
-        verify(ledger).capture(any()); verify(provider, never()).prepareAndObserve(any());
+        verify(ledger).capture(argThat(c -> c.expectedIntentVersion() == 3));
+        verify(provider).prepareAndObserve(any());
+        verify(ledger, never()).confirmProvisioningSucceeded(any());
+        verify(ledger, never()).confirmProvisioningFailedNoEffect(any());
+        verify(ledger, never()).refund(any());
+        assertEquals(1700000000000L, intent.getServiceReadyAt());
+    }
+
+    @Test void committedReadyOfflineUnknownWrongAssociationAndLegacyLinkCannotCaptureOrRefund() {
+        intent.setStatus("SERVICE_READY").setVersion(3L);
+        when(provider.prepareAndObserve(any())).thenThrow(new IllegalStateException("offline"));
+        worker.reconcilePending();
+        doAnswer(call -> new ManagedHostingProvisioner.Observation(call.getArgument(0),
+                ManagedHostingProvisioner.Outcome.UNKNOWN, null)).when(provider).prepareAndObserve(any());
+        worker.reconcilePending();
+        var wrong = new ManagedHostingProvisioner.Preparation(TENANT, CLIENT, OWNER, AGENT,
+                "other-intent", "hrl-test", "17", intent.getReservedAt());
+        doReturn(new ManagedHostingProvisioner.Observation(wrong, ManagedHostingProvisioner.Outcome.SERVICE_READY, "stale"))
+                .when(provider).prepareAndObserve(any());
+        worker.reconcilePending();
+        intent.setRuntimeInstallationId(null).setRuntimeManifestSha256(null).setRuntimeProvisionGeneration(0L);
+        doAnswer(call -> new ManagedHostingProvisioner.Observation(call.getArgument(0),
+                ManagedHostingProvisioner.Outcome.SERVICE_READY, "legacy-ready")).when(provider).prepareAndObserve(any());
+        worker.reconcilePending();
+        verifyNoInteractions(ledger);
     }
 
     @Test
@@ -264,8 +295,11 @@ class HostingRentReconcilerTest {
         });
         worker.reconcileFree(free, provider);
         verify(mapper, never()).finishReprovision(anyString(), anyString(), anyString(), anyLong(), anyString(), any(), anyString());
-        when(provider.prepareAndObserve(any())).thenAnswer(call -> new ManagedHostingProvisioner.Observation(
-                call.getArgument(0), ManagedHostingProvisioner.Outcome.SERVICE_READY, "exact-free-proof", requestedAt + 1));
+        when(provider.prepareAndObserve(any())).thenAnswer(call -> {
+            intent.setRuntimeProvisionGeneration(2L); free.setRuntimeTargetGeneration(2L);
+            return new ManagedHostingProvisioner.Observation(call.getArgument(0),
+                    ManagedHostingProvisioner.Outcome.SERVICE_READY, "exact-free-proof", requestedAt + 1);
+        });
         when(mapper.finishReprovision(TENANT, CLIENT, "hrr-free", 2L, "SERVICE_READY", requestedAt + 1, "exact-free-proof"))
                 .thenAnswer(call -> { free.setStatus("SERVICE_READY").setVersion(3L); return 1; });
         worker.reconcileFree(free, provider); worker.reconcileFree(free, provider);

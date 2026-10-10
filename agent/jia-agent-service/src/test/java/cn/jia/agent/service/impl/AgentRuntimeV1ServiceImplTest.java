@@ -75,24 +75,33 @@ class AgentRuntimeV1ServiceImplTest {
     @Test void internalEnsureCreatesThenExactlyReplaysWithoutRotatingOrExposingSecrets() {
         internalOwner();
         var row = internalInstallation("PENDING");
-        when(installations.lock(INTERNAL_ID)).thenReturn(null, row, row);
+        when(installations.findInScope("0", "client-a", INTERNAL_ID)).thenReturn(null, row);
+        when(installations.lock(INTERNAL_ID)).thenReturn(row);
         var request = candidate("a".repeat(64), "b".repeat(64), 2000);
         var created = service.ensureInstallation("0", "client-a", "owner-a", request, NOW);
         assertEquals(created, service.ensureInstallation("0", "client-a", "owner-a", request, NOW + 1));
         verify(installations, times(1)).insertCandidateIfAbsent(any());
+        var order = inOrder(installations);
+        order.verify(installations).findInScope("0", "client-a", INTERNAL_ID);
+        order.verify(installations).insertCandidateIfAbsent(any());
+        order.verify(installations).lock(INTERNAL_ID);
         verify(installations, never()).insert(any());
         verifyNoInteractions(identities, sessions, acks);
         assertFalse(created.toString().contains("enrollmentSecret"));
         assertFalse(created.toString().contains("b".repeat(64)));
     }
     @Test void internalEnsureActiveReplayAfterEnrollmentExpiryIsNotReenrollment() {
-        internalOwner(); when(installations.lock(INTERNAL_ID)).thenReturn(internalInstallation("ACTIVE").setEnrollmentConsumedAt(1500L));
+        internalOwner(); var row = internalInstallation("ACTIVE").setEnrollmentConsumedAt(1500L);
+        when(installations.findInScope("0", "client-a", INTERNAL_ID)).thenReturn(row);
+        when(installations.lock(INTERNAL_ID)).thenReturn(row);
         assertEquals("ACTIVE", service.ensureInstallation("0", "client-a", "owner-a",
                 candidate("a".repeat(64), "b".repeat(64), 2000), 3000).status());
         verify(installations, never()).insertCandidateIfAbsent(any()); verify(installations, never()).activate(any(), any(), anyLong());
     }
     @Test void internalEnsureRejectsDigestExpiryIdentityAndRevokedWinnerWithoutOverwrite() {
-        internalOwner(); var row = internalInstallation("ACTIVE"); when(installations.lock(INTERNAL_ID)).thenReturn(row);
+        internalOwner(); var row = internalInstallation("ACTIVE");
+        when(installations.findInScope("0", "client-a", INTERNAL_ID)).thenReturn(row);
+        when(installations.lock(INTERNAL_ID)).thenReturn(row);
         for (var request : java.util.List.of(candidate("c".repeat(64), "b".repeat(64), 2000),
                 candidate("a".repeat(64), "c".repeat(64), 2000), candidate("a".repeat(64), "b".repeat(64), 2001))) {
             assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.ensureInstallation("0", "client-a", "owner-a", request, NOW));
@@ -111,6 +120,26 @@ class AgentRuntimeV1ServiceImplTest {
         verifyNoInteractions(installations); internalOwner();
         assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.ensureInstallation("0", "client-a", "owner-a", request, 3000));
         verify(installations, never()).insertCandidateIfAbsent(any());
+    }
+
+    @Test void absentHintUsesUniqueInsertThenExactWinnerReadAndRejectsConcurrentDifferentDigest() {
+        internalOwner();
+        var winner = internalInstallation("PENDING").setManifestSha256("c".repeat(64));
+        when(installations.findInScope("0", "client-a", INTERNAL_ID)).thenReturn(null);
+        when(installations.insertCandidateIfAbsent(any())).thenReturn(0); // another candidate won
+        when(installations.lock(INTERNAL_ID)).thenReturn(winner);
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.ensureInstallation("0", "client-a", "owner-a",
+                candidate("a".repeat(64), "b".repeat(64), 2000), NOW));
+        var order = inOrder(installations);
+        order.verify(installations).findInScope("0", "client-a", INTERNAL_ID);
+        order.verify(installations).insertCandidateIfAbsent(any()); order.verify(installations).lock(INTERNAL_ID);
+        verify(installations, never()).activate(any(), any(), anyLong());
+    }
+    @Test void expiredNewCandidateNeverObtainsMissingKeyGapLock() {
+        internalOwner();
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.ensureInstallation("0", "client-a", "owner-a",
+                candidate("a".repeat(64), "b".repeat(64), 2000), 3000));
+        verify(installations, never()).lock(anyString()); verify(installations, never()).insertCandidateIfAbsent(any());
     }
 
     @Test void rejectsInstallationIdThatCannotBeBoundIntoTheManifest() {

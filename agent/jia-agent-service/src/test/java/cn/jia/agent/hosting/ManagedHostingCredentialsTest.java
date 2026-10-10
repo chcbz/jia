@@ -72,7 +72,7 @@ class ManagedHostingCredentialsTest {
             jdbc.queryForObject("SELECT id FROM installation_lock WHERE id=1 FOR UPDATE", Integer.class);
             jdbc.update("INSERT INTO effects VALUES('installation-ensure')");
             return new AgentRuntimeV1InstallationView(candidate.installationId(), "0", "Client-A", p.agentId(), "1", candidate.manifestSha256(),
-                    candidate.enrollmentExpiresAt(), "ACTIVE".equals(base.getStatus()) ? "ACTIVE" : "PENDING", null);
+                    candidate.enrollmentExpiresAt(), ("ACTIVE".equals(base.getStatus()) || "SERVICE_READY".equals(base.getStatus())) ? "ACTIVE" : "PENDING", null);
         });
         when(rent.attachRuntimeInstallation(anyString(), anyString(), anyString(), anyString(), anyString())).thenAnswer(call ->
                 jdbc.update("UPDATE association SET installation=?,manifest=?,generation=1 WHERE id=1 AND generation=0 AND installation IS NULL",
@@ -154,6 +154,36 @@ class ManagedHostingCredentialsTest {
         assertThrows(IllegalStateException.class, () -> service.ensureInstallation(free(), generation(2)));
         assertEquals(1L, jdbc.queryForObject("SELECT generation FROM association", Long.class));
         assertNull(jdbc.queryForObject("SELECT target FROM free_request", Long.class)); verifyNoInteractions(keys);
+    }
+    @Test void committedReadyResumesOnlyExactAlreadyBoundActiveInstallation() {
+        service.ensureInstallation(p, candidate);
+        base.setStatus("SERVICE_READY");
+        service.ensureInstallation(p, candidate);
+        verify(rent, times(1)).attachRuntimeInstallation(anyString(), anyString(), anyString(), anyString(), anyString());
+        jdbc.update("UPDATE association SET installation=NULL,manifest=NULL,generation=0");
+        assertThrows(IllegalStateException.class, () -> service.ensureInstallation(p, candidate));
+        assertNull(jdbc.queryForObject("SELECT installation FROM association", String.class));
+        verifyNoInteractions(keys);
+    }
+    @Test void committedReadyRejectsPendingInstallationAndWrongGenerationEvenWithLink() {
+        service.ensureInstallation(p, candidate); base.setStatus("SERVICE_READY");
+        doReturn(new AgentRuntimeV1InstallationView(candidate.installationId(), "0", "Client-A", p.agentId(), "1",
+                candidate.manifestSha256(), candidate.enrollmentExpiresAt(), "PENDING", null))
+                .when(runtime).ensureInstallation(anyString(), anyString(), anyString(), any(), anyLong());
+        assertThrows(IllegalStateException.class, () -> service.ensureInstallation(p, candidate));
+        assertThrows(IllegalStateException.class, () -> service.ensureInstallation(p, generation(2)));
+        verifyNoInteractions(keys);
+    }
+    @Test void freeSnapshotSurvivesConcurrentRenewalWithoutExtendingOperationOrCharging() {
+        active(); var snapshot = free(); long originalExpiry = snapshot.validUntil();
+        lease.setPaidThrough(originalExpiry + 2592000000L);
+        when(rent.selectReprovisionForUpdate("0", "Client-A", "hrr-one")).thenAnswer(call ->
+                new EconomyHostingReprovisionEntity().setRequestId("hrr-one").setIntentId(p.intentId()).setAgentId(p.agentId())
+                        .setLeaseId(p.leaseId()).setPrincipalId("login-sub").setStatus("PROVISIONING_UNKNOWN").setRequestedAt(1100L)
+                        .setPaidThrough(originalExpiry).setRuntimeTargetGeneration(jdbc.queryForObject("SELECT target FROM free_request", Long.class)));
+        service.ensureInstallation(snapshot, generation(2)); service.ensureInstallation(snapshot, generation(2));
+        assertEquals(originalExpiry + 2592000000L, lease.getPaidThrough());
+        verifyNoInteractions(keys);
     }
     @Test void legacyAuditRefundRevokesOnlyExactExistingReferenceAndRequiresTransaction() {
         var failed = new EconomyHostingProvisioningIntentEntity().setId(1L).setIntentId(p.intentId()).setQuotePurpose("INITIAL")

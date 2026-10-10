@@ -47,7 +47,8 @@ public final class ManagedHostingCredentials {
                     || !"INITIAL".equals(intent.getQuotePurpose()) || !"USER".equals(intent.getPrincipalType())
                     || !p.agentId().equals(intent.getAgentId()) || !p.leaseId().equals(intent.getLeaseId())
                     || !Objects.equals(p.reservedAt(), intent.getReservedAt()) || intent.getRefundTransactionId() != null
-                    || !("PROVISIONING_UNKNOWN".equals(intent.getStatus()) || "ACTIVE".equals(intent.getStatus()))) throw unavailable();
+                    || !("PROVISIONING_UNKNOWN".equals(intent.getStatus()) || "SERVICE_READY".equals(intent.getStatus())
+                            || "ACTIVE".equals(intent.getStatus()))) throw unavailable();
             var actor = new HostingRentHttp.Actor(intent.getPrincipalId(), p.tenantId(), p.clientId(), p.ownerJiacn());
             if (!p.ownerJiacn().equals(owners.requireOwner(actor))) throw unavailable();
             var lease = rent.selectLeaseForUpdate(p.tenantId(), p.clientId(), p.leaseId());
@@ -67,8 +68,13 @@ public final class ManagedHostingCredentials {
                     || !Long.valueOf(bindingId).equals(identity.getBindingId()) || !Long.valueOf(bindingId).equals(binding.getId())) throw unavailable();
             if (p.operationId().equals(p.intentId())) {
                 if (candidate.provisionGeneration() != 1 || p.validUntil() != null || p.requestedAt() != p.reservedAt()
-                        || !"PROVISIONING_UNKNOWN".equals(intent.getStatus()) || intent.getCaptureTransactionId() != null
+                        || !("PROVISIONING_UNKNOWN".equals(intent.getStatus()) || "SERVICE_READY".equals(intent.getStatus()))
+                        || intent.getCaptureTransactionId() != null
                         || !"PROVISIONING".equals(lease.getStatus()) || !p.intentId().equals(lease.getLatestIntentId())) throw unavailable();
+                // A committed ready outcome may only resume an already-bound ACTIVE
+                // installation. Never turn historical legacy READY into fresh authority.
+                if ("SERVICE_READY".equals(intent.getStatus())
+                        && (!"ACTIVE".equals(installed.status()) || intent.getRuntimeInstallationId() == null)) throw unavailable();
                 if (intent.getRuntimeInstallationId() == null) {
                     if (intent.getRuntimeManifestSha256() != null || !Long.valueOf(0).equals(intent.getRuntimeProvisionGeneration())
                             || rent.attachRuntimeInstallation(p.tenantId(), p.clientId(), p.intentId(), candidate.installationId(),
@@ -81,7 +87,7 @@ public final class ManagedHostingCredentials {
                         || !p.agentId().equals(free.getAgentId()) || !p.leaseId().equals(free.getLeaseId())
                         || !intent.getPrincipalId().equals(free.getPrincipalId()) || !"PROVISIONING_UNKNOWN".equals(free.getStatus())
                         || !Objects.equals(p.requestedAt(), free.getRequestedAt()) || !Objects.equals(p.validUntil(), free.getPaidThrough())
-                        || !Objects.equals(p.validUntil(), lease.getPaidThrough()) || p.validUntil() == null
+                        || p.validUntil() == null || lease.getPaidThrough() == null || lease.getPaidThrough() < p.validUntil()
                         || p.validUntil() <= System.currentTimeMillis() || !matches(intent, candidate)
                         || intent.getRuntimeProvisionGeneration() == null || intent.getRuntimeProvisionGeneration() <= 0) throw unavailable();
                 if (free.getRuntimeTargetGeneration() == null) {

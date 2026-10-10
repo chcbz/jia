@@ -167,6 +167,30 @@ class HostingRentLedgerServiceRealTransactionTest {
     }
 
     @Test
+    void runtimeLinkMetadataCasPreservesOriginalReserveAndSettlementVersionWithoutAnotherCharge() {
+        var reserveCommand = reserve(service.quote(initialQuote("agent-runtime", "persona-runtime", "plan-test", 1)).quoteId(),
+                "00000000-0000-0000-0000-000000000092");
+        var reserved = service.reserve(reserveCommand);
+        service.markProvisioningUnknown(new HostingRentOutcomeCommand(scope(), principal(), reserved.intentId(), 1, "runtime-attempt"));
+        String installation = "rti_0123456789abcdef0123456789abcdef";
+        assertEquals(1, hostingMapper.attachRuntimeInstallation(TENANT, CLIENT, reserved.intentId(), installation, "a".repeat(64)));
+        assertEquals(0, hostingMapper.attachRuntimeInstallation(TENANT, CLIENT, reserved.intentId(), installation, "a".repeat(64)));
+        assertEquals(0, hostingMapper.attachRuntimeInstallation(TENANT, "other-client", reserved.intentId(), installation, "a".repeat(64)));
+        var linked = hostingMapper.selectIntentForUpdate(TENANT, CLIENT, reserved.intentId());
+        assertEquals(installation, linked.getRuntimeInstallationId()); assertEquals(1L, linked.getRuntimeProvisionGeneration());
+        assertEquals(2L, linked.getVersion()); assertEquals(reserved, service.reserve(reserveCommand));
+        assertEquals(1, count("economy_transaction")); assertEquals(V1_AMOUNT_MICRO, balanceLike("hosting_esc_%"));
+        service.confirmProvisioningSucceeded(new HostingRentOutcomeCommand(scope(), principal(), reserved.intentId(), 2, "live-runtime-proof"));
+        var capture = settlement(reserved.intentId(), 3, "00000000-0000-0000-0000-000000000093", HASH_CAPTURE);
+        var captured = service.capture(capture); assertEquals(captured, service.capture(capture));
+        assertEquals(2, count("economy_transaction")); assertEquals(0L, balanceLike("hosting_esc_%"));
+        assertEquals(0L, jdbc.queryForObject("SELECT SUM(signed_amount_micro) FROM economy_entry", Long.class));
+        assertEquals(1, hostingMapper.advanceRuntimeGeneration(TENANT, CLIENT, reserved.intentId(), installation, "a".repeat(64), 1, 2));
+        assertEquals(0, hostingMapper.advanceRuntimeGeneration(TENANT, CLIENT, reserved.intentId(), installation, "a".repeat(64), 1, 3));
+        assertEquals(2, count("economy_transaction"));
+    }
+
+    @Test
     void unknownOutcomeCannotCaptureOrRefundUntilExplicitNoEffectThenRefundsExactlyOnce() {
         HostingRentMutationReceipt reserved = service.reserve(reserve(
                 service.quote(initialQuote("agent-2", "persona-2", "plan-test", 1)).quoteId(),
@@ -750,7 +774,7 @@ class HostingRentLedgerServiceRealTransactionTest {
                 "CREATE TABLE economy_hosting_rent_plan(id BIGINT AUTO_INCREMENT PRIMARY KEY,plan_id VARCHAR(100),plan_version BIGINT,amount_micro BIGINT,period_seconds BIGINT,quote_ttl_seconds BIGINT,currency VARCHAR(16),status VARCHAR(16),tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,UNIQUE(tenant_id,client_id,plan_id,plan_version))",
                 "CREATE TABLE economy_hosting_rent_quote(id BIGINT AUTO_INCREMENT PRIMARY KEY,quote_id VARCHAR(100),quote_purpose VARCHAR(16),plan_id VARCHAR(100),plan_version BIGINT,amount_micro BIGINT,period_seconds BIGINT,principal_type VARCHAR(20),principal_id VARCHAR(100),persona_code VARCHAR(100),agent_id VARCHAR(100),lease_id VARCHAR(100),expected_lease_version BIGINT,idempotency_key VARBINARY(36),request_hash BINARY(32),expires_at BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,UNIQUE(tenant_id,client_id,quote_id),UNIQUE(tenant_id,client_id,principal_type,principal_id,idempotency_key))",
                 "CREATE TABLE economy_hosting_lease(id BIGINT AUTO_INCREMENT PRIMARY KEY,lease_id VARCHAR(100),principal_type VARCHAR(20),principal_id VARCHAR(100),persona_code VARCHAR(100),agent_id VARCHAR(100),binding_id VARCHAR(100),live_slot TINYINT DEFAULT 1,plan_id VARCHAR(100),plan_version BIGINT,amount_micro BIGINT,period_seconds BIGINT,status VARCHAR(24),paid_from BIGINT,paid_through BIGINT,latest_intent_id VARCHAR(100),version BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,update_time BIGINT,UNIQUE(tenant_id,client_id,lease_id),UNIQUE(tenant_id,client_id,agent_id,live_slot),CHECK((status='REFUNDED' AND live_slot IS NULL) OR (status IN ('PROVISIONING','ACTIVE') AND live_slot IS NOT NULL AND live_slot=1)),UNIQUE(tenant_id,client_id,latest_intent_id))",
-                "CREATE TABLE economy_hosting_provisioning_intent(id BIGINT AUTO_INCREMENT PRIMARY KEY,intent_id VARCHAR(100),lease_id VARCHAR(100),quote_id VARCHAR(100),quote_purpose VARCHAR(16),principal_type VARCHAR(20),principal_id VARCHAR(100),persona_code VARCHAR(100),agent_id VARCHAR(100),amount_micro BIGINT,period_seconds BIGINT,status VARCHAR(32),reserve_idempotency_key VARBINARY(36),reserve_request_hash BINARY(32),reserve_transaction_id VARCHAR(100),reserved_at BIGINT,escrow_version BIGINT,capture_idempotency_key VARBINARY(36),capture_request_hash BINARY(32),capture_transaction_id VARCHAR(100),captured_at BIGINT,refund_idempotency_key VARBINARY(36),refund_request_hash BINARY(32),refund_transaction_id VARCHAR(100),refunded_at BIGINT,managed_api_key_id VARCHAR(100),outcome_evidence_ref VARCHAR(100),service_ready_at BIGINT,paid_from BIGINT,paid_through BIGINT,version BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,update_time BIGINT,UNIQUE(tenant_id,client_id,intent_id),UNIQUE(tenant_id,client_id,quote_id),UNIQUE(tenant_id,client_id,principal_type,principal_id,reserve_idempotency_key),CHECK((status='ACTIVE' AND paid_from IS NOT NULL AND paid_through IS NOT NULL AND paid_through>paid_from) OR (status<>'ACTIVE' AND paid_from IS NULL AND paid_through IS NULL)))"
+                "CREATE TABLE economy_hosting_provisioning_intent(id BIGINT AUTO_INCREMENT PRIMARY KEY,intent_id VARCHAR(100),lease_id VARCHAR(100),quote_id VARCHAR(100),quote_purpose VARCHAR(16),principal_type VARCHAR(20),principal_id VARCHAR(100),persona_code VARCHAR(100),agent_id VARCHAR(100),amount_micro BIGINT,period_seconds BIGINT,status VARCHAR(32),reserve_idempotency_key VARBINARY(36),reserve_request_hash BINARY(32),reserve_transaction_id VARCHAR(100),reserved_at BIGINT,escrow_version BIGINT,capture_idempotency_key VARBINARY(36),capture_request_hash BINARY(32),capture_transaction_id VARCHAR(100),captured_at BIGINT,refund_idempotency_key VARBINARY(36),refund_request_hash BINARY(32),refund_transaction_id VARCHAR(100),refunded_at BIGINT,managed_api_key_id VARCHAR(100),runtime_installation_id VARCHAR(100),runtime_manifest_sha256 VARCHAR(64),runtime_provision_generation BIGINT NOT NULL DEFAULT 0,outcome_evidence_ref VARCHAR(100),service_ready_at BIGINT,paid_from BIGINT,paid_through BIGINT,version BIGINT,tenant_id VARCHAR(50),client_id VARCHAR(50),create_time BIGINT,update_time BIGINT,UNIQUE(tenant_id,client_id,intent_id),UNIQUE(tenant_id,client_id,quote_id),UNIQUE(tenant_id,client_id,runtime_installation_id),CHECK((runtime_installation_id IS NULL AND runtime_manifest_sha256 IS NULL AND runtime_provision_generation=0) OR (quote_purpose='INITIAL' AND runtime_installation_id IS NOT NULL AND runtime_manifest_sha256 IS NOT NULL AND OCTET_LENGTH(runtime_manifest_sha256)=64 AND runtime_provision_generation>0)),UNIQUE(tenant_id,client_id,principal_type,principal_id,reserve_idempotency_key),CHECK((status='ACTIVE' AND paid_from IS NOT NULL AND paid_through IS NOT NULL AND paid_through>paid_from) OR (status<>'ACTIVE' AND paid_from IS NULL AND paid_through IS NULL)))"
         )) jdbc.execute(ddl);
     }
 
