@@ -556,7 +556,8 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
     private Admission verifyPromotionAdmission(Scope scope, AgentTaskMetaEntity root,
             AgentTaskExecutionGrantEntity grant, long grantVersion, long assignmentRevision,
             String targetAgentId) {
-        if (!"ACTIVE".equals(grant.getState()) || !Objects.equals(grantVersion,grant.getGrantVersion())
+        if ("cancelled".equals(root.getRewardStatus())
+                || !"ACTIVE".equals(grant.getState()) || !Objects.equals(grantVersion,grant.getGrantVersion())
                 || !Objects.equals(assignmentRevision,grant.getAssignmentRevision())
                 || root.getTaskVersion()==null || root.getTaskVersion()<assignmentRevision
                 || !same(targetAgentId,grant.getTargetAgentId())
@@ -652,7 +653,8 @@ public final class AgentTaskExecutionGrantServiceImpl implements AgentTaskExecut
 
     private Admission verifyAdmission(Scope scope,AgentTaskMetaEntity root,AgentTaskExecutionGrantEntity grant,
             long grantVersion,long assignmentRevision,String targetAgentId,String operation,boolean paid) {
-        if (!"ACTIVE".equals(grant.getState()) || !Objects.equals(grantVersion,grant.getGrantVersion())
+        if ("cancelled".equals(root.getRewardStatus())
+                || !"ACTIVE".equals(grant.getState()) || !Objects.equals(grantVersion,grant.getGrantVersion())
                 || !Objects.equals(assignmentRevision,grant.getAssignmentRevision())
                 || root.getTaskVersion()==null || root.getTaskVersion()<assignmentRevision
                 || !same(targetAgentId,grant.getTargetAgentId())

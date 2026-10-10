@@ -49,10 +49,10 @@ class AgentWebSocketHandlerSecurityTest extends BaseMockTest {
         when(agentService.register(any(AgentRegisterDTO.class)))
                 .thenReturn(new AgentRegisterResultDTO("agent-001", "registration-token", AgentConstants.STATUS_ONLINE));
 
-        AgentWebSocketHandler handler = new AgentWebSocketHandler(chatClient, agentServiceProvider,
-                chatMessageDao, chatConversationEventBroker);
+        AgentWebSocketHandler handler = UnifiedRuntimeTestSupport.authorize(new AgentWebSocketHandler(chatClient, agentServiceProvider,
+                chatMessageDao, chatConversationEventBroker));
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"type":"agent.register","requestId":"reg-1","agentId":"agent-001","name":"Wu Yong"}
                 """));
 

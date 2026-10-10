@@ -48,6 +48,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class AgentWorkItemReassignmentStartupTest {
     private static final String ACTOR = "agt_cccccccccccccccccccccccccccccccc";
     private static final ApplicationContextRunner RUNNER = new ApplicationContextRunner()
+            .withBean(cn.jia.agent.security.AgentRuntimeAuthenticationService.class,
+                    () -> mock(cn.jia.agent.security.AgentRuntimeAuthenticationService.class))
             .withBean(AgentWorkItemReassignmentDao.class,
                     () -> mock(AgentWorkItemReassignmentDao.class))
             .withBean(AgentTaskMemberDao.class, () -> mock(AgentTaskMemberDao.class))
@@ -146,7 +148,8 @@ class AgentWorkItemReassignmentStartupTest {
                     context.getBean(AgentTaskEventWriter.class),
                     context.getBean(AgentWorkItemLeaseService.class),
                     context.getBean(AgentHallCommandTransportDao.class),
-                    context.getBean(AgentCommandTransportMapper.class));
+                    context.getBean(AgentCommandTransportMapper.class),
+                    context.getBean(cn.jia.agent.security.AgentRuntimeAuthenticationService.class));
         });
     }
 

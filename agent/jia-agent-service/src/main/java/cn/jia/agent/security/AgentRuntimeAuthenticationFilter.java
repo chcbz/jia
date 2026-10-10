@@ -18,10 +18,14 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
     public AgentRuntimeAuthenticationFilter(AgentRuntimeAuthenticationService service) { this.service = service; }
 
     public static boolean selectsRuntimeCredentialLane(HttpServletRequest request) {
-        // One X-Agent-Id is also the established API-key websocket identity header. It is not,
-        // by itself, proof that the caller is presenting an AgentRuntime credential. Ambiguous
-        // duplicates remain fail-closed instead of falling through to a first-value consumer.
-        return request.getHeader("X-Agent-Runtime-Id") != null
+        // WS and Runtime ACK/package endpoints are exclusive native lanes, even when legacy
+        // API-key headers are presented: they must fail here, never fall through to old auth.
+        // Elsewhere X-Agent-Id alone grants no Runtime authority; ambiguous duplicates fail closed.
+        return request.getRequestURI().matches(request.getContextPath() + "/internal/agent/tasks/[^/]+/work-items/[^/]+/reassignments/[^/]+/commands/[^/]+/(?:result-commit|lease)")
+                || request.getRequestURI().matches(request.getContextPath() + "/internal/agent/skill-installations/[^/]+/package")
+                || request.getRequestURI().equals(request.getContextPath() + "/ws/agent/channel")
+                || request.getRequestURI().startsWith(request.getContextPath() + "/agent/runtime/v1/commands/")
+                || request.getHeader("X-Agent-Runtime-Id") != null
                 || Collections.list(request.getHeaders("X-Agent-Id")).size() > 1
                 || Collections.list(request.getHeaders("Authorization")).stream()
                 .anyMatch(value -> value.toLowerCase(Locale.ROOT).startsWith("agentruntime"));
@@ -31,7 +35,15 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
         String path = request.getRequestURI().substring(request.getContextPath().length());
         // No matrix parameters, encoded separators, dot-segments or alternate dispatch paths.
         String id = "[A-Za-z0-9][A-Za-z0-9._:-]{0,99}";
-        return "GET".equals(request.getMethod()) && (path.equals("/internal/agent/tasks/conversation-executions/commands")
+        return ("GET".equals(request.getMethod()) || "POST".equals(request.getMethod()))
+                && path.matches("/internal/agent/tasks/" + id + "/work-items/" + id + "/reassignments/" + id
+                + "/commands/" + id + "/result-commit")
+                || "GET".equals(request.getMethod()) && path.matches("/internal/agent/tasks/" + id
+                + "/work-items/" + id + "/reassignments/" + id + "/commands/" + id + "/lease")
+                || "GET".equals(request.getMethod()) && path.matches("/internal/agent/skill-installations/" + id + "/package")
+                || "GET".equals(request.getMethod()) && path.equals("/ws/agent/channel")
+                || "POST".equals(request.getMethod()) && path.matches("/agent/runtime/v1/commands/" + id + "/acks")
+                || "GET".equals(request.getMethod()) && (path.equals("/internal/agent/tasks/conversation-executions/commands")
                 || path.equals("/internal/agent/tasks/conversation-executions/controlled-image-v3-commands"))
                 || "POST".equals(request.getMethod()) && path.matches("/internal/agent/tasks/" + id
                 + "/runs/" + id + "/conversation/(?:inputs(?:-v3|/" + id + "/content)?|lease(?:/renew)?|provider-start(?:-controlled-image(?:-v3)?)?|failure|(?:output|result)-commits/" + id
@@ -60,17 +72,18 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
             if (!allowed(request) || request.getHeader("Origin") != null) {
                 reject(response, 403); return; // native-only; no browser credential exposure/CORS lane
             }
-            String authorization = single(request, "Authorization");
-            if (!authorization.matches("AgentRuntime [0-9a-f]{32}")) throw AgentRuntimeAuthenticationService.denied();
-            authentication = service.authenticate(single(request, "X-Agent-Id"),
-                    single(request, "X-Agent-Runtime-Id"), authorization.substring(13));
-        } catch (RuntimeException ignored) { reject(response, 401); return; }
+            boolean handshake = request.getRequestURI().equals(request.getContextPath() + "/ws/agent/channel");
+            boolean ack = request.getRequestURI().startsWith(request.getContextPath() + "/agent/runtime/v1/commands/");
+            authentication = service.authenticate(sessionHeaders(request), !handshake && !ack);
+        } catch (org.springframework.dao.DataAccessException unavailable) { reject(response, 503); return; }
+        catch (RuntimeException ignored) { reject(response, 401); return; }
         var previous = SecurityContextHolder.getContext();
         var context = SecurityContextHolder.createEmptyContext();
         context.setAuthentication(authentication);
         SecurityContextHolder.setContext(context);
         var previousScope = EsContextHolder.getContext();
         var trustedScope = new EsContext();
+        trustedScope.setTenantId(authentication.getPrincipal().tenantId());
         trustedScope.setJiacn(authentication.getPrincipal().ownerJiacn());
         trustedScope.setClientId(authentication.getPrincipal().clientId());
         EsContextHolder.setContext(trustedScope); // never inherit client cookies as domain scope
@@ -79,6 +92,54 @@ public final class AgentRuntimeAuthenticationFilter extends OncePerRequestFilter
             SecurityContextHolder.setContext(previous);
         }
     }
+    /** Unified proof syntax shared by native HTTP and the WS handshake. Parsing grants no authority.
+     * Persistent installation/subject/host/generation validation is separately mandatory.
+     */
+    public static SessionHeaders sessionHeaders(HttpServletRequest request) {
+        if (request.getHeader("Origin") != null || request.getHeader("X-API-Key") != null
+                || request.getParameter("api_key") != null || request.getParameter("apiKey") != null
+                || request.getParameter("token") != null && !existingConversationFenceToken(request)
+                || request.getParameter("sessionToken") != null
+                || request.getParameter("access_token") != null
+                || request.getParameter("runtimeAuthorization") != null) {
+            throw AgentRuntimeAuthenticationService.denied();
+        }
+        String authorization = single(request, "Authorization");
+        if (!authorization.matches("AgentRuntime rts1_[0-9a-f]{64}")) throw AgentRuntimeAuthenticationService.denied();
+        String agent = single(request, "X-Agent-Id");
+        String installation = single(request, "X-Agent-Installation-Id");
+        String host = single(request, "X-Agent-Host-Id");
+        String instance = single(request, "X-Agent-Runtime-Id");
+        String generation = single(request, "X-Agent-Session-Generation");
+        if (!AgentRuntimeAuthenticationService.validAgentReference(agent)
+                || !installation.matches("rti_[0-9a-f]{32}")
+                || !AgentRuntimeAuthenticationService.exact(host, 100)
+                || !AgentRuntimeAuthenticationService.exact(instance, 100) || instance.equals(agent)
+                || !generation.matches("[1-9][0-9]*")) throw AgentRuntimeAuthenticationService.denied();
+        long parsed;
+        try { parsed = Long.parseLong(generation); }
+        catch (NumberFormatException invalid) { throw AgentRuntimeAuthenticationService.denied(); }
+        return new SessionHeaders(agent, installation, host, instance, parsed, authorization.substring(13));
+    }
+
+    // Existing multipart conversation uploads carry a business lease token named "token".
+    // It is not a Runtime credential, cannot select authority and remains checked by the original controller/service.
+    private static boolean existingConversationFenceToken(HttpServletRequest request) {
+        String path = request.getRequestURI().substring(request.getContextPath().length());
+        String id = "[A-Za-z0-9][A-Za-z0-9._:-]{0,99}";
+        String[] values = request.getParameterValues("token");
+        return "POST".equals(request.getMethod())
+                && path.matches("/internal/agent/tasks/" + id + "/runs/" + id + "/conversation/outputs/" + id + "/content")
+                && values != null && values.length == 1
+                && values[0].matches("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}");
+    }
+
+    /** Secret stays in the native request boundary; never store this record in WS attributes or logs. */
+    public record SessionHeaders(String agentId, String installationId, String hostId,
+            String runtimeInstanceId, long sessionGeneration, String token) {
+        @Override public String toString() { return "AgentRuntimeSessionHeaders[credentials=REDACTED]"; }
+    }
+
     private static String single(HttpServletRequest request, String header) {
         var values = Collections.list(request.getHeaders(header));
         if (values.size() != 1) throw AgentRuntimeAuthenticationService.denied();

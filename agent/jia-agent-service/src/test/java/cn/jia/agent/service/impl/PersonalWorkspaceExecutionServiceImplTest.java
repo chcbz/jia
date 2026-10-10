@@ -67,8 +67,11 @@ class PersonalWorkspaceExecutionServiceImplTest {
     private PersonalWorkspaceWriteService writes;
     private PersonalWorkspaceExecutionServiceImpl service;
 
+    @org.junit.jupiter.api.AfterEach
+    void clearRuntimePrincipal() { org.springframework.security.core.context.SecurityContextHolder.clearContext(); }
+
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         executions = mock(PersonalWorkspaceExecutionDao.class);
         workspace = mock(PersonalWorkspaceDao.class);
         taskLinks = mock(PersonalWorkspaceTaskLinkDao.class);
@@ -79,6 +82,15 @@ class PersonalWorkspaceExecutionServiceImplTest {
         service = new PersonalWorkspaceExecutionServiceImpl(executions, workspace,
                 taskLinks, runtimes, storage, writes,
                 new PersonalWorkspaceExecutionProperties(List.of(PersonalWorkspaceExecutionProperties.DOCX)));
+        var principal=org.springframework.beans.BeanUtils.instantiateClass(
+                cn.jia.agent.security.AgentRuntimeAuthentication.class.getDeclaredConstructor(cn.jia.agent.security.AgentRuntimeAuthentication.Scope.class),
+                new cn.jia.agent.security.AgentRuntimeAuthentication.Scope("0","client-a","owner-a","agent-a","runtime-a"));
+        principal.setDetails(new cn.jia.agent.security.AgentRuntimeAuthenticationService.Proof(principal.getPrincipal(),
+                "rti_"+"1".repeat(32),"host",1,"b".repeat(64),7,2));
+        org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(principal);
+        var auth=mock(cn.jia.agent.security.AgentRuntimeAuthenticationService.class);
+        when(auth.withNativeFence(any(),any())).thenAnswer(call->((java.util.function.Supplier<?>)call.getArgument(1)).get());
+        service.setRuntimeAuthentication(auth);
     }
 
     @Test
@@ -618,6 +630,8 @@ class PersonalWorkspaceExecutionServiceImplTest {
         when(executions.lockByTaskRun("0", "client-a", "owner-a", "pwe_task_1", "pwe_run_1"))
                 .thenReturn(execution);
 
+        when(executions.findByTaskRun("0", "client-a", "owner-a", "pwe_task_1", "pwe_run_1"))
+                .thenReturn(execution);
         var failure = assertThrows(PersonalWorkspaceExecutionService.Failure.class, () -> service.stageOutput(
                 RUNTIME, "pwe_task_1", "pwe_run_1", "output_1", "result.docx",
                 PersonalWorkspaceExecutionProperties.DOCX, "not an OOXML package".getBytes(StandardCharsets.UTF_8)));
@@ -863,8 +877,13 @@ class PersonalWorkspaceExecutionServiceImplTest {
                 org.mockito.ArgumentMatchers.eq(PersonalWorkspaceExecutionProperties.DOCX)))
                 .thenReturn(new PersonalWorkspaceStorage.StoredContent("agent result".getBytes(StandardCharsets.UTF_8),
                         contentHash, 12L, PersonalWorkspaceExecutionProperties.DOCX));
-        when(artifacts.publish(any(), any(), any(), any(), any(), any())).thenAnswer(invocation -> {
-            AgentTaskArtifactPublishDTO publish = invocation.getArgument(5);
+        var publications = new java.util.IdentityHashMap<AgentTaskArtifactService.PreparedPublication, AgentTaskArtifactPublishDTO>();
+        when(artifacts.preparePublication(any(), any(), any(), any(), any(), any())).thenAnswer(invocation -> {
+            var prepared = mock(AgentTaskArtifactService.PreparedPublication.class);
+            publications.put(prepared, invocation.getArgument(5));return prepared;
+        });
+        when(artifacts.publishPrepared(any(), any(), any(), any(), any(), any())).thenAnswer(invocation -> {
+            var publish = publications.get(invocation.getArgument(5));
             return artifact(publish.getArtifactId(), publish.getContentHash(), publish.getContentMimeType());
         });
         AgentTaskFormalDeliveryViewDTO formal = new AgentTaskFormalDeliveryViewDTO();
@@ -888,7 +907,7 @@ class PersonalWorkspaceExecutionServiceImplTest {
         assertEquals(formal.getDeliveryId(), output.getFormalDeliveryId());
         assertEquals("OUTPUT_COMMITTED", execution.getExecutionState());
         verify(writes).archiveRuntimeOutput(any(), any(), any());
-        verify(artifacts, times(2)).publish(any(), any(), any(), org.mockito.ArgumentMatchers.eq("task-1"),
+        verify(artifacts, times(2)).publishPrepared(any(), any(), any(), org.mockito.ArgumentMatchers.eq("task-1"),
                 org.mockito.ArgumentMatchers.eq("agent-a"), any());
         verify(formalDeliveries).submit(any(), any(), any(), org.mockito.ArgumentMatchers.eq("task-1"),
                 org.mockito.ArgumentMatchers.eq("agent-a"), any());

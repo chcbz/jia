@@ -6,6 +6,9 @@ import cn.jia.agent.entity.*;
 import cn.jia.agent.service.*;
 import cn.jia.chat.service.WorkspaceConversationAccessService;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
+import cn.jia.agent.security.*;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -42,7 +45,15 @@ class PersonalWorkspaceConversationExecutionTest {
     private PersonalWorkspaceExecutionEntity execution;
     private PersonalWorkspaceExecutionOutputEntity output;
 
-    @BeforeEach void setUp() {
+    @AfterEach void clearPrincipal() { SecurityContextHolder.clearContext(); }
+    private void principal(PersonalWorkspaceExecutionService.RuntimeScope scope) throws Exception {
+        var principal=org.springframework.beans.BeanUtils.instantiateClass(AgentRuntimeAuthentication.class.getDeclaredConstructor(AgentRuntimeAuthentication.Scope.class),new AgentRuntimeAuthentication.Scope(
+                scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.agentId(),scope.runtimeInstanceId()));
+        principal.setDetails(new AgentRuntimeAuthenticationService.Proof(principal.getPrincipal(),
+                "rti_"+"1".repeat(32),"host",1,"b".repeat(64),7,2));
+        SecurityContextHolder.getContext().setAuthentication(principal);
+    }
+    @BeforeEach void setUp() throws Exception {
         when(storage.maxContentBytes()).thenReturn(10_000L);
         var agent=new AgentRuntimeEntity();
         agent.setAgentId("agent");agent.setClientId("client");agent.setOwnerJiacn("owner");
@@ -51,6 +62,10 @@ class PersonalWorkspaceConversationExecutionTest {
                 mock(PersonalWorkspaceTaskLinkDao.class),runtimes,storage,writes,
                 new PersonalWorkspaceExecutionProperties(List.of("image/png")));
         service.setConversationAdmission(grants,transactions);
+        principal(RUNTIME);
+        var authentication=mock(AgentRuntimeAuthenticationService.class);
+        when(authentication.withNativeFence(any(),any())).thenAnswer(call->((java.util.function.Supplier<?>)call.getArgument(1)).get());
+        service.setRuntimeAuthentication(authentication);
         service.setControlledImageFollowupV3(followup,followupSources);
         service.setTaskExecutionDependencies(conversation,mock(AgentTaskWorkItemDao.class),
                 mock(AgentWorkItemLeaseService.class));
@@ -640,7 +655,7 @@ class PersonalWorkspaceConversationExecutionTest {
         assertEquals(hash,staged.sha256());
         assertEquals("COMMITTED",committed.state());
         assertEquals("OUTPUT_COMMITTED",execution.getExecutionState());
-        verify(followup,times(2)).runtimeAuthority(argThat(scope -> "runtime".equals(scope.runtimeInstanceId())),
+        verify(followup,times(4)).runtimeAuthority(argThat(scope -> "runtime".equals(scope.runtimeInstanceId())),
                 eq("task-1"),eq("run-1"),eq("RESULT"));
         verifyNoInteractions(followupSources,writes);
     }
@@ -749,6 +764,7 @@ class PersonalWorkspaceConversationExecutionTest {
         byte[] bytes=recoverableV3();
         var replacement=new PersonalWorkspaceExecutionService.RuntimeScope("0","client","owner","agent","replacement");
         execution.setConversationLeaseExpiresAt(1L);
+        principal(replacement);
         var proof=recoveryProof(bytes);
         var first=service.recoverConversationOutput(replacement,"task-1","run-1",recoveryManifest(bytes),
                 proof,"bird.png","image/png",bytes);
@@ -762,16 +778,18 @@ class PersonalWorkspaceConversationExecutionTest {
         assertEquals("runtime",execution.getConversationLeaseRuntimeId());
         assertEquals(1L,execution.getConversationLeaseVersion());assertEquals(1L,execution.getConversationLeaseExpiresAt());
         assertEquals(10L,execution.getConversationProviderStartedAt());
-        verify(followup,times(3)).runtimeAuthority(any(),eq("task-1"),eq("run-1"),eq("RESULT_RECOVERY"));
+        verify(followup,times(6)).runtimeAuthority(any(),eq("task-1"),eq("run-1"),eq("RESULT_RECOVERY"));
         verifyNoMoreInteractions(followup);verifyNoInteractions(followupSources,writes);
     }
 
     @Test void spoolRecoveryRejectsForeignLiveLeaseAndMissingStartWithoutWritingBytes() throws Exception {
         byte[] bytes=recoverableV3();var proof=recoveryProof(bytes);String manifest=recoveryManifest(bytes);
         var replacement=new PersonalWorkspaceExecutionService.RuntimeScope("0","client","owner","agent","replacement");
+        principal(replacement);
         assertThrows(PersonalWorkspaceExecutionService.Failure.class,()->service.recoverConversationOutput(
                 replacement,"task-1","run-1",manifest,proof,"bird.png","image/png",bytes));
         execution.setConversationProviderStartedAt(null);
+        principal(RUNTIME);
         assertThrows(PersonalWorkspaceExecutionService.Failure.class,()->service.recoverConversationOutput(
                 RUNTIME,"task-1","run-1",manifest,proof,"bird.png","image/png",bytes));
         verify(storage,never()).store(any(),any(byte[].class),anyString());verify(rows,never()).insertOutput(any());

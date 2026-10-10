@@ -1,0 +1,100 @@
+// UR-04 opt-in fixture only. Does not change main/default/Owner test source sets.
+// Run only through the project orchestrator against fixed clean API source/settings.
+// Requires full pinned 7594fd7 source + proven clean artifact + Node 20.20.2, not host dependencies.
+// Controller verifies archiveSHA + manifestSHA before extraction; fixture verifies manifest/bytes.
+// External non-sensitive inputs: UR04_API_COMMIT, UR04_CLIENT_ROOT, UR04_CLIENT_COMMIT, UR04_NODE_BIN, UR04_ARTIFACT_ROOT.
+// Task requires the explicit local fixture opt-in UR04_LOCAL_ACCEPTANCE=1.
+// Node needs outbound localhost socket access, Java needs 127.0.0.1 ephemeral bind; no Internet.
+// Java A -> STOP/exit -> parent JDBC -> fresh Java B on SAME private H2-file, never reseed.
+// Real native WS/E05/synthetic original engine execution; NOT Provider/enroll/MySQL/production.
+import org.gradle.api.tasks.testing.Test
+
+// --init-script is also applied to composite plugin/build-logic and buildSrc builds.
+// Bind to this checked-in script's API settings directory, not Gradle.parent/currentDir
+// or the presence of the agent project (which must still fail closed in the API build).
+// cold-init.gradle includes <API>/plugin; its settings root is not the API settings root.
+def apiBuildRoot = initscript.sourceFile?.canonicalFile
+for (String segment : ['ur04-e05-http.init.gradle', 'ur04E05Http', 'src', 'jia-agent-service', 'agent']) {
+    if (apiBuildRoot == null || apiBuildRoot.name != segment) {
+        throw new GradleException('UR04_INIT_SOURCE_PATH_REQUIRED')
+    }
+    apiBuildRoot = apiBuildRoot.parentFile
+}
+def isApiBuild = false
+gradle.settingsEvaluated { settings ->
+    isApiBuild = settings.settingsDir.canonicalFile == apiBuildRoot
+    if (isApiBuild && settings.rootProject.name != 'jia') {
+        throw new GradleException('UR04_API_SETTINGS_ROOT_REQUIRED')
+    }
+}
+
+gradle.projectsEvaluated {
+    if (!isApiBuild) return // No source set/task/project lookup in included builds or buildSrc.
+    def p = gradle.rootProject.findProject(':agent:jia-agent-service')
+    if (p == null) throw new GradleException('UR04_AGENT_PROJECT_REQUIRED')
+    if (p.sourceSets.findByName('ur04E05Http') != null) {
+        throw new GradleException('UR04_SOURCE_SET_ALREADY_DEFINED')
+    }
+    def s = p.sourceSets.create('ur04E05Http') {
+        java.setSrcDirs(['src/ur04E05Http/java'])
+        resources.setSrcDirs(['src/ur04E05Http/resources'])
+        compileClasspath += p.sourceSets.main.output
+        runtimeClasspath += output + compileClasspath
+    }
+    p.configurations.named(s.implementationConfigurationName) {
+        extendsFrom p.configurations.testImplementation
+    }
+    p.configurations.named(s.runtimeOnlyConfigurationName) {
+        extendsFrom p.configurations.testRuntimeOnly
+    }
+    // Real account verification, not a fixed snapshot or mock DAO. Test-only.
+    p.dependencies.add(s.implementationConfigurationName,
+            p.dependencies.project(path: ':user:jia-user-service'))
+    p.dependencies.add(s.implementationConfigurationName,
+            p.dependencies.project(path: ':user:jia-user-mapper'))
+
+    ['jia-chat-service', 'jia-chat-mapper'].each { module ->
+        p.dependencies.add(s.implementationConfigurationName, p.dependencies.project(path: ':chat:' + module))
+    }
+    def libs = p.rootProject.extensions.getByType(org.gradle.api.artifacts.VersionCatalogsExtension).named('libs')
+    p.dependencies.add(s.implementationConfigurationName, libs.findLibrary('spring.boot.starter.websocket').get())
+    // Handler constructor references ChatClient. Only its API type is compiled/loaded;
+    // no model bean/autoconfiguration or Provider request is created by this fixture.
+    p.dependencies.add(s.implementationConfigurationName,
+            'org.springframework.ai:spring-ai-client-chat:' + libs.findVersion('spring-ai').get().requiredVersion)
+
+    p.tasks.register('ur04E05Http', Test) {
+        group = 'verification'
+        description = 'UR-04 real Node HTTP/Spring/MyBatis/H2-file dual-JVM acceptance (synthetic engine; not Provider/MySQL).'
+        dependsOn p.tasks.named(s.classesTaskName)
+        testClassesDirs = s.output.classesDirs
+        classpath = s.runtimeClasspath
+        useJUnitPlatform()
+        maxParallelForks = 1
+        // Each scheduled paired-source acceptance must actually open sockets/restart the DB.
+        // Client archive is external to the API checkout: never reuse stale task/cache evidence.
+        outputs.upToDateWhen { false }
+        outputs.cacheIf { false }
+        filter { includeTestsMatching 'cn.jia.agent.acceptance.ur04.Ur04E05HttpDbAcceptanceTest' }
+        // Do not pass launcher credentials, opt-in control or external datasource configuration to tests.
+        def inputs = [:]
+        ['UR04_API_COMMIT', 'UR04_CLIENT_ROOT', 'UR04_CLIENT_COMMIT', 'UR04_NODE_BIN', 'UR04_ARTIFACT_ROOT'].each { key ->
+            def value = System.getenv(key)
+            if (value != null) inputs[key] = value
+        }
+        setEnvironment(inputs)
+        doFirst {
+            if (System.getenv('UR04_LOCAL_ACCEPTANCE') != '1') {
+                throw new GradleException('UR04_LOCAL_ACCEPTANCE_REQUIRED')
+            }
+            if (inputs.size() != 5) throw new GradleException('UR04_PAIRED_SOURCE_INPUTS_REQUIRED')
+            systemProperty 'ur04.fixture.classpath', s.runtimeClasspath.asPath
+            systemProperty 'ur04.api.root', p.rootProject.projectDir.absolutePath
+        }
+        testLogging {
+            events 'passed', 'failed', 'skipped'
+            exceptionFormat 'short'
+            showStandardStreams = true // Only fixed UR04 stage/number receipts are emitted.
+        }
+    }
+}

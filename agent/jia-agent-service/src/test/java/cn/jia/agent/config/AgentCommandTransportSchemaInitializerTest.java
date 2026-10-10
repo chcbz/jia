@@ -276,8 +276,35 @@ class AgentCommandTransportSchemaInitializerTest {
                 expected.keySet().stream().sorted().toList());
 
         assertEquals(new AgentCommandTransportSchemaInitializer.IndexDefinition(
-                        true, List.of("tenant_id", "client_id", "command_id")),
+                        true, List.of("tenant_id", "client_id", "owner_jiacn", "command_id")),
                 expected.get("agent_command_delivery").indexes().get("uk_delivery_command"));
+        assertFalse(new AgentCommandTransportSchemaInitializer.IndexDefinition(
+                        true, List.of("tenant_id", "client_id", "command_id"))
+                .equals(expected.get("agent_command_delivery").indexes().get("uk_delivery_command")));
+        assertEquals(new AgentCommandTransportSchemaInitializer.IndexDefinition(
+                        false, List.of("tenant_id", "client_id", "owner_jiacn",
+                                "active_message_id", "active_attempt")),
+                expected.get("agent_command_delivery").indexes().get("idx_delivery_active_message"));
+        assertFalse(new AgentCommandTransportSchemaInitializer.IndexDefinition(
+                        false, List.of("tenant_id", "client_id", "active_message_id", "active_attempt"))
+                .equals(expected.get("agent_command_delivery").indexes().get("idx_delivery_active_message")));
+        assertEquals(new AgentCommandTransportSchemaInitializer.IndexDefinition(
+                        false, List.of("tenant_id", "client_id", "owner_jiacn", "target_agent_id",
+                                "status", "next_retry_at", "id")),
+                expected.get("agent_command_delivery").indexes().get("idx_delivery_agent"));
+        assertFalse(new AgentCommandTransportSchemaInitializer.IndexDefinition(
+                        false, List.of("tenant_id", "client_id", "target_agent_id", "status", "next_retry_at", "id"))
+                .equals(expected.get("agent_command_delivery").indexes().get("idx_delivery_agent")));
+        AgentCommandTransportSchemaInitializer.ColumnDefinition owner =
+                expected.get("agent_command_delivery").columns().stream()
+                        .filter(column -> "owner_jiacn".equals(column.name())).findFirst().orElseThrow();
+        assertEquals(new AgentCommandTransportSchemaInitializer.ColumnDefinition(
+                "owner_jiacn", "varchar", "varchar(50)", false, null, "utf8mb4_0900_bin", "", ""), owner);
+        String deliveryDdl = AgentCommandTransportSchemaInitializer.ddlStatements().getFirst()
+                .replaceAll("\\s+", " ").trim().toLowerCase(Locale.ROOT);
+        assertTrue(deliveryDdl.contains("owner_jiacn varchar(50) not null"));
+        assertTrue(deliveryDdl.contains(
+                "constraint chk_delivery_owner_nonempty check (octet_length(owner_jiacn) between 1 and 50)"));
         assertEquals(new AgentCommandTransportSchemaInitializer.IndexDefinition(
                         true, List.of("tenant_id", "client_id", "event_id")),
                 expected.get("agent_outbox_event").indexes().get("uk_outbox_event_id"));

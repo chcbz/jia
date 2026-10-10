@@ -43,6 +43,249 @@ class AgentSchemaInitializerTest extends BaseMockTest {
     JdbcTemplate jdbcTemplate;
 
     @Test
+    void hostedProfileInitializerAndFullBaselineDeclareSameFourChecks() throws Exception {
+        // Source parity only; real MySQL execution remains the separate acceptance lane.
+        JdbcTemplate template = schemaCaptureTemplate("MySQL");
+        new AgentSchemaInitializer(template).afterPropertiesSet();
+        ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+        verify(template, atLeastOnce()).execute(captor.capture());
+        String created = captor.getAllValues().stream()
+                .filter(sql -> sql.contains("CREATE TABLE IF NOT EXISTS agent_hosted_profile ("))
+                .findFirst().orElseThrow();
+        Map<String, String> baseline = hostedCheckClauses(
+                tableDefinition(readResource("db/schema.sql"), "agent_hosted_profile"));
+        assertEquals(Set.of("chk_hosted_state", "chk_hosted_generation",
+                "chk_hosted_single_tenant", "chk_hosted_repair"), baseline.keySet());
+        assertEquals(baseline, hostedCheckClauses(created));
+        assertEquals("tenant_id='0'", baseline.get("chk_hosted_single_tenant"));
+
+        // Statement extraction must preserve quoted SQL and comments, not truncate a CHECK oracle.
+        String prefix = "create table if not exists statement_probe (";
+        for (String body : List.of(
+                "value varchar(100) comment 'before; after', id bigint)",
+                "value varchar(100) comment 'doubled ''; still quoted', id bigint)",
+                "value varchar(100) comment 'escaped \\'; still quoted', id bigint)",
+                "value varchar(100) comment \"double; quote\", id bigint)",
+                "value varchar(100) comment \"escaped \\\"; still quoted\", id bigint)",
+                "value varchar(100) comment \"doubled \"\"; still quoted\", id bigint)",
+                "`semi;colon``name` bigint, id bigint)",
+                "id bigint /* block; ' quote */ , value bigint)",
+                "id bigint -- line; ' quote\n, value bigint)",
+                "id bigint # line; \" quote\r\n, value bigint)",
+                "id bigint comment '-- # /* ; */', value bigint)")) {
+            String statement = prefix + body;
+            assertEquals(statement, tableDefinition(statement + "; select 1;", "statement_probe"));
+        }
+        for (String unfinished : List.of(
+                "value varchar(100) comment 'unterminated;", "`unterminated;",
+                "id bigint /* unterminated;", "id bigint) -- no terminator;")) {
+            assertThrows(AssertionError.class,
+                    () -> tableDefinition(prefix + unfinished, "statement_probe"));
+        }
+    }
+
+    @Test
+    void hostedProfileStrictCatalogAcceptsExactlyFourChecksOnRepeat() {
+        JdbcTemplate catalog = withHostedProfileCatalog(new JdbcTemplate(), hostedProfileChecks());
+        AgentSchemaInitializer initializer = new AgentSchemaInitializer(catalog);
+        initializer.validateHostedProfileSchema();
+        initializer.validateHostedProfileSchema();
+    }
+
+    @Test
+    void hostedProfileStrictCatalogRejectsEveryMissingCheckIncludingOldThreeSet() {
+        for (String missing : hostedProfileChecks().keySet()) {
+            Map<String, String> checks = new LinkedHashMap<>(hostedProfileChecks());
+            checks.remove(missing);
+            IllegalStateException rejected = assertThrows(IllegalStateException.class,
+                    () -> new AgentSchemaInitializer(withHostedProfileCatalog(new JdbcTemplate(), checks))
+                            .validateHostedProfileSchema());
+            assertTrue(rejected.getMessage().startsWith("PWA-HOSTED-P0 CHECK set drift:"), missing);
+        }
+    }
+
+    @Test
+    void hostedProfileStrictCatalogRejectsExtraOrChangedCheckExpressions() {
+        Map<String, String> extra = new LinkedHashMap<>(hostedProfileChecks());
+        extra.put("chk_hosted_extra", "generation <= 100");
+        assertThrows(IllegalStateException.class,
+                () -> new AgentSchemaInitializer(withHostedProfileCatalog(new JdbcTemplate(), extra))
+                        .validateHostedProfileSchema());
+        Map<String, String> wrongExpressions = Map.of(
+                "chk_hosted_state", "lifecycle_state IN ('ACTIVE')",
+                "chk_hosted_generation", "generation > 0",
+                "chk_hosted_single_tenant", "tenant_id = '1'",
+                "chk_hosted_repair", "resume_state IS NULL");
+        for (Map.Entry<String, String> wrong : wrongExpressions.entrySet()) {
+            Map<String, String> checks = new LinkedHashMap<>(hostedProfileChecks());
+            checks.put(wrong.getKey(), wrong.getValue());
+            IllegalStateException rejected = assertThrows(IllegalStateException.class,
+                    () -> new AgentSchemaInitializer(withHostedProfileCatalog(new JdbcTemplate(), checks))
+                            .validateHostedProfileSchema());
+            assertTrue(rejected.getMessage().startsWith("PWA-HOSTED-P0 CHECK set drift:"), wrong.getKey());
+        }
+    }
+
+    @Test
+    void bindingTenantStrictCatalogAcceptsExactlyEnforcedCanonicalContractOnRepeat() throws Exception {
+        for (String dialect : List.of("MySQL", "H2")) {
+            List<String> statements = new java.util.ArrayList<>();
+            JdbcTemplate catalog = bindingContractTemplate(dialect,
+                    List.of(bindingTenantColumn(dialect)), bindingTenantChecks(dialect), statements);
+            AgentSchemaInitializer initializer = new AgentSchemaInitializer(catalog);
+            initializer.validateBindingTenantContract();
+            initializer.validateBindingTenantContract();
+            assertTrue(statements.isEmpty(), "Binding validation must not repair DDL or convert data");
+        }
+    }
+
+    @Test
+    void bindingTenantStrictCatalogRejectsMissingDuplicateNullableTypeLengthAndDefaultDrift()
+            throws Exception {
+        Map<String, Object> required = bindingTenantColumn("MySQL");
+        List<List<Map<String, Object>>> variants = new java.util.ArrayList<>();
+        variants.add(List.of());
+        variants.add(List.of(required, required));
+        for (Map.Entry<String, Object> wrong : Map.<String, Object>of(
+                "DATA_TYPE", "char", "CHARACTER_MAXIMUM_LENGTH", 49L,
+                "IS_NULLABLE", "YES", "COLUMN_DEFAULT", "1").entrySet()) {
+            Map<String, Object> drifted = new LinkedHashMap<>(required);
+            drifted.put(wrong.getKey(), wrong.getValue());
+            variants.add(List.of(drifted));
+        }
+        for (String missing : required.keySet()) {
+            Map<String, Object> drifted = new LinkedHashMap<>(required);
+            drifted.put(missing, null);
+            variants.add(List.of(drifted));
+        }
+        Map<String, Object> numericDefault = new LinkedHashMap<>(required);
+        numericDefault.put("COLUMN_DEFAULT", 0);
+        variants.add(List.of(numericDefault));
+        Map<String, Object> quotedMysqlDefault = new LinkedHashMap<>(required);
+        quotedMysqlDefault.put("COLUMN_DEFAULT", "'0'");
+        variants.add(List.of(quotedMysqlDefault));
+        for (List<Map<String, Object>> columns : variants) {
+            List<String> statements = new java.util.ArrayList<>();
+            JdbcTemplate catalog = bindingContractTemplate("MySQL", columns,
+                    bindingTenantChecks("MySQL"), statements);
+            IllegalStateException rejected = assertThrows(IllegalStateException.class,
+                    () -> new AgentSchemaInitializer(catalog).validateBindingTenantContract());
+            assertTrue(rejected.getMessage().startsWith("Agent binding tenant"));
+            assertTrue(statements.isEmpty());
+        }
+    }
+
+    @Test
+    void bindingTenantStrictCatalogRejectsMissingLegacyOnlyDoubleAndWrongCaseChecks() throws Exception {
+        List<Map<String, Object>> required = bindingTenantChecks("MySQL");
+        Map<String, Object> status = required.get(0);
+        Map<String, Object> singleTenant = required.get(1);
+        Map<String, Object> legacy = new LinkedHashMap<>(singleTenant);
+        legacy.put("CONSTRAINT_NAME", "chk_agent_binding_tenant_owner");
+        Map<String, Object> wrongCase = new LinkedHashMap<>(singleTenant);
+        wrongCase.put("CONSTRAINT_NAME", "CHK_AGENT_BINDING_SINGLE_TENANT");
+        for (List<Map<String, Object>> checks : List.of(
+                List.<Map<String, Object>>of(), List.of(status), List.of(singleTenant),
+                List.of(status, legacy), List.of(status, legacy, singleTenant),
+                List.of(status, wrongCase))) {
+            JdbcTemplate catalog = bindingContractTemplate("MySQL",
+                    List.of(bindingTenantColumn("MySQL")), checks, new java.util.ArrayList<>());
+            IllegalStateException rejected = assertThrows(IllegalStateException.class,
+                    () -> new AgentSchemaInitializer(catalog).validateBindingTenantContract());
+            assertEquals("Agent binding CHECK set/clause drift", rejected.getMessage());
+        }
+    }
+
+    @Test
+    void bindingTenantStrictCatalogRejectsWeakClausesAndUnenforcedChecks() throws Exception {
+        for (int index : List.of(0, 1)) {
+            List<String> weakClauses = index == 0
+                    ? List.of("status IN (0, 1, 2, 3, 4)", "status >= 0", "TRUE")
+                    : List.of("tenant_id IS NULL OR tenant_id = '0'", "tenant_id = TRIM(jiacn)",
+                            "tenant_id = '1'", "tenant_id = '0' OR TRUE", "TRUE");
+            for (String clause : weakClauses) {
+                List<Map<String, Object>> checks = new java.util.ArrayList<>(bindingTenantChecks("MySQL"));
+                Map<String, Object> wrong = new LinkedHashMap<>(checks.get(index));
+                wrong.put("CHECK_CLAUSE", clause);
+                checks.set(index, wrong);
+                JdbcTemplate catalog = bindingContractTemplate("MySQL",
+                        List.of(bindingTenantColumn("MySQL")), checks, new java.util.ArrayList<>());
+                IllegalStateException rejected = assertThrows(IllegalStateException.class,
+                        () -> new AgentSchemaInitializer(catalog).validateBindingTenantContract());
+                assertEquals("Agent binding CHECK set/clause drift", rejected.getMessage());
+            }
+            for (String enforcement : List.of("NO", "")) {
+                List<Map<String, Object>> checks = new java.util.ArrayList<>(bindingTenantChecks("MySQL"));
+                Map<String, Object> wrong = new LinkedHashMap<>(checks.get(index));
+                wrong.put("ENFORCED", enforcement);
+                checks.set(index, wrong);
+                JdbcTemplate catalog = bindingContractTemplate("MySQL",
+                        List.of(bindingTenantColumn("MySQL")), checks, new java.util.ArrayList<>());
+                IllegalStateException rejected = assertThrows(IllegalStateException.class,
+                        () -> new AgentSchemaInitializer(catalog).validateBindingTenantContract());
+                assertEquals("Agent binding CHECK enforcement/duplicate drift", rejected.getMessage());
+            }
+        }
+    }
+
+    @Test
+    void bindingTenantStrictCatalogRejectsDuplicateCheckMetadata() throws Exception {
+        List<Map<String, Object>> required = bindingTenantChecks("MySQL");
+        for (Map<String, Object> duplicate : required) {
+            List<Map<String, Object>> checks = new java.util.ArrayList<>(required);
+            checks.add(duplicate);
+            JdbcTemplate catalog = bindingContractTemplate("MySQL",
+                    List.of(bindingTenantColumn("MySQL")), checks, new java.util.ArrayList<>());
+            IllegalStateException rejected = assertThrows(IllegalStateException.class,
+                    () -> new AgentSchemaInitializer(catalog).validateBindingTenantContract());
+            assertEquals("Agent binding CHECK enforcement/duplicate drift", rejected.getMessage());
+        }
+    }
+
+    @Test
+    void bindingContractFailsBeforeGeneratedColumnIndexOrAutomaticCheckRepair() throws Exception {
+        Map<String, Object> nullable = new LinkedHashMap<>(bindingTenantColumn("MySQL"));
+        nullable.put("IS_NULLABLE", "YES");
+        for (boolean badColumn : List.of(true, false)) {
+            List<String> statements = new java.util.ArrayList<>();
+            JdbcTemplate catalog = bindingContractTemplate("MySQL",
+                    List.of(badColumn ? nullable : bindingTenantColumn("MySQL")),
+                    badColumn ? bindingTenantChecks("MySQL") : List.of(), statements);
+            assertThrows(IllegalStateException.class,
+                    () -> invokeEnsureBindingTable(new AgentSchemaInitializer(catalog)));
+            assertEquals(1, statements.size());
+            assertTrue(statements.getFirst().startsWith("CREATE TABLE IF NOT EXISTS agent_persona_binding"));
+            assertTrue(statements.stream().noneMatch(sql -> sql.startsWith("ALTER TABLE")
+                    || sql.startsWith("CREATE INDEX") || sql.startsWith("CREATE UNIQUE INDEX")));
+        }
+    }
+
+    @Test
+    void bindingInitializerBaselineAndMigrationDeclareSingleCanonicalTenantContract() throws Exception {
+        JdbcTemplate template = schemaCaptureTemplate("MySQL");
+        new AgentSchemaInitializer(template).afterPropertiesSet();
+        String created = executedStatements(template).stream()
+                .filter(sql -> sql.contains("CREATE TABLE IF NOT EXISTS agent_persona_binding ("))
+                .findFirst().orElseThrow();
+        String baseline = tableDefinition(readResource("db/schema.sql"), "agent_persona_binding");
+        for (String definition : List.of(created, baseline)) {
+            String normalized = normalizeCatalogSql(definition);
+            assertTrue(normalized.contains("tenant_id varchar(50) not null default '0'"));
+            assertTrue(normalized.contains("constraint chk_agent_binding_single_tenant check (tenant_id = '0')"));
+            assertTrue(normalized.contains("constraint chk_agent_binding_status check (status in (0, 1, 2, 3))"));
+            assertTrue(normalized.contains("unique key uk_agent_binding_active_persona "
+                    + "(tenant_id, client_id, active_persona_code)"));
+            assertFalse(normalized.contains("chk_agent_binding_tenant_owner"));
+        }
+        String migration = normalizeCatalogSql(readResource("db/agent-identity-schema.sql"));
+        assertTrue(migration.contains("modify column tenant_id varchar(50) not null default '0'"));
+        assertTrue(migration.contains("add constraint chk_agent_binding_single_tenant check (tenant_id = '0')"));
+        assertTrue(migration.contains("drop check chk_agent_binding_tenant_owner"));
+        assertTrue(migration.contains("drop check chk_agent_binding_single_tenant"));
+        assertFalse(migration.contains("add constraint chk_agent_binding_tenant_owner"));
+    }
+
+    @Test
     void taskEventStorageEngineValidationAcceptsOnlyInnoDb() {
         JdbcTemplate valid = engineTemplate(Map.of(
                 "agent_task_meta", "InnoDB",
@@ -66,6 +309,26 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         List<AgentSchemaInitializer.TaskEventIndexColumn> required = requiredTaskEventUniqueIndexes();
         new AgentSchemaInitializer(taskEventUniqueIndexTemplate(required))
                 .validateTaskEventUniqueIndexes();
+
+        for (String ownerlessIndex : List.of("uk_task_event_id", "uk_task_event_version")) {
+            java.util.ArrayList<AgentSchemaInitializer.TaskEventIndexColumn> ownerless =
+                    new java.util.ArrayList<>();
+            for (AgentSchemaInitializer.TaskEventIndexColumn part : required) {
+                if (!ownerlessIndex.equals(part.indexName())) {
+                    ownerless.add(part);
+                } else if (!"owner_jiacn".equals(part.columnName())) {
+                    ownerless.add(new AgentSchemaInitializer.TaskEventIndexColumn(
+                            part.indexName(), part.columnName(),
+                            part.sequence() > 3 ? part.sequence() - 1 : part.sequence(),
+                            part.subPart()));
+                }
+            }
+            IllegalStateException error = assertThrows(IllegalStateException.class,
+                    () -> new AgentSchemaInitializer(taskEventUniqueIndexTemplate(ownerless))
+                            .validateTaskEventUniqueIndexes());
+            assertTrue(error.getMessage().contains("dangerous scoped-uniqueness drift"),
+                    error.getMessage());
+        }
 
         for (AgentSchemaInitializer.TaskEventIndexColumn dangerous : List.of(
                 new AgentSchemaInitializer.TaskEventIndexColumn(
@@ -207,14 +470,14 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         }
 
         assertTrue(schema.contains("create table if not exists agent_scene_state"));
-        assertTrue(schema.contains("unique key uk_agent_scene_state_scope_agent (tenant_id, client_id, scene_id, agent_id)"));
-        assertTrue(schema.contains("key idx_agent_scene_state_scope_version (tenant_id, client_id, scene_id, state_version)"));
+        assertTrue(schema.contains("unique key uk_agent_scene_state_scope_agent (tenant_id, client_id, owner_jiacn, scene_id, agent_id)"));
+        assertTrue(schema.contains("key idx_agent_scene_state_scope_version (tenant_id, client_id, owner_jiacn, scene_id, state_version)"));
         assertTrue(schema.contains("create table if not exists agent_scene_event"));
-        assertTrue(schema.contains("unique key uk_agent_scene_event_scope_version (tenant_id, client_id, scene_id, scene_version)"));
+        assertTrue(schema.contains("unique key uk_agent_scene_event_scope_version (tenant_id, client_id, owner_jiacn, scene_id, scene_version)"));
         assertTrue(schema.contains("create table if not exists agent_scene_phase_report"));
-        assertTrue(schema.contains("unique key uk_agent_scene_phase_report_scope_report (tenant_id, client_id, scene_id, report_id)"));
+        assertTrue(schema.contains("unique key uk_agent_scene_phase_report_scope_report (tenant_id, client_id, owner_jiacn, scene_id, report_id)"));
         assertTrue(schema.contains("create table if not exists agent_scene_version"));
-        assertTrue(schema.contains("primary key (tenant_id, client_id, scene_id)"));
+        assertTrue(schema.contains("primary key (tenant_id, client_id, owner_jiacn, scene_id)"));
 
         for (String table : Set.of(
                 "agent_scene_state", "agent_scene_event", "agent_scene_phase_report", "agent_scene_version")) {
@@ -222,11 +485,12 @@ class AgentSchemaInitializerTest extends BaseMockTest {
             String compact = definition.replaceAll("\\s+", " ");
             assertTrue(compact.contains("tenant_id varchar(50) not null"), table);
             assertTrue(compact.contains("client_id varchar(50) not null"), table);
+            assertTrue(compact.contains("owner_jiacn varchar(50) not null"), table);
             assertTrue(compact.contains("scene_id varchar(100) not null"), table);
             assertFalse(definition.matches("(?s).*\\b(x|y|path|coordinates?|frame|frame_index|token|credential|model_response)\\b.*"), table);
         }
         assertEquals(Set.of(
-                        "tenant_id", "client_id", "scene_id", "current_version", "create_time", "update_time"),
+                        "tenant_id", "client_id", "owner_jiacn", "scene_id", "current_version", "create_time", "update_time"),
                 tableStructure(tableDefinition(schema, "agent_scene_version")).columns().keySet());
     }
 
@@ -483,6 +747,9 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                     .findFirst().orElseThrow();
             assertEquals(normalizeSqlStructure(tableDefinition(schema, table)),
                     normalizeSqlStructure(initializerDefinition), table);
+            assertEquals(normalizeSqlStructure(tableDefinition(schema, table)),
+                    normalizeSqlStructure(tableDefinition(
+                            readResource("db/agent-identity-schema.sql"), table)), table + " migration");
         }
     }
 
@@ -737,7 +1004,8 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         };
 
         IllegalStateException error = assertThrows(IllegalStateException.class,
-                () -> new AgentSchemaInitializer(failingTemplate).afterPropertiesSet());
+                () -> new AgentSchemaInitializer(withHostedProfileCatalog(failingTemplate))
+                        .afterPropertiesSet());
         assertTrue(error.getMessage().contains("uk_agent_binding_active_persona"), error.getMessage());
     }
 
@@ -877,8 +1145,9 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                     return (List<T>) List.of(
                             new AgentSchemaInitializer.IndexColumn(1, "tenant_id", 1, null),
                             new AgentSchemaInitializer.IndexColumn(1, "client_id", 2, null),
-                            new AgentSchemaInitializer.IndexColumn(1, "scene_id", 3, null),
-                            new AgentSchemaInitializer.IndexColumn(1, "agent_id", 4, null));
+                            new AgentSchemaInitializer.IndexColumn(1, "owner_jiacn", 3, null),
+                            new AgentSchemaInitializer.IndexColumn(1, "scene_id", 4, null),
+                            new AgentSchemaInitializer.IndexColumn(1, "agent_id", 5, null));
                 }
                 return List.of();
             }
@@ -967,8 +1236,9 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                     return (List<T>) List.of(
                             new AgentSchemaInitializer.IndexColumn(1, "tenant_id", 1, null),
                             new AgentSchemaInitializer.IndexColumn(1, "client_id", 2, null),
-                            new AgentSchemaInitializer.IndexColumn(1, "scene_id", 3, null),
-                            new AgentSchemaInitializer.IndexColumn(1, "agent_id", 4, null));
+                            new AgentSchemaInitializer.IndexColumn(1, "owner_jiacn", 3, null),
+                            new AgentSchemaInitializer.IndexColumn(1, "scene_id", 4, null),
+                            new AgentSchemaInitializer.IndexColumn(1, "agent_id", 5, null));
                 }
                 return List.of();
             }
@@ -1002,8 +1272,9 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                     return (List<T>) List.of(
                             new AgentSchemaInitializer.IndexColumn(0, "client_id", 1, null),
                             new AgentSchemaInitializer.IndexColumn(0, "tenant_id", 2, null),
-                            new AgentSchemaInitializer.IndexColumn(0, "scene_id", 3, null),
-                            new AgentSchemaInitializer.IndexColumn(0, "agent_id", 4, null));
+                            new AgentSchemaInitializer.IndexColumn(0, "owner_jiacn", 3, null),
+                            new AgentSchemaInitializer.IndexColumn(0, "scene_id", 4, null),
+                            new AgentSchemaInitializer.IndexColumn(0, "agent_id", 5, null));
                 }
                 return List.of();
             }
@@ -1037,8 +1308,9 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                     return (List<T>) List.of(
                             new AgentSchemaInitializer.IndexColumn(0, "tenant_id", 1, null),
                             new AgentSchemaInitializer.IndexColumn(0, "client_id", 2, 12),
-                            new AgentSchemaInitializer.IndexColumn(0, "scene_id", 3, null),
-                            new AgentSchemaInitializer.IndexColumn(0, "agent_id", 4, null));
+                            new AgentSchemaInitializer.IndexColumn(0, "owner_jiacn", 3, null),
+                            new AgentSchemaInitializer.IndexColumn(0, "scene_id", 4, null),
+                            new AgentSchemaInitializer.IndexColumn(0, "agent_id", 5, null));
                 }
                 return List.of();
             }
@@ -1159,6 +1431,16 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                 () -> new AgentSchemaInitializer(identityCatalogTemplate("check")).afterPropertiesSet());
         assertTrue(error.getMessage().contains("chk_identity_registry_scope"), error.getMessage());
         assertTrue(error.getMessage().contains("incompatible definition"), error.getMessage());
+
+        for (String oldContract : List.of("system-null-tenant", "owner-tenant", "dual-tenant",
+                "alias-owner-tenant")) {
+            IllegalStateException rejected = assertThrows(IllegalStateException.class,
+                    () -> new AgentSchemaInitializer(identityCatalogTemplate(oldContract)).afterPropertiesSet());
+            String constraint = "alias-owner-tenant".equals(oldContract)
+                    ? "chk_identity_alias_scope" : "chk_identity_registry_scope";
+            assertTrue(rejected.getMessage().contains(constraint), oldContract + ": " + rejected.getMessage());
+            assertTrue(rejected.getMessage().contains("incompatible definition"), rejected.getMessage());
+        }
     }
 
     @Test
@@ -1215,15 +1497,19 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                 new AgentSchemaInitializer.TaskEventIndexColumn(
                         "uk_task_event_id", "client_id", 2, null),
                 new AgentSchemaInitializer.TaskEventIndexColumn(
-                        "uk_task_event_id", "event_id", 3, null),
+                        "uk_task_event_id", "owner_jiacn", 3, null),
+                new AgentSchemaInitializer.TaskEventIndexColumn(
+                        "uk_task_event_id", "event_id", 4, null),
                 new AgentSchemaInitializer.TaskEventIndexColumn(
                         "uk_task_event_version", "tenant_id", 1, null),
                 new AgentSchemaInitializer.TaskEventIndexColumn(
                         "uk_task_event_version", "client_id", 2, null),
                 new AgentSchemaInitializer.TaskEventIndexColumn(
-                        "uk_task_event_version", "task_id", 3, null),
+                        "uk_task_event_version", "owner_jiacn", 3, null),
                 new AgentSchemaInitializer.TaskEventIndexColumn(
-                        "uk_task_event_version", "event_version", 4, null));
+                        "uk_task_event_version", "task_id", 4, null),
+                new AgentSchemaInitializer.TaskEventIndexColumn(
+                        "uk_task_event_version", "event_version", 5, null));
     }
 
     private JdbcTemplate identityCatalogTemplate(String fault) {
@@ -1269,7 +1555,27 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                     return (List<T>) identityIndex(String.valueOf(args[0]), String.valueOf(args[1]));
                 }
                 if (normalized.contains("join information_schema.check_constraints")) {
-                    return (List<T>) identityChecks("check".equals(fault));
+                    List<AgentSchemaInitializer.CheckDefinition> checks =
+                            new java.util.ArrayList<>(identityChecks("check".equals(fault)));
+                    for (int i = 0; i < checks.size(); i++) {
+                        AgentSchemaInitializer.CheckDefinition original = checks.get(i);
+                        String clause = original.clause();
+                        if ("chk_identity_registry_scope".equals(original.name())) {
+                            clause = switch (fault) {
+                                case "system-null-tenant" -> clause.replaceFirst("tenant_id = '0'", "tenant_id IS NULL");
+                                case "owner-tenant" -> clause.replace("tenant_id = '0'", "tenant_id = TRIM(owner_jiacn)");
+                                case "dual-tenant" -> clause.replace("tenant_id = '0'",
+                                        "(tenant_id = '0' OR tenant_id = TRIM(owner_jiacn))");
+                                default -> clause;
+                            };
+                        } else if ("chk_identity_alias_scope".equals(original.name())
+                                && "alias-owner-tenant".equals(fault)) {
+                            clause = "tenant_id = TRIM(owner_jiacn)";
+                        }
+                        checks.set(i, new AgentSchemaInitializer.CheckDefinition(
+                                original.table(), original.name(), clause));
+                    }
+                    return (List<T>) checks;
                 }
                 if (normalized.contains("join information_schema.referential_constraints")) {
                     return (List<T>) identityForeignKey("fk".equals(fault));
@@ -1545,9 +1851,50 @@ class AgentSchemaInitializerTest extends BaseMockTest {
     private String tableDefinition(String schema, String table) {
         int start = schema.indexOf("create table if not exists " + table + " (");
         assertTrue(start >= 0, table);
-        int end = schema.indexOf(";", start);
-        assertTrue(end > start, table);
-        return schema.substring(start, end);
+        char quote = 0;
+        boolean lineComment = false;
+        boolean blockComment = false;
+        for (int i = start; i < schema.length(); i++) {
+            char current = schema.charAt(i);
+            char next = i + 1 < schema.length() ? schema.charAt(i + 1) : 0;
+            if (lineComment) {
+                if (current == '\n' || current == '\r') {
+                    lineComment = false;
+                }
+                continue;
+            }
+            if (blockComment) {
+                if (current == '*' && next == '/') {
+                    blockComment = false;
+                    i++;
+                }
+                continue;
+            }
+            if (quote != 0) {
+                if (quote != '`' && current == '\\' && next != 0) {
+                    i++; // MySQL string backslash escape: the next character cannot close the quote.
+                } else if (current == quote) {
+                    if (next == quote) {
+                        i++; // Doubled string/identifier quote remains inside the quoted value.
+                    } else {
+                        quote = 0;
+                    }
+                }
+                continue;
+            }
+            if (current == '\'' || current == '"' || current == '`') {
+                quote = current;
+            } else if (current == '/' && next == '*') {
+                blockComment = true;
+                i++;
+            } else if (current == '#' || (current == '-' && next == '-'
+                    && (i + 2 == schema.length() || Character.isWhitespace(schema.charAt(i + 2))))) {
+                lineComment = true;
+            } else if (current == ';') {
+                return schema.substring(start, i);
+            }
+        }
+        throw new AssertionError("Missing unquoted SQL statement terminator for " + table);
     }
 
     private JdbcTemplate dialectTemplate(String productName) throws Exception {
@@ -1563,6 +1910,10 @@ class AgentSchemaInitializerTest extends BaseMockTest {
     private void configureTaskEventCatalog(JdbcTemplate template, String productName) throws Exception {
         DataSource dataSource = dialectDataSource(productName);
         lenient().when(template.getDataSource()).thenReturn(dataSource);
+        lenient().doAnswer(invocation -> {
+            List<Map<String, Object>> rows = bindingTenantCatalogRows(invocation.getArgument(0));
+            return rows == null ? List.of() : rows;
+        }).when(template).queryForList(anyString());
         AtomicBoolean eventCreated = new AtomicBoolean();
         Set<String> historicalTables = new java.util.LinkedHashSet<>();
         List<AgentSchemaInitializer.TriggerDefinition> historicalTriggers =
@@ -1717,11 +2068,87 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         }).when(template).queryForObject(anyString(), any(Class.class));
     }
 
+    private Map<String, Object> bindingTenantColumn(String dialect) {
+        return Map.of("DATA_TYPE", "H2".equals(dialect) ? "CHARACTER VARYING" : "varchar",
+                "CHARACTER_MAXIMUM_LENGTH", 50L, "IS_NULLABLE", "NO",
+                "COLUMN_DEFAULT", "H2".equals(dialect) ? "'0'" : "0");
+    }
+
+    private List<Map<String, Object>> bindingTenantChecks(String dialect) {
+        boolean h2 = "H2".equals(dialect);
+        return List.of(
+                Map.of("CONSTRAINT_NAME", h2 ? "CHK_AGENT_BINDING_STATUS" : "chk_agent_binding_status",
+                        "ENFORCED", "YES", "CHECK_CLAUSE", h2 ? "\"STATUS\" IN (0, 1, 2, 3)" : "status IN (0, 1, 2, 3)"),
+                Map.of("CONSTRAINT_NAME", h2 ? "CHK_AGENT_BINDING_SINGLE_TENANT" : "chk_agent_binding_single_tenant",
+                        "ENFORCED", "YES", "CHECK_CLAUSE", h2 ? "\"TENANT_ID\" = '0'" : "tenant_id = '0'"));
+    }
+
+    private List<Map<String, Object>> bindingTenantCatalogRows(String sql) {
+        String normalized = normalizeCatalogSql(sql);
+        if (!normalized.contains("'agent_persona_binding'")) return null;
+        String dialect = normalized.contains("schema()") ? "H2" : "MySQL";
+        if (normalized.contains("from information_schema.columns")) {
+            return List.of(bindingTenantColumn(dialect));
+        }
+        if (normalized.contains("join information_schema.check_constraints")) {
+            return bindingTenantChecks(dialect);
+        }
+        return null;
+    }
+
+    private JdbcTemplate bindingContractTemplate(String dialect, List<Map<String, Object>> columns,
+            List<Map<String, Object>> checks, List<String> statements) throws Exception {
+        return new JdbcTemplate(dialectDataSource(dialect)) {
+            @Override
+            public List<Map<String, Object>> queryForList(String sql) {
+                String normalized = normalizeCatalogSql(sql);
+                assertTrue(normalized.contains("'agent_persona_binding'"));
+                if (normalized.contains("from information_schema.columns")) return columns;
+                assertTrue(normalized.contains("join information_schema.check_constraints"));
+                assertTrue(normalized.contains("tc.enforced"));
+                return checks;
+            }
+
+            @Override
+            public void execute(String sql) {
+                statements.add(sql);
+            }
+
+            @Override
+            public int update(String sql, Object... args) {
+                throw new AssertionError("Binding contract validation must not convert tenant data");
+            }
+        };
+    }
+
+    private void invokeEnsureBindingTable(AgentSchemaInitializer initializer) {
+        try {
+            var method = AgentSchemaInitializer.class.getDeclaredMethod("ensureBindingTable");
+            method.setAccessible(true);
+            method.invoke(initializer);
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            if (e.getCause() instanceof RuntimeException runtime) throw runtime;
+            throw new AssertionError(e.getCause());
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
+    }
+
     private JdbcTemplate withHostedProfileCatalog(JdbcTemplate delegate) {
+        return withHostedProfileCatalog(delegate, hostedProfileChecks());
+    }
+
+    private JdbcTemplate withHostedProfileCatalog(JdbcTemplate delegate, Map<String, String> checks) {
         return new JdbcTemplate() {
             @Override
             public DataSource getDataSource() {
                 return delegate.getDataSource();
+            }
+
+            @Override
+            public List<Map<String, Object>> queryForList(String sql) {
+                List<Map<String, Object>> rows = bindingTenantCatalogRows(sql);
+                return rows == null ? delegate.queryForList(sql) : rows;
             }
 
             @Override
@@ -1795,7 +2222,7 @@ class AgentSchemaInitializerTest extends BaseMockTest {
 
             @Override
             public void query(String sql, RowCallbackHandler rowCallbackHandler) {
-                if (!emitHostedProfileRows(sql, rowCallbackHandler)) {
+                if (!emitHostedProfileRows(sql, rowCallbackHandler, checks)) {
                     delegate.query(sql, rowCallbackHandler);
                 }
             }
@@ -1803,6 +2230,11 @@ class AgentSchemaInitializerTest extends BaseMockTest {
     }
 
     private boolean emitHostedProfileRows(String sql, RowCallbackHandler rowCallbackHandler) {
+        return emitHostedProfileRows(sql, rowCallbackHandler, hostedProfileChecks());
+    }
+
+    private boolean emitHostedProfileRows(String sql, RowCallbackHandler rowCallbackHandler,
+            Map<String, String> checks) {
         String normalized = normalizeCatalogSql(sql);
         try {
             if (normalized.contains("from information_schema.columns")
@@ -1825,7 +2257,7 @@ class AgentSchemaInitializerTest extends BaseMockTest {
             }
             if (normalized.contains("join information_schema.check_constraints")
                     && normalized.contains("table_name='agent_hosted_profile'")) {
-                for (Map.Entry<String, String> entry : hostedProfileChecks().entrySet()) {
+                for (Map.Entry<String, String> entry : checks.entrySet()) {
                     java.sql.ResultSet row = mock(java.sql.ResultSet.class);
                     when(row.getString("CONSTRAINT_NAME")).thenReturn(entry.getKey());
                     when(row.getString("CHECK_CLAUSE")).thenReturn(entry.getValue());
@@ -1903,11 +2335,38 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                 "uk_hosted_binding", "uk_hosted_profile_key");
     }
 
+    private Map<String, String> hostedCheckClauses(String definition) {
+        Map<String, String> result = new LinkedHashMap<>();
+        Matcher matcher = Pattern.compile("(?i)\\bconstraint\\s+(chk_hosted_[a-z_]+)\\s+check\\s*\\(")
+                .matcher(definition);
+        while (matcher.find()) {
+            int depth = 1, end = matcher.end();
+            boolean quoted = false;
+            for (; end < definition.length(); end++) {
+                char c = definition.charAt(end);
+                if (c == '\'') {
+                    if (quoted && end + 1 < definition.length() && definition.charAt(end + 1) == '\'') end++;
+                    else quoted = !quoted;
+                } else if (!quoted) {
+                    if (c == '(') depth++;
+                    else if (c == ')' && --depth == 0) break;
+                }
+            }
+            assertEquals(0, depth, "complete CHECK clause");
+            String expression = definition.substring(matcher.end(), end)
+                    .replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
+            org.junit.jupiter.api.Assertions.assertNull(result.put(matcher.group(1).toLowerCase(Locale.ROOT), expression),
+                    "CHECK names must be unique");
+        }
+        return result;
+    }
+
     private Map<String, String> hostedProfileChecks() {
         return Map.of(
                 "chk_hosted_state",
                 "lifecycle_state IN ('PREPARED','STAGED_DISABLED','FILE_ENABLED','ACTIVE','SUSPENDING','SUSPENDED','REPAIR_REQUIRED')",
                 "chk_hosted_generation", "generation >= 0",
+                "chk_hosted_single_tenant", "tenant_id = '0'",
                 "chk_hosted_repair",
                 "(lifecycle_state='REPAIR_REQUIRED' AND resume_state IS NOT NULL) OR "
                         + "(lifecycle_state<>'REPAIR_REQUIRED' AND resume_state IS NULL)");
@@ -2036,7 +2495,7 @@ class AgentSchemaInitializerTest extends BaseMockTest {
                     "varchar", "varchar(20)", false, "utf8mb4_0900_bin", "");
             case "aggregate_type" -> new AgentSchemaInitializer.ColumnDefinition(
                     "varchar", "varchar(30)", false, "utf8mb4_0900_bin", "");
-            case "tenant_id", "client_id" -> new AgentSchemaInitializer.ColumnDefinition(
+            case "tenant_id", "client_id", "owner_jiacn" -> new AgentSchemaInitializer.ColumnDefinition(
                     "varchar", "varchar(50)", false, "utf8mb4_0900_bin", "");
             case "event_json" -> new AgentSchemaInitializer.ColumnDefinition(
                     "mediumtext", "mediumtext", false, null, "");
@@ -2048,14 +2507,14 @@ class AgentSchemaInitializerTest extends BaseMockTest {
         List<String> columns = switch (index) {
             case "PRIMARY" -> List.of("id");
             case "uk_task_event_version" ->
-                    List.of("tenant_id", "client_id", "task_id", "event_version");
-            case "uk_task_event_id" -> List.of("tenant_id", "client_id", "event_id");
+                    List.of("tenant_id", "client_id", "owner_jiacn", "task_id", "event_version");
+            case "uk_task_event_id" -> List.of("tenant_id", "client_id", "owner_jiacn", "event_id");
             case "idx_task_event_occurred" ->
-                    List.of("tenant_id", "client_id", "task_id", "occurred_at");
+                    List.of("tenant_id", "client_id", "owner_jiacn", "task_id", "occurred_at");
             case "idx_event_actor_time" ->
-                    List.of("tenant_id", "client_id", "actor_type", "actor_id", "occurred_at");
+                    List.of("tenant_id", "client_id", "owner_jiacn", "actor_type", "actor_id", "occurred_at");
             case "idx_event_type_time" ->
-                    List.of("tenant_id", "client_id", "event_type", "occurred_at");
+                    List.of("tenant_id", "client_id", "owner_jiacn", "event_type", "occurred_at");
             default -> List.of();
         };
         boolean unique = "PRIMARY".equals(index) || index.startsWith("uk_");

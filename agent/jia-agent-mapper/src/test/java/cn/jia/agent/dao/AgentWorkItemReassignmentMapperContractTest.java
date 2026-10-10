@@ -71,6 +71,9 @@ class AgentWorkItemReassignmentMapperContractTest {
         assertFalse(ddl.contains(" lease_token "));
         assertTrue(ddl.contains("previous_agent_id <> target_agent_id"));
         assertTrue(ddl.contains("attempt_count < max_attempts"));
+        assertTrue(ddl.contains("owner_jiacn varchar(50) not null"));
+        assertTrue(ddl.contains("key idx_agent_work_item_reassignment_owner_scope "
+                + "(tenant_id, client_id, owner_jiacn, task_id, work_item_id)"));
     }
 
     private static String sql(Class<?> type, String methodName) throws Exception {

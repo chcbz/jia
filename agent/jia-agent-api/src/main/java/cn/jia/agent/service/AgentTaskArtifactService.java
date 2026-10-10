@@ -25,6 +25,18 @@ public interface AgentTaskArtifactService {
         throw new UnsupportedOperationException("Prepared artifact publication unavailable");
     }
 
+    /** Internal, process-local capability, never a wire DTO or caller-supplied storage proof. */
+    interface PreparedPublication { }
+
+    /** Performs original scoped validation in a short transaction, then immutable storage I/O
+     * with no enclosing transaction. Must be called before acquiring a Runtime fence. */
+    PreparedPublication preparePublication(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, AgentTaskArtifactPublishDTO command);
+
+    /** Revalidates ACL/work item/version and commits only rows/events in the caller's transaction. */
+    AgentTaskArtifactViewDTO publishPrepared(String tenantId, String clientId, String ownerJiacn,
+            String taskId, String actorAgentId, PreparedPublication prepared);
+
     AgentTaskArtifactViewDTO publish(String tenantId, String clientId, String ownerJiacn,
             String taskId, String actorAgentId, AgentTaskArtifactPublishDTO command);
 

@@ -36,6 +36,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
+    private final cn.jia.agent.security.AgentRuntimeAuthenticationService runtimeAuthentication =
+            org.mockito.Mockito.mock(cn.jia.agent.security.AgentRuntimeAuthenticationService.class);
+    private final Map<String, String> currentChannels = new HashMap<>();
     @Mock ChatClient chatClient;
     @Mock AgentService agentService;
     @Mock ObjectProvider<AgentService> agentServiceProvider;
@@ -43,7 +46,7 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
     @Mock ChatConversationEventBroker eventBroker;
 
     @Test
-    void rawCommandGoesOnlyToExactTenantClientAndTargetSessionsWithoutWrappingOrReserialization()
+    void rawCommandGoesOnlyToCurrentExactChannelWithoutWrappingOrReserialization()
             throws Exception {
         WebSocketSession exactOne = session("exact-1", "tenant-a", "client-a", "agent-1");
         WebSocketSession exactTwo = session("exact-2", "tenant-a", "client-a", "agent-1");
@@ -64,15 +67,13 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
                 "tenant-a", "client-a", "task-1", "agent-1", raw);
 
         assertEquals(AgentRawCommandDispatchResult.Status.SENT, result.status());
-        assertEquals(2, result.matchingSessionCount());
-        assertEquals(2, result.sentSessionCount());
-        ArgumentCaptor<TextMessage> first = ArgumentCaptor.forClass(TextMessage.class);
+        assertEquals(1, result.matchingSessionCount());
+        assertEquals(1, result.sentSessionCount());
         ArgumentCaptor<TextMessage> second = ArgumentCaptor.forClass(TextMessage.class);
-        verify(exactOne).sendMessage(first.capture());
+        verify(exactOne, never()).sendMessage(any(TextMessage.class));
         verify(exactTwo).sendMessage(second.capture());
-        assertArrayEquals(raw, first.getValue().getPayload().getBytes(StandardCharsets.UTF_8));
         assertArrayEquals(raw, second.getValue().getPayload().getBytes(StandardCharsets.UTF_8));
-        assertEquals(new String(raw, StandardCharsets.UTF_8), first.getValue().getPayload());
+        assertEquals(new String(raw, StandardCharsets.UTF_8), second.getValue().getPayload());
         verify(crossTenant, never()).sendMessage(any(TextMessage.class));
         verify(crossClient, never()).sendMessage(any(TextMessage.class));
         verify(otherAgent, never()).sendMessage(any(TextMessage.class));
@@ -148,7 +149,7 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
         when(agentService.updateStatus(any(), any())).thenReturn(presence);
         AgentWebSocketHandler handler = handler();
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"schemaVersion":1,"messageType":"agent.presence","messageId":"presence-1",
                  "agentId":"agent-1","sourceAgentId":"agent-1",
                  "runtimeInstanceId":"runtime-1","status":"online"}
@@ -186,7 +187,7 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
                 .thenReturn(List.of("agent-1"));
         AgentWebSocketHandler handler = handler();
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage("""
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage("""
                 {"schemaVersion":1,"messageType":"agent.presence","messageId":"presence-direct",
                  "agentId":"agent-1","sourceAgentId":"agent-1",
                  "runtimeInstanceId":"runtime-1","status":"online"}
@@ -213,7 +214,7 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
     }
 
     @Test
-    void oneMatchingSessionFailureDoesNotPreventOtherExactSessionFromReceivingRawBytes()
+    void staleSessionDoesNotPreventCurrentExactSessionFromReceivingRawBytes()
             throws Exception {
         WebSocketSession failing = session("failing", "tenant-a", "client-a", "agent-1");
         WebSocketSession succeeding = session("succeeding", "tenant-a", "client-a", "agent-1");
@@ -221,17 +222,15 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
         register(handler, failing, "agent-1");
         register(handler, succeeding, "agent-1");
         org.mockito.Mockito.clearInvocations(failing, succeeding);
-        doThrow(new IllegalStateException("simulated partial websocket failure"))
-                .when(failing).sendMessage(any(TextMessage.class));
         byte[] raw = wire("tenant-a", "client-a", "task-1", "agent-1");
 
         AgentRawCommandDispatchResult result = handler.dispatchExactRawCommand(
                 "tenant-a", "client-a", "task-1", "agent-1", raw);
 
         assertEquals(AgentRawCommandDispatchResult.Status.SENT, result.status());
-        assertEquals(2, result.matchingSessionCount());
+        assertEquals(1, result.matchingSessionCount());
         assertEquals(1, result.sentSessionCount());
-        verify(failing).sendMessage(any(TextMessage.class));
+        verify(failing, never()).sendMessage(any(TextMessage.class));
         ArgumentCaptor<TextMessage> sent = ArgumentCaptor.forClass(TextMessage.class);
         verify(succeeding).sendMessage(sent.capture());
         assertArrayEquals(raw, sent.getValue().getPayload().getBytes(StandardCharsets.UTF_8));
@@ -275,21 +274,62 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
     }
 
     @Test
-    void skillDispatchRequiresExactDedicatedKeyAndCurrentRegistrationNotOwnerWidePresence() throws Exception {
+    void legacyManagedKeyCannotAuthorizeUnifiedRuntimeSkillDispatch() throws Exception {
         var exact=session("skill-exact","0","client-a","agent-1");
         var shared=session("skill-shared","0","client-a","agent-1");
         exact.getAttributes().put("managedApiKeyId","dedicated-key");shared.getAttributes().put("managedApiKeyId","shared-key");
         var handler=handler();register(handler,exact,"agent-1");register(handler,shared,"agent-1");
         org.mockito.Mockito.clearInvocations(exact,shared);
-        byte[] hash=cn.jia.agent.skill.SkillMarketplaceService.sessionRegistrationHash("agent-1","token");
-        assertTrue(handler.isManagedSkillSessionReady("0","client-a","agent-1","dedicated-key",hash));
-        assertFalse(handler.isManagedSkillSessionReady("0","client-a","agent-1","dedicated-key",new byte[32]));
+        var fence=new cn.jia.agent.service.AgentManagedSessionLookup.SessionFence("rti_"+"b".repeat(32),"foreign-host","runtime-1",1L);
+        assertFalse(handler.isManagedSkillSessionReady("0","client-a","agent-1",fence));
         var payload=new cn.jia.agent.entity.AgentSkillInstallPayload("order-1","install-1","version-1","repo-test","1.0.0","500","sha256:"+"a".repeat(64),"/internal/agent/skill-installations/install-1/package");
         String commandId=AgentCommandCanonicalCodec.skillInstallCommandId("0","client-a","owner-a","install-1");
         var draft=new AgentCommandDraft(1,commandId,"order-1","install-1","0","client-a","owner-a","order-1",null,"agent-1","SKILL_INSTALL",1L,3600001L,payload);
         byte[] raw=AgentCommandCanonicalCodec.wireBytes(draft,"message-1",1);
-        assertEquals(AgentRawCommandDispatchResult.Status.SENT,handler.dispatchManagedSkill("0","client-a","agent-1","dedicated-key",hash,raw).status());
-        verify(exact).sendMessage(any(TextMessage.class));verify(shared,never()).sendMessage(any(TextMessage.class));
+        assertEquals(AgentRawCommandDispatchResult.Status.OFFLINE,handler.dispatchManagedSkill("0","client-a","agent-1",fence,raw).status());
+        verify(exact,never()).sendMessage(any(TextMessage.class));verify(shared,never()).sendMessage(any(TextMessage.class));
+    }
+
+    @Test
+    void skillDispatchRequiresRealAdapterReadinessAndExactCurrentTransportFence() throws Exception {
+        var old=session("old-skill","0","client-a","agent-1");old.getAttributes().put("jiacn","owner-a");
+        var current=session("current-skill","0","client-a","agent-1");current.getAttributes().put("jiacn","owner-a");
+        var handler=handler();register(handler,old,"agent-1");register(handler,current,"agent-1");
+        var proof=UnifiedRuntimeTestSupport.install(current);
+        var fence=cn.jia.agent.skill.SkillMarketplaceService.sessionFence(proof);
+        var payload=new cn.jia.agent.entity.AgentSkillInstallPayload("order-1","install-1","version-1","repo-test","1.0.0","500","sha256:"+"a".repeat(64),"/internal/agent/skill-installations/install-1/package");
+        var draft=new AgentCommandDraft(1,AgentCommandCanonicalCodec.skillInstallCommandId("0","client-a","owner-a","install-1"),
+                "order-1","install-1","0","client-a","owner-a","order-1",null,"agent-1","SKILL_INSTALL",1L,3600001L,payload);
+        byte[] raw=AgentCommandCanonicalCodec.wireBytes(draft,"message-1",1);
+        assertFalse(handler.isManagedSkillSessionReady("0","client-a","agent-1",fence));
+        UnifiedRuntimeTestSupport.deliver(handler,current,new TextMessage(
+                "{\"type\":\"agent.register\",\"agentId\":\"agent-1\",\"name\":\"Agent\",\"durableStateHealthy\":true,\"readyCommandTypes\":[\"SKILL_INSTALL\"]}"));
+        assertTrue(handler.isManagedSkillSessionReady("0","client-a","agent-1",fence));
+        org.mockito.Mockito.clearInvocations(old,current);
+        assertEquals(AgentRawCommandDispatchResult.Status.SENT,handler.dispatchManagedSkill("0","client-a","agent-1",fence,raw).status());
+        var sent=ArgumentCaptor.forClass(TextMessage.class);verify(current).sendMessage(sent.capture());
+        assertArrayEquals(raw,sent.getValue().asBytes());verify(old,never()).sendMessage(any(TextMessage.class));
+        var foreign=new cn.jia.agent.service.AgentManagedSessionLookup.SessionFence(fence.runtimeInstallationId(),"other-host",fence.runtimeInstanceId(),fence.sessionGeneration());
+        assertEquals(AgentRawCommandDispatchResult.Status.OFFLINE,handler.dispatchManagedSkill("0","client-a","agent-1",foreign,raw).status());
+    }
+
+    @Test
+    void durableSkillResultUsesCurrentSocketProofWithoutRewritingOriginalExecutingBoot() throws Exception {
+        var session=session("current-skill","0","client-a","agent-1");var handler=handler();
+        register(handler,session,"agent-1");
+        var results=org.mockito.Mockito.mock(cn.jia.agent.skill.SkillInstallResultService.class);
+        handler.setSkillResults(results);
+        var proof=UnifiedRuntimeTestSupport.install(session);
+        Map<String,Object> body=Map.of("messageType","work.result","resultType","SKILL_INSTALL_RESULT",
+                "messageId","durable-result","targetAgentId","agent-1","runtimeInstanceId","original-executing-boot");
+        when(results.accept(org.mockito.ArgumentMatchers.eq(proof),org.mockito.ArgumentMatchers.eq(body)))
+                .thenReturn(Map.of("receiptStatus","ACCEPTED","correlationId","durable-result"));
+        UnifiedRuntimeTestSupport.deliver(handler,session,new TextMessage(new tools.jackson.databind.ObjectMapper().writeValueAsString(body)));
+        verify(results).accept(proof,body);
+        assertEquals("original-executing-boot",body.get("runtimeInstanceId"));
+        currentChannels.put("0|client-a|agent-1","replacement-socket");
+        UnifiedRuntimeTestSupport.deliver(handler,session,new TextMessage(new tools.jackson.databind.ObjectMapper().writeValueAsString(body)));
+        verify(results,org.mockito.Mockito.times(1)).accept(proof,body);
     }
 
     private AgentWebSocketHandler handler() {
@@ -298,16 +338,25 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
             AgentRegisterDTO request = invocation.getArgument(0);
             return new AgentRegisterResultDTO(request.getAgentId(), "token", "online");
         });
-        return new AgentWebSocketHandler(
+        var handler = new AgentWebSocketHandler(
                 chatClient, agentServiceProvider, chatMessageDao, eventBroker);
+        org.mockito.Mockito.lenient().when(runtimeAuthentication.isCurrentBinding(
+                any(), any(), any(), any(), any(), any())).thenAnswer(inv ->
+                inv.getArgument(0).equals(currentChannels.get(
+                        inv.getArgument(1) + "|" + inv.getArgument(2) + "|" + inv.getArgument(4))));
+        UnifiedRuntimeTestSupport.stub(runtimeAuthentication);
+        handler.setRuntimeAuthentication(runtimeAuthentication);
+        return handler;
     }
 
     private void register(
             AgentWebSocketHandler handler, WebSocketSession session, String agentId) throws Exception {
         handler.afterConnectionEstablished(session);
-        handler.handleTextMessage(session, new TextMessage(
+        currentChannels.put(session.getAttributes().get("tenantId") + "|"
+                + session.getAttributes().get("clientId") + "|" + agentId, session.getId());
+        UnifiedRuntimeTestSupport.deliver(handler, session, new TextMessage(
                 "{\"type\":\"agent.register\",\"agentId\":\"" + agentId
-                        + "\",\"name\":\"Agent\"}"));
+                        + "\",\"name\":\"Agent\",\"durableStateHealthy\":true,\"readyCommandTypes\":[\"TASK_INVITE\"]}"));
     }
 
     private WebSocketSession session(
@@ -318,6 +367,7 @@ class AgentWebSocketRawCommandDispatchTest extends BaseMockTest {
         when(session.getAttributes()).thenReturn(new HashMap<>(Map.of(
                 "agentId", agentId,
                 "runtimeInstanceId", "runtime-1",
+                "tenantId", tenantId,
                 "jiacn", tenantId,
                 "clientId", clientId)));
         return session;

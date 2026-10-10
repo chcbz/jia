@@ -2,6 +2,7 @@ package cn.jia.agent.api;
 
 import cn.jia.agent.entity.AgentWorkItemReassignmentLeaseDTO;
 import cn.jia.agent.security.AgentRuntimeAuthentication;
+import cn.jia.agent.security.AgentRuntimeAuthenticationService;
 import cn.jia.agent.entity.AgentWorkItemReassignmentLeaseRequestDTO;
 import cn.jia.agent.entity.AgentWorkItemReassignmentRequestDTO;
 import cn.jia.agent.entity.AgentWorkItemReassignmentResultDTO;
@@ -52,8 +53,11 @@ public class AgentWorkItemReassignmentController {
 
     private final AgentWorkItemReassignmentService service;
 
-    public AgentWorkItemReassignmentController(AgentWorkItemReassignmentService service) {
+    private final AgentRuntimeAuthenticationService runtimeAuthentication;
+    public AgentWorkItemReassignmentController(AgentWorkItemReassignmentService service,
+            AgentRuntimeAuthenticationService runtimeAuthentication) {
         this.service = Objects.requireNonNull(service);
+        this.runtimeAuthentication = Objects.requireNonNull(runtimeAuthentication);
     }
 
     @PostMapping(value = "/{taskId}/work-items/{workItemId}/reassignments",
@@ -83,9 +87,12 @@ public class AgentWorkItemReassignmentController {
         Principal principal = principal(authentication, false);
         String actorAgentId = targetActor(request, principal);
         requirePath(taskId, workItemId, reassignmentId);
-        return ok(service.readLease(principal.tenantId(), principal.clientId(), principal.ownerJiacn(), actorAgentId,
+        // Parse servlet bytes before acquiring installation/runtime/business locks.
+        var command = parse(request, AgentWorkItemReassignmentLeaseRequestDTO.class);
+        return ok(nativeCommit(authentication, () -> service.readLease(principal.tenantId(), principal.clientId(), principal.ownerJiacn(), actorAgentId,
                 taskId, workItemId, reassignmentId,
-                parse(request, AgentWorkItemReassignmentLeaseRequestDTO.class)));
+                command)));
+
     }
 
     @AllowSensitiveOutput(reason = "Exact target-only command-bound active lease start response")
@@ -98,9 +105,12 @@ public class AgentWorkItemReassignmentController {
         Principal principal = principal(authentication, false);
         String actorAgentId = targetActor(request, principal);
         requirePath(taskId, workItemId, reassignmentId);
-        return ok(service.startLease(principal.tenantId(), principal.clientId(), principal.ownerJiacn(), actorAgentId,
+        // Parse servlet bytes before acquiring installation/runtime/business locks.
+        var command = parse(request, AgentWorkItemReassignmentLeaseRequestDTO.class);
+        return ok(nativeCommit(authentication, () -> service.startLease(principal.tenantId(), principal.clientId(), principal.ownerJiacn(), actorAgentId,
                 taskId, workItemId, reassignmentId,
-                parse(request, AgentWorkItemReassignmentLeaseRequestDTO.class)));
+                command)));
+
     }
 
     @AllowSensitiveOutput(reason = "Exact target-only command-bound active lease heartbeat response")
@@ -113,9 +123,17 @@ public class AgentWorkItemReassignmentController {
         Principal principal = principal(authentication, false);
         String actorAgentId = targetActor(request, principal);
         requirePath(taskId, workItemId, reassignmentId);
-        return ok(service.heartbeatLease(principal.tenantId(), principal.clientId(), principal.ownerJiacn(), actorAgentId,
+        // Parse servlet bytes before acquiring installation/runtime/business locks.
+        var command = parse(request, AgentWorkItemReassignmentLeaseRequestDTO.class);
+        return ok(nativeCommit(authentication, () -> service.heartbeatLease(principal.tenantId(), principal.clientId(), principal.ownerJiacn(), actorAgentId,
                 taskId, workItemId, reassignmentId,
-                parse(request, AgentWorkItemReassignmentLeaseRequestDTO.class)));
+                command)));
+
+    }
+
+    private <T> T nativeCommit(Authentication authentication, java.util.function.Supplier<T> commit) {
+        if (!(authentication instanceof AgentRuntimeAuthentication)) return commit.get(); // existing scoped JWT ACL lane
+        return runtimeAuthentication.withNativeFence(authentication, commit);
     }
 
     @ExceptionHandler(AuthenticationFailure.class)

@@ -78,6 +78,10 @@ public class AgentTaskCollaborationAccessServiceImpl
         } catch (IllegalArgumentException exception) {
             return AgentTaskAccessLevel.NONE;
         }
+        // Retain historical read access; no queued Hall command may regain write authority.
+        if ("cancelled".equals(task.getRewardStatus())
+                && (status==AgentTaskMemberStatus.ACCEPTED || status==AgentTaskMemberStatus.WORKING
+                    || status==AgentTaskMemberStatus.BLOCKED)) return AgentTaskAccessLevel.READ_ONLY;
         return switch (status) {
             case ACCEPTED, WORKING, BLOCKED -> AgentTaskAccessLevel.READ_WRITE;
             case DONE, FAILED -> AgentTaskAccessLevel.READ_ONLY;
