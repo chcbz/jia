@@ -295,6 +295,12 @@ class HostingRentReconcilerTest {
         });
         worker.reconcileFree(free, provider);
         verify(mapper, never()).finishReprovision(anyString(), anyString(), anyString(), anyLong(), anyString(), any(), anyString());
+        when(provider.prepareAndObserve(any())).thenAnswer(call -> new ManagedHostingProvisioner.Observation(call.getArgument(0),
+                ManagedHostingProvisioner.Outcome.SERVICE_READY, "unlinked-free-proof", requestedAt + 1));
+        worker.reconcileFree(free, provider); // live-looking proof without durable target is insufficient
+        intent.setRuntimeProvisionGeneration(3L); free.setRuntimeTargetGeneration(2L);
+        worker.reconcileFree(free, provider); // independently persisted target must still match initial generation
+        verify(mapper, never()).finishReprovision(anyString(), anyString(), anyString(), anyLong(), anyString(), any(), anyString());
         when(provider.prepareAndObserve(any())).thenAnswer(call -> {
             intent.setRuntimeProvisionGeneration(2L); free.setRuntimeTargetGeneration(2L);
             return new ManagedHostingProvisioner.Observation(call.getArgument(0),

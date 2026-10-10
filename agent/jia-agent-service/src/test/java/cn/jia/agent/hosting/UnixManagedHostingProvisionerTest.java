@@ -175,9 +175,11 @@ class UnixManagedHostingProvisionerTest {
         assertTrue(Files.isRegularFile(script));
         Process child = new ProcessBuilder(node, script.toString()).directory(source.toFile())
                 .redirectError(ProcessBuilder.Redirect.INHERIT).start();
-        try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
-             var output = new java.io.BufferedReader(new java.io.InputStreamReader(child.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
-            String line = executor.submit(output::readLine).get(10, TimeUnit.SECONDS);
+        var output = new java.io.BufferedReader(new java.io.InputStreamReader(child.getInputStream(), java.nio.charset.StandardCharsets.UTF_8));
+        try {
+            var handshake = new java.util.concurrent.FutureTask<String>(output::readLine);
+            Thread.ofVirtual().start(handshake);
+            String line = handshake.get(10, TimeUnit.SECONDS);
             assertNotNull(line, "Runtime fixture must publish its owned socket");
             Map<String, Object> endpoint = JSON.readValue(line, new TypeReference<Map<String, Object>>() {});
             assertEquals(Set.of("socketPath", "uid", "gid", "hostId", "instanceId"), endpoint.keySet());
@@ -229,6 +231,7 @@ class UnixManagedHostingProvisionerTest {
                 if (!child.waitFor(5, TimeUnit.SECONDS)) child.destroyForcibly(); // exact child only, never peer processes
                 fail("Owned Runtime fixture failed graceful shutdown");
             }
+            output.close(); // after child exit, also unblocks any timed-out handshake reader
             assertEquals(0, child.exitValue(), "Runtime fixture cleanup");
         }
     }
