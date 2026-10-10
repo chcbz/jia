@@ -24,6 +24,7 @@ public class EconomyHostingReprovisionEntity {
     private Long version;
     private Long serviceReadyAt;
     private String evidenceRef;
+    private Long runtimeTargetGeneration;
     private String tenantId;
     private String clientId;
 }

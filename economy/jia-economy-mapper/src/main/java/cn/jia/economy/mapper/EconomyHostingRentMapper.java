@@ -185,7 +185,7 @@ public interface EconomyHostingRentMapper {
             + "reserve_idempotency_key,reserve_request_hash,reserve_transaction_id,reserved_at,escrow_version,"
             + "capture_idempotency_key,capture_request_hash,capture_transaction_id,captured_at,"
             + "refund_idempotency_key,refund_request_hash,refund_transaction_id,refunded_at,"
-            + "managed_api_key_id,outcome_evidence_ref,service_ready_at,paid_from,paid_through,version,tenant_id,client_id,create_time,update_time ";
+            + "managed_api_key_id,runtime_installation_id,runtime_manifest_sha256,runtime_provision_generation,outcome_evidence_ref,service_ready_at,paid_from,paid_through,version,tenant_id,client_id,create_time,update_time ";
 
     @Select("SELECT " + INTENT_COLUMNS + " FROM economy_hosting_provisioning_intent WHERE "
             + EXACT_SCOPE + " AND quote_id=#{quoteId} AND OCTET_LENGTH(quote_id)=OCTET_LENGTH(#{quoteId})"
@@ -347,6 +347,31 @@ public interface EconomyHostingRentMapper {
             + " AND quote_purpose='INITIAL' AND managed_api_key_id IS NULL AND status IN ('FUNDS_RESERVED','PROVISIONING_UNKNOWN','ACTIVE')")
     int attachManagedKey(@Param("tenantId") String tenantId, @Param("clientId") String clientId,
             @Param("intentId") String intentId, @Param("keyId") String keyId);
+
+    /** Metadata CAS does not advance the independent settlement version. Caller holds exact roots. */
+    @Update("UPDATE economy_hosting_provisioning_intent SET runtime_installation_id=#{installation},"
+            + " runtime_manifest_sha256=#{manifest},runtime_provision_generation=1 WHERE " + EXACT_SCOPE
+            + " AND intent_id=#{intentId} AND OCTET_LENGTH(intent_id)=OCTET_LENGTH(#{intentId})"
+            + " AND quote_purpose='INITIAL' AND status='PROVISIONING_UNKNOWN'"
+            + " AND capture_transaction_id IS NULL AND refund_transaction_id IS NULL"
+            + " AND runtime_installation_id IS NULL AND runtime_manifest_sha256 IS NULL AND runtime_provision_generation=0")
+    int attachRuntimeInstallation(@Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("intentId") String intentId, @Param("installation") String installation, @Param("manifest") String manifest);
+
+    @Update("UPDATE economy_hosting_provisioning_intent SET runtime_provision_generation=#{target} WHERE " + EXACT_SCOPE
+            + " AND intent_id=#{intentId} AND OCTET_LENGTH(intent_id)=OCTET_LENGTH(#{intentId})"
+            + " AND quote_purpose='INITIAL' AND status='ACTIVE' AND runtime_provision_generation=#{current}"
+            + " AND runtime_installation_id=#{installation} AND OCTET_LENGTH(runtime_installation_id)=OCTET_LENGTH(#{installation})"
+            + " AND runtime_manifest_sha256=#{manifest} AND OCTET_LENGTH(runtime_manifest_sha256)=OCTET_LENGTH(#{manifest})")
+    int advanceRuntimeGeneration(@Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("intentId") String intentId, @Param("installation") String installation,
+            @Param("manifest") String manifest, @Param("current") long current, @Param("target") long target);
+
+    @Update("UPDATE economy_hosting_reprovision SET runtime_target_generation=#{target} WHERE " + EXACT_SCOPE
+            + " AND request_id=#{requestId} AND OCTET_LENGTH(request_id)=OCTET_LENGTH(#{requestId})"
+            + " AND status='PROVISIONING_UNKNOWN' AND live_slot=1 AND runtime_target_generation IS NULL")
+    int attachRuntimeTarget(@Param("tenantId") String tenantId, @Param("clientId") String clientId,
+            @Param("requestId") String requestId, @Param("target") long target);
 
     @Select("SELECT * FROM economy_hosting_reprovision WHERE " + EXACT_SCOPE
             + " AND principal_id=#{actor} AND OCTET_LENGTH(principal_id)=OCTET_LENGTH(#{actor})"

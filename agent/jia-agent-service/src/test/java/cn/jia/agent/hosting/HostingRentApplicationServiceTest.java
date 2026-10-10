@@ -56,6 +56,10 @@ class HostingRentApplicationServiceTest {
         when(providers.getIfAvailable()).thenReturn(provider);
         when(provider.available()).thenReturn(true);
         when(provider.availableFor(anyString(), anyString(), anyString())).thenAnswer(call -> provider.available());
+        when(provider.probeCapabilities(anyString(), anyString(), anyString())).thenAnswer(call -> {
+            assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
+            return provider.available();
+        });
         application = new HostingRentApplicationService(new AgentHostingRentProperties(true, null, null, null),
                 new EconomyPreviewGate(new EconomyPreviewProperties(true, List.of(
                         new EconomyPreviewProperties.AllowedScope("0", "Client-A")))), owners, rent,
@@ -105,6 +109,19 @@ class HostingRentApplicationServiceTest {
         order.verify(identities).provisionOpaqueIdentity(any(), anyString());
         order.verify(runtimes).insert(any()); order.verify(reconciler).wake();
         verify(provider, never()).prepareAndObserve(any());
+    }
+
+    @Test
+    void missingLiveControlRefusesNewReserveDespiteConfiguredAdapterButSuccessfulReplaySkipsProbe() {
+        when(provider.probeCapabilities(anyString(), anyString(), anyString())).thenReturn(false);
+        assertEquals("HOSTING_RENT_NOT_READY", assertThrows(HostingRentApplicationException.class,
+                () -> application.bind(ACTOR, "wuyong", KEY, confirmation())).code());
+        verifyNoInteractions(ledger, bindings, identities, runtimes, reconciler);
+        assertEquals(0, count());
+        when(rent.selectIntentByQuoteForUpdate("0", "Client-A", "hrq-test")).thenReturn(new EconomyHostingProvisioningIntentEntity().setIntentId("hri-test"));
+        doReturn(receipt).when(ledger).reserve(any()); clearInvocations(provider);
+        assertEquals("FUNDS_RESERVED", application.bind(ACTOR, "wuyong", KEY, confirmation()).status());
+        verify(provider, never()).probeCapabilities(anyString(), anyString(), anyString());
     }
 
     @Test

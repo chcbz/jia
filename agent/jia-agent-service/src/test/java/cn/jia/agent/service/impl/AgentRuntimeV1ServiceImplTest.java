@@ -58,6 +58,61 @@ class AgentRuntimeV1ServiceImplTest {
         assertNull(persisted.getRuntimeAuthorizationHash());
     }
 
+    private static final String INTERNAL_ID = "rti_0123456789abcdef0123456789abcdef";
+    private cn.jia.agent.entity.AgentRuntimeV1InstallationRequest candidate(String manifest, String secret, long expires) {
+        return new AgentRuntimeV1InstallationRequest(INTERNAL_ID, AGENT, "1", manifest, secret, expires);
+    }
+    private void internalOwner() {
+        var identity = new cn.jia.agent.entity.AgentIdentityRegistryEntity().setCanonicalAgentId(AGENT).setOwnerJiacn("owner-a");
+        identity.setTenantId("0"); identity.setClientId("client-a");
+        when(registry.findExactByCanonicalInScope("0", "client-a", "owner-a", AGENT)).thenReturn(identity);
+    }
+    private AgentRuntimeV1InstallationEntity internalInstallation(String status) {
+        var row = installation(status).setInstallationId(INTERNAL_ID).setEnrollmentSecretHash(java.util.HexFormat.of().parseHex("b".repeat(64)))
+                .setManifestSha256("a".repeat(64)).setEnrollmentExpiresAt(2000L);
+        row.setTenantId("0"); return row;
+    }
+    @Test void internalEnsureCreatesThenExactlyReplaysWithoutRotatingOrExposingSecrets() {
+        internalOwner();
+        var row = internalInstallation("PENDING");
+        when(installations.lock(INTERNAL_ID)).thenReturn(null, row, row);
+        var request = candidate("a".repeat(64), "b".repeat(64), 2000);
+        var created = service.ensureInstallation("0", "client-a", "owner-a", request, NOW);
+        assertEquals(created, service.ensureInstallation("0", "client-a", "owner-a", request, NOW + 1));
+        verify(installations, times(1)).insertCandidateIfAbsent(any());
+        verify(installations, never()).insert(any());
+        verifyNoInteractions(identities, sessions, acks);
+        assertFalse(created.toString().contains("enrollmentSecret"));
+        assertFalse(created.toString().contains("b".repeat(64)));
+    }
+    @Test void internalEnsureActiveReplayAfterEnrollmentExpiryIsNotReenrollment() {
+        internalOwner(); when(installations.lock(INTERNAL_ID)).thenReturn(internalInstallation("ACTIVE").setEnrollmentConsumedAt(1500L));
+        assertEquals("ACTIVE", service.ensureInstallation("0", "client-a", "owner-a",
+                candidate("a".repeat(64), "b".repeat(64), 2000), 3000).status());
+        verify(installations, never()).insertCandidateIfAbsent(any()); verify(installations, never()).activate(any(), any(), anyLong());
+    }
+    @Test void internalEnsureRejectsDigestExpiryIdentityAndRevokedWinnerWithoutOverwrite() {
+        internalOwner(); var row = internalInstallation("ACTIVE"); when(installations.lock(INTERNAL_ID)).thenReturn(row);
+        for (var request : java.util.List.of(candidate("c".repeat(64), "b".repeat(64), 2000),
+                candidate("a".repeat(64), "c".repeat(64), 2000), candidate("a".repeat(64), "b".repeat(64), 2001))) {
+            assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.ensureInstallation("0", "client-a", "owner-a", request, NOW));
+        }
+        row.setStatus("REVOKED");
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.ensureInstallation("0", "client-a", "owner-a",
+                candidate("a".repeat(64), "b".repeat(64), 2000), NOW));
+        verify(installations, never()).insertCandidateIfAbsent(any());
+        row.setStatus("ACTIVE"); row.setClientId("other-client");
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.ensureInstallation("0", "client-a", "owner-a",
+                candidate("a".repeat(64), "b".repeat(64), 2000), NOW));
+    }
+    @Test void internalEnsureRejectsUnprovenOwnerAndExpiredNewCandidateBeforeInsert() {
+        var request = candidate("a".repeat(64), "b".repeat(64), 2000);
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.ensureInstallation("0", "client-a", "other-owner", request, NOW));
+        verifyNoInteractions(installations); internalOwner();
+        assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.ensureInstallation("0", "client-a", "owner-a", request, 3000));
+        verify(installations, never()).insertCandidateIfAbsent(any());
+    }
+
     @Test void rejectsInstallationIdThatCannotBeBoundIntoTheManifest() {
         assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.create("tenant-a", "client-a", "owner-a",
                 new AgentRuntimeV1InstallationRequest("rti-not-opaque", AGENT, "1", "a".repeat(64),

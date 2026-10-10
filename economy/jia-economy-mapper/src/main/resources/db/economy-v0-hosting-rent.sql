@@ -131,6 +131,9 @@ CREATE TABLE IF NOT EXISTS economy_hosting_provisioning_intent (
     refund_transaction_id    VARCHAR(100) DEFAULT NULL,
     refunded_at              BIGINT DEFAULT NULL,
     managed_api_key_id       VARCHAR(100) DEFAULT NULL,
+    runtime_installation_id  VARCHAR(100) NULL,
+    runtime_manifest_sha256  VARCHAR(64) NULL,
+    runtime_provision_generation BIGINT NOT NULL DEFAULT 0,
     outcome_evidence_ref     VARCHAR(100) DEFAULT NULL,
     service_ready_at         BIGINT DEFAULT NULL,
     paid_from                BIGINT DEFAULT NULL,
@@ -142,10 +145,17 @@ CREATE TABLE IF NOT EXISTS economy_hosting_provisioning_intent (
     update_time              BIGINT NOT NULL,
     PRIMARY KEY (id),
     UNIQUE KEY uk_hosting_intent_id (tenant_id,client_id,intent_id),
+    UNIQUE KEY uk_hosting_intent_installation (tenant_id,client_id,runtime_installation_id),
     UNIQUE KEY uk_hosting_intent_quote (tenant_id,client_id,quote_id),
     UNIQUE KEY uk_hosting_intent_reserve_key (tenant_id,client_id,principal_type,principal_id,reserve_idempotency_key),
     KEY idx_hosting_intent_lease (tenant_id,client_id,lease_id,version),
     KEY idx_hosting_intent_status (tenant_id,client_id,status,update_time,intent_id),
+    CONSTRAINT chk_hosting_intent_runtime CHECK (
+        (runtime_installation_id IS NULL AND runtime_manifest_sha256 IS NULL AND runtime_provision_generation = 0)
+        OR (quote_purpose = 'INITIAL' AND runtime_installation_id IS NOT NULL
+            AND runtime_manifest_sha256 IS NOT NULL AND OCTET_LENGTH(runtime_manifest_sha256) = 64
+            AND runtime_provision_generation > 0)
+    ),
     CONSTRAINT chk_hosting_intent_values CHECK (amount_micro > 0 AND period_seconds > 0 AND escrow_version > 0 AND version > 0),
     CONSTRAINT chk_hosting_intent_actor CHECK (principal_type = 'USER'),
     CONSTRAINT chk_hosting_intent_reserve_key CHECK (OCTET_LENGTH(reserve_idempotency_key) = 36),
@@ -207,6 +217,7 @@ CREATE TABLE IF NOT EXISTS economy_hosting_reprovision (
     live_slot TINYINT DEFAULT 1,
     version BIGINT NOT NULL,
     service_ready_at BIGINT DEFAULT NULL,
+    runtime_target_generation BIGINT NULL,
     evidence_ref VARCHAR(100) DEFAULT NULL,
     tenant_id VARCHAR(50) NOT NULL,
     client_id VARCHAR(50) NOT NULL,
@@ -215,6 +226,7 @@ CREATE TABLE IF NOT EXISTS economy_hosting_reprovision (
     UNIQUE KEY uk_hosting_reprovision_key (tenant_id,client_id,principal_id,idempotency_key),
     UNIQUE KEY uk_hosting_reprovision_live (tenant_id,client_id,lease_id,live_slot),
     KEY idx_hosting_reprovision_pending (status,id),
+    CONSTRAINT chk_hosting_reprovision_runtime CHECK (runtime_target_generation IS NULL OR runtime_target_generation > 0),
     CONSTRAINT chk_hosting_reprovision_values CHECK (lease_version > 0 AND version > 0 AND requested_at > 0 AND paid_through > requested_at),
     CONSTRAINT chk_hosting_reprovision_key CHECK (OCTET_LENGTH(idempotency_key) = 36 AND OCTET_LENGTH(request_hash) = 32),
     CONSTRAINT chk_hosting_reprovision_state CHECK (

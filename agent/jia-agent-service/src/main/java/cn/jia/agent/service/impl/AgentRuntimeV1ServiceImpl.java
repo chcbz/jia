@@ -77,6 +77,46 @@ public class AgentRuntimeV1ServiceImpl implements AgentRuntimeV1Service {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
+    public AgentRuntimeV1InstallationView ensureInstallation(String tenantId, String clientId, String ownerJiacn,
+            AgentRuntimeV1InstallationRequest request, long now) {
+        requireScope(tenantId, clientId);
+        if (request == null || !installationId(request.installationId()) || !exact(request.canonicalAgentId(), 100)
+                || !"1".equals(request.manifestVersion()) || !sha256Text(request.manifestSha256())
+                || !sha256Text(request.enrollmentSecretSha256()) || request.enrollmentExpiresAt() <= 0) {
+            throw forbidden("Runtime v1 installation candidate is invalid");
+        }
+        var candidate = new AgentRuntimeV1InstallationEntity().setInstallationId(request.installationId())
+                .setCanonicalAgentId(request.canonicalAgentId()).setManifestVersion(request.manifestVersion())
+                .setManifestSha256(request.manifestSha256()).setEnrollmentSecretHash(hexDigest(request.enrollmentSecretSha256()))
+                .setEnrollmentExpiresAt(request.enrollmentExpiresAt()).setStatus("PENDING").setVersion(0L);
+        candidate.setTenantId(tenantId); candidate.setClientId(clientId);
+        requireInstallationOwner(candidate, tenantId, clientId, ownerJiacn);
+        // Installation first, then hosting intent -> lease -> binding -> free request. This follows
+        // session/registration's installation-before-binding fence and performs no external I/O.
+        var existing = installations.lock(request.installationId());
+        if (existing == null) {
+            if (request.enrollmentExpiresAt() <= now) throw forbidden("Runtime v1 installation candidate expired");
+            installations.insertCandidateIfAbsent(candidate);
+            existing = installations.lock(request.installationId());
+        }
+        if (existing == null || !sameScope(existing, tenantId, clientId)
+                || !request.installationId().equals(existing.getInstallationId())
+                || !request.canonicalAgentId().equals(existing.getCanonicalAgentId())
+                || !request.manifestVersion().equals(existing.getManifestVersion())
+                || !request.manifestSha256().equals(existing.getManifestSha256())
+                || !Objects.equals(request.enrollmentExpiresAt(), existing.getEnrollmentExpiresAt())
+                || existing.getEnrollmentSecretHash() == null
+                || !MessageDigest.isEqual(candidate.getEnrollmentSecretHash(), existing.getEnrollmentSecretHash())
+                || !("PENDING".equals(existing.getStatus()) || "ACTIVE".equals(existing.getStatus()))
+                || existing.getId() == null || existing.getVersion() == null) {
+            throw forbidden("Runtime v1 installation candidate conflicts");
+        }
+        // Exact ACTIVE/PENDING replay remains valid after expiry; never extend, reenroll or rotate it.
+        return view(existing, null);
+    }
+
+    @Override
     public AgentRuntimeV1InstallationView status(String tenantId, String clientId, String ownerJiacn, String installationId) {
         requireScope(tenantId, clientId);
         AgentRuntimeV1InstallationEntity installation = installations.findInScope(tenantId, clientId, installationId);

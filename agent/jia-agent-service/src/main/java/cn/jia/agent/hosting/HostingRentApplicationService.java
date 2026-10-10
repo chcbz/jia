@@ -34,7 +34,7 @@ import java.util.UUID;
 
 import static cn.jia.agent.hosting.HostingRentHttp.*;
 
-/** Database-only HTTP application boundary. The legacy fallback-based bind service is never called. */
+/** HTTP application boundary with transaction-external admission probe. The legacy fallback-based bind service is never called. */
 @Service
 public final class HostingRentApplicationService {
     private static final String PLAN_ID = "agent-hosting-preview";
@@ -114,8 +114,21 @@ public final class HostingRentApplicationService {
                 "expectedAmountMicro", "expectedPeriodSeconds").containsAll(body.keySet())) throw badRequest();
         requireCanonicalShape(required(body, "agentId"));
         byte[] hash = hash("INITIAL-CONFIRM:" + personaCode, body);
+        MutationView replay = initialReplay(actor, personaCode, idempotencyKey, body, hash);
+        if (replay != null) return replay;
+        String probedOwner = owners.requireOwner(actor);
+        ManagedHostingProvisioner provider = provisioners.getIfAvailable();
+        if (TransactionSynchronizationManager.isActualTransactionActive())
+            throw new IllegalStateException("Hosting reserve admission probe must be transaction-external");
+        if (provider == null || !provider.probeCapabilities(actor.tenantId(), actor.clientId(), probedOwner)) {
+            // A concurrent successful submission may have committed while the channel disappeared.
+            replay = initialReplay(actor, personaCode, idempotencyKey, body, hash);
+            if (replay != null) return replay;
+            throw new HostingRentApplicationException(503, "HOSTING_RENT_NOT_READY");
+        }
         return transactions.execute(status -> {
             String owner = owners.requireOwner(actor);
+            if (!probedOwner.equals(owner)) throw forbidden();
             EconomyHostingRentQuoteEntity quote = ownedQuote(actor, required(body, "quoteId"));
             confirmation(quote, body, personaCode, "INITIAL");
             EconomyHostingProvisioningIntentEntity prior = rent.selectIntentByQuoteForUpdate(
@@ -156,6 +169,19 @@ public final class HostingRentApplicationService {
                 @Override public void afterCommit() { reconciler.wake(); } // Signal only; NO I/O or posting here.
             });
             return mutationView(quote.getAgentId(), receipt);
+        });
+    }
+
+    private MutationView initialReplay(Actor actor, String personaCode, String idempotencyKey,
+            Map<String, String> body, byte[] hash) {
+        return transactions.execute(status -> {
+            owners.requireOwner(actor);
+            var quote = ownedQuote(actor, required(body, "quoteId"));
+            confirmation(quote, body, personaCode, "INITIAL");
+            var prior = rent.selectIntentByQuoteForUpdate(actor.tenantId(), actor.clientId(), quote.getQuoteId());
+            if (prior == null) return null;
+            return mutationView(quote.getAgentId(), ledger.reserve(new HostingRentReserveCommand(
+                    actor.scope(), actor.principal(), idempotencyKey, hash, quote.getQuoteId())));
         });
     }
 
@@ -238,7 +264,7 @@ public final class HostingRentApplicationService {
         var replay = rent.selectReprovisionReplay(actor.tenantId(), actor.clientId(), actor.actorId(), keyBytes);
         if (replay != null) return reprovisionReceipt(replay, requestHash);
         ManagedHostingProvisioner provider = provisioners.getIfAvailable();
-        if (provider == null || !provider.availableFor(actor.tenantId(), actor.clientId(), owner)) throw new HostingRentApplicationException(503, "HOSTING_RENT_REPROVISION_NOT_READY");
+        if (provider == null || !provider.probeCapabilities(actor.tenantId(), actor.clientId(), owner)) throw new HostingRentApplicationException(503, "HOSTING_RENT_REPROVISION_NOT_READY");
         return transactions.execute(status -> {
             if (!owner.equals(owners.requireOwner(actor))) throw forbidden();
             var initial = rent.selectInitialIntent(actor.tenantId(), actor.clientId(), leaseId);
