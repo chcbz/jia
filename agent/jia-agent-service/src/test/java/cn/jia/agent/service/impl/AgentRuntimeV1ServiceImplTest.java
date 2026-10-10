@@ -143,7 +143,14 @@ class AgentRuntimeV1ServiceImplTest {
     }
 
     @Test void concurrentAbsentInstallationCandidatesUseActualUniqueInsertAndOneExactWinnerInH2Transactions() throws Exception {
-        // Real mapper SQL + Spring transactions; H2 is NOT evidence of MySQL gap-lock semantics.
+        installationRace(false);
+    }
+    @Test void h2RepeatableReadSnapshotDiagnosesMissingLockingCurrentViewWithoutWeakeningAuthorization() throws Exception {
+        installationRace(true);
+    }
+    private void installationRace(boolean diagnoseRepeatableRead) throws Exception {
+        // Actual mapper SQL + Spring transactions. H2 READ_COMMITTED proves unique-insert
+        // contention only. The separate RR diagnostic is NOT MySQL locking-read evidence.
         internalOwner();
         var source = new org.springframework.jdbc.datasource.DriverManagerDataSource(
                 "jdbc:h2:mem:installation_race_" + java.util.UUID.randomUUID() + ";MODE=MYSQL;DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=10000", "sa", "");
@@ -166,16 +173,46 @@ class AgentRuntimeV1ServiceImplTest {
         });
         doAnswer(call -> { mapper.insertCandidateIfAbsent(call.getArgument(0)); return null; })
                 .when(installations).insertCandidateIfAbsent(any());
-        when(installations.lock(INTERNAL_ID)).thenAnswer(call -> mapper.selectByInstallationForUpdate(INTERNAL_ID));
+        var missingReads = new java.util.concurrent.ConcurrentLinkedQueue<java.util.Map<String, Integer>>();
+        var independent = new org.springframework.jdbc.core.JdbcTemplate(
+                new org.springframework.jdbc.datasource.DriverManagerDataSource(source.getUrl(), "sa", ""));
+        when(installations.lock(INTERNAL_ID)).thenAnswer(call -> {
+            var row = mapper.selectByInstallationForUpdate(INTERNAL_ID);
+            if (row == null) {
+                missingReads.add(java.util.Map.of("transactionRawRows", jdbc.queryForObject("SELECT COUNT(*) FROM agent_runtime_v1_installation", Integer.class),
+                        "committedRawRows", independent.queryForObject("SELECT COUNT(*) FROM agent_runtime_v1_installation", Integer.class)));
+            } else {
+                assertEquals(INTERNAL_ID, row.getInstallationId(), "mapped installationId");
+                assertEquals("0", row.getTenantId(), "mapped tenantId"); assertEquals("client-a", row.getClientId(), "mapped clientId");
+                assertEquals(AGENT, row.getCanonicalAgentId(), "mapped agentId"); assertEquals("1", row.getManifestVersion(), "mapped manifestVersion");
+                assertEquals("a".repeat(64), row.getManifestSha256(), "mapped manifest digest");
+                assertArrayEquals(java.util.HexFormat.of().parseHex("b".repeat(64)), row.getEnrollmentSecretHash(), "mapped synthetic secret digest");
+                assertEquals(2000L, row.getEnrollmentExpiresAt(), "mapped expiry");
+                assertEquals("PENDING", row.getStatus()); assertNotNull(row.getId()); assertEquals(0L, row.getVersion());
+            }
+            return row;
+        });
         var transactions = new org.springframework.transaction.support.TransactionTemplate(
                 new org.springframework.jdbc.datasource.DataSourceTransactionManager(source));
-        transactions.setIsolationLevel(org.springframework.transaction.TransactionDefinition.ISOLATION_REPEATABLE_READ);
+        transactions.setIsolationLevel(diagnoseRepeatableRead ? org.springframework.transaction.TransactionDefinition.ISOLATION_REPEATABLE_READ
+                : org.springframework.transaction.TransactionDefinition.ISOLATION_READ_COMMITTED);
         var request = candidate("a".repeat(64), "b".repeat(64), 2000);
         try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
-            java.util.concurrent.Callable<cn.jia.agent.entity.AgentRuntimeV1InstallationView> ensure = () ->
-                    transactions.execute(status -> service.ensureInstallation("0", "client-a", "owner-a", request, NOW));
+            java.util.concurrent.Callable<Object> ensure = () -> {
+                try { return transactions.execute(status -> service.ensureInstallation("0", "client-a", "owner-a", request, NOW)); }
+                catch (AgentServiceImpl.AgentBizException denied) { return denied; }
+            };
             var first = executor.submit(ensure); var second = executor.submit(ensure);
-            assertEquals(first.get(10, java.util.concurrent.TimeUnit.SECONDS), second.get(10, java.util.concurrent.TimeUnit.SECONDS));
+            var results = java.util.List.of(first.get(10, java.util.concurrent.TimeUnit.SECONDS), second.get(10, java.util.concurrent.TimeUnit.SECONDS));
+            if (diagnoseRepeatableRead) {
+                assertEquals(1, results.stream().filter(cn.jia.agent.entity.AgentRuntimeV1InstallationView.class::isInstance).count());
+                assertEquals(1, results.stream().filter(AgentServiceImpl.AgentBizException.class::isInstance).count());
+                assertEquals(java.util.List.of(java.util.Map.of("transactionRawRows", 0, "committedRawRows", 1)), java.util.List.copyOf(missingReads));
+                System.out.println("H2_CURRENT_VIEW_DIAGNOSTIC locking_row_missing=true transaction_raw_rows=0 committed_raw_rows=1; production authorization rejected, not weakened");
+            } else {
+                assertInstanceOf(cn.jia.agent.entity.AgentRuntimeV1InstallationView.class, results.get(0));
+                assertEquals(results.get(0), results.get(1)); assertTrue(missingReads.isEmpty());
+            }
             assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM agent_runtime_v1_installation", Integer.class));
             verify(installations, times(2)).insertCandidateIfAbsent(any()); verify(installations, times(2)).lock(INTERNAL_ID);
             assertEquals("PENDING", transactions.execute(status -> service.ensureInstallation("0", "client-a", "owner-a", request, 3000)).status());
