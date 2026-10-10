@@ -126,7 +126,7 @@ class AgentRuntimeV1ServiceImplTest {
         internalOwner();
         var winner = internalInstallation("PENDING").setManifestSha256("c".repeat(64));
         when(installations.findInScope("0", "client-a", INTERNAL_ID)).thenReturn(null);
-        when(installations.insertCandidateIfAbsent(any())).thenReturn(0); // another candidate won
+        doNothing().when(installations).insertCandidateIfAbsent(any()); // another candidate won
         when(installations.lock(INTERNAL_ID)).thenReturn(winner);
         assertThrows(AgentServiceImpl.AgentBizException.class, () -> service.ensureInstallation("0", "client-a", "owner-a",
                 candidate("a".repeat(64), "b".repeat(64), 2000), NOW));

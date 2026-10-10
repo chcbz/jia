@@ -164,6 +164,87 @@ class UnixManagedHostingProvisionerTest {
             assertThrows(IllegalStateException.class, () -> adapter.prepareAndObserve(preparation()));
         } finally { TransactionSynchronizationManager.clear(); }
     }
+    /** Real Java transport/decoder -> Runtime UDS/control/journal. Native API and executor remain synthetic. */
+    @Test @EnabledOnOs(OS.LINUX)
+    @EnabledIfEnvironmentVariable(named = "CYF_GSS_RUNTIME_TEST_SOURCE", matches = ".+")
+    void actualJavaAdapterDrivesRuntimeInitialReplayAndFreeNewSessionWithoutCredentialWire() throws Exception {
+        Path source = Path.of(System.getenv("CYF_GSS_RUNTIME_TEST_SOURCE")).toRealPath();
+        Path script = source.resolve("conf/cyf-agent-runtime-v1/test/hosting-java-bridge-fixture.mjs");
+        String node = System.getenv("CYF_GSS_NODE_BIN");
+        assertNotNull(node, "Explicit tested Node executable required; no version gate");
+        assertTrue(Files.isRegularFile(script));
+        Process child = new ProcessBuilder(node, script.toString()).directory(source.toFile())
+                .redirectError(ProcessBuilder.Redirect.INHERIT).start();
+        try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+             var output = new java.io.BufferedReader(new java.io.InputStreamReader(child.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
+            String line = executor.submit(output::readLine).get(10, TimeUnit.SECONDS);
+            assertNotNull(line, "Runtime fixture must publish its owned socket");
+            Map<String, Object> endpoint = JSON.readValue(line, new TypeReference<Map<String, Object>>() {});
+            assertEquals(Set.of("socketPath", "uid", "gid", "hostId", "instanceId"), endpoint.keySet());
+            assertEquals("fixture-host", endpoint.get("hostId")); assertEquals("fixture-instance-1", endpoint.get("instanceId"));
+            var real = adapter(Path.of((String)endpoint.get("socketPath")), ((Number)endpoint.get("uid")).longValue(),
+                    ((Number)endpoint.get("gid")).longValue(), "fixture-owner");
+            var candidates = new java.util.concurrent.ConcurrentHashMap<String, ManagedHostingProvisioner.Candidate>();
+            var expectedSession = new java.util.concurrent.atomic.AtomicLong(1);
+            doAnswer(call -> {
+                var p = (ManagedHostingProvisioner.Preparation)call.getArgument(0);
+                var c = (ManagedHostingProvisioner.Candidate)call.getArgument(1);
+                var previous = candidates.putIfAbsent(p.operationId(), c);
+                if (previous != null) assertEquals(previous, c, "Exact operation must replay its original candidate");
+                assertEquals(p.operationId().equals(p.intentId()) ? 1 : 2, c.provisionGeneration());
+                return null;
+            }).when(credentials).ensureInstallation(any(), any());
+            // Independent expected API proof: known fixture host/instance + committed prepared
+            // installation, and session floor fixed by the test, NEVER derived from READY JSON.
+            when(sessions.currentRegisteredProof("0", "fixture-client", "agt_fixture")).thenAnswer(call -> {
+                var c = candidates.get("hri_fixture");
+                assertNotNull(c);
+                return new AgentRuntimeAuthenticationService.Proof(new AgentRuntimeAuthentication.Scope("0", "fixture-client",
+                        "fixture-owner", "agt_fixture", "fixture-instance-1"), c.installationId(), "fixture-host", expectedSession.get(), "a".repeat(64), 1, 0);
+            });
+            assertTrue(real.probeCapabilities("0", "fixture-client", "fixture-owner"));
+            var initial = preparation();
+            var ready = pollFixtureReady(real, initial);
+            assertEquals(initial, ready.preparation());
+            var original = candidates.get(initial.operationId()); assertNotNull(original);
+            assertEquals(ready, real.prepareAndObserve(initial));
+            var free = new ManagedHostingProvisioner.Preparation(initial.tenantId(), initial.clientId(), initial.ownerJiacn(), initial.agentId(),
+                    initial.intentId(), initial.leaseId(), initial.bindingId(), initial.reservedAt(), "hrr_fixture_free",
+                    initial.requestedAt(), initial.reservedAt() + 2592000000L); // same-ms request still requires NEW session
+            expectedSession.set(2);
+            var renewed = pollFixtureReady(real, free);
+            assertEquals(free, renewed.preparation()); assertEquals(renewed, real.prepareAndObserve(free));
+            var replacement = candidates.get(free.operationId());
+            assertEquals(original.installationId(), replacement.installationId());
+            assertEquals(original.manifestSha256(), replacement.manifestSha256());
+            assertEquals(original.enrollmentSecretSha256(), replacement.enrollmentSecretSha256());
+            assertEquals(original.enrollmentExpiresAt(), replacement.enrollmentExpiresAt());
+            assertEquals(ManagedHostingProvisioner.Outcome.UNKNOWN, real.prepareAndObserve(initial).outcome());
+            expectedSession.set(1); // stale independent API registration cannot authenticate current free READY
+            assertEquals(ManagedHostingProvisioner.Outcome.UNKNOWN, real.prepareAndObserve(free).outcome());
+        } finally {
+            child.getOutputStream().close(); // EOF asks this fixture to close its own journal/socket/host/private roots
+            if (!child.waitFor(10, TimeUnit.SECONDS)) {
+                child.destroy();
+                if (!child.waitFor(5, TimeUnit.SECONDS)) child.destroyForcibly(); // exact child only, never peer processes
+                fail("Owned Runtime fixture failed graceful shutdown");
+            }
+            assertEquals(0, child.exitValue(), "Runtime fixture cleanup");
+        }
+    }
+    private ManagedHostingProvisioner.Observation pollFixtureReady(UnixManagedHostingProvisioner adapter,
+            ManagedHostingProvisioner.Preparation preparation) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        ManagedHostingProvisioner.Observation observation;
+        do {
+            observation = adapter.prepareAndObserve(preparation);
+            if (observation.outcome() == ManagedHostingProvisioner.Outcome.SERVICE_READY) return observation;
+            Thread.sleep(25); // bounded polling ONLY this fixture's asynchronous synthetic executor
+        } while (System.nanoTime() < deadline);
+        fail("Local Runtime fixture did not become ready for " + preparation.operationId());
+        return observation;
+    }
+
     @Test @EnabledOnOs(OS.LINUX)
     void privateUnixExchangeSupportsExplicitRestrictedGroupAndRejectsWrongGroupOrWorldAccess(@TempDir Path root) throws Exception {
         Files.setPosixFilePermissions(root, PosixFilePermissions.fromString("rwxr-x---"));
