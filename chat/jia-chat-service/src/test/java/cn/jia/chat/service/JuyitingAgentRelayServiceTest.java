@@ -441,7 +441,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
     void unknownOrIncompleteTurnsCannotComplete() throws Exception {
         List<String> targets = List.of("agent-wuyong", "agent-linchong");
         Flux<String> stream = preparedStream(targets);
-        CountDownLatch forwarded = new CountDownLatch(5);
+        CountDownLatch forwarded = new CountDownLatch(8);
         CompletableFuture<List<String>> result = stream.doOnNext(frame -> {
             if (frame.contains("probe")) forwarded.countDown();
         }).collectList().toFuture();
@@ -452,7 +452,10 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
                 view("RECOVERY_REQUIRED", List.of("PUBLISHED", "FAILED"), targets),
                 view("COMPLETED", List.of(), List.of()),
                 view("COMPLETED", List.of("PUBLISHED"), targets.subList(0, 1)),
-                view("PARTIAL", List.of("PUBLISHED", "RECOVERY_REQUIRED"), targets))) {
+                view("PARTIAL", List.of("PUBLISHED", "RECOVERY_REQUIRED"), targets),
+                view("COMPLETED", List.of("PUBLISHED", "QUEUED"), targets),
+                view("COMPLETED", List.of("PUBLISHED", "DISPATCHED"), targets),
+                view("COMPLETED", List.of("PUBLISHED", "UNKNOWN"), targets))) {
             CountDownLatch frameSeen = new CountDownLatch(1);
             when(deliberationService.getRequest("0", "tester", "web-client", "req-1"))
                     .thenAnswer(ignored -> { frameSeen.countDown(); return invalid; });
@@ -464,7 +467,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         currentView.set(view("CANCELLED", List.of("CANCELLED", "CANCELLED"), targets));
         when(deliberationService.getRequest("0", "tester", "web-client", "req-1")).thenAnswer(ignored -> currentView.get());
         publish(Map.of("requestId", "req-1", "content", "cancelled"));
-        assertEquals(8, result.get(2, TimeUnit.SECONDS).size());
+        assertEquals(11, result.get(2, TimeUnit.SECONDS).size());
     }
 
     @Test
@@ -565,6 +568,62 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         java.util.concurrent.ExecutionException error = assertThrows(java.util.concurrent.ExecutionException.class,
                 () -> result.get(2, TimeUnit.SECONDS));
         assertTrue(error.getCause() instanceof IllegalStateException);
+        assertEquals(0, broker.subscriberCount("1001"));
+    }
+
+    @Test
+    void realFinalOutboxPublicationCompletesBeforeMarkPublishedTransaction() throws Exception {
+        Flux<String> stream = preparedStream(List.of("agent-wuyong"));
+        CompletableFuture<List<String>> result = stream.collectList().toFuture();
+        assertTrue(firstRead.await(2, TimeUnit.SECONDS));
+        // FINAL_PERSISTED and the final-delivery outbox are already committed together.
+        currentView.set(view("COMPLETED", List.of("FINAL_PERSISTED"), List.of("agent-wuyong")));
+        ChatDeliberationOutboxService outbox = org.mockito.Mockito.mock(ChatDeliberationOutboxService.class);
+        org.springframework.ai.chat.client.ChatClient client = org.mockito.Mockito.mock(org.springframework.ai.chat.client.ChatClient.class);
+        cn.jia.chat.deliberation.ChatDispatchOutboxEntity row = new cn.jia.chat.deliberation.ChatDispatchOutboxEntity()
+                .setEventId("committed-final-event").setTenantId("0").setOwnerJiacn("tester").setClientId("web-client")
+                .setTurnId("turn-agent-wuyong").setEventType("FINAL_PERSISTED").setCreatedAt(1L)
+                .setPayloadJson(cn.jia.core.util.JsonUtil.toJson(Map.of(
+                        "requestId", "req-1", "conversationId", "1001", "conversationGeneration", "1", "content", "committed final")));
+        org.mockito.Mockito.doAnswer(ignored -> {
+            assertFalse(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive());
+            // Force the actual outbox publisher to wait at its subsequent state write.
+            // The POST must have already forwarded the full frame and completed, without PUBLISHED.
+            List<String> frames = result.get(2, TimeUnit.SECONDS);
+            assertEquals(2, frames.size());
+            assertTrue(frames.getLast().contains("committed-final-event"));
+            assertTrue(frames.getLast().contains("committed final"));
+            assertEquals(0, broker.subscriberCount("1001"));
+            return null;
+        }).when(deliberationService).markPublished("0", "tester", "web-client", "turn-agent-wuyong");
+        try (ChatDeliberationOutboxRelay worker = new ChatDeliberationOutboxRelay(outbox, deliberationService,
+                agentWebSocketHandler, builtinHallAgentSupport, broker, chatConversationService, client)) {
+            ChatDeliberationOutboxService.Claim claim = new ChatDeliberationOutboxService.Claim(row, false);
+            worker.deliverClaim(claim);
+            verify(outbox).sent(eq(claim), anyLong());
+            verify(outbox, never()).retry(any(), anyString(), anyLong());
+        }
+        org.mockito.Mockito.verifyNoInteractions(client);
+    }
+
+    @Test
+    void privateInspectAdmissionKeepsItsRouteAndCompletesFromAuthoritativeSnapshot() {
+        stubLiveConversation();
+        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+                .thenReturn(conversation("private", "agent:agent-wuyong", null, List.of("agent-wuyong")));
+        stubAdmission(List.of("agent-wuyong"), false);
+        ChatDeliberationService.Dispatch dispatch = new ChatDeliberationService.Dispatch("req-1", "turn-agent-wuyong",
+                "dispatch-agent-wuyong", "evt-agent-wuyong", "agent-wuyong", "INSPECT", "RECEIVED", "snapshot-agent-wuyong", "hash-agent-wuyong", Map.of(), Map.of());
+        when(deliberationService.admit(eq("0"), any(), eq("1001"), eq(1L), any(), eq(InteractionRoute.INSPECT), any(), any()))
+                .thenReturn(new ChatDeliberationService.Admission("req-1", 1L, "11", "1001", 1L, InteractionRoute.INSPECT, List.of(dispatch), false));
+        ChatDeliberationService.TurnView turn = new ChatDeliberationService.TurnView("turn-agent-wuyong", "req-1", "1", "1001", "1", "agent-wuyong",
+                "snapshot-agent-wuyong", "dispatch-agent-wuyong", "INSPECT", "FINAL_PERSISTED", "2", "0", null, "12", "1", "2");
+        currentView.set(new ChatDeliberationService.RequestView("req-1", "1", "1001", "1", "11", "COMPLETED", "2", List.of(turn), List.of()));
+        ChatMessageDTO request = request("private", null, List.of("agent-wuyong"));
+        request.setConversationScopeKey("agent:agent-wuyong");
+        assertEquals(1, service().relay(request, "1001", sender(), InteractionRoute.INSPECT)
+                .stream().collectList().block(Duration.ofSeconds(2)).size());
+        verify(deliberationService).admit(eq("0"), any(), eq("1001"), eq(1L), any(), eq(InteractionRoute.INSPECT), eq(request), any());
         assertEquals(0, broker.subscriberCount("1001"));
     }
 
