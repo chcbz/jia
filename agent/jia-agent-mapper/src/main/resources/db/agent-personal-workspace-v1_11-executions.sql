@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS agent_personal_workspace_execution (
   CONSTRAINT chk_pwex_grant_revision CHECK (grant_revision >= 1),
   CONSTRAINT chk_pwex_state CHECK (execution_state IN ('QUEUED','INPUTS_REVOKED','OUTPUT_COMMITTED','FAILED')),
   CONSTRAINT chk_pwex_failure CHECK ((execution_state='FAILED' AND failure_code='AGENT_DELIVERY_FAILED' AND failure_message IS NOT NULL AND failed_at IS NOT NULL) OR (execution_state<>'FAILED' AND failure_code IS NULL AND failure_message IS NULL AND failed_at IS NULL)),
-  CONSTRAINT chk_pwex_output_mime CHECK (output_content_mime_type IN ('image/png','image/jpeg','application/pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.openxmlformats-officedocument.presentationml.presentation')),
+  CONSTRAINT chk_pwex_output_mime CHECK (output_content_mime_type IN ('image/png','image/jpeg','application/pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.openxmlformats-officedocument.presentationml.presentation','text/plain')),
   CONSTRAINT chk_pwex_hash CHECK (CHAR_LENGTH(request_hash)=64),
   CONSTRAINT chk_pwex_revoke_hash CHECK ((revoke_idempotency_key IS NULL AND revoke_request_hash IS NULL) OR (revoke_idempotency_key IS NOT NULL AND CHAR_LENGTH(revoke_request_hash)=64))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;

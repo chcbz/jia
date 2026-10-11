@@ -17,6 +17,16 @@ import java.util.Objects;
 public final class PersonalWorkspaceExecutionSchemaInitializer implements InitializingBean {
     static final String RESOURCE = "db/agent-personal-workspace-v1_11-executions.sql";
     static final String OUTPUT_MIME_MIGRATION_RESOURCE = "db/agent-personal-workspace-v1_13-execution-output-mime.sql";
+    static final String TEXT_OUTPUT_MIME_RESOURCE = "db/agent-personal-workspace-v1_17-text-output-mime.sql";
+    static final String DOCUMENT_MIMES = "'image/png','image/jpeg','application/pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.openxmlformats-officedocument.presentationml.presentation'";
+    static final String OUTPUT_MIMES = DOCUMENT_MIMES + ",'text/plain'";
+    static final String MIME_CHECK_QUERY = """
+            SELECT tc.enforced, cc.check_clause FROM information_schema.table_constraints tc
+            JOIN information_schema.check_constraints cc ON cc.constraint_schema=tc.constraint_schema
+              AND cc.constraint_name=tc.constraint_name AND cc.constraint_catalog=tc.constraint_catalog
+            WHERE tc.constraint_schema=DATABASE() AND tc.table_name='agent_personal_workspace_execution'
+              AND tc.constraint_type='CHECK' AND tc.constraint_name='chk_pwex_output_mime'
+            """;
     static final String TERMINAL_STATE_MIGRATION_RESOURCE = "db/agent-personal-workspace-v1_13-execution-terminal-state.sql";
     static final String TASK_EXECUTION_MIGRATION_RESOURCE = "db/agent-personal-workspace-v1_13-task-execution.sql";
     static final String TASK_PUBLICATION_MIGRATION_RESOURCE = "db/agent-personal-workspace-v1_13-task-publication.sql";
@@ -34,6 +44,7 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
         else if (!present.equals(TABLES)) throw new IllegalStateException("Personal workspace execution schema is partial: " + present);
         if (!presentTables().equals(TABLES)) throw new IllegalStateException("Personal workspace execution schema is unavailable");
         migrateOutputMime();
+        migrateTextOutputMime();
         verifyOutputMime();
         migrateTerminalState();
         verifyTerminalState();
@@ -81,6 +92,40 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
         if (present == null) throw new IllegalStateException("Execution output MIME schema discovery failed");
         if (present == 0) jdbc.execute(outputMimeMigrationStatement());
         else if (present != 1) throw new IllegalStateException("Execution output MIME column is ambiguous");
+    }
+
+    private static String canonicalMimeCheck(String clause) {
+        return clause.replace("_utf8mb4", "").replace("`", "")
+                .replaceAll("\\s+", "").replace("(", "").replace(")", "");
+    }
+    private String enforcedMimeCheck() {
+        var rows=jdbc.queryForList(MIME_CHECK_QUERY);
+        if (rows.size()!=1 || !"YES".equalsIgnoreCase(Objects.toString(rows.getFirst().get("enforced"), "")))
+            throw new IllegalStateException("Execution output MIME CHECK missing or not enforced");
+        return canonicalMimeCheck(Objects.toString(rows.getFirst().get("check_clause"), ""));
+    }
+    static String textOutputMimeMigrationStatement() {
+        try {
+            String statement=new ClassPathResource(TEXT_OUTPUT_MIME_RESOURCE)
+                    .getContentAsString(StandardCharsets.UTF_8).lines()
+                    .filter(line -> !line.stripLeading().startsWith("--"))
+                    .reduce("", (a,b)->a+b+'\n').strip();
+            String expected="ALTER TABLE agent_personal_workspace_execution DROP CHECK chk_pwex_output_mime, "
+                    + "ADD CONSTRAINT chk_pwex_output_mime CHECK (output_content_mime_type IN ("+OUTPUT_MIMES+"));";
+            if (!statement.replaceAll("\\s+", " ").equals(expected))
+                throw new IllegalStateException("Unsafe text output MIME migration");
+            return statement.substring(0,statement.length()-1);
+        } catch (IOException failure) { throw new IllegalStateException("Text output MIME migration missing",failure); }
+    }
+    void migrateTextOutputMime() {
+        String actual=enforcedMimeCheck();
+        String required=canonicalMimeCheck("output_content_mime_type in ("+OUTPUT_MIMES+")");
+        if (actual.equals(required)) return;
+        if (!actual.equals(canonicalMimeCheck("output_content_mime_type in ("+DOCUMENT_MIMES+")")))
+            throw new IllegalStateException("Execution output MIME CHECK drifted");
+        jdbc.execute(textOutputMimeMigrationStatement());
+        if (!enforcedMimeCheck().equals(required))
+            throw new IllegalStateException("Text output MIME CHECK migration not applied");
     }
 
     static String terminalStateMigrationStatement() {
@@ -384,7 +429,7 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
                     OR output_content_mime_type NOT IN ('image/png','image/jpeg','application/pdf',
                       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
                       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                      'application/vnd.openxmlformats-officedocument.presentationml.presentation')
+                      'application/vnd.openxmlformats-officedocument.presentationml.presentation','text/plain')
                 """, Integer.class);
         if (invalid == null || invalid != 0) throw new IllegalStateException("Execution output MIME schema is invalid");
     }
