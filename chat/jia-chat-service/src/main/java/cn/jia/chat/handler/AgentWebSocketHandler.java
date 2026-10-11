@@ -152,6 +152,9 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
     private ChatDeliberationOutboxService chatDeliberationOutboxService;
     private TypedDeliberationSessionRegistry typedDeliberationSessions;
     private TypedInspectionSessionRegistry typedInspectionSessions;
+    private NativeTextFileSessionRegistry nativeTextFileSessions;
+    @Autowired(required = false)
+    public void setNativeTextFileSessions(NativeTextFileSessionRegistry sessions) { this.nativeTextFileSessions = sessions; }
     @Autowired(required = false)
     public void setChatDeliberationOutboxService(ChatDeliberationOutboxService service) {
         this.chatDeliberationOutboxService = service;
@@ -906,6 +909,11 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
                         payload.get("typedInspection"),
                         () -> typedDeliberationSessionCurrent(session, result.getAgentId()));
             }
+            if (nativeTextFileSessions != null) nativeTextFileSessions.register(session.getId(),
+                    new cn.jia.agent.service.NativeTextFileRuntimeLookup.Scope(sessionTenantId(session),
+                            sessionClientId(session), sessionJiacn(session), result.getAgentId()),
+                    payload.get("nativeTextFileExecution"),
+                    () -> typedDeliberationSessionCurrent(session, result.getAgentId()));
             signalRegisteredReconnect(session, result.getAgentId());
             sendCapabilityIndex(session, payload);
         } catch (Exception e) {
@@ -1470,6 +1478,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler
 
     private void removeTypedInspectionSession(String sessionId) {
         if (typedInspectionSessions != null) typedInspectionSessions.remove(sessionId);
+        if (nativeTextFileSessions != null) nativeTextFileSessions.remove(sessionId);
     }
 
     private boolean typedDeliberationSessionCurrent(WebSocketSession session, String agentId) {

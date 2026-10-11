@@ -97,7 +97,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             "application/vnd.openxmlformats-officedocument.presentationml.presentation");
     /** Every runtime output type is independently configuration-gated; input support does not enable output. */
     private static final Set<String> SUPPORTED_OUTPUT_MIME_TYPES = Set.of(
-            "image/png", "image/jpeg", "application/pdf",
+            "text/plain", "image/png", "image/jpeg", "application/pdf",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             "application/vnd.openxmlformats-officedocument.presentationml.presentation");
@@ -146,6 +146,9 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         this.conversationGrants = Objects.requireNonNull(grants);
         this.taskMutations = Objects.requireNonNull(transactions);
     }
+    private cn.jia.agent.service.NativeTextFileRuntimeLookup textFiles;
+    @Autowired(required=false)
+    public void setNativeTextFileRuntime(cn.jia.agent.service.NativeTextFileRuntimeLookup lookup) { this.textFiles=lookup; }
     private AgentRuntimeAuthenticationService runtimeAuthentication;
 
     @Autowired
@@ -320,15 +323,18 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
         id(command.intentId(), "intentId", 90);
         id(command.grantId(), "grantId", 100);
         id(command.permittedOperation(), "permittedOperation", 40);
+        boolean textFile = "GENERATE_TEXT_FILE".equals(command.permittedOperation());
+        if (textFile && (command.controlledImage() || !command.references().isEmpty()
+                || !"text/plain".equals(command.outputContentMimeType()))) throw failure(Reason.BAD_REQUEST);
         int controlledProtocol=command.controlledImage()?command.controlledImageProtocolVersion():1;
         if (command.grantVersion() < 1 || command.assignmentRevision() < 0
-                || !"GENERATE_IMAGE".equals(command.permittedOperation())
+                || !("GENERATE_IMAGE".equals(command.permittedOperation()) || textFile)
                 || command.controlledImage()&&!Set.of(2,3).contains(controlledProtocol)
                 || !command.controlledImage()&&controlledProtocol!=1)
             throw failure(Reason.BAD_REQUEST);
         ValidCreate valid=validCreate(new CreateCommand(command.conversationId(), command.targetAgentId(),
                 command.taskId(), command.instruction(), command.outputContentMimeType(), List.of()));
-        if (valid.taskId() == null || !Set.of("image/png", "image/jpeg").contains(valid.outputContentMimeType())
+        if (valid.taskId() == null || !(textFile || Set.of("image/png", "image/jpeg").contains(valid.outputContentMimeType()))
                 || command.controlledImage() && !"image/png".equals(valid.outputContentMimeType()))
             throw failure(Reason.CAPABILITY_UNAVAILABLE);
         if (command.references().size()>(command.controlledImage()?16:32)) throw failure(Reason.BAD_REQUEST);
@@ -372,6 +378,9 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                         return view(scope,prior);
                     }
                     requireOwnedTarget(scope,valid.targetAgentId());
+                    if (textFile && (textFiles == null || !textFiles.ready(
+                            new cn.jia.agent.service.NativeTextFileRuntimeLookup.Scope(scope.tenantId(),scope.clientId(),
+                                    scope.ownerJiacn(),valid.targetAgentId())))) throw failure(Reason.CAPABILITY_UNAVAILABLE);
                     try {
                         var conversation=conversationAccess.requireAccessible(
                                 new WorkspaceConversationAccessService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),
@@ -415,7 +424,8 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                         }
                     }
                     PersonalWorkspaceExecutionEntity row=new PersonalWorkspaceExecutionEntity()
-                            .setExecutionId(identifier("pwe_")).setOwnerJiacn(scope.ownerJiacn())
+                            .setExecutionId(textFile ? PersonalWorkspaceExecutionService.textFileExecutionId(scope, command.intentId())
+                                    : identifier("pwe_")).setOwnerJiacn(scope.ownerJiacn())
                             .setTaskId(valid.taskId()).setRunId(identifier("pwe_run_"))
                             .setExecutionMode("CONVERSATION")
                             .setConversationId(valid.conversationId())
@@ -669,10 +679,13 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                         execution.getTaskGrantVersion(),execution.getAssignmentRevision(),
                         execution.getTargetAgentId(),execution.getPermittedOperation(),true);
             }
+            boolean textFile = "GENERATE_TEXT_FILE".equals(execution.getPermittedOperation());
+            if (textFile && (execution.getControlledConsentId()!=null || !"text/plain".equals(execution.getOutputContentMimeType())))
+                throw failure(Reason.GRANT_REVOKED);
             var admission=execution.getControlledConsentId()==null
                     ? conversationGrants.admit(grantScope,execution.getTaskId(),execution.getTaskGrantId(),
                         execution.getTaskGrantVersion(),execution.getAssignmentRevision(),
-                        execution.getTargetAgentId(),execution.getPermittedOperation(),true)
+                        execution.getTargetAgentId(),execution.getPermittedOperation(),!textFile)
                     : conversationGrants.admitControlled(grantScope,execution.getTaskId(),execution.getTaskGrantId(),
                         execution.getTaskGrantVersion(),execution.getAssignmentRevision(),
                         execution.getTargetAgentId(),execution.getPermittedOperation(),purpose,
@@ -682,7 +695,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                     || execution.getAssignmentRevision()!=admission.assignmentRevision()
                     || !same(execution.getTargetAgentId(),admission.targetAgentId())
                     || !same(execution.getPermittedOperation(),admission.operation())
-                    || !admission.paidExecutionAuthorized())
+                    || !textFile && !admission.paidExecutionAuthorized())
                 throw failure(Reason.GRANT_REVOKED);
             return admission;
         } catch (RuntimeException denied) { throw failure(Reason.GRANT_REVOKED); }

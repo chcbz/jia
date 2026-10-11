@@ -60,7 +60,7 @@ class PersonalWorkspaceConversationExecutionTest {
         when(runtimes.findCandidateRosterByOwner("client","owner")).thenReturn(List.of(agent));
         service=new PersonalWorkspaceExecutionServiceImpl(rows,workspace,
                 mock(PersonalWorkspaceTaskLinkDao.class),runtimes,storage,writes,
-                new PersonalWorkspaceExecutionProperties(List.of("image/png")));
+                new PersonalWorkspaceExecutionProperties(List.of("image/png","text/plain")));
         service.setConversationAdmission(grants,transactions);
         principal(RUNTIME);
         var authentication=mock(AgentRuntimeAuthenticationService.class);
@@ -90,6 +90,77 @@ class PersonalWorkspaceConversationExecutionTest {
         when(rows.listInputs(eq("0"),eq("client"),eq("owner"),anyString())).thenReturn(List.of());
         when(rows.findByTaskRun("0","client","owner","task-1","run-1")).thenReturn(execution);
         when(rows.lockByTaskRun("0","client","owner","task-1","run-1")).thenReturn(execution);
+    }
+
+    private PersonalWorkspaceExecutionService.ConversationCreate textCommand() {
+        return new PersonalWorkspaceExecutionService.ConversationCreate("42","task-1","agent","text-intent","grant-1",1,7,
+                "GENERATE_TEXT_FILE","生成三行会议清单","text/plain");
+    }
+    private void authorizeText() {
+        var lookup=mock(NativeTextFileRuntimeLookup.class);
+        when(lookup.ready(new NativeTextFileRuntimeLookup.Scope("0","client","owner","agent"))).thenReturn(true);
+        service.setNativeTextFileRuntime(lookup);
+        when(grants.admit(any(),eq("task-1"),eq("grant-1"),eq(1L),eq(7L),eq("agent"),eq("GENERATE_TEXT_FILE"),eq(false)))
+                .thenReturn(new AgentTaskExecutionGrantService.Admission("grant-1",1,7,"agent","GENERATE_TEXT_FILE",false));
+    }
+    @Test void textCreateUsesExplicitUnpaidOperationAndStableScopedId() {
+        authorizeText();var created=service.createConversation(OWNER,textCommand());
+        assertEquals(PersonalWorkspaceExecutionService.textFileExecutionId(OWNER,"text-intent"),created.executionId());
+        assertEquals("text/plain",created.outputContentMimeType());assertEquals("CONVERSATION",created.executionMode());
+        verify(grants).admit(any(),eq("task-1"),eq("grant-1"),eq(1L),eq(7L),eq("agent"),eq("GENERATE_TEXT_FILE"),eq(false));
+        verifyNoInteractions(writes);
+    }
+    @Test void textCreateFailsWithoutLiveExecutorOrExplicitGrant() {
+        assertEquals(PersonalWorkspaceExecutionService.Reason.CAPABILITY_UNAVAILABLE,assertThrows(
+                PersonalWorkspaceExecutionService.Failure.class,()->service.createConversation(OWNER,textCommand())).getReason());
+        authorizeText();when(grants.admit(any(),eq("task-1"),eq("grant-1"),eq(1L),eq(7L),eq("agent"),eq("GENERATE_TEXT_FILE"),eq(false))).thenReturn(null);
+        assertEquals(PersonalWorkspaceExecutionService.Reason.GRANT_REVOKED,assertThrows(
+                PersonalWorkspaceExecutionService.Failure.class,()->service.createConversation(OWNER,textCommand())).getReason());
+        verify(rows,never()).insert(any());
+    }
+    @Test void textCannotSilentlyDropGrantInputsOrEnterPaidImageLane() {
+        authorizeText();
+        var input=new AgentTaskExecutionGrantService.AuthorizedInput("file-1",1,"INPUT","text/plain",3,"a".repeat(64));
+        when(grants.admit(any(),eq("task-1"),eq("grant-1"),eq(1L),eq(7L),eq("agent"),eq("GENERATE_TEXT_FILE"),eq(false)))
+                .thenReturn(new AgentTaskExecutionGrantService.Admission("grant-1",1,7,"agent","GENERATE_TEXT_FILE",false,List.of(input)));
+        assertEquals(PersonalWorkspaceExecutionService.Reason.GRANT_REVOKED,assertThrows(
+                PersonalWorkspaceExecutionService.Failure.class,()->service.createConversation(OWNER,textCommand())).getReason());
+        var wrong=new PersonalWorkspaceExecutionService.ConversationCreate("42","task-1","agent","text-intent","grant-1",1,7,
+                "GENERATE_TEXT_FILE","instruction","image/png");
+        assertEquals(PersonalWorkspaceExecutionService.Reason.BAD_REQUEST,assertThrows(
+                PersonalWorkspaceExecutionService.Failure.class,()->service.createConversation(OWNER,wrong)).getReason());
+        verify(rows,never()).insert(any());
+    }
+    @Test void utf8FormatIsStrictAndNeverAcceptedAsImage() {
+        byte[] text="确认议题\n通知参会人\n检查设备\n".getBytes(StandardCharsets.UTF_8);
+        assertTrue(PersonalWorkspaceOutputFormatValidator.isValid("text/plain",text));
+        assertFalse(PersonalWorkspaceOutputFormatValidator.isValid("image/png",text));
+        for(byte[] bad:List.of(new byte[0],new byte[]{0},new byte[]{(byte)0xc3,0x28}))
+            assertFalse(PersonalWorkspaceOutputFormatValidator.isValid("text/plain",bad));
+    }
+
+    @Test void nativeTextRunsThroughOneShotStartUploadCommitAndTrustedRead() throws Exception {
+        authorizeText();enable();execution.setPermittedOperation("GENERATE_TEXT_FILE").setOutputContentMimeType("text/plain");
+        byte[] bytes="确认议题\n通知参会人\n检查设备\n".getBytes(StandardCharsets.UTF_8);String hash=sha(bytes);
+        when(storage.store(any(),any(byte[].class),eq("text/plain")))
+                .thenReturn(new PersonalWorkspaceStorage.StoredObject("private/text",hash,bytes.length,"text/plain"));
+        when(rows.lockOutput("0","client","owner","exec-1","output_1")).thenAnswer(i->output);
+        when(rows.lockOutputs("0","client","owner","exec-1")).thenAnswer(i->output==null?List.of():List.of(output));
+        doAnswer(i->{output=i.getArgument(0);return null;}).when(rows).insertOutput(any());
+        when(storage.read(any(),eq("private/text"),eq(hash),eq((long)bytes.length),eq("text/plain")))
+                .thenReturn(new PersonalWorkspaceStorage.StoredContent(bytes,hash,bytes.length,"text/plain"));
+        var lease=service.claimConversationStart(RUNTIME,"task-1","run-1",commandId(),messageId());
+        service.beginConversationProviderStart(RUNTIME,"task-1","run-1",lease.fence());
+        assertThrows(PersonalWorkspaceExecutionService.Failure.class,()->service.beginConversationProviderStart(RUNTIME,"task-1","run-1",lease.fence()));
+        var staged=service.stageConversationOutput(RUNTIME,"task-1","run-1",lease.fence(),"output_1","output.txt","text/plain",bytes);
+        assertEquals(hash,staged.sha256());
+        String manifest="pwe_m_"+sha(("task-1\nrun-1\noutput_1\n"+hash+"\n"+bytes.length+"\n").getBytes(StandardCharsets.UTF_8));
+        var committed=service.commitConversationOutput(RUNTIME,"task-1","run-1",lease.fence(),manifest,
+                List.of(new PersonalWorkspaceExecutionService.OutputDeclaration("output_1",hash,bytes.length)));
+        assertEquals("COMMITTED",committed.state());
+        assertArrayEquals(bytes,service.readConversationOutput(OWNER,"task-1","run-1","output_1").bytes());
+        verify(grants,never()).admit(any(),anyString(),anyString(),anyLong(),anyLong(),anyString(),eq("GENERATE_IMAGE"),eq(false));
+        verifyNoInteractions(writes);
     }
 
     @Test void trustedCreateRequiresActualPaidGrantAndCorrectConversationBeforeInsert() {

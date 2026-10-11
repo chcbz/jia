@@ -29,6 +29,9 @@ public class ChatActionExecutionService implements ChatActionDispatchService.Exe
     private final AgentTaskExecutionGrantService grants;
     private final ChatConversationAssetSourceResolver sources;
     private final ControlledImageFollowupAuthorityService authority;
+    private ChatTextFileActionExecutionService textFiles;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setTextFileExecutor(ChatTextFileActionExecutionService textFiles) { this.textFiles=textFiles; }
 
     public ChatActionExecutionService(ChatDeliberationService deliberation, ChatDeliberationDao dao,
             ChatTypedDeliberationStore typed, ChatInteractionStepStore steps, AgentTaskExecutionGrantService grants,
@@ -44,6 +47,10 @@ public class ChatActionExecutionService implements ChatActionDispatchService.Exe
         var requested=action.validated().interactionOutcome().action();
         var capability=action.validated().dispatchFacts().availableActions().stream()
                 .filter(c->c.actionId().equals(requested.actionId())).findFirst().orElseThrow(ChatActionExecutionService::conflict);
+        if ("GENERATE_TEXT_FILE".equals(capability.operation())) {
+            if (textFiles==null) throw conflict();
+            return textFiles.admit(action);
+        }
         if (!"EXECUTE".equals(capability.kind()) || !List.of("GENERATE_IMAGE","EDIT_IMAGE").contains(capability.operation())) throw conflict();
         String target=(String)action.validated().binding().get("targetAgentId");
         String actionId=ChatActionFinalValidator.actionEventId(action.validated());

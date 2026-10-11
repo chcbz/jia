@@ -71,11 +71,23 @@ class AgentTaskExecutionGrantServiceImplTest {
     void pointWithoutMaterialsCreatesDeliberationNotImageOrPaidAuthority() {
         when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
         var receipt=service.assignForDeliberation(scope(),"task-1","point-empty","agent-1",0,1);
-        assertEquals(List.of("DELIBERATE","INSPECT_INPUTS"),receipt.getPermittedOperations());
+        assertEquals(List.of("DELIBERATE","GENERATE_TEXT_FILE","INSPECT_INPUTS"),receipt.getPermittedOperations());
         assertFalse(receipt.getPaidExecutionAuthorized());
         assertTrue(receipt.getInputs().isEmpty());
         assertEquals("DELIBERATE",bootstraps.byAction.values().iterator().next().getPermittedOperation());
         assertNull(grants.byAction.values().iterator().next().getCostAuthorizationRef());
+    }
+
+    @Test void newOrdinaryGrantAdmitsTextButAnOldGrantDoesNotGainTheOperation() {
+        when(links.list("0","client","owner","task-1",null,null,33)).thenReturn(List.of());
+        var grant=service.assignForDeliberation(scope(),"task-1","text-grant","agent-1",0,1);
+        assertEquals("GENERATE_TEXT_FILE",service.admit(scope(),"task-1",grant.getGrantId(),grant.getGrantVersion(),
+                grant.getAssignmentRevision(),"agent-1","GENERATE_TEXT_FILE",false).operation());
+        assertThrows(AgentTaskExecutionGrantException.class,()->service.admit(scope(),"task-1",grant.getGrantId(),
+                grant.getGrantVersion(),grant.getAssignmentRevision(),"agent-1","GENERATE_IMAGE",true));
+        grants.byAction.values().iterator().next().setPermittedOperationsJson("[\"DELIBERATE\",\"INSPECT_INPUTS\"]");
+        assertThrows(AgentTaskExecutionGrantException.class,()->service.admit(scope(),"task-1",grant.getGrantId(),
+                grant.getGrantVersion(),grant.getAssignmentRevision(),"agent-1","GENERATE_TEXT_FILE",false));
     }
 
     @Test
