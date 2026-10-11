@@ -146,6 +146,10 @@ public class JuyitingAgentRelayService {
                     || !expectedGeneration.equals(view.conversationGeneration())) {
                 throw new IllegalStateException("Request scope unavailable");
             }
+            // This completion rule is only for CHAT/INSPECT. Typed EXECUTE owns a different
+            // lifecycle: even terminal CHAT turns must not settle its execution-state stream.
+            if (view.steps() == null || view.steps().stream().anyMatch(step -> step == null
+                    || !("CHAT".equals(step.kind()) || "INSPECT".equals(step.kind())))) return false;
             if (view.turns() == null || view.turns().isEmpty() || admission.dispatches().isEmpty()) return false;
             Set<String> seen = new HashSet<>();
             boolean allTerminal = true;

@@ -625,6 +625,56 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         assertEquals(0, broker.subscriberCount("1001"));
     }
 
+    @Test
+    void ordinaryBountyChatWithoutExecuteStepStillCompletesItsPost() {
+        Flux<String> stream = preparedBountyStream();
+        currentView.set(view("COMPLETED", List.of("FINAL_PERSISTED"), List.of("agent-wuyong")));
+        assertEquals(1, stream.collectList().block(Duration.ofSeconds(2)).size());
+        assertEquals(0, broker.subscriberCount("1001"));
+    }
+
+    @Test
+    void bountyExecuteStepsNeverUseTerminalChatTurnsToCloseExecutionStateStream() throws Exception {
+        Flux<String> stream = preparedBountyStream();
+        CountDownLatch runningForwarded = new CountDownLatch(1);
+        CountDownLatch terminalForwarded = new CountDownLatch(1);
+        CompletableFuture<List<String>> result = stream.doOnNext(frame -> {
+            if (frame.contains("running-execute-probe")) runningForwarded.countDown();
+            if (frame.contains("terminal-execute-probe")) terminalForwarded.countDown();
+        }).collectList().toFuture();
+        try {
+            assertTrue(firstRead.await(2, TimeUnit.SECONDS));
+            ChatDeliberationService.RequestView chatDone = view("COMPLETED", List.of("FINAL_PERSISTED"), List.of("agent-wuyong"));
+            for (String state : List.of("RUNNING", "COMPLETED")) {
+                ChatDeliberationService.StepView execute = new ChatDeliberationService.StepView("step-execute", "1", "task-7", "1",
+                        "agent-wuyong", "EXECUTE", state, "1", "intent-1", "execution-1",
+                        "RUNNING".equals(state) ? "RUNNING" : "OUTPUT_COMMITTED");
+                currentView.set(new ChatDeliberationService.RequestView(chatDone.requestId(), chatDone.requestRevision(),
+                        chatDone.conversationId(), chatDone.conversationGeneration(), chatDone.userMessageId(),
+                        chatDone.state(), chatDone.stateVersion(), chatDone.turns(), List.of(execute)));
+                String probe = "RUNNING".equals(state) ? "running-execute-probe" : "terminal-execute-probe";
+                publish(Map.of("requestId", "req-1", "content", probe));
+                assertTrue(("RUNNING".equals(state) ? runningForwarded : terminalForwarded).await(2, TimeUnit.SECONDS));
+                assertFalse(result.isDone(), "Typed EXECUTE is excluded, not assigned a CHAT completion rule");
+            }
+            assertEquals(1, broker.subscriberCount("1001"));
+        } finally {
+            result.cancel(true);
+        }
+        assertEquals(0, broker.subscriberCount("1001"));
+    }
+
+    private Flux<String> preparedBountyStream() {
+        stubLiveConversation();
+        when(agentService.listTaskWritableMemberAgentIds("0", "web-client", "task-7"))
+                .thenReturn(List.of("agent-wuyong"));
+        when(chatConversationService.getOwned("tester", "web-client", "1001"))
+                .thenReturn(conversation("bounty", "task:task-7", "task-7", List.of("agent-wuyong")));
+        stubAdmission(List.of("agent-wuyong"), false);
+        return service().relay(request("bounty", "task-7", List.of("agent-wuyong")),
+                "1001", sender(), InteractionRoute.CHAT).stream();
+    }
+
     private Flux<String> preparedStream(List<String> targets) {
         stubLiveConversation();
         when(chatConversationService.getOwned("tester", "web-client", "1001"))
