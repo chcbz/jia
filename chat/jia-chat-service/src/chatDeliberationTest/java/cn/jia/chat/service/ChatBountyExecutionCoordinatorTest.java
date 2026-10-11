@@ -230,6 +230,21 @@ class ChatBountyExecutionCoordinatorTest {
         verifyNoInteractions(grants, executions, conversations);
     }
 
+    @Test void revokedPaidConsentOnEqualRequirementWaitsWithoutExecutionOrRelayFailure() throws Exception {
+        persistedRequirementImage("画一只鸟", "画一只鸟", "画一只鸟");
+        when(grants.admitControlledV3(any(), eq("task"), eq("grant"), eq(1L), eq(2L), eq("agent"),
+                eq("GENERATE_IMAGE"), eq("NEW_EXECUTION"), isNull(), isNull(), isNull()))
+                .thenReturn(new AgentTaskExecutionGrantService.Admission("grant", 1, 2,
+                        "agent", "GENERATE_IMAGE", false, List.of(), null, null));
+        when(steps.updateStepState(any(), eq("WAITING_AUTHORIZATION"), anyLong())).thenReturn(1);
+        when(requests.updateRequestState(any(), eq("WAITING_AUTHORIZATION"), anyLong())).thenReturn(1);
+        assertEquals("WAITING_AUTHORIZATION", coordinator.coordinate(candidate));
+        verify(steps).updateStepState(any(), eq("WAITING_AUTHORIZATION"), anyLong());
+        verify(requests).updateRequestState(any(), eq("WAITING_AUTHORIZATION"), anyLong());
+        verify(steps, never()).bindExecution(any(), anyString(), anyLong());
+        verifyNoInteractions(executions, conversations);
+    }
+
     @Test void persistedCapabilityWaitIsIdempotentUntilRuntimeReturns() throws Exception {
         persistedImageRequest();
         String digest=steps.findStep("0","owner","client","req",1,1).inputSnapshotDigest();
