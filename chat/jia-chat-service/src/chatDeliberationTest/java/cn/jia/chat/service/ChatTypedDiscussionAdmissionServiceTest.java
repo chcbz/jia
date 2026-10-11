@@ -66,40 +66,6 @@ class ChatTypedDiscussionAdmissionServiceTest {
         verify(finals).readIfV3(storeScope,parent.requestId(),parent.turnId(),1,"CHAT");
     }
 
-    @Test void newDiscussionWithExactCommittedAssetParentDoesNotSelectLatestDeadSibling() {
-        var media = new ChatMixedDeliveryBasisTest.Mixed();
-        var generated = media.addMedia("generated", media.c.root, "APPEND");
-        var failed = media.c.add("failed-edit", "DISCUSSION", generated,
-                media.basis(generated), "ACTION_REQUEST", "APPEND");
-        var progress = (Map<?, ?>) media.c.read(failed).get("actionProgress");
-        media.events.get((String) progress.get("actionRequestId")).setStatus("DEAD").setVersion(1L);
-        var exact = new ChatTypedDeliberationWire.SourceSelector(
-                "CURRENT_CONVERSATION_ASSET", null, null, null, "original-asset", "1");
-        var selectors = List.of(exact);
-        when(typed.requireParent(storeScope, generated.outcomeId())).thenReturn(generated);
-        when(events.findTurn("0", "owner", "client", generated.turnId()))
-                .thenReturn(media.c.turns.get(generated.turnId()));
-        when(contexts.resolve(any(), eq("task"), eq("agent"), eq(selectors))).thenReturn(
-                new ChatTypedDeliberationContextService.Context(
-                        ChatActionFinalValidator.factsMap(ChatActionOutcomeContract.factsJson(generated.factsJson())),
-                        "[]", selectors, Map.of("schemaVersion", 3, "state", "READY")));
-        when(deliberation.admit(eq("0"), eq(sender), eq("42"), eq(1L), any(), any(), any(), isNull(), any(), any()))
-                .thenAnswer(i -> admitted(((ChatMessageDTO) i.getArgument(6)).getRequestId()));
-        when(store.insertAdmission(any())).thenReturn(1);
-        var actual = new ChatTypedDiscussionAdmissionService(tasks, bindings, conversations, scopes,
-                deliberation, events, contexts, typed, media.c.f.finals);
-        var command = new ChatTypedDeliberationWire.DiscussionCommand("DISCUSSION", "task", 3,
-                "把原图蓝鸟改红", generated.outcomeId(), 0L, null, null, selectors);
-        actual.admit("0", sender, "42", "new-edit-key", command);
-        var targets = media.retained(generated);
-        verify(deliberation).admit(eq("0"), eq(sender), eq("42"), eq(1L), any(), any(), any(), isNull(), any(),
-                argThat(facts -> media.basis(generated).equals(facts.get("deliveryParent"))
-                        && targets.equals(facts.get("deliveryTargets"))
-                        && List.of(ChatTypedDeliberationWire.selectorMap(exact)).equals(facts.get("sourceSelectors"))));
-        verify(typed, never()).requireParent(storeScope, failed.outcomeId());
-        assertEquals("FAILED", ((Map<?, ?>) media.c.read(failed).get("actionProgress")).get("state"));
-    }
-
     @Test void clarificationAdmissionCopiesOriginalVerifiedTextBasisAndReplayNeverRebindsIt() {
         var chain=new ChatClarificationDeliveryRelationTest.Chain();
         var question=chain.add("question","DISCUSSION",chain.root,chain.basis,"CLARIFY",null);

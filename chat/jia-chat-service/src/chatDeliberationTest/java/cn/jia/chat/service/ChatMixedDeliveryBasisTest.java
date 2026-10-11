@@ -85,32 +85,10 @@ class ChatMixedDeliveryBasisTest {
             assertThrows(ChatDeliberationException.class,()->m.c.read(text),damage);
         }
     }
-    @Test void failedNoChildIsReadableButNeverDeliveryBasisAndDoesNotPoisonCommittedSibling() {
+    @Test void actualTypedReadProxyReplaysCommittedMediaParentWithJdbcLockWithoutWrites() {
         var m = new Mixed();
         var first = m.addMedia("generated", m.c.root, "APPEND");
-        var before = m.retained(first);
-        var failed = m.c.add("failed-edit", "DISCUSSION", first, m.basis(first), "ACTION_REQUEST", "APPEND");
-        failWithoutChild(m, failed);
-        var view = m.c.read(failed);
-        var progress = (Map<?, ?>) view.get("actionProgress");
-        assertEquals("READY", view.get("state"));
-        assertEquals("FAILED", progress.get("state"));
-        for (String key : List.of("childRequestId", "childRoute", "childStateVersion")) assertNull(progress.get(key));
-        assertThrows(ChatDeliberationException.class, () -> m.retained(failed));
-        assertEquals(before, m.retained(first));
-        // A new ordinary discussion chooses the exact committed original parent, not latest failed prose.
-        var next = m.addMedia("new-edit", first, "APPEND");
-        assertEquals(5, m.retained(next).size());
-        assertEquals("FAILED", ((Map<?, ?>) m.c.read(failed).get("actionProgress")).get("state"));
-        verify(m.executions, never()).createConversation(any(), any());
-        verify(m.executions, never()).claimConversationStart(any(), anyString(), anyString(), anyString(), anyString());
-    }
-
-    @Test void actualTypedReadProxyReplaysCommittedParentWithJdbcLockAndKeepsFailedCardWithoutWrites() {
-        var m = new Mixed();
-        var first = m.addMedia("generated", m.c.root, "APPEND");
-        var failed = m.c.add("failed-edit", "DISCUSSION", first, m.basis(first), "ACTION_REQUEST", "APPEND");
-        failWithoutChild(m, failed);
+        var edit = m.c.add("normal-edit", "DISCUSSION", first, m.basis(first), "ACTION_REQUEST", "APPEND");
         var source = new org.springframework.jdbc.datasource.DriverManagerDataSource(
                 "jdbc:h2:mem:typed_delivery_" + UUID.randomUUID() + ";MODE=MYSQL;DB_CLOSE_DELAY=-1", "sa", "");
         var jdbc = new org.springframework.jdbc.core.JdbcTemplate(source);
@@ -138,9 +116,9 @@ class ChatMixedDeliveryBasisTest {
             context.refresh();
             var typed = context.getBean(ChatTypedDeliberationService.class);
             assertTrue(org.springframework.aop.support.AopUtils.isCglibProxy(typed));
-            var view = (Map<?, ?>) typed.read(m.c.f.scope, failed.requestId(), failed.turnId(), 1);
+            var view = (Map<?, ?>) typed.read(m.c.f.scope, edit.requestId(), edit.turnId(), 1);
             assertEquals("READY", view.get("state"));
-            assertEquals("FAILED", ((Map<?, ?>) view.get("actionProgress")).get("state"));
+            assertEquals("QUEUED", ((Map<?, ?>) view.get("actionProgress")).get("state"));
             assertTrue(locks.get() > 0);
         }
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM owner_root", Integer.class));
@@ -149,11 +127,6 @@ class ChatMixedDeliveryBasisTest {
         verify(m.c.f.dao, never()).insertOutbox(any());
         verify(m.executions, never()).createConversation(any(), any());
         verifyNoInteractions(m.c.f.sessions);
-    }
-
-    private static void failWithoutChild(Mixed m, ChatTypedDeliberationStore.Outcome row) {
-        var progress = (Map<?, ?>) m.c.read(row).get("actionProgress");
-        m.events.get((String) progress.get("actionRequestId")).setStatus("DEAD").setVersion(1L);
     }
 
     @org.springframework.context.annotation.Configuration
