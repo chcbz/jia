@@ -194,7 +194,7 @@ public final class ChatSelectedOutputFinalizationService {
                     || link==null || !scopeExact(scope,link.tenantId(),link.ownerJiacn(),link.clientId())
                     || !selected.stepId().equals(link.stepId())
                     || !stepView.executionIntentId().equals(link.executionIntentId())
-                    || !stepView.executionId().equals(link.executionId()) || !"RUNNING".equals(link.state()))
+                    || !stepView.executionId().equals(link.executionId()) || !"OUTPUT_COMMITTED".equals(link.state()))
                 throw sourceUnavailable();
             var source=store.source(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),valid.command().conversationId(),
                     requestGeneration,selected.requestId(),selected.stepId(),selected.outputId());
