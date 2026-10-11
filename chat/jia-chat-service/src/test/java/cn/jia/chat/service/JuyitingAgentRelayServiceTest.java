@@ -521,6 +521,53 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         assertTrue(readerThread.get().startsWith("boundedElastic"));
     }
 
+    @Test
+    void failedAndCancelledRequestsWithAllTerminalTurnsCompleteWithoutSuccessFabrication() {
+        for (String state : List.of("FAILED", "CANCELLED")) {
+            Flux<String> stream = preparedStream(List.of("agent-wuyong"));
+            currentView.set(view(state, List.of(state), List.of("agent-wuyong")));
+            List<String> frames = stream.collectList().block(Duration.ofSeconds(2));
+            assertEquals(1, frames.size()); // Only original acceptance; no fabricated successful answer.
+            assertFalse(frames.getFirst().contains("COMPLETED"));
+            assertEquals(0, broker.subscriberCount("1001"));
+        }
+    }
+
+    @Test
+    void capturesNondefaultTenantOwnerClientBeforeThreadLocalIsCleared() {
+        EsContext context = new EsContext();
+        context.setTenantId("tenant-alt"); context.setJiacn("owner-alt"); context.setClientId("client-alt");
+        EsContextHolder.setContext(context);
+        ChatConversationEntity alternate = conversation("public", "public", null, List.of("agent-wuyong"));
+        alternate.setTenantId("tenant-alt"); alternate.setJiacn("owner-alt"); alternate.setClientId("client-alt");
+        when(chatConversationService.getOwned("owner-alt", "client-alt", "1001")).thenReturn(alternate);
+        when(chatConversationService.isLiveGeneration("owner-alt", "client-alt", "1001", 1L)).thenReturn(true);
+        stubAdmission(List.of("agent-wuyong"), false);
+        when(deliberationService.getRequest("tenant-alt", "owner-alt", "client-alt", "req-1"))
+                .thenReturn(view("COMPLETED", List.of("FINAL_PERSISTED"), List.of("agent-wuyong")));
+        ServerResolvedSender trusted = new ServerResolvedSender(ServerResolvedSender.USER_TYPE, "Alternate Owner",
+                "owner-alt", "client-alt", DisplayNameSource.NICKNAME);
+        Flux<String> stream = service().relay(request("public", null, List.of("agent-wuyong")), "1001", trusted, InteractionRoute.CHAT).stream();
+        EsContextHolder.clearContext();
+        assertEquals(1, stream.collectList().block(Duration.ofSeconds(2)).size());
+        verify(deliberationService).getRequest("tenant-alt", "owner-alt", "client-alt", "req-1");
+        verify(deliberationService, never()).getRequest("0", "tester", "web-client", "req-1");
+    }
+
+    @Test
+    void liveReadFailureIsNotNormalCompletionAndReleasesPostBuffer() throws Exception {
+        Flux<String> stream = preparedStream(List.of("agent-wuyong"));
+        CompletableFuture<List<String>> result = stream.collectList().toFuture();
+        assertTrue(firstRead.await(2, TimeUnit.SECONDS));
+        when(deliberationService.getRequest("0", "tester", "web-client", "req-1"))
+                .thenThrow(new IllegalStateException("live read unavailable"));
+        publish(Map.of("requestId", "req-1", "content", "final signal without readable authority"));
+        java.util.concurrent.ExecutionException error = assertThrows(java.util.concurrent.ExecutionException.class,
+                () -> result.get(2, TimeUnit.SECONDS));
+        assertTrue(error.getCause() instanceof IllegalStateException);
+        assertEquals(0, broker.subscriberCount("1001"));
+    }
+
     private Flux<String> preparedStream(List<String> targets) {
         stubLiveConversation();
         when(chatConversationService.getOwned("tester", "web-client", "1001"))
