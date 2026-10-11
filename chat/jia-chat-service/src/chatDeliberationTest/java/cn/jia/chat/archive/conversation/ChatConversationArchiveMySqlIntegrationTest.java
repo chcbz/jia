@@ -365,43 +365,60 @@ class ChatConversationArchiveMySqlIntegrationTest {
     }
 
     @Test
-    void typedOutcomeReadOnlyOuterTransactionRejectsRequiredJdbcLock() {
-        ChatActionFinalService finals = mock(ChatActionFinalService.class);
-        when(finals.readIfV3(any(), eq("request"), eq("turn"), eq(1L), eq("CHAT")))
-                .thenAnswer(invocation -> {
-                    assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
-                    assertTrue(TransactionSynchronizationManager.isCurrentTransactionReadOnly());
-                    return transactions.required(() -> {
-                        jdbc.queryForObject("SELECT id FROM chat_conversation WHERE id=42 FOR UPDATE", Long.class);
-                        return Map.of("state", "READY");
-                    });
-                });
-        try (var context = new AnnotationConfigApplicationContext()) {
-            context.register(LockingReadConfiguration.class);
-            context.registerBean(DataSourceTransactionManager.class,
-                    () -> new DataSourceTransactionManager(source));
-            context.registerBean(ChatTypedDeliberationService.class, () -> {
-                var typed = new ChatTypedDeliberationService(mock(ChatTypedDeliberationStore.class));
-                typed.setActionFinals(finals);
-                return typed;
-            });
-            context.refresh();
+    void typedOutcomeReadAllowsRequiredJdbcLockWithoutMutation() {
+        var before = jdbc.queryForList("SELECT * FROM chat_conversation");
+        try (var context = lockingReadContext()) {
             var typed = context.getBean(ChatTypedDeliberationService.class);
             assertTrue(AopUtils.isCglibProxy(typed));
-            DataAccessException failure = assertThrows(DataAccessException.class, () -> typed.read(
+            assertEquals(Map.of("state", "READY"), typed.read(
                     new ChatTypedDeliberationStore.Scope("0", "owner", "client", "42", 3),
                     "request", "turn", 1));
+        }
+        assertEquals(before, jdbc.queryForList("SELECT * FROM chat_conversation"));
+        assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
+    }
+
+    @Test
+    void explicitReadOnlyCallerStillRejectsRequiredJdbcLockWithoutTransactionSplitting() {
+        try (var context = lockingReadContext()) {
+            var typed = context.getBean(ChatTypedDeliberationService.class);
+            var readOnly = new TransactionTemplate(new DataSourceTransactionManager(source));
+            readOnly.setReadOnly(true);
+            DataAccessException failure = assertThrows(DataAccessException.class, () -> readOnly.execute(status ->
+                    typed.read(new ChatTypedDeliberationStore.Scope("0", "owner", "client", "42", 3),
+                            "request", "turn", 1)));
             Throwable cause = failure;
             while (!(cause instanceof SQLException) && cause.getCause() != null) cause = cause.getCause();
             assertInstanceOf(SQLException.class, cause);
             var sql = (SQLException) cause;
             assertEquals(1792, sql.getErrorCode());
             assertEquals("25006", sql.getSQLState());
-            System.out.println("TYPED_READ_BASELINE_JDBC_LOCK_REJECTED SQLState=" + sql.getSQLState()
-                    + " errorCode=" + sql.getErrorCode());
         }
-        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM chat_conversation", Integer.class));
         assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
+    }
+
+    private AnnotationConfigApplicationContext lockingReadContext() {
+        ChatActionFinalService finals = mock(ChatActionFinalService.class);
+        when(finals.readIfV3(any(), eq("request"), eq("turn"), eq(1L), eq("CHAT")))
+                .thenAnswer(invocation -> {
+                    assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
+                    return transactions.required(() -> {
+                        jdbc.queryForObject("SELECT id FROM chat_conversation WHERE id=42 FOR UPDATE", Long.class);
+                        assertFalse(TransactionSynchronizationManager.isCurrentTransactionReadOnly());
+                        return Map.of("state", "READY");
+                    });
+                });
+        var context = new AnnotationConfigApplicationContext();
+        context.register(LockingReadConfiguration.class);
+        context.registerBean(DataSourceTransactionManager.class,
+                () -> new DataSourceTransactionManager(source));
+        context.registerBean(ChatTypedDeliberationService.class, () -> {
+            var typed = new ChatTypedDeliberationService(mock(ChatTypedDeliberationStore.class));
+            typed.setActionFinals(finals);
+            return typed;
+        });
+        context.refresh();
+        return context;
     }
 
     @Configuration
