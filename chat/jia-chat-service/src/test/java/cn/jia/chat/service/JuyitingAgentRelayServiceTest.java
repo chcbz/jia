@@ -392,6 +392,8 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         publish(Map.of("requestId", "foreign", "content", "\"requestId\":\"req-1\""));
         publish(Map.of("requestId", "req-1", "conversationGeneration", "2"));
         publish(Map.of("requestId", "req-1", "requestRevision", "2"));
+        publish(Map.of("requestId", "foreign", "nested", Map.of("requestId", "req-1")));
+        publish(Map.of("requestId", "req-1", "tenantId", 0));
         publish(Map.of("requestId", "req-1", "tenantId", "foreign"));
         publish(Map.of("requestId", "req-1", "ownerJiacn", "foreign"));
         publish(Map.of("requestId", "req-1", "clientId", "foreign"));
@@ -611,11 +613,7 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
         stubLiveConversation();
         when(chatConversationService.getOwned("tester", "web-client", "1001"))
                 .thenReturn(conversation("private", "agent:agent-wuyong", null, List.of("agent-wuyong")));
-        stubAdmission(List.of("agent-wuyong"), false);
-        ChatDeliberationService.Dispatch dispatch = new ChatDeliberationService.Dispatch("req-1", "turn-agent-wuyong",
-                "dispatch-agent-wuyong", "evt-agent-wuyong", "agent-wuyong", "INSPECT", "RECEIVED", "snapshot-agent-wuyong", "hash-agent-wuyong", Map.of(), Map.of());
-        when(deliberationService.admit(eq("0"), any(), eq("1001"), eq(1L), any(), eq(InteractionRoute.INSPECT), any(), any()))
-                .thenReturn(new ChatDeliberationService.Admission("req-1", 1L, "11", "1001", 1L, InteractionRoute.INSPECT, List.of(dispatch), false));
+        stubAdmission(List.of("agent-wuyong"), false, InteractionRoute.INSPECT);
         ChatDeliberationService.TurnView turn = new ChatDeliberationService.TurnView("turn-agent-wuyong", "req-1", "1", "1001", "1", "agent-wuyong",
                 "snapshot-agent-wuyong", "dispatch-agent-wuyong", "INSPECT", "FINAL_PERSISTED", "2", "0", null, "12", "1", "2");
         currentView.set(new ChatDeliberationService.RequestView("req-1", "1", "1001", "1", "11", "COMPLETED", "2", List.of(turn), List.of()));
@@ -663,14 +661,18 @@ class JuyitingAgentRelayServiceTest extends BaseMockTest {
     }
 
     private void stubAdmission(List<String> targets, boolean replay) {
+        stubAdmission(targets, replay, InteractionRoute.CHAT);
+    }
+
+    private void stubAdmission(List<String> targets, boolean replay, InteractionRoute route) {
         List<ChatDeliberationService.Dispatch> dispatches = targets.stream()
                 .map(agentId -> new ChatDeliberationService.Dispatch(
                         "req-1", "turn-" + agentId, "dispatch-" + agentId, "evt-" + agentId,
-                        agentId, "CHAT", "RECEIVED", "snapshot-" + agentId, "hash-" + agentId,
+                        agentId, route.name(), "RECEIVED", "snapshot-" + agentId, "hash-" + agentId,
                         Map.of(), Map.of()))
                 .toList();
         ChatDeliberationService.Admission admission = new ChatDeliberationService.Admission(
-                "req-1", 1L, "11", "1001", 1L, InteractionRoute.CHAT, dispatches, replay);
+                "req-1", 1L, "11", "1001", 1L, route, dispatches, replay);
         currentView.set(view("RUNNING", targets.stream().map(ignored -> "DISPATCHED").toList(), targets));
         org.mockito.Mockito.lenient().when(deliberationService.getRequest("0", "tester", "web-client", "req-1"))
                 .thenAnswer(ignored -> {

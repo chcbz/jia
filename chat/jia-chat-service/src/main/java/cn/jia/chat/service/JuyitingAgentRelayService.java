@@ -189,8 +189,10 @@ public class JuyitingAgentRelayService {
     private boolean optionalEventFieldMatches(Map<?, ?> event, String field, String expected) {
         if (!event.containsKey(field)) return true;
         Object value = event.get(field);
-        return value != null && (value instanceof String || value instanceof Long || value instanceof Integer)
-                && expected.equals(value.toString());
+        if (expected.equals(value)) return true;
+        // Identity strings are byte-exact; only decimal version fields admit integral JSON numbers.
+        return ("conversationGeneration".equals(field) || "requestRevision".equals(field))
+                && (value instanceof Long || value instanceof Integer) && expected.equals(value.toString());
     }
 
     private static final Set<String> TERMINAL_REQUEST_STATES =
