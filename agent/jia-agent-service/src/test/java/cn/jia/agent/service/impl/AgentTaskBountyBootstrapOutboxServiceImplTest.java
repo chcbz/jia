@@ -314,7 +314,7 @@ class AgentTaskBountyBootstrapOutboxServiceImplTest {
         @Test
         void textFileGrantReadsBackWithoutReassigningOrWeakeningIntegrity() {
             var operations=List.of("DELIBERATE", "GENERATE_TEXT_FILE", "INSPECT_INPUTS");
-            ReadFixture fixture=new ReadFixture(operations,"DELIBERATE",false,3L);
+            ReadFixture fixture=new ReadFixture(operations,"DELIBERATE",true,3L);
             var result=fixture.service.read(scope(),"task-1","original-key");
             assertEquals(operations,result.permittedOperations());
             assertEquals(0,fixture.grants.writeCalls);
