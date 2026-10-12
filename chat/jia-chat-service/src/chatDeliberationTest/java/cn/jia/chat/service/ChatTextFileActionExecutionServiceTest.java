@@ -43,7 +43,7 @@ class ChatTextFileActionExecutionServiceTest {
         payload.put("finalDigest",parent.finalDigest()); payload.put("taskId",parent.taskId());
         payload.put("targetAgentId",action.validated().binding().get("targetAgentId"));
         payload.put("actionId",action.validated().interactionOutcome().action().actionId());
-        event.setPayloadJson(cn.jia.chat.deliberation.CanonicalContextJson.write(payload));
+        event.setPayloadJson(CanonicalContextJson.write(payload));
         when(base.dao.findOutboxById("0","owner","client",event.getEventId())).thenReturn(event);
         when(base.typed.findAdmissionByKey(action.outcome().scope(),event.getEventId(),false)).thenReturn(child);
         var reader=new ChatActionFinalService(base.typed,base.dao,
