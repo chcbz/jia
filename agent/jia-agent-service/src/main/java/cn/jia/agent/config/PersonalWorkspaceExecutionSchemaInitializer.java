@@ -95,7 +95,7 @@ public final class PersonalWorkspaceExecutionSchemaInitializer implements Initia
     }
 
     private static String canonicalMimeCheck(String clause) {
-        return clause.replace("_utf8mb4", "").replace("`", "")
+        return clause.replace("_utf8mb4", "").replace("`", "").replace("\\'", "'")
                 .replaceAll("\\s+", "").replace("(", "").replace(")", "");
     }
     private String enforcedMimeCheck() {

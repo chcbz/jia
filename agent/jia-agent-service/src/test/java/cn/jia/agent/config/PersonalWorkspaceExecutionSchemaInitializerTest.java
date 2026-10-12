@@ -14,7 +14,7 @@ class PersonalWorkspaceExecutionSchemaInitializerTest {
     void textMimeMigrationVerifiesEnforcedDefinitionAndIsIdempotent() {
         var jdbc=mock(JdbcTemplate.class);
         var old=java.util.Map.<String,Object>of("enforced","YES","check_clause",
-                "(`output_content_mime_type` in ("+PersonalWorkspaceExecutionSchemaInitializer.DOCUMENT_MIMES+"))");
+                "(`output_content_mime_type` in ("+PersonalWorkspaceExecutionSchemaInitializer.DOCUMENT_MIMES.replace("'", "\\'")+"))");
         var current=java.util.Map.<String,Object>of("enforced","YES","check_clause",
                 "(`output_content_mime_type` in ("+PersonalWorkspaceExecutionSchemaInitializer.OUTPUT_MIMES+"))");
         when(jdbc.queryForList(PersonalWorkspaceExecutionSchemaInitializer.MIME_CHECK_QUERY))
