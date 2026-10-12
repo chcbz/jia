@@ -42,7 +42,7 @@ public class ChatTextFileActionExecutionService {
                 || capability.maxSources()!=0 || !requested.sourceRefIds().isEmpty()) throw conflict();
         String target=(String)action.validated().binding().get("targetAgentId");
         String event=ChatActionFinalValidator.actionEventId(action.validated());
-        String requestId=stable("text-file-request",event), stepId=stable("text-file-step",event);
+        String requestId=requestId(event), stepId=stable("text-file-step",event);
         String intentId=stable("text-file-intent",event);
         String executionId=PersonalWorkspaceExecutionService.textFileExecutionId(
                 new PersonalWorkspaceExecutionService.OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),intentId);
@@ -118,6 +118,7 @@ public class ChatTextFileActionExecutionService {
         deliberation.persistActionStarted(action,requestId,"EXECUTE",now);
         return requestId;
     }
+    static String requestId(String event) { return stable("text-file-request",event); }
     private static String stable(String domain,String event) { return ChatBountyInteractionV3Wire.shaText(domain+"\n"+event); }
     private static ChatDeliberationException conflict() {
         return new ChatDeliberationException(ChatDeliberationException.Reason.CONFLICT,"Text file action changed");
