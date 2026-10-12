@@ -8,95 +8,51 @@ import cn.jia.agent.service.AgentHostedBindingTransaction.Prepared;
 import cn.jia.agent.service.AgentHostedBindingTransaction.Scope;
 import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
-
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class AgentPersonaProvisioningServiceTest {
-    private static final Scope SCOPE = new Scope("owner-a", "client-a", "owner-a");
+    private static final Scope SCOPE = new Scope("0", "client-a", "owner-a");
     private static final String AGENT_ID = "agt_0123456789abcdef0123456789abcdef";
-    @TempDir Path temp;
 
     @Test
-    void localBindUsesExplicitJwtScopeAndExecutableAbsoluteProfileSection() {
+    void localBindProjectsTrustedScopeIntoRuntimeSetupWithoutLegacyCredentials() {
         AgentService agentService = mock(AgentService.class);
         AgentHostedBindingTransaction transactions = mock(AgentHostedBindingTransaction.class);
         AgentHostedProfilePublisher publisher = mock(AgentHostedProfilePublisher.class);
         AgentRuntimeDTO runtime = runtime();
-        runtime.setName("Wu Yong");
-        runtime.setTitle("Strategist");
-        when(agentService.bindPersona("owner-a", "client-a", "owner-a", "wuyong"))
+        Scope nonDefaultClientScope = new Scope("0", "client-local-alt", "owner-local");
+        when(agentService.bindPersona("0", "client-local-alt", "owner-local", "wuyong"))
                 .thenReturn(runtime);
 
         var result = new AgentPersonaProvisioningService(agentService, transactions, publisher)
-                .bind(SCOPE, "wuyong", "local");
+                .bind(nonDefaultClientScope, "wuyong", "local");
 
         assertEquals("local", result.getMode());
-        assertTrue(result.getProfileExample().startsWith("[agent.wuyong]\n"));
-        assertTrue(result.getProfileExample().contains("agentId=" + AGENT_ID));
+        assertEquals(AGENT_ID, result.getAgentId());
+        assertEquals("wuyong", result.getProfileId());
         assertEquals("/home/isp/apps/codex-ws-agent", result.getWorkdir());
-        assertTrue(result.getProfileExample().contains("codexWorkdir=/home/isp/apps/codex-ws-agent"));
-        assertTrue(result.getProfileExample().contains("agentName=Wu Yong"));
-        assertTrue(result.getProfileExample().contains("personaName=Strategist"));
-        assertNull(result.getCodexHome());
-        assertFalse(result.getProfileExample().contains("codexHome="));
-        assertFalse(result.getProfileExample().contains("$HOME"));
-        assertTrue(result.getProfileExample().contains("isDefault=true"));
-        assertFalse(result.getProfileExample().contains("apiKey"));
-        assertFalse(result.getProfileExample().contains("cdx_"));
-        assertTrue(result.getEnvExample().contains("OPENCLAW_API_KEY=<key>"));
-        verify(agentService).bindPersona("owner-a", "client-a", "owner-a", "wuyong");
+        assertNull(result.getEnvExample());
+        assertNull(result.getProfileExample());
+        assertTrue(result.getMessage().contains("不会创建 installation"));
+        assertFalse(result.getMessage().toLowerCase().contains("api key"));
+        var setup = result.getRuntimeSetup();
+        assertNotNull(setup);
+        assertEquals("v1", setup.getRuntimeProtocolVersion());
+        // The current server Scope constructor permits only tenant 0; this does not claim multi-tenant binding.
+        assertEquals("0", setup.getTenantId());
+        assertEquals("client-local-alt", setup.getClientId());
+        assertEquals(AGENT_ID, setup.getCanonicalAgentId());
+        assertEquals("1", setup.getManifestVersion());
+        assertEquals("/agent/runtime/v1/installations", setup.getInstallationCreatePath());
+        assertEquals("https://gitee.com/chcbz/isp-install/blob/develop/docs/cyf-agent-runtime-v1-self-host.md",
+                setup.getGuideUrl());
+        assertFalse(result.getCommands().toString().toLowerCase().contains("api key"));
+        assertFalse(result.getCommands().toString().contains("codex-ws-agent"));
+        verify(agentService).bindPersona("0", "client-local-alt", "owner-local", "wuyong");
         verifyNoInteractions(transactions, publisher);
-    }
-
-    @Test
-    void copiedLocalProfilePassesAuthoritativeRuntimeValidation() throws Exception {
-        Path runtimeSource = Path.of(
-                "/home/isp/wsps/chcbz/isp-install/conf/codex-ws-agent/agent-client.mjs");
-        org.junit.jupiter.api.Assumptions.assumeTrue(Files.isRegularFile(runtimeSource));
-        org.junit.jupiter.api.Assumptions.assumeTrue(Files.isExecutable(Path.of("/usr/bin/node")));
-        org.junit.jupiter.api.Assumptions.assumeTrue(Files.isDirectory(
-                Path.of("/home/isp/apps/codex-ws-agent")));
-
-        AgentService agentService = mock(AgentService.class);
-        AgentHostedBindingTransaction transactions = mock(AgentHostedBindingTransaction.class);
-        AgentHostedProfilePublisher publisher = mock(AgentHostedProfilePublisher.class);
-        AgentRuntimeDTO runtime = runtime();
-        runtime.setName("Wu Yong");
-        runtime.setTitle("Strategist");
-        when(agentService.bindPersona("owner-a", "client-a", "owner-a", "wuyong"))
-                .thenReturn(runtime);
-        var result = new AgentPersonaProvisioningService(agentService, transactions, publisher)
-                .bind(SCOPE, "wuyong", "local");
-        Path copiedProfile = temp.resolve("codex-profiles.conf");
-        Files.writeString(copiedProfile, result.getProfileExample() + "\n");
-
-        ProcessBuilder validation = new ProcessBuilder(
-                "/usr/bin/node", runtimeSource.toString(), "--validate");
-        validation.directory(temp.toFile()).redirectErrorStream(true);
-        validation.environment().remove("CODEX_PROFILES");
-        validation.environment().remove("CODEX_WORKSPACE_POLICIES_FILE");
-        validation.environment().put("CODEX_WORKSPACE_POLICIES", "");
-        validation.environment().put("CODEX_PROFILES_FILE", copiedProfile.toString());
-        validation.environment().put("DEFAULT_CODEX_PROFILE", result.getProfileId());
-        validation.environment().put("OPENCLAW_API_KEY", "test-only-key");
-        validation.environment().put("CODEX_SESSION_MAP_FILE",
-                temp.resolve("codex-session-map.json").toString());
-        Process validated = validation.start();
-        if (!validated.waitFor(15, TimeUnit.SECONDS)) {
-            validated.destroyForcibly();
-            fail("runtime validation timed out");
-        }
-        String output = new String(validated.getInputStream().readAllBytes(),
-                java.nio.charset.StandardCharsets.UTF_8);
-        assertEquals(0, validated.exitValue(), output);
-        assertTrue(output.contains("configuration valid | profiles=1"), output);
     }
 
     @Test
@@ -152,6 +108,7 @@ class AgentPersonaProvisioningServiceTest {
 
         assertEquals(Long.toString(Long.MAX_VALUE - 1), result.getBindingId());
         assertEquals(Long.toString(Long.MAX_VALUE - 2), result.getGeneration());
+        assertNull(result.getRuntimeSetup());
         assertEquals("/configured/clients/" + AGENT_ID, result.getWorkdir());
         assertEquals("/configured/runtime/.codex-hosted-profile", result.getCodexHome());
         assertEquals("/configured/runtime/codex-profiles.conf", result.getProfilesFile());
@@ -189,6 +146,7 @@ class AgentPersonaProvisioningServiceTest {
                 .bind(SCOPE, "wuyong", "server");
 
         assertEquals(AgentHostedProfileState.ACTIVE, result.getHostedState());
+        assertNull(result.getRuntimeSetup());
         assertTrue(result.getServerProfileCreated());
         assertFalse(result.getServerProfileAlreadyExists());
         assertEquals("/configured/runtime/codex-profiles.conf", result.getProfilesFile());
