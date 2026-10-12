@@ -11,7 +11,6 @@ import cn.jia.agent.service.impl.AgentServiceImpl.AgentBizException;
 import cn.jia.core.util.StringUtil;
 import org.springframework.stereotype.Service;
 
-import java.nio.file.Path;
 import java.util.List;
 import java.util.Objects;
 
@@ -168,13 +167,11 @@ public class AgentPersonaProvisioningService {
         AgentRuntimeDTO agent = agentService.bindPersona(
                 scope.tenantId(), scope.clientId(), scope.ownerJiacn(), personaCode);
         String profileId = personaCode.strip().toLowerCase().replaceAll("[^a-z0-9_-]", "-");
-        String workdir = Path.of("/home/isp/apps/codex-ws-agent").toAbsolutePath().normalize().toString();
         AgentPersonaBindResultDTO result = new AgentPersonaBindResultDTO();
         result.setAgent(agent);
         result.setMode("local");
         result.setAgentId(agent.getAgentId());
         result.setProfileId(profileId);
-        result.setWorkdir(workdir);
         result.setMessage("本地绑定仅提供 Runtime v1 自托管准备信息；不会创建 installation 或返回凭证。");
         result.setEnvExample(null);
         result.setProfileExample(null);

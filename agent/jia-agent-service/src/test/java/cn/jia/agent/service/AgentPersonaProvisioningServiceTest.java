@@ -33,7 +33,7 @@ class AgentPersonaProvisioningServiceTest {
         assertEquals("local", result.getMode());
         assertEquals(AGENT_ID, result.getAgentId());
         assertEquals("wuyong", result.getProfileId());
-        assertEquals("/home/isp/apps/codex-ws-agent", result.getWorkdir());
+        assertNull(result.getWorkdir());
         assertNull(result.getEnvExample());
         assertNull(result.getProfileExample());
         assertTrue(result.getMessage().contains("不会创建 installation"));
