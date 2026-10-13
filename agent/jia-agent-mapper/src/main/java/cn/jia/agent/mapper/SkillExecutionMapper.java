@@ -50,7 +50,8 @@ public interface SkillExecutionMapper {
                SET phase=#{row.phase},effects_json=#{row.effectsJson},
                    result_manifest_json=#{row.resultManifestJson},last_error_code=#{row.lastErrorCode},
                    version=version+1,updated_at=#{row.updatedAt}
-             WHERE """ + EXACT_SCOPE + """
+             WHERE
+            """ + EXACT_SCOPE + """
                AND version=#{expectedVersion} AND phase=#{expectedPhase}
                AND CAST(phase AS BINARY)=CAST(#{expectedPhase} AS BINARY)
                AND OCTET_LENGTH(phase)=OCTET_LENGTH(#{expectedPhase})

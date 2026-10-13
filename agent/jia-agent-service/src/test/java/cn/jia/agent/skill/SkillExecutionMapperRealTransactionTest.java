@@ -6,6 +6,9 @@ import cn.jia.agent.entity.SkillExecutionEntity;
 import cn.jia.agent.mapper.SkillExecutionMapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.*;
+import org.apache.ibatis.executor.statement.StatementHandler;
+import org.apache.ibatis.plugin.*;
+import org.apache.ibatis.reflection.SystemMetaObject;
 import org.mybatis.spring.SqlSessionFactoryBean;
 import org.mybatis.spring.SqlSessionTemplate;
 import org.springframework.core.io.ClassPathResource;
@@ -27,7 +30,9 @@ import static org.junit.jupiter.api.Assertions.*;
 /** Real attachment SQL/MyBatis/transactions, without business authorization or production DDL.
  * H2 fixture adapts JSON storage to CLOB + Jackson JSON_TYPE, and binary scope columns to
  * deliberately case-insensitive VARCHARs to challenge exact comparisons. This verifies
- * predicates/CAS, not MySQL catalog/collation/storage fidelity or paired protocol-4 admission. */
+ * predicates/CAS, not MySQL catalog/collation/storage fidelity or paired protocol-4 admission.
+ * MySQL CAST AS BINARY retains every byte; H2 BINARY defaults to length 1, so only the
+ * fixture replaces that cast with VARBINARY before JDBC prepare. No scope guard is removed. */
 public class SkillExecutionMapperRealTransactionTest {
     private JdbcTemplate jdbc;
     private TransactionTemplate tx;
@@ -43,6 +48,17 @@ public class SkillExecutionMapperRealTransactionTest {
             if (node == null) return "INVALID";
             return node.isObject() ? "OBJECT" : node.isArray() ? "ARRAY" : "SCALAR";
         } catch (Exception invalid) { return "INVALID"; }
+    }
+
+    @Intercepts(@Signature(type = StatementHandler.class, method = "prepare",
+            args = {Connection.class, Integer.class}))
+    public static final class MySqlBinaryCastAdapter implements Interceptor {
+        @Override public Object intercept(Invocation invocation) throws Throwable {
+            var statement = (StatementHandler) invocation.getTarget();
+            var bound = statement.getBoundSql();
+            SystemMetaObject.forObject(bound).setValue("sql", bound.getSql().replace(" AS BINARY)", " AS VARBINARY)"));
+            return invocation.proceed();
+        }
     }
 
     @BeforeEach void setup() throws Exception {
@@ -66,6 +82,7 @@ public class SkillExecutionMapperRealTransactionTest {
         }
         var config = new org.apache.ibatis.session.Configuration();
         config.setMapUnderscoreToCamelCase(true);
+        config.addInterceptor(new MySqlBinaryCastAdapter());
         config.addMapper(SkillExecutionMapper.class);
         var factory = new SqlSessionFactoryBean();
         factory.setDataSource(ds);
