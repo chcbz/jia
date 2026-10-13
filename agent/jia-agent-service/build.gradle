@@ -840,16 +840,20 @@ tasks.register('initialCancellation', Test) {
 
 // JYT-SKILL-SE2-20261013: manifest/schema fixture contract, isolated from historical test debt.
 def skillManifestContractSourceSet = sourceSets.create('skillManifestContract') {
-    java.srcDir 'src/skillManifestContract/java'
-    resources.srcDir 'src/skillManifestContract/resources'
+    java.setSrcDirs(['src/skillManifestContract/java'])
+    resources.setSrcDirs(['src/skillManifestContract/resources'])
     compileClasspath += sourceSets.main.output
     runtimeClasspath += output + compileClasspath
 }
 configurations.named(skillManifestContractSourceSet.implementationConfigurationName) {
-    extendsFrom configurations.testImplementation
+    extendsFrom configurations.implementation
 }
 configurations.named(skillManifestContractSourceSet.runtimeOnlyConfigurationName) {
-    extendsFrom configurations.testRuntimeOnly
+    extendsFrom configurations.runtimeOnly
+}
+dependencies {
+    add(skillManifestContractSourceSet.implementationConfigurationName, libs.junit.jupiter)
+    add(skillManifestContractSourceSet.runtimeOnlyConfigurationName, 'org.junit.platform:junit-platform-launcher:6.0.1')
 }
 tasks.register('skillManifestContract', Test) {
     group = 'verification'

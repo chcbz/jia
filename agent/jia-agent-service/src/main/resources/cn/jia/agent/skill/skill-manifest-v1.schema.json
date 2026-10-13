@@ -21,11 +21,11 @@
     },
     "skillKey": {
       "type": "string",
-      "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+      "pattern": "^[a-z0-9][a-z0-9-]{0,63}(?![\\s\\S])"
     },
     "skillVersion": {
       "type": "string",
-      "pattern": "^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$"
+      "pattern": "^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}(?![\\s\\S])"
     },
     "title": {
       "type": "string",
@@ -73,7 +73,7 @@
           "uniqueItems": true,
           "items": {
             "type": "string",
-            "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$"
+            "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*(?![\\s\\S])"
           }
         }
       }
@@ -99,7 +99,7 @@
           "uniqueItems": true,
           "items": {
             "type": "string",
-            "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$"
+            "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*(?![\\s\\S])"
           }
         },
         "multiple": {
@@ -116,14 +116,14 @@
       "properties": {
         "providerAlias": {
           "type": "string",
-          "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,63}(?![\\s\\S])"
         },
         "tools": {
           "type": "array",
           "uniqueItems": true,
           "items": {
             "type": "string",
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(?![\\s\\S])"
           }
         }
       }

@@ -61,7 +61,10 @@ public final class SkillManifestCodec {
     }
 
     public JsonNode parseJson(byte[] bytes) {
-        try { var value = JSON.readTree(bytes); require(value != null, "SKILL_INVALID_JSON"); checkUnicode(value); return value; }
+        try { var text = java.nio.charset.StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .decode(java.nio.ByteBuffer.wrap(bytes)).toString();
+            var value = JSON.readTree(text); require(value != null, "SKILL_INVALID_JSON"); checkUnicode(value); return value; }
         catch (IOException e) { throw failure("SKILL_INVALID_JSON"); }
     }
 
