@@ -23,6 +23,10 @@ public interface SkillExecutionService {
     record EffectReceipt(int schemaVersion,String disposition,String status,String providerRequestId,String resultDigest) { }
     EffectReceipt startEffect(RuntimeScope scope,String taskId,String runId,String effectId,EffectStart command);
     EffectReceipt recordEffect(RuntimeScope scope,String taskId,String runId,String effectId,EffectResult command);
+    record Inputs(int schemaVersion,String executionId,long leaseVersion,String snapshotDigest,
+            boolean noReferencedMaterials,List<Map<String,Object>> inputs) { }
+    Inputs inputs(RuntimeScope scope,String taskId,String runId,ConversationFence fence);
+    RuntimeContent inputContent(RuntimeScope scope,String taskId,String runId,String inputRef,ConversationFence fence);
     record Resume(String executionId,String snapshotDigest) { }
     record ResumeReceipt(ConversationLease lease,String phase,List<String> allowedWork,Map<String,Object> resultManifest) { }
     ResumeReceipt resume(RuntimeScope scope,String taskId,String runId,Resume command);

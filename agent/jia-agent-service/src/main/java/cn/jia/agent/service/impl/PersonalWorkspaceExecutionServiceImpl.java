@@ -74,7 +74,7 @@ import java.util.UUID;
  * A runtime-authenticated client polls its durable queue; browser responses never contain a lease.
  */
 @Named
-public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceExecutionService {
+public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceExecutionService,cn.jia.agent.service.SkillExecutionService {
     private static final String INTERNAL_PREFIX = "/internal/agent/tasks/";
     private static final String RUNTIME_FAILURE_CODE = "AGENT_DELIVERY_FAILED";
     private static final String RUNTIME_FAILURE_MESSAGE = "Agent 未能完成本次交付，请调整需求后重新创建执行。";
@@ -536,13 +536,13 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 scope.ownerJiacn(),taskId,root -> {
                     var row=executions.findByTaskRun(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,runId);
                     if (row==null || !"CONVERSATION".equals(row.getExecutionMode())
-                            || !"OUTPUT_COMMITTED".equals(row.getExecutionState())) throw failure(Reason.NOT_FOUND);
+                            || !Set.of("OUTPUT_COMMITTED","RESULT_COMMITTED").contains(row.getExecutionState())) throw failure(Reason.NOT_FOUND);
                     requireConversationRoot(root,scope,taskId,row.getTargetAgentId(),row.getAssignmentRevision());
                     requireOwnerCommittedConversationAuthority(scope,row);
                     requireCurrentControlledConversationAccess(scope,row);
                     var locked=executions.lockByTaskRun(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,runId);
                     if (locked==null || !same(row.getExecutionId(),locked.getExecutionId())
-                            || !"OUTPUT_COMMITTED".equals(locked.getExecutionState())) throw failure(Reason.NOT_FOUND);
+                            || !Set.of("OUTPUT_COMMITTED","RESULT_COMMITTED").contains(locked.getExecutionState())) throw failure(Reason.NOT_FOUND);
                     var output=executions.lockOutput(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),
                             row.getExecutionId(),outputId);
                     if (output==null || !same(row.getExecutionId(),output.getExecutionId())
@@ -568,15 +568,15 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 scope.ownerJiacn(),taskId,root -> {
                     var row=executions.findByTaskRun(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,runId);
                     if (row==null || !"CONVERSATION".equals(row.getExecutionMode())
-                            || !"OUTPUT_COMMITTED".equals(row.getExecutionState())) throw failure(Reason.NOT_FOUND);
+                            || !Set.of("OUTPUT_COMMITTED","RESULT_COMMITTED").contains(row.getExecutionState())) throw failure(Reason.NOT_FOUND);
                     requireConversationRoot(root,scope,taskId,row.getTargetAgentId(),row.getAssignmentRevision());
                     requireOwnerCommittedConversationAuthority(scope,row);
                     requireCurrentControlledConversationAccess(scope,row);
                     var locked=executions.lockByTaskRun(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),taskId,runId);
                     if (locked==null || !same(row.getExecutionId(),locked.getExecutionId())
-                            || !"OUTPUT_COMMITTED".equals(locked.getExecutionState())) throw failure(Reason.NOT_FOUND);
+                            || !Set.of("OUTPUT_COMMITTED","RESULT_COMMITTED").contains(locked.getExecutionState())) throw failure(Reason.NOT_FOUND);
                     var outputs=executions.lockOutputs(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),row.getExecutionId());
-                    if (outputs==null || outputs.isEmpty() || outputs.size()>128) throw failure(Reason.NOT_FOUND);
+                    if (outputs==null || outputs.isEmpty()&&!Objects.equals(4,row.getExecutionProtocolVersion()) || outputs.size()>128) throw failure(Reason.NOT_FOUND);
                     var replacement=committedOutputReplacement(scope,locked,outputs.size());
                     var result=new java.util.ArrayList<ConversationOutputInfo>(outputs.size());
                     for (var output: outputs) {
@@ -589,7 +589,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                                 || output.getByteLength()<0 || !sha(output.getContentHash()))
                             throw failure(Reason.NOT_FOUND);
                         id(output.getOutputId(),"outputId",100);
-                        validMime(output.getContentMimeType());
+                        if(!Objects.equals(4,row.getExecutionProtocolVersion()))validMime(output.getContentMimeType());
                         var stored=storage.read(storageScope(scope),output.getStorageUri(),output.getContentHash(),
                                 output.getByteLength(),output.getContentMimeType());
                         byte[] bytes=stored==null ? null : stored.content();
@@ -623,6 +623,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     }
 
     private void requireOwnerCommittedConversationAuthority(OwnerScope scope,PersonalWorkspaceExecutionEntity row) {
+        if(Objects.equals(4,row.getExecutionProtocolVersion())) {requireSkillConversationAccess(scope,row);return;}
         if (!Objects.equals(3,row.getExecutionProtocolVersion())) {
             requireConversationGrant(scope,row,"EXISTING_RUN",null);
             return;
@@ -680,12 +681,13 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                         execution.getTargetAgentId(),execution.getPermittedOperation(),true);
             }
             boolean textFile = "GENERATE_TEXT_FILE".equals(execution.getPermittedOperation());
+            boolean skillExecution=Objects.equals(4,execution.getExecutionProtocolVersion())&&"EXECUTE_SKILL".equals(execution.getPermittedOperation());
             if (textFile && (execution.getControlledConsentId()!=null || !"text/plain".equals(execution.getOutputContentMimeType())))
                 throw failure(Reason.GRANT_REVOKED);
             var admission=execution.getControlledConsentId()==null
                     ? conversationGrants.admit(grantScope,execution.getTaskId(),execution.getTaskGrantId(),
                         execution.getTaskGrantVersion(),execution.getAssignmentRevision(),
-                        execution.getTargetAgentId(),execution.getPermittedOperation(),!textFile)
+                        execution.getTargetAgentId(),execution.getPermittedOperation(),!textFile&&!skillExecution)
                     : conversationGrants.admitControlled(grantScope,execution.getTaskId(),execution.getTaskGrantId(),
                         execution.getTaskGrantVersion(),execution.getAssignmentRevision(),
                         execution.getTargetAgentId(),execution.getPermittedOperation(),purpose,
@@ -695,7 +697,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                     || execution.getAssignmentRevision()!=admission.assignmentRevision()
                     || !same(execution.getTargetAgentId(),admission.targetAgentId())
                     || !same(execution.getPermittedOperation(),admission.operation())
-                    || !textFile && !admission.paidExecutionAuthorized())
+                    || !textFile && !skillExecution && !admission.paidExecutionAuthorized())
                 throw failure(Reason.GRANT_REVOKED);
             return admission;
         } catch (RuntimeException denied) { throw failure(Reason.GRANT_REVOKED); }
@@ -951,6 +953,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 if (result.size()>=limit) continue;
                 if (!"CONVERSATION".equals(candidate.getExecutionMode())
                         || candidate.getControlledConsentId()!=null
+                        || Objects.equals(4,candidate.getExecutionProtocolVersion())
                         || candidate.getConversationProviderStartedAt()!=null
                         || !"QUEUED".equals(candidate.getExecutionState())
                         || !same(candidate.getTenantId(),scope.tenantId())
@@ -1027,6 +1030,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 || !same(candidate.getRunId(),execution.getRunId())
                 || !Objects.equals(candidate.getControlledConsentId(),execution.getControlledConsentId()))
             throw failure(Reason.TASK_CONFLICT);
+        if(Objects.equals(4,execution.getExecutionProtocolVersion()))return skillCommand(scope,execution);
         if(Objects.equals(3,execution.getExecutionProtocolVersion()))throw failure(Reason.NOT_FOUND);
         String seed=execution.getExecutionId();
         String commandId="pwe_cmd_"+plainSha("command\n"+seed);
@@ -1279,6 +1283,11 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
             try { next=Math.addExact(Objects.requireNonNullElse(execution.getConversationLeaseVersion(),0L),1L); }
             catch (ArithmeticException overflow) { throw failure(Reason.TASK_CONFLICT); }
             if(next>MAX_SAFE_INTEGER)throw failure(Reason.TASK_CONFLICT);
+            if(Objects.equals(4,execution.getExecutionProtocolVersion())) {
+                var skill=skillRow(skillOwner(scope),execution.getExecutionId(),true);
+                if(!"READY".equals(skill.getPhase()))throw failure(Reason.TASK_CONFLICT);
+                long version=skill.getVersion();skill.setPhase("RUNNING");skillCas(skill,"READY",version);
+            }
             execution.setConversationLeaseVersion(next).setConversationLeaseToken(UUID.randomUUID().toString())
                     .setConversationLeaseRuntimeId(scope.runtimeInstanceId())
                     .setConversationLeaseExpiresAt(Math.addExact(now,CONVERSATION_LEASE_MILLIS));
@@ -1533,10 +1542,10 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public RuntimeContent conversationInputContent(RuntimeScope scope, String taskId, String runId,
             ConversationFence fence, String inputRef) {
         requireConversationExecutionEnabled();id(inputRef,"inputRef",100);
+        if(Objects.equals(4,runtimeExecution(scope,taskId,runId,false).getExecutionProtocolVersion()))return inputContent(scope,taskId,runId,inputRef,fence);
         return withConversationRoot(scope,taskId,runId,true,execution -> {
             requireConversationFence(scope,execution,fence,false);
             if(Objects.equals(3,execution.getExecutionProtocolVersion())) {
@@ -1591,6 +1600,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     public CommitView commitConversationOutput(RuntimeScope scope, String taskId, String runId,
             ConversationFence fence, String manifestId, List<OutputDeclaration> outputs) {
         requireConversationExecutionEnabled();id(manifestId,"manifestId",100);validateManifest(outputs);
+        if(Objects.equals(4,runtimeExecution(scope,taskId,runId,false,true).getExecutionProtocolVersion()))throw failure(Reason.NOT_FOUND);
         nativeAuthentication(scope); var immutable=List.copyOf(outputs);
         var prepared=withConversationRoot(scope,taskId,runId,true,true,false,"RESULT",execution -> {
             requireConversationFence(scope,execution,fence,"OUTPUT_COMMITTED".equals(execution.getExecutionState()));
@@ -1896,7 +1906,15 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
 
     private void validateOutputUpload(PersonalWorkspaceExecutionEntity execution,String outputId,
             String originalFilename,String contentMimeType,byte[] content) {
-        id(outputId,"outputId",100);filename(originalFilename,contentMimeType);validMime(contentMimeType);
+        id(outputId,"outputId",100);
+        if(Objects.equals(4,execution.getExecutionProtocolVersion())) {
+            id(originalFilename,"filename",255);if(originalFilename.contains("/")||originalFilename.contains("\\")||originalFilename.equals(".")||originalFilename.equals(".."))throw failure(Reason.BAD_REQUEST);
+            var spec=skillObject(skillMap(skillRow(new OwnerScope(execution.getTenantId(),execution.getClientId(),execution.getOwnerJiacn()),execution.getExecutionId(),false).getSnapshotJson()).get("outputs"));
+            if(content==null||content.length==0||content.length>storage.maxContentBytes()||!((List<?>)spec.get("mimeTypes")).contains(contentMimeType))throw failure(Reason.BAD_REQUEST);
+            if(SUPPORTED_OUTPUT_MIME_TYPES.contains(contentMimeType)&&!PersonalWorkspaceOutputFormatValidator.isValid(contentMimeType,content))throw failure(Reason.BAD_REQUEST);
+            return;
+        }
+        filename(originalFilename,contentMimeType);validMime(contentMimeType);
         if(!"output_1".equals(outputId)||content==null||content.length==0||content.length>storage.maxContentBytes()
                 ||!same(contentMimeType,execution.getOutputContentMimeType())
                 ||!PersonalWorkspaceOutputFormatValidator.isValid(contentMimeType,content)) throw failure(Reason.BAD_REQUEST);
@@ -2354,7 +2372,7 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
                 : executions.findByTaskRun(scope.tenantId(), scope.clientId(), scope.ownerJiacn(), taskId, runId);
         if (execution == null) throw failure(Reason.NOT_FOUND);
         boolean stateAllowed = "QUEUED".equals(execution.getExecutionState())
-                || (allowCommitted && "OUTPUT_COMMITTED".equals(execution.getExecutionState()))
+                || (allowCommitted && Set.of("OUTPUT_COMMITTED","RESULT_COMMITTED").contains(execution.getExecutionState()))
                 || (allowFailed && "FAILED".equals(execution.getExecutionState()));
         if (!same(execution.getTargetAgentId(), scope.agentId()) || !stateAllowed) {
             throw failure(Reason.NOT_FOUND);
@@ -2718,6 +2736,408 @@ public class PersonalWorkspaceExecutionServiceImpl implements PersonalWorkspaceE
     private static void scoped(cn.jia.core.entity.BaseEntity entity,OwnerScope scope){entity.setTenantId(scope.tenantId());entity.setClientId(scope.clientId());}
     private static void scoped(cn.jia.core.entity.BaseEntity entity,RuntimeScope scope){entity.setTenantId(scope.tenantId());entity.setClientId(scope.clientId());}
     private static Failure failure(Reason reason){return new Failure(reason);}
+    private cn.jia.agent.dao.SkillExecutionDao skillExecutions;
+    private cn.jia.agent.service.InstalledSkillDescriptorLookup installedSkills;
+    private cn.jia.agent.service.SkillCapabilityLookup skillCapabilities;
+    private cn.jia.agent.service.TaskSkillPolicyService skillPolicy;
+    private cn.jia.agent.service.SkillSourceAccessService skillSourceAccess;
+    private final cn.jia.agent.skill.SkillManifestCodec skillCodec=new cn.jia.agent.skill.SkillManifestCodec();
+    @Autowired(required=false)
+    public void setSkillExecutionDependencies(cn.jia.agent.dao.SkillExecutionDao executions,
+            cn.jia.agent.service.InstalledSkillDescriptorLookup installed,
+            cn.jia.agent.service.SkillCapabilityLookup capabilities,cn.jia.agent.service.TaskSkillPolicyService policy) {
+        skillExecutions=executions;installedSkills=installed;skillCapabilities=capabilities;skillPolicy=policy;
+    }
+    @Autowired(required=false)
+    public void setSkillSourceAccess(cn.jia.agent.service.SkillSourceAccessService sources) {skillSourceAccess=sources;}
+    private void requireSkillEnabled() {
+        requireConversationExecutionEnabled();
+        if(skillExecutions==null||installedSkills==null||skillCapabilities==null||skillPolicy==null)
+            throw failure(Reason.CAPABILITY_UNAVAILABLE);
+    }
+    /** Deterministic canonical JSON: map keys sorted, array order retained, no secret/path fields added. */
+    private static Object skillCanonical(Object value) {
+        if(value instanceof Map<?,?> map) {
+            var result=new java.util.TreeMap<String,Object>();
+            for(var entry:map.entrySet()) {
+                if(!(entry.getKey() instanceof String key))throw failure(Reason.BAD_REQUEST);
+                result.put(key,skillCanonical(entry.getValue()));
+            }
+            return result;
+        }
+        if(value instanceof List<?> list)return list.stream().map(PersonalWorkspaceExecutionServiceImpl::skillCanonical).toList();
+        return value;
+    }
+    private static String skillJson(Object value) {return v3Json(skillCanonical(value));}
+    @SuppressWarnings("unchecked") private static Map<String,Object> skillObject(Object value) {
+        if(!(value instanceof Map<?,?>))throw failure(Reason.BAD_REQUEST);
+        return (Map<String,Object>)value;
+    }
+    @SuppressWarnings("unchecked") private static List<Map<String,Object>> skillInputs(Map<String,Object> snapshot) {
+        if(!(snapshot.get("inputs") instanceof List<?> values)||values.size()>32)throw failure(Reason.BAD_REQUEST);
+        var result=new ArrayList<Map<String,Object>>();for(var input:values)result.add(skillObject(input));return List.copyOf(result);
+    }
+    private static String skillString(Map<String,Object> value,String key) {
+        if(!(value.get(key) instanceof String text)||text.isBlank())throw failure(Reason.BAD_REQUEST);return text;
+    }
+    private static long skillLong(Object value) {
+        if(value==null)throw failure(Reason.BAD_REQUEST);
+        try {
+            String text=value.toString();if(!text.matches("0|[1-9][0-9]*"))throw failure(Reason.BAD_REQUEST);
+            long number=Long.parseLong(text);if(number>MAX_SAFE_INTEGER)throw failure(Reason.BAD_REQUEST);return number;
+        }catch(NumberFormatException invalid){throw failure(Reason.BAD_REQUEST);}
+    }
+    @SuppressWarnings("unchecked") private static Map<String,Object> skillMap(String json) {
+        try {return V3_JSON.readValue(json,Map.class);}catch(RuntimeException invalid){throw failure(Reason.TASK_CONFLICT);}
+    }
+    private cn.jia.agent.entity.SkillExecutionEntity skillRow(OwnerScope scope,String executionId,boolean lock) {
+        if(skillExecutions==null)throw failure(Reason.CAPABILITY_UNAVAILABLE);
+        var row=lock?skillExecutions.lock(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),executionId)
+                :skillExecutions.find(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),executionId);
+        if(row==null||!same(row.getTenantId(),scope.tenantId())||!same(row.getClientId(),scope.clientId())
+                ||!same(row.getOwnerJiacn(),scope.ownerJiacn())||!same(row.getExecutionId(),executionId)
+                ||!same(plainSha(skillJson(skillMap(row.getSnapshotJson()))),row.getSnapshotSha256()))throw failure(Reason.TASK_CONFLICT);
+        return row;
+    }
+    private static OwnerScope skillOwner(RuntimeScope scope) {return new OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());}
+    private void skillCas(cn.jia.agent.entity.SkillExecutionEntity row,String expectedPhase,long version) {
+        row.setUpdatedAt(System.currentTimeMillis());
+        if(!skillExecutions.compareAndSet(row,version,expectedPhase))throw failure(Reason.TASK_CONFLICT);
+        row.setVersion(Math.addExact(version,1));
+    }
+    private Map<String,Object> verifiedSkillDescriptor(OwnerScope scope,String agent,Map<String,Object> snapshot,boolean runtimeRequired) {
+        var selected=skillObject(snapshot.get("skill"));var key=skillString(selected,"key");var version=skillString(selected,"version");
+        var capScope=new cn.jia.agent.service.SkillCapabilityLookup.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),agent);
+        var descriptors=installedSkills.read(capScope).skills().stream().filter(d->key.equals(d.skillKey())&&version.equals(d.skillVersion())).toList();
+        if(descriptors.size()!=1)throw failure(Reason.CAPABILITY_UNAVAILABLE);
+        var descriptor=descriptors.getFirst();
+        if(!descriptor.verified()||!same(descriptor.packageSha256(),skillString(selected,"packageSha256"))
+                ||!same(descriptor.manifestSha256(),skillString(selected,"manifestSha256"))
+                ||!same(descriptor.installationId(),skillString(selected,"installationId")))throw failure(Reason.CAPABILITY_UNAVAILABLE);
+        var manifest=skillMap(descriptor.manifestJson());
+        if(!same(skillString(manifest,"runner"),skillString(selected,"runner"))
+                ||!same(skillString(manifest,"entrypoint"),skillString(selected,"entrypoint")))throw failure(Reason.CAPABILITY_UNAVAILABLE);
+        var document=skillCodec.parseJson(descriptor.manifestJson().getBytes(StandardCharsets.UTF_8));
+        skillCodec.validateParameters(document.get("parametersSchema"),skillJson(snapshot.get("parameters")).getBytes(StandardCharsets.UTF_8));
+        var inputs=skillInputs(snapshot);var inputSpec=skillObject(manifest.get("inputs"));
+        if(inputs.size()<skillLong(inputSpec.get("minItems"))||inputs.size()>skillLong(inputSpec.get("maxItems")))throw failure(Reason.BAD_REQUEST);
+        var types=(List<?>)inputSpec.get("acceptedMimeTypes");
+        for(var input:inputs)if(!types.contains(skillString(input,"contentMimeType")))throw failure(Reason.BAD_REQUEST);
+        if(!same(skillJson(snapshot.get("outputs")),skillJson(manifest.get("outputs"))))throw failure(Reason.BAD_REQUEST);
+        if(runtimeRequired) {
+            var policy=skillPolicy.read(capScope,skillString(snapshot,"taskId"));
+            if(!policy.allowed())throw failure(Reason.CAPABILITY_UNAVAILABLE);
+            var catalog=skillCapabilities.lookup(capScope,policy.fence());
+            if(catalog.state()!=cn.jia.agent.service.SkillCapabilityLookup.State.AVAILABLE)throw failure(Reason.CAPABILITY_UNAVAILABLE);
+            if(!same(descriptor.runtimeInstallationId(),policy.fence().runtimeInstallationId())||!same(descriptor.runtimeHostId(),policy.fence().hostId()))throw failure(Reason.CAPABILITY_UNAVAILABLE);
+            var facts=catalog.catalog().skills().stream().filter(d->key.equals(d.skillKey())&&version.equals(d.skillVersion())).toList();
+            if(facts.size()!=1)throw failure(Reason.CAPABILITY_UNAVAILABLE);var fact=facts.getFirst();
+            if(fact.readiness()!=cn.jia.agent.service.SkillCapabilityLookup.Readiness.READY||fact.toolchainDigest()==null
+                    ||!same(fact.packageSha256(),descriptor.packageSha256())||!same(fact.manifestSha256(),descriptor.manifestSha256())
+                    ||!same(fact.runner(),skillString(selected,"runner")))throw failure(Reason.CAPABILITY_UNAVAILABLE);
+            var requirement=skillObject(manifest.get("requirements"));
+            if(requirement.get("providerAlias")!=null) {
+                var binding=skillObject(snapshot.get("providerBinding"));
+                if(!same(skillString(requirement,"providerAlias"),skillString(binding,"alias"))||!same(fact.bindingRevision(),skillString(binding,"revision")))throw failure(Reason.CAPABILITY_UNAVAILABLE);
+            }else if(snapshot.get("providerBinding")!=null)throw failure(Reason.BAD_REQUEST);
+            // Read live lookup again after descriptor processing; a generation/config replacement fails closed.
+            var fresh=skillCapabilities.lookup(capScope,policy.fence());
+            if(!catalog.equals(fresh))throw failure(Reason.CAPABILITY_UNAVAILABLE);
+        }
+        return manifest;
+    }
+    private void verifySkillInput(OwnerScope scope,PersonalWorkspaceExecutionEntity execution,Map<String,Object> input) {
+        if(!sha(skillString(input,"sha256"))||skillLong(input.get("byteLength"))<0)throw failure(Reason.BAD_REQUEST);
+        var identity=skillObject(input.get("sourceIdentity"));String kind=skillString(input,"sourceKind");
+        if("TASK_LINKED_WORKSPACE_VERSION".equals(kind)) {
+            String fileId=skillString(identity,"fileId");long revision=skillLong(identity.get("version"));
+            if(revision<1||revision>Integer.MAX_VALUE)throw failure(Reason.BAD_REQUEST);
+            String purpose=skillString(identity,"purpose");if(!Set.of("INPUT","REFERENCE").contains(purpose))throw failure(Reason.BAD_REQUEST);
+            var link=taskLinks.lockBySelection(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),execution.getTaskId(),fileId,(int)revision,purpose);
+            var file=workspace.findFile(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),fileId);
+            var version=workspace.findVersion(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),fileId,(int)revision);
+            if(link==null||!"ACTIVE".equals(link.getLinkState())||file==null||!"ACTIVE".equals(file.getState())||version==null
+                    ||!same(version.getContentHash(),skillString(input,"sha256"))||!Objects.equals(version.getByteLength(),skillLong(input.get("byteLength")))
+                    ||!same(version.getContentMimeType(),skillString(input,"contentMimeType")))throw failure(Reason.GRANT_REVOKED);
+        }else if(Set.of("CURRENT_CONVERSATION_ASSET","EXECUTION_RESULT").contains(kind)) {
+            if(skillSourceAccess==null)throw failure(Reason.CAPABILITY_UNAVAILABLE);
+            var snapshot=skillMap(skillRow(scope,execution.getExecutionId(),false).getSnapshotJson());
+            skillSourceAccess.requireAuthorized(scope,execution.getTaskId(),execution.getConversationId(),skillLong(snapshot.get("conversationGeneration")),input);
+        }else throw failure(Reason.BAD_REQUEST);
+    }
+    @Override @Transactional(rollbackFor=Exception.class)
+    public cn.jia.agent.service.SkillExecutionService.Creation create(OwnerScope scope,cn.jia.agent.service.SkillExecutionService.Create command) {
+        requireSkillEnabled();validateOwnerScope(scope);if(command==null)throw failure(Reason.BAD_REQUEST);
+        id(command.actionEventId(),"actionEventId",100);id(command.taskId(),"taskId",100);id(command.conversationId(),"conversationId",100);
+        id(command.targetAgentId(),"targetAgentId",100);id(command.grantId(),"grantId",100);
+        if(command.conversationGeneration()<1||command.conversationGeneration()>MAX_SAFE_INTEGER||command.grantVersion()<1||command.assignmentRevision()<0)throw failure(Reason.BAD_REQUEST);
+        // Detach caller-owned mutable structures. Body/snapshot values cannot be changed after hashing.
+        var snapshot=skillMap(skillJson(command.snapshot()));
+        if(!command.taskId().equals(snapshot.get("taskId"))||!command.conversationId().equals(snapshot.get("conversationId"))
+                ||command.conversationGeneration()!=skillLong(snapshot.get("conversationGeneration"))||!command.targetAgentId().equals(snapshot.get("targetAgentId"))
+                ||!command.actionEventId().equals(snapshot.get("actionEventId"))||skillLong(snapshot.get("schemaVersion"))!=1)throw failure(Reason.BAD_REQUEST);
+        var taskGrant=skillObject(snapshot.get("taskGrant"));
+        if(!command.grantId().equals(taskGrant.get("id"))||command.grantVersion()!=skillLong(taskGrant.get("version"))
+                ||command.assignmentRevision()!=skillLong(taskGrant.get("assignmentRevision")))throw failure(Reason.BAD_REQUEST);
+        String instruction=skillString(snapshot,"instruction");instructionText(instruction,8000);
+        var inputs=skillInputs(snapshot);var unique=new LinkedHashSet<String>();
+        for(var input:inputs)if(!unique.add(skillString(input,"inputRef")))throw failure(Reason.BAD_REQUEST);
+        String sourceDigest=plainSha(skillJson(inputs));
+        if(!sourceDigest.equals(snapshot.get("sourceSnapshotDigest")))throw failure(Reason.BAD_REQUEST);
+        String digest=plainSha(skillJson(snapshot));String seed=skillJson(List.of(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),command.actionEventId()));
+        String executionId="pwe_"+plainSha(seed+"\\nexecution").substring(0,60);String runId="pwe_run_"+plainSha(seed+"\\nrun");String key="skill_"+plainSha(seed);
+        return taskMutations.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),command.taskId(),root->{
+            requireConversationRoot(root,scope,command.taskId(),command.targetAgentId(),command.assignmentRevision());
+            var prior=executions.findByIdempotency(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),key);
+            if(prior!=null) {
+                if(!Objects.equals(4,prior.getExecutionProtocolVersion())||!same(prior.getRequestHash(),digest)||!same(prior.getExecutionId(),executionId))throw failure(Reason.IDEMPOTENCY_CONFLICT);
+                var frozen=skillRow(scope,executionId,false);if(!same(frozen.getSnapshotSha256(),digest))throw failure(Reason.IDEMPOTENCY_CONFLICT);
+                requireSkillConversationAccess(scope,prior);return skillCreation(prior,frozen);
+            }
+            requireOwnedTarget(scope,command.targetAgentId());
+            var row=new PersonalWorkspaceExecutionEntity().setExecutionId(executionId).setOwnerJiacn(scope.ownerJiacn()).setTaskId(command.taskId()).setRunId(runId)
+                .setExecutionMode("CONVERSATION").setConversationId(command.conversationId()).setTargetAgentId(command.targetAgentId()).setInstruction(instruction)
+                .setOutputContentMimeType(null).setExecutionState("QUEUED").setExecutionProtocolVersion(4).setGrantRevision(1L)
+                .setTaskGrantId(command.grantId()).setTaskGrantVersion(command.grantVersion()).setAssignmentRevision(command.assignmentRevision())
+                .setPermittedOperation("EXECUTE_SKILL").setControlledConsentId(null).setOperationGrantId(null).setRuntimeInputSnapshotDigest(sourceDigest)
+                .setIdempotencyKey(key).setRequestHash(digest).setCreatedAt(System.currentTimeMillis());scoped(row,scope);
+            requireSkillConversationAccess(scope,row);requireConversationGrant(scope,row,"NEW_EXECUTION",null);
+            verifiedSkillDescriptor(scope,command.targetAgentId(),snapshot,true);
+            var selected=skillObject(snapshot.get("skill"));long now=System.currentTimeMillis();
+            var skill=new cn.jia.agent.entity.SkillExecutionEntity().setTenantId(scope.tenantId()).setClientId(scope.clientId()).setOwnerJiacn(scope.ownerJiacn())
+                .setExecutionId(executionId).setSkillKey(skillString(selected,"key")).setSkillVersion(skillString(selected,"version"))
+                .setPackageSha256(skillString(selected,"packageSha256")).setManifestSha256(skillString(selected,"manifestSha256"))
+                .setSnapshotJson(skillJson(snapshot)).setSnapshotSha256(digest).setCreatedAt(now).setUpdatedAt(now);
+            executions.insert(row);skillExecutions.insertReady(skill);
+            for(var input:inputs)verifySkillInput(scope,row,input);
+            return skillCreation(row,skillRow(scope,executionId,false));
+        });
+    }
+    private static cn.jia.agent.service.SkillExecutionService.Creation skillCreation(PersonalWorkspaceExecutionEntity row,cn.jia.agent.entity.SkillExecutionEntity skill) {
+        return new cn.jia.agent.service.SkillExecutionService.Creation(row.getExecutionId(),row.getTaskId(),row.getRunId(),row.getConversationId(),row.getTargetAgentId(),row.getExecutionState(),skill.getSnapshotSha256());
+    }
+    private void requireSkillConversationAccess(OwnerScope scope,PersonalWorkspaceExecutionEntity execution) {
+        if(conversationAccess==null)throw failure(Reason.CAPABILITY_UNAVAILABLE);
+        var access=conversationAccess.requireAccessible(new WorkspaceConversationAccessService.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),execution.getConversationId());
+        if(access==null||!same(access.taskId(),execution.getTaskId())||!"bounty".equals(access.scopeType())||!same(access.scopeKey(),"task:"+execution.getTaskId())
+                ||access.targetAgentIds()==null||!access.targetAgentIds().contains(execution.getTargetAgentId()))throw failure(Reason.NOT_FOUND);
+    }
+    private cn.jia.agent.service.SkillExecutionService.Command skillCommand(RuntimeScope scope,PersonalWorkspaceExecutionEntity execution) {
+        var skill=skillRow(skillOwner(scope),execution.getExecutionId(),false);if(!"READY".equals(skill.getPhase()))throw failure(Reason.NOT_FOUND);
+        var snapshot=skillMap(skill.getSnapshotJson());verifiedSkillDescriptor(skillOwner(scope),scope.agentId(),snapshot,true);
+        return new cn.jia.agent.service.SkillExecutionService.Command(4,execution.getExecutionId(),execution.getTaskId(),execution.getRunId(),execution.getConversationId(),
+            Long.toString(skillLong(snapshot.get("conversationGeneration"))),"pwe_cmd_"+plainSha("command\n"+execution.getExecutionId()),"pwe_msg_"+plainSha("message\n"+execution.getExecutionId()),
+            new cn.jia.agent.service.SkillExecutionService.Skill(skill.getSkillKey(),skill.getSkillVersion(),skill.getPackageSha256(),skill.getManifestSha256()),skill.getSnapshotSha256(),
+            skillObject(snapshot.get("parameters")),execution.getInstruction(),skillInputs(snapshot).stream().map(i->skillString(i,"inputRef")).toList(),skillObject(snapshot.get("outputs")));
+    }
+    @Override
+    public cn.jia.agent.service.SkillExecutionService.Inputs inputs(RuntimeScope scope,String taskId,String runId,ConversationFence fence) {
+        requireSkillEnabled();nativeAuthentication(scope);
+        return withConversationRoot(scope,taskId,runId,true,execution->{
+            if(!Objects.equals(4,execution.getExecutionProtocolVersion()))throw failure(Reason.NOT_FOUND);
+            requireConversationFence(scope,execution,fence,false);
+            var skill=skillRow(skillOwner(scope),execution.getExecutionId(),false);var snapshot=skillMap(skill.getSnapshotJson());
+            var inputs=skillInputs(snapshot);for(var input:inputs)verifySkillInput(skillOwner(scope),execution,input);
+            return new cn.jia.agent.service.SkillExecutionService.Inputs(4,execution.getExecutionId(),fence.version(),skill.getSnapshotSha256(),inputs.isEmpty(),inputs);
+        });
+    }
+    private record SkillInputPreparation(String executionId,String snapshotDigest,Map<String,Object> input,long generation,String storageUri,String filename) { }
+    @Override
+    public RuntimeContent inputContent(RuntimeScope scope,String taskId,String runId,String inputRef,ConversationFence fence) {
+        requireSkillEnabled();nativeAuthentication(scope);id(inputRef,"inputRef",100);
+        var prepared=withConversationRoot(scope,taskId,runId,true,execution->{
+            if(!Objects.equals(4,execution.getExecutionProtocolVersion()))throw failure(Reason.NOT_FOUND);
+            requireConversationFence(scope,execution,fence,false);
+            var skill=skillRow(skillOwner(scope),execution.getExecutionId(),false);var snapshot=skillMap(skill.getSnapshotJson());
+            var input=skillInputs(snapshot).stream().filter(i->inputRef.equals(i.get("inputRef"))).findFirst().orElseThrow(()->failure(Reason.NOT_FOUND));
+            verifySkillInput(skillOwner(scope),execution,input);
+            String uri=null,filename=null;
+            if("TASK_LINKED_WORKSPACE_VERSION".equals(input.get("sourceKind"))) {
+                var identity=skillObject(input.get("sourceIdentity"));
+                var version=workspace.findVersion(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),skillString(identity,"fileId"),(int)skillLong(identity.get("version")));
+                uri=version.getStorageUri();filename=version.getOriginalFilename();
+            }
+            return new SkillInputPreparation(execution.getExecutionId(),skill.getSnapshotSha256(),input,skillLong(snapshot.get("conversationGeneration")),uri,filename);
+        });
+        RuntimeContent content;
+        if(prepared.storageUri()!=null) {
+            var stored=storage.read(storageScope(scope),prepared.storageUri(),skillString(prepared.input(),"sha256"),skillLong(prepared.input().get("byteLength")),skillString(prepared.input(),"contentMimeType"));
+            content=new RuntimeContent(prepared.filename(),skillString(prepared.input(),"contentMimeType"),stored.content());
+        }else content=skillSourceAccess.read(skillOwner(scope),taskId,runtimeExecution(scope,taskId,runId,false).getConversationId(),prepared.generation(),prepared.input());
+        if(content==null||content.bytes()==null||content.bytes().length!=skillLong(prepared.input().get("byteLength"))||!same(plainSha(content.bytes()),skillString(prepared.input(),"sha256"))||!same(content.contentMimeType(),skillString(prepared.input(),"contentMimeType")))throw failure(Reason.STORAGE_UNAVAILABLE);
+        return nativeMutation(scope,()->withConversationRoot(scope,taskId,runId,true,execution->{
+            requireConversationFence(scope,execution,fence,false);var skill=skillRow(skillOwner(scope),execution.getExecutionId(),false);
+            requireSkillSnapshot(skill,prepared.executionId(),prepared.snapshotDigest());verifySkillInput(skillOwner(scope),execution,prepared.input());return content;
+        }));
+    }
+    private void requireSkillSnapshot(cn.jia.agent.entity.SkillExecutionEntity skill,String executionId,String digest) {
+        if(!same(skill.getExecutionId(),executionId)||!same(skill.getSnapshotSha256(),digest))throw failure(Reason.TASK_CONFLICT);
+    }
+    private static String skillEffectRevision(Map<String,Object> snapshot) {
+        return snapshot.get("providerBinding")==null?null:skillString(skillObject(snapshot.get("providerBinding")),"revision");
+    }
+    @Override @Transactional(rollbackFor=Exception.class)
+    public cn.jia.agent.service.SkillExecutionService.EffectReceipt startEffect(RuntimeScope scope,String taskId,String runId,String effectId,cn.jia.agent.service.SkillExecutionService.EffectStart command) {
+        requireSkillEnabled();nativeAuthentication(scope);id(effectId,"effectId",100);
+        if(command==null||!sha(command.effectDigest()))throw failure(Reason.BAD_REQUEST);
+        return nativeMutation(scope,()->withConversationRoot(scope,taskId,runId,true,execution->{
+            requireConversationFence(scope,execution,command.fence(),false);if(!Objects.equals(4,execution.getExecutionProtocolVersion()))throw failure(Reason.NOT_FOUND);
+            var skill=skillRow(skillOwner(scope),execution.getExecutionId(),true);requireSkillSnapshot(skill,command.executionId(),command.snapshotDigest());
+            var snapshot=skillMap(skill.getSnapshotJson());
+            if(!Objects.equals(skillEffectRevision(snapshot),command.providerBindingRevision()))throw failure(Reason.TASK_CONFLICT);
+            var effects=skillMap(skill.getEffectsJson());
+            if(effects.containsKey(effectId)) {
+                var effect=skillObject(effects.get(effectId));requireSkillEffect(effect,command.effectDigest(),command.providerBindingRevision());
+                return skillEffectReceipt(effect,"START_RECORDED".equals(effect.get("status"))?"RECORDED":"UNKNOWN".equals(effect.get("status"))?"UNKNOWN":"KNOWN");
+            }
+            if(!Set.of("READY","RUNNING","WAITING_PROVIDER").contains(skill.getPhase()))throw failure(Reason.TASK_CONFLICT);
+            verifiedSkillDescriptor(skillOwner(scope),scope.agentId(),snapshot,true);
+            for(var input:skillInputs(snapshot))verifySkillInput(skillOwner(scope),execution,input);
+            var effect=new LinkedHashMap<String,Object>();effect.put("effectDigest",command.effectDigest());effect.put("bindingRevision",command.providerBindingRevision());
+            effect.put("status","START_RECORDED");effect.put("providerRequestId",null);effect.put("providerIdempotencyKey",null);effect.put("resultDigest",null);
+            effect.put("ownerRuntimeFence",Map.of("runtimeInstanceId",scope.runtimeInstanceId(),"leaseVersion",command.fence().version()));effects.put(effectId,effect);
+            String phase=skill.getPhase();long version=skill.getVersion();skill.setEffectsJson(skillJson(effects)).setPhase("WAITING_PROVIDER");skillCas(skill,phase,version);
+            return skillEffectReceipt(effect,"NEW");
+        }));
+    }
+    private static void requireSkillEffect(Map<String,Object> effect,String digest,String revision) {
+        if(!same(skillString(effect,"effectDigest"),digest)||!Objects.equals(effect.get("bindingRevision"),revision))throw failure(Reason.TASK_CONFLICT);
+    }
+    private static cn.jia.agent.service.SkillExecutionService.EffectReceipt skillEffectReceipt(Map<String,Object> effect,String disposition) {
+        return new cn.jia.agent.service.SkillExecutionService.EffectReceipt(1,disposition,skillString(effect,"status"),(String)effect.get("providerRequestId"),(String)effect.get("resultDigest"));
+    }
+    @Override @Transactional(rollbackFor=Exception.class)
+    public cn.jia.agent.service.SkillExecutionService.EffectReceipt recordEffect(RuntimeScope scope,String taskId,String runId,String effectId,cn.jia.agent.service.SkillExecutionService.EffectResult command) {
+        requireSkillEnabled();nativeAuthentication(scope);id(effectId,"effectId",100);
+        if(command==null||!sha(command.effectDigest())||!Set.of("ACCEPTED","SUCCEEDED","FAILED","UNKNOWN").contains(command.status())
+                ||command.resultDigest()!=null&&!sha(command.resultDigest())||"SUCCEEDED".equals(command.status())&&command.resultDigest()==null)throw failure(Reason.BAD_REQUEST);
+        if(command.providerRequestId()!=null)id(command.providerRequestId(),"providerRequestId",100);
+        return nativeMutation(scope,()->withConversationRoot(scope,taskId,runId,true,execution->{
+            requireConversationFence(scope,execution,command.fence(),false);if(!Objects.equals(4,execution.getExecutionProtocolVersion()))throw failure(Reason.NOT_FOUND);
+            var skill=skillRow(skillOwner(scope),execution.getExecutionId(),true);requireSkillSnapshot(skill,command.executionId(),command.snapshotDigest());
+            var effects=skillMap(skill.getEffectsJson());var effect=skillObject(effects.get(effectId));requireSkillEffect(effect,command.effectDigest(),command.providerBindingRevision());
+            String prior=skillString(effect,"status");
+            if(Set.of("SUCCEEDED","FAILED").contains(prior)) {
+                if(!prior.equals(command.status())||!Objects.equals(effect.get("providerRequestId"),command.providerRequestId())||!Objects.equals(effect.get("resultDigest"),command.resultDigest()))throw failure(Reason.TASK_CONFLICT);
+                return skillEffectReceipt(effect,"KNOWN");
+            }
+            if(!Set.of("WAITING_PROVIDER","RESULT_UNKNOWN","RUNNING").contains(skill.getPhase())||effect.get("providerRequestId")!=null&&!Objects.equals(effect.get("providerRequestId"),command.providerRequestId()))throw failure(Reason.TASK_CONFLICT);
+            effect.put("status",command.status());effect.put("providerRequestId",command.providerRequestId());effect.put("resultDigest",command.resultDigest());
+            String phase=skill.getPhase();long version=skill.getVersion();
+            skill.setEffectsJson(skillJson(effects)).setPhase("UNKNOWN".equals(command.status())?"RESULT_UNKNOWN":"WAITING_PROVIDER");skillCas(skill,phase,version);
+            return skillEffectReceipt(effect,"UNKNOWN".equals(command.status())?"UNKNOWN":"KNOWN");
+        }));
+    }
+    @Override @Transactional(rollbackFor=Exception.class)
+    public cn.jia.agent.service.SkillExecutionService.ResumeReceipt resume(RuntimeScope scope,String taskId,String runId,cn.jia.agent.service.SkillExecutionService.Resume command) {
+        requireSkillEnabled();nativeAuthentication(scope);if(command==null)throw failure(Reason.BAD_REQUEST);
+        return nativeMutation(scope,()->withConversationRoot(scope,taskId,runId,true,true,false,execution->{
+            if(!Objects.equals(4,execution.getExecutionProtocolVersion()))throw failure(Reason.NOT_FOUND);
+            var skill=skillRow(skillOwner(scope),execution.getExecutionId(),true);requireSkillSnapshot(skill,command.executionId(),command.snapshotDigest());
+            long now=System.currentTimeMillis();boolean live=execution.getConversationLeaseExpiresAt()!=null&&execution.getConversationLeaseExpiresAt()>now;
+            if(live&&!same(execution.getConversationLeaseRuntimeId(),scope.runtimeInstanceId()))throw failure(Reason.TASK_CONFLICT);
+            if(!live) {
+                long next=Math.addExact(Objects.requireNonNullElse(execution.getConversationLeaseVersion(),0L),1);
+                if(next>MAX_SAFE_INTEGER)throw failure(Reason.TASK_CONFLICT);
+                execution.setConversationLeaseVersion(next).setConversationLeaseToken(UUID.randomUUID().toString()).setConversationLeaseRuntimeId(scope.runtimeInstanceId()).setConversationLeaseExpiresAt(now+CONVERSATION_LEASE_MILLIS);executions.update(execution);
+            }
+            var effects=skillMap(skill.getEffectsJson());boolean unknown=false;
+            for(var item:effects.values()) {
+                var effect=skillObject(item);if("START_RECORDED".equals(effect.get("status"))) {effect.put("status","UNKNOWN");unknown=true;}
+                if("UNKNOWN".equals(effect.get("status")))unknown=true;
+            }
+            if(unknown&&!Set.of("RESULT_UNKNOWN","ARCHIVING","COMPLETE").contains(skill.getPhase())) {
+                String phase=skill.getPhase();long version=skill.getVersion();skill.setPhase("RESULT_UNKNOWN").setEffectsJson(skillJson(effects));skillCas(skill,phase,version);
+            }
+            var result=skill.getResultManifestJson()==null?null:skillMap(skill.getResultManifestJson());
+            List<String> allowed=result!=null?List.of("STAGE_OUTPUTS","COMMIT_RESULT","PROJECT_RESULT")
+                    :effects.isEmpty()&&Set.of("READY","RUNNING").contains(skill.getPhase())?List.of("EXECUTE")
+                    :List.of("QUERY_EFFECT","RECOVER_LOCAL_RESULT");
+            return new cn.jia.agent.service.SkillExecutionService.ResumeReceipt(conversationLease(execution),skill.getPhase(),allowed,result);
+        }));
+    }
+    @Override
+    public cn.jia.agent.service.SkillExecutionService.ResultReceipt commitResult(RuntimeScope scope,String taskId,String runId,String manifestId,cn.jia.agent.service.SkillExecutionService.ResultCommit command) {
+        requireSkillEnabled();nativeAuthentication(scope);id(manifestId,"manifestId",100);
+        if(command==null||command.artifacts()==null||command.artifacts().size()>128||!sha(command.snapshotDigest()))throw failure(Reason.BAD_REQUEST);
+        var artifactIds=new LinkedHashSet<String>();for(var output:command.artifacts()) {
+            if(output==null||!artifactIds.add(output.outputId())||!sha(output.sha256())||output.byteLength()<1||output.byteLength()>storage.maxContentBytes())throw failure(Reason.BAD_REQUEST);id(output.outputId(),"outputId",100);
+        }
+        Map<String,Object> data=command.data()==null?null:skillMap(skillJson(command.data()));
+        var artifacts=List.copyOf(command.artifacts());
+        var envelope=new LinkedHashMap<String,Object>();envelope.put("schemaVersion",1);envelope.put("data",data);
+        envelope.put("artifacts",artifacts.stream().map(a->Map.of("outputId",a.outputId(),"sha256",a.sha256(),"byteLength",a.byteLength())).toList());
+        String digest=plainSha(skillJson(envelope));envelope.put("resultDigest",digest);envelope.put("manifestId",manifestId);
+        var preparation=withConversationRoot(scope,taskId,runId,true,true,false,execution->{
+            if(!Objects.equals(4,execution.getExecutionProtocolVersion()))throw failure(Reason.NOT_FOUND);
+            requireConversationFence(scope,execution,command.fence(),"RESULT_COMMITTED".equals(execution.getExecutionState()));
+            var skill=skillRow(skillOwner(scope),execution.getExecutionId(),true);requireSkillSnapshot(skill,execution.getExecutionId(),command.snapshotDigest());
+            if(skill.getResultManifestJson()!=null) {
+                if(!same(skill.getResultManifestJson(),skillJson(envelope)))throw failure(Reason.OUTPUT_CONFLICT);
+                return new ArrayList<PreparedNativeOutput>();
+            }
+            if(!Set.of("RUNNING","WAITING_PROVIDER","RESULT_UNKNOWN","READY").contains(skill.getPhase()))throw failure(Reason.TASK_CONFLICT);
+            var snapshot=skillMap(skill.getSnapshotJson());var spec=skillObject(snapshot.get("outputs"));
+            if(Boolean.TRUE.equals(spec.get("artifactsRequired"))&&artifacts.isEmpty()||!Boolean.TRUE.equals(spec.get("multiple"))&&artifacts.size()>1)throw failure(Reason.BAD_REQUEST);
+            var schema=spec.get("dataSchema");
+            if(schema==null&&data!=null)throw failure(Reason.BAD_REQUEST);
+            if(schema!=null)skillCodec.validateParameters(skillCodec.parseJson(skillJson(schema).getBytes(StandardCharsets.UTF_8)),skillJson(data).getBytes(StandardCharsets.UTF_8));
+            for(var effect:skillMap(skill.getEffectsJson()).values())if(!"SUCCEEDED".equals(skillObject(effect).get("status")))throw failure(Reason.TASK_CONFLICT);
+            var outputs=executions.lockOutputs(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),execution.getExecutionId());
+            if(outputs.size()!=artifacts.size())throw failure(Reason.OUTPUT_CONFLICT);
+            var prepared=new ArrayList<PreparedNativeOutput>();
+            for(var declaration:artifacts) {
+                var output=outputs.stream().filter(o->declaration.outputId().equals(o.getOutputId())).findFirst().orElseThrow(()->failure(Reason.OUTPUT_MISSING));
+                if(!same(declaration.sha256(),output.getContentHash())||!Objects.equals(declaration.byteLength(),output.getByteLength())||!"STAGED".equals(output.getOutputState())
+                        ||!"CONVERSATION".equals(output.getOutputPurpose())||!((List<?>)spec.get("mimeTypes")).contains(output.getContentMimeType()))throw failure(Reason.OUTPUT_CONFLICT);
+                prepared.add(preparedOutput(output));
+            }
+            return prepared;
+        });
+        for(var output:preparation)readPreparedOutput(scope,output);
+        return nativeMutation(scope,()->withConversationRoot(scope,taskId,runId,true,true,false,execution->{
+            requireConversationFence(scope,execution,command.fence(),"RESULT_COMMITTED".equals(execution.getExecutionState()));
+            var skill=skillRow(skillOwner(scope),execution.getExecutionId(),true);requireSkillSnapshot(skill,execution.getExecutionId(),command.snapshotDigest());
+            if(skill.getResultManifestJson()!=null) {
+                if(!same(skill.getResultManifestJson(),skillJson(envelope))||!"RESULT_COMMITTED".equals(execution.getExecutionState()))throw failure(Reason.OUTPUT_CONFLICT);
+                return new cn.jia.agent.service.SkillExecutionService.ResultReceipt(manifestId,execution.getExecutionState(),skill.getPhase(),digest);
+            }
+            if(!Set.of("RUNNING","WAITING_PROVIDER","RESULT_UNKNOWN","READY").contains(skill.getPhase()))throw failure(Reason.TASK_CONFLICT);
+            for(var prepared:preparation) {
+                var output=executions.lockOutput(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),execution.getExecutionId(),prepared.outputId());requirePreparedOutput(prepared,output);
+                output.setOutputState("COMMITTED").setCommittedAt(System.currentTimeMillis());executions.updateOutput(output);
+            }
+            String phase=skill.getPhase();long version=skill.getVersion();
+            if("READY".equals(phase))throw failure(Reason.TASK_CONFLICT);
+            skill.setPhase("RESULT_READY").setResultManifestJson(skillJson(envelope));skillCas(skill,phase,version);
+            skill.setPhase("ARCHIVING");skillCas(skill,"RESULT_READY",skill.getVersion());
+            execution.setExecutionState("RESULT_COMMITTED");executions.update(execution);
+            return new cn.jia.agent.service.SkillExecutionService.ResultReceipt(manifestId,"RESULT_COMMITTED","ARCHIVING",digest);
+        }));
+    }
+    @Override @Transactional(readOnly=true)
+    public cn.jia.agent.service.SkillExecutionService.ResultView result(OwnerScope scope,String executionId) {
+        validateOwnerScope(scope);id(executionId,"executionId",100);requireSkillEnabled();
+        var execution=executions.find(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),executionId);
+        if(execution==null||!Objects.equals(4,execution.getExecutionProtocolVersion()))throw failure(Reason.NOT_FOUND);
+        requireSkillConversationAccess(scope,execution);var skill=skillRow(scope,executionId,false);
+        if(Set.of("ARCHIVING","COMPLETE").contains(skill.getPhase())&&!"RESULT_COMMITTED".equals(execution.getExecutionState()))throw failure(Reason.TASK_CONFLICT);
+        return new cn.jia.agent.service.SkillExecutionService.ResultView(executionId,execution.getExecutionState(),skill.getPhase(),skill.getLastErrorCode(),skill.getSnapshotSha256(),skill.getResultManifestJson()==null?null:skillMap(skill.getResultManifestJson()));
+    }
+    @Override @Transactional(propagation=org.springframework.transaction.annotation.Propagation.MANDATORY,rollbackFor=Exception.class)
+    public void markProjected(OwnerScope scope,String executionId,String expectedResultDigest) {
+        validateOwnerScope(scope);if(!sha(expectedResultDigest))throw failure(Reason.BAD_REQUEST);
+        var candidate=executions.find(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),executionId);if(candidate==null)throw failure(Reason.NOT_FOUND);
+        taskMutations.executeWithLockedTaskRootInOwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),candidate.getTaskId(),root->{
+            requireSkillConversationAccess(scope,candidate);var execution=executions.lock(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),executionId);
+            if(execution==null||!"RESULT_COMMITTED".equals(execution.getExecutionState()))throw failure(Reason.TASK_CONFLICT);
+            var skill=skillRow(scope,executionId,true);if(skill.getResultManifestJson()==null||!same(expectedResultDigest,skillString(skillMap(skill.getResultManifestJson()),"resultDigest")))throw failure(Reason.TASK_CONFLICT);
+            if("COMPLETE".equals(skill.getPhase()))return null;
+            if(!"ARCHIVING".equals(skill.getPhase()))throw failure(Reason.TASK_CONFLICT);
+            long version=skill.getVersion();skill.setPhase("COMPLETE");skillCas(skill,"ARCHIVING",version);return null;
+        });
+    }
+
     private record ValidCreate(String conversationId,String targetAgentId,String taskId,String instruction,
                                String outputContentMimeType,List<InputSelection> inputs,
                                SourceOutputRef sourceOutputRef){}

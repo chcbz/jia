@@ -90,6 +90,17 @@ public interface PersonalWorkspaceExecutionMapper extends BaseMapper<PersonalWor
              WHERE tenant_id=#{tenantId} AND client_id=#{clientId} AND owner_jiacn=#{ownerJiacn}
                AND target_agent_id=#{targetAgentId} AND execution_state='QUEUED'
                AND execution_mode='CONVERSATION'
+               AND (execution_protocol_version&lt;&gt;4 OR EXISTS (
+                 SELECT 1 FROM agent_skill_execution sk
+                  WHERE sk.tenant_id=agent_personal_workspace_execution.tenant_id
+                    AND sk.client_id=agent_personal_workspace_execution.client_id
+                    AND sk.owner_jiacn=agent_personal_workspace_execution.owner_jiacn
+                    AND sk.execution_id=agent_personal_workspace_execution.execution_id
+                    AND CAST(sk.tenant_id AS BINARY)=CAST(agent_personal_workspace_execution.tenant_id AS BINARY)
+                    AND CAST(sk.client_id AS BINARY)=CAST(agent_personal_workspace_execution.client_id AS BINARY)
+                    AND CAST(sk.owner_jiacn AS BINARY)=CAST(agent_personal_workspace_execution.owner_jiacn AS BINARY)
+                    AND CAST(sk.execution_id AS BINARY)=CAST(agent_personal_workspace_execution.execution_id AS BINARY)
+                    AND sk.phase='READY'))
                AND CAST(tenant_id AS BINARY)=CAST(#{tenantId} AS BINARY)
                AND OCTET_LENGTH(tenant_id)=OCTET_LENGTH(#{tenantId})
                AND CAST(client_id AS BINARY)=CAST(#{clientId} AS BINARY)
