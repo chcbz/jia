@@ -540,7 +540,7 @@ public class ChatDeliberationService {
         ChatTypedDeliberationService.Prepared typedPrepared = null;
         ChatTypedInspectionService.Prepared inspectionPrepared = null;
         ChatActionFinalService.Prepared actionPrepared = null;
-        if (ChatActionFinalService.isV3(finalFacts)) {
+        if (ChatActionFinalService.isV4(finalFacts)) {
             if (actionFinals == null) throw persistence("Action final service is unavailable");
             actionPrepared = actionFinals.prepare(turn, finalSnapshot, safeContent, outcomeContractVersion,
                     rawInteractionOutcomeJson, rawInspectionInputReceiptJson);

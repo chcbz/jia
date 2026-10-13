@@ -9,7 +9,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
-/** Canonical JSON v1: UTF-8, lexical object keys, preserved array order, integral numbers only. */
+/** Canonical JSON: UTF-8, lexical keys, preserved array order; portable JSON numbers for action-v4. */
 public final class CanonicalContextJson {
     private CanonicalContextJson() { }
 
@@ -31,8 +31,15 @@ public final class CanonicalContextJson {
             out.append(value);
         } else if (value instanceof BigDecimal decimal && decimal.scale() <= 0) {
             out.append(decimal.toBigIntegerExact());
-        } else if (value instanceof Number) {
-            throw new IllegalArgumentException("Canonical context forbids floating-point numbers");
+        } else if (value instanceof Number number) {
+            double n=number.doubleValue();
+            if(!Double.isFinite(n)||(n==Math.rint(n)&&Math.abs(n)>9007199254740991d))
+                throw new IllegalArgumentException("Canonical context forbids non-portable numbers");
+            BigDecimal decimal=BigDecimal.valueOf(n).stripTrailingZeros();
+            if(decimal.signum()==0)out.append('0');
+            else if(Math.abs(n)>=1e-6&&Math.abs(n)<1e21)out.append(decimal.toPlainString());
+            else {String text=decimal.toString().replace("E","e");out.append(text);}
+
         } else if (value instanceof Map<?, ?> map) {
             out.append('{');
             List<Map.Entry<String, Object>> entries = new ArrayList<>();

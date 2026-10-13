@@ -21,7 +21,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
-/** One v3 final store for CHAT/INSPECT. Action events contain references, not execution authority. */
+/** One action-v4 final store for CHAT. Action events contain references, not execution authority. */
 @Service
 public class ChatActionFinalService {
     public static final String ACTION_EVENT = "ACTION_REQUESTED";
@@ -43,6 +43,10 @@ public class ChatActionFinalService {
         this.sessions = Objects.requireNonNull(sessions);
     }
 
+    private HistoricalChatActionReader historical;
+    private cn.jia.agent.service.SkillExecutionService skills;
+    @Autowired public void setSkillResults(cn.jia.agent.service.SkillExecutionService service) {skills=Objects.requireNonNull(service);}
+    @Autowired public void setHistoricalReader(HistoricalChatActionReader reader) {historical=Objects.requireNonNull(reader);}
     private ChatInteractionStepStore deliverySteps;
     private PersonalWorkspaceExecutionService deliveryExecutions;
 
@@ -51,19 +55,19 @@ public class ChatActionFinalService {
         this.deliverySteps=Objects.requireNonNull(steps);this.deliveryExecutions=Objects.requireNonNull(executions);
     }
 
-    static boolean isV3(Map<String, Object> facts) {
+    static boolean isV4(Map<String, Object> facts) {
         if (facts.containsKey("typedDeliberation") && facts.containsKey("typedInspection"))
             throw persistence("Snapshot has conflicting typed contracts");
         Object value = facts.get("typedDeliberation");
         if (facts.containsKey("typedInspection")) value = map(facts.get("typedInspection")).get("discussionFacts");
-        return value instanceof Map<?, ?> typed && Integer.valueOf(3).equals(typed.get("schemaVersion"));
+        return value instanceof Map<?, ?> typed && Integer.valueOf(4).equals(typed.get("schemaVersion"));
     }
 
     public Prepared prepare(ChatTurnEntity turn, ChatContextSnapshotEntity snapshot, String content,
             Integer version, String rawOutcome, String rawReceipt) {
         verifySnapshot(turn, snapshot);
         Map<String, Object> facts = parse(snapshot.getFactsManifestJson());
-        if (!isV3(facts)) throw invalid("Action final requires v3 snapshot facts");
+        if (!isV4(facts)) throw invalid("Action final requires v4 snapshot facts");
         var scope = scope(turn);
         var admission = requireAdmission(scope, turn.getRequestId(), turn.getTurnId(), turn.getRequestRevision());
         String taskId = taskId(facts);
@@ -110,7 +114,7 @@ public class ChatActionFinalService {
     public Map<String, Object> persist(Prepared p, long messageId, long now) {
         if (p.existing() != null) return projection(p.existing(), p.validated());
         var v = p.validated(); var union = v.interactionOutcome(); String id = outcomeId(p);
-        var stored = new LinkedHashMap<String, Object>(); stored.put("schemaVersion", 3);
+        var stored = new LinkedHashMap<String, Object>(); stored.put("schemaVersion", 4);
         stored.put("interactionOutcome", ChatActionFinalValidator.outcomeMap(union));
         stored.put("inspectionInputReceipt", v.inspectionInputReceipt() == null ? null
                 : TypedInspectionFinalValidator.receiptMap(v.inspectionInputReceipt()));
@@ -133,7 +137,7 @@ public class ChatActionFinalService {
     private static Map<String, Object> actionPayload(ChatTypedDeliberationStore.Outcome row,
             ChatActionFinalValidator.ValidatedFinal v) {
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("schemaVersion", 3); payload.put("conversationId", row.scope().conversationId());
+        payload.put("schemaVersion", 4); payload.put("conversationId", row.scope().conversationId());
         payload.put("conversationGeneration", Long.toString(row.scope().conversationGeneration()));
         payload.put("requestId", row.requestId()); payload.put("requestRevision", Long.toString(row.requestRevision()));
         payload.put("turnId", row.turnId()); payload.put("outcomeId", row.outcomeId());
@@ -172,7 +176,7 @@ public class ChatActionFinalService {
         if ("INSPECT".equals(turn.getRoute())) inputAuthority = authority(
                 ChatTypedInspectionContextService.inspection(admission.sourceCatalogJson()));
         var validated = ChatActionFinalValidator.validateJson(parse(row.bindingJson()), parse(row.factsJson()),
-                inputAuthority, row.text(), 3, canonical(stored.get("interactionOutcome")),
+                inputAuthority, row.text(), 4, canonical(stored.get("interactionOutcome")),
                 stored.get("inspectionInputReceipt") == null ? null : canonical(stored.get("inspectionInputReceipt")));
         if (!ChatActionFinalValidator.actionEventId(validated).equals(event.getEventId())
                 || !canonical(actionPayload(row, validated)).equals(canonical(parse(event.getPayloadJson()))))
@@ -182,7 +186,7 @@ public class ChatActionFinalService {
 
     /** Returns null only for old immutable contracts; no legacy proposal is promoted to an action. */
     @Transactional(readOnly = true)
-    public Map<String, Object> readIfV3(ChatTypedDeliberationStore.Scope scope, String requestId,
+    public Map<String, Object> readActionIfPresent(ChatTypedDeliberationStore.Scope scope, String requestId,
             String turnId, long revision, String expectedRoute) {
         return read(scope, requestId, turnId, revision, expectedRoute, true);
     }
@@ -201,7 +205,7 @@ public class ChatActionFinalService {
         var snapshot = dao.findSnapshot(scope.tenantId(), scope.ownerJiacn(), scope.clientId(), turn.getSnapshotId());
         verifySnapshot(turn, snapshot);
         Map<String, Object> facts = parse(snapshot.getFactsManifestJson());
-        if (!isV3(facts)) return null;
+        if (!isV4(facts)) return historical==null?null:historical.readIfV3(scope,requestId,turnId,revision,expectedRoute);
         var admission = requireAdmission(scope, requestId, turnId, revision);
         if (!admission.taskId().equals(taskId(facts))) throw persistence("Action admission task differs from snapshot");
         var typed = discussion(facts, expectedRoute);
@@ -217,10 +221,10 @@ public class ChatActionFinalService {
                     || admission.assignmentRevision() != row.assignmentRevision()) throw persistence("Stored action identity differs");
             var stored = parse(row.outcomeJson());
             if (!stored.keySet().equals(Set.of("schemaVersion", "interactionOutcome", "inspectionInputReceipt"))
-                    || !Integer.valueOf(3).equals(stored.get("schemaVersion"))) throw persistence("Stored action final is invalid");
+                    || !Integer.valueOf(4).equals(stored.get("schemaVersion"))) throw persistence("Stored action final is invalid");
             try {
                 validated = ChatActionFinalValidator.validateJson(binding(turn, admission.taskId()), typed,
-                        inspection == null ? null : authority(inspection), row.text(), 3,
+                        inspection == null ? null : authority(inspection), row.text(), 4,
                         canonical(stored.get("interactionOutcome")), stored.get("inspectionInputReceipt") == null
                                 ? null : canonical(stored.get("inspectionInputReceipt")));
             } catch (IllegalArgumentException invalid) { throw persistence("Stored action final is invalid"); }
@@ -231,7 +235,7 @@ public class ChatActionFinalService {
             verifyDeliveryRelation(scope,admission,facts,validated,verifyTargets);
             outcome = projection(row, validated);
         } else if (turn.getFinalDigest() != null) throw persistence("Action final transaction is incomplete");
-        var view = new LinkedHashMap<String, Object>(); view.put("schemaVersion", 3); view.put("route", expectedRoute);
+        var view = new LinkedHashMap<String, Object>(); view.put("schemaVersion", 4); view.put("route", expectedRoute);
         view.put("conversationId", scope.conversationId()); view.put("conversationGeneration", Long.toString(scope.conversationGeneration()));
         view.put("requestId", requestId); view.put("requestRevision", Long.toString(revision)); view.put("turnId", turnId);
         view.put("state", row == null ? "PENDING" : "READY"); view.put("outcome", outcome);
@@ -254,7 +258,7 @@ public class ChatActionFinalService {
                 || !canonical(actionPayload(parent, v)).equals(canonical(parse(event.getPayloadJson()))))
             throw persistence("Action progress identity is inconsistent");
         var childAdmission = store.findAdmissionByKey(scope, actionId, false);
-        String state, childId = null, route = null, childVersion = null;
+        String state, childId = null, route = null, childVersion = null, executionId=null, phase=null, resultDigest=null;
         if (childAdmission == null) {
             state = switch (event.getStatus()) {
                 case "READY", "RETRY", "CLAIMED" -> "QUEUED";
@@ -262,13 +266,8 @@ public class ChatActionFinalService {
                 default -> throw persistence("Settled action has no child");
             };
         } else {
-            var capability = v.dispatchFacts().availableActions().stream().filter(c -> c.actionId().equals(
-                    v.interactionOutcome().action().actionId())).findFirst().orElseThrow();
-            route = "INSPECT_INPUTS".equals(capability.kind()) ? "INSPECT" : "EXECUTE";
-            childId = "INSPECT".equals(route) ? ChatDeliberationService.inspectionContinuationRequestId(actionId)
-                    : "GENERATE_TEXT_FILE".equals(capability.operation())
-                            ? ChatTextFileActionExecutionService.requestId(actionId)
-                            : cn.jia.chat.api.ChatBountyInteractionV3Wire.shaText("action-execute\n" + actionId);
+            route = "EXECUTE";
+            childId = childAdmission.requestId();
             if (!"SENT".equals(event.getStatus()) || !scope.equals(childAdmission.scope())
                     || !actionId.equals(childAdmission.idempotencyKey()) || !childId.equals(childAdmission.requestId())
                     || !parent.outcomeId().equals(childAdmission.parentOutcomeId()) || !parent.taskId().equals(childAdmission.taskId())
@@ -285,23 +284,40 @@ public class ChatActionFinalService {
                     || child.getStateVersion() == null || child.getStateVersion() < 0)
                 throw persistence("Action progress child scope is inconsistent");
             childVersion = Long.toString(child.getStateVersion());
-            state = switch (child.getAggregateState()) {
-                case "RUNNING", "RECEIVED", "QUEUED" -> "RUNNING";
-                case "COMPLETED" -> {
-                    if (!"INSPECT".equals(route)) throw persistence("Execution has no projected output");
-                    yield "COMPLETED";
-                }
-                case "OUTPUT_COMMITTED" -> {
-                    if (!"EXECUTE".equals(route)) throw persistence("Inspection has invalid terminal state");
-                    yield "COMPLETED";
+            if(deliverySteps==null||skills==null)throw persistence("Skill progress source unavailable");
+            var persisted=deliverySteps.findSteps(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),childId,1);
+            if(persisted==null||persisted.size()!=1)throw persistence("Skill step is ambiguous");
+            var step=persisted.getFirst();var link=deliverySteps.findLink(scope.tenantId(),scope.ownerJiacn(),scope.clientId(),step.stepId());
+            if(!scope.tenantId().equals(step.tenantId())||!scope.ownerJiacn().equals(step.ownerJiacn())||!scope.clientId().equals(step.clientId())
+                    ||!childId.equals(step.requestId())||step.requestRevision()!=1||!"EXECUTE".equals(step.kind())
+                    ||!scope.conversationId().equals(step.conversationId())||scope.conversationGeneration()!=step.conversationGeneration()
+                    ||!parent.taskId().equals(step.taskId())||parent.assignmentRevision()!=step.assignmentRevision()
+                    ||!v.binding().get("targetAgentId").equals(step.targetAgentId())||link==null||!step.stepId().equals(link.stepId())
+                    ||!scope.tenantId().equals(link.tenantId())||!scope.ownerJiacn().equals(link.ownerJiacn())||!scope.clientId().equals(link.clientId()))throw persistence("Skill progress lineage differs");
+            executionId=link.executionId();
+            var resultView=skills.result(new PersonalWorkspaceExecutionService.OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn()),executionId);
+            if(resultView==null||!executionId.equals(resultView.executionId()))throw persistence("Skill result lineage differs");
+            phase=resultView.phase();
+            resultDigest=resultView.resultManifest()==null?null:(String)resultView.resultManifest().get("resultDigest");
+            if(resultDigest!=null&&!resultDigest.matches("[0-9a-f]{64}"))throw persistence("Skill result digest invalid");
+            state=switch(phase) {
+                case "READY","RUNNING","RESULT_READY" -> "RUNNING";
+                case "WAITING_PROVIDER" -> "WAITING_PROVIDER";
+                case "RESULT_UNKNOWN" -> "RESULT_UNKNOWN";
+                case "ARCHIVING" -> "ARCHIVING";
+                case "COMPLETE" -> {
+                    if(!"RESULT_COMMITTED".equals(child.getAggregateState())||!"RESULT_COMMITTED".equals(step.state())
+                            ||!"RESULT_COMMITTED".equals(link.state())||!"RESULT_COMMITTED".equals(resultView.state())||resultDigest==null)
+                        throw persistence("Skill result has no committed projection");yield "COMPLETED";
                 }
                 case "FAILED" -> "FAILED";
                 case "CANCELLED" -> "CANCELLED";
-                default -> throw persistence("Action child state is unsupported");
+                default -> throw persistence("Skill phase unsupported");
             };
         }
         var result = new LinkedHashMap<String, Object>(); result.put("actionRequestId", actionId);
         result.put("state", state); result.put("dispatchVersion", Long.toString(event.getVersion()));
+        result.put("executionId",executionId);result.put("phase",phase);result.put("resultDigest",resultDigest);
         result.put("childRequestId", childId); result.put("childRoute", route); result.put("childStateVersion", childVersion);
         return Collections.unmodifiableMap(result);
     }
@@ -484,17 +500,17 @@ public class ChatActionFinalService {
                 ||!requestId.equals(step.requestId())||step.requestRevision()!=1||step.stepNumber()!=1
                 ||!scope.conversationId().equals(step.conversationId())||scope.conversationGeneration()!=step.conversationGeneration()
                 ||!row.taskId().equals(step.taskId())||row.assignmentRevision()!=step.assignmentRevision()
-                ||!turn.getTargetAgentId().equals(step.targetAgentId())||!"EXECUTE".equals(step.kind())||!"OUTPUT_COMMITTED".equals(step.state())
+                ||!turn.getTargetAgentId().equals(step.targetAgentId())||!"EXECUTE".equals(step.kind())||!"RESULT_COMMITTED".equals(step.state())
                 ||link==null||!scope.tenantId().equals(link.tenantId())||!scope.ownerJiacn().equals(link.ownerJiacn())
-                ||!scope.clientId().equals(link.clientId())||!step.stepId().equals(link.stepId())||!"OUTPUT_COMMITTED".equals(link.state()))throw unavailable();
+                ||!scope.clientId().equals(link.clientId())||!step.stepId().equals(link.stepId())||!"RESULT_COMMITTED".equals(link.state()))throw unavailable();
         var owner=new PersonalWorkspaceExecutionService.OwnerScope(scope.tenantId(),scope.clientId(),scope.ownerJiacn());
         var execution=deliveryExecutions.get(owner,link.executionId());
         if(execution==null||!link.executionId().equals(execution.executionId())||!row.taskId().equals(execution.taskId())
                 ||!scope.conversationId().equals(execution.conversationId())||!turn.getTargetAgentId().equals(execution.targetAgentId())
-                ||!"CONVERSATION".equals(execution.executionMode())||!"OUTPUT_COMMITTED".equals(execution.state())
+                ||!"CONVERSATION".equals(execution.executionMode())||!"RESULT_COMMITTED".equals(execution.state())
                 ||execution.runId()==null||!execution.runId().matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,99}"))throw unavailable();
         var outputs=deliveryExecutions.listConversationOutputs(owner,row.taskId(),execution.runId());
-        if(outputs==null||outputs.isEmpty()||outputs.size()>128)throw unavailable();
+        if(outputs==null||outputs.size()>128)throw unavailable();
         var seen=new java.util.HashSet<String>();var result=new java.util.ArrayList<Map<String,Object>>();
         for(var output:outputs) {
             if(output==null||!execution.executionId().equals(output.executionId())||output.outputId()==null
@@ -550,7 +566,7 @@ public class ChatActionFinalService {
     }
 
     private Map<String, Object> projection(ChatTypedDeliberationStore.Outcome row, ChatActionFinalValidator.ValidatedFinal v) {
-        var view = new LinkedHashMap<String, Object>(); view.put("outcomeContractVersion", 3);
+        var view = new LinkedHashMap<String, Object>(); view.put("outcomeContractVersion", 4);
         view.put("outcomeId", row.outcomeId()); view.put("taskId", row.taskId());
         view.put("assignmentRevision", Long.toString(row.assignmentRevision()));
         view.put("assistantMessageId", Long.toString(row.assistantMessageId())); view.put("finalDigest", row.finalDigest());
@@ -579,7 +595,7 @@ public class ChatActionFinalService {
         }
         if ("ACTION_REQUEST".equals(row.kind())) {
             var a = v.interactionOutcome().action(); action = Map.of("actionRequestId", ChatActionFinalValidator.actionEventId(v),
-                    "actionId", a.actionId(), "instruction", a.instruction(), "sourceRefIds", a.sourceRefIds());
+                    "actionId", a.actionId(), "instruction", a.instruction(), "sourceRefIds", a.sourceRefIds(), "parameters", a.parameters());
         }
         view.put("clarification", clarification == null ? null : Collections.unmodifiableMap(clarification)); view.put("action", action);
         return Collections.unmodifiableMap(view);
@@ -639,7 +655,7 @@ public class ChatActionFinalService {
         }
         for (var source : facts.availableSources()) {
             var item = byId.remove(source.sourceRefId());
-            if (item == null || !source.kind().equals(item.get("sourceKind")) || !source.mediaType().equals(item.get("mediaType")))
+            if (item == null || !source.kind().equals(item.get("sourceKind")) || !source.mediaType().equals(item.get("mediaType")) || !source.contentMimeType().equals(item.get("contentMimeType")))
                 throw persistence("Action source catalogue differs");
         }
     }

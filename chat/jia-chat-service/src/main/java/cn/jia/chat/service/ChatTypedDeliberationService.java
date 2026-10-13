@@ -108,7 +108,7 @@ public class ChatTypedDeliberationService {
     public Object read(ChatTypedDeliberationStore.Scope scope,String requestId,
             String expectedTurnId,long requestRevision){
         if (actionFinals != null) {
-            var current = actionFinals.readIfV3(scope, requestId, expectedTurnId, requestRevision, "CHAT");
+            var current = actionFinals.readActionIfPresent(scope, requestId, expectedTurnId, requestRevision, "CHAT");
             if (current != null) return current;
         }
         var admission=store.findAdmissionByRequest(scope,requestId);if(admission==null)throw unavailable();

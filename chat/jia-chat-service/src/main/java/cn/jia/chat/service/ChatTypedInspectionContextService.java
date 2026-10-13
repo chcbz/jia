@@ -145,7 +145,7 @@ public final class ChatTypedInspectionContextService {
         var capabilityCatalog = sources.stream().map(source -> Map.<String,Object>of(
                 "mediaType", source.get("mediaKind"), "contentMimeType", source.get("mimeType"))).toList();
         discussionFacts.put("availableActions", capabilities.available(new ChatActionCapabilityService.Scope(
-                scope.tenantId(), scope.ownerJiacn(), scope.clientId(), scope.targetAgentId()), capabilityCatalog));
+                scope.tenantId(), scope.ownerJiacn(), scope.clientId(), scope.targetAgentId()), scope.taskId(), capabilityCatalog));
         ChatActionOutcomeContract.facts(discussionFacts);
 
         Map<String, Object> typed = new LinkedHashMap<>();

@@ -16,8 +16,8 @@ class ChatInstalledSkillCapabilityTest {
     private final ChatActionCapabilityService.Scope scope=new ChatActionCapabilityService.Scope("0","owner","client","agent");
     private final AgentManagedSessionLookup.SessionFence fence=new AgentManagedSessionLookup.SessionFence("installation","host","runtime",7);
     private final SkillCapabilityLookup.Scope key=new SkillCapabilityLookup.Scope("0","client","owner","agent");
-    private final ChatActionCapabilityService service=new ChatActionCapabilityService(new TypedInspectionSessionRegistry(),
-            mock(ObjectProvider.class),mock(ControlledImageProviderAuthorityLookup.class),false,false,false,false);
+    private final TaskSkillPolicyService policy=mock(TaskSkillPolicyService.class);
+    private final ChatActionCapabilityService service=new ChatActionCapabilityService(installed,runtime,policy);
     @BeforeEach void setup() { service.setInstalledSkillCapabilities(installed,runtime); }
     private static InstalledSkillDescriptorLookup.Descriptor descriptor(String name) {
         return new InstalledSkillDescriptorLookup.Descriptor(name,"1.0.0","install_"+name,"a".repeat(64),"b".repeat(64),
@@ -44,7 +44,7 @@ class ChatInstalledSkillCapabilityTest {
         assertTrue(result.items().getFirst().metadataJson().contains("maxItems\":32"));
         assertTrue(result.items().getFirst().metadataJson().contains("UNKNOWN"));
         assertFalse(result.toString().contains("private/path"));assertFalse(result.toString().contains("install_text-file"));
-        assertEquals(List.of(),service.available(scope,List.of())); // not EXECUTE_SKILL until task admission exists
+        verifyNoInteractions(policy); // not EXECUTE_SKILL until task admission exists
         assertThrows(UnsupportedOperationException.class,()->result.items().clear());
     }
     @Test void agentReportedButUninstalledSkillIsNotAdvertised() {
@@ -110,5 +110,19 @@ class ChatInstalledSkillCapabilityTest {
         when(installed.read(key)).thenThrow(new InstalledSkillDescriptorLookup.SourceUnavailable());
         assertThrows(InstalledSkillDescriptorLookup.SourceUnavailable.class,()->service.inspectInstalledSkills(scope,fence));
         verifyNoInteractions(runtime);
+    }
+
+    @Test void taskPolicyNotRuntimeReadyDecidesCallabilityAndUnknownCostIsNotZero() {
+        ready();when(policy.read(key,"task")).thenReturn(new TaskSkillPolicyService.Snapshot(false,"TASK_SKILL_POLICY_DENIED",4,fence));
+        var blocked=service.taskCatalog(scope,"task");assertTrue(blocked.items().stream().allMatch(x->"UNAVAILABLE".equals(x.get("state"))));
+        assertEquals(java.util.Map.of("mode","UNKNOWN"),blocked.items().getFirst().get("costInfo"));
+        when(policy.read(key,"task")).thenReturn(new TaskSkillPolicyService.Snapshot(true,null,4,fence));
+        assertTrue(service.taskCatalog(scope,"task").items().stream().allMatch(x->"CALLABLE".equals(x.get("state"))));
+        assertFalse(service.taskCatalog(scope,"task").toString().contains("private/path"));
+    }
+    @Test void taskPolicyReplacementNeverKeepsOldCallable() {
+        ready();when(policy.read(key,"task")).thenReturn(new TaskSkillPolicyService.Snapshot(true,null,4,fence),
+                new TaskSkillPolicyService.Snapshot(false,"TASK_SKILL_POLICY_DENIED",5,fence));
+        assertTrue(service.taskCatalog(scope,"task").items().stream().allMatch(x->"SKILL_TASK_POLICY_CHANGED".equals(x.get("reasonCode"))));
     }
 }

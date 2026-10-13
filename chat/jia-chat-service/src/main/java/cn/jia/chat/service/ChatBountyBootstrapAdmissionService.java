@@ -129,7 +129,7 @@ public class ChatBountyBootstrapAdmissionService {
                             reference.fileId(), Integer.toString(reference.version()), reference.purpose(),
                             null, null)).toList();
             var command = new ChatTypedDeliberationWire.DiscussionCommand("DISCUSSION", claim.taskId(),
-                    claim.assignmentRevision(), content, null, null, null, null, selectors);
+                    claim.assignmentRevision(), content, null, null, null, null, selectors, "TASK_DEFAULT");
             // Stable per original action. The typed admission persists the source catalogue and
             // one dispatch outbox atomically; replay returns its receipt without a second turn.
             // ensure() acquired this same task root/binding before the conversation lock.

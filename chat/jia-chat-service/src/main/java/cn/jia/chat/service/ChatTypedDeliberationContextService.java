@@ -44,6 +44,36 @@ public final class ChatTypedDeliberationContextService {
     private final ChatTypedDeliberationSchemaInitializer schema;
     private final boolean enabled;
     private final ChatActionCapabilityService capabilities;
+    private ChatSkillSourceAccessService skillSources;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setSkillSources(ChatSkillSourceAccessService value) {skillSources=Objects.requireNonNull(value);}
+
+    /** TASK_DEFAULT is only the active task-linked directory, never all workspace/history. */
+    public List<ChatTypedDeliberationWire.SourceSelector> effectiveSelectors(Scope s,String taskId,String materialScope,
+            List<ChatTypedDeliberationWire.SourceSelector> explicit,List<ChatTypedDeliberationWire.SourceSelector> inherited) {
+        if(!Set.of("TASK_DEFAULT","EXPLICIT","NONE").contains(materialScope)||explicit==null||inherited==null)throw invalid();
+        if("NONE".equals(materialScope)) {if(!explicit.isEmpty())throw invalid();return List.of();}
+        var selected=new java.util.LinkedHashSet<ChatTypedDeliberationWire.SourceSelector>();
+        if("TASK_DEFAULT".equals(materialScope)) {
+            var rows=jdbc.queryForList("""
+                SELECT l.file_id,l.file_version,l.link_role FROM agent_personal_workspace_task_file_link l
+                JOIN agent_personal_workspace_file f ON BINARY f.tenant_id=BINARY l.tenant_id
+                  AND BINARY f.client_id=BINARY l.client_id AND BINARY f.owner_jiacn=BINARY l.owner_jiacn
+                  AND BINARY f.file_id=BINARY l.file_id AND f.state='ACTIVE'
+                WHERE BINARY l.tenant_id=BINARY ? AND BINARY l.owner_jiacn=BINARY ? AND BINARY l.client_id=BINARY ?
+                  AND BINARY l.task_id=BINARY ? AND l.link_state='ACTIVE' AND l.link_role IN ('INPUT','REFERENCE')
+                ORDER BY BINARY l.file_id,l.file_version,BINARY l.link_role
+                """,s.tenantId(),s.ownerJiacn(),s.clientId(),taskId);
+            for(var row:rows)selected.add(new ChatTypedDeliberationWire.SourceSelector("TASK_LINKED_WORKSPACE_VERSION",
+                    text(row,"file_id"),Long.toString(number(row,"file_version")),text(row,"link_role"),null,null));
+            selected.addAll(inherited);
+        }
+        selected.addAll(explicit);
+        if(selected.size()>32)throw new ChatDeliberationException(ChatDeliberationException.Reason.INVALID_REQUEST,
+                "More than 32 effective sources; explicitly select this message's sources");
+        return List.copyOf(selected);
+    }
+
 
     public ChatTypedDeliberationContextService(JdbcTemplate jdbc, TypedDeliberationSessionRegistry sessions,
             ChatTypedDeliberationSchemaInitializer schema, ChatActionCapabilityService capabilities,
@@ -80,22 +110,23 @@ public final class ChatTypedDeliberationContextService {
         for (var raw:requested) {
             var selector=ChatTypedDeliberationWire.validateSelector(raw);
             Map<String,Object> entry="TASK_LINKED_WORKSPACE_VERSION".equals(selector.kind())
-                    ? workspace(scope,taskId,selector) : asset(scope,taskId,targetAgentId,selector);
+                    ? workspace(scope,taskId,selector) : "CURRENT_CONVERSATION_ASSET".equals(selector.kind())
+                            ? asset(scope,taskId,targetAgentId,selector) : result(scope,taskId,selector);
             String sourceRef=sourceRefId(scope,entry);
             if (!sourceRefs.add(sourceRef)) throw invalid();
             Map<String,Object> stored=new LinkedHashMap<>(entry); stored.put("sourceRefId",sourceRef);
             catalog.add(Collections.unmodifiableMap(new LinkedHashMap<>(stored)));
             available.add(Map.of("sourceRefId",sourceRef,"kind",entry.get("sourceKind"),
-                    "mediaType",entry.get("mediaType")));
+                    "mediaType",entry.get("mediaType"),"contentMimeType",entry.get("contentMimeType")));
             normalized.add(selector);
         }
         catalog.sort(Comparator.comparing(value -> (String)value.get("sourceRefId")));
         available.sort(Comparator.comparing(value -> (String)value.get("sourceRefId")));
-        Map<String,Object> facts=new LinkedHashMap<>(); facts.put("schemaVersion",3);
+        Map<String,Object> facts=new LinkedHashMap<>(); facts.put("schemaVersion",4);
         facts.put("availableSources",List.copyOf(available));
         facts.put("inspectedSourceRefIds",List.of());
         facts.put("availableActions",capabilities.available(new ChatActionCapabilityService.Scope(
-                scope.tenantId(),scope.ownerJiacn(),scope.clientId(),targetAgentId),List.copyOf(catalog)));
+                scope.tenantId(),scope.ownerJiacn(),scope.clientId(),targetAgentId),taskId,List.copyOf(catalog)));
         ChatActionOutcomeContract.facts(facts);
         return new Context(Map.copyOf(facts),CanonicalContextJson.write(catalog),normalized,ready.frozenDeclaration());
     }
@@ -140,38 +171,23 @@ public final class ChatTypedDeliberationContextService {
     }
 
     private Map<String,Object> asset(Scope s,String taskId,String targetAgentId,ChatTypedDeliberationWire.SourceSelector x) {
-        List<Map<String,Object>> rows=jdbc.queryForList("""
-                SELECT a.content_mime_type,a.sha256,a.byte_length,a.request_id,a.step_id
-                FROM chat_conversation_asset a JOIN chat_conversation c
-                  ON c.id=CAST(a.conversation_id AS UNSIGNED) AND BINARY CAST(c.id AS CHAR)=BINARY a.conversation_id
-                  AND c.deleted_at IS NULL AND c.lifecycle_generation=a.conversation_generation
-                  AND c.tenant_id=a.tenant_id AND BINARY c.tenant_id=BINARY a.tenant_id
-                  AND c.client_id=a.client_id AND BINARY c.client_id=BINARY a.client_id
-                  AND c.jiacn=a.owner_jiacn AND BINARY c.jiacn=BINARY a.owner_jiacn
-                JOIN chat_interaction_step step ON step.step_id=a.step_id
-                  AND BINARY step.step_id=BINARY a.step_id AND step.request_id=a.request_id
-                  AND BINARY step.request_id=BINARY a.request_id AND step.tenant_id=a.tenant_id
-                  AND BINARY step.tenant_id=BINARY a.tenant_id AND step.owner_jiacn=a.owner_jiacn
-                  AND BINARY step.owner_jiacn=BINARY a.owner_jiacn AND step.client_id=a.client_id
-                  AND BINARY step.client_id=BINARY a.client_id AND step.conversation_id=a.conversation_id
-                  AND BINARY step.conversation_id=BINARY a.conversation_id
-                  AND step.conversation_generation=a.conversation_generation
-                  AND step.kind='EXECUTE' AND step.state='OUTPUT_COMMITTED'
-                WHERE c.task_id=? AND BINARY c.task_id=BINARY ?
-                  AND step.task_id=? AND BINARY step.task_id=BINARY ?
-                  AND step.target_agent_id=? AND BINARY step.target_agent_id=BINARY ?
-                  AND a.tenant_id=? AND BINARY a.tenant_id=BINARY ?
-                  AND a.owner_jiacn=? AND BINARY a.owner_jiacn=BINARY ?
-                  AND a.client_id=? AND BINARY a.client_id=BINARY ?
-                  AND a.conversation_id=? AND BINARY a.conversation_id=BINARY ?
-                  AND a.conversation_generation=? AND a.asset_id=? AND BINARY a.asset_id=BINARY ? AND a.revision=?
-                """,taskId,taskId,taskId,taskId,targetAgentId,targetAgentId,
-                s.tenantId(),s.tenantId(),s.ownerJiacn(),s.ownerJiacn(),s.clientId(),s.clientId(),
-                s.conversationId(),s.conversationId(),s.conversationGeneration(),x.assetId(),x.assetId(),Long.parseLong(x.assetRevision()));
-        if(rows.size()!=1)throw missing(); Map<String,Object> row=rows.getFirst();
-        return source("CURRENT_CONVERSATION_ASSET","CURRENT_CONVERSATION_ASSET",x,
-                text(row,"content_mime_type"),text(row,"sha256"),number(row,"byte_length"),
-                text(row,"request_id"),text(row,"step_id"));
+        if(skillSources==null)throw unavailable("Skill source adapter is unavailable");
+        var owner=new cn.jia.agent.service.PersonalWorkspaceExecutionService.OwnerScope(s.tenantId(),s.clientId(),s.ownerJiacn());
+        skillSources.conversation(owner,taskId,s.conversationId(),s.conversationGeneration());
+        var actual=skillSources.asset(owner,taskId,s.conversationId(),s.conversationGeneration(),targetAgentId,
+                ChatTypedDeliberationWire.selectorMap(x));
+        var value=source("CURRENT_CONVERSATION_ASSET",x.kind(),x,actual.contentMimeType(),actual.sha256(),actual.byteLength(),actual.requestId(),actual.stepId());
+        value.put("sourceIdentity",ChatSkillSourceAccessService.assetIdentity(actual));
+        return value;
+    }
+    private Map<String,Object> result(Scope s,String task,ChatTypedDeliberationWire.SourceSelector x) {
+        if(skillSources==null)throw unavailable("Skill source adapter is unavailable");
+        var owner=new cn.jia.agent.service.PersonalWorkspaceExecutionService.OwnerScope(s.tenantId(),s.clientId(),s.ownerJiacn());
+        skillSources.conversation(owner,task,s.conversationId(),s.conversationGeneration());
+        var identity=ChatTypedDeliberationWire.selectorMap(x);
+        byte[] bytes=skillSources.result(owner,task,s.conversationId(),s.conversationGeneration(),identity);
+        var value=source("EXECUTION_RESULT",x.kind(),x,"application/json",ChatSkillSourceAccessService.sha(bytes),bytes.length,null,null);
+        value.put("sourceIdentity",identity);return value;
     }
 
     private Map<String,Object> source(String sourceKind,String selectorKind,
@@ -180,6 +196,7 @@ public final class ChatTypedDeliberationContextService {
         if(!mime.matches("[a-z0-9.+-]+/[a-z0-9.+-]+")||!hash.matches("[0-9a-f]{64}")||bytes<0) throw unavailable("Source metadata is invalid");
         Map<String,Object> value=new LinkedHashMap<>(); value.put("sourceKind",sourceKind);
         value.put("selectorKind",selectorKind); value.put("selector",ChatTypedDeliberationWire.selectorMap(selector));
+        value.put("sourceIdentity",ChatTypedDeliberationWire.selectorMap(selector));
         value.put("mediaType",mediaType(mime)); value.put("contentMimeType",mime); value.put("contentHash",hash);
         value.put("byteLength",Long.toString(bytes)); value.put("parentRequestId",parentRequest); value.put("parentStepId",parentStep);
         return value;

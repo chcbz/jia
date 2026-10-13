@@ -13,7 +13,7 @@ public final class TypedDeliberationDeclaration {
             "referenceModes", "outcomeKinds", "engine", "strictNoToolsVerified", "toolPolicy");
     private static final List<String> MODES = List.of("NONE", "AVAILABLE");
     private static final List<String> KINDS = List.of("ANSWER", "CLARIFY", "ACTION_REQUEST");
-    private static final String CARRIER = "CHAT_MESSAGE_FINAL_SIDECAR_V3";
+    private static final String CARRIER = "CHAT_MESSAGE_FINAL_SIDECAR_V4";
     private static final String ENGINE = "CODEX_APP_SERVER_NATIVE_OUTPUT_SCHEMA";
     private static final String TOOL_POLICY = "read-only-constrained";
 
@@ -28,7 +28,7 @@ public final class TypedDeliberationDeclaration {
                     || !candidate.keySet().stream().allMatch(String.class::isInstance)
                     || !candidate.keySet().equals(KEYS)) throw invalid();
             @SuppressWarnings("unchecked") Map<String, Object> value = (Map<String, Object>) candidate;
-            exactInteger(value.get("schemaVersion"), 3);
+            exactInteger(value.get("schemaVersion"), 4);
             String state = exactText(value.get("state"));
             if (!Set.of("READY", "UNAVAILABLE").contains(state)) throw invalid();
             exact(value.get("carrier"), CARRIER);
@@ -50,7 +50,7 @@ public final class TypedDeliberationDeclaration {
     }
     public Map<String, Object> frozenReceipt() {
         Map<String, Object> value = new LinkedHashMap<>();
-        value.put("schemaVersion", 3);
+        value.put("schemaVersion", 4);
         value.put("state", state.name());
         value.put("carrier", CARRIER);
         value.put("referenceModes", MODES);

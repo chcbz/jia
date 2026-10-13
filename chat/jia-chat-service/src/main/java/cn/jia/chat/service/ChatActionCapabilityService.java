@@ -1,28 +1,17 @@
 package cn.jia.chat.service;
 
-import cn.jia.agent.service.ControlledImageFollowupAuthorityService;
-import cn.jia.agent.service.ControlledImageProviderAuthorityLookup;
-import cn.jia.chat.handler.TypedInspectionSessionRegistry;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /** Current adapter facts only: this projection never grants authority or invokes a tool. */
 @Service
 public final class ChatActionCapabilityService {
     public record Scope(String tenantId, String ownerJiacn, String clientId, String targetAgentId) { }
-    private final TypedInspectionSessionRegistry inspections;
-    private final ObjectProvider<ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup> executions;
-    private final ControlledImageProviderAuthorityLookup authorities;
-    private final boolean inspectionEnabled;
-    private final boolean executionEnabled;
-    private final boolean textExecutionEnabled;
     private static final com.fasterxml.jackson.databind.ObjectMapper SKILL_JSON = new com.fasterxml.jackson.databind.ObjectMapper();
     private cn.jia.agent.service.InstalledSkillDescriptorLookup installedSkills;
     private cn.jia.agent.service.SkillCapabilityLookup skillRuntimes;
@@ -106,96 +95,83 @@ public final class ChatActionCapabilityService {
         return new InstalledCatalog(runtime.catalog()==null?null:runtime.catalog().catalogRevision(),results);
     }
 
-    private cn.jia.agent.service.NativeTextFileRuntimeLookup textFiles;
-    private cn.jia.agent.service.PersonalWorkspaceExecutionService workspaceExecutions;
-    @org.springframework.beans.factory.annotation.Autowired
-    public void setTextFileCapabilities(cn.jia.agent.service.NativeTextFileRuntimeLookup lookup,
-            cn.jia.agent.service.PersonalWorkspaceExecutionService executions) {
-        this.textFiles = lookup; this.workspaceExecutions = executions;
+    private final cn.jia.agent.service.TaskSkillPolicyService policies;
+    public ChatActionCapabilityService(cn.jia.agent.service.InstalledSkillDescriptorLookup installed,
+            cn.jia.agent.service.SkillCapabilityLookup runtimes, cn.jia.agent.service.TaskSkillPolicyService policies) {
+        setInstalledSkillCapabilities(installed, runtimes); this.policies=Objects.requireNonNull(policies);
     }
-
-    public ChatActionCapabilityService(TypedInspectionSessionRegistry inspections,
-            ObjectProvider<ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup> executions,
-            ControlledImageProviderAuthorityLookup authorities,
-            @Value("${chat.typed-inspection.enabled:false}") boolean inspectionEnabled,
-            @Value("${agent.controlled-image-provider.bridge-enabled:false}") boolean bridgeEnabled,
-            @Value("${agent.controlled-image-provider.enabled:false}") boolean providerEnabled,
-            @Value("${chat.bounty-execution.enabled:false}") boolean executionEnabled) {
-        this.inspections = Objects.requireNonNull(inspections);
-        this.executions = Objects.requireNonNull(executions);
-        this.authorities = Objects.requireNonNull(authorities);
-        this.inspectionEnabled = inspectionEnabled;
-        this.executionEnabled = bridgeEnabled && providerEnabled && executionEnabled;
-        this.textExecutionEnabled = executionEnabled;
+    public record TaskCatalog(String catalogRevision, List<Map<String,Object>> items) {
+        public TaskCatalog { items=List.copyOf(items); }
     }
-
-    /** Catalogue entries contain authoritative mediaType/contentMimeType metadata, never bytes. */
-    public List<Map<String, Object>> available(Scope scope, List<Map<String, Object>> catalog) {
-        Objects.requireNonNull(scope); Objects.requireNonNull(catalog);
-        List<Map<String, Object>> actions = new ArrayList<>();
-        if (inspectionEnabled && !catalog.isEmpty()) {
-            try {
-                var ready = inspections.requireSingleReady(new TypedInspectionSessionRegistry.Scope(
-                        scope.tenantId(), scope.ownerJiacn(), scope.clientId()), scope.targetAgentId());
-                LinkedHashSet<String> media = new LinkedHashSet<>();
-                for (var source : catalog) {
-                    try {
-                        var input = ready.declaration().requireInput((String) source.get("mediaType"),
-                                (String) source.get("contentMimeType"));
-                        media.add(input.mediaKind());
-                    } catch (IllegalStateException unsupportedInput) {
-                        // One unsupported file does not hide usable inputs or prevent ordinary chat.
-                    }
-                }
-                if (!media.isEmpty()) actions.add(action("inspect-materials", "INSPECT_INPUTS",
-                        "INSPECT_INPUTS", List.copyOf(media), 1, 32));
-            } catch (IllegalStateException unavailable) {
-                // No exact live inspector: do not fabricate a read capability.
+    /** Read-only policy AND installation AND live authenticated fence. Costs never decide callability. */
+    public TaskCatalog taskCatalog(Scope scope, String taskId) {
+        var key=new cn.jia.agent.service.SkillCapabilityLookup.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.targetAgentId());
+        var policy=policies.read(key,taskId);
+        InstalledCatalog observed;
+        if(policy.fence()!=null) observed=inspectInstalledSkills(scope,policy.fence());
+        else {
+            var list=new ArrayList<SkillCandidate>();
+            for(var d:installedSkills.read(key).skills()) {
+                String title=d.skillKey(),metadata=null;
+                if(d.verified()) try {
+                    var m=SKILL_JSON.readTree(d.manifestJson());title=m.path("title").asText(d.skillKey());
+                    var publicMetadata=SKILL_JSON.createObjectNode();
+                    for(String field:List.of("description","parametersSchema","inputs","outputs","costInfo")) publicMetadata.set(field,m.get(field));
+                    metadata=publicMetadata.toString();
+                } catch(java.io.IOException malformed) {throw new cn.jia.agent.service.InstalledSkillDescriptorLookup.SourceUnavailable(malformed);}
+                list.add(new SkillCandidate(d.skillKey(),d.skillVersion(),title,"UNAVAILABLE",
+                        d.reasonCode()!=null?d.reasonCode():"SKILL_RUNTIME_UNAVAILABLE",metadata));
             }
+            observed=new InstalledCatalog(null,list);
         }
-        if (executionEnabled) appendImageAdapter(scope, actions);
-        if (textExecutionEnabled && catalog.isEmpty() && textFiles != null && workspaceExecutions != null
-                && workspaceExecutions.capabilities().allowedMimeTypes().contains("text/plain")
-                && textFiles.ready(new cn.jia.agent.service.NativeTextFileRuntimeLookup.Scope(
-                        scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.targetAgentId())))
-            actions.add(action("generate-text-file", "EXECUTE", "GENERATE_TEXT_FILE", List.of(), 0, 0));
+        var items=new ArrayList<Map<String,Object>>();
+        boolean stable=policy.equals(policies.read(key,taskId));
+        for(var item:observed.items()) {
+            var view=new java.util.LinkedHashMap<String,Object>();
+            view.put("skillKey",item.skillKey());view.put("skillVersion",item.skillVersion());view.put("title",item.title());
+            boolean callable=stable&&policy.allowed()&&"RUNTIME_READY".equals(item.state());
+            view.put("state",callable?"CALLABLE":"UNAVAILABLE");
+            view.put("reasonCode",!stable?"SKILL_TASK_POLICY_CHANGED":!policy.allowed()?policy.reasonCode():item.reasonCode());
+            view.put("costInfo",costInfo(item.metadataJson()));
+            items.add(java.util.Collections.unmodifiableMap(view));
+        }
+        return new TaskCatalog(observed.catalogRevision(),items);
+    }
+    public List<Map<String,Object>> available(Scope scope, String taskId, List<Map<String,Object>> catalog) {
+        var key=new cn.jia.agent.service.SkillCapabilityLookup.Scope(scope.tenantId(),scope.clientId(),scope.ownerJiacn(),scope.targetAgentId());
+        var installed=installedSkills.read(key);
+        var task=taskCatalog(scope,taskId);
+        if(!installed.equals(installedSkills.read(key)))return List.of();
+        var callable=task.items().stream().filter(x->"CALLABLE".equals(x.get("state"))).toList();
+        var actions=new ArrayList<Map<String,Object>>();
+        for(var item:callable) {
+            var matches=installed.skills().stream().filter(d->d.verified()&&d.skillKey().equals(item.get("skillKey"))
+                    &&d.skillVersion().equals(item.get("skillVersion"))).toList();
+            if(matches.size()!=1)continue;
+            var d=matches.getFirst();
+            try {
+                var manifest=SKILL_JSON.readTree(d.manifestJson());
+                var skill=Map.of("skillKey",d.skillKey(),"skillVersion",d.skillVersion(),"packageSha256",d.packageSha256(),"manifestSha256",d.manifestSha256());
+                var action=new java.util.LinkedHashMap<String,Object>();
+                action.put("actionId","act_"+cn.jia.chat.api.ChatBountyInteractionV3Wire.shaText(CanonicalContextJson.write(skill)));
+                action.put("kind","EXECUTE");action.put("operation","EXECUTE_SKILL");action.put("skill",skill);
+                action.put("parametersSchema",SKILL_JSON.convertValue(manifest.get("parametersSchema"),Map.class));
+                action.put("inputMimeTypes",SKILL_JSON.convertValue(manifest.at("/inputs/acceptedMimeTypes"),List.class));
+                action.put("minSources",manifest.at("/inputs/minItems").intValue());action.put("maxSources",manifest.at("/inputs/maxItems").intValue());
+                action.put("outputMimeTypes",SKILL_JSON.convertValue(manifest.at("/outputs/mimeTypes"),List.class));
+                actions.add(java.util.Collections.unmodifiableMap(action));
+            }catch(java.io.IOException malformed){throw new cn.jia.agent.service.InstalledSkillDescriptorLookup.SourceUnavailable(malformed);}
+        }
         return List.copyOf(actions);
     }
-
-    private void appendImageAdapter(Scope scope, List<Map<String, Object>> actions) {
-        var lookup = executions.getIfUnique();
-        if (lookup == null) return;
-        var declaration = lookup.current(new ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.DeclarationScope(
-                scope.tenantId(), scope.clientId(), scope.ownerJiacn(), scope.targetAgentId()));
-        if (declaration == null || declaration.state()
-                != ControlledImageFollowupAuthorityService.RuntimeDeclarationLookup.State.READY) return;
-        if (declaration.runtimeInstanceId() == null || declaration.runtimeInstanceId().isBlank()
-                || !"CONTROLLED_IMAGE_HTTP_V1".equals(declaration.providerLane())
-                || declaration.bindingId() == null || declaration.bindingId().isBlank()
-                || declaration.bindingEpoch() == null || declaration.bindingEpoch() < 1
-                || declaration.modelId() == null || declaration.modelId().isBlank()
-                || !Objects.equals(declaration.maxInputItems(), 16)
-                || !Objects.equals(declaration.maxOutboundRequestAttempts(), 1)
-                || !Objects.equals(declaration.precallFenceVersion(), 1)) return;
-        var policy = authorities.current(new ControlledImageProviderAuthorityLookup.Scope(
-                scope.tenantId(), scope.clientId(), scope.ownerJiacn()), scope.targetAgentId(),
-                declaration.bindingId(), declaration.bindingEpoch());
-        if (policy == null || policy.state() != ControlledImageProviderAuthorityLookup.State.READY
-                || !Objects.equals(policy.providerLane(), declaration.providerLane())
-                || !Objects.equals(policy.bindingId(), declaration.bindingId())
-                || !Objects.equals(policy.bindingEpoch(), Long.toString(declaration.bindingEpoch()))
-                || !Objects.equals(policy.modelId(), declaration.modelId())
-                || !Objects.equals(policy.maxOutboundRequestAttempts(), declaration.maxOutboundRequestAttempts())) return;
-        // Limits are the registered image adapter's wire contract, not a generic product restriction.
-        if (declaration.operations().contains("GENERATE_IMAGE")) actions.add(action("generate-image", "EXECUTE",
-                "GENERATE_IMAGE", List.of("image"), 0, declaration.maxInputItems()));
-        if (declaration.operations().contains("EDIT_IMAGE")) actions.add(action("edit-image", "EXECUTE",
-                "EDIT_IMAGE", List.of("image"), 1, 1));
-    }
-
-    private static Map<String, Object> action(String id, String kind, String operation,
-            List<String> media, int min, int max) {
-        return Map.of("actionId", id, "kind", kind, "operation", operation,
-                "inputMediaTypes", media, "minSources", min, "maxSources", max);
+    private static Object costInfo(String metadata) {
+        try {
+            if(metadata!=null) {
+                var raw=SKILL_JSON.readTree(metadata).get("costInfo");
+                if(raw!=null&&raw.isObject()&&Set.of("FREE","FIXED","METERED","UNKNOWN").contains(raw.path("mode").asText()))
+                    return SKILL_JSON.convertValue(raw,Map.class);
+            }
+        }catch(java.io.IOException ignored){/* metadata warning only, never authority */}
+        return Map.of("mode","UNKNOWN");
     }
 }

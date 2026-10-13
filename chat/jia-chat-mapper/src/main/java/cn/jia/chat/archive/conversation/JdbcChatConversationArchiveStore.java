@@ -194,9 +194,9 @@ public final class JdbcChatConversationArchiveStore implements ChatConversationA
                   AND OCTET_LENGTH(a.conversation_id)=OCTET_LENGTH(?)
                   AND a.asset_id=? AND BINARY a.asset_id=BINARY ?
                   AND OCTET_LENGTH(a.asset_id)=OCTET_LENGTH(?) AND a.revision=?
-                  AND s.kind='EXECUTE' AND s.state='OUTPUT_COMMITTED'
-                  AND l.state='OUTPUT_COMMITTED' AND l.execution_id IS NOT NULL
-                  AND r.aggregate_state='OUTPUT_COMMITTED'
+                  AND s.kind='EXECUTE' AND l.execution_id IS NOT NULL
+                  AND ((s.state='OUTPUT_COMMITTED' AND l.state='OUTPUT_COMMITTED' AND r.aggregate_state='OUTPUT_COMMITTED')
+                    OR (s.state='RESULT_COMMITTED' AND l.state='RESULT_COMMITTED' AND r.aggregate_state='RESULT_COMMITTED'))
                   AND c.conversation_type='juyiting' AND c.conversation_scope_type='bounty'
                   AND BINARY c.task_id=BINARY s.task_id
                   AND BINARY c.conversation_scope_key=BINARY CONCAT('task:',s.task_id)

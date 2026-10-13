@@ -80,7 +80,7 @@ public class ChatTypedInspectionService {
     @Transactional(readOnly=true)
     public Object read(ChatTypedDeliberationStore.Scope scope,String requestId,String turnId,long revision){
         if (actionFinals != null) {
-            var current = actionFinals.readIfV3(scope, requestId, turnId, revision, "INSPECT");
+            var current = actionFinals.readActionIfPresent(scope, requestId, turnId, revision, "INSPECT");
             if (current != null) return current;
         }
         var admission=store.findAdmissionByRequest(scope,requestId);if(admission==null)throw unavailable();requireInspectionAdmission(admission);

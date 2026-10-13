@@ -39,6 +39,10 @@ public class ChatTypedDiscussionAdmissionService {
     private final ChatTypedDeliberationContextService contexts;
     private final ChatTypedDeliberationService typed;
     private final ChatActionFinalService finals;
+    private cn.jia.agent.service.AgentTaskExecutionGrantService skillGrants;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setSkillGrants(cn.jia.agent.service.AgentTaskExecutionGrantService value){skillGrants=Objects.requireNonNull(value);}
+
 
     public ChatTypedDiscussionAdmissionService(AgentTaskMutationTransaction taskMutations,
             ChatBountyBindingStore bindings, ChatConversationDao conversations,
@@ -85,7 +89,13 @@ public class ChatTypedDiscussionAdmissionService {
             }
             Parent parent=parent(storeScope,command);
             List<ChatTypedDeliberationWire.SourceSelector> selectors=command.sourceSelectors();
-            if("CLARIFICATION_REPLY".equals(command.intent())&&selectors.isEmpty())selectors=selectors(parent.outcome().sourceCatalogJson());
+            var inherited="CLARIFICATION_REPLY".equals(command.intent())?selectors(parent.outcome().sourceCatalogJson()):List.<ChatTypedDeliberationWire.SourceSelector>of();
+            // The original key was checked first: replay never upgrades a grant or discovers a new directory.
+            if(skillGrants==null)throw persistence("Skill baseline service is unavailable");
+            skillGrants.resolveSkillBaseline(new cn.jia.agent.service.AgentTaskExecutionGrantService.Scope(tenantId,client,owner),
+                    command.taskId(),command.expectedAssignmentRevision(),targets.getFirst());
+            selectors=contexts.effectiveSelectors(new ChatTypedDeliberationContextService.Scope(tenantId,owner,client,conversationId,generation),
+                    command.taskId(),command.materialScope(),selectors,inherited);
             var context=contexts.resolve(new ChatTypedDeliberationContextService.Scope(tenantId,owner,client,conversationId,generation),
                     command.taskId(),targets.getFirst(),selectors);
             String requestDigest=requestDigest(command,context.sourceCatalogJson());
@@ -139,7 +149,7 @@ public class ChatTypedDiscussionAdmissionService {
         List<String> turns=parseStrings(row.turnIdsJson());
         if(turns.size()!=1||!ADMISSION_STATE.equals(row.state())||row.stateVersion()!=ADMISSION_STATE_VERSION)
             throw persistence("Stored typed receipt is invalid");
-        return new ChatTypedDeliberationWire.Accepted(1,row.intent(),row.requestId(),
+        return new ChatTypedDeliberationWire.Accepted(2,row.intent(),row.requestId(),
                 Long.toString(row.userMessageId()),turns,row.state(),Long.toString(row.stateVersion()),Long.toString(row.eventCursor()),
                 "/chat/requests/"+row.requestId(),"/chat/conversations/"+row.scope().conversationId()+"/requests/"+row.requestId()+"/typed-outcome",replay,row.pendingQuestionId());
     }
@@ -162,7 +172,7 @@ public class ChatTypedDiscussionAdmissionService {
         if(turn==null||!"CHAT".equals(turn.getRoute())
                 ||!("FINAL_PERSISTED".equals(turn.getState())||"PUBLISHED".equals(turn.getState()))
                 ||row.assignmentRevision()!=command.expectedAssignmentRevision())throw unavailable();
-        var projection=finals.readIfV3(scope,row.requestId(),row.turnId(),row.requestRevision(),"CHAT");
+        var projection=finals.readActionIfPresent(scope,row.requestId(),row.turnId(),row.requestRevision(),"CHAT");
         if(projection==null)return null;
         if(!"READY".equals(projection.get("state"))||!(projection.get("outcome") instanceof Map<?,?> view)
                 ||!row.outcomeId().equals(view.get("outcomeId"))||!row.finalDigest().equals(view.get("finalDigest")))throw unavailable();
@@ -182,7 +192,7 @@ public class ChatTypedDiscussionAdmissionService {
     private static Map<String,Object> admissionFacts(ChatTypedDeliberationWire.DiscussionCommand command,
             List<ChatTypedDeliberationWire.SourceSelector> selectors, Map<String,Object> deliveryParent,List<Map<String,Object>> deliveryTargets) {
         Map<String,Object> value=new LinkedHashMap<>();
-        value.put("schemaVersion",1);value.put("intent",command.intent());
+        value.put("schemaVersion",2);value.put("materialScope",command.materialScope());value.put("intent",command.intent());
         if(deliveryParent!=null)value.put("deliveryParent",deliveryParent);
         if(!deliveryTargets.isEmpty())value.put("deliveryTargets",deliveryTargets);
         value.put("sourceSelectors",selectors.stream().map(ChatTypedDeliberationWire::selectorMap).toList());
@@ -204,7 +214,7 @@ public class ChatTypedDiscussionAdmissionService {
         return ChatDeliberationService.digest(complete);
     }
     private static Map<String,Object> commandMap(ChatTypedDeliberationWire.DiscussionCommand c){
-        Map<String,Object> m=new LinkedHashMap<>();m.put("schemaVersion",1);m.put("intent",c.intent());
+        Map<String,Object> m=new LinkedHashMap<>();m.put("schemaVersion",2);m.put("materialScope",c.materialScope());m.put("intent",c.intent());
         m.put("taskId",c.taskId());m.put("expectedAssignmentRevision",Long.toString(c.expectedAssignmentRevision()));
         m.put("content",c.content());m.put("parentOutcomeId",c.parentOutcomeId());
         m.put("expectedParentStateVersion",c.expectedParentStateVersion()==null?null:Long.toString(c.expectedParentStateVersion()));
@@ -213,7 +223,7 @@ public class ChatTypedDiscussionAdmissionService {
         m.put("sourceSelectors",c.sourceSelectors().stream().map(ChatTypedDeliberationWire::selectorMap).toList());return m;
     }
     @SuppressWarnings("unchecked") private static List<String> parseStrings(String json){try{Object v=JsonUtil.getMapper().readValue(json,List.class);if(v instanceof List<?> l&&l.stream().allMatch(String.class::isInstance))return(List<String>)l;}catch(Exception ignored){}throw persistence("Stored typed receipt is invalid");}
-    @SuppressWarnings("unchecked") private static List<ChatTypedDeliberationWire.SourceSelector> selectors(String json){List<Map<String,Object>> rows=ChatTypedDeliberationContextService.parseCatalog(json);List<ChatTypedDeliberationWire.SourceSelector> r=new ArrayList<>();for(var row:rows){Map<String,Object> m=(Map<String,Object>)row.get("selector");r.add(new ChatTypedDeliberationWire.SourceSelector((String)m.get("kind"),(String)m.get("fileId"),(String)m.get("version"),(String)m.get("purpose"),(String)m.get("assetId"),(String)m.get("assetRevision")));}return List.copyOf(r);}
+    @SuppressWarnings("unchecked") private static List<ChatTypedDeliberationWire.SourceSelector> selectors(String json){List<Map<String,Object>> rows=ChatTypedDeliberationContextService.parseCatalog(json);List<ChatTypedDeliberationWire.SourceSelector> r=new ArrayList<>();for(var row:rows){Map<String,Object> m=(Map<String,Object>)row.get("selector");r.add(ChatTypedDeliberationWire.selector(m));}return List.copyOf(r);}
     private record Parent(ChatTypedDeliberationStore.Outcome outcome,ChatTypedDeliberationStore.PendingQuestion pending){}
     private static boolean exact(String v,int max){return v!=null&&!v.isBlank()&&v.equals(v.strip())&&v.codePointCount(0,v.length())<=max&&v.codePoints().noneMatch(Character::isISOControl);}
     private static String stable(String prefix,String...parts){return prefix.substring(0,Math.min(prefix.length(),20))+"_"+sha256(String.join("\0",parts)).substring(0,40);}
