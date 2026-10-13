@@ -58,7 +58,7 @@ public class ChatBountyInteractionController {
             long eventCursor, String statusUrl, boolean replay) { }
 
     @PostMapping("/{conversationId}/interactions")
-    public ResponseEntity<JsonResult<?>> interact(
+    public ResponseEntity<JsonResult<Void>> interact(
             @PathVariable String conversationId,
             @RequestHeader("Idempotency-Key") String idempotencyKey,
             @RequestBody(required=false) String raw, Authentication authentication,
