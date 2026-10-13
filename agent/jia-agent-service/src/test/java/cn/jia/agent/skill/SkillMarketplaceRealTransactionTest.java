@@ -626,6 +626,6 @@ class SkillMarketplaceRealTransactionTest {
         return count;
     }
     @SuppressWarnings("unchecked") static <T> ObjectProvider<T> provider(T value) {
-        ObjectProvider<T> p=mock(ObjectProvider.class);when(p.getIfAvailable()).thenReturn(value);when(p.getObject()).thenReturn(value);return p;
+        ObjectProvider<T> p=mock(ObjectProvider.class);when(p.getIfAvailable()).thenReturn(value);when(p.getObject()).thenReturn(value);when(p.getIfUnique()).thenReturn(value);return p;
     }
 }

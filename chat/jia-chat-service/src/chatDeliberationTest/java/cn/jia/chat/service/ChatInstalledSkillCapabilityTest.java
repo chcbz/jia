@@ -97,6 +97,15 @@ class ChatInstalledSkillCapabilityTest {
         when(runtime.lookup(key,fence)).thenReturn(view(List.of(bad)));
         assertEquals("SKILL_RUNTIME_EVIDENCE_INVALID",service.inspectInstalledSkills(scope,fence).items().getFirst().reasonCode());
     }
+    @Test void nativeSkillWithProviderRequirementStillRequiresBindingEvidence() {
+        ready();var original=descriptor("text-file");
+        var needingProvider=new InstalledSkillDescriptorLookup.Descriptor(original.skillKey(),original.skillVersion(),
+                original.installationId(),original.packageSha256(),original.manifestSha256(),
+                original.manifestJson().replace("\"runner\":\"native-model\"","\"runner\":\"native-model\",\"requirements\":{\"providerAlias\":\"model-default\"}"),
+                original.runtimeInstallationId(),original.runtimeHostId(),null);
+        when(installed.read(key)).thenReturn(new InstalledSkillDescriptorLookup.Snapshot(List.of(needingProvider)));
+        assertEquals("SKILL_RUNTIME_EVIDENCE_INVALID",service.inspectInstalledSkills(scope,fence).items().getFirst().reasonCode());
+    }
     @Test void trueDescriptorSourceFailurePropagatesInsteadOfReportingEmptyCatalog() {
         when(installed.read(key)).thenThrow(new InstalledSkillDescriptorLookup.SourceUnavailable());
         assertThrows(InstalledSkillDescriptorLookup.SourceUnavailable.class,()->service.inspectInstalledSkills(scope,fence));

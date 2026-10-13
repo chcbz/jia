@@ -36,6 +36,21 @@ public final class InstalledSkillDescriptorService implements InstalledSkillDesc
                         || e.getSkillVersion()==null) throw new SourceUnavailable();
                 result.add(descriptor(scope,e));
             }
+            // One final authorization read per catalog, not per skill (avoid quadratic/N+1 reads).
+            if(result.stream().anyMatch(Descriptor::verified)) {
+                var current=Objects.requireNonNull(market.selectEntitlementsByAgent(scope.tenantId(),scope.clientId(),scope.agentId()));
+                var byId=new HashMap<String,List<SkillEntitlementEntity>>();
+                for(var row:current) {
+                    if(!exact(scope,row.getTenantId(),row.getClientId(),row.getTargetAgentId())) throw new SourceUnavailable();
+                    byId.computeIfAbsent(row.getEntitlementId(),unused->new ArrayList<>()).add(row);
+                }
+                for(int index=0;index<rows.size();index++) {
+                    if(!result.get(index).verified()) continue;
+                    var original=rows.get(index); var observed=byId.getOrDefault(original.getEntitlementId(),List.of());
+                    if(observed.size()!=1||!original.equals(observed.getFirst()))
+                        result.set(index,unavailable(original,"SKILL_INSTALLATION_CHANGED"));
+                }
+            }
             return new Snapshot(result);
         } catch(SourceUnavailable failure) { throw failure; }
         catch(RuntimeException failure) { throw new SourceUnavailable(failure); }
@@ -75,10 +90,6 @@ public final class InstalledSkillDescriptorService implements InstalledSkillDesc
         try { manifest=store.manifest(store.prepare(v)); }
         catch(SkillMarketplaceException invalid) { throw new SourceUnavailable(invalid); }
         if(manifest==null) return unavailable(e,"SKILL_NOT_EXECUTABLE");
-        // Re-read mutable authorization AFTER immutable IO, never publish an old ACTIVE snapshot.
-        var current=market.selectEntitlementsByAgent(s.tenantId(),s.clientId(),s.agentId()).stream()
-                .filter(r->Objects.equals(e.getEntitlementId(),r.getEntitlementId())).toList();
-        if(current.size()!=1||!e.equals(current.getFirst())) return unavailable(e,"SKILL_INSTALLATION_CHANGED");
         return new Descriptor(e.getSkillKey(),e.getSkillVersion(),e.getInstallationId(),
                 HexFormat.of().formatHex(v.getPackageSha256()),manifest.manifestSha256(),manifest.document().toString(),
                 binding.getRuntimeInstallationId(),binding.getRuntimeHostId(),null);

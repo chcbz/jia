@@ -56,11 +56,12 @@ public final class ChatActionCapabilityService {
         for(var descriptor:descriptors.skills()) {
             String reason=descriptor.reasonCode();
             String title=descriptor.skillKey(); String metadata=null;
-            String runner=null;
+            String runner=null; boolean requiresBinding=false;
             if(descriptor.verified()) {
                 try {
                     var manifest=SKILL_JSON.readTree(descriptor.manifestJson());
                     title=manifest.path("title").asText(descriptor.skillKey()); runner=manifest.path("runner").asText();
+                    requiresBinding="provider-operation".equals(runner)||manifest.path("requirements").has("providerAlias");
                     // Allowlist: no entrypoint, installation, host, binding or internal package paths.
                     var publicMetadata=SKILL_JSON.createObjectNode();
                     for(String field:List.of("description","parametersSchema","inputs","outputs","costInfo"))
@@ -88,7 +89,7 @@ public final class ChatActionCapabilityService {
                     else if(report.readiness()!=cn.jia.agent.service.SkillCapabilityLookup.Readiness.READY)
                         reason=report.reasonCode()==null?"SKILL_RUNTIME_UNAVAILABLE":report.reasonCode();
                     else if(report.reasonCode()!=null||report.toolchainDigest()==null
-                            || ("provider-operation".equals(runner)&&report.bindingRevision()==null))
+                            || (requiresBinding&&report.bindingRevision()==null))
                         reason="SKILL_RUNTIME_EVIDENCE_INVALID";
                 }
             }
